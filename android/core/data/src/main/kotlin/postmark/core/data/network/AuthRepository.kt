@@ -48,6 +48,43 @@ class AuthRepository internal constructor(
         decode = { text -> NetworkJson.decodeFromString<RegisterResponseDto>(text) },
     )
 
+    suspend fun login(request: LoginRequestDto): AuthResult<LoginResponseDto> = postJson(
+        path = "v1/auth/login",
+        body = NetworkJson.encodeToString(request),
+        successStatus = 200,
+        decode = { text -> NetworkJson.decodeFromString<LoginResponseDto>(text) },
+    )
+
+    suspend fun refresh(request: RefreshRequestDto): AuthResult<RefreshResponseDto> = postJson(
+        path = "v1/auth/refresh",
+        body = NetworkJson.encodeToString(request),
+        successStatus = 200,
+        decode = { text -> NetworkJson.decodeFromString<RefreshResponseDto>(text) },
+    )
+
+    /** Revokes the authenticated session; the server is idempotent and answers 204. */
+    suspend fun logout(accessToken: String): AuthResult<Unit> {
+        val request = Request.Builder()
+            .url(baseUrl.resolve("v1/auth/logout"))
+            .header("Accept", "application/json")
+            .header("Authorization", "Bearer $accessToken")
+            .post(ByteArray(0).toRequestBody("application/json".toMediaTypeOrNull()))
+            .build()
+        return try {
+            client.newCall(request).executeAsync().use { response ->
+                if (response.code == 204) {
+                    AuthResult.Success(Unit, 204)
+                } else {
+                    AuthResult.Failure(AuthFailure.HTTP, response.code)
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: IOException) {
+            AuthResult.Failure(AuthFailure.NETWORK)
+        }
+    }
+
     private suspend fun <T> postJson(
         path: String,
         body: String,

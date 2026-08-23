@@ -46,3 +46,34 @@ data class RegisterResponseDto(
     @SerialName("refresh_token") val refreshToken: String,
     @SerialName("refresh_expires_at") val refreshExpiresAt: String,
 )
+
+@Serializable
+data class LoginRequestDto(
+    val email: String,
+    val password: String,
+)
+
+@Serializable
+data class LoginResponseDto(
+    val user: RegistrationUserDto,
+    @SerialName("active_key_bundle") val activeKeyBundle: ActiveKeyBundleMetadataDto,
+    @SerialName("session_id") val sessionId: String,
+    @SerialName("access_token") val accessToken: String,
+    @SerialName("access_expires_at") val accessExpiresAt: String,
+    @SerialName("refresh_token") val refreshToken: String,
+    @SerialName("refresh_expires_at") val refreshExpiresAt: String,
+)
+
+@Serializable
+data class RefreshRequestDto(
+    @SerialName("refresh_token") val refreshToken: String,
+)
+
+@Serializable
+data class RefreshResponseDto(
+    @SerialName("session_id") val sessionId: String,
+    @SerialName("access_token") val accessToken: String,
+    @SerialName("access_expires_at") val accessExpiresAt: String,
+    @SerialName("refresh_token") val refreshToken: String,
+    @SerialName("refresh_expires_at") val refreshExpiresAt: String,
+)

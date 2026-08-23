@@ -1,10 +1,10 @@
 # Development toolchain
 
-This document records the required M0 toolchain and the observed VPS inventory. It does not install or configure anything.
+This document records the required M0 toolchain, the original VPS inventory, and host provisioning for JDK 17 and Python 3.13.
 
 Android builds are CLI-only. Android Studio is optional and is not required for M0.
 
-Missing JDK and Android SDK tooling on this host is a known M0 provisioning step, not an architecture blocker.
+Android SDK tooling is still missing on this host. That remains a known M0 provisioning step, not an architecture blocker. Do not install Gradle globally; the project uses the Gradle wrapper.
 
 ## Required baseline
 
@@ -33,9 +33,9 @@ Compatibility sources already selected:
 
 System Python on the host is not the project runtime. Project Python is 3.13 via uv.
 
-## Observed VPS inventory
+## Original VPS inventory
 
-Recorded on this host with the read-only commands below. Re-run the same commands to re-check.
+Recorded before JDK/Python provisioning with the read-only commands below. Re-run the same commands to re-check.
 
 | Item | Observed |
 | --- | --- |
@@ -87,3 +87,40 @@ Docker:
 docker --version
 docker compose version
 ```
+
+## Host provisioning
+
+Noninteractive commands used on this host. Do not install Gradle globally. Do not install the Android SDK here.
+
+```sh
+sudo apt-get update
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y openjdk-17-jdk-headless unzip
+uv python install 3.13
+```
+
+## Verified after provisioning
+
+Actual results on this host after the commands above.
+
+| Item | Detected |
+| --- | --- |
+| `java -version` | `openjdk version "17.0.19" 2026-04-21` (`OpenJDK Runtime Environment (build 17.0.19+10-1-26.04.2-Ubuntu)`) |
+| `java` path | `/usr/bin/java` → `/usr/lib/jvm/java-17-openjdk-amd64/bin/java` |
+| `javac -version` | `javac 17.0.19` |
+| `javac` path | `/usr/bin/javac` → `/usr/lib/jvm/java-17-openjdk-amd64/bin/javac` |
+| JDK home | `/usr/lib/jvm/java-17-openjdk-amd64` (`JAVA_HOME` still unset) |
+| `uv python find 3.13` | `/home/vodkolyan/.local/share/uv/python/cpython-3.13-linux-x86_64-gnu/bin/python3.13` → `/home/vodkolyan/.local/share/uv/python/cpython-3.13.14-linux-x86_64-gnu/bin/python3.13` |
+| `uv run --python 3.13 python --version` | `Python 3.13.14` |
+| `adb` / `sdkmanager` | still absent |
+| `ANDROID_HOME` / `ANDROID_SDK_ROOT` | still unset |
+
+Verification commands:
+
+```sh
+java -version
+javac -version
+uv python find 3.13
+uv run --python 3.13 python --version
+```
+
+Android SDK remains missing for the next provisioning task.

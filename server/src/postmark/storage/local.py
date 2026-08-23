@@ -1,11 +1,17 @@
-"""Safe local blob path resolution. No I/O besides symlink inspection."""
+"""Safe local blob path resolution and read/stat/delete adapter."""
 
 from __future__ import annotations
 
+import hashlib
+import os
 import re
+import stat
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from typing import BinaryIO
 
-from postmark.storage.base import InvalidBlobKeyError
+from postmark.storage.base import BlobInfo, BlobNotFoundError, BlobStoreError, InvalidBlobKeyError
 
 _MAX_KEY_LENGTH = 512
 _MAX_SEGMENT_LENGTH = 128
@@ -49,3 +55,62 @@ class LocalBlobPathResolver:
             ):
                 raise InvalidBlobKeyError(key)
         return segments
+
+
+_CHUNK_SIZE = 64 * 1024
+
+
+class LocalFileBlobStore:
+    def __init__(self, root: Path) -> None:
+        root = Path(root)
+        if root.exists() and not root.is_dir():
+            raise BlobStoreError("blob root is not a directory")
+        root.mkdir(parents=True, exist_ok=True)
+        self._resolver = LocalBlobPathResolver(root)
+
+    @contextmanager
+    def open_reader(self, key: str) -> Iterator[BinaryIO]:
+        path = self._resolver.resolve(key)
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            fd = os.open(path, flags)
+        except (FileNotFoundError, OSError):
+            raise BlobNotFoundError(key) from None
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise BlobNotFoundError(key)
+            reader = os.fdopen(fd, "rb")
+        except Exception:
+            os.close(fd)
+            raise
+        try:
+            yield reader
+        finally:
+            reader.close()
+
+    def stat(self, key: str) -> BlobInfo:
+        digest = hashlib.sha256()
+        size = 0
+        with self.open_reader(key) as reader:
+            while True:
+                chunk = reader.read(_CHUNK_SIZE)
+                if not chunk:
+                    break
+                size += len(chunk)
+                digest.update(chunk)
+        return BlobInfo(key=key, size=size, sha256_hex=digest.hexdigest())
+
+    def delete(self, key: str) -> None:
+        path = self._resolver.resolve(key)
+        try:
+            mode = path.lstat().st_mode
+        except FileNotFoundError:
+            return
+        if not stat.S_ISREG(mode):
+            raise BlobNotFoundError(key)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return

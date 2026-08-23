@@ -24,4 +24,4 @@ Capsule artifact AEAD associated data and HPKE envelope context info must be one
 
 ## Consequences
 
-Android and server reconstruct identical AAD/info bytes from typed IDs and layout. Artifact AEAD and envelope HPKE cannot be mixed by omitting a prefix or sharing one message type. Publish signatures stay on the existing `"postmark/publish/v1" || statement` input.
+Android and any future interoperable client implementation reconstruct identical AAD/info bytes from typed IDs and layout; the dumb backend does not invoke AEAD/HPKE or reconstruct these contexts, and only routes opaque ciphertext/public metadata under protocol validation. Artifact AEAD and envelope HPKE cannot be mixed by omitting a prefix or sharing one message type. Publish signatures stay on the existing `"postmark/publish/v1" || statement` input.

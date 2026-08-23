@@ -55,6 +55,25 @@ dependencies {
     testImplementation(libs.junit.vintage.engine)
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.ext.junit)
+    // OpenCV Java bindings: compiled/tested against the desktop 4.10 jar on
+    // this VPS (identical org.opencv API); the official Android AAR carrying
+    // device natives is packaged at the :app level.
+    val opencvDesktopJar = file("/usr/share/java/opencv4/opencv-4100.jar")
+    require(opencvDesktopJar.exists()) {
+        "OpenCV desktop jar missing at $opencvDesktopJar; install libopencv-java as documented in docs/development.md"
+    }
+    compileOnly(files(opencvDesktopJar))
+    testImplementation(files(opencvDesktopJar))
+    tasks.withType<Test>().configureEach {
+        // Debian's desktop OpenCV ships Java-25 bytecode; only the test JVM
+        // needs the newer runtime, the Android build stays on JDK 17.
+        javaLauncher.set(
+            project.javaToolchains.launcherFor {
+                languageVersion.set(JavaLanguageVersion.of(25))
+            },
+        )
+        jvmArgs("-Djava.library.path=/usr/lib/jni")
+    }
 }
 
 tasks.withType<Test>().configureEach {

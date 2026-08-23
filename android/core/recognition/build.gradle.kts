@@ -1,6 +1,20 @@
+import com.google.protobuf.gradle.proto
+
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.protobuf)
+}
+
+protobuf {
+    protoc {
+        artifact = "com.google.protobuf:protoc:${libs.versions.protobuf.get()}"
+    }
+    generateProtoTasks {
+        all().configureEach {
+            builtins.maybeCreate("java").option("lite")
+        }
+    }
 }
 
 android {
@@ -16,11 +30,20 @@ android {
         sourceCompatibility = JavaVersion.toVersion(libs.versions.jdk.get())
         targetCompatibility = JavaVersion.toVersion(libs.versions.jdk.get())
     }
+
+    sourceSets {
+        getByName("main") {
+            proto {
+                srcDir(rootProject.file("../protocol/proto"))
+            }
+        }
+    }
 }
 
 dependencies {
     implementation(project(":core:model"))
     implementation(libs.kotlinx.serialization.json)
+    api(libs.protobuf.javalite)
     testImplementation(kotlin("test-junit5"))
 }
 

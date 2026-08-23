@@ -4,10 +4,11 @@ import base64
 import re
 import uuid
 from collections.abc import Iterator
-from datetime import datetime, timezone
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from fastapi import Depends, Header, Request
+from pydantic import SecretStr
 from sqlalchemy.orm import Session
 
 from postmark.auth.session_repository import AuthSessionRepository
@@ -43,7 +44,7 @@ def get_db_session(request: Request) -> Iterator[Session]:
         session.close()
 
 
-def _decode_access_token(token: str) -> bytes:
+def _validate_access_token(token: str) -> None:
     if not token.startswith(_ACCESS_TOKEN_PREFIX):
         raise AuthenticationRequiredError()
     payload = token[len(_ACCESS_TOKEN_PREFIX):]
@@ -58,13 +59,11 @@ def _decode_access_token(token: str) -> bytes:
         raise AuthenticationRequiredError() from None
     if len(decoded) != 32:
         raise AuthenticationRequiredError()
-    return decoded
 
 
-def get_authenticated_principal(
+def get_access_bearer_token(
     authorization: str | None = Header(default=None, alias="Authorization"),
-    session: Session = Depends(get_db_session),
-) -> AuthenticatedPrincipal:
+) -> SecretStr:
     if authorization is None:
         raise AuthenticationRequiredError()
     try:
@@ -73,11 +72,20 @@ def get_authenticated_principal(
         raise AuthenticationRequiredError() from None
     if scheme != "Bearer" or " " in token or not token:
         raise AuthenticationRequiredError()
-    if not _ascii_only(token):
+    try:
+        token.encode("ascii")
+    except UnicodeEncodeError:
         raise AuthenticationRequiredError()
-    _decode_access_token(token)
+    _validate_access_token(token)
+    return SecretStr(token)
 
-    token_hash = hash_opaque_token(token)
+
+def get_authenticated_principal(
+    token: SecretStr = Depends(get_access_bearer_token),
+    session: Session = Depends(get_db_session),
+) -> AuthenticatedPrincipal:
+    access_token = token.get_secret_value()
+    token_hash = hash_opaque_token(access_token)
     auth_session = AuthSessionRepository(session).find_by_access_token_hash(
         token_hash, datetime.now(timezone.utc)
     )
@@ -87,11 +95,3 @@ def get_authenticated_principal(
     if user is None or user.disabled_at is not None:
         raise AuthenticationRequiredError()
     return AuthenticatedPrincipal(user_id=user.id, session_id=auth_session.id)
-
-
-def _ascii_only(value: str) -> bool:
-    try:
-        value.encode("ascii")
-    except UnicodeEncodeError:
-        return False
-    return True

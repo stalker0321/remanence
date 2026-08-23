@@ -68,6 +68,20 @@ class AuthSessionRepository:
         )
         return self._session.scalar(statement)
 
+    def find_lineage_id_by_access_token_hash(self, token_hash: bytes) -> uuid.UUID | None:
+        statement = select(AuthSession.lineage_id).where(
+            AuthSession.access_token_hash == token_hash
+        )
+        return self._session.scalar(statement)
+
+    def find_by_access_token_hash_for_update(self, token_hash: bytes) -> AuthSession | None:
+        statement = (
+            select(AuthSession)
+            .where(AuthSession.access_token_hash == token_hash)
+            .with_for_update()
+        )
+        return self._session.scalar(statement, execution_options={"populate_existing": True})
+
     def lock_lineage(self, lineage_id: uuid.UUID) -> tuple[AuthSession, ...]:
         statement = (
             select(AuthSession)

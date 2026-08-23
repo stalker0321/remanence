@@ -2,9 +2,10 @@
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import SecretStr
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -20,8 +21,9 @@ from postmark.api.auth_schemas import (
     RegistrationUserResponse,
     registration_validation_problem,
 )
-from postmark.api.dependencies import DatabaseUnavailableError, get_db_session
+from postmark.api.dependencies import DatabaseUnavailableError, get_access_bearer_token, get_db_session
 from postmark.auth.login import LoginService, LoginStatus
+from postmark.auth.logout import LogoutService
 from postmark.auth.passwords import PasswordService
 from postmark.auth.registration import RegistrationService
 from postmark.auth.session_repository import AuthSessionRepository
@@ -125,6 +127,18 @@ def _problem_response(status: int, problem: ProblemDetail) -> JSONResponse:
         content=problem.model_dump(),
         media_type="application/problem+json",
     )
+
+
+@router.post("/v1/auth/logout", status_code=204)
+def logout(
+    token: SecretStr = Depends(get_access_bearer_token),
+    session: Session = Depends(get_db_session),
+) -> Response:
+    with session.begin():
+        LogoutService(AuthSessionRepository(session)).logout(
+            token.get_secret_value(), datetime.now(timezone.utc)
+        )
+    return Response(status_code=204)
 
 
 @router.post(

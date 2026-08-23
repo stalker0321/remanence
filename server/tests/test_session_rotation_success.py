@@ -219,12 +219,12 @@ def test_revoked_refresh_yields_invalid_no_child(session_factory) -> None:
         assert len(session.scalars(select(AuthSession)).all()) == 1
 
 
-def test_rotated_refresh_yields_invalid_no_child_or_mutation(session_factory) -> None:
+def test_rotated_refresh_yields_replayed_revokes_lineage_no_child(session_factory) -> None:
     with session_factory() as session:
         user = _create_user(session)
         repo = AuthSessionRepository(session)
         rotated_refresh = REFRESH_TOKEN_PREFIX + "rotated"
-        _create_active(
+        rotated = _create_active(
             repo,
             user_id=user.id,
             access_hash=_ACCESS_HASH,
@@ -235,11 +235,17 @@ def test_rotated_refresh_yields_invalid_no_child_or_mutation(session_factory) ->
         session.expunge_all()
 
         result = SessionRotationService(repo).rotate(rotated_refresh, _NOW)
-        assert result == RefreshRotationResult(RefreshRotationStatus.INVALID, None)
+        assert result.status is RefreshRotationStatus.REPLAYED
+        assert result.session_id is None
+        assert result.access_token is None
+        assert result.refresh_token is None
+        session.commit()
         session.expunge_all()
         rows = session.scalars(select(AuthSession)).all()
         assert len(rows) == 1
-        assert rows[0].rotated_at == datetime(2029, 1, 1, tzinfo=timezone.utc)
+        persisted = session.get(AuthSession, rotated.id)
+        assert persisted.revoked_at == _NOW
+        assert persisted.rotated_at == datetime(2029, 1, 1, tzinfo=timezone.utc)
 
 
 def test_external_rollback_undoes_old_mutation_and_child(session_factory) -> None:

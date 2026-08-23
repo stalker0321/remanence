@@ -14,6 +14,7 @@ REFRESH_TTL = timedelta(days=30)
 
 class RefreshRotationStatus(enum.Enum):
     ROTATED = "ROTATED"
+    REPLAYED = "REPLAYED"
     INVALID = "INVALID"
 
 
@@ -34,7 +35,18 @@ class SessionRotationService:
     def rotate(self, refresh_token: str, now: datetime) -> RefreshRotationResult:
         token_hash = hash_opaque_token(refresh_token)
         old = self._repo.find_by_refresh_token_hash_for_update(token_hash)
-        if old is None or not self._repo.is_refresh_usable(old, now):
+        if old is None:
+            return RefreshRotationResult(
+                status=RefreshRotationStatus.INVALID,
+                session_id=None,
+            )
+        if old.rotated_at is not None:
+            self._repo.revoke_lineage(old.lineage_id, now)
+            return RefreshRotationResult(
+                status=RefreshRotationStatus.REPLAYED,
+                session_id=None,
+            )
+        if not self._repo.is_refresh_usable(old, now):
             return RefreshRotationResult(
                 status=RefreshRotationStatus.INVALID,
                 session_id=None,

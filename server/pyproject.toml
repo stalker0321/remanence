@@ -10,6 +10,7 @@ dependencies = [
     "psycopg[binary]==3.3.4",
     "pydantic-settings==2.15.0",
     "sqlalchemy==2.0.52",
+    "tink==1.16.1",
     "uvicorn==0.52.4",
 ]
 

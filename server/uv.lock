@@ -3,6 +3,15 @@ revision = 3
 requires-python = "==3.13.*"
 
 [[package]]
+name = "absl-py"
+version = "2.5.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d0/4f/d79676ab82f2e42fc3611618139f13a9c4c31d0cff4b486982047679a802/absl_py-2.5.0.tar.gz", hash = "sha256:0c996f25c0490700fadabe6351630f6111534fa0ae252cc6d2014ea3b141135f", size = 118119, upload-time = "2026-07-03T10:57:48.157Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/58/0a/a10b45aab35b175aded078a462dc8d0c698f5b13946e7cb0869097b78bb6/absl_py-2.5.0-py3-none-any.whl", hash = "sha256:0f17b89f2a4eaaedc4f28c622998aa690564b3012a396a4ffad0821007fe03ba", size = 137410, upload-time = "2026-07-03T10:57:46.735Z" },
+]
+
+[[package]]
 name = "alembic"
 version = "1.19.1"
 source = { registry = "https://pypi.org/simple" }
@@ -78,6 +87,14 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/6d/3a/0cc14a05810e6add9bce5e87693334baa2222de5f647fa31781885b6573f/argon2_cffi_bindings-26.1.0-cp310-abi3-win_amd64.whl", hash = "sha256:2c36ff87b5dfaa477d0bd51e9d7f6abdae7c8955d2983c97419085d842154b3e", size = 25730, upload-time = "2026-08-20T07:32:51.091Z" },
     { url = "https://files.pythonhosted.org/packages/4e/db/d83cf2af140547f0b9cdaece05b2dc2dcbf991be4667331d073eff771435/argon2_cffi_bindings-26.1.0-cp310-abi3-win_arm64.whl", hash = "sha256:f9c4420a7a864fe1b86ce35befc95b8e39fb852493b81cf798671ddc265de638", size = 24478, upload-time = "2026-08-20T07:32:52.111Z" },
     { url = "https://files.pythonhosted.org/packages/bb/5f/f652055e18d2627e2eed94c7f31a792127cfe38df786635395d742321674/argon2_cffi_bindings-26.1.0-cp313-cp313-pyemscripten_2025_0_wasm32.whl", hash = "sha256:af11ac37a7c53dc16cb7950a6190851b0870fe218b6c60c0bb7ac355234e3083", size = 15434, upload-time = "2026-08-20T07:32:53.143Z" },
+]
+
+[[package]]
+name = "bazel-runfiles"
+version = "2.3.2"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/30/8a/ee68d39bb8729fd4ed0668dbf6d0909e2364ea573442356667bba7687acd/bazel_runfiles-2.3.2-py3-none-any.whl", hash = "sha256:1e69e329f824e05384cad02979e3a186da6c59b4424b805e15d41a386f157617", size = 10356, upload-time = "2026-08-22T16:30:55.475Z" },
 ]
 
 [[package]]
@@ -294,6 +311,7 @@ dependencies = [
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic-settings" },
     { name = "sqlalchemy" },
+    { name = "tink" },
     { name = "uvicorn" },
 ]
 
@@ -311,6 +329,7 @@ requires-dist = [
     { name = "psycopg", extras = ["binary"], specifier = "==3.3.4" },
     { name = "pydantic-settings", specifier = "==2.15.0" },
     { name = "sqlalchemy", specifier = "==2.0.52" },
+    { name = "tink", specifier = "==1.16.1" },
     { name = "uvicorn", specifier = "==0.52.4" },
 ]
 
@@ -318,6 +337,21 @@ requires-dist = [
 dev = [
     { name = "httpx2", specifier = "==2.12.0" },
     { name = "pytest", specifier = "==9.1.1" },
+]
+
+[[package]]
+name = "protobuf"
+version = "7.36.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a7/e7/0553e21d25ca4d9f573135775348a372c3ec34a93a71d5f297c3bac38341/protobuf-7.36.0.tar.gz", hash = "sha256:e8e09cb0d794c6687926fa558a8a6e72aa10edb997d5ca61da0765f12a3e00ea", size = 510034, upload-time = "2026-08-20T16:34:01.071Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8f/ae/58e3ca96cb2e118cc546b677359b3c6659f79a140935c08dec94c7998585/protobuf-7.36.0-cp310-abi3-macosx_10_9_universal2.whl", hash = "sha256:9103532dffd80c6fab7e50c65a31007680a06eb57537d437bb1b35812c138a37", size = 453256, upload-time = "2026-08-20T16:33:53.945Z" },
+    { url = "https://files.pythonhosted.org/packages/f0/15/5162230af4912697f0fe406f6800f80760945babcff0e2c2fe6c84ef2d5d/protobuf-7.36.0-cp310-abi3-manylinux2014_aarch64.whl", hash = "sha256:bf94a5917c71058262de683669bc0a797a7669d3de71f0b36d058e3194f47b44", size = 341436, upload-time = "2026-08-20T16:33:55.134Z" },
+    { url = "https://files.pythonhosted.org/packages/d7/09/1670b2bfc9a45e807e520c3e9be36524db9ccc7dc05ea17af7681cabdc61/protobuf-7.36.0-cp310-abi3-manylinux2014_s390x.whl", hash = "sha256:3297e60abdff301e5f74393d87f6cc59dacab5f024a89548a6e8de1d26576b16", size = 354440, upload-time = "2026-08-20T16:33:56.077Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/f8/bd5804695ba400e423c33fd4d9f58c28d86633d5ba1945c36ff3967d98cb/protobuf-7.36.0-cp310-abi3-manylinux2014_x86_64.whl", hash = "sha256:70f5ec8eb0da81a44360c0dc0beac99a0d78071d21956a7076bae8bd2051841b", size = 340439, upload-time = "2026-08-20T16:33:56.992Z" },
+    { url = "https://files.pythonhosted.org/packages/ef/9f/acd02338235a3e7d03168c4303478347b7624fc8189ff4e7f0d2654bbe86/protobuf-7.36.0-cp310-abi3-win32.whl", hash = "sha256:7326fd717bdc419162a735938d89d4032332bcc3408804012b24ff3a37086071", size = 440216, upload-time = "2026-08-20T16:33:57.99Z" },
+    { url = "https://files.pythonhosted.org/packages/0e/4e/12cb93270967a2affff5b3f720694700d4d87712a67afd05c8cb3f6fa52c/protobuf-7.36.0-cp310-abi3-win_amd64.whl", hash = "sha256:1781cc1de61249b750848029bca452c0a8b7e990080316b9bbc2518b2117b488", size = 453731, upload-time = "2026-08-20T16:33:58.951Z" },
+    { url = "https://files.pythonhosted.org/packages/01/c3/629999e78d46c1115c11886d51c6bd68c17ce4a944f1ea3e153a91316a33/protobuf-7.36.0-py3-none-any.whl", hash = "sha256:53374d53fc29a67f7dbbf0ade47d7526a0f0137bf0f9c90e48d8a60790ef748c", size = 177024, upload-time = "2026-08-20T16:34:00.053Z" },
 ]
 
 [[package]]
@@ -483,6 +517,23 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/b5/b4/205b0d5241d934e8add0c38aa924c4f9fb7330834ff11e5444db964ec3f9/starlette-1.6.0.tar.gz", hash = "sha256:d4e3ac5e546444960c710297a3c9fc3f7ebae1b7e963f3d36173b49da535be9b", size = 2716969, upload-time = "2026-08-08T18:27:57.512Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c8/cb/6a6a47d5b464bd08695d254f3da6e7986cc70c9fa5d778eda57538edfe56/starlette-1.6.0-py3-none-any.whl", hash = "sha256:a86dd39d14bb45f85a3d18525215a9ef0cfd1f192ac793220e72598c90335f0c", size = 75969, upload-time = "2026-08-08T18:27:56.196Z" },
+]
+
+[[package]]
+name = "tink"
+version = "1.16.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "absl-py" },
+    { name = "bazel-runfiles" },
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d3/e2/06a2836b499abddff5127ac4a849667b721f1e1b38742572e0cf9a53f327/tink-1.16.1.tar.gz", hash = "sha256:8d82f934f31d1ba8fa6014c37edddc0b3f61cfdbbd9317eb6269cfe7eeb1fa86", size = 280107, upload-time = "2026-08-13T02:13:07.172Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ad/64/d2a0da68b96e9aeb1c532d0f1a0af033a15d2facac7b6007006f07ba600c/tink-1.16.1-cp313-cp313-macosx_11_0_universal2.whl", hash = "sha256:f8451ed5c3867d083638f126c4430a743b584177f64a2a65cbf5f218d24647cc", size = 5158491, upload-time = "2026-08-13T02:12:53.466Z" },
+    { url = "https://files.pythonhosted.org/packages/e8/44/be7787f47fc02b3b12ff8806e80d2595e64df0ab64c05b56166e9aa40dbe/tink-1.16.1-cp313-cp313-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:de70e92c0888344573662d463e56f0f281f75bfe5de02254b292753a638584ca", size = 4088463, upload-time = "2026-08-13T02:12:55.196Z" },
+    { url = "https://files.pythonhosted.org/packages/c3/78/4023bb4a09d7e8d6a51c341756ae137946d7609f96414cf59cb8b098e38d/tink-1.16.1-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:a33da9474ee43a21e0c7261ad8af1a3b394d1607db2d79a0a21e3d5305285e68", size = 4280993, upload-time = "2026-08-13T02:12:56.898Z" },
+    { url = "https://files.pythonhosted.org/packages/4e/dc/a951bb9a0d206aec9176a27cac586eddf9ff456c88a5da70e5cc0f20894e/tink-1.16.1-cp313-cp313-win_amd64.whl", hash = "sha256:33818c06bd17397de1e3a122fb2db7aa2658eed06d01f299ce004d7ff3612b98", size = 2293519, upload-time = "2026-08-13T02:12:58.21Z" },
 ]
 
 [[package]]

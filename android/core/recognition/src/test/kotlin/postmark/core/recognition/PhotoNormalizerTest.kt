@@ -22,7 +22,12 @@ class PhotoNormalizerTest {
     @org.junit.Before
     fun loadNative() {
         runCatching { System.loadLibrary("opencv_java4100") }
-            .onFailure { assumeTrue("desktop OpenCV natives unavailable: $it", false) }
+            .onFailure { error ->
+                // Another Robolectric sandbox may have mapped the same .so.
+                val alreadyLoaded = error is UnsatisfiedLinkError &&
+                    error.message?.contains("already loaded") == true
+                assumeTrue("desktop OpenCV natives unavailable: $error", alreadyLoaded)
+            }
     }
 
     private fun noisyBitmap(width: Int, height: Int): Bitmap {
@@ -83,22 +88,51 @@ class PhotoNormalizerTest {
 
     @org.junit.Test
     fun qualityStepsDownUntilPlaintextBudgetFits() {
-        val tinyBudget = 64 * 1024
-        val normalizer = PhotoNormalizer(
-            maxLongEdgePx = 1280,
-            maxPlaintextBytes = tinyBudget,
-        )
-        val normalized = normalizer.normalize(jpegWithExif(noisyBitmap(1280, 800), 1))
+        // Robolectric's native graphics ignore the JPEG quality knob, so the
+        // stepping logic is proven against a deterministic fake encoder:
+        // size(quality) = 5_000 + quality * 1_000.
+        val fakeEncoder: (Bitmap, Int) -> ByteArray = { _, quality ->
+            ByteArray(5_000 + quality * 1_000)
+        }
+        val budget = 100_000 // q100=105_000 rejected; q90=95_000 fits.
 
-        assertTrue(normalized.jpegBytes.size <= tinyBudget)
-        assertTrue(normalized.finalQuality < PhotoNormalizer.QUALITY_LADDER.first())
+        val normalizer = PhotoNormalizer(
+            maxPlaintextBytes = budget,
+            qualityLadder = intArrayOf(100, 90),
+            encoderOverride = fakeEncoder,
+        )
+        val normalized = normalizer.normalize(jpegWithExif(noisyBitmap(320, 200), 1))
+
+        assertTrue(normalized.jpegBytes.size <= budget)
+        assertEquals(90, normalized.finalQuality)
+    }
+
+    @org.junit.Test
+    fun impossibleBudgetFailsClosed() {
+        val normalizer = PhotoNormalizer(
+            maxPlaintextBytes = 16,
+            qualityLadder = intArrayOf(50),
+            encoderOverride = { _, _ -> ByteArray(999_999) },
+        )
+        assertFailsWith<IllegalArgumentException> {
+            normalizer.normalize(jpegWithExif(noisyBitmap(64, 48), 1))
+        }
+    }
+
+    @org.junit.Test
+    fun smallCleanPhotoIsNeverUpscaled() {
+        val normalizer = PhotoNormalizer(encoderOverride = { _, q -> ByteArray(q) })
+        val normalized = normalizer.normalize(jpegWithExif(noisyBitmap(800, 600), 1))
+        assertEquals(90, normalized.finalQuality)
+        assertEquals(800, normalized.width)
+        assertEquals(600, normalized.height)
     }
 
     @org.junit.Test
     fun alreadySmallCleanPhotoPassesThroughAtTopQuality() {
         val normalizer = PhotoNormalizer()
         val normalized = normalizer.normalize(jpegWithExif(noisyBitmap(800, 600), 1))
-        assertEquals(PhotoNormalizer.QUALITY_LADDER.first(), normalized.finalQuality)
+        assertEquals(90, normalized.finalQuality)
         assertEquals(800, normalized.width)
         assertEquals(600, normalized.height)
     }

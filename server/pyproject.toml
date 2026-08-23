@@ -3,7 +3,9 @@ name = "postmark-server"
 version = "0.1.0"
 description = "Postmark server for account routing and ciphertext storage."
 requires-python = ">=3.13,<3.14"
-dependencies = []
+dependencies = [
+    "pydantic-settings==2.15.0",
+]
 
 [build-system]
 requires = ["uv_build>=0.11.26,<0.12"]
@@ -11,3 +13,8 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-name = "postmark"
+
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+]

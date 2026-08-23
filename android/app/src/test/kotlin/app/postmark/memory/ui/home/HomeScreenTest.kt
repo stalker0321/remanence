@@ -22,12 +22,12 @@ class HomeScreenTest {
     fun homeSemanticsAreWired() {
         composeRule.setContent {
             MaterialTheme {
-                HomeScreen()
+                HomeScreen(BackendHealthUiState.CHECKING)
             }
         }
 
         composeRule.onNodeWithTag("home_build_label")
-            .assertTextEquals("Architecture approved · M0 foundation")
+            .assertTextEquals("Architecture approved · API checking")
             .assertIsDisplayed()
 
         composeRule.onNodeWithTag("create_action")
@@ -39,5 +39,31 @@ class HomeScreenTest {
             .assertTextEquals("Scan")
             .assertIsDisplayed()
             .assertIsNotEnabled()
+    }
+
+    @Test
+    fun availableStateShowsAvailableBuildLabel() {
+        composeRule.setContent {
+            MaterialTheme {
+                HomeScreen(BackendHealthUiState.AVAILABLE)
+            }
+        }
+
+        composeRule.onNodeWithTag("home_build_label")
+            .assertTextEquals("Architecture approved · API available")
+            .assertIsDisplayed()
+    }
+
+    @Test
+    fun unavailableStateShowsUnavailableBuildLabel() {
+        composeRule.setContent {
+            MaterialTheme {
+                HomeScreen(BackendHealthUiState.UNAVAILABLE)
+            }
+        }
+
+        composeRule.onNodeWithTag("home_build_label")
+            .assertTextEquals("Architecture approved · API unavailable")
+            .assertIsDisplayed()
     }
 }

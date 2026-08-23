@@ -14,8 +14,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 
+enum class BackendHealthUiState {
+    CHECKING,
+    AVAILABLE,
+    UNAVAILABLE,
+}
+
 @Composable
-fun HomeScreen() {
+fun HomeScreen(state: BackendHealthUiState) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -26,7 +32,11 @@ fun HomeScreen() {
         Text("Postmark")
         Spacer(Modifier.height(12.dp))
         Text(
-            text = "Architecture approved · M0 foundation",
+            text = when (state) {
+                BackendHealthUiState.CHECKING -> "Architecture approved · API checking"
+                BackendHealthUiState.AVAILABLE -> "Architecture approved · API available"
+                BackendHealthUiState.UNAVAILABLE -> "Architecture approved · API unavailable"
+            },
             modifier = Modifier.testTag("home_build_label"),
         )
         Spacer(Modifier.height(24.dp))

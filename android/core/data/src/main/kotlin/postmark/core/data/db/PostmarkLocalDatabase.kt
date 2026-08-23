@@ -16,6 +16,7 @@ import androidx.room.RoomDatabase
         OutboxCapsuleEntity::class,
         OutboxBlobEntity::class,
         RecognitionFingerprintEntity::class,
+        SyncCursorEntity::class,
     ],
     version = 1,
     exportSchema = true,
@@ -34,6 +35,8 @@ abstract class PostmarkLocalDatabase : RoomDatabase() {
     abstract fun outboxBlobDao(): OutboxBlobDao
 
     abstract fun recognitionFingerprintDao(): RecognitionFingerprintDao
+
+    abstract fun syncCursorDao(): SyncCursorDao
 
     companion object {
         const val DATABASE_NAME: String = "postmark-local.db"

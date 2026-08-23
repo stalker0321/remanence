@@ -1,6 +1,6 @@
 # System context and technology boundaries
 
-This document is normative for system context, trust boundaries, and the MVP technology stack. It does not define module structures, database tables, API endpoints, or cryptographic algorithms.
+This document is normative for system context, trust boundaries, the MVP technology stack, and Android module boundaries. It does not define local tables, backend layout, API endpoints, or cryptographic algorithms.
 
 ## 1. Architecture goals
 
@@ -114,3 +114,69 @@ Private content and recognition material MUST be encrypted before they leave the
 ## 6. Architecture gate
 
 Application code MUST NOT start until `docs/product.md`, architecture, security, protocol, recognition, milestones, and acceptance-criteria documents are mutually consistent.
+
+## 7. Android module boundaries
+
+MVP uses exactly these Gradle modules:
+
+- `:app`
+- `:core:model`
+- `:core:data`
+- `:core:crypto`
+- `:core:recognition`
+
+```mermaid
+flowchart BT
+  model[":core:model"]
+  crypto[":core:crypto"]
+  recognition[":core:recognition"]
+  data[":core:data"]
+  app[":app"]
+  crypto --> model
+  recognition --> model
+  data --> model
+  data --> crypto
+  app --> model
+  app --> data
+  app --> crypto
+  app --> recognition
+```
+
+### Responsibilities and dependencies
+
+- **`:core:model`** is a pure Kotlin module of identifiers, value objects, and state. It depends on nothing else in this graph.
+- **`:core:crypto`** is an Android library wrapping Tink and Android Keystore. It MAY depend only on `:core:model`.
+- **`:core:recognition`** is an Android library wrapping OpenCV. It MAY depend only on `:core:model`. OpenCV types MUST stay inside this module.
+- **`:core:data`** owns Room, network and storage adapters, repositories, and WorkManager. It MAY depend on `:core:model` and on narrow crypto interfaces from `:core:crypto`. Recognition payloads MUST be treated as opaque blobs; `:core:data` MUST NOT depend on `:core:recognition`.
+- **`:app`** owns Compose UI, CameraX integration, navigation, orchestration, and DI. It MAY depend on all core modules.
+
+No core module MAY depend on `:app` or on UI types. Backend DTOs MUST NOT leak into domain models in `:core:model`.
+
+### Feature packages stay in `:app`
+
+Feature code remains packages inside `:app` rather than additional Gradle modules. MVP has few surfaces, one activity, and no second client; extra feature modules would add Gradle graph cost without a shippable boundary. The isolation that matters for this product is already module-split: model, crypto, recognition, and data stay UI-free. Features stay packages so navigation and orchestration remain in one place.
+
+Feature packages:
+
+- `auth`
+- `home`
+- `create`
+- `scan`
+- `capsule`
+
+Navigation is one-activity Compose navigation. Capsule presentation is not a generally addressable or deep-link route. Opening a capsule REQUIRES an in-memory, unexpired scan grant produced by a successful scan. Process death MUST invalidate the grant.
+
+CameraX captures stills only. WorkManager syncs ciphertext and metadata only. WorkManager MUST NEVER upload or persist camera images or plaintext.
+
+### Conceptual interfaces
+
+Names only; no code in this document.
+
+- `HandleResolver` — resolve a handle to an immutable user ID and active public key.
+- `CapsuleRepository` — load and persist capsule ciphertext/metadata visible to the client.
+- `OutboxRepository` — resumable sender upload/finalize state.
+- `IdentityKeyManager` — identity key material via Keystore.
+- `CapsuleCryptor` — local encrypt/sign and decrypt/verify of capsule content.
+- `PostcardRecognizer` — local hierarchical matching of postcard stills.
+- `FingerprintStore` — persist recipient/sender fingerprints after successful receipt.
+- `ScanGrantManager` — issue and expire in-memory scan grants.

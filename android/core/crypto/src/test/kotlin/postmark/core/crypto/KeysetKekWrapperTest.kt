@@ -1,0 +1,120 @@
+package postmark.core.crypto
+
+import com.google.crypto.tink.KeyTemplates
+import com.google.crypto.tink.KeysetHandle
+import java.security.GeneralSecurityException
+import kotlin.test.Test
+import kotlin.test.assertContentEquals
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNotEquals
+import kotlin.test.assertTrue
+
+class KeysetKekWrapperTest {
+
+    private fun newEd25519Keyset(): KeysetHandle {
+        TinkPrimitives.ensureRegistered()
+        return KeysetHandle.generateNew(KeyTemplates.get("ED25519"))
+    }
+
+    @Test
+    fun wrapProducesPersistableRecordWithoutRawKeysetBytes() {
+        val boundary = InMemoryKekBoundary()
+        boundary.createAes256GcmKey("postmark.kek.wrap")
+        val keyset = newEd25519Keyset()
+        val record = KeysetKekWrapper(boundary).wrap("postmark.kek.wrap", keyset)
+        assertEquals("postmark.kek.wrap", record.alias)
+        assertEquals(12, record.nonce.size)
+        assertTrue(record.wrappedKeyset.isNotEmpty())
+        val rawSerialized = com.google.crypto.tink.TinkProtoKeysetFormat.serializeKeyset(
+            keyset,
+            com.google.crypto.tink.InsecureSecretKeyAccess.get(),
+        )
+        assertNotEquals(rawSerialized.toList(), record.wrappedKeyset.toList())
+    }
+
+    @Test
+    fun unwrapRoundTripsSameProcess() {
+        val boundary = InMemoryKekBoundary()
+        boundary.createAes256GcmKey("postmark.kek.roundtrip")
+        val wrapper = KeysetKekWrapper(boundary)
+        val keyset = newEd25519Keyset()
+        val record = wrapper.wrap("postmark.kek.roundtrip", keyset)
+        assertTrue(keyset.equalsKeyset(wrapper.unwrap(record)))
+    }
+
+    @Test
+    fun unwrapSurvivesSimulatedProcessReloadThroughRecordSerialization() {
+        val firstBoundary = InMemoryKekBoundary()
+        firstBoundary.createAes256GcmKey("postmark.kek.reload")
+        val firstWrapper = KeysetKekWrapper(firstBoundary)
+        val keyset = newEd25519Keyset()
+        val rawBefore = com.google.crypto.tink.TinkProtoKeysetFormat.serializeKeyset(
+            keyset,
+            com.google.crypto.tink.InsecureSecretKeyAccess.get(),
+        )
+        val persisted = firstWrapper.wrap("postmark.kek.reload", keyset).serialize()
+
+        val secondBoundary = InMemoryKekBoundary()
+        val reloaded = WrappedKeysetRecord.parse(persisted)
+        val unwrapped = KeysetKekWrapper(secondBoundary).unwrap(reloaded)
+        val rawAfter = com.google.crypto.tink.TinkProtoKeysetFormat.serializeKeyset(
+            unwrapped,
+            com.google.crypto.tink.InsecureSecretKeyAccess.get(),
+        )
+        assertEquals("postmark.kek.reload", reloaded.alias)
+        assertContentEquals(rawBefore, rawAfter)
+    }
+
+    @Test
+    fun tamperedCiphertextNonceAndAliasFailClosed() {
+        val boundary = InMemoryKekBoundary()
+        boundary.createAes256GcmKey("postmark.kek.tamper")
+        val wrapper = KeysetKekWrapper(boundary)
+        val record = wrapper.wrap("postmark.kek.tamper", newEd25519Keyset())
+
+        val flippedPayload = WrappedKeysetRecord.create(
+            record.alias,
+            record.nonce,
+            record.wrappedKeyset.copyOf().also { it[0] = (it[0].toInt() xor 1).toByte() },
+        )
+        assertFailsWith<Exception> { wrapper.unwrap(flippedPayload) }
+
+        val flippedNonce = WrappedKeysetRecord.create(
+            record.alias,
+            record.nonce.copyOf().also { it[0] = (it[0].toInt() xor 1).toByte() },
+            record.wrappedKeyset,
+        )
+        assertFailsWith<Exception> { wrapper.unwrap(flippedNonce) }
+    }
+
+    @Test
+    fun wrongKekOrWrongAssociatedDataFailsClosed() {
+        val boundary = InMemoryKekBoundary()
+        boundary.createAes256GcmKey("postmark.kek.one")
+        boundary.createAes256GcmKey("postmark.kek.two")
+        val wrapper = KeysetKekWrapper(boundary)
+        val record = wrapper.wrap("postmark.kek.one", newEd25519Keyset())
+
+        assertFailsWith<Exception> { wrapper.unwrap(WrappedKeysetRecord.create("postmark.kek.two", record.nonce, record.wrappedKeyset)) }
+        assertFailsWith<GeneralSecurityException> {
+            wrapper.unwrap(WrappedKeysetRecord.create("postmark.kek.missing", record.nonce, record.wrappedKeyset))
+        }
+    }
+
+    @Test
+    fun wrappingWithoutKekFailsClosed() {
+        val wrapper = KeysetKekWrapper(InMemoryKekBoundary())
+        assertFailsWith<GeneralSecurityException> { wrapper.wrap("postmark.kek.absent", newEd25519Keyset()) }
+    }
+
+    @Test
+    fun associatedDataIsDeterministicAndVersionBound() {
+        val aad = KeysetKekWrapper.associatedData(1, "postmark.kek.aad")
+        assertContentEquals(aad, KeysetKekWrapper.associatedData(1, "postmark.kek.aad"))
+        assertNotEquals(aad.toList(), KeysetKekWrapper.associatedData(2, "postmark.kek.aad").toList())
+        assertNotEquals(aad.toList(), KeysetKekWrapper.associatedData(1, "other.alias").toList())
+        val expectedPrefix = "postmark/kek/wrap/v1".toByteArray(Charsets.UTF_8) + 0x00 + byteArrayOf(0, 0, 0, 1)
+        assertContentEquals(expectedPrefix + "postmark.kek.aad".encodeToByteArray(), aad)
+    }
+}

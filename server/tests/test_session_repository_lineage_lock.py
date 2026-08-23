@@ -17,6 +17,7 @@ pytest_plugins = ("test_session_repository_create",)
 _ACCESS_HASH = bytes(range(32))
 _ACCESS_EXPIRES = datetime(2030, 1, 1, tzinfo=timezone.utc)
 _REFRESH_EXPIRES = datetime(2030, 2, 1, tzinfo=timezone.utc)
+_NOW = datetime(2029, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
 
 
 def _create_user(session) -> User:
@@ -133,48 +134,56 @@ def test_second_transaction_waits_for_lineage_lock_then_sees_refreshed_state(
         session.commit()
         session.expunge_all()
 
-        first_ready = threading.Event()
-        second_started = threading.Event()
-        second_finished: list[tuple[AuthSession, ...]] = []
-        second_error: list[BaseException] = []
+        holder_locked = threading.Event()
+        waiter_about_to_lock = threading.Event()
+        release_holder = threading.Event()
+        waiter_done = threading.Event()
+        waiter_locked: list[tuple[AuthSession, ...]] = []
+        waiter_error: list[Exception] = []
 
-        def first_holder() -> None:
+        def holder() -> None:
             with session_factory() as holder_session:
                 holder_repo = AuthSessionRepository(holder_session)
                 holder_repo.lock_lineage(root.lineage_id)
-                first_ready.set()
-                second_started.wait(timeout=10)
+                root_row = holder_session.get(AuthSession, root.id)
+                root_row.revoked_at = _NOW
+                holder_session.flush()
+                holder_locked.set()
+                assert release_holder.wait(timeout=10), "holder release timed out"
                 holder_session.commit()
 
-        def second_waiter() -> None:
+        def waiter() -> None:
             try:
                 with session_factory() as waiter_session:
                     waiter_repo = AuthSessionRepository(waiter_session)
-                    second_started.set()
+                    pre = waiter_session.get(AuthSession, root.id)
+                    assert pre.revoked_at is None
+                    waiter_about_to_lock.set()
                     locked = waiter_repo.lock_lineage(root.lineage_id)
-                    second_finished.append(locked)
-            except BaseException as exc:  # pragma: no cover - surfaced via assertion
-                second_error.append(exc)
+                    waiter_locked.append(locked)
+            except Exception as exc:  # pragma: no cover - surfaced via assertion
+                waiter_error.append(exc)
+            finally:
+                waiter_done.set()
 
-        holder = threading.Thread(target=first_holder)
-        waiter = threading.Thread(target=second_waiter)
-        holder.start()
+        holder_thread = threading.Thread(target=holder)
+        waiter_thread = threading.Thread(target=waiter)
+        holder_thread.start()
         try:
-            assert first_ready.wait(timeout=10), "first transaction did not acquire lock"
-            waiter.start()
-            assert second_started.wait(timeout=10), "second transaction did not start"
-            assert not second_finished and not second_error, "second transaction must block on lock"
-            holder.join(timeout=10)
-            waiter.join(timeout=10)
-            assert not holder.is_alive(), "holder thread hung"
-            assert not waiter.is_alive(), "waiter thread hung"
-            assert not second_error, second_error
-            assert len(second_finished) == 1
-            locked = second_finished[0]
+            assert holder_locked.wait(timeout=10), "holder did not acquire lineage lock"
+            waiter_thread.start()
+            assert waiter_about_to_lock.wait(timeout=10), "waiter did not reach lock call"
+            assert not waiter_done.wait(timeout=0.25), "waiter must block on lineage lock"
+            release_holder.set()
+            assert holder_thread.join(timeout=10) is None, "holder thread hung"
+            assert waiter_thread.join(timeout=10) is None, "waiter thread hung"
+            assert not waiter_error, waiter_error
+            assert len(waiter_locked) == 1
+            locked = waiter_locked[0]
             assert len(locked) == 1
             assert locked[0].id == root.id
+            assert locked[0].revoked_at == _NOW
         finally:
-            first_ready.set()
-            second_started.set()
-            holder.join(timeout=10)
-            waiter.join(timeout=10)
+            release_holder.set()
+            holder_thread.join(timeout=10)
+            waiter_thread.join(timeout=10)

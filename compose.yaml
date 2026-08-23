@@ -16,5 +16,46 @@ services:
       retries: 20
       start_period: 5s
 
+  migrate:
+    image: postmark-api:m0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["/app/.venv/bin/alembic", "upgrade", "head"]
+    environment:
+      POSTMARK_MODE: dev
+      POSTMARK_DATABASE_URL: postgresql+psycopg://postmark:${POSTMARK_DEV_DB_PASSWORD:-postmark-dev-only}@postgres:5432/postmark
+      POSTMARK_BLOB_ROOT: /var/lib/postmark/blobs
+
+  api:
+    image: postmark-api:m0
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      POSTMARK_MODE: dev
+      POSTMARK_DATABASE_URL: postgresql+psycopg://postmark:${POSTMARK_DEV_DB_PASSWORD:-postmark-dev-only}@postgres:5432/postmark
+      POSTMARK_BLOB_ROOT: /var/lib/postmark/blobs
+    ports:
+      - "127.0.0.1:${POSTMARK_API_PORT:-8000}:8000"
+    volumes:
+      - postmark-blob-data:/var/lib/postmark/blobs
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "/app/.venv/bin/python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')",
+        ]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
 volumes:
   postmark-postgres-data:
+  postmark-blob-data:

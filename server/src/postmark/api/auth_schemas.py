@@ -215,6 +215,22 @@ class ActiveKeyBundleResponse(BaseModel):
         return value
 
 
+class MeResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    user_id: uuid.UUID
+    email: str
+    handle: str
+    created_at: datetime
+    updated_at: datetime
+    active_key_bundle: ActiveKeyBundleResponse
+
+    @field_validator("created_at", "updated_at")
+    @classmethod
+    def _utc_aware(cls, value: datetime) -> datetime:
+        return validate_utc_aware(value)
+
+
 class RegistrationResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 

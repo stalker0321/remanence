@@ -18,6 +18,7 @@ from postmark.api.dependencies import (
     DatabaseUnavailableError,
 )
 from postmark.api.health import router as health_router
+from postmark.api.users import router as users_router
 from postmark.db.session import build_engine, build_session_factory
 from postmark.settings import AppMode, Settings
 
@@ -74,4 +75,5 @@ def create_app(
 
     app.include_router(health_router)
     app.include_router(auth_router)
+    app.include_router(users_router)
     return app

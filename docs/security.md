@@ -113,7 +113,7 @@ Each capsule has:
 - one signed publish statement;
 - one recipient HPKE envelope.
 
-Each of those capsule artifacts is encrypted with the capsule keyset. Ciphertext wire bytes are `5-byte Tink prefix || 12-byte IV || plaintext-length ciphertext || 16-byte tag` (exactly 33 bytes of AEAD overhead). The prefix is a Tink routing/key-ID hint, not an authentication substitute; the AEAD tag and AAD provide integrity. There is no `RAW` fallback and no heuristic alternate decoding. Android Keystore KEK wrapping and the HPKE envelope are different constructions and are not this artifact framing.
+Only the recognition manifest, content manifest, and each photo blob use the capsule AES-GCM artifact framing. Ciphertext wire bytes are `5-byte Tink prefix || 12-byte IV || plaintext-length ciphertext || 16-byte tag` (exactly 33 bytes of AEAD overhead). The prefix is a Tink routing/key-ID hint, not an authentication substitute; the AEAD tag and AAD provide integrity. There is no `RAW` fallback and no heuristic alternate decoding. The signed publish statement is signed plaintext bytes transported in the control record. The recipient envelope is independently HPKE-encrypted. Android Keystore KEK wrapping is a different construction and is not this artifact framing.
 
 The recognition manifest contains sender front/back fingerprints and minimal chooser hints. It does not contain note text or photo bytes. The content manifest contains note, photo ordering/media metadata, and nullable provider-neutral `TrackAttachment`. Separating them lets background sync prepare matching without handing content to UI code.
 
@@ -175,8 +175,8 @@ The server never receives the envelope plaintext. Envelope ciphertext is safe to
 
 - REST control messages use JSON, but all signed/encrypted logical payloads use deterministic Protocol Buffers (protobuf-lite on Android).
 - A schema/protocol version is present inside and outside each artifact and is bound by signature/AAD.
-- The exact Tink key type, `TINK` output-prefix variant, 33-byte artifact framing, public-key encoding, protobuf schema, and golden vectors are frozen for protocol v1 (`docs/decisions/ADR-005-capsule-artifact-aead-wire-format.md`).
-- Unknown protocol/algorithm versions fail closed; the client does not “try” alternate algorithms or `RAW` ciphertext.
+- Protocol-v1 protobuf schema and capsule artifact `AES256_GCM`/`TINK`/33-byte framing are frozen now (`docs/decisions/ADR-005-capsule-artifact-aead-wire-format.md`). Exact HPKE/signature template, output-prefix, public-key serialization, and golden vectors must be frozen before their respective crypto implementation tasks.
+- Unknown protocol/algorithm versions fail closed; the client does not “try” alternate algorithms or `RAW` ciphertext for capsule artifacts.
 - Key rotation adds a new active bundle ID. It never silently mutates an existing key record.
 - Crypto changes require an ADR, a new version if wire behavior changes, and cross-version test vectors.
 

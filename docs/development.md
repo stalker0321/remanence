@@ -88,7 +88,7 @@ docker compose version
 
 ## Host provisioning
 
-Noninteractive commands used on this host. Do not install Gradle globally. Do not install the Android SDK here.
+Noninteractive commands used on this host. Do not install Gradle globally; the project uses its wrapper.
 
 ```sh
 sudo apt-get update

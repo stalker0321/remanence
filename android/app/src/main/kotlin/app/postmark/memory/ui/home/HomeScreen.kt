@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -20,8 +21,31 @@ enum class BackendHealthUiState {
     UNAVAILABLE,
 }
 
+/**
+ * Combined account capability driving Home actions. Create/Scan stay disabled
+ * unless the user is authenticated AND the local crypto identity is ready;
+ * recovery-required accounts can browse nowhere and are told why.
+ */
+sealed interface AccountCapabilityState {
+    data object NotAuthenticated : AccountCapabilityState
+
+    /** Authenticated on the server, but private identity keys are absent locally. */
+    data object RecoveryRequired : AccountCapabilityState
+
+    data class CryptoReady(
+        val userId: String,
+        val handle: String,
+    ) : AccountCapabilityState
+
+    val actionsEnabled: Boolean
+        get() = this is CryptoReady
+}
+
 @Composable
-fun HomeScreen(state: BackendHealthUiState) {
+fun HomeScreen(
+    state: BackendHealthUiState,
+    accountCapability: AccountCapabilityState = AccountCapabilityState.NotAuthenticated,
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -42,7 +66,7 @@ fun HomeScreen(state: BackendHealthUiState) {
         Spacer(Modifier.height(24.dp))
         Button(
             onClick = {},
-            enabled = false,
+            enabled = accountCapability.actionsEnabled,
             modifier = Modifier.testTag("create_action"),
         ) {
             Text("Create")
@@ -50,10 +74,18 @@ fun HomeScreen(state: BackendHealthUiState) {
         Spacer(Modifier.height(12.dp))
         Button(
             onClick = {},
-            enabled = false,
+            enabled = accountCapability.actionsEnabled,
             modifier = Modifier.testTag("scan_action"),
         ) {
             Text("Scan")
+        }
+        when (accountCapability) {
+            AccountCapabilityState.RecoveryRequired -> Text(
+                text = "Private keys for this account are not on this device; recovery required.",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.testTag("home_recovery_note"),
+            )
+            else -> Unit
         }
     }
 }

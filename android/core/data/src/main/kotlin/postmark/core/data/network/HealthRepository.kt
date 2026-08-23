@@ -30,7 +30,7 @@ sealed interface HealthCheckResult {
     ) : HealthCheckResult
 }
 
-class HealthRepository(
+class HealthRepository internal constructor(
     private val client: OkHttpClient,
     private val baseUrl: ApiBaseUrl,
 ) {
@@ -109,8 +109,11 @@ class HealthRepository(
             null
         }
 
-    private companion object {
-        const val MAX_BODY_BYTES = 1024
-        const val READ_CHUNK_BYTES = 256
+    companion object {
+        fun create(baseUrl: ApiBaseUrl): HealthRepository =
+            HealthRepository(HttpClientFactory.create(), baseUrl)
+
+        private const val MAX_BODY_BYTES = 1024
+        private const val READ_CHUNK_BYTES = 256
     }
 }

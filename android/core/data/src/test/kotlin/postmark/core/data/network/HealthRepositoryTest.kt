@@ -12,6 +12,19 @@ import okio.Buffer
 
 class HealthRepositoryTest {
     @Test
+    fun createFactoryPathReachesMockWebServerAndReturnsAvailable() = runTest {
+        withServer { server ->
+            server.enqueueJson("""{"status":"ok"}""")
+            val repository = HealthRepository.create(ApiBaseUrl.parse(server.url("/").toString()))
+            assertEquals(HealthCheckResult.Available, repository.check())
+            val recorded = server.takeRequest()
+            assertEquals("GET", recorded.method)
+            assertEquals("/healthz", recorded.url.encodedPath)
+            assertEquals("application/json", recorded.headers["Accept"])
+        }
+    }
+
+    @Test
     fun availableExactJsonRecordsGetHealthzAndAccept() = runTest {
         withServer { server ->
             server.enqueueJson("""{"status":"ok"}""")

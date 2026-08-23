@@ -3,7 +3,7 @@ package postmark.core.data.network
 import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
 
-object HttpClientFactory {
+internal object HttpClientFactory {
     fun create(): OkHttpClient =
         OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)

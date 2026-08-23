@@ -1,5 +1,5 @@
 # Current milestone
 
-`M0_FOUNDATION`
+`M1_SINGLE_ACCOUNT`
 
-Review 002 PASS at `58c988daa7a52eac6f73616052acec38d31aeb5c`. Grok may implement only the single atomic task assigned by Codex. Next task: `M0-24`.
+M0 gate PASS at `f62a71de439982a92b37cfba648ef6c5d6ff680c`. Grok may implement only the single atomic task assigned by Codex. Next task: `M1-P01`. Physical Android device remains a blocker for APK installation, CameraX, CV, and physical M1/M2 evidence.

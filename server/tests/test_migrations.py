@@ -243,6 +243,7 @@ def test_account_migration_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
         command.upgrade(config, "head")
         with _connect_db(url, database) as conn:
             _assert_head_schema(conn)
+        command.check(config)
 
         command.downgrade(config, _BASELINE)
         with _connect_db(url, database) as conn:
@@ -251,6 +252,7 @@ def test_account_migration_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
         command.upgrade(config, "head")
         with _connect_db(url, database) as conn:
             _assert_head_schema(conn)
+        command.check(config)
 
         command.upgrade(config, "head")
         with _connect_db(url, database) as conn:

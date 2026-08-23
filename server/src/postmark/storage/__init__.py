@@ -9,6 +9,7 @@ from postmark.storage.base import (
     BlobStoreError,
     InvalidBlobKeyError,
 )
+from postmark.storage.local import LocalBlobPathResolver
 
 __all__ = [
     "BlobConflictError",
@@ -18,4 +19,5 @@ __all__ = [
     "BlobStore",
     "BlobStoreError",
     "InvalidBlobKeyError",
+    "LocalBlobPathResolver",
 ]

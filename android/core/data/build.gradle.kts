@@ -21,7 +21,11 @@ android {
 dependencies {
     implementation(libs.okhttp)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.okhttp.coroutines)
     testImplementation(kotlin("test-junit5"))
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.okhttp.mockwebserver3)
 }
 
 tasks.withType<Test>().configureEach {

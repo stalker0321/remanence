@@ -35,7 +35,8 @@ def normalize_email(value: str) -> str:
 
 def validate_password(value: SecretStr) -> SecretStr:
     password = value.get_secret_value()
-    if not 8 <= len(password) <= 128:
+    # Canonical v1 limit: 12–128 Unicode code points (protocol.md section 12).
+    if not 12 <= len(password) <= 128:
         raise ValueError("invalid password")
     return value
 

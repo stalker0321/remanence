@@ -154,6 +154,16 @@ def test_password_too_short_rejected() -> None:
         RegistrationRequest.model_validate(_registration_payload(password="short"))
 
 
+def test_password_below_canonical_minimum_rejected() -> None:
+    with pytest.raises(ValidationError):
+        RegistrationRequest.model_validate(_registration_payload(password="x" * 11))
+
+
+def test_password_at_canonical_minimum_accepted() -> None:
+    request = RegistrationRequest.model_validate(_registration_payload(password="x" * 12))
+    assert request.password.get_secret_value() == "x" * 12
+
+
 def test_password_too_long_rejected() -> None:
     with pytest.raises(ValidationError):
         RegistrationRequest.model_validate(_registration_payload(password="x" * 129))

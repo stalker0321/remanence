@@ -1,4 +1,5 @@
 import hashlib
+import os
 from pathlib import Path
 
 import pytest
@@ -50,6 +51,78 @@ def test_stat_hashes_multiple_chunks(tmp_path: Path) -> None:
     info = LocalFileBlobStore(root).stat(_KEY)
     assert info.size == len(payload)
     assert info.sha256_hex == hashlib.sha256(payload).hexdigest()
+
+
+def _assert_generic_read_error(exc: BaseException, *, root: Path, path: Path) -> None:
+    assert isinstance(exc, BlobStoreError)
+    assert not isinstance(exc, BlobNotFoundError)
+    assert str(exc) == "blob read failed"
+    public = f"{exc!s} {exc!r}"
+    assert _KEY not in public
+    assert str(root) not in public
+    assert root.as_posix() not in public
+    assert str(path) not in public
+    assert path.as_posix() not in public
+    assert path.name not in public
+    assert exc.__cause__ is None
+    assert exc.__suppress_context__ is True
+
+
+def test_permission_error_is_store_error_not_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "blobs"
+    path = _place(root, _KEY, b"secret")
+    store = LocalFileBlobStore(root)
+
+    def _denied(*args: object, **kwargs: object) -> int:
+        raise PermissionError(13, "Permission denied", os.fspath(path))
+
+    monkeypatch.setattr(os, "open", _denied)
+    with pytest.raises(BlobStoreError) as caught:
+        with store.open_reader(_KEY):
+            raise AssertionError("unreadable blob opened")
+    _assert_generic_read_error(caught.value, root=root, path=path)
+    assert "Permission denied" not in f"{caught.value!s} {caught.value!r}"
+
+
+def test_generic_oserror_is_store_error_not_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "blobs"
+    path = _place(root, _KEY, b"payload")
+    store = LocalFileBlobStore(root)
+
+    def _io_error(*args: object, **kwargs: object) -> int:
+        raise OSError(5, "Input/output error", os.fspath(path))
+
+    monkeypatch.setattr(os, "open", _io_error)
+    with pytest.raises(BlobStoreError) as caught:
+        with store.open_reader(_KEY):
+            raise AssertionError("io error opened")
+    _assert_generic_read_error(caught.value, root=root, path=path)
+    assert "Input/output error" not in f"{caught.value!s} {caught.value!r}"
+
+
+def test_fstat_oserror_is_store_error_not_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "blobs"
+    path = _place(root, _KEY, b"payload")
+    store = LocalFileBlobStore(root)
+
+    def _io_error(_fd: int) -> os.stat_result:
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(os, "fstat", _io_error)
+    with pytest.raises(BlobStoreError) as caught:
+        with store.open_reader(_KEY):
+            raise AssertionError("fstat failure opened")
+    _assert_generic_read_error(caught.value, root=root, path=path)
+    assert "Input/output error" not in f"{caught.value!s} {caught.value!r}"
 
 
 def test_missing_reader_and_stat(tmp_path: Path) -> None:

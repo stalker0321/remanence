@@ -71,6 +71,7 @@ _TEMP_PREFIX = ".postmark-"
 _GENERIC_INTEGRITY = "blob integrity check failed"
 _GENERIC_EXPECTATION = "invalid blob expectation"
 _GENERIC_CONFLICT = "blob already exists"
+_GENERIC_READ = "blob read failed"
 
 
 class LocalFileBlobStore:
@@ -152,12 +153,17 @@ class LocalFileBlobStore:
             flags |= os.O_NOFOLLOW
         try:
             fd = os.open(path, flags)
-        except (FileNotFoundError, OSError):
+        except (FileNotFoundError, NotADirectoryError, IsADirectoryError):
             raise BlobNotFoundError(key) from None
+        except OSError:
+            raise BlobStoreError(_GENERIC_READ) from None
         try:
             if not stat.S_ISREG(os.fstat(fd).st_mode):
                 raise BlobNotFoundError(key)
             reader = os.fdopen(fd, "rb")
+        except OSError:
+            os.close(fd)
+            raise BlobStoreError(_GENERIC_READ) from None
         except Exception:
             os.close(fd)
             raise

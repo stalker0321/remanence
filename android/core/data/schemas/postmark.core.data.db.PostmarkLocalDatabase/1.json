@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 1,
-    "identityHash": "6214c198a6bc69d4215d208d2b66d282",
+    "identityHash": "4fbcead9b360819248be9de7551f29b7",
     "entities": [
       {
         "tableName": "local_account",
@@ -159,11 +159,70 @@
             "capsule_id"
           ]
         }
+      },
+      {
+        "tableName": "blob_cache",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`blob_id` TEXT NOT NULL, `capsule_id` TEXT NOT NULL, `kind` TEXT NOT NULL, `ordinal` INTEGER, `expected_size_bytes` INTEGER NOT NULL, `expected_sha256` BLOB NOT NULL, `local_path` TEXT NOT NULL, `cache_state` TEXT NOT NULL, PRIMARY KEY(`blob_id`))",
+        "fields": [
+          {
+            "fieldPath": "blobId",
+            "columnName": "blob_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "capsuleId",
+            "columnName": "capsule_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ordinal",
+            "columnName": "ordinal",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "expectedSizeBytes",
+            "columnName": "expected_size_bytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "expectedSha256",
+            "columnName": "expected_sha256",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "localPath",
+            "columnName": "local_path",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cacheState",
+            "columnName": "cache_state",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "blob_id"
+          ]
+        }
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '6214c198a6bc69d4215d208d2b66d282')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '4fbcead9b360819248be9de7551f29b7')"
     ]
   }
 }

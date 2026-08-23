@@ -6,7 +6,17 @@
 - Нет открытки — нет воспоминания
 - Делиться реже, но осмысленнее
 
-Application code must not be started until the architecture gate is complete.
+## Current development status / Quick verification
+
+Architecture gate passed. M0 is being finalized. Toolchain, Compose, and optional device steps are in [`docs/development.md`](docs/development.md).
+
+Canonical verification:
+
+```sh
+./scripts/verify-m0.sh
+```
+
+That command does not prove physical-device, camera, or M1/M2 success.
 
 ## Engineering package
 

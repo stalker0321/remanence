@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 1,
-    "identityHash": "4fbcead9b360819248be9de7551f29b7",
+    "identityHash": "9c93bcd20eaeb573e0116928ba3d9cf6",
     "entities": [
       {
         "tableName": "local_account",
@@ -218,11 +218,171 @@
             "blob_id"
           ]
         }
+      },
+      {
+        "tableName": "outbox_capsule",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`capsule_id` TEXT NOT NULL, `idempotency_key` TEXT NOT NULL, `recipient_user_id` TEXT NOT NULL, `recipient_key_bundle_id` TEXT NOT NULL, `state` TEXT NOT NULL, `recognition_manifest_path` TEXT, `content_manifest_path` TEXT, `envelope_path` TEXT, `last_error_code` TEXT, PRIMARY KEY(`capsule_id`))",
+        "fields": [
+          {
+            "fieldPath": "capsuleId",
+            "columnName": "capsule_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "idempotencyKey",
+            "columnName": "idempotency_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "recipientUserId",
+            "columnName": "recipient_user_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "recipientKeyBundleId",
+            "columnName": "recipient_key_bundle_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "recognitionManifestPath",
+            "columnName": "recognition_manifest_path",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "contentManifestPath",
+            "columnName": "content_manifest_path",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "envelopePath",
+            "columnName": "envelope_path",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastErrorCode",
+            "columnName": "last_error_code",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "capsule_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_outbox_capsule_idempotency_key",
+            "unique": true,
+            "columnNames": [
+              "idempotency_key"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_outbox_capsule_idempotency_key` ON `${TABLE_NAME}` (`idempotency_key`)"
+          }
+        ]
+      },
+      {
+        "tableName": "outbox_blob",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`blob_id` TEXT NOT NULL, `capsule_id` TEXT NOT NULL, `kind` TEXT NOT NULL, `ordinal` INTEGER, `local_ciphertext_path` TEXT NOT NULL, `size_bytes` INTEGER NOT NULL, `sha256` BLOB NOT NULL, `upload_state` TEXT NOT NULL, `attempt_count` INTEGER NOT NULL, PRIMARY KEY(`blob_id`))",
+        "fields": [
+          {
+            "fieldPath": "blobId",
+            "columnName": "blob_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "capsuleId",
+            "columnName": "capsule_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ordinal",
+            "columnName": "ordinal",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "localCiphertextPath",
+            "columnName": "local_ciphertext_path",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sizeBytes",
+            "columnName": "size_bytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sha256",
+            "columnName": "sha256",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "uploadState",
+            "columnName": "upload_state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "attemptCount",
+            "columnName": "attempt_count",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "blob_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_outbox_blob_capsule_id",
+            "unique": false,
+            "columnNames": [
+              "capsule_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_outbox_blob_capsule_id` ON `${TABLE_NAME}` (`capsule_id`)"
+          },
+          {
+            "name": "index_outbox_blob_capsule_id_kind_ordinal",
+            "unique": true,
+            "columnNames": [
+              "capsule_id",
+              "kind",
+              "ordinal"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_outbox_blob_capsule_id_kind_ordinal` ON `${TABLE_NAME}` (`capsule_id`, `kind`, `ordinal`)"
+          }
+        ]
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '4fbcead9b360819248be9de7551f29b7')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '9c93bcd20eaeb573e0116928ba3d9cf6')"
     ]
   }
 }

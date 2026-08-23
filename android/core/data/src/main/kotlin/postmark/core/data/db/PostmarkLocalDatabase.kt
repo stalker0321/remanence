@@ -13,6 +13,8 @@ import androidx.room.RoomDatabase
         IncomingCapsuleEntity::class,
         IncomingEnvelopeEntity::class,
         BlobCacheEntity::class,
+        OutboxCapsuleEntity::class,
+        OutboxBlobEntity::class,
     ],
     version = 1,
     exportSchema = true,
@@ -25,6 +27,10 @@ abstract class PostmarkLocalDatabase : RoomDatabase() {
     abstract fun incomingEnvelopeDao(): IncomingEnvelopeDao
 
     abstract fun blobCacheDao(): BlobCacheDao
+
+    abstract fun outboxCapsuleDao(): OutboxCapsuleDao
+
+    abstract fun outboxBlobDao(): OutboxBlobDao
 
     companion object {
         const val DATABASE_NAME: String = "postmark-local.db"

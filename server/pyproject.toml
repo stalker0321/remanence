@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Postmark server for account routing and ciphertext storage."
 requires-python = ">=3.13,<3.14"
 dependencies = [
+    "fastapi==0.141.1",
     "pydantic-settings==2.15.0",
 ]
 
@@ -16,5 +17,6 @@ module-name = "postmark"
 
 [dependency-groups]
 dev = [
+    "httpx==0.28.1",
     "pytest==9.1.1",
 ]

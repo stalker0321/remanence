@@ -118,3 +118,6 @@ def test_verify_catches_only_documented_exceptions() -> None:
     source = inspect.getsource(PasswordService.verify_password)
     assert "except Exception" not in source
     assert "except BaseException" not in source
+    assert "except ValueError" not in source
+    assert "InvalidHashError" in source
+    assert "VerificationError" in source

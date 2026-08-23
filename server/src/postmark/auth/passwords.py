@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 
 from argon2 import PasswordHasher
-from argon2.exceptions import VerificationError
+from argon2.exceptions import InvalidHashError, VerificationError
 from argon2.low_level import Type
 
 
@@ -32,10 +32,10 @@ class PasswordService:
             self._hasher.verify(encoded_hash, password)
         except VerificationError:
             return PasswordVerificationResult(verified=False, needs_rehash=False)
-        except ValueError:
+        except InvalidHashError:
             return PasswordVerificationResult(verified=False, needs_rehash=False)
         try:
             needs_rehash = self._hasher.check_needs_rehash(encoded_hash)
-        except (VerificationError, ValueError):
+        except InvalidHashError:
             needs_rehash = False
         return PasswordVerificationResult(verified=True, needs_rehash=needs_rehash)

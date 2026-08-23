@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 1,
-    "identityHash": "f0f779410f2d557fc9a7fb12d2e87e2b",
+    "identityHash": "6214c198a6bc69d4215d208d2b66d282",
     "entities": [
       {
         "tableName": "local_account",
@@ -45,11 +45,125 @@
             "user_id"
           ]
         }
+      },
+      {
+        "tableName": "incoming_capsule",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`capsule_id` TEXT NOT NULL, `sender_user_id` TEXT NOT NULL, `recipient_user_id` TEXT NOT NULL, `sender_signing_key_bundle_id` TEXT NOT NULL, `recipient_encryption_key_bundle_id` TEXT NOT NULL, `protocol_version` INTEGER NOT NULL, `server_status` TEXT NOT NULL, `ready_at_epoch_ms` INTEGER NOT NULL, `signed_statement_bytes` BLOB NOT NULL, `material_state` TEXT NOT NULL, PRIMARY KEY(`capsule_id`))",
+        "fields": [
+          {
+            "fieldPath": "capsuleId",
+            "columnName": "capsule_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "senderUserId",
+            "columnName": "sender_user_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "recipientUserId",
+            "columnName": "recipient_user_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "senderSigningKeyBundleId",
+            "columnName": "sender_signing_key_bundle_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "recipientEncryptionKeyBundleId",
+            "columnName": "recipient_encryption_key_bundle_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "protocolVersion",
+            "columnName": "protocol_version",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "serverStatus",
+            "columnName": "server_status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "readyAtEpochMs",
+            "columnName": "ready_at_epoch_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "signedStatementBytes",
+            "columnName": "signed_statement_bytes",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "materialState",
+            "columnName": "material_state",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "capsule_id"
+          ]
+        }
+      },
+      {
+        "tableName": "incoming_envelope",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`capsule_id` TEXT NOT NULL, `recipient_key_bundle_id` TEXT NOT NULL, `hpke_ciphertext` BLOB NOT NULL, `transport_sha256` BLOB NOT NULL, `received_at_epoch_ms` INTEGER NOT NULL, PRIMARY KEY(`capsule_id`))",
+        "fields": [
+          {
+            "fieldPath": "capsuleId",
+            "columnName": "capsule_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "recipientKeyBundleId",
+            "columnName": "recipient_key_bundle_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hpkeCiphertext",
+            "columnName": "hpke_ciphertext",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "transportSha256",
+            "columnName": "transport_sha256",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "receivedAtEpochMs",
+            "columnName": "received_at_epoch_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "capsule_id"
+          ]
+        }
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'f0f779410f2d557fc9a7fb12d2e87e2b')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '6214c198a6bc69d4215d208d2b66d282')"
     ]
   }
 }

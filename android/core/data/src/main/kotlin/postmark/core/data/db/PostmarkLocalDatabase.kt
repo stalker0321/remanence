@@ -8,12 +8,20 @@ import androidx.room.RoomDatabase
  * inbox projection, and grows only through explicit versioned migrations.
  */
 @Database(
-    entities = [LocalAccountEntity::class],
+    entities = [
+        LocalAccountEntity::class,
+        IncomingCapsuleEntity::class,
+        IncomingEnvelopeEntity::class,
+    ],
     version = 1,
     exportSchema = true,
 )
 abstract class PostmarkLocalDatabase : RoomDatabase() {
     abstract fun localAccountDao(): LocalAccountDao
+
+    abstract fun incomingCapsuleDao(): IncomingCapsuleDao
+
+    abstract fun incomingEnvelopeDao(): IncomingEnvelopeDao
 
     companion object {
         const val DATABASE_NAME: String = "postmark-local.db"

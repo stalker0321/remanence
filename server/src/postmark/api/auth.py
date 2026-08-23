@@ -13,6 +13,8 @@ from postmark.api.auth_schemas import (
     LoginRequest,
     LoginResponse,
     ProblemDetail,
+    RefreshRequest,
+    RefreshResponse,
     RegistrationRequest,
     RegistrationResponse,
     RegistrationUserResponse,
@@ -22,6 +24,11 @@ from postmark.api.dependencies import DatabaseUnavailableError, get_db_session
 from postmark.auth.login import LoginService, LoginStatus
 from postmark.auth.passwords import PasswordService
 from postmark.auth.registration import RegistrationService
+from postmark.auth.session_repository import AuthSessionRepository
+from postmark.auth.session_rotation import (
+    RefreshRotationStatus,
+    SessionRotationService,
+)
 from postmark.users.key_bundle_validation import PublicKeyBundleValidationError
 
 router = APIRouter()
@@ -91,6 +98,59 @@ def _invalid_credentials_response() -> JSONResponse:
         status_code=401,
         content=_invalid_credentials_problem().model_dump(),
         media_type="application/problem+json",
+    )
+
+
+def _invalid_refresh_problem() -> ProblemDetail:
+    return ProblemDetail(
+        type="https://postmark.invalid/problems/invalid-refresh-token",
+        title="Invalid refresh token",
+        status=401,
+        code="INVALID_REFRESH_TOKEN",
+    )
+
+
+def _session_replayed_problem() -> ProblemDetail:
+    return ProblemDetail(
+        type="https://postmark.invalid/problems/session-replayed",
+        title="Session replayed",
+        status=401,
+        code="SESSION_REPLAYED",
+    )
+
+
+def _problem_response(status: int, problem: ProblemDetail) -> JSONResponse:
+    return JSONResponse(
+        status_code=status,
+        content=problem.model_dump(),
+        media_type="application/problem+json",
+    )
+
+
+@router.post(
+    "/v1/auth/refresh",
+    response_model=RefreshResponse,
+    status_code=200,
+)
+def refresh(
+    payload: RefreshRequest,
+    session: Session = Depends(get_db_session),
+) -> RefreshResponse:
+    with session.begin():
+        result = SessionRotationService(AuthSessionRepository(session)).rotate(
+            payload.refresh_token.get_secret_value(),
+            datetime.now(timezone.utc),
+        )
+    if result.status is RefreshRotationStatus.INVALID:
+        return _problem_response(401, _invalid_refresh_problem())
+    if result.status is RefreshRotationStatus.REPLAYED:
+        return _problem_response(401, _session_replayed_problem())
+    return RefreshResponse(
+        session_id=result.session_id,
+        access_token=result.access_token,
+        refresh_token=result.refresh_token,
+        access_expires_at=result.access_expires_at,
+        refresh_expires_at=result.refresh_expires_at,
     )
 
 

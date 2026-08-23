@@ -54,6 +54,32 @@ def validate_utc_aware(value: datetime) -> datetime:
     return value
 
 
+class RefreshRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    refresh_token: SecretStr
+
+    @field_validator("refresh_token")
+    @classmethod
+    def _refresh_format(cls, value: SecretStr) -> SecretStr:
+        token = value.get_secret_value()
+        if not token.startswith(_REFRESH_TOKEN_PREFIX):
+            raise ValueError("invalid refresh token")
+        payload = token[len(_REFRESH_TOKEN_PREFIX):]
+        if _BASE64URL_RE.fullmatch(payload) is None:
+            raise ValueError("invalid refresh token")
+        if "=" in payload:
+            raise ValueError("invalid refresh token")
+        padded = payload + "=" * (-len(payload) % 4)
+        try:
+            decoded = base64.b64decode(padded, altchars=b"-_", validate=True)
+        except Exception:
+            raise ValueError("invalid refresh token") from None
+        if len(decoded) != 32:
+            raise ValueError("invalid refresh token")
+        return value
+
+
 class RegistrationKeyBundleRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
@@ -224,6 +250,31 @@ class LoginResponse(BaseModel):
     access_token: str = Field(repr=False)
     access_expires_at: datetime
     refresh_token: str = Field(repr=False)
+    refresh_expires_at: datetime
+
+    @field_validator("access_token")
+    @classmethod
+    def _access_prefix(cls, value: str) -> str:
+        return validate_token(value, _ACCESS_TOKEN_PREFIX)
+
+    @field_validator("refresh_token")
+    @classmethod
+    def _refresh_prefix(cls, value: str) -> str:
+        return validate_token(value, _REFRESH_TOKEN_PREFIX)
+
+    @field_validator("access_expires_at", "refresh_expires_at")
+    @classmethod
+    def _utc_aware(cls, value: datetime) -> datetime:
+        return validate_utc_aware(value)
+
+
+class RefreshResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    session_id: uuid.UUID
+    access_token: str = Field(repr=False)
+    refresh_token: str = Field(repr=False)
+    access_expires_at: datetime
     refresh_expires_at: datetime
 
     @field_validator("access_token")

@@ -1,9 +1,9 @@
-"""Auth session persistence creation and read/expiry lookups."""
+"""Auth session persistence creation, read/expiry lookups, and rotation primitives."""
 
 import uuid
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from postmark.auth.models import AuthSession
@@ -53,6 +53,26 @@ class AuthSessionRepository:
     def find_by_refresh_token_hash(self, token_hash: bytes) -> AuthSession | None:
         statement = select(AuthSession).where(AuthSession.refresh_token_hash == token_hash)
         return self._session.scalar(statement)
+
+    def find_by_refresh_token_hash_for_update(self, token_hash: bytes) -> AuthSession | None:
+        statement = (
+            select(AuthSession)
+            .where(AuthSession.refresh_token_hash == token_hash)
+            .with_for_update()
+        )
+        return self._session.scalar(statement)
+
+    def revoke_lineage(self, lineage_id: uuid.UUID, revoked_at: datetime) -> int:
+        statement = (
+            update(AuthSession)
+            .where(
+                AuthSession.lineage_id == lineage_id,
+                AuthSession.revoked_at.is_(None),
+            )
+            .values(revoked_at=revoked_at)
+        )
+        result = self._session.execute(statement)
+        return result.rowcount
 
     @staticmethod
     def is_refresh_usable(auth_session: AuthSession, now: datetime) -> bool:

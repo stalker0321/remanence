@@ -22,6 +22,24 @@ message ArtifactBinding {
   bytes ciphertext_sha256 = 5; // SHA256 exactly 32
 }
 
+message ArtifactAadContext {
+  uint32 protocol_version = 1; // exactly 1
+  bytes capsule_id = 2; // UUID bytes exactly 16
+  bytes blob_id = 3; // UUID bytes exactly 16
+  ArtifactKind artifact_kind = 4;
+  sint32 ordinal = 5; // -1 except PHOTO 0..4
+  bytes sender_user_id = 6; // UUID bytes exactly 16
+  bytes recipient_user_id = 7; // UUID bytes exactly 16
+}
+
+message RecipientEnvelopeContext {
+  uint32 protocol_version = 1; // exactly 1
+  bytes capsule_id = 2; // UUID bytes exactly 16
+  bytes sender_user_id = 3; // UUID bytes exactly 16
+  bytes recipient_user_id = 4; // UUID bytes exactly 16
+  bytes recipient_key_bundle_id = 5; // UUID bytes exactly 16
+}
+
 message PublishStatement {
   uint32 protocol_version = 1; // exactly 1
   bytes capsule_id = 2; // UUID bytes exactly 16

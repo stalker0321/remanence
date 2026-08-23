@@ -119,20 +119,19 @@ The recognition manifest contains sender front/back fingerprints and minimal cho
 
 ### 6.3 Associated data
 
-Every AEAD call uses deterministic, versioned associated data:
+Every AEAD call uses deterministic, versioned associated data. Canonical AAD bytes are the UTF-8/ASCII prefix `postmark/artifact/v1`, one `0x00` delimiter, then deterministic protobuf bytes of `ArtifactAadContext` (`docs/decisions/ADR-006-canonical-crypto-context-encoding.md`). The domain prefix is not a protobuf field. Logical fields of `ArtifactAadContext`:
 
 ```text
-postmark/artifact/v1
 protocol_version
 capsule_id
 blob_id
 artifact_kind
-ordinal_or_minus_one
+ordinal
 sender_user_id
 recipient_user_id
 ```
 
-Encoding is the canonical binary encoding defined in `protocol.md`, not string concatenation. The client reconstructs and compares the complete AAD context before returning plaintext.
+The context protobuf must be fully populated, protocol version exactly 1, typed IDs exactly 16 bytes; `artifact_kind` cannot be unspecified; ordinal must match kind (`-1` for non-photo, `0..4` for photo). Unknown version/kind or malformed IDs fail before the AEAD primitive is invoked. The client reconstructs and compares the complete AAD context before returning plaintext.
 
 ### 6.4 Publish statement and signature
 
@@ -158,16 +157,17 @@ The envelope plaintext is canonical binary data containing:
 - serialized capsule AEAD keyset;
 - SHA-256 of deterministic signed publish-statement bytes.
 
-Tink HPKE encrypts it to the recipient public key with context info:
+Tink HPKE encrypts it to the recipient public key with context info. Canonical context-info bytes are the UTF-8/ASCII prefix `postmark/envelope/v1`, one `0x00` delimiter, then deterministic protobuf bytes of `RecipientEnvelopeContext` (`docs/decisions/ADR-006-canonical-crypto-context-encoding.md`). The domain prefix is not a protobuf field. Logical fields of `RecipientEnvelopeContext`:
 
 ```text
-postmark/envelope/v1
 protocol_version
 capsule_id
 sender_user_id
 recipient_user_id
 recipient_key_bundle_id
 ```
+
+The context protobuf must be fully populated, protocol version exactly 1, typed IDs exactly 16 bytes. Unknown version or malformed IDs fail before the HPKE primitive is invoked.
 
 The server never receives the envelope plaintext. Envelope ciphertext is safe to route/store but is still excluded from logs.
 

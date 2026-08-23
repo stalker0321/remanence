@@ -59,6 +59,24 @@ message ArtifactBinding {
   bytes ciphertext_sha256 = 5;    // exactly 32 bytes
 }
 
+message ArtifactAadContext {
+  uint32 protocol_version = 1;    // exactly 1 for v1
+  bytes capsule_id = 2;
+  bytes blob_id = 3;
+  ArtifactKind artifact_kind = 4;
+  sint32 ordinal = 5;             // -1 except PHOTO: 0..4
+  bytes sender_user_id = 6;
+  bytes recipient_user_id = 7;
+}
+
+message RecipientEnvelopeContext {
+  uint32 protocol_version = 1;    // exactly 1 for v1
+  bytes capsule_id = 2;
+  bytes sender_user_id = 3;
+  bytes recipient_user_id = 4;
+  bytes recipient_key_bundle_id = 5;
+}
+
 message PublishStatement {
   uint32 protocol_version = 1;    // exactly 1 for v1
   bytes capsule_id = 2;
@@ -119,6 +137,8 @@ message ContentManifest {
   optional TrackAttachment track = 5; // MUST be absent in MVP
 }
 ```
+
+Canonical artifact AAD bytes are the UTF-8/ASCII prefix `postmark/artifact/v1`, one `0x00` delimiter, then deterministic protobuf bytes of `ArtifactAadContext`. Canonical HPKE context info is the UTF-8/ASCII prefix `postmark/envelope/v1`, one `0x00` delimiter, then deterministic protobuf bytes of `RecipientEnvelopeContext`. The domain prefix is not a protobuf field; the `0x00` delimiter is mandatory. Context messages must be fully populated with protocol version 1 and 16-byte typed IDs. `artifact_kind` cannot be `ARTIFACT_KIND_UNSPECIFIED`. Ordinal is `-1` for non-photo artifacts and `0..4` for `PHOTO`. Unknown version/kind or malformed IDs fail closed before AEAD or HPKE. No JSON, string UUID, locale, or varint hand-concatenation is used outside protobuf. Publish signature input remains `"postmark/publish/v1" || deterministic_statement_bytes` as documented in `security.md` and is outside this context encoding.
 
 The signed publish object transported by REST is:
 

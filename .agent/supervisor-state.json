@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "current_milestone": "M0_FOUNDATION",
-  "current_task": "M0-15",
-  "last_completed_implementation_commit": "062213baebf4a312e1f0ceebf4a69b3ca045e85f",
-  "last_reviewed_commit": "062213baebf4a312e1f0ceebf4a69b3ca045e85f",
+  "current_task": "M0-24",
+  "last_completed_implementation_commit": "58c988daa7a52eac6f73616052acec38d31aeb5c",
+  "last_reviewed_commit": "58c988daa7a52eac6f73616052acec38d31aeb5c",
   "known_blockers": [
     "No physical Android device is currently attached; APK installation, CameraX, CV, and physical M1/M2 evidence cannot be claimed until a device is available."
   ],

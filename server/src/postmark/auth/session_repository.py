@@ -1,8 +1,9 @@
-"""Auth session persistence creation."""
+"""Auth session persistence creation and read/expiry lookups."""
 
 import uuid
 from datetime import datetime
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from postmark.auth.models import AuthSession
@@ -39,3 +40,24 @@ class AuthSessionRepository:
         self._session.add(auth_session)
         self._session.flush()
         return auth_session
+
+    def find_by_access_token_hash(self, token_hash: bytes, now: datetime) -> AuthSession | None:
+        statement = select(AuthSession).where(
+            AuthSession.access_token_hash == token_hash,
+            AuthSession.revoked_at.is_(None),
+            AuthSession.rotated_at.is_(None),
+            AuthSession.access_expires_at > now,
+        )
+        return self._session.scalar(statement)
+
+    def find_by_refresh_token_hash(self, token_hash: bytes) -> AuthSession | None:
+        statement = select(AuthSession).where(AuthSession.refresh_token_hash == token_hash)
+        return self._session.scalar(statement)
+
+    @staticmethod
+    def is_refresh_usable(auth_session: AuthSession, now: datetime) -> bool:
+        return (
+            auth_session.refresh_expires_at > now
+            and auth_session.revoked_at is None
+            and auth_session.rotated_at is None
+        )

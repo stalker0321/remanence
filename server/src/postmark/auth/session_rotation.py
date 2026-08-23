@@ -34,6 +34,13 @@ class SessionRotationService:
 
     def rotate(self, refresh_token: str, now: datetime) -> RefreshRotationResult:
         token_hash = hash_opaque_token(refresh_token)
+        lineage_id = self._repo.find_lineage_id_by_refresh_token_hash(token_hash)
+        if lineage_id is None:
+            return RefreshRotationResult(
+                status=RefreshRotationStatus.INVALID,
+                session_id=None,
+            )
+        self._repo.lock_lineage(lineage_id)
         old = self._repo.find_by_refresh_token_hash_for_update(token_hash)
         if old is None:
             return RefreshRotationResult(

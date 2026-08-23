@@ -1,12 +1,15 @@
-"""Authenticated current-account endpoint."""
+"""Authenticated current-account and handle-change endpoints."""
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from postmark.api.auth_schemas import (
     ActiveKeyBundleResponse,
+    HandleChangeRequest,
+    HandleChangeResponse,
     MeResponse,
     ProblemDetail,
 )
@@ -29,6 +32,44 @@ def _account_state_invalid_response() -> JSONResponse:
         content=problem.model_dump(),
         media_type="application/problem+json",
     )
+
+
+def _handle_conflict_response() -> JSONResponse:
+    problem = ProblemDetail(
+        type="https://postmark.invalid/problems/handle-conflict",
+        title="Handle conflict",
+        status=409,
+        code="HANDLE_CONFLICT",
+    )
+    return JSONResponse(
+        status_code=409,
+        content=problem.model_dump(),
+        media_type="application/problem+json",
+    )
+
+
+@router.patch("/v1/me/handle", response_model=HandleChangeResponse)
+def change_handle(
+    payload: HandleChangeRequest,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    session: Session = Depends(get_db_session),
+) -> HandleChangeResponse:
+    try:
+        user = session.scalar(
+            select(User).where(User.id == principal.user_id).with_for_update()
+        )
+        if user is None:
+            return _account_state_invalid_response()
+        user.handle_normalized = payload.handle
+        user.handle_display = payload.handle
+        session.flush()
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        if "uq_users_handle_normalized" not in str(exc.orig):
+            raise
+        return _handle_conflict_response()
+    return HandleChangeResponse(user_id=user.id, handle=user.handle_normalized)
 
 
 @router.get("/v1/me", response_model=MeResponse)

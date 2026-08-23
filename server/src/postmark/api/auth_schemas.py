@@ -231,6 +231,29 @@ class MeResponse(BaseModel):
         return validate_utc_aware(value)
 
 
+class HandleChangeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    handle: str
+
+    @field_validator("handle")
+    @classmethod
+    def _normalize_handle(cls, value: str) -> str:
+        return normalize_handle(value)
+
+
+class HandleChangeResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    user_id: uuid.UUID
+    handle: str
+
+    @field_validator("handle")
+    @classmethod
+    def _canonical_handle(cls, value: str) -> str:
+        return normalize_handle(value)
+
+
 class RegistrationResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 

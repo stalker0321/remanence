@@ -135,8 +135,10 @@ def test_replay_blocks_concurrent_child_rotation_and_revokes_lineage(
             assert child_about_to_rotate.wait(timeout=10), "child did not start rotation"
             assert not child_done.wait(timeout=0.25), "child rotation must block on lineage lock"
             release_replay.set()
-            assert replay.join(timeout=10) is None, "replay thread hung"
-            assert child_thread.join(timeout=10) is None, "child thread hung"
+            replay.join(timeout=10)
+            child_thread.join(timeout=10)
+            assert not replay.is_alive(), "replay thread did not terminate"
+            assert not child_thread.is_alive(), "child thread did not terminate"
             assert not replay_error, replay_error
             assert not child_error, child_error
             assert len(replay_result) == 1

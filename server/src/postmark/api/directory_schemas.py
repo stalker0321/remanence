@@ -45,6 +45,31 @@ class DirectoryKeyBundleResponse(BaseModel):
         return validate_utc_aware(value)
 
 
+class KeyBundleByIdResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    key_bundle_id: uuid.UUID
+    user_id: uuid.UUID
+    suite: str
+    protocol_version: int
+    encryption_public_keyset: str
+    signing_public_keyset: str
+    status: str
+    created_at: datetime
+
+    @field_validator("status")
+    @classmethod
+    def _known_status(cls, value: str) -> str:
+        if value not in {"ACTIVE", "RETIRED", "REVOKED"}:
+            raise ValueError("invalid status")
+        return value
+
+    @field_validator("created_at")
+    @classmethod
+    def _utc_aware(cls, value: datetime) -> datetime:
+        return validate_utc_aware(value)
+
+
 class DirectoryLookupResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 

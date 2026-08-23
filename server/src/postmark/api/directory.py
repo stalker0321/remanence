@@ -1,6 +1,7 @@
-"""Handle-directory lookup endpoint."""
+"""Handle-directory lookup and public key-bundle endpoints."""
 
 import hashlib
+import uuid
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
@@ -13,6 +14,7 @@ from postmark.api.directory_schemas import (
     DirectoryKeyBundleResponse,
     DirectoryLookupResponse,
     DirectoryUserSummary,
+    KeyBundleByIdResponse,
     encode_base64url,
 )
 from postmark.users.handles import normalize_handle
@@ -21,16 +23,40 @@ from postmark.users.models import User
 
 router = APIRouter()
 
+_BUNDLE_PUBLIC_FIELDS = (
+    "key_bundle_id",
+    "user_id",
+    "suite",
+    "protocol_version",
+    "encryption_public_keyset",
+    "signing_public_keyset",
+    "status",
+    "created_at",
+)
+
 
 def _handle_not_found_response() -> JSONResponse:
-    problem = ProblemDetail(
-        type="https://postmark.invalid/problems/handle-not-found",
+    return _problem_response(
+        problem_type="https://postmark.invalid/problems/handle-not-found",
         title="Handle not found",
         status=404,
         code="HANDLE_NOT_FOUND",
     )
+
+
+def _key_bundle_not_found_response() -> JSONResponse:
+    return _problem_response(
+        problem_type="https://postmark.invalid/problems/key-bundle-not-found",
+        title="Key bundle not found",
+        status=404,
+        code="KEY_BUNDLE_NOT_FOUND",
+    )
+
+
+def _problem_response(problem_type: str, title: str, status: int, code: str) -> JSONResponse:
+    problem = ProblemDetail(type=problem_type, title=title, status=status, code=code)
     return JSONResponse(
-        status_code=404,
+        status_code=status,
         content=problem.model_dump(),
         media_type="application/problem+json",
     )
@@ -42,6 +68,19 @@ def _directory_version(bundle: UserKeyBundle) -> str:
     digest.update(b"|")
     digest.update(str(int(bundle.created_at.timestamp())).encode("ascii"))
     return digest.hexdigest()[:32]
+
+
+def _public_bundle_fields(bundle: UserKeyBundle) -> dict:
+    return {
+        "key_bundle_id": bundle.id,
+        "user_id": bundle.user_id,
+        "suite": bundle.suite,
+        "protocol_version": bundle.protocol_version,
+        "encryption_public_keyset": encode_base64url(bundle.encryption_public_keyset),
+        "signing_public_keyset": encode_base64url(bundle.signing_public_keyset),
+        "status": bundle.status.value,
+        "created_at": bundle.created_at,
+    }
 
 
 @router.get("/v1/directory/handles/{handle}", response_model=DirectoryLookupResponse)
@@ -67,16 +106,23 @@ def lookup_handle(
         return _handle_not_found_response()
     body = DirectoryLookupResponse(
         user=DirectoryUserSummary(user_id=user.id, handle=user.handle_normalized),
-        key_bundle=DirectoryKeyBundleResponse(
-            key_bundle_id=key_bundle.id,
-            user_id=key_bundle.user_id,
-            suite=key_bundle.suite,
-            protocol_version=key_bundle.protocol_version,
-            encryption_public_keyset=encode_base64url(key_bundle.encryption_public_keyset),
-            signing_public_keyset=encode_base64url(key_bundle.signing_public_keyset),
-            status=key_bundle.status.value,
-            created_at=key_bundle.created_at,
-        ),
+        key_bundle=DirectoryKeyBundleResponse(**_public_bundle_fields(key_bundle)),
         directory_version=_directory_version(key_bundle),
     )
     return body
+
+
+@router.get("/v1/directory/key-bundles/{key_bundle_id}", response_model=KeyBundleByIdResponse)
+def get_key_bundle(
+    key_bundle_id: str,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    session: Session = Depends(get_db_session),
+) -> KeyBundleByIdResponse | JSONResponse:
+    try:
+        bundle_id = uuid.UUID(key_bundle_id)
+    except ValueError:
+        return _key_bundle_not_found_response()
+    key_bundle = session.get(UserKeyBundle, bundle_id)
+    if key_bundle is None:
+        return _key_bundle_not_found_response()
+    return KeyBundleByIdResponse(**_public_bundle_fields(key_bundle))

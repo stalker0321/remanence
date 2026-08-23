@@ -1,4 +1,4 @@
-"""Registration request/response schemas and redacted validation problem."""
+"""Registration/login request/response schemas and redacted validation problem."""
 
 import base64
 import re
@@ -21,6 +21,37 @@ _BASE64URL_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _ACCESS_TOKEN_PREFIX = "pm_at_"
 _REFRESH_TOKEN_PREFIX = "pm_rt_"
 _MAX_KEYSET_BYTES = 4096
+_ASCII_WHITESPACE = " \t\n\r\f\v"
+
+
+def normalize_email(value: str) -> str:
+    trimmed = value.strip(_ASCII_WHITESPACE)
+    validated = validate_email(trimmed, check_deliverability=False)
+    normalized = validated.normalized.casefold()
+    if len(normalized) > 320:
+        raise ValueError("invalid email")
+    return normalized
+
+
+def validate_password(value: SecretStr) -> SecretStr:
+    password = value.get_secret_value()
+    if not 8 <= len(password) <= 128:
+        raise ValueError("invalid password")
+    return value
+
+
+def validate_token(value: str, prefix: str) -> str:
+    if not value.startswith(prefix):
+        raise ValueError("invalid token")
+    return value
+
+
+def validate_utc_aware(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("invalid timestamp")
+    if value.utcoffset() != timezone.utc.utcoffset(value):
+        raise ValueError("invalid timestamp")
+    return value
 
 
 class RegistrationKeyBundleRequest(BaseModel):
@@ -98,25 +129,34 @@ class RegistrationRequest(BaseModel):
     @field_validator("email")
     @classmethod
     def _normalize_email(cls, value: str) -> str:
-        trimmed = value.strip(" \t\n\r\f\v")
-        validated = validate_email(trimmed, check_deliverability=False)
-        normalized = validated.normalized.casefold()
-        if len(normalized) > 320:
-            raise ValueError("invalid email")
-        return normalized
+        return normalize_email(value)
 
     @field_validator("password")
     @classmethod
     def _validate_password(cls, value: SecretStr) -> SecretStr:
-        password = value.get_secret_value()
-        if not 8 <= len(password) <= 128:
-            raise ValueError("invalid password")
-        return value
+        return validate_password(value)
 
     @field_validator("handle")
     @classmethod
     def _normalize_handle(cls, value: str) -> str:
         return normalize_handle(value)
+
+
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    email: str
+    password: SecretStr
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_email(cls, value: str) -> str:
+        return normalize_email(value)
+
+    @field_validator("password")
+    @classmethod
+    def _validate_password(cls, value: SecretStr) -> SecretStr:
+        return validate_password(value)
 
 
 class RegistrationUserResponse(BaseModel):
@@ -130,10 +170,22 @@ class RegistrationUserResponse(BaseModel):
     @field_validator("created_at")
     @classmethod
     def _utc_aware(cls, value: datetime) -> datetime:
-        if value.tzinfo is None or value.utcoffset() is None:
-            raise ValueError("invalid timestamp")
-        if value.utcoffset() != timezone.utc.utcoffset(value):
-            raise ValueError("invalid timestamp")
+        return validate_utc_aware(value)
+
+
+class ActiveKeyBundleResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    key_bundle_id: uuid.UUID
+    suite: str
+    protocol_version: int
+    status: str
+
+    @field_validator("status")
+    @classmethod
+    def _exact_status(cls, value: str) -> str:
+        if value != "ACTIVE":
+            raise ValueError("invalid status")
         return value
 
 
@@ -150,25 +202,44 @@ class RegistrationResponse(BaseModel):
     @field_validator("access_token")
     @classmethod
     def _access_prefix(cls, value: str) -> str:
-        if not value.startswith(_ACCESS_TOKEN_PREFIX):
-            raise ValueError("invalid access token")
-        return value
+        return validate_token(value, _ACCESS_TOKEN_PREFIX)
 
     @field_validator("refresh_token")
     @classmethod
     def _refresh_prefix(cls, value: str) -> str:
-        if not value.startswith(_REFRESH_TOKEN_PREFIX):
-            raise ValueError("invalid refresh token")
-        return value
+        return validate_token(value, _REFRESH_TOKEN_PREFIX)
 
     @field_validator("access_expires_at", "refresh_expires_at")
     @classmethod
     def _utc_aware(cls, value: datetime) -> datetime:
-        if value.tzinfo is None or value.utcoffset() is None:
-            raise ValueError("invalid timestamp")
-        if value.utcoffset() != timezone.utc.utcoffset(value):
-            raise ValueError("invalid timestamp")
-        return value
+        return validate_utc_aware(value)
+
+
+class LoginResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    user: RegistrationUserResponse
+    active_key_bundle: ActiveKeyBundleResponse
+    session_id: uuid.UUID
+    access_token: str = Field(repr=False)
+    access_expires_at: datetime
+    refresh_token: str = Field(repr=False)
+    refresh_expires_at: datetime
+
+    @field_validator("access_token")
+    @classmethod
+    def _access_prefix(cls, value: str) -> str:
+        return validate_token(value, _ACCESS_TOKEN_PREFIX)
+
+    @field_validator("refresh_token")
+    @classmethod
+    def _refresh_prefix(cls, value: str) -> str:
+        return validate_token(value, _REFRESH_TOKEN_PREFIX)
+
+    @field_validator("access_expires_at", "refresh_expires_at")
+    @classmethod
+    def _utc_aware(cls, value: datetime) -> datetime:
+        return validate_utc_aware(value)
 
 
 class ProblemDetail(BaseModel):

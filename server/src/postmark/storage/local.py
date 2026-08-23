@@ -6,12 +6,20 @@ import hashlib
 import os
 import re
 import stat
+import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO
 
-from postmark.storage.base import BlobInfo, BlobNotFoundError, BlobStoreError, InvalidBlobKeyError
+from postmark.storage.base import (
+    BlobConflictError,
+    BlobInfo,
+    BlobIntegrityError,
+    BlobNotFoundError,
+    BlobStoreError,
+    InvalidBlobKeyError,
+)
 
 _MAX_KEY_LENGTH = 512
 _MAX_SEGMENT_LENGTH = 128
@@ -58,6 +66,11 @@ class LocalBlobPathResolver:
 
 
 _CHUNK_SIZE = 64 * 1024
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}")
+_TEMP_PREFIX = ".postmark-"
+_GENERIC_INTEGRITY = "blob integrity check failed"
+_GENERIC_EXPECTATION = "invalid blob expectation"
+_GENERIC_CONFLICT = "blob already exists"
 
 
 class LocalFileBlobStore:
@@ -67,6 +80,69 @@ class LocalFileBlobStore:
             raise BlobStoreError("blob root is not a directory")
         root.mkdir(parents=True, exist_ok=True)
         self._resolver = LocalBlobPathResolver(root)
+
+    def put(
+        self,
+        key: str,
+        source: BinaryIO,
+        *,
+        expected_size: int,
+        expected_sha256: str,
+    ) -> BlobInfo:
+        if type(expected_size) is not int or expected_size < 0:
+            raise BlobIntegrityError(_GENERIC_EXPECTATION)
+        if not isinstance(expected_sha256, str) or _SHA256_HEX.fullmatch(expected_sha256) is None:
+            raise BlobIntegrityError(_GENERIC_EXPECTATION)
+
+        path = self._resolver.resolve(key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path = self._resolver.resolve(key)
+
+        fd: int | None = None
+        tmp_path: Path | None = None
+        try:
+            fd, tmp_name = tempfile.mkstemp(prefix=_TEMP_PREFIX, dir=path.parent)
+            tmp_path = Path(tmp_name)
+            os.fchmod(fd, 0o600)
+            digest = hashlib.sha256()
+            size = 0
+            while True:
+                chunk = source.read(_CHUNK_SIZE)
+                if not chunk:
+                    break
+                size += len(chunk)
+                digest.update(chunk)
+                written = 0
+                while written < len(chunk):
+                    written += os.write(fd, chunk[written:])
+            os.fsync(fd)
+            os.close(fd)
+            fd = None
+            sha256_hex = digest.hexdigest()
+            if size != expected_size or sha256_hex != expected_sha256:
+                raise BlobIntegrityError(_GENERIC_INTEGRITY)
+            streamed = BlobInfo(key=key, size=size, sha256_hex=sha256_hex)
+            try:
+                os.link(tmp_path, path)
+            except FileExistsError:
+                existing = self.stat(key)
+                if existing != streamed:
+                    raise BlobConflictError(_GENERIC_CONFLICT) from None
+                return existing
+            dir_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+            return streamed
+        finally:
+            if fd is not None:
+                os.close(fd)
+            if tmp_path is not None:
+                try:
+                    tmp_path.unlink()
+                except FileNotFoundError:
+                    pass
 
     @contextmanager
     def open_reader(self, key: str) -> Iterator[BinaryIO]:

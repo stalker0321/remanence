@@ -40,6 +40,7 @@ protobuf-javalite = { group = "com.google.protobuf", name = "protobuf-javalite",
 tink-android = { group = "com.google.crypto.tink", name = "tink-android", version.ref = "tink" }
 room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
 room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
+room-testing = { group = "androidx.room", name = "room-testing", version.ref = "room" }
 junit-vintage-engine = { group = "org.junit.vintage", name = "junit-vintage-engine", version = "5.10.1" }
 
 [plugins]

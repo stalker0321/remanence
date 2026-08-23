@@ -23,6 +23,12 @@ android {
             isIncludeAndroidResources = true
         }
     }
+
+    sourceSets {
+        getByName("test") {
+            assets.srcDir("$projectDir/schemas")
+        }
+    }
 }
 
 dependencies {
@@ -33,6 +39,7 @@ dependencies {
     implementation(libs.okhttp.coroutines)
     api(libs.room.runtime)
     ksp(libs.room.compiler)
+    testImplementation(libs.room.testing)
     testImplementation(kotlin("test-junit5"))
     testImplementation(libs.junit.vintage.engine)
     testImplementation(libs.kotlinx.coroutines.test)

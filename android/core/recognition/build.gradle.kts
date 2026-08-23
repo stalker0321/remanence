@@ -31,6 +31,12 @@ android {
         targetCompatibility = JavaVersion.toVersion(libs.versions.jdk.get())
     }
 
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
+
     sourceSets {
         getByName("main") {
             proto {
@@ -43,8 +49,12 @@ android {
 dependencies {
     implementation(project(":core:model"))
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.androidx.exifinterface)
     api(libs.protobuf.javalite)
     testImplementation(kotlin("test-junit5"))
+    testImplementation(libs.junit.vintage.engine)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.ext.junit)
 }
 
 tasks.withType<Test>().configureEach {

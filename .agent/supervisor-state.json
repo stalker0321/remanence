@@ -1,10 +1,12 @@
 {
   "schema_version": 1,
-  "current_milestone": "ARCHITECTURE_GATE",
+  "current_milestone": "M0_FOUNDATION",
   "current_task": null,
   "last_completed_implementation_commit": null,
-  "last_reviewed_commit": null,
-  "known_blockers": [],
+  "last_reviewed_commit": "b783bf19adacd6998612a4579d77871728db9b00",
+  "known_blockers": [
+    "No physical Android device is currently attached; APK installation, CameraX, CV, and physical M1/M2 evidence cannot be claimed until a device is available."
+  ],
   "grok_tmux_target": "main:5",
   "codex_tmux_target": "main:1",
   "task_max_expected_minutes": 10,

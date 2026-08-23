@@ -1,6 +1,6 @@
 # Acceptance criteria
 
-Status: **DRAFT — Codex-owned.**
+Status: **APPROVED.**
 
 Every item is pass/fail. A screenshot, agent statement, or successful command from an unrelated commit is not evidence. Evidence records command, exit code, environment/device, and reviewed commit.
 

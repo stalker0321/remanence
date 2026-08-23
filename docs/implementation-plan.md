@@ -1,6 +1,6 @@
 # Atomic implementation plan
 
-Status: **DRAFT — Codex-owned; Grok remains idle until Architecture Gate passes.**
+Status: **APPROVED; Architecture Gate passed and Grok may receive one listed task at a time.**
 
 This queue maps approved architecture to implementation-sized commits. It is intentionally more granular than milestones. The supervisor gives only one task at a time and may split any task further if repository state makes ten minutes unrealistic.
 

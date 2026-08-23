@@ -1,6 +1,6 @@
 # Architecture
 
-Status: **DRAFT — Codex-owned; application code is blocked until the architecture gate.**
+Status: **APPROVED for implementation.**
 
 This document defines the system shape and lifecycle boundaries for the production-shaped MVP. Cryptographic wire details live in `security.md` and `protocol.md`; computer-vision details live in `recognition.md`.
 

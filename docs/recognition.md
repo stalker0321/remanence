@@ -1,6 +1,6 @@
 # Local postcard recognition
 
-Status: **DRAFT — Codex-owned; initial thresholds are seed values and cannot be called calibrated until M3.**
+Status: **APPROVED initial `mvp-orb-v1` design; seed thresholds remain uncalibrated until M3.**
 
 Recognition runs entirely on Android from two deliberate still captures. It identifies a postcard only among capsules routed to the authenticated recipient. It is not global image search, object recognition, OCR, AR, or a cryptographic authentication mechanism.
 

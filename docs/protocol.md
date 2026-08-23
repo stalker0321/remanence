@@ -1,6 +1,6 @@
 # Protocol and API contracts
 
-Status: **DRAFT — Codex-owned; schemas become immutable for v1 after golden vectors pass.**
+Status: **APPROVED logical v1 contract; normative generated schemas/field fixtures freeze in M1.**
 
 This document defines identifiers, canonical encrypted/signed payloads, REST contracts, state transitions, idempotency, limits, and error behavior. The backend treats encrypted artifacts as opaque bytes even when it validates their declared structure and signed publish statement.
 

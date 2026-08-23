@@ -1,6 +1,6 @@
 # Security architecture
 
-Status: **DRAFT — Codex-owned; requires protocol test vectors before approval.**
+Status: **APPROVED for implementation; M1 must produce golden vectors before crypto is considered verified.**
 
 This document defines what the MVP protects, what it intentionally does not protect, and the exact cryptographic/key-lifecycle design. Cryptographic operations use established library primitives; application code must not implement curves, KDFs, ciphers, padding, or signature algorithms.
 

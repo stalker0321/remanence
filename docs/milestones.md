@@ -1,6 +1,6 @@
 # Milestones
 
-Status: **DRAFT — Codex-owned.**
+Status: **APPROVED.**
 
 Milestones are vertical gates, not calendars. Grok receives only one atomic implementation task at a time; no task may mean “implement a milestone/module/feature.” A milestone advances only when its acceptance criteria pass and the supervisor records the reviewed commit.
 

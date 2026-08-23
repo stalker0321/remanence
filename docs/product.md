@@ -1,6 +1,6 @@
 # Product thesis and MVP boundary
 
-Status: **DRAFT — Codex-owned; product scope is frozen when the architecture gate passes.**
+Status: **APPROVED for production-shaped MVP scope.**
 
 This document is normative for product scope and physical-first user flows. It does not define architecture, APIs, cryptographic algorithms, or implementation.
 

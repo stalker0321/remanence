@@ -1,6 +1,6 @@
 # Test strategy
 
-Status: **DRAFT — Codex-owned.**
+Status: **APPROVED.**
 
 Tests prove mechanisms and boundaries, not screen count. A green mocked demo cannot satisfy M1/M2. The minimum evidence pyramid combines fast deterministic tests, real PostgreSQL/storage integration, Android instrumentation, recognition datasets, adversarial crypto fixtures, and a two-device physical flow.
 

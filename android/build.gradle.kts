@@ -4,6 +4,7 @@ plugins {
     // AGP 9 includes Kotlin for Android modules. Kotlin JVM is only for :core:model.
     alias(libs.plugins.kotlin.jvm) apply false
     alias(libs.plugins.kotlin.compose) apply false
+    alias(libs.plugins.kotlin.serialization) apply false
 }
 
 tasks.register("testDebugUnitTest") {

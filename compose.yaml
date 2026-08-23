@@ -4,9 +4,9 @@ services:
     environment:
       POSTGRES_DB: postmark
       POSTGRES_USER: postmark
-      POSTGRES_PASSWORD: postmark-dev-only
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postmark-dev-only}
     ports:
-      - "127.0.0.1:55432:5432"
+      - "${POSTMARK_POSTGRES_PUBLISH:-127.0.0.1:55432:5432}"
     volumes:
       - postmark-postgres-data:/var/lib/postgresql
     healthcheck:

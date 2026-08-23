@@ -9,7 +9,7 @@ import postmark.core.data.network.RegistrationUserDto
  * Port over the local identity bundle. Implementations must durably wrap the
  * private keysets before any network traffic happens (protocol.md section 5).
  */
-interface RegistrationIdentityPort {
+fun interface RegistrationIdentityPort {
     /**
      * Returns the stable identity snapshot to register with, creating and
      * wrapping it on first use. Repeated calls reuse the same identity.

@@ -29,6 +29,7 @@ data class RecognitionProfile(
         val maxNearBlackFraction: Double,
         val maxClippedWhiteFraction: Double,
         val maxGlareRegionFraction: Double,
+        val minRectangularity: Double = 0.80,
     )
 
     @Serializable
@@ -109,6 +110,7 @@ data class RecognitionProfile(
                 maxNearBlackFraction = 0.25,
                 maxClippedWhiteFraction = 0.20,
                 maxGlareRegionFraction = 0.12,
+                minRectangularity = 0.80,
             ),
             orb = OrbExtraction(
                 nfeatures = 1500,
@@ -196,6 +198,7 @@ internal data class ProfileDto(
             capture.maxNearBlackFraction,
             capture.maxClippedWhiteFraction,
             capture.maxGlareRegionFraction,
+            capture.minRectangularity,
         ),
         orb = RecognitionProfile.OrbExtraction(
             orb.nfeatures,
@@ -253,6 +256,7 @@ internal data class ProfileDto(
         val maxNearBlackFraction: Double,
         val maxClippedWhiteFraction: Double,
         val maxGlareRegionFraction: Double,
+        val minRectangularity: Double = 0.80,
     )
 
     @Serializable

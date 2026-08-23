@@ -8,7 +8,7 @@
 
 ## Current development status / Quick verification
 
-Architecture gate passed. M0 is being finalized. Toolchain, Compose, and optional device steps are in [`docs/development.md`](docs/development.md).
+Architecture gate passed. M0 foundation gate passed; M1 single-account mechanism work is in progress. Toolchain, Compose, and optional device steps are in [`docs/development.md`](docs/development.md).
 
 Canonical verification:
 

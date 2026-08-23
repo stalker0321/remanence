@@ -77,6 +77,10 @@ data class RecognitionProfile(
         val autoMarginOverRunnerUp: Double,
         val duplicateFrontBackMinScore: Double,
         val chooserCompositeMin: Double,
+        val confidenceAreaWeight: Double = 0.40,
+        val confidenceRectangularityWeight: Double = 0.30,
+        val confidenceEdgeSupportWeight: Double = 0.20,
+        val confidenceGuideProximityWeight: Double = 0.10,
     )
 
     companion object {
@@ -147,6 +151,10 @@ data class RecognitionProfile(
                 autoMarginOverRunnerUp = 0.12,
                 duplicateFrontBackMinScore = 0.65,
                 chooserCompositeMin = 0.40,
+                confidenceAreaWeight = 0.40,
+                confidenceRectangularityWeight = 0.30,
+                confidenceEdgeSupportWeight = 0.20,
+                confidenceGuideProximityWeight = 0.10,
             ),
         )
 
@@ -293,6 +301,10 @@ internal data class ProfileDto(
         val autoMarginOverRunnerUp: Double,
         val duplicateFrontBackMinScore: Double,
         val chooserCompositeMin: Double,
+        val confidenceAreaWeight: Double = 0.40,
+        val confidenceRectangularityWeight: Double = 0.30,
+        val confidenceEdgeSupportWeight: Double = 0.20,
+        val confidenceGuideProximityWeight: Double = 0.10,
     )
 }
 
@@ -333,11 +345,18 @@ private fun RecognitionProfile.validate() {
     with(ranking) {
         require(duplicateFrontMargin in 0.0..1.0)
         // Front and back weights must form a convex combination.
-        require(compositeFrontWeight + compositeBackWeight == 1.0) { "composite weights must sum to 1" }
+        require(kotlin.math.abs(compositeFrontWeight + compositeBackWeight - 1.0) < 1e-9) {
+            "composite weights must sum to 1"
+        }
         require(autoCompositeMin in 0.0..1.0)
         require(autoMarginOverRunnerUp in 0.0..1.0)
         require(duplicateFrontBackMinScore in 0.0..1.0)
         require(chooserCompositeMin in 0.0..autoCompositeMin) { "chooser floor must not exceed automatic floor" }
+        // Confidence weights must form a convex combination (epsilon-tolerant).
+        val weightSum = confidenceAreaWeight + confidenceRectangularityWeight +
+            confidenceEdgeSupportWeight + confidenceGuideProximityWeight
+        require(kotlin.math.abs(weightSum - 1.0) < 1e-9) { "confidence weights must sum to 1" }
+        require(listOf(confidenceAreaWeight, confidenceRectangularityWeight, confidenceEdgeSupportWeight, confidenceGuideProximityWeight).all { it >= 0.0 })
     }
 }
 
@@ -397,6 +416,10 @@ internal fun RecognitionProfile.toDto() = ProfileDto(
         ranking.autoMarginOverRunnerUp,
         ranking.duplicateFrontBackMinScore,
         ranking.chooserCompositeMin,
+        ranking.confidenceAreaWeight,
+        ranking.confidenceRectangularityWeight,
+        ranking.confidenceEdgeSupportWeight,
+        ranking.confidenceGuideProximityWeight,
     ),
 )
 

@@ -325,8 +325,8 @@ Handle normalization is lowercase ASCII matching `^[a-z0-9_.]{3,30}$`. Every rel
 ### `auth_sessions`
 
 - `id` PK, `user_id` FK;
-- hash of the opaque refresh token;
-- `created_at`, `expires_at`, `last_used_at`, `revoked_at`;
+- hashes of opaque access and refresh tokens plus their separate expirations;
+- `created_at`, `last_used_at`, `revoked_at`;
 - rotation lineage for replay detection.
 
 ### `user_key_bundles`
@@ -425,6 +425,10 @@ Recognition before download is a bootstrap problem. The solution is routing, not
 
 The server can technically serve content ciphertext before a scan because it cannot prove postcard possession. The official app downloads content/photos only after a scan match unless an explicit offline-cache policy has already cached ciphertext. Plaintext content is never materialized without a current scan grant.
 
+Incoming sync runs immediately after login, when the app returns to foreground and its cursor is stale, and once at the start of Scan when network is available. A bounded opportunistic WorkManager job may refresh in the background; push notifications are not required. A first receipt with no locally cached index and no network reports that synchronization is required.
+
+Chooser hints remain inside the encrypted recognition manifest or are re-encrypted under the same local fingerprint-storage boundary. Room never stores sender-handle snapshots, dates, or place labels as plaintext columns.
+
 ## 10. First receipt and later scan
 
 ### First receipt
@@ -500,5 +504,6 @@ Application code remains blocked until all are true:
 - `recognition.md` defines versioned fingerprints, capture normalization, scoring, thresholds, ambiguity, and evaluation data;
 - `milestones.md` orders vertical implementation without fake mechanisms;
 - `acceptance-criteria.md` has command-level and physical-device pass/fail checks;
+- `test-strategy.md` separates deterministic, integration, adversarial, and physical evidence;
 - cross-document identifiers, state names, cardinalities, and trust boundaries are consistent;
 - unresolved architecture changes require an ADR before implementation.

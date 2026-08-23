@@ -338,7 +338,7 @@ Unexpected crypto/parsing detail is not returned. `retryable` is true only for t
 | Optional place label | 120 UTF-8 bytes |
 | Photos | exactly 3–5 |
 | Normalized photo | JPEG, max long edge 2560 px, max plaintext 8 MiB |
-| Encrypted photo | max 8 MiB plus protocol overhead |
+| Encrypted photo | max 8,388,641 bytes (8 MiB plaintext + 33-byte v1 AEAD overhead) |
 | Recognition manifest ciphertext | max 1 MiB |
 | Content manifest ciphertext | max 64 KiB |
 | Recipient envelope ciphertext | max 16 KiB |

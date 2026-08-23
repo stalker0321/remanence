@@ -5,3 +5,15 @@ plugins {
     alias(libs.plugins.kotlin.jvm) apply false
     alias(libs.plugins.kotlin.compose) apply false
 }
+
+tasks.register("testDebugUnitTest") {
+    group = "verification"
+    description = "Run unit tests for all Android modules."
+    dependsOn(
+        ":core:model:test",
+        ":core:data:testDebugUnitTest",
+        ":core:crypto:testDebugUnitTest",
+        ":core:recognition:testDebugUnitTest",
+        ":app:testDebugUnitTest",
+    )
+}

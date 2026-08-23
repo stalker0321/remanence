@@ -60,7 +60,25 @@ class AuthSessionRepository:
             .where(AuthSession.refresh_token_hash == token_hash)
             .with_for_update()
         )
+        return self._session.scalar(statement, execution_options={"populate_existing": True})
+
+    def find_lineage_id_by_refresh_token_hash(self, token_hash: bytes) -> uuid.UUID | None:
+        statement = select(AuthSession.lineage_id).where(
+            AuthSession.refresh_token_hash == token_hash
+        )
         return self._session.scalar(statement)
+
+    def lock_lineage(self, lineage_id: uuid.UUID) -> tuple[AuthSession, ...]:
+        statement = (
+            select(AuthSession)
+            .where(AuthSession.lineage_id == lineage_id)
+            .order_by(AuthSession.id)
+            .with_for_update()
+        )
+        result = self._session.scalars(
+            statement, execution_options={"populate_existing": True}
+        )
+        return tuple(result.all())
 
     def revoke_lineage(self, lineage_id: uuid.UUID, revoked_at: datetime) -> int:
         statement = (

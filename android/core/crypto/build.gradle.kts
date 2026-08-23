@@ -18,7 +18,7 @@ android {
 }
 
 dependencies {
-    implementation(libs.tink.android)
+    api(libs.tink.android)
     implementation(project(":core:model"))
     testImplementation(kotlin("test-junit5"))
 }

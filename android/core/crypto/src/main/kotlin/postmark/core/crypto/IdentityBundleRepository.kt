@@ -66,6 +66,30 @@ class IdentityBundleRepository(
 
     fun exists(): Boolean = encryptionFile().exists() || signingFile().exists()
 
+    /**
+     * Serialized public-only keysets of the stored bundle. Lets callers
+     * register or display identity without touching private handles.
+     */
+    sealed interface PublicExportsResult {
+        data class Available(
+            val encryptionPublicKeyset: ByteArray,
+            val signingPublicKeyset: ByteArray,
+        ) : PublicExportsResult
+
+        data object RecoveryRequired : PublicExportsResult
+    }
+
+    fun loadPublicExports(): PublicExportsResult = when (val result = load()) {
+        is LoadResult.Available -> PublicExportsResult.Available(
+            encryptionPublicKeyset = serializeWithoutSecret(result.encryptionHandle),
+            signingPublicKeyset = serializeWithoutSecret(result.signingHandle),
+        )
+        LoadResult.RecoveryRequired -> PublicExportsResult.RecoveryRequired
+    }
+
+    internal fun serializeWithoutSecret(handle: KeysetHandle): ByteArray =
+        com.google.crypto.tink.TinkProtoKeysetFormat.serializeKeysetWithoutSecret(handle.publicKeysetHandle)
+
     private fun encryptionFile(): File = File(baseDirectory, ENCRYPTION_FILE_NAME)
 
     private fun signingFile(): File = File(baseDirectory, SIGNING_FILE_NAME)

@@ -16,6 +16,9 @@ sourceSets {
             srcDir(rootProject.file("../protocol/proto"))
         }
     }
+    named("test") {
+        resources.srcDir(rootProject.file("../protocol/fixtures"))
+    }
 }
 
 protobuf {
@@ -32,6 +35,7 @@ protobuf {
 dependencies {
     api(libs.protobuf.javalite)
     testImplementation(kotlin("test-junit5"))
+    testImplementation(libs.kotlinx.serialization.json)
 }
 
 tasks.test {

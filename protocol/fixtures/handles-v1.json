@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "valid": [
+    {"input": "alice", "normalized": "alice"},
+    {"input": "@BOB", "normalized": "bob"},
+    {"input": "User_Name.v1", "normalized": "user_name.v1"},
+    {"input": "abc", "normalized": "abc"},
+    {"input": "abcdefghijklmnopqrstuvwxyz0123", "normalized": "abcdefghijklmnopqrstuvwxyz0123"},
+    {"input": "a..b", "normalized": "a..b"},
+    {"input": "a__b", "normalized": "a__b"},
+    {"input": ".ok", "normalized": ".ok"},
+    {"input": "ok.", "normalized": "ok."},
+    {"input": "_ok", "normalized": "_ok"},
+    {"input": "ok_", "normalized": "ok_"},
+    {"input": "...", "normalized": "..."},
+    {"input": "123", "normalized": "123"},
+    {"input": "@abc", "normalized": "abc"}
+  ],
+  "invalid": [
+    "",
+    "@",
+    "ab",
+    "@ab",
+    "abcdefghijklmnopqrstuvwxyz01234",
+    " abc",
+    "abc ",
+    "a c",
+    "abcя",
+    "josé",
+    "ａｂｃ",
+    "abc😀",
+    "abc-def",
+    "abc/def",
+    "@@abc",
+    "abc\n",
+    "abc\t",
+    "abc\u0000"
+  ]
+}

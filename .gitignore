@@ -1,0 +1,71 @@
+# Gradle / Android
+.gradle/
+build/
+**/build/
+.kotlin/
+local.properties
+*.apk
+*.aab
+*.aar
+*.ap_
+*.dex
+*.class
+.cxx/
+.externalNativeBuild/
+captures/
+*.hprof
+
+# Android Studio metadata
+.idea/
+*.iml
+*.ipr
+*.iws
+.navigation/
+
+# Python bytecode, caches, venvs, coverage, build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# Env files; keep a tracked example if added later
+.env
+.env.*
+!.env.example
+
+# OS / editor temp files
+.DS_Store
+Thumbs.db
+*~
+*.swp
+*.swo
+*.tmp
+
+# Local development database / blob / upload data
+/.data/
+/data/
+/pgdata/
+/server/.data/
+*.sqlite
+*.sqlite3
+!**/fixtures/**
+!**/testdata/**
+!**/test-fixtures/**

@@ -1,10 +1,8 @@
 # Development toolchain
 
-This document records the required M0 toolchain, the original VPS inventory, and host provisioning for JDK 17 and Python 3.13.
+This document records the required M0 toolchain, the original VPS inventory, and host provisioning for JDK 17, Python 3.13, and the Android command-line SDK.
 
-Android builds are CLI-only. Android Studio is optional and is not required for M0.
-
-Android SDK tooling is still missing on this host. That remains a known M0 provisioning step, not an architecture blocker. Do not install Gradle globally; the project uses the Gradle wrapper.
+Android builds are CLI-only. Android Studio is optional and is not required for M0. Do not install Gradle globally; the project uses the Gradle wrapper.
 
 ## Required baseline
 
@@ -111,8 +109,8 @@ Actual results on this host after the commands above.
 | JDK home | `/usr/lib/jvm/java-17-openjdk-amd64` (`JAVA_HOME` still unset) |
 | `uv python find 3.13` | `/home/vodkolyan/.local/share/uv/python/cpython-3.13-linux-x86_64-gnu/bin/python3.13` → `/home/vodkolyan/.local/share/uv/python/cpython-3.13.14-linux-x86_64-gnu/bin/python3.13` |
 | `uv run --python 3.13 python --version` | `Python 3.13.14` |
-| `adb` / `sdkmanager` | still absent |
-| `ANDROID_HOME` / `ANDROID_SDK_ROOT` | still unset |
+| `adb` / `sdkmanager` | still absent (before Android SDK provisioning) |
+| `ANDROID_HOME` / `ANDROID_SDK_ROOT` | still unset (before Android SDK provisioning) |
 
 Verification commands:
 
@@ -123,4 +121,48 @@ uv python find 3.13
 uv run --python 3.13 python --version
 ```
 
-Android SDK remains missing for the next provisioning task.
+## Android CLI SDK provisioning
+
+Noninteractive commands used on this host. Do not install Android Studio, emulator/system images, NDK, CMake, Gradle, or extra platforms/build-tools.
+
+```sh
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y google-android-cmdline-tools-19.0-installer
+yes | sudo env JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 sdkmanager --sdk_root=/usr/lib/android-sdk --licenses
+sudo env JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 sdkmanager --sdk_root=/usr/lib/android-sdk \
+  "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+```
+
+Build shells MUST set:
+
+```sh
+export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+export ANDROID_HOME=/usr/lib/android-sdk
+export ANDROID_SDK_ROOT=/usr/lib/android-sdk
+export PATH="$ANDROID_HOME/cmdline-tools/19.0/bin:$ANDROID_HOME/platform-tools:$PATH"
+```
+
+The Ubuntu cmdline-tools package also pulled `google-android-build-tools-19.1.0-installer` and switched the default `java` alternative to OpenJDK 25. Keep using JDK 17 via `JAVA_HOME` for Postmark builds. Do not use Build-Tools 19.1.0.
+
+## Verified after Android CLI SDK provisioning
+
+Actual results on this host after the commands above.
+
+| Item | Detected |
+| --- | --- |
+| `sdkmanager --version` | `19.0` (`/usr/bin/sdkmanager` → `/usr/lib/android-sdk/cmdline-tools/19.0/bin/sdkmanager`) |
+| `adb version` | `Android Debug Bridge version 1.0.41`, `Version 37.0.1-15733141`, installed as `/usr/lib/android-sdk/platform-tools/adb` |
+| `ANDROID_HOME` | `/usr/lib/android-sdk` (for build shells; not set in a login profile) |
+| `ANDROID_SDK_ROOT` | `/usr/lib/android-sdk` (for build shells; not set in a login profile) |
+| `platform-tools` | `37.0.1` at `/usr/lib/android-sdk/platform-tools` |
+| `platforms;android-36` | version `2` at `/usr/lib/android-sdk/platforms/android-36` |
+| `build-tools;36.0.0` | `36.0.0` at `/usr/lib/android-sdk/build-tools/36.0.0` |
+
+`sdkmanager --sdk_root=/usr/lib/android-sdk --list_installed` also shows `cmdline-tools;19.0` from the Ubuntu installer and `build-tools;19.1.0` from that package’s apt dependency. The three packages requested through `sdkmanager` are `platform-tools`, `platforms;android-36`, and `build-tools;36.0.0`.
+
+Verification commands:
+
+```sh
+sdkmanager --version
+"$ANDROID_HOME/platform-tools/adb" version
+JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 sdkmanager --sdk_root=/usr/lib/android-sdk --list_installed
+```

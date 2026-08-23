@@ -13,10 +13,22 @@ from postmark.api.auth import (
     register_validation_error_handler,
     router as auth_router,
 )
-from postmark.api.dependencies import DatabaseUnavailableError
+from postmark.api.dependencies import (
+    AuthenticationRequiredError,
+    DatabaseUnavailableError,
+)
 from postmark.api.health import router as health_router
 from postmark.db.session import build_engine, build_session_factory
 from postmark.settings import AppMode, Settings
+
+
+def _authentication_required_problem() -> dict:
+    return {
+        "type": "https://postmark.invalid/problems/authentication-required",
+        "title": "Authentication required",
+        "status": 401,
+        "code": "AUTHENTICATION_REQUIRED",
+    }
 
 
 def create_app(
@@ -46,6 +58,15 @@ def create_app(
     @app.exception_handler(DatabaseUnavailableError)
     def _database_unavailable(request: Request, exc: DatabaseUnavailableError) -> JSONResponse:
         return register_database_unavailable_handler(request, exc)
+
+    @app.exception_handler(AuthenticationRequiredError)
+    def _authentication_required(request: Request, exc: AuthenticationRequiredError) -> JSONResponse:
+        return JSONResponse(
+            status_code=401,
+            content=_authentication_required_problem(),
+            media_type="application/problem+json",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     @app.exception_handler(RequestValidationError)
     def _validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:

@@ -36,12 +36,6 @@ interface IdentityAvailabilityPort {
     fun signingKeysetAvailable(): Boolean
 }
 
-/** Locally persisted account summary recorded at registration/login time. */
-data class PersistedAccountSummary(
-    val userId: String,
-    val handle: String,
-)
-
 fun interface AccountSummaryPort {
     fun load(): PersistedAccountSummary?
 }

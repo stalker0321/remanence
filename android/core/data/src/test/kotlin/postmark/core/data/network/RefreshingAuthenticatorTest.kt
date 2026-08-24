@@ -29,6 +29,20 @@ class RefreshingAuthenticatorTest {
         """
     }
 
+    /** Records every rotation/clear so atomicity and ordering are observable. */
+    private class RecordingSink : SessionRotationSink {
+        val rotations = mutableListOf<Pair<String, String>>()
+        var clearCount = 0
+
+        override fun rotate(accessToken: String, refreshToken: String) {
+            rotations += accessToken to refreshToken
+        }
+
+        override fun clear() {
+            clearCount++
+        }
+    }
+
     private class PathDispatcher : Dispatcher() {
 
         val refreshCount = AtomicInteger()
@@ -53,9 +67,15 @@ class RefreshingAuthenticatorTest {
         }
     }
 
-    private fun wiredClient(server: MockWebServer, tokens: AuthTokenHolder): OkHttpClient {
-        val repository = AuthRepository.create(ApiBaseUrl.parse(server.url("/").toString()))
-        return RefreshingAuthenticator.attach(OkHttpClient.Builder(), repository, tokens).build()
+    private fun wiredClient(server: MockWebServer, tokens: AuthTokenHolder, sink: RecordingSink): OkHttpClient {
+        // Bare repository: the refresh round trip never re-enters the stack.
+        val bareRepository = AuthRepository.create(ApiBaseUrl.parse(server.url("/").toString()))
+        return RefreshingAuthenticator.attach(
+            OkHttpClient.Builder(),
+            bareRepository,
+            tokens,
+            sink,
+        ).build()
     }
 
     private fun protectedRequest(server: MockWebServer, token: String): Request =
@@ -87,12 +107,14 @@ class RefreshingAuthenticatorTest {
         server.start()
         try {
             val tokens = AuthTokenHolder("pm_at_old", "pm_rt_old")
-            val client = wiredClient(server, tokens)
+            val sink = RecordingSink()
+            val client = wiredClient(server, tokens, sink)
             val response = client.newCall(protectedRequest(server, "pm_at_old")).executeAsync()
             response.use { assertEquals(200, it.code) }
 
             assertEquals(2, protectedHits.get()) // stale attempt + retried attempt
             assertEquals("pm_at_new", tokens.accessToken)
+            assertEquals(listOf("pm_at_new" to "pm_rt_new"), sink.rotations)
         } finally {
             server.close()
         }
@@ -106,7 +128,8 @@ class RefreshingAuthenticatorTest {
         server.start()
         try {
             val tokens = AuthTokenHolder("pm_at_stale", "pm_rt_live")
-            val client = wiredClient(server, tokens)
+            val sink = RecordingSink()
+            val client = wiredClient(server, tokens, sink)
 
             val workers = (1..6).map {
                 async {
@@ -116,11 +139,13 @@ class RefreshingAuthenticatorTest {
             val codes = workers.awaitAll()
 
             // Every worker ultimately receives the final 401 (dispatcher always rejects /v1/data),
-            // but the burst collapses into a single serialized refresh.
+            // but the burst collapses into a single serialized refresh with ONE atomic rotation.
             assertEquals(List(6) { 401 }, codes)
             assertEquals(1, dispatcher.refreshCount.get())
             assertEquals("pm_at_new", tokens.accessToken)
             assertEquals("pm_rt_new", tokens.refreshToken)
+            assertEquals(1, sink.rotations.size)
+            assertEquals(0, sink.clearCount)
         } finally {
             server.close()
         }
@@ -140,11 +165,52 @@ class RefreshingAuthenticatorTest {
         server.start()
         try {
             val tokens = AuthTokenHolder("pm_at_stale", "pm_rt_replayed")
-            val repository = AuthRepository.create(ApiBaseUrl.parse(server.url("/").toString()))
-            val client = RefreshingAuthenticator.attach(OkHttpClient.Builder(), repository, tokens).build()
+            val sink = RecordingSink()
+            val bareRepository = AuthRepository.create(ApiBaseUrl.parse(server.url("/").toString()))
+            val client = RefreshingAuthenticator.attach(OkHttpClient.Builder(), bareRepository, tokens, sink).build()
 
             val response = client.newCall(protectedRequest(server, "pm_at_stale")).executeAsync()
             response.use { assertEquals(401, it.code) }
+            assertNull(tokens.accessToken)
+            assertNull(tokens.refreshToken)
+            assertEquals(1, sink.clearCount)
+        } finally {
+            server.close()
+        }
+    }
+
+    @Test
+    fun failingRotationSinkFailsTheRefreshClosed(): Unit = runBlocking {
+        val server = MockWebServer()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: mockwebserver3.RecordedRequest): MockResponse =
+                when (request.url.encodedPath) {
+                    "/v1/auth/refresh" -> MockResponse.Builder()
+                        .code(200)
+                        .setHeader("Content-Type", "application/json")
+                        .body(REFRESH_RESPONSE)
+                        .build()
+                    else -> MockResponse.Builder().code(401).build()
+                }
+        }
+        server.start()
+        try {
+            val tokens = AuthTokenHolder("pm_at_stale", "pm_rt_live")
+            val throwingSink = object : SessionRotationSink {
+                override fun rotate(accessToken: String, refreshToken: String) {
+                    throw IllegalStateException("sealed persistence unavailable")
+                }
+
+                override fun clear() {
+                    tokens.clearSession()
+                }
+            }
+            val bareRepository = AuthRepository.create(ApiBaseUrl.parse(server.url("/").toString()))
+            val client = RefreshingAuthenticator.attach(OkHttpClient.Builder(), bareRepository, tokens, throwingSink).build()
+
+            val response = client.newCall(protectedRequest(server, "pm_at_stale")).executeAsync()
+            response.use { assertEquals(401, it.code) }
+            // The half-trusted rotation never became visible in memory.
             assertNull(tokens.accessToken)
             assertNull(tokens.refreshToken)
         } finally {

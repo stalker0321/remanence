@@ -101,8 +101,45 @@ class AppContainer(
         )
     }
 
-    val authRepository: AuthRepository by lazy {
-        AuthRepository.create(apiBaseUrl)
+    /**
+     * Bare auth repository (FIX-M1-007-06): no bearer interceptor, no
+     * authenticator. Only this shape may carry the auth endpoint calls so a
+     * rejected refresh can never recurse through the authenticator.
+     */
+    val bareAuthRepository: AuthRepository
+        get() = apiStack.bareAuthRepository
+
+    /**
+     * Atomic rotation sink: publishes both credentials to the memory holder
+     * and re-seals the rotating refresh token in one step. Runs inside the
+     * authenticator's serialization mutex; a persistence failure fails the
+     * whole refresh closed.
+     */
+    private val sessionRotationSink: postmark.core.data.network.SessionRotationSink by lazy {
+        object : postmark.core.data.network.SessionRotationSink {
+            override fun rotate(accessToken: String, refreshToken: String) {
+                sessionTokenStore.save(refreshToken)
+                authTokenHolder.updateTokens(accessToken, refreshToken)
+            }
+
+            override fun clear() {
+                authTokenHolder.clearSession()
+                sessionTokenStore.clear()
+            }
+        }
+    }
+
+    /**
+     * Production HTTP stack (FIX-M1-007-06): bare auth repository for the
+     * auth endpoints plus an authenticated client with the bearer interceptor
+     * and serialized one-retry authenticator.
+     */
+    val apiStack: postmark.core.data.network.ProductionApiStack by lazy {
+        postmark.core.data.network.ProductionApiStack.create(
+            baseUrl = apiBaseUrl,
+            tokens = authTokenHolder,
+            rotationSink = sessionRotationSink,
+        )
     }
 
     /**
@@ -172,7 +209,7 @@ class AppContainer(
             },
             authApi = { request ->
                 captureAuthSession(
-                    authRepository.login(request),
+                    bareAuthRepository.login(request),
                     accessTokenOf = { it.accessToken },
                     refreshTokenOf = { it.refreshToken },
                 )
@@ -192,7 +229,7 @@ class AppContainer(
             authApi = object : app.postmark.memory.auth.RegistrationAuthApiPort {
                 override suspend fun register(request: RegisterRequestDto): AuthResult<RegisterResponseDto> =
                     captureAuthSession(
-                        authRepository.register(request),
+                        bareAuthRepository.register(request),
                         accessTokenOf = { it.accessToken },
                         refreshTokenOf = { it.refreshToken },
                     )
@@ -229,7 +266,7 @@ class AppContainer(
             identity = identityAvailability,
             account = { summaryStore.load() },
             refresher = { storedRefreshToken ->
-                when (val result = authRepository.refresh(
+                when (val result = bareAuthRepository.refresh(
                     postmark.core.data.network.RefreshRequestDto(storedRefreshToken),
                 )) {
                     is AuthResult.Success -> {

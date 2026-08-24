@@ -135,6 +135,11 @@ class AuthRepository internal constructor(
     }
 
     companion object {
+        /**
+         * Bare client repository: no bearer interceptor and no authenticator.
+         * This is the ONLY shape allowed to carry `/v1/auth/refresh` so a
+         * rejected refresh can never recurse through [RefreshingAuthenticator].
+         */
         fun create(baseUrl: ApiBaseUrl): AuthRepository =
             AuthRepository(HttpClientFactory.create(), baseUrl)
 

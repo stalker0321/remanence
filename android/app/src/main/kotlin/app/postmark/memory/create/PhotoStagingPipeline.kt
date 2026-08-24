@@ -1,6 +1,7 @@
 package app.postmark.memory.create
 
 import java.io.File
+import java.io.InputStream
 
 /** One successfully staged normalized photo inside the current create session. */
 data class StagedPhoto(
@@ -22,17 +23,28 @@ data class NormalizedPhotoDto(
 )
 
 /**
+ * Lazy handle to one picked photo (file/content-URI backed). Opening must be
+ * cheap and deferred: [PhotoStagingPipeline] holds at most one open source at
+ * any moment and closes it before advancing to the next photo.
+ */
+fun interface PhotoSource {
+    fun openInputStream(): InputStream
+}
+
+/**
  * Bounded sequential staging of picked photos (docs/architecture.md section 9
- * step 8): every photo is normalized one at a time, written atomically to the
- * session staging directory, and any mid-way failure removes every artifact
- * created by THIS invocation before propagating.
+ * step 8): every photo is read from its lazy source one at a time (never two
+ * sources open at once), normalized, written atomically to the session staging
+ * directory, and released before the next source is touched. Any mid-way
+ * failure removes every artifact created by THIS invocation before propagating;
+ * plaintext source bytes are held only for the active photo.
  */
 class PhotoStagingPipeline(
     private val stagingDirectory: File,
     private val normalizer: PhotoNormalizerPort,
 ) {
 
-    fun stageAll(sourcePhotos: List<ByteArray>): List<StagedPhoto> {
+    fun stageAll(sourcePhotos: List<PhotoSource>): List<StagedPhoto> {
         if (sourcePhotos.size !in MIN_PHOTOS..MAX_PHOTOS) {
             throw IllegalArgumentException(
                 "exactly $MIN_PHOTOS..$MAX_PHOTOS photos required, got ${sourcePhotos.size}",
@@ -41,7 +53,8 @@ class PhotoStagingPipeline(
         stagingDirectory.mkdirs()
         val created = ArrayList<File>(sourcePhotos.size)
         try {
-            return sourcePhotos.mapIndexed { index, jpeg ->
+            return sourcePhotos.mapIndexed { index, source ->
+                val jpeg = source.openInputStream().use(InputStream::readBytes)
                 val normalized = normalizer.normalize(jpeg)
                 val target = File(stagingDirectory, "photo-%02d.jpg".format(index))
                 atomicWrite(target, normalized.jpegBytes)

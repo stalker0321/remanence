@@ -35,6 +35,9 @@ class RootViewModel(
     private val _destination = MutableStateFlow<AppDestination>(AppDestination.Authentication)
     val destination: StateFlow<AppDestination> = _destination.asStateFlow()
 
+    /** Per-flow transient cleanup hooks keyed by the flow destination. */
+    private val transientCleanups = mutableMapOf<AppDestination, MutableList<() -> Unit>>()
+
     init {
         refreshAsync()
     }
@@ -53,6 +56,9 @@ class RootViewModel(
             (logoutAction ?: { sessionBootstrap.logout() })()
             // Any live scan grant dies with the account context.
             controller.consumeCapsuleAccess()
+            // Every flow's transient state dies with the account context.
+            AppDestination.Create.let { runTransientCleanups(it) }
+            AppDestination.Scan.let { runTransientCleanups(it) }
             resolveNow()
         }
     }
@@ -69,10 +75,30 @@ class RootViewModel(
         _destination.value = controller.current
     }
 
-    /** Returns from Create/Scan to Home; transient flow state dies with them. */
+    /**
+     * Returns from Create/Scan to Home. Leaving a flow RUNS its registered
+     * transient-state cleanups - confirmed recipients, staged captures, and
+     * scan sessions never survive their surface.
+     */
     fun returnToHome() {
+        val previous = controller.current
         controller.navigate(AppDestination.Home)
+        if (previous != controller.current) {
+            runTransientCleanups(previous)
+        }
         _destination.value = controller.current
+    }
+
+    /**
+     * Registers per-flow transient cleanup. Cleanups run when the flow is
+     * left, on logout, or when authentication is lost - never on rotation.
+     */
+    fun registerTransientCleanup(destination: AppDestination, cleanup: () -> Unit) {
+        transientCleanups.getOrPut(destination) { mutableListOf() }.add(cleanup)
+    }
+
+    private fun runTransientCleanups(destination: AppDestination) {
+        transientCleanups.remove(destination)?.forEach { cleanup -> cleanup() }
     }
 
     private fun refreshAsync() {
@@ -109,7 +135,14 @@ class RootViewModel(
     private fun publish(next: AuthUiState) {
         val previousAuth = _authState.value
         _authState.value = next
+        val previousDestination = controller.current
         controller.updateAuth(next)
+        // Losing authentication ejects from any flow: its transient state dies.
+        if (previousDestination != controller.current &&
+            (previousDestination is AppDestination.Create || previousDestination is AppDestination.Scan)
+        ) {
+            runTransientCleanups(previousDestination)
+        }
         // Becoming authenticated lands on Home; losing authentication is
         // already redirected by the controller's guard.
         if (next is AuthUiState.Authenticated && previousAuth !is AuthUiState.Authenticated) {

@@ -4,8 +4,11 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -86,6 +89,7 @@ private fun RootSurface(container: AppContainer) {
     }
 
     val authState by rootViewModel.authState.collectAsStateWithLifecycle()
+    val destination by rootViewModel.destination.collectAsStateWithLifecycle()
 
     // Real capability derivation: authenticated AND both keysets on device.
     LaunchedEffect(authState) {
@@ -95,6 +99,7 @@ private fun RootSurface(container: AppContainer) {
 
     RootScreen(
         authState = authState,
+        destination = destination,
         authenticationContent = {
             Column(modifier = Modifier.padding(16.dp)) {
                 val form by loginViewModel.form.collectAsStateWithLifecycle()
@@ -131,5 +136,34 @@ private fun RootSurface(container: AppContainer) {
                 },
             )
         },
+        createContent = {
+            // Full production create wiring lands in FIX-M1-007-11.
+            FlowIntroSurface(
+                title = "Create",
+                detail = "Resolve the recipient, capture both sides, and seal your capsule.",
+            )
+        },
+        scanContent = {
+            // Full production scan wiring lands in FIX-M1-007-12.
+            FlowIntroSurface(
+                title = "Scan",
+                detail = "Capture the front and back of a physical postcard to open it.",
+            )
+        },
+        onExitFlow = rootViewModel::returnToHome,
     )
+}
+
+/**
+ * Intro chrome for flows whose full production wiring lands in
+ * FIX-M1-007-11/12: an honest description of what the surface does plus
+ * the working exit path. It performs no recognition, crypto, or network work.
+ */
+@Composable
+private fun FlowIntroSurface(title: String, detail: String) {
+    Column(modifier = Modifier.padding(16.dp)) {
+        Text(text = title, style = MaterialTheme.typography.titleLarge)
+        Spacer(Modifier.height(8.dp))
+        Text(text = detail)
+    }
 }

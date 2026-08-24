@@ -11,34 +11,72 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import app.postmark.memory.ui.navigation.AppDestination
 import app.postmark.memory.ui.navigation.AuthUiState
 
 /**
- * I03 root renderer: picks exactly one surface from the guarded pair.
- * The authentication surface hosts login and registration slots so
- * MainActivity can bind its real ViewModels without this file knowing them.
+ * I03/FIX-M1-007-10 root renderer: picks exactly one surface from the guarded
+ * set. Authentication hosts login/registration slots; authenticated users
+ * land on Home and can reach ONLY the Create and Scan entry points (plus the
+ * grant-gated capsule presentation). There is deliberately no gallery,
+ * inbox, history, or feed surface anywhere in this hierarchy.
  */
 @Composable
 fun RootScreen(
     authState: AuthUiState,
+    destination: AppDestination,
     authenticationContent: @Composable () -> Unit,
     homeContent: @Composable () -> Unit,
     modifier: Modifier = Modifier,
+    createContent: @Composable () -> Unit = {},
+    scanContent: @Composable () -> Unit = {},
+    onExitFlow: () -> Unit = {},
 ) {
-    if (authState is AuthUiState.Authenticated) {
-        homeContent()
+    if (authState !is AuthUiState.Authenticated) {
+        Column(modifier = modifier.fillMaxWidth()) {
+            if (authState is AuthUiState.RecoveryRequired) {
+                Text(
+                    "Local keys are missing on this device. Sign in to complete account recovery.",
+                    modifier = Modifier.padding(16.dp),
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+            authenticationContent()
+        }
         return
     }
-    Column(modifier = modifier.fillMaxWidth()) {
-        if (authState is AuthUiState.RecoveryRequired) {
-            Text(
-                "Local keys are missing on this device. Sign in to complete account recovery.",
-                modifier = Modifier.padding(16.dp),
-            )
-            Spacer(Modifier.height(8.dp))
+
+    when (destination) {
+        AppDestination.Create -> Column(modifier = modifier.fillMaxWidth()) {
+            FlowHeader(title = "Create", onExit = onExitFlow)
+            createContent()
         }
-        authenticationContent()
+
+        AppDestination.Scan -> Column(modifier = modifier.fillMaxWidth()) {
+            FlowHeader(title = "Scan", onExit = onExitFlow)
+            scanContent()
+        }
+
+        // Grant-gated capsule presentation arrives through its own verified
+        // route; until a live grant exists Home remains the fallback surface.
+        else -> homeContent()
     }
+}
+
+/** Shared exit chrome for the two reachable flows; leaving drops flow state. */
+@Composable
+private fun FlowHeader(title: String, onExit: () -> Unit) {
+    OutlinedButton(
+        onClick = onExit,
+        modifier = Modifier
+            .padding(16.dp)
+            .testTag("flow_exit_${title.lowercase()}"),
+    ) { Text("Back to Home") }
+    Text(
+        text = title,
+        modifier = Modifier.testTag("flow_title_${title.lowercase()}"),
+    )
+    Spacer(Modifier.height(8.dp))
 }
 
 /** Home chrome including the logout action, rendered for authenticated users. */

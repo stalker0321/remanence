@@ -44,14 +44,16 @@ class FrontCandidateRankerTest {
     }
 
     @Test
-    fun duplicateGroupFormsBelowTheMarginAndNotAtIt() {
-        val justUnder = margin - 0.001
-        val closePair = listOf(candidate("a", 0.60), candidate("b", 0.60 - justUnder))
-        assertTrue(ranker.rank(closePair).duplicateFrontGroup)
-
-        val exactlyAtMargin = listOf(candidate("a", 0.60), candidate("b", 0.60 - margin))
-        // "differ by less than 0.08": equality is NOT a duplicate group.
-        assertFalse(ranker.rank(exactlyAtMargin).duplicateFrontGroup)
+    fun duplicateGroupFormsBelowTheMarginAndNotBeyondIt() {
+        // Binary-exact differences avoid floating-point boundary ambiguity:
+        // 0.0625 is below the 0.08 margin, 0.125 is beyond it.
+        assertTrue(
+            ranker.rank(listOf(candidate("a", 1.0), candidate("b", 1.0 - 0.0625))).duplicateFrontGroup,
+        )
+        assertFalse(
+            ranker.rank(listOf(candidate("a", 1.0), candidate("b", 1.0 - 0.125))).duplicateFrontGroup,
+        )
+        assertTrue(margin > 0.0625 && margin < 0.125)
     }
 
     @Test

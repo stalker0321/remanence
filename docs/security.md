@@ -143,9 +143,9 @@ After encrypting all artifacts, the sender constructs a canonical `PublishStatem
 - each blob ID, kind, ordinal, ciphertext byte length, and SHA-256 transport hash;
 - envelope-independent creation timestamp rounded to seconds.
 
-The sender signs `"postmark/publish/v1" || deterministic_statement_bytes` with Tink Ed25519. The signature authenticates the complete artifact set relative to the directory key. SHA-256 fields are transport/object identity checks; the signature and AEAD provide security integrity.
+The sender signs `"postmark/publish/v1" || deterministic_statement_bytes` with Tink Ed25519. The signature transported by REST is exactly the raw Tink output with the `TINK` output prefix and is exactly 69 bytes: `0x01 || key_id(4B big-endian) || r||s(64B)` (ADR-007). There is no prefix stripping, no `RAW` variant, and no fallback decode path. Signers fail closed unless their primitive emits this exact framing; verifiers apply a structural length/prefix/key-ID guard before invoking Tink verification. The signature authenticates the complete artifact set relative to the directory key. SHA-256 fields are transport/object identity checks; the signature and AEAD provide security integrity.
 
-The recipient verifies the signature before decrypting/presenting content and confirms that the authenticated account, routed capsule row, envelope plaintext, statement, and AAD all agree on IDs/key IDs.
+The recipient verifies the signature before decrypting/presenting content and confirms that the authenticated account, routed capsule row, envelope plaintext, statement, and AAD all agree on IDs/key IDs. A fixed non-secret Ed25519 keyset plus exact cross-platform golden vector live in `protocol/fixtures/publish-signature-v1.json`; Android and backend must reproduce/accept those bytes for protocol v1.
 
 ### 6.5 Recipient envelope
 

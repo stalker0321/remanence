@@ -1,5 +1,7 @@
 package postmark.core.crypto
 
+import com.google.crypto.tink.InsecureSecretKeyAccess
+import com.google.crypto.tink.TinkJsonProtoKeysetFormat
 import com.google.crypto.tink.TinkProtoKeysetFormat
 import java.security.GeneralSecurityException
 import java.util.UUID
@@ -7,7 +9,6 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertTrue
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
@@ -25,77 +26,121 @@ import postmark.core.model.PublishStatementInput
 import postmark.core.model.UserId
 
 /**
- * Golden proof for M1-C11: the signer consumes the frozen deterministic
- * statement bytes from `protocol/fixtures/publish-statement-v1.json` and the
- * exact `"postmark/publish/v1" || bytes` input; tampering fails closed.
+ * Golden proof for M1-C11 + ADR-007: the signer consumes the frozen
+ * deterministic statement bytes from `protocol/fixtures/publish-statement-v1.json`
+ * and reproduces the exact committed 69-byte TINK-prefixed Ed25519 signature
+ * from `protocol/fixtures/publish-signature-v1.json` using the checked-in
+ * non-secret keysets. Tampering fails closed.
  */
 class PublishStatementSignerTest {
 
     private val signer = PublishStatementSigner()
-    private val identity = AccountIdentityGenerator().generate()
+    private val golden = loadGoldenFixture()
 
-    private fun loadFixture(): JsonObject =
+    @kotlin.test.BeforeTest
+    fun setUp() {
+        TinkPrimitives.ensureRegistered()
+    }
+
+    private fun loadGoldenFixture(): JsonObject =
         Json.parseToJsonElement(
             requireNotNull(
-                this::class.java.classLoader.getResourceAsStream("publish-statement-v1.json")
+                this::class.java.classLoader.getResourceAsStream("publish-signature-v1.json")
                     ?.readBytes()?.decodeToString(),
-            ) { "publish-statement-v1.json fixture missing on test classpath" },
+            ) { "publish-signature-v1.json fixture missing on test classpath" },
         ).jsonObject
 
-    private fun goldenStatementBytes(): ByteArray {
-        val expected = loadFixture()["expected_deterministic_hex"]!!.jsonPrimitive.content
-        return expected.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-    }
+    private fun hexToBytes(hex: String): ByteArray =
+        hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
-    private fun publicVerifyingHandle() =
-        TinkProtoKeysetFormat.parseKeysetWithoutSecret(identity.signingPublicKeyset)
+    private fun goldenStatementBytes(): ByteArray =
+        hexToBytes(golden["expected_deterministic_hex"]!!.jsonPrimitive.content)
+
+    private fun goldenSignatureBytes(): ByteArray =
+        hexToBytes(golden["expected_signature_hex"]!!.jsonPrimitive.content)
+
+    private fun fixedSigningKeysetId(): Int = golden["signing_key_id"]!!.jsonPrimitive.content.toInt()
+
+    /** The checked-in non-secret private Ed25519 test keyset (TINK prefix). */
+    private fun fixedSigningHandle() = TinkJsonProtoKeysetFormat.parseKeyset(
+        golden["fixed_private_keyset_json"]!!.jsonObject.toString(),
+        InsecureSecretKeyAccess.get(),
+    )
+
+    private fun fixedVerifyingHandle() = TinkJsonProtoKeysetFormat.parseKeysetWithoutSecret(
+        golden["fixed_public_keyset_json"]!!.jsonObject.toString(),
+    )
 
     @Test
-    fun signsGoldenDeterministicBytesAndVerifiesWithPublicHalf() {
-        val statementBytes = goldenStatementBytes()
+    fun signsFixedStatementToTheExactCommittedSixtyNineByteVector() {
+        val signed = signer.sign(fixedSigningHandle(), goldenStatementBytes())
 
-        val signed = signer.sign(identity.signingPrivateHandle, statementBytes)
-
-        assertContentEquals(statementBytes, signed.deterministicStatementBytes)
-        assertTrue(signed.signature.size >= 64) // Ed25519 R||S plus optional Tink output prefix
-        signer.verify(publicVerifyingHandle(), signed)
+        assertContentEquals(goldenSignatureBytes(), signed.signature)
+        assertEquals(PublishStatementSigner.SIGNATURE_LENGTH, signed.signature.size)
+        assertEquals(PublishStatementSigner.TINK_PREFIX_TYPE_BYTE, signed.signature[0])
+        assertEquals(fixedSigningKeysetId(), readEmbeddedKeyId(signed.signature))
+        assertContentEquals(goldenStatementBytes(), signed.deterministicStatementBytes)
+        signer.verify(fixedVerifyingHandle(), signed)
     }
 
     @Test
-    fun signingIsDeterministicForFixedInput() {
+    fun verificationAcceptsOnlyTheCommittedVectorForTheFixedStatement() {
         val statementBytes = goldenStatementBytes()
+        val signed = signer.sign(fixedSigningHandle(), statementBytes)
 
-        val first = signer.sign(identity.signingPrivateHandle, statementBytes)
-        val second = signer.sign(identity.signingPrivateHandle, statementBytes)
+        signer.verify(fixedVerifyingHandle(), signed)
+        // Re-verification of the committed bytes is stable and deterministic.
+        assertContentEquals(goldenSignatureBytes(), signed.signature)
+        val second = signer.sign(fixedSigningHandle(), statementBytes)
+        assertContentEquals(signed.signature, second.signature)
+    }
 
-        assertContentEquals(first.signature, second.signature)
+    @Test
+    fun generatedIdentityProducesProtocolV1TinkPrefixedSignatures() {
+        val identity = AccountIdentityGenerator().generate()
+
+        val signed = signer.sign(identity.signingPrivateHandle, goldenStatementBytes())
+
+        assertEquals(PublishStatementSigner.SIGNATURE_LENGTH, signed.signature.size)
+        assertEquals(PublishStatementSigner.TINK_PREFIX_TYPE_BYTE, signed.signature[0])
+        assertEquals(
+            identity.signingPrivateHandle.keysetInfo.primaryKeyId,
+            readEmbeddedKeyId(signed.signature),
+        )
+        val verifying = TinkProtoKeysetFormat.parseKeysetWithoutSecret(identity.signingPublicKeyset)
+        signer.verify(verifying, signed)
     }
 
     @Test
     fun bitFlipInStatementBytesFailsVerification() {
-        val signed = signer.sign(identity.signingPrivateHandle, goldenStatementBytes())
+        val signed = signer.sign(fixedSigningHandle(), goldenStatementBytes())
         val tampered = signed.deterministicStatementBytes.copyOf()
         tampered[tampered.size / 2] = (tampered[tampered.size / 2].toInt() xor 0x01).toByte()
 
         assertFailsWith<GeneralSecurityException> {
-            signer.verify(publicVerifyingHandle(), SignedPublishStatement(tampered, signed.signature))
+            signer.verify(fixedVerifyingHandle(), SignedPublishStatement(tampered, signed.signature))
         }
     }
 
     @Test
-    fun truncatedSignatureAndForeignSignatureFailClosed() {
+    fun truncatedStrippedAndForeignSignaturesFailClosed() {
         val statementBytes = goldenStatementBytes()
-        val signed = signer.sign(identity.signingPrivateHandle, statementBytes)
+        val signed = signer.sign(fixedSigningHandle(), statementBytes)
 
+        // Stripping the 5-byte TINK prefix is not protocol v1; RAW fails closed.
+        val stripped = signed.signature.copyOfRange(5, signed.signature.size)
+        assertFailsWith<GeneralSecurityException> {
+            signer.verify(fixedVerifyingHandle(), SignedPublishStatement(statementBytes, stripped))
+        }
+        // Truncated TINK output fails closed.
         val truncated = signed.signature.copyOf(signed.signature.size - 1)
         assertFailsWith<GeneralSecurityException> {
-            signer.verify(publicVerifyingHandle(), SignedPublishStatement(statementBytes, truncated))
+            signer.verify(fixedVerifyingHandle(), SignedPublishStatement(statementBytes, truncated))
         }
-
-        val otherIdentity = AccountIdentityGenerator().generate()
-        val foreign = signer.sign(otherIdentity.signingPrivateHandle, statementBytes)
+        // Well-formed length but wrong bytes fails closed.
+        val foreign = goldenSignatureBytes().copyOf().also { it[10] = (it[10].toInt() xor 0x01).toByte() }
         assertFailsWith<GeneralSecurityException> {
-            signer.verify(publicVerifyingHandle(), SignedPublishStatement(statementBytes, foreign.signature))
+            signer.verify(fixedVerifyingHandle(), SignedPublishStatement(statementBytes, foreign))
         }
     }
 
@@ -104,25 +149,30 @@ class PublishStatementSignerTest {
         // The domain prefix is added exactly once by the signer; a payload that
         // already embeds it must never verify as a statement.
         val statementBytes = goldenStatementBytes()
-        val signed = signer.sign(identity.signingPrivateHandle, statementBytes)
+        val signed = signer.sign(fixedSigningHandle(), statementBytes)
         val prefixed = PublishStatementSigner.DOMAIN_PREFIX.toByteArray(Charsets.US_ASCII) + statementBytes
 
         assertFailsWith<GeneralSecurityException> {
-            signer.verify(publicVerifyingHandle(), SignedPublishStatement(prefixed, signed.signature))
+            signer.verify(fixedVerifyingHandle(), SignedPublishStatement(prefixed, signed.signature))
         }
     }
 
     @Test
     fun emptyStatementRejectedBeforeSigningOrVerifying() {
-        assertFailsWith<IllegalArgumentException> { signer.sign(identity.signingPrivateHandle, ByteArray(0)) }
+        assertFailsWith<IllegalArgumentException> { signer.sign(fixedSigningHandle(), ByteArray(0)) }
         assertFailsWith<GeneralSecurityException> {
-            signer.verify(identity.signingPrivateHandle, SignedPublishStatement(ByteArray(0), ByteArray(64)))
+            signer.verify(fixedVerifyingHandle(), SignedPublishStatement(ByteArray(0), goldenSignatureBytes()))
         }
     }
 
     @Test
-    fun builderOutputFeedsSignerEndToEnd() {
-        val json = loadFixture()
+    fun builderOutputFeedsSignerEndToEndOnTheGoldenPath() {
+        val json = Json.parseToJsonElement(
+            requireNotNull(
+                this::class.java.classLoader.getResourceAsStream("publish-statement-v1.json")
+                    ?.readBytes()?.decodeToString(),
+            ),
+        ).jsonObject
         val capsuleId = CapsuleId(UUID.fromString(json["capsule_id"]!!.jsonPrimitive.content))
         val sender = UserId(UUID.fromString(json["sender_user_id"]!!.jsonPrimitive.content))
         val recipient = UserId(UUID.fromString(json["recipient_user_id"]!!.jsonPrimitive.content))
@@ -152,9 +202,18 @@ class PublishStatementSignerTest {
             PublishStatementInput(capsuleId, sender, recipient, senderBundle, recipientBundle, 1_700_000_000L, artifacts),
         ) as PublishStatementBuildResult.Success
 
-        val signed = signer.sign(identity.signingPrivateHandle, success.deterministicBytes.toByteArray())
-        signer.verify(publicVerifyingHandle(), signed)
+        assertContentEquals(
+            goldenStatementBytes(),
+            success.deterministicBytes.toByteArray(),
+        )
+        val signed = signer.sign(fixedSigningHandle(), success.deterministicBytes.toByteArray())
+        assertContentEquals(goldenSignatureBytes(), signed.signature)
+        signer.verify(fixedVerifyingHandle(), signed)
     }
+
+    private fun readEmbeddedKeyId(signature: ByteArray): Int =
+        ((signature[1].toInt() and 0xFF) shl 24) or ((signature[2].toInt() and 0xFF) shl 16) or
+            ((signature[3].toInt() and 0xFF) shl 8) or (signature[4].toInt() and 0xFF)
 
     private fun hexToByteString(hex: String): com.google.protobuf.ByteString =
         com.google.protobuf.ByteString.copyFrom(hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray())

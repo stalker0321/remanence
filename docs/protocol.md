@@ -145,10 +145,12 @@ The signed publish object transported by REST is:
 ```json
 {
   "statement": "<base64url deterministic PublishStatement>",
-  "signature": "<base64url Ed25519 signature>",
+  "signature": "<base64url 69-byte TINK-prefixed Ed25519 signature>",
   "sender_key_bundle_id": "uuid"
 }
 ```
+
+The `signature` bytes are exactly the raw Tink output with the `TINK` output prefix and are always 69 bytes: `0x01 || key_id(4B big-endian) || r||s(64B)` (ADR-007). Prefix stripping, `RAW` variants, and alternate decode paths are not protocol v1; a fixed non-secret keyset and exact Android/backend cross-platform golden vector are checked in at `protocol/fixtures/publish-signature-v1.json`.
 
 Signature input and AEAD/HPKE domain-separated contexts are normative in `security.md`.
 

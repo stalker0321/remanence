@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "purpose": "publish-statement-signature-v1 golden vector (non-secret test material)",
+  "algorithm": "TINK-prefixed Ed25519; REST signature bytes are exactly 69 bytes: 0x01 || key_id(4B big-endian) || r||s(64B)",
+  "signature_input": "\"postmark/publish/v1\" || deterministic PublishStatement bytes",
+  "statement_source": "publish-statement-v1.json#expected_deterministic_hex",
+  "expected_deterministic_hex": "08011210000102030405060708090a0b0c0d0e0f1a10101112131415161718191a1b1c1d1e1f2210202122232425262728292a2b2c2d2e2f2a10303132333435363738393a3b3c3d3e3f3210404142434445464748494a4b4c4d4e4f3880e2cfaa06423a0a10000000000000000000000000000000a11001180120652a201111111111111111111111111111111111111111111111111111111111111111423b0a10000000000000000000000000000000b21002180120ca012a20222222222222222222222222222222222222222222222222222222222222222242390a10000000000000000000000000000000c3100320af022a203333333333333333333333333333333333333333333333333333333333333333423b0a10000000000000000000000000000000d4100318022094032a204444444444444444444444444444444444444444444444444444444444444444423b0a10000000000000000000000000000000e51003180420f9032a205555555555555555555555555555555555555555555555555555555555555555",
+  "signing_key_id": 923953280,
+  "fixed_private_keyset_json": {
+    "primaryKeyId": 923953280,
+    "key": [
+      {
+        "keyData": {
+          "typeUrl": "type.googleapis.com/google.crypto.tink.Ed25519PrivateKey",
+          "value": "EiBb1GHET+fIpBEjJP0l+UTmOIjtSRRTep57Z9HSDNFrghoiEiB5Y7vRC/a7LcW1PCH4mJmq7AApuEjSD0/EHpZbBLWOgA==",
+          "keyMaterialType": "ASYMMETRIC_PRIVATE"
+        },
+        "status": "ENABLED",
+        "keyId": 923953280,
+        "outputPrefixType": "TINK"
+      }
+    ]
+  },
+  "fixed_public_keyset_json": {
+    "primaryKeyId": 923953280,
+    "key": [
+      {
+        "keyData": {
+          "typeUrl": "type.googleapis.com/google.crypto.tink.Ed25519PublicKey",
+          "value": "EiB5Y7vRC/a7LcW1PCH4mJmq7AApuEjSD0/EHpZbBLWOgA==",
+          "keyMaterialType": "ASYMMETRIC_PUBLIC"
+        },
+        "status": "ENABLED",
+        "keyId": 923953280,
+        "outputPrefixType": "TINK"
+      }
+    ]
+  },
+  "expected_signature_hex": "01371268805c08851c4fccd2e5e45024e9894431de18a3e522f2b3e42b8a7c7a754011b913ab1a820dbb2bf4cb94bc37ab66c12a783d6d9f3150fe17462e4b657a237d3d0c",
+  "expected_signature_base64url": "ATcSaIBcCIUcT8zS5eRQJOmJRDHeGKPlIvKz5CuKfHp1QBG5E6sagg27K_TLlLw3q2bBKng9bZ8xUP4XRi5LZXojfT0M"
+}

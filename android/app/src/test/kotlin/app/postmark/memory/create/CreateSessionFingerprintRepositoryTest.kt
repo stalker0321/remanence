@@ -13,8 +13,9 @@ import postmark.core.data.fingerprints.SealedFingerprintPersistence
 
 private class RecordingPersistence : SealedFingerprintPersistence {
     val persisted = mutableListOf<Triple<FingerprintSide, FingerprintOrigin, ByteArray>>()
-    var profiles = mutableListOf<String>()
+    val profiles = mutableListOf<String>()
     var duplicateNext = false
+    var frontExists = false
 
     override suspend fun persist(
         capsuleId: String,
@@ -31,15 +32,29 @@ private class RecordingPersistence : SealedFingerprintPersistence {
         profiles += profileId
         return "fp-${persisted.size}"
     }
+
+    override suspend fun hasBaseline(
+        capsuleId: String,
+        side: FingerprintSide,
+        origin: FingerprintOrigin,
+    ): Boolean = persisted.any { it.first == side && it.second == origin } || (side == FingerprintSide.FRONT && frontExists)
 }
 
-private class StubExtractor(private val side: FingerprintSide = FingerprintSide.FRONT) : SideFingerprintExtractor {
+private class StubExtractor : SideFingerprintExtractor {
     val extractions = AtomicInteger()
+    val requested = mutableListOf<FingerprintSide>()
 
     override fun extract(side: FingerprintSide): StagedSideFingerprint {
         extractions.incrementAndGet()
-        return StagedSideFingerprint("mvp-orb-v1", this.side, "serialized-fingerprint".toByteArray())
+        requested += side
+        return StagedSideFingerprint("mvp-orb-v1", side, "serialized-fingerprint".toByteArray())
     }
+}
+
+/** Misbehaving adapter that always reports the wrong side back to the repo. */
+private class LyingExtractor(private val reported: FingerprintSide) : SideFingerprintExtractor {
+    override fun extract(side: FingerprintSide): StagedSideFingerprint =
+        StagedSideFingerprint("mvp-orb-v1", reported, "serialized-fingerprint".toByteArray())
 }
 
 class CreateSessionFingerprintRepositoryTest {
@@ -94,5 +109,70 @@ class CreateSessionFingerprintRepositoryTest {
         assertThrows(IllegalArgumentException::class.java) {
             runBlocking { sut.captureFront(capsuleId.uppercase()) }
         }
+    }
+
+    @Test
+    fun backWithoutFrontIsRejectedBeforeAnyExtractionOrPersist() {
+        val persistence = RecordingPersistence()
+        val extractor = StubExtractor()
+        val sut = CreateSessionFingerprintRepository(persistence, extractor)
+
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking { sut.captureBack(capsuleId) }
+        }
+        assertEquals(0, extractor.extractions.get())
+        assertEquals(0, persistence.persisted.size)
+    }
+
+    @Test
+    fun backCaptureRequiresFrontThenPersistsSenderBack() = runBlocking {
+        val persistence = RecordingPersistence()
+        val extractor = StubExtractor()
+        val sut = CreateSessionFingerprintRepository(persistence, extractor)
+
+        sut.captureFront(capsuleId)
+        val backId = sut.captureBack(capsuleId)
+
+        assertEquals("fp-2", backId)
+        assertEquals(2, extractor.extractions.get())
+        assertEquals(
+            listOf(FingerprintSide.FRONT, FingerprintSide.BACK),
+            extractor.requested,
+        )
+        assertEquals(
+            listOf(FingerprintSide.FRONT, FingerprintSide.BACK),
+            persistence.persisted.map { it.first },
+        )
+        assertTrue(persistence.persisted.all { it.second == FingerprintOrigin.SENDER })
+    }
+
+    @Test
+    fun failedBackAttemptLeavesFrontBaselineIntact() = runBlocking {
+        val persistence = RecordingPersistence()
+        val extractor = StubExtractor()
+        val sut = CreateSessionFingerprintRepository(persistence, extractor)
+
+        sut.captureFront(capsuleId)
+        persistence.duplicateNext = true
+
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking { sut.captureBack(capsuleId) }
+        }
+        // Front record untouched; only the front baseline exists.
+        assertEquals(1, persistence.persisted.size)
+        assertEquals(FingerprintSide.FRONT, persistence.persisted.single().first)
+        assertTrue(persistence.hasBaseline(capsuleId, FingerprintSide.FRONT, FingerprintOrigin.SENDER))
+    }
+
+    @Test
+    fun wrongSideFromExtractorRejectedWithoutPersist() = runBlocking {
+        val persistence = RecordingPersistence().apply { frontExists = true }
+        val extractor = LyingExtractor(reported = FingerprintSide.FRONT)
+        val sut = CreateSessionFingerprintRepository(persistence, extractor)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            runBlocking { sut.captureBack(capsuleId) }
+        }
+        assertEquals(0, persistence.persisted.size)
     }
 }

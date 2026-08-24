@@ -17,4 +17,11 @@ interface SealedFingerprintPersistence {
         profileId: String,
         plaintextBytes: ByteArray,
     ): String
+
+    /** True when this capsule already holds a sealed [side]/[origin] baseline. */
+    suspend fun hasBaseline(
+        capsuleId: String,
+        side: FingerprintSide,
+        origin: FingerprintOrigin,
+    ): Boolean
 }

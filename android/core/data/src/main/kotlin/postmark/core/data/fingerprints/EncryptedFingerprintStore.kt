@@ -76,6 +76,12 @@ class EncryptedFingerprintStore(
         return fingerprintId
     }
 
+    override suspend fun hasBaseline(
+        capsuleId: String,
+        side: FingerprintSide,
+        origin: FingerprintOrigin,
+    ): Boolean = dao.getByCapsuleIdAndOrigin(capsuleId, origin).any { it.side == side }
+
     /** Loads the row, reads its file, and unseals; anything unexpected fails closed. */
     suspend fun decrypt(fingerprintId: String): ByteArray {
         val entity = dao.getByFingerprintId(fingerprintId)

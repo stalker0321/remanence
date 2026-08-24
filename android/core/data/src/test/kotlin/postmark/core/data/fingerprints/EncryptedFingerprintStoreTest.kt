@@ -108,6 +108,18 @@ class EncryptedFingerprintStoreTest {
     }
 
     @Test
+    fun hasBaselineReflectsOnlyPersistedSides() = runBlocking {
+        val sut = store()
+        assertFalse(sut.hasBaseline("capsule-c", FingerprintSide.FRONT, FingerprintOrigin.SENDER))
+
+        sut.persist("capsule-c", FingerprintSide.FRONT, FingerprintOrigin.SENDER, "mvp-orb-v1", byteArrayOf(1))
+
+        assertTrue(sut.hasBaseline("capsule-c", FingerprintSide.FRONT, FingerprintOrigin.SENDER))
+        assertFalse(sut.hasBaseline("capsule-c", FingerprintSide.BACK, FingerprintOrigin.SENDER))
+        assertFalse(sut.hasBaseline("capsule-other", FingerprintSide.FRONT, FingerprintOrigin.SENDER))
+    }
+
+    @Test
     fun missingRecordAndMissingFileFailClosed() = runBlocking {
         val sut = store()
         try {

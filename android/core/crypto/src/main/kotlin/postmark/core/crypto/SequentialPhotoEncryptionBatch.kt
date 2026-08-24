@@ -1,10 +1,15 @@
 package postmark.core.crypto
 
+import java.io.InputStream
+
 /**
  * Encrypts the staged photos strictly one at a time, in ascending ordinal
- * order, keeping only the running result list alive (docs/security.md
- * section 6.2). Any failure discards the partial result before propagating,
- * so callers can never observe or persist a half-encrypted set.
+ * order (docs/security.md sections 6.1/6.2). Inputs are lazy descriptors of
+ * staged normalized photos: at any moment exactly zero or one source is open
+ * and only the active plaintext plus the running ciphertext results are kept
+ * alive; each source is closed before the next photo is touched. Any failure
+ * discards the partial result before propagating, so callers can never
+ * observe or persist a half-encrypted set, and no plaintext is ever returned.
  */
 class SequentialPhotoEncryptionBatch(
     private val encryptor: PhotoArtifactEncryptor,
@@ -29,9 +34,10 @@ class SequentialPhotoEncryptionBatch(
         val results = ArrayList<EncryptedPhoto>(photos.size)
         try {
             photos.forEachIndexed { index, photo ->
-                // Only the current plaintext is reachable inside this iteration;
-                // the reference is dropped when the loop advances.
-                val encrypted = encryptor.encryptPhoto(capsuleKeyset, routingContext, photo.ordinal, photo.normalizedJpeg)
+                // Exactly one staged source is open here; use{} closes it before
+                // the loop advances to the next descriptor.
+                val normalizedJpeg = photo.plaintext.openStream().use(InputStream::readBytes)
+                val encrypted = encryptor.encryptPhoto(capsuleKeyset, routingContext, photo.ordinal, normalizedJpeg)
                 results += encrypted
                 onEachEncrypted(index, photos.size)
             }
@@ -48,8 +54,13 @@ class SequentialPhotoEncryptionBatch(
     }
 }
 
-/** One queued photo for batch encryption: its fixed ordinal and normalized bytes. */
+/** Lazy handle to one staged normalized photo's bytes; opened at most one at a time. */
+fun interface PhotoPlaintextSource {
+    fun openStream(): InputStream
+}
+
+/** One queued photo for batch encryption: its fixed ordinal and lazy staged-bytes descriptor. */
 data class OrdinalPhoto(
     val ordinal: Int,
-    val normalizedJpeg: ByteArray,
+    val plaintext: PhotoPlaintextSource,
 )

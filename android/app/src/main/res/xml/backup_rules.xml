@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Fail-safe legacy backup policy (security.md section 5). Auto Backup is
+     disabled via android:allowBackup="false"; these rules deny every domain
+     so wrapped identity keysets, sealed tokens, staged/decrypted media,
+     fingerprint keys, and ciphertext files are excluded even if backup is
+     ever accidentally re-enabled on API < 31. -->
+<full-backup-content>
+    <exclude domain="root" />
+    <exclude domain="file" />
+    <exclude domain="database" />
+    <exclude domain="sharedpref" />
+    <exclude domain="external" />
+</full-backup-content>

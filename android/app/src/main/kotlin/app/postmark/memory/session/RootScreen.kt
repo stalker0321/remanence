@@ -30,6 +30,8 @@ fun RootScreen(
     modifier: Modifier = Modifier,
     createContent: @Composable () -> Unit = {},
     scanContent: @Composable () -> Unit = {},
+    capsuleContent: @Composable (grantId: String, capsuleId: String) -> Unit = { _, _ -> },
+    capsuleIdResolver: (String) -> String? = { null },
     onExitFlow: () -> Unit = {},
 ) {
     if (authState !is AuthUiState.Authenticated) {
@@ -57,8 +59,10 @@ fun RootScreen(
             scanContent()
         }
 
-        // Grant-gated capsule presentation arrives through its own verified
-        // route; until a live grant exists Home remains the fallback surface.
+        is AppDestination.Capsule ->
+            capsuleContent(destination.grantId, capsuleIdResolver(destination.grantId) ?: "")
+
+        // Until a live grant exists, Home remains the fallback surface.
         else -> homeContent()
     }
 }

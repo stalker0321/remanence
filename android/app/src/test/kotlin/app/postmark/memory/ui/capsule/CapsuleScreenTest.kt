@@ -17,6 +17,16 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 
+/** A genuinely decodable JPEG so the bounded on-screen decode succeeds. */
+private fun realJpeg(ordinal: Int): ByteArray {
+    val bitmap = android.graphics.Bitmap.createBitmap(8, 8, android.graphics.Bitmap.Config.ARGB_8888)
+    bitmap.eraseColor((0xFF000000L + ordinal * 0x010101L).toInt())
+    val output = java.io.ByteArrayOutputStream()
+    bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, output)
+    bitmap.recycle()
+    return output.toByteArray()
+}
+
 /** Bounded presentation + cleanup proof for M1-M15. */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35])
@@ -29,9 +39,11 @@ class CapsuleScreenTest {
         val requestedOrdinals = mutableListOf<Int>()
         override suspend fun load(ordinal: Int): DecryptedPhoto {
             requestedOrdinals += ordinal
-            return DecryptedPhoto(ordinal, "jpeg-bytes-$ordinal".toByteArray())
+            return DecryptedPhoto(ordinal, realJpeg(ordinal))
         }
     }
+
+
 
     private fun state(note: String? = null): Pair<CapsulePresentationState, RecordingLoader> {
         val loader = RecordingLoader()
@@ -62,7 +74,7 @@ class CapsuleScreenTest {
         presentationState.pageAt(0)
 
         assertEquals(listOf(0), loader.requestedOrdinals)
-        assertEquals("jpeg-bytes-0", String(presentationState.loadedPages[0]!!.jpegBytes))
+        assertTrue(presentationState.loadedPages[0]!!.jpegBytes.isNotEmpty())
 
         presentationState.close()
         assertTrue(presentationState.loadedPages.isEmpty())

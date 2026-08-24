@@ -86,6 +86,19 @@ class RootViewModel(
         _destination.value = controller.current
     }
 
+    /** Resolves the capsule bound to a live verified grant, if any. */
+    fun capsuleIdFor(grantId: String): String? =
+        (controller.capsuleAccess as? app.postmark.memory.ui.navigation.CapsuleAccess.Granted)
+            ?.takeIf { it.grantId == grantId }
+            ?.capsuleId
+
+    /** Leaving the presentation consumes the grant and ejects to Home. */
+    fun closeCapsule() {
+        controller.consumeCapsuleAccess()
+        controller.navigate(AppDestination.Home)
+        _destination.value = controller.current
+    }
+
     /**
      * Returns from Create/Scan to Home. Leaving a flow RUNS its registered
      * transient-state cleanups - confirmed recipients, staged captures, and

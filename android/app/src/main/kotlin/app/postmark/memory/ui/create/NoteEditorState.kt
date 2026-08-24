@@ -20,7 +20,7 @@ class NoteEditorState(private val maxBytes: Int = MAX_NOTE_BYTES) {
 
     /** @return true when the candidate was accepted as the new note text. */
     fun onChange(candidate: String): Boolean {
-        if (candidate.any { Character.isSurrogate(it) }) {
+        if (containsUnpairedSurrogate(candidate)) {
             limitReached = false
             return false
         }
@@ -37,5 +37,22 @@ class NoteEditorState(private val maxBytes: Int = MAX_NOTE_BYTES) {
         const val MAX_NOTE_BYTES: Int = 1000
 
         fun utf8ByteCount(value: String): Int = value.toByteArray(Charsets.UTF_8).size
+
+        /** Valid surrogate pairs are legitimate supplementary code points; lone ones are malformed. */
+        internal fun containsUnpairedSurrogate(value: String): Boolean {
+            var index = 0
+            while (index < value.length) {
+                val high = value[index]
+                when {
+                    Character.isHighSurrogate(high) -> {
+                        if (index + 1 >= value.length || !Character.isLowSurrogate(value[index + 1])) return true
+                        index += 2
+                    }
+                    Character.isLowSurrogate(high) -> return true
+                    else -> index += 1
+                }
+            }
+            return false
+        }
     }
 }

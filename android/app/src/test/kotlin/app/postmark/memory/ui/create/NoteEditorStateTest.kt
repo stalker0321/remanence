@@ -55,8 +55,8 @@ class NoteEditorStateTest {
         assertTrue(state.canIncludeInCapsule)
 
         val other = NoteEditorState()
-        // 499 two-byte + one three-byte = 1001 → rejected.
-        assertFalse(other.onChange("б".repeat(499) + "ю"))
+        // 1000 bytes + one more ASCII char = 1001 → rejected whole.
+        assertFalse(other.onChange("б".repeat(500) + "x"))
         assertEquals("", other.text)
     }
 

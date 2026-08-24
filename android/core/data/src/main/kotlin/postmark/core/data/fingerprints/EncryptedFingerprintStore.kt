@@ -98,7 +98,7 @@ class EncryptedFingerprintStore(
     }
 
     /** Loads the row, reads its file, and unseals; anything unexpected fails closed. */
-    suspend fun decrypt(fingerprintId: String): ByteArray {
+    override suspend fun decrypt(fingerprintId: String): ByteArray {
         val entity = dao.getByFingerprintId(fingerprintId)
             ?: throw IllegalStateException("unknown fingerprint record")
         val file = filesRoot.resolve(entity.encryptedPath)

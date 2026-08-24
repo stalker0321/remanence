@@ -12,6 +12,8 @@ import postmark.core.data.db.FingerprintSide
 import postmark.core.data.fingerprints.SealedFingerprintPersistence
 
 private class RecordingPersistence : SealedFingerprintPersistence {
+        override suspend fun decrypt(fingerprintId: String): ByteArray = ByteArray(0)
+
     val persisted = mutableListOf<Triple<FingerprintSide, FingerprintOrigin, ByteArray>>()
     val profiles = mutableListOf<String>()
     var duplicateNext = false

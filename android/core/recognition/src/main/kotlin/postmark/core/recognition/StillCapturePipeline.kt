@@ -32,6 +32,18 @@ class StillCapturePipeline(
         val width: Int get() = bitmap.width
         val height: Int get() = bitmap.height
 
+        /**
+         * Copies the working image into ARGB pixels for detector/warper/meter
+         * consumption. Fails closed after release; the bitmap itself is
+         * recycled by [close].
+         */
+        fun copyArgbPixels(): IntArray {
+            checkOpen()
+            val target = IntArray(bitmap.width * bitmap.height)
+            bitmap.getPixels(target, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+            return target
+        }
+
         private var closed = false
 
         override fun close() {

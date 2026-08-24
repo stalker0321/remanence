@@ -17,6 +17,8 @@ import postmark.core.recognition.QualityReason
 class BackCaptureFlowTest {
 
     private class FakePersistence : SealedFingerprintPersistence {
+        override suspend fun decrypt(fingerprintId: String): ByteArray = ByteArray(0)
+
         val persisted = mutableListOf<Pair<FingerprintSide, String>>()
         var frontExists = false
 

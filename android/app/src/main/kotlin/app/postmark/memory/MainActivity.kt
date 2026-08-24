@@ -26,6 +26,8 @@ import app.postmark.memory.session.RootViewModel
 import app.postmark.memory.ui.auth.LoginScreen
 import app.postmark.memory.ui.auth.LoginSubmitState
 import app.postmark.memory.ui.auth.LoginViewModel
+import app.postmark.memory.ui.create.CreateScreen
+import app.postmark.memory.ui.create.CreateViewModel
 import app.postmark.memory.ui.auth.RegistrationFormScreen
 import app.postmark.memory.ui.auth.RegistrationSubmitState
 import app.postmark.memory.ui.auth.RegistrationViewModel
@@ -137,11 +139,8 @@ private fun RootSurface(container: AppContainer) {
             )
         },
         createContent = {
-            // Full production create wiring lands in FIX-M1-007-11.
-            FlowIntroSurface(
-                title = "Create",
-                detail = "Resolve the recipient, capture both sides, and seal your capsule.",
-            )
+            val createViewModel: CreateViewModel = viewModel(factory = factory)
+            CreateScreen(viewModel = createViewModel)
         },
         scanContent = {
             // Full production scan wiring lands in FIX-M1-007-12.

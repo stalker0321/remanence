@@ -40,6 +40,9 @@ class PostmarkApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // OpenCV native runtime must be live before any capture/extraction
+        // component runs (docs/recognition.md section 4).
+        org.opencv.android.OpenCVLoader.initLocal()
         container = AppContainer(this)
     }
 }
@@ -64,7 +67,7 @@ class AppContainer(
 
     val healthRepository: HealthRepository by lazy { HealthRepository.create(apiBaseUrl) }
 
-    private val appContext: Context = context.applicationContext
+    val appContext: Context = context.applicationContext
 
     val database: PostmarkLocalDatabase by lazy {
         Room.databaseBuilder(appContext, PostmarkLocalDatabase::class.java, DATABASE_NAME).build()
@@ -155,6 +158,14 @@ class AppContainer(
     val registrationIdentityAdapter: TinkRegistrationIdentityAdapter by lazy {
         TinkRegistrationIdentityAdapter(identityRepository, kekBoundary, identityKekAlias)
     }
+
+    /** Handle resolution for the create flow (docs/security.md section 8). */
+    val directoryRepository: postmark.core.data.network.DirectoryRepository by lazy {
+        postmark.core.data.network.DirectoryRepository.create(apiBaseUrl)
+    }
+
+    /** App-private root for bounded staging directories. */
+    val appFilesRoot: File get() = appContext.filesDir
 
     /** FIX-M1-007-07: the current account lives in the real local_account table. */
     val currentAccountStore: app.postmark.memory.session.RoomCurrentAccountStore by lazy {

@@ -25,6 +25,9 @@ interface SealedFingerprintPersistence {
         origin: FingerprintOrigin,
     ): Boolean
 
+    /** Unseals exactly one stored fingerprint for local matching/staging use. */
+    suspend fun decrypt(fingerprintId: String): ByteArray
+
     /**
      * Marks exactly the [origin] front/back pair of [capsuleId] as preferred
      * and clears the flag from every other row of that capsule, demoting any

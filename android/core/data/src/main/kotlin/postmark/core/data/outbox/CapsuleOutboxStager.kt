@@ -36,6 +36,9 @@ data class PreparedOutboxCapsule(
     val recipientKeyBundleId: UUID,
     val envelopeCiphertext: ByteArray,
     val artifacts: List<PreparedOutboxArtifact>,
+    /** Signed deterministic statement carried for the finalize call (M2). */
+    val publishStatementBytes: ByteArray,
+    val publishStatementSignature: ByteArray,
 )
 
 /** The persisted outbox record after a successful atomic staging. */

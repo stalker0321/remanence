@@ -111,6 +111,10 @@ class CapsuleScreenTest {
         }
 
         composeRule.onNodeWithTag("capsule_page_indicator").assertIsDisplayed()
+        // The page decodes asynchronously; wait for the real image node.
+        composeRule.waitUntil(10_000) {
+            composeRule.onAllNodesWithTag("capsule_page_0").fetchSemanticsNodes().isNotEmpty()
+        }
         composeRule.onNodeWithTag("capsule_page_0").assertIsDisplayed()
         composeRule.onNodeWithTag("capsule_note_text").assertIsDisplayed()
 
@@ -119,6 +123,9 @@ class CapsuleScreenTest {
 
         composeRule.onNodeWithTag("capsule_next_button").performClick()
         composeRule.onNodeWithTag("capsule_next_button").performClick()
+        composeRule.waitUntil(10_000) {
+            composeRule.onAllNodesWithTag("capsule_page_2").fetchSemanticsNodes().isNotEmpty()
+        }
         composeRule.onNodeWithTag("capsule_page_2").assertIsDisplayed()
         composeRule.onNodeWithTag("capsule_next_button").assertIsNotEnabled()
 

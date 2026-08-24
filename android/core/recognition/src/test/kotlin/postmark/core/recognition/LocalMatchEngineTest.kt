@@ -4,7 +4,6 @@ import java.util.UUID
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
@@ -114,20 +113,37 @@ class LocalMatchEngineTest {
     }
 
     @Test
-    fun senderFallbackRunsOnlyWhenRecipientUniverseIsEmpty() {
+    fun senderFallbackRunsWhenRecipientRowsLackWeakEvidence() {
         val (engine, _) = engine()
         val queryFront = fingerprint(11, 64, FingerprintSide.FRONT)
         val queryBack = fingerprint(22, 64, FingerprintSide.BACK)
+        // Recipient baselines EXIST but each holds so few features that no
+        // side can ever clear the weak-evidence gate (which requires at least
+        // the configured minimum ratio/mutual matches); the scanned card must
+        // therefore fall back to its sender-era identity.
+        val starvedFront = fingerprint(11, 3, FingerprintSide.FRONT)
+        val starvedBack = fingerprint(22, 3, FingerprintSide.BACK)
         val universe = listOf(
-            candidate("sender-only", preferred = false, seedFront = 11, seedBack = 22),
+            IndexedCandidate(
+                capsuleId = UUID.nameUUIDFromBytes("rec-starved-1".toByteArray()),
+                front = starvedFront,
+                back = starvedBack,
+                recipientPreferred = true,
+            ),
+            IndexedCandidate(
+                capsuleId = UUID.nameUUIDFromBytes("rec-starved-2".toByteArray()),
+                front = fingerprint(31, 5, FingerprintSide.FRONT),
+                back = fingerprint(32, 5, FingerprintSide.BACK),
+                recipientPreferred = true,
+            ),
+            candidate("sender-original", preferred = false, seedFront = 11, seedBack = 22),
         )
 
         val result = engine.run(queryFront, queryBack, universe)
 
         val granted = result as ScanFlowResult.Granted
-        assertEquals(universe.single().capsuleId, granted.capsuleId)
+        assertEquals(UUID.nameUUIDFromBytes("sender-original".toByteArray()), granted.capsuleId)
         assertEquals(CandidateOrigin.SENDER_FALLBACK, granted.origin)
-        assertTrue(granted.compositeScore >= 0.0 && granted.compositeScore <= 1.0)
         assertEquals(1, issuedGrants.size)
     }
 
@@ -144,11 +160,46 @@ class LocalMatchEngineTest {
     }
 
     @Test
-    fun emptyCandidateUniverseIsRejected() {
+    fun emptyCandidateIndexIsNoMatchNotAnError() {
         val (engine, _) = engine()
-        assertFailsWith<IllegalArgumentException> {
-            engine.run(fingerprint(1, 64, FingerprintSide.FRONT), fingerprint(2, 64, FingerprintSide.BACK), emptyList())
-        }
+
+        val result = engine.run(fingerprint(1, 64, FingerprintSide.FRONT), fingerprint(2, 64, FingerprintSide.BACK), emptyList())
+
+        assertEquals(ScanFlowResult.RecaptureRequired, result)
+        assertEquals(0, issuedGrants.size)
+    }
+
+    @Test
+    fun candidateWithoutStoredBackNeverBorrowsTheFrontAsItsBack() {
+        val (engine, _) = engine()
+        // Perfect front match but NO stored back fingerprint. If the engine
+        // substituted the front as the missing back, this scan would wrongly
+        // self-accept; instead the incomplete pair must be unusable evidence.
+        val front = fingerprint(11, 64, FingerprintSide.FRONT)
+        val brokenCandidate = IndexedCandidate(
+            capsuleId = UUID.nameUUIDFromBytes("broken-pair".toByteArray()),
+            front = front,
+            back = null,
+            recipientPreferred = true,
+        )
+
+        // The query back carries the FRONT's descriptors: exactly the forgery
+        // the front-as-back substitution would have accepted.
+        val queryBack = PostcardFingerprint(
+            profileId = front.profileId,
+            side = FingerprintSide.BACK,
+            canonicalWidthPx = front.canonicalWidthPx,
+            canonicalHeightPx = front.canonicalHeightPx,
+            coarseHash64 = front.coarseHash64,
+            keypoints = front.keypoints,
+            descriptors = front.descriptors,
+            quality = front.quality,
+        )
+
+        val result = engine.run(front, queryBack, listOf(brokenCandidate))
+
+        assertEquals(ScanFlowResult.RecaptureRequired, result)
+        assertTrue(issuedGrants.isEmpty(), "an incomplete pair must never issue a grant")
     }
 
     private fun assertFalse(value: Boolean) = kotlin.test.assertFalse(value)

@@ -69,16 +69,23 @@ class LocalMatchEngine(
         queryBack: PostcardFingerprint,
         candidates: List<IndexedCandidate>,
     ): ScanFlowResult {
-        require(candidates.isNotEmpty()) { "candidate universe is empty" }
+        // An empty index is a NO-MATCH outcome, never an error or a grant.
+        if (candidates.isEmpty()) {
+            return ScanFlowResult.RecaptureRequired
+        }
 
-        val recipientList = candidates.filter { it.recipientPreferred }
-        val senderList = candidates.filterNot { it.recipientPreferred }
+        val recipientList = candidates.filter { it.recipientPreferred && it.back != null }
+        val senderList = candidates.filterNot { it.recipientPreferred }.filter { it.back != null }
 
         val recipientUniverse = evaluateUniverse(recipientList, queryFront, queryBack)
-        val senderUniverse = if (recipientList.isEmpty()) {
+        // The sender universe is consulted only when the recipient universe
+        // produced NO weak evidence at all - recipient rows existing without
+        // weak-evidence retention does not block the documented fallback
+        // (docs/recognition.md section 11).
+        val senderUniverse = if (recipientUniverse.frontRanking.retained.isEmpty() && senderList.isNotEmpty()) {
             evaluateUniverse(senderList, queryFront, queryBack)
         } else {
-            null // never consulted while recipient evidence exists
+            null // recipient evidence decided the scan; sender pairs not searched
         }
 
         return when (val decision = coordinator.coordinate(recipientUniverse, senderUniverse)) {
@@ -138,7 +145,10 @@ class LocalMatchEngine(
 
         val composites = frontRanking.retained.mapNotNull { retained ->
             val candidate = universe.single { it.capsuleId.toString() == retained.candidateId }
-            val backReference = candidate.back ?: candidate.front
+            // A candidate without a stored back fingerprint can never present
+            // honest two-side evidence: it is dropped instead of scoring the
+            // query back against the front (docs/product.md: never guess).
+            val backReference = candidate.back ?: return@mapNotNull null
             val backOutcome = evaluateSide(queryBack, backReference)
             CompositeCandidate(
                 candidateId = retained.candidateId,

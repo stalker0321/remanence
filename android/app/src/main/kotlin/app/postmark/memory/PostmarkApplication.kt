@@ -105,6 +105,15 @@ class AppContainer(
         AuthRepository.create(apiBaseUrl)
     }
 
+    /**
+     * Memory-only holder for the live session credentials (FIX-05): the
+     * short-lived access token NEVER touches disk; only the rotating refresh
+     * token is persisted, sealed under the Keystore KEK.
+     */
+    val authTokenHolder: postmark.core.data.network.AuthTokenHolder by lazy {
+        postmark.core.data.network.AuthTokenHolder()
+    }
+
     /** Identity KEK alias used for wrapping the HPKE/Ed25519 private keysets. */
     val identityKekAlias: String = IDENTITY_KEK_ALIAS
 
@@ -112,27 +121,45 @@ class AppContainer(
         TinkRegistrationIdentityAdapter(identityRepository, kekBoundary, identityKekAlias)
     }
 
-    /** Persists the access token plus account summary after auth success. */
-    private fun recordAuthenticatedSession(userId: String, handle: String, accessToken: String) {
-        sessionTokenStore.save(accessToken)
+    /**
+     * Persists ONLY the rotating refresh token (sealed) plus the account
+     * summary; the access token lives exclusively in [authTokenHolder].
+     */
+    private fun recordAuthenticatedSession(
+        userId: String,
+        handle: String,
+        accessToken: String,
+        refreshToken: String,
+    ) {
+        sessionTokenStore.save(refreshToken)
+        authTokenHolder.updateTokens(accessToken, refreshToken)
         AccountSummaryStore(File(appContext.filesDir, ACCOUNT_SUMMARY_FILE))
             .save(PersistedAccountSummary(userId, handle))
     }
 
-    /** Saves the access token from a successful auth call, then delegates. */
-    private fun <T> captureToken(result: AuthResult<T>, tokenOf: (T) -> String): AuthResult<T> {
+    /** Seals the refresh token from a successful auth call, then delegates. */
+    private fun <T> captureAuthSession(
+        result: AuthResult<T>,
+        accessTokenOf: (T) -> String,
+        refreshTokenOf: (T) -> String,
+    ): AuthResult<T> {
         if (result is AuthResult.Success) {
-            val user = tokenUser(result.value)
+            val user = sessionUser(result.value)
             if (user != null) {
-                recordAuthenticatedSession(user.userId, user.handle, tokenOf(result.value))
+                recordAuthenticatedSession(
+                    user.userId,
+                    user.handle,
+                    accessTokenOf(result.value),
+                    refreshTokenOf(result.value),
+                )
             }
         }
         return result
     }
 
-    private fun tokenUser(value: Any?): postmark.core.data.network.RegistrationUserDto? = when (value) {
+    private fun sessionUser(value: Any?): RegistrationUserDto? = when (value) {
         is postmark.core.data.network.LoginResponseDto -> value.user
-        is postmark.core.data.network.RegisterResponseDto -> value.user
+        is RegisterResponseDto -> value.user
         else -> null
     }
 
@@ -144,7 +171,11 @@ class AppContainer(
                     deriveKeyBundleId(exports.encryptionPublicKeyset) == activeKeyBundleId
             },
             authApi = { request ->
-                captureToken(authRepository.login(request)) { it.accessToken }
+                captureAuthSession(
+                    authRepository.login(request),
+                    accessTokenOf = { it.accessToken },
+                    refreshTokenOf = { it.refreshToken },
+                )
             },
             accounts = object : app.postmark.memory.auth.CurrentAccountPort {
                 override suspend fun recordCurrentAccount(
@@ -160,7 +191,11 @@ class AppContainer(
             identity = registrationIdentityAdapter,
             authApi = object : app.postmark.memory.auth.RegistrationAuthApiPort {
                 override suspend fun register(request: RegisterRequestDto): AuthResult<RegisterResponseDto> =
-                    captureToken(authRepository.register(request)) { it.accessToken }
+                    captureAuthSession(
+                        authRepository.register(request),
+                        accessTokenOf = { it.accessToken },
+                        refreshTokenOf = { it.refreshToken },
+                    )
             },
             accounts = object : app.postmark.memory.auth.CurrentAccountPort {
                 override suspend fun recordCurrentAccount(
@@ -172,8 +207,9 @@ class AppContainer(
     }
 
     /**
-     * Cold-start session resolution over the persisted token, wrapped keysets,
-     * and the locally recorded account summary.
+     * Cold-start session resolution over the sealed refresh token, wrapped
+     * keysets, and the locally recorded account summary. The stored token is
+     * proved against `/v1/auth/refresh` BEFORE any Active state exists.
      */
     val sessionBootstrap: SessionBootstrap by lazy {
         val summaryStore = AccountSummaryStore(File(appContext.filesDir, ACCOUNT_SUMMARY_FILE))
@@ -187,10 +223,36 @@ class AppContainer(
         SessionBootstrap(
             tokens = object : SessionTokenPort {
                 override fun readToken(): String? = sessionTokenStore.load()
+                override fun saveToken(refreshToken: String) = sessionTokenStore.save(refreshToken)
                 override fun clearToken() = sessionTokenStore.clear()
             },
             identity = identityAvailability,
             account = { summaryStore.load() },
+            refresher = { storedRefreshToken ->
+                when (val result = authRepository.refresh(
+                    postmark.core.data.network.RefreshRequestDto(storedRefreshToken),
+                )) {
+                    is AuthResult.Success -> {
+                        authTokenHolder.updateTokens(
+                            result.value.accessToken,
+                            result.value.refreshToken,
+                        )
+                        app.postmark.memory.session.SessionRefreshOutcome.Rotated(
+                            accessToken = result.value.accessToken,
+                            refreshToken = result.value.refreshToken,
+                        )
+                    }
+                    is AuthResult.Failure -> when {
+                        result.reason == postmark.core.data.network.AuthFailure.NETWORK ->
+                            app.postmark.memory.session.SessionRefreshOutcome.Unreachable
+                        // 401/403/409: the server definitively refused the
+                        // lineage; anything else is treated as transient.
+                        result.httpStatus == 401 || result.httpStatus == 403 || result.httpStatus == 409 ->
+                            app.postmark.memory.session.SessionRefreshOutcome.Rejected
+                        else -> app.postmark.memory.session.SessionRefreshOutcome.Unreachable
+                    }
+                }
+            },
         )
     }
 

@@ -11,6 +11,9 @@ sealed interface AuthUiState {
     /** Password accepted by the server, but local private identity is absent. */
     data object RecoveryRequired : AuthUiState
 
+    /** Sealed refresh token exists but the cold-start refresh could not complete. */
+    data object RequiresConnectivity : AuthUiState
+
     data class Authenticated(
         val userId: String,
         val handle: String,
@@ -68,6 +71,7 @@ object RouteGuard {
     ): AppDestination = when (authState) {
         AuthUiState.SignedOut,
         AuthUiState.RecoveryRequired,
+        AuthUiState.RequiresConnectivity,
         -> AppDestination.Authentication
 
         is AuthUiState.Authenticated ->

@@ -48,11 +48,92 @@ class AppNavigationTest {
     }
 
     @Test
-    fun destinationInventoryContainsNoCapsuleOrGalleryRoutes() {
+    fun destinationInventoryAllowsOnlyAuthHomeAndGrantGatedCapsule() {
         val inventory = RouteGuard.allDestinations().map { it.javaClass.simpleName }.toSet()
-        assertEquals(setOf("Authentication", "Home"), inventory)
-        for (forbidden in listOf("Capsule", "Gallery", "Inbox", "History", "Feed", "DeepLink")) {
+        assertEquals(setOf("Authentication", "Home", "Capsule"), inventory)
+        for (forbidden in listOf("Gallery", "Inbox", "History", "Feed", "DeepLink")) {
             org.junit.Assert.assertFalse("forbidden route type: $forbidden", forbidden in inventory.joinToString())
         }
+    }
+
+    private fun authenticatedController() = AppNavigationController(
+        AuthUiState.Authenticated(userId = "1f0a1234-5678-4abc-9def-aabbccdd1001", handle = "mykola"),
+    )
+
+    @Test
+    fun capsuleRequestWithoutAnyGrantFallsBackToHome() {
+        val controller = authenticatedController()
+
+        controller.navigate(AppDestination.Capsule(grantId = "grant-1"))
+
+        assertEquals(AppDestination.Home, controller.current)
+    }
+
+    @Test
+    fun capsuleRequestBeforeCryptoVerificationFallsBackToHome() {
+        val controller = authenticatedController()
+        // A grant string alone must never open anything: this simulates a
+        // leaked or guessed ID without the verified crypto result.
+        controller.navigate(AppDestination.Capsule(grantId = "unverified-grant"))
+        assertEquals(AppDestination.Home, controller.current)
+    }
+
+    @Test
+    fun verifiedCapsuleIsReachableByItsExactGrantId() {
+        val controller = authenticatedController()
+        controller.grantCapsuleAccess(grantId = "grant-9", capsuleId = "capsule-9")
+
+        controller.navigate(AppDestination.Capsule(grantId = "grant-8")) // wrong id
+        assertEquals(AppDestination.Home, controller.current)
+
+        controller.navigate(AppDestination.Capsule(grantId = "grant-9"))
+        assertEquals(
+            AppDestination.Capsule("grant-9"),
+            controller.current,
+        )
+    }
+
+    @Test
+    fun consumingTheGrantEjectsToHomeAndBlocksReentry() {
+        val controller = authenticatedController()
+        controller.grantCapsuleAccess("grant-3", "capsule-3")
+        controller.navigate(AppDestination.Capsule("grant-3"))
+
+        controller.consumeCapsuleAccess()
+
+        assertEquals(AppDestination.Home, controller.current)
+        controller.navigate(AppDestination.Capsule("grant-3"))
+        assertEquals(AppDestination.Home, controller.current)
+    }
+
+    @Test
+    fun signedOutCannotResolveACapsuleEvenWithValidAccess() {
+        val access = CapsuleAccess.Granted("grant-4", "capsule-4", cryptoVerified = true)
+
+        assertEquals(
+            AppDestination.Authentication,
+            RouteGuard.resolve(AuthUiState.SignedOut, AppDestination.Capsule("grant-4"), access),
+        )
+        assertEquals(
+            AppDestination.Authentication,
+            RouteGuard.resolve(AuthUiState.RecoveryRequired, AppDestination.Capsule("grant-4"), access),
+        )
+    }
+
+    @Test
+    fun logoutWhileViewingCapsuleDropsAccessCompletely() {
+        val controller = authenticatedController()
+        controller.grantCapsuleAccess("grant-5", "capsule-5")
+        controller.navigate(AppDestination.Capsule("grant-5"))
+        assertEquals(AppDestination.Capsule("grant-5"), controller.current)
+
+        controller.updateAuth(AuthUiState.SignedOut)
+
+        assertEquals(AppDestination.Authentication, controller.current)
+        assertEquals(CapsuleAccess.None, controller.capsuleAccess)
+
+        controller.updateAuth(AuthUiState.Authenticated(userId = "u", handle = "mykola"))
+        controller.navigate(AppDestination.Capsule("grant-5"))
+        assertEquals(AppDestination.Home, controller.current)
     }
 }

@@ -52,6 +52,7 @@ dependencies {
     implementation(project(":core:data"))
     implementation(project(":core:crypto"))
     implementation(project(":core:model"))
+    implementation(project(":core:recognition"))
     implementation("org.opencv:opencv:4.10.0")
     implementation(libs.kotlinx.coroutines.core)
     implementation(platform(libs.androidx.compose.bom))

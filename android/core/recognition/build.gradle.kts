@@ -3,18 +3,6 @@ import com.google.protobuf.gradle.proto
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.serialization)
-    alias(libs.plugins.protobuf)
-}
-
-protobuf {
-    protoc {
-        artifact = "com.google.protobuf:protoc:${libs.versions.protobuf.get()}"
-    }
-    generateProtoTasks {
-        all().configureEach {
-            builtins.maybeCreate("java").option("lite")
-        }
-    }
 }
 
 android {
@@ -36,21 +24,15 @@ android {
             isIncludeAndroidResources = true
         }
     }
-
-    sourceSets {
-        getByName("main") {
-            proto {
-                srcDir(rootProject.file("../protocol/proto"))
-            }
-        }
-    }
 }
 
 dependencies {
+    // Normative protocol/fingerprint protobuf classes are generated once here
+    // (:core:model owns ../protocol/proto) so app-level dex merging never sees
+    // duplicates; javalite runtime arrives transitively as api().
     implementation(project(":core:model"))
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.androidx.exifinterface)
-    api(libs.protobuf.javalite)
     testImplementation(kotlin("test-junit5"))
     testImplementation(libs.junit.vintage.engine)
     testImplementation(libs.robolectric)

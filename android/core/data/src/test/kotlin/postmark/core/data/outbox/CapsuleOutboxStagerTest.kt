@@ -128,6 +128,8 @@ class CapsuleOutboxStagerTest {
             recipientUserId = recipientUser,
             recipientKeyBundleId = recipientBundle,
             envelopeCiphertext = envelope,
+            publishStatementBytes = "signed-statement".toByteArray(),
+            publishStatementSignature = ByteArray(69) { 1 },
             artifacts =
             listOf(
                 PreparedOutboxArtifact(blob(1), OutboxArtifactKind.RECOGNITION_MANIFEST, -1, recognition),

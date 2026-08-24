@@ -7,7 +7,10 @@ import java.io.InputStream
  * order (docs/security.md sections 6.1/6.2). Inputs are lazy descriptors of
  * staged normalized photos: at any moment exactly zero or one source is open
  * and only the active plaintext plus the running ciphertext results are kept
- * alive; each source is closed before the next photo is touched. Any failure
+ * alive; each source is closed before the next photo is touched. Each source
+ * is read with a bounded read capped at [PhotoArtifactEncryptor.MAX_PLAINTEXT_BYTES]
+ * (docs/protocol.md photo plaintext budget), so an oversized or endless staged
+ * file aborts during the read instead of buffering without bound. Any failure
  * discards the partial result before propagating, so callers can never
  * observe or persist a half-encrypted set, and no plaintext is ever returned.
  */
@@ -35,8 +38,11 @@ class SequentialPhotoEncryptionBatch(
         try {
             photos.forEachIndexed { index, photo ->
                 // Exactly one staged source is open here; use{} closes it before
-                // the loop advances to the next descriptor.
-                val normalizedJpeg = photo.plaintext.openStream().use(InputStream::readBytes)
+                // the loop advances to the next descriptor, even when the bounded
+                // read rejects an oversized source.
+                val normalizedJpeg = photo.plaintext.openStream().use {
+                    it.readBoundedBytes(PhotoArtifactEncryptor.MAX_PLAINTEXT_BYTES)
+                }
                 val encrypted = encryptor.encryptPhoto(capsuleKeyset, routingContext, photo.ordinal, normalizedJpeg)
                 results += encrypted
                 onEachEncrypted(index, photos.size)

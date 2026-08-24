@@ -172,4 +172,151 @@ class PhotoStagingPipelineTest {
         pipeline.clearStaged()
         assertEquals(0, dir.toFile().listFiles()?.size ?: 0)
     }
+
+    @Test
+    fun sourceOneByteUnderPlaintextBudgetStagesFully() {
+        val (pipeline, dir) = newPipeline()
+        val payload = ByteArray(postmark.core.crypto.PhotoArtifactEncryptor.MAX_PLAINTEXT_BYTES - 1) { it.toByte() }
+        val staged = pipeline.stageAll(listOf(PhotoSource { java.io.ByteArrayInputStream(payload) }) + sources(2))
+        assertEquals(payload.size.toLong(), staged[0].file.length())
+        assertEquals(3, dir.toFile().listFiles()?.size)
+    }
+
+    @Test
+    fun sourceExactlyAtPlaintextBudgetStagesFully() {
+        val (pipeline, _) = newPipeline()
+        val payload = ByteArray(postmark.core.crypto.PhotoArtifactEncryptor.MAX_PLAINTEXT_BYTES) { it.toByte() }
+        val staged = pipeline.stageAll(listOf(PhotoSource { java.io.ByteArrayInputStream(payload) }) + sources(2))
+        assertEquals(payload.size.toLong(), staged[0].file.length())
+    }
+
+    @Test
+    fun sourceOneByteOverPlaintextBudgetRejectedWithCleanupAndClosedStreams() {
+        val dir = Files.createTempDirectory("staging-over-budget").toFile()
+        val counting = CountingSources(3)
+        val pipeline = PhotoStagingPipeline(
+            stagingDirectory = dir,
+            normalizer = { input -> NormalizedPhotoDto(input.copyOf(), 800, 600) },
+        )
+        // Replace the middle source with an over-budget stream that tracks its own close.
+        var rejectedStreamClosed = false
+        val overBudgetSources = counting.list().mapIndexed { index, source ->
+            if (index == 1) {
+                PhotoSource {
+                    object : InputStream() {
+                        private val delegate =
+                            java.io.ByteArrayInputStream(ByteArray(postmark.core.crypto.PhotoArtifactEncryptor.MAX_PLAINTEXT_BYTES + 1))
+                        override fun read(): Int = delegate.read()
+                        override fun read(b: ByteArray, off: Int, len: Int): Int = delegate.read(b, off, len)
+                        override fun close() {
+                            rejectedStreamClosed = true
+                            delegate.close()
+                        }
+                    }
+                }
+            } else {
+                source
+            }
+        }
+        try {
+            pipeline.stageAll(overBudgetSources)
+            throw AssertionError("expected failure")
+        } catch (expected: IllegalArgumentException) {
+            assertTrue(expected.message!!.contains("plaintext budget"))
+        }
+        assertEquals(0, dir.listFiles()?.size ?: 0)
+        assertTrue("rejection must happen while reading the second photo", counting.totalOpens == 1)
+        assertTrue("the rejected source must be closed", rejectedStreamClosed)
+    }
+
+    @Test
+    fun endlessHostileSourceIsCutOffAtBudgetInsteadOfExhaustingMemory() {
+        val dir = Files.createTempDirectory("staging-endless").toFile()
+        var closed = false
+        val pipeline = PhotoStagingPipeline(
+            stagingDirectory = dir,
+            normalizer = { input -> NormalizedPhotoDto(input.copyOf(), 800, 600) },
+        )
+        val endless: InputStream = object : InputStream() {
+            private val chunk = ByteArray(64 * 1024)
+            override fun read(): Int = 0x41
+            override fun read(b: ByteArray, off: Int, len: Int): Int {
+                System.arraycopy(chunk, 0, b, off, len)
+                return len
+            }
+            override fun close() {
+                closed = true
+            }
+        }
+        try {
+            pipeline.stageAll(listOf(PhotoSource { endless }) + sources(2))
+            throw AssertionError("expected failure")
+        } catch (expected: IllegalArgumentException) {
+            assertTrue(expected.message!!.contains("plaintext budget"))
+        }
+        assertTrue("cut-off source must be closed", closed)
+        assertEquals(0, dir.listFiles()?.size ?: 0)
+    }
+
+    @Test
+    fun hostileStreamLyingAboutAvailableIsStillReadByContent() {
+        val (pipeline, _) = newPipeline()
+        val liar: InputStream = object : InputStream() {
+            private val delegate = ByteArrayInputStream("jpeg-liar".toByteArray())
+            override fun read(): Int = delegate.read()
+            override fun available(): Int = Int.MAX_VALUE
+        }
+        val staged = pipeline.stageAll(listOf(PhotoSource { liar }) + sources(2))
+        assertEquals("jpeg-liar", staged[0].file.readText())
+    }
+
+    @Test
+    fun refusesToStageOverPreExistingArtifactsAndLeavesThemUntouched() {
+        val dir = Files.createTempDirectory("staging-pre-existing").toFile()
+        val keptTarget = java.io.File(dir, "photo-00.jpg")
+        val keptTmp = java.io.File(dir, "photo-01.jpg.tmp")
+        keptTarget.writeText("pre-existing target")
+        keptTmp.writeText("stale plaintext tmp")
+        val (pipeline, _) = newPipelineAt(dir)
+        val counting = CountingSources(3)
+
+        try {
+            pipeline.stageAll(counting.list())
+            throw AssertionError("expected refusal")
+        } catch (expected: IllegalStateException) {
+            assertTrue(expected.message!!.contains("must be empty before staging"))
+        }
+        assertEquals(0, counting.totalOpens)
+        assertEquals("pre-existing target", keptTarget.readText())
+        assertEquals("stale plaintext tmp", keptTmp.readText())
+    }
+
+    @Test
+    fun failedAtomicWriteNeverLeavesThePlaintextTmpBehind() {
+        val (pipeline, dir) = newPipeline()
+        // A directory occupying the target path makes the rename fail after the
+        // tmp was fully written, which is exactly the finally-deletion case.
+        val conflictingTarget = java.io.File(dir.toFile(), "photo-00.jpg")
+        assertTrue(conflictingTarget.mkdirs())
+
+        try {
+            pipeline.atomicWrite(conflictingTarget, "secret-plaintext".toByteArray())
+            throw AssertionError("expected failure")
+        } catch (expected: IllegalStateException) {
+            assertEquals("could not persist photo-00.jpg", expected.message)
+        }
+        assertTrue(
+            "the plaintext .tmp must be deleted in finally",
+            !java.io.File(dir.toFile(), "photo-00.jpg.tmp").exists(),
+        )
+        assertTrue(conflictingTarget.isDirectory && conflictingTarget.listFiles()?.isEmpty() == true)
+    }
+
+    private fun newPipelineAt(dir: java.io.File): Pair<PhotoStagingPipeline, java.nio.file.Path> {
+        val pipeline = PhotoStagingPipeline(
+            stagingDirectory = dir,
+            normalizer = { input -> NormalizedPhotoDto(input.copyOf(), 800, 600) },
+        )
+        return pipeline to dir.toPath()
+    }
 }

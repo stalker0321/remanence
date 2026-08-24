@@ -139,6 +139,88 @@ class SequentialPhotoEncryptionBatchTest {
     }
 
     @Test
+    fun stagedSourceAtExactlyThePlaintextBudgetEncryptsAndRoundtrips() {
+        val batch = SequentialPhotoEncryptionBatch(PhotoArtifactEncryptor())
+        val sources = photos(3).toMutableList()
+        val exactBudget = bytes(1, PhotoArtifactEncryptor.MAX_PLAINTEXT_BYTES)
+        sources[1] = OrdinalPhoto(1) { ByteArrayInputStream(exactBudget) }
+
+        val results = batch.encryptInOrder(keyset, routing, sources)
+
+        assertContentEquals(
+            exactBudget,
+            PhotoArtifactEncryptor().decryptPhoto(keyset, routing, 1, results[1]),
+        )
+    }
+
+    @Test
+    fun stagedSourceOneByteUnderThePlaintextBudgetEncryptsAndRoundtrips() {
+        val batch = SequentialPhotoEncryptionBatch(PhotoArtifactEncryptor())
+        val sources = photos(3).toMutableList()
+        val underBudget = bytes(1, PhotoArtifactEncryptor.MAX_PLAINTEXT_BYTES - 1)
+        sources[1] = OrdinalPhoto(1) { ByteArrayInputStream(underBudget) }
+
+        val results = batch.encryptInOrder(keyset, routing, sources)
+
+        assertContentEquals(
+            underBudget,
+            PhotoArtifactEncryptor().decryptPhoto(keyset, routing, 1, results[1]),
+        )
+    }
+
+    @Test
+    fun stagedSourceOneByteOverThePlaintextBudgetIsRejectedDuringReadAndStillClosed() {
+        val batch = SequentialPhotoEncryptionBatch(PhotoArtifactEncryptor())
+        val oversized = object : java.io.ByteArrayInputStream(
+            bytes(1, PhotoArtifactEncryptor.MAX_PLAINTEXT_BYTES + 1),
+        ) {
+            var closed = false
+                private set
+            override fun close() {
+                closed = true
+                super.close()
+            }
+        }
+        val sources = photos(3).toMutableList()
+        sources[1] = OrdinalPhoto(1) { oversized }
+        var progressEvents = 0
+
+        val failure = assertFailsWith<IllegalArgumentException> {
+            batch.encryptInOrder(keyset, routing, sources) { _, _ -> progressEvents++ }
+        }
+
+        assertTrue(failure.message!!.contains("plaintext budget"), failure.message)
+        assertEquals(1, progressEvents, "rejection must happen while reading, before any AEAD work")
+        assertTrue(oversized.closed, "the rejected source must still be closed")
+    }
+
+    @Test
+    fun endlessHostileStagedSourceIsCutOffAtTheBudgetAndClosed() {
+        val batch = SequentialPhotoEncryptionBatch(PhotoArtifactEncryptor())
+        val endless = object : java.io.InputStream() {
+            var closed = false
+                private set
+            private val chunk = ByteArray(64 * 1024)
+            override fun read(): Int = 0x41
+            override fun read(b: ByteArray, off: Int, len: Int): Int {
+                System.arraycopy(chunk, 0, b, off, len)
+                return len
+            }
+            override fun close() {
+                closed = true
+                super.close()
+            }
+        }
+        val sources = photos(3).toMutableList()
+        sources[2] = OrdinalPhoto(2) { endless }
+
+        assertFailsWith<IllegalArgumentException> {
+            batch.encryptInOrder(keyset, routing, sources)
+        }
+        assertTrue(endless.closed, "the cut-off source must still be closed")
+    }
+
+    @Test
     fun nonSequentialOrdinalsRejectedBeforeAnySourceIsOpened() {
         val bad = listOf(
             OrdinalPhoto(0) { ByteArrayInputStream(bytes(0)) },

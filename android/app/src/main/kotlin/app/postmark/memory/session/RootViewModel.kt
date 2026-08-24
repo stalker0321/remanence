@@ -24,6 +24,8 @@ import kotlinx.coroutines.launch
 class RootViewModel(
     private val sessionBootstrap: SessionStateResolver,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    /** Full teardown flow (server → session → local → grants); defaults to token-only clearing. */
+    private val logoutAction: (suspend () -> Unit)? = null,
 ) {
 
     private val controller = AppNavigationController(AuthUiState.SignedOut)
@@ -45,7 +47,10 @@ class RootViewModel(
 
     fun logout() {
         scope.launch {
-            sessionBootstrap.logout()
+            // Full ordered teardown when wired; otherwise token-only clearing.
+            (logoutAction ?: { sessionBootstrap.logout() })()
+            // Any live scan grant dies with the account context.
+            controller.consumeCapsuleAccess()
             resolveNow()
         }
     }

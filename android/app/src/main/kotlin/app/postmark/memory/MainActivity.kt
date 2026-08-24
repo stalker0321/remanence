@@ -38,7 +38,12 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 // I02/I03: cold-start session bootstrap decides the first surface.
-                val rootViewModel = remember { RootViewModel(container.sessionBootstrap) }
+                val rootViewModel = remember {
+                    RootViewModel(
+                        sessionBootstrap = container.sessionBootstrap,
+                        logoutAction = { container.logoutUseCase.logout() },
+                    )
+                }
                 var healthState by remember { mutableStateOf(BackendHealthUiState.CHECKING) }
 
                 LaunchedEffect(Unit) {

@@ -49,7 +49,7 @@ interface IdentityAvailabilityPort {
 }
 
 fun interface AccountSummaryPort {
-    fun load(): PersistedAccountSummary?
+    suspend fun load(): PersistedAccountSummary?
 }
 
 /** Cold-start refresh outcome against `/v1/auth/refresh`. */

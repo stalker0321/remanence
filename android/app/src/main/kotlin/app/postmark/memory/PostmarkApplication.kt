@@ -21,10 +21,8 @@ import postmark.core.data.network.AuthResult
 import postmark.core.data.network.HealthRepository
 import postmark.core.data.network.RegistrationUserDto
 import app.postmark.memory.wiring.KekBoundSecretSealer
-import app.postmark.memory.session.AccountSummaryStore
 import app.postmark.memory.session.IdentityAvailabilityPort
 import app.postmark.memory.session.SessionBootstrap
-import app.postmark.memory.session.PersistedAccountSummary
 import app.postmark.memory.session.SessionTokenPort
 import app.postmark.memory.wiring.TinkRegistrationIdentityAdapter
 
@@ -158,9 +156,44 @@ class AppContainer(
         TinkRegistrationIdentityAdapter(identityRepository, kekBoundary, identityKekAlias)
     }
 
+    /** FIX-M1-007-07: the current account lives in the real local_account table. */
+    val currentAccountStore: app.postmark.memory.session.RoomCurrentAccountStore by lazy {
+        app.postmark.memory.session.RoomCurrentAccountStore(database.localAccountDao())
+    }
+
     /**
-     * Persists ONLY the rotating refresh token (sealed) plus the account
-     * summary; the access token lives exclusively in [authTokenHolder].
+     * FIX-M1-007-07 logout ordering: server revocation first (best effort),
+     * then session credentials, the local_account row, and scan grants.
+     */
+    val logoutUseCase: app.postmark.memory.auth.LogoutUseCase by lazy {
+        app.postmark.memory.auth.LogoutUseCase(
+            serverLogout = { accessToken -> bareAuthRepository.logout(accessToken) },
+            accessToken = { authTokenHolder.accessToken },
+            tokens = object : app.postmark.memory.session.SessionTokenPort {
+                override fun readToken(): String? = sessionTokenStore.load()
+                override fun saveToken(refreshToken: String) = sessionTokenStore.save(refreshToken)
+                override fun clearToken() = sessionTokenStore.clear()
+            },
+            credentialSink = sessionRotationSink,
+            accounts = { currentAccountStore.clear() },
+            grants = {
+                // App-level grant state dies with the account context.
+                appLevelGrantCleanup.forEach { cleanup -> cleanup() }
+            },
+        )
+    }
+
+    /** Hooks registered by the running UI to drop scan grants on logout. */
+    private val appLevelGrantCleanup = mutableListOf<() -> Unit>()
+
+    fun registerGrantCleanup(cleanup: () -> Unit) {
+        appLevelGrantCleanup += cleanup
+    }
+
+    /**
+     * Persists ONLY the rotating refresh token (sealed); the access token
+     * lives exclusively in [authTokenHolder]. The `local_account` row is
+     * written by each auth use case through its suspended port.
      */
     private fun recordAuthenticatedSession(
         userId: String,
@@ -170,8 +203,6 @@ class AppContainer(
     ) {
         sessionTokenStore.save(refreshToken)
         authTokenHolder.updateTokens(accessToken, refreshToken)
-        AccountSummaryStore(File(appContext.filesDir, ACCOUNT_SUMMARY_FILE))
-            .save(PersistedAccountSummary(userId, handle))
     }
 
     /** Seals the refresh token from a successful auth call, then delegates. */
@@ -218,7 +249,9 @@ class AppContainer(
                 override suspend fun recordCurrentAccount(
                     user: postmark.core.data.network.RegistrationUserDto,
                     activeKeyBundleId: String,
-                ) = Unit // summary already captured with the token above
+                ) {
+                    currentAccountStore.record(user.userId, user.handle, activeKeyBundleId)
+                }
             },
         )
     }
@@ -238,18 +271,19 @@ class AppContainer(
                 override suspend fun recordCurrentAccount(
                     user: postmark.core.data.network.RegistrationUserDto,
                     activeKeyBundleId: String,
-                ) = Unit
+                ) {
+                    currentAccountStore.record(user.userId, user.handle, activeKeyBundleId)
+                }
             },
         )
     }
 
     /**
      * Cold-start session resolution over the sealed refresh token, wrapped
-     * keysets, and the locally recorded account summary. The stored token is
+     * keysets, and the real `local_account` row. The stored token is
      * proved against `/v1/auth/refresh` BEFORE any Active state exists.
      */
     val sessionBootstrap: SessionBootstrap by lazy {
-        val summaryStore = AccountSummaryStore(File(appContext.filesDir, ACCOUNT_SUMMARY_FILE))
         val identityAvailability = object : IdentityAvailabilityPort {
             private fun bothAvailable(): Boolean =
                 identityRepository.exists() &&
@@ -264,7 +298,7 @@ class AppContainer(
                 override fun clearToken() = sessionTokenStore.clear()
             },
             identity = identityAvailability,
-            account = { summaryStore.load() },
+            account = { currentAccountStore.load() },
             refresher = { storedRefreshToken ->
                 when (val result = bareAuthRepository.refresh(
                     postmark.core.data.network.RefreshRequestDto(storedRefreshToken),
@@ -301,6 +335,5 @@ class AppContainer(
         const val DATABASE_NAME: String = "postmark.db"
         const val SESSION_TOKEN_KEK_ALIAS: String = "postmark.session.v1"
         const val IDENTITY_KEK_ALIAS: String = "postmark.identity.v1"
-        const val ACCOUNT_SUMMARY_FILE: String = "account-summary.txt"
     }
 }

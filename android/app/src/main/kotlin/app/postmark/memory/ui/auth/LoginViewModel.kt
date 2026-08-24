@@ -1,5 +1,7 @@
 package app.postmark.memory.ui.auth
 
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import app.postmark.memory.auth.LoginUseCase
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -34,8 +36,11 @@ sealed interface LoginSubmitState {
  */
 class LoginViewModel(
     private val loginUseCase: LoginUseCase,
-    private val scope: CoroutineScope,
-) {
+    scope: CoroutineScope? = null,
+) : ViewModel() {
+
+    /** Injected scope (tests); production runs on the lifecycle-owned scope. */
+    private val launchScope: CoroutineScope = scope ?: viewModelScope
 
     private val _form = MutableStateFlow(LoginFormState())
     val form: StateFlow<LoginFormState> = _form.asStateFlow()
@@ -56,7 +61,7 @@ class LoginViewModel(
         if (!LoginFormValidator.canSubmit(_form.value)) return
         val snapshot = _form.value
         _submitState.value = LoginSubmitState.Submitting
-        scope.launch {
+        launchScope.launch {
             _submitState.value = try {
                 mapOutcome(loginUseCase.login(snapshot.email, snapshot.password))
             } catch (cancelled: CancellationException) {

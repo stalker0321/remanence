@@ -1,5 +1,7 @@
 package app.postmark.memory.session
 
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -14,8 +16,9 @@ import app.postmark.memory.ui.navigation.AppDestination
 import app.postmark.memory.ui.navigation.AuthUiState
 
 /**
- * Auth route-guard wiring proof (FIX-M1-007-05/08): the root publishes ONLY
- * terminal async auth outcomes and never leaves Home without a proven session.
+ * Auth route-guard wiring proof (FIX-M1-007-05/08): the root is a lifecycle
+ * ViewModel on [viewModelScope] and publishes ONLY terminal async auth
+ * outcomes; it never leaves Home without a proven session.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class RootViewModelTest {
@@ -40,60 +43,65 @@ class RootViewModelTest {
     }
 
     private class FixedOutcomeResolver(private val state: SessionState) : SessionStateResolver {
-        override suspend fun bootstrap(): SessionState = state
+        var resolveCount: Int = 0
+            private set
+
+        override suspend fun bootstrap(): SessionState {
+            resolveCount++
+            return state
+        }
 
         override suspend fun logout(): SessionState = SessionState.SignedOut
     }
 
-    private fun viewModelOf(resolver: SessionStateResolver): RootViewModel =
-        RootViewModel(resolver, kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + testDispatcher))
-
     @Test
     fun coldStartWithoutSessionLandsOnAuthenticationSurface() = runTest {
-        val vm = viewModelOf(SignedOutResolver())
+        val vm = RootViewModel(SignedOutResolver())
 
         assertEquals(AuthUiState.SignedOut, vm.authState.value)
         assertEquals(AppDestination.Authentication, vm.destination.value)
-        vm.dispose()
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
     }
 
     @Test
     fun missingKeysOnColdStartSurfacesRecoveryRequired() = runTest {
-        val vm = viewModelOf(FixedOutcomeResolver(SessionState.RecoveryRequired))
+        val vm = RootViewModel(FixedOutcomeResolver(SessionState.RecoveryRequired))
 
         assertEquals(AuthUiState.RecoveryRequired, vm.authState.value)
         assertEquals(AppDestination.Authentication, vm.destination.value)
-        vm.dispose()
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
     }
 
     @Test
     fun unreachableColdStartSurfacesConnectivityInsteadOfAuthenticatedHome() = runTest {
-        val vm = viewModelOf(FixedOutcomeResolver(SessionState.RequiresConnectivity))
+        val vm = RootViewModel(FixedOutcomeResolver(SessionState.RequiresConnectivity))
 
         assertEquals(AuthUiState.RequiresConnectivity, vm.authState.value)
         assertEquals(AppDestination.Authentication, vm.destination.value)
-        vm.dispose()
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
     }
 
     @Test
     fun establishedSessionReachesHomeAsAuthenticatedOnlyAfterTerminalResult() = runTest {
-        val vm = viewModelOf(FixedOutcomeResolver(SessionState.Active("user-1", "mykola", true, true)))
+        val resolver = FixedOutcomeResolver(SessionState.Active("user-1", "mykola", true, true))
+        val vm = RootViewModel(resolver)
 
         vm.onSessionEstablished()
 
         assertEquals(AuthUiState.Authenticated(userId = "user-1", handle = "mykola"), vm.authState.value)
         assertEquals(AppDestination.Home, vm.destination.value)
-        vm.dispose()
+        assertEquals(2, resolver.resolveCount) // cold start + terminal success only
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
     }
 
     @Test
     fun logoutReturnsToAuthenticationEvenIfTokenClearingFailsSilently() = runTest {
-        val vm = viewModelOf(SignedOutResolver()) // nothing persisted; logout is still safe
+        val vm = RootViewModel(SignedOutResolver()) // nothing persisted; logout is still safe
 
         vm.logout()
 
         assertEquals(AuthUiState.SignedOut, vm.authState.value)
         assertEquals(AppDestination.Authentication, vm.destination.value)
-        vm.dispose()
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
     }
 }

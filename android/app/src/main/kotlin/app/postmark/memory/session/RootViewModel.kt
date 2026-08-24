@@ -1,32 +1,31 @@
 package app.postmark.memory.session
 
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import app.postmark.memory.ui.navigation.AppDestination
 import app.postmark.memory.ui.navigation.AppNavigationController
 import app.postmark.memory.ui.navigation.AuthUiState
 import kotlin.coroutines.cancellation.CancellationException
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /**
- * I03 root state: the single auth state plus guarded navigation position that
- * MainActivity renders. Cold start resolves through [SessionBootstrap] on a
- * background scope because it performs a live refresh round trip; the root
- * NEVER flips to Authenticated on persisted bytes alone - only after the
- * async auth result reaches its terminal state. Successful login/registration
- * re-resolves; logout clears and returns to authentication.
+ * I03/FIX-M1-007-08 root state: the single auth state plus guarded navigation
+ * position that MainActivity renders. Cold start resolves through
+ * [SessionStateResolver] on [viewModelScope] because it performs a live
+ * refresh round trip; the root NEVER flips to Authenticated on persisted bytes
+ * alone - only after the async auth result reaches its terminal state.
+ * Successful login/registration re-resolves; logout clears and returns to
+ * authentication. The scope dies with this ViewModel, so nothing leaks past
+ * the screen lifecycle.
  */
 class RootViewModel(
     private val sessionBootstrap: SessionStateResolver,
-    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     /** Full teardown flow (server → session → local → grants); defaults to token-only clearing. */
     private val logoutAction: (suspend () -> Unit)? = null,
-) {
+) : ViewModel() {
 
     private val controller = AppNavigationController(AuthUiState.SignedOut)
 
@@ -40,13 +39,16 @@ class RootViewModel(
         refreshAsync()
     }
 
-    /** Re-resolves persisted facts after a successful login/registration. */
+    /**
+     * Re-resolves persisted facts after an async auth flow reaches its
+     * terminal success - never called mid-flight by the UI.
+     */
     fun onSessionEstablished() {
         refreshAsync()
     }
 
     fun logout() {
-        scope.launch {
+        viewModelScope.launch {
             // Full ordered teardown when wired; otherwise token-only clearing.
             (logoutAction ?: { sessionBootstrap.logout() })()
             // Any live scan grant dies with the account context.
@@ -55,13 +57,8 @@ class RootViewModel(
         }
     }
 
-    /** Stops background resolution; called when the owning screen goes away. */
-    fun dispose() {
-        scope.cancel()
-    }
-
     private fun refreshAsync() {
-        scope.launch {
+        viewModelScope.launch {
             resolveNow()
         }
     }

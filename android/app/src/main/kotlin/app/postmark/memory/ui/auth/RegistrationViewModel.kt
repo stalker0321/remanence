@@ -1,5 +1,7 @@
 package app.postmark.memory.ui.auth
 
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import app.postmark.memory.auth.RegistrationUseCase
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -26,8 +28,11 @@ sealed interface RegistrationSubmitState {
  */
 class RegistrationViewModel(
     private val useCase: RegistrationUseCase,
-    private val scope: CoroutineScope,
-) {
+    scope: CoroutineScope? = null,
+) : ViewModel() {
+
+    /** Injected scope (tests); production runs on the lifecycle-owned scope. */
+    private val launchScope: CoroutineScope = scope ?: viewModelScope
 
     private val _form = MutableStateFlow(RegistrationFormState())
     val form: StateFlow<RegistrationFormState> = _form.asStateFlow()
@@ -49,7 +54,7 @@ class RegistrationViewModel(
         if (!RegistrationFormValidator.canSubmit(_form.value)) return
         val snapshot = _form.value
         _submitState.value = RegistrationSubmitState.Submitting
-        scope.launch {
+        launchScope.launch {
             _submitState.value = try {
                 mapOutcome(useCase.register(snapshot.email, snapshot.password, snapshot.handle))
             } catch (cancelled: CancellationException) {

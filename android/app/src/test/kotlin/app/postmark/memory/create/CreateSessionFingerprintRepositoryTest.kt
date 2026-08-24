@@ -38,6 +38,21 @@ private class RecordingPersistence : SealedFingerprintPersistence {
         side: FingerprintSide,
         origin: FingerprintOrigin,
     ): Boolean = persisted.any { it.first == side && it.second == origin } || (side == FingerprintSide.FRONT && frontExists)
+
+    val preferredPairCalls = mutableListOf<Pair<String, FingerprintOrigin>>()
+    val deletedBaselines = mutableListOf<Triple<String, FingerprintSide, FingerprintOrigin>>()
+
+    override suspend fun setPreferredPair(capsuleId: String, origin: FingerprintOrigin) {
+        preferredPairCalls += capsuleId to origin
+    }
+
+    override suspend fun deleteBaseline(
+        capsuleId: String,
+        side: FingerprintSide,
+        origin: FingerprintOrigin,
+    ) {
+        deletedBaselines += Triple(capsuleId, side, origin)
+    }
 }
 
 private class StubExtractor : SideFingerprintExtractor {

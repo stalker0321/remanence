@@ -4,6 +4,60 @@ Generated at the close of the I-queue. Every item below was executed on this
 workstation in a clean shell. Physical-device items are explicitly **PENDING**
 and are not claimed.
 
+## FIX-M1-007 correction batch (2026-08-24, baseline 42a45eb)
+
+Fifteen ordered corrections from the M1-007 review. One focused commit each,
+tests with each, no amends:
+
+| Fix | Commit |
+| --- | --- |
+| 01 acceptance gate fail-closed + 69-byte guard before indexing | `3852e58` |
+| 02 statement+signature persisted across restart (Room v1→v2) | `209ca93` |
+| 03 replay-safe outbox staging (unique temps, owned cleanup) | `dd9c60f` |
+| 04 sender fallback on recipient weak-evidence absence; empty index no-match; no front-as-back | `b4b2240` |
+| 05 sealed rotating refresh only; memory-only access token; refresh before Active | `b734c73` |
+| 06 bearer interceptor + serialized one-retry authenticator on a bare refresh client | `c9989ad` |
+| 07 real local_account persistence + ordered logout teardown | `5477554` |
+| 08 lifecycle ViewModels/scopes + collectAsStateWithLifecycle | `6f76f99` |
+| 09 real CryptoReady derivation + working Create/Scan callbacks | `2ac10b7` |
+| 10 reachable Create/Scan destinations + one-shot transient cleanup | `2103941` |
+| 11 production Create connected through the single ciphertext publisher | `1c36196` |
+| 12 production Scan connected with real crypto verification before every grant | `cf67529` |
+| 13 real on-demand decoded photo pages bound to the grant lifecycle | `9e78716` |
+| 14 honest E2E: real AEAD sealing and real acceptance gate (no XOR / verifier=true) | `39b5ddf`, `7d25ab3` |
+
+### Verification commands and results for this batch
+
+| Command | Result |
+| --- | --- |
+| `cd android && ./gradlew clean testDebugUnitTest assembleDebug --console=plain` | BUILD SUCCESSFUL — 584 unit tests, 0 failures |
+| `cd server && POSTMARK_TEST_DATABASE_URL=postgresql+psycopg://postmark:postmark-dev-only@127.0.0.1:55432/postmark uv run --locked pytest -q -W error` | 324 passed (PostgreSQL-backed suites included, 0 skipped) |
+| `git diff --check` | clean; worktree clean at `7d25ab3` |
+| APK | `android/app/build/outputs/apk/debug/app-debug.apk`, 155,100,931 bytes, SHA-256 `b13da93df3929dce7a0993ce1cdd6ff16bee67b8e83dbb1b3ce324c853386d0a` |
+
+### Plaintext canary status
+
+Automated canaries pass inside the suite: the ciphertext-only outbox stager
+scans every produced byte (artifact files, statement/signature files, SQLite
+db/WAL) for note/photo/manifest markers (`CapsuleOutboxStagerTest`), and the
+FIX-M1-007-14 narrative repeats the scan over the sealed-baseline database,
+sealed fingerprint files, and outbox ciphertext after a close/reopen cycle —
+now with REAL AES-GCM sealing under a software KEK boundary and the REAL
+`CapsuleAcceptanceGate` deciding every grant (tamper case proves no grant).
+No plaintext marker appears in any persisted byte.
+
+### Honest-client status after this batch
+
+The debug APK now exposes working login/register surfaces, reachable Create
+(directory resolve → confirm → front/prepared-back capture → picker/note →
+sealing into the durable outbox), reachable Scan (front/back capture → local
+hierarchy → chooser on decrypted hints → verified grant), and fullscreen
+photo presentation that exists only behind a live memory-only grant plus a
+verified crypto result. CameraX/OpenCV behavior on physical hardware remains
+the open item below.
+
+## I-queue batch (original record)
+
 ## Verification commands and results
 
 | Command | Result |
@@ -82,7 +136,11 @@ I queue (integration):
 The following require real hardware/emulator runs and remain **PENDING**:
 
 - CameraX preview/capture on physical ARM64 devices (permission flow, focus,
-  exposure behavior under real lighting).
+  exposure behavior under real lighting) — including the now-connected
+  production Create/Scan capture surfaces.
 - ORB extraction latency and match-loop timing on-device (OpenCV instrumentation).
 - Full two-device physical scenario: mail card, second device scans and opens.
 - AndroidKeystore-backed KEK wrapping round trip on hardware TEE/StrongBox.
+- M1 completion claim: the automated surface proves login/register, Create,
+  Scan, and real photo presentation are wired end to end; the milestone is
+  physically complete only when the actual APK demonstrates them on a device.

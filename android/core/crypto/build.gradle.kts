@@ -15,12 +15,19 @@ android {
         sourceCompatibility = JavaVersion.toVersion(libs.versions.jdk.get())
         targetCompatibility = JavaVersion.toVersion(libs.versions.jdk.get())
     }
+
+    sourceSets {
+        getByName("test") {
+            resources.srcDir(rootProject.file("../protocol/fixtures"))
+        }
+    }
 }
 
 dependencies {
     api(libs.tink.android)
     implementation(project(":core:model"))
     testImplementation(kotlin("test-junit5"))
+    testImplementation(libs.kotlinx.serialization.json)
 }
 
 tasks.withType<Test>().configureEach {

@@ -2,6 +2,8 @@ package postmark.core.crypto
 
 import app.postmark.protocol.v1.PublishStatement
 import app.postmark.protocol.v1.RecipientEnvelopePlaintext
+import com.google.crypto.tink.KeyTemplates
+import com.google.crypto.tink.KeysetHandle
 import com.google.crypto.tink.TinkProtoKeysetFormat
 import com.google.protobuf.ByteString
 import java.security.MessageDigest
@@ -72,7 +74,11 @@ class CapsuleAcceptanceGateTest {
     private fun sha256(bytes: ByteArray): ByteArray =
         MessageDigest.getInstance("SHA-256").digest(bytes)
 
-    private fun envelopeFor(statementBytes: ByteArray, statementHash: ByteArray = sha256(statementBytes)): ByteArray {
+    private fun envelopeFor(
+        statementBytes: ByteArray,
+        statementHash: ByteArray = sha256(statementBytes),
+        capsuleKeysetBytes: ByteArray = validCapsuleKeysetBytes(),
+    ): ByteArray {
         val statement = PublishStatement.parseFrom(statementBytes)
         return RecipientEnvelopePlaintext.newBuilder()
             .setProtocolVersion(1)
@@ -81,16 +87,28 @@ class CapsuleAcceptanceGateTest {
             .setRecipientUserId(statement.recipientUserId)
             .setSenderKeyBundleId(statement.senderKeyBundleId)
             .setRecipientKeyBundleId(statement.recipientKeyBundleId)
-            .setCapsuleAeadKeyset(ByteString.copyFrom("wrapped-capsule-keyset-material".toByteArray()))
+            .setCapsuleAeadKeyset(ByteString.copyFrom(capsuleKeysetBytes))
             .setPublishStatementSha256(ByteString.copyFrom(statementHash))
             .build()
             .toByteArray()
     }
 
+    /** A genuine protocol-v1 capsule keyset: fresh AES256_GCM, TINK prefix. */
+    private fun validCapsuleKeysetBytes(): ByteArray =
+        TinkProtoKeysetFormat.serializeKeyset(
+            CapsuleKeysetGenerator().generate(),
+            com.google.crypto.tink.InsecureSecretKeyAccess.get(),
+        )
+
     private fun blobsFor(statementBytes: ByteArray): List<DeliveredBlob> =
-        PublishStatement.parseFrom(statementBytes).artifactsList.map { binding ->
+        PublishStatement.parseFrom(statementBytes).artifactsList.mapNotNull { binding ->
+            val id = try {
+                BlobId.fromProtoBytes(binding.blobId)
+            } catch (_: IllegalArgumentException) {
+                return@mapNotNull null
+            }
             DeliveredBlob(
-                blobId = BlobId.fromProtoBytes(binding.blobId),
+                blobId = id,
                 ciphertextSize = binding.ciphertextSize,
                 ciphertextSha256 = binding.ciphertextSha256.toByteArray(),
             )
@@ -99,6 +117,7 @@ class CapsuleAcceptanceGateTest {
     private fun sealedCapsule(
         artifacts: List<PublishArtifact> = artifacts(),
         statementHash: ByteArray? = null,
+        envelopeKeyset: ByteArray? = null,
     ): SealedCapsule {
         val success = PublishStatementBuilder.build(
             PublishStatementInput(
@@ -111,7 +130,11 @@ class CapsuleAcceptanceGateTest {
         return SealedCapsule(
             statementBytes = bytes,
             signature = signed.signature,
-            envelopeBytes = envelopeFor(bytes, statementHash ?: sha256(bytes)),
+            envelopeBytes = envelopeFor(
+                bytes,
+                statementHash ?: sha256(bytes),
+                envelopeKeyset ?: validCapsuleKeysetBytes(),
+            ),
             blobs = blobsFor(bytes),
         )
     }
@@ -295,5 +318,93 @@ class CapsuleAcceptanceGateTest {
             RejectionReason.MALFORMED_STATEMENT,
             rejected(gate.verify(input(capsule).copy(statementBytes = "garbage".toByteArray()))),
         )
+    }
+
+    @Test
+    fun shortAndEmptySignaturesAreRejectedNotThrown() {
+        val capsule = sealedCapsule()
+
+        // Below the 5-byte TINK header: indexing must never precede the
+        // structural length guard, and the gate must return, not throw.
+        assertEquals(
+            RejectionReason.SIGNATURE_INVALID,
+            rejected(gate.verify(input(capsule).copy(signature = ByteArray(0)))),
+        )
+        assertEquals(
+            RejectionReason.SIGNATURE_INVALID,
+            rejected(gate.verify(input(capsule).copy(signature = capsule.signature.copyOf(3)))),
+        )
+        assertEquals(
+            RejectionReason.SIGNATURE_INVALID,
+            rejected(gate.verify(input(capsule).copy(signature = capsule.signature.copyOf(4)))),
+        )
+    }
+
+    @Test
+    fun unknownEnumKindIsRejectedAsLayoutInsteadOfThrowing() {
+        val valid = sealedCapsule()
+        val poisoned = PublishStatement.parseFrom(valid.statementBytes)
+            .toBuilder()
+            .setArtifacts(
+                0,
+                PublishStatement.parseFrom(valid.statementBytes).getArtifacts(0).toBuilder()
+                    .setKindValue(99),
+            )
+            .build()
+        val bytes = poisoned.toByteArray()
+        val signed = signer.sign(senderIdentity.signingPrivateHandle, bytes)
+        val capsule = SealedCapsule(
+            statementBytes = bytes,
+            signature = signed.signature,
+            envelopeBytes = envelopeFor(bytes),
+            blobs = blobsFor(bytes),
+        )
+
+        assertEquals(RejectionReason.LAYOUT_INVALID, rejected(gate.verify(input(capsule))))
+    }
+
+    @Test
+    fun malformedBlobIdInsideStatementIsRejectedInsteadOfThrowing() {
+        val valid = sealedCapsule()
+        val truncatedId = ByteString.copyFrom(ByteArray(15) { 0x0a })
+        val binding = PublishStatement.parseFrom(valid.statementBytes).getArtifacts(0).toBuilder()
+            .setBlobId(truncatedId)
+            .build()
+        val poisoned = PublishStatement.parseFrom(valid.statementBytes)
+            .toBuilder()
+            .setArtifacts(0, binding)
+            .build()
+        val bytes = poisoned.toByteArray()
+        val signed = signer.sign(senderIdentity.signingPrivateHandle, bytes)
+        val capsule = SealedCapsule(
+            statementBytes = bytes,
+            signature = signed.signature,
+            envelopeBytes = envelopeFor(bytes),
+            blobs = blobsFor(bytes),
+        )
+
+        assertEquals(RejectionReason.LAYOUT_INVALID, rejected(gate.verify(input(capsule))))
+    }
+
+    @Test
+    fun unusableCapsuleKeysetsInEnvelopeAreRejected() {
+        val rawKeyset = TinkProtoKeysetFormat.serializeKeyset(
+            KeysetHandle.generateNew(KeyTemplates.get("AES256_GCM_RAW")),
+            com.google.crypto.tink.InsecureSecretKeyAccess.get(),
+        )
+        val foreignAlgorithm = TinkProtoKeysetFormat.serializeKeyset(
+            KeysetHandle.generateNew(KeyTemplates.get("CHACHA20_POLY1305")),
+            com.google.crypto.tink.InsecureSecretKeyAccess.get(),
+        )
+        val garbage = "not-a-tink-keyset".toByteArray()
+
+        listOf(rawKeyset, foreignAlgorithm, garbage).forEach { keysetBytes ->
+            val capsule = sealedCapsule(statementHash = null, envelopeKeyset = keysetBytes)
+            assertEquals(
+                RejectionReason.MALFORMED_CAPSULE_KEYSET,
+                rejected(gate.verify(input(capsule))),
+                "keyset variant must reject closed",
+            )
+        }
     }
 }

@@ -4,6 +4,7 @@ import app.postmark.protocol.v1.ArtifactBinding
 import app.postmark.protocol.v1.PublishStatement
 import app.postmark.protocol.v1.RecipientEnvelopePlaintext
 import com.google.crypto.tink.KeysetHandle
+import com.google.protobuf.ByteString
 import com.google.protobuf.CodedOutputStream
 import com.google.protobuf.MessageLite
 import java.security.GeneralSecurityException
@@ -45,6 +46,7 @@ sealed interface CapsuleAcceptanceResult {
 
 enum class RejectionReason {
     MALFORMED_ENVELOPE,
+    MALFORMED_CAPSULE_KEYSET,
     MALFORMED_STATEMENT,
     NON_CANONICAL_BYTES,
     SIGNATURE_INVALID,
@@ -58,14 +60,19 @@ enum class RejectionReason {
  * M1-C13 gate (docs/security.md sections 6.4/6.6): verifies the signature,
  * deterministic statement structure, canonical byte encoding, every ID and
  * key-ID agreement, the envelope/statement binding including the statement
- * SHA-256, artifact layout, and every delivered blob size/hash BEFORE any
- * artifact decrypt can happen. The gate cannot decrypt: accepting is its only
- * effect, and [CapsuleAcceptanceResult.Accepted] is the sole pass-through.
- * Any failure rejects closed with a reason and performs no cryptographic or
- * storage side effects.
+ * SHA-256, the exact protocol-v1 AES256_GCM/TINK capsule keyset, artifact
+ * layout, and every delivered blob size/hash BEFORE any artifact decrypt can
+ * happen. The gate cannot decrypt: accepting is its only effect, and
+ * [CapsuleAcceptanceResult.Accepted] is the sole pass-through.
+ *
+ * The gate ALWAYS returns a result — it never throws. Malformed signatures,
+ * unparseable protobuf, unknown enums, malformed typed IDs, invalid layouts,
+ * and unusable capsule keysets all reject closed with a reason and perform no
+ * cryptographic or storage side effects.
  */
 class CapsuleAcceptanceGate(
     private val signer: PublishStatementSigner = PublishStatementSigner(),
+    private val capsuleKeysetParser: CapsuleKeysetParser = CapsuleKeysetParser(),
 ) {
 
     fun verify(input: CapsuleAcceptanceInput): CapsuleAcceptanceResult {
@@ -73,6 +80,9 @@ class CapsuleAcceptanceGate(
             ?: return CapsuleAcceptanceResult.Rejected(RejectionReason.MALFORMED_ENVELOPE)
         if (!isCanonical(envelope, input.envelopePlaintextBytes)) {
             return CapsuleAcceptanceResult.Rejected(RejectionReason.NON_CANONICAL_BYTES)
+        }
+        if (!isExactProtocolV1CapsuleKeyset(envelope.capsuleAeadKeyset)) {
+            return CapsuleAcceptanceResult.Rejected(RejectionReason.MALFORMED_CAPSULE_KEYSET)
         }
 
         val statement = parseStatement(input.statementBytes)
@@ -86,7 +96,9 @@ class CapsuleAcceptanceGate(
                 input.senderVerifyingKeyset,
                 SignedPublishStatement(input.statementBytes, input.signature),
             )
-        } catch (_: GeneralSecurityException) {
+        } catch (_: Exception) {
+            // Includes the ADR-007 structural guard for short/foreign-framed
+            // signatures; verification failures never escape this gate.
             return CapsuleAcceptanceResult.Rejected(RejectionReason.SIGNATURE_INVALID)
         }
 
@@ -101,7 +113,8 @@ class CapsuleAcceptanceGate(
             return CapsuleAcceptanceResult.Rejected(RejectionReason.STATEMENT_HASH_MISMATCH)
         }
 
-        val slots = statement.artifactsList.map { it.toSlot() }
+        val slots = bindingSlots(statement.artifactsList)
+            ?: return CapsuleAcceptanceResult.Rejected(RejectionReason.LAYOUT_INVALID)
         if (ArtifactLayoutValidator.validate(slots) !is postmark.core.model.ArtifactLayoutValidation.Valid) {
             return CapsuleAcceptanceResult.Rejected(RejectionReason.LAYOUT_INVALID)
         }
@@ -110,6 +123,13 @@ class CapsuleAcceptanceGate(
         }
 
         return CapsuleAcceptanceResult.Accepted(statement)
+    }
+
+    private fun isExactProtocolV1CapsuleKeyset(serializedKeyset: ByteString): Boolean = try {
+        capsuleKeysetParser.parseExactAes256GcmTink(serializedKeyset.toByteArray())
+        true
+    } catch (_: GeneralSecurityException) {
+        false
     }
 
     private fun idsAgree(
@@ -174,6 +194,17 @@ class CapsuleAcceptanceGate(
                 blob.ciphertextSha256.size == SHA256_BYTES &&
                 MessageDigest.isEqual(blob.ciphertextSha256, binding.ciphertextSha256.toByteArray())
         }
+    }
+
+    /**
+     * Converts signed artifact bindings into layout slots, or null when any
+     * binding carries an unknown enum kind or a malformed (non-16-byte) typed
+     * blob ID — both reject closed instead of throwing.
+     */
+    private fun bindingSlots(bindings: List<ArtifactBinding>): List<ArtifactSlot>? = try {
+        bindings.map { it.toSlot() }
+    } catch (_: IllegalArgumentException) {
+        null
     }
 
     private fun ArtifactBinding.toSlot(): ArtifactSlot = ArtifactSlot(

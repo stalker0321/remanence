@@ -52,15 +52,20 @@ class PublishStatementSigner {
     }
 
     private fun validateWireFormat(signature: ByteArray, handle: KeysetHandle) {
+        // Length/type are checked BEFORE any byte indexing so a malformed or
+        // truncated signature fails closed as a security exception instead of
+        // an out-of-bounds crash (ADR-007 structural guard).
+        if (signature.size != SIGNATURE_LENGTH ||
+            signature[0].toInt() != TINK_PREFIX_TYPE_BYTE.toInt()
+        ) {
+            throw GeneralSecurityException("signature is not protocol-v1 69-byte TINK-prefixed Ed25519")
+        }
         val expectedKeyId = handle.keysetInfo.primaryKeyId
         val embeddedKeyId = ((signature[1].toInt() and 0xFF) shl 24) or
             ((signature[2].toInt() and 0xFF) shl 16) or
             ((signature[3].toInt() and 0xFF) shl 8) or
             (signature[4].toInt() and 0xFF)
-        if (signature.size != SIGNATURE_LENGTH ||
-            signature[0].toInt() != TINK_PREFIX_TYPE_BYTE.toInt() ||
-            embeddedKeyId != expectedKeyId
-        ) {
+        if (embeddedKeyId != expectedKeyId) {
             throw GeneralSecurityException("signature is not protocol-v1 69-byte TINK-prefixed Ed25519")
         }
     }

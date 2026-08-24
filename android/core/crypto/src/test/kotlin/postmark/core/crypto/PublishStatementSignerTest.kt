@@ -145,6 +145,29 @@ class PublishStatementSignerTest {
     }
 
     @Test
+    fun subHeaderSignaturesFailClosedAsSecurityExceptionsNotCrashes() {
+        val statementBytes = goldenStatementBytes()
+        val signed = signer.sign(fixedSigningHandle(), statementBytes)
+
+        // Any signature shorter than the 5-byte TINK header must fail closed
+        // with GeneralSecurityException; the structural guard checks length
+        // BEFORE indexing the embedded key id (ADR-007).
+        (0..4).forEach { size ->
+            val exception = assertFailsWith<GeneralSecurityException> {
+                signer.verify(fixedVerifyingHandle(), SignedPublishStatement(statementBytes, signed.signature.copyOf(size)))
+            }
+            assertEquals(
+                "signature is not protocol-v1 69-byte TINK-prefixed Ed25519",
+                exception.message,
+            )
+        }
+        // Empty signature likewise.
+        assertFailsWith<GeneralSecurityException> {
+            signer.verify(fixedVerifyingHandle(), SignedPublishStatement(statementBytes, ByteArray(0)))
+        }
+    }
+
+    @Test
     fun doublePrefixAttemptFailsVerification() {
         // The domain prefix is added exactly once by the signer; a payload that
         // already embeds it must never verify as a statement.

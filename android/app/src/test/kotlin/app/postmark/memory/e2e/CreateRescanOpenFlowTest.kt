@@ -3,14 +3,17 @@ package app.postmark.memory.e2e
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import app.postmark.memory.auth.SoftwareKekBoundary
 import app.postmark.memory.create.SameAccountCapsulePublisher
 import app.postmark.memory.create.SameAccountCapsuleRequest
 import app.postmark.memory.ui.navigation.AppDestination
 import app.postmark.memory.ui.navigation.AppNavigationController
 import app.postmark.memory.ui.navigation.AuthUiState
 import app.postmark.memory.ui.navigation.CapsuleAccess
+import app.postmark.memory.wiring.KekBoundSecretSealer
 import com.google.crypto.tink.TinkProtoKeysetFormat
 import java.io.File
+import java.security.MessageDigest
 import java.util.UUID
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -28,24 +31,32 @@ import postmark.core.crypto.AccountIdentityGenerator
 import postmark.core.crypto.CapsuleAcceptanceGate
 import postmark.core.crypto.CapsuleAcceptanceInput
 import postmark.core.crypto.CapsuleAcceptanceResult
-import postmark.core.crypto.DeliveredBlob
+import postmark.core.crypto.CapsuleKeysetParser
+import postmark.core.crypto.RecipientEnvelopeCryptor
+import postmark.core.recognition.CapsuleVerifier
+import app.postmark.protocol.v1.RecipientEnvelopePlaintext
 import postmark.core.data.db.FingerprintOrigin
-import postmark.core.recognition.FingerprintSide as RecognitionSide
 import postmark.core.data.db.FingerprintSide
+import postmark.core.recognition.FingerprintSide as RecognitionSide
 import postmark.core.data.db.PostmarkLocalDatabase
 import postmark.core.data.fingerprints.EncryptedFingerprintStore
 import postmark.core.data.outbox.CapsuleOutboxStager
+import postmark.core.model.BlobId
+import postmark.core.model.CapsuleId
+import postmark.core.model.KeyBundleId
+import postmark.core.model.UserId
+import postmark.core.recognition.IndexedCandidate
 import postmark.core.recognition.LocalMatchEngine
 import postmark.core.recognition.RecognitionProfile
 import postmark.core.recognition.ScanFlowResult
 
 /**
- * I11: one continuous narrative on JVM-real crypto and storage - CREATE a
- * capsule (sealed sender baselines + ciphertext-only outbox), simulate CLOSE
- * and REOPEN of the process, then SCAN the same physical card and OPEN it
- * through the verified-crypto grant gate. A final canary walks every produced
- * byte - database, sealed baselines, ciphertext blobs - and must find none of
- * the plaintext markers anywhere.
+ * FIX-M1-007-14: the HONEST connected narrative on production paths only -
+ * real Tink identity, real AEAD-sealed baselines (no XOR stand-in), the real
+ * ciphertext publisher + durable outbox, the real local hierarchy, and a
+ * verifier that performs the actual envelope/signature/ID/hash/AEAD gate.
+ * A grant exists ONLY after that verification passes; tampering yields none.
+ * A final canary scans every produced byte for plaintext markers.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -59,48 +70,24 @@ class CreateRescanOpenFlowTest {
     private lateinit var context: Context
     private lateinit var database: PostmarkLocalDatabase
     private lateinit var filesRoot: File
+    private lateinit var outboxDir: File
 
     private val identity = AccountIdentityGenerator().generate()
-    private val capsuleId = UUID.fromString("5e111111-2222-4333-8444-555555555555")
-    private val userId = UUID.fromString("5e222222-3333-4444-8555-666666666666")
+    private val capsuleUuid = UUID.fromString("5e111111-2222-4333-8444-555555555555")
+    private val userUuid = UUID.fromString("5e222222-3333-4444-8555-666666666666")
+    private val bundleUuid = UUID.fromString("5e333333-4444-4555-8666-777777777777")
 
     private fun newDb(name: String) =
         Room.databaseBuilder(context, PostmarkLocalDatabase::class.java, name)
             .allowMainThreadQueries()
             .build()
 
+    /** REAL sealer: AES-GCM under a software KEK boundary - no XOR anywhere. */
     private fun store() = EncryptedFingerprintStore(
         File(filesRoot, "fingerprints"),
-        XorSealer(),
+        KekBoundSecretSealer(SoftwareKekBoundary(), KekBoundSecretSealer.FINGERPRINT_SEALING_ALIAS),
         database.recognitionFingerprintDao(),
     )
-
-    private fun orbBytes(marker: String) = marker.toByteArray()
-
-    @Before
-    fun setUp() {
-        context = ApplicationProvider.getApplicationContext()
-        database = newDb("e2e-flow.db")
-        filesRoot = File(context.filesDir, "e2e-artifacts").apply { mkdirs() }
-    }
-
-    @After
-    fun tearDown() {
-        if (::database.isInitialized) database.close()
-        context.getDatabasePath("e2e-flow.db").parentFile?.listFiles()
-            ?.filter { it.name.startsWith("e2e-flow.db") }
-            ?.forEach { it.delete() }
-        filesRoot.deleteRecursively()
-    }
-
-    /** XOR stand-in sealer; reversible so round-trips stay verifiable. */
-    private class XorSealer : postmark.core.data.fingerprints.SecretSealer {
-        override fun seal(plaintext: ByteArray, aad: ByteArray): ByteArray =
-            ByteArray(plaintext.size) { (plaintext[it].toInt() xor 0x33).toByte() }
-
-        override fun unseal(ciphertext: ByteArray, aad: ByteArray): ByteArray =
-            ByteArray(ciphertext.size) { (ciphertext[it].toInt() xor 0x33).toByte() }
-    }
 
     private fun syntheticFingerprint(seed: Int, side: RecognitionSide): ByteArray {
         val profile = RecognitionProfile.mvpOrbV1()
@@ -127,74 +114,145 @@ class CreateRescanOpenFlowTest {
         return postmark.core.recognition.FingerprintCodec.serialize(fp)
     }
 
-    @Test
-    fun createCloseReopenScanOpenWithCleanPlaintextCanary() = runBlocking {
-        val profile = RecognitionProfile.mvpOrbV1()
-        val frontStored = syntheticFingerprint(11, RecognitionSide.FRONT)
-        val backStored = syntheticFingerprint(22, RecognitionSide.BACK)
+    @Before
+    fun setUp() {
+        context = ApplicationProvider.getApplicationContext()
+        database = newDb("e2e-flow.db")
+        filesRoot = File(context.filesDir, "e2e-artifacts").apply { mkdirs() }
+        outboxDir = File(filesRoot, "outbox").apply { mkdirs() }
+    }
 
-        // ---------- PHASE 1: CREATE ----------
-        store().persist(capsuleId.toString(), FingerprintSide.FRONT, FingerprintOrigin.SENDER, profile.profileId, frontStored)
-        store().persist(capsuleId.toString(), FingerprintSide.BACK, FingerprintOrigin.SENDER, profile.profileId, backStored)
+    @After
+    fun tearDown() {
+        if (::database.isInitialized) database.close()
+        context.getDatabasePath("e2e-flow.db").parentFile?.listFiles()
+            ?.filter { it.name.startsWith("e2e-flow.db") }
+            ?.forEach { it.delete() }
+        filesRoot.deleteRecursively()
+    }
 
-        val publisher = SameAccountCapsulePublisher()
-        val prepared = publisher.publish(
+    private suspend fun stagePublishedCapsule(): File {
+        store().persist(
+            capsuleUuid.toString(), FingerprintSide.FRONT, FingerprintOrigin.SENDER,
+            RecognitionProfile.mvpOrbV1().profileId,
+            syntheticFingerprint(11, RecognitionSide.FRONT),
+        )
+        store().persist(
+            capsuleUuid.toString(), FingerprintSide.BACK, FingerprintOrigin.SENDER,
+            RecognitionProfile.mvpOrbV1().profileId,
+            syntheticFingerprint(22, RecognitionSide.BACK),
+        )
+        val prepared = SameAccountCapsulePublisher().publish(
             SameAccountCapsuleRequest(
-                capsuleId = postmark.core.model.CapsuleId(capsuleId),
-                senderUserId = postmark.core.model.UserId(userId),
-                senderKeyBundleId = postmark.core.model.KeyBundleId(UUID.randomUUID()),
+                capsuleId = CapsuleId(capsuleUuid),
+                senderUserId = UserId(userUuid),
+                senderKeyBundleId = KeyBundleId(bundleUuid),
                 senderHandleSnapshot = "mykola",
                 createdAtEpochSeconds = 1_700_000_000L,
                 photoJpegs = (0 until 3).map { "$photoPayloadMarker-$it".toByteArray() },
                 photoWidthsPx = listOf(800, 800, 800),
                 photoHeightsPx = listOf(600, 600, 600),
                 noteUtf8 = noteMarker,
-                frontFingerprintBytes = frontStored,
-                backFingerprintBytes = backStored,
+                frontFingerprintBytes = syntheticFingerprint(11, RecognitionSide.FRONT),
+                backFingerprintBytes = syntheticFingerprint(22, RecognitionSide.BACK),
                 signingKeyset = identity.signingPrivateHandle,
-                recipientEncryptionPublicKeyset = TinkProtoKeysetFormat.parseKeysetWithoutSecret(identity.encryptionPublicKeyset),
+                recipientEncryptionPublicKeyset =
+                    TinkProtoKeysetFormat.parseKeysetWithoutSecret(identity.encryptionPublicKeyset),
             ),
         )
-        val stagingDir = File(filesRoot, "staging").apply { mkdirs() }
-        CapsuleOutboxStager(database, stagingDir).stage(prepared)
+        CapsuleOutboxStager(database, outboxDir).stage(prepared)
+        return outboxDir
+    }
+
+    /**
+     * THE REAL GATE, mirroring ScanViewModel.verifyCapsuleCrypto: open our own
+     * envelope with the HPKE private handle, then run CapsuleAcceptanceGate
+     * over statement/signature/IDs/hashes from the durable outbox.
+     */
+    private fun realVerifier(
+        database: PostmarkLocalDatabase,
+        encryptionPrivate: com.google.crypto.tink.KeysetHandle,
+    ): CapsuleVerifier {
+        return CapsuleVerifier { candidateId: UUID ->
+            runCatching {
+                val row = database.outboxCapsuleDao().getByCapsuleId(candidateId.toString()) ?: return@runCatching false
+                val blobs = database.outboxBlobDao().getAllByCapsuleId(candidateId.toString())
+                val openedEnvelope = RecipientEnvelopeCryptor().open(
+                    encryptionPrivate,
+                    postmark.core.model.RecipientEnvelopeContextInput(
+                        CapsuleId(candidateId),
+                        UserId(userUuid),
+                        UserId(userUuid),
+                        KeyBundleId(UUID.fromString(row.recipientKeyBundleId)),
+                    ),
+                    File(requireNotNull(row.envelopePath)).readBytes(),
+                )
+                val result = CapsuleAcceptanceGate().verify(
+                    CapsuleAcceptanceInput(
+                        expectedCapsuleId = CapsuleId(candidateId),
+                        authenticatedUserId = UserId(userUuid),
+                        senderVerifyingKeyset = TinkProtoKeysetFormat.parseKeysetWithoutSecret(
+                            identity.signingPublicKeyset,
+                        ),
+                        expectedSenderKeyBundleId = KeyBundleId(bundleUuid),
+                        envelopePlaintextBytes = openedEnvelope,
+                        statementBytes = File(requireNotNull(row.publishStatementPath)).readBytes(),
+                        signature = File(requireNotNull(row.publishStatementSignaturePath)).readBytes(),
+                        deliveredBlobs = blobs.map { blobRow ->
+                            val file = File(blobRow.localCiphertextPath)
+                            postmark.core.crypto.DeliveredBlob(
+                                blobId = BlobId(UUID.fromString(blobRow.blobId)),
+                                ciphertextSize = file.length(),
+                                ciphertextSha256 =
+                                    MessageDigest.getInstance("SHA-256").digest(file.readBytes()),
+                            )
+                        },
+                    ),
+                )
+                result is CapsuleAcceptanceResult.Accepted
+            }.getOrDefault(false)
+        }
+        }
+
+    @Test
+    fun createCloseReopenScanOpenWithCleanPlaintextCanary() = runBlocking {
+        // ---------- PHASE 1: CREATE (production publisher + stager) ----------
+        stagePublishedCapsule()
 
         // ---------- CLOSE / REOPEN ----------
         database.close()
         database = newDb("e2e-flow.db")
 
-        // ---------- SCAN ----------
+        // ---------- SCAN through the REAL hierarchy and REAL verifier ----------
         val reopenedStore = store()
-        val decryptedFront = reopenedStore.decrypt(
-            reopenedDatabaseFingerprintId(FingerprintSide.FRONT),
-        )
-        val decryptedBack = reopenedStore.decrypt(
-            reopenedDatabaseFingerprintId(FingerprintSide.BACK),
-        )
-        assertEquals(frontStored.toList(), decryptedFront.toList())
-        assertEquals(backStored.toList(), decryptedBack.toList())
-        val candidateFront = postmark.core.recognition.FingerprintCodec.parse(decryptedFront)
-        val candidateBack = postmark.core.recognition.FingerprintCodec.parse(decryptedBack)
+        val frontRow = reopenedDbFingerprint(FingerprintSide.FRONT)
+        val backRow = reopenedDbFingerprint(FingerprintSide.BACK)
+        val decryptedFront = reopenedStore.decrypt(frontRow.fingerprintId)
+        val decryptedBack = reopenedStore.decrypt(backRow.fingerprintId)
 
         val engine = LocalMatchEngine(
-            profile = profile,
-            verifier = { true }, // crypto verification succeeded upstream (gate below)
+            profile = RecognitionProfile.mvpOrbV1(),
+            verifier = { id ->
+                val gate = realVerifier(database, identity.encryptionPrivateHandle)
+                gate.verify(id)
+            },
             grantIssuer = { id -> "grant-for-$id" },
         )
-        // The rescanned card produces the SAME fingerprints.
         val result = engine.run(
-            postmark.core.recognition.FingerprintCodec.parse(frontStored),
-            postmark.core.recognition.FingerprintCodec.parse(backStored),
+            postmark.core.recognition.FingerprintCodec.parse(decryptedFront),
+            postmark.core.recognition.FingerprintCodec.parse(decryptedBack),
             listOf(
-                postmark.core.recognition.IndexedCandidate(
-                    capsuleId, candidateFront, candidateBack, recipientPreferred = false,
+                IndexedCandidate(
+                    capsuleId = capsuleUuid,
+                    front = postmark.core.recognition.FingerprintCodec.parse(decryptedFront),
+                    back = postmark.core.recognition.FingerprintCodec.parse(decryptedBack),
+                    recipientPreferred = backRow.origin == FingerprintOrigin.RECIPIENT &&
+                        backRow.preferred,
                 ),
             ),
         )
         val granted = result as ScanFlowResult.Granted
-        assertTrue(
-            "composite must clear the auto gate, was ${granted.compositeScore}",
-            granted.compositeScore >= 0.70,
-        )
+        assertTrue("composite must clear the auto gate", granted.compositeScore >= 0.70)
 
         // ---------- OPEN through the verified gate ----------
         var now = 1_000L
@@ -208,11 +266,9 @@ class CreateRescanOpenFlowTest {
         controller.navigate(AppDestination.Capsule(grant.grantId.toString()))
         assertEquals(AppDestination.Capsule(grant.grantId.toString()), controller.current)
 
-        // Outbox rows survived the restart and match the scanned capsule.
-        assertNotNull(database.outboxCapsuleDao().getByCapsuleId(capsuleId.toString()))
-        assertEquals(5, database.outboxBlobDao().getAllByCapsuleId(capsuleId.toString()).size)
+        assertNotNull(database.outboxCapsuleDao().getByCapsuleId(capsuleUuid.toString()))
+        assertEquals(5, database.outboxBlobDao().getAllByCapsuleId(capsuleUuid.toString()).size)
 
-        // Leaving consumes everything.
         assertTrue(grants.consume(grant.grantId))
         controller.consumeCapsuleAccess()
         assertNull(grants.resolveCapsuleId(grant.grantId))
@@ -223,7 +279,7 @@ class CreateRescanOpenFlowTest {
         val dbFile = context.getDatabasePath("e2e-flow.db").parentFile!!
         val scannedFiles = filesRoot.walk().filter { it.isFile }.toList() +
             dbDirFiles(dbFile).filter { it.name.startsWith("e2e-flow.db") }
-        val markers = listOf(noteMarker, photoPayloadMarker)
+        val markers = listOf(noteMarker, photoPayloadMarker, frontMarker, backMarker)
         scannedFiles.forEach { file ->
             val bytes = file.readBytes()
             markers.forEach { marker ->
@@ -235,14 +291,65 @@ class CreateRescanOpenFlowTest {
         }
     }
 
+    @Test
+    fun tamperedCiphertextNeverPassesTheRealGateAndNeverIssuesAGrant() = runBlocking {
+        stagePublishedCapsule()
+        database.close()
+        database = newDb("e2e-flow.db")
+
+        // Corrupt one stored ciphertext byte AFTER staging: hash check fails.
+        val blobRow = database.outboxBlobDao().getAllByCapsuleId(capsuleUuid.toString()).first()
+        val target = File(blobRow.localCiphertextPath)
+        val corrupted = target.readBytes().also { it[0] = (it[0].toInt() xor 0x01).toByte() }
+        target.writeBytes(corrupted)
+
+        val issued = mutableListOf<UUID>()
+        val engine = LocalMatchEngine(
+            profile = RecognitionProfile.mvpOrbV1(),
+            verifier = { id ->
+                val gate = realVerifier(database, identity.encryptionPrivateHandle)
+                gate.verify(id)
+            },
+            grantIssuer = { id -> issued += id; "grant-for-$id" },
+        )
+        val fp = postmark.core.recognition.FingerprintCodec.parse(syntheticFingerprint(11, RecognitionSide.FRONT))
+        val bp = postmark.core.recognition.FingerprintCodec.parse(syntheticFingerprint(22, RecognitionSide.BACK))
+
+        val result = engine.run(fp, bp, listOf(IndexedCandidate(capsuleUuid, fp, bp, false)))
+
+        assertEquals(ScanFlowResult.RecaptureRequired, result)
+        assertTrue(issued.isEmpty())
+    }
+
+    @Test
+    fun authenticatedRootReachesCreateAndScanButNothingElse() {
+        val controller = AppNavigationController(AuthUiState.SignedOut)
+        controller.updateAuth(AuthUiState.Authenticated("user-1", "mykola"))
+
+        controller.navigate(AppDestination.Create)
+        assertEquals(AppDestination.Create, controller.current)
+        controller.navigate(AppDestination.Home)
+        controller.navigate(AppDestination.Scan)
+        assertEquals(AppDestination.Scan, controller.current)
+
+        // No gallery/history route exists to navigate to at all.
+        RouteInventoryProbe.assertNoGalleryRoutes()
+    }
+
+    private object RouteInventoryProbe {
+        fun assertNoGalleryRoutes() {
+            val names = app.postmark.memory.ui.navigation.RouteGuard.allDestinations()
+                .map { it.javaClass.simpleName }
+            assertFalse("Gallery" in names || "History" in names || "Inbox" in names)
+        }
+    }
+
     private fun dbDirFiles(dbDir: File): List<File> = dbDir.listFiles()?.toList() ?: emptyList()
 
-    private suspend fun reopenedDatabaseFingerprintId(side: FingerprintSide): String {
-        val row = database.recognitionFingerprintDao()
-            .getByCapsuleIdAndOrigin(capsuleId.toString(), FingerprintOrigin.SENDER)
+    private suspend fun reopenedDbFingerprint(side: FingerprintSide) =
+        database.recognitionFingerprintDao()
+            .getByCapsuleIdAndOrigin(capsuleUuid.toString(), FingerprintOrigin.SENDER)
             .single { it.side == side }
-        return row.fingerprintId
-    }
 
     private fun indexOf(haystack: ByteArray, needle: ByteArray): Boolean {
         outer@ for (i in 0..haystack.size - needle.size) {

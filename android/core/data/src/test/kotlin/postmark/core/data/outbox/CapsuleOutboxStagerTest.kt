@@ -217,6 +217,29 @@ class CapsuleOutboxStagerTest {
     }
 
     @Test
+    fun statementAndSignatureSurviveRoomRestartByteIdentically() = runBlocking {
+        val dbName = "stager-restart.db"
+        database = newFileBackedDatabase(dbName)
+        ciphertextDirectory = File(context.filesDir, "outbox-staging-restart")
+        val prepared = preparedCapsule()
+        CapsuleOutboxStager(database, ciphertextDirectory).stage(prepared)
+
+        // ---- process death ----
+        val stagedStatementBytes = prepared.publishStatementBytes
+        val stagedSignatureBytes = prepared.publishStatementSignature
+        database.close()
+
+        // ---- second process reads the durable outbox from disk only ----
+        database = newFileBackedDatabase(dbName)
+        val reopened = database.outboxCapsuleDao().getByCapsuleId(capsuleId.toString())
+        assertNotNull(reopened)
+        assertNotNull(reopened!!.publishStatementPath)
+        assertNotNull(reopened.publishStatementSignaturePath)
+        assertTrue(stagedStatementBytes.contentEquals(File(reopened.publishStatementPath!!).readBytes()))
+        assertTrue(stagedSignatureBytes.contentEquals(File(reopened.publishStatementSignaturePath!!).readBytes()))
+    }
+
+    @Test
     fun plaintextCanaryAcrossEveryProducedByteFindsNothing() = runBlocking {
         val dbName = "canary.db"
         database = newFileBackedDatabase(dbName)

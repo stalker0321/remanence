@@ -69,12 +69,22 @@ class CapsuleOutboxStager(
             ciphertextDirectory.mkdirs()
         }
 
-        val created = ArrayList<File>(prepared.artifacts.size + 1)
+        val created = ArrayList<File>(prepared.artifacts.size + 3)
         try {
             val envelopePath = writeCiphertext(created, "envelope-${prepared.capsuleId}.bin", prepared.envelopeCiphertext)
             val artifactPaths = prepared.artifacts.map { artifact ->
                 writeCiphertext(created, "${artifact.blobId}.bin", artifact.ciphertext)
             }
+            val statementPath = writeBytes(
+                created,
+                "statement-${prepared.capsuleId}.bin",
+                prepared.publishStatementBytes,
+            )
+            val signaturePath = writeBytes(
+                created,
+                "signature-${prepared.capsuleId}.bin",
+                prepared.publishStatementSignature,
+            )
 
             database.withTransaction {
                 // Existence check lives inside the transaction so a concurrent
@@ -93,6 +103,8 @@ class CapsuleOutboxStager(
                         recognitionManifestPath = artifactPaths[recognitionIndex(prepared)],
                         contentManifestPath = artifactPaths[contentIndex(prepared)],
                         envelopePath = envelopePath,
+                        publishStatementPath = statementPath,
+                        publishStatementSignaturePath = signaturePath,
                         lastErrorCode = null,
                     ),
                 )
@@ -120,7 +132,11 @@ class CapsuleOutboxStager(
     }
 
     private suspend fun writeCiphertext(created: MutableList<File>, name: String, bytes: ByteArray): String =
+        writeBytes(created, name, bytes)
+
+    private suspend fun writeBytes(created: MutableList<File>, name: String, bytes: ByteArray): String =
         withContext(Dispatchers.IO) {
+            require(bytes.isNotEmpty()) { "refusing to persist empty bytes for $name" }
             val target = File(ciphertextDirectory, name)
             val temporary = File(ciphertextDirectory, "$name.tmp")
             try {
@@ -138,6 +154,10 @@ class CapsuleOutboxStager(
     private fun validate(prepared: PreparedOutboxCapsule) {
         require(prepared.idempotencyKey.isNotBlank()) { "idempotency key missing" }
         require(prepared.envelopeCiphertext.isNotEmpty()) { "envelope ciphertext empty" }
+        require(prepared.publishStatementBytes.isNotEmpty()) { "publish statement bytes empty" }
+        require(prepared.publishStatementSignature.size == PUBLISH_SIGNATURE_LENGTH) {
+            "publish signature must be the protocol-v1 69-byte TINK-prefixed Ed25519 form"
+        }
         val kinds = prepared.artifacts.groupBy { it.kind }
         require(kinds[OutboxArtifactKind.RECOGNITION_MANIFEST].orEmpty().size == 1) {
             "exactly one recognition manifest required"
@@ -163,4 +183,8 @@ class CapsuleOutboxStager(
 
     private fun sha256(bytes: ByteArray): ByteArray =
         MessageDigest.getInstance("SHA-256").digest(bytes)
+
+    private companion object {
+        const val PUBLISH_SIGNATURE_LENGTH = 69
+    }
 }

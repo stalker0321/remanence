@@ -37,6 +37,43 @@ class PostmarkLocalSchemaTest {
     }
 
     @Test
+    fun migrationOneToTwoAddsOutboxStatementColumnsWithoutDataLoss() {
+        helper.createDatabase(DB_MIGRATION_NAME, 1).use { v1 ->
+            v1.execSQL(
+                "INSERT INTO outbox_capsule (" +
+                    "capsule_id, idempotency_key, recipient_user_id, recipient_key_bundle_id, state, " +
+                    "recognition_manifest_path, content_manifest_path, envelope_path, last_error_code" +
+                    ") VALUES ('cap-1', 'idem-1', 'recipient', 'bundle', 'ENCRYPTED', " +
+                    "'/tmp/rec.bin', '/tmp/con.bin', '/tmp/env.bin', NULL)",
+            )
+            assertTrue(v1.isDatabaseIntegrityOk)
+        }
+
+        val migrated = helper.runMigrationsAndValidate(
+            DB_MIGRATION_NAME,
+            2,
+            true,
+            PostmarkLocalDatabase.MIGRATION_1_2,
+        )
+        // The pre-migration row survives and gains usable statement columns.
+        migrated.query(
+            "UPDATE outbox_capsule SET publish_statement_path = '/tmp/statement.bin', " +
+                "publish_statement_signature_path = '/tmp/signature.bin' WHERE capsule_id = 'cap-1'",
+        ).use { it.moveToFirst() }
+        migrated.query("SELECT capsule_id, state FROM outbox_capsule").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals("cap-1", cursor.getString(0))
+            assertEquals("ENCRYPTED", cursor.getString(1))
+        }
+        migrated.query("SELECT publish_statement_path, publish_statement_signature_path FROM outbox_capsule").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals("/tmp/statement.bin", cursor.getString(0))
+            assertEquals("/tmp/signature.bin", cursor.getString(1))
+        }
+        migrated.close()
+    }
+
+    @Test
     fun exportedSchemaCoversAllM1Tables() {
         val schemaJson = String(
             context.assets.open("postmark.core.data.db.PostmarkLocalDatabase/1.json").readBytes(),
@@ -89,6 +126,7 @@ class PostmarkLocalSchemaTest {
 
     private companion object {
         const val DB_NAME = "postmark-schema-test.db"
+        const val DB_MIGRATION_NAME = "postmark-migration-test.db"
         const val REOPEN_DB_NAME = "postmark-reopen-test.db"
     }
 }

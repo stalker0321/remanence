@@ -100,6 +100,8 @@ class ProcessRestartResilienceTest {
                 recognitionManifestPath = null,
                 contentManifestPath = null,
                 envelopePath = null,
+                publishStatementPath = null,
+                publishStatementSignaturePath = null,
                 lastErrorCode = null,
             ),
         )

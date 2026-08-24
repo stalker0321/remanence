@@ -17,8 +17,10 @@ enum class OutboxCapsuleState {
 }
 
 /**
- * One outgoing ciphertext-only capsule. Holds routing snapshots and encrypted
- * artifact paths only: never plaintext note text or image bytes.
+ * One outgoing ciphertext-only capsule. Holds routing snapshots, the signed
+ * publish statement plus signature (public REST material required to finalize
+ * after any process restart), and encrypted artifact paths only: never
+ * plaintext note text or image bytes.
  */
 @Entity(
     tableName = "outbox_capsule",
@@ -44,6 +46,10 @@ data class OutboxCapsuleEntity(
     val contentManifestPath: String?,
     @ColumnInfo(name = "envelope_path")
     val envelopePath: String?,
+    @ColumnInfo(name = "publish_statement_path")
+    val publishStatementPath: String?,
+    @ColumnInfo(name = "publish_statement_signature_path")
+    val publishStatementSignaturePath: String?,
     @ColumnInfo(name = "last_error_code")
     val lastErrorCode: String?,
 )

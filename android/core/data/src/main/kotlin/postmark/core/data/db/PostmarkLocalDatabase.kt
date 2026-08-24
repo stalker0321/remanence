@@ -2,6 +2,8 @@ package postmark.core.data.db
 
 import androidx.room.Database
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 /**
  * Local infrastructure database. Contains no content plaintext, no gallery or
@@ -18,7 +20,7 @@ import androidx.room.RoomDatabase
         RecognitionFingerprintEntity::class,
         SyncCursorEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 abstract class PostmarkLocalDatabase : RoomDatabase() {
@@ -40,5 +42,15 @@ abstract class PostmarkLocalDatabase : RoomDatabase() {
 
     companion object {
         const val DATABASE_NAME: String = "postmark-local.db"
+
+        /** v2 adds the signed publish statement/signature to the outbox capsule. */
+        val MIGRATION_1_2: Migration = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE outbox_capsule ADD COLUMN publish_statement_path TEXT")
+                db.execSQL(
+                    "ALTER TABLE outbox_capsule ADD COLUMN publish_statement_signature_path TEXT",
+                )
+            }
+        }
     }
 }

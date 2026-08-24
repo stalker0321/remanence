@@ -57,6 +57,24 @@ class RootViewModel(
         }
     }
 
+    /** Home entry point: sender create flow (authenticated accounts only). */
+    fun openCreate() {
+        controller.navigate(AppDestination.Create)
+        _destination.value = controller.current
+    }
+
+    /** Home entry point: scan flow (authenticated accounts only). */
+    fun openScan() {
+        controller.navigate(AppDestination.Scan)
+        _destination.value = controller.current
+    }
+
+    /** Returns from Create/Scan to Home; transient flow state dies with them. */
+    fun returnToHome() {
+        controller.navigate(AppDestination.Home)
+        _destination.value = controller.current
+    }
+
     private fun refreshAsync() {
         viewModelScope.launch {
             resolveNow()

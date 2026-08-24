@@ -48,12 +48,27 @@ class AppNavigationTest {
     }
 
     @Test
-    fun destinationInventoryAllowsOnlyAuthHomeAndGrantGatedCapsule() {
+    fun destinationInventoryAllowsOnlyAuthHomeCreateScanAndGrantGatedCapsule() {
         val inventory = RouteGuard.allDestinations().map { it.javaClass.simpleName }.toSet()
-        assertEquals(setOf("Authentication", "Home", "Capsule"), inventory)
+        assertEquals(setOf("Authentication", "Home", "Create", "Scan", "Capsule"), inventory)
         for (forbidden in listOf("Gallery", "Inbox", "History", "Feed", "DeepLink")) {
             org.junit.Assert.assertFalse("forbidden route type: $forbidden", forbidden in inventory.joinToString())
         }
+    }
+
+    @Test
+    fun createAndScanAreAuthenticatedOnlyDestinations() {
+        val controller = AppNavigationController(AuthUiState.SignedOut)
+        controller.navigate(AppDestination.Create)
+        assertEquals(AppDestination.Authentication, controller.current)
+        controller.navigate(AppDestination.Scan)
+        assertEquals(AppDestination.Authentication, controller.current)
+
+        val authenticated = authenticatedController()
+        authenticated.navigate(AppDestination.Create)
+        assertEquals(AppDestination.Create, authenticated.current)
+        authenticated.navigate(AppDestination.Scan)
+        assertEquals(AppDestination.Scan, authenticated.current)
     }
 
     private fun authenticatedController() = AppNavigationController(

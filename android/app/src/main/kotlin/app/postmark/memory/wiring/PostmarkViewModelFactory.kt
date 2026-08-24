@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import app.postmark.memory.AppContainer
 import app.postmark.memory.session.RootViewModel
+import app.postmark.memory.ui.home.HomeCapabilityViewModel
 import app.postmark.memory.ui.auth.LoginViewModel
 import app.postmark.memory.ui.auth.RegistrationViewModel
 
@@ -23,6 +24,8 @@ class PostmarkViewModelFactory(
         ) as T
         LoginViewModel::class.java -> LoginViewModel(container.loginUseCase) as T
         RegistrationViewModel::class.java -> RegistrationViewModel(container.registrationUseCase) as T
+        HomeCapabilityViewModel::class.java ->
+            HomeCapabilityViewModel(container.identityAvailability) as T
         else -> throw IllegalArgumentException("unknown ViewModel: ${modelClass.name}")
     }
 }

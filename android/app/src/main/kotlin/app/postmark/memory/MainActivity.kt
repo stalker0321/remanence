@@ -27,6 +27,7 @@ import app.postmark.memory.ui.auth.RegistrationFormScreen
 import app.postmark.memory.ui.auth.RegistrationSubmitState
 import app.postmark.memory.ui.auth.RegistrationViewModel
 import app.postmark.memory.ui.home.BackendHealthUiState
+import app.postmark.memory.ui.home.HomeCapabilityViewModel
 import app.postmark.memory.ui.home.HomeScreen
 import app.postmark.memory.wiring.PostmarkViewModelFactory
 import app.postmark.memory.ui.navigation.AuthUiState
@@ -60,6 +61,7 @@ private fun RootSurface(container: AppContainer) {
     val rootViewModel: RootViewModel = viewModel(factory = factory)
     val loginViewModel: LoginViewModel = viewModel(factory = factory)
     val registrationViewModel: RegistrationViewModel = viewModel(factory = factory)
+    val capabilityViewModel: HomeCapabilityViewModel = viewModel(factory = factory)
 
     var healthState by remember { mutableStateOf(BackendHealthUiState.CHECKING) }
     LaunchedEffect(Unit) {
@@ -84,6 +86,12 @@ private fun RootSurface(container: AppContainer) {
     }
 
     val authState by rootViewModel.authState.collectAsStateWithLifecycle()
+
+    // Real capability derivation: authenticated AND both keysets on device.
+    LaunchedEffect(authState) {
+        capabilityViewModel.onAuthStateChanged(authState)
+    }
+    val accountCapability by capabilityViewModel.capability.collectAsStateWithLifecycle()
 
     RootScreen(
         authState = authState,
@@ -113,7 +121,14 @@ private fun RootSurface(container: AppContainer) {
             AuthenticatedHomeChrome(
                 handle = authenticated?.handle ?: "",
                 onLogout = rootViewModel::logout,
-                homeContent = { HomeScreen(healthState) },
+                homeContent = {
+                    HomeScreen(
+                        state = healthState,
+                        accountCapability = accountCapability,
+                        onCreate = rootViewModel::openCreate,
+                        onScan = rootViewModel::openScan,
+                    )
+                },
             )
         },
     )

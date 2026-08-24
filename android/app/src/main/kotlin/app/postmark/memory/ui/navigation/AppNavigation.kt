@@ -42,7 +42,8 @@ sealed interface CapsuleAccess {
  * the single source of truth for what can be navigated to; there is no
  * gallery, inbox, history, or deep-link destination by construction. The one
  * capsule presentation surface exists ONLY behind a live memory-only scan
- * grant plus a verified crypto result.
+ * grant plus a verified crypto result. Create and Scan are the only required
+ * home entry points (docs/product.md section 7).
  */
 sealed interface AppDestination {
     /** Authentication surface: sign-in, create account, device-loss warning. */
@@ -50,6 +51,12 @@ sealed interface AppDestination {
 
     /** Post-authentication home. */
     data object Home : AppDestination
+
+    /** Sender flow entry: resolve recipient, capture, encrypt, publish. */
+    data object Create : AppDestination
+
+    /** Scan flow entry: front/back capture, local match, grant gate. */
+    data object Scan : AppDestination
 
     /**
      * Presentation of ONE scanned capsule, addressable only by its random
@@ -94,6 +101,8 @@ object RouteGuard {
     fun allDestinations(): Set<AppDestination> = setOf(
         AppDestination.Authentication,
         AppDestination.Home,
+        AppDestination.Create,
+        AppDestination.Scan,
         AppDestination.Capsule("inventory-probe"),
     )
 }

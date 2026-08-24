@@ -283,14 +283,18 @@ class AppContainer(
      * keysets, and the real `local_account` row. The stored token is
      * proved against `/v1/auth/refresh` BEFORE any Active state exists.
      */
-    val sessionBootstrap: SessionBootstrap by lazy {
-        val identityAvailability = object : IdentityAvailabilityPort {
+    val identityAvailability: IdentityAvailabilityPort by lazy {
+        object : IdentityAvailabilityPort {
             private fun bothAvailable(): Boolean =
                 identityRepository.exists() &&
                     identityRepository.load() !is IdentityBundleRepository.LoadResult.RecoveryRequired
             override fun encryptionKeysetAvailable(): Boolean = bothAvailable()
             override fun signingKeysetAvailable(): Boolean = bothAvailable()
         }
+    }
+
+    val sessionBootstrap: SessionBootstrap by lazy {
+        val identityAvailability = this.identityAvailability
         SessionBootstrap(
             tokens = object : SessionTokenPort {
                 override fun readToken(): String? = sessionTokenStore.load()

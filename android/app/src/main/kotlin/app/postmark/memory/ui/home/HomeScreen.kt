@@ -45,6 +45,8 @@ sealed interface AccountCapabilityState {
 fun HomeScreen(
     state: BackendHealthUiState,
     accountCapability: AccountCapabilityState = AccountCapabilityState.NotAuthenticated,
+    onCreate: () -> Unit = {},
+    onScan: () -> Unit = {},
 ) {
     Column(
         modifier = Modifier
@@ -65,7 +67,7 @@ fun HomeScreen(
         )
         Spacer(Modifier.height(24.dp))
         Button(
-            onClick = {},
+            onClick = onCreate,
             enabled = accountCapability.actionsEnabled,
             modifier = Modifier.testTag("create_action"),
         ) {
@@ -73,7 +75,7 @@ fun HomeScreen(
         }
         Spacer(Modifier.height(12.dp))
         Button(
-            onClick = {},
+            onClick = onScan,
             enabled = accountCapability.actionsEnabled,
             modifier = Modifier.testTag("scan_action"),
         ) {

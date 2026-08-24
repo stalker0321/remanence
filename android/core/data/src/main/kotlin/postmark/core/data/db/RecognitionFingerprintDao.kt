@@ -45,6 +45,10 @@ interface RecognitionFingerprintDao {
     )
     suspend fun markPreferred(capsuleId: String, origin: FingerprintOrigin)
 
+    /** Removes exactly one sealed baseline row (used for pair-rollback). */
+    @Query("DELETE FROM recognition_fingerprint WHERE fingerprint_id = :fingerprintId")
+    suspend fun deleteByFingerprintId(fingerprintId: String)
+
     @Query("DELETE FROM recognition_fingerprint WHERE capsule_id = :capsuleId")
     suspend fun deleteByCapsuleId(capsuleId: String)
 

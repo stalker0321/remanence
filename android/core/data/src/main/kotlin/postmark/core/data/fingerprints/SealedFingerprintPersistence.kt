@@ -24,4 +24,21 @@ interface SealedFingerprintPersistence {
         side: FingerprintSide,
         origin: FingerprintOrigin,
     ): Boolean
+
+    /**
+     * Marks exactly the [origin] front/back pair of [capsuleId] as preferred
+     * and clears the flag from every other row of that capsule, demoting any
+     * previous pair (e.g. sender fallback) in one transaction.
+     */
+    suspend fun setPreferredPair(
+        capsuleId: String,
+        origin: FingerprintOrigin,
+    )
+
+    /** Best-effort removal of one sealed baseline row plus its ciphertext. */
+    suspend fun deleteBaseline(
+        capsuleId: String,
+        side: FingerprintSide,
+        origin: FingerprintOrigin,
+    )
 }

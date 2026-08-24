@@ -82,6 +82,21 @@ class EncryptedFingerprintStore(
         origin: FingerprintOrigin,
     ): Boolean = dao.getByCapsuleIdAndOrigin(capsuleId, origin).any { it.side == side }
 
+    override suspend fun setPreferredPair(capsuleId: String, origin: FingerprintOrigin) {
+        dao.setPreferredPair(capsuleId, origin)
+    }
+
+    override suspend fun deleteBaseline(
+        capsuleId: String,
+        side: FingerprintSide,
+        origin: FingerprintOrigin,
+    ) {
+        val entity = dao.getByCapsuleIdAndOrigin(capsuleId, origin)
+            .firstOrNull { it.side == side } ?: return
+        filesRoot.resolve(entity.encryptedPath).delete()
+        dao.deleteByFingerprintId(entity.fingerprintId)
+    }
+
     /** Loads the row, reads its file, and unseals; anything unexpected fails closed. */
     suspend fun decrypt(fingerprintId: String): ByteArray {
         val entity = dao.getByFingerprintId(fingerprintId)

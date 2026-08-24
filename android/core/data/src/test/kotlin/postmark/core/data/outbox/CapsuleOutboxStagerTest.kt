@@ -6,6 +6,7 @@ import androidx.test.core.app.ApplicationProvider
 import java.io.File
 import java.security.MessageDigest
 import java.util.UUID
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -214,6 +215,94 @@ class CapsuleOutboxStagerTest {
         }
 
         assertEquals(5, database.outboxBlobDao().getAllByCapsuleId(capsuleId.toString()).size)
+    }
+
+    @Test
+    fun replayedStagingCannotOverwriteOrDeleteTheWinner() = runBlocking {
+        database = newFileBackedDatabase("stager-replay.db")
+        ciphertextDirectory = File(context.filesDir, "outbox-staging-replay-guard")
+        val stager = CapsuleOutboxStager(database, ciphertextDirectory)
+        stager.stage(preparedCapsule())
+
+        // Snapshot the winner exactly as committed. Each preparedCapsule()
+        // call produces fresh random ciphertext, so any overwrite would be
+        // observable byte-for-byte.
+        val winnerRow = database.outboxCapsuleDao().getByCapsuleId(capsuleId.toString())!!
+        val winnerBlobs = database.outboxBlobDao().getAllByCapsuleId(capsuleId.toString())
+        val winnerFiles = listOfNotNull(
+            winnerRow.envelopePath,
+            winnerRow.recognitionManifestPath,
+            winnerRow.contentManifestPath,
+            winnerRow.publishStatementPath,
+            winnerRow.publishStatementSignaturePath,
+        ).map { File(it) } + winnerBlobs.map { File(it.localCiphertextPath) }
+        val winnerBytes = winnerFiles.map { it.readBytes().toList() }
+
+        try {
+            stager.stage(preparedCapsule())
+            throw AssertionError("expected replay refusal")
+        } catch (expected: IllegalStateException) {
+            assertEquals("capsule already staged", expected.message)
+        }
+
+        val afterRow = database.outboxCapsuleDao().getByCapsuleId(capsuleId.toString())!!
+        assertEquals(winnerRow, afterRow)
+        assertEquals(5, database.outboxBlobDao().getAllByCapsuleId(capsuleId.toString()).size)
+        winnerFiles.forEachIndexed { index, file ->
+            assertTrue("winner file ${file.name} must survive replay", file.exists())
+            assertEquals(winnerBytes[index], file.readBytes().toList())
+        }
+    }
+
+    @Test
+    fun concurrentStagingOfSameCapsuleProducesExactlyOneWinner() = runBlocking {
+        database = newFileBackedDatabase("stager-concurrent.db")
+        ciphertextDirectory = File(context.filesDir, "outbox-staging-concurrent")
+        val stager = CapsuleOutboxStager(database, ciphertextDirectory)
+
+        val outcomes = kotlinx.coroutines.coroutineScope {
+            val first = this@coroutineScope.async { runCatching { stager.stage(preparedCapsule()) } }
+            val second = this@coroutineScope.async { runCatching { stager.stage(preparedCapsule()) } }
+            listOf(first.await(), second.await())
+        }
+
+        val winners = outcomes.filter { it.isSuccess }
+        val losers = outcomes.filter { it.isFailure }
+        assertEquals(1, winners.size)
+        assertEquals(1, losers.size)
+        assertTrue(losers.single().exceptionOrNull() is IllegalStateException)
+
+        val row = database.outboxCapsuleDao().getByCapsuleId(capsuleId.toString())!!
+        assertEquals(OutboxCapsuleState.ENCRYPTED, row.state)
+        assertEquals(5, database.outboxBlobDao().getAllByCapsuleId(capsuleId.toString()).size)
+        // Every committed path exists with content; no temp residue remains.
+        val committedPaths =
+            listOfNotNull(row.envelopePath, row.publishStatementPath, row.publishStatementSignaturePath) +
+                database.outboxBlobDao().getAllByCapsuleId(capsuleId.toString()).map { it.localCiphertextPath }
+        committedPaths.forEach { assertTrue(File(it).exists() && File(it).length() > 0L) }
+        assertTrue(ciphertextDirectory.listFiles()!!.none { it.name.contains(".tmp-") })
+    }
+
+    @Test
+    fun stagingCompletesOnlyThroughGuardedPreparingToEncryptedTransition() = runBlocking {
+        database = newFileBackedDatabase("stager-transition.db")
+        ciphertextDirectory = File(context.filesDir, "outbox-staging-transition")
+        CapsuleOutboxStager(database, ciphertextDirectory).stage(preparedCapsule())
+
+        // A completed staging is ENCRYPTED — never stranded in PREPARING.
+        assertEquals(
+            OutboxCapsuleState.ENCRYPTED,
+            database.outboxCapsuleDao().getByCapsuleId(capsuleId.toString())!!.state,
+        )
+        // The guarded transition only accepts PREPARING as origin.
+        assertEquals(
+            0,
+            database.outboxCapsuleDao().transitionState(
+                capsuleId.toString(),
+                OutboxCapsuleState.ENCRYPTED,
+                listOf(OutboxCapsuleState.PREPARING),
+            ),
+        )
     }
 
     @Test

@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import app.postmark.memory.AppContainer
 import app.postmark.memory.session.RootViewModel
 import app.postmark.memory.ui.create.CreateViewModel
+import app.postmark.memory.ui.scan.ScanViewModel
 import app.postmark.memory.ui.home.HomeCapabilityViewModel
 import app.postmark.memory.ui.auth.LoginViewModel
 import app.postmark.memory.ui.auth.RegistrationViewModel
@@ -59,6 +60,33 @@ class PostmarkViewModelFactory(
                         ?: throw java.io.IOException("photo picker stream unavailable")
                 }
             },
+        ) as T
+        ScanViewModel::class.java -> ScanViewModel(
+            persistence = container.fingerprintPersistence,
+            database = container.database,
+            profile = postmark.core.recognition.RecognitionProfile.mvpOrbV1(),
+            identityProvider = {
+                val row = container.currentAccountStore.loadEntity() ?: return@ScanViewModel null
+                when (val loaded = container.identityRepository.load()) {
+                    is postmark.core.crypto.IdentityBundleRepository.LoadResult.Available ->
+                        app.postmark.memory.ui.create.SenderIdentitySnapshot(
+                            userId = row.userId,
+                            handle = row.handleNormalized,
+                            activeKeyBundleId = row.activeKeyBundleId,
+                            encryptionPrivateHandle = loaded.encryptionHandle,
+                            signingPrivateHandle = loaded.signingHandle,
+                        )
+                    postmark.core.crypto.IdentityBundleRepository.LoadResult.RecoveryRequired -> null
+                }
+            },
+            signingPublicExports = {
+                when (val exports = container.identityRepository.loadPublicExports()) {
+                    is postmark.core.crypto.IdentityBundleRepository.PublicExportsResult.Available ->
+                        exports.signingPublicKeyset
+                    postmark.core.crypto.IdentityBundleRepository.PublicExportsResult.RecoveryRequired -> null
+                }
+            },
+            grantsClockMillis = { System.currentTimeMillis() },
         ) as T
         else -> throw IllegalArgumentException("unknown ViewModel: ${modelClass.name}")
     }

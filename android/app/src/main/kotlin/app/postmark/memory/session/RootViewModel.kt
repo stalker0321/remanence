@@ -76,6 +76,17 @@ class RootViewModel(
     }
 
     /**
+     * Opens the capsule presentation behind a verified memory-only grant
+     * (docs/architecture.md section 5): the grant plus crypto-verified flag
+     * are registered together, then the guarded route resolves.
+     */
+    fun openCapsuleWithGrant(grantId: String, capsuleId: String) {
+        controller.grantCapsuleAccess(grantId, capsuleId)
+        controller.navigate(AppDestination.Capsule(grantId))
+        _destination.value = controller.current
+    }
+
+    /**
      * Returns from Create/Scan to Home. Leaving a flow RUNS its registered
      * transient-state cleanups - confirmed recipients, staged captures, and
      * scan sessions never survive their surface.

@@ -13,7 +13,7 @@ data class IndexedCandidate(
 
 /** Crypto verification hook: true only after envelope/statement/AEAD checks. */
 fun interface CapsuleVerifier {
-    fun verify(capsuleId: UUID): Boolean
+    suspend fun verify(capsuleId: UUID): Boolean
 }
 
 /** Grant issuer seam so the engine stays testable without Android state. */
@@ -64,7 +64,7 @@ class LocalMatchEngine(
     private val outcomeClassifier = ScanOutcomeClassifier(profile)
     private val coordinator = MatchCoordinator(profile)
 
-    fun run(
+    suspend fun run(
         queryFront: PostcardFingerprint,
         queryBack: PostcardFingerprint,
         candidates: List<IndexedCandidate>,

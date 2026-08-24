@@ -7,12 +7,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-/** One chooser row: only locally-decrypted minimal hints, sorted by score. */
-data class ChooserRow(
-    val candidateId: String,
-    val compositeScore: Double,
-)
-
 /** Result of running the local hierarchy over one captured pair. */
 enum class MatchOutcomeKind { AUTO_ACCEPTED, CHOOSER, SINGLE_RECAPTURE, NO_MATCH }
 

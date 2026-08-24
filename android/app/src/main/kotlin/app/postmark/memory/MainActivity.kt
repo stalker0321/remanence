@@ -28,6 +28,9 @@ import app.postmark.memory.ui.auth.LoginSubmitState
 import app.postmark.memory.ui.auth.LoginViewModel
 import app.postmark.memory.ui.create.CreateScreen
 import app.postmark.memory.ui.create.CreateViewModel
+import app.postmark.memory.ui.scan.ScanScreen
+import app.postmark.memory.ui.scan.ScanTerminalState
+import app.postmark.memory.ui.scan.ScanViewModel
 import app.postmark.memory.ui.auth.RegistrationFormScreen
 import app.postmark.memory.ui.auth.RegistrationSubmitState
 import app.postmark.memory.ui.auth.RegistrationViewModel
@@ -143,11 +146,17 @@ private fun RootSurface(container: AppContainer) {
             CreateScreen(viewModel = createViewModel)
         },
         scanContent = {
-            // Full production scan wiring lands in FIX-M1-007-12.
-            FlowIntroSurface(
-                title = "Scan",
-                detail = "Capture the front and back of a physical postcard to open it.",
-            )
+            val scanViewModel: ScanViewModel = viewModel(factory = factory)
+            // A verified grant navigates through the guarded capsule route.
+            val terminal by scanViewModel.terminal.collectAsStateWithLifecycle()
+            LaunchedEffect(terminal) {
+                val granted = terminal as? ScanTerminalState.Granted ?: return@LaunchedEffect
+                rootViewModel.openCapsuleWithGrant(
+                    grantId = granted.grantId,
+                    capsuleId = granted.capsuleId,
+                )
+            }
+            ScanScreen(viewModel = scanViewModel)
         },
         onExitFlow = rootViewModel::returnToHome,
     )

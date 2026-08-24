@@ -19,6 +19,10 @@ interface RecognitionFingerprintDao {
     @Query("SELECT * FROM recognition_fingerprint WHERE capsule_id = :capsuleId")
     suspend fun getAllByCapsuleId(capsuleId: String): List<RecognitionFingerprintEntity>
 
+    /** Scan index source: every locally sealed fingerprint row of this account. */
+    @Query("SELECT * FROM recognition_fingerprint")
+    suspend fun getAll(): List<RecognitionFingerprintEntity>
+
     /** Single-record lookup used for load/delete of one sealed baseline. */
     @Query("SELECT * FROM recognition_fingerprint WHERE fingerprint_id = :fingerprintId")
     suspend fun getByFingerprintId(fingerprintId: String): RecognitionFingerprintEntity?

@@ -62,7 +62,8 @@ class LocalMatchEngineTest {
     }
 
     @Test
-    fun uniqueStrongRecipientMatchIssuesExactlyOneGrantAfterVerification() {
+    fun uniqueStrongRecipientMatchIssuesExactlyOneGrantAfterVerification() = kotlinx.coroutines.runBlocking {
+        // suspend engine.run proof
         val (engine, _) = engine()
         // The scanned card IS candidate A: identical descriptors, grid keypoints.
         val queryFront = fingerprint(11, 64, FingerprintSide.FRONT)
@@ -79,7 +80,8 @@ class LocalMatchEngineTest {
     }
 
     @Test
-    fun refusedCryptoVerificationNeverIssuesAGrant() {
+    fun refusedCryptoVerificationNeverIssuesAGrant() = kotlinx.coroutines.runBlocking {
+        // suspend engine.run proof
         verifierResult = false
         val (engine, _) = engine()
         val queryFront = fingerprint(11, 64, FingerprintSide.FRONT)
@@ -93,7 +95,8 @@ class LocalMatchEngineTest {
     }
 
     @Test
-    fun identicalMassProducedDesignsFallToTheChooserInsteadOfAutoOpen() {
+    fun identicalMassProducedDesignsFallToTheChooserInsteadOfAutoOpen() = kotlinx.coroutines.runBlocking {
+        // suspend engine.run proof
         val (engine, _) = engine()
         val queryFront = fingerprint(11, 64, FingerprintSide.FRONT)
         val queryBack = fingerprint(22, 64, FingerprintSide.BACK)
@@ -113,7 +116,8 @@ class LocalMatchEngineTest {
     }
 
     @Test
-    fun senderFallbackRunsWhenRecipientRowsLackWeakEvidence() {
+    fun senderFallbackRunsWhenRecipientRowsLackWeakEvidence() = kotlinx.coroutines.runBlocking {
+        // suspend engine.run proof
         val (engine, _) = engine()
         val queryFront = fingerprint(11, 64, FingerprintSide.FRONT)
         val queryBack = fingerprint(22, 64, FingerprintSide.BACK)
@@ -148,7 +152,8 @@ class LocalMatchEngineTest {
     }
 
     @Test
-    fun unknownPostcardIsRecaptureRequiredWithoutAnyGrant() {
+    fun unknownPostcardIsRecaptureRequiredWithoutAnyGrant() = kotlinx.coroutines.runBlocking {
+        // suspend engine.run proof
         val (engine, _) = engine()
         // Query matches nothing in the index.
         val universe = listOf(candidate("other-card", preferred = false, seedFront = 91, seedBack = 92))
@@ -160,7 +165,8 @@ class LocalMatchEngineTest {
     }
 
     @Test
-    fun emptyCandidateIndexIsNoMatchNotAnError() {
+    fun emptyCandidateIndexIsNoMatchNotAnError() = kotlinx.coroutines.runBlocking {
+        // suspend engine.run proof
         val (engine, _) = engine()
 
         val result = engine.run(fingerprint(1, 64, FingerprintSide.FRONT), fingerprint(2, 64, FingerprintSide.BACK), emptyList())
@@ -170,7 +176,8 @@ class LocalMatchEngineTest {
     }
 
     @Test
-    fun candidateWithoutStoredBackNeverBorrowsTheFrontAsItsBack() {
+    fun candidateWithoutStoredBackNeverBorrowsTheFrontAsItsBack() = kotlinx.coroutines.runBlocking {
+        // suspend engine.run proof
         val (engine, _) = engine()
         // Perfect front match but NO stored back fingerprint. If the engine
         // substituted the front as the missing back, this scan would wrongly

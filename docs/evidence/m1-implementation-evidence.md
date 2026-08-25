@@ -465,3 +465,85 @@ The following require real hardware/emulator runs and remain **PENDING**:
 - M1 completion claim: the automated surface proves login/register, Create,
   Scan, and real photo presentation are wired end to end; the milestone is
   physically complete only when the actual APK demonstrates them on a device.
+
+## FIX-STATE hardening batch (state-transition review corrections)
+
+Scope: one coordinated hardening batch after the on-device state review —
+authoritative capture contract, create transition table, scan parity,
+content/publish recovery, auth/capsule terminal UX, and a production-shaped
+transition suite. No crypto/protocol changes; no rebrand; no M2 scope.
+
+Commits (in order):
+
+- `d741823` fix(capture): single authoritative capture-attempt contract
+  (FIX-STATE-01/03). Replaces the three unsynchronized states (shell phase /
+  VM step / rejection set) with one `CaptureAttemptController` per side:
+  monotonic attempt ids, guaranteed terminal (Accepted/Rejected/Failed) for
+  every begun attempt even when the OpenCV processor or persistence throws,
+  structurally inert stale callbacks, clean cancellation without publication.
+  CPU pipeline on injected Default dispatcher, sealed persistence on IO;
+  suspending photo normalization port. Camera adapter seam with explicit
+  use-case release and inert late callbacks.
+- `92a3751` fix(create): the create transition table (FIX-STATE-02). Checklist
+  Continue now REALLY advances BACK_CHECKLIST → BACK (production previously
+  looped BACK_CHECKLIST→BACK_CHECKLIST so the prepared back was unreachable);
+  out-of-order events fail closed with a visible recovery message instead of
+  crashing via `check()`; publish guards route through the same table.
+- `8f7f329` fix(scan): capture parity + dead-wiring removal (FIX-STATE-05).
+  Same contract on both sides; reset wipes pair, cancels in-flight work, and
+  invalidates queued stills; GuidedRecapture/ConfirmSingle removed from the
+  production state surface together with the unused ScanMatchingViewModel;
+  orphaned legacy capture components (SingleStillCaptureShell,
+  StillCaptureScreen, PreparedBackScreen, CropConfirm/CropConfirmationShell)
+  deleted so no second state machine survives.
+- `6f40478` fix(create): observable content input + recoverable publishing
+  (FIX-STATE-06). Note text/limit error and the photo count / 3..5 gate are
+  Compose-observable through ONE picker sink; PUBLISHING shows a real spinner;
+  EVERY publish failure — identity resolution included, which previously left
+  the spinner forever — terminates visibly at CONTENT preserving recipient/
+  photos/note/captures while plaintext staging is cleared; the durable outbox
+  refuses replayed capsules so retries cannot duplicate artifacts.
+- `50a45b8` fix(auth,capsule): registration renders THE submit state
+  (Submitting disables with progress, Failed visible, Completed blocks a second
+  submit), scrollable keyboard-reachable auth surface, and the capsule route
+  extracted behind Loading | Ready | Failed: never spins forever, photoCount
+  outside 3..5 fails closed WITHOUT coercion, Retry+Close always actionable,
+  grant-guarded decrypts preserved, revocation closes instantly, page decode
+  failures get Try again.
+- `f5d1226` test(state): production-shaped suite (FIX-STATE-08). Real-surface
+  happy path A (lookup → confirm → FRONT → checklist Continue → BACK → 3 photos
+  via production sink → note → publish → PUBLISHED with ENCRYPTED outbox row),
+  stale-delivery E (exit during processing changes nothing — which exposed and
+  fixed a real gap where the controller was inert but the VM step still
+  advanced from the stale coroutine; fixed by a monotonic delivery generation),
+  31-row golden transition table I, small-viewport D (rejection panel replaces
+  camera at 320x480 with working Retake; scroll reaches below-the-fold errors),
+  scan parity F, registration lifecycle G, capsule route/page recovery H.
+
+Validation evidence (JDK 17, host `vuzol-main`):
+
+- `./gradlew clean testDebugUnitTest assembleDebug` — BUILD SUCCESSFUL,
+  app module **279 tests / 0 failures** (+28 core JVM tests green in the same
+  gate run of `test`).
+- Full-suite hang root-caused and eliminated: the first stale-delivery draft
+  blocked the Unconfined test thread on an unreleased latch; rewritten to a
+  paused `StandardTestDispatcher` queue (no latches/threads/sleeps), then each
+  new class proven individually under external timeouts before the full run.
+- `git diff --check` clean (one trailing-newline warning in ScanScreen fixed).
+- Plaintext canaries: production sources scanned for note/photo/fingerprint
+  markers (`dear mama`, `plaintext-FRONT`, payload markers) — none present;
+  staging cleanup remains covered by PhotoStagingPipelineTest and the publish
+  failure/recovery tests.
+- Backend unchanged this batch; hosted health verified live:
+  `GET https://remanence.hryshyn.dev/healthz` → HTTP 200 `{"status":"ok"}`.
+- Hosted debug APK built ONLY after full green:
+  `./gradlew clean :app:assembleDebug -Ppostmark.apiBaseUrl=https://remanence.hryshyn.dev/`
+  — size **155,133,699 bytes**, SHA-256
+  **3d2af9d17148da35702b3e18c2373d0ed2112bc6a93d734d93796016743de402**.
+  Verified inside the dex: exactly one occurrence of
+  `https://remanence.hryshyn.dev/`; the only `127.0.0.1` strings are the
+  `ApiBaseUrl` loopback GUARD constant that rejects loopback bases — no
+  loopback API base is compiled in.
+
+Physical-device status: honest **PENDING** — nothing in this batch is claimed
+as hardware PASS; the on-device items above remain outstanding.

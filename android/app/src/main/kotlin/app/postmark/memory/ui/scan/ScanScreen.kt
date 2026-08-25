@@ -135,4 +135,3 @@ private fun CapturePair(
         ScanSessionState.READY_FOR_MATCHING -> Unit
     }
 }
-

@@ -282,22 +282,12 @@ private fun TerminalPanel(
 ) {
     Column(modifier = Modifier.fillMaxWidth().testTag("capture_terminal_panel")) {
         if (reasons.isNotEmpty()) {
-            Text(
-                text = "This capture cannot be used yet:",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.testTag("quality_failure_header"),
+            // The panel owns the single real Retake action.
+            QualityRejectionPanel(
+                reasons = reasons,
+                onRecapture = onRetake,
+                recaptureTag = retakeTag,
             )
-            Spacer(Modifier.height(4.dp))
-            for (reason in reasons) {
-                Text(
-                    text = guidanceFor(reason),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("quality_reason_${reason.name}"),
-                )
-            }
         } else {
             Text(
                 text = "Capture failed:",
@@ -310,10 +300,10 @@ private fun TerminalPanel(
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.testTag("capture_failed_message"),
             )
-        }
-        Spacer(Modifier.height(12.dp))
-        OutlinedButton(onClick = onRetake, modifier = Modifier.fillMaxWidth().testTag(retakeTag)) {
-            Text("Retake")
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(onClick = onRetake, modifier = Modifier.fillMaxWidth().testTag(retakeTag)) {
+                Text("Retake")
+            }
         }
     }
 }

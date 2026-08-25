@@ -13,32 +13,25 @@ import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import postmark.core.recognition.QualityReason
 
+/**
+ * FIX-STATE-04 regression: THE production rejection panel renders one
+ * actionable instruction per documented reason code (M1-R16) and its Retake
+ * action is real - there is no default no-op path.
+ */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35])
-class QualityFailureScreenTest {
+class QualityRejectionPanelTest {
 
     @get:Rule
     val composeRule = createComposeRule()
 
-    private fun setContent(reasons: Set<QualityReason>, recaptures: MutableList<Int>) {
-        composeRule.setContent {
-            MaterialTheme {
-                QualityFailureScreen(
-                    reasons = reasons,
-                    onRecapture = { recaptures += 1 },
-                )
-            }
-        }
-    }
-
-    /** Parameterized over every documented reason code (M1-R16 verification). */
     @Test
-    fun everyReasonCodeRendersItsSpecificGuidance() {
+    fun everyReasonCodeRendersItsSpecificGuidanceAndWorkingRetake() {
         val recaptures = mutableListOf<Int>()
         val reasonsState = androidx.compose.runtime.mutableStateOf(setOf(QualityReason.entries.first()))
         composeRule.setContent {
             MaterialTheme {
-                QualityFailureScreen(
+                QualityRejectionPanel(
                     reasons = reasonsState.value,
                     onRecapture = { recaptures += 1 },
                 )
@@ -60,19 +53,37 @@ class QualityFailureScreenTest {
 
     @Test
     fun multipleFailuresShowEveryApplicableInstruction() {
-        setContent(
-            setOf(QualityReason.TOO_DARK, QualityReason.GLARE_EXCESSIVE),
-            mutableListOf(),
-        )
+        composeRule.setContent {
+            MaterialTheme {
+                QualityRejectionPanel(
+                    reasons = setOf(QualityReason.TOO_DARK, QualityReason.GLARE_EXCESSIVE),
+                    onRecapture = {},
+                )
+            }
+        }
 
         composeRule.onNodeWithTag("quality_reason_TOO_DARK").assertIsDisplayed()
         composeRule.onNodeWithTag("quality_reason_GLARE_EXCESSIVE").assertIsDisplayed()
     }
 
+    /** Capture surfaces pass their own retake tag through to the panel. */
     @Test
-    fun emptyFailureSetShowsAcceptedStatusWithoutRecapture() {
-        setContent(emptySet(), mutableListOf())
+    fun customRetakeTagIsHonoredForSurfaceWiring() {
+        var retakes = 0
+        composeRule.setContent {
+            MaterialTheme {
+                QualityRejectionPanel(
+                    reasons = setOf(QualityReason.TOO_BLURRY),
+                    onRecapture = { retakes += 1 },
+                    recaptureTag = "capture_retake_front",
+                )
+            }
+        }
 
-        composeRule.onNodeWithTag("quality_passed_status").assertIsDisplayed()
+        composeRule.onNodeWithTag("capture_retake_front")
+            .assertIsDisplayed()
+            .performClick()
+
+        composeRule.runOnIdle { assertEquals(1, retakes) }
     }
 }

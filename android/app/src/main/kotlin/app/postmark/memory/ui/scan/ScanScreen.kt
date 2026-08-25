@@ -37,6 +37,11 @@ import app.postmark.memory.scan.ScanSessionState
 fun ScanScreen(
     viewModel: ScanViewModel,
     modifier: Modifier = Modifier,
+    /**
+     * FIX-STATE-08: optional camera driver seam so transition tests excite
+     * the same production callbacks without hardware; production passes null.
+     */
+    adapterFactory: (() -> app.postmark.memory.capture.StillCameraAdapter)? = null,
 ) {
     val matchState by viewModel.matchState.collectAsStateWithLifecycle()
 
@@ -54,33 +59,36 @@ fun ScanScreen(
         Spacer(Modifier.height(8.dp))
 
         when (val current = matchState) {
-            is ScanMatchUiState.AwaitingCapture -> CapturePair(viewModel)
+            is ScanMatchUiState.AwaitingCapture -> CapturePair(viewModel, Modifier.fillMaxWidth(), adapterFactory)
             is ScanMatchUiState.Matching -> Text("Matching...", modifier = Modifier.testTag("scan_matching"))
             is ScanMatchUiState.Accepted -> Text(
                 "Verified. Opening the capsule...",
                 modifier = Modifier.testTag("scan_verified"),
             )
-            is ScanMatchUiState.Chooser -> AmbiguityChooserContent(
-                rows = current.rows,
-                onSelected = viewModel::onChooserSelected,
-                onRecapture = viewModel::resetSession,
+            is ScanMatchUiState.Chooser -> AmbiguityChooserScreen(
+                rows = current.rows.map { row ->
+                    ChooserHintRow(
+                        candidateId = row.candidateId,
+                        senderHandleSnapshot = row.senderHandleSnapshot ?: "Unknown sender",
+                        yearAndDateLabel = row.createdAtEpochSeconds?.let {
+                            java.time.LocalDate.ofEpochDay(it / 86400L).year.toString()
+                        } ?: "Unknown date",
+                        placeLabel = row.placeLabel,
+                    )
+                },
+                onSelected = { hint -> viewModel.onChooserSelected(hint.candidateId) },
+                onRecapture = {
+                    // FIX-STATE-05: recapture resets the WHOLE flow and
+                    // invalidates in-flight matching work.
+                    viewModel.resetSession()
+                },
+                modifier = Modifier.fillMaxWidth(),
             )
-            is ScanMatchUiState.GuidedRecapture -> Column {
-                Text("One plausible candidate: recapture both sides once more.")
-                CapturePair(viewModel)
-            }
-            is ScanMatchUiState.ConfirmSingle -> Column {
-                Text("Same single candidate again: confirm explicitly.")
-                Button(
-                    onClick = { viewModel.onChooserSelected(current.row.candidateId) },
-                    modifier = Modifier.testTag("scan_confirm_single"),
-                ) { Text("Open this capsule") }
-                CapturePair(viewModel)
-            }
             is ScanMatchUiState.RecaptureGuidance -> Column {
                 Text("No confident match. Recapture the front and back.", modifier = Modifier.testTag("scan_recapture"))
                 OutlinedButton(onClick = viewModel::resetSession) { Text("Start over") }
-                CapturePair(viewModel)
+                Spacer(Modifier.height(8.dp))
+                CapturePair(viewModel, Modifier.fillMaxWidth(), adapterFactory)
             }
         }
     }
@@ -88,7 +96,11 @@ fun ScanScreen(
 
 /** The side currently awaiting capture, rendered from its own controller. */
 @Composable
-private fun CapturePair(viewModel: ScanViewModel) {
+private fun CapturePair(
+    viewModel: ScanViewModel,
+    modifier: Modifier = Modifier,
+    adapterFactory: (() -> app.postmark.memory.capture.StillCameraAdapter)? = null,
+) {
     when (viewModel.captureSession.state) {
         ScanSessionState.AWAITING_FRONT -> CaptureAttemptSurface(
             title = "postcard front",
@@ -98,7 +110,8 @@ private fun CapturePair(viewModel: ScanViewModel) {
             onBeginAttempt = viewModel::beginFrontCapture,
             onDelivered = viewModel::deliverFrontJpeg,
             onRetake = viewModel::retakeFront,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = modifier,
+            adapterFactory = adapterFactory,
         )
 
         ScanSessionState.AWAITING_BACK -> CaptureAttemptSurface(
@@ -109,7 +122,8 @@ private fun CapturePair(viewModel: ScanViewModel) {
             onBeginAttempt = viewModel::beginBackCapture,
             onDelivered = viewModel::deliverBackJpeg,
             onRetake = viewModel::retakeBack,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = modifier,
+            adapterFactory = adapterFactory,
         )
 
         ScanSessionState.CONSUMED -> Unit
@@ -117,33 +131,3 @@ private fun CapturePair(viewModel: ScanViewModel) {
     }
 }
 
-@Composable
-private fun AmbiguityChooserContent(
-    rows: List<ChooserRow>,
-    onSelected: (String) -> Unit,
-    onRecapture: () -> Unit,
-) {
-    Column(modifier = Modifier.testTag("scan_chooser")) {
-        Text("Which capsule matches this postcard?", style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(8.dp))
-        rows.forEach { row ->
-            Button(
-                onClick = { onSelected(row.candidateId) },
-                modifier = Modifier.fillMaxWidth().testTag("scan_chooser_row"),
-            ) {
-                Column {
-                    // Minimal locally decrypted hints only (docs/product.md 11).
-                    Text(row.senderHandleSnapshot?.let { "@$it" } ?: "Unknown sender")
-                    row.createdAtEpochSeconds?.let {
-                        Text(java.time.LocalDate.ofEpochDay(it / 86400L).year.toString())
-                    }
-                    row.placeLabel?.let { Text(it) }
-                }
-            }
-            Spacer(Modifier.height(4.dp))
-        }
-        OutlinedButton(onClick = onRecapture, modifier = Modifier.testTag("scan_chooser_recapture")) {
-            Text("Scan again instead")
-        }
-    }
-}

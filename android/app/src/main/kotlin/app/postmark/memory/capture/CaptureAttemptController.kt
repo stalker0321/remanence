@@ -7,6 +7,43 @@ import androidx.compose.runtime.setValue
 import postmark.core.recognition.QualityReason
 
 /**
+ * Pure permission gate for the shared one-still capture component
+ * (docs/implementation-plan.md M1-R13). Free of Android types so every
+ * transition is unit-testable; the Compose layer only renders it.
+ */
+sealed interface CapturePermissionStep {
+    /** No request launched yet; UI explains why the camera is needed. */
+    data object NotRequested : CapturePermissionStep
+
+    /** System dialog declined once; an explicit user action may retry it. */
+    data object DeniedRetryable : CapturePermissionStep
+
+    /** Declined permanently (do-not-ask-again/policy); only Settings can recover. */
+    data object PermanentlyDenied : CapturePermissionStep
+
+    /** Capture may bind a preview and expose exactly one still-capture action. */
+    data object Granted : CapturePermissionStep
+}
+
+/**
+ * FIX-REVIEW-05: THE one classifier of a system permission request outcome,
+ * shared by every capture surface (Create, Scan, shared still component).
+ * [shouldShowRationale] must be read via
+ * ActivityCompat.shouldShowRequestPermissionRationale AFTER the denial
+ * arrives: true means the system will show the ask-again dialog again
+ * (ordinary decline); false means do-not-ask-again/policy block - only
+ * Settings can recover. A bare denial is never assumed retryable forever.
+ */
+fun resolveCapturePermissionStep(
+    granted: Boolean,
+    shouldShowRationale: Boolean,
+): CapturePermissionStep = when {
+    granted -> CapturePermissionStep.Granted
+    shouldShowRationale -> CapturePermissionStep.DeniedRetryable
+    else -> CapturePermissionStep.PermanentlyDenied
+}
+
+/**
  * FIX-STATE-01: THE authoritative presentation contract for one deliberate
  * capture attempt. The camera surface, the ViewModel step, and quality
  * rejections all render from THIS single state; there is no second

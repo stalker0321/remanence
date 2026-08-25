@@ -1,11 +1,12 @@
 package app.postmark.memory.capture
 
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -28,46 +29,44 @@ fun guidanceFor(reason: QualityReason): String = when (reason) {
 }
 
 /**
- * Quality-failure guidance surface (docs/implementation-plan.md M1-R16):
- * every failed gate maps to a specific recapture instruction; UI receives
- * classifications only (docs/recognition.md section 8).
+ * FIX-STATE-04: THE production rejection panel shared by every capture
+ * surface. Reasons render as one actionable instruction each and the Retake
+ * action is real - callers MUST hand a working callback; there is no default
+ * no-op. Rendered INSTEAD of the camera so nothing hides below the preview,
+ * and reachable on small phones through the scrollable step layout.
  */
 @Composable
-fun QualityFailureScreen(
+fun QualityRejectionPanel(
     reasons: Set<QualityReason>,
-    onRecapture: () -> Unit = {},
+    onRecapture: () -> Unit,
+    modifier: Modifier = Modifier,
+    recaptureTag: String = "quality_recapture_action",
 ) {
-    Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
-        if (reasons.isEmpty()) {
-            Text(
-                text = "Capture quality accepted.",
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.testTag("quality_passed_status"),
-            )
-            return@Column
-        }
+    Column(modifier = modifier.fillMaxWidth()) {
         Text(
             text = "This capture cannot be used yet:",
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.testTag("quality_failure_header"),
         )
+        Spacer(Modifier.height(4.dp))
         for (reason in reasons) {
             Text(
                 text = guidanceFor(reason),
                 style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("quality_reason_${reason.name}"),
             )
         }
-        Button(
+        OutlinedButton(
             onClick = onRecapture,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 12.dp)
-                .testTag("quality_recapture_action"),
+                .testTag(recaptureTag),
         ) {
-            Text("Try again")
+            Text("Retake")
         }
     }
 }

@@ -12,6 +12,7 @@ import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
 
@@ -77,15 +78,16 @@ class FlowSessionEpochTest {
     @Test
     fun leavingScanDropsAnyLiveCapsuleAccessFromTheMidScanGrant() = runTest {
         val vm = RootViewModel(NoopResolver())
-        // A verified grant was just registered while inside Scan (navigation
-        // to the capsule route is pending) and the user exits the flow.
-        vm.openScan()
-        vm.openCapsuleWithGrant(grantId = "grant-1", capsuleId = "capsule-1")
+        // A verified grant was issued by the scan flow while inside Scan
+        // (navigation to the capsule route is pending) and the user exits.
+        val grant = vm.scanGrants.issue(java.util.UUID.randomUUID())
+        vm.openCapsuleWithGrant(grant.grantId.toString())
         vm.openScan()
         vm.returnToHome()
 
         assertEquals(AppDestination.Home, vm.destination.value)
         assertEquals(CapsuleAccess.None, vm.liveCapsuleAccess)
+        assertNull(vm.capsuleIdFor(grant.grantId.toString()))
         vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
     }
 }

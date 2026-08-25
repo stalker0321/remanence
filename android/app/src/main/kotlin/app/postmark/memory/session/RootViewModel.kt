@@ -5,11 +5,14 @@ import androidx.lifecycle.viewModelScope
 import app.postmark.memory.ui.navigation.AppDestination
 import app.postmark.memory.ui.navigation.AppNavigationController
 import app.postmark.memory.ui.navigation.AuthUiState
+import app.postmark.memory.ui.navigation.CapsuleAccess
+import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import postmark.core.recognition.ScanGrantManager
 
 /**
  * I03/FIX-M1-007-08 root state: the single auth state plus guarded navigation
@@ -20,11 +23,18 @@ import kotlinx.coroutines.launch
  * Successful login/registration re-resolves; logout clears and returns to
  * authentication. The scope dies with this ViewModel, so nothing leaks past
  * the screen lifecycle.
+ *
+ * FIX-REVIEW-03: capsule presentation is gated by THE one [ScanGrantManager]
+ * instance shared with the scan flow. This root can never mint verified
+ * access out of strings - a grant ID must resolve, unexpired, to its bound
+ * capsule ID through the manager before any navigation or access binding.
  */
 class RootViewModel(
     private val sessionBootstrap: SessionStateResolver,
     /** Full teardown flow (server → session → local → grants); defaults to token-only clearing. */
     private val logoutAction: (suspend () -> Unit)? = null,
+    /** Authoritative memory-only grant lifecycle; injected as the single instance. */
+    private val grants: ScanGrantManager = ScanGrantManager(clockMillis = System::currentTimeMillis),
 ) : ViewModel() {
 
     private val controller = AppNavigationController(AuthUiState.SignedOut)
@@ -69,6 +79,7 @@ class RootViewModel(
             (logoutAction ?: { sessionBootstrap.logout() })()
             // Any live scan grant dies with the account context.
             controller.consumeCapsuleAccess()
+            grants.clearAll()
             // Every flow's transient state dies with the account context.
             AppDestination.Create.let { runTransientCleanups(it) }
             AppDestination.Scan.let { runTransientCleanups(it) }
@@ -91,28 +102,58 @@ class RootViewModel(
     }
 
     /**
-     * Opens the capsule presentation behind a verified memory-only grant
-     * (docs/architecture.md section 5): the grant plus crypto-verified flag
-     * are registered together, then the guarded route resolves.
+     * Opens the capsule presentation behind a memory-only grant
+     * (docs/architecture.md section 5). FIX-REVIEW-03: the grant ID is only a
+     * routing handle - it must resolve, UNEXPIRED, to its bound capsule ID
+     * through THE shared [ScanGrantManager] before any navigation or access
+     * binding. Arbitrary strings can never create verified access; the real
+     * crypto verification already happened in the scan flow before this grant
+     * was issued.
      */
-    fun openCapsuleWithGrant(grantId: String, capsuleId: String) {
-        controller.grantCapsuleAccess(grantId, capsuleId)
+    fun openCapsuleWithGrant(grantId: String) {
+        val uuid = runCatching { UUID.fromString(grantId) }.getOrNull() ?: return
+        val capsuleId = grants.resolveCapsuleId(uuid) ?: return
+        controller.grantCapsuleAccess(grantId, capsuleId.toString())
         controller.navigate(AppDestination.Capsule(grantId))
         _destination.value = controller.current
     }
 
-    /** Resolves the capsule bound to a live verified grant, if any. */
-    fun capsuleIdFor(grantId: String): String? =
-        (controller.capsuleAccess as? app.postmark.memory.ui.navigation.CapsuleAccess.Granted)
-            ?.takeIf { it.grantId == grantId }
-            ?.capsuleId
+    /**
+     * FIX-REVIEW-03: the authoritative resolver behind the capsule route.
+     * The capsule ID comes from THE manager (expiry enforced) and must agree
+     * with the access bound at navigation time. Expiry or consumption while
+     * presenting ejects to Home on the next resolve.
+     */
+    fun capsuleIdFor(grantId: String): String? {
+        val uuid = runCatching { UUID.fromString(grantId) }.getOrNull() ?: return null
+        val resolvedCapsuleId = grants.resolveCapsuleId(uuid)?.toString()
+        val bound = controller.capsuleAccess as? app.postmark.memory.ui.navigation.CapsuleAccess.Granted
+        val trusted = resolvedCapsuleId != null &&
+            bound?.grantId == grantId &&
+            bound.capsuleId == resolvedCapsuleId &&
+            controller.current is AppDestination.Capsule
+        if (!trusted) {
+            if (controller.current is AppDestination.Capsule) {
+                controller.consumeCapsuleAccess()
+                controller.navigate(AppDestination.Home)
+                _destination.value = controller.current
+            }
+            return null
+        }
+        return resolvedCapsuleId
+    }
 
     /** Module-internal view of the live grant binding (never persisted). */
     internal val liveCapsuleAccess: app.postmark.memory.ui.navigation.CapsuleAccess
         get() = controller.capsuleAccess
 
-    /** Leaving the presentation consumes the grant and ejects to Home. */
+    /** Module-internal handle of THE authoritative grant manager. */
+    internal val scanGrants: ScanGrantManager get() = grants
+
+    /** Leaving the presentation consumes THE grant and ejects to Home. */
     fun closeCapsule() {
+        val bound = controller.capsuleAccess as? app.postmark.memory.ui.navigation.CapsuleAccess.Granted
+        runCatching { UUID.fromString(bound?.grantId ?: "") }.getOrNull()?.let { grants.consume(it) }
         controller.consumeCapsuleAccess()
         controller.navigate(AppDestination.Home)
         _destination.value = controller.current

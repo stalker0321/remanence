@@ -167,6 +167,16 @@ class AppContainer(
     /** App-private root for bounded staging directories. */
     val appFilesRoot: File get() = appContext.filesDir
 
+    /**
+     * FIX-REVIEW-03: THE single memory-only scan-grant authority
+     * (docs/architecture.md section 5). Issued by the scan flow after real
+     * crypto verification; resolved/consumed/cleared by root navigation,
+     * close, logout, and process death. Nothing else may create access.
+     */
+    val scanGrants: postmark.core.recognition.ScanGrantManager by lazy {
+        postmark.core.recognition.ScanGrantManager(clockMillis = System::currentTimeMillis)
+    }
+
     /** FIX-M1-007-07: the current account lives in the real local_account table. */
     val currentAccountStore: app.postmark.memory.session.RoomCurrentAccountStore by lazy {
         app.postmark.memory.session.RoomCurrentAccountStore(database.localAccountDao())

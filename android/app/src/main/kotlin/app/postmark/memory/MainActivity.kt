@@ -185,10 +185,9 @@ private fun ScanFlowSurface(rootViewModel: RootViewModel, scanViewModel: ScanVie
     val terminal by scanViewModel.terminal.collectAsStateWithLifecycle()
     LaunchedEffect(terminal) {
         val granted = terminal as? ScanTerminalState.Granted ?: return@LaunchedEffect
-        rootViewModel.openCapsuleWithGrant(
-            grantId = granted.grantId,
-            capsuleId = granted.capsuleId,
-        )
+        // FIX-REVIEW-03: only the random grant ID travels; the root resolves
+        // the capsule ID through THE authoritative grant manager itself.
+        rootViewModel.openCapsuleWithGrant(grantId = granted.grantId)
     }
     ScanScreen(viewModel = scanViewModel)
 }

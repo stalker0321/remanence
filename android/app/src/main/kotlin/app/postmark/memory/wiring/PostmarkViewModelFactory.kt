@@ -24,6 +24,8 @@ class PostmarkViewModelFactory(
         RootViewModel::class.java -> RootViewModel(
             sessionBootstrap = container.sessionBootstrap,
             logoutAction = { container.logoutUseCase.logout() },
+            // FIX-REVIEW-03: THE one authoritative grant lifecycle.
+            grants = container.scanGrants,
         ) as T
         LoginViewModel::class.java -> LoginViewModel(container.loginUseCase) as T
         RegistrationViewModel::class.java -> RegistrationViewModel(container.registrationUseCase) as T
@@ -87,6 +89,8 @@ class PostmarkViewModelFactory(
                 }
             },
             grantsClockMillis = { System.currentTimeMillis() },
+            // FIX-REVIEW-03: issue ONLY through THE shared authoritative manager.
+            grants = container.scanGrants,
         ) as T
         else -> throw IllegalArgumentException("unknown ViewModel: ${modelClass.name}")
     }

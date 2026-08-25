@@ -94,6 +94,12 @@ class ScanViewModel(
     private val identityProvider: suspend () -> SenderIdentitySnapshot?,
     private val signingPublicExports: suspend () -> ByteArray?,
     grantsClockMillis: () -> Long,
+    /**
+     * FIX-REVIEW-03: THE one authoritative memory-only grant lifecycle, shared
+     * with the root navigation. Grants exist only after the full crypto gate
+     * passes; resolve/consume/expiry all go through this same instance.
+     */
+    private val grants: ScanGrantManager = ScanGrantManager(clockMillis = grantsClockMillis),
     frontProcessor: app.postmark.memory.capture.StillProcessor =
         RealStillFingerprintProcessor(profile, FingerprintSide.FRONT),
     backProcessor: app.postmark.memory.capture.StillProcessor =
@@ -113,8 +119,6 @@ class ScanViewModel(
 
     private val _terminal = MutableStateFlow<ScanTerminalState>(ScanTerminalState.Idle)
     val terminal: StateFlow<ScanTerminalState> = _terminal.asStateFlow()
-
-    private val grants = ScanGrantManager(clockMillis = grantsClockMillis)
 
     private val queuedStill = AtomicReference<ScannedSide?>()
     private val frontProcessor = frontProcessor

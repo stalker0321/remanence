@@ -21,11 +21,16 @@ class CreateRecipientFlow(
     private val _step = MutableStateFlow(Step.LOOKUP)
     val step: StateFlow<Step> = _step.asStateFlow()
 
-    /** Snapshot awaiting explicit confirmation; null until a lookup resolved. */
-    private var pending: ResolvedHandleSnapshot? = null
+    /**
+     * FIX-M1-ONDEVICE-01: read-only observable view of the resolved-but-NOT-
+     * yet-confirmed snapshot. The confirmation screen renders THIS state;
+     * the session store is touched only by the explicit confirmation.
+     */
+    private val _pending = MutableStateFlow<ResolvedHandleSnapshot?>(null)
+    val pendingRecipient: StateFlow<ResolvedHandleSnapshot?> = _pending.asStateFlow()
 
     fun onResolved(snapshot: ResolvedHandleSnapshot) {
-        pending = snapshot
+        _pending.value = snapshot
         _step.value = Step.CONFIRM
     }
 
@@ -36,19 +41,31 @@ class CreateRecipientFlow(
      */
     fun onConfirm() {
         check(_step.value == Step.CONFIRM) { "confirmation requires a resolved recipient" }
-        val snapshot = requireNotNull(pending) { "no resolved recipient pending" }
+        val snapshot = requireNotNull(_pending.value) { "no resolved recipient pending" }
         if (store.confirmedRecipient.value != null) {
             throw IllegalStateException("recipient already bound for this session")
         }
+        // FIX-M1-ONDEVICE-01: this one user action MOVES the exact resolved
+        // snapshot into the session store; the pending copy dies with it.
         store.confirmRecipient(snapshot)
+        _pending.value = null
         _step.value = Step.BOUND
     }
 
     /** Recapture/change intent: ends the current binding entirely. */
     fun restartLookup() {
         store.endSession()
-        pending = null
+        _pending.value = null
         _step.value = Step.LOOKUP
+    }
+
+    /**
+     * FIX-M1-ONDEVICE-01: drops pending AND confirmed material without touching
+     * navigation steps - used by endSession/new-epoch teardown.
+     */
+    fun clearTransientMaterial() {
+        store.endSession()
+        _pending.value = null
     }
 
     val confirmed: StateFlow<ResolvedHandleSnapshot?> get() = store.confirmedRecipient

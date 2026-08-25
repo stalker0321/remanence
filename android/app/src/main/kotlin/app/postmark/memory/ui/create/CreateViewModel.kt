@@ -69,6 +69,12 @@ class CreateViewModel(
 
     val confirmedRecipient: StateFlow<ResolvedHandleSnapshot?> get() = sessionStore.confirmedRecipient
 
+    /**
+     * FIX-M1-ONDEVICE-01: the resolved-but-not-yet-confirmed snapshot for the
+     * confirmation screen. Binding happens ONLY through explicit confirm.
+     */
+    val pendingRecipient: StateFlow<ResolvedHandleSnapshot?> get() = recipientFlow.pendingRecipient
+
     private val _step = MutableStateFlow(Step.RECIPIENT_LOOKUP)
     val step: StateFlow<Step> = _step.asStateFlow()
 
@@ -123,7 +129,8 @@ class CreateViewModel(
         begunEpoch = epoch
         _capsuleId = UUID.randomUUID().toString()
         _step.value = Step.RECIPIENT_LOOKUP
-        sessionStore.endSession()
+        // FIX-M1-ONDEVICE-01: pending and confirmed recipient material both die.
+        recipientFlow.clearTransientMaterial()
         pickerVm.reset()
         photoSelection.clear()
         noteEditor.reset()
@@ -319,7 +326,8 @@ class CreateViewModel(
 
     /** Leaving the create surface drops its transient session immediately. */
     fun endSession() {
-        sessionStore.endSession()
+        // FIX-M1-ONDEVICE-01: pending resolved material never outlives the surface.
+        recipientFlow.clearTransientMaterial()
         clearStagedPhotos()
     }
 

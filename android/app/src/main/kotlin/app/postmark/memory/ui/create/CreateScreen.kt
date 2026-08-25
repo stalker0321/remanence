@@ -149,8 +149,27 @@ private fun RecipientLookupContent(viewModel: CreateViewModel) {
 
 @Composable
 private fun RecipientConfirmContent(viewModel: CreateViewModel) {
-    val snapshot by viewModel.confirmedRecipient.collectAsStateWithLifecycle()
-    val resolved = snapshot ?: return
+    // FIX-M1-ONDEVICE-01: the confirmation screen renders the PENDING resolved
+    // snapshot; `confirmedRecipient` stays null until the explicit Confirm.
+    val pending by viewModel.pendingRecipient.collectAsStateWithLifecycle()
+    val resolved = pending
+    if (resolved == null) {
+        // RECIPIENT_CONFIRM without a pending resolve is an impossible state;
+        // fail closed with an explicit error instead of an eternal blank screen.
+        Column {
+            Text(
+                "No resolved recipient is pending. Resolve the handle again.",
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.testTag("create_confirm_missing_pending"),
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = viewModel::restartLookup,
+                modifier = Modifier.testTag("create_confirm_back_to_lookup"),
+            ) { Text("Back to handle lookup") }
+        }
+        return
+    }
     RecipientConfirmationScreen(
         snapshot = resolved,
         onConfirm = viewModel::confirmRecipient,

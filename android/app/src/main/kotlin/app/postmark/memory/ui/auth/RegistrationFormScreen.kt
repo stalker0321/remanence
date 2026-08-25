@@ -1,10 +1,13 @@
 package app.postmark.memory.ui.auth
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -15,9 +18,15 @@ import androidx.compose.ui.unit.dp
 
 enum class RegistrationField { EMAIL, PASSWORD, HANDLE }
 
+/**
+ * FIX-STATE-07: the form renders THE authoritative [RegistrationSubmitState]:
+ * Submitting disables the button with visible progress, Failed shows a
+ * redacted actionable message, and Completed never allows a second submit.
+ */
 @Composable
 fun RegistrationFormScreen(
     form: RegistrationFormState,
+    submitState: RegistrationSubmitState,
     onFieldChange: (RegistrationField, String) -> Unit,
     onSubmit: () -> Unit,
     modifier: Modifier = Modifier,
@@ -72,14 +81,38 @@ fun RegistrationFormScreen(
         )
 
         Spacer(Modifier.height(16.dp))
-        Button(
-            onClick = onSubmit,
-            enabled = RegistrationFormValidator.canSubmit(form),
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("reg_submit_button"),
-        ) {
-            Text("Create account")
+        when (submitState) {
+            is RegistrationSubmitState.Failed -> Text(
+                text = submitState.message,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.testTag("reg_error_message"),
+            )
+            RegistrationSubmitState.Completed -> Text(
+                text = "Account created.",
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.testTag("reg_completed_message"),
+            )
+            else -> Unit
+        }
+        Row {
+            Button(
+                onClick = onSubmit,
+                enabled = submitState !is RegistrationSubmitState.Submitting &&
+                    submitState !is RegistrationSubmitState.Completed &&
+                    RegistrationFormValidator.canSubmit(form),
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("reg_submit_button"),
+            ) {
+                Text("Create account")
+            }
+            if (submitState is RegistrationSubmitState.Submitting) {
+                Spacer(Modifier.width(12.dp))
+                CircularProgressIndicator(
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.testTag("reg_submit_progress"),
+                )
+            }
         }
     }
 }

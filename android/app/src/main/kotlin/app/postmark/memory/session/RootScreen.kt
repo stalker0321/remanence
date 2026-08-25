@@ -2,9 +2,13 @@ package app.postmark.memory.session
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -35,7 +39,14 @@ fun RootScreen(
     onExitFlow: () -> Unit = {},
 ) {
     if (authState !is AuthUiState.Authenticated) {
-        Column(modifier = modifier.fillMaxWidth()) {
+        // FIX-STATE-07: the auth surface scrolls and stays keyboard-reachable
+        // on small screens - every field and the submit buttons are reachable.
+        Column(
+            modifier = modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .imePadding(),
+        ) {
             if (authState is AuthUiState.RecoveryRequired) {
                 Text(
                     "Local keys are missing on this device. Sign in to complete account recovery.",

@@ -119,8 +119,10 @@ private fun RootSurface(container: AppContainer) {
                     modifier = Modifier.padding(bottom = 24.dp),
                 )
                 val registrationForm by registrationViewModel.form.collectAsStateWithLifecycle()
+                val registrationSubmit by registrationViewModel.submitState.collectAsStateWithLifecycle()
                 RegistrationFormScreen(
                     form = registrationForm,
+                    submitState = registrationSubmit,
                     onFieldChange = registrationViewModel::onFieldChange,
                     onSubmit = registrationViewModel::submit,
                     modifier = Modifier,
@@ -153,11 +155,24 @@ private fun RootSurface(container: AppContainer) {
             }
         },
         capsuleContent = { grantId, capsuleId ->
-            CapsuleRoute(
-                container = container,
-                rootViewModel = rootViewModel,
+            app.postmark.memory.ui.capsule.CapsuleRoute(
                 grantId = grantId,
                 capsuleId = capsuleId,
+                identityLoader = app.postmark.memory.ui.capsule.CapsuleIdentityLoader {
+                    when (val loaded = container.identityRepository.load()) {
+                        is postmark.core.crypto.IdentityBundleRepository.LoadResult.Available ->
+                            loaded.encryptionHandle
+                        postmark.core.crypto.IdentityBundleRepository.LoadResult.RecoveryRequired -> null
+                    }
+                },
+                sourceFactory = { handle ->
+                    app.postmark.memory.ui.capsule.CapsuleContentSource(
+                        database = container.database,
+                        encryptionPrivateHandle = handle,
+                    )
+                },
+                validateLiveGrant = { rootViewModel.requireLivePresentationGrant(grantId) },
+                revocations = rootViewModel.capsuleRevocations,
                 onClose = rootViewModel::closeCapsule,
             )
         },
@@ -205,73 +220,4 @@ private fun FlowIntroSurface(title: String, detail: String) {
         Spacer(Modifier.height(8.dp))
         Text(text = detail)
     }
-}
-
-
-/**
- * FIX-M1-007-13: the live capsule presentation bound to the memory-only
- * grant lifecycle. Photos decrypt on demand from ciphertext; leaving the
- * screen consumes the grant and releases every decrypted byte.
- */
-@Composable
-private fun CapsuleRoute(
-    container: AppContainer,
-    rootViewModel: RootViewModel,
-    grantId: String,
-    capsuleId: String,
-    onClose: () -> Unit,
-) {
-    var state by remember(grantId) {
-        mutableStateOf<app.postmark.memory.ui.capsule.CapsulePresentationState?>(null)
-    }
-
-    // FIX-REVIEW2-03: an authoritative revocation (exact-expiry ejection)
-    // releases every decrypted reference immediately.
-    LaunchedEffect(grantId) {
-        rootViewModel.capsuleRevocations.collect { revoked ->
-            if (revoked == grantId) state?.close()
-        }
-    }
-
-    LaunchedEffect(grantId, capsuleId) {
-        if (state != null || capsuleId.isEmpty()) return@LaunchedEffect
-        val loaded = runCatching { container.identityRepository.load() }.getOrNull()
-            as? postmark.core.crypto.IdentityBundleRepository.LoadResult.Available
-            ?: return@LaunchedEffect
-        // FIX-REVIEW2-03: the production route reaches decryption ONLY through
-        // the grant-guarded reader; every operation revalidates the live grant.
-        val source = app.postmark.memory.ui.capsule.GrantGuardedCapsuleContentSource(
-            delegate = app.postmark.memory.ui.capsule.CapsuleContentSource(
-                database = container.database,
-                encryptionPrivateHandle = loaded.encryptionHandle,
-            ),
-            validateLiveGrant = { rootViewModel.requireLivePresentationGrant(grantId) },
-        )
-        val photoCount = runCatching { source.photoCount(capsuleId) }.getOrNull() ?: return@LaunchedEffect
-        // The note decrypts once at open (grant validated); photos decrypt per page on demand.
-        val note = runCatching { source.noteText(capsuleId) }.getOrNull()
-        val presentation = app.postmark.memory.ui.capsule.CapsulePresentationState(
-            photoLoader = object : app.postmark.memory.ui.capsule.CapsulePhotoLoader {
-                override suspend fun load(ordinal: Int): app.postmark.memory.ui.capsule.DecryptedPhoto =
-                    app.postmark.memory.ui.capsule.DecryptedPhoto(
-                        ordinal,
-                        source.loadPhoto(capsuleId, ordinal).jpegBytes,
-                    )
-            },
-        )
-        // FIX-REVIEW3-03: the note's owning reference moves INTO the state;
-        // this local goes out of scope when the loading effect completes, so
-        // close()/revocation drops the last controlled strong reference.
-        presentation.open(photoCount.coerceIn(3, 5), note)
-        state = presentation
-    }
-
-    val presentation = state
-    if (presentation == null || !presentation.isOpen) {
-        androidx.compose.material3.CircularProgressIndicator(
-            modifier = Modifier.testTag("capsule_route_loading"),
-        )
-        return
-    }
-    app.postmark.memory.ui.capsule.CapsuleScreen(state = presentation, onClose = onClose)
 }

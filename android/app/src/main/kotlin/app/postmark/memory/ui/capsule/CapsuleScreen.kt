@@ -160,16 +160,18 @@ fun CapsuleScreen(
     var currentIndex by remember { mutableIntStateOf(0) }
     var pageBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     var pageError by remember { mutableStateOf<String?>(null) }
+    // FIX-STATE-07: bumped by the Retry action to re-run a failed page load.
+    var pageRetryEpoch by remember { mutableIntStateOf(0) }
 
     // Dispose the current page bitmap whenever it changes or the screen leaves.
-    DisposableEffect(currentIndex, state.isOpen) {
+    DisposableEffect(currentIndex, state.isOpen, pageRetryEpoch) {
         onDispose {
             pageBitmap?.recycle()
             pageBitmap = null
         }
     }
 
-    LaunchedEffect(currentIndex, state.isOpen) {
+    LaunchedEffect(currentIndex, state.isOpen, pageRetryEpoch) {
         pageError = null
         if (!state.isOpen) return@LaunchedEffect
         try {
@@ -182,10 +184,13 @@ fun CapsuleScreen(
                     photo.jpegBytes.size,
                 )
             } ?: run {
+                // A failed decode must not keep serving poisoned bytes.
+                state.loadedPages.remove(currentIndex)
                 pageError = "this page could not be decoded"
                 null
             }
         } catch (failure: Exception) {
+            state.loadedPages.remove(currentIndex)
             pageError = failure.message ?: "page unavailable"
         }
     }
@@ -212,7 +217,18 @@ fun CapsuleScreen(
                     .weight(1f, fill = false)
                     .testTag("capsule_page_${currentIndex}"),
             )
-            pageError != null -> Text(pageError!!, color = MaterialTheme.colorScheme.error)
+            pageError != null -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    pageError!!,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.testTag("capsule_page_error"),
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = { pageRetryEpoch += 1 },
+                    modifier = Modifier.testTag("capsule_page_retry"),
+                ) { Text("Try again") }
+            }
             else -> CircularProgressIndicator(modifier = Modifier.testTag("capsule_page_loading"))
         }
         Spacer(Modifier.height(12.dp))

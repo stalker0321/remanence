@@ -72,11 +72,16 @@ class RegistrationFormScreenTest {
     @get:Rule
     val composeRule = createComposeRule()
 
-    private fun setContent(state: RegistrationFormState, submissions: MutableList<Int>) {
+    private fun setContent(
+        state: RegistrationFormState,
+        submissions: MutableList<Int>,
+        submitState: RegistrationSubmitState = RegistrationSubmitState.Idle,
+    ) {
         composeRule.setContent {
             MaterialTheme {
                 RegistrationFormScreen(
                     form = state,
+                    submitState = submitState,
                     onFieldChange = { _, _ -> },
                     onSubmit = { submissions += 1 },
                 )

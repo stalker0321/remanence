@@ -66,8 +66,32 @@ class CreateViewModel(
     private val stagingDirectory: File,
     private val openPhotoSource: (pickerId: String) -> app.postmark.memory.create.PhotoSource,
     private val clockMillis: () -> Long = System::currentTimeMillis,
+    /**
+     * FIX-STATE-08: injectable still processors so production-shaped tests
+     * drive the same delivery callbacks without camera hardware; production
+     * wiring keeps the real OpenCV pipeline.
+     */
+    frontProcessor: app.postmark.memory.capture.StillProcessor =
+        RealStillFingerprintProcessor(profile, FingerprintSide.FRONT),
+    backProcessor: app.postmark.memory.capture.StillProcessor =
+        RealStillFingerprintProcessor(profile, FingerprintSide.BACK),
     private val cpuDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    /**
+     * FIX-STATE-03/08: the photo normalization step is a port; production
+     * keeps the real OpenCV normalizer on the CPU dispatcher, tests inject a
+     * deterministic one so publishing stays fully exercisable off-hardware.
+     */
+    private val photoNormalizer: app.postmark.memory.create.PhotoNormalizerPort = { jpeg ->
+        val normalized = withContext(cpuDispatcher) {
+            postmark.core.recognition.PhotoNormalizer().normalize(jpeg)
+        }
+        app.postmark.memory.create.NormalizedPhotoDto(
+            normalized.jpegBytes,
+            normalized.width,
+            normalized.height,
+        )
+    },
 ) : ViewModel() {
 
     enum class Step { RECIPIENT_LOOKUP, RECIPIENT_CONFIRM, FRONT, BACK_CHECKLIST, BACK, CONTENT, PUBLISHING, PUBLISHED }
@@ -123,8 +147,6 @@ class CreateViewModel(
     val frontAttempt = CaptureAttemptController()
     val backAttempt = CaptureAttemptController()
 
-    private val frontProcessor = RealStillFingerprintProcessor(profile, FingerprintSide.FRONT)
-    private val backProcessor = RealStillFingerprintProcessor(profile, FingerprintSide.BACK)
     private val frontFlow = FrontCaptureFlow(frontProcessor, cpuDispatcher, ioDispatcher)
     private val backFlow = BackCaptureFlow(backGate, backProcessor, cpuDispatcher, ioDispatcher)
 
@@ -296,11 +318,6 @@ class CreateViewModel(
         _step.value = Step.BACK
     }
 
-    fun proceedToContent() {
-        if (!requireStep(Step.CONTENT, "content continuation")) return
-        clearGuardError()
-    }
-
     // ---------------------------------------------------------------------
     // Guard helpers: fail closed with visible recovery, never crash.
     // ---------------------------------------------------------------------
@@ -382,16 +399,8 @@ class CreateViewModel(
             // staged file is deleted before this method returns or throws.
             val pipeline = app.postmark.memory.create.PhotoStagingPipeline(
                 stagingDirectory,
-                normalizer = { jpeg ->
-                    val normalized = withContext(cpuDispatcher) {
-                        postmark.core.recognition.PhotoNormalizer().normalize(jpeg)
-                    }
-                    app.postmark.memory.create.NormalizedPhotoDto(
-                        normalized.jpegBytes,
-                        normalized.width,
-                        normalized.height,
-                    )
-                },
+                // The port owns its dispatcher hop; stageAll below adds IO.
+                normalizer = photoNormalizer,
             )
             val staged = withContext(ioDispatcher) {
                 pipeline.stageAll(photoSelection.selectedIds.map(openPhotoSource))

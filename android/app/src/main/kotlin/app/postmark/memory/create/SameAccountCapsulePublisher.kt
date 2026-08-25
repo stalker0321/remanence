@@ -28,11 +28,18 @@ import postmark.core.model.PublishStatementInput
 import postmark.core.model.RecipientEnvelopeContextInput
 import postmark.core.model.UserId
 
-/** Inputs for one same-account capsule: content plus both identity halves. */
+/** Inputs for one capsule: content plus both identity halves. */
 data class SameAccountCapsuleRequest(
     val capsuleId: CapsuleId,
     val senderUserId: UserId,
+    /**
+     * FIX-REVIEW-04: the RECIPIENT identity is explicit and separate. M1
+     * self-send defaults to the same account VALUES - naturally equal, never
+     * conflated by assumption.
+     */
+    val recipientUserId: UserId = senderUserId,
     val senderKeyBundleId: KeyBundleId,
+    val recipientKeyBundleId: KeyBundleId = senderKeyBundleId,
     val senderHandleSnapshot: String,
     val createdAtEpochSeconds: Long,
     /** Exactly 3..5 normalized JPEGs. */
@@ -62,6 +69,10 @@ class SameAccountCapsulePublisher {
         require(request.photoJpegs.size in 3..5) { "3..5 photos required" }
         TinkPrimitives.ensureRegistered()
         val senderUser = request.senderUserId
+        // FIX-REVIEW-04: distinct routing identities for every context/AAD.
+        val recipientUser = request.recipientUserId
+        val senderBundle = request.senderKeyBundleId
+        val recipientBundle = request.recipientKeyBundleId
 
         val capsuleKeyset = CapsuleKeysetGenerator().generate()
 
@@ -75,11 +86,14 @@ class SameAccountCapsulePublisher {
         val artifacts = ArrayList<PreparedOutboxArtifact>(2 + request.photoJpegs.size)
         val bindings = ArrayList<PublishArtifact>(artifacts.size)
 
+        fun routing(capsuleId: CapsuleId, blobId: BlobId) =
+            RecognitionManifestCodec.RoutingContext(capsuleId, blobId, senderUser, recipientUser)
+
         // 1. Recognition manifest (fingerprints + minimal chooser hint only).
         val recognitionBlob = blob(RECOGNITION_BLOB_BYTE)
         val recognitionCiphertext = RecognitionManifestCodec().buildAndEncrypt(
             capsuleKeyset,
-            routingFor(request.capsuleId, recognitionBlob, senderUser),
+            routing(request.capsuleId, recognitionBlob),
             request.senderHandleSnapshot,
             request.createdAtEpochSeconds,
             null,
@@ -102,7 +116,7 @@ class SameAccountCapsulePublisher {
         }
         val contentCiphertext = ContentManifestCodec().buildAndEncrypt(
             capsuleKeyset,
-            routingFor(request.capsuleId, contentBlob, senderUser),
+            routing(request.capsuleId, contentBlob),
             manifestPhotos,
             request.noteUtf8,
         )
@@ -121,7 +135,7 @@ class SameAccountCapsulePublisher {
             val photoBlob = blob(PHOTO_BLOB_BASE + index)
             val encrypted = encryptor.encryptPhoto(
                 capsuleKeyset,
-                routingFor(request.capsuleId, photoBlob, senderUser),
+                routingFor(request.capsuleId, photoBlob, senderUser, recipientUser),
                 index,
                 jpeg,
             )
@@ -138,14 +152,14 @@ class SameAccountCapsulePublisher {
         // 4. Signed publish statement over the exact declared set.
         val built = PublishStatementBuilder.build(
             PublishStatementInput(
-                request.capsuleId, senderUser, senderUser,
-                request.senderKeyBundleId, request.senderKeyBundleId, request.createdAtEpochSeconds, bindings,
+                request.capsuleId, senderUser, recipientUser,
+                senderBundle, recipientBundle, request.createdAtEpochSeconds, bindings,
             ),
         ) as? PublishStatementBuildResult.Success
             ?: throw IllegalStateException("statement layout rejected")
         val signed = PublishStatementSigner().sign(request.signingKeyset, built.deterministicBytes.toByteArray())
 
-        // 5. Recipient envelope sealing the capsule keyset (same account).
+        // 5. Recipient envelope sealing the capsule keyset.
         val envelopePlaintext = RecipientEnvelopePlaintext.newBuilder()
             .setProtocolVersion(1)
             .setCapsuleId(built.statement.capsuleId)
@@ -159,15 +173,25 @@ class SameAccountCapsulePublisher {
             .toByteArray()
         val envelope = RecipientEnvelopeCryptor().seal(
             request.recipientEncryptionPublicKeyset,
-            RecipientEnvelopeContextInput(request.capsuleId, senderUser, senderUser, request.senderKeyBundleId),
+            RecipientEnvelopeContextInput(request.capsuleId, senderUser, recipientUser, recipientBundle),
             envelopePlaintext,
         )
 
         return PreparedOutboxCapsule(
             capsuleId = request.capsuleId.value,
             idempotencyKey = "publish-${request.capsuleId.toRestString()}",
-            recipientUserId = senderUser.value,
-            recipientKeyBundleId = request.senderKeyBundleId.value,
+            senderUserId = senderUser.value,
+            recipientUserId = recipientUser.value,
+            senderKeyBundleId = senderBundle.value,
+            recipientKeyBundleId = recipientBundle.value,
+            // Public verification material only: the sender's Ed25519 public half.
+            senderSigningPublicKeysetB64Url =
+                com.google.crypto.tink.subtle.Base64.urlSafeEncode(
+                    TinkProtoKeysetFormat.serializeKeyset(
+                        request.signingKeyset.publicKeysetHandle,
+                        com.google.crypto.tink.InsecureSecretKeyAccess.get(),
+                    ),
+                ),
             envelopeCiphertext = envelope,
             artifacts = artifacts,
             publishStatementBytes = signed.deterministicStatementBytes,
@@ -175,8 +199,8 @@ class SameAccountCapsulePublisher {
         )
     }
 
-    private fun routingFor(capsuleId: CapsuleId, blobId: BlobId, user: UserId) =
-        RecognitionManifestCodec.RoutingContext(capsuleId, blobId, user, user)
+    private fun routingFor(capsuleId: CapsuleId, blobId: BlobId, sender: UserId, recipient: UserId) =
+        RecognitionManifestCodec.RoutingContext(capsuleId, blobId, sender, recipient)
 
     private fun serializedCapsuleKeyset(handle: KeysetHandle): ByteString =
         ByteString.copyFrom(TinkProtoKeysetFormat.serializeKeyset(handle, com.google.crypto.tink.InsecureSecretKeyAccess.get()))

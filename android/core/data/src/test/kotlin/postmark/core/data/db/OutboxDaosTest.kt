@@ -44,8 +44,11 @@ class OutboxDaosTest {
     ) = OutboxCapsuleEntity(
         capsuleId = capsuleId,
         idempotencyKey = idempotencyKey,
+        senderUserId = "0198f0a0-0000-7000-8000-00000000se01",
         recipientUserId = "0198f0a0-0000-7000-8000-00000000re01",
+        senderKeyBundleId = "0198f0a0-0000-7000-8000-00000000sk01",
         recipientKeyBundleId = "0198f0a0-0000-7000-8000-00000000rk01",
+        senderSigningPublicKeysetB64 = null,
         state = state,
         recognitionManifestPath = null,
         contentManifestPath = null,

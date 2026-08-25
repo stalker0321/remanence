@@ -20,11 +20,12 @@ import postmark.core.model.RecipientEnvelopeContextInput
 import postmark.core.model.UserId
 
 /**
- * FIX-M1-007-13: the REAL capsule content source behind the presentation.
- * Every photo is decrypted on demand from its ciphertext file under the exact
- * artifact AAD; the note comes from the decrypted content manifest. Nothing
- * is written to disk in plaintext and nothing outlives the caller's page
- * cache (docs/security.md section 12).
+ * FIX-M1-007-13 / FIX-REVIEW-04: the REAL capsule content source behind the
+ * presentation. Every photo is decrypted on demand from its ciphertext file
+ * under the exact artifact AAD built from the SEPARATE persisted sender and
+ * recipient identities; the note comes from the decrypted content manifest.
+ * Nothing is written to disk in plaintext and nothing outlives the caller's
+ * page cache (docs/security.md section 12).
  */
 class CapsuleContentSource(
     private val database: PostmarkLocalDatabase,
@@ -33,6 +34,31 @@ class CapsuleContentSource(
     private val recipientKeyBundleIdOf: suspend (capsuleId: String) -> UUID?,
 ) {
 
+    /** Separate routing identities resolved from the persisted capsule row. */
+    private data class Routing(
+        val senderUserId: UserId,
+        val recipientUserId: UserId,
+    )
+
+    /**
+     * FIX-REVIEW-04: sender and recipient are distinct persisted identities.
+     * Legacy same-account rows (NULL sender columns) fall back to the
+     * authenticated account - self-send works naturally, never by conflation.
+     */
+    private fun routing(row: postmark.core.data.db.OutboxCapsuleEntity): Routing {
+        val recipient = runCatching { UserId(UUID.fromString(row.recipientUserId)) }
+            .getOrElse { UserId(ownUserId) }
+        val sender = row.senderUserId?.let { id ->
+            runCatching { UserId(UUID.fromString(id)) }.getOrNull()
+        } ?: recipient
+        return Routing(senderUserId = sender, recipientUserId = recipient)
+    }
+
+    private suspend fun routing(capsuleId: String): Routing =
+        routing(requireNotNull(database.outboxCapsuleDao().getByCapsuleId(capsuleId)) {
+            "unknown capsule"
+        })
+
     /** Opens the envelope and returns the validated protocol-v1 keyset. */
     private suspend fun capsuleKeyset(capsuleId: String): com.google.crypto.tink.KeysetHandle =
         withContext(Dispatchers.IO) {
@@ -40,14 +66,15 @@ class CapsuleContentSource(
             val row = requireNotNull(database.outboxCapsuleDao().getByCapsuleId(capsuleId)) {
                 "unknown capsule"
             }
+            val routing = routing(row)
             val bundleId = requireNotNull(recipientKeyBundleIdOf(capsuleId))
             val envelopeBytes = java.io.File(requireNotNull(row.envelopePath)).readBytes()
             val opened = RecipientEnvelopeCryptor().open(
                 encryptionPrivateHandle,
                 RecipientEnvelopeContextInput(
                     CapsuleId(uuid),
-                    UserId(ownUserId),
-                    UserId(ownUserId),
+                    routing.senderUserId,
+                    routing.recipientUserId,
                     KeyBundleId(bundleId),
                 ),
                 envelopeBytes,
@@ -57,14 +84,17 @@ class CapsuleContentSource(
             )
         }
 
-    private fun routing(capsuleUuid: UUID, blobId: BlobId, ordinal: Int) = ArtifactAadInput(
-        capsuleId = CapsuleId(capsuleUuid),
-        blobId = blobId,
-        artifactKind = CapsuleArtifactKind.PHOTO,
-        ordinal = ordinal,
-        senderUserId = UserId(ownUserId),
-        recipientUserId = UserId(ownUserId),
-    )
+    private suspend fun photoRouting(capsuleUuid: UUID, blobId: BlobId, ordinal: Int): ArtifactAadInput {
+        val routing = routing(capsuleUuid.toString())
+        return ArtifactAadInput(
+            capsuleId = CapsuleId(capsuleUuid),
+            blobId = blobId,
+            artifactKind = CapsuleArtifactKind.PHOTO,
+            ordinal = ordinal,
+            senderUserId = routing.senderUserId,
+            recipientUserId = routing.recipientUserId,
+        )
+    }
 
     /** Number of encrypted photo blobs declared for this capsule. */
     suspend fun photoCount(capsuleId: String): Int =
@@ -83,7 +113,7 @@ class CapsuleContentSource(
             val ciphertext = java.io.File(blobRow.localCiphertextPath).readBytes()
             val plaintext = CapsuleArtifactCryptor().decrypt(
                 keyset,
-                routing(uuid, BlobId(UUID.fromString(blobRow.blobId)), ordinal),
+                photoRouting(uuid, BlobId(UUID.fromString(blobRow.blobId)), ordinal),
                 ciphertext,
             )
             DecryptedPhoto(ordinal = ordinal, jpegBytes = plaintext)
@@ -97,13 +127,14 @@ class CapsuleContentSource(
             ?: return@withContext null
         val keyset = capsuleKeyset(capsuleId)
         val ciphertext = java.io.File(contentRow.localCiphertextPath).readBytes()
+        val manifestRouting = routing(capsuleId)
         ContentManifestCodec().decryptAndParse(
             keyset,
             postmark.core.crypto.RecognitionManifestCodec.RoutingContext(
                 CapsuleId(uuid),
                 BlobId(UUID.fromString(contentRow.blobId)),
-                UserId(ownUserId),
-                UserId(ownUserId),
+                manifestRouting.senderUserId,
+                manifestRouting.recipientUserId,
             ),
             ciphertext,
         ).note

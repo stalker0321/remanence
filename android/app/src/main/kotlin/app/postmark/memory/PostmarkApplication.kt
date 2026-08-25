@@ -70,7 +70,13 @@ class AppContainer(
     val appContext: Context = context.applicationContext
 
     val database: PostmarkLocalDatabase by lazy {
-        Room.databaseBuilder(appContext, PostmarkLocalDatabase::class.java, DATABASE_NAME).build()
+        Room.databaseBuilder(appContext, PostmarkLocalDatabase::class.java, DATABASE_NAME)
+            // Versioned local schema evolution; no silent destructive resets.
+            .addMigrations(
+                PostmarkLocalDatabase.MIGRATION_1_2,
+                PostmarkLocalDatabase.MIGRATION_2_3,
+            )
+            .build()
     }
 
     /** Non-exportable Android Keystore KEKs; overridable for JVM tests. */

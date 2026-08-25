@@ -94,8 +94,11 @@ class ProcessRestartResilienceTest {
             postmark.core.data.db.OutboxCapsuleEntity(
                 capsuleId = capsuleId.toString(),
                 idempotencyKey = "idem-$capsuleId",
+                senderUserId = UUID.randomUUID().toString(),
                 recipientUserId = UUID.randomUUID().toString(),
+                senderKeyBundleId = UUID.randomUUID().toString(),
                 recipientKeyBundleId = UUID.randomUUID().toString(),
+                senderSigningPublicKeysetB64 = null,
                 state = OutboxCapsuleState.ENCRYPTED,
                 recognitionManifestPath = null,
                 contentManifestPath = null,

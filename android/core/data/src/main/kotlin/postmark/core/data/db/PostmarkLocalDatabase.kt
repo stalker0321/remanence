@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         RecognitionFingerprintEntity::class,
         SyncCursorEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 abstract class PostmarkLocalDatabase : RoomDatabase() {
@@ -49,6 +49,22 @@ abstract class PostmarkLocalDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE outbox_capsule ADD COLUMN publish_statement_path TEXT")
                 db.execSQL(
                     "ALTER TABLE outbox_capsule ADD COLUMN publish_statement_signature_path TEXT",
+                )
+            }
+        }
+
+        /**
+         * v3 (FIX-REVIEW-04) separates the sender identity from the recipient
+         * identity on every persisted outbox capsule. Legacy rows keep NULL
+         * and consumers fall back to the authenticated account, so the M1
+         * same-account flow keeps working without an equality assumption.
+         */
+        val MIGRATION_2_3: Migration = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE outbox_capsule ADD COLUMN sender_user_id TEXT")
+                db.execSQL("ALTER TABLE outbox_capsule ADD COLUMN sender_key_bundle_id TEXT")
+                db.execSQL(
+                    "ALTER TABLE outbox_capsule ADD COLUMN sender_signing_public_keyset_b64 TEXT",
                 )
             }
         }

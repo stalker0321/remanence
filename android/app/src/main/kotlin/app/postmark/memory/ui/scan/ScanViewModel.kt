@@ -369,27 +369,45 @@ class ScanViewModel(
             val statementBytes = File(statementPath).readBytes()
             val signatureBytes = File(signaturePath).readBytes()
             val envelopeBytes = File(envelopePath).readBytes()
-            val publicSigningKeyset = signingPublicExports() ?: return false
             val ownUser = UserId(UUID.fromString(identity.userId))
+
+            // FIX-REVIEW-04: the persisted routing identities are authoritative.
+            // Sender and recipient are SEPARATE; legacy same-account rows with
+            // NULL sender columns fall back to the authenticated account so M1
+            // self-send keeps working naturally - never by assumption.
+            val routing = resolveRouting(row, ownUser)
+            val recipientBundleId = KeyBundleId(UUID.fromString(row.recipientKeyBundleId))
+            val senderBundleId = routing.senderBundleId
 
             val openedEnvelope = RecipientEnvelopeCryptor().open(
                 recipientEncryptionPrivateKeyset = identity.encryptionPrivateHandle,
                 context = postmark.core.model.RecipientEnvelopeContextInput(
                     CapsuleId(capsuleId),
-                    ownUser,
-                    ownUser,
-                    KeyBundleId(UUID.fromString(row.recipientKeyBundleId)),
+                    routing.senderUserId,
+                    routing.recipientUserId,
+                    recipientBundleId,
                 ),
                 ciphertext = envelopeBytes,
             )
 
+            // The REAL sender verification material comes from the persisted
+            // capsule itself; only legacy rows fall back to our own exports.
+            val senderVerifyingKeyset = routing.senderSigningPublicKeysetB64
+                ?.let { encoded ->
+                    runCatching {
+                        TinkProtoKeysetFormat.parseKeysetWithoutSecret(
+                            com.google.crypto.tink.subtle.Base64.urlSafeDecode(encoded),
+                        )
+                    }.getOrNull()
+                }
+                ?: signingPublicExports()?.let { TinkProtoKeysetFormat.parseKeysetWithoutSecret(it) }
+                ?: return false
+
             val gateInput = CapsuleAcceptanceInput(
                 expectedCapsuleId = CapsuleId(capsuleId),
                 authenticatedUserId = ownUser,
-                senderVerifyingKeyset =
-                    TinkProtoKeysetFormat.parseKeysetWithoutSecret(publicSigningKeyset),
-                expectedSenderKeyBundleId =
-                    KeyBundleId(UUID.fromString(row.recipientKeyBundleId)),
+                senderVerifyingKeyset = senderVerifyingKeyset,
+                expectedSenderKeyBundleId = senderBundleId,
                 envelopePlaintextBytes = openedEnvelope,
                 statementBytes = statementBytes,
                 signature = signatureBytes,
@@ -407,6 +425,40 @@ class ScanViewModel(
         } catch (_: Exception) {
             false
         }
+    }
+
+    /**
+     * FIX-REVIEW-04: resolves the separate sender/recipient identities of one
+     * outbox row. Persisted sender user ID / bundle ID / public signing keyset
+     * win; legacy v2 rows (NULL columns) fall back to the authenticated
+     * account and its own bundle - the documented single-account fallback.
+     */
+    private data class RoutingIdentity(
+        val senderUserId: UserId,
+        val recipientUserId: UserId,
+        val senderBundleId: KeyBundleId,
+        val senderSigningPublicKeysetB64: String?,
+    )
+
+    private fun resolveRouting(
+        row: postmark.core.data.db.OutboxCapsuleEntity,
+        ownUser: UserId,
+    ): RoutingIdentity {
+        val persistedSender = row.senderUserId?.let { id ->
+            runCatching { UserId(UUID.fromString(id)) }.getOrNull()
+        }
+        val persistedSenderBundle = row.senderKeyBundleId?.let { id ->
+            runCatching { KeyBundleId(UUID.fromString(id)) }.getOrNull()
+        }
+        return RoutingIdentity(
+            senderUserId = persistedSender ?: ownUser,
+            recipientUserId = runCatching {
+                UserId(UUID.fromString(row.recipientUserId))
+            }.getOrElse { ownUser },
+            senderBundleId = persistedSenderBundle
+                ?: KeyBundleId(UUID.fromString(row.recipientKeyBundleId)),
+            senderSigningPublicKeysetB64 = row.senderSigningPublicKeysetB64,
+        )
     }
 
     private suspend fun persistVerifiedRecipientBaseline(capsuleId: String) {
@@ -438,10 +490,14 @@ class ScanViewModel(
         val envelopeCiphertext = File(requireNotNull(row.envelopePath)).readBytes()
 
         val ownUser = UserId(UUID.fromString(identity.userId))
+        // FIX-REVIEW-04: distinct sender/recipient identities from the row.
+        val routing = resolveRouting(row, ownUser)
         val bundleId = KeyBundleId(UUID.fromString(row.recipientKeyBundleId))
         val opened = RecipientEnvelopeCryptor().open(
             identity.encryptionPrivateHandle,
-            postmark.core.model.RecipientEnvelopeContextInput(CapsuleId(capsuleUuid), ownUser, ownUser, bundleId),
+            postmark.core.model.RecipientEnvelopeContextInput(
+                CapsuleId(capsuleUuid), routing.senderUserId, routing.recipientUserId, bundleId,
+            ),
             envelopeCiphertext,
         )
         val capsuleKeyset = CapsuleKeysetParser().parseExactAes256GcmTink(
@@ -454,8 +510,8 @@ class ScanViewModel(
             postmark.core.crypto.RecognitionManifestCodec.RoutingContext(
                 CapsuleId(capsuleUuid),
                 deriveRecognitionBlobId(capsuleUuid),
-                ownUser,
-                ownUser,
+                routing.senderUserId,
+                routing.recipientUserId,
             ),
             manifestCiphertext,
         )

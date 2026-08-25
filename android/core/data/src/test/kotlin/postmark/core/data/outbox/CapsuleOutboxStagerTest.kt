@@ -126,8 +126,11 @@ class CapsuleOutboxStagerTest {
         return PreparedOutboxCapsule(
             capsuleId = capsuleId,
             idempotencyKey = "idempotency-$capsuleId",
+            senderUserId = senderUser,
             recipientUserId = recipientUser,
+            senderKeyBundleId = senderBundle,
             recipientKeyBundleId = recipientBundle,
+            senderSigningPublicKeysetB64Url = "dGVzdC1wdWJsaWMta2V5c2V0",
             envelopeCiphertext = envelope,
             publishStatementBytes = "signed-statement".toByteArray(),
             publishStatementSignature = ByteArray(69) { 1 },
@@ -154,7 +157,12 @@ class CapsuleOutboxStagerTest {
 
         val capsuleRow = database.outboxCapsuleDao().getByCapsuleId(capsuleId.toString())!!
         assertEquals(OutboxCapsuleState.ENCRYPTED, capsuleRow.state)
+        // FIX-REVIEW-04: sender and recipient identities persist SEPARATELY.
+        assertEquals(senderUser.toString(), capsuleRow.senderUserId)
         assertEquals(recipientUser.toString(), capsuleRow.recipientUserId)
+        assertEquals(senderBundle.toString(), capsuleRow.senderKeyBundleId)
+        assertEquals(recipientBundle.toString(), capsuleRow.recipientKeyBundleId)
+        assertEquals("dGVzdC1wdWJsaWMta2V5c2V0", capsuleRow.senderSigningPublicKeysetB64)
 
         val rows = database.outboxBlobDao().getAllByCapsuleId(capsuleId.toString())
         assertEquals(prepared.artifacts.size, rows.size)

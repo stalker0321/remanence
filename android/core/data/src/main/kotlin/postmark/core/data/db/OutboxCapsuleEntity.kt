@@ -21,6 +21,13 @@ enum class OutboxCapsuleState {
  * publish statement plus signature (public REST material required to finalize
  * after any process restart), and encrypted artifact paths only: never
  * plaintext note text or image bytes.
+ *
+ * FIX-REVIEW-04: the SENDER identity is persisted separately from the
+ * RECIPIENT identity (immutable user IDs and key-bundle IDs plus the sender's
+ * public signing keyset export) so verification never conflates the two.
+ * Legacy same-account rows pre-dating v3 keep NULL here and consumers fall
+ * back to the authenticated account - self-send stays natural without any
+ * equality assumption.
  */
 @Entity(
     tableName = "outbox_capsule",
@@ -34,10 +41,17 @@ data class OutboxCapsuleEntity(
     val capsuleId: String,
     @ColumnInfo(name = "idempotency_key")
     val idempotencyKey: String,
+    @ColumnInfo(name = "sender_user_id")
+    val senderUserId: String?,
     @ColumnInfo(name = "recipient_user_id")
     val recipientUserId: String,
+    @ColumnInfo(name = "sender_key_bundle_id")
+    val senderKeyBundleId: String?,
     @ColumnInfo(name = "recipient_key_bundle_id")
     val recipientKeyBundleId: String,
+    /** Sender Ed25519 PUBLIC keyset export (base64url); verification material only. */
+    @ColumnInfo(name = "sender_signing_public_keyset_b64")
+    val senderSigningPublicKeysetB64: String?,
     @ColumnInfo(name = "state")
     val state: OutboxCapsuleState,
     @ColumnInfo(name = "recognition_manifest_path")

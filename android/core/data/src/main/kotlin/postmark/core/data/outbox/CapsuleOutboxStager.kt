@@ -30,12 +30,20 @@ data class PreparedOutboxArtifact(
  * Everything the outbox transaction needs: routing snapshots plus the exact
  * ciphertext bytes of the envelope and every declared blob. No plaintext ever
  * enters this type or this class.
+ *
+ * FIX-REVIEW-04: sender and recipient identities are carried SEPARATELY -
+ * immutable user IDs, key-bundle IDs, and the sender's public signing keyset
+ * export - so persisted verification material never conflates the two ends.
  */
 data class PreparedOutboxCapsule(
     val capsuleId: UUID,
     val idempotencyKey: String,
+    val senderUserId: UUID,
     val recipientUserId: UUID,
+    val senderKeyBundleId: UUID,
     val recipientKeyBundleId: UUID,
+    /** Sender Ed25519 PUBLIC keyset export (base64url); public material only. */
+    val senderSigningPublicKeysetB64Url: String,
     val envelopeCiphertext: ByteArray,
     val artifacts: List<PreparedOutboxArtifact>,
     /** Signed deterministic statement carried for the finalize call (M2). */
@@ -122,8 +130,11 @@ class CapsuleOutboxStager(
                         OutboxCapsuleEntity(
                             capsuleId = prepared.capsuleId.toString(),
                             idempotencyKey = prepared.idempotencyKey,
+                            senderUserId = prepared.senderUserId.toString(),
                             recipientUserId = prepared.recipientUserId.toString(),
+                            senderKeyBundleId = prepared.senderKeyBundleId.toString(),
                             recipientKeyBundleId = prepared.recipientKeyBundleId.toString(),
+                            senderSigningPublicKeysetB64 = prepared.senderSigningPublicKeysetB64Url,
                             state = OutboxCapsuleState.PREPARING,
                             recognitionManifestPath = artifactPaths[recognitionIndex(prepared)],
                             contentManifestPath = artifactPaths[contentIndex(prepared)],

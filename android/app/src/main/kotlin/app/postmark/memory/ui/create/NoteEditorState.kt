@@ -33,6 +33,12 @@ class NoteEditorState(private val maxBytes: Int = MAX_NOTE_BYTES) {
         return true
     }
 
+    /** FIX-REVIEW-02: clears the note and any limit flag for a fresh session. */
+    fun reset() {
+        text = ""
+        limitReached = false
+    }
+
     companion object {
         const val MAX_NOTE_BYTES: Int = 1000
 

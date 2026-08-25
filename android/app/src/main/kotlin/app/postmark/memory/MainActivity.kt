@@ -144,7 +144,13 @@ private fun RootSurface(container: AppContainer) {
         },
         createContent = {
             val createViewModel: CreateViewModel = viewModel(factory = factory)
-            CreateScreen(viewModel = createViewModel)
+            // FIX-REVIEW-02: every entry starts a fresh create session; the
+            // same epoch across rotation is a deliberate no-op.
+            val createEpoch by rootViewModel.createSessionEpoch.collectAsStateWithLifecycle()
+            LaunchedEffect(createEpoch) { createViewModel.beginSession(createEpoch) }
+            androidx.compose.runtime.key(createEpoch) {
+                CreateScreen(viewModel = createViewModel)
+            }
         },
         capsuleContent = { grantId, capsuleId ->
             CapsuleRoute(
@@ -157,19 +163,34 @@ private fun RootSurface(container: AppContainer) {
         capsuleIdResolver = rootViewModel::capsuleIdFor,
         scanContent = {
             val scanViewModel: ScanViewModel = viewModel(factory = factory)
-            // A verified grant navigates through the guarded capsule route.
-            val terminal by scanViewModel.terminal.collectAsStateWithLifecycle()
-            LaunchedEffect(terminal) {
-                val granted = terminal as? ScanTerminalState.Granted ?: return@LaunchedEffect
-                rootViewModel.openCapsuleWithGrant(
-                    grantId = granted.grantId,
-                    capsuleId = granted.capsuleId,
-                )
+            // FIX-REVIEW-02: every entry is a fresh FRONT-first scan; a stale
+            // Granted from a previous session can never re-navigate because
+            // beginSession clears the terminal before this screen renders.
+            val scanEpoch by rootViewModel.scanSessionEpoch.collectAsStateWithLifecycle()
+            LaunchedEffect(scanEpoch) { scanViewModel.beginSession(scanEpoch) }
+            androidx.compose.runtime.key(scanEpoch) {
+                ScanFlowSurface(rootViewModel = rootViewModel, scanViewModel = scanViewModel)
             }
-            ScanScreen(viewModel = scanViewModel)
         },
         onExitFlow = rootViewModel::returnToHome,
     )
+}
+
+/**
+ * FIX-M1-007-12: the live scan surface. A verified grant navigates through
+ * the guarded capsule route - only while this surface is composed.
+ */
+@Composable
+private fun ScanFlowSurface(rootViewModel: RootViewModel, scanViewModel: ScanViewModel) {
+    val terminal by scanViewModel.terminal.collectAsStateWithLifecycle()
+    LaunchedEffect(terminal) {
+        val granted = terminal as? ScanTerminalState.Granted ?: return@LaunchedEffect
+        rootViewModel.openCapsuleWithGrant(
+            grantId = granted.grantId,
+            capsuleId = granted.capsuleId,
+        )
+    }
+    ScanScreen(viewModel = scanViewModel)
 }
 
 /**

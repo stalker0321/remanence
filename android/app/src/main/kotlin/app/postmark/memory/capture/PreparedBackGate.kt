@@ -35,4 +35,9 @@ class PreparedBackGate {
         require(item in checked) { "unknown checklist item" }
         checked = checked + (item to value)
     }
+
+    /** FIX-REVIEW-02: unchecks every preparation item for a fresh session. */
+    fun reset() {
+        checked = PreparedBackItem.entries.associateWith { false }
+    }
 }

@@ -127,6 +127,26 @@ class ScanViewModel(
      */
     private var matchGeneration: Int = 0
 
+    /**
+     * FIX-REVIEW-02: epoch of the scan session this ViewModel currently holds.
+     * beginSession(epoch) fully resets when [epoch] differs - captures, match
+     * state, terminal grant, and any live grant are consumed so re-entry is
+     * always a fresh FRONT-first flow and an old Granted can never be
+     * reopened without a new scan. Same epoch is a no-op (rotation safety).
+     */
+    private var begunEpoch: Long? = null
+
+    fun beginSession(epoch: Long) {
+        if (begunEpoch == epoch) return
+        begunEpoch = epoch
+        matchGeneration++
+        captureSession.reset()
+        grants.clearAll()
+        _qualityRejection.value = emptySet()
+        _matchState.value = ScanMatchUiState.AwaitingCapture
+        _terminal.value = ScanTerminalState.Idle
+    }
+
     // ------------------------------------------------------------------
     // Capture.
     // ------------------------------------------------------------------
@@ -322,6 +342,12 @@ class ScanViewModel(
 
     private fun issueGrant(capsuleId: UUID): String? =
         grants.issue(capsuleId)?.toString()
+
+    /** Module-internal view of the live grant: capsule ID only while valid. */
+    internal fun liveGrantCapsuleId(grantId: String): String? {
+        val uuid = runCatching { UUID.fromString(grantId) }.getOrNull() ?: return null
+        return grants.resolveCapsuleId(uuid)?.toString()
+    }
 
     // ------------------------------------------------------------------
     // THE verification gate: no grant without it, ever.

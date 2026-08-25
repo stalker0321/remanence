@@ -35,6 +35,19 @@ class RootViewModel(
     private val _destination = MutableStateFlow<AppDestination>(AppDestination.Authentication)
     val destination: StateFlow<AppDestination> = _destination.asStateFlow()
 
+    /**
+     * FIX-REVIEW-02: monotonically increasing flow-session epochs. Every entry
+     * into Create/Scan bumps its epoch, and the screen's beginSession(epoch)
+     * starts a genuinely fresh session when the value differs - the Activity-
+     * scoped ViewModels can never leak a previous session across re-entry,
+     * while rotation (same epoch) keeps an in-progress session intact.
+     */
+    private val _createSessionEpoch = MutableStateFlow(0L)
+    val createSessionEpoch: StateFlow<Long> = _createSessionEpoch.asStateFlow()
+
+    private val _scanSessionEpoch = MutableStateFlow(0L)
+    val scanSessionEpoch: StateFlow<Long> = _scanSessionEpoch.asStateFlow()
+
     /** Per-flow transient cleanup hooks keyed by the flow destination. */
     private val transientCleanups = mutableMapOf<AppDestination, MutableList<() -> Unit>>()
 
@@ -65,12 +78,14 @@ class RootViewModel(
 
     /** Home entry point: sender create flow (authenticated accounts only). */
     fun openCreate() {
+        _createSessionEpoch.value += 1
         controller.navigate(AppDestination.Create)
         _destination.value = controller.current
     }
 
     /** Home entry point: scan flow (authenticated accounts only). */
     fun openScan() {
+        _scanSessionEpoch.value += 1
         controller.navigate(AppDestination.Scan)
         _destination.value = controller.current
     }
@@ -92,6 +107,10 @@ class RootViewModel(
             ?.takeIf { it.grantId == grantId }
             ?.capsuleId
 
+    /** Module-internal view of the live grant binding (never persisted). */
+    internal val liveCapsuleAccess: app.postmark.memory.ui.navigation.CapsuleAccess
+        get() = controller.capsuleAccess
+
     /** Leaving the presentation consumes the grant and ejects to Home. */
     fun closeCapsule() {
         controller.consumeCapsuleAccess()
@@ -102,12 +121,16 @@ class RootViewModel(
     /**
      * Returns from Create/Scan to Home. Leaving a flow RUNS its registered
      * transient-state cleanups - confirmed recipients, staged captures, and
-     * scan sessions never survive their surface.
+     * scan sessions never survive their surface. Leaving Scan also drops any
+     * live capsule access so nothing granted mid-scan outlives the flow.
      */
     fun returnToHome() {
         val previous = controller.current
         controller.navigate(AppDestination.Home)
         if (previous != controller.current) {
+            if (previous == AppDestination.Scan) {
+                controller.consumeCapsuleAccess()
+            }
             runTransientCleanups(previous)
         }
         _destination.value = controller.current

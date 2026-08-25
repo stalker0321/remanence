@@ -73,8 +73,16 @@ class CreateViewModel(
     val step: StateFlow<Step> = _step.asStateFlow()
 
     /** Generated once per create session; binds captures and the outbox row. */
-    private val _capsuleId: String = UUID.randomUUID().toString()
+    private var _capsuleId: String = UUID.randomUUID().toString()
     val capsuleId: String get() = _capsuleId
+
+    /**
+     * FIX-REVIEW-02: epoch of the session this ViewModel currently holds.
+     * beginSession(epoch) performs the full reset only when [epoch] differs,
+     * so re-entry after leaving is always a NEW session while rotation (same
+     * epoch) never discards an in-progress one. onCleared is not relied on.
+     */
+    private var begunEpoch: Long? = null
 
     private val _qualityRejection = MutableStateFlow<Set<QualityReason>>(emptySet())
     val qualityRejection: StateFlow<Set<QualityReason>> = _qualityRejection.asStateFlow()
@@ -99,6 +107,35 @@ class CreateViewModel(
 
     private var frontFingerprintId: String? = null
     private var backFingerprintId: String? = null
+
+    // ---------------------------------------------------------------------
+    // Session lifecycle.
+    // ---------------------------------------------------------------------
+
+    /**
+     * FIX-REVIEW-02: every fresh entry starts a NEW session - a new capsule
+     * ID, RECIPIENT_LOOKUP, and empty recipient/photos/note/checklist/errors/
+     * capture refs. Persisted sender fingerprints and outbox rows are never
+     * touched. A same-epoch call is a no-op (rotation safety).
+     */
+    fun beginSession(epoch: Long) {
+        if (begunEpoch == epoch) return
+        begunEpoch = epoch
+        _capsuleId = UUID.randomUUID().toString()
+        _step.value = Step.RECIPIENT_LOOKUP
+        sessionStore.endSession()
+        pickerVm.reset()
+        photoSelection.clear()
+        noteEditor.reset()
+        backGate.reset()
+        _qualityRejection.value = emptySet()
+        _frontCaptured.value = false
+        _backCaptured.value = false
+        frontFingerprintId = null
+        backFingerprintId = null
+        _publishError.value = null
+        clearStagedPhotos()
+    }
 
     // ---------------------------------------------------------------------
     // Recipient steps.

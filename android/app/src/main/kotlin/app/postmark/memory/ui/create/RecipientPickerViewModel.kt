@@ -59,6 +59,12 @@ class RecipientPickerViewModel(
         _state.value = RecipientLookupUiState.Idle
     }
 
+    /** FIX-REVIEW-02: drops the typed handle and any lookup outcome. */
+    fun reset() {
+        _handle.value = ""
+        _state.value = RecipientLookupUiState.Idle
+    }
+
     fun lookup() {
         val token = accessTokenProvider() ?: run {
             _state.value = RecipientLookupUiState.Failed("Sign in first.")

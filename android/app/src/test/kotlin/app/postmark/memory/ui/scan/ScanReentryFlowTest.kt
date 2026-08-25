@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import app.postmark.memory.capture.ProcessedStill
-import app.postmark.memory.capture.SingleStillCaptureShell
 import app.postmark.memory.capture.StillProcessor
 import app.postmark.memory.ui.create.SenderIdentitySnapshot
 import app.postmark.memory.create.SameAccountCapsulePublisher
@@ -187,12 +186,21 @@ class ScanReentryFlowTest {
         grantsClockMillis = { clock },
         frontProcessor = MatchingProcessor(syntheticFingerprint(11, FingerprintSide.FRONT)),
         backProcessor = MatchingProcessor(syntheticFingerprint(22, FingerprintSide.BACK)),
+        cpuDispatcher = testDispatcher,
+        ioDispatcher = testDispatcher,
     )
 
-    private fun capturingShell() = SingleStillCaptureShell().apply {
-        onPermissionResult(granted = true, canAskAgain = false)
-        onPreviewBound()
-        onCaptureStarted()
+    /** FIX-STATE-01: production-shaped delivery through the authoritative controllers. */
+    private fun capturePairThroughRealDelivery(vm: ScanViewModel) {
+        listOf(vm.frontAttempt, vm.backAttempt).forEach {
+            it.onPermissionResult(granted = true, canAskAgain = false)
+            it.onPreviewBound()
+        }
+        assertTrue(vm.beginFrontCapture())
+        vm.deliverFrontJpeg("front".toByteArray())
+        awaitCondition { vm.captureSession.state == app.postmark.memory.scan.ScanSessionState.AWAITING_BACK }
+        assertTrue(vm.beginBackCapture())
+        vm.deliverBackJpeg("back".toByteArray())
     }
 
     /** The Room-backed match+verify chain completes off-thread; await it. */
@@ -211,8 +219,7 @@ class ScanReentryFlowTest {
 
         // First session: FRONT then BACK, real matching over the real index.
         assertEquals(ScanMatchUiState.AwaitingCapture, vm.matchState.value)
-        vm.onFrontJpeg("front".toByteArray(), capturingShell())
-        vm.onBackJpeg("back".toByteArray(), capturingShell())
+        capturePairThroughRealDelivery(vm)
         awaitCondition { vm.terminal.value is ScanTerminalState.Granted }
         val granted = vm.terminal.value as ScanTerminalState.Granted
         assertTrue(granted.capsuleId == capsuleUuid.toString())
@@ -243,7 +250,12 @@ class ScanReentryFlowTest {
         stagePublishedCapsule()
         val vm = scanViewModel()
         vm.beginSession(epoch = 1L)
-        vm.onFrontJpeg("front".toByteArray(), capturingShell())
+        // FIX-STATE-01: a fresh session resets the authoritative controllers;
+        // the surface re-resolves permission and rebinds before any attempt.
+        vm.frontAttempt.onPermissionResult(true, canAskAgain = false)
+        vm.frontAttempt.onPreviewBound()
+        assertTrue(vm.beginFrontCapture())
+        vm.deliverFrontJpeg("front".toByteArray())
 
         vm.beginSession(epoch = 1L)
 

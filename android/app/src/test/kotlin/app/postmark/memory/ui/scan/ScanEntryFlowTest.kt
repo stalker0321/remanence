@@ -3,8 +3,10 @@ package app.postmark.memory.ui.scan
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import app.postmark.memory.capture.CaptureAttemptController
+import app.postmark.memory.capture.CaptureAttemptPhase
+import app.postmark.memory.capture.CapturePermissionStep
 import app.postmark.memory.capture.ProcessedStill
-import app.postmark.memory.capture.SingleStillCaptureShell
 import app.postmark.memory.capture.StillProcessor
 import app.postmark.memory.scan.ScanSessionState
 import java.util.UUID
@@ -17,6 +19,7 @@ import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
@@ -112,16 +115,35 @@ class ScanEntryFlowTest {
             frontProcessor = AcceptedProcessor(FingerprintSide.FRONT),
             backProcessor = AcceptedProcessor(FingerprintSide.BACK),
             candidateIndexProvider = { emptyList() },
+            // FIX-STATE-01: delivery completes synchronously under the test
+            // dispatcher so assertions are deterministic.
+            cpuDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher,
         )
     }
 
-    /** Capturing shell driven to the Capturing phase exactly as the UI does. */
-    private fun capturingShell(): SingleStillCaptureShell =
-        SingleStillCaptureShell().apply {
-            onPermissionResult(granted = true, canAskAgain = false)
-            onPreviewBound()
-            onCaptureStarted()
+    /**
+     * FIX-STATE-01: drives THE authoritative capture controllers exactly as
+     * the production surface does - permission, bind, shutter, delivery.
+     */
+    private fun readyCameras(vm: ScanViewModel) {
+        listOf(vm.frontAttempt, vm.backAttempt).forEach { controller: CaptureAttemptController ->
+            controller.onPermissionResult(granted = true, canAskAgain = false)
+            assertEquals(CaptureAttemptPhase.Binding, controller.phase)
+            controller.onPreviewBound()
+            assertEquals(CapturePermissionStep.Granted, controller.permission)
         }
+    }
+
+    private fun deliverFront(vm: ScanViewModel) {
+        assertTrue(vm.beginFrontCapture())
+        vm.deliverFrontJpeg("jpeg-front".toByteArray())
+    }
+
+    private fun deliverBack(vm: ScanViewModel) {
+        assertTrue(vm.beginBackCapture())
+        vm.deliverBackJpeg("jpeg-back".toByteArray())
+    }
 
     @Test
     fun entryIsFrontCaptureThenBackThenMatchingAndResetReturnsToFront() = runBlocking {
@@ -132,12 +154,13 @@ class ScanEntryFlowTest {
         assertEquals(ScanMatchUiState.AwaitingCapture, vm.matchState.value)
         assertEquals(ScanSessionState.AWAITING_FRONT, vm.captureSession.state)
 
-        vm.onFrontJpeg("jpeg-front".toByteArray(), capturingShell())
+        readyCameras(vm)
+        deliverFront(vm)
 
         assertEquals(ScanSessionState.AWAITING_BACK, vm.captureSession.state)
         assertEquals(ScanMatchUiState.AwaitingCapture, vm.matchState.value)
 
-        vm.onBackJpeg("jpeg-back".toByteArray(), capturingShell())
+        deliverBack(vm)
 
         // Both sides exist, so matching actually ran (empty index => guidance).
         assertNotNull(vm.captureSession.front)
@@ -160,8 +183,9 @@ class ScanEntryFlowTest {
     fun staleAsyncMatchResultCannotOverwriteAFreshCaptureFlow() = runBlocking {
         val vm = viewModel()
 
-        vm.onFrontJpeg("jpeg-front".toByteArray(), capturingShell())
-        vm.onBackJpeg("jpeg-back".toByteArray(), capturingShell())
+        readyCameras(vm)
+        deliverFront(vm)
+        deliverBack(vm)
         assertEquals(ScanMatchUiState.RecaptureGuidance(failedAttempts = 1), vm.matchState.value)
 
         // A reset discards the finished generation; a later stale write (the

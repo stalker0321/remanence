@@ -12,9 +12,13 @@ data class StagedPhoto(
     val height: Int,
 )
 
-/** Port over [PhotoNormalizer][postmark.core.recognition.PhotoNormalizer]. */
+/**
+ * Port over [PhotoNormalizer][postmark.core.recognition.PhotoNormalizer].
+ * FIX-STATE-03: suspending so implementations can hop to a CPU dispatcher
+ * instead of blocking Main; non-suspending lambdas still conform.
+ */
 fun interface PhotoNormalizerPort {
-    fun normalize(inputJpeg: ByteArray): NormalizedPhotoDto
+    suspend fun normalize(inputJpeg: ByteArray): NormalizedPhotoDto
 }
 
 /** Decoupled transport shape so this package never imports image internals. */
@@ -51,7 +55,7 @@ class PhotoStagingPipeline(
     private val normalizer: PhotoNormalizerPort,
 ) {
 
-    fun stageAll(sourcePhotos: List<PhotoSource>): List<StagedPhoto> {
+    suspend fun stageAll(sourcePhotos: List<PhotoSource>): List<StagedPhoto> {
         if (sourcePhotos.size !in MIN_PHOTOS..MAX_PHOTOS) {
             throw IllegalArgumentException(
                 "exactly $MIN_PHOTOS..$MAX_PHOTOS photos required, got ${sourcePhotos.size}",

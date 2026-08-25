@@ -151,10 +151,10 @@ class CreateSessionReentryTest {
         assertTrue(vm.photoSelection.selectedIds.isEmpty())
         assertTrue(vm.noteEditor.isEmpty)
         assertFalse(vm.backGate.ready)
-        assertFalse(vm.frontCaptured.value)
-        assertFalse(vm.backCaptured.value)
         assertNull(vm.publishError.value)
-        assertTrue(vm.qualityRejection.value.isEmpty())
+        // FIX-STATE-01: authoritative attempts are reset with the session.
+        assertNull(vm.frontAttempt.phase)
+        assertNull(vm.backAttempt.phase)
         assertEquals("", vm.pickerVm.handle.value)
 
         // Persisted material is untouched: no outbox rows were ever removed.

@@ -288,14 +288,11 @@ class CreateRecipientConfirmFlowTest {
         assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
         assertSame(otherResolved, vm.confirmedRecipient.value)
 
-        // Without captured sides nothing can be published: fail closed.
-        try {
-            vm.startPublishing()
-            fail("publishing must be gated behind real captures")
-        } catch (expected: IllegalStateException) {
-            assertTrue(expected.message!!.contains("captured"))
-        }
-        assertNull(vm.publishError.value)
+        // Without captured sides nothing can be published: FIX-STATE-02
+        // fails CLOSED with a visible recovery message instead of crashing.
+        vm.startPublishing()
+        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        assertTrue(vm.flowError.value!!.contains("publishing requires step CONTENT"))
         runBlocking {
             assertTrue(database.outboxBlobDao().getAllByCapsuleId(vm.capsuleId).isEmpty())
         }

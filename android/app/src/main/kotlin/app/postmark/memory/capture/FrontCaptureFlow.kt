@@ -4,6 +4,10 @@ import app.postmark.memory.create.CreateSessionFingerprintRepository
 import app.postmark.memory.create.SideFingerprintExtractor
 import app.postmark.memory.create.StagedSideFingerprint
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import postmark.core.data.db.FingerprintSide
 import postmark.core.recognition.QualityReason
 
@@ -22,27 +26,37 @@ sealed interface ProcessedStill {
     data class Rejected(val reasons: Set<QualityReason>) : ProcessedStill
 }
 
-/** I05 outcome of one camera still flowing through to encrypted persistence. */
+/**
+ * I05 outcome of one camera still flowing through to encrypted persistence.
+ * FIX-STATE-01: [Superseded] marks a delivery that arrived for an attempt
+ * that is no longer current (cancelled/reset/disposed); it changes nothing.
+ */
 sealed interface FrontCaptureOutcome {
     data class Captured(val fingerprintId: String) : FrontCaptureOutcome
 
     data class QualityRejected(val reasons: Set<QualityReason>) : FrontCaptureOutcome
 
     data class Failed(val message: String) : FrontCaptureOutcome
+
+    data object Superseded : FrontCaptureOutcome
 }
 
 /**
- * I05 integration: binds the CameraX capture shell to the bounded
- * normalize-crop-quality-ORB pipeline and the sealed fingerprint repository.
- * A delivered still is processed once; quality rejections persist nothing and
- * leave the session untouched so the user can recapture; persistence failures
- * surface as [FrontCaptureOutcome.Failed] without partial state. Exactly one
- * processed still is queued at a time and handed to the repository through its
- * extractor port, keeping the OpenCV pipeline out of persistence code.
+ * I05 integration: runs the bounded normalize-crop-quality-ORB pipeline and
+ * the sealed fingerprint repository for one delivered still, publishing every
+ * transition through THE authoritative [CaptureAttemptController].
+ *
+ * FIX-STATE-01: a begun attempt ALWAYS terminates - Accepted, Rejected, or
+ * Failed - even when the processor or persistence throws; cancellation ends
+ * the lifecycle cleanly without publishing any result. FIX-STATE-03: JPEG/
+ * OpenCV decode and ORB extraction run on [cpuDispatcher] (never Main);
+ * sealed file/database persistence runs on [ioDispatcher]; raw plaintext
+ * bytes live only inside this call.
  */
 class FrontCaptureFlow(
-    val shell: SingleStillCaptureShell,
     private val processor: StillProcessor,
+    private val cpuDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
 
     private val queued = AtomicReference<StagedSideFingerprint?>()
@@ -62,28 +76,45 @@ class FrontCaptureFlow(
         jpegBytes: ByteArray,
         capsuleId: String,
         persistence: postmark.core.data.fingerprints.SealedFingerprintPersistence,
+        attempt: CaptureAttemptController,
     ): FrontCaptureOutcome {
-        if (jpegBytes.isEmpty()) {
-            shell.onCaptureFailed("empty still")
-            return FrontCaptureOutcome.Failed("empty still")
-        }
-        return when (val processed = processor.process(jpegBytes)) {
-            is ProcessedStill.Rejected -> {
-                // Quality failure: no persistence, shell stays consumable.
-                shell.onStillDelivered()
-                FrontCaptureOutcome.QualityRejected(processed.reasons)
+        // A stale or non-capturing delivery is structurally inert.
+        if (!attempt.markProcessing()) return FrontCaptureOutcome.Superseded
+        try {
+            if (jpegBytes.isEmpty()) {
+                attempt.fail("empty still")
+                return FrontCaptureOutcome.Failed("empty still")
             }
-            is ProcessedStill.Accepted -> {
-                shell.onStillDelivered()
-                queued.set(StagedSideFingerprint(processed.profileId, FingerprintSide.FRONT, processed.serializedBytes))
-                try {
-                    val id = createRepository(persistence).captureFront(capsuleId)
+            return when (
+                val processed = withContext(cpuDispatcher) { processor.process(jpegBytes) }
+            ) {
+                is ProcessedStill.Rejected -> {
+                    // Quality failure: no persistence, controller shows Rejected.
+                    attempt.reject(processed.reasons)
+                    FrontCaptureOutcome.QualityRejected(processed.reasons)
+                }
+                is ProcessedStill.Accepted -> {
+                    queued.set(
+                        StagedSideFingerprint(processed.profileId, FingerprintSide.FRONT, processed.serializedBytes),
+                    )
+                    val id = withContext(ioDispatcher) {
+                        createRepository(persistence).captureFront(capsuleId)
+                    }
+                    attempt.accept()
                     FrontCaptureOutcome.Captured(id)
-                } catch (expected: Exception) {
-                    queued.set(null)
-                    FrontCaptureOutcome.Failed(expected.message ?: "capture failed")
                 }
             }
+        } catch (cancelled: CancellationException) {
+            // Clean lifecycle completion: no terminal result is published for
+            // this attempt, and nothing stays queued.
+            queued.set(null)
+            attempt.cancelActiveAttempt()
+            throw cancelled
+        } catch (failure: Exception) {
+            queued.set(null)
+            val message = failure.message ?: "capture failed"
+            attempt.fail(message)
+            return FrontCaptureOutcome.Failed(message)
         }
     }
 }

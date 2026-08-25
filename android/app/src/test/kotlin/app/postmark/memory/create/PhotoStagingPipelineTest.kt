@@ -57,7 +57,7 @@ class PhotoStagingPipelineTest {
     @Test
     fun threePhotosStageSuccessfullyInOrder() {
         val (pipeline, dir) = newPipeline()
-        val staged = pipeline.stageAll(sources(3))
+        val staged = kotlinx.coroutines.runBlocking { pipeline.stageAll(sources(3)) }
         assertEquals(3, staged.size)
         staged.forEachIndexed { index, photo ->
             assertEquals("photo-%02d.jpg".format(index), photo.file.name)
@@ -71,7 +71,7 @@ class PhotoStagingPipelineTest {
     @Test
     fun fivePhotosStageSuccessfully() {
         val (pipeline, dir) = newPipeline()
-        val staged = pipeline.stageAll(sources(5))
+        val staged = kotlinx.coroutines.runBlocking { pipeline.stageAll(sources(5)) }
         assertEquals(5, staged.size)
         assertEquals(5, dir.toFile().listFiles()?.size)
     }
@@ -81,7 +81,7 @@ class PhotoStagingPipelineTest {
         val (pipeline, _) = newPipeline()
         val counting = CountingSources(4)
 
-        pipeline.stageAll(counting.list())
+        kotlinx.coroutines.runBlocking { pipeline.stageAll(counting.list()) }
 
         assertEquals("sources must be streamed one at a time", 1, counting.maxConcurrentOpen)
         assertEquals("every opened source must be closed", counting.totalOpens, counting.totalCloses)
@@ -106,7 +106,7 @@ class PhotoStagingPipelineTest {
         )
         val counting = CountingSources(5)
         try {
-            pipeline.stageAll(counting.list())
+            kotlinx.coroutines.runBlocking { pipeline.stageAll(counting.list()) }
             throw AssertionError("expected failure")
         } catch (expected: IllegalStateException) {
             assertEquals("normalizer exploded", expected.message)
@@ -132,7 +132,7 @@ class PhotoStagingPipelineTest {
             }
         }
         try {
-            pipeline.stageAll(sources)
+            kotlinx.coroutines.runBlocking { pipeline.stageAll(sources) }
             throw AssertionError("expected failure")
         } catch (expected: SecurityException) {
             assertEquals("picker source unavailable", expected.message)
@@ -145,7 +145,7 @@ class PhotoStagingPipelineTest {
         val (pipeline, dir) = newPipeline()
         val counting = CountingSources(6)
         try {
-            pipeline.stageAll(counting.list())
+            kotlinx.coroutines.runBlocking { pipeline.stageAll(counting.list()) }
             throw AssertionError("expected rejection")
         } catch (expected: IllegalArgumentException) {
             assertTrue(expected.message!!.contains("got 6"))
@@ -158,7 +158,7 @@ class PhotoStagingPipelineTest {
     fun undersizedInputRejected() {
         val (pipeline, _) = newPipeline()
         try {
-            pipeline.stageAll(sources(2))
+            kotlinx.coroutines.runBlocking { pipeline.stageAll(sources(2)) }
             throw AssertionError("expected rejection")
         } catch (expected: IllegalArgumentException) {
             assertTrue(expected.message!!.contains("got 2"))
@@ -168,7 +168,7 @@ class PhotoStagingPipelineTest {
     @Test
     fun clearStagedRemovesArtifacts() {
         val (pipeline, dir) = newPipeline()
-        pipeline.stageAll(sources(4))
+        kotlinx.coroutines.runBlocking { pipeline.stageAll(sources(4)) }
         pipeline.clearStaged()
         assertEquals(0, dir.toFile().listFiles()?.size ?: 0)
     }
@@ -177,7 +177,9 @@ class PhotoStagingPipelineTest {
     fun sourceOneByteUnderPlaintextBudgetStagesFully() {
         val (pipeline, dir) = newPipeline()
         val payload = ByteArray(postmark.core.crypto.PhotoArtifactEncryptor.MAX_PLAINTEXT_BYTES - 1) { it.toByte() }
-        val staged = pipeline.stageAll(listOf(PhotoSource { java.io.ByteArrayInputStream(payload) }) + sources(2))
+        val staged = kotlinx.coroutines.runBlocking {
+            pipeline.stageAll(listOf(PhotoSource { java.io.ByteArrayInputStream(payload) }) + sources(2))
+        }
         assertEquals(payload.size.toLong(), staged[0].file.length())
         assertEquals(3, dir.toFile().listFiles()?.size)
     }
@@ -186,7 +188,9 @@ class PhotoStagingPipelineTest {
     fun sourceExactlyAtPlaintextBudgetStagesFully() {
         val (pipeline, _) = newPipeline()
         val payload = ByteArray(postmark.core.crypto.PhotoArtifactEncryptor.MAX_PLAINTEXT_BYTES) { it.toByte() }
-        val staged = pipeline.stageAll(listOf(PhotoSource { java.io.ByteArrayInputStream(payload) }) + sources(2))
+        val staged = kotlinx.coroutines.runBlocking {
+            pipeline.stageAll(listOf(PhotoSource { java.io.ByteArrayInputStream(payload) }) + sources(2))
+        }
         assertEquals(payload.size.toLong(), staged[0].file.length())
     }
 
@@ -219,7 +223,7 @@ class PhotoStagingPipelineTest {
             }
         }
         try {
-            pipeline.stageAll(overBudgetSources)
+            kotlinx.coroutines.runBlocking { pipeline.stageAll(overBudgetSources) }
             throw AssertionError("expected failure")
         } catch (expected: IllegalArgumentException) {
             assertTrue(expected.message!!.contains("plaintext budget"))
@@ -249,7 +253,9 @@ class PhotoStagingPipelineTest {
             }
         }
         try {
-            pipeline.stageAll(listOf(PhotoSource { endless }) + sources(2))
+            kotlinx.coroutines.runBlocking {
+                pipeline.stageAll(listOf(PhotoSource { endless }) + sources(2))
+            }
             throw AssertionError("expected failure")
         } catch (expected: IllegalArgumentException) {
             assertTrue(expected.message!!.contains("plaintext budget"))
@@ -266,7 +272,9 @@ class PhotoStagingPipelineTest {
             override fun read(): Int = delegate.read()
             override fun available(): Int = Int.MAX_VALUE
         }
-        val staged = pipeline.stageAll(listOf(PhotoSource { liar }) + sources(2))
+        val staged = kotlinx.coroutines.runBlocking {
+            pipeline.stageAll(listOf(PhotoSource { liar }) + sources(2))
+        }
         assertEquals("jpeg-liar", staged[0].file.readText())
     }
 
@@ -281,7 +289,7 @@ class PhotoStagingPipelineTest {
         val counting = CountingSources(3)
 
         try {
-            pipeline.stageAll(counting.list())
+            kotlinx.coroutines.runBlocking { pipeline.stageAll(counting.list()) }
             throw AssertionError("expected refusal")
         } catch (expected: IllegalStateException) {
             assertTrue(expected.message!!.contains("must be empty before staging"))

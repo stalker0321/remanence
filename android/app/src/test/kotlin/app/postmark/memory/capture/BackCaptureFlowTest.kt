@@ -1,26 +1,29 @@
 package app.postmark.memory.capture
 
-import app.postmark.memory.create.CreateSessionFingerprintRepository
 import java.util.UUID
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import postmark.core.data.db.FingerprintOrigin
 import postmark.core.data.db.FingerprintSide
-import postmark.core.data.fingerprints.SealedFingerprintPersistence
 import postmark.core.recognition.QualityReason
 
-/** Checklist-gated ordered back capture proof for I06. */
+/**
+ * FIX-STATE-01/02 regression proof for the checklist-gated back capture:
+ * a locked checklist is a VISIBLE Failed attempt (never a crash), ordering is
+ * enforced through sealed persistence failures, and every delivery terminates
+ * its authoritative attempt.
+ */
 class BackCaptureFlowTest {
 
-    private class FakePersistence : SealedFingerprintPersistence {
+    private class FakePersistence : postmark.core.data.fingerprints.SealedFingerprintPersistence {
         override suspend fun decrypt(fingerprintId: String): ByteArray = ByteArray(0)
 
         val persisted = mutableListOf<Pair<FingerprintSide, String>>()
         var frontExists = false
+        var failBackNext = false
 
         override suspend fun persist(
             capsuleId: String,
@@ -29,8 +32,9 @@ class BackCaptureFlowTest {
             profileId: String,
             plaintextBytes: ByteArray,
         ): String {
-            if (side == FingerprintSide.BACK && !frontExists) {
-                throw IllegalStateException("front must be captured before the back")
+            if (failBackNext && side == FingerprintSide.BACK) {
+                failBackNext = false
+                throw IllegalStateException("disk full")
             }
             persisted += side to String(plaintextBytes)
             if (side == FingerprintSide.FRONT) frontExists = true
@@ -46,59 +50,100 @@ class BackCaptureFlowTest {
 
     private val capsuleId = UUID.randomUUID().toString()
 
-    private fun flow(): Pair<BackCaptureFlow, PreparedBackGate> {
-        val gate = PreparedBackGate()
-        return BackCaptureFlow(gate) { ProcessedStill.Accepted("mvp-orb-v1", "orb-back".toByteArray()) } to gate
+    /** Accepting processor as a plain lambda (StillProcessor is a fun interface). */
+    private val acceptingProcessor = StillProcessor {
+        ProcessedStill.Accepted("mvp-orb-v1", "orb-back".toByteArray())
+    }
+
+    private val rejectingProcessor = StillProcessor {
+        ProcessedStill.Rejected(setOf(QualityReason.CROP_UNCERTAIN))
+    }
+
+    private fun capturingController(): CaptureAttemptController =
+        CaptureAttemptController().apply {
+            onPermissionResult(granted = true, canAskAgain = false)
+            onPreviewBound()
+            beginAttempt()
+        }
+
+    private fun fullyConfirmed(gate: PreparedBackGate) {
+        PreparedBackItem.entries.forEach { gate.setChecked(it, true) }
     }
 
     @Test
-    fun backIsLockedUntilEveryChecklistItemIsConfirmed() = runBlocking {
-        val (flow, gate) = flow()
-        assertFalse(flow.readyToCapture())
+    fun lockedChecklistYieldsVisibleFailedAttemptNotCrash() = runBlocking {
+        val gate = PreparedBackGate()
+        val backFlow = BackCaptureFlow(gate, acceptingProcessor)
+        assertFalse(backFlow.readyToCapture())
 
         // Partial confirmation is not enough.
         gate.setChecked(PreparedBackItem.MESSAGE_WRITTEN, true)
         gate.setChecked(PreparedBackItem.ADDRESS_WRITTEN, true)
-        assertFalse(flow.readyToCapture())
-        assertThrows(IllegalStateException::class.java) {
-            runBlocking { flow.onJpegDelivered("jpeg".toByteArray(), capsuleId, FakePersistence()) }
-        }
 
-        PreparedBackItem.entries.forEach { gate.setChecked(it, true) }
-        assertTrue(flow.readyToCapture())
+        val controller = capturingController()
+        val outcome = backFlow.onJpegDelivered("jpeg".toByteArray(), capsuleId, FakePersistence(), controller)
+
+        assertTrue(outcome is FrontCaptureOutcome.Failed)
+        assertTrue(controller.phase is CaptureAttemptPhase.Failed)
+        assertFalse(backFlow.readyToCapture())
+        Unit
     }
 
     @Test
     fun confirmedChecklistFlowsBackThroughProcessorIntoPersistence() = runBlocking {
-        val (flow, gate) = flow()
+        val gate = PreparedBackGate()
+        val backFlow = BackCaptureFlow(gate, acceptingProcessor)
         val persistence = FakePersistence()
         // Front-first ordering: seed the front baseline.
         persistence.persist(capsuleId, FingerprintSide.FRONT, FingerprintOrigin.SENDER, "mvp-orb-v1", "orb-front".toByteArray())
-        PreparedBackItem.entries.forEach { gate.setChecked(it, true) }
+        fullyConfirmed(gate)
+        val controller = capturingController()
 
-        val outcome = flow.onJpegDelivered("jpeg".toByteArray(), capsuleId, persistence)
+        val outcome = backFlow.onJpegDelivered("jpeg".toByteArray(), capsuleId, persistence, controller)
 
         assertEquals(FrontCaptureOutcome.Captured("fp-2"), outcome)
-        assertEquals(listOf(FingerprintSide.FRONT to "orb-front", FingerprintSide.BACK to "orb-back"), persistence.persisted)
+        assertEquals(
+            listOf(FingerprintSide.FRONT to "orb-front", FingerprintSide.BACK to "orb-back"),
+            persistence.persisted,
+        )
+        assertEquals(CaptureAttemptPhase.Accepted, controller.phase)
+        Unit
     }
 
     @Test
-    fun qualityRejectionStillReportsWithoutPersisting() = runBlocking {
-        val (flow, gate) = flow()
-        val rejecting = BackCaptureFlow(gate) {
-            ProcessedStill.Rejected(setOf(QualityReason.CROP_UNCERTAIN))
-        }
-        PreparedBackItem.entries.forEach { gate.setChecked(it, true) }
+    fun qualityRejectionReportsWithoutPersistingAndStaysRetriable() = runBlocking {
+        val gate = PreparedBackGate()
+        val rejecting = BackCaptureFlow(gate, rejectingProcessor)
+        fullyConfirmed(gate)
         val persistence = FakePersistence()
         persistence.persist(capsuleId, FingerprintSide.FRONT, FingerprintOrigin.SENDER, "mvp-orb-v1", ByteArray(1))
+        val controller = capturingController()
 
-        val outcome = rejecting.onJpegDelivered("jpeg".toByteArray(), capsuleId, persistence)
+        val outcome = rejecting.onJpegDelivered("jpeg".toByteArray(), capsuleId, persistence, controller)
 
         assertEquals(FrontCaptureOutcome.QualityRejected(setOf(QualityReason.CROP_UNCERTAIN)), outcome)
         assertEquals(1, persistence.persisted.size)
+        assertTrue(controller.phase is CaptureAttemptPhase.Rejected)
+        controller.startRetake()
+        assertEquals(CaptureAttemptPhase.Binding, controller.phase)
+        Unit
     }
 
-    private companion object {
-        fun runBlocking(block: suspend () -> Unit) = kotlinx.coroutines.runBlocking { block() }
+    /** FIX-STATE-01: even the persistence layer failing ends the attempt visibly. */
+    @Test
+    fun persistenceFailureTerminatesTheAttemptAsFailed() = runBlocking {
+        val gate = PreparedBackGate()
+        val backFlow = BackCaptureFlow(gate, acceptingProcessor)
+        val persistence = FakePersistence()
+        persistence.persist(capsuleId, FingerprintSide.FRONT, FingerprintOrigin.SENDER, "mvp-orb-v1", ByteArray(1))
+        persistence.failBackNext = true
+        fullyConfirmed(gate)
+        val controller = capturingController()
+
+        val outcome = backFlow.onJpegDelivered("jpeg".toByteArray(), capsuleId, persistence, controller)
+
+        assertEquals(FrontCaptureOutcome.Failed("disk full"), outcome)
+        assertEquals(CaptureAttemptPhase.Failed(1L, "disk full"), controller.phase)
+        Unit
     }
 }

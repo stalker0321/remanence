@@ -5,7 +5,6 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import app.postmark.memory.auth.SoftwareKekBoundary
 import app.postmark.memory.capture.ProcessedStill
-import app.postmark.memory.capture.SingleStillCaptureShell
 import app.postmark.memory.capture.StillProcessor
 import app.postmark.memory.create.SameAccountCapsulePublisher
 import app.postmark.memory.create.SameAccountCapsuleRequest
@@ -289,12 +288,21 @@ class CapsuleRoutingCorruptionTest {
         grantsClockMillis = { 0L },
         frontProcessor = MatchingProcessor(syntheticFingerprint(11, FingerprintSide.FRONT)),
         backProcessor = MatchingProcessor(syntheticFingerprint(22, FingerprintSide.BACK)),
+        cpuDispatcher = testDispatcher,
+        ioDispatcher = testDispatcher,
     )
 
-    private fun capturingShell() = SingleStillCaptureShell().apply {
-        onPermissionResult(granted = true, canAskAgain = false)
-        onPreviewBound()
-        onCaptureStarted()
+    /** FIX-STATE-01: drives the authoritative controllers exactly as the UI does. */
+    private fun capturePair(vm: ScanViewModel) {
+        listOf(vm.frontAttempt, vm.backAttempt).forEach {
+            it.onPermissionResult(granted = true, canAskAgain = false)
+            it.onPreviewBound()
+        }
+        assertTrue(vm.beginFrontCapture())
+        vm.deliverFrontJpeg("front".toByteArray())
+        awaitCondition { vm.captureSession.state == app.postmark.memory.scan.ScanSessionState.AWAITING_BACK }
+        assertTrue(vm.beginBackCapture())
+        vm.deliverBackJpeg("back".toByteArray())
     }
 
     private fun awaitCondition(timeoutMs: Long = 10_000, condition: () -> Boolean) {
@@ -307,8 +315,7 @@ class CapsuleRoutingCorruptionTest {
 
     /** Runs one full scan attempt and asserts the corrupt row yields nothing. */
     private suspend fun assertScanYieldsNoGrantAndNoBaseline(vm: ScanViewModel) {
-        vm.onFrontJpeg("front".toByteArray(), capturingShell())
-        vm.onBackJpeg("back".toByteArray(), capturingShell())
+        capturePair(vm)
         awaitCondition { vm.matchState.value !is ScanMatchUiState.Matching }
         assertTrue("corrupt row must never grant", vm.terminal.value !is ScanTerminalState.Granted)
         assertTrue(vm.matchState.value is ScanMatchUiState.RecaptureGuidance)
@@ -370,8 +377,7 @@ class CapsuleRoutingCorruptionTest {
             it.copy(senderSigningPublicKeysetB64 = Base64.urlSafeEncode(attacker.signingPublicKeyset))
         }
         val vm = scanViewModel()
-        vm.onFrontJpeg("front".toByteArray(), capturingShell())
-        vm.onBackJpeg("back".toByteArray(), capturingShell())
+        capturePair(vm)
         awaitCondition { vm.terminal.value is ScanTerminalState.Granted }
         assertTrue(
             "row-carried key substitution must not influence the trust decision",
@@ -389,8 +395,7 @@ class CapsuleRoutingCorruptionTest {
             it.copy(senderUserId = null, senderKeyBundleId = null, senderSigningPublicKeysetB64 = null)
         }
         val vm = scanViewModel()
-        vm.onFrontJpeg("front".toByteArray(), capturingShell())
-        vm.onBackJpeg("back".toByteArray(), capturingShell())
+        capturePair(vm)
         awaitCondition { vm.terminal.value !is ScanTerminalState.Idle }
         assertTrue(
             "legacy NULL self-send row keeps working through the documented fallback",

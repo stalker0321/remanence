@@ -2,8 +2,8 @@ package app.postmark.memory.ui.scan
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import app.postmark.memory.capture.CaptureAttemptController
 import app.postmark.memory.capture.ProcessedStill
-import app.postmark.memory.capture.SingleStillCaptureShell
 import app.postmark.memory.create.RealStillFingerprintProcessor
 import app.postmark.memory.scan.ScanCaptureSession
 import app.postmark.memory.scan.ScannedSide
@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import postmark.core.crypto.CapsuleAcceptanceGate
 import postmark.core.crypto.CapsuleAcceptanceInput
 import postmark.core.crypto.CapsuleAcceptanceResult
@@ -38,7 +39,6 @@ import postmark.core.recognition.FingerprintCodec
 import postmark.core.recognition.FingerprintSide
 import postmark.core.recognition.IndexedCandidate
 import postmark.core.recognition.LocalMatchEngine
-import postmark.core.recognition.QualityReason
 import postmark.core.recognition.RecognitionProfile
 import postmark.core.recognition.ScanFlowResult
 import postmark.core.recognition.ScanGrantManager
@@ -110,14 +110,20 @@ class ScanViewModel(
     backProcessor: app.postmark.memory.capture.StillProcessor =
         RealStillFingerprintProcessor(profile, FingerprintSide.BACK),
     candidateIndexProvider: (suspend () -> List<IndexedCandidate>)? = null,
+    private val cpuDispatcher: kotlinx.coroutines.CoroutineDispatcher = kotlinx.coroutines.Dispatchers.Default,
+    private val ioDispatcher: kotlinx.coroutines.CoroutineDispatcher = kotlinx.coroutines.Dispatchers.IO,
 ) : ViewModel() {
 
     val captureSession = ScanCaptureSession(ScanSideExtractor { side ->
         requireNotNull(queuedStill.getAndSet(null)) { "no processed still queued for $side" }
     })
 
-    private val _qualityRejection = MutableStateFlow<Set<QualityReason>>(emptySet())
-    val qualityRejection: StateFlow<Set<QualityReason>> = _qualityRejection.asStateFlow()
+    /**
+     * FIX-STATE-01: THE authoritative per-side capture attempts. Rejections,
+     * failures, processing, and retakes all render from these controllers.
+     */
+    val frontAttempt = CaptureAttemptController()
+    val backAttempt = CaptureAttemptController()
 
     private val _matchState = MutableStateFlow<ScanMatchUiState>(ScanMatchUiState.AwaitingCapture)
     val matchState: StateFlow<ScanMatchUiState> = _matchState.asStateFlow()
@@ -151,7 +157,9 @@ class ScanViewModel(
         matchGeneration++
         captureSession.reset()
         grants.clearAll()
-        _qualityRejection.value = emptySet()
+        frontAttempt.reset()
+        backAttempt.reset()
+        queuedStill.set(null)
         _matchState.value = ScanMatchUiState.AwaitingCapture
         _terminal.value = ScanTerminalState.Idle
     }
@@ -160,39 +168,100 @@ class ScanViewModel(
     // Capture.
     // ------------------------------------------------------------------
 
-    fun onFrontJpeg(jpegBytes: ByteArray, shell: SingleStillCaptureShell) {
-        viewModelScope.launch {
-            acceptProcessed(frontProcessor.process(jpegBytes), FingerprintSide.FRONT, shell)
+    /** Shutter press for the FRONT; legal only while the session awaits FRONT. */
+    fun beginFrontCapture(): Boolean = beginCapture(FingerprintSide.FRONT)
+
+    /** Shutter press for the BACK; legal only while the session awaits BACK. */
+    fun beginBackCapture(): Boolean = beginCapture(FingerprintSide.BACK)
+
+    private fun beginCapture(side: FingerprintSide): Boolean {
+        val expected = if (side == FingerprintSide.FRONT) {
+            app.postmark.memory.scan.ScanSessionState.AWAITING_FRONT
+        } else {
+            app.postmark.memory.scan.ScanSessionState.AWAITING_BACK
+        }
+        if (captureSession.state != expected) return false
+        return try {
+            attemptFor(side).beginAttempt()
+            true
+        } catch (_: IllegalStateException) {
+            false
         }
     }
 
-    fun onBackJpeg(jpegBytes: ByteArray, shell: SingleStillCaptureShell) {
+    private fun attemptFor(side: FingerprintSide): CaptureAttemptController =
+        if (side == FingerprintSide.FRONT) frontAttempt else backAttempt
+
+    /** Camera bytes for the FRONT; stale deliveries are structurally inert. */
+    fun deliverFrontJpeg(jpegBytes: ByteArray) {
+        if (captureSession.state != app.postmark.memory.scan.ScanSessionState.AWAITING_FRONT) return
         viewModelScope.launch {
-            acceptProcessed(backProcessor.process(jpegBytes), FingerprintSide.BACK, shell)
-            if (captureSession.readyForMatching) evaluateMatch()
+            acceptProcessed(jpegBytes, frontProcessor, FingerprintSide.FRONT)
         }
     }
 
+    /** Camera bytes for the BACK; stale deliveries are structurally inert. */
+    fun deliverBackJpeg(jpegBytes: ByteArray) {
+        if (captureSession.state != app.postmark.memory.scan.ScanSessionState.AWAITING_BACK) return
+        viewModelScope.launch {
+            val accepted = acceptProcessed(jpegBytes, backProcessor, FingerprintSide.BACK)
+            if (accepted && captureSession.readyForMatching) evaluateMatch()
+        }
+    }
+
+    /**
+     * FIX-STATE-01: a delivered still ALWAYS terminates its attempt -
+     * Accepted, Rejected, or Failed - even when the ORB processor throws;
+     * cancellation completes the lifecycle without publishing any result.
+     */
     private suspend fun acceptProcessed(
-        outcome: ProcessedStill,
+        jpegBytes: ByteArray,
+        processor: app.postmark.memory.capture.StillProcessor,
         side: FingerprintSide,
-        shell: SingleStillCaptureShell,
-    ) {
-        when (outcome) {
-            is ProcessedStill.Accepted -> {
-                shell.onStillDelivered()
-                _qualityRejection.value = emptySet()
-                queuedStill.set(
-                    ScannedSide(outcome.profileId, side, outcome.serializedBytes),
-                )
-                if (side == FingerprintSide.FRONT) captureSession.captureFront()
-                else captureSession.captureBack()
+    ): Boolean {
+        val attempt = attemptFor(side)
+        if (!attempt.markProcessing()) return false
+        return try {
+            when (
+                val processed =
+                    withContext(cpuDispatcher) { processor.process(jpegBytes) }
+            ) {
+                is ProcessedStill.Rejected -> {
+                    attempt.reject(processed.reasons)
+                    false
+                }
+                is ProcessedStill.Accepted -> {
+                    queuedStill.set(
+                        ScannedSide(processed.profileId, side, processed.serializedBytes),
+                    )
+                    if (side == FingerprintSide.FRONT) captureSession.captureFront()
+                    else captureSession.captureBack()
+                    attempt.accept()
+                    true
+                }
             }
-            is ProcessedStill.Rejected -> {
-                shell.onStillDelivered()
-                _qualityRejection.value = outcome.reasons
-            }
+        } catch (cancelled: CancellationException) {
+            queuedStill.set(null)
+            attempt.cancelActiveAttempt()
+            throw cancelled
+        } catch (failure: Exception) {
+            queuedStill.set(null)
+            attempt.fail(failure.message ?: "capture failed")
+            false
         }
+    }
+
+    /** Explicit Retake after Rejected/Failed on either side. */
+    fun retakeFront() {
+        runCatchingRetake(frontAttempt)
+    }
+
+    fun retakeBack() {
+        runCatchingRetake(backAttempt)
+    }
+
+    private fun runCatchingRetake(attempt: CaptureAttemptController) {
+        runCatching { attempt.startRetake() }
     }
 
     /**
@@ -202,8 +271,13 @@ class ScanViewModel(
      */
     fun resetSession() {
         matchGeneration++
+        // FIX-STATE-05: an in-flight delivery/match can never write into the
+        // fresh flow - active attempts are cancelled cleanly and stale
+        // terminal callbacks are structurally inert afterwards.
+        frontAttempt.restartCapture()
+        backAttempt.restartCapture()
+        queuedStill.set(null)
         captureSession.reset()
-        _qualityRejection.value = emptySet()
         _matchState.value = ScanMatchUiState.AwaitingCapture
     }
 

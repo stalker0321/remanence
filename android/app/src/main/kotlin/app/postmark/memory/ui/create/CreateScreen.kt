@@ -1,11 +1,8 @@
 package app.postmark.memory.ui.create
 
-import android.Manifest
-import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.camera.view.PreviewView
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -13,6 +10,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
@@ -20,30 +19,18 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.key
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import app.postmark.memory.capture.CapturePermissionStep
-import app.postmark.memory.capture.CameraXPreviewBinder
+import app.postmark.memory.capture.CaptureAttemptSurface
 import app.postmark.memory.capture.PreparedBackItem
-import app.postmark.memory.capture.QualityFailureScreen
-import app.postmark.memory.capture.SingleStillCaptureShell
-import app.postmark.memory.capture.cameraAskAgainPossible
-import app.postmark.memory.capture.resolveCapturePermissionStep
 
 /**
  * FIX-M1-007-11: the production Create surface. Every control is bound to the
@@ -52,6 +39,11 @@ import app.postmark.memory.capture.resolveCapturePermissionStep
  * prepared-back checklist, the Photo Picker (exactly 3-5), the bounded note,
  * and the single sealing path into the ciphertext outbox. No step advances
  * without its real gate.
+ *
+ * FIX-STATE-01/04: capture attempts render exclusively from the authoritative
+ * controllers (Processing shown; Rejected/Failed replace the camera with
+ * reasons plus a real Retake). FIX-STATE-04: the whole step content is
+ * scrollable so errors and actions stay reachable on small phones.
  */
 @Composable
 fun CreateScreen(
@@ -60,6 +52,7 @@ fun CreateScreen(
 ) {
     val step by viewModel.step.collectAsStateWithLifecycle()
     val publishError by viewModel.publishError.collectAsStateWithLifecycle()
+    val flowError by viewModel.flowError.collectAsStateWithLifecycle()
 
     // Leaving the create flow (exit, logout, navigation away) tears the
     // session down: confirmed recipient and staged plaintext never linger.
@@ -67,7 +60,12 @@ fun CreateScreen(
         onDispose { viewModel.endSession() }
     }
 
-    Column(modifier = modifier.fillMaxSize().padding(16.dp)) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+    ) {
         Text("Create a capsule", style = MaterialTheme.typography.titleLarge)
         Spacer(Modifier.height(8.dp))
         Text(
@@ -89,23 +87,40 @@ fun CreateScreen(
         when (step) {
             CreateViewModel.Step.RECIPIENT_LOOKUP -> RecipientLookupContent(viewModel)
             CreateViewModel.Step.RECIPIENT_CONFIRM -> RecipientConfirmContent(viewModel)
-            CreateViewModel.Step.FRONT -> CaptureAttemptContent(
-                title = "front",
-                viewModel = viewModel,
-                onJpeg = viewModel::onFrontJpeg,
+            CreateViewModel.Step.FRONT -> CaptureAttemptSurface(
+                title = "postcard front",
+                controller = viewModel.frontAttempt,
+                shutterTag = "capture_shutter_front",
+                retakeTag = "capture_retake_front",
+                onBeginAttempt = viewModel::beginFrontCapture,
+                onDelivered = viewModel::deliverFrontJpeg,
+                onRetake = viewModel::retakeFront,
             )
+
             CreateViewModel.Step.BACK_CHECKLIST -> PreparedBackChecklist(viewModel)
-            CreateViewModel.Step.BACK -> CaptureAttemptContent(
+            CreateViewModel.Step.BACK -> CaptureAttemptSurface(
                 title = "prepared back",
-                viewModel = viewModel,
-                onJpeg = viewModel::onBackJpeg,
+                controller = viewModel.backAttempt,
+                shutterTag = "capture_shutter_back",
+                retakeTag = "capture_retake_back",
+                onBeginAttempt = viewModel::beginBackCapture,
+                onDelivered = viewModel::deliverBackJpeg,
+                onRetake = viewModel::retakeBack,
             )
+
             CreateViewModel.Step.CONTENT -> ContentStepContent(viewModel)
             CreateViewModel.Step.PUBLISHING -> Text("Encrypting locally...", modifier = Modifier.testTag("create_publishing"))
             CreateViewModel.Step.PUBLISHED -> Text(
                 "Capsule sealed. Send the physical postcard.",
                 modifier = Modifier.testTag("create_published"),
             )
+        }
+
+        // FIX-STATE-02: visible recovery for guarded/out-of-order events.
+        val guard = flowError
+        if (guard != null && step != CreateViewModel.Step.PUBLISHING) {
+            Spacer(Modifier.height(8.dp))
+            Text(text = guard, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("create_guard_error"))
         }
 
         val error = publishError
@@ -177,117 +192,6 @@ private fun RecipientConfirmContent(viewModel: CreateViewModel) {
     )
 }
 
-/**
- * One camera attempt: fresh [SingleStillCaptureShell], permission request,
- * PreviewView binding through CameraXPreviewBinder, one deliberate still.
- * A quality rejection bumps the attempt counter so a clean shell backs the
- * guided recapture; nothing else resets a consumed capture.
- */
-@Composable
-private fun CaptureAttemptContent(
-    title: String,
-    viewModel: CreateViewModel,
-    onJpeg: (ByteArray, SingleStillCaptureShell) -> Unit,
-) {
-    val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-    var attempt by remember { mutableIntStateOf(0) }
-    val rejection by viewModel.qualityRejection.collectAsStateWithLifecycle()
-    LaunchedEffect(rejection) { if (rejection.isNotEmpty()) attempt++ }
-
-    key(attempt) {
-        val shell = remember(attempt) { SingleStillCaptureShell() }
-        var imageCapture by remember(attempt) { mutableStateOf<androidx.camera.core.ImageCapture?>(null) }
-        var previewView by remember(attempt) { mutableStateOf<PreviewView?>(null) }
-
-        val permissionLauncher = rememberLauncherForActivityResult(
-            ActivityResultContracts.RequestPermission(),
-        ) { granted ->
-            // FIX-REVIEW-05: the OS ask-again signal decides retryable vs
-            // permanent; a bare denial is no longer treated as retryable
-            // forever (PermanentlyDenied is actually reachable).
-            shell.onPermissionResolved(
-                resolveCapturePermissionStep(
-                    granted = granted,
-                    shouldShowRationale = cameraAskAgainPossible(context),
-                ),
-            )
-        }
-
-        LaunchedEffect(shell) {
-            val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
-                PackageManager.PERMISSION_GRANTED
-            if (granted) {
-                shell.onPermissionResult(true, false)
-            } else {
-                permissionLauncher.launch(Manifest.permission.CAMERA)
-            }
-        }
-
-        Column {
-            Text("Capture the $title", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(8.dp))
-            when (shell.permission) {
-                CapturePermissionStep.Granted -> {
-                    AndroidView(
-                        factory = { ctx ->
-                            PreviewView(ctx).also { pv ->
-                                previewView = pv
-                                val capture = CameraXPreviewBinder.createImageCapture()
-                                imageCapture = capture
-                                CameraXPreviewBinder.bind(
-                                    ctx,
-                                    lifecycleOwner,
-                                    pv,
-                                    capture,
-                                    onBound = { shell.onPreviewBound() },
-                                    onError = { reason ->
-                                        runCatching { shell.onCaptureFailed(reason) }
-                                    },
-                                )
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth().height(320.dp).testTag("capture_preview"),
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Button(
-                        onClick = {
-                            val capture = imageCapture ?: return@Button
-                            shell.onCaptureStarted()
-                            CameraXPreviewBinder.captureOneStill(
-                                context,
-                                capture,
-                                onDelivered = { jpeg -> onJpeg(jpeg, shell) },
-                                onError = { reason ->
-                                    runCatching { shell.onCaptureFailed(reason) }
-                                },
-                            )
-                        },
-                        enabled = shell.phase is app.postmark.memory.capture.StillCapturePhase.PreviewReady,
-                        modifier = Modifier.testTag("capture_shutter"),
-                    ) { Text("Capture") }
-                    if (shell.phase is app.postmark.memory.capture.StillCapturePhase.Failed) {
-                        Text(
-                            "Capture failed: ${(shell.phase as app.postmark.memory.capture.StillCapturePhase.Failed).reason}",
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                }
-                CapturePermissionStep.DeniedRetryable -> Column {
-                    Text("Camera permission was declined.")
-                    Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) {
-                        Text("Ask again")
-                    }
-                }
-                CapturePermissionStep.PermanentlyDenied ->
-                    Text("Camera access is permanently denied; enable it in Settings.")
-                CapturePermissionStep.NotRequested -> Text("Requesting camera permission...")
-            }
-            Spacer(Modifier.height(8.dp))
-        }
-    }
-}
-
 @Composable
 private fun PreparedBackChecklist(viewModel: CreateViewModel) {
     Column {
@@ -316,8 +220,6 @@ private fun PreparedBackChecklist(viewModel: CreateViewModel) {
 
 @Composable
 private fun ContentStepContent(viewModel: CreateViewModel) {
-    val context = LocalContext.current
-    val rejection by viewModel.qualityRejection.collectAsStateWithLifecycle()
     var selectionCount by remember { mutableIntStateOf(viewModel.photoSelection.selectedIds.size) }
 
     val pickerContract = remember {
@@ -355,6 +257,13 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
             label = { Text("Optional note (${NoteEditorState.MAX_NOTE_BYTES} byte limit)") },
             modifier = Modifier.fillMaxWidth().testTag("create_note_input"),
         )
+        if (!viewModel.noteEditor.canIncludeInCapsule || viewModel.noteEditor.limitReached) {
+            Text(
+                "The note exceeds the ${NoteEditorState.MAX_NOTE_BYTES} byte limit.",
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.testTag("create_note_limit_error"),
+            )
+        }
 
         Spacer(Modifier.height(12.dp))
         Button(
@@ -362,9 +271,5 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
             enabled = viewModel.photoSelection.canProceed && viewModel.noteEditor.canIncludeInCapsule,
             modifier = Modifier.testTag("create_publish"),
         ) { Text("Encrypt and stage capsule") }
-
-        if (rejection.isNotEmpty()) {
-            QualityFailureScreen(reasons = rejection)
-        }
     }
 }

@@ -20,39 +20,40 @@ import postmark.core.model.RecipientEnvelopeContextInput
 import postmark.core.model.UserId
 
 /**
- * FIX-M1-007-13 / FIX-REVIEW-04: the REAL capsule content source behind the
- * presentation. Every photo is decrypted on demand from its ciphertext file
- * under the exact artifact AAD built from the SEPARATE persisted sender and
- * recipient identities; the note comes from the decrypted content manifest.
- * Nothing is written to disk in plaintext and nothing outlives the caller's
- * page cache (docs/security.md section 12).
+ * FIX-M1-007-13 / FIX-REVIEW-04 / FIX-REVIEW2-01: the REAL capsule content
+ * source behind the presentation. Every photo is decrypted on demand from its
+ * ciphertext file under the exact artifact AAD built from the SEPARATE
+ * strictly-parsed persisted sender and recipient identities; the note comes
+ * from the decrypted content manifest. Malformed non-null identity material
+ * fails closed - nothing decrypts, nothing falls back to the authenticated
+ * account. Nothing is written to disk in plaintext (docs/security.md 12).
  */
 class CapsuleContentSource(
     private val database: PostmarkLocalDatabase,
     private val encryptionPrivateHandle: com.google.crypto.tink.KeysetHandle,
-    private val ownUserId: UUID,
-    private val recipientKeyBundleIdOf: suspend (capsuleId: String) -> UUID?,
 ) {
 
     /** Separate routing identities resolved from the persisted capsule row. */
     private data class Routing(
         val senderUserId: UserId,
         val recipientUserId: UserId,
+        val recipientKeyBundleId: KeyBundleId,
     )
 
     /**
-     * FIX-REVIEW-04: sender and recipient are distinct persisted identities.
-     * Legacy same-account rows (NULL sender columns) fall back to the
-     * authenticated account - self-send works naturally, never by conflation.
+     * FIX-REVIEW2-01: strict parse via THE shared routing policy. Corrupt
+     * rows refuse every decryption; there is no own-account substitution.
      */
-    private fun routing(row: postmark.core.data.db.OutboxCapsuleEntity): Routing {
-        val recipient = runCatching { UserId(UUID.fromString(row.recipientUserId)) }
-            .getOrElse { UserId(ownUserId) }
-        val sender = row.senderUserId?.let { id ->
-            runCatching { UserId(UUID.fromString(id)) }.getOrNull()
-        } ?: recipient
-        return Routing(senderUserId = sender, recipientUserId = recipient)
-    }
+    private fun routing(row: postmark.core.data.db.OutboxCapsuleEntity): Routing =
+        when (val resolution = app.postmark.memory.identity.CapsuleRoutingPolicy.resolve(row)) {
+            is app.postmark.memory.identity.CapsuleRoutingResolution.Resolved -> Routing(
+                senderUserId = resolution.senderUserId,
+                recipientUserId = resolution.recipientUserId,
+                recipientKeyBundleId = resolution.recipientKeyBundleId,
+            )
+            is app.postmark.memory.identity.CapsuleRoutingResolution.Corrupt ->
+                throw IllegalStateException("corrupt capsule routing: ${resolution.field}")
+        }
 
     private suspend fun routing(capsuleId: String): Routing =
         routing(requireNotNull(database.outboxCapsuleDao().getByCapsuleId(capsuleId)) {
@@ -67,7 +68,6 @@ class CapsuleContentSource(
                 "unknown capsule"
             }
             val routing = routing(row)
-            val bundleId = requireNotNull(recipientKeyBundleIdOf(capsuleId))
             val envelopeBytes = java.io.File(requireNotNull(row.envelopePath)).readBytes()
             val opened = RecipientEnvelopeCryptor().open(
                 encryptionPrivateHandle,
@@ -75,7 +75,7 @@ class CapsuleContentSource(
                     CapsuleId(uuid),
                     routing.senderUserId,
                     routing.recipientUserId,
-                    KeyBundleId(bundleId),
+                    routing.recipientKeyBundleId,
                 ),
                 envelopeBytes,
             )

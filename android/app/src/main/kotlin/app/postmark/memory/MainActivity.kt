@@ -228,15 +228,9 @@ private fun CapsuleRoute(
         val loaded = runCatching { container.identityRepository.load() }.getOrNull()
             as? postmark.core.crypto.IdentityBundleRepository.LoadResult.Available
             ?: return@LaunchedEffect
-        val row = container.currentAccountStore.loadEntity() ?: return@LaunchedEffect
         val source = app.postmark.memory.ui.capsule.CapsuleContentSource(
             database = container.database,
             encryptionPrivateHandle = loaded.encryptionHandle,
-            ownUserId = java.util.UUID.fromString(row.userId),
-            recipientKeyBundleIdOf = { id ->
-                container.database.outboxCapsuleDao().getByCapsuleId(id)
-                    ?.recipientKeyBundleId?.let(java.util.UUID::fromString)
-            },
         )
         val photoCount = runCatching { source.photoCount(capsuleId) }.getOrNull() ?: return@LaunchedEffect
         // The note decrypts once at open; photos decrypt per page on demand.

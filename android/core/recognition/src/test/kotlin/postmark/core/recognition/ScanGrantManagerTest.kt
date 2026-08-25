@@ -97,4 +97,30 @@ class ScanGrantManagerTest {
             ScanGrantManager(clock, grantLifetimeMillis = 0)
         }
     }
+
+    @Test
+    fun expiresAtMillisReportsTheExactDeadlineOfTheLiveGrantOnly() {
+        val grants = manager()
+        val grant = grants.issue(UUID.randomUUID())
+
+        assertEquals(grant.expiresAtEpochMillis, grants.expiresAtMillis(grant.grantId))
+
+        // A foreign ID never reads another grant's deadline.
+        assertNull(grants.expiresAtMillis(UUID.randomUUID()))
+
+        // After consumption there is no deadline left to read.
+        assertTrue(grants.consume(grant.grantId))
+        assertNull(grants.expiresAtMillis(grant.grantId))
+    }
+
+    @Test
+    fun expiresAtMillisInvalidatesAnAlreadyExpiredGrant() {
+        val grants = manager()
+        val grant = grants.issue(UUID.randomUUID())
+
+        nowMillis += ScanGrantManager.DEFAULT_GRANT_LIFETIME_MILLIS + 1
+
+        assertNull(grants.expiresAtMillis(grant.grantId))
+        assertNull(grants.resolveCapsuleId(grant.grantId))
+    }
 }

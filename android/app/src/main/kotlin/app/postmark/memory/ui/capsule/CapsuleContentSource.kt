@@ -31,7 +31,7 @@ import postmark.core.model.UserId
 class CapsuleContentSource(
     private val database: PostmarkLocalDatabase,
     private val encryptionPrivateHandle: com.google.crypto.tink.KeysetHandle,
-) {
+) : CapsuleContentReader {
 
     /** Separate routing identities resolved from the persisted capsule row. */
     private data class Routing(
@@ -97,12 +97,12 @@ class CapsuleContentSource(
     }
 
     /** Number of encrypted photo blobs declared for this capsule. */
-    suspend fun photoCount(capsuleId: String): Int =
+    override suspend fun photoCount(capsuleId: String): Int =
         database.outboxBlobDao().getAllByCapsuleId(capsuleId)
             .count { it.kind == OutboxArtifactKind.PHOTO.name }
 
     /** Decrypts one photo page strictly on demand. */
-    suspend fun loadPhoto(capsuleId: String, ordinal: Int): DecryptedPhoto =
+    override suspend fun loadPhoto(capsuleId: String, ordinal: Int): DecryptedPhoto =
         withContext(Dispatchers.IO) {
             val uuid = UUID.fromString(capsuleId)
             val blobs = database.outboxBlobDao().getAllByCapsuleId(capsuleId)
@@ -120,7 +120,7 @@ class CapsuleContentSource(
         }
 
     /** Decrypts the optional note from the content manifest. */
-    suspend fun noteText(capsuleId: String): String? = withContext(Dispatchers.IO) {
+    override suspend fun noteText(capsuleId: String): String? = withContext(Dispatchers.IO) {
         val uuid = UUID.fromString(capsuleId)
         val blobs = database.outboxBlobDao().getAllByCapsuleId(capsuleId)
         val contentRow = blobs.firstOrNull { it.kind == OutboxArtifactKind.CONTENT_MANIFEST.name }

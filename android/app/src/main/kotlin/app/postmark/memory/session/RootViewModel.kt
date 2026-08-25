@@ -8,8 +8,11 @@ import app.postmark.memory.ui.navigation.AuthUiState
 import app.postmark.memory.ui.navigation.CapsuleAccess
 import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import postmark.core.recognition.ScanGrantManager
@@ -35,9 +38,31 @@ class RootViewModel(
     private val logoutAction: (suspend () -> Unit)? = null,
     /** Authoritative memory-only grant lifecycle; injected as the single instance. */
     private val grants: ScanGrantManager = ScanGrantManager(clockMillis = System::currentTimeMillis),
+    /**
+     * FIX-REVIEW2-03: same clock source as [grants]; schedules the exact
+     * expiry wake-up for the presented capsule. Injected for determinism.
+     */
+    private val clockMillis: () -> Long = System::currentTimeMillis,
 ) : ViewModel() {
 
     private val controller = AppNavigationController(AuthUiState.SignedOut)
+
+    /**
+     * FIX-REVIEW2-03: the one pending exact-expiry timer for the presented
+     * grant, bound to this ViewModel's scope - process death and logout kill
+     * it with the context; explicit close/exit cancels it.
+     */
+    private val expiryWatch: CapsuleExpiryWatch by lazy {
+        CapsuleExpiryWatch(viewModelScope, grants, clockMillis, ::revokePresentation)
+    }
+
+    /**
+     * FIX-REVIEW2-03: emitted when the authoritative lifecycle revokes a
+     * presented grant (exact expiry). The presentation route closes its
+     * state, releasing every decrypted reference.
+     */
+    private val _capsuleRevocations = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    val capsuleRevocations: SharedFlow<String> = _capsuleRevocations.asSharedFlow()
 
     private val _authState = MutableStateFlow<AuthUiState>(AuthUiState.SignedOut)
     val authState: StateFlow<AuthUiState> = _authState.asStateFlow()
@@ -74,6 +99,8 @@ class RootViewModel(
     }
 
     fun logout() {
+        // No pending expiry timer may outlive the account context.
+        expiryWatch.cancel()
         viewModelScope.launch {
             // Full ordered teardown when wired; otherwise token-only clearing.
             (logoutAction ?: { sessionBootstrap.logout() })()
@@ -116,6 +143,38 @@ class RootViewModel(
         controller.grantCapsuleAccess(grantId, capsuleId.toString())
         controller.navigate(AppDestination.Capsule(grantId))
         _destination.value = controller.current
+        // FIX-REVIEW2-03: schedule THIS presentation's exact-expiry wake-up.
+        expiryWatch.watch(grantId)
+    }
+
+    /**
+     * FIX-REVIEW2-03: every on-demand decrypt/page load validates through THE
+     * authoritative manager first; an expired, consumed, or wrong grant never
+     * decrypts anything.
+     */
+    fun requireLivePresentationGrant(grantId: String) {
+        val uuid = runCatching { UUID.fromString(grantId) }.getOrNull()
+            ?: throw IllegalStateException("malformed grant id")
+        val bound = controller.capsuleAccess as? CapsuleAccess.Granted
+        check(
+            controller.current is AppDestination.Capsule &&
+                bound?.grantId == grantId &&
+                grants.resolveCapsuleId(uuid) != null,
+        ) { "scan grant is no longer live" }
+    }
+
+    /**
+     * FIX-REVIEW2-03: authoritative revocation of one presented grant -
+     * ejects to Home through the guarded route and publishes the revocation
+     * so the presentation releases every decrypted reference.
+     */
+    private fun revokePresentation(grantId: String) {
+        val bound = controller.capsuleAccess as? CapsuleAccess.Granted
+        if (controller.current is AppDestination.Capsule && bound?.grantId == grantId) {
+            controller.consumeCapsuleAccess()
+            _destination.value = controller.current
+        }
+        _capsuleRevocations.tryEmit(grantId)
     }
 
     /**
@@ -152,6 +211,7 @@ class RootViewModel(
 
     /** Leaving the presentation consumes THE grant and ejects to Home. */
     fun closeCapsule() {
+        expiryWatch.cancel()
         val bound = controller.capsuleAccess as? app.postmark.memory.ui.navigation.CapsuleAccess.Granted
         runCatching { UUID.fromString(bound?.grantId ?: "") }.getOrNull()?.let { grants.consume(it) }
         controller.consumeCapsuleAccess()
@@ -174,6 +234,7 @@ class RootViewModel(
         controller.navigate(AppDestination.Home)
         if (previous != controller.current) {
             if (previous == AppDestination.Scan) {
+                expiryWatch.cancel()
                 controller.consumeCapsuleAccess()
                 grants.clearAll()
             }

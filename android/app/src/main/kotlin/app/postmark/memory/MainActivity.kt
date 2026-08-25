@@ -155,6 +155,7 @@ private fun RootSurface(container: AppContainer) {
         capsuleContent = { grantId, capsuleId ->
             CapsuleRoute(
                 container = container,
+                rootViewModel = rootViewModel,
                 grantId = grantId,
                 capsuleId = capsuleId,
                 onClose = rootViewModel::closeCapsule,
@@ -215,6 +216,7 @@ private fun FlowIntroSurface(title: String, detail: String) {
 @Composable
 private fun CapsuleRoute(
     container: AppContainer,
+    rootViewModel: RootViewModel,
     grantId: String,
     capsuleId: String,
     onClose: () -> Unit,
@@ -223,17 +225,30 @@ private fun CapsuleRoute(
         mutableStateOf<app.postmark.memory.ui.capsule.CapsulePresentationState?>(null)
     }
 
+    // FIX-REVIEW2-03: an authoritative revocation (exact-expiry ejection)
+    // releases every decrypted reference immediately.
+    LaunchedEffect(grantId) {
+        rootViewModel.capsuleRevocations.collect { revoked ->
+            if (revoked == grantId) state?.close()
+        }
+    }
+
     LaunchedEffect(grantId, capsuleId) {
         if (state != null || capsuleId.isEmpty()) return@LaunchedEffect
         val loaded = runCatching { container.identityRepository.load() }.getOrNull()
             as? postmark.core.crypto.IdentityBundleRepository.LoadResult.Available
             ?: return@LaunchedEffect
-        val source = app.postmark.memory.ui.capsule.CapsuleContentSource(
-            database = container.database,
-            encryptionPrivateHandle = loaded.encryptionHandle,
+        // FIX-REVIEW2-03: the production route reaches decryption ONLY through
+        // the grant-guarded reader; every operation revalidates the live grant.
+        val source = app.postmark.memory.ui.capsule.GrantGuardedCapsuleContentSource(
+            delegate = app.postmark.memory.ui.capsule.CapsuleContentSource(
+                database = container.database,
+                encryptionPrivateHandle = loaded.encryptionHandle,
+            ),
+            validateLiveGrant = { rootViewModel.requireLivePresentationGrant(grantId) },
         )
         val photoCount = runCatching { source.photoCount(capsuleId) }.getOrNull() ?: return@LaunchedEffect
-        // The note decrypts once at open; photos decrypt per page on demand.
+        // The note decrypts once at open (grant validated); photos decrypt per page on demand.
         val note = runCatching { source.noteText(capsuleId) }.getOrNull()
         val presentation = app.postmark.memory.ui.capsule.CapsulePresentationState(
             photoLoader = object : app.postmark.memory.ui.capsule.CapsulePhotoLoader {

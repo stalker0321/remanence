@@ -53,6 +53,22 @@ class ScanGrantManager(
         return current.grant.capsuleId
     }
 
+    /**
+     * FIX-REVIEW2-03: exact expiry instant of the LIVE grant with this ID,
+     * read from the same injected clock - or null when unknown, consumed, or
+     * already expired (which also invalidates it). Lets presentation schedule
+     * one lifecycle-bound timer to the deadline instead of polling.
+     */
+    fun expiresAtMillis(grantId: UUID): Long? {
+        val current = active ?: return null
+        if (current.grant.grantId != grantId) return null
+        if (clockMillis() >= current.grant.expiresAtEpochMillis) {
+            active = null
+            return null
+        }
+        return current.grant.expiresAtEpochMillis
+    }
+
     /** Consumes the grant when its screen is left; later resolves fail. */
     fun consume(grantId: UUID): Boolean {
         val current = active ?: return false

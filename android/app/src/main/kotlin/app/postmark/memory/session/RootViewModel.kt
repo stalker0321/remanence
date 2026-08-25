@@ -162,8 +162,12 @@ class RootViewModel(
     /**
      * Returns from Create/Scan to Home. Leaving a flow RUNS its registered
      * transient-state cleanups - confirmed recipients, staged captures, and
-     * scan sessions never survive their surface. Leaving Scan also drops any
-     * live capsule access so nothing granted mid-scan outlives the flow.
+     * scan sessions never survive their surface.
+     *
+     * FIX-REVIEW2-02: leaving Scan invalidates THE authoritative grant
+     * manager itself, not just the bound controller access - a grant issued
+     * right before a navigation effect (or racing a Back press) dies with the
+     * flow and can never resolve afterwards.
      */
     fun returnToHome() {
         val previous = controller.current
@@ -171,6 +175,7 @@ class RootViewModel(
         if (previous != controller.current) {
             if (previous == AppDestination.Scan) {
                 controller.consumeCapsuleAccess()
+                grants.clearAll()
             }
             runTransientCleanups(previous)
         }

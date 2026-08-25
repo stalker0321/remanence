@@ -186,4 +186,53 @@ class ScanGrantAuthorityTest {
         assertEquals(AppDestination.Capsule(second.grantId.toString()), vm.destination.value)
         vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
     }
+
+    /**
+     * FIX-REVIEW2-02 regression: the grant is issued while the user is still
+     * on Scan, but the navigation effect never completes (Back wins the
+     * race). Leaving Scan to Home must invalidate THE authoritative manager,
+     * so the issued grant no longer resolves and can never open anything.
+     */
+    @Test
+    fun returnToHomeFromScanInvalidatesAnIssuedButNeverNavigatedGrant() = runTest {
+        val vm = RootViewModel(NoopResolver(), grants = ScanGrantManager({ 0L }))
+        vm.openScan()
+        assertEquals(AppDestination.Scan, vm.destination.value)
+
+        // The scan flow verified crypto and issued its grant; the terminal ->
+        // navigation effect has NOT run yet when the user leaves the flow.
+        val grant = vm.scanGrants.issue(capsuleA)
+        vm.returnToHome()
+
+        assertEquals(AppDestination.Home, vm.destination.value)
+        assertNull(vm.scanGrants.resolveCapsuleId(grant.grantId))
+        // Even the full navigation effect replaying afterwards opens nothing.
+        vm.openCapsuleWithGrant(grant.grantId.toString())
+        assertEquals(AppDestination.Home, vm.destination.value)
+        assertEquals(CapsuleAccess.None, vm.liveCapsuleAccess)
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+    }
+
+    @Test
+    fun returnToHomeFromScanBeforeAnyIssueLeavesNothingBehindAndReentryStillWorks() = runTest {
+        val vm = RootViewModel(NoopResolver(), grants = ScanGrantManager({ 0L }))
+
+        // Exit before anything was ever issued: nothing breaks.
+        vm.openScan()
+        vm.returnToHome()
+        assertEquals(AppDestination.Home, vm.destination.value)
+        assertEquals(CapsuleAccess.None, vm.liveCapsuleAccess)
+
+        // A fresh re-entry scans, verifies, issues, and opens normally.
+        vm.openScan()
+        val grant = vm.scanGrants.issue(capsuleA)
+        vm.openCapsuleWithGrant(grant.grantId.toString())
+        assertEquals(AppDestination.Capsule(grant.grantId.toString()), vm.destination.value)
+
+        // Close keeps its existing guarantee after the re-entry.
+        vm.closeCapsule()
+        assertNull(vm.scanGrants.resolveCapsuleId(grant.grantId))
+        assertEquals(AppDestination.Home, vm.destination.value)
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+    }
 }

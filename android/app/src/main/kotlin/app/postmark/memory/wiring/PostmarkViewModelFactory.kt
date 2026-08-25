@@ -81,13 +81,9 @@ class PostmarkViewModelFactory(
                     postmark.core.crypto.IdentityBundleRepository.LoadResult.RecoveryRequired -> null
                 }
             },
-            signingPublicExports = {
-                when (val exports = container.identityRepository.loadPublicExports()) {
-                    is postmark.core.crypto.IdentityBundleRepository.PublicExportsResult.Available ->
-                        exports.signingPublicKeyset
-                    postmark.core.crypto.IdentityBundleRepository.PublicExportsResult.RecoveryRequired -> null
-                }
-            },
+            // FIX-REVIEW2-04: verification trusts ONLY the directory-backed
+            // sender-key boundary - never storage-adjacent key material.
+            trustedSenderKeys = container.trustedSenderKeys,
             grantsClockMillis = { System.currentTimeMillis() },
             // FIX-REVIEW-03: issue ONLY through THE shared authoritative manager.
             grants = container.scanGrants,

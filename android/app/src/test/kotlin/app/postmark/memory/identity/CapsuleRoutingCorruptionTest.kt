@@ -273,7 +273,19 @@ class CapsuleRoutingCorruptionTest {
                 signingPrivateHandle = identity.signingPrivateHandle,
             )
         },
-        signingPublicExports = { identity.signingPublicKeyset },
+            // FIX-REVIEW2-04: trusted boundary wired to the provable self
+            // account; corrupt rows below fail before this is ever consulted.
+            trustedSenderKeys = app.postmark.memory.identity.DirectorySenderKeyStore(
+                directoryFetch = { error("self-send verification must not touch the network") },
+                ownAccount = {
+                    app.postmark.memory.identity.DirectorySenderKeyStore.OwnAccount(
+                        userId = UserId(userUuid),
+                        activeKeyBundleId = KeyBundleId(bundleUuid),
+                        publicSigningExportB64Url =
+                            com.google.crypto.tink.subtle.Base64.urlSafeEncode(identity.signingPublicKeyset),
+                    )
+                },
+            ),
         grantsClockMillis = { 0L },
         frontProcessor = MatchingProcessor(syntheticFingerprint(11, FingerprintSide.FRONT)),
         backProcessor = MatchingProcessor(syntheticFingerprint(22, FingerprintSide.BACK)),
@@ -346,15 +358,26 @@ class CapsuleRoutingCorruptionTest {
     }
 
     @Test
-    fun carriedValidButForeignEd25519KeyNeverGrants() = runBlocking {
+    fun tamperedCarriedSigningExportIsInertBecauseTrustComesOnlyFromTheBoundary() = runBlocking {
         stagePublishedSelfSendCapsule()
-        // A DIFFERENT well-formed Ed25519 public keyset parses cleanly but the
-        // statement signature was made by the real sender key: gate rejects.
+        // A DIFFERENT well-formed Ed25519 public keyset parses cleanly into
+        // the row, but the row-carried export is a transport/cache candidate
+        // only: verification still runs against the trusted boundary's
+        // material, so this storage tamper neither helps nor breaks the
+        // authentic capsule.
         val attacker = AccountIdentityGenerator().generate()
         tamperRow {
             it.copy(senderSigningPublicKeysetB64 = Base64.urlSafeEncode(attacker.signingPublicKeyset))
         }
-        assertScanYieldsNoGrantAndNoBaseline(scanViewModel())
+        val vm = scanViewModel()
+        vm.onFrontJpeg("front".toByteArray(), capturingShell())
+        vm.onBackJpeg("back".toByteArray(), capturingShell())
+        awaitCondition { vm.terminal.value is ScanTerminalState.Granted }
+        assertTrue(
+            "row-carried key substitution must not influence the trust decision",
+            vm.terminal.value is ScanTerminalState.Granted,
+        )
+        database.close()
     }
 
     @Test

@@ -9,7 +9,6 @@ import app.postmark.memory.scan.ScanCaptureSession
 import app.postmark.memory.scan.ScannedSide
 import app.postmark.memory.scan.ScanSideExtractor
 import app.postmark.memory.ui.create.SenderIdentitySnapshot
-import com.google.crypto.tink.TinkProtoKeysetFormat
 import java.io.File
 import java.security.MessageDigest
 import java.util.UUID
@@ -91,7 +90,14 @@ class ScanViewModel(
     private val database: PostmarkLocalDatabase,
     private val profile: RecognitionProfile,
     private val identityProvider: suspend () -> SenderIdentitySnapshot?,
-    private val signingPublicExports: suspend () -> ByteArray?,
+    /**
+     * FIX-REVIEW2-04: THE trusted sender-key boundary. The acceptance gate's
+     * verifier comes ONLY from here - directory-proven material for other
+     * senders, the provably own export only for an exact self-account match.
+     * A keyset stored next to the capsule row never decides trust, so M2 can
+     * not accidentally grow on storage adjacency.
+     */
+    private val trustedSenderKeys: app.postmark.memory.identity.TrustedSenderKeyStore,
     grantsClockMillis: () -> Long,
     /**
      * FIX-REVIEW-03: THE one authoritative memory-only grant lifecycle, shared
@@ -390,23 +396,20 @@ class ScanViewModel(
                 ciphertext = envelopeBytes,
             )
 
-            // FIX-REVIEW2-01: a carried sender export must parse or the
-            // capsule fails closed - an error NEVER falls back to our own
-            // signing key. The own export is eligible ONLY for an explicitly
-            // legacy NULL row whose routing provably is our own self-send.
+            // FIX-REVIEW2-04: the verifier comes ONLY from the trusted
+            // sender-key boundary - directory-proven for other senders, the
+            // provably own export only for an exact self-account match. The
+            // row-carried keyset is a transport/cache candidate and never a
+            // trust decision; any lookup refusal fails closed.
             val senderVerifyingKeyset =
-                routing.senderSigningPublicKeysetB64Url?.let { encoded ->
-                    app.postmark.memory.identity.CapsuleRoutingPolicy.senderVerifyingKeysetOrNull(encoded)
-                        ?: return false
-                } ?: run {
-                    val provenSelfSend =
-                        routing.senderUserId == ownUser &&
-                            routing.recipientUserId == ownUser &&
-                            identity.activeKeyBundleId == row.recipientKeyBundleId
-                    if (!provenSelfSend) return false
-                    signingPublicExports()?.let {
-                        TinkProtoKeysetFormat.parseKeysetWithoutSecret(it)
-                    } ?: return false
+                when (
+                    val lookup = trustedSenderKeys.senderVerifyingKeyset(
+                        routing.senderUserId,
+                        routing.senderKeyBundleId,
+                    )
+                ) {
+                    is app.postmark.memory.identity.SenderKeyResolution.Trusted -> lookup.verifyingKeyset
+                    is app.postmark.memory.identity.SenderKeyResolution.Untrusted -> return false
                 }
 
             val gateInput = CapsuleAcceptanceInput(

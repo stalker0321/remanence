@@ -171,7 +171,19 @@ class ScanReentryFlowTest {
                 signingPrivateHandle = identity.signingPrivateHandle,
             )
         },
-        signingPublicExports = { identity.signingPublicKeyset },
+            // FIX-REVIEW2-04: trusted boundary wired to the provable self
+            // account; corrupt rows below fail before this is ever consulted.
+            trustedSenderKeys = app.postmark.memory.identity.DirectorySenderKeyStore(
+                directoryFetch = { error("self-send verification must not touch the network") },
+                ownAccount = {
+                    app.postmark.memory.identity.DirectorySenderKeyStore.OwnAccount(
+                        userId = UserId(userUuid),
+                        activeKeyBundleId = KeyBundleId(bundleUuid),
+                        publicSigningExportB64Url =
+                            com.google.crypto.tink.subtle.Base64.urlSafeEncode(identity.signingPublicKeyset),
+                    )
+                },
+            ),
         grantsClockMillis = { clock },
         frontProcessor = MatchingProcessor(syntheticFingerprint(11, FingerprintSide.FRONT)),
         backProcessor = MatchingProcessor(syntheticFingerprint(22, FingerprintSide.BACK)),

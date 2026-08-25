@@ -170,6 +170,44 @@ class AppContainer(
         postmark.core.data.network.DirectoryRepository.create(apiBaseUrl)
     }
 
+    /** FIX-REVIEW2-04: immutable public key-bundle lookup for verification. */
+    val keyBundleByIdRepository: postmark.core.data.network.KeyBundleByIdRepository by lazy {
+        postmark.core.data.network.KeyBundleByIdRepository.create(apiBaseUrl)
+    }
+
+    /**
+     * FIX-REVIEW2-04: THE trusted sender-key boundary for capsule
+     * verification. Other senders resolve only through the authenticated
+     * directory; the own export is returned solely for an exact match of the
+     * authenticated account and its active bundle. No local cache, so a later
+     * revocation can never be outrun by a stale copy.
+     */
+    val trustedSenderKeys: app.postmark.memory.identity.TrustedSenderKeyStore by lazy {
+        app.postmark.memory.identity.DirectorySenderKeyStore(
+            directoryFetch = { bundleId ->
+                val token = authTokenHolder.accessToken ?: return@DirectorySenderKeyStore null
+                keyBundleByIdRepository.fetch(bundleId, token)
+            },
+            ownAccount = {
+                val row = currentAccountStore.loadEntity()
+                    ?: return@DirectorySenderKeyStore null
+                when (val exports = identityRepository.loadPublicExports()) {
+                    is postmark.core.crypto.IdentityBundleRepository.PublicExportsResult.Available ->
+                        app.postmark.memory.identity.DirectorySenderKeyStore.OwnAccount(
+                            userId = postmark.core.model.UserId(java.util.UUID.fromString(row.userId)),
+                            activeKeyBundleId = postmark.core.model.KeyBundleId(
+                                java.util.UUID.fromString(row.activeKeyBundleId),
+                            ),
+                            publicSigningExportB64Url = com.google.crypto.tink.subtle.Base64.urlSafeEncode(
+                                exports.signingPublicKeyset,
+                            ),
+                        )
+                    else -> null
+                }
+            },
+        )
+    }
+
     /** App-private root for bounded staging directories. */
     val appFilesRoot: File get() = appContext.filesDir
 

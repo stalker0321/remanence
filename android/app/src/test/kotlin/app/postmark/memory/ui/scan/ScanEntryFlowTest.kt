@@ -102,7 +102,12 @@ class ScanEntryFlowTest {
             database = database,
             profile = RecognitionProfile.mvpOrbV1(),
             identityProvider = { null },
-            signingPublicExports = { null },
+            // FIX-REVIEW2-04: unreachable here (no identity), but the API
+            // requires THE trusted boundary explicitly.
+            trustedSenderKeys = app.postmark.memory.identity.DirectorySenderKeyStore(
+                directoryFetch = { error("verification must be unreachable without identity") },
+                ownAccount = { null },
+            ),
             grantsClockMillis = { 0L },
             frontProcessor = AcceptedProcessor(FingerprintSide.FRONT),
             backProcessor = AcceptedProcessor(FingerprintSide.BACK),

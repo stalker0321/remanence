@@ -24,6 +24,8 @@ import postmark.core.crypto.CapsuleAcceptanceInput
 import postmark.core.crypto.CapsuleAcceptanceResult
 import postmark.core.crypto.RecipientEnvelopeCryptor
 import postmark.core.data.db.PostmarkLocalDatabase
+import postmark.core.data.network.HistoricalKeyBundle
+import postmark.core.data.network.KeyBundleByIdResult
 import postmark.core.data.outbox.CapsuleOutboxStager
 import postmark.core.model.CapsuleId
 import postmark.core.model.KeyBundleId
@@ -33,16 +35,20 @@ import postmark.core.recognition.FingerprintSide
 import postmark.core.recognition.RecognitionProfile
 
 /**
- * FIX-REVIEW-04 regression: persisted/authenticated capsule material carries
- * SEPARATE sender and recipient identities - immutable user IDs, distinct key
- * bundle IDs, and the sender's public signing keyset. A capsule sealed for a
- * DIFFERENT recipient opens ONLY with that recipient's private key, and the
- * acceptance gate verifies using the ROW-CARRIED sender bundle/keyset rather
- * than assuming the authenticated account is the sender.
+ * FIX-REVIEW-04 / FIX-REVIEW2-04 regression: persisted/authenticated capsule
+ * material carries SEPARATE sender and recipient identities, and the
+ * acceptance gate verifies ONLY through the TRUSTED sender-key boundary - an
+ * authenticated directory fixture here. A storage writer that replaces the
+ * row-carried public key cannot influence the trust decision; wrong owner,
+ * revoked status, and missing bundles fail closed.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class CrossIdentityCapsuleFlowTest {
+
+    private companion object {
+        const val SUITE = "HPKE_X25519_HKDF_SHA256_AES256GCM__ED25519"
+    }
 
     private lateinit var context: Context
     private lateinit var database: PostmarkLocalDatabase
@@ -56,6 +62,22 @@ class CrossIdentityCapsuleFlowTest {
     private val senderBundleUuid = UUID.fromString("8c444444-5555-4666-8777-888888888888")
     private val recipientBundleUuid = UUID.fromString("8c555555-6666-4777-8888-999999999999")
 
+    /** Authenticated directory contents the tests control explicitly. */
+    private val directory = mutableMapOf<String, KeyBundleByIdResult>()
+    private var directoryFetches = 0
+
+    /** The REAL production boundary over the in-test authenticated directory. */
+    private fun trustedStore(
+        ownAccount: app.postmark.memory.identity.DirectorySenderKeyStore.OwnAccount? = null,
+    ): app.postmark.memory.identity.DirectorySenderKeyStore =
+        app.postmark.memory.identity.DirectorySenderKeyStore(
+            directoryFetch = { bundleId ->
+                directoryFetches += 1
+                directory[bundleId]
+            },
+            ownAccount = { ownAccount },
+        )
+
     @Before
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
@@ -63,6 +85,8 @@ class CrossIdentityCapsuleFlowTest {
             .allowMainThreadQueries()
             .build()
         outboxDir = File(context.filesDir, "cross-identity-outbox").apply { mkdirs() }
+        directory.clear()
+        directoryFetches = 0
     }
 
     @After
@@ -101,9 +125,7 @@ class CrossIdentityCapsuleFlowTest {
         )
     }
 
-    @Test
-    fun persistedMaterialCarriesSeparateIdentitiesAndVerifiesWithoutConflation() = runBlocking {
-        // ---- PUBLISH: sender S -> recipient R, two real identities ----
+    private suspend fun publishAndStageCrossIdentity() {
         val prepared = SameAccountCapsulePublisher().publish(
             SameAccountCapsuleRequest(
                 capsuleId = CapsuleId(capsuleUuid),
@@ -126,6 +148,57 @@ class CrossIdentityCapsuleFlowTest {
             ),
         )
         CapsuleOutboxStager(database, outboxDir).stage(prepared)
+    }
+
+    @Suppress("SameParameterValue")
+    private suspend fun runAcceptanceGate(
+        verifier: com.google.crypto.tink.KeysetHandle,
+        expectedSenderBundle: KeyBundleId,
+        envelopePlaintext: ByteArray,
+    ): CapsuleAcceptanceResult {
+        val row = database.outboxCapsuleDao().getByCapsuleId(capsuleUuid.toString())!!
+        val blobs = database.outboxBlobDao().getAllByCapsuleId(capsuleUuid.toString())
+        return CapsuleAcceptanceGate().verify(
+            CapsuleAcceptanceInput(
+                expectedCapsuleId = CapsuleId(capsuleUuid),
+                authenticatedUserId = UserId(recipientUuid),
+                senderVerifyingKeyset = verifier,
+                expectedSenderKeyBundleId = expectedSenderBundle,
+                envelopePlaintextBytes = envelopePlaintext,
+                statementBytes = File(requireNotNull(row.publishStatementPath)).readBytes(),
+                signature = File(requireNotNull(row.publishStatementSignaturePath)).readBytes(),
+                deliveredBlobs = blobs.map { blobRow ->
+                    val file = File(blobRow.localCiphertextPath)
+                    postmark.core.crypto.DeliveredBlob(
+                        blobId = postmark.core.model.BlobId(UUID.fromString(blobRow.blobId)),
+                        ciphertextSize = file.length(),
+                        ciphertextSha256 =
+                            java.security.MessageDigest.getInstance("SHA-256").digest(file.readBytes()),
+                    )
+                },
+            ),
+        )
+    }
+
+    @Test
+    fun persistedMaterialCarriesSeparateIdentitiesAndTrustComesOnlyFromTheDirectoryBoundary() = runBlocking {
+        // The authenticated directory knows ONLY the true sender bundle.
+        directory[senderBundleUuid.toString()] = KeyBundleByIdResult.Found(
+            HistoricalKeyBundle(
+                keyBundleId = KeyBundleId(senderBundleUuid),
+                ownerUserId = UserId(senderUuid),
+                suite = SUITE,
+                protocolVersion = 1,
+                encryptionPublicKeysetB64Url = "",
+                signingPublicKeysetB64Url =
+                    Base64.urlSafeEncode(senderIdentity.signingPublicKeyset),
+                status = "ACTIVE",
+            ),
+        )
+        val store = trustedStore()
+
+        // ---- PUBLISH: sender S -> recipient R, two real identities ----
+        publishAndStageCrossIdentity()
 
         // ---- PERSISTED routing identities are separate and complete ----
         val row = database.outboxCapsuleDao().getByCapsuleId(capsuleUuid.toString())!!
@@ -135,20 +208,6 @@ class CrossIdentityCapsuleFlowTest {
         assertEquals(senderBundleUuid.toString(), row.senderKeyBundleId)
         assertEquals(recipientBundleUuid.toString(), row.recipientKeyBundleId)
         assertNotNull(row.senderSigningPublicKeysetB64)
-
-        // The carried public keyset IS the sender's Ed25519 verification key.
-        val senderVerifierFromRow = TinkProtoKeysetFormat.parseKeysetWithoutSecret(
-            Base64.urlSafeDecode(requireNotNull(row.senderSigningPublicKeysetB64)),
-        )
-        val expectedSenderVerifier = TinkProtoKeysetFormat.parseKeysetWithoutSecret(
-            senderIdentity.signingPublicKeyset,
-        )
-        assertEquals(
-            com.google.protobuf.ByteString.copyFrom(senderIdentity.signingPublicKeyset),
-            com.google.protobuf.ByteString.copyFrom(
-                Base64.urlSafeDecode(requireNotNull(row.senderSigningPublicKeysetB64)),
-            ),
-        )
 
         // ---- ENVELOPE opens ONLY for the bound recipient identity ----
         val envelopeBytes = File(requireNotNull(row.envelopePath)).readBytes()
@@ -180,63 +239,136 @@ class CrossIdentityCapsuleFlowTest {
         }
         assertTrue(wrongOpen.isFailure)
 
-        // ---- ACCEPTANCE GATE uses the ROW-CARRIED sender verifier/bundle ----
-        val blobs = database.outboxBlobDao().getAllByCapsuleId(capsuleUuid.toString())
-        val accepted = CapsuleAcceptanceGate().verify(
-            CapsuleAcceptanceInput(
-                expectedCapsuleId = CapsuleId(capsuleUuid),
-                authenticatedUserId = UserId(recipientUuid),
-                senderVerifyingKeyset = senderVerifierFromRow,
-                expectedSenderKeyBundleId = KeyBundleId(senderBundleUuid),
-                envelopePlaintextBytes = openedForRecipient,
-                statementBytes = File(requireNotNull(row.publishStatementPath)).readBytes(),
-                signature = File(requireNotNull(row.publishStatementSignaturePath)).readBytes(),
-                deliveredBlobs = blobs.map { blobRow ->
-                    val file = File(blobRow.localCiphertextPath)
-                    postmark.core.crypto.DeliveredBlob(
-                        blobId = postmark.core.model.BlobId(UUID.fromString(blobRow.blobId)),
-                        ciphertextSize = file.length(),
-                        ciphertextSha256 =
-                            java.security.MessageDigest.getInstance("SHA-256").digest(file.readBytes()),
-                    )
-                },
-            ),
+        // ---- ACCEPTANCE GATE verifies ONLY through the trusted boundary ----
+        val trusted = store.senderVerifyingKeyset(UserId(senderUuid), KeyBundleId(senderBundleUuid))
+        assertTrue("directory-proven material must resolve", trusted is app.postmark.memory.identity.SenderKeyResolution.Trusted)
+        val accepted = runAcceptanceGate(
+            verifier = (trusted as app.postmark.memory.identity.SenderKeyResolution.Trusted).verifyingKeyset,
+            expectedSenderBundle = KeyBundleId(senderBundleUuid),
+            envelopePlaintext = openedForRecipient,
         )
         assertTrue(
-            "the real gate must accept with row-carried sender material",
+            "the real gate must accept with directory-proven sender material",
             accepted is CapsuleAcceptanceResult.Accepted,
         )
 
-        // And refuses when the sender bundle is claimed as the recipient's:
+        // A FORGED replacement of the row-carried export is inert: trust is
+        // decided by the boundary, so the authentic capsule still verifies.
+        database.outboxCapsuleDao().upsert(
+            row.copy(senderSigningPublicKeysetB64 = Base64.urlSafeEncode(attackerPublicExport())),
+        )
+        val afterTamper = runAcceptanceGate(
+            verifier = (
+                store.senderVerifyingKeyset(UserId(senderUuid), KeyBundleId(senderBundleUuid))
+                    as app.postmark.memory.identity.SenderKeyResolution.Trusted
+                ).verifyingKeyset,
+            expectedSenderBundle = KeyBundleId(senderBundleUuid),
+            envelopePlaintext = openedForRecipient,
+        )
+        assertTrue(
+            "storage-adjacent key substitution must not decide verification",
+            afterTamper is CapsuleAcceptanceResult.Accepted,
+        )
+
+        // And refusing the claimed bundle as the sender's stays rejected.
         val conflated = runCatching {
-            CapsuleAcceptanceGate().verify(
-                CapsuleAcceptanceInput(
-                    expectedCapsuleId = CapsuleId(capsuleUuid),
-                    authenticatedUserId = UserId(recipientUuid),
-                    senderVerifyingKeyset = expectedSenderVerifier,
-                    expectedSenderKeyBundleId = KeyBundleId(recipientBundleUuid),
-                    envelopePlaintextBytes = openedForRecipient,
-                    statementBytes = File(requireNotNull(row.publishStatementPath)).readBytes(),
-                    signature = File(requireNotNull(row.publishStatementSignaturePath)).readBytes(),
-                    deliveredBlobs = blobs.map { blobRow ->
-                        val file = File(blobRow.localCiphertextPath)
-                        postmark.core.crypto.DeliveredBlob(
-                            blobId = postmark.core.model.BlobId(UUID.fromString(blobRow.blobId)),
-                            ciphertextSize = file.length(),
-                            ciphertextSha256 =
-                                java.security.MessageDigest.getInstance("SHA-256")
-                                    .digest(file.readBytes()),
-                        )
-                    },
-                ),
+            runAcceptanceGate(
+                verifier = TinkProtoKeysetFormat.parseKeysetWithoutSecret(senderIdentity.signingPublicKeyset),
+                expectedSenderBundle = KeyBundleId(recipientBundleUuid),
+                envelopePlaintext = openedForRecipient,
             )
         }
         assertTrue(conflated.isFailure || conflated.getOrNull() is CapsuleAcceptanceResult.Rejected)
     }
 
     @Test
-    fun selfSendRemainsNaturalWithDistinctButEqualValues() = runBlocking {
-        // M1 self-send: explicit same VALUES, no equality assumption anywhere.
+    fun wrongOwnerRevokedAndMissingDirectoryEntriesAllFailClosed() = runBlocking {
+        val attacker = AccountIdentityGenerator().generate()
+
+        // Wrong OWNER: the bundle exists but belongs to someone else.
+        directory[senderBundleUuid.toString()] = activeEntry(UserId(recipientUuid), Base64.urlSafeEncode(attacker.signingPublicKeyset))
+        assertTrue(
+            trustedStore().senderVerifyingKeyset(UserId(senderUuid), KeyBundleId(senderBundleUuid))
+                is app.postmark.memory.identity.SenderKeyResolution.Untrusted,
+        )
+
+        // REVOKED: present and well-formed but no longer trustworthy.
+        directory[senderBundleUuid.toString()] = KeyBundleByIdResult.Found(
+            HistoricalKeyBundle(
+                keyBundleId = KeyBundleId(senderBundleUuid),
+                ownerUserId = UserId(senderUuid),
+                suite = SUITE,
+                protocolVersion = 1,
+                encryptionPublicKeysetB64Url = "",
+                signingPublicKeysetB64Url = Base64.urlSafeEncode(senderIdentity.signingPublicKeyset),
+                status = "REVOKED",
+            ),
+        )
+        assertTrue(
+            trustedStore().senderVerifyingKeyset(UserId(senderUuid), KeyBundleId(senderBundleUuid))
+                is app.postmark.memory.identity.SenderKeyResolution.Untrusted,
+        )
+
+        // MISSING: nothing routed under this identity.
+        directory.remove(senderBundleUuid.toString())
+        assertTrue(
+            trustedStore().senderVerifyingKeyset(UserId(senderUuid), KeyBundleId(senderBundleUuid))
+                is app.postmark.memory.identity.SenderKeyResolution.Untrusted,
+        )
+
+        // MALFORMED directory keyset material also refuses.
+        directory[senderBundleUuid.toString()] = activeEntry(
+            UserId(senderUuid),
+            Base64.urlSafeEncode("not-a-keyset".toByteArray()),
+        )
+        assertTrue(
+            trustedStore().senderVerifyingKeyset(UserId(senderUuid), KeyBundleId(senderBundleUuid))
+                is app.postmark.memory.identity.SenderKeyResolution.Untrusted,
+        )
+    }
+
+    @Test
+    fun selfSendRemainsNaturalThroughTheProvablyOwnAccountShortcut() = runBlocking {
+        // M1 self-send: explicit same VALUES, resolved through the OWN-account
+        // shortcut without ever touching the network.
+        publishSelfSend()
+
+        val fetchesBefore = directoryFetches
+        val store = trustedStore(
+            ownAccount = app.postmark.memory.identity.DirectorySenderKeyStore.OwnAccount(
+                userId = UserId(senderUuid),
+                activeKeyBundleId = KeyBundleId(senderBundleUuid),
+                publicSigningExportB64Url = Base64.urlSafeEncode(senderIdentity.signingPublicKeyset),
+            ),
+        )
+
+        val resolution = store.senderVerifyingKeyset(UserId(senderUuid), KeyBundleId(senderBundleUuid))
+        assertTrue(resolution is app.postmark.memory.identity.SenderKeyResolution.Trusted)
+        assertEquals("self-send must not require a network lookup", fetchesBefore, directoryFetches)
+
+        // The persisted row still separates the columns with equal VALUES.
+        val stagedRow = database.outboxCapsuleDao().getByCapsuleId(capsuleUuid.toString())!!
+        assertEquals(senderUuid.toString(), stagedRow.senderUserId)
+        assertEquals(senderUuid.toString(), stagedRow.recipientUserId)
+        assertEquals(senderBundleUuid.toString(), stagedRow.senderKeyBundleId)
+        assertEquals(senderBundleUuid.toString(), stagedRow.recipientKeyBundleId)
+
+        // And the envelope opens naturally with our own private half.
+        val envelopeBytes = File(requireNotNull(stagedRow.envelopePath)).readBytes()
+        val opened = RecipientEnvelopeCryptor().open(
+            senderIdentity.encryptionPrivateHandle,
+            RecipientEnvelopeContextInput(
+                CapsuleId(capsuleUuid),
+                UserId(senderUuid),
+                UserId(senderUuid),
+                KeyBundleId(senderBundleUuid),
+            ),
+            envelopeBytes,
+        )
+        assertTrue(opened.isNotEmpty())
+    }
+
+    private suspend fun publishSelfSend() {
         val prepared = SameAccountCapsulePublisher().publish(
             SameAccountCapsuleRequest(
                 capsuleId = CapsuleId(capsuleUuid),
@@ -257,25 +389,21 @@ class CrossIdentityCapsuleFlowTest {
             ),
         )
         CapsuleOutboxStager(database, outboxDir).stage(prepared)
-
-        val row = database.outboxCapsuleDao().getByCapsuleId(capsuleUuid.toString())!!
-        assertEquals(senderUuid.toString(), row.senderUserId)
-        assertEquals(senderUuid.toString(), row.recipientUserId)
-        assertEquals(senderBundleUuid.toString(), row.senderKeyBundleId)
-        assertEquals(senderBundleUuid.toString(), row.recipientKeyBundleId)
-
-        // Opens naturally with our own private half under the same contexts.
-        val envelopeBytes = File(requireNotNull(row.envelopePath)).readBytes()
-        val opened = RecipientEnvelopeCryptor().open(
-            senderIdentity.encryptionPrivateHandle,
-            RecipientEnvelopeContextInput(
-                CapsuleId(capsuleUuid),
-                UserId(senderUuid),
-                UserId(senderUuid),
-                KeyBundleId(senderBundleUuid),
-            ),
-            envelopeBytes,
-        )
-        assertTrue(opened.isNotEmpty())
     }
+
+    private fun attackerPublicExport(): ByteArray =
+        AccountIdentityGenerator().generate().signingPublicKeyset
+
+    private fun activeEntry(owner: UserId, signingExportB64Url: String): KeyBundleByIdResult.Found =
+        KeyBundleByIdResult.Found(
+            HistoricalKeyBundle(
+                keyBundleId = KeyBundleId(senderBundleUuid),
+                ownerUserId = owner,
+                suite = SUITE,
+                protocolVersion = 1,
+                encryptionPublicKeysetB64Url = "",
+                signingPublicKeysetB64Url = signingExportB64Url,
+                status = "ACTIVE",
+            ),
+        )
 }

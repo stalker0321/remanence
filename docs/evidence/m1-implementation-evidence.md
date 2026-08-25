@@ -4,6 +4,64 @@ Generated at the close of the I-queue. Every item below was executed on this
 workstation in a clean shell. Physical-device items are explicitly **PENDING**
 and are not claimed.
 
+## FIX-REVIEW correction batch (2026-08-25, baseline 2111289)
+
+Review corrections after baseline `2111289`. One focused commit each,
+tests with each, no amends:
+
+| Fix | Commit |
+| --- | --- |
+| 01 honest FRONT-first Scan state before matching | `d815251` |
+| 02 fresh Create/Scan session on every flow re-entry | `8eddde3` |
+| 03 one authoritative memory-only ScanGrantManager | `f724919` |
+| 04 sender/recipient identities separated end to end (Room v2→v3) | `579a5db` |
+| 05 camera permission: PermanentlyDenied reachable via real OS ask-again signal | `408b04a` |
+
+FIX-REVIEW-04 detail: persisted/authenticated capsule material now carries
+separate `sender_user_id`, `recipient_user_id`, `sender_key_bundle_id`,
+`recipient_key_bundle_id`, and the sender signing public keyset
+(`outbox_capsule` v2→v3 migration, exported schema checked in, no destructive
+reset; legacy NULL rows fall back to the authenticated account so M1 self-send
+stays natural). `CrossIdentityCapsuleFlowTest` proves a capsule sealed for a
+different recipient opens only with that recipient's private key and verifies
+only through row-carried sender material — never own-key-as-sender or
+recipient-bundle-as-sender conflation. No M2 delivery machinery was added.
+
+### Verification commands and results for this batch
+
+| Command | Result |
+| --- | --- |
+| `cd android && ./gradlew clean testDebugUnitTest assembleDebug --console=plain` (JDK 17) | BUILD SUCCESSFUL — 607 unit tests, 0 failures, 1 pre-existing environment skip (`ApiStackIntegrationTest`, skips cleanly without its external dependency) |
+| `cd server && POSTMARK_TEST_DATABASE_URL=postgresql+psycopg://postmark:postmark-dev-only@127.0.0.1:55432/postmark uv run --locked pytest -q -W error` | 324 passed (full PostgreSQL-backed suites included, 0 skipped) |
+| `git diff --check` | clean; worktree clean at the FIX-REVIEW-06 commit |
+| APK | `android/app/build/outputs/apk/debug/app-debug.apk`, 155,117,315 bytes, SHA-256 `d33cb55daa5ec61fe3a4999b74e9923172bb97054c2a13028ca425e5888dea87` |
+
+### Plaintext canary status
+
+Automated canaries pass inside the same clean run:
+`CapsuleOutboxStagerTest` (`plaintextCanaryAcrossEveryProducedByteFindsNothing`,
+rollback-without-traces case) scans every produced byte — artifact files,
+statement/signature files, SQLite db/WAL — for note/photo/manifest markers,
+and the FIX-M1-007-14 narrative (`CreateRescanOpenFlowTest`) repeats the scan
+over the sealed-baseline database, sealed fingerprint files, and outbox
+ciphertext across close/reopen with the REAL acceptance gate deciding every
+grant. No plaintext marker appears in any persisted byte. Room rows now also
+carry only public routing identity material (user/bundle IDs plus the sender
+PUBLIC signing keyset export); no private keyset bytes enter Room.
+
+### Honest-client status after this batch
+
+The debug APK exposes login/register surfaces, reachable Create (directory
+resolve → confirm → front/prepared-back capture → picker/note → sealing into
+the durable outbox), reachable Scan (front/back capture → local hierarchy →
+chooser on decrypted hints → verified grant through the one authoritative
+grant manager), and fullscreen photo presentation that exists only behind a
+live memory-only grant plus a verified crypto result. Sender and recipient
+identities are distinct throughout publish/persist/verify/present; camera
+permission states distinguish first request, retryable denial, and permanent
+denial with no re-request loop. CameraX/OpenCV/Keystore behavior on physical
+hardware remains the open item below.
+
 ## FIX-M1-007 correction batch (2026-08-24, baseline 42a45eb)
 
 Fifteen ordered corrections from the M1-007 review. One focused commit each,
@@ -137,7 +195,9 @@ The following require real hardware/emulator runs and remain **PENDING**:
 
 - CameraX preview/capture on physical ARM64 devices (permission flow, focus,
   exposure behavior under real lighting) — including the now-connected
-  production Create/Scan capture surfaces.
+  production Create/Scan capture surfaces and the FIX-REVIEW-05 first-request/
+  retryable/permanent permission states, whose real system-dialog behavior is
+  only unit-proven at the classifier level until then.
 - ORB extraction latency and match-loop timing on-device (OpenCV instrumentation).
 - Full two-device physical scenario: mail card, second device scans and opens.
 - AndroidKeystore-backed KEK wrapping round trip on hardware TEE/StrongBox.

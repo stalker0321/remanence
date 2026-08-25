@@ -78,10 +78,12 @@ sealed interface ScanTerminalState {
 }
 
 /**
- * FIX-M1-007-12: the production Scan flow. The candidate index is built from
- * locally sealed fingerprint rows only; front/back stills run through the ORB
- * processor; [LocalMatchEngine] classifies the hierarchy; and EVERY path to a
- * grant - automatic or manually chosen - passes the real envelope/signature/
+ * FIX-M1-007-12 / FIX-REVIEW-01: the production Scan flow. Entry is an honest
+ * capture state - FRONT first, then BACK, and only a complete capture pair
+ * reaches matching (docs/recognition.md section 3). The candidate index is
+ * built from locally sealed fingerprint rows only; stills run through the ORB
+ * processors; [LocalMatchEngine] classifies the hierarchy; and EVERY path to
+ * a grant - automatic or manually chosen - passes the real envelope/signature/
  * ID/hash/AEAD verification ([CapsuleAcceptanceGate]) first. A verified
  * receipt persists the delivered pair as the preferred RECIPIENT baseline.
  */
@@ -92,6 +94,11 @@ class ScanViewModel(
     private val identityProvider: suspend () -> SenderIdentitySnapshot?,
     private val signingPublicExports: suspend () -> ByteArray?,
     grantsClockMillis: () -> Long,
+    frontProcessor: app.postmark.memory.capture.StillProcessor =
+        RealStillFingerprintProcessor(profile, FingerprintSide.FRONT),
+    backProcessor: app.postmark.memory.capture.StillProcessor =
+        RealStillFingerprintProcessor(profile, FingerprintSide.BACK),
+    candidateIndexProvider: (suspend () -> List<IndexedCandidate>)? = null,
 ) : ViewModel() {
 
     val captureSession = ScanCaptureSession(ScanSideExtractor { side ->
@@ -101,7 +108,7 @@ class ScanViewModel(
     private val _qualityRejection = MutableStateFlow<Set<QualityReason>>(emptySet())
     val qualityRejection: StateFlow<Set<QualityReason>> = _qualityRejection.asStateFlow()
 
-    private val _matchState = MutableStateFlow<ScanMatchUiState>(ScanMatchUiState.Matching)
+    private val _matchState = MutableStateFlow<ScanMatchUiState>(ScanMatchUiState.AwaitingCapture)
     val matchState: StateFlow<ScanMatchUiState> = _matchState.asStateFlow()
 
     private val _terminal = MutableStateFlow<ScanTerminalState>(ScanTerminalState.Idle)
@@ -110,8 +117,15 @@ class ScanViewModel(
     private val grants = ScanGrantManager(clockMillis = grantsClockMillis)
 
     private val queuedStill = AtomicReference<ScannedSide?>()
-    private val frontProcessor = RealStillFingerprintProcessor(profile, FingerprintSide.FRONT)
-    private val backProcessor = RealStillFingerprintProcessor(profile, FingerprintSide.BACK)
+    private val frontProcessor = frontProcessor
+    private val backProcessor = backProcessor
+    private val candidateIndexProvider = candidateIndexProvider
+
+    /**
+     * FIX-REVIEW-01: generation guard so a stale asynchronous match result can
+     * never overwrite a newer capture flow started by reset/re-entry.
+     */
+    private var matchGeneration: Int = 0
 
     // ------------------------------------------------------------------
     // Capture.
@@ -152,16 +166,23 @@ class ScanViewModel(
         }
     }
 
+    /**
+     * FIX-REVIEW-01: the explicit user restart returns the WHOLE flow to the
+     * FRONT capture state; any in-flight evaluation is discarded so a stale
+     * result can never overwrite the fresh capture sequence.
+     */
     fun resetSession() {
+        matchGeneration++
         captureSession.reset()
         _qualityRejection.value = emptySet()
+        _matchState.value = ScanMatchUiState.AwaitingCapture
     }
 
     // ------------------------------------------------------------------
     // Matching over the encrypted local index.
     // ------------------------------------------------------------------
 
-    private suspend fun buildIndex(): List<IndexedCandidate> {
+    private suspend fun buildRoomCandidateIndex(): List<IndexedCandidate> {
         val rows = database.recognitionFingerprintDao().getAll()
         return rows.groupBy { it.capsuleId }.mapNotNull { (capsuleId, sides) ->
             val preferredOrigin = sides.any {
@@ -195,6 +216,7 @@ class ScanViewModel(
         val sessionFront = captureSession.front ?: return
         val sessionBack = captureSession.back ?: return
         _matchState.value = ScanMatchUiState.Matching
+        val generation = ++matchGeneration
         viewModelScope.launch {
             try {
                 val engine = LocalMatchEngine(
@@ -205,13 +227,15 @@ class ScanViewModel(
                 val result = engine.run(
                     queryFront = FingerprintCodec.parse(sessionFront.serializedBytes),
                     queryBack = FingerprintCodec.parse(sessionBack.serializedBytes),
-                    candidates = buildIndex(),
+                    candidates = candidateIndexProvider?.invoke() ?: buildRoomCandidateIndex(),
                 )
-                applyResult(result)
+                if (generation == matchGeneration) applyResult(result)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                _matchState.value = ScanMatchUiState.RecaptureGuidance(failedAttempts = 1)
+                if (generation == matchGeneration) {
+                    _matchState.value = ScanMatchUiState.RecaptureGuidance(failedAttempts = 1)
+                }
             }
         }
     }
@@ -248,19 +272,30 @@ class ScanViewModel(
     /**
      * Manual choice from the ambiguity chooser STILL verifies the full crypto
      * chain before any grant exists - selection is not stronger evidence.
+     * FIX-REVIEW-01: selection is accepted ONLY while the matching chooser
+     * with exactly this row is live, so an out-of-flow call can never mint
+     * state or grants.
      */
     fun onChooserSelected(candidateId: String) {
+        val chooser = _matchState.value as? ScanMatchUiState.Chooser ?: return
+        if (chooser.rows.none { it.candidateId == candidateId }) return
+        val generation = ++matchGeneration
         viewModelScope.launch {
             val id = UUID.fromString(candidateId)
             if (!verifyCapsuleCrypto(id)) {
-                _matchState.value = ScanMatchUiState.RecaptureGuidance(failedAttempts = 2)
+                if (generation == matchGeneration) {
+                    _matchState.value = ScanMatchUiState.RecaptureGuidance(failedAttempts = 2)
+                }
                 return@launch
             }
             val grantId = issueGrant(id)
             if (grantId == null) {
-                _matchState.value = ScanMatchUiState.RecaptureGuidance(failedAttempts = 2)
+                if (generation == matchGeneration) {
+                    _matchState.value = ScanMatchUiState.RecaptureGuidance(failedAttempts = 2)
+                }
                 return@launch
             }
+            if (generation != matchGeneration) return@launch
             applyResult(
                 ScanFlowResult.Granted(
                     capsuleId = id,

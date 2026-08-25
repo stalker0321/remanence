@@ -30,6 +30,14 @@ fun interface ScanMatcherPort {
 
 /** Live retry/matching state of one scan flow (docs/recognition.md sections 9, 12). */
 sealed interface ScanMatchUiState {
+
+    /**
+     * FIX-REVIEW-01: entry state of every fresh scan session - the FRONT
+     * camera is reachable BEFORE any matching exists, then BACK, and only a
+     * complete capture pair may advance to [Matching].
+     */
+    data object AwaitingCapture : ScanMatchUiState
+
     data object Matching : ScanMatchUiState
 
     /** Automatic rules passed; crypto verification happens before any grant. */

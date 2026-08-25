@@ -40,8 +40,9 @@ import app.postmark.memory.scan.ScanSessionState
 import postmark.core.recognition.QualityReason
 
 /**
- * FIX-M1-007-12: the production Scan surface. FRONT then BACK stills feed the
- * real ORB pipeline; matching runs against the encrypted local index; the
+ * FIX-M1-007-12 / FIX-REVIEW-01: the production Scan surface. Entry renders
+ * the honest capture flow - FRONT then BACK stills through the real ORB
+ * pipeline - before any matching runs against the encrypted local index; the
  * ambiguity chooser shows only decrypted minimal hints; and a grant exists
  * only after the full crypto gate passes - manual selection included.
  */
@@ -62,6 +63,7 @@ fun ScanScreen(
         Spacer(Modifier.height(8.dp))
 
         when (val current = matchState) {
+            is ScanMatchUiState.AwaitingCapture -> CapturePair(viewModel, rejection)
             is ScanMatchUiState.Matching -> Text("Matching...", modifier = Modifier.testTag("scan_matching"))
             is ScanMatchUiState.Accepted -> Text(
                 "Verified. Opening the capsule...",

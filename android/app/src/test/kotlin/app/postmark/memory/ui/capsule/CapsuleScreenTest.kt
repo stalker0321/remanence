@@ -47,18 +47,24 @@ class CapsuleScreenTest {
 
     private fun state(note: String? = null): Pair<CapsulePresentationState, RecordingLoader> {
         val loader = RecordingLoader()
-        return CapsulePresentationState(loader) { note } to loader
+        // FIX-REVIEW3-03: the note is owned by the state, handed over at open.
+        val presentationState = CapsulePresentationState(loader)
+        if (note != null) presentationState.open(3, note)
+        return presentationState to loader
     }
 
-    private fun openState(count: Int = 3, note: String? = null) =
-        state(note).also { it.first.open(count) }
+    private fun openState(count: Int = 3, note: String? = null): Pair<CapsulePresentationState, RecordingLoader> {
+        val loader = RecordingLoader()
+        val presentationState = CapsulePresentationState(loader).also { it.open(count, note) }
+        return presentationState to loader
+    }
 
     @Test
     fun openOutsideThreeToFiveFailsClosed() {
         val (presentationState, _) = state()
         listOf(2, 6).forEach { badCount ->
             try {
-                presentationState.open(badCount)
+                presentationState.open(badCount, null)
                 throw AssertionError("expected failure for count=$badCount")
             } catch (expected: IllegalArgumentException) {
                 assertEquals("capsule must contain 3..5 photos", expected.message)
@@ -144,7 +150,7 @@ class CapsuleScreenTest {
         presentationState.pageAt(1)
         presentationState.close()
 
-        presentationState.open(4)
+        presentationState.open(4, null)
         presentationState.pageAt(2)
 
         assertEquals(listOf(1, 2), loader.requestedOrdinals)

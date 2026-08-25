@@ -30,8 +30,8 @@ class CapsulePresentationStateLoadRaceTest {
             release.await()
             DecryptedPhoto(ordinal, produced)
         }
-        val state = CapsulePresentationState(loader) { null }
-        state.open(3)
+        val state = CapsulePresentationState(loader)
+        state.open(3, null)
 
         // Enter the loader and hang there; the outcome is captured INSIDE
         // the coroutine so nothing can escape into structured concurrency.
@@ -65,8 +65,8 @@ class CapsulePresentationStateLoadRaceTest {
             release.await()
             DecryptedPhoto(ordinal, "jpeg-$ordinal".toByteArray())
         }
-        val state = CapsulePresentationState(loader) { null }
-        state.open(3)
+        val state = CapsulePresentationState(loader)
+        state.open(3, null)
 
         val outcomes = CompletableDeferred<Pair<DecryptedPhoto, DecryptedPhoto>>()
         launch {
@@ -99,8 +99,8 @@ class CapsulePresentationStateLoadRaceTest {
             release.await()
             DecryptedPhoto(ordinal, "late".toByteArray())
         }
-        val state = CapsulePresentationState(loader) { null }
-        state.open(3)
+        val state = CapsulePresentationState(loader)
+        state.open(3, null)
 
         val inFlightOutcome = CompletableDeferred<Result<DecryptedPhoto>>()
         launch { inFlightOutcome.complete(runCatching { state.pageAt(0) }) }

@@ -24,8 +24,10 @@ class GrantGateCapsuleFlowTest {
 
     private fun newState() = CapsulePresentationState(
         photoLoader = { ordinal -> DecryptedPhoto(ordinal, "jpeg-$ordinal".toByteArray()) },
-        noteText = { "note" },
     )
+
+    private fun openedState(count: Int = 3, note: String? = null) =
+        newState().also { it.open(count, note) }
 
     private fun authenticatedController() = AppNavigationController(
         AuthUiState.Authenticated(userId = "u", handle = "mykola"),
@@ -36,8 +38,7 @@ class GrantGateCapsuleFlowTest {
         var now = 1_000L
         val grants = ScanGrantManager({ now })
         val controller = authenticatedController()
-        val state = newState()
-        state.open(3)
+        val state = openedState(count = 3, note = "note")
 
         // Without a bound grant the capsule route is unreachable.
         controller.navigate(AppDestination.Capsule("spoofed"))
@@ -55,11 +56,14 @@ class GrantGateCapsuleFlowTest {
         assertEquals("jpeg-0", String(page.jpegBytes))
 
         // Leaving consumes the grant and ejects to Home; nothing reopens.
+        assertTrue("the state owns its decrypted note while open", state.holdsDecryptedNoteForTests)
         state.close()
         assertTrue(grants.consume(grant.grantId))
         controller.consumeCapsuleAccess()
         assertTrue(state.loadedPages.isEmpty())
         assertFalse(state.isOpen)
+        assertFalse("close must drop the note reference", state.holdsDecryptedNoteForTests)
+        assertNull(state.note)
         assertEquals(AppDestination.Home, controller.current)
         assertNull(grants.resolveCapsuleId(grant.grantId))
         controller.navigate(AppDestination.Capsule(grant.grantId.toString()))
@@ -89,7 +93,7 @@ class GrantGateCapsuleFlowTest {
         var now = 1_000L
         val grants = ScanGrantManager({ now })
         val controller = authenticatedController()
-        val state = newState().also { it.open(4) }
+        val state = openedState(count = 4, note = "note")
         val grant = grants.issue(capsuleId)
         controller.grantCapsuleAccess(grant.grantId.toString(), capsuleId.toString())
         controller.navigate(AppDestination.Capsule(grant.grantId.toString()))

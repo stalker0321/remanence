@@ -55,10 +55,13 @@ fun interface CapsulePhotoLoader {
  * plaintext to the caller nor re-enter [loadedPages]; the rejected bytes are
  * zeroed first. Concurrent loads for the same page are serialized, so one
  * decrypt is ever in flight per request chain.
+ *
+ * FIX-REVIEW3-03: the plaintext note is OWNED by this state (handed over at
+ * [open]) instead of being captured by an unclosable caller lambda - [close]
+ * and revocation drop the last controlled strong reference immediately.
  */
 class CapsulePresentationState(
     private val photoLoader: CapsulePhotoLoader,
-    private val noteText: () -> String?,
 ) {
 
     var photoCount: Int by mutableIntStateOf(0)
@@ -79,14 +82,25 @@ class CapsulePresentationState(
     /** Serializes page loads so concurrent requests share one decrypt path. */
     private val pageLoadMutex = kotlinx.coroutines.sync.Mutex()
 
-    val note: String? get() = if (isOpen) noteText() else null
+    /**
+     * FIX-REVIEW3-03: the decrypted note lives HERE so [close] can drop the
+     * reference; nothing outside holds it for the presentation's lifetime.
+     */
+    private var decryptedNote: String? = null
 
-    fun open(expectedCount: Int) {
+    /** Test-only probe proving the strong reference is really dropped. */
+    internal val holdsDecryptedNoteForTests: Boolean
+        get() = decryptedNote != null
+
+    val note: String? get() = if (isOpen) decryptedNote else null
+
+    fun open(expectedCount: Int, note: String?) {
         check(!isOpen) { "presentation already open" }
         require(expectedCount in ProtocolV1Limits.PHOTO_COUNT_MIN..ProtocolV1Limits.PHOTO_COUNT_MAX) {
             "capsule must contain ${ProtocolV1Limits.PHOTO_COUNT_MIN}..${ProtocolV1Limits.PHOTO_COUNT_MAX} photos"
         }
         loadGeneration += 1
+        decryptedNote = note
         photoCount = expectedCount
         isOpen = true
     }
@@ -122,6 +136,9 @@ class CapsulePresentationState(
         // Invalidate every in-flight load BEFORE dropping the references.
         loadGeneration += 1
         loadedPages.clear()
+        // Kotlin cannot scrub String contents; dropping the last controlled
+        // strong reference immediately is the strongest available guarantee.
+        decryptedNote = null
         photoCount = 0
         isOpen = false
     }

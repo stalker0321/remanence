@@ -258,9 +258,11 @@ private fun CapsuleRoute(
                         source.loadPhoto(capsuleId, ordinal).jpegBytes,
                     )
             },
-            noteText = { note },
         )
-        presentation.open(photoCount.coerceIn(3, 5))
+        // FIX-REVIEW3-03: the note's owning reference moves INTO the state;
+        // this local goes out of scope when the loading effect completes, so
+        // close()/revocation drops the last controlled strong reference.
+        presentation.open(photoCount.coerceIn(3, 5), note)
         state = presentation
     }
 

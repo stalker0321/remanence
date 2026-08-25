@@ -68,6 +68,12 @@ fun CaptureAttemptSurface(
     onRetake: () -> Unit,
     modifier: Modifier = Modifier,
     adapterFactory: (() -> StillCameraAdapter)? = null,
+    /**
+     * FIX-STATE-08: when true (production), the surface resolves the system
+     * camera permission itself on attach; tests set false and resolve the
+     * controller's permission explicitly.
+     */
+    requestPermissionOnAttach: Boolean = true,
 ) {
     val context = LocalContext.current
 
@@ -83,7 +89,7 @@ fun CaptureAttemptSurface(
     }
 
     LaunchedEffect(controller) {
-        if (controller.permission == CapturePermissionStep.NotRequested) {
+        if (requestPermissionOnAttach && controller.permission == CapturePermissionStep.NotRequested) {
             val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
                 PackageManager.PERMISSION_GRANTED
             if (granted) {

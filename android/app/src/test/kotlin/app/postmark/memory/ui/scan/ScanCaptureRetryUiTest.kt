@@ -176,6 +176,7 @@ class ScanCaptureRetryUiTest {
             MaterialTheme {
                 ScanScreen(
                     viewModel = vm,
+                    requestPermissionOnAttach = false,
                     adapterFactory = {
                         bindCount += 1
                         FakeStillCameraAdapter().also { live.set(it) }

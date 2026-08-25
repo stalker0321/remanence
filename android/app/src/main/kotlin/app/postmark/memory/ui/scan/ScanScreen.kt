@@ -42,6 +42,7 @@ fun ScanScreen(
      * the same production callbacks without hardware; production passes null.
      */
     adapterFactory: (() -> app.postmark.memory.capture.StillCameraAdapter)? = null,
+    requestPermissionOnAttach: Boolean = true,
 ) {
     val matchState by viewModel.matchState.collectAsStateWithLifecycle()
 
@@ -59,7 +60,8 @@ fun ScanScreen(
         Spacer(Modifier.height(8.dp))
 
         when (val current = matchState) {
-            is ScanMatchUiState.AwaitingCapture -> CapturePair(viewModel, Modifier.fillMaxWidth(), adapterFactory)
+            is ScanMatchUiState.AwaitingCapture ->
+                CapturePair(viewModel, Modifier.fillMaxWidth(), adapterFactory, requestPermissionOnAttach)
             is ScanMatchUiState.Matching -> Text("Matching...", modifier = Modifier.testTag("scan_matching"))
             is ScanMatchUiState.Accepted -> Text(
                 "Verified. Opening the capsule...",
@@ -88,7 +90,7 @@ fun ScanScreen(
                 Text("No confident match. Recapture the front and back.", modifier = Modifier.testTag("scan_recapture"))
                 OutlinedButton(onClick = viewModel::resetSession) { Text("Start over") }
                 Spacer(Modifier.height(8.dp))
-                CapturePair(viewModel, Modifier.fillMaxWidth(), adapterFactory)
+                CapturePair(viewModel, Modifier.fillMaxWidth(), adapterFactory, requestPermissionOnAttach)
             }
         }
     }
@@ -100,6 +102,7 @@ private fun CapturePair(
     viewModel: ScanViewModel,
     modifier: Modifier = Modifier,
     adapterFactory: (() -> app.postmark.memory.capture.StillCameraAdapter)? = null,
+    requestPermissionOnAttach: Boolean = true,
 ) {
     when (viewModel.captureSession.state) {
         ScanSessionState.AWAITING_FRONT -> CaptureAttemptSurface(
@@ -112,6 +115,7 @@ private fun CapturePair(
             onRetake = viewModel::retakeFront,
             modifier = modifier,
             adapterFactory = adapterFactory,
+            requestPermissionOnAttach = requestPermissionOnAttach,
         )
 
         ScanSessionState.AWAITING_BACK -> CaptureAttemptSurface(
@@ -124,6 +128,7 @@ private fun CapturePair(
             onRetake = viewModel::retakeBack,
             modifier = modifier,
             adapterFactory = adapterFactory,
+            requestPermissionOnAttach = requestPermissionOnAttach,
         )
 
         ScanSessionState.CONSUMED -> Unit

@@ -1,0 +1,312 @@
+package app.postmark.memory.ui.create
+
+import android.content.Context
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.performTextInput
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.room.Room
+import androidx.test.core.app.ApplicationProvider
+import app.postmark.memory.capture.CapturePermissionStep
+import app.postmark.memory.capture.FakeStillCameraAdapter
+import app.postmark.memory.capture.PreparedBackItem
+import app.postmark.memory.capture.ProcessedStill
+import app.postmark.memory.capture.StillCameraAdapter
+import app.postmark.memory.capture.StillProcessor
+import java.util.UUID
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.setMain
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import postmark.core.crypto.AccountIdentityGenerator
+import postmark.core.data.db.PostmarkLocalDatabase
+import postmark.core.data.db.OutboxCapsuleState
+import postmark.core.data.fingerprints.SealedFingerprintPersistence
+import postmark.core.data.network.DirectoryLookupResult
+import postmark.core.data.network.ResolvedHandleSnapshot
+import postmark.core.model.KeyBundleId
+import postmark.core.model.NormalizedHandle
+import postmark.core.model.UserId
+import postmark.core.recognition.FingerprintSide
+import postmark.core.recognition.RecognitionProfile
+
+/**
+ * FIX-STATE-08 (A): the create happy path driven through the REAL production
+ * UI - typed handle lookup, explicit confirmation, FRONT capture through the
+ * camera adapter seam, checklist boxes + Continue, BACK capture, three photos
+ * via the production picker sink, note input, publish - ending PUBLISHED with
+ * the capsule staged in the durable outbox. No ViewModel method is called
+ * that the UI itself would not call.
+ */
+private fun synthetic(side: FingerprintSide): ProcessedStill.Accepted {
+    val profile = RecognitionProfile.mvpOrbV1()
+    val keypoints = List(64) {
+        postmark.core.recognition.FingerprintKeypoint(
+            xNormalized = (it % 8) / 8.0,
+            yNormalized = (it / 8) / 8.0,
+            scaleNormalized = 1.0,
+            angleCentiDegrees = 0,
+            responseQuantized = it,
+            octave = 0,
+        )
+    }
+    return ProcessedStill.Accepted(
+        profileId = profile.profileId,
+        serializedBytes = postmark.core.recognition.FingerprintCodec.serialize(
+            postmark.core.recognition.PostcardFingerprint(
+                profileId = profile.profileId,
+                side = side,
+                canonicalWidthPx = profile.capture.canonicalLongEdgePx,
+                canonicalHeightPx = 1000,
+                coarseHash64 = 5L,
+                keypoints = keypoints,
+                descriptors = List(64) { i ->
+                    ByteArray(32) { ((it * 13 + i * 7) and 0xFF).toByte() }
+                },
+                quality = postmark.core.recognition.ExtractionQuality(200.0, 90.0, 0.01, 0.85),
+            ),
+        ),
+    )
+}
+
+@OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(AndroidJUnit4::class)
+@Config(sdk = [35])
+class CreateUiHappyPathTest {
+
+    @get:Rule
+    val composeRule = createComposeRule()
+
+    private val testDispatcher = UnconfinedTestDispatcher()
+
+    private lateinit var database: PostmarkLocalDatabase
+
+    private val identity = AccountIdentityGenerator().generate()
+    private val userUuid = UUID.fromString("9a111111-2222-4333-8444-555555555555")
+    private val bundleUuid = UUID.fromString("9a333333-4444-4555-8666-777777777777")
+
+    @Before
+    fun setUp() {
+        Dispatchers.setMain(testDispatcher)
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, PostmarkLocalDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+    }
+
+    @After
+    fun tearDown() {
+        Dispatchers.resetMain()
+        if (::database.isInitialized) database.close()
+    }
+
+    private fun selfSnapshot() = ResolvedHandleSnapshot(
+        userId = UserId(userUuid),
+        handle = NormalizedHandle.parse("mykola"),
+        keyBundleId = KeyBundleId(bundleUuid),
+        suite = "HPKE_X25519_HKDF_SHA256_AES256GCM__ED25519",
+        protocolVersion = 1,
+        encryptionPublicKeysetB64Url =
+            com.google.crypto.tink.subtle.Base64.urlSafeEncode(identity.encryptionPublicKeyset),
+        signingPublicKeysetB64Url =
+            com.google.crypto.tink.subtle.Base64.urlSafeEncode(identity.signingPublicKeyset),
+        keyBundleStatus = "ACTIVE",
+        directoryVersion = "v1",
+    )
+
+    private inner class SelfDirectory : RecipientDirectoryPort {
+        override suspend fun lookup(rawHandle: String, accessToken: String): DirectoryLookupResult =
+            DirectoryLookupResult.Found(selfSnapshot())
+    }
+
+    private class AcceptingProcessor(private val side: FingerprintSide) : StillProcessor {
+        override fun process(jpegBytes: ByteArray): ProcessedStill = synthetic(side)
+    }
+
+
+    private class RecordingPersistence : SealedFingerprintPersistence {
+        val stored = mutableMapOf<String, ByteArray>()
+        var counter = 0
+
+        override suspend fun persist(
+            capsuleId: String,
+            side: postmark.core.data.db.FingerprintSide,
+            origin: postmark.core.data.db.FingerprintOrigin,
+            profileId: String,
+            plaintextBytes: ByteArray,
+        ): String {
+            val id = "fp-${++counter}"
+            stored[id] = plaintextBytes
+            return id
+        }
+
+        override suspend fun hasBaseline(
+            capsuleId: String,
+            side: postmark.core.data.db.FingerprintSide,
+            origin: postmark.core.data.db.FingerprintOrigin,
+        ): Boolean = stored.isNotEmpty()
+
+        override suspend fun decrypt(fingerprintId: String): ByteArray =
+            requireNotNull(stored[fingerprintId])
+
+        override suspend fun setPreferredPair(capsuleId: String, origin: postmark.core.data.db.FingerprintOrigin) = Unit
+
+        override suspend fun deleteBaseline(
+            capsuleId: String,
+            side: postmark.core.data.db.FingerprintSide,
+            origin: postmark.core.data.db.FingerprintOrigin,
+        ) = Unit
+    }
+
+    @Test
+    fun fullCreateHappyPathThroughTheRealSurfaceEndsPublished() = runBlocking {
+        val persistence = RecordingPersistence()
+        val vm = CreateViewModel(
+            directory = SelfDirectory(),
+            accessTokenProvider = { "test-token" },
+            identityProvider = {
+                SenderIdentitySnapshot(
+                    userId = userUuid.toString(),
+                    handle = "mykola",
+                    activeKeyBundleId = bundleUuid.toString(),
+                    encryptionPrivateHandle = identity.encryptionPrivateHandle,
+                    signingPrivateHandle = identity.signingPrivateHandle,
+                )
+            },
+            persistence = persistence,
+            outboxStager = postmark.core.data.outbox.CapsuleOutboxStager(database, stagingDir()),
+            profile = RecognitionProfile.mvpOrbV1(),
+            stagingDirectory = stagingDir(),
+            openPhotoSource = { id ->
+                app.postmark.memory.create.PhotoSource {
+                    java.io.ByteArrayInputStream("photo-$id".toByteArray())
+                }
+            },
+            frontProcessor = AcceptingProcessor(FingerprintSide.FRONT),
+            backProcessor = AcceptingProcessor(FingerprintSide.BACK),
+            photoNormalizer = { input -> app.postmark.memory.create.NormalizedPhotoDto(input.copyOf(), 800, 600) },
+            cpuDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher,
+        )
+        vm.beginSession(1L)
+
+        val live = AtomicReference<FakeStillCameraAdapter?>(null)
+        composeRule.setContent {
+            MaterialTheme {
+                CreateScreen(
+                    viewModel = vm,
+                    adapterFactory = {
+                        FakeStillCameraAdapter().also { live.set(it) }
+                    },
+                    requestPermissionOnAttach = false,
+                )
+            }
+        }
+
+        fun readyCamera() {
+            composeRule.waitForIdle()
+            composeRule.runOnIdle { live.get()?.emitReady() }
+            composeRule.waitForIdle()
+        }
+
+        fun scroll(tag: String) {
+            composeRule.onNodeWithTag("create_screen_scroll").performScrollToNode(hasTestTag(tag))
+        }
+
+        // 1) Lookup the recipient handle.
+        scroll("create_handle_input")
+        composeRule.onNodeWithTag("create_handle_input").performTextInput("mykola")
+        composeRule.onNodeWithTag("create_lookup_button").performClick()
+        composeRule.waitForIdle()
+
+        // 2) Explicit confirmation of the resolved snapshot.
+        composeRule.onNodeWithTag("confirm_ack_checkbox").performClick()
+        composeRule.onNodeWithTag("confirm_button").performClick()
+
+        // 3) FRONT capture through the camera seam.
+        composeRule.runOnIdle {
+            vm.frontAttempt.onPermissionResolved(CapturePermissionStep.Granted)
+        }
+        readyCamera()
+        composeRule.onNodeWithTag("capture_shutter_front").performClick()
+        composeRule.runOnIdle { live.get()!!.deliverFrame("front-frame".toByteArray()) }
+        composeRule.waitForIdle()
+
+        // 4) Checklist boxes + Continue REALLY reach BACK.
+        PreparedBackItem.entries.forEach { item ->
+            scroll("checklist_${item.name}")
+            composeRule.onNodeWithTag("checklist_${item.name}").performClick()
+        }
+        scroll("create_back_ready")
+        composeRule.onNodeWithTag("create_back_ready").performClick()
+
+        // 5) BACK capture.
+        composeRule.runOnIdle {
+            vm.backAttempt.onPermissionResolved(CapturePermissionStep.Granted)
+        }
+        readyCamera()
+        composeRule.onNodeWithTag("capture_shutter_back").performClick()
+        composeRule.runOnIdle { live.get()!!.deliverFrame("back-frame".toByteArray()) }
+        composeRule.waitForIdle()
+
+        // 6) Content: three photos via THE production sink + note input.
+        scroll("create_pick_photos")
+        composeRule.runOnIdle { vm.onPhotosPicked(listOf("u1", "u2", "u3")) }
+        composeRule.onNodeWithTag("create_note_input").performTextInput("dear mama")
+
+        // 7) Publish.
+        scroll("create_publish")
+        composeRule.onNodeWithTag("create_publish")
+            .assertIsDisplayed()
+            .performClick()
+
+        // Durable staging completes on Room's own executors; await terminal.
+        val deadline = System.currentTimeMillis() + 10_000
+        while (vm.step.value == CreateViewModel.Step.PUBLISHING) {
+            if (System.currentTimeMillis() > deadline) {
+                error(
+                    "publish never terminated; publishError=" + vm.publishError.value +
+                        " flowError=" + vm.flowError.value,
+                )
+            } // bounded await: Room executors are not under the test clock
+            Thread.sleep(20)
+        }
+        composeRule.waitForIdle()
+        assertEquals(
+            "publishError=" + vm.publishError.value + " flowError=" + vm.flowError.value,
+            CreateViewModel.Step.PUBLISHED,
+            vm.step.value,
+        )
+        composeRule.onNodeWithTag("create_published").assertIsDisplayed()
+
+        val row = database.outboxCapsuleDao().getByCapsuleId(vm.capsuleId)
+        assertTrue(row != null)
+        assertEquals(OutboxCapsuleState.ENCRYPTED, row!!.state)
+        assertEquals(2, persistence.stored.size)
+        Unit
+    }
+
+    private fun stagingDir() =
+        java.io.File(
+            ApplicationProvider.getApplicationContext<Context>().filesDir,
+            "ui-happy-staging",
+        )
+}

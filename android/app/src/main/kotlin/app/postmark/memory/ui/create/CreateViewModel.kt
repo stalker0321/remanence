@@ -153,6 +153,13 @@ class CreateViewModel(
     private var frontFingerprintId: String? = null
     private var backFingerprintId: String? = null
 
+    /**
+     * FIX-STATE-01: monotonic guard for delivered-still continuations. A new
+     * session invalidates every queued outcome - the late coroutine may still
+     * finish its work, but its RESULT can never be applied to the new session.
+     */
+    private var deliveryGeneration: Long = 0L
+
     // ---------------------------------------------------------------------
     // Session lifecycle.
     // ---------------------------------------------------------------------
@@ -176,6 +183,7 @@ class CreateViewModel(
         backGate.reset()
         frontAttempt.reset()
         backAttempt.reset()
+        deliveryGeneration += 1
         frontFingerprintId = null
         backFingerprintId = null
         _flowError.value = null
@@ -239,23 +247,32 @@ class CreateViewModel(
         }
     }
 
-    /** Camera bytes for the FRONT; stale deliveries are inert. */
+    /**
+     * Camera bytes for the FRONT. A late hardware callback with no active
+     * attempt (dispose/reset won the race) is silently inert - it is device
+     * timing, not a user action, so it must not raise the recovery banner.
+     */
     fun deliverFrontJpeg(jpegBytes: ByteArray) {
+        if (!frontAttempt.hasActiveAttempt) return
         if (!requireStep(Step.FRONT, "front delivery")) return
+        val generation = deliveryGeneration
         viewModelScope.launch {
-            applyFrontOutcome(
-                frontFlow.onJpegDelivered(jpegBytes, capsuleId, persistence, frontAttempt),
-            )
+            val outcome = frontFlow.onJpegDelivered(jpegBytes, capsuleId, persistence, frontAttempt)
+            // A session reset supersedes this continuation entirely.
+            if (generation != deliveryGeneration) return@launch
+            applyFrontOutcome(outcome)
         }
     }
 
-    /** Camera bytes for the BACK; stale deliveries are inert. */
+    /** Camera bytes for the BACK; late callbacks without an attempt are inert. */
     fun deliverBackJpeg(jpegBytes: ByteArray) {
+        if (!backAttempt.hasActiveAttempt) return
         if (!requireStep(Step.BACK, "back delivery")) return
+        val generation = deliveryGeneration
         viewModelScope.launch {
-            applyBackOutcome(
-                backFlow.onJpegDelivered(jpegBytes, capsuleId, persistence, backAttempt),
-            )
+            val outcome = backFlow.onJpegDelivered(jpegBytes, capsuleId, persistence, backAttempt)
+            if (generation != deliveryGeneration) return@launch
+            applyBackOutcome(outcome)
         }
     }
 
@@ -283,6 +300,7 @@ class CreateViewModel(
     private suspend fun applyFrontOutcome(outcome: FrontCaptureOutcome) {
         when (outcome) {
             is FrontCaptureOutcome.Captured -> {
+                if (_step.value != Step.FRONT) return
                 frontFingerprintId = outcome.fingerprintId
                 clearGuardError()
                 _step.value = Step.BACK_CHECKLIST
@@ -296,6 +314,7 @@ class CreateViewModel(
     private suspend fun applyBackOutcome(outcome: FrontCaptureOutcome) {
         when (outcome) {
             is FrontCaptureOutcome.Captured -> {
+                if (_step.value != Step.BACK) return
                 backFingerprintId = outcome.fingerprintId
                 clearGuardError()
                 _step.value = Step.CONTENT

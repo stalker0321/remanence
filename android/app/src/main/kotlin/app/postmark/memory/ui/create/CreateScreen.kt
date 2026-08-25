@@ -47,6 +47,12 @@ import app.postmark.memory.capture.PreparedBackItem
 fun CreateScreen(
     viewModel: CreateViewModel,
     modifier: Modifier = Modifier,
+    /**
+     * FIX-STATE-08: optional camera driver seam so transition tests excite
+     * the same production callbacks without hardware; production passes null.
+     */
+    adapterFactory: (() -> app.postmark.memory.capture.StillCameraAdapter)? = null,
+    requestPermissionOnAttach: Boolean = true,
 ) {
     val step by viewModel.step.collectAsStateWithLifecycle()
     val publishError by viewModel.publishError.collectAsStateWithLifecycle()
@@ -94,6 +100,8 @@ fun CreateScreen(
                 onBeginAttempt = viewModel::beginFrontCapture,
                 onDelivered = viewModel::deliverFrontJpeg,
                 onRetake = viewModel::retakeFront,
+                adapterFactory = adapterFactory,
+                requestPermissionOnAttach = requestPermissionOnAttach,
             )
 
             CreateViewModel.Step.BACK_CHECKLIST -> PreparedBackChecklist(viewModel)
@@ -105,6 +113,8 @@ fun CreateScreen(
                 onBeginAttempt = viewModel::beginBackCapture,
                 onDelivered = viewModel::deliverBackJpeg,
                 onRetake = viewModel::retakeBack,
+                adapterFactory = adapterFactory,
+                requestPermissionOnAttach = requestPermissionOnAttach,
             )
 
             CreateViewModel.Step.CONTENT -> ContentStepContent(viewModel)
@@ -211,6 +221,7 @@ private fun PreparedBackChecklist(viewModel: CreateViewModel) {
                 Checkbox(
                     checked = viewModel.backGate.checked[item] == true,
                     onCheckedChange = { checked -> viewModel.backGate.setChecked(item, checked) },
+                    modifier = Modifier.testTag("checklist_${item.name}"),
                 )
                 Text(item.name.lowercase().replace('_', ' '))
             }

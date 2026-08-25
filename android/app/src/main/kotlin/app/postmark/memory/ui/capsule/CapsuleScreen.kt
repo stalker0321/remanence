@@ -28,6 +28,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import postmark.core.model.ProtocolV1Limits
 
@@ -48,6 +49,12 @@ fun interface CapsulePhotoLoader {
  * exists. [close] releases every decrypted byte reference immediately - the
  * caller must invoke it when the screen is left, matching the memory-only
  * grant lifecycle (docs/architecture.md sections 5 and 10).
+ *
+ * FIX-REVIEW3-01: page loads carry a session generation. A load that was in
+ * flight while [close] ran (expiry/revocation) can neither return its
+ * plaintext to the caller nor re-enter [loadedPages]; the rejected bytes are
+ * zeroed first. Concurrent loads for the same page are serialized, so one
+ * decrypt is ever in flight per request chain.
  */
 class CapsulePresentationState(
     private val photoLoader: CapsulePhotoLoader,
@@ -58,10 +65,19 @@ class CapsulePresentationState(
         private set
 
     /** Decrypted page cache keyed by ordinal; empty after [close]. */
-    val loadedPages: MutableMap<Int, DecryptedPhoto> = mutableMapOf()
+    val loadedPages: MutableMap<Int, DecryptedPhoto> = java.util.concurrent.ConcurrentHashMap()
 
     var isOpen: Boolean by mutableStateOf(false)
         private set
+
+    /**
+     * FIX-REVIEW3-01: bumped by [open] and [close]; any in-flight load whose
+     * captured generation differs afterwards is stale and must be rejected.
+     */
+    private var loadGeneration: Int by mutableIntStateOf(0)
+
+    /** Serializes page loads so concurrent requests share one decrypt path. */
+    private val pageLoadMutex = kotlinx.coroutines.sync.Mutex()
 
     val note: String? get() = if (isOpen) noteText() else null
 
@@ -70,6 +86,7 @@ class CapsulePresentationState(
         require(expectedCount in ProtocolV1Limits.PHOTO_COUNT_MIN..ProtocolV1Limits.PHOTO_COUNT_MAX) {
             "capsule must contain ${ProtocolV1Limits.PHOTO_COUNT_MIN}..${ProtocolV1Limits.PHOTO_COUNT_MAX} photos"
         }
+        loadGeneration += 1
         photoCount = expectedCount
         isOpen = true
     }
@@ -79,16 +96,31 @@ class CapsulePresentationState(
 
     fun canRewind(currentOrdinal: Int): Boolean = currentOrdinal > 0
 
-    /** Loads one page on demand; repeats are served from the memory cache. */
-    suspend fun pageAt(ordinal: Int): DecryptedPhoto {
-        check(isOpen) { "presentation closed" }
+    /**
+     * Loads one page on demand; repeats are served from the memory cache.
+     * FIX-REVIEW3-01: AFTER the suspend load returns, the presentation must
+     * still be open within the SAME generation - a close/expiry during the
+     * load rejects the result (zeroing the plaintext bytes) instead of
+     * caching or returning it.
+     */
+    suspend fun pageAt(ordinal: Int): DecryptedPhoto = pageLoadMutex.withLock {
+        val session = loadGeneration
+        check(isOpen && loadGeneration == session) { "presentation closed" }
         require(ordinal in 0 until photoCount) { "ordinal out of bounds" }
-        loadedPages[ordinal]?.let { return it }
-        return photoLoader.load(ordinal).also { loadedPages[ordinal] = it }
+        loadedPages[ordinal]?.let { return@withLock it }
+        val photo = photoLoader.load(ordinal)
+        if (!isOpen || loadGeneration != session) {
+            // Closed/expired/reopened mid-flight: the plaintext must die here.
+            photo.jpegBytes.fill(0)
+            throw IllegalStateException("presentation closed during page load")
+        }
+        loadedPages.putIfAbsent(ordinal, photo) ?: photo
     }
 
     /** Releases every decrypted byte reference; nothing survives leaving. */
     fun close() {
+        // Invalidate every in-flight load BEFORE dropping the references.
+        loadGeneration += 1
         loadedPages.clear()
         photoCount = 0
         isOpen = false

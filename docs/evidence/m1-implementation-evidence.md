@@ -4,6 +4,100 @@ Generated at the close of the I-queue. Every item below was executed on this
 workstation in a clean shell. Physical-device items are explicitly **PENDING**
 and are not claimed.
 
+## FIX-REVIEW2 correction batch (2026-08-25, baseline 3e742f2)
+
+Independent Codex review of `d815251..3e742f2`. One focused commit each,
+tests with each, no amends:
+
+| Fix | Commit |
+| --- | --- |
+| 01 strict routing parser: malformed identity material fails closed | `a72b9a2` |
+| 02 leaving Scan always invalidates the authoritative grant manager | `f7c46bb` |
+| 03 real ten-minute expiry during capsule presentation + per-load grant revalidation | `31145d1` |
+| 04 sender verification only through the trusted key-directory boundary | `38c648d` |
+
+FIX-REVIEW2-01: one shared `CapsuleRoutingPolicy` parses persisted routing
+material strictly for BOTH Scan verification and content decryption.
+`recipient_user_id`/`recipient_key_bundle_id` are mandatory (malformed never
+falls back to the authenticated account); non-null malformed sender IDs or
+bundles fail closed; a carried signing export must decode to valid non-secret
+Ed25519 material or the row is corrupt - an error NEVER falls back to the own
+signing key. Only genuinely NULL v2-migrated columns resolve through the
+documented self-send fallback. `CapsuleRoutingCorruptionTest` (16 cases)
+proves every malformed case yields no grant, no decrypted hint, and no
+plaintext baseline, while genuine legacy NULL self-send keeps verifying.
+
+FIX-REVIEW2-02: `returnToHome()` now clears THE authoritative
+`ScanGrantManager` itself when leaving Scan, so a grant issued in the race
+before the navigation effect completed cannot outlive the flow. Close,
+logout, flow reset/re-entry, and process-death guarantees unchanged;
+rotation never touches a live presentation.
+
+FIX-REVIEW2-03: presentation expiry is REAL. One lifecycle-bound timer
+(`CapsuleExpiryWatch`, no polling) wakes exactly at the grant deadline from
+the same injected clock, THE authoritative manager re-decides, the route
+ejects to Home, and a revocation event closes the presentation state,
+releasing every decrypted reference. The production route reaches decryption
+ONLY through `GrantGuardedCapsuleContentSource`, which revalidates the same
+grant through THE manager before every photo/note/count operation - an
+expired/consumed/wrong grant decrypts nothing even before any wake-up.
+Rotation preserves grant and timer; process death loses both.
+`ScanGrantManager.expiresAtMillis` exposes the exact deadline.
+
+FIX-REVIEW2-04: sender verification trusts ONLY `TrustedSenderKeyStore`.
+Production resolves other senders exclusively through the authenticated
+`GET /v1/directory/key-bundles/{id}` material (owner must match, not REVOKED,
+well-formed non-secret Ed25519; uncached so later revocation cannot be
+outrun). The own public export is returned solely for an exact match of the
+authenticated account and its active bundle - provable self-send without the
+network. Row-carried exports stay strictly parsed transport/cache candidates
+and never decide trust: `ScanViewModel` now REQUIRES the boundary, and
+CrossIdentity proofs show a forged replacement row export is inert while
+wrong-owner/revoked/missing/malformed directory entries all fail closed. The
+documented malicious-live-directory limitation remains unchanged; no M2
+delivery machinery was implemented.
+
+### Verification commands and results for this batch
+
+| Command | Result |
+| --- | --- |
+| `cd android && ./gradlew clean testDebugUnitTest assembleDebug --console=plain` (JDK 17) | BUILD SUCCESSFUL — 633 unit tests, 0 failures, 0 errors, 1 pre-existing environment skip (`ApiStackIntegrationTest`, skips cleanly without its external dependency) |
+| `cd server && POSTMARK_TEST_DATABASE_URL=postgresql+psycopg://postmark:postmark-dev-only@127.0.0.1:55432/postmark uv run --locked pytest -q -W error` | 324 passed (full PostgreSQL-backed suites included, 0 skipped) |
+| `git diff --check` | clean; worktree clean at the FIX-REVIEW2-05 commit |
+| APK | `android/app/build/outputs/apk/debug/app-debug.apk`, 155,133,699 bytes, SHA-256 `caf7bb831bd4656f1da3c0b7b36fad0ed8ab83030b97b3cab1ad01940948599b` |
+
+The APK hash records exactly this verification run's artifact. Byte-for-byte
+reproducibility across clean builds is NOT claimed: debug signing and ZIP
+metadata may vary between runs.
+
+### Plaintext canary status
+
+Automated canaries pass inside the same clean run:
+`CapsuleOutboxStagerTest`
+(`plaintextCanaryAcrossEveryProducedByteFindsNothing` plus the rollback-
+without-traces case) scans every produced byte — artifact files, statement/
+signature files, SQLite db/WAL — for note/photo/manifest markers, and the
+create-close-reopen-scan-open narrative (`CreateRescanOpenFlowTest`) repeats
+the scan over sealed baselines, fingerprint files, and outbox ciphertext with
+the REAL acceptance gate deciding every grant. No plaintext marker appears in
+any persisted byte. Persisted routing identity material remains public-only
+(user/bundle IDs plus the sender PUBLIC keyset export), parsed strictly.
+
+### Honest-client status after this batch
+
+The debug APK exposes login/register surfaces, reachable Create (directory
+resolve → confirm → front/prepared-back capture → picker/note → sealing into
+the durable outbox), reachable Scan (front/back capture → local hierarchy →
+chooser on decrypted hints → verified grant through the one authoritative
+grant manager), and fullscreen photo presentation that exists ONLY behind a
+live memory-only grant plus directory-bound verified crypto, with real
+ten-minute expiry enforced during presentation. Tampered or malformed local
+capsule material fails closed everywhere it can be met; leaving Scan always
+invalidates grants; camera permission states distinguish first request,
+retryable denial, and permanent denial with no re-request loop.
+CameraX/OpenCV/Keystore behavior on physical hardware and the two-device
+scenario remain the open items below.
+
 ## FIX-REVIEW correction batch (2026-08-25, baseline 2111289)
 
 Review corrections after baseline `2111289`. One focused commit each,
@@ -198,6 +292,11 @@ The following require real hardware/emulator runs and remain **PENDING**:
   production Create/Scan capture surfaces and the FIX-REVIEW-05 first-request/
   retryable/permanent permission states, whose real system-dialog behavior is
   only unit-proven at the classifier level until then.
+- On-device presentation lifecycle from FIX-REVIEW2-02/03: real Back/Recents
+  navigation out of Scan invalidating grants, and the exact ten-minute expiry
+  ejecting an open capsule on hardware (unit-proven with virtual clocks only).
+- Directory-backed sender verification from FIX-REVIEW2-04 against a live
+  authenticated backend (owner/status/malformed refusals over real HTTP).
 - ORB extraction latency and match-loop timing on-device (OpenCV instrumentation).
 - Full two-device physical scenario: mail card, second device scans and opens.
 - AndroidKeystore-backed KEK wrapping round trip on hardware TEE/StrongBox.

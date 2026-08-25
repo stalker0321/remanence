@@ -70,6 +70,49 @@ class SingleStillCaptureShellTest {
     }
 
     @Test
+    fun fix05ClassifierMapsEverySystemOutcome() {
+        // Grant wins regardless of any stale rationale signal.
+        assertEquals(
+            CapturePermissionStep.Granted,
+            resolveCapturePermissionStep(granted = true, shouldShowRationale = true),
+        )
+        assertEquals(
+            CapturePermissionStep.Granted,
+            resolveCapturePermissionStep(granted = true, shouldShowRationale = false),
+        )
+        // Ordinary decline: the OS would show the dialog again.
+        assertEquals(
+            CapturePermissionStep.DeniedRetryable,
+            resolveCapturePermissionStep(granted = false, shouldShowRationale = true),
+        )
+        // Do-not-ask-again/policy block: only Settings can recover.
+        assertEquals(
+            CapturePermissionStep.PermanentlyDenied,
+            resolveCapturePermissionStep(granted = false, shouldShowRationale = false),
+        )
+    }
+
+    /**
+     * FIX-REVIEW-05 regression for the real device sequence: the first
+     * denial reports rationale=true (retryable), a later do-not-ask-again
+     * denial reports rationale=false and MUST land on PermanentlyDenied -
+     * never looping back to a request button.
+     */
+    @Test
+    fun repeatedDenialProgressesRetryableThenPermanentlyWithoutLoop() {
+        shell.onPermissionResolved(resolveCapturePermissionStep(false, shouldShowRationale = true))
+        assertEquals(CapturePermissionStep.DeniedRetryable, shell.permission)
+
+        shell.onPermissionResolved(resolveCapturePermissionStep(false, shouldShowRationale = false))
+        assertEquals(CapturePermissionStep.PermanentlyDenied, shell.permission)
+
+        expectIllegalState {
+            shell.onPermissionResolved(resolveCapturePermissionStep(false, shouldShowRationale = true))
+        }
+        assertEquals(CapturePermissionStep.PermanentlyDenied, shell.permission)
+    }
+
+    @Test
     fun secondResultAfterResolutionIsRejected() {
         grant()
         expectIllegalState { shell.onPermissionResult(granted = false, canAskAgain = false) }

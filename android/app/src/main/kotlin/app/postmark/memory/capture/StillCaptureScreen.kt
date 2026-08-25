@@ -1,7 +1,6 @@
 package app.postmark.memory.capture
 
 import android.Manifest
-import android.app.Activity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.ImageCapture
@@ -56,11 +55,14 @@ fun StillCaptureScreen(
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
-        // A denial without the system's ask-again affordance counts as
-        // permanent; refining this requires instrumentation evidence (M1).
-        val canAskAgain = granted ||
-            (context as? Activity)?.shouldShowRequestPermissionRationale(Manifest.permission.CAMERA) ?: true
-        shell.onPermissionResult(granted, canAskAgain)
+        // FIX-REVIEW-05: the one shared classifier reads the real OS
+        // ask-again signal; no surface invents its own denial semantics.
+        shell.onPermissionResolved(
+            resolveCapturePermissionStep(
+                granted = granted,
+                shouldShowRationale = cameraAskAgainPossible(context),
+            ),
+        )
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {

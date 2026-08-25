@@ -42,6 +42,8 @@ import app.postmark.memory.capture.CameraXPreviewBinder
 import app.postmark.memory.capture.PreparedBackItem
 import app.postmark.memory.capture.QualityFailureScreen
 import app.postmark.memory.capture.SingleStillCaptureShell
+import app.postmark.memory.capture.cameraAskAgainPossible
+import app.postmark.memory.capture.resolveCapturePermissionStep
 
 /**
  * FIX-M1-007-11: the production Create surface. Every control is bound to the
@@ -181,7 +183,17 @@ private fun CaptureAttemptContent(
 
         val permissionLauncher = rememberLauncherForActivityResult(
             ActivityResultContracts.RequestPermission(),
-        ) { granted -> shell.onPermissionResult(granted, !granted) }
+        ) { granted ->
+            // FIX-REVIEW-05: the OS ask-again signal decides retryable vs
+            // permanent; a bare denial is no longer treated as retryable
+            // forever (PermanentlyDenied is actually reachable).
+            shell.onPermissionResolved(
+                resolveCapturePermissionStep(
+                    granted = granted,
+                    shouldShowRationale = cameraAskAgainPossible(context),
+                ),
+            )
+        }
 
         LaunchedEffect(shell) {
             val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==

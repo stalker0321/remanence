@@ -24,6 +24,24 @@ sealed interface CapturePermissionStep {
 }
 
 /**
+ * FIX-REVIEW-05: THE one classifier of a system permission request outcome,
+ * shared by every capture surface (Create, Scan, shared still component).
+ * [shouldShowRationale] must be read via
+ * ActivityCompat.shouldShowRequestPermissionRationale AFTER the denial
+ * arrives: true means the system will show the ask-again dialog again
+ * (ordinary decline); false means do-not-ask-again/policy block - only
+ * Settings can recover. A bare denial is never assumed retryable forever.
+ */
+fun resolveCapturePermissionStep(
+    granted: Boolean,
+    shouldShowRationale: Boolean,
+): CapturePermissionStep = when {
+    granted -> CapturePermissionStep.Granted
+    shouldShowRationale -> CapturePermissionStep.DeniedRetryable
+    else -> CapturePermissionStep.PermanentlyDenied
+}
+
+/**
  * Progress of the single deliberate still after permission was granted.
  * Raw JPEG bytes are never held here; they travel through the delivery
  * callback straight into normalization (docs/security.md section 12).
@@ -61,15 +79,20 @@ class SingleStillCaptureShell {
         private set
 
     fun onPermissionResult(granted: Boolean, canAskAgain: Boolean) {
+        onPermissionResolved(resolveCapturePermissionStep(granted, canAskAgain))
+    }
+
+    /**
+     * FIX-REVIEW-05: single transition entry for a RESOLVED permission step.
+     * Callers classify the raw system result once through
+     * [resolveCapturePermissionStep] and hand the step here.
+     */
+    fun onPermissionResolved(step: CapturePermissionStep) {
         check(permission == CapturePermissionStep.NotRequested || permission == CapturePermissionStep.DeniedRetryable) {
             "permission already resolved: $permission"
         }
-        permission = when {
-            granted -> CapturePermissionStep.Granted
-            canAskAgain -> CapturePermissionStep.DeniedRetryable
-            else -> CapturePermissionStep.PermanentlyDenied
-        }
-        if (granted) phase = StillCapturePhase.BindingPreview
+        permission = step
+        if (step == CapturePermissionStep.Granted) phase = StillCapturePhase.BindingPreview
     }
 
     fun onPreviewBound() {

@@ -21,9 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -63,6 +61,7 @@ fun CreateScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
+            .testTag("create_screen_scroll")
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
     ) {
@@ -109,7 +108,14 @@ fun CreateScreen(
             )
 
             CreateViewModel.Step.CONTENT -> ContentStepContent(viewModel)
-            CreateViewModel.Step.PUBLISHING -> Text("Encrypting locally...", modifier = Modifier.testTag("create_publishing"))
+            CreateViewModel.Step.PUBLISHING -> Column {
+                androidx.compose.material3.CircularProgressIndicator(
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.testTag("create_publishing_spinner"),
+                )
+                Spacer(Modifier.height(8.dp))
+                Text("Encrypting locally...", modifier = Modifier.testTag("create_publishing"))
+            }
             CreateViewModel.Step.PUBLISHED -> Text(
                 "Capsule sealed. Send the physical postcard.",
                 modifier = Modifier.testTag("create_published"),
@@ -220,17 +226,16 @@ private fun PreparedBackChecklist(viewModel: CreateViewModel) {
 
 @Composable
 private fun ContentStepContent(viewModel: CreateViewModel) {
-    var selectionCount by remember { mutableIntStateOf(viewModel.photoSelection.selectedIds.size) }
+    // FIX-STATE-06: the selection snapshot is observable, so the count label
+    // and the 3..5 publish gate recompose immediately after a picker result.
+    val selectedIds = viewModel.photoSelection.selectedIds
 
     val pickerContract = remember {
         ActivityResultContracts.PickMultipleVisualMedia(PhotoSelectionState.MAX_PHOTOS)
     }
     val pickerLauncher = rememberLauncherForActivityResult(pickerContract) { uris: List<android.net.Uri> ->
-        viewModel.photoSelection.clear()
-        uris.forEach { uri ->
-            viewModel.photoSelection.toggle(uri.toString())
-        }
-        selectionCount = viewModel.photoSelection.selectedIds.size
+        // FIX-STATE-06: one production sink for picker results.
+        viewModel.onPhotosPicked(uris.map { it.toString() })
     }
 
     Column {
@@ -246,7 +251,7 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
         ) { Text("Open photo picker") }
         Spacer(Modifier.height(4.dp))
         Text(
-            "Selected: $selectionCount of 3-5",
+            "Selected: ${selectedIds.size} of 3-5",
             modifier = Modifier.testTag("create_selection_count"),
         )
 
@@ -255,9 +260,10 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
             value = viewModel.noteEditor.text,
             onValueChange = viewModel.noteEditor::onChange,
             label = { Text("Optional note (${NoteEditorState.MAX_NOTE_BYTES} byte limit)") },
+            isError = viewModel.noteEditor.limitReached || !viewModel.noteEditor.canIncludeInCapsule,
             modifier = Modifier.fillMaxWidth().testTag("create_note_input"),
         )
-        if (!viewModel.noteEditor.canIncludeInCapsule || viewModel.noteEditor.limitReached) {
+        if (viewModel.noteEditor.limitReached || !viewModel.noteEditor.canIncludeInCapsule) {
             Text(
                 "The note exceeds the ${NoteEditorState.MAX_NOTE_BYTES} byte limit.",
                 color = MaterialTheme.colorScheme.error,

@@ -1,17 +1,24 @@
 package app.postmark.memory.ui.create
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+
 /**
  * Optional capsule note with the v1 limit of 1000 UTF-8 bytes. Input that
  * does not fit is REJECTED whole — the state never silently truncates, and
  * malformed surrogate input is refused outright.
+ *
+ * FIX-STATE-06: text and the limit flag are Compose-observable so typed
+ * input and the visible limit error always recompose.
  */
 class NoteEditorState(private val maxBytes: Int = MAX_NOTE_BYTES) {
 
-    var text: String = ""
+    var text: String by mutableStateOf("")
         private set
 
     /** True after the most recent [onChange] was rejected for size. */
-    var limitReached: Boolean = false
+    var limitReached: Boolean by mutableStateOf(false)
         private set
 
     val isEmpty: Boolean get() = text.isEmpty()

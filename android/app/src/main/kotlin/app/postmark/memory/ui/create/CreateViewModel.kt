@@ -337,6 +337,17 @@ class CreateViewModel(
         _flowError.value = null
     }
 
+    /**
+     * FIX-STATE-06: THE production sink for Photo Picker results. The UI
+     * hands the picked ids here; tests call the same method, so the 3..5 gate
+     * behaves identically in both worlds. A fresh picker result replaces the
+     * previous selection (the system picker is authoritative per attempt).
+     */
+    fun onPhotosPicked(ids: List<String>) {
+        photoSelection.clear()
+        ids.forEach { id -> photoSelection.toggle(id) }
+    }
+
     // ---------------------------------------------------------------------
     // Sealing: the ONE production path - publisher → ciphertext outbox.
     // ---------------------------------------------------------------------
@@ -363,8 +374,26 @@ class CreateViewModel(
     private fun hasBothCaptures(): Boolean =
         frontFingerprintId != null && backFingerprintId != null
 
+    /**
+     * FIX-STATE-06: EVERY publish failure - including identity resolution or
+     * any unexpected exception - terminates visibly back at CONTENT. Nothing
+     * can leave the flow stuck on the PUBLISHING spinner.
+     */
     private suspend fun publish() {
         _publishError.value = null
+        try {
+            publishSealed()
+        } catch (cancelled: CancellationException) {
+            // Session teardown: staged plaintext dies with the scope below.
+            withContext(ioDispatcher) { clearStagedPhotos() }
+            throw cancelled
+        } catch (failure: Exception) {
+            _publishError.value = failure.message ?: "publishing failed"
+            _step.value = Step.CONTENT
+        }
+    }
+
+    private suspend fun publishSealed() {
         val snapshot = confirmedRecipient.value
         if (snapshot == null) {
             failPublishing("recipient must be confirmed before publishing")
@@ -394,7 +423,6 @@ class CreateViewModel(
             return
         }
 
-        try {
             // Normalized plaintext photos exist ONLY inside this call; every
             // staged file is deleted before this method returns or throws.
             val pipeline = app.postmark.memory.create.PhotoStagingPipeline(
@@ -431,14 +459,9 @@ class CreateViewModel(
                 outboxStager.stage(prepared)
                 _step.value = Step.PUBLISHED
             } finally {
+                // Normalized plaintext staging never survives this call.
                 withContext(ioDispatcher) { clearStagedPhotos() }
             }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (failure: Exception) {
-            _publishError.value = failure.message ?: "publishing failed"
-            _step.value = Step.CONTENT
-        }
     }
 
     private fun failPublishing(message: String, restartAt: Step = Step.CONTENT) {

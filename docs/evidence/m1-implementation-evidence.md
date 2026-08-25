@@ -4,6 +4,71 @@ Generated at the close of the I-queue. Every item below was executed on this
 workstation in a clean shell. Physical-device items are explicitly **PENDING**
 and are not claimed.
 
+## FIX-M1-ONDEVICE-01 (2026-08-25, baseline 1e20798)
+
+Real on-device M1 integration bug in the Create self-send flow, reproduced
+against the hosted backend during Test Build 2: entering own handle and
+resolving reached the directory (`GET /v1/directory/handles/vodkolyan` →
+200 OK — network, auth, and lookup all work), but nothing usable appeared
+afterwards. Root cause: `RecipientConfirmContent` read
+`confirmedRecipient`, which by design stays null until explicit
+confirmation, while the resolved snapshot sat only in `CreateRecipientFlow`'s
+private pending field - the screen required an already-confirmed snapshot to
+OFFER confirmation. Eternal blank screen after every successful lookup.
+
+Fix (one commit, code + tests): `a4cb987`
+
+- `CreateRecipientFlow.pendingRecipient`: read-only observable of the
+  resolved-but-NOT-yet-confirmed snapshot; the confirmation screen renders
+  THAT immutable snapshot, never the unbound session store.
+- Checkbox + Confirm remains the single action that MOVES the exact snapshot
+  instance into the session store and advances to FRONT; the pending copy is
+  dropped with the move. Explicit confirmation still required; no auto
+  self-confirm.
+- Cancel / restart / endSession / new epoch clear pending AND confirmed
+  material; same-epoch rotation keeps an in-flight resolve untouched.
+- RECIPIENT_CONFIRM without a pending snapshot now fails closed with an
+  explicit error and a way back to lookup instead of a blank screen.
+- Other handles may still resolve/confirm; the M1 publisher's own-account
+  guard ("publishes only to your own account") is untouched.
+
+### Verification commands and results for this batch
+
+| Command | Result |
+| --- | --- |
+| Regression proof | The key test FAILED against the previous implementation (blank confirmation screen) and passes after the fix — red/green verified before committing |
+| `cd android && JAVA_HOME=... POSTMARK_TEST_API_BASE_URL=http://127.0.0.1:8000/ ./gradlew clean testDebugUnitTest assembleDebug --console=plain` (JDK 17) | BUILD SUCCESSFUL — 649 unit tests (+5 new), 0 failures, 0 errors, 0 skipped (`ApiStackIntegrationTest` ran against the live local API) |
+| Backend | Untouched by this commit (android-only diff). Hosted directory endpoint confirmed live: `GET /v1/directory/handles/vodkolyan` → 200 OK on-device during Test Build 2; local compose stack healthy during this run (`/healthz` = 200) |
+| `git diff --check` | clean; worktree clean at the evidence commit |
+
+New regression coverage (`CreateRecipientConfirmFlowTest`, production-shaped:
+REAL CreateScreen over REAL CreateViewModel through real lookup):
+Found(self) really shows handle/account cue/checkbox/button; no binding
+before Confirm; same-instance binding after it; cancel returns to lookup
+with pending+confirmed cleared; endSession/new-epoch drop everything while
+same-epoch rotation keeps pending; impossible invariant renders explicit
+error + recovery; another recipient confirms but publish stays gated fail-
+closed with zero outbox rows.
+
+### APK artifacts for this batch
+
+| Artifact | Size | SHA-256 |
+| --- | --- | --- |
+| Default debug APK from the clean suite build (`API_BASE_URL = http://127.0.0.1:8000/`) | 155,133,699 bytes | `d8ea007cfed27222801b2e9afb9f67028ec336f76319a9078e33e6ef245ad6c9` |
+| Hosted release candidate: clean `assembleDebug -Ppostmark.apiBaseUrl=https://remanence.hryshyn.dev/` | 155,133,699 bytes | `ded0aeca6765264c8a3e1ef1a4a996121a8b7165545211f2f56738f6733e5936` |
+
+The hosted artifact was verified to contain `https://remanence.hryshyn.dev/`
+in its dex bytecode and NOT contain the default loopback URL. Byte-for-byte
+reproducibility across builds is NOT claimed (debug signing/ZIP metadata).
+
+### Hardware status for this fix
+
+Honest state: the lookup bug was REPRODUCED on physical hardware (Test
+Build 2); the fix above is proven only by automated tests so far. The
+hosted release-candidate APK has NOT been installed/retested on device yet —
+the physical Create self-send retest (Resolve → visible confirmation controls
+→ Confirm → FRONT → publish path) remains **PENDING** below.
+
 ## FIX-REVIEW3 correction batch (2026-08-25, baseline 0203c1c)
 
 Independent Codex review of `0203c1c..ce78352`. One focused commit each,
@@ -392,6 +457,10 @@ The following require real hardware/emulator runs and remain **PENDING**:
   authenticated backend (owner/status/malformed refusals over real HTTP).
 - ORB extraction latency and match-loop timing on-device (OpenCV instrumentation).
 - Full two-device physical scenario: mail card, second device scans and opens.
+- FIX-M1-ONDEVICE-01 physical retest: install the hosted release-candidate
+  APK (`ded0aeca…`) and repeat the real Create self-send flow on hardware —
+  own-handle Resolve now showing handle/account cue/checkbox/button,
+  explicit Confirm advancing to FRONT, and the publish path end to end.
 - AndroidKeystore-backed KEK wrapping round trip on hardware TEE/StrongBox.
 - M1 completion claim: the automated surface proves login/register, Create,
   Scan, and real photo presentation are wired end to end; the milestone is

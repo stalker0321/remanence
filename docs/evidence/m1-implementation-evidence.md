@@ -4,6 +4,99 @@ Generated at the close of the I-queue. Every item below was executed on this
 workstation in a clean shell. Physical-device items are explicitly **PENDING**
 and are not claimed.
 
+## FIX-REVIEW3 correction batch (2026-08-25, baseline 0203c1c)
+
+Independent Codex review of `0203c1c..ce78352`. One focused commit each,
+tests with each, no amends:
+
+| Fix | Commit |
+| --- | --- |
+| 01 in-flight page loads finishing after close are rejected and zeroed | `358260b` |
+| 02 grant revalidated AFTER every suspended decrypt too (TOCTOU closed) | `b7185ba` |
+| 03 presentation state owns and drops the plaintext note reference | `6c5797d` |
+| 04 deterministic lifecycle/plaintext regression suite | `ce78352` |
+
+FIX-REVIEW3-01: page loads carry a session generation bumped by open/close
+and are serialized behind one mutex. A load still in flight when close(),
+expiry, or revocation ran can neither return its plaintext nor re-enter
+`loadedPages`; rejected bytes are zeroed first. Concurrent same-page loads
+share exactly one decrypt path.
+
+FIX-REVIEW3-02: `GrantGuardedCapsuleContentSource` previously validated the
+grant only BEFORE each operation - plaintext finishing into a dead grant was
+returned successfully. The single validator now runs both before and after
+every photo/note/count operation through THE authoritative manager; a photo
+refused post-decrypt has its bytes zeroed before the failure propagates; an
+immutable String note is refused without delivery.
+
+FIX-REVIEW3-03: the pre-decrypted note is handed over at
+`open(expectedCount, note)` into the closable presentation state; `close()`
+nulls it immediately (Kotlin cannot scrub String bytes; dropping the last
+controlled strong reference is the strongest available guarantee). No
+plaintext note is logged anywhere.
+
+FIX-REVIEW3-04: `PresentationPlaintextLifecycleTest` drives the REAL
+composition (presentation → GrantGuardedCapsuleContentSource → decrypt)
+through suspension gates on the test scheduler - no sleeps, no wall clock.
+
+### Deterministic race-test verification (all PASS inside the same clean run)
+
+- Expiry/close during a suspended load: `CapsulePresentationStateLoadRaceTest`
+  (`hungLoaderCompletingAfterCloseReturnsNothingCachesNothingAndZeroesBytes`,
+  `closeDuringFlightAlsoRejectsLoadsThatArriveAfterwards`,
+  `concurrentLoadsForTheSamePageShareOneDecryptAndSurviveOnlyWhileOpen`) -
+  nothing returned, nothing cached or re-entered after clear, bytes zeroed.
+- Post-decrypt grant rejection: `GrantGuardedPostDecryptValidationTest`
+  (`photoDecryptedIntoADeadGrantIsZeroedAndRefused`, `liveGrantStillServesThePhoto`,
+  `noteDecryptedIntoADeadGrantIsRefusedWithoutDelivery`,
+  `countOperationIsAlsoValidatedOnBothSides`).
+- Note strong-reference release: `PresentationPlaintextLifecycleTest`
+  (`noteOwnershipMovesIntoTheStateAndDiesWithIt`,
+  `grantDeathDuringFlightRefusesPlaintextAndCloseDropsTheNote`) plus the
+  internal ownership probe assertions in `GrantGateCapsuleFlowTest`
+  (`holdsDecryptedNoteForTests` held while open, gone after close).
+- Full lifecycle composition: `PresentationPlaintextLifecycleTest`
+  (`closeWinningTheRaceLeavesNoPlaintextAnywhere`,
+  `postDecryptValidationIsProvableWithoutPresentationClosure`).
+
+### Verification commands and results for this batch
+
+| Command | Result |
+| --- | --- |
+| `cd android && JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ANDROID_HOME=/usr/lib/android-sdk ANDROID_SDK_ROOT=/usr/lib/android-sdk POSTMARK_TEST_API_BASE_URL=http://127.0.0.1:8000/ ./gradlew clean testDebugUnitTest assembleDebug --console=plain` | BUILD SUCCESSFUL in 5m — 644 unit tests, 0 failures, 0 errors, 0 skipped (with the local API up, `ApiStackIntegrationTest` ran instead of skipping) |
+| `cd server && uv lock --check && uv sync --locked && POSTMARK_TEST_DATABASE_URL=postgresql+psycopg://postmark:postmark-dev-only@127.0.0.1:55432/postmark uv run --locked pytest -q -W error` | 324 passed (full PostgreSQL-backed suites included, 0 skipped), compose stack healthy (`migrate` exited 0, `/healthz` = `{"status":"ok"}`) |
+| `git diff --check` | clean; worktree clean at the FIX-REVIEW3-05 commit |
+| APK | `android/app/build/outputs/apk/debug/app-debug.apk`, 155,133,699 bytes, SHA-256 `19da697692a35cb5108e9904da6e4b514ee4483f1bf60363d57c8cf411fb2a74` |
+
+No code fixes were needed in this batch's verification: all four REVIEW3
+commits compiled and passed the full suites unchanged.
+
+The APK hash records exactly this verification run's artifact. Byte-for-byte
+reproducibility across clean builds is NOT claimed: debug signing and ZIP
+metadata may vary between runs.
+
+### Plaintext canary status
+
+Automated canaries pass inside the same clean run:
+`CapsuleOutboxStagerTest`
+(`plaintextCanaryAcrossEveryProducedByteFindsNothing` plus the rollback-
+without-traces case) scans every produced byte — artifact files,
+statement/signature files, SQLite db/WAL — for note/photo/manifest markers,
+and the create-close-reopen-scan-open narrative (`CreateRescanOpenFlowTest`)
+repeats the scan over sealed baselines, fingerprint files, and outbox
+ciphertext with the REAL acceptance gate deciding every grant. No plaintext
+marker appears in any persisted byte.
+
+### Honest-client status after this batch
+
+Unchanged from the FIX-REVIEW2 record below, hardened further: fullscreen
+photo presentation now also survives its own races - an in-flight page load
+that finishes after close/expiry returns nothing and zeroing-scrubs its
+bytes, every suspended decrypt is revalidated against THE authoritative
+grant on both sides, and the plaintext note reference dies with the
+presentation state. CameraX/OpenCV/Keystore behavior on physical hardware
+and the two-device scenario remain the open items listed at the bottom.
+
 ## FIX-REVIEW2 correction batch (2026-08-25, baseline 3e742f2)
 
 Independent Codex review of `d815251..3e742f2`. One focused commit each,

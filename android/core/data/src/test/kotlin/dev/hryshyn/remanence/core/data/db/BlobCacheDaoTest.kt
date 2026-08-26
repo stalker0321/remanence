@@ -17,6 +17,10 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class BlobCacheDaoTest {
 
+    private companion object {
+        const val OWNER = "0198f0a0-0000-7000-8000-00000000ow01"
+    }
+
     private lateinit var database: RemanenceLocalDatabase
     private lateinit var dao: BlobCacheDao
 
@@ -53,7 +57,7 @@ class BlobCacheDaoTest {
     fun upsertThenReadReturnsBlobReference() = runBlocking {
         val record = blob()
         dao.upsert(record)
-        assertEquals(record.expectedSha256.toList(), dao.getByBlobId(record.blobId)!!.expectedSha256.toList())
+        assertEquals(record.expectedSha256.toList(), dao.getByBlobIdAndOwner(record.blobId, OWNER)!!.expectedSha256.toList())
     }
 
     @Test
@@ -61,22 +65,22 @@ class BlobCacheDaoTest {
         val record = blob()
         dao.upsert(record)
 
-        val illegal = dao.transitionState(record.blobId, BlobCacheState.CACHED, listOf(BlobCacheState.CORRUPT))
+        val illegal = dao.transitionStateForOwner(record.blobId, OWNER, BlobCacheState.CACHED, listOf(BlobCacheState.CORRUPT))
         assertEquals(0, illegal)
 
-        val legal = dao.transitionState(record.blobId, BlobCacheState.CACHED, listOf(BlobCacheState.DOWNLOADING))
+        val legal = dao.transitionStateForOwner(record.blobId, OWNER, BlobCacheState.CACHED, listOf(BlobCacheState.DOWNLOADING))
         assertEquals(1, legal)
-        assertEquals(BlobCacheState.CACHED, dao.getByBlobId(record.blobId)!!.cacheState)
+        assertEquals(BlobCacheState.CACHED, dao.getByBlobIdAndOwner(record.blobId, OWNER)!!.cacheState)
     }
 
     @Test
     fun cachedBlobCanBeMarkedCorruptForRepair() = runBlocking {
         val record = blob(state = BlobCacheState.DOWNLOADING)
         dao.upsert(record)
-        dao.transitionState(record.blobId, BlobCacheState.CACHED, listOf(BlobCacheState.DOWNLOADING))
-        val rows = dao.transitionState(record.blobId, BlobCacheState.CORRUPT, listOf(BlobCacheState.CACHED))
+        dao.transitionStateForOwner(record.blobId, OWNER, BlobCacheState.CACHED, listOf(BlobCacheState.DOWNLOADING))
+        val rows = dao.transitionStateForOwner(record.blobId, OWNER, BlobCacheState.CORRUPT, listOf(BlobCacheState.CACHED))
         assertEquals(1, rows)
-        assertEquals(BlobCacheState.CORRUPT, dao.getByBlobId(record.blobId)!!.cacheState)
+        assertEquals(BlobCacheState.CORRUPT, dao.getByBlobIdAndOwner(record.blobId, OWNER)!!.cacheState)
     }
 
     @Test
@@ -85,9 +89,9 @@ class BlobCacheDaoTest {
             .copy(capsuleId = "0198f0a0-0000-7000-8000-00000000ca02", ordinal = null, kind = "CONTENT_MANIFEST")
         dao.upsert(blob())
         dao.upsert(other)
-        dao.deleteByCapsuleId("0198f0a0-0000-7000-8000-00000000ca01")
+        dao.deleteByCapsuleIdAndOwner("0198f0a0-0000-7000-8000-00000000ca01", OWNER)
 
-        assertNull(dao.getByBlobId("0198f0a0-0000-7000-8000-00000000bl01"))
-        assertEquals(other.blobId, dao.getByBlobId(other.blobId)!!.blobId)
+        assertNull(dao.getByBlobIdAndOwner("0198f0a0-0000-7000-8000-00000000bl01", OWNER))
+        assertEquals(other.blobId, dao.getByBlobIdAndOwner(other.blobId, OWNER)!!.blobId)
     }
 }

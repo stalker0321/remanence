@@ -17,6 +17,10 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class IncomingDaosTest {
 
+    private companion object {
+        const val OWNER = "0198f0a0-0000-7000-8000-00000000ow01"
+    }
+
     private lateinit var database: RemanenceLocalDatabase
     private lateinit var capsuleDao: IncomingCapsuleDao
     private lateinit var envelopeDao: IncomingEnvelopeDao
@@ -68,7 +72,7 @@ class IncomingDaosTest {
     fun upsertThenReadReturnsRoutedMetadataOnly() = runBlocking {
         val record = capsule()
         capsuleDao.upsertAll(listOf(record))
-        assertEquals(record.signedStatementBytes.toList(), capsuleDao.getByCapsuleId(record.capsuleId)!!.signedStatementBytes.toList())
+        assertEquals(record.signedStatementBytes.toList(), capsuleDao.getByCapsuleIdAndOwner(record.capsuleId, OWNER)!!.signedStatementBytes.toList())
     }
 
     @Test
@@ -78,7 +82,7 @@ class IncomingDaosTest {
         val updated = record.copy(serverStatus = "READY", readyAtEpochMs = 1_755_000_999_999)
         capsuleDao.upsertAll(listOf(updated))
 
-        val loaded = capsuleDao.getByCapsuleId(record.capsuleId)!!
+        val loaded = capsuleDao.getByCapsuleIdAndOwner(record.capsuleId, OWNER)!!
         assertEquals(updated.readyAtEpochMs, loaded.readyAtEpochMs)
         // exactly one row for the capsule id after replay
         assertEquals(1, countRows("incoming_capsule"))
@@ -89,22 +93,24 @@ class IncomingDaosTest {
         val record = capsule(state = IncomingMaterialState.DISCOVERED)
         capsuleDao.upsertAll(listOf(record))
 
-        val skippedRows = capsuleDao.transitionMaterialState(
+        val skippedRows = capsuleDao.transitionMaterialStateForOwner(
             record.capsuleId,
+            OWNER,
             IncomingMaterialState.FINGERPRINT_ACCEPTED,
             listOf(IncomingMaterialState.INDEX_CACHED),
         )
         assertEquals(0, skippedRows)
 
-        val advancedRows = capsuleDao.transitionMaterialState(
+        val advancedRows = capsuleDao.transitionMaterialStateForOwner(
             record.capsuleId,
+            OWNER,
             IncomingMaterialState.INDEX_CACHED,
             listOf(IncomingMaterialState.DISCOVERED, IncomingMaterialState.CORRUPT),
         )
         assertEquals(1, advancedRows)
         assertEquals(
             IncomingMaterialState.INDEX_CACHED,
-            capsuleDao.getByCapsuleId(record.capsuleId)!!.materialState,
+            capsuleDao.getByCapsuleIdAndOwner(record.capsuleId, OWNER)!!.materialState,
         )
     }
 
@@ -114,7 +120,7 @@ class IncomingDaosTest {
         envelopeDao.upsert(record)
         envelopeDao.upsert(record.copy(receivedAtEpochMs = 1_755_000_200_000))
 
-        val loaded = envelopeDao.getByCapsuleId(record.capsuleId)!!
+        val loaded = envelopeDao.getByCapsuleIdAndOwner(record.capsuleId, OWNER)!!
         assertEquals(1_755_000_200_000, loaded.receivedAtEpochMs)
         assertEquals(record.hpkeCiphertext.toList(), loaded.hpkeCiphertext.toList())
         assertEquals(1, countRows("incoming_envelope"))
@@ -127,8 +133,8 @@ class IncomingDaosTest {
         envelopeDao.upsert(envelope(capsuleId = id))
         capsuleDao.clear()
         envelopeDao.clear()
-        assertNull(capsuleDao.getByCapsuleId(id))
-        assertNull(envelopeDao.getByCapsuleId(id))
+        assertNull(capsuleDao.getByCapsuleIdAndOwner(id, OWNER))
+        assertNull(envelopeDao.getByCapsuleIdAndOwner(id, OWNER))
     }
 
     private fun countRows(table: String): Int =

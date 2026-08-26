@@ -52,7 +52,7 @@ def create_app(
         if engine is not None:
             engine.dispose()
 
-    app = FastAPI(title="Postmark API", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Remanence API", version="0.1.0", lifespan=lifespan)
     app.state.settings = resolved
     if session_factory is not None:
         app.state.session_factory = session_factory

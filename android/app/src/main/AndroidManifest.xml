@@ -10,7 +10,7 @@
     <application
         android:name=".PostmarkApplication"
         android:label="@string/app_name"
-        android:theme="@style/Theme.Postmark"
+        android:theme="@style/Theme.Remanence"
         android:usesCleartextTraffic="false"
         android:allowBackup="false"
         android:fullBackupContent="@xml/backup_rules"

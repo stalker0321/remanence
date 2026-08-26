@@ -21,6 +21,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import postmark.core.data.fingerprints.SealedFingerprintPersistence
@@ -160,6 +162,31 @@ class CreateViewModel(
      */
     private var deliveryGeneration: Long = 0L
 
+    /**
+     * FIX-STATE-11: THE owning Job of the active publication plus the
+     * monotonic create-session generation it belongs to. endSession() and
+     * beginSession(new epoch) cancel the job and invalidate every queued
+     * publish continuation; a superseded publish can neither stage into the
+     * outbox nor mutate step/error of any later session.
+     */
+    private var publishJob: Job? = null
+    private var createSessionGeneration: Long = 0L
+
+    /** Immutable snapshot of ONE session's publish inputs, captured before
+     * any suspend boundary so no long-running step can read live state that a
+     * newer session already replaced. */
+    private data class PublishInputs(
+        val capsuleId: String,
+        val recipient: ResolvedHandleSnapshot,
+        val noteText: String?,
+        val frontFingerprintId: String,
+        val backFingerprintId: String,
+        val photoIds: List<String>,
+    )
+
+    /** Thrown when the publishing session was replaced mid-flight. */
+    private class PublishSuperseded : Exception()
+
     // ---------------------------------------------------------------------
     // Session lifecycle.
     // ---------------------------------------------------------------------
@@ -173,6 +200,9 @@ class CreateViewModel(
     fun beginSession(epoch: Long) {
         if (begunEpoch == epoch) return
         begunEpoch = epoch
+        createSessionGeneration += 1
+        deliveryGeneration += 1
+        cancelPublishingLocked()
         _capsuleId = UUID.randomUUID().toString()
         _step.value = Step.RECIPIENT_LOOKUP
         // FIX-M1-ONDEVICE-01: pending and confirmed recipient material both die.
@@ -183,7 +213,6 @@ class CreateViewModel(
         backGate.reset()
         frontAttempt.reset()
         backAttempt.reset()
-        deliveryGeneration += 1
         frontFingerprintId = null
         backFingerprintId = null
         _flowError.value = null
@@ -386,8 +415,25 @@ class CreateViewModel(
             return
         }
         clearGuardError()
+        // FIX-STATE-11: immutable inputs of THIS session, captured before any
+        // suspend boundary.
+        val inputs = PublishInputs(
+            capsuleId = capsuleId,
+            recipient = requireNotNull(confirmedRecipient.value),
+            noteText = if (noteEditor.isEmpty) null else noteEditor.text,
+            frontFingerprintId = requireNotNull(frontFingerprintId),
+            backFingerprintId = requireNotNull(backFingerprintId),
+            photoIds = photoSelection.selectedIds.toList(),
+        )
         _step.value = Step.PUBLISHING
-        viewModelScope.launch { publish() }
+        val generation = createSessionGeneration
+        publishJob = viewModelScope.launch { publish(generation, inputs) }
+    }
+
+    /** Cancels an in-flight publication; safe to call repeatedly. */
+    private fun cancelPublishingLocked() {
+        publishJob?.cancel()
+        publishJob = null
     }
 
     private fun hasBothCaptures(): Boolean =
@@ -398,47 +444,62 @@ class CreateViewModel(
      * any unexpected exception - terminates visibly back at CONTENT. Nothing
      * can leave the flow stuck on the PUBLISHING spinner.
      */
-    private suspend fun publish() {
+    private fun isPublishCurrent(generation: Long): Boolean =
+        generation == createSessionGeneration && _step.value == Step.PUBLISHING
+
+    private suspend fun clearStagedPhotosGuarded() {
+        // FIX-STATE-11: guaranteed plaintext removal even on cancellation -
+        // but NEVER any state publication from this path.
+        withContext(NonCancellable + ioDispatcher) { clearStagedPhotos() }
+    }
+
+    private suspend fun publish(generation: Long, inputs: PublishInputs) {
         _publishError.value = null
         try {
-            publishSealed()
+            publishSealed(generation, inputs)
+        } catch (superseded: PublishSuperseded) {
+            // The owning session is gone: staging dies, nothing is published.
+            clearStagedPhotosGuarded()
         } catch (cancelled: CancellationException) {
-            // Session teardown: staged plaintext dies with the scope below.
-            withContext(ioDispatcher) { clearStagedPhotos() }
+            // Session teardown: staged plaintext dies with this scope below.
+            clearStagedPhotosGuarded()
             throw cancelled
         } catch (failure: Exception) {
+            if (!isPublishCurrent(generation)) return
             _publishError.value = failure.message ?: "publishing failed"
             _step.value = Step.CONTENT
         }
     }
 
-    private suspend fun publishSealed() {
-        val snapshot = confirmedRecipient.value
-        if (snapshot == null) {
-            failPublishing("recipient must be confirmed before publishing")
-            return
+    private suspend fun publishSealed(generation: Long, inputs: PublishInputs) {
+        fun ensureCurrent() {
+            if (!isPublishCurrent(generation)) throw PublishSuperseded()
         }
+        val snapshot = inputs.recipient
         val sender = identityProvider()
+        ensureCurrent()
         if (sender == null) {
-            failPublishing("local identity is unavailable; recovery required")
+            failPublishing("local identity is unavailable; recovery required", generation)
             return
         }
         if (snapshot.userId.value.toString() != sender.userId) {
-            failPublishing("this milestone publishes only to your own account")
+            failPublishing("this milestone publishes only to your own account", generation)
             return
         }
         val frontBytes = try {
-            withContext(ioDispatcher) { persistence.decrypt(requireNotNull(frontFingerprintId)) }
+            withContext(ioDispatcher) { persistence.decrypt(inputs.frontFingerprintId) }
         } catch (_: Exception) {
             null
         }
+        ensureCurrent()
         val backBytes = try {
-            withContext(ioDispatcher) { persistence.decrypt(requireNotNull(backFingerprintId)) }
+            withContext(ioDispatcher) { persistence.decrypt(inputs.backFingerprintId) }
         } catch (_: Exception) {
             null
         }
+        ensureCurrent()
         if (frontBytes == null || backBytes == null) {
-            failPublishing("sealed captures are unreadable; recapture required", restartAt = Step.FRONT)
+            failPublishing("sealed captures are unreadable; recapture required", generation, Step.FRONT)
             return
         }
 
@@ -450,14 +511,16 @@ class CreateViewModel(
                 normalizer = photoNormalizer,
             )
             val staged = withContext(ioDispatcher) {
-                pipeline.stageAll(photoSelection.selectedIds.map(openPhotoSource))
+                pipeline.stageAll(inputs.photoIds.map(openPhotoSource))
             }
+            ensureCurrent()
             try {
                 val photoBytes = staged.map { withContext(ioDispatcher) { it.file.readBytes() } }
+                ensureCurrent()
                 val prepared = withContext(cpuDispatcher) {
                 SameAccountCapsulePublisher().publish(
                     SameAccountCapsuleRequest(
-                        capsuleId = CapsuleId(UUID.fromString(capsuleId)),
+                        capsuleId = CapsuleId(UUID.fromString(inputs.capsuleId)),
                         senderUserId = UserId(UUID.fromString(sender.userId)),
                         senderKeyBundleId = KeyBundleId(UUID.fromString(sender.activeKeyBundleId)),
                         senderHandleSnapshot = sender.handle,
@@ -465,7 +528,7 @@ class CreateViewModel(
                         photoJpegs = photoBytes,
                         photoWidthsPx = staged.map { it.width },
                         photoHeightsPx = staged.map { it.height },
-                        noteUtf8 = if (noteEditor.isEmpty) null else noteEditor.text,
+                        noteUtf8 = inputs.noteText,
                         frontFingerprintBytes = frontBytes,
                         backFingerprintBytes = backBytes,
                         signingKeyset = sender.signingPrivateHandle,
@@ -475,6 +538,7 @@ class CreateViewModel(
                     ),
                 )
                 }
+                ensureCurrent()
                 outboxStager.stage(prepared)
                 _step.value = Step.PUBLISHED
             } finally {
@@ -483,7 +547,13 @@ class CreateViewModel(
             }
     }
 
-    private fun failPublishing(message: String, restartAt: Step = Step.CONTENT) {
+    private fun failPublishing(
+        message: String,
+        generation: Long,
+        restartAt: Step = Step.CONTENT,
+    ) {
+        // A superseded publish never writes into a newer session's state.
+        if (!isPublishCurrent(generation)) return
         _publishError.value = message
         _step.value = restartAt
     }
@@ -503,7 +573,12 @@ class CreateViewModel(
      * this session - plaintext can never outlive the surface.
      */
     fun endSession() {
-        // FIX-M1-ONDEVICE-01: pending resolved material never outlives the surface.
+        // FIX-M1-ONDEVICE-01 / FIX-STATE-11: pending resolved material AND an
+        // in-flight publication never outlive the surface; the cancelled job's
+        // own NonCancellable cleanup guarantees staged plaintext removal.
+        createSessionGeneration += 1
+        deliveryGeneration += 1
+        cancelPublishingLocked()
         recipientFlow.clearTransientMaterial()
         clearStagedPhotos()
     }

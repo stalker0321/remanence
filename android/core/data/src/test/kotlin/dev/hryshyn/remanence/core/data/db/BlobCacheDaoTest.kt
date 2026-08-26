@@ -56,14 +56,14 @@ class BlobCacheDaoTest {
     @Test
     fun upsertThenReadReturnsBlobReference() = runBlocking {
         val record = blob()
-        dao.upsert(record)
+        dao.upsertForOwner(record)
         assertEquals(record.expectedSha256.toList(), dao.getByBlobIdAndOwner(record.blobId, OWNER)!!.expectedSha256.toList())
     }
 
     @Test
     fun stateTransitionOnlyFromAllowedOriginStates() = runBlocking {
         val record = blob()
-        dao.upsert(record)
+        dao.upsertForOwner(record)
 
         val illegal = dao.transitionStateForOwner(record.blobId, OWNER, BlobCacheState.CACHED, listOf(BlobCacheState.CORRUPT))
         assertEquals(0, illegal)
@@ -76,7 +76,7 @@ class BlobCacheDaoTest {
     @Test
     fun cachedBlobCanBeMarkedCorruptForRepair() = runBlocking {
         val record = blob(state = BlobCacheState.DOWNLOADING)
-        dao.upsert(record)
+        dao.upsertForOwner(record)
         dao.transitionStateForOwner(record.blobId, OWNER, BlobCacheState.CACHED, listOf(BlobCacheState.DOWNLOADING))
         val rows = dao.transitionStateForOwner(record.blobId, OWNER, BlobCacheState.CORRUPT, listOf(BlobCacheState.CACHED))
         assertEquals(1, rows)
@@ -87,8 +87,8 @@ class BlobCacheDaoTest {
     fun deleteByCapsuleRemovesAllCapsuleBlobsOnly() = runBlocking {
         val other = blob(blobId = "0198f0a0-0000-7000-8000-00000000bl02")
             .copy(capsuleId = "0198f0a0-0000-7000-8000-00000000ca02", ordinal = null, kind = "CONTENT_MANIFEST")
-        dao.upsert(blob())
-        dao.upsert(other)
+        dao.upsertForOwner(blob())
+        dao.upsertForOwner(other)
         dao.deleteByCapsuleIdAndOwner("0198f0a0-0000-7000-8000-00000000ca01", OWNER)
 
         assertNull(dao.getByBlobIdAndOwner("0198f0a0-0000-7000-8000-00000000bl01", OWNER))

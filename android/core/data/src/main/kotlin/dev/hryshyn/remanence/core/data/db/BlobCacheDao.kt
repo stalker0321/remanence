@@ -1,20 +1,68 @@
 package dev.hryshyn.remanence.core.data.db
 
 import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
-import androidx.room.Upsert
+import androidx.room.Transaction
 
 /**
- * M2-P02/P03: every account-owned lookup, list, compare-and-set, and cleanup
- * REQUIRES the row's immutable owner_user_id; no unscoped account-owned
- * query exists.
+ * M2-P02/P03 + review fix: every account-owned lookup, list, compare-and-set,
+ * and cleanup REQUIRES the row's immutable owner_user_id. Writes go ONLY
+ * through [upsertForOwner]: the same local account may replay/update its own
+ * cache entry's transport fields, while a different account presenting the
+ * same immutable blob ID is REFUSED with the original row left unchanged.
  */
 @Dao
 interface BlobCacheDao {
 
-    /** Row creation/replay write; reads, transitions, and deletes stay owner-guarded. */
-    @Upsert
-    suspend fun upsert(blob: BlobCacheEntity)
+    /**
+     * Owner-preserving idempotent cache write. [BlobCacheEntity.cacheState]
+     * is NOT a replay field - it changes only through the owner-guarded CAS -
+     * so replaying never rewinds a download state.
+     */
+    @Transaction
+    suspend fun upsertForOwner(blob: BlobCacheEntity) {
+        val existingOwner = findOwnerOf(blob.blobId)
+        if (existingOwner != null && existingOwner != blob.ownerUserId) {
+            throw IllegalStateException(
+                "blob cache ${blob.blobId} already cached for another local account",
+            )
+        }
+        insertIgnoring(blob)
+        updateReplayFieldsForOwner(
+            blobId = blob.blobId,
+            ownerUserId = blob.ownerUserId,
+            kind = blob.kind,
+            ordinal = blob.ordinal,
+            expectedSizeBytes = blob.expectedSizeBytes,
+            expectedSha256 = blob.expectedSha256,
+            localPath = blob.localPath,
+        )
+    }
+
+    /** Minimal ownership probe: never returns full unscoped rows. */
+    @Query("SELECT owner_user_id FROM blob_cache WHERE blob_id = :blobId LIMIT 1")
+    suspend fun findOwnerOf(blobId: String): String?
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIgnoring(blob: BlobCacheEntity)
+
+    @Query(
+        "UPDATE blob_cache SET kind = :kind, ordinal = :ordinal, " +
+            "expected_size_bytes = :expectedSizeBytes, expected_sha256 = :expectedSha256, " +
+            "local_path = :localPath " +
+            "WHERE blob_id = :blobId AND owner_user_id = :ownerUserId",
+    )
+    suspend fun updateReplayFieldsForOwner(
+        blobId: String,
+        ownerUserId: String,
+        kind: String,
+        ordinal: Int?,
+        expectedSizeBytes: Long,
+        expectedSha256: ByteArray,
+        localPath: String,
+    )
 
     @Query("DELETE FROM blob_cache")
     suspend fun clear()

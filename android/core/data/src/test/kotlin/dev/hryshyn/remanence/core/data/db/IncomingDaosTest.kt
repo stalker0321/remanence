@@ -71,16 +71,16 @@ class IncomingDaosTest {
     @Test
     fun upsertThenReadReturnsRoutedMetadataOnly() = runBlocking {
         val record = capsule()
-        capsuleDao.upsertAll(listOf(record))
+        capsuleDao.upsertAllForOwner(listOf(record))
         assertEquals(record.signedStatementBytes.toList(), capsuleDao.getByCapsuleIdAndOwner(record.capsuleId, OWNER)!!.signedStatementBytes.toList())
     }
 
     @Test
     fun replayedUpsertIsIdempotentByCapsuleId() = runBlocking {
         val record = capsule()
-        capsuleDao.upsertAll(listOf(record))
+        capsuleDao.upsertAllForOwner(listOf(record))
         val updated = record.copy(serverStatus = "READY", readyAtEpochMs = 1_755_000_999_999)
-        capsuleDao.upsertAll(listOf(updated))
+        capsuleDao.upsertAllForOwner(listOf(updated))
 
         val loaded = capsuleDao.getByCapsuleIdAndOwner(record.capsuleId, OWNER)!!
         assertEquals(updated.readyAtEpochMs, loaded.readyAtEpochMs)
@@ -91,7 +91,7 @@ class IncomingDaosTest {
     @Test
     fun materialStateTransitionHonorsAllowedOriginStates() = runBlocking {
         val record = capsule(state = IncomingMaterialState.DISCOVERED)
-        capsuleDao.upsertAll(listOf(record))
+        capsuleDao.upsertAllForOwner(listOf(record))
 
         val skippedRows = capsuleDao.transitionMaterialStateForOwner(
             record.capsuleId,
@@ -117,8 +117,8 @@ class IncomingDaosTest {
     @Test
     fun envelopeUpsertIsIdempotentAndReplaySafe() = runBlocking {
         val record = envelope()
-        envelopeDao.upsert(record)
-        envelopeDao.upsert(record.copy(receivedAtEpochMs = 1_755_000_200_000))
+        envelopeDao.upsertForOwner(record)
+        envelopeDao.upsertForOwner(record.copy(receivedAtEpochMs = 1_755_000_200_000))
 
         val loaded = envelopeDao.getByCapsuleIdAndOwner(record.capsuleId, OWNER)!!
         assertEquals(1_755_000_200_000, loaded.receivedAtEpochMs)
@@ -129,8 +129,8 @@ class IncomingDaosTest {
     @Test
     fun clearRemovesIncomingRecords() = runBlocking {
         val id = "0198f0a0-0000-7000-8000-00000000ca02"
-        capsuleDao.upsertAll(listOf(capsule(capsuleId = id)))
-        envelopeDao.upsert(envelope(capsuleId = id))
+        capsuleDao.upsertAllForOwner(listOf(capsule(capsuleId = id)))
+        envelopeDao.upsertForOwner(envelope(capsuleId = id))
         capsuleDao.clear()
         envelopeDao.clear()
         assertNull(capsuleDao.getByCapsuleIdAndOwner(id, OWNER))

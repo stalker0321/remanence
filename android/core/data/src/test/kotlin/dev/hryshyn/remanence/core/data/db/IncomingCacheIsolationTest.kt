@@ -6,10 +6,12 @@ import androidx.test.core.app.ApplicationProvider
 import java.util.UUID
 import kotlinx.coroutines.runBlocking
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -87,9 +89,9 @@ class IncomingCacheIsolationTest {
     @Test
     fun afterLogoutAAndLoginBZeroARowsAreExposedOrMutable() = runBlocking {
         // --- logged in as A: sync page writes A-owned cached material ---
-        database.incomingCapsuleDao().upsertAll(listOf(incomingCapsule(capsuleA, ownerA)))
-        database.incomingEnvelopeDao().upsert(incomingEnvelope(capsuleA, ownerA))
-        database.blobCacheDao().upsert(blobCache(blobA, capsuleA, ownerA))
+        database.incomingCapsuleDao().upsertAllForOwner(listOf(incomingCapsule(capsuleA, ownerA)))
+        database.incomingEnvelopeDao().upsertForOwner(incomingEnvelope(capsuleA, ownerA))
+        database.blobCacheDao().upsertForOwner(blobCache(blobA, capsuleA, ownerA))
         database.syncCursorDao().advance(SyncCursorEntity(ownerA, "incoming", "page-a3", 300))
 
         // ... material fully resolved under its owning account:
@@ -152,13 +154,134 @@ class IncomingCacheIsolationTest {
         assertEquals("page-a3", database.syncCursorDao().get(ownerA, "incoming")!!.serverCursor)
     }
 
+    /**
+     * M2 review regression: B cannot reassign A's routed capsule row by
+     * replaying A's immutable capsule ID under B's ownership - refused and
+     * every original field left byte-for-byte identical.
+     */
+    @Test
+    fun foreignOwnerCapsuleReplayIsRefusedAndOriginalRowUnchanged() = runBlocking {
+        val original = incomingCapsule(capsuleA, ownerA)
+        database.incomingCapsuleDao().upsertAllForOwner(listOf(original))
+        val before = database.incomingCapsuleDao().getByCapsuleIdAndOwner(capsuleA, ownerA)!!
+
+        val bReplaysSameCapsuleId =
+            listOf(original.copy(ownerUserId = ownerB, serverStatus = "READY"))
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking { database.incomingCapsuleDao().upsertAllForOwner(bReplaysSameCapsuleId) }
+        }
+
+        assertEquals(1, countRows("incoming_capsule"))
+        val after = database.incomingCapsuleDao().getByCapsuleIdAndOwner(capsuleA, ownerA)!!
+        assertEquals(before, after)
+        assertEquals(ownerA, after.ownerUserId)
+    }
+
+    /** Same-owner page replay updates exactly the allowed fields, nothing else. */
+    @Test
+    fun sameOwnerCapsuleReplayUpdatesOnlyAllowedFields() = runBlocking {
+        val original = incomingCapsule(capsuleA, ownerA)
+        database.incomingCapsuleDao().upsertAllForOwner(listOf(original))
+
+        database.incomingCapsuleDao().upsertAllForOwner(
+            listOf(
+                original.copy(
+                    serverStatus = "READY",
+                    readyAtEpochMs = 1_755_000_999_999,
+                    signedStatementBytes = byteArrayOf(9, 9),
+                ),
+            ),
+        )
+
+        val replayed = database.incomingCapsuleDao().getByCapsuleIdAndOwner(capsuleA, ownerA)!!
+        assertEquals("READY", replayed.serverStatus)
+        assertEquals(1_755_000_999_999, replayed.readyAtEpochMs)
+        assertTrue(replayed.signedStatementBytes.contentEquals(byteArrayOf(9, 9)))
+        // Immutable routing/state columns survive a replay untouched.
+        assertEquals(1, countRows("incoming_capsule"))
+        assertEquals(IncomingMaterialState.DISCOVERED, replayed.materialState)
+        assertTrue(original.senderUserId == replayed.senderUserId)
+        assertTrue(original.recipientEncryptionKeyBundleId == replayed.recipientEncryptionKeyBundleId)
+    }
+
+    @Test
+    fun foreignOwnerEnvelopeReplayIsRefusedAndOriginalRowUnchanged() = runBlocking {
+        val original = incomingEnvelope(capsuleA, ownerA)
+        database.incomingEnvelopeDao().upsertForOwner(original)
+
+        val before = database.incomingEnvelopeDao().getByCapsuleIdAndOwner(capsuleA, ownerA)!!
+
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking {
+                database.incomingEnvelopeDao()
+                    .upsertForOwner(original.copy(ownerUserId = ownerB, hpkeCiphertext = byteArrayOf(1)))
+            }
+        }
+
+        assertEquals(1, countRows("incoming_envelope"))
+        val after = database.incomingEnvelopeDao().getByCapsuleIdAndOwner(capsuleA, ownerA)!!
+        assertTrue(before.hpkeCiphertext.contentEquals(after.hpkeCiphertext))
+        assertTrue(before.transportSha256.contentEquals(after.transportSha256))
+        assertEquals(before.receivedAtEpochMs, after.receivedAtEpochMs)
+        assertEquals(ownerA, after.ownerUserId)
+    }
+
+    @Test
+    fun foreignOwnerBlobCacheReplayIsRefusedAndOriginalRowUnchanged() = runBlocking {
+        val original = blobCache(blobA, capsuleA, ownerA)
+        database.blobCacheDao().upsertForOwner(original)
+
+        val before = database.blobCacheDao().getByBlobIdAndOwner(blobA, ownerA)!!
+
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking {
+                database.blobCacheDao()
+                    .upsertForOwner(original.copy(ownerUserId = ownerB, localPath = "b/stolen.bin"))
+            }
+        }
+
+        assertEquals(1, countRows("blob_cache"))
+        val after = database.blobCacheDao().getByBlobIdAndOwner(blobA, ownerA)!!
+        assertEquals(before.localPath, after.localPath)
+        assertTrue(before.expectedSha256.contentEquals(after.expectedSha256))
+        assertEquals(before.cacheState, after.cacheState)
+        assertEquals(ownerA, after.ownerUserId)
+    }
+
+    /** Same-owner cache replay may fix transport metadata but never rewinds state. */
+    @Test
+    fun sameOwnerBlobCacheReplayUpdatesFieldsWithoutTouchingCacheState() = runBlocking {
+        val original = blobCache(blobA, capsuleA, ownerA)
+        database.blobCacheDao().upsertForOwner(original)
+        assertEquals(
+            1,
+            database.blobCacheDao()
+                .transitionStateForOwner(blobA, ownerA, BlobCacheState.CACHED, listOf(BlobCacheState.DOWNLOADING)),
+        )
+
+        database.blobCacheDao().upsertForOwner(
+            original.copy(localPath = "files/capsules/ca01/blob-bl01-replayed.bin"),
+        )
+
+        val replayed = database.blobCacheDao().getByBlobIdAndOwner(blobA, ownerA)!!
+        assertEquals("files/capsules/ca01/blob-bl01-replayed.bin", replayed.localPath)
+        // Replay must NOT rewind a progressed lifecycle state.
+        assertEquals(BlobCacheState.CACHED, replayed.cacheState)
+    }
+
+    private fun countRows(table: String): Int =
+        database.openHelper.readableDatabase.query("SELECT COUNT(*) FROM $table").use { cursor ->
+            cursor.moveToFirst()
+            cursor.getInt(0)
+        }
+
     @Test
     fun bAccumulatesItsOwnIncomingMaterialAlongsideARetainedRows() = runBlocking {
         val capsuleB = UUID.randomUUID().toString()
         // A caches first; then B accumulates its own pages independently.
-        database.incomingCapsuleDao().upsertAll(listOf(incomingCapsule(capsuleA, ownerA)))
-        database.incomingCapsuleDao().upsertAll(listOf(incomingCapsule(capsuleB, ownerB)))
-        database.blobCacheDao().upsert(blobCache(blobA, capsuleA, ownerA))
+        database.incomingCapsuleDao().upsertAllForOwner(listOf(incomingCapsule(capsuleA, ownerA)))
+        database.incomingCapsuleDao().upsertAllForOwner(listOf(incomingCapsule(capsuleB, ownerB)))
+        database.blobCacheDao().upsertForOwner(blobCache(blobA, capsuleA, ownerA))
 
         // B advances only its own material state.
         assertEquals(

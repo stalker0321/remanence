@@ -88,6 +88,8 @@ make existing capsule/key material unverifiable:
 - `postmark/publish/v1` — publish-statement signature domain prefix (ADR-007)
 - `postmark/kek/wrap/v1` — KEK keyset-wrap domain prefix
 - `postmark/session/v1` — session-token sealing prefix
+- `postmark/local-fp/v1` — local fingerprint-sealing AEAD prefix
+  (`EncryptedFingerprintStore`)
 - fixture marker `postmark-envelope-plaintext-v1` in
   `protocol/fixtures/recipient-envelope-v1.json`
 

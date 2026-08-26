@@ -28,6 +28,6 @@ class KekBoundSecretSealer(
 
     companion object {
         /** Stable Keystore alias for the local fingerprint-storage AEAD key. */
-        const val FINGERPRINT_SEALING_ALIAS: String = "postmark.fingerprint.v1"
+        const val FINGERPRINT_SEALING_ALIAS: String = "remanence.fingerprint.v1"
     }
 }

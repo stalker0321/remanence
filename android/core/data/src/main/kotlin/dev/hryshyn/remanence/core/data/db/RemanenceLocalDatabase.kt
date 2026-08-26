@@ -41,7 +41,7 @@ abstract class RemanenceLocalDatabase : RoomDatabase() {
     abstract fun syncCursorDao(): SyncCursorDao
 
     companion object {
-        const val DATABASE_NAME: String = "postmark-local.db"
+        const val DATABASE_NAME: String = "remanence-local.db"
 
         /** v2 adds the signed publish statement/signature to the outbox capsule. */
         val MIGRATION_1_2: Migration = object : Migration(1, 2) {

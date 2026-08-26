@@ -401,8 +401,8 @@ class AppContainer(
         java.util.UUID.nameUUIDFromBytes(encryptionPublicKeyset).toString()
 
     companion object {
-        const val DATABASE_NAME: String = "postmark.db"
-        const val SESSION_TOKEN_KEK_ALIAS: String = "postmark.session.v1"
-        const val IDENTITY_KEK_ALIAS: String = "postmark.identity.v1"
+        const val DATABASE_NAME: String = "remanence.db"
+        const val SESSION_TOKEN_KEK_ALIAS: String = "remanence.session.v1"
+        const val IDENTITY_KEK_ALIAS: String = "remanence.identity.v1"
     }
 }

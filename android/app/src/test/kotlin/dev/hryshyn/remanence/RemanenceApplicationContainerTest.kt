@@ -96,6 +96,6 @@ class RemanenceApplicationContainerTest {
 
     @Test
     fun databaseNameIsTheSingleConfiguredFile() {
-        assertEquals("postmark.db", AppContainer.DATABASE_NAME)
+        assertEquals("remanence.db", AppContainer.DATABASE_NAME)
     }
 }

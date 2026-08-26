@@ -2,10 +2,12 @@ package app.postmark.memory.ui.create
 
 import android.content.Context
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.hasTestTag
@@ -179,8 +181,16 @@ class CreateSmallViewportTest {
         composeRule.runOnIdle { live.get()!!.deliverFrame("frame".toByteArray()) }
         composeRule.waitForIdle()
 
-        // The reasons REPLACE the camera and are fully displayed at 320x480.
+        // The reasons REPLACE the camera; on a 480dp-tall screen they sit
+        // below the fold and MUST be reachable by scrolling.
+        assertEquals(
+            "delivery must reject on first frame",
+            app.postmark.memory.capture.CaptureAttemptPhase.Rejected::class,
+            vm.frontAttempt.phase?.let { it::class },
+        )
+        composeRule.scrollToTag("quality_reason_TOO_BLURRY")
         composeRule.onNodeWithTag("quality_reason_TOO_BLURRY").assertIsDisplayed()
+        composeRule.scrollToTag("capture_retake_front")
         composeRule.onNodeWithTag("capture_retake_front")
             .assertIsDisplayed()
             .performClick()
@@ -193,7 +203,9 @@ class CreateSmallViewportTest {
         composeRule.runOnIdle { live.get()!!.deliverFrame("frame-2".toByteArray()) }
         composeRule.waitForIdle()
 
+        composeRule.scrollToTag("quality_reason_GLARE_EXCESSIVE")
         composeRule.onNodeWithTag("quality_reason_GLARE_EXCESSIVE").assertIsDisplayed()
+        composeRule.scrollToTag("capture_retake_front")
         composeRule.onNodeWithTag("capture_retake_front").assertIsDisplayed()
     }
 
@@ -249,6 +261,98 @@ class CreateSmallViewportTest {
         composeRule.onNodeWithTag("create_screen_scroll")
             .performScrollToNode(hasTestTag("create_note_limit_error"))
         composeRule.onNodeWithTag("create_note_limit_error").assertIsDisplayed()
+    }
+
+
+    @Test
+    fun capturePreviewHasDeterministicNonzeroHeightAndRecoveryStaysReachable() {
+        val vm = CreateViewModel(
+            directory = StaticDirectory(),
+            accessTokenProvider = { null },
+            identityProvider = { null },
+            persistence = NoPersistence(),
+            outboxStager = postmark.core.data.outbox.CapsuleOutboxStager(
+                database,
+                File(context().filesDir, "small-vp"),
+            ),
+            profile = RecognitionProfile.mvpOrbV1(),
+            stagingDirectory = File(context().filesDir, "small-vp-staging"),
+            openPhotoSource = { error("unused") },
+            frontProcessor = RejectingThenAccepting(),
+            backProcessor = RejectingThenAccepting(),
+            cpuDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher,
+        )
+        vm.beginSession(1L)
+        vm.onResolved(selfSnapshot())
+        vm.confirmRecipient()
+
+        val live = AtomicReference<FakeStillCameraAdapter?>(null)
+        composeRule.setContent {
+            MaterialTheme {
+                CreateScreen(
+                    viewModel = vm,
+                    adapterFactory = { FakeStillCameraAdapter().also { live.set(it) } },
+                    requestPermissionOnAttach = false,
+                )
+            }
+        }
+        composeRule.waitForIdle()
+        composeRule.runOnIdle {
+            vm.frontAttempt.onPermissionResolved(CapturePermissionStep.Granted)
+        }
+        composeRule.waitForIdle()
+        composeRule.runOnIdle { live.get()?.emitReady() }
+        composeRule.waitForIdle()
+
+        // FIX-STATE-09: the camera area is DETERMINISTICALLY nonzero even in
+        // the tiny viewport.
+        val dbgPhase = vm.frontAttempt.phase.toString()
+        val previewBounds = composeRule.onNodeWithTag("capture_preview")
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue(
+            "phase=$dbgPhase preview height must be >= MIN(${app.postmark.memory.capture.CAPTURE_PREVIEW_MIN_HEIGHT}), was ${previewBounds.height} bounds=$previewBounds",
+            previewBounds.height >= app.postmark.memory.capture.CAPTURE_PREVIEW_MIN_HEIGHT.value,
+        )
+
+        // Shutter sits directly BELOW the nonzero preview area.
+        val shutterBounds = composeRule.onNodeWithTag("capture_shutter_front")
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue(
+            "shutter must be below the preview, shutter=$shutterBounds preview=$previewBounds",
+            shutterBounds.top >= previewBounds.bottom - 1f,
+        )
+
+        // Rejection replaces the preview; reasons + Retake stay reachable and
+        // inside the viewport.
+        composeRule.scrollToTag("capture_shutter_front")
+        composeRule.onNodeWithTag("capture_shutter_front")
+            .assertIsDisplayed()
+            .performClick()
+        composeRule.runOnIdle { live.get()!!.deliverFrame("frame".toByteArray()) }
+        composeRule.waitForIdle()
+
+        composeRule.scrollToTag("quality_reason_TOO_BLURRY")
+        assertEquals(
+            "delivery must reject on first frame",
+            app.postmark.memory.capture.CaptureAttemptPhase.Rejected::class,
+            vm.frontAttempt.phase?.let { it::class },
+        )
+        composeRule.scrollToTag("quality_reason_TOO_BLURRY")
+        composeRule.onNodeWithTag("quality_reason_TOO_BLURRY").assertIsDisplayed()
+        composeRule.scrollToTag("capture_retake_front")
+        val viewportHeight = composeRule.onRoot().fetchSemanticsNode().boundsInRoot.height
+        val retakeBounds = composeRule.onNodeWithTag("capture_retake_front")
+            .assertIsDisplayed()
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue(
+            "retake must be inside the viewport",
+            retakeBounds.bottom <= viewportHeight + 1f,
+        )
+    }
+
+    private fun androidx.compose.ui.test.junit4.ComposeTestRule.scrollToTag(tag: String) {
+        onNodeWithTag("create_screen_scroll").performScrollToNode(hasTestTag(tag))
     }
 
     private fun selfSnapshot() = ResolvedHandleSnapshot(

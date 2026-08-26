@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -39,6 +40,14 @@ import postmark.core.recognition.QualityReason
  * and reachable on small phones instead of being pushed under the camera.
  */
 val CAPTURE_PREVIEW_MAX_HEIGHT = 320.dp
+
+/**
+ * FIX-STATE-09: THE deterministic nonzero floor of the camera area. A bare
+ * `heightIn(max)` lets the hosted PreviewView measure to zero height; the
+ * floor guarantees an always-visible viewfinder on every screen size while
+ * the cap keeps recovery panels reachable below it.
+ */
+val CAPTURE_PREVIEW_MIN_HEIGHT = 180.dp
 
 /**
  * FIX-STATE-01/04: THE shared production rendering of one capture attempt.
@@ -213,13 +222,27 @@ private fun LivePreviewContent(
     }
 
     Column {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = CAPTURE_PREVIEW_MAX_HEIGHT)
-                .testTag("capture_preview"),
-        ) {
-            adapter?.preview?.let { it(Modifier.fillMaxWidth()) }
+        // FIX-STATE-09: the viewfinder area is DETERMINISTIC - a 3:4 portrait
+        // fraction of the available width, clamped to [MIN, MAX], and further
+        // capped by a fraction of the SCREEN height so on short phones the
+        // shutter stays visible without scrolling.
+        val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+        val screenHeight = configuration.screenHeightDp.dp
+        val effectiveMax = minOf(CAPTURE_PREVIEW_MAX_HEIGHT, screenHeight * 0.45f)
+        androidx.compose.foundation.layout.BoxWithConstraints {
+            val desired = maxWidth * 4f / 3f
+            val lowerBound = minOf(CAPTURE_PREVIEW_MIN_HEIGHT, effectiveMax)
+            val previewHeight = desired.coerceIn(lowerBound, effectiveMax)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(previewHeight)
+                    .testTag("capture_preview"),
+            ) {
+                // Fills the guaranteed area exactly; the hosted surface can
+                // never measure to zero height.
+                adapter?.preview?.invoke(Modifier.matchParentSize())
+            }
         }
         Spacer(Modifier.height(8.dp))
         when (phase) {

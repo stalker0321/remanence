@@ -5,7 +5,7 @@ import inspect
 import pytest
 from tink.proto import tink_pb2
 
-from postmark.users.key_bundle_validation import (
+from remanence.users.key_bundle_validation import (
     MAX_PUBLIC_KEYSET_BYTES,
     PublicKeyBundleValidationError,
     _parse_single_public_keyset,
@@ -200,7 +200,7 @@ def test_all_errors_share_exact_args_and_no_input_in_repr() -> None:
 
 
 def test_source_avoids_broad_catch_and_logging() -> None:
-    source = inspect.getsource(__import__("postmark.users.key_bundle_validation", fromlist=["*"]))
+    source = inspect.getsource(__import__("remanence.users.key_bundle_validation", fromlist=["*"]))
     assert "except Exception" not in source
     assert "except BaseException" not in source
     assert "logging" not in source

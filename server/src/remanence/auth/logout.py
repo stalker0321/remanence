@@ -2,8 +2,8 @@
 
 from datetime import datetime
 
-from postmark.auth.session_repository import AuthSessionRepository
-from postmark.auth.tokens import hash_opaque_token
+from remanence.auth.session_repository import AuthSessionRepository
+from remanence.auth.tokens import hash_opaque_token
 
 
 class LogoutService:

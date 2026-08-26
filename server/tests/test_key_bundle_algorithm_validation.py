@@ -3,7 +3,7 @@
 import pytest
 from tink.proto import ed25519_pb2, hpke_pb2, tink_pb2
 
-from postmark.users.key_bundle_validation import (
+from remanence.users.key_bundle_validation import (
     ED25519_PUBLIC_KEY_TYPE_URL,
     HPKE_PUBLIC_KEY_TYPE_URL,
     SUPPORTED_KEY_BUNDLE_PROTOCOL_VERSION,

@@ -4,8 +4,8 @@ import uuid
 
 from sqlalchemy import DateTime, ForeignKeyConstraint, String, UUID, UniqueConstraint
 
-from postmark.auth.models import AuthCredential
-from postmark.db.base import Base
+from remanence.auth.models import AuthCredential
+from remanence.db.base import Base
 
 EXPECTED_COLUMNS = frozenset({"user_id", "password_hash", "password_changed_at"})
 

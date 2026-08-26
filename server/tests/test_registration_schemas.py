@@ -8,7 +8,7 @@ import pytest
 from pydantic import ValidationError
 from tink.proto import ed25519_pb2, hpke_pb2, tink_pb2
 
-from postmark.api.auth_schemas import (
+from remanence.api.auth_schemas import (
     ProblemDetail,
     RegistrationKeyBundleRequest,
     RegistrationRequest,
@@ -16,7 +16,7 @@ from postmark.api.auth_schemas import (
     RegistrationUserResponse,
     registration_validation_problem,
 )
-from postmark.users.key_bundle_validation import (
+from remanence.users.key_bundle_validation import (
     ED25519_PUBLIC_KEY_TYPE_URL,
     HPKE_PUBLIC_KEY_TYPE_URL,
     SUPPORTED_KEY_BUNDLE_PROTOCOL_VERSION,
@@ -221,7 +221,7 @@ def test_fixed_problem_identical_for_distinct_failures() -> None:
     first = registration_validation_problem()
     second = registration_validation_problem()
     assert first == second
-    assert first.type == "https://postmark.invalid/problems/invalid-request"
+    assert first.type == "https://remanence.invalid/problems/invalid-request"
     assert first.title == "Invalid request"
     assert first.status == 422
     assert first.code == "INVALID_REQUEST"

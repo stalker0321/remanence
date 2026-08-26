@@ -8,25 +8,25 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy import Engine
 
-from postmark.api.auth import (
+from remanence.api.auth import (
     register_database_unavailable_handler,
     register_validation_error_handler,
     router as auth_router,
 )
-from postmark.api.dependencies import (
+from remanence.api.dependencies import (
     AuthenticationRequiredError,
     DatabaseUnavailableError,
 )
-from postmark.api.directory import router as directory_router
-from postmark.api.health import router as health_router
-from postmark.api.users import router as users_router
-from postmark.db.session import build_engine, build_session_factory
-from postmark.settings import AppMode, Settings
+from remanence.api.directory import router as directory_router
+from remanence.api.health import router as health_router
+from remanence.api.users import router as users_router
+from remanence.db.session import build_engine, build_session_factory
+from remanence.settings import AppMode, Settings
 
 
 def _authentication_required_problem() -> dict:
     return {
-        "type": "https://postmark.invalid/problems/authentication-required",
+        "type": "https://remanence.invalid/problems/authentication-required",
         "title": "Authentication required",
         "status": 401,
         "code": "AUTHENTICATION_REQUIRED",

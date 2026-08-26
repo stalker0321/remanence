@@ -9,20 +9,20 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from tink.proto import ed25519_pb2, hpke_pb2, tink_pb2
 
-from postmark.auth.models import AuthCredential, AuthSession
-from postmark.auth.passwords import PasswordService
-from postmark.auth.registration import RegistrationService
-from postmark.auth.session_rotation import ACCESS_TTL, REFRESH_TTL
-from postmark.auth.tokens import hash_opaque_token
-from postmark.users.key_bundle_validation import (
+from remanence.auth.models import AuthCredential, AuthSession
+from remanence.auth.passwords import PasswordService
+from remanence.auth.registration import RegistrationService
+from remanence.auth.session_rotation import ACCESS_TTL, REFRESH_TTL
+from remanence.auth.tokens import hash_opaque_token
+from remanence.users.key_bundle_validation import (
     ED25519_PUBLIC_KEY_TYPE_URL,
     HPKE_PUBLIC_KEY_TYPE_URL,
     SUPPORTED_KEY_BUNDLE_PROTOCOL_VERSION,
     SUPPORTED_KEY_BUNDLE_SUITE,
     PublicKeyBundleValidationError,
 )
-from postmark.users.key_models import KeyBundleStatus, UserKeyBundle
-from postmark.users.models import User
+from remanence.users.key_models import KeyBundleStatus, UserKeyBundle
+from remanence.users.models import User
 
 pytest_plugins = ("test_session_repository_create",)
 

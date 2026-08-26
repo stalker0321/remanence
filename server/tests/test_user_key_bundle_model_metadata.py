@@ -6,8 +6,8 @@ from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKeyConstraint, La
 from sqlalchemy import SmallInteger, String, UUID, UniqueConstraint
 from sqlalchemy.dialects import postgresql
 
-from postmark.db.base import Base
-from postmark.users.key_models import KeyBundleStatus, UserKeyBundle
+from remanence.db.base import Base
+from remanence.users.key_models import KeyBundleStatus, UserKeyBundle
 
 EXPECTED_COLUMNS = frozenset(
     {

@@ -8,13 +8,13 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from postmark.auth.models import AuthCredential
-from postmark.auth.passwords import PasswordService
-from postmark.auth.session_repository import AuthSessionRepository
-from postmark.auth.session_rotation import ACCESS_TTL, REFRESH_TTL
-from postmark.auth.tokens import generate_access_token, generate_refresh_token, hash_opaque_token
-from postmark.users.key_models import KeyBundleStatus, UserKeyBundle
-from postmark.users.models import User
+from remanence.auth.models import AuthCredential
+from remanence.auth.passwords import PasswordService
+from remanence.auth.session_repository import AuthSessionRepository
+from remanence.auth.session_rotation import ACCESS_TTL, REFRESH_TTL
+from remanence.auth.tokens import generate_access_token, generate_refresh_token, hash_opaque_token
+from remanence.users.key_models import KeyBundleStatus, UserKeyBundle
+from remanence.users.models import User
 
 
 class LoginStatus(enum.Enum):

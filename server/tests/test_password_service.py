@@ -8,7 +8,7 @@ import pytest
 from argon2 import PasswordHasher
 from argon2.low_level import Type
 
-from postmark.auth.passwords import PasswordService, PasswordVerificationResult
+from remanence.auth.passwords import PasswordService, PasswordVerificationResult
 
 PASSWORD = "correct horse battery staple"
 _PHC_RE = re.compile(

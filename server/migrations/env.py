@@ -1,13 +1,13 @@
 from alembic import context
 from sqlalchemy import create_engine, pool
 
-from postmark.auth.models import AuthCredential as _AuthCredential
-from postmark.auth.models import AuthSession as _AuthSession
-from postmark.db.base import Base
-from postmark.db.session import DatabaseConfigurationError
-from postmark.settings import Settings
-from postmark.users.key_models import UserKeyBundle as _UserKeyBundle
-from postmark.users.models import User as _User
+from remanence.auth.models import AuthCredential as _AuthCredential
+from remanence.auth.models import AuthSession as _AuthSession
+from remanence.db.base import Base
+from remanence.db.session import DatabaseConfigurationError
+from remanence.settings import Settings
+from remanence.users.key_models import UserKeyBundle as _UserKeyBundle
+from remanence.users.models import User as _User
 
 target_metadata = Base.metadata
 

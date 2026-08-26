@@ -11,9 +11,9 @@ from fastapi import Depends, Header, Request
 from pydantic import SecretStr
 from sqlalchemy.orm import Session
 
-from postmark.auth.session_repository import AuthSessionRepository
-from postmark.auth.tokens import hash_opaque_token
-from postmark.users.models import User
+from remanence.auth.session_repository import AuthSessionRepository
+from remanence.auth.tokens import hash_opaque_token
+from remanence.users.models import User
 
 _ACCESS_TOKEN_PREFIX = "pm_at_"
 _BASE64URL_RE = re.compile(r"^[A-Za-z0-9_-]+$")

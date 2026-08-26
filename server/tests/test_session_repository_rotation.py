@@ -6,9 +6,9 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 
-from postmark.auth.models import AuthSession
-from postmark.auth.session_repository import AuthSessionRepository
-from postmark.users.models import User
+from remanence.auth.models import AuthSession
+from remanence.auth.session_repository import AuthSessionRepository
+from remanence.users.models import User
 
 pytest_plugins = ("test_session_repository_create",)
 

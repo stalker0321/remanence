@@ -11,8 +11,8 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 
-from postmark.auth.models import AuthCredential, AuthSession
-from postmark.db.base import Base
+from remanence.auth.models import AuthCredential, AuthSession
+from remanence.db.base import Base
 
 EXPECTED_COLUMNS = frozenset(
     {

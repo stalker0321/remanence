@@ -7,7 +7,7 @@ import re
 
 import pytest
 
-from postmark.auth.tokens import (
+from remanence.auth.tokens import (
     ACCESS_TOKEN_PREFIX,
     REFRESH_TOKEN_PREFIX,
     generate_access_token,
@@ -76,7 +76,7 @@ def test_non_ascii_hash_raises_unicode_encode_error() -> None:
 
 
 def test_source_avoids_random_uuid_logging_and_global_mutable_state() -> None:
-    source = inspect.getsource(__import__("postmark.auth.tokens", fromlist=["*"]))
+    source = inspect.getsource(__import__("remanence.auth.tokens", fromlist=["*"]))
     for banned in ("import random", "from random", "uuid", "logging", "log("):
         assert banned not in source, banned
     assert "secrets.token_urlsafe(nbytes=32)" in source

@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO
 
-from postmark.storage.base import (
+from remanence.storage.base import (
     BlobConflictError,
     BlobInfo,
     BlobIntegrityError,
@@ -67,7 +67,7 @@ class LocalBlobPathResolver:
 
 _CHUNK_SIZE = 64 * 1024
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}")
-_TEMP_PREFIX = ".postmark-"
+_TEMP_PREFIX = ".remanence-"
 _GENERIC_INTEGRITY = "blob integrity check failed"
 _GENERIC_EXPECTATION = "invalid blob expectation"
 _GENERIC_CONFLICT = "blob already exists"

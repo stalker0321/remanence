@@ -1,6 +1,6 @@
 """BlobStore protocol and adapters."""
 
-from postmark.storage.base import (
+from remanence.storage.base import (
     BlobConflictError,
     BlobInfo,
     BlobIntegrityError,
@@ -9,7 +9,7 @@ from postmark.storage.base import (
     BlobStoreError,
     InvalidBlobKeyError,
 )
-from postmark.storage.local import LocalBlobPathResolver, LocalFileBlobStore
+from remanence.storage.local import LocalBlobPathResolver, LocalFileBlobStore
 
 __all__ = [
     "BlobConflictError",

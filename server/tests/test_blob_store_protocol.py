@@ -5,7 +5,7 @@ from typing import BinaryIO, get_args, get_origin, get_type_hints
 
 import pytest
 
-from postmark.storage import (
+from remanence.storage import (
     BlobConflictError,
     BlobInfo,
     BlobIntegrityError,

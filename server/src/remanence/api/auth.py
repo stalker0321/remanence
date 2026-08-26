@@ -9,7 +9,7 @@ from pydantic import SecretStr
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from postmark.api.auth_schemas import (
+from remanence.api.auth_schemas import (
     ActiveKeyBundleResponse,
     LoginRequest,
     LoginResponse,
@@ -21,24 +21,24 @@ from postmark.api.auth_schemas import (
     RegistrationUserResponse,
     registration_validation_problem,
 )
-from postmark.api.dependencies import DatabaseUnavailableError, get_access_bearer_token, get_db_session
-from postmark.auth.login import LoginService, LoginStatus
-from postmark.auth.logout import LogoutService
-from postmark.auth.passwords import PasswordService
-from postmark.auth.registration import RegistrationService
-from postmark.auth.session_repository import AuthSessionRepository
-from postmark.auth.session_rotation import (
+from remanence.api.dependencies import DatabaseUnavailableError, get_access_bearer_token, get_db_session
+from remanence.auth.login import LoginService, LoginStatus
+from remanence.auth.logout import LogoutService
+from remanence.auth.passwords import PasswordService
+from remanence.auth.registration import RegistrationService
+from remanence.auth.session_repository import AuthSessionRepository
+from remanence.auth.session_rotation import (
     RefreshRotationStatus,
     SessionRotationService,
 )
-from postmark.users.key_bundle_validation import PublicKeyBundleValidationError
+from remanence.users.key_bundle_validation import PublicKeyBundleValidationError
 
 router = APIRouter()
 
 
 def _account_conflict_problem() -> ProblemDetail:
     return ProblemDetail(
-        type="https://postmark.invalid/problems/account-conflict",
+        type="https://remanence.invalid/problems/account-conflict",
         title="Account conflict",
         status=409,
         code="ACCOUNT_CONFLICT",
@@ -63,7 +63,7 @@ def _invalid_response() -> JSONResponse:
 
 def _service_unavailable_problem() -> ProblemDetail:
     return ProblemDetail(
-        type="https://postmark.invalid/problems/service-unavailable",
+        type="https://remanence.invalid/problems/service-unavailable",
         title="Service unavailable",
         status=503,
         code="SERVICE_UNAVAILABLE",
@@ -88,7 +88,7 @@ def register_validation_error_handler(request: object, exc: RequestValidationErr
 
 def _invalid_credentials_problem() -> ProblemDetail:
     return ProblemDetail(
-        type="https://postmark.invalid/problems/invalid-credentials",
+        type="https://remanence.invalid/problems/invalid-credentials",
         title="Invalid credentials",
         status=401,
         code="INVALID_CREDENTIALS",
@@ -105,7 +105,7 @@ def _invalid_credentials_response() -> JSONResponse:
 
 def _invalid_refresh_problem() -> ProblemDetail:
     return ProblemDetail(
-        type="https://postmark.invalid/problems/invalid-refresh-token",
+        type="https://remanence.invalid/problems/invalid-refresh-token",
         title="Invalid refresh token",
         status=401,
         code="INVALID_REFRESH_TOKEN",
@@ -114,7 +114,7 @@ def _invalid_refresh_problem() -> ProblemDetail:
 
 def _session_replayed_problem() -> ProblemDetail:
     return ProblemDetail(
-        type="https://postmark.invalid/problems/session-replayed",
+        type="https://remanence.invalid/problems/session-replayed",
         title="Session replayed",
         status=401,
         code="SESSION_REPLAYED",

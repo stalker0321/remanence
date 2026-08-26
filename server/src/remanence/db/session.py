@@ -3,7 +3,7 @@
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from postmark.settings import Settings
+from remanence.settings import Settings
 
 
 class DatabaseConfigurationError(RuntimeError):

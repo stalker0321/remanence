@@ -19,8 +19,8 @@ from sqlalchemy import (
 from sqlalchemy import Enum as SaEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
-from postmark.db.base import Base
-from postmark.users.models import User as _User
+from remanence.db.base import Base
+from remanence.users.models import User as _User
 
 
 class KeyBundleStatus(str, enum.Enum):

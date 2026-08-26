@@ -6,7 +6,7 @@ from datetime import datetime
 from sqlalchemy import DateTime, FetchedValue, String, UUID, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
-from postmark.db.base import Base
+from remanence.db.base import Base
 
 
 class User(Base):

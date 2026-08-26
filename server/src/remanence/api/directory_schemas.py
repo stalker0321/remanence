@@ -6,7 +6,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from postmark.api.auth_schemas import validate_utc_aware
+from remanence.api.auth_schemas import validate_utc_aware
 
 
 def encode_base64url(value: bytes) -> str:

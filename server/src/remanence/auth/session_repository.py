@@ -6,7 +6,7 @@ from datetime import datetime
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from postmark.auth.models import AuthSession
+from remanence.auth.models import AuthSession
 
 
 class AuthSessionRepository:

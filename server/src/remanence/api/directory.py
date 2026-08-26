@@ -8,18 +8,18 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from postmark.api.dependencies import AuthenticatedPrincipal, get_authenticated_principal, get_db_session
-from postmark.api.auth_schemas import ProblemDetail
-from postmark.api.directory_schemas import (
+from remanence.api.dependencies import AuthenticatedPrincipal, get_authenticated_principal, get_db_session
+from remanence.api.auth_schemas import ProblemDetail
+from remanence.api.directory_schemas import (
     DirectoryKeyBundleResponse,
     DirectoryLookupResponse,
     DirectoryUserSummary,
     KeyBundleByIdResponse,
     encode_base64url,
 )
-from postmark.users.handles import normalize_handle
-from postmark.users.key_models import KeyBundleStatus, UserKeyBundle
-from postmark.users.models import User
+from remanence.users.handles import normalize_handle
+from remanence.users.key_models import KeyBundleStatus, UserKeyBundle
+from remanence.users.models import User
 
 router = APIRouter()
 
@@ -37,7 +37,7 @@ _BUNDLE_PUBLIC_FIELDS = (
 
 def _handle_not_found_response() -> JSONResponse:
     return _problem_response(
-        problem_type="https://postmark.invalid/problems/handle-not-found",
+        problem_type="https://remanence.invalid/problems/handle-not-found",
         title="Handle not found",
         status=404,
         code="HANDLE_NOT_FOUND",
@@ -46,7 +46,7 @@ def _handle_not_found_response() -> JSONResponse:
 
 def _key_bundle_not_found_response() -> JSONResponse:
     return _problem_response(
-        problem_type="https://postmark.invalid/problems/key-bundle-not-found",
+        problem_type="https://remanence.invalid/problems/key-bundle-not-found",
         title="Key bundle not found",
         status=404,
         code="KEY_BUNDLE_NOT_FOUND",

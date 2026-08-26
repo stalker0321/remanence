@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 from email_validator import validate_email
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
-from postmark.users.handles import normalize_handle
-from postmark.users.key_bundle_validation import (
+from remanence.users.handles import normalize_handle
+from remanence.users.key_bundle_validation import (
     ED25519_PUBLIC_KEY_TYPE_URL,
     HPKE_PUBLIC_KEY_TYPE_URL,
     SUPPORTED_KEY_BUNDLE_PROTOCOL_VERSION,
@@ -344,7 +344,7 @@ class ProblemDetail(BaseModel):
 
 def registration_validation_problem() -> ProblemDetail:
     return ProblemDetail(
-        type="https://postmark.invalid/problems/invalid-request",
+        type="https://remanence.invalid/problems/invalid-request",
         title="Invalid request",
         status=422,
         code="INVALID_REQUEST",

@@ -13,11 +13,11 @@ from psycopg import sql
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
-from postmark.auth.models import AuthSession
-from postmark.auth.session_repository import AuthSessionRepository
-from postmark.db.session import build_engine, build_session_factory
-from postmark.settings import AppMode, Settings
-from postmark.users.models import User
+from remanence.auth.models import AuthSession
+from remanence.auth.session_repository import AuthSessionRepository
+from remanence.db.session import build_engine, build_session_factory
+from remanence.settings import AppMode, Settings
+from remanence.users.models import User
 
 _ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 _ACCESS_HASH = bytes(range(32))
@@ -63,12 +63,12 @@ def _create_user(session: Session) -> User:
 
 @pytest.fixture()
 def session_factory(monkeypatch: pytest.MonkeyPatch):
-    source = os.environ.get("POSTMARK_TEST_DATABASE_URL")
+    source = os.environ.get("REMANENCE_TEST_DATABASE_URL")
     if not source:
-        pytest.skip("POSTMARK_TEST_DATABASE_URL is not set")
+        pytest.skip("REMANENCE_TEST_DATABASE_URL is not set")
 
     url = make_url(source)
-    database = f"postmark_tmp_{uuid4().hex}"
+    database = f"remanence_tmp_{uuid4().hex}"
     admin: psycopg.Connection | None = None
     created = False
     try:
@@ -77,14 +77,14 @@ def session_factory(monkeypatch: pytest.MonkeyPatch):
         created = True
 
         for key in list(os.environ):
-            if key.upper().startswith("POSTMARK_"):
+            if key.upper().startswith("REMANENCE_"):
                 monkeypatch.delenv(key, raising=False)
-        monkeypatch.setenv("POSTMARK_MODE", "dev")
+        monkeypatch.setenv("REMANENCE_MODE", "dev")
         monkeypatch.setenv(
-            "POSTMARK_DATABASE_URL",
+            "REMANENCE_DATABASE_URL",
             url.set(database=database).render_as_string(hide_password=False),
         )
-        monkeypatch.setenv("POSTMARK_BLOB_ROOT", "var/test-blobs")
+        monkeypatch.setenv("REMANENCE_BLOB_ROOT", "var/test-blobs")
 
         config = Config(str(_ALEMBIC_INI))
         config.set_main_option("path_separator", "os")

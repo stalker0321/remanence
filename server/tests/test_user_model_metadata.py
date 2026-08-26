@@ -4,7 +4,7 @@ import uuid
 
 from sqlalchemy import DateTime, FetchedValue, String, UUID, UniqueConstraint
 
-from postmark.users.models import User
+from remanence.users.models import User
 
 EXPECTED_COLUMNS = frozenset(
     {

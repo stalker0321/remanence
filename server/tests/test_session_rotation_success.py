@@ -5,22 +5,22 @@ from uuid import uuid4
 
 from sqlalchemy import select
 
-from postmark.auth.models import AuthSession
-from postmark.auth.session_repository import AuthSessionRepository
-from postmark.auth.session_rotation import (
+from remanence.auth.models import AuthSession
+from remanence.auth.session_repository import AuthSessionRepository
+from remanence.auth.session_rotation import (
     ACCESS_TTL,
     REFRESH_TTL,
     RefreshRotationResult,
     RefreshRotationStatus,
     SessionRotationService,
 )
-from postmark.auth.tokens import (
+from remanence.auth.tokens import (
     ACCESS_TOKEN_PREFIX,
     REFRESH_TOKEN_PREFIX,
     generate_refresh_token,
     hash_opaque_token,
 )
-from postmark.users.models import User
+from remanence.users.models import User
 
 pytest_plugins = ("test_session_repository_create",)
 

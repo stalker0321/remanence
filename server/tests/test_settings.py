@@ -5,24 +5,24 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from postmark.settings import AppMode, Settings
+from remanence.settings import AppMode, Settings
 
 FIXTURE_PASSWORD = "s3cret-fixture-password"
 DEV_DATABASE_URL = (
-    f"postgresql+psycopg://postmark:{FIXTURE_PASSWORD}@localhost:5432/postmark"
+    f"postgresql+psycopg://remanence:{FIXTURE_PASSWORD}@localhost:5432/remanence"
 )
 
 
 @pytest.fixture(autouse=True)
-def isolate_postmark_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def isolate_remanence_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     for key in list(os.environ):
-        if key.upper().startswith("POSTMARK_"):
+        if key.upper().startswith("REMANENCE_"):
             monkeypatch.delenv(key, raising=False)
     yield
 
 
 def test_minimal_test_mode_accepted_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("POSTMARK_MODE", "test")
+    monkeypatch.setenv("REMANENCE_MODE", "test")
     settings = Settings()
     assert settings.mode is AppMode.TEST
     assert settings.host == "127.0.0.1"
@@ -37,7 +37,7 @@ def test_missing_mode_rejected() -> None:
 
 
 def test_dev_missing_required_values_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("POSTMARK_MODE", "dev")
+    monkeypatch.setenv("REMANENCE_MODE", "dev")
     with pytest.raises(ValidationError):
         Settings()
 
@@ -45,9 +45,9 @@ def test_dev_missing_required_values_rejected(monkeypatch: pytest.MonkeyPatch) -
 def test_dev_valid_postgres_url_and_relative_blob_root_accepted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("POSTMARK_MODE", "dev")
-    monkeypatch.setenv("POSTMARK_DATABASE_URL", DEV_DATABASE_URL)
-    monkeypatch.setenv("POSTMARK_BLOB_ROOT", "var/blobs")
+    monkeypatch.setenv("REMANENCE_MODE", "dev")
+    monkeypatch.setenv("REMANENCE_DATABASE_URL", DEV_DATABASE_URL)
+    monkeypatch.setenv("REMANENCE_BLOB_ROOT", "var/blobs")
     settings = Settings()
     assert settings.mode is AppMode.DEV
     assert settings.blob_root == Path("var/blobs")
@@ -57,29 +57,29 @@ def test_dev_valid_postgres_url_and_relative_blob_root_accepted(
 
 
 def test_prod_relative_root_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("POSTMARK_MODE", "prod")
-    monkeypatch.setenv("POSTMARK_DATABASE_URL", DEV_DATABASE_URL)
-    monkeypatch.setenv("POSTMARK_BLOB_ROOT", "var/blobs")
+    monkeypatch.setenv("REMANENCE_MODE", "prod")
+    monkeypatch.setenv("REMANENCE_DATABASE_URL", DEV_DATABASE_URL)
+    monkeypatch.setenv("REMANENCE_BLOB_ROOT", "var/blobs")
     with pytest.raises(ValidationError):
         Settings()
 
 
 def test_prod_complete_absolute_root_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("POSTMARK_MODE", "prod")
-    monkeypatch.setenv("POSTMARK_DATABASE_URL", DEV_DATABASE_URL)
-    monkeypatch.setenv("POSTMARK_BLOB_ROOT", "/var/postmark/blobs")
+    monkeypatch.setenv("REMANENCE_MODE", "prod")
+    monkeypatch.setenv("REMANENCE_DATABASE_URL", DEV_DATABASE_URL)
+    monkeypatch.setenv("REMANENCE_BLOB_ROOT", "/var/remanence/blobs")
     settings = Settings()
     assert settings.mode is AppMode.PROD
-    assert settings.blob_root == Path("/var/postmark/blobs")
+    assert settings.blob_root == Path("/var/remanence/blobs")
     assert settings.blob_root.is_absolute()
 
 
 def test_port_bounds_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("POSTMARK_MODE", "test")
-    monkeypatch.setenv("POSTMARK_PORT", "0")
+    monkeypatch.setenv("REMANENCE_MODE", "test")
+    monkeypatch.setenv("REMANENCE_PORT", "0")
     with pytest.raises(ValidationError):
         Settings()
-    monkeypatch.setenv("POSTMARK_PORT", "65536")
+    monkeypatch.setenv("REMANENCE_PORT", "65536")
     with pytest.raises(ValidationError):
         Settings()
 
@@ -87,9 +87,9 @@ def test_port_bounds_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_secretstr_repr_does_not_expose_fixture_password(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("POSTMARK_MODE", "dev")
-    monkeypatch.setenv("POSTMARK_DATABASE_URL", DEV_DATABASE_URL)
-    monkeypatch.setenv("POSTMARK_BLOB_ROOT", "var/blobs")
+    monkeypatch.setenv("REMANENCE_MODE", "dev")
+    monkeypatch.setenv("REMANENCE_DATABASE_URL", DEV_DATABASE_URL)
+    monkeypatch.setenv("REMANENCE_BLOB_ROOT", "var/blobs")
     settings = Settings()
     assert FIXTURE_PASSWORD not in repr(settings)
     assert FIXTURE_PASSWORD not in repr(settings.database_url)

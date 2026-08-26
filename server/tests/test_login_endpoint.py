@@ -17,14 +17,14 @@ from sqlalchemy import select
 from sqlalchemy.engine import make_url
 from tink.proto import ed25519_pb2, hpke_pb2, tink_pb2
 
-from postmark.auth.models import AuthCredential, AuthSession
-from postmark.auth.passwords import PasswordService
-from postmark.auth.tokens import hash_opaque_token
-from postmark.db.session import build_engine, build_session_factory
-from postmark.main import create_app
-from postmark.settings import AppMode, Settings
-from postmark.users.key_models import KeyBundleStatus, UserKeyBundle
-from postmark.users.models import User
+from remanence.auth.models import AuthCredential, AuthSession
+from remanence.auth.passwords import PasswordService
+from remanence.auth.tokens import hash_opaque_token
+from remanence.db.session import build_engine, build_session_factory
+from remanence.main import create_app
+from remanence.settings import AppMode, Settings
+from remanence.users.key_models import KeyBundleStatus, UserKeyBundle
+from remanence.users.models import User
 
 _ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 _HPKE_KEY = bytes(range(32))
@@ -92,11 +92,11 @@ def _valid_registration_payload() -> dict:
 
 @pytest.fixture()
 def login_env(monkeypatch: pytest.MonkeyPatch):
-    source = os.environ.get("POSTMARK_TEST_DATABASE_URL")
+    source = os.environ.get("REMANENCE_TEST_DATABASE_URL")
     if not source:
-        pytest.skip("POSTMARK_TEST_DATABASE_URL is not set")
+        pytest.skip("REMANENCE_TEST_DATABASE_URL is not set")
     url = make_url(source)
-    database = f"postmark_tmp_{uuid4().hex}"
+    database = f"remanence_tmp_{uuid4().hex}"
     admin: psycopg.Connection | None = None
     created = False
     try:
@@ -104,11 +104,11 @@ def login_env(monkeypatch: pytest.MonkeyPatch):
         admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database)))
         created = True
         for key in list(os.environ):
-            if key.upper().startswith("POSTMARK_"):
+            if key.upper().startswith("REMANENCE_"):
                 monkeypatch.delenv(key, raising=False)
-        monkeypatch.setenv("POSTMARK_MODE", "dev")
-        monkeypatch.setenv("POSTMARK_DATABASE_URL", url.set(database=database).render_as_string(hide_password=False))
-        monkeypatch.setenv("POSTMARK_BLOB_ROOT", "var/test-blobs")
+        monkeypatch.setenv("REMANENCE_MODE", "dev")
+        monkeypatch.setenv("REMANENCE_DATABASE_URL", url.set(database=database).render_as_string(hide_password=False))
+        monkeypatch.setenv("REMANENCE_BLOB_ROOT", "var/test-blobs")
         config = Config(str(_ALEMBIC_INI))
         config.set_main_option("path_separator", "os")
         command.upgrade(config, "head")
@@ -185,7 +185,7 @@ def test_wrong_password_nonexistent_disabled_identical_401_no_session(login_env)
     disabled = client.post("/v1/auth/login", json={"email": "alice@example.com", "password": _PASSWORD})
 
     expected = {
-        "type": "https://postmark.invalid/problems/invalid-credentials",
+        "type": "https://remanence.invalid/problems/invalid-credentials",
         "title": "Invalid credentials",
         "status": 401,
         "code": "INVALID_CREDENTIALS",
@@ -236,7 +236,7 @@ def test_legacy_argon_params_login_rehashes_and_stamps_now(login_env) -> None:
 def test_response_repr_hides_tokens_and_password(login_env) -> None:
     client, _ = login_env
     _seed_register(client)
-    from postmark.auth.login import LoginService
+    from remanence.auth.login import LoginService
 
     with client.app.state.session_factory() as session:
         result = LoginService(session, PasswordService()).login(
@@ -256,7 +256,7 @@ def test_malformed_login_input_422_redacted(login_env) -> None:
     assert response.headers["content-type"].startswith("application/problem+json")
     body = response.json()
     assert body == {
-        "type": "https://postmark.invalid/problems/invalid-request",
+        "type": "https://remanence.invalid/problems/invalid-request",
         "title": "Invalid request",
         "status": 422,
         "code": "INVALID_REQUEST",

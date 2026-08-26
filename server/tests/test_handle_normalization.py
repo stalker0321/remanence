@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from postmark.users.handles import INVALID, normalize_handle
+from remanence.users.handles import INVALID, normalize_handle
 
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "protocol" / "fixtures" / "handles-v1.json"
 

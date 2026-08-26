@@ -286,7 +286,7 @@ Room contains infrastructure records only. No DAO may expose a query named or sh
 
 ```text
 server/
-├── src/postmark/
+├── src/remanence/
 │   ├── api/          # HTTP parsing, auth dependency, error mapping
 │   ├── auth/         # password verification and opaque sessions
 │   ├── users/        # handles and public key directory

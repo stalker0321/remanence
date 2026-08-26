@@ -17,13 +17,13 @@ from sqlalchemy import select
 from sqlalchemy.engine import make_url
 from tink.proto import ed25519_pb2, hpke_pb2, tink_pb2
 
-from postmark.auth.models import AuthCredential, AuthSession
-from postmark.auth.tokens import hash_opaque_token
-from postmark.db.session import build_engine, build_session_factory
-from postmark.main import create_app
-from postmark.settings import AppMode, Settings
-from postmark.users.key_models import UserKeyBundle
-from postmark.users.models import User
+from remanence.auth.models import AuthCredential, AuthSession
+from remanence.auth.tokens import hash_opaque_token
+from remanence.db.session import build_engine, build_session_factory
+from remanence.main import create_app
+from remanence.settings import AppMode, Settings
+from remanence.users.key_models import UserKeyBundle
+from remanence.users.models import User
 
 _ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 _HPKE_KEY = bytes(range(32))
@@ -90,11 +90,11 @@ def _valid_payload() -> dict:
 
 @pytest.fixture()
 def client_factory(monkeypatch: pytest.MonkeyPatch):
-    source = os.environ.get("POSTMARK_TEST_DATABASE_URL")
+    source = os.environ.get("REMANENCE_TEST_DATABASE_URL")
     if not source:
-        pytest.skip("POSTMARK_TEST_DATABASE_URL is not set")
+        pytest.skip("REMANENCE_TEST_DATABASE_URL is not set")
     url = make_url(source)
-    database = f"postmark_tmp_{uuid4().hex}"
+    database = f"remanence_tmp_{uuid4().hex}"
     admin: psycopg.Connection | None = None
     created = False
     try:
@@ -102,11 +102,11 @@ def client_factory(monkeypatch: pytest.MonkeyPatch):
         admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database)))
         created = True
         for key in list(os.environ):
-            if key.upper().startswith("POSTMARK_"):
+            if key.upper().startswith("REMANENCE_"):
                 monkeypatch.delenv(key, raising=False)
-        monkeypatch.setenv("POSTMARK_MODE", "dev")
-        monkeypatch.setenv("POSTMARK_DATABASE_URL", url.set(database=database).render_as_string(hide_password=False))
-        monkeypatch.setenv("POSTMARK_BLOB_ROOT", "var/test-blobs")
+        monkeypatch.setenv("REMANENCE_MODE", "dev")
+        monkeypatch.setenv("REMANENCE_DATABASE_URL", url.set(database=database).render_as_string(hide_password=False))
+        monkeypatch.setenv("REMANENCE_BLOB_ROOT", "var/test-blobs")
         config = Config(str(_ALEMBIC_INI))
         config.set_main_option("path_separator", "os")
         command.upgrade(config, "head")
@@ -165,7 +165,7 @@ def test_duplicate_email_409_no_partial_rows(client_factory) -> None:
     assert response.headers["content-type"].startswith("application/problem+json")
     body = response.json()
     assert body == {
-        "type": "https://postmark.invalid/problems/account-conflict",
+        "type": "https://remanence.invalid/problems/account-conflict",
         "title": "Account conflict",
         "status": 409,
         "code": "ACCOUNT_CONFLICT",
@@ -187,7 +187,7 @@ def test_duplicate_handle_409_indistinguishable(client_factory) -> None:
     assert response.status_code == 409
     body = response.json()
     assert body == {
-        "type": "https://postmark.invalid/problems/account-conflict",
+        "type": "https://remanence.invalid/problems/account-conflict",
         "title": "Account conflict",
         "status": 409,
         "code": "ACCOUNT_CONFLICT",
@@ -205,7 +205,7 @@ def test_malformed_inputs_fixed_422(client_factory) -> None:
         {**_valid_payload(), "key_bundle": {**_valid_payload()["key_bundle"], "signing_public_keyset": "not-base64!!"}},
     ]
     expected = {
-        "type": "https://postmark.invalid/problems/invalid-request",
+        "type": "https://remanence.invalid/problems/invalid-request",
         "title": "Invalid request",
         "status": 422,
         "code": "INVALID_REQUEST",
@@ -231,7 +231,7 @@ def test_test_app_without_factory_health_ok_register_503() -> None:
     assert response.headers["content-type"].startswith("application/problem+json")
     body = response.json()
     assert body == {
-        "type": "https://postmark.invalid/problems/service-unavailable",
+        "type": "https://remanence.invalid/problems/service-unavailable",
         "title": "Service unavailable",
         "status": 503,
         "code": "SERVICE_UNAVAILABLE",

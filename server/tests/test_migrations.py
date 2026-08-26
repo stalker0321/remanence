@@ -214,12 +214,12 @@ def _drop_database(admin: psycopg.Connection, database: str) -> None:
 
 
 def test_account_migration_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
-    source = os.environ.get("POSTMARK_TEST_DATABASE_URL")
+    source = os.environ.get("REMANENCE_TEST_DATABASE_URL")
     if not source:
-        pytest.skip("POSTMARK_TEST_DATABASE_URL is not set")
+        pytest.skip("REMANENCE_TEST_DATABASE_URL is not set")
 
     url = make_url(source)
-    database = f"postmark_tmp_{uuid4().hex}"
+    database = f"remanence_tmp_{uuid4().hex}"
     admin: psycopg.Connection | None = None
     created = False
     try:
@@ -228,14 +228,14 @@ def test_account_migration_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
         created = True
 
         for key in list(os.environ):
-            if key.upper().startswith("POSTMARK_"):
+            if key.upper().startswith("REMANENCE_"):
                 monkeypatch.delenv(key, raising=False)
-        monkeypatch.setenv("POSTMARK_MODE", "dev")
+        monkeypatch.setenv("REMANENCE_MODE", "dev")
         monkeypatch.setenv(
-            "POSTMARK_DATABASE_URL",
+            "REMANENCE_DATABASE_URL",
             url.set(database=database).render_as_string(hide_password=False),
         )
-        monkeypatch.setenv("POSTMARK_BLOB_ROOT", "var/test-blobs")
+        monkeypatch.setenv("REMANENCE_BLOB_ROOT", "var/test-blobs")
 
         config = Config(str(_ALEMBIC_INI))
         config.set_main_option("path_separator", "os")

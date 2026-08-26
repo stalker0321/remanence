@@ -19,13 +19,13 @@ COPY migrations/ migrations/
 COPY alembic.ini ./
 RUN uv sync --locked --no-dev
 
-RUN groupadd --system --gid 10001 postmark \
-    && useradd --system --uid 10001 --gid 10001 --no-create-home postmark \
-    && mkdir -p /var/lib/postmark/blobs \
-    && chown 10001:10001 /var/lib/postmark/blobs
+RUN groupadd --system --gid 10001 remanence \
+    && useradd --system --uid 10001 --gid 10001 --no-create-home remanence \
+    && mkdir -p /var/lib/remanence/blobs \
+    && chown 10001:10001 /var/lib/remanence/blobs
 
 USER 10001:10001
 
 EXPOSE 8000
 
-CMD ["/app/.venv/bin/uvicorn", "postmark.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/app/.venv/bin/uvicorn", "remanence.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]

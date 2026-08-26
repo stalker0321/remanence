@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from postmark.storage import (
+from remanence.storage import (
     BlobConflictError,
     BlobIntegrityError,
     BlobNotFoundError,
@@ -28,7 +28,7 @@ def _sha(payload: bytes) -> str:
 
 
 def _temps(root: Path) -> list[Path]:
-    return [path for path in root.rglob("*") if path.name.startswith(".postmark-")]
+    return [path for path in root.rglob("*") if path.name.startswith(".remanence-")]
 
 
 def test_store_is_blobstore_protocol(tmp_path: Path) -> None:

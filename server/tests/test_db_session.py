@@ -5,21 +5,21 @@ import pytest
 from pydantic import SecretStr
 from sqlalchemy import text
 
-from postmark.db.session import (
+from remanence.db.session import (
     DatabaseConfigurationError,
     build_engine,
     build_session_factory,
 )
-from postmark.settings import AppMode, Settings
+from remanence.settings import AppMode, Settings
 
 FIXTURE_PASSWORD = "s3cret-fixture-password"
-_TEST_DATABASE_URL = os.environ.get("POSTMARK_TEST_DATABASE_URL")
+_TEST_DATABASE_URL = os.environ.get("REMANENCE_TEST_DATABASE_URL")
 
 
 @pytest.fixture(autouse=True)
-def isolate_postmark_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def isolate_remanence_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     for key in list(os.environ):
-        if key.upper().startswith("POSTMARK_"):
+        if key.upper().startswith("REMANENCE_"):
             monkeypatch.delenv(key, raising=False)
     yield
 
@@ -34,7 +34,7 @@ def test_engine_and_factory_do_not_connect_until_used() -> None:
     settings = Settings(
         mode=AppMode.TEST,
         database_url=SecretStr(
-            f"postgresql+psycopg://postmark:{FIXTURE_PASSWORD}@127.0.0.1:1/postmark"
+            f"postgresql+psycopg://remanence:{FIXTURE_PASSWORD}@127.0.0.1:1/remanence"
         ),
     )
     engine = build_engine(settings)
@@ -48,7 +48,7 @@ def test_engine_and_factory_do_not_connect_until_used() -> None:
 
 def test_select_1_through_engine_and_session() -> None:
     if not _TEST_DATABASE_URL:
-        pytest.skip("POSTMARK_TEST_DATABASE_URL is not set")
+        pytest.skip("REMANENCE_TEST_DATABASE_URL is not set")
     settings = Settings(mode=AppMode.TEST, database_url=SecretStr(_TEST_DATABASE_URL))
     engine = build_engine(settings)
     try:
@@ -67,7 +67,7 @@ def test_engine_repr_does_not_expose_fixture_password() -> None:
     settings = Settings(
         mode=AppMode.TEST,
         database_url=SecretStr(
-            f"postgresql+psycopg://postmark:{FIXTURE_PASSWORD}@127.0.0.1:55432/postmark"
+            f"postgresql+psycopg://remanence:{FIXTURE_PASSWORD}@127.0.0.1:55432/remanence"
         ),
     )
     engine = build_engine(settings)

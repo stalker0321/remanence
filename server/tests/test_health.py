@@ -4,14 +4,14 @@ from collections.abc import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
-from postmark.main import create_app
-from postmark.settings import AppMode, Settings
+from remanence.main import create_app
+from remanence.settings import AppMode, Settings
 
 
 @pytest.fixture(autouse=True)
-def isolate_postmark_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def isolate_remanence_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     for key in list(os.environ):
-        if key.upper().startswith("POSTMARK_"):
+        if key.upper().startswith("REMANENCE_"):
             monkeypatch.delenv(key, raising=False)
     yield
 
@@ -32,7 +32,7 @@ def test_explicit_test_settings_health() -> None:
 
 
 def test_create_app_reads_test_mode_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("POSTMARK_MODE", "test")
+    monkeypatch.setenv("REMANENCE_MODE", "test")
     app = create_app()
     client = TestClient(app)
 

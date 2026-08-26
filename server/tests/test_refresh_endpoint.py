@@ -16,11 +16,11 @@ from sqlalchemy import select
 from sqlalchemy.engine import make_url
 from tink.proto import ed25519_pb2, hpke_pb2, tink_pb2
 
-from postmark.auth.models import AuthSession
-from postmark.auth.tokens import hash_opaque_token
-from postmark.db.session import build_engine, build_session_factory
-from postmark.main import create_app
-from postmark.settings import AppMode, Settings
+from remanence.auth.models import AuthSession
+from remanence.auth.tokens import hash_opaque_token
+from remanence.db.session import build_engine, build_session_factory
+from remanence.main import create_app
+from remanence.settings import AppMode, Settings
 
 _ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 _HPKE_KEY = bytes(range(32))
@@ -88,11 +88,11 @@ def _registration_payload() -> dict:
 
 @pytest.fixture()
 def refresh_env(monkeypatch: pytest.MonkeyPatch):
-    source = os.environ.get("POSTMARK_TEST_DATABASE_URL")
+    source = os.environ.get("REMANENCE_TEST_DATABASE_URL")
     if not source:
-        pytest.skip("POSTMARK_TEST_DATABASE_URL is not set")
+        pytest.skip("REMANENCE_TEST_DATABASE_URL is not set")
     url = make_url(source)
-    database = f"postmark_tmp_{uuid4().hex}"
+    database = f"remanence_tmp_{uuid4().hex}"
     admin: psycopg.Connection | None = None
     created = False
     try:
@@ -100,11 +100,11 @@ def refresh_env(monkeypatch: pytest.MonkeyPatch):
         admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database)))
         created = True
         for key in list(os.environ):
-            if key.upper().startswith("POSTMARK_"):
+            if key.upper().startswith("REMANENCE_"):
                 monkeypatch.delenv(key, raising=False)
-        monkeypatch.setenv("POSTMARK_MODE", "dev")
-        monkeypatch.setenv("POSTMARK_DATABASE_URL", url.set(database=database).render_as_string(hide_password=False))
-        monkeypatch.setenv("POSTMARK_BLOB_ROOT", "var/test-blobs")
+        monkeypatch.setenv("REMANENCE_MODE", "dev")
+        monkeypatch.setenv("REMANENCE_DATABASE_URL", url.set(database=database).render_as_string(hide_password=False))
+        monkeypatch.setenv("REMANENCE_BLOB_ROOT", "var/test-blobs")
         config = Config(str(_ALEMBIC_INI))
         config.set_main_option("path_separator", "os")
         command.upgrade(config, "head")
@@ -167,7 +167,7 @@ def test_refresh_reuse_old_returns_replayed_and_revokes_lineage(refresh_env) -> 
     assert second.headers["content-type"].startswith("application/problem+json")
     body = second.json()
     assert body == {
-        "type": "https://postmark.invalid/problems/session-replayed",
+        "type": "https://remanence.invalid/problems/session-replayed",
         "title": "Session replayed",
         "status": 401,
         "code": "SESSION_REPLAYED",
@@ -213,7 +213,7 @@ def test_malformed_tokens_422_redacted(refresh_env) -> None:
         {"refresh_token": "pm_rt_\u00e9\u00e9\u00e9"},
     ]
     expected = {
-        "type": "https://postmark.invalid/problems/invalid-request",
+        "type": "https://remanence.invalid/problems/invalid-request",
         "title": "Invalid request",
         "status": 422,
         "code": "INVALID_REQUEST",
@@ -233,7 +233,7 @@ def test_refresh_response_repr_hides_tokens(refresh_env) -> None:
     response = client.post("/v1/auth/refresh", json={"refresh_token": seed["refresh_token"]})
     assert response.status_code == 200
     body = response.json()
-    from postmark.api.auth_schemas import RefreshResponse
+    from remanence.api.auth_schemas import RefreshResponse
 
     model = RefreshResponse.model_validate(body)
     rendered = repr(model)

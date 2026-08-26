@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from postmark.storage import InvalidBlobKeyError, LocalBlobPathResolver
+from remanence.storage import InvalidBlobKeyError, LocalBlobPathResolver
 
 _UUID_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 _UUID_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"

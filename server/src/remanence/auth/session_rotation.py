@@ -5,8 +5,8 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from postmark.auth.session_repository import AuthSessionRepository
-from postmark.auth.tokens import generate_access_token, generate_refresh_token, hash_opaque_token
+from remanence.auth.session_repository import AuthSessionRepository
+from remanence.auth.tokens import generate_access_token, generate_refresh_token, hash_opaque_token
 
 ACCESS_TTL = timedelta(minutes=15)
 REFRESH_TTL = timedelta(days=30)

@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from postmark.storage.base import BlobNotFoundError, BlobStoreError, InvalidBlobKeyError
-from postmark.storage.local import LocalBlobPathResolver, LocalFileBlobStore
+from remanence.storage.base import BlobNotFoundError, BlobStoreError, InvalidBlobKeyError
+from remanence.storage.local import LocalBlobPathResolver, LocalFileBlobStore
 
 _KEY = (
     "capsules/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/"

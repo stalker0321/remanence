@@ -16,12 +16,12 @@ from sqlalchemy import select
 from sqlalchemy.engine import make_url
 from tink.proto import ed25519_pb2, hpke_pb2, tink_pb2
 
-from postmark.auth.models import AuthCredential, AuthSession
-from postmark.db.session import build_engine, build_session_factory
-from postmark.main import create_app
-from postmark.settings import AppMode, Settings
-from postmark.users.key_models import KeyBundleStatus, UserKeyBundle
-from postmark.users.models import User
+from remanence.auth.models import AuthCredential, AuthSession
+from remanence.db.session import build_engine, build_session_factory
+from remanence.main import create_app
+from remanence.settings import AppMode, Settings
+from remanence.users.key_models import KeyBundleStatus, UserKeyBundle
+from remanence.users.models import User
 
 _ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 _HPKE_KEY = bytes(range(32))
@@ -70,11 +70,11 @@ def _registration_payload(email="alice@example.com", handle="alice") -> dict:
 
 @pytest.fixture()
 def me_env(monkeypatch: pytest.MonkeyPatch):
-    source = os.environ.get("POSTMARK_TEST_DATABASE_URL")
+    source = os.environ.get("REMANENCE_TEST_DATABASE_URL")
     if not source:
-        pytest.skip("POSTMARK_TEST_DATABASE_URL is not set")
+        pytest.skip("REMANENCE_TEST_DATABASE_URL is not set")
     url = make_url(source)
-    database = f"postmark_tmp_{uuid4().hex}"
+    database = f"remanence_tmp_{uuid4().hex}"
     admin: psycopg.Connection | None = None
     created = False
     try:
@@ -82,11 +82,11 @@ def me_env(monkeypatch: pytest.MonkeyPatch):
         admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database)))
         created = True
         for key in list(os.environ):
-            if key.upper().startswith("POSTMARK_"):
+            if key.upper().startswith("REMANENCE_"):
                 monkeypatch.delenv(key, raising=False)
-        monkeypatch.setenv("POSTMARK_MODE", "dev")
-        monkeypatch.setenv("POSTMARK_DATABASE_URL", url.set(database=database).render_as_string(hide_password=False))
-        monkeypatch.setenv("POSTMARK_BLOB_ROOT", "var/test-blobs")
+        monkeypatch.setenv("REMANENCE_MODE", "dev")
+        monkeypatch.setenv("REMANENCE_DATABASE_URL", url.set(database=database).render_as_string(hide_password=False))
+        monkeypatch.setenv("REMANENCE_BLOB_ROOT", "var/test-blobs")
         config = Config(str(_ALEMBIC_INI))
         config.set_main_option("path_separator", "os")
         command.upgrade(config, "head")
@@ -205,7 +205,7 @@ def test_missing_active_bundle_maps_fixed_409(me_env) -> None:
     assert response.status_code == 409
     assert response.headers["content-type"].startswith("application/problem+json")
     assert response.json() == {
-        "type": "https://postmark.invalid/problems/account-state-invalid",
+        "type": "https://remanence.invalid/problems/account-state-invalid",
         "title": "Account state invalid",
         "status": 409,
         "code": "ACCOUNT_STATE_INVALID",

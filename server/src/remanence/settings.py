@@ -16,7 +16,7 @@ class AppMode(StrEnum):
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="POSTMARK_",
+        env_prefix="REMANENCE_",
         case_sensitive=False,
         extra="forbid",
         env_file=None,

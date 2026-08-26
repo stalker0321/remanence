@@ -34,7 +34,7 @@ readonly SCRIPT_DIR REPO_ROOT
 
 DOCKER=()
 COMPOSE=()
-PROBE_PATH="/var/lib/postmark/blobs/.postmark-m0-verify-probe"
+PROBE_PATH="/var/lib/remanence/blobs/.remanence-m0-verify-probe"
 readonly PROBE_PATH
 
 cleanup_probe() {
@@ -58,23 +58,23 @@ need_cmd bash "Install bash."
 need_cmd curl "Install curl."
 need_cmd uv "Install uv as documented in docs/development.md."
 
-if [[ -n "${POSTMARK_JAVA_HOME:-}" ]]; then
-  JAVA_HOME="${POSTMARK_JAVA_HOME}"
+if [[ -n "${REMANENCE_JAVA_HOME:-}" ]]; then
+  JAVA_HOME="${REMANENCE_JAVA_HOME}"
 elif [[ -z "${JAVA_HOME:-}" ]]; then
   JAVA_HOME="/usr/lib/jvm/java-17-openjdk-amd64"
 fi
 if [[ ! -x "${JAVA_HOME}/bin/java" || ! -x "${JAVA_HOME}/bin/javac" ]]; then
-  die "JDK 17 not found at ${JAVA_HOME} (expected bin/java and bin/javac). Set POSTMARK_JAVA_HOME or JAVA_HOME."
+  die "JDK 17 not found at ${JAVA_HOME} (expected bin/java and bin/javac). Set REMANENCE_JAVA_HOME or JAVA_HOME."
 fi
 java_version="$("${JAVA_HOME}/bin/java" -version 2>&1)"
 case "${java_version}" in
   *version\ \"17\"* | *version\ \"17.*) ;;
-  *) die "JAVA_HOME must point at JDK 17 (checked ${JAVA_HOME}). Set POSTMARK_JAVA_HOME or JAVA_HOME." ;;
+  *) die "JAVA_HOME must point at JDK 17 (checked ${JAVA_HOME}). Set REMANENCE_JAVA_HOME or JAVA_HOME." ;;
 esac
 export JAVA_HOME
 
-if [[ -n "${POSTMARK_ANDROID_SDK_ROOT:-}" ]]; then
-  android_sdk="${POSTMARK_ANDROID_SDK_ROOT}"
+if [[ -n "${REMANENCE_ANDROID_SDK_ROOT:-}" ]]; then
+  android_sdk="${REMANENCE_ANDROID_SDK_ROOT}"
 elif [[ -n "${ANDROID_SDK_ROOT:-}" ]]; then
   android_sdk="${ANDROID_SDK_ROOT}"
 elif [[ -n "${ANDROID_HOME:-}" ]]; then
@@ -83,7 +83,7 @@ else
   android_sdk="/usr/lib/android-sdk"
 fi
 if [[ ! -d "${android_sdk}" ]]; then
-  die "Android SDK not found at ${android_sdk}. Set POSTMARK_ANDROID_SDK_ROOT, ANDROID_SDK_ROOT, or ANDROID_HOME."
+  die "Android SDK not found at ${android_sdk}. Set REMANENCE_ANDROID_SDK_ROOT, ANDROID_SDK_ROOT, or ANDROID_HOME."
 fi
 if [[ ! -d "${android_sdk}/platforms/android-36" || ! -f "${android_sdk}/platforms/android-36/android.jar" ]]; then
   die "Android SDK platform 36 is missing under ${android_sdk}/platforms/android-36. Install platforms;android-36 as documented in docs/development.md."
@@ -107,20 +107,20 @@ if ! "${COMPOSE[@]}" version >/dev/null 2>&1; then
   die "Docker Compose is not available via ${DOCKER[*]}. Install the Docker Compose plugin."
 fi
 
-POSTMARK_DEV_DB_PASSWORD="${POSTMARK_DEV_DB_PASSWORD:-postmark-dev-only}"
-POSTMARK_DB_PORT="${POSTMARK_DB_PORT:-55432}"
-POSTMARK_API_PORT="${POSTMARK_API_PORT:-8000}"
-export POSTMARK_DEV_DB_PASSWORD POSTMARK_DB_PORT POSTMARK_API_PORT
+REMANENCE_DEV_DB_PASSWORD="${REMANENCE_DEV_DB_PASSWORD:-remanence-dev-only}"
+REMANENCE_DB_PORT="${REMANENCE_DB_PORT:-55432}"
+REMANENCE_API_PORT="${REMANENCE_API_PORT:-8000}"
+export REMANENCE_DEV_DB_PASSWORD REMANENCE_DB_PORT REMANENCE_API_PORT
 
-if [[ -z "${POSTMARK_TEST_DATABASE_URL:-}" ]]; then
-  if [[ ! "${POSTMARK_DEV_DB_PASSWORD}" =~ ^[A-Za-z0-9._~-]+$ ]]; then
-    die "POSTMARK_DEV_DB_PASSWORD contains URL-significant characters; set POSTMARK_TEST_DATABASE_URL explicitly instead of constructing a URL."
+if [[ -z "${REMANENCE_TEST_DATABASE_URL:-}" ]]; then
+  if [[ ! "${REMANENCE_DEV_DB_PASSWORD}" =~ ^[A-Za-z0-9._~-]+$ ]]; then
+    die "REMANENCE_DEV_DB_PASSWORD contains URL-significant characters; set REMANENCE_TEST_DATABASE_URL explicitly instead of constructing a URL."
   fi
-  POSTMARK_TEST_DATABASE_URL="postgresql+psycopg://postmark:${POSTMARK_DEV_DB_PASSWORD}@127.0.0.1:${POSTMARK_DB_PORT}/postmark"
+  REMANENCE_TEST_DATABASE_URL="postgresql+psycopg://remanence:${REMANENCE_DEV_DB_PASSWORD}@127.0.0.1:${REMANENCE_DB_PORT}/remanence"
 fi
-export POSTMARK_TEST_DATABASE_URL
-POSTMARK_TEST_API_BASE_URL="http://127.0.0.1:${POSTMARK_API_PORT}/"
-export POSTMARK_TEST_API_BASE_URL
+export REMANENCE_TEST_DATABASE_URL
+REMANENCE_TEST_API_BASE_URL="http://127.0.0.1:${REMANENCE_API_PORT}/"
+export REMANENCE_TEST_API_BASE_URL
 
 wait_healthy() {
   local service="$1"
@@ -161,11 +161,11 @@ log "starting api"
 wait_healthy api
 
 log "checking /healthz"
-health_body="$(curl -fsS -H 'Accept: application/json' "http://127.0.0.1:${POSTMARK_API_PORT}/healthz")"
+health_body="$(curl -fsS -H 'Accept: application/json' "http://127.0.0.1:${REMANENCE_API_PORT}/healthz")"
 [[ "${health_body}" == '{"status":"ok"}' ]] || die "/healthz did not return exactly {\"status\":\"ok\"}"
 
 log "checking alembic_version"
-alembic_version="$("${COMPOSE[@]}" exec -T postgres psql -U postmark -d postmark -tAc "SELECT version_num FROM alembic_version;")"
+alembic_version="$("${COMPOSE[@]}" exec -T postgres psql -U remanence -d remanence -tAc "SELECT version_num FROM alembic_version;")"
 alembic_version="${alembic_version//$'\r'/}"
 alembic_version="${alembic_version%%$'\n'*}"
 [[ "${alembic_version}" == "0001_m0_baseline" ]] || die "alembic_version is not 0001_m0_baseline"

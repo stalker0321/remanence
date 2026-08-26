@@ -6,23 +6,23 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from postmark.api.auth_schemas import (
+from remanence.api.auth_schemas import (
     ActiveKeyBundleResponse,
     HandleChangeRequest,
     HandleChangeResponse,
     MeResponse,
     ProblemDetail,
 )
-from postmark.api.dependencies import AuthenticatedPrincipal, get_authenticated_principal, get_db_session
-from postmark.users.key_models import KeyBundleStatus, UserKeyBundle
-from postmark.users.models import User
+from remanence.api.dependencies import AuthenticatedPrincipal, get_authenticated_principal, get_db_session
+from remanence.users.key_models import KeyBundleStatus, UserKeyBundle
+from remanence.users.models import User
 
 router = APIRouter()
 
 
 def _account_state_invalid_response() -> JSONResponse:
     problem = ProblemDetail(
-        type="https://postmark.invalid/problems/account-state-invalid",
+        type="https://remanence.invalid/problems/account-state-invalid",
         title="Account state invalid",
         status=409,
         code="ACCOUNT_STATE_INVALID",
@@ -36,7 +36,7 @@ def _account_state_invalid_response() -> JSONResponse:
 
 def _handle_conflict_response() -> JSONResponse:
     problem = ProblemDetail(
-        type="https://postmark.invalid/problems/handle-conflict",
+        type="https://remanence.invalid/problems/handle-conflict",
         title="Handle conflict",
         status=409,
         code="HANDLE_CONFLICT",

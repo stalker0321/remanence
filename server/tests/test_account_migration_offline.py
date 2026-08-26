@@ -13,7 +13,7 @@ from alembic.script import ScriptDirectory
 
 SERVER_ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS_DIR = SERVER_ROOT / "migrations"
-FIXTURE_URL = "postgresql+psycopg://postmark:offline-fixture@127.0.0.1:1/postmark"
+FIXTURE_URL = "postgresql+psycopg://remanence:offline-fixture@127.0.0.1:1/remanence"
 
 EXPECTED_UPGRADE_FRAGMENTS = [
     "CREATE TYPE key_bundle_status AS ENUM ('ACTIVE', 'RETIRED', 'REVOKED')",
@@ -52,10 +52,10 @@ EXPECTED_UPGRADE_FRAGMENTS = [
 @pytest.fixture()
 def offline_config(monkeypatch: pytest.MonkeyPatch) -> Iterator[Config]:
     for key in list(os.environ):
-        if key.upper().startswith("POSTMARK_"):
+        if key.upper().startswith("REMANENCE_"):
             monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("POSTMARK_MODE", "test")
-    monkeypatch.setenv("POSTMARK_DATABASE_URL", FIXTURE_URL)
+    monkeypatch.setenv("REMANENCE_MODE", "test")
+    monkeypatch.setenv("REMANENCE_DATABASE_URL", FIXTURE_URL)
     config = Config()
     config.set_main_option("script_location", str(MIGRATIONS_DIR))
     yield config

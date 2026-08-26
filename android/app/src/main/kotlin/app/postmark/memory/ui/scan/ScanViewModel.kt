@@ -469,7 +469,7 @@ class ScanViewModel(
     }
 
     private fun issueGrant(capsuleId: UUID): String? =
-        grants.issue(capsuleId)?.toString()
+        grants.issue(capsuleId).grantId.toString()
 
     /** Module-internal view of the live grant: capsule ID only while valid. */
     internal fun liveGrantCapsuleId(grantId: String): String? {

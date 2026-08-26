@@ -1,7 +1,9 @@
 package app.postmark.memory.session
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -60,14 +62,22 @@ fun RootScreen(
     }
 
     when (destination) {
-        AppDestination.Create -> Column(modifier = modifier.fillMaxWidth()) {
+        // FIX-STATE-12: the root owns the FULL available size; the header is
+        // laid out first and the flow body receives the REMAINING height via
+        // weight(1f), so a full-size flow screen can never push the header's
+        // controls out of reach or measure itself against the whole window.
+        AppDestination.Create -> Column(modifier = modifier.fillMaxSize()) {
             FlowHeader(title = "Create", onExit = onExitFlow)
-            createContent()
+            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                createContent()
+            }
         }
 
-        AppDestination.Scan -> Column(modifier = modifier.fillMaxWidth()) {
+        AppDestination.Scan -> Column(modifier = modifier.fillMaxSize()) {
             FlowHeader(title = "Scan", onExit = onExitFlow)
-            scanContent()
+            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                scanContent()
+            }
         }
 
         is AppDestination.Capsule ->

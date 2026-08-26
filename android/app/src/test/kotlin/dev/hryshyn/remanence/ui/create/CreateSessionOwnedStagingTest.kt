@@ -327,11 +327,11 @@ class CreateSessionOwnedStagingTest {
         assertNull(vm.publishError.value)
 
         runBlockingNullable {
-            assertNull(database.outboxCapsuleDao().getByCapsuleId(oldCapsuleId))
-            val row = database.outboxCapsuleDao().getByCapsuleId(newCapsuleId)
+            assertNull(database.outboxCapsuleDao().getByCapsuleIdAndOwner(oldCapsuleId, userUuid.toString()))
+            val row = database.outboxCapsuleDao().getByCapsuleIdAndOwner(newCapsuleId, userUuid.toString())
             assertNotNull(row)
             assertEquals(OutboxCapsuleState.ENCRYPTED, row!!.state)
-            assertTrue(database.outboxBlobDao().getAllByCapsuleId(newCapsuleId).size >= 5)
+            assertTrue(database.outboxBlobDao().getAllByCapsuleIdAndOwner(newCapsuleId, userUuid.toString()).size >= 5)
         }
 
         // Own-directory cleanup after SUCCESS too: no plaintext survives.

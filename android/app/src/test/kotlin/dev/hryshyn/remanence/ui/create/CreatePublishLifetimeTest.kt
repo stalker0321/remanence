@@ -231,7 +231,7 @@ class CreatePublishLifetimeTest {
     }
 
     private suspend fun outboxRow(capsuleId: String) =
-        database.outboxCapsuleDao().getByCapsuleId(capsuleId)
+        database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId, userUuid.toString())
 
     // ------------------------------------------------------------------
     // Scenarios.
@@ -330,7 +330,7 @@ class CreatePublishLifetimeTest {
             assertEquals(OutboxCapsuleState.ENCRYPTED, row!!.state)
         }
         val blobCount = kotlinx.coroutines.runBlocking {
-            database.outboxBlobDao().getAllByCapsuleId(capsuleId).size
+            database.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleId, userUuid.toString()).size
         }
         assertTrue("expected full artifact set", blobCount >= 5)
 

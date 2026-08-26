@@ -176,8 +176,8 @@ class CreateRescanOpenFlowTest {
     ): CapsuleVerifier {
         return CapsuleVerifier { candidateId: UUID ->
             runCatching {
-                val row = database.outboxCapsuleDao().getByCapsuleId(candidateId.toString()) ?: return@runCatching false
-                val blobs = database.outboxBlobDao().getAllByCapsuleId(candidateId.toString())
+                val row = database.outboxCapsuleDao().getByCapsuleIdAndOwner(candidateId.toString(), userUuid.toString()) ?: return@runCatching false
+                val blobs = database.outboxBlobDao().getAllByCapsuleIdAndOwner(candidateId.toString(), userUuid.toString())
                 val openedEnvelope = RecipientEnvelopeCryptor().open(
                     encryptionPrivate,
                     dev.hryshyn.remanence.core.model.RecipientEnvelopeContextInput(
@@ -267,8 +267,8 @@ class CreateRescanOpenFlowTest {
         controller.navigate(AppDestination.Capsule(grant.grantId.toString()))
         assertEquals(AppDestination.Capsule(grant.grantId.toString()), controller.current)
 
-        assertNotNull(database.outboxCapsuleDao().getByCapsuleId(capsuleUuid.toString()))
-        assertEquals(5, database.outboxBlobDao().getAllByCapsuleId(capsuleUuid.toString()).size)
+        assertNotNull(database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleUuid.toString(), userUuid.toString()))
+        assertEquals(5, database.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleUuid.toString(), userUuid.toString()).size)
 
         assertTrue(grants.consume(grant.grantId))
         controller.consumeCapsuleAccess()
@@ -299,7 +299,7 @@ class CreateRescanOpenFlowTest {
         database = newDb("e2e-flow.db")
 
         // Corrupt one stored ciphertext byte AFTER staging: hash check fails.
-        val blobRow = database.outboxBlobDao().getAllByCapsuleId(capsuleUuid.toString()).first()
+        val blobRow = database.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleUuid.toString(), userUuid.toString()).first()
         val target = File(blobRow.localCiphertextPath)
         val corrupted = target.readBytes().also { it[0] = (it[0].toInt() xor 0x01).toByte() }
         target.writeBytes(corrupted)

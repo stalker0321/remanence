@@ -483,8 +483,14 @@ class ScanViewModel(
 
     private suspend fun verifyCapsuleCrypto(capsuleId: UUID): Boolean {
         val identity = identityProvider() ?: return false
-        val row = database.outboxCapsuleDao().getByCapsuleId(capsuleId.toString()) ?: return false
-        val blobs = database.outboxBlobDao().getAllByCapsuleId(capsuleId.toString())
+        // M2-P03: outbox lookups are account-scoped; a capsule owned by
+        // another local account can never be verified, decrypted, or granted.
+        val row =
+            database.outboxCapsuleDao()
+                .getByCapsuleIdAndOwner(capsuleId.toString(), identity.userId)
+                ?: return false
+        val blobs = database.outboxBlobDao()
+            .getAllByCapsuleIdAndOwner(capsuleId.toString(), identity.userId)
         val statementPath = row.publishStatementPath ?: return false
         val signaturePath = row.publishStatementSignaturePath ?: return false
         val envelopePath = row.envelopePath ?: return false
@@ -576,9 +582,13 @@ class ScanViewModel(
     private suspend fun decryptHint(candidateId: String): DecryptedHint {
         val identity = identityProvider() ?: throw IllegalStateException("no identity")
         val capsuleUuid = UUID.fromString(candidateId)
-        val row = database.outboxCapsuleDao().getByCapsuleId(candidateId)
+        // M2-P03: account-scoped outbox reads; chooser hints never resolve
+        // another local account's capsule.
+        val row = database.outboxCapsuleDao()
+            .getByCapsuleIdAndOwner(candidateId, identity.userId)
             ?: throw IllegalStateException("unknown capsule")
-        val blobs = database.outboxBlobDao().getAllByCapsuleId(candidateId)
+        val blobs = database.outboxBlobDao()
+            .getAllByCapsuleIdAndOwner(candidateId, identity.userId)
         val recognitionBlob = blobs.first { it.kind == OutboxArtifactKind.RECOGNITION_MANIFEST.name }
         val manifestCiphertext = File(recognitionBlob.localCiphertextPath).readBytes()
         val envelopeCiphertext = File(requireNotNull(row.envelopePath)).readBytes()

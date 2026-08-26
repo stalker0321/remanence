@@ -160,7 +160,7 @@ class CreateStaleDeliveryTest {
 
         // And nothing was staged for either session.
         kotlinx.coroutines.runBlocking {
-            assertNull(database.outboxCapsuleDao().getByCapsuleId(vm.capsuleId))
+            assertNull(database.outboxCapsuleDao().getByCapsuleIdAndOwner(vm.capsuleId, "0198f0a0-0000-7000-8000-00000000ow01"))
         }
     }
 

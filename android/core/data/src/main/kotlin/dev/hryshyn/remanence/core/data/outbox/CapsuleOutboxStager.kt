@@ -89,9 +89,16 @@ class CapsuleOutboxStager(
     suspend fun stage(prepared: PreparedOutboxCapsule): StagedOutboxCapsule {
         validate(prepared)
         val capsuleDao = database.outboxCapsuleDao()
+        // M2-P03: account-scoped replay refusals - a lookup and every durable
+        // transition carry the staging owner so only the owning account's own
+        // row can be observed or resumed (a colliding UUID owned by another
+        // account is refused later by the strict insert constraint).
         // Refuse a replayed capsule BEFORE writing any bytes so a losing
         // invocation cannot touch, overwrite, or clean up winner-owned files.
-        capsuleDao.getByCapsuleId(prepared.capsuleId.toString())?.let {
+        capsuleDao.getByCapsuleIdAndOwner(
+            prepared.capsuleId.toString(),
+            prepared.ownerUserId,
+        )?.let {
             throw IllegalStateException("capsule already staged")
         }
         withContext(Dispatchers.IO) {
@@ -102,7 +109,10 @@ class CapsuleOutboxStager(
             // Re-check under the lock and BEFORE any byte is written so a
             // queued invocation can neither overwrite nor clean up
             // winner-owned files.
-            capsuleDao.getByCapsuleId(prepared.capsuleId.toString())?.let {
+            capsuleDao.getByCapsuleIdAndOwner(
+                prepared.capsuleId.toString(),
+                prepared.ownerUserId,
+            )?.let {
                 throw IllegalStateException("capsule already staged")
             }
             val created = ArrayList<File>(prepared.artifacts.size + 3)
@@ -128,7 +138,11 @@ class CapsuleOutboxStager(
                     // concurrent staging of the same capsule cannot slip
                     // between check and insert; refusal rolls the transaction
                     // back cleanly and leaves the winner untouched.
-                    if (capsuleDao.getByCapsuleId(prepared.capsuleId.toString()) != null) {
+                    if (capsuleDao.getByCapsuleIdAndOwner(
+                            prepared.capsuleId.toString(),
+                            prepared.ownerUserId,
+                        ) != null
+                    ) {
                         throw IllegalStateException("capsule already staged")
                     }
                     capsuleDao.upsert(
@@ -150,8 +164,9 @@ class CapsuleOutboxStager(
                             lastErrorCode = null,
                         ),
                     )
-                    val transitioned = capsuleDao.transitionState(
+                    val transitioned = capsuleDao.transitionStateForOwner(
                         prepared.capsuleId.toString(),
+                        prepared.ownerUserId,
                         OutboxCapsuleState.ENCRYPTED,
                         listOf(OutboxCapsuleState.PREPARING),
                     )

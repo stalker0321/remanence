@@ -335,7 +335,7 @@ class CreateTransitionTableTest {
         )
         assertNull(vm.publishError.value)
         assertNull(vm.flowError.value)
-        val row = database.outboxCapsuleDao().getByCapsuleId(vm.capsuleId)
+        val row = database.outboxCapsuleDao().getByCapsuleIdAndOwner(vm.capsuleId, userUuid.toString())
         assertNotNull(row)
         assertEquals(OutboxCapsuleState.ENCRYPTED, row!!.state)
         assertTrue(persistence.stored.isNotEmpty())
@@ -582,7 +582,7 @@ class CreateTransitionTableTest {
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         assertTrue(vm.publishError.value!!.contains("own account"))
         runBlocking {
-            assertTrue(database.outboxCapsuleDao().getByCapsuleId(vm.capsuleId) == null)
+            assertTrue(database.outboxCapsuleDao().getByCapsuleIdAndOwner(vm.capsuleId, userUuid.toString()) == null)
         }
         Unit
     }

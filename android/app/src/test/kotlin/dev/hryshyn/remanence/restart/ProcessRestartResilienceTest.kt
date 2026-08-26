@@ -41,6 +41,10 @@ import dev.hryshyn.remanence.core.recognition.ScanGrantManager
 @Config(sdk = [34])
 class ProcessRestartResilienceTest {
 
+    private companion object {
+        const val OWNER_USER_ID = "0198f0a0-0000-7000-8000-00000000ow01"
+    }
+
     private lateinit var context: Context
     private lateinit var database: RemanenceLocalDatabase
     private lateinit var filesRoot: File
@@ -94,7 +98,7 @@ class ProcessRestartResilienceTest {
             dev.hryshyn.remanence.core.data.db.OutboxCapsuleEntity(
                 capsuleId = capsuleId.toString(),
                 idempotencyKey = "idem-$capsuleId",
-                ownerUserId = "0198f0a0-0000-7000-8000-00000000ow01",
+                ownerUserId = OWNER_USER_ID,
                 senderUserId = UUID.randomUUID().toString(),
                 recipientUserId = UUID.randomUUID().toString(),
                 senderKeyBundleId = UUID.randomUUID().toString(),
@@ -114,7 +118,7 @@ class ProcessRestartResilienceTest {
             listOf(
                 dev.hryshyn.remanence.core.data.db.OutboxBlobEntity(
                     blobId = UUID.randomUUID().toString(),
-                    ownerUserId = "0198f0a0-0000-7000-8000-00000000ow01",
+                    ownerUserId = OWNER_USER_ID,
                     capsuleId = capsuleId.toString(),
                     kind = "PHOTO",
                     ordinal = 0,
@@ -134,7 +138,7 @@ class ProcessRestartResilienceTest {
             listOf(
                 dev.hryshyn.remanence.core.data.db.RecognitionFingerprintEntity(
                     fingerprintId = "fp-1",
-                    ownerUserId = "0198f0a0-0000-7000-8000-00000000ow01",
+                    ownerUserId = OWNER_USER_ID,
                     capsuleId = capsuleId.toString(),
                     side = FingerprintSide.FRONT,
                     origin = FingerprintOrigin.RECIPIENT,
@@ -179,9 +183,9 @@ class ProcessRestartResilienceTest {
             assertEquals(CapsuleAccess.None, rebornNavigation.capsuleAccess)
 
             // Outbox rows survived.
-            val capsuleRow = rebornDatabase.outboxCapsuleDao().getByCapsuleId(capsuleId.toString())
+            val capsuleRow = rebornDatabase.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId.toString(), OWNER_USER_ID)
             assertEquals(OutboxCapsuleState.ENCRYPTED, capsuleRow?.state)
-            val blobRow = rebornDatabase.outboxBlobDao().getAllByCapsuleId(capsuleId.toString()).single()
+            val blobRow = rebornDatabase.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleId.toString(), OWNER_USER_ID).single()
             assertEquals(first.outboxBlobPath, blobRow.localCiphertextPath)
 
             // Ciphertext files are byte-identical.

@@ -156,8 +156,8 @@ class CrossIdentityCapsuleFlowTest {
         expectedSenderBundle: KeyBundleId,
         envelopePlaintext: ByteArray,
     ): CapsuleAcceptanceResult {
-        val row = database.outboxCapsuleDao().getByCapsuleId(capsuleUuid.toString())!!
-        val blobs = database.outboxBlobDao().getAllByCapsuleId(capsuleUuid.toString())
+        val row = database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleUuid.toString(), senderUuid.toString())!!
+        val blobs = database.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleUuid.toString(), senderUuid.toString())
         return CapsuleAcceptanceGate().verify(
             CapsuleAcceptanceInput(
                 expectedCapsuleId = CapsuleId(capsuleUuid),
@@ -201,7 +201,7 @@ class CrossIdentityCapsuleFlowTest {
         publishAndStageCrossIdentity()
 
         // ---- PERSISTED routing identities are separate and complete ----
-        val row = database.outboxCapsuleDao().getByCapsuleId(capsuleUuid.toString())!!
+        val row = database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleUuid.toString(), senderUuid.toString())!!
         assertEquals(senderUuid.toString(), row.senderUserId)
         assertEquals(recipientUuid.toString(), row.recipientUserId)
         assertNotEquals(row.senderUserId, row.recipientUserId)
@@ -347,7 +347,7 @@ class CrossIdentityCapsuleFlowTest {
         assertEquals("self-send must not require a network lookup", fetchesBefore, directoryFetches)
 
         // The persisted row still separates the columns with equal VALUES.
-        val stagedRow = database.outboxCapsuleDao().getByCapsuleId(capsuleUuid.toString())!!
+        val stagedRow = database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleUuid.toString(), senderUuid.toString())!!
         assertEquals(senderUuid.toString(), stagedRow.senderUserId)
         assertEquals(senderUuid.toString(), stagedRow.recipientUserId)
         assertEquals(senderBundleUuid.toString(), stagedRow.senderKeyBundleId)

@@ -294,7 +294,7 @@ class CreateRecipientConfirmFlowTest {
         assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
         assertTrue(vm.flowError.value!!.contains("publishing requires step CONTENT"))
         runBlocking {
-            assertTrue(database.outboxBlobDao().getAllByCapsuleId(vm.capsuleId).isEmpty())
+            assertTrue(database.outboxBlobDao().getAllByCapsuleIdAndOwner(vm.capsuleId, "0198f0a0-0000-7000-8000-00000000ow01").isEmpty())
         }
     }
 }

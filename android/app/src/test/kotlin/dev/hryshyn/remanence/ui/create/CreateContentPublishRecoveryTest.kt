@@ -366,7 +366,7 @@ class CreateContentPublishRecoveryTest {
         }
         // No outbox row was staged by the failed attempt.
         runBlocking {
-            assertTrue(database.outboxCapsuleDao().getByCapsuleId(vm.capsuleId) == null)
+            assertTrue(database.outboxCapsuleDao().getByCapsuleIdAndOwner(vm.capsuleId, userUuid.toString()) == null)
         }
         Unit
     }

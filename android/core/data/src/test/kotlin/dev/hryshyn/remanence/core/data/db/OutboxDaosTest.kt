@@ -6,10 +6,11 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
 import org.junit.After
-import org.junit.Assert.assertThrows
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -19,6 +20,11 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class OutboxDaosTest {
+
+    private companion object {
+        const val OWNER = "0198f0a0-0000-7000-8000-00000000ow01"
+        const val OTHER_OWNER = "0198f0a0-0000-7000-8000-00000000ow02"
+    }
 
     private lateinit var database: RemanenceLocalDatabase
     private lateinit var capsuleDao: OutboxCapsuleDao
@@ -78,7 +84,7 @@ class OutboxDaosTest {
     fun upsertThenReadReturnsOutboxRecord() = runBlocking {
         val record = capsule(state = OutboxCapsuleState.ENCRYPTED)
         capsuleDao.upsert(record)
-        assertEquals(OutboxCapsuleState.ENCRYPTED, capsuleDao.getByCapsuleId(record.capsuleId)!!.state)
+        assertEquals(OutboxCapsuleState.ENCRYPTED, capsuleDao.getByCapsuleIdAndOwner(record.capsuleId, OWNER)!!.state)
     }
 
     @Test
@@ -87,8 +93,8 @@ class OutboxDaosTest {
         // Same idempotency key under another capsule ID resolves onto the
         // original record instead of creating a second draft.
         capsuleDao.upsert(capsule(capsuleId = "capsule-b", idempotencyKey = "0198f0a0-0000-7000-8000-00000000id01"))
-        assertNull(capsuleDao.getByCapsuleId("capsule-b"))
-        assertEquals("capsule-a", capsuleDao.getByCapsuleId("capsule-a")!!.capsuleId)
+        assertNull(capsuleDao.getByCapsuleIdAndOwner("capsule-b", OWNER))
+        assertEquals("capsule-a", capsuleDao.getByCapsuleIdAndOwner("capsule-a", OWNER)!!.capsuleId)
         assertEquals(1, countOutboxRows())
     }
 
@@ -103,20 +109,21 @@ class OutboxDaosTest {
         val record = capsule()
         capsuleDao.upsert(record)
 
-        assertEquals(0, capsuleDao.transitionState(record.capsuleId, OutboxCapsuleState.UPLOADING, listOf(OutboxCapsuleState.PUBLISHED)))
-        assertEquals(1, capsuleDao.transitionState(record.capsuleId, OutboxCapsuleState.ENCRYPTED, listOf(OutboxCapsuleState.PREPARING)))
-        assertEquals(1, capsuleDao.transitionState(record.capsuleId, OutboxCapsuleState.UPLOADING, listOf(OutboxCapsuleState.ENCRYPTED)))
+        assertEquals(0, capsuleDao.transitionStateForOwner(record.capsuleId, OWNER, OutboxCapsuleState.UPLOADING, listOf(OutboxCapsuleState.PUBLISHED)))
+        assertEquals(1, capsuleDao.transitionStateForOwner(record.capsuleId, OWNER, OutboxCapsuleState.ENCRYPTED, listOf(OutboxCapsuleState.PREPARING)))
+        assertEquals(1, capsuleDao.transitionStateForOwner(record.capsuleId, OWNER, OutboxCapsuleState.UPLOADING, listOf(OutboxCapsuleState.ENCRYPTED)))
 
         assertEquals(
             1,
-            capsuleDao.transitionStateWithError(
+            capsuleDao.transitionStateWithErrorForOwner(
                 record.capsuleId,
+                OWNER,
                 OutboxCapsuleState.RETRYABLE_FAILURE,
                 listOf(OutboxCapsuleState.UPLOADING),
                 "BLOB_HASH_MISMATCH",
             ),
         )
-        val loaded = capsuleDao.getByCapsuleId(record.capsuleId)!!
+        val loaded = capsuleDao.getByCapsuleIdAndOwner(record.capsuleId, OWNER)!!
         assertEquals(OutboxCapsuleState.RETRYABLE_FAILURE, loaded.state)
         assertEquals("BLOB_HASH_MISMATCH", loaded.lastErrorCode)
     }
@@ -125,9 +132,9 @@ class OutboxDaosTest {
     fun publishedTerminalStateCannotReturnToUploading() = runBlocking {
         val record = capsule()
         capsuleDao.upsert(record)
-        capsuleDao.transitionState(record.capsuleId, OutboxCapsuleState.FINALIZING, listOf(OutboxCapsuleState.UPLOADING))
-        capsuleDao.transitionState(record.capsuleId, OutboxCapsuleState.PUBLISHED, listOf(OutboxCapsuleState.FINALIZING))
-        assertEquals(0, capsuleDao.transitionState(record.capsuleId, OutboxCapsuleState.UPLOADING, listOf(OutboxCapsuleState.PUBLISHED)))
+        capsuleDao.transitionStateForOwner(record.capsuleId, OWNER, OutboxCapsuleState.FINALIZING, listOf(OutboxCapsuleState.UPLOADING))
+        capsuleDao.transitionStateForOwner(record.capsuleId, OWNER, OutboxCapsuleState.PUBLISHED, listOf(OutboxCapsuleState.FINALIZING))
+        assertEquals(0, capsuleDao.transitionStateForOwner(record.capsuleId, OWNER, OutboxCapsuleState.UPLOADING, listOf(OutboxCapsuleState.PUBLISHED)))
     }
 
     @Test
@@ -141,33 +148,33 @@ class OutboxDaosTest {
                 blob("blob-p2", "PHOTO", 2),
             ),
         )
-        assertEquals(1, blobDao.countByKind("0198f0a0-0000-7000-8000-00000000ca01", "RECOGNITION_MANIFEST"))
-        assertEquals(1, blobDao.countByKind("0198f0a0-0000-7000-8000-00000000ca01", "CONTENT_MANIFEST"))
-        assertEquals(3, blobDao.countByKind("0198f0a0-0000-7000-8000-00000000ca01", "PHOTO"))
-        assertEquals(5, blobDao.getAllByCapsuleId("0198f0a0-0000-7000-8000-00000000ca01").size)
+        assertEquals(1, blobDao.countByKindAndOwner("0198f0a0-0000-7000-8000-00000000ca01", OWNER, "RECOGNITION_MANIFEST"))
+        assertEquals(1, blobDao.countByKindAndOwner("0198f0a0-0000-7000-8000-00000000ca01", OWNER, "CONTENT_MANIFEST"))
+        assertEquals(3, blobDao.countByKindAndOwner("0198f0a0-0000-7000-8000-00000000ca01", OWNER, "PHOTO"))
+        assertEquals(5, blobDao.getAllByCapsuleIdAndOwner("0198f0a0-0000-7000-8000-00000000ca01", OWNER).size)
 
         blobDao.upsertAll(listOf(blob("blob-p3", "PHOTO", 3), blob("blob-p4", "PHOTO", 4)))
-        assertEquals(5, blobDao.countByKind("0198f0a0-0000-7000-8000-00000000ca01", "PHOTO"))
+        assertEquals(5, blobDao.countByKindAndOwner("0198f0a0-0000-7000-8000-00000000ca01", OWNER, "PHOTO"))
 
         // M2-P02: an occupied (kind, ordinal) slot is a HARD conflict - blob
         // inserts abort instead of upserting, so a colliding write can never
         // be converted into an update that silently reassigns another
         // account's row onto this relationship.
-        val ordinalZeroBefore = blobDao.getAllByCapsuleId("0198f0a0-0000-7000-8000-00000000ca01")
+        val ordinalZeroBefore = blobDao.getAllByCapsuleIdAndOwner("0198f0a0-0000-7000-8000-00000000ca01", OWNER)
             .single { it.ordinal == 0 }
         assertThrows(SQLiteConstraintException::class.java) {
             kotlinx.coroutines.runBlocking {
                 blobDao.upsertAll(listOf(blob("blob-dup-ordinal", "PHOTO", 0)))
             }
         }
-        assertEquals(5, blobDao.countByKind("0198f0a0-0000-7000-8000-00000000ca01", "PHOTO"))
+        assertEquals(5, blobDao.countByKindAndOwner("0198f0a0-0000-7000-8000-00000000ca01", OWNER, "PHOTO"))
         assertEquals(
             ordinalZeroBefore.blobId,
-            blobDao.getAllByCapsuleId("0198f0a0-0000-7000-8000-00000000ca01")
+            blobDao.getAllByCapsuleIdAndOwner("0198f0a0-0000-7000-8000-00000000ca01", OWNER)
                 .single { it.ordinal == 0 }
                 .blobId,
         )
-        val ordinals = blobDao.getAllByCapsuleId("0198f0a0-0000-7000-8000-00000000ca01")
+        val ordinals = blobDao.getAllByCapsuleIdAndOwner("0198f0a0-0000-7000-8000-00000000ca01", OWNER)
             .filter { it.kind == "PHOTO" }
             .map { it.ordinal }
             .filterNotNull()
@@ -180,14 +187,14 @@ class OutboxDaosTest {
         val record = blob("blob-up", "PHOTO", 4)
         blobDao.upsertAll(listOf(record))
 
-        assertEquals(0, blobDao.incrementAttemptCount("missing-blob"))
-        assertEquals(1, blobDao.incrementAttemptCount("blob-up"))
-        assertEquals(1, blobDao.incrementAttemptCount("blob-up"))
+        assertEquals(0, blobDao.incrementAttemptCountForOwner("missing-blob", OWNER))
+        assertEquals(1, blobDao.incrementAttemptCountForOwner("blob-up", OWNER))
+        assertEquals(1, blobDao.incrementAttemptCountForOwner("blob-up", OWNER))
 
-        assertEquals(1, blobDao.transitionUploadState("blob-up", OutboxBlobUploadState.STORED, listOf(OutboxBlobUploadState.PENDING)))
-        assertEquals(0, blobDao.transitionUploadState("blob-up", OutboxBlobUploadState.STORED, listOf(OutboxBlobUploadState.PENDING)))
+        assertEquals(1, blobDao.transitionUploadStateForOwner("blob-up", OWNER, OutboxBlobUploadState.STORED, listOf(OutboxBlobUploadState.PENDING)))
+        assertEquals(0, blobDao.transitionUploadStateForOwner("blob-up", OWNER, OutboxBlobUploadState.STORED, listOf(OutboxBlobUploadState.PENDING)))
 
-        val stored = blobDao.getAllByCapsuleId("0198f0a0-0000-7000-8000-00000000ca01").single { it.blobId == "blob-up" }
+        val stored = blobDao.getAllByCapsuleIdAndOwner("0198f0a0-0000-7000-8000-00000000ca01", OWNER).single { it.blobId == "blob-up" }
         assertEquals(OutboxBlobUploadState.STORED, stored.uploadState)
         assertEquals(2, stored.attemptCount)
     }
@@ -203,8 +210,59 @@ class OutboxDaosTest {
                 blob("blob-b", "PHOTO", 1),
             ),
         )
-        blobDao.deleteByCapsuleId(otherCapsule.capsuleId)
-        assertNull(blobDao.getAllByCapsuleId(otherCapsule.capsuleId).firstOrNull())
-        assertEquals(1, blobDao.countByKind("0198f0a0-0000-7000-8000-00000000ca01", "PHOTO"))
+        blobDao.deleteByCapsuleIdAndOwner(otherCapsule.capsuleId, OWNER)
+        assertNull(blobDao.getAllByCapsuleIdAndOwner(otherCapsule.capsuleId, OWNER).firstOrNull())
+        assertEquals(1, blobDao.countByKindAndOwner("0198f0a0-0000-7000-8000-00000000ca01", OWNER, "PHOTO"))
+    }
+
+    /**
+     * M2-P03: the ONLY account-owned surface left is owner-required, so
+     * another local account can neither observe nor mutate this account's
+     * durable outbox material.
+     */
+    @Test
+    fun wrongOwnerSeesNothingAndMutatesNothing() = runBlocking {
+        val record = capsule()
+        capsuleDao.upsert(record)
+        blobDao.upsertAll(listOf(blob("blob-up", "PHOTO", 4)))
+
+        assertNull(capsuleDao.getByCapsuleIdAndOwner(record.capsuleId, OTHER_OWNER))
+        assertTrue(blobDao.getAllByCapsuleIdAndOwner(record.capsuleId, OTHER_OWNER).isEmpty())
+        assertEquals(0, blobDao.countByKindAndOwner(record.capsuleId, OTHER_OWNER, "PHOTO"))
+
+        assertEquals(
+            0,
+            capsuleDao.transitionStateForOwner(
+                record.capsuleId,
+                OTHER_OWNER,
+                OutboxCapsuleState.PUBLISHED,
+                listOf(OutboxCapsuleState.ENCRYPTED),
+            ),
+        )
+        assertEquals(
+            0,
+            capsuleDao.transitionStateWithErrorForOwner(
+                record.capsuleId,
+                OTHER_OWNER,
+                OutboxCapsuleState.TERMINAL_FAILURE,
+                listOf(OutboxCapsuleState.PREPARING),
+                "X",
+            ),
+        )
+        assertEquals(
+            0,
+            blobDao.transitionUploadStateForOwner(
+                "blob-up",
+                OTHER_OWNER,
+                OutboxBlobUploadState.STORED,
+                listOf(OutboxBlobUploadState.PENDING),
+            ),
+        )
+        assertEquals(0, blobDao.incrementAttemptCountForOwner("blob-up", OTHER_OWNER))
+        assertEquals(0, blobDao.deleteByCapsuleIdAndOwner(record.capsuleId, OTHER_OWNER))
+
+        // The owner's material is untouched and still fully resolvable.
+        assertNotNull(capsuleDao.getByCapsuleIdAndOwner(record.capsuleId, OWNER)!!)
+        assertEquals(OutboxCapsuleState.PREPARING, capsuleDao.getByCapsuleIdAndOwner(record.capsuleId, OWNER)!!.state)
     }
 }

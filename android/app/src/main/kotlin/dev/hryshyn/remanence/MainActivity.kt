@@ -169,6 +169,12 @@ private fun RootSurface(container: AppContainer) {
                     dev.hryshyn.remanence.ui.capsule.CapsuleContentSource(
                         database = container.database,
                         encryptionPrivateHandle = handle,
+                        // M2-P03: presentation material resolves only under the
+                        // owning authenticated account; no active account fails closed.
+                        ownerUserIdProvider = {
+                            container.currentAccountStore.loadEntity()?.userId
+                                ?: error("no authenticated local account")
+                        },
                     )
                 },
                 validateLiveGrant = { rootViewModel.requireLivePresentationGrant(grantId) },

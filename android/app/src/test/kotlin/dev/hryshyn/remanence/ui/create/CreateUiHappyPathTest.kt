@@ -297,7 +297,7 @@ class CreateUiHappyPathTest {
         )
         composeRule.onNodeWithTag("create_published").assertIsDisplayed()
 
-        val row = database.outboxCapsuleDao().getByCapsuleId(vm.capsuleId)
+        val row = database.outboxCapsuleDao().getByCapsuleIdAndOwner(vm.capsuleId, userUuid.toString())
         assertTrue(row != null)
         assertEquals(OutboxCapsuleState.ENCRYPTED, row!!.state)
         assertEquals(2, persistence.stored.size)

@@ -257,7 +257,7 @@ class CapsuleRoutingCorruptionTest {
     }
 
     private suspend fun tamperRow(transform: (OutboxCapsuleEntity) -> OutboxCapsuleEntity) {
-        val row = database.outboxCapsuleDao().getByCapsuleId(capsuleUuid.toString())!!
+        val row = database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleUuid.toString(), userUuid.toString())!!
         database.outboxCapsuleDao().upsert(transform(row))
     }
 

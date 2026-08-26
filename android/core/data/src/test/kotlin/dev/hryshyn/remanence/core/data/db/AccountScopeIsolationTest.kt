@@ -263,7 +263,12 @@ class AccountScopeIsolationTest {
         )
 
         // The unattributed row exists physically but no real account resolves it.
-        assertNotNull(database.outboxCapsuleDao().getByCapsuleId("cap-legacy"))
+        assertEquals(
+            1,
+            database.openHelper.readableDatabase
+                .query("SELECT COUNT(*) FROM outbox_capsule WHERE capsule_id = 'cap-legacy'")
+                .use { c -> c.moveToFirst(); c.getInt(0) },
+        )
         assertNull(database.outboxCapsuleDao().getByCapsuleIdAndOwner("cap-legacy", ownerA))
         assertNull(database.outboxCapsuleDao().getByCapsuleIdAndOwner("cap-legacy", ownerB))
     }

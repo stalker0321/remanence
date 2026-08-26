@@ -11,6 +11,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -160,7 +161,7 @@ class CapsuleOutboxStagerTest {
         assertTrue(File(staged.envelopePath).exists())
         staged.artifactPaths.forEach { assertTrue(File(it).exists()) }
 
-        val capsuleRow = database.outboxCapsuleDao().getByCapsuleId(capsuleId.toString())!!
+        val capsuleRow = database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId.toString(), OWNER)!!
         assertEquals(OutboxCapsuleState.ENCRYPTED, capsuleRow.state)
         // FIX-REVIEW-04: sender and recipient identities persist SEPARATELY.
         assertEquals(senderUser.toString(), capsuleRow.senderUserId)
@@ -170,9 +171,9 @@ class CapsuleOutboxStagerTest {
         assertEquals("dGVzdC1wdWJsaWMta2V5c2V0", capsuleRow.senderSigningPublicKeysetB64)
         // M2-P02: staged rows carry the immutable owning account.
         assertEquals(OWNER, capsuleRow.ownerUserId)
-        assertTrue(database.outboxBlobDao().getAllByCapsuleId(capsuleId.toString()).all { it.ownerUserId == OWNER })
+        assertTrue(database.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleId.toString(), OWNER).all { it.ownerUserId == OWNER })
 
-        val rows = database.outboxBlobDao().getAllByCapsuleId(capsuleId.toString())
+        val rows = database.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleId.toString(), OWNER)
         assertEquals(prepared.artifacts.size, rows.size)
         rows.forEach { row ->
             assertEquals(OutboxBlobUploadState.PENDING, row.uploadState)
@@ -199,7 +200,7 @@ class CapsuleOutboxStagerTest {
                 assertEquals("owner account id must be a canonical UUID string", expected.message)
             }
             // Nothing may have been written for the refused invocation.
-            assertEquals(null, database.outboxCapsuleDao().getByCapsuleId(capsuleId.toString()))
+            assertEquals(null, database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId.toString(), OWNER))
         }
     }
 
@@ -227,10 +228,10 @@ class CapsuleOutboxStagerTest {
         val leftovers = ciphertextDirectory.listFiles().orEmpty()
         assertEquals(listOf("$blockedBlobId.bin"), leftovers.map { it.name })
         assertTrue(leftovers.single().isDirectory)
-        assertEquals(null, database.outboxCapsuleDao().getByCapsuleId(capsuleId.toString()))
+        assertEquals(null, database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId.toString(), OWNER))
         assertEquals(
             0,
-            database.outboxBlobDao().getAllByCapsuleId(capsuleId.toString()).size,
+            database.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleId.toString(), OWNER).size,
         )
     }
 
@@ -248,7 +249,34 @@ class CapsuleOutboxStagerTest {
             assertEquals("capsule already staged", expected.message)
         }
 
-        assertEquals(5, database.outboxBlobDao().getAllByCapsuleId(capsuleId.toString()).size)
+        assertEquals(5, database.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleId.toString(), OWNER).size)
+    }
+
+    /**
+     * M2-P03: a second local account can never stage over, observe, or clean
+     * up a capsule owned by the first account.
+     */
+    @Test
+    fun anotherOwnerCannotObserveMutateOrReplaceAStagedCapsule() = runBlocking {
+        val otherOwner = "0198f0a0-0000-7000-8000-00000000ab02"
+        database = newFileBackedDatabase("stager-owner-isolation.db")
+        ciphertextDirectory = File(context.filesDir, "outbox-staging-owner-isolation")
+        val stager = CapsuleOutboxStager(database, ciphertextDirectory)
+        stager.stage(preparedCapsule())
+
+        // Staging the SAME capsule id under another owner is refused (the
+        // strict insert aborts on the globally unique capsule id) and leaves
+        // the winner intact.
+        try {
+            stager.stage(preparedCapsule(ownerUserId = otherOwner))
+            throw AssertionError("expected refusal")
+        } catch (_: Exception) {
+            // any failure is acceptable; nothing of account B may persist
+        }
+
+        assertNull(database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId.toString(), otherOwner))
+        assertTrue(database.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleId.toString(), otherOwner).isEmpty())
+        assertEquals(5, database.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleId.toString(), OWNER).size)
     }
 
     @Test
@@ -261,8 +289,8 @@ class CapsuleOutboxStagerTest {
         // Snapshot the winner exactly as committed. Each preparedCapsule()
         // call produces fresh random ciphertext, so any overwrite would be
         // observable byte-for-byte.
-        val winnerRow = database.outboxCapsuleDao().getByCapsuleId(capsuleId.toString())!!
-        val winnerBlobs = database.outboxBlobDao().getAllByCapsuleId(capsuleId.toString())
+        val winnerRow = database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId.toString(), OWNER)!!
+        val winnerBlobs = database.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleId.toString(), OWNER)
         val winnerFiles = listOfNotNull(
             winnerRow.envelopePath,
             winnerRow.recognitionManifestPath,
@@ -279,9 +307,9 @@ class CapsuleOutboxStagerTest {
             assertEquals("capsule already staged", expected.message)
         }
 
-        val afterRow = database.outboxCapsuleDao().getByCapsuleId(capsuleId.toString())!!
+        val afterRow = database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId.toString(), OWNER)!!
         assertEquals(winnerRow, afterRow)
-        assertEquals(5, database.outboxBlobDao().getAllByCapsuleId(capsuleId.toString()).size)
+        assertEquals(5, database.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleId.toString(), OWNER).size)
         winnerFiles.forEachIndexed { index, file ->
             assertTrue("winner file ${file.name} must survive replay", file.exists())
             assertEquals(winnerBytes[index], file.readBytes().toList())
@@ -306,13 +334,13 @@ class CapsuleOutboxStagerTest {
         assertEquals(1, losers.size)
         assertTrue(losers.single().exceptionOrNull() is IllegalStateException)
 
-        val row = database.outboxCapsuleDao().getByCapsuleId(capsuleId.toString())!!
+        val row = database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId.toString(), OWNER)!!
         assertEquals(OutboxCapsuleState.ENCRYPTED, row.state)
-        assertEquals(5, database.outboxBlobDao().getAllByCapsuleId(capsuleId.toString()).size)
+        assertEquals(5, database.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleId.toString(), OWNER).size)
         // Every committed path exists with content; no temp residue remains.
         val committedPaths =
             listOfNotNull(row.envelopePath, row.publishStatementPath, row.publishStatementSignaturePath) +
-                database.outboxBlobDao().getAllByCapsuleId(capsuleId.toString()).map { it.localCiphertextPath }
+                database.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleId.toString(), OWNER).map { it.localCiphertextPath }
         committedPaths.forEach { assertTrue(File(it).exists() && File(it).length() > 0L) }
         assertTrue(ciphertextDirectory.listFiles()!!.none { it.name.contains(".tmp-") })
     }
@@ -326,13 +354,14 @@ class CapsuleOutboxStagerTest {
         // A completed staging is ENCRYPTED — never stranded in PREPARING.
         assertEquals(
             OutboxCapsuleState.ENCRYPTED,
-            database.outboxCapsuleDao().getByCapsuleId(capsuleId.toString())!!.state,
+            database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId.toString(), OWNER)!!.state,
         )
         // The guarded transition only accepts PREPARING as origin.
         assertEquals(
             0,
-            database.outboxCapsuleDao().transitionState(
+            database.outboxCapsuleDao().transitionStateForOwner(
                 capsuleId.toString(),
+                OWNER,
                 OutboxCapsuleState.ENCRYPTED,
                 listOf(OutboxCapsuleState.PREPARING),
             ),
@@ -354,7 +383,7 @@ class CapsuleOutboxStagerTest {
 
         // ---- second process reads the durable outbox from disk only ----
         database = newFileBackedDatabase(dbName)
-        val reopened = database.outboxCapsuleDao().getByCapsuleId(capsuleId.toString())
+        val reopened = database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId.toString(), OWNER)
         assertNotNull(reopened)
         assertNotNull(reopened!!.publishStatementPath)
         assertNotNull(reopened.publishStatementSignaturePath)

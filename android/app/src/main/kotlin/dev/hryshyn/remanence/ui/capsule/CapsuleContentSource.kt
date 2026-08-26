@@ -27,11 +27,18 @@ import dev.hryshyn.remanence.core.model.UserId
  * from the decrypted content manifest. Malformed non-null identity material
  * fails closed - nothing decrypts, nothing falls back to the authenticated
  * account. Nothing is written to disk in plaintext (docs/security.md 12).
+ *
+ * M2-P03: every outbox lookup/list carries the owning local account resolved
+ * by [ownerUserIdProvider]; another login can neither resolve nor decrypt any
+ * prior account's presentation material.
  */
 class CapsuleContentSource(
     private val database: RemanenceLocalDatabase,
     private val encryptionPrivateHandle: com.google.crypto.tink.KeysetHandle,
+    private val ownerUserIdProvider: suspend () -> String,
 ) : CapsuleContentReader {
+
+    private suspend fun requireOwnerUserId(): String = ownerUserIdProvider()
 
     /** Separate routing identities resolved from the persisted capsule row. */
     private data class Routing(
@@ -56,7 +63,10 @@ class CapsuleContentSource(
         }
 
     private suspend fun routing(capsuleId: String): Routing =
-        routing(requireNotNull(database.outboxCapsuleDao().getByCapsuleId(capsuleId)) {
+        routing(requireNotNull(
+            database.outboxCapsuleDao()
+                .getByCapsuleIdAndOwner(capsuleId, requireOwnerUserId()),
+        ) {
             "unknown capsule"
         })
 
@@ -64,7 +74,10 @@ class CapsuleContentSource(
     private suspend fun capsuleKeyset(capsuleId: String): com.google.crypto.tink.KeysetHandle =
         withContext(Dispatchers.IO) {
             val uuid = UUID.fromString(capsuleId)
-            val row = requireNotNull(database.outboxCapsuleDao().getByCapsuleId(capsuleId)) {
+            val row = requireNotNull(
+                database.outboxCapsuleDao()
+                    .getByCapsuleIdAndOwner(capsuleId, requireOwnerUserId()),
+            ) {
                 "unknown capsule"
             }
             val routing = routing(row)
@@ -98,14 +111,16 @@ class CapsuleContentSource(
 
     /** Number of encrypted photo blobs declared for this capsule. */
     override suspend fun photoCount(capsuleId: String): Int =
-        database.outboxBlobDao().getAllByCapsuleId(capsuleId)
+        database.outboxBlobDao()
+            .getAllByCapsuleIdAndOwner(capsuleId, requireOwnerUserId())
             .count { it.kind == OutboxArtifactKind.PHOTO.name }
 
     /** Decrypts one photo page strictly on demand. */
     override suspend fun loadPhoto(capsuleId: String, ordinal: Int): DecryptedPhoto =
         withContext(Dispatchers.IO) {
             val uuid = UUID.fromString(capsuleId)
-            val blobs = database.outboxBlobDao().getAllByCapsuleId(capsuleId)
+            val blobs = database.outboxBlobDao()
+                .getAllByCapsuleIdAndOwner(capsuleId, requireOwnerUserId())
             val blobRow = blobs.first {
                 it.kind == OutboxArtifactKind.PHOTO.name && it.ordinal == ordinal
             }
@@ -122,7 +137,8 @@ class CapsuleContentSource(
     /** Decrypts the optional note from the content manifest. */
     override suspend fun noteText(capsuleId: String): String? = withContext(Dispatchers.IO) {
         val uuid = UUID.fromString(capsuleId)
-        val blobs = database.outboxBlobDao().getAllByCapsuleId(capsuleId)
+        val blobs = database.outboxBlobDao()
+            .getAllByCapsuleIdAndOwner(capsuleId, requireOwnerUserId())
         val contentRow = blobs.firstOrNull { it.kind == OutboxArtifactKind.CONTENT_MANIFEST.name }
             ?: return@withContext null
         val keyset = capsuleKeyset(capsuleId)

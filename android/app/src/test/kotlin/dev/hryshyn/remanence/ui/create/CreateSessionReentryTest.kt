@@ -159,7 +159,7 @@ class CreateSessionReentryTest {
 
         // Persisted material is untouched: no outbox rows were ever removed.
         kotlinx.coroutines.runBlocking {
-            assertTrue(database.outboxBlobDao().getAllByCapsuleId(firstCapsuleId).isEmpty())
+            assertTrue(database.outboxBlobDao().getAllByCapsuleIdAndOwner(firstCapsuleId, "0198f0a0-0000-7000-8000-00000000ow01").isEmpty())
         }
     }
 

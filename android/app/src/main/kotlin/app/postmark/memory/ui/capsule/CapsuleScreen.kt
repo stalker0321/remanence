@@ -27,6 +27,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -144,55 +146,123 @@ class CapsulePresentationState(
     }
 }
 
+/** Decodes one page's decrypted JPEG bytes into the fullscreen bitmap. */
+fun interface CapsulePageDecoder {
+    fun decode(jpegBytes: ByteArray): android.graphics.Bitmap?
+}
+
+/**
+ * Production decoder: a single bounded decode of bytes already capped by the
+ * artifact budget. A null result marks the artifact as poisoned.
+ */
+val DefaultCapsulePageDecoder = CapsulePageDecoder { jpegBytes ->
+    android.graphics.BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
+}
+
+/**
+ * FIX-PAGING-01: owns the decoded page shown by [CapsuleScreen]. The pager
+ * NEVER recycles bitmaps - on minSdk 26 pixel memory is GC-managed, and an
+ * eager recycle raced the render thread drawing the outgoing Image ("trying
+ * to use a recycled bitmap"). Only reference drops happen, here and at the
+ * composable's lifecycle boundaries. Retention stays bounded by design: at
+ * most the current decoded bitmap plus the presentation's existing 3..5-page
+ * decrypted cache.
+ *
+ * Stale-load safety: every request is keyed by its requested ordinal. The
+ * mutex in [CapsulePresentationState.pageAt] serializes DECRYPTS but is
+ * released before DECODE runs, so an older request can finish decoding while
+ * a newer ordinal is already displayed. Any result whose ordinal no longer
+ * matches [latestRequestOrdinal] - including its error path - is dropped
+ * without ever touching state. Cancellation is rethrown, never converted to
+ * a fake page error (which previously also evicted a NEWER cached page via
+ * the live-captured index).
+ */
+internal class CapsulePager(
+    private val presentation: CapsulePresentationState,
+    private val decoder: CapsulePageDecoder,
+    private val decodeDispatcher: CoroutineDispatcher = Dispatchers.IO,
+) {
+
+    /** The currently displayed decoded page; null while loading or failed. */
+    var displayedBitmap: android.graphics.Bitmap? by mutableStateOf(null)
+        private set
+
+    /** Visible, retryable failure for the current page request. */
+    var pageError: String? by mutableStateOf(null)
+        private set
+
+    private var latestRequestOrdinal: Int = -1
+
+    /**
+     * Loads and displays [requestedOrdinal]. Superseded requests land
+     * nothing: neither bitmap nor error may overwrite a newer ordinal.
+     */
+    suspend fun show(requestedOrdinal: Int) {
+        latestRequestOrdinal = requestedOrdinal
+        // Reference-only drop of the outgoing page; never recycle().
+        displayedBitmap = null
+        pageError = null
+        if (!presentation.isOpen) return
+        try {
+            val photo = presentation.pageAt(requestedOrdinal)
+            val decoded = withContext(decodeDispatcher) {
+                decoder.decode(photo.jpegBytes)
+            }
+            if (latestRequestOrdinal != requestedOrdinal) return
+            if (decoded == null) {
+                // A failed decode must not keep serving poisoned bytes.
+                presentation.loadedPages.remove(requestedOrdinal)
+                pageError = "this page could not be decoded"
+            } else {
+                displayedBitmap = decoded
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            if (latestRequestOrdinal != requestedOrdinal) return
+            presentation.loadedPages.remove(requestedOrdinal)
+            pageError = failure.message ?: "page unavailable"
+        }
+    }
+
+    /** Drops the displayed reference at a safe lifecycle boundary. */
+    fun dropDisplayed() {
+        displayedBitmap = null
+    }
+}
+
 /**
  * Fullscreen capsule presentation bound to an already-open
  * [CapsulePresentationState]. Pages are decoded on demand into [ImageBitmap]s
  * with a bounded JPEG decode and released when the state closes. No
  * thumbnails, no gallery grid, no save/share: only sequential fullscreen
  * pages plus the optional note.
+ *
+ * FIX-PAGING-01: bitmap ownership lives in [CapsulePager]; this composable
+ * holds no recycle path at all. Navigating pages (and leaving the screen)
+ * only DROPS references - the previously displayed bitmap stays valid for
+ * any frame still drawing it and is reclaimed by GC afterwards.
  */
 @Composable
 fun CapsuleScreen(
     state: CapsulePresentationState,
     modifier: Modifier = Modifier,
+    decoder: CapsulePageDecoder = DefaultCapsulePageDecoder,
     onClose: () -> Unit,
 ) {
     var currentIndex by remember { mutableIntStateOf(0) }
-    var pageBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
-    var pageError by remember { mutableStateOf<String?>(null) }
     // FIX-STATE-07: bumped by the Retry action to re-run a failed page load.
     var pageRetryEpoch by remember { mutableIntStateOf(0) }
+    val pager = remember(state, decoder) { CapsulePager(state, decoder) }
 
-    // Dispose the current page bitmap whenever it changes or the screen leaves.
+    // Reference-only drop when the page changes or the screen leaves; the
+    // old eager recycle() here crashed hardware devices mid-frame.
     DisposableEffect(currentIndex, state.isOpen, pageRetryEpoch) {
-        onDispose {
-            pageBitmap?.recycle()
-            pageBitmap = null
-        }
+        onDispose { pager.dropDisplayed() }
     }
 
     LaunchedEffect(currentIndex, state.isOpen, pageRetryEpoch) {
-        pageError = null
-        if (!state.isOpen) return@LaunchedEffect
-        try {
-            val photo = state.pageAt(currentIndex)
-            // Bounded decode: bytes are already capped by the artifact budget.
-            pageBitmap = withContext(Dispatchers.IO) {
-                android.graphics.BitmapFactory.decodeByteArray(
-                    photo.jpegBytes,
-                    0,
-                    photo.jpegBytes.size,
-                )
-            } ?: run {
-                // A failed decode must not keep serving poisoned bytes.
-                state.loadedPages.remove(currentIndex)
-                pageError = "this page could not be decoded"
-                null
-            }
-        } catch (failure: Exception) {
-            state.loadedPages.remove(currentIndex)
-            pageError = failure.message ?: "page unavailable"
-        }
+        pager.show(currentIndex)
     }
 
     Column(
@@ -207,7 +277,7 @@ fun CapsuleScreen(
             modifier = Modifier.testTag("capsule_page_indicator"),
         )
         Spacer(Modifier.height(8.dp))
-        val bitmap = pageBitmap
+        val bitmap = pager.displayedBitmap
         when {
             bitmap != null -> Image(
                 bitmap = bitmap.asImageBitmap(),
@@ -217,9 +287,9 @@ fun CapsuleScreen(
                     .weight(1f, fill = false)
                     .testTag("capsule_page_${currentIndex}"),
             )
-            pageError != null -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            pager.pageError != null -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    pageError!!,
+                    pager.pageError!!,
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.testTag("capsule_page_error"),
                 )

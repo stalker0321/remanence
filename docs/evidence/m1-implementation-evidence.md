@@ -547,3 +547,83 @@ Validation evidence (JDK 17, host `vuzol-main`):
 
 Physical-device status: honest **PENDING** — nothing in this batch is claimed
 as hardware PASS; the on-device items above remain outstanding.
+
+## FIX-STATE review follow-up batch 2 (staging ownership + scan root layout)
+
+Scope: the two remaining findings from the independent review of the FIX-STATE
+batch — one cross-session staging race left inside FIX-STATE-11's accepted
+state guards, and the missing production-root viewport test for Scan. No
+crypto/protocol changes; no rebrand; no M2 scope. Accepted FIX-STATE-09/10/12
+untouched.
+
+Commits (in order):
+
+- `c2a8805` fix(create): session-owned plaintext staging directories
+  (FIX-STATE-13). Every publication now stages normalized plaintext ONLY
+  inside `create-staging/<capsule UUID>/` derived from its immutable
+  `PublishInputs`, and cleanup touches exactly that directory: NonCancellable
+  on cancellation/supersession, `finally` on success/failure. Ownership of a
+  directory belongs to its LIVE publication (tracked by an in-flight ledger,
+  not the detached job handle): `beginSession`/`endSession` remove a session's
+  own directory only when no publication still owns it, so an old coroutine
+  woken after non-cooperative normalization can never delete a newer session's
+  files (previously `clearStagedPhotos()` deleted ALL children of the shared
+  `create-staging`). `beginSession` sweeps process-death leftovers strictly by
+  capsule-UUID directory names, skipping the current session and in-flight
+  owners; arbitrary files/unknown entries are never touched (follows
+  docs/architecture.md "discard incomplete plaintext state" recovery line —
+  no bigger mechanism invented). Bounded sequential staging, plaintext
+  cleanup guarantees, ciphertext-only outbox, single-publish and generation
+  guards unchanged.
+- `2250df7` test(scan): production-root viewport coverage (FIX-STATE-14).
+  RootScreen hosting the REAL ScanScreen/CaptureAttemptSurface at 320x480dp:
+  "Back to Home" visible and actionable, flow body starts below the header
+  with the remaining height, `capture_preview` keeps its deterministic
+  positive area with the shutter beneath, and after a real rejection through
+  the camera seam the terminal Retake panel scrolls fully into view inside
+  the newly named `scan_screen_scroll` container while the header stays on
+  screen (mirrors the accepted Create production-root test).
+
+Regression proof (FIX-STATE-13):
+
+- New `CreateSessionOwnedStagingTest.stalePublicationCleanupSparesTheNewSessionArtifactsAndRow`
+  parks an old publication INSIDE a non-cooperative normalization (plain
+  latch invisible to coroutine cancellation) with its first staged file
+  already written, starts epoch 2, REALLY publishes it mid-park (two real
+  staged photos parked on a gate), wakes the stale job so its cancellation
+  cleanup runs against the live new-session artifacts, then completes the new
+  publication: stale cleanup removed only its own directory, the new staged
+  bytes survived byte-for-byte, and exactly one ENCRYPTED outbox row (plus
+  ≥5 blobs) exists for the NEW capsule id while the old row stays absent.
+  RED on pre-fix code (shared delete-all refused/corrupted the second
+  publication), GREEN after.
+- `beginSessionSweepsOnlyAbandonedUuidDirectories`: planted UUID-shaped
+  leftovers are swept at beginSession; foreign dirs/files survive; the
+  replaced idle session's own directory is removed by rotation.
+- Accepted-suite fixtures updated to the owned-dir contract only where they
+  encoded the shared directory: lifetime/transition tests now keep the
+  ciphertext outbox OUTSIDE the staging root (as production wiring already
+  does) and plant mid-flight plaintext inside the owning session subdirectory.
+
+Validation evidence (JDK 17, host `vuzol-main`):
+
+- Targeted first: create/session/scan packages green (110 tests), including
+  the red/green race proof above; then
+  `./gradlew clean testDebugUnitTest assembleDebug --console=plain` —
+  BUILD SUCCESSFUL, **679 tests / 0 failures / 0 errors** counted from the
+  JUnit XML across app + core modules.
+- `git diff --check` clean.
+- Hosted health verified live during this batch:
+  `GET https://remanence.hryshyn.dev/healthz` → HTTP 200 `{"status":"ok"}`.
+- Hosted debug APK built ONLY after full green:
+  `./gradlew :app:assembleDebug -Ppostmark.apiBaseUrl=https://remanence.hryshyn.dev/`
+  — size **155,197,144 bytes**, SHA-256
+  **e2435e78fb52c60b63ad321390152e3b64a7a616e0216e99fcff702e2f3860c3**
+  (`android/app/build/outputs/apk/debug/app-debug.apk`). Verified inside the
+  dex: exactly ONE occurrence of `https://remanence.hryshyn.dev/`; no
+  loopback API base (`http://127.0.0.1:8000/` absent); the only `127.0.0.1`
+  strings are the bare `ApiBaseUrl` loopback-GUARD host constants — no
+  loopback base is compiled in.
+
+Physical-device status: honest **PENDING** — nothing in this batch is claimed
+as hardware PASS; the on-device items above remain outstanding.

@@ -446,7 +446,9 @@ Recognition before download is a bootstrap problem. The solution is routing, not
    account-scoped local fingerprint-storage key, then drops temporary plaintext.
 5. The UI receives no enumerable capsule list, counts, thumbnails, notes, or places.
 
-The server can technically serve content ciphertext before a scan because it cannot prove postcard possession. The official app downloads content/photos only after a scan match unless an explicit offline-cache policy has already cached ciphertext. Plaintext content is never materialized without a current scan grant.
+The server can serve recipient-authorized ciphertext before a scan because ciphertext possession does not grant presentation access. M2 therefore prefetches every assigned recipient capsule by default: signed control material, envelope, recognition material, content manifest, and all 3--5 encrypted photos are hash-checked and stored in account-scoped app-private storage as soon as sync discovers them. There is no inbox, thumbnail, preview, count, or other UI over this cache. Plaintext content is never materialized without a current physical-scan grant.
+
+Consequently, a capsule that reached `MATERIAL_CACHED` must open on its first successful physical scan without network access. Network fetch after a match is a recovery fallback only when prefetch is incomplete; it is not the normal presentation path. The durable server remains the encrypted source of truth, while the phone holds the offline-capable encrypted working copy.
 
 Incoming sync runs immediately after login, when the app returns to foreground and its cursor is stale, and once at the start of Scan when network is available. A bounded opportunistic WorkManager job may refresh in the background; push notifications are not required. A first receipt with no locally cached index and no network reports that synchronization is required.
 

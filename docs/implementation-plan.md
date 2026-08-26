@@ -279,14 +279,14 @@ and authorization matrix before Android upload work consumes the API.
 | M2-A10 | A09,P05 | Add authenticated account-scoped incoming WorkManager chain. | unique work/logout/account-switch test |
 | M2-A11 | P11,A09,S20 | Download and perform control/index acceptance on envelope + recognition blob. | wrong bundle/signature/hash/context matrix |
 | M2-A12 | A11 | Re-encrypt verified sender fingerprints and chooser hints into account-scoped local storage. | plaintext/storage/index privacy test |
-| M2-A13 | P12,S20 | Download/cache remaining content/photo ciphertext and verify transport bindings without decrypting content. | authorization/hash/no-pre-scan-plaintext tests |
+| M2-A13 | P12,S20 | Prefetch/cache every assigned capsule's remaining content/photo ciphertext by default, before scan, and verify transport bindings without decrypting content. Ciphertext download may precede envelope availability. | authorization/hash/restart/no-pre-scan-plaintext tests |
 | M2-A14 | A13,S21 | Mark `CIPHERTEXT_SYNCED` only after all required blobs are durable and hash-checked. | index-only never acknowledges test |
 | M2-A15 | A12,P14 | Feed only account-scoped verified sender candidates into the existing Scan flow. | two-candidate coordinator/no-list test |
 | M2-A16 | A15 | Persist recipient pair after verified automatic result. | generation/order test |
 | M2-A17 | A15 | Require explicit physical-card confirmation after a plausible manual chooser result. | state/confirmation test |
 | M2-A18 | A16,A17 | Prefer recipient pair later and retain sender fallback only under documented weak-evidence rule. | ordering regression test |
 | M2-A19 | A13,A15 | After current scan, run full presentation acceptance and only then issue the presentation grant. | bypass/partial-material/content-AEAD tests |
-| M2-A20 | A19 | Support later offline open from cached ciphertext after a fresh scan. | network-disabled/process-restart test |
+| M2-A20 | A19 | Open on the first or any later successful scan entirely from prefetched ciphertext; network fetch is fallback only when prefetch is incomplete. | first-scan and repeat-scan network-disabled/process-restart tests |
 | M2-A21 | A19 | Show connectivity-required state when matched content is absent, with zero partial plaintext. | Compose/state test |
 | M2-A22 | A15 | Add duplicate-front/different-back end-to-end fixture. | automatic-or-plausible-chooser test |
 | M2-A23 | A15 | Add unknown-postcard fixture. | no-random-candidate test |

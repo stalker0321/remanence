@@ -344,7 +344,7 @@ Recipient: `DISCOVERED -> INDEX_CACHED -> MATERIAL_CACHED -> FINGERPRINT_ACCEPTE
 envelope, and recognition blob only. `MATERIAL_CACHED` means all required
 content/photo ciphertext is durable and transport-hash checked; background
 cache does not decrypt the content manifest. The server's
-`CIPHERTEXT_SYNCED` corresponds only to that latter material state. After a
+`CIPHERTEXT_SYNCED` corresponds only to that latter material state. Recipient sync prefetches all assigned capsule ciphertext by default, before any physical scan; large blobs may arrive before an eventually delivered recipient envelope because neither is usable as plaintext without the client-held private key and a fresh scan grant. After a
 physical match, presentation acceptance performs content AEAD/layout checks
 before publishing a grant. Missing material yields a connectivity-required
 state and no partial plaintext.

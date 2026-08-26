@@ -126,7 +126,9 @@ Every item is pass/fail. A screenshot, agent statement, or successful command fr
 
 - [ ] After leaving and force-stopping/restarting the app, no capsule presentation route is available.
 - [ ] Rescanning the delivered postcard prefers recipient fingerprint and opens the same capsule.
-- [ ] With cached ciphertext and valid local keys, later scan works offline.
+- [ ] Recipient sync prefetches every assigned capsule's complete ciphertext set by default; no scan, inbox, or UI visit is required to trigger it.
+- [ ] With prefetched ciphertext and valid local keys, both the first successful physical scan and every later fresh scan open offline.
+- [ ] If ciphertext is incomplete, post-match network sync is an explicit recovery fallback and exposes no partial plaintext.
 - [ ] Without cached required material, UI explains connectivity rather than showing partial plaintext.
 
 ### End-to-end physical evidence

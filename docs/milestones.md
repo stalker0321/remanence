@@ -89,7 +89,7 @@ Scope:
 - recipient envelope open, signature/AEAD verification, content download/cache;
 - fullscreen capsule and recipient delivered fingerprint creation;
 - later scan prefers recipient fingerprint and falls back to sender fingerprint;
-- offline later open when ciphertext is cached;
+- default ciphertext-only prefetch for every assigned capsule, with offline first and later open after a fresh scan;
 - no gallery/inbox/history/deep-link path.
 
 M2 addresses only an existing registered recipient with a non-null immutable

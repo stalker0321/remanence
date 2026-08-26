@@ -4,6 +4,10 @@ Status: **APPROVED.**
 
 Tests prove mechanisms and boundaries, not screen count. A green mocked demo cannot satisfy M1/M2. The minimum evidence pyramid combines fast deterministic tests, real PostgreSQL/storage integration, Android instrumentation, recognition datasets, adversarial crypto fixtures, and a two-device physical flow.
 
+M2 server work may run before the M1 hardware smoke, but automated or
+Robolectric results never substitute for that CameraX/OpenCV evidence. The M2
+Create/Scan integration gate consumes the recorded hardware result first.
+
 ## 1. Test layers
 
 ### Pure JVM/Kotlin tests
@@ -110,6 +114,10 @@ Inject failure at each durable transition:
 - during access-token refresh;
 - between incoming page download and local cursor update;
 - after envelope/index download but before fingerprint re-encryption;
+- after index acceptance but before content/photo download;
+- after all ciphertext cache writes but before `material-synced` acknowledgement;
+- after recipient key becomes stale and before sender re-envelope;
+- after logout A and login B while A upload/sync work is queued or running;
 - during content download/decrypt/render cleanup.
 
 Restart client/API/PostgreSQL as applicable. The result must be safe retry, explicit repair state, or terminal redacted failure—never duplicate ready capsule, half-visible capsule, lost confirmed blob, plaintext persistence, or infinite retry.
@@ -133,6 +141,17 @@ Instrumentation/physical suites are separate labeled evidence because the VPS ma
 - Back-side images use synthetic personal details unless documented consent exists.
 - Test private keys are clearly named, scoped to fixtures, and rejected by production-mode configuration.
 - Logs/evidence redact email, handles where unnecessary, tokens, key bytes, envelopes, descriptors, note/photo data, and physical addresses.
+- Account-isolation probes assert B cannot query or resume A's incoming,
+  outbox, fingerprint, hint, cursor, blob, file, or WorkManager state.
+- Sender retry-material tests cover process restart, wrong account/key/AAD,
+  stale-recipient re-envelope with byte-identical artifacts, and cleanup.
+- Control/index acceptance tests permit absent content only as undelivered
+  declarations; presentation tests reject every missing/substituted blob and
+  prove zero partial plaintext.
+- PostgreSQL is required for constraint/transaction/idempotency evidence;
+  SQLite is not accepted as a substitute. BlobStore adapters share a failure-
+  injection contract for short writes, hash mismatch, promotion failure, and
+  safe orphan cleanup.
 - Recognition raw dataset access is narrower than repository access; derived distributable fixtures must be privacy-reviewed.
 
 ## 7. Review evidence

@@ -79,24 +79,48 @@ Every item is pass/fail. A screenshot, agent statement, or successful command fr
 
 ## M2 — Two-user transfer
 
+### Entry and architecture gates
+
+- [ ] M1 physical CameraX/OpenCV smoke evidence is recorded before Create/Scan integration is accepted; automated tests are not represented as hardware proof.
+- [ ] M2 generalizes the existing M1 publisher, outbox, incoming store, matching flow, and scan grant; no parallel M2-only path exists.
+- [ ] Incoming/outbox/blob/fingerprint/cursor records, file roots, DAO queries, and WorkManager chains are scoped to the authenticated local account.
+- [ ] Logout/account switch cancels that account's work and grants; user B cannot query, match, resume, or render any user-A row, hint, or outbox item.
+- [ ] Sender-owned wrapped capsule-key retry material survives process death, fails under a wrong account/key/AAD, and is removed after publish/abort/terminal cleanup.
+- [ ] M2 accepts only an already-registered recipient with immutable user ID and active key bundle; no pending-email stub or optional-handle shortcut is shipped.
+
+### Server and storage
+
+- [ ] PostgreSQL—not a SQLite substitute—proves capsule/blob/envelope/delivery/idempotency constraints and finalize rollback behavior.
+- [ ] Blob streaming enforces declared and actual byte limits, verifies SHA-256, removes failed temporaries, and treats promoted-but-unreferenced ciphertext as garbage-collectable orphan state.
+- [ ] Finalize resolves both key bundles authoritatively by ID; request-adjacent public keys are never trusted.
+- [ ] Recipient key bundle is ACTIVE and owned by B; sender signing bundle is owned by A and non-REVOKED, with the documented RETIRED policy covered by tests.
+- [ ] Idempotent create/blob/finalize replay returns the same outcome; conflicting replay fails without duplicate rows or object ownership.
+
 ### Sender A
 
 - [ ] A and B are separate server users with distinct UUIDs, handles, and key bundles.
 - [ ] A resolves B’s current handle, sees confirmation, and published route/envelope bind B’s immutable IDs.
 - [ ] A uploads only ciphertext and a public signed statement; finalize reaches `READY` atomically.
 - [ ] Interruption after any blob can resume without duplicate capsule/blob or reupload of completed blobs.
+- [ ] Process death followed by `RECIPIENT_KEY_STALE` re-resolves B and re-envelopes/re-signs from sender-owned retry material without changing any artifact ciphertext/hash.
+- [ ] Upload worker inputs contain only capsule ID and expected account ID, revalidate the account before durable transitions, and cannot continue after logout/account switch.
 
 ### Recipient B first receipt
 
 - [ ] B’s incoming sync receives only routed metadata, envelope, signed statement, and encrypted artifacts.
+- [ ] Control/index acceptance verifies canonical statement/layout, authoritative sender signature, all routed/envelope IDs, and the recognition blob hash/AEAD before any fingerprint or hint enters the local index.
+- [ ] Undownloaded content/photo bindings remain unverified declarations; index acceptance never labels them delivered or material-cached.
 - [ ] No incoming list/count/thumbnail/sender identity appears before a plausible scan.
 - [ ] B scans front/back and matches locally against pending sender fingerprints.
 - [ ] Duplicate-front test produces back disambiguation or explicit plausible chooser; it never silently guesses.
 - [ ] Wrong postcard produces no match/retry, not a random capsule.
 - [ ] B verifies envelope, IDs, signed statement, hashes, and AEAD before plaintext.
+- [ ] Before note/photo plaintext, presentation acceptance requires every declared content/photo ciphertext and verifies all statement size/hash bindings plus content-manifest AEAD/layout.
+- [ ] If a physical match occurs before content is cached, UI shows connectivity-required state and exposes zero partial plaintext.
 - [ ] B sees the correct 3–5 photos and note fullscreen.
 - [ ] Successful receipt stores a preferred encrypted recipient front/back fingerprint pair and retains sender fallback.
 - [ ] Server state reveals at most `CIPHERTEXT_SYNCED`, never opened/recognized timestamps.
+- [ ] `INDEX_CACHED` is local-only; server reaches `CIPHERTEXT_SYNCED` only after every required ciphertext is durably cached and hash-checked.
 
 ### Recipient B later use
 
@@ -110,6 +134,11 @@ Every item is pass/fail. A screenshot, agent statement, or successful command fr
 - [ ] Two physical Android installations run the reviewed APK and distinct accounts.
 - [ ] One real physical postcard completes A create/publish → physical handoff/mail simulation → B first receipt → restart → B later scan.
 - [ ] API/DB/object/log inspection for that run finds no plaintext photo/note/back/descriptors/private/capsule keys.
+
+### Deferred email-invite seam
+
+- [ ] M2 documentation points to ADR-009 and does not claim protocol v1 can support an unregistered email recipient through envelope-only re-wrap.
+- [ ] Reserved-future-user-ID versus new-recipient-target protocol remains an explicit M2.x decision, not an implementation-agent assumption.
 
 ## M3 — Recognition hardening
 

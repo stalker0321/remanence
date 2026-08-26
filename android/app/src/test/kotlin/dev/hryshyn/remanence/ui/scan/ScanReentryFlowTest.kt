@@ -89,7 +89,7 @@ class ScanReentryFlowTest {
         File(filesRoot, "fingerprints"),
         KekBoundSecretSealer(dev.hryshyn.remanence.auth.SoftwareKekBoundary(), KekBoundSecretSealer.FINGERPRINT_SEALING_ALIAS),
         database.recognitionFingerprintDao(),
-        ownerUserIdProvider = { "0198f0a0-0000-7000-8000-00000000ow01" },
+        ownerUserIdProvider = { userUuid.toString() },
     )
 
     private fun syntheticFingerprint(seed: Int, side: FingerprintSide): ByteArray {

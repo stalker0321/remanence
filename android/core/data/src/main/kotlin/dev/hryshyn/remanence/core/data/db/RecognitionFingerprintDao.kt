@@ -8,6 +8,10 @@ import androidx.room.Transaction
 /**
  * DAO over encrypted fingerprint records. Queries are scoped to one capsule;
  * no method projects an enumerable list of all memories to UI code.
+ *
+ * M2-P02/P03: every account-owned read, preferred-pair transition, and delete
+ * REQUIRES the row's immutable owner_user_id; no unscoped account-owned query
+ * exists. Writes insert only through [insertAll] with the authoritative owner.
  */
 @Dao
 interface RecognitionFingerprintDao {
@@ -16,54 +20,12 @@ interface RecognitionFingerprintDao {
     @Insert
     suspend fun insertAll(fingerprints: List<RecognitionFingerprintEntity>)
 
-    @Query("SELECT * FROM recognition_fingerprint WHERE capsule_id = :capsuleId")
-    suspend fun getAllByCapsuleId(capsuleId: String): List<RecognitionFingerprintEntity>
-
-    /** Scan index source: every locally sealed fingerprint row of this account. */
-    @Query("SELECT * FROM recognition_fingerprint")
-    suspend fun getAll(): List<RecognitionFingerprintEntity>
-
-    /** Single-record lookup used for load/delete of one sealed baseline. */
-    @Query("SELECT * FROM recognition_fingerprint WHERE fingerprint_id = :fingerprintId")
-    suspend fun getByFingerprintId(fingerprintId: String): RecognitionFingerprintEntity?
-
-    @Query("SELECT * FROM recognition_fingerprint WHERE capsule_id = :capsuleId AND origin = :origin")
-    suspend fun getByCapsuleIdAndOrigin(capsuleId: String, origin: FingerprintOrigin): List<RecognitionFingerprintEntity>
-
-    /**
-     * Marks exactly the two rows of [origin] for [capsuleId] as preferred and
-     * clears the flag from every other row of that capsule.
-     */
-    @Transaction
-    suspend fun setPreferredPair(capsuleId: String, origin: FingerprintOrigin) {
-        clearPreferred(capsuleId)
-        markPreferred(capsuleId, origin)
-    }
-
-    @Query("UPDATE recognition_fingerprint SET preferred = 0 WHERE capsule_id = :capsuleId")
-    suspend fun clearPreferred(capsuleId: String)
-
-    @Query(
-        "UPDATE recognition_fingerprint SET preferred = 1 " +
-            "WHERE capsule_id = :capsuleId AND origin = :origin AND side IN ('FRONT', 'BACK')",
-    )
-    suspend fun markPreferred(capsuleId: String, origin: FingerprintOrigin)
-
-    /** Removes exactly one sealed baseline row (used for pair-rollback). */
-    @Query("DELETE FROM recognition_fingerprint WHERE fingerprint_id = :fingerprintId")
-    suspend fun deleteByFingerprintId(fingerprintId: String)
-
-    @Query("DELETE FROM recognition_fingerprint WHERE capsule_id = :capsuleId")
-    suspend fun deleteByCapsuleId(capsuleId: String)
-
     @Query("DELETE FROM recognition_fingerprint")
     suspend fun clear()
 
     // ------------------------------------------------------------------
-    // M2-P02 account-scoped primitives. Every durable read, CAS, and delete
-    // is guarded by the row's immutable owning account so another login can
-    // never enumerate or resume it. P03 converts the scan/index paths onto
-    // these (notably the account-scoped candidate index).
+    // Account-scoped surface (M2-P03): the ONLY scan source is the owner's
+    // sealed fingerprint index.
     // ------------------------------------------------------------------
 
     /** The account's full sealed fingerprint index; the only sanctioned scan source from M2 onward. */

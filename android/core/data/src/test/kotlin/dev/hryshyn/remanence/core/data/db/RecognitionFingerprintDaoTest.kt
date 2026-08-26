@@ -18,6 +18,10 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class RecognitionFingerprintDaoTest {
 
+    private companion object {
+        const val OWNER = "0198f0a0-0000-7000-8000-00000000ow01"
+    }
+
     private lateinit var database: RemanenceLocalDatabase
     private lateinit var dao: RecognitionFingerprintDao
 
@@ -66,9 +70,9 @@ class RecognitionFingerprintDaoTest {
 
         assertEquals(
             listOf("fp-sf", "fp-sb").sorted(),
-            dao.getByCapsuleIdAndOrigin("0198f0a0-0000-7000-8000-00000000ca01", FingerprintOrigin.SENDER).map { it.fingerprintId }.sorted(),
+            dao.getByCapsuleIdAndOriginAndOwner("0198f0a0-0000-7000-8000-00000000ca01", FingerprintOrigin.SENDER, OWNER).map { it.fingerprintId }.sorted(),
         )
-        assertEquals(4, dao.getAllByCapsuleId("0198f0a0-0000-7000-8000-00000000ca01").size)
+        assertEquals(4, dao.getAllByCapsuleIdAndOwner("0198f0a0-0000-7000-8000-00000000ca01", OWNER).size)
     }
 
     @Test
@@ -102,9 +106,9 @@ class RecognitionFingerprintDaoTest {
             ),
         )
 
-        dao.setPreferredPair("0198f0a0-0000-7000-8000-00000000ca01", FingerprintOrigin.RECIPIENT)
+        dao.setPreferredPairForOwner("0198f0a0-0000-7000-8000-00000000ca01", FingerprintOrigin.RECIPIENT, OWNER)
 
-        val rows = dao.getAllByCapsuleId("0198f0a0-0000-7000-8000-00000000ca01")
+        val rows = dao.getAllByCapsuleIdAndOwner("0198f0a0-0000-7000-8000-00000000ca01", OWNER)
         assertEquals(
             listOf(false, false),
             rows.filter { it.origin == FingerprintOrigin.SENDER }.map { it.preferred }.sorted(),
@@ -121,9 +125,9 @@ class RecognitionFingerprintDaoTest {
                 fingerprint("fp-rb", FingerprintSide.BACK, FingerprintOrigin.RECIPIENT, preferred = true),
             ),
         )
-        dao.setPreferredPair("0198f0a0-0000-7000-8000-00000000ca01", FingerprintOrigin.SENDER)
+        dao.setPreferredPairForOwner("0198f0a0-0000-7000-8000-00000000ca01", FingerprintOrigin.SENDER, OWNER)
         // SENDER rows do not exist yet; nothing may remain preferred.
-        assertEquals(0, dao.getAllByCapsuleId("0198f0a0-0000-7000-8000-00000000ca01").count { it.preferred })
+        assertEquals(0, dao.getAllByCapsuleIdAndOwner("0198f0a0-0000-7000-8000-00000000ca01", OWNER).count { it.preferred })
 
         dao.insertAll(
             listOf(
@@ -131,8 +135,8 @@ class RecognitionFingerprintDaoTest {
                 fingerprint("fp-sb", FingerprintSide.BACK, FingerprintOrigin.SENDER),
             ),
         )
-        dao.setPreferredPair("0198f0a0-0000-7000-8000-00000000ca01", FingerprintOrigin.SENDER)
-        val rows = dao.getAllByCapsuleId("0198f0a0-0000-7000-8000-00000000ca01")
+        dao.setPreferredPairForOwner("0198f0a0-0000-7000-8000-00000000ca01", FingerprintOrigin.SENDER, OWNER)
+        val rows = dao.getAllByCapsuleIdAndOwner("0198f0a0-0000-7000-8000-00000000ca01", OWNER)
         assertFalse(rows.first { it.fingerprintId == "fp-rf" }.preferred)
         assertTrue(rows.first { it.fingerprintId == "fp-sb" }.preferred)
         assertEquals(2, rows.count { it.preferred })

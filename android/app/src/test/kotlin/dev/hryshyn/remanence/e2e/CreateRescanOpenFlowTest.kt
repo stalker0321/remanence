@@ -349,7 +349,7 @@ class CreateRescanOpenFlowTest {
 
     private suspend fun reopenedDbFingerprint(side: FingerprintSide) =
         database.recognitionFingerprintDao()
-            .getByCapsuleIdAndOrigin(capsuleUuid.toString(), FingerprintOrigin.SENDER)
+            .getByCapsuleIdAndOriginAndOwner(capsuleUuid.toString(), FingerprintOrigin.SENDER, "0198f0a0-0000-7000-8000-00000000ow01")
             .single { it.side == side }
 
     private fun indexOf(haystack: ByteArray, needle: ByteArray): Boolean {

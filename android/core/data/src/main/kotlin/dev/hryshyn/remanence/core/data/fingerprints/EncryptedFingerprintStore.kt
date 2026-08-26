@@ -49,7 +49,7 @@ class EncryptedFingerprintStore(
         profileId: String,
         plaintextBytes: ByteArray,
     ): String {
-        val existing = dao.getByCapsuleIdAndOrigin(capsuleId, origin)
+        val existing = dao.getByCapsuleIdAndOriginAndOwner(capsuleId, origin, currentOwner())
         if (existing.any { it.side == side }) {
             throw DuplicateFingerprintException(capsuleId, side)
         }
@@ -66,7 +66,7 @@ class EncryptedFingerprintStore(
                 listOf(
                     RecognitionFingerprintEntity(
                         fingerprintId = fingerprintId,
-                        ownerUserId = ownerUserIdProvider(),
+                        ownerUserId = currentOwner(),
                         capsuleId = capsuleId,
                         side = side,
                         origin = origin,
@@ -88,10 +88,10 @@ class EncryptedFingerprintStore(
         capsuleId: String,
         side: FingerprintSide,
         origin: FingerprintOrigin,
-    ): Boolean = dao.getByCapsuleIdAndOrigin(capsuleId, origin).any { it.side == side }
+    ): Boolean = dao.getByCapsuleIdAndOriginAndOwner(capsuleId, origin, currentOwner()).any { it.side == side }
 
     override suspend fun setPreferredPair(capsuleId: String, origin: FingerprintOrigin) {
-        dao.setPreferredPair(capsuleId, origin)
+        dao.setPreferredPairForOwner(capsuleId, origin, currentOwner())
     }
 
     override suspend fun deleteBaseline(
@@ -99,15 +99,17 @@ class EncryptedFingerprintStore(
         side: FingerprintSide,
         origin: FingerprintOrigin,
     ) {
-        val entity = dao.getByCapsuleIdAndOrigin(capsuleId, origin)
+        val entity = dao.getByCapsuleIdAndOriginAndOwner(capsuleId, origin, currentOwner())
             .firstOrNull { it.side == side } ?: return
         filesRoot.resolve(entity.encryptedPath).delete()
-        dao.deleteByFingerprintId(entity.fingerprintId)
+        check(dao.deleteByFingerprintIdAndOwner(entity.fingerprintId, currentOwner()) == 1) {
+            "owned baseline row vanished mid-delete"
+        }
     }
 
     /** Loads the row, reads its file, and unseals; anything unexpected fails closed. */
     override suspend fun decrypt(fingerprintId: String): ByteArray {
-        val entity = dao.getByFingerprintId(fingerprintId)
+        val entity = dao.getByFingerprintIdAndOwner(fingerprintId, currentOwner())
             ?: throw IllegalStateException("unknown fingerprint record")
         val file = filesRoot.resolve(entity.encryptedPath)
         if (!file.exists()) {
@@ -116,11 +118,13 @@ class EncryptedFingerprintStore(
         return sealer.unseal(file.readBytes(), aadFor(fingerprintId))
     }
 
-    /** Removes the ciphertext file of one record; the Room row must be removed by callers. */
+    /** Removes the ciphertext file of one owned record; the Room row must be removed by callers. */
     suspend fun deleteFileOf(fingerprintId: String) {
-        val entity = dao.getByFingerprintId(fingerprintId) ?: return
+        val entity = dao.getByFingerprintIdAndOwner(fingerprintId, currentOwner()) ?: return
         filesRoot.resolve(entity.encryptedPath).delete()
     }
+
+    private suspend fun currentOwner(): String = ownerUserIdProvider()
 
     private fun fileFor(fingerprintId: String): File =
         File(filesRoot, "$fingerprintId.fpw")

@@ -194,7 +194,7 @@ class ProcessRestartResilienceTest {
 
             // Fingerprint baseline row + wrapped keyset record survive.
             val fingerprints = rebornDatabase.recognitionFingerprintDao()
-                .getByCapsuleIdAndOrigin(capsuleId.toString(), FingerprintOrigin.RECIPIENT)
+                .getByCapsuleIdAndOriginAndOwner(capsuleId.toString(), FingerprintOrigin.RECIPIENT, OWNER_USER_ID)
             assertEquals(1, fingerprints.size)
             assertTrue(fingerprints.single().preferred)
                 assertTrue(File(first.wrappedKeysetPath).length() == 48L)

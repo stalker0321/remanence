@@ -35,6 +35,10 @@ private class XorSealer(private val failOnTamperedAad: Boolean = false) : Secret
 @Config(sdk = [34])
 class EncryptedFingerprintStoreTest {
 
+    private companion object {
+        const val OWNER = "0198f0a0-0000-7000-8000-00000000ow01"
+    }
+
     private lateinit var database: RemanenceLocalDatabase
     private lateinit var filesRoot: File
 
@@ -64,7 +68,7 @@ class EncryptedFingerprintStoreTest {
 
         val id = sut.persist("capsule-a", FingerprintSide.FRONT, FingerprintOrigin.SENDER, "mvp-orb-v1", plaintext)
 
-        val entity = database.recognitionFingerprintDao().getByFingerprintId(id)!!
+        val entity = database.recognitionFingerprintDao().getByFingerprintIdAndOwner(id, OWNER)!!
         val onDisk = File(filesRoot, entity.encryptedPath).readBytes()
         assertFalse("plaintext must never reach disk", onDisk.contentEquals(plaintext))
         assertTrue(entity.encryptedPath.endsWith(".fpw"))
@@ -130,7 +134,7 @@ class EncryptedFingerprintStoreTest {
         }
 
         val id = sut.persist("capsule-b", FingerprintSide.BACK, FingerprintOrigin.SENDER, "mvp-orb-v1", byteArrayOf(3))
-        database.recognitionFingerprintDao().deleteByCapsuleId("capsule-b")
+        database.recognitionFingerprintDao().deleteByCapsuleIdAndOwner("capsule-b", OWNER)
         try {
             sut.decrypt(id)
             throw AssertionError("expected failure")

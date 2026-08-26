@@ -32,6 +32,10 @@ private class XorSealerForRecipient : SecretSealer {
 @Config(sdk = [34])
 class RecipientBaselineCreatorTest {
 
+    private companion object {
+        const val OWNER = "0198f0a0-0000-7000-8000-00000000ow01"
+    }
+
     private lateinit var database: RemanenceLocalDatabase
     private lateinit var filesRoot: File
     private lateinit var creator: RecipientBaselineCreator
@@ -78,7 +82,7 @@ class RecipientBaselineCreatorTest {
 
         creator.createAfterVerifiedReceipt(capsuleId, side(FingerprintSide.FRONT), side(FingerprintSide.BACK))
 
-        val rows = database.recognitionFingerprintDao().getAllByCapsuleId(capsuleId)
+        val rows = database.recognitionFingerprintDao().getAllByCapsuleIdAndOwner(capsuleId, OWNER)
         assertEquals(4, rows.size)
         val recipientRows = rows.filter { it.origin == FingerprintOrigin.RECIPIENT }
         assertEquals(setOf(FingerprintSide.FRONT, FingerprintSide.BACK), recipientRows.map { it.side }.toSet())
@@ -108,7 +112,7 @@ class RecipientBaselineCreatorTest {
         }
 
         // Still exactly one pair after the refused attempt.
-        val rows = database.recognitionFingerprintDao().getAllByCapsuleId(capsuleId)
+        val rows = database.recognitionFingerprintDao().getAllByCapsuleIdAndOwner(capsuleId, OWNER)
             .filter { it.origin == FingerprintOrigin.RECIPIENT }
         assertEquals(2, rows.size)
     }
@@ -139,7 +143,7 @@ class RecipientBaselineCreatorTest {
             }
         }
 
-        val recipientRows = database.recognitionFingerprintDao().getAllByCapsuleId(capsuleId)
+        val recipientRows = database.recognitionFingerprintDao().getAllByCapsuleIdAndOwner(capsuleId, OWNER)
             .filter { it.origin == FingerprintOrigin.RECIPIENT }
         // Only the pre-existing BACK remains; the rolled-back FRONT is gone.
         assertEquals(listOf(FingerprintSide.BACK), recipientRows.map { it.side })

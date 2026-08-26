@@ -330,8 +330,14 @@ class ScanViewModel(
     // Matching over the encrypted local index.
     // ------------------------------------------------------------------
 
+    /**
+     * M2-P03: THE scan index is the owning account's sealed fingerprint rows
+     * only. Without an authenticated local account (logout A) the index is
+     * empty, so a later login as B exposes zero A recognition candidates.
+     */
     private suspend fun buildRoomCandidateIndex(): List<IndexedCandidate> {
-        val rows = database.recognitionFingerprintDao().getAll()
+        val identity = identityProvider() ?: return emptyList()
+        val rows = database.recognitionFingerprintDao().getAllForOwner(identity.userId)
         return rows.groupBy { it.capsuleId }.mapNotNull { (capsuleId, sides) ->
             val preferredOrigin = sides.any {
                 it.origin == FingerprintOrigin.RECIPIENT && it.preferred

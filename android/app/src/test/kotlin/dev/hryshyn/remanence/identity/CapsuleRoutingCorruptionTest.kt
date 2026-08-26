@@ -216,7 +216,7 @@ class CapsuleRoutingCorruptionTest {
         File(filesRoot, "fingerprints"),
         KekBoundSecretSealer(SoftwareKekBoundary(), KekBoundSecretSealer.FINGERPRINT_SEALING_ALIAS),
         database.recognitionFingerprintDao(),
-        ownerUserIdProvider = { "0198f0a0-0000-7000-8000-00000000ow01" },
+        ownerUserIdProvider = { userUuid.toString() },
     )
 
     private class MatchingProcessor(private val bytes: ByteArray) : StillProcessor {
@@ -324,7 +324,7 @@ class CapsuleRoutingCorruptionTest {
         assertTrue(
             "no plaintext recipient baseline may persist for a corrupt row",
             database.recognitionFingerprintDao()
-                .getByCapsuleIdAndOrigin(capsuleUuid.toString(), FingerprintOrigin.RECIPIENT)
+                .getByCapsuleIdAndOriginAndOwner(capsuleUuid.toString(), FingerprintOrigin.RECIPIENT, "0198f0a0-0000-7000-8000-00000000ow01")
                 .isEmpty(),
         )
         database.close()

@@ -54,6 +54,9 @@ fun ScanScreen(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
+            // FIX-STATE-14: named scroll container so layout tests prove the
+            // step content scrolls INSIDE the bounded root region.
+            .testTag("scan_screen_scroll")
             .padding(16.dp),
     ) {
         Text("Scan a postcard", style = MaterialTheme.typography.titleLarge)

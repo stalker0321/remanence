@@ -187,9 +187,12 @@ Control/index acceptance verifies the canonical complete declaration,
 authoritative sender signature, routed/envelope IDs, and the downloaded
 recognition binding/hash/AEAD before fingerprints enter the local index. It
 does not claim undownloaded photo/content declarations were delivered.
-Presentation acceptance requires every declared content/photo ciphertext and
-verifies all bindings plus content-manifest AEAD/layout before any note/photo
-plaintext. Both stages share one canonical statement/ID verifier.
+Background full-cache verifies transport bindings but does not decrypt the
+content manifest. Presentation acceptance runs only after a current physical
+scan identifies the capsule; it requires every declared content/photo
+ciphertext and verifies all bindings plus content-manifest AEAD/layout before
+publishing a grant or exposing any note/photo plaintext. Both stages share one
+canonical statement/ID verifier.
 
 ## 7. Canonical encoding and crypto agility
 

@@ -341,11 +341,13 @@ Sender: `PREPARING -> ENCRYPTED -> UPLOADING -> FINALIZING -> PUBLISHED`. Networ
 Recipient: `DISCOVERED -> INDEX_CACHED -> MATERIAL_CACHED -> FINGERPRINT_ACCEPTED`, with `CORRUPT` as a repair state. `MATERIAL_CACHED` may precede scan for offline policy, but plaintext access still requires a current scan grant. No local/server `OPENED` state exists.
 
 `INDEX_CACHED` follows control/index acceptance of the signed declaration,
-envelope, and recognition blob only. `MATERIAL_CACHED` follows full
-presentation acceptance prerequisites: all required content/photo ciphertext
-is durable and hash-checked. The server's `CIPHERTEXT_SYNCED` corresponds only
-to that latter material state. A physical match with missing material yields a
-connectivity-required state and no partial plaintext.
+envelope, and recognition blob only. `MATERIAL_CACHED` means all required
+content/photo ciphertext is durable and transport-hash checked; background
+cache does not decrypt the content manifest. The server's
+`CIPHERTEXT_SYNCED` corresponds only to that latter material state. After a
+physical match, presentation acceptance performs content AEAD/layout checks
+before publishing a grant. Missing material yields a connectivity-required
+state and no partial plaintext.
 
 ## 10. Idempotency semantics
 

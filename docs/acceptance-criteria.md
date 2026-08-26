@@ -115,7 +115,7 @@ Every item is pass/fail. A screenshot, agent statement, or successful command fr
 - [ ] Duplicate-front test produces back disambiguation or explicit plausible chooser; it never silently guesses.
 - [ ] Wrong postcard produces no match/retry, not a random capsule.
 - [ ] B verifies envelope, IDs, signed statement, hashes, and AEAD before plaintext.
-- [ ] Before note/photo plaintext, presentation acceptance requires every declared content/photo ciphertext and verifies all statement size/hash bindings plus content-manifest AEAD/layout.
+- [ ] Background full-cache verifies transport bindings but never decrypts the content manifest; after a current physical match, presentation acceptance requires every ciphertext and verifies content-manifest AEAD/layout before publishing the grant or note/photo plaintext.
 - [ ] If a physical match occurs before content is cached, UI shows connectivity-required state and exposes zero partial plaintext.
 - [ ] B sees the correct 3–5 photos and note fullscreen.
 - [ ] Successful receipt stores a preferred encrypted recipient front/back fingerprint pair and retains sender fallback.

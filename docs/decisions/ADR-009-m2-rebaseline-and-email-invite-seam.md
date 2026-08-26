@@ -80,14 +80,17 @@ therefore factored around one canonical statement/ID verifier:
    authenticated IDs, recipient envelope context/plaintext, and the downloaded
    recognition blob's declared size/hash and AEAD. Undownloaded content/photo
    bindings remain declarations, never claims of delivered verification.
-2. **Presentation acceptance** requires every content/photo ciphertext,
-   verifies every statement binding size/hash, decrypts and validates the
-   content manifest, and only then permits note/photo plaintext on demand.
+2. **Presentation acceptance**, invoked only after a current physical scan
+   identifies the capsule, requires every content/photo ciphertext, verifies
+   every statement binding size/hash, decrypts and validates the content
+   manifest, and only then publishes a presentation grant and permits
+   note/photo plaintext on demand.
 
 Locally encrypted sender fingerprints may enter the candidate index after the
-first gate. A presentation grant still requires a current physical scan plus
-the second gate. Missing content produces a connectivity-required state and
-no partial plaintext.
+first gate. Background caching performs transport hash verification only for
+content/photos; it does not decrypt the content manifest. A presentation grant
+requires a current physical scan plus the second gate. Missing content
+produces a connectivity-required state and no partial plaintext.
 
 ### Delivery semantics
 

@@ -143,6 +143,14 @@ class ScanViewModel(
     private var matchGeneration: Int = 0
 
     /**
+     * FIX-STATE-10: monotonic guard for DELIVERED-STILL continuations.
+     * resetSession()/beginSession() bump it; a processing result whose
+     * generation no longer matches is fully inert - it may neither touch
+     * queuedStill, nor captureSession, nor match state, nor the controllers.
+     */
+    private var deliveryGeneration: Long = 0L
+
+    /**
      * FIX-REVIEW-02: epoch of the scan session this ViewModel currently holds.
      * beginSession(epoch) fully resets when [epoch] differs - captures, match
      * state, terminal grant, and any live grant are consumed so re-entry is
@@ -155,6 +163,7 @@ class ScanViewModel(
         if (begunEpoch == epoch) return
         begunEpoch = epoch
         matchGeneration++
+        deliveryGeneration++
         captureSession.reset()
         grants.clearAll()
         frontAttempt.reset()
@@ -195,18 +204,40 @@ class ScanViewModel(
     /** Camera bytes for the FRONT; stale deliveries are structurally inert. */
     fun deliverFrontJpeg(jpegBytes: ByteArray) {
         if (captureSession.state != app.postmark.memory.scan.ScanSessionState.AWAITING_FRONT) return
+        val generation = deliveryGeneration
         viewModelScope.launch {
-            acceptProcessed(jpegBytes, frontProcessor, FingerprintSide.FRONT)
+            acceptProcessed(jpegBytes, frontProcessor, FingerprintSide.FRONT, generation)
         }
     }
 
     /** Camera bytes for the BACK; stale deliveries are structurally inert. */
     fun deliverBackJpeg(jpegBytes: ByteArray) {
         if (captureSession.state != app.postmark.memory.scan.ScanSessionState.AWAITING_BACK) return
+        val generation = deliveryGeneration
         viewModelScope.launch {
-            val accepted = acceptProcessed(jpegBytes, backProcessor, FingerprintSide.BACK)
+            val accepted = acceptProcessed(jpegBytes, backProcessor, FingerprintSide.BACK, generation)
             if (accepted && captureSession.readyForMatching) evaluateMatch()
         }
+    }
+
+    /**
+     * FIX-STATE-10: the ONLY authority for whether a resumed pipeline result
+     * may mutate anything. Checked BEFORE every mutation - a stale outcome is
+     * dropped on the floor without touching queuedStill, the session, the
+     * attempt controllers, or match state.
+     */
+    private fun deliveryIsCurrent(
+        generation: Long,
+        side: FingerprintSide,
+    ): Boolean {
+        if (generation != deliveryGeneration) return false
+        val expected = if (side == FingerprintSide.FRONT) {
+            app.postmark.memory.scan.ScanSessionState.AWAITING_FRONT
+        } else {
+            app.postmark.memory.scan.ScanSessionState.AWAITING_BACK
+        }
+        if (captureSession.state != expected) return false
+        return attemptFor(side).hasActiveAttempt
     }
 
     /**
@@ -218,14 +249,19 @@ class ScanViewModel(
         jpegBytes: ByteArray,
         processor: app.postmark.memory.capture.StillProcessor,
         side: FingerprintSide,
+        generation: Long,
     ): Boolean {
         val attempt = attemptFor(side)
         if (!attempt.markProcessing()) return false
         return try {
-            when (
-                val processed =
-                    withContext(cpuDispatcher) { processor.process(jpegBytes) }
-            ) {
+            val processed =
+                withContext(cpuDispatcher) { processor.process(jpegBytes) }
+
+            // FIX-STATE-10: BEFORE ANY MUTATION - a reset/new session during
+            // processing makes this whole outcome disappear without a trace.
+            if (!deliveryIsCurrent(generation, side)) return false
+
+            when (processed) {
                 is ProcessedStill.Rejected -> {
                     attempt.reject(processed.reasons)
                     false
@@ -241,15 +277,23 @@ class ScanViewModel(
                 }
             }
         } catch (cancelled: CancellationException) {
-            queuedStill.set(null)
-            attempt.cancelActiveAttempt()
+            // Teardown touches state only while this delivery still owns it.
+            if (deliveryIsCurrent(generation, side)) {
+                queuedStill.set(null)
+                attempt.cancelActiveAttempt()
+            }
             throw cancelled
         } catch (failure: Exception) {
-            queuedStill.set(null)
-            attempt.fail(failure.message ?: "capture failed")
+            if (deliveryIsCurrent(generation, side)) {
+                queuedStill.set(null)
+                attempt.fail(failure.message ?: "capture failed")
+            }
             false
         }
     }
+
+    /** Module-internal view of THE delivery generation (tests only). */
+    internal fun deliveryGenerationForDiagnostics(): Long = deliveryGeneration
 
     /** Explicit Retake after Rejected/Failed on either side. */
     fun retakeFront() {
@@ -271,6 +315,7 @@ class ScanViewModel(
      */
     fun resetSession() {
         matchGeneration++
+        deliveryGeneration++
         // FIX-STATE-05: an in-flight delivery/match can never write into the
         // fresh flow - active attempts are cancelled cleanly and stale
         // terminal callbacks are structurally inert afterwards.

@@ -93,8 +93,8 @@ class AccountScopedFileRootsTest {
         val roots = AccountScopedFileRoots(filesDir)
 
         val aRoot = roots.accountDirectory(ownerA)
-        val accounts = roots.accountsRootDirectory()
-        assertEquals(File(filesDir, "accounts").canonicalFile, accounts.canonicalFile)
+        val accounts = File(filesDir, "accounts").canonicalFile
+        assertEquals(File(filesDir, "accounts").canonicalFile, accounts)
         assertEquals(File(accounts, ownerAUuid).canonicalFile, aRoot.canonicalFile)
 
         // Every fixed child root is contained beneath the owner directory.
@@ -132,7 +132,7 @@ class AccountScopedFileRootsTest {
         // the canonical accounts root (`outside/`), so this is allowed.
         // The crucial property the resolver enforces is that nothing ends
         // up *outside* the accounts root, regardless of filesDir layout.
-        val accounts = resolver.accountsRootDirectory().canonicalFile
+        val accounts = File(filesDir, "accounts").canonicalFile
         assertTrue(
             "resolved path must still be inside canonical accounts root: ${resolved.path}",
             resolved.canonicalPath.startsWith(accounts.canonicalPath + File.separator),

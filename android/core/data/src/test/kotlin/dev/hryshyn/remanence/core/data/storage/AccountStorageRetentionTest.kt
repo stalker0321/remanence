@@ -6,6 +6,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 
@@ -279,5 +280,172 @@ class AccountStorageRetentionTest {
         assertEquals(snapshot.retry, fileCount(roots.child(ownerB, AccountScopedFileRoots.ChildRoot.RETRY_MATERIAL)))
         assertEquals(snapshot.temp, fileCount(roots.child(ownerB, AccountScopedFileRoots.ChildRoot.TEMP)))
         assertTrue(roots.accountDirectory(ownerB).exists())
+    }
+
+    /**
+     * Regression: a symbolic link nested inside A's temp directory targets
+     * material that lives outside A's account root (B's fingerprint file).
+     * A normal logout of A must unlink the symlink entry but never follow
+     * it, and the B material it pointed at must remain intact afterwards.
+     */
+    @Test
+    fun logoutANeverFollowsSymlinkInTempAndPreservesBTarget() {
+        // Seed B's fingerprint file first so the symlink target exists
+        // when A's cleanup runs.
+        val bFingerprints = roots.child(ownerB, AccountScopedFileRoots.ChildRoot.FINGERPRINTS)
+        check(bFingerprints.mkdirs())
+        val bFingerprintFile = touch(bFingerprints, "fp-b.fpw")
+        val bFingerprintBytes = bFingerprintFile.readBytes()
+        check(bFingerprintBytes.isNotEmpty())
+
+        // Build A temp with one regular file and a symlink to B's file.
+        val aTemp = roots.child(ownerA, AccountScopedFileRoots.ChildRoot.TEMP)
+        check(aTemp.mkdirs())
+        val aScratch = touch(aTemp, "scratch-a.tmp")
+        val aScratchBytes = aScratch.readBytes()
+        val symlinkInTemp = File(aTemp, "escape-to-b")
+        java.nio.file.Files.createSymbolicLink(symlinkInTemp.toPath(), bFingerprintFile.toPath())
+
+        // Sanity: the symlink resolves to the B file before cleanup.
+        assertEquals(
+            bFingerprintFile.canonicalPath,
+            symlinkInTemp.canonicalFile.canonicalPath,
+        )
+
+        retention.onLogout(ownerA)
+
+        // A's regular temp file is gone and the temp directory is removed.
+        assertFalse(aScratch.exists())
+        assertFalse(aTemp.exists())
+        assertFalse(symlinkInTemp.exists() || symlinkInTemp.toPath().toFile().exists())
+
+        // B's targeted material is byte-for-byte intact: the symlink was
+        // unlinked, never followed, and its target was never opened for
+        // deletion.
+        assertTrue("B fingerprint file must survive A logout", bFingerprintFile.exists())
+        assertArrayEquals(bFingerprintBytes, bFingerprintFile.readBytes())
+        assertTrue("B account directory must survive A logout", roots.accountDirectory(ownerB).exists())
+    }
+
+    /**
+     * Regression for the explicit purge path: a symlink in A's account root
+     * that targets a file in B's account root must not delete the B file
+     * when A is purged.
+     */
+    @Test
+    fun purgeAccountANeverFollowsSymlinkAndPreservesBTarget() {
+        val bFingerprints = roots.child(ownerB, AccountScopedFileRoots.ChildRoot.FINGERPRINTS)
+        check(bFingerprints.mkdirs())
+        val bFingerprintFile = touch(bFingerprints, "fp-b.fpw")
+        val bFingerprintBytes = bFingerprintFile.readBytes()
+
+        val aFingerprints = roots.child(ownerA, AccountScopedFileRoots.ChildRoot.FINGERPRINTS)
+        check(aFingerprints.mkdirs())
+        val aScratch = touch(aFingerprints, "fp-a.fpw")
+        val symlinkInA = File(aFingerprints, "escape-to-b")
+        java.nio.file.Files.createSymbolicLink(symlinkInA.toPath(), bFingerprintFile.toPath())
+
+        retention.purgeAccount(ownerA)
+
+        assertFalse("A account root must be removed", roots.accountDirectory(ownerA).exists())
+        assertFalse("A fingerprint file must be removed", aScratch.exists())
+        assertFalse("A symlink entry must be removed", symlinkInA.toPath().toFile().exists())
+        // B material is intact.
+        assertTrue(bFingerprintFile.exists())
+        assertArrayEquals(bFingerprintBytes, bFingerprintFile.readBytes())
+    }
+
+    /**
+     * A symlink to a directory outside the targeted account root must not
+     * delete the target directory: only the symlink itself is unlinked.
+     */
+    @Test
+    fun purgeAccountANeverFollowsSymlinkToForeignDirectory() {
+        // Create a foreign directory outside any account root.
+        val foreign = File(filesDir, "foreign")
+        check(foreign.mkdirs())
+        val foreignFile = touch(foreign, "outside.bin")
+        val foreignBytes = foreignFile.readBytes()
+
+        val aFingerprints = roots.child(ownerA, AccountScopedFileRoots.ChildRoot.FINGERPRINTS)
+        check(aFingerprints.mkdirs())
+        val aScratch = touch(aFingerprints, "fp-a.fpw")
+        val symlinkDir = File(aFingerprints, "escape-dir")
+        java.nio.file.Files.createSymbolicLink(symlinkDir.toPath(), foreign.toPath())
+
+        retention.purgeAccount(ownerA)
+
+        assertFalse(roots.accountDirectory(ownerA).exists())
+        assertFalse(symlinkDir.toPath().toFile().exists())
+        // Foreign material must be intact.
+        assertTrue(foreign.isDirectory)
+        assertTrue(foreignFile.exists())
+        assertArrayEquals(foreignBytes, foreignFile.readBytes())
+    }
+
+    /**
+     * If an in-scope entry cannot be removed (e.g. a directory whose
+     * permissions make it unremovable), the routine must fail explicitly
+     * with the offending path rather than silently leaving a partial
+     * delete behind.
+     */
+    @Test
+    fun cleanupFailsExplicitlyWhenAnInScopeEntryCannotBeRemoved() {
+        val aTemp = roots.child(ownerA, AccountScopedFileRoots.ChildRoot.TEMP)
+        check(aTemp.mkdirs())
+        val aScratch = touch(aTemp, "scratch-a.tmp")
+
+        // Make a subdirectory inside A's temp read-only so its contents
+        // cannot be removed. The walk will fail to delete a file inside it.
+        val readOnlyChild = File(aTemp, "locked")
+        check(readOnlyChild.mkdirs())
+        val stuckFile = File(readOnlyChild, "stuck.bin")
+        stuckFile.writeBytes(byteArrayOf(9, 8, 7))
+        val readOnlyDir = readOnlyChild
+        val originalPermissions = readOnlyDir.setWritable(false, false)
+        val originalOwnerWritable = readOnlyDir.setWritable(false, true)
+        check(originalPermissions || originalOwnerWritable) {
+            "test environment does not support permission-based unremovability"
+        }
+
+        try {
+            try {
+                retention.onLogout(ownerA)
+                fail("expected explicit failure for unremovable in-scope entry")
+            } catch (expected: AccountStorageCleanupException) {
+                // The path reported must be the in-scope entry that could
+                // not be removed, not a path outside the account root.
+                val reported = expected.message ?: ""
+                assertTrue(
+                    "failure message must name the in-scope path: $reported",
+                    reported.contains("stuck.bin") || reported.contains("locked"),
+                )
+            }
+            // A's temp directory must still exist because the cleanup
+            // failed partway: the unremovable entry is still present.
+            assertTrue(
+                "A temp must still exist after a failed cleanup",
+                aTemp.exists(),
+            )
+            assertTrue(
+                "unremovable file must still exist after a failed cleanup",
+                stuckFile.exists(),
+            )
+            assertTrue(
+                "A scratch file must still exist because the walk was aborted",
+                aScratch.exists(),
+            )
+        } finally {
+            // Restore permissions so tearDown can clean up.
+            readOnlyDir.setWritable(true, true)
+            readOnlyDir.setWritable(true, false)
+            aScratch.delete()
+        }
+    }
+
+    private fun assertArrayEquals(expected: ByteArray, actual: ByteArray) {
+        if (!expected.contentEquals(actual)) {
+            fail("byte arrays differ (expected ${expected.size} bytes, got ${actual.size})")
+        }
     }
 }

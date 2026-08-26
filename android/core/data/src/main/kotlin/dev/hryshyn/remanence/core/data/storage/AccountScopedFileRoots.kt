@@ -68,13 +68,6 @@ class AccountScopedFileRoots(
         return ownerPath
     }
 
-    /**
-     * Returns the top-level `filesDir/accounts/` directory. Exposed only
-     * so wiring code (AppContainer) can guarantee the accounts boundary
-     * exists; this resolver never enumerates or returns its children.
-     */
-    fun accountsRootDirectory(): File = accountsRoot()
-
     private fun accountsRoot(): File = File(filesDir, ACCOUNTS_DIR)
 
     private fun ownerDirectory(owner: UserId): File =

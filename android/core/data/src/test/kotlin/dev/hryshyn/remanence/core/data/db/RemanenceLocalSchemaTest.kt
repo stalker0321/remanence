@@ -130,6 +130,122 @@ class RemanenceLocalSchemaTest {
     }
 
     @Test
+    fun exportedSchemaCreatesAndValidatesAtVersionFour() {
+        helper.createDatabase(DB_V4_NAME, 4).use { created ->
+            assertTrue(created.isDatabaseIntegrityOk)
+            created.close()
+        }
+        // Validates the reopened database against the current entity definitions,
+        // including every owner_user_id column and its NOT NULL DEFAULT ''.
+        helper.runMigrationsAndValidate(DB_V4_NAME, 4, true)
+    }
+
+    /**
+     * M2-P02 canonical attribution: the M1 device held exactly ONE local
+     * account, so when exactly one `local_account` row exists at upgrade time
+     * its immutable user ID is stamped onto EVERY legacy material row - the
+     * only attribution the migration ever makes.
+     */
+    @Test
+    fun migrationThreeToFourStampsLegacyRowsWithTheSingleLocalAccount() {
+        helper.createDatabase(DB_STAMP_NAME, 3).use { v3 ->
+            insertLegacyMaterialRows(v3)
+            // Exactly one account: unambiguous ownership.
+            v3.execSQL(
+                "INSERT INTO local_account (user_id, handle_normalized, active_key_bundle_id, " +
+                    "registered_at_epoch_ms, last_authenticated_at_epoch_ms) " +
+                    "VALUES ('0198f0a0-0000-7000-8000-00000000ow01', 'mykola', 'bundle-a', 10, 11)",
+            )
+        }
+        val migrated = helper.runMigrationsAndValidate(
+            DB_STAMP_NAME,
+            4,
+            true,
+            RemanenceLocalDatabase.MIGRATION_3_4,
+        )
+        for (table in SCOPED_TABLES) {
+            migrated.query("SELECT DISTINCT owner_user_id FROM $table").use { cursor ->
+                cursor.moveToFirst()
+                assertEquals(
+                    "table $table must carry the single account as its only owner",
+                    "0198f0a0-0000-7000-8000-00000000ow01",
+                    cursor.getString(0),
+                )
+            }
+        }
+        // Legacy data itself survived untouched.
+        migrated.query("SELECT capsule_id, state FROM outbox_capsule").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals("cap-l", cursor.getString(0))
+            assertEquals("ENCRYPTED", cursor.getString(1))
+        }
+        assertTrue(migrated.isDatabaseIntegrityOk)
+        migrated.close()
+    }
+
+    /**
+     * Refusal-to-guess policy: without an attributable account (logged-out
+     * device at upgrade time) every legacy row stays at the '' sentinel -
+     * never misattributed, never deleted - and '' can never equal a real
+     * owner UUID, so such rows are unreachable through owner-scoped queries.
+     */
+    @Test
+    fun migrationThreeToFourLeavesRowsUnattributedWithoutALocalAccount() {
+        helper.createDatabase(DB_UNATTRIBUTED_NAME, 3).use { v3 ->
+            insertLegacyMaterialRows(v3)
+        }
+        val migrated = helper.runMigrationsAndValidate(
+            DB_UNATTRIBUTED_NAME,
+            4,
+            true,
+            RemanenceLocalDatabase.MIGRATION_3_4,
+        )
+        for (table in SCOPED_TABLES) {
+            migrated.query("SELECT DISTINCT owner_user_id FROM $table").use { cursor ->
+                cursor.moveToFirst()
+                assertEquals("table $table must keep the '' sentinel", "", cursor.getString(0))
+            }
+        }
+        assertTrue(migrated.isDatabaseIntegrityOk)
+        migrated.close()
+    }
+
+    /**
+     * Refusal-to-guess policy, adversarial variant: if the account table ever
+     * held multiple rows the migration must NOT pick one; rows stay ''.
+     */
+    @Test
+    fun migrationThreeToFourRefusesToGuessBetweenMultipleAccounts() {
+        helper.createDatabase(DB_MULTI_ACCOUNT_NAME, 3).use { v3 ->
+            insertLegacyMaterialRows(v3)
+            v3.execSQL(
+                "INSERT INTO local_account (user_id, handle_normalized, active_key_bundle_id, " +
+                    "registered_at_epoch_ms, last_authenticated_at_epoch_ms) " +
+                    "VALUES ('0198f0a0-0000-7000-8000-00000000ow01', 'mykola', 'bundle-a', 10, 11)",
+            )
+            v3.execSQL(
+                "INSERT INTO local_account (user_id, handle_normalized, active_key_bundle_id, " +
+                    "registered_at_epoch_ms, last_authenticated_at_epoch_ms) " +
+                    "VALUES ('0198f0a0-0000-7000-8000-00000000ow02', 'other', 'bundle-b', 20, 21)",
+            )
+        }
+        val migrated = helper.runMigrationsAndValidate(
+            DB_MULTI_ACCOUNT_NAME,
+            4,
+            true,
+            RemanenceLocalDatabase.MIGRATION_3_4,
+        )
+        for (table in SCOPED_TABLES) {
+            migrated.query("SELECT DISTINCT owner_user_id FROM $table").use { cursor ->
+                cursor.moveToFirst()
+                assertEquals("table $table must stay unattributed", "", cursor.getString(0))
+            }
+        }
+        assertTrue(migrated.isDatabaseIntegrityOk)
+        migrated.close()
+    }
+
+    @Test
     fun exportedSchemaCoversAllM1Tables() {
         val schemaJson = String(
             context.assets.open("dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase/1.json").readBytes(),
@@ -184,6 +300,57 @@ class RemanenceLocalSchemaTest {
         const val DB_NAME = "remanence-schema-test.db"
         const val DB_MIGRATION_NAME = "remanence-migration-test.db"
         const val DB_V3_NAME = "remanence-schema-v3-test.db"
+        const val DB_V4_NAME = "remanence-schema-v4-test.db"
         const val REOPEN_DB_NAME = "remanence-reopen-test.db"
+        const val DB_STAMP_NAME = "remanence-v3to4-stamp-test.db"
+        const val DB_UNATTRIBUTED_NAME = "remanence-v3to4-unattributed-test.db"
+        const val DB_MULTI_ACCOUNT_NAME = "remanence-v3to4-multi-account-test.db"
+
+        /** Material tables that carry the immutable owning account from v4 on. */
+        val SCOPED_TABLES =
+            listOf(
+                "outbox_capsule",
+                "outbox_blob",
+                "incoming_capsule",
+                "incoming_envelope",
+                "blob_cache",
+                "recognition_fingerprint",
+            )
+
+
+        /** One valid legacy row per scoped material table, pre-v4 shapes. */
+        fun insertLegacyMaterialRows(v3: androidx.sqlite.db.SupportSQLiteDatabase) {
+            v3.execSQL(
+                "INSERT INTO outbox_capsule (capsule_id, idempotency_key, sender_user_id, recipient_user_id, " +
+                    "sender_key_bundle_id, recipient_key_bundle_id, sender_signing_public_keyset_b64, state, " +
+                    "envelope_path, last_error_code) " +
+                    "VALUES ('cap-l', 'idem-l', 'sender-l', 'recipient-l', 'sbundle-l', 'rbundle-l', NULL, " +
+                    "'ENCRYPTED', '/tmp/env-l.bin', NULL)",
+            )
+            v3.execSQL(
+                "INSERT INTO outbox_blob (blob_id, capsule_id, kind, ordinal, local_ciphertext_path, size_bytes, sha256, " +
+                    "upload_state, attempt_count) VALUES ('blob-l', 'cap-l', 'PHOTO', 0, '/tmp/blob-l.bin', 10, x'00', 'PENDING', 0)",
+            )
+            v3.execSQL(
+                "INSERT INTO incoming_capsule (capsule_id, sender_user_id, recipient_user_id, " +
+                    "sender_signing_key_bundle_id, recipient_encryption_key_bundle_id, protocol_version, " +
+                    "server_status, ready_at_epoch_ms, signed_statement_bytes, material_state) " +
+                    "VALUES ('cap-i', 'sender-i', 'recipient-i', 'skb-i', 'rkb-i', 1, 'READY', 1, x'01', 'DISCOVERED')",
+            )
+            v3.execSQL(
+                "INSERT INTO incoming_envelope (capsule_id, recipient_key_bundle_id, hpke_ciphertext, " +
+                    "transport_sha256, received_at_epoch_ms) VALUES ('cap-i', 'rkb-i', x'02', x'03', 2)",
+            )
+            v3.execSQL(
+                "INSERT INTO blob_cache (blob_id, capsule_id, kind, ordinal, expected_size_bytes, " +
+                    "expected_sha256, local_path, cache_state) " +
+                    "VALUES ('blc-l', 'cap-i', 'RECOGNITION_MANIFEST', NULL, 5, x'04', '/tmp/blc-l.bin', 'CACHED')",
+            )
+            v3.execSQL(
+                "INSERT INTO recognition_fingerprint (fingerprint_id, capsule_id, side, origin, " +
+                    "fingerprint_profile_id, encrypted_path, created_at_epoch_ms, preferred) " +
+                    "VALUES ('fp-l', 'cap-i', 'FRONT', 'SENDER', 'mvp-orb-v1', 'fp/fp-l.bin', 3, 0)",
+            )
+        }
     }
 }

@@ -42,6 +42,7 @@ class IncomingDaosTest {
         readyAt: Long = 1_755_000_000_000,
     ) = IncomingCapsuleEntity(
         capsuleId = capsuleId,
+        ownerUserId = "0198f0a0-0000-7000-8000-00000000ow01",
         senderUserId = "0198f0a0-0000-7000-8000-00000000se01",
         recipientUserId = "0198f0a0-0000-7000-8000-00000000re01",
         senderSigningKeyBundleId = "0198f0a0-0000-7000-8000-00000000sk01",
@@ -56,6 +57,7 @@ class IncomingDaosTest {
     private fun envelope(capsuleId: String = "0198f0a0-0000-7000-8000-00000000ca01") =
         IncomingEnvelopeEntity(
             capsuleId = capsuleId,
+            ownerUserId = "0198f0a0-0000-7000-8000-00000000ow01",
             recipientKeyBundleId = "0198f0a0-0000-7000-8000-00000000rk01",
             hpkeCiphertext = byteArrayOf(9, 8, 7),
             transportSha256 = ByteArray(32) { 4 },

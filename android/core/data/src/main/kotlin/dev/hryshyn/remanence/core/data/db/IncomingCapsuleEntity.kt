@@ -2,6 +2,7 @@ package dev.hryshyn.remanence.core.data.db
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /** Local material state of an incoming capsule (architecture section 6). */
@@ -16,12 +17,27 @@ enum class IncomingMaterialState {
 /**
  * Routed metadata of one incoming ciphertext-only capsule. Contains no note,
  * place, thumbnail, chooser label, or any other plaintext content.
+ *
+ * M2-P02 account scoping: [ownerUserId] is the immutable local account this
+ * delivery belongs to; owner-scoped DAO primitives are the only sanctioned
+ * access path from M2 onward. The '' sentinel exists solely for legacy rows
+ * the canonical v3→v4 migration could not attribute (see
+ * [RemanenceLocalDatabase.MIGRATION_3_4]) and is invisible to every
+ * owner-scoped query.
  */
-@Entity(tableName = "incoming_capsule")
+@Entity(
+    tableName = "incoming_capsule",
+    indices = [
+        Index(value = ["owner_user_id"]),
+    ],
+)
 data class IncomingCapsuleEntity(
     @PrimaryKey
     @ColumnInfo(name = "capsule_id")
     val capsuleId: String,
+    /** Immutable owning local account UUID string. */
+    @ColumnInfo(name = "owner_user_id", defaultValue = "")
+    val ownerUserId: String,
     @ColumnInfo(name = "sender_user_id")
     val senderUserId: String,
     @ColumnInfo(name = "recipient_user_id")

@@ -53,7 +53,7 @@ class RecipientBaselineCreatorTest {
         filesRoot = File(context.filesDir, "recipient-baseline-test")
         filesRoot.mkdirs()
         creator = RecipientBaselineCreator(
-            EncryptedFingerprintStore(filesRoot, XorSealerForRecipient(), database.recognitionFingerprintDao()),
+            EncryptedFingerprintStore(filesRoot, XorSealerForRecipient(), database.recognitionFingerprintDao(), ownerUserIdProvider = { "0198f0a0-0000-7000-8000-00000000ow01" }),
         )
     }
 
@@ -64,7 +64,7 @@ class RecipientBaselineCreatorTest {
     }
 
     private suspend fun seedSenderPair(preferred: Boolean) {
-        val store = EncryptedFingerprintStore(filesRoot, XorSealerForRecipient(), database.recognitionFingerprintDao())
+        val store = EncryptedFingerprintStore(filesRoot, XorSealerForRecipient(), database.recognitionFingerprintDao(), ownerUserIdProvider = { "0198f0a0-0000-7000-8000-00000000ow01" })
         store.persist(capsuleId, FingerprintSide.FRONT, FingerprintOrigin.SENDER, "mvp-orb-v1", "sender-front".toByteArray())
         store.persist(capsuleId, FingerprintSide.BACK, FingerprintOrigin.SENDER, "mvp-orb-v1", "sender-back".toByteArray())
         if (preferred) {
@@ -89,7 +89,7 @@ class RecipientBaselineCreatorTest {
 
         // The recipient baseline is sealed and round-trips.
         val frontRow = recipientRows.single { it.side == FingerprintSide.FRONT }
-        val store = EncryptedFingerprintStore(filesRoot, XorSealerForRecipient(), database.recognitionFingerprintDao())
+        val store = EncryptedFingerprintStore(filesRoot, XorSealerForRecipient(), database.recognitionFingerprintDao(), ownerUserIdProvider = { "0198f0a0-0000-7000-8000-00000000ow01" })
         assertEquals("fp-FRONT", String(store.decrypt(frontRow.fingerprintId)))
     }
 
@@ -124,6 +124,7 @@ class RecipientBaselineCreatorTest {
                     ByteArray(ciphertext.size)
             },
             database.recognitionFingerprintDao(),
+            ownerUserIdProvider = { "0198f0a0-0000-7000-8000-00000000ow01" },
         )
         var attempts = 0
         val flakyCreator = RecipientBaselineCreator(failingStore)

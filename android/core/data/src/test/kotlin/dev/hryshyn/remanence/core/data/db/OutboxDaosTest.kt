@@ -1,10 +1,12 @@
 package dev.hryshyn.remanence.core.data.db
 
 import android.content.Context
+import android.database.sqlite.SQLiteConstraintException
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
 import org.junit.After
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -44,6 +46,7 @@ class OutboxDaosTest {
     ) = OutboxCapsuleEntity(
         capsuleId = capsuleId,
         idempotencyKey = idempotencyKey,
+        ownerUserId = "0198f0a0-0000-7000-8000-00000000ow01",
         senderUserId = "0198f0a0-0000-7000-8000-00000000se01",
         recipientUserId = "0198f0a0-0000-7000-8000-00000000re01",
         senderKeyBundleId = "0198f0a0-0000-7000-8000-00000000sk01",
@@ -60,6 +63,7 @@ class OutboxDaosTest {
 
     private fun blob(blobId: String, kind: String, ordinal: Int?) = OutboxBlobEntity(
         blobId = blobId,
+        ownerUserId = "0198f0a0-0000-7000-8000-00000000ow01",
         capsuleId = "0198f0a0-0000-7000-8000-00000000ca01",
         kind = kind,
         ordinal = ordinal,
@@ -145,10 +149,24 @@ class OutboxDaosTest {
         blobDao.upsertAll(listOf(blob("blob-p3", "PHOTO", 3), blob("blob-p4", "PHOTO", 4)))
         assertEquals(5, blobDao.countByKind("0198f0a0-0000-7000-8000-00000000ca01", "PHOTO"))
 
-        // Re-upserting an occupied (kind, ordinal) slot replaces that slot's
-        // row instead of adding a duplicate ordinal.
-        blobDao.upsertAll(listOf(blob("blob-dup-ordinal", "PHOTO", 0)))
+        // M2-P02: an occupied (kind, ordinal) slot is a HARD conflict - blob
+        // inserts abort instead of upserting, so a colliding write can never
+        // be converted into an update that silently reassigns another
+        // account's row onto this relationship.
+        val ordinalZeroBefore = blobDao.getAllByCapsuleId("0198f0a0-0000-7000-8000-00000000ca01")
+            .single { it.ordinal == 0 }
+        assertThrows(SQLiteConstraintException::class.java) {
+            kotlinx.coroutines.runBlocking {
+                blobDao.upsertAll(listOf(blob("blob-dup-ordinal", "PHOTO", 0)))
+            }
+        }
         assertEquals(5, blobDao.countByKind("0198f0a0-0000-7000-8000-00000000ca01", "PHOTO"))
+        assertEquals(
+            ordinalZeroBefore.blobId,
+            blobDao.getAllByCapsuleId("0198f0a0-0000-7000-8000-00000000ca01")
+                .single { it.ordinal == 0 }
+                .blobId,
+        )
         val ordinals = blobDao.getAllByCapsuleId("0198f0a0-0000-7000-8000-00000000ca01")
             .filter { it.kind == "PHOTO" }
             .map { it.ordinal }

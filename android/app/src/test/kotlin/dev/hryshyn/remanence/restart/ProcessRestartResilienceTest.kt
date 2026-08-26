@@ -94,6 +94,7 @@ class ProcessRestartResilienceTest {
             dev.hryshyn.remanence.core.data.db.OutboxCapsuleEntity(
                 capsuleId = capsuleId.toString(),
                 idempotencyKey = "idem-$capsuleId",
+                ownerUserId = "0198f0a0-0000-7000-8000-00000000ow01",
                 senderUserId = UUID.randomUUID().toString(),
                 recipientUserId = UUID.randomUUID().toString(),
                 senderKeyBundleId = UUID.randomUUID().toString(),
@@ -113,6 +114,7 @@ class ProcessRestartResilienceTest {
             listOf(
                 dev.hryshyn.remanence.core.data.db.OutboxBlobEntity(
                     blobId = UUID.randomUUID().toString(),
+                    ownerUserId = "0198f0a0-0000-7000-8000-00000000ow01",
                     capsuleId = capsuleId.toString(),
                     kind = "PHOTO",
                     ordinal = 0,
@@ -132,6 +134,7 @@ class ProcessRestartResilienceTest {
             listOf(
                 dev.hryshyn.remanence.core.data.db.RecognitionFingerprintEntity(
                     fingerprintId = "fp-1",
+                    ownerUserId = "0198f0a0-0000-7000-8000-00000000ow01",
                     capsuleId = capsuleId.toString(),
                     side = FingerprintSide.FRONT,
                     origin = FingerprintOrigin.RECIPIENT,

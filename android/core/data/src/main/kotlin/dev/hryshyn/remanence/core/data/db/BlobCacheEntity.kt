@@ -2,6 +2,7 @@ package dev.hryshyn.remanence.core.data.db
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /** Private local cache lifecycle of one declared capsule blob. */
@@ -14,12 +15,25 @@ enum class BlobCacheState {
 /**
  * Reference to one locally cached ciphertext blob. The path is always an
  * app-private file path, never a content URI shareable with other apps.
+ *
+ * M2-P02 account scoping: [ownerUserId] binds the cache entry to its
+ * immutable local account ('' only for legacy rows the v3→v4 migration could
+ * not attribute).
  */
-@Entity(tableName = "blob_cache")
+@Entity(
+    tableName = "blob_cache",
+    indices = [
+        Index(value = ["owner_user_id"]),
+        Index(value = ["owner_user_id", "capsule_id"]),
+    ],
+)
 data class BlobCacheEntity(
     @PrimaryKey
     @ColumnInfo(name = "blob_id")
     val blobId: String,
+    /** Immutable owning local account UUID string. */
+    @ColumnInfo(name = "owner_user_id", defaultValue = "")
+    val ownerUserId: String,
     @ColumnInfo(name = "capsule_id")
     val capsuleId: String,
     @ColumnInfo(name = "kind")

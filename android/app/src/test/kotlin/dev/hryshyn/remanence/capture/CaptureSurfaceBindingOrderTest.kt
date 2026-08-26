@@ -23,7 +23,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import postmark.core.recognition.QualityReason
+import dev.hryshyn.remanence.core.recognition.QualityReason
 
 /**
  * Regression proof for the first-camera-entry crash (Create flow exited

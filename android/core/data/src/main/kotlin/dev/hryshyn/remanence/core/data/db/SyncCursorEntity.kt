@@ -7,6 +7,11 @@ import androidx.room.Index
 /**
  * Opaque per-stream synchronization position of one authenticated account
  * (architecture section 6). One row per `(user_id, stream_name)`.
+ *
+ * M2-P02: this table already carries explicit account ownership as half of
+ * its primary key - colliding stream names across accounts are permitted and
+ * isolated by `user_id`. No owner column is added; [SyncCursorDao] is
+ * already fully account-keyed.
  */
 @Entity(
     tableName = "sync_cursor",

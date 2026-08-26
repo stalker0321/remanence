@@ -40,6 +40,13 @@ data class SameAccountCapsuleRequest(
     val recipientUserId: UserId = senderUserId,
     val senderKeyBundleId: KeyBundleId,
     val recipientKeyBundleId: KeyBundleId = senderKeyBundleId,
+    /**
+     * M2-P02: immutable local account that will own every staged outbox row.
+     * M1 self-send defaults to the sender's own account VALUES - the
+     * authenticated local account under the single-account milestone. The
+     * distinct-owner form is passed explicitly once P03 wires scoping.
+     */
+    val ownerUserId: String = senderUserId.toRestString(),
     val senderHandleSnapshot: String,
     val createdAtEpochSeconds: Long,
     /** Exactly 3..5 normalized JPEGs. */
@@ -180,6 +187,7 @@ class SameAccountCapsulePublisher {
         return PreparedOutboxCapsule(
             capsuleId = request.capsuleId.value,
             idempotencyKey = "publish-${request.capsuleId.toRestString()}",
+            ownerUserId = request.ownerUserId,
             senderUserId = senderUser.value,
             recipientUserId = recipientUser.value,
             senderKeyBundleId = senderBundle.value,

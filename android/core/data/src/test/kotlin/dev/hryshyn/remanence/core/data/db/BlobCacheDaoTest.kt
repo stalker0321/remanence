@@ -39,6 +39,7 @@ class BlobCacheDaoTest {
         state: BlobCacheState = BlobCacheState.DOWNLOADING,
     ) = BlobCacheEntity(
         blobId = blobId,
+        ownerUserId = "0198f0a0-0000-7000-8000-00000000ow01",
         capsuleId = "0198f0a0-0000-7000-8000-00000000ca01",
         kind = "PHOTO",
         ordinal = 0,

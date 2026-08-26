@@ -58,6 +58,10 @@ class CapsuleOutboxStagerTest {
     private val recipientBundle = UUID.fromString("2b444444-5555-4666-8777-888888888888")
     private val senderBundle = UUID.fromString("2b555555-6666-4777-8888-999999999999")
 
+    private companion object {
+        const val OWNER: String = "0198f0a0-0000-7000-8000-00000000ab01"
+    }
+
     @Before
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
@@ -75,7 +79,7 @@ class CapsuleOutboxStagerTest {
             .build()
 
     /** Real encryption chain: AEAD artifacts + HPKE envelope over canary payloads. */
-    private fun preparedCapsule(): PreparedOutboxCapsule {
+    private fun preparedCapsule(ownerUserId: String = OWNER): PreparedOutboxCapsule {
         val capsuleKeyset = CapsuleKeysetGenerator().generate()
         val identity = AccountIdentityGenerator().generate()
         val recipientPublic = com.google.crypto.tink.TinkProtoKeysetFormat.parseKeysetWithoutSecret(
@@ -126,6 +130,7 @@ class CapsuleOutboxStagerTest {
         return PreparedOutboxCapsule(
             capsuleId = capsuleId,
             idempotencyKey = "idempotency-$capsuleId",
+            ownerUserId = ownerUserId,
             senderUserId = senderUser,
             recipientUserId = recipientUser,
             senderKeyBundleId = senderBundle,
@@ -163,6 +168,9 @@ class CapsuleOutboxStagerTest {
         assertEquals(senderBundle.toString(), capsuleRow.senderKeyBundleId)
         assertEquals(recipientBundle.toString(), capsuleRow.recipientKeyBundleId)
         assertEquals("dGVzdC1wdWJsaWMta2V5c2V0", capsuleRow.senderSigningPublicKeysetB64)
+        // M2-P02: staged rows carry the immutable owning account.
+        assertEquals(OWNER, capsuleRow.ownerUserId)
+        assertTrue(database.outboxBlobDao().getAllByCapsuleId(capsuleId.toString()).all { it.ownerUserId == OWNER })
 
         val rows = database.outboxBlobDao().getAllByCapsuleId(capsuleId.toString())
         assertEquals(prepared.artifacts.size, rows.size)
@@ -174,6 +182,24 @@ class CapsuleOutboxStagerTest {
                 MessageDigest.getInstance("SHA-256").digest(bytes).toList(),
                 row.sha256.toList(),
             )
+        }
+    }
+
+    @Test
+    fun refusesNonCanonicalOwnerAccountIdsBeforeWritingAnything() = runBlocking {
+        database = newFileBackedDatabase("stager-owner.db")
+        ciphertextDirectory = File(context.filesDir, "outbox-staging-owner")
+        val stager = CapsuleOutboxStager(database, ciphertextDirectory)
+
+        for (invalid in listOf("", "not-a-uuid", OWNER.uppercase())) {
+            try {
+                stager.stage(preparedCapsule(ownerUserId = invalid))
+                throw AssertionError("expected refusal for '$invalid'")
+            } catch (expected: IllegalArgumentException) {
+                assertEquals("owner account id must be a canonical UUID string", expected.message)
+            }
+            // Nothing may have been written for the refused invocation.
+            assertEquals(null, database.outboxCapsuleDao().getByCapsuleId(capsuleId.toString()))
         }
     }
 

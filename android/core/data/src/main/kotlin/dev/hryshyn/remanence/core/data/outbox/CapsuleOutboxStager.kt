@@ -34,10 +34,15 @@ data class PreparedOutboxArtifact(
  * FIX-REVIEW-04: sender and recipient identities are carried SEPARATELY -
  * immutable user IDs, key-bundle IDs, and the sender's public signing keyset
  * export - so persisted verification material never conflates the two ends.
+ *
+ * M2-P02: [ownerUserId] is the immutable local account that will own every
+ * staged row; it is validated as a canonical UUID string before any byte or
+ * row is written (docs/architecture.md section 6).
  */
 data class PreparedOutboxCapsule(
     val capsuleId: UUID,
     val idempotencyKey: String,
+    val ownerUserId: String,
     val senderUserId: UUID,
     val recipientUserId: UUID,
     val senderKeyBundleId: UUID,
@@ -130,6 +135,7 @@ class CapsuleOutboxStager(
                         OutboxCapsuleEntity(
                             capsuleId = prepared.capsuleId.toString(),
                             idempotencyKey = prepared.idempotencyKey,
+                            ownerUserId = prepared.ownerUserId,
                             senderUserId = prepared.senderUserId.toString(),
                             recipientUserId = prepared.recipientUserId.toString(),
                             senderKeyBundleId = prepared.senderKeyBundleId.toString(),
@@ -154,6 +160,7 @@ class CapsuleOutboxStager(
                         prepared.artifacts.mapIndexed { index, artifact ->
                             OutboxBlobEntity(
                                 blobId = artifact.blobId.toString(),
+                                ownerUserId = prepared.ownerUserId,
                                 capsuleId = prepared.capsuleId.toString(),
                                 kind = artifact.kind.name,
                                 ordinal = artifact.ordinal,
@@ -195,6 +202,13 @@ class CapsuleOutboxStager(
 
     private fun validate(prepared: PreparedOutboxCapsule) {
         require(prepared.idempotencyKey.isNotBlank()) { "idempotency key missing" }
+        // M2-P02: the owning account must be a canonical lowercase UUID
+        // string - round-tripping through UUID.fromString must reproduce it
+        // exactly, so non-canonical forms fail before anything is persisted.
+        val canonicalOwner = runCatching { UUID.fromString(prepared.ownerUserId) }.getOrNull()
+        require(canonicalOwner != null && canonicalOwner.toString() == prepared.ownerUserId) {
+            "owner account id must be a canonical UUID string"
+        }
         require(prepared.envelopeCiphertext.isNotEmpty()) { "envelope ciphertext empty" }
         require(prepared.publishStatementBytes.isNotEmpty()) { "publish statement bytes empty" }
         require(prepared.publishStatementSignature.size == PUBLISH_SIGNATURE_LENGTH) {

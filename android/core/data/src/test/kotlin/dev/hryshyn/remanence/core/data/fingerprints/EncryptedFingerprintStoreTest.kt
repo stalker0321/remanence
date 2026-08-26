@@ -55,7 +55,7 @@ class EncryptedFingerprintStoreTest {
     }
 
     private fun store(sealer: SecretSealer = XorSealer()) =
-        EncryptedFingerprintStore(filesRoot, sealer, database.recognitionFingerprintDao())
+        EncryptedFingerprintStore(filesRoot, sealer, database.recognitionFingerprintDao(), ownerUserIdProvider = { "0198f0a0-0000-7000-8000-00000000ow01" })
 
     @Test
     fun persistEncryptsAtRestAndDecryptsRoundtrip() = runBlocking {
@@ -96,7 +96,7 @@ class EncryptedFingerprintStoreTest {
                 throw IllegalStateException("database exploded")
             }
         }
-        val sut = EncryptedFingerprintStore(filesRoot, XorSealer(), explodingDao)
+        val sut = EncryptedFingerprintStore(filesRoot, XorSealer(), explodingDao, ownerUserIdProvider = { "0198f0a0-0000-7000-8000-00000000ow01" })
 
         try {
             sut.persist("capsule-a", FingerprintSide.BACK, FingerprintOrigin.SENDER, "mvp-orb-v1", byteArrayOf(9))

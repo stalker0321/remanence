@@ -42,6 +42,7 @@ class RecognitionFingerprintDaoTest {
         preferred: Boolean = false,
     ) = RecognitionFingerprintEntity(
         fingerprintId = id,
+        ownerUserId = "0198f0a0-0000-7000-8000-00000000ow01",
         capsuleId = "0198f0a0-0000-7000-8000-00000000ca01",
         side = side,
         origin = origin,

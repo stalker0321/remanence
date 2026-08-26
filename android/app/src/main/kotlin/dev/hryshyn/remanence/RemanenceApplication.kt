@@ -75,6 +75,7 @@ class AppContainer(
             .addMigrations(
                 RemanenceLocalDatabase.MIGRATION_1_2,
                 RemanenceLocalDatabase.MIGRATION_2_3,
+                RemanenceLocalDatabase.MIGRATION_3_4,
             )
             .build()
     }
@@ -82,11 +83,17 @@ class AppContainer(
     /** Non-exportable Android Keystore KEKs; overridable for JVM tests. */
     val kekBoundary: KekBoundary = kekBoundaryOverride ?: AndroidKeystoreKekBoundary()
 
+    /**
+     * M2-P02: every sealed fingerprint row is attributed to the authenticated
+     * local account at write time. All persistence flows run post-auth, so
+     * the row always exists when this resolves.
+     */
     val fingerprintPersistence: SealedFingerprintPersistence by lazy {
         EncryptedFingerprintStore(
             filesRoot = File(appContext.filesDir, "fingerprints"),
             sealer = KekBoundSecretSealer(kekBoundary, KekBoundSecretSealer.FINGERPRINT_SEALING_ALIAS),
             dao = database.recognitionFingerprintDao(),
+            ownerUserIdProvider = { currentAccountStore.loadEntity()?.userId.orEmpty() },
         )
     }
 

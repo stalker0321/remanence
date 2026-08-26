@@ -16,11 +16,18 @@ class DuplicateFingerprintException(capsuleId: String, side: FingerprintSide) :
  * plus a Room reference row (docs/architecture.md section 6, security.md
  * section 11). Plaintext never touches disk: sealing happens before the
  * atomic write, and any mid-way failure removes artifacts this call created.
+ *
+ * M2-P02 account scoping: every persisted row carries the immutable owning
+ * local account from [ownerUserIdProvider]. Like the injected clock and id
+ * factories, the provider is resolved per call; production wiring resolves it
+ * against the authenticated `local_account` row, so rows written without an
+ * active account are impossible through auth-gated flows.
  */
 class EncryptedFingerprintStore(
     private val filesRoot: File,
     private val sealer: SecretSealer,
     private val dao: RecognitionFingerprintDao,
+    private val ownerUserIdProvider: suspend () -> String,
     private val nowEpochMs: () -> Long = System::currentTimeMillis,
     private val newId: () -> String = { UUID.randomUUID().toString() },
 ) : SealedFingerprintPersistence {
@@ -33,7 +40,7 @@ class EncryptedFingerprintStore(
 
     /**
      * Seals [plaintextBytes], writes them atomically, and records the strict
-     * reference row. Returns the generated fingerprint ID.
+     * owner-scoped reference row. Returns the generated fingerprint ID.
      */
     override suspend fun persist(
         capsuleId: String,
@@ -59,6 +66,7 @@ class EncryptedFingerprintStore(
                 listOf(
                     RecognitionFingerprintEntity(
                         fingerprintId = fingerprintId,
+                        ownerUserId = ownerUserIdProvider(),
                         capsuleId = capsuleId,
                         side = side,
                         origin = origin,

@@ -30,6 +30,28 @@ interface IncomingCapsuleDao {
 
     @Query("DELETE FROM incoming_capsule")
     suspend fun clear()
+
+    // M2-P02 account-scoped primitives: ownership-guarded reads and CAS
+    // transitions for P03's production conversion.
+
+    /** Resolves the incoming capsule ONLY when owned by [ownerUserId]. */
+    @Query(
+        "SELECT * FROM incoming_capsule " +
+            "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId",
+    )
+    suspend fun getByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String): IncomingCapsuleEntity?
+
+    /** Owner-guarded material-state CAS; 0 rows means refused. */
+    @Query(
+        "UPDATE incoming_capsule SET material_state = :newState " +
+            "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId AND material_state IN (:allowedFrom)",
+    )
+    suspend fun transitionMaterialStateForOwner(
+        capsuleId: String,
+        ownerUserId: String,
+        newState: IncomingMaterialState,
+        allowedFrom: List<IncomingMaterialState>,
+    ): Int
 }
 
 @Dao
@@ -43,4 +65,11 @@ interface IncomingEnvelopeDao {
 
     @Query("DELETE FROM incoming_envelope")
     suspend fun clear()
+
+    /** M2-P02: resolves the envelope ONLY when owned by [ownerUserId]. */
+    @Query(
+        "SELECT * FROM incoming_envelope " +
+            "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId",
+    )
+    suspend fun getByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String): IncomingEnvelopeEntity?
 }

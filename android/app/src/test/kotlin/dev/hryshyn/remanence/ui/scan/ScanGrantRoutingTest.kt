@@ -44,18 +44,18 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import postmark.core.crypto.AccountIdentityGenerator
-import postmark.core.data.db.FingerprintOrigin
-import postmark.core.data.db.FingerprintSide
-import postmark.core.data.db.PostmarkLocalDatabase
-import postmark.core.data.fingerprints.EncryptedFingerprintStore
-import postmark.core.data.outbox.CapsuleOutboxStager
-import postmark.core.model.CapsuleId
-import postmark.core.model.KeyBundleId
-import postmark.core.model.UserId
-import postmark.core.recognition.RecognitionProfile
-import postmark.core.recognition.ScanGrantManager
-import postmark.core.recognition.FingerprintSide as RecognitionSide
+import dev.hryshyn.remanence.core.crypto.AccountIdentityGenerator
+import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
+import dev.hryshyn.remanence.core.data.db.FingerprintSide
+import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
+import dev.hryshyn.remanence.core.data.fingerprints.EncryptedFingerprintStore
+import dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager
+import dev.hryshyn.remanence.core.model.CapsuleId
+import dev.hryshyn.remanence.core.model.KeyBundleId
+import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.core.recognition.ScanGrantManager
+import dev.hryshyn.remanence.core.recognition.FingerprintSide as RecognitionSide
 
 /**
  * Physical-device regression for the verified-grant handoff: a REAL verified
@@ -76,7 +76,7 @@ class ScanGrantRoutingTest {
     private val testDispatcher = UnconfinedTestDispatcher()
 
     private lateinit var context: Context
-    private lateinit var database: PostmarkLocalDatabase
+    private lateinit var database: RemanenceLocalDatabase
     private lateinit var filesRoot: File
     private lateinit var outboxDir: File
 
@@ -91,7 +91,7 @@ class ScanGrantRoutingTest {
     fun setUp() {
         Dispatchers.setMain(testDispatcher)
         context = ApplicationProvider.getApplicationContext()
-        database = Room.inMemoryDatabaseBuilder(context, PostmarkLocalDatabase::class.java)
+        database = Room.inMemoryDatabaseBuilder(context, RemanenceLocalDatabase::class.java)
             .allowMainThreadQueries()
             .build()
         filesRoot = File(context.filesDir, "grant-routing-artifacts").apply { mkdirs() }
@@ -129,12 +129,13 @@ class ScanGrantRoutingTest {
             KekBoundSecretSealer.FINGERPRINT_SEALING_ALIAS,
         ),
         database.recognitionFingerprintDao(),
+        ownerUserIdProvider = { "0198f0a0-0000-7000-8000-00000000ow01" },
     )
 
     private fun syntheticFingerprint(seed: Int, side: RecognitionSide): ByteArray {
         val profile = RecognitionProfile.mvpOrbV1()
         val keypoints = List(64) {
-            postmark.core.recognition.FingerprintKeypoint(
+            dev.hryshyn.remanence.core.recognition.FingerprintKeypoint(
                 xNormalized = (it % 8) / 8.0,
                 yNormalized = (it / 8) / 8.0,
                 scaleNormalized = 1.0,
@@ -143,7 +144,7 @@ class ScanGrantRoutingTest {
                 octave = 0,
             )
         }
-        val fp = postmark.core.recognition.PostcardFingerprint(
+        val fp = dev.hryshyn.remanence.core.recognition.PostcardFingerprint(
             profileId = profile.profileId,
             side = side,
             canonicalWidthPx = profile.capture.canonicalLongEdgePx,
@@ -151,9 +152,9 @@ class ScanGrantRoutingTest {
             coarseHash64 = seed.toLong(),
             keypoints = keypoints,
             descriptors = List(64) { i -> ByteArray(32) { ((it * 7 + i * 13 + seed * 29) and 0xFF).toByte() } },
-            quality = postmark.core.recognition.ExtractionQuality(200.0, 90.0, 0.01, 0.85),
+            quality = dev.hryshyn.remanence.core.recognition.ExtractionQuality(200.0, 90.0, 0.01, 0.85),
         )
-        return postmark.core.recognition.FingerprintCodec.serialize(fp)
+        return dev.hryshyn.remanence.core.recognition.FingerprintCodec.serialize(fp)
     }
 
     /** Publishes one real self-send capsule whose fingerprints match the scan. */

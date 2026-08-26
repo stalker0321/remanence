@@ -28,11 +28,21 @@ enum class OutboxCapsuleState {
  * Legacy same-account rows pre-dating v3 keep NULL here and consumers fall
  * back to the authenticated account - self-send stays natural without any
  * equality assumption.
+ *
+ * M2-P02 account scoping: [ownerUserId] is the immutable local account that
+ * owns this row (docs/architecture.md section 6). Capsule IDs stay globally
+ * unique client-generated UUIDs - uniqueness constraints deliberately remain
+ * capsule-scoped, NOT owner-composed, so a second account can never join its
+ * blobs onto another account's capsule. Only the canonical migration policy
+ * may write the empty sentinel: legacy v3 rows upgraded without exactly one
+ * `local_account` row stay unattributed ('') and are unreachable through
+ * every owner-scoped DAO primitive (fail-safe isolation, never guessed).
  */
 @Entity(
     tableName = "outbox_capsule",
     indices = [
         Index(value = ["idempotency_key"], unique = true),
+        Index(value = ["owner_user_id"]),
     ],
 )
 data class OutboxCapsuleEntity(
@@ -41,6 +51,9 @@ data class OutboxCapsuleEntity(
     val capsuleId: String,
     @ColumnInfo(name = "idempotency_key")
     val idempotencyKey: String,
+    /** Immutable owning local account UUID string; '' only for legacy rows migrated without an attributable account. */
+    @ColumnInfo(name = "owner_user_id", defaultValue = "")
+    val ownerUserId: String,
     @ColumnInfo(name = "sender_user_id")
     val senderUserId: String?,
     @ColumnInfo(name = "recipient_user_id")

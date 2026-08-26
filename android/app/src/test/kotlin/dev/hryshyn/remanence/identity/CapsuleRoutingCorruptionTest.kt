@@ -108,6 +108,7 @@ class CapsuleRoutingCorruptionTest {
     ) = OutboxCapsuleEntity(
         capsuleId = capsuleUuid.toString(),
         idempotencyKey = "idem",
+        ownerUserId = "0198f0a0-0000-7000-8000-00000000ow01",
         senderUserId = senderUserId,
         recipientUserId = recipientUserId,
         senderKeyBundleId = senderBundleId,
@@ -215,6 +216,7 @@ class CapsuleRoutingCorruptionTest {
         File(filesRoot, "fingerprints"),
         KekBoundSecretSealer(SoftwareKekBoundary(), KekBoundSecretSealer.FINGERPRINT_SEALING_ALIAS),
         database.recognitionFingerprintDao(),
+        ownerUserIdProvider = { "0198f0a0-0000-7000-8000-00000000ow01" },
     )
 
     private class MatchingProcessor(private val bytes: ByteArray) : StillProcessor {

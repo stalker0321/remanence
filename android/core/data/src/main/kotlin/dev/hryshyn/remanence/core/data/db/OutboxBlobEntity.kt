@@ -16,12 +16,16 @@ enum class OutboxBlobUploadState {
     indices = [
         Index(value = ["capsule_id"]),
         Index(value = ["capsule_id", "kind", "ordinal"], unique = true),
+        Index(value = ["owner_user_id"]),
     ],
 )
 data class OutboxBlobEntity(
     @PrimaryKey
     @ColumnInfo(name = "blob_id")
     val blobId: String,
+    /** Immutable owning local account UUID string; '' only for legacy rows migrated without an attributable account. */
+    @ColumnInfo(name = "owner_user_id", defaultValue = "")
+    val ownerUserId: String,
     @ColumnInfo(name = "capsule_id")
     val capsuleId: String,
     @ColumnInfo(name = "kind")

@@ -217,6 +217,13 @@ This gate prevents accidental gallery-like navigation in the honest application.
 
 Room contains infrastructure records only. No DAO may expose a query named or shaped as “all memories” to UI code.
 
+From M2 onward every capsule/index/outbox/blob/cursor record and app-private
+file root is scoped to the authenticated local account ID. A worker carries
+only an opaque resource ID plus expected account ID and revalidates that scope
+before every durable transition. Logout/account switch cancels scoped work and
+scan grants. Retained ciphertext may remain for the same account, but another
+account has no DAO, candidate-index, worker, or presentation path to it.
+
 ### Tables
 
 `local_account`
@@ -263,6 +270,9 @@ Room contains infrastructure records only. No DAO may expose a query named or sh
 - state: `PREPARING`, `ENCRYPTED`, `UPLOADING`, `FINALIZING`, `PUBLISHED`, `RETRYABLE_FAILURE`, `TERMINAL_FAILURE`;
 - encrypted artifact paths and last structured error;
 - no plaintext note or image bytes.
+- owner account ID and an app-private reference to sender-owned wrapped
+  capsule-key retry material; that wrapped key is never a Room blob or server
+  upload and is removed after publish/abort/terminal cleanup.
 
 `outbox_blob`
 
@@ -359,7 +369,10 @@ Only authenticated sender may create/upload/finalize its draft. Only the bound r
 - HPKE ciphertext, byte length, SHA-256 transport hash;
 - created timestamp.
 
-MVP stores one recipient envelope. A future sender/recovery envelope requires an explicit product and protocol change.
+M2 stores one recipient envelope. ADR-009 reserves a future sender/key-delivery
+purpose but does not add a second envelope or pending-recipient mechanism to
+M2. A longer-lived/server-routed sender envelope requires an explicit product,
+protocol, and threat-model decision.
 
 ### `capsule_blobs`
 
@@ -413,19 +426,33 @@ stateDiagram-v2
 
 If the recipient key bundle was retired after lookup, finalize fails with `RECIPIENT_KEY_STALE`; the client re-resolves, re-envelopes the same capsule key for the new key, and retries finalize. Content blobs do not need re-encryption.
 
+The sender recovers that key from account/capsule/key-bundle-bound durable
+wrapped retry material staged with the outbox, not from the recipient envelope.
+It survives process death, is never uploaded, and is deleted after a terminal
+outbox outcome.
+
 ### Incoming sync bootstrap
 
 Recognition before download is a bootstrap problem. The solution is routing, not server-side CV:
 
 1. The authenticated client lists ready capsules addressed to its immutable user ID.
 2. It downloads each small HPKE envelope, signed statement, and encrypted recognition manifest.
-3. It opens the envelope and decrypts only the recognition manifest locally.
-4. It persists sender fingerprints re-encrypted under a local fingerprint-storage key, or retains the encrypted manifest plus key reference.
+3. A shared canonical verifier validates statement encoding/layout, the
+   authoritative sender signing bundle, routed/envelope IDs, and the downloaded
+   recognition declaration/hash. It opens the envelope and verifies the
+   recognition AEAD; undownloaded content/photo bindings remain declarations.
+4. It persists sender fingerprints and chooser hints re-encrypted under the
+   account-scoped local fingerprint-storage key, then drops temporary plaintext.
 5. The UI receives no enumerable capsule list, counts, thumbnails, notes, or places.
 
 The server can technically serve content ciphertext before a scan because it cannot prove postcard possession. The official app downloads content/photos only after a scan match unless an explicit offline-cache policy has already cached ciphertext. Plaintext content is never materialized without a current scan grant.
 
 Incoming sync runs immediately after login, when the app returns to foreground and its cursor is stale, and once at the start of Scan when network is available. A bounded opportunistic WorkManager job may refresh in the background; push notifications are not required. A first receipt with no locally cached index and no network reports that synchronization is required.
+
+`INDEX_CACHED` is local-only. `CIPHERTEXT_SYNCED` is acknowledged to the
+server only after the content manifest and every photo ciphertext are durably
+cached and hash-checked. Page upsert and cursor state are account-scoped; a
+cursor never advances ahead of the documented durable metadata transaction.
 
 Chooser hints remain inside the encrypted recognition manifest or are re-encrypted under the same local fingerprint-storage boundary. Room never stores sender-handle snapshots, dates, or place labels as plaintext columns.
 
@@ -450,7 +477,7 @@ Chooser hints remain inside the encrypted recognition manifest or are re-encrypt
 
 ## 11. Sync and retry strategy
 
-- WorkManager uses one unique outgoing chain per capsule and one unique incoming-sync chain per authenticated account.
+- WorkManager uses one unique outgoing chain per `(account_id, capsule_id)` and one unique incoming-sync chain per authenticated account. Worker input contains no token, key, email, handle, envelope, or plaintext.
 - Network calls are idempotent. Client-generated UUIDs identify capsule/blob resources; mutating requests also carry an idempotency key and request hash.
 - Upload retry is per encrypted blob. A completed hash-identical blob is not transferred again.
 - Finalize is repeatable and returns the existing `READY` result for an identical request.
@@ -475,6 +502,8 @@ Chooser hints remain inside the encrypted recognition manifest or are re-encrypt
 | Network unavailable on first receipt | Match may succeed from cached index; content opens only if ciphertext is cached. |
 | Database/object storage restart | Migrations and durable blob state allow retry without duplicate capsule creation. |
 | Device lost before recovery exists | Auth account may be recovered; old E2EE content is unavailable. Future capsules use a new key bundle. |
+| Logout A then login B | Cancel A work/grants; every B query returns no A candidate, hint, outbox, cursor, or file reference. |
+| Process dies before stale-key retry | Reload sender-owned wrapped capsule key; re-envelope/re-sign only; artifact ciphertext remains byte-identical. |
 
 ## 13. Build, configuration, and observability
 

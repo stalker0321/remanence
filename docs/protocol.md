@@ -254,6 +254,11 @@ Returns the immutable public portion of an `ACTIVE`, `RETIRED`, or `REVOKED` bun
 
 ## 7. Capsule draft and upload endpoints
 
+M2 accepts only `RecipientTarget.ExistingUser`: the recipient already has an
+immutable user ID and active key bundle. The JSON fields below are that
+variant's wire representation. `PendingEmail` is reserved for M2.x in ADR-009
+and has no v1 endpoint, table, discriminator value, or placeholder behavior.
+
 ### `POST /v1/capsules`
 
 Creates an idempotent `DRAFT`. The authenticated user is always the sender.
@@ -297,6 +302,12 @@ The service hashes while streaming to a temporary object, compares length/hash, 
 
 Within one database transaction, finalize verifies draft ownership/state, non-expiry, current and matching user/key IDs, deterministic v1 statement structure, sender Ed25519 signature, exact stored blob declarations, envelope limits/hash, and artifact cardinality. It then inserts envelope/delivery state and marks `READY`.
 
+The recipient key bundle must be ACTIVE and owned by the recipient. The sender
+signing bundle is resolved by ID, must belong to the sender, and must be
+non-REVOKED; a valid RETIRED sender bundle is accepted for an existing draft.
+Neither an uploaded public key nor locally persisted adjacent key material is
+an authoritative verification source.
+
 A failed transaction leaves an unrouteable `DRAFT`. Identical finalize replay returns existing `READY`; different data returns `FINALIZE_CONFLICT`. `RECIPIENT_KEY_STALE` requires re-resolve, re-envelope, statement update, and re-sign, but not photo re-encryption.
 
 ### `DELETE /v1/capsules/{capsule_id}`
@@ -319,11 +330,22 @@ Only the bound recipient (or sender while its draft is unfinished) may download 
 
 Recipient may idempotently change server delivery state from `AVAILABLE` to `CIPHERTEXT_SYNCED`. This does not mean physically received, recognized, decrypted, or opened and is never queryable by the sender in MVP.
 
+The client sends this only after the recognition manifest, content manifest,
+and every declared photo ciphertext are durably cached and independently
+hash-checked. Caching the recognition index alone never triggers this call.
+
 ## 9. Client state machines
 
 Sender: `PREPARING -> ENCRYPTED -> UPLOADING -> FINALIZING -> PUBLISHED`. Network transitions may enter `RETRYABLE_FAILURE`; incompatible/corrupt/rejected state enters `TERMINAL_FAILURE`.
 
 Recipient: `DISCOVERED -> INDEX_CACHED -> MATERIAL_CACHED -> FINGERPRINT_ACCEPTED`, with `CORRUPT` as a repair state. `MATERIAL_CACHED` may precede scan for offline policy, but plaintext access still requires a current scan grant. No local/server `OPENED` state exists.
+
+`INDEX_CACHED` follows control/index acceptance of the signed declaration,
+envelope, and recognition blob only. `MATERIAL_CACHED` follows full
+presentation acceptance prerequisites: all required content/photo ciphertext
+is durable and hash-checked. The server's `CIPHERTEXT_SYNCED` corresponds only
+to that latter material state. A physical match with missing material yields a
+connectivity-required state and no partial plaintext.
 
 ## 10. Idempotency semantics
 
@@ -369,6 +391,16 @@ Unexpected crypto/parsing detail is not returned. `retryable` is true only for t
 | Incoming page | default 50, max 100 |
 
 Image normalization strips EXIF. Limits are centralized in shared fixtures and checked independently by Android and server.
+
+### Future email-addressed recipient
+
+Email is routing/identity metadata, never an encryption key or postcard
+credential. Protocol v1 includes `recipient_user_id` in every artifact AAD and
+the signed statement. Therefore a recipient who does not yet exist cannot be
+supported merely by uploading a new envelope later. M2.x must first choose
+either a pending UUID reserved as the exact future immutable user ID or a new
+protocol version with a stable recipient-target binding. This choice is
+deferred by ADR-009; re-encrypting all artifacts is not the intended flow.
 
 ## 13. Compatibility and test fixtures
 

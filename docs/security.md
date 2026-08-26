@@ -171,6 +171,26 @@ The context protobuf must be fully populated, protocol version exactly 1, typed 
 
 The server never receives the envelope plaintext. Envelope ciphertext is safe to route/store but is still excluded from logs.
 
+### 6.6 Sender-owned retry wrapping
+
+For M2 upload retry, Android also keeps a local sender-readable wrapped copy
+of the capsule keyset. It is not a recipient envelope and is never uploaded.
+Its versioned associated data binds local account, capsule, sender bundle,
+protocol, and retry purpose. This is the only source for process-death-safe
+`RECIPIENT_KEY_STALE` re-envelope; it is removed after successful finalize,
+abort, or terminal cleanup. The recipient envelope cannot serve this purpose
+because a distinct sender has no recipient private key.
+
+### 6.7 Staged recipient verification
+
+Control/index acceptance verifies the canonical complete declaration,
+authoritative sender signature, routed/envelope IDs, and the downloaded
+recognition binding/hash/AEAD before fingerprints enter the local index. It
+does not claim undownloaded photo/content declarations were delivered.
+Presentation acceptance requires every declared content/photo ciphertext and
+verifies all bindings plus content-manifest AEAD/layout before any note/photo
+plaintext. Both stages share one canonical statement/ID verifier.
+
 ## 7. Canonical encoding and crypto agility
 
 - REST control messages use JSON, but all signed/encrypted logical payloads use deterministic Protocol Buffers (protobuf-lite on Android).
@@ -186,6 +206,13 @@ The handle lookup response contains current display handle, immutable user ID, a
 
 The publish statement/envelope bind the immutable user/key IDs, not the handle string. Finalize rejects a retired/revoked recipient bundle with `RECIPIENT_KEY_STALE`. The sender then re-resolves and creates only a new envelope for the same capsule key and statement version updated with the new key ID; ciphertext content must be re-signed because the statement binds the recipient key ID, but photo ciphertext need not be re-encrypted.
 
+Finalize resolves bundles by ID from the authoritative directory/database. A
+recipient bundle must be ACTIVE and owned by the recipient. A sender signing
+bundle must be owned by the sender and non-REVOKED; a valid RETIRED sender
+bundle remains acceptable for the draft it signed so rotation during upload
+does not silently destroy authenticated work. Request-adjacent public key
+material is never a trust source.
+
 Directory responses are not cached beyond the current create flow in MVP. This narrows stale-key and wrong-handle risk.
 
 ## 9. Key rotation, logout, and account deletion
@@ -193,7 +220,7 @@ Directory responses are not cached beyond the current create flow in MVP. This n
 - Encryption/signing key bundles rotate together in MVP to keep one directory snapshot.
 - `RETIRED` keys remain usable for decrypting/verifying old capsules; they are not returned for new encryption.
 - `REVOKED` denotes suspected compromise. Existing content confidentiality cannot be restored retroactively. MVP fails closed instead of presenting a capsule authenticated only by a revoked bundle, and uses a new bundle for future capsules.
-- Logout removes session credentials, unwrapped keysets, plaintext caches, and scan grants from the running account context. Wrapped keys/ciphertext may remain for the same account unless the user chooses device-data removal.
+- Logout removes session credentials, unwrapped keysets, plaintext caches, and scan grants from the running account context and cancels its WorkManager tags. Wrapped keys/ciphertext may remain for the same account unless the user chooses device-data removal, but every row/file/query is account-scoped and another login cannot enumerate or resume it.
 - Account deletion is a separate destructive operation. Server rows/blobs can be deleted, but copies already downloaded by recipients cannot be remotely erased. MVP need not ship account deletion UI before M2, but schema ownership must support it.
 
 ## 10. Device loss and recovery path
@@ -267,12 +294,19 @@ Before M2 passes, automated tests must prove:
 - access control rejects unrelated authenticated users;
 - refresh-token rotation/reuse detection and password-hash verification work;
 - process death invalidates scan grants and does not persist plaintext navigation state.
+- logout A/login B exposes no A outbox, cursor, fingerprint, chooser hint, blob, or worker transition;
+- sender retry wrapping survives process death, rejects wrong account/key/AAD, supports stale-recipient re-envelope without artifact changes, and is cleaned at its terminal boundary;
+- index-only sync never produces `CIPHERTEXT_SYNCED` or note/photo plaintext;
+- PostgreSQL finalize and BlobStore failure injection prove rollback/orphan cleanup without claiming cross-system atomicity.
 
 ## 15. Residual risks requiring explicit future decisions
 
 1. Key transparency/out-of-band verification: required to defend fully against a malicious directory or first-contact key substitution.
 2. Recovery UX: required before claiming durable access after device loss.
 3. Multiple devices: requires secure private-key transfer and fingerprint sync semantics.
+4. Email invitation target identity: protocol v1 binds `recipient_user_id` in
+   every artifact AAD. ADR-009 defers choosing a reserved future user ID versus
+   a new protocol version; envelope-only re-wrap is insufficient.
 4. Compromised sender device: content captured/encrypted on that device cannot be trusted or made secret from it.
 5. Metadata minimization: sender/recipient graph and timing remain visible to the service; hiding them would require a materially different routing system and is not justified for MVP.
 

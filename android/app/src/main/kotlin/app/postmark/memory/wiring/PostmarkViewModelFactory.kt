@@ -54,6 +54,8 @@ class PostmarkViewModelFactory(
                 File(container.appFilesRoot, "outbox-ciphertext"),
             ),
             profile = postmark.core.recognition.RecognitionProfile.mvpOrbV1(),
+            // FIX-STATE-13: the staging ROOT; each publication owns
+            // create-staging/<capsule UUID>/ inside it.
             stagingDirectory = File(container.appFilesRoot, "create-staging"),
             openPhotoSource = { pickerId ->
                 val uri = android.net.Uri.parse(pickerId)

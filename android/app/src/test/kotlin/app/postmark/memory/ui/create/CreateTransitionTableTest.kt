@@ -68,6 +68,10 @@ class CreateTransitionTableTest {
             .allowMainThreadQueries()
             .build()
         stagingDir = File(context.filesDir, "transition-staging").apply { mkdirs() }
+        // FIX-STATE-13: ciphertext outbox lives OUTSIDE the staging root, as
+        // in production wiring; the emptiness assertions below stay plaintext
+        // assertions.
+        File(context.filesDir, "transition-outbox").apply { mkdirs() }.deleteRecursively()
     }
 
     @After
@@ -216,7 +220,10 @@ class CreateTransitionTableTest {
             accessTokenProvider = { null },
             identityProvider = identityProvider,
             persistence = persistence,
-            outboxStager = postmark.core.data.outbox.CapsuleOutboxStager(database, stagingDir),
+            outboxStager = postmark.core.data.outbox.CapsuleOutboxStager(
+                database,
+                File(stagingDir.parentFile, "transition-outbox"),
+            ),
             profile = RecognitionProfile.mvpOrbV1(),
             stagingDirectory = stagingDir,
             openPhotoSource = openPhotoSource,

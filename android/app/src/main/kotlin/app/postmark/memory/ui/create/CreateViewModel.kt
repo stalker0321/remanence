@@ -52,6 +52,11 @@ data class SenderIdentitySnapshot(
  * route. Plaintext staging lives only inside [publish] and is cleared in a
  * finally-equivalent path; cancellation tears the session down.
  *
+ * FIX-STATE-13: every publication owns the isolated staging subdirectory
+ * `<staging root>/<capsule UUID>/`; neither a superseded publish nor session
+ * teardown can remove another session's staged artifacts, and abandoned
+ * directories from process death are swept only by scoped UUID matching.
+ *
  * FIX-STATE-01: every capture side runs through ONE authoritative
  * [CaptureAttemptController]; a delivered still always terminates its
  * attempt. FIX-STATE-02: ViewModel events are guarded by the step table -
@@ -65,6 +70,11 @@ class CreateViewModel(
     private val persistence: SealedFingerprintPersistence,
     private val outboxStager: CapsuleOutboxStager,
     profile: RecognitionProfile,
+    /**
+     * FIX-STATE-13: the staging ROOT (`files/create-staging` in production).
+     * Each create session owns the subdirectory `<root>/<capsule UUID>/`;
+     * cleanup is strictly per-session - no shared delete-all exists anymore.
+     */
     private val stagingDirectory: File,
     private val openPhotoSource: (pickerId: String) -> app.postmark.memory.create.PhotoSource,
     private val clockMillis: () -> Long = System::currentTimeMillis,
@@ -172,6 +182,15 @@ class CreateViewModel(
     private var publishJob: Job? = null
     private var createSessionGeneration: Long = 0L
 
+    /**
+     * FIX-STATE-13: capsule ids whose publication job is still alive and
+     * therefore OWNS its staging subdirectory. A cancelled-but-still-running
+     * (non-cooperative normalization) publish keeps exclusive cleanup rights;
+     * nothing else may delete that directory while the id is listed here.
+     */
+    private val inFlightPublications: MutableSet<String> =
+        java.util.concurrent.ConcurrentHashMap.newKeySet()
+
     /** Immutable snapshot of ONE session's publish inputs, captured before
      * any suspend boundary so no long-running step can read live state that a
      * newer session already replaced. */
@@ -196,6 +215,13 @@ class CreateViewModel(
      * ID, RECIPIENT_LOOKUP, and empty recipient/photos/note/checklist/errors/
      * capture refs. Persisted sender fingerprints and outbox rows are never
      * touched. A same-epoch call is a no-op (rotation safety).
+     *
+     * FIX-STATE-13: staging is session-owned. The replaced session's
+     * directory is removed here only when NO publication still owns it; an
+     * in-flight (possibly cancellation-delayed) publish keeps exclusive
+     * cleanup rights over its own directory. Afterwards a SCOPED recovery
+     * sweep removes only abandoned `create-staging/<capsule UUID>/`
+     * directories left behind by a process death - never arbitrary files.
      */
     fun beginSession(epoch: Long) {
         if (begunEpoch == epoch) return
@@ -203,6 +229,11 @@ class CreateViewModel(
         createSessionGeneration += 1
         deliveryGeneration += 1
         cancelPublishingLocked()
+        // FIX-STATE-13: ownership is tracked by the in-flight ledger, NOT by
+        // the local job handle - endSession()/an earlier beginSession() may
+        // already have detached a publication that is still running its
+        // non-cooperative work and owns its directory until it terminates.
+        if (_capsuleId !in inFlightPublications) deleteSessionStaging(_capsuleId)
         _capsuleId = UUID.randomUUID().toString()
         _step.value = Step.RECIPIENT_LOOKUP
         // FIX-M1-ONDEVICE-01: pending and confirmed recipient material both die.
@@ -217,7 +248,7 @@ class CreateViewModel(
         backFingerprintId = null
         _flowError.value = null
         _publishError.value = null
-        clearStagedPhotos()
+        sweepAbandonedStagingDirectoriesLocked()
     }
 
     // ---------------------------------------------------------------------
@@ -427,13 +458,19 @@ class CreateViewModel(
         )
         _step.value = Step.PUBLISHING
         val generation = createSessionGeneration
+        // FIX-STATE-13: THIS publication owns its staging directory from here
+        // until its job reaches a terminal state (success, failure,
+        // supersession, or cancellation cleanup).
+        inFlightPublications.add(inputs.capsuleId)
         publishJob = viewModelScope.launch { publish(generation, inputs) }
     }
 
-    /** Cancels an in-flight publication; safe to call repeatedly. */
-    private fun cancelPublishingLocked() {
-        publishJob?.cancel()
+    /** Cancels an in-flight publication; returns whether one existed. */
+    private fun cancelPublishingLocked(): Boolean {
+        val job = publishJob ?: return false
         publishJob = null
+        job.cancel()
+        return true
     }
 
     private fun hasBothCaptures(): Boolean =
@@ -447,10 +484,11 @@ class CreateViewModel(
     private fun isPublishCurrent(generation: Long): Boolean =
         generation == createSessionGeneration && _step.value == Step.PUBLISHING
 
-    private suspend fun clearStagedPhotosGuarded() {
+    private suspend fun clearStagedPhotosGuarded(capsuleId: String) {
         // FIX-STATE-11: guaranteed plaintext removal even on cancellation -
         // but NEVER any state publication from this path.
-        withContext(NonCancellable + ioDispatcher) { clearStagedPhotos() }
+        // FIX-STATE-13: only the OWNING session's directory is touched.
+        withContext(NonCancellable + ioDispatcher) { deleteSessionStaging(capsuleId) }
     }
 
     private suspend fun publish(generation: Long, inputs: PublishInputs) {
@@ -458,16 +496,19 @@ class CreateViewModel(
         try {
             publishSealed(generation, inputs)
         } catch (superseded: PublishSuperseded) {
-            // The owning session is gone: staging dies, nothing is published.
-            clearStagedPhotosGuarded()
+            // The owning session is gone: ITS staging dies, nothing is
+            // published, and no newer session's artifacts are touched.
+            clearStagedPhotosGuarded(inputs.capsuleId)
         } catch (cancelled: CancellationException) {
             // Session teardown: staged plaintext dies with this scope below.
-            clearStagedPhotosGuarded()
+            clearStagedPhotosGuarded(inputs.capsuleId)
             throw cancelled
         } catch (failure: Exception) {
             if (!isPublishCurrent(generation)) return
             _publishError.value = failure.message ?: "publishing failed"
             _step.value = Step.CONTENT
+        } finally {
+            inFlightPublications.remove(inputs.capsuleId)
         }
     }
 
@@ -503,10 +544,13 @@ class CreateViewModel(
             return
         }
 
-            // Normalized plaintext photos exist ONLY inside this call; every
-            // staged file is deleted before this method returns or throws.
+            // FIX-STATE-13: normalized plaintext photos live ONLY inside this
+            // call and ONLY inside THIS publication's own subdirectory
+            // (`<staging root>/<capsule UUID>/`); every staged artifact is
+            // deleted before this method returns or throws, and no other
+            // session's directory is ever touched.
             val pipeline = app.postmark.memory.create.PhotoStagingPipeline(
-                stagingDirectory,
+                stagingDirectoryFor(inputs.capsuleId),
                 // The port owns its dispatcher hop; stageAll below adds IO.
                 normalizer = photoNormalizer,
             )
@@ -543,7 +587,7 @@ class CreateViewModel(
                 _step.value = Step.PUBLISHED
             } finally {
                 // Normalized plaintext staging never survives this call.
-                withContext(ioDispatcher) { clearStagedPhotos() }
+                withContext(ioDispatcher) { deleteSessionStaging(inputs.capsuleId) }
             }
     }
 
@@ -558,8 +602,36 @@ class CreateViewModel(
         _step.value = restartAt
     }
 
-    private fun clearStagedPhotos() {
-        stagingDirectory.listFiles()?.forEach { it.delete() }
+    /**
+     * FIX-STATE-13: staging is session-owned. [stagingDirectory] is the ROOT;
+     * every publication stages plaintext only inside its own
+     * `<root>/<capsule UUID>/` subdirectory, so concurrent sessions and a
+     * cancellation-delayed stale publish can never delete each other's files.
+     */
+    private fun stagingDirectoryFor(capsuleId: String): File = File(stagingDirectory, capsuleId)
+
+    /** Removes ONE session's own staging directory; absent means already clean. */
+    private fun deleteSessionStaging(capsuleId: String) {
+        val dir = stagingDirectoryFor(capsuleId)
+        if (dir.exists()) dir.deleteRecursively()
+    }
+
+    /**
+     * FIX-STATE-13 scoped recovery after process death (docs/architecture.md:
+     * "discard incomplete plaintext/raw capture state"): removes ONLY
+     * directories whose name parses as the capsule UUID of an ABANDONED
+     * publication - not the current session's, not one still owned by a live
+     * publish job, and never arbitrary files or unknown entries.
+     */
+    private fun sweepAbandonedStagingDirectoriesLocked() {
+        val children = stagingDirectory.listFiles() ?: return
+        for (child in children) {
+            if (!child.isDirectory) continue
+            val capsuleId = runCatching { UUID.fromString(child.name) }.getOrNull() ?: continue
+            if (capsuleId.toString().equals(_capsuleId, ignoreCase = true)) continue
+            if (inFlightPublications.any { it.equals(capsuleId.toString(), ignoreCase = true) }) continue
+            child.deleteRecursively()
+        }
     }
 
     private fun parsePublicHandle(b64Url: String): KeysetHandle =
@@ -568,9 +640,12 @@ class CreateViewModel(
     /**
      * Leaving the create surface drops its transient session immediately.
      * Cleanup stays synchronous ON PURPOSE: it runs during teardown
-     * (onDispose/onCleared) where a launched coroutine could be cancelled
-     * before executing, and it touches at most the 3..5 tiny staged files of
-     * this session - plaintext can never outlive the surface.
+     * (onDispose/onCleared). FIX-STATE-13: the session's OWN staging
+     * directory is removed here only when no publication still owns it - an
+     * in-flight publish keeps the exclusive right (and the NonCancellable
+     * obligation) to remove its own directory, so a stale coroutine can never
+     * delete another session's artifacts and plaintext can never outlive its
+     * owner.
      */
     fun endSession() {
         // FIX-M1-ONDEVICE-01 / FIX-STATE-11: pending resolved material AND an
@@ -580,7 +655,9 @@ class CreateViewModel(
         deliveryGeneration += 1
         cancelPublishingLocked()
         recipientFlow.clearTransientMaterial()
-        clearStagedPhotos()
+        // FIX-STATE-13: only when no live publication still owns THIS session's
+        // directory may teardown remove it directly.
+        if (_capsuleId !in inFlightPublications) deleteSessionStaging(_capsuleId)
     }
 
     override fun onCleared() {

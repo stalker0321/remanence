@@ -85,6 +85,7 @@ class CreatePublishLifetimeTest {
 
     private lateinit var database: PostmarkLocalDatabase
     private lateinit var stagingDir: File
+    private lateinit var outboxDir: File
 
     private val identity = AccountIdentityGenerator().generate()
     private val userUuid = UUID.fromString("8e111111-2222-4333-8444-555555555555")
@@ -98,6 +99,9 @@ class CreatePublishLifetimeTest {
             .allowMainThreadQueries()
             .build()
         stagingDir = File(context.filesDir, "publish-lifetime").apply { mkdirs() }
+        // FIX-STATE-13: ciphertext outbox lives OUTSIDE the staging root, as
+        // in production wiring.
+        outboxDir = File(context.filesDir, "publish-lifetime-outbox")
     }
 
     @After
@@ -105,6 +109,7 @@ class CreatePublishLifetimeTest {
         Dispatchers.resetMain()
         if (::database.isInitialized) database.close()
         stagingDir.deleteRecursively()
+        outboxDir.deleteRecursively()
     }
 
     // ------------------------------------------------------------------
@@ -189,7 +194,7 @@ class CreatePublishLifetimeTest {
             accessTokenProvider = { null },
             identityProvider = { identityGate.await() },
             persistence = persistence,
-            outboxStager = postmark.core.data.outbox.CapsuleOutboxStager(database, stagingDir),
+            outboxStager = postmark.core.data.outbox.CapsuleOutboxStager(database, outboxDir),
             profile = RecognitionProfile.mvpOrbV1(),
             stagingDirectory = stagingDir,
             openPhotoSource = { id ->
@@ -244,8 +249,10 @@ class CreatePublishLifetimeTest {
         // Parked INSIDE normalization before any file was written.
         assertTrue(stagingDir.listFiles()?.isEmpty() == true)
 
-        // A plaintext artifact exists when the exit happens.
-        File(stagingDir, "mid-flight.jpg").writeBytes("plaintext".toByteArray())
+        // FIX-STATE-13: a plaintext artifact exists INSIDE the owning
+        // session's own staging subdirectory when the exit happens.
+        val sessionDir = File(stagingDir, vm.capsuleId).apply { mkdirs() }
+        File(sessionDir, "mid-flight.jpg").writeBytes("plaintext".toByteArray())
 
         // Exit tears the publication down.
         vm.endSession()

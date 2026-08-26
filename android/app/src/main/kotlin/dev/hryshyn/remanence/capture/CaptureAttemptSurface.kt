@@ -21,10 +21,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -61,6 +58,8 @@ val CAPTURE_PREVIEW_MIN_HEIGHT = 180.dp
  * - the camera adapter lives exactly one binding cycle
  *   ([CaptureAttemptController.bindEpoch]) and is released on dispose or
  *   step transition; late hardware callbacks are inert after release;
+ *   its preview composes in the SAME commit that creates it and bind()
+ *   only runs after that commit, so the hosted PreviewView always exists;
  * - permission recovery (ask again / settings note) stays available.
  *
  * The [adapterFactory] seam lets tests drive the same production callbacks
@@ -199,23 +198,29 @@ private fun LivePreviewContent(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    var adapter by remember { mutableStateOf<StillCameraAdapter?>(null) }
+
+    // First-camera-entry crash fix: THE ADAPTER EXISTS DURING COMPOSITION,
+    // created exactly once per binding epoch (plus context/lifecycle owner).
+    // The factory lambda itself is deliberately NOT a remember key: callers
+    // may pass a fresh lambda identity on every recomposition, and keying on
+    // it would churn adapters. The epoch is the sole binding-cycle key.
     val realFactory: () -> StillCameraAdapter =
         adapterFactory ?: { CameraXStillCameraAdapter(context, lifecycleOwner) }
+    val adapter = remember(context, lifecycleOwner, controller.bindEpoch) { realFactory() }
 
-    // FIX-STATE-04: explicit use-case release on dispose/step transition.
-    DisposableEffect(Unit) {
-        onDispose { adapter?.release() }
+    // Releases EXACTLY this adapter when the epoch replaces it or this
+    // content leaves composition; late hardware callbacks stay inert by
+    // the adapter's own release contract.
+    DisposableEffect(adapter) {
+        onDispose { adapter.release() }
     }
 
-    // One fresh adapter per binding epoch; late callbacks after its release
-    // are inert by contract.
-    LaunchedEffect(controller.bindEpoch) {
+    // Binds ONLY from an effect that runs after the composition commit that
+    // composed adapter.preview below, so the hosted PreviewView already
+    // exists - CameraXStillCameraAdapter.bind() requires it.
+    LaunchedEffect(adapter) {
         if (controller.phase !is CaptureAttemptPhase.Binding) return@LaunchedEffect
-        adapter?.release()
-        val next = realFactory()
-        adapter = next
-        next.bind(
+        adapter.bind(
             onReady = { controller.onPreviewBound() },
             onError = { reason -> runCatching { controller.onBindFailed(reason) } },
         )
@@ -240,8 +245,9 @@ private fun LivePreviewContent(
                     .testTag("capture_preview"),
             ) {
                 // Fills the guaranteed area exactly; the hosted surface can
-                // never measure to zero height.
-                adapter?.preview?.invoke(Modifier.matchParentSize())
+                // never measure to zero height. Composed in the SAME commit
+                // that created the adapter, before the bind effect runs.
+                adapter.preview(Modifier.matchParentSize())
             }
         }
         Spacer(Modifier.height(8.dp))
@@ -254,7 +260,7 @@ private fun LivePreviewContent(
                 enabled = true,
                 onClick = {
                     if (onBeginAttempt()) {
-                        adapter?.captureStill(
+                        adapter.captureStill(
                             onDelivered = onDelivered,
                             onError = { reason -> runCatching { controller.fail(reason) } },
                         )

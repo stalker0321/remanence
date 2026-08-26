@@ -4,12 +4,12 @@ plugins {
 }
 
 android {
-    namespace = "app.postmark.memory"
+    namespace = "dev.hryshyn.remanence"
     compileSdk = libs.versions.compileSdk.get().toInt()
     buildToolsVersion = libs.versions.buildTools.get()
 
     defaultConfig {
-        applicationId = "app.postmark.memory"
+        applicationId = "dev.hryshyn.remanence"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = 1
@@ -21,14 +21,14 @@ android {
             buildConfigField(
                 "String",
                 "API_BASE_URL",
-                quoteBuildConfigString(postmarkApiBaseUrl("http://127.0.0.1:8000/")),
+                quoteBuildConfigString(remanenceApiBaseUrl("http://127.0.0.1:8000/")),
             )
         }
         named("release") {
             buildConfigField(
                 "String",
                 "API_BASE_URL",
-                quoteBuildConfigString(postmarkApiBaseUrl("https://invalid.invalid/")),
+                quoteBuildConfigString(remanenceApiBaseUrl("https://invalid.invalid/")),
             )
         }
     }
@@ -75,16 +75,16 @@ dependencies {
     debugImplementation(libs.compose.ui.test.manifest)
 }
 
-fun postmarkApiBaseUrl(default: String): String {
-    val raw = (findProperty("postmark.apiBaseUrl") as? String) ?: default
+fun remanenceApiBaseUrl(default: String): String {
+    val raw = (findProperty("remanence.apiBaseUrl") as? String) ?: default
     if (raw != raw.trim()) {
-        throw GradleException("postmark.apiBaseUrl must not have surrounding whitespace")
+        throw GradleException("remanence.apiBaseUrl must not have surrounding whitespace")
     }
     if (!raw.endsWith("/")) {
-        throw GradleException("postmark.apiBaseUrl must end with '/'")
+        throw GradleException("remanence.apiBaseUrl must end with '/'")
     }
     if (raw.any { ch -> ch == '"' || ch == '\\' || ch.code < 32 || ch.code == 127 }) {
-        throw GradleException("postmark.apiBaseUrl contains an illegal character")
+        throw GradleException("remanence.apiBaseUrl contains an illegal character")
     }
     return raw
 }

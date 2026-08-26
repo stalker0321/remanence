@@ -1,0 +1,101 @@
+syntax = "proto3";
+
+package remanence.protocol.v1;
+
+option java_package = "dev.hryshyn.remanence.protocol.v1";
+option java_multiple_files = true;
+option java_outer_classname = "RemanenceV1";
+option optimize_for = LITE_RUNTIME;
+
+enum ArtifactKind {
+  ARTIFACT_KIND_UNSPECIFIED = 0;
+  RECOGNITION_MANIFEST = 1;
+  CONTENT_MANIFEST = 2;
+  PHOTO = 3;
+}
+
+message ArtifactBinding {
+  bytes blob_id = 1; // UUID bytes exactly 16
+  ArtifactKind kind = 2;
+  sint32 ordinal = 3; // -1 except PHOTO 0..4
+  uint64 ciphertext_size = 4;
+  bytes ciphertext_sha256 = 5; // SHA256 exactly 32
+}
+
+message ArtifactAadContext {
+  uint32 protocol_version = 1; // exactly 1
+  bytes capsule_id = 2; // UUID bytes exactly 16
+  bytes blob_id = 3; // UUID bytes exactly 16
+  ArtifactKind artifact_kind = 4;
+  sint32 ordinal = 5; // -1 except PHOTO 0..4
+  bytes sender_user_id = 6; // UUID bytes exactly 16
+  bytes recipient_user_id = 7; // UUID bytes exactly 16
+}
+
+message RecipientEnvelopeContext {
+  uint32 protocol_version = 1; // exactly 1
+  bytes capsule_id = 2; // UUID bytes exactly 16
+  bytes sender_user_id = 3; // UUID bytes exactly 16
+  bytes recipient_user_id = 4; // UUID bytes exactly 16
+  bytes recipient_key_bundle_id = 5; // UUID bytes exactly 16
+}
+
+message PublishStatement {
+  uint32 protocol_version = 1; // exactly 1
+  bytes capsule_id = 2; // UUID bytes exactly 16
+  bytes sender_user_id = 3; // UUID bytes exactly 16
+  bytes recipient_user_id = 4; // UUID bytes exactly 16
+  bytes sender_key_bundle_id = 5; // UUID bytes exactly 16
+  bytes recipient_key_bundle_id = 6; // UUID bytes exactly 16
+  int64 created_at_epoch_seconds = 7;
+  repeated ArtifactBinding artifacts = 8;
+}
+
+message RecipientEnvelopePlaintext {
+  uint32 protocol_version = 1; // exactly 1
+  bytes capsule_id = 2; // UUID bytes exactly 16
+  bytes sender_user_id = 3; // UUID bytes exactly 16
+  bytes recipient_user_id = 4; // UUID bytes exactly 16
+  bytes sender_key_bundle_id = 5; // UUID bytes exactly 16
+  bytes recipient_key_bundle_id = 6; // UUID bytes exactly 16
+  bytes capsule_aead_keyset = 7;
+  bytes publish_statement_sha256 = 8; // SHA256 exactly 32
+}
+
+message ChooserHint {
+  string sender_handle_snapshot = 1;
+  int64 created_at_epoch_seconds = 2;
+  optional string place_label = 3;
+}
+
+message RecognitionManifest {
+  uint32 protocol_version = 1; // exactly 1
+  bytes capsule_id = 2; // UUID bytes exactly 16
+  ChooserHint chooser_hint = 3;
+  bytes front_fingerprint = 4;
+  bytes back_fingerprint = 5;
+}
+
+message PhotoEntry {
+  bytes blob_id = 1; // UUID bytes exactly 16
+  uint32 ordinal = 2;
+  string media_type = 3; // image/jpeg in v1
+  uint32 width = 4;
+  uint32 height = 5;
+}
+
+message TrackAttachment {
+  string provider = 1;
+  string track_id = 2;
+  string title = 3;
+  string artist = 4;
+  uint32 start_ms = 5;
+}
+
+message ContentManifest {
+  uint32 protocol_version = 1; // exactly 1
+  bytes capsule_id = 2; // UUID bytes exactly 16
+  repeated PhotoEntry photos = 3; // 3..5, sorted ordinal
+  optional string note = 4;
+  optional TrackAttachment track = 5; // MUST be absent in MVP
+}

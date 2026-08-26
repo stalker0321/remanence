@@ -174,7 +174,7 @@ OpenCV classes never cross its public boundary. It depends only on `:core:model`
 One-activity Compose application that owns navigation, CameraX integration, dependency wiring, and use-case orchestration. Feature packages remain packages rather than Gradle modules because the MVP has few screens and one client:
 
 ```text
-app.postmark/
+dev.hryshyn.remanence/
 ├── auth/
 ├── home/
 ├── create/

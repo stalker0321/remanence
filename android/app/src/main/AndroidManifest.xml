@@ -8,7 +8,7 @@
         android:required="true" />
 
     <application
-        android:name=".PostmarkApplication"
+        android:name=".RemanenceApplication"
         android:label="@string/app_name"
         android:theme="@style/Theme.Remanence"
         android:usesCleartextTraffic="false"
@@ -16,7 +16,7 @@
         android:fullBackupContent="@xml/backup_rules"
         android:dataExtractionRules="@xml/data_extraction_rules">
         <activity
-            android:name="app.postmark.memory.MainActivity"
+            android:name="dev.hryshyn.remanence.MainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

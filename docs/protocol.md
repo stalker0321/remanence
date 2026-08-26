@@ -42,7 +42,7 @@ The normative `.proto` file created during implementation must express these v1 
 
 ```proto
 syntax = "proto3";
-package postmark.protocol.v1;
+package dev.hryshyn.remanence.protocol.v1;
 
 enum ArtifactKind {
   ARTIFACT_KIND_UNSPECIFIED = 0;

@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "postmark.core.recognition"
+    namespace = "dev.hryshyn.remanence.core.recognition"
     compileSdk = libs.versions.compileSdk.get().toInt()
     buildToolsVersion = libs.versions.buildTools.get()
 

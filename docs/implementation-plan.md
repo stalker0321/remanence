@@ -63,7 +63,7 @@ Operational completion checks between tasks confirm commit/status/declared comma
 
 | ID | Single outcome | Minimum verification |
 | --- | --- | --- |
-| M1-P01 | Add normative `postmark_v1.proto` field numbers matching `protocol.md`. | protobuf lint/compile |
+| M1-P01 | Add normative `remanence_v1.proto` field numbers matching `protocol.md`. | protobuf lint/compile |
 | M1-P02 | Configure protobuf-lite generation for Android model/crypto consumers. | generated-source compile |
 | M1-P03 | Add typed UUID domain wrappers and strict REST/protobuf conversions. | valid/invalid conversion tests |
 | M1-P04 | Add normalized handle value object and shared fixture cases. | normalization/boundary tests |

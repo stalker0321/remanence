@@ -273,7 +273,7 @@ Validation requires sender ownership, current recipient bundle, exactly one reco
 
 ### `PUT /v1/capsules/{capsule_id}/blobs/{blob_id}`
 
-Streams one complete `application/octet-stream` ciphertext body. Required headers are `Content-Length`, `X-Postmark-Ciphertext-SHA256`, and `Idempotency-Key`.
+Streams one complete `application/octet-stream` ciphertext body. Required headers are `Content-Length`, `X-Remanence-Ciphertext-SHA256`, and `Idempotency-Key`.
 
 The service hashes while streaming to a temporary object, compares length/hash, atomically promotes through `BlobStore`, and marks `STORED`. A hash-identical replay returns `204`; different bytes for a stored blob ID return `BLOB_CONFLICT`. There is no multipart/range API in v1. WorkManager resumes by skipping stored blobs.
 

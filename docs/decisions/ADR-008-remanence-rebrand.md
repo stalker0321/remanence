@@ -77,6 +77,13 @@ Proto wire format is unaffected by these renames: protobuf encoding carries
 field numbers only, never package or message names. Golden fixtures pin the
 byte-level output and guard this claim.
 
+One documented-but-unimplemented REST element is renamed with this same
+rationale: the capsule blob-upload header `X-Postmark-Ciphertext-SHA256`
+becomes `X-Remanence-Ciphertext-SHA256`. Neither the server route nor any
+client uploader exists yet (M1 implements auth/directory/health only), so
+there is no deployed consumer; it carries no relation to crypto AAD or
+persisted state.
+
 ### 2. Kept as legacy protocol identifiers — NOT renamed
 
 These strings are domain-separation labels baked into ciphertext, signatures,

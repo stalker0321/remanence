@@ -141,7 +141,7 @@ export ANDROID_SDK_ROOT=/usr/lib/android-sdk
 export PATH="$ANDROID_HOME/cmdline-tools/19.0/bin:$ANDROID_HOME/platform-tools:$PATH"
 ```
 
-The Ubuntu cmdline-tools package also pulled `google-android-build-tools-19.1.0-installer` and switched the default `java` alternative to OpenJDK 25. Keep using JDK 17 via `JAVA_HOME` for Postmark builds. Do not use Build-Tools 19.1.0.
+The Ubuntu cmdline-tools package also pulled `google-android-build-tools-19.1.0-installer` and switched the default `java` alternative to OpenJDK 25. Keep using JDK 17 via `JAVA_HOME` for Remanence builds. Do not use Build-Tools 19.1.0.
 
 ## Verified after Android CLI SDK provisioning
 
@@ -173,23 +173,23 @@ JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 sdkmanager --sdk_root=/usr/lib/andr
 
 ```sh
 ./scripts/verify-m0.sh
-/home/vodkolyan/projects/Postmark/scripts/verify-m0.sh
+/home/vodkolyan/projects/Remanence/scripts/verify-m0.sh
 ```
 
-If your clone is not `/home/vodkolyan/projects/Postmark`, substitute that path. The script does not change the caller cwd permanently.
+If your clone is not `/home/vodkolyan/projects/Remanence`, substitute that path. The script does not change the caller cwd permanently.
 
-Documented defaults (override with `POSTMARK_*` as needed):
+Documented defaults (override with `REMANENCE_*` as needed):
 
 | Variable | Default |
 | --- | --- |
-| `POSTMARK_JAVA_HOME` / `JAVA_HOME` | `/usr/lib/jvm/java-17-openjdk-amd64` |
-| `POSTMARK_ANDROID_SDK_ROOT` / `ANDROID_SDK_ROOT` / `ANDROID_HOME` | `/usr/lib/android-sdk` |
-| `POSTMARK_DEV_DB_PASSWORD` | `postmark-dev-only` (local development only; never a production secret) |
-| `POSTMARK_DB_PORT` | `55432` |
-| `POSTMARK_API_PORT` | `8000` |
-| `POSTMARK_TEST_DATABASE_URL` | constructed as `postgresql+psycopg://postmark:<password>@127.0.0.1:<db-port>/postmark` when unset |
+| `REMANENCE_JAVA_HOME` / `JAVA_HOME` | `/usr/lib/jvm/java-17-openjdk-amd64` |
+| `REMANENCE_ANDROID_SDK_ROOT` / `ANDROID_SDK_ROOT` / `ANDROID_HOME` | `/usr/lib/android-sdk` |
+| `REMANENCE_DEV_DB_PASSWORD` | `remanence-dev-only` (local development only; never a production secret) |
+| `REMANENCE_DB_PORT` | `55432` |
+| `REMANENCE_API_PORT` | `8000` |
+| `REMANENCE_TEST_DATABASE_URL` | constructed as `postgresql+psycopg://remanence:<password>@127.0.0.1:<db-port>/remanence` when unset |
 
-If the password contains URL-significant characters, set `POSTMARK_TEST_DATABASE_URL` explicitly instead of letting the script construct it. Do not put production credentials in these variables or in shell history.
+If the password contains URL-significant characters, set `REMANENCE_TEST_DATABASE_URL` explicitly instead of letting the script construct it. Do not put production credentials in these variables or in shell history.
 
 The script leaves Compose services and named volumes running. It never invokes `adb` and must not be treated as device, camera, or M1/M2 evidence.
 
@@ -201,19 +201,19 @@ A current PASS surface is:
 - `alembic_version` exactly `0001_m0_baseline`
 - blob volume create/stat/remove probe at mode `0600`
 - `uv lock --check`, `uv sync --locked`, `uv run --locked pytest -q -W error`
-- `./gradlew clean testDebugUnitTest assembleDebug --console=plain` with `POSTMARK_TEST_API_BASE_URL=http://127.0.0.1:$POSTMARK_API_PORT/`
+- `./gradlew clean testDebugUnitTest assembleDebug --console=plain` with `REMANENCE_TEST_API_BASE_URL=http://127.0.0.1:$REMANENCE_API_PORT/`
 - non-empty `android/app/build/outputs/apk/debug/app-debug.apk` (size printed; this host last printed `12287755` bytes)
 - `git diff --check` clean
 - explicit note that device/camera/CV were not validated
 
-On this host a PASS also ran 82 pytest cases (the two database tests run when `POSTMARK_TEST_DATABASE_URL` is set) and 146 Gradle actionable tasks.
+On this host a PASS also ran 82 pytest cases (the two database tests run when `REMANENCE_TEST_DATABASE_URL` is set) and 146 Gradle actionable tasks.
 
 ## Manual clean-shell verification
 
-Commands below are copy/paste-correct from `/home/vodkolyan/projects/Postmark`. Substitute your clone path if different. Use `docker compose` when `docker info` works; on this VPS the login user is not in the `docker` group, so prefix Compose with `sudo -n` as the verifier does. `sudo -n` does not prompt; if it fails, fix Docker access instead of waiting for a password.
+Commands below are copy/paste-correct from `/home/vodkolyan/projects/Remanence`. Substitute your clone path if different. Use `docker compose` when `docker info` works; on this VPS the login user is not in the `docker` group, so prefix Compose with `sudo -n` as the verifier does. `sudo -n` does not prompt; if it fails, fix Docker access instead of waiting for a password.
 
 ```sh
-cd /home/vodkolyan/projects/Postmark
+cd /home/vodkolyan/projects/Remanence
 
 export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 export ANDROID_HOME=/usr/lib/android-sdk
@@ -233,27 +233,27 @@ curl -fsS -H 'Accept: application/json' http://127.0.0.1:8000/healthz
 
 The body must be exactly `{"status":"ok"}`.
 
-`postmark-dev-only` is a local-development-only Compose password. Do not replace it with a production secret.
+`remanence-dev-only` is a local-development-only Compose password. Do not replace it with a production secret.
 
 ```sh
-cd /home/vodkolyan/projects/Postmark/server
+cd /home/vodkolyan/projects/Remanence/server
 uv lock --check
 uv sync --locked
-POSTMARK_TEST_DATABASE_URL=postgresql+psycopg://postmark:postmark-dev-only@127.0.0.1:55432/postmark \
+REMANENCE_TEST_DATABASE_URL=postgresql+psycopg://remanence:remanence-dev-only@127.0.0.1:55432/remanence \
   uv run --locked pytest -q -W error
 ```
 
 ```sh
-cd /home/vodkolyan/projects/Postmark/android
-POSTMARK_TEST_API_BASE_URL=http://127.0.0.1:8000/ \
+cd /home/vodkolyan/projects/Remanence/android
+REMANENCE_TEST_API_BASE_URL=http://127.0.0.1:8000/ \
   ./gradlew clean testDebugUnitTest assembleDebug --console=plain
 ```
 
 ```sh
-stat -c '%s %n' /home/vodkolyan/projects/Postmark/android/app/build/outputs/apk/debug/app-debug.apk
+stat -c '%s %n' /home/vodkolyan/projects/Remanence/android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-The APK path must exist and be non-empty. Debug `applicationId` is `app.postmark.memory`. Debug `API_BASE_URL` defaults to `http://127.0.0.1:8000/` unless you pass `-Ppostmark.apiBaseUrl=...` (must end with `/`).
+The APK path must exist and be non-empty. Debug `applicationId` is `dev.hryshyn.remanence`. Debug `API_BASE_URL` defaults to `http://127.0.0.1:8000/` unless you pass `-Premanence.apiBaseUrl=...` (must end with `/`).
 
 ## Physical-device install (optional)
 
@@ -275,18 +275,18 @@ adb devices -l
 
 ```sh
 adb reverse tcp:8000 tcp:8000
-adb install -r /home/vodkolyan/projects/Postmark/android/app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -n app.postmark.memory/.MainActivity
+adb install -r /home/vodkolyan/projects/Remanence/android/app/build/outputs/apk/debug/app-debug.apk
+adb shell am start -n dev.hryshyn.remanence/.MainActivity
 ```
 
-Substitute the APK path if your clone is not `/home/vodkolyan/projects/Postmark`. Confirm Home shows `Architecture approved · API available` (backend health Available). Create and Scan stay disabled.
+Substitute the APK path if your clone is not `/home/vodkolyan/projects/Remanence`. Confirm Home shows `Architecture approved · API available` (backend health Available). Create and Scan stay disabled.
 
 ## Stopping Compose
 
-Preserve named volumes (`postmark-postgres-data`, `postmark-blob-data`):
+Preserve named volumes (`remanence-postgres-data`, `remanence-blob-data`):
 
 ```sh
-cd /home/vodkolyan/projects/Postmark
+cd /home/vodkolyan/projects/Remanence
 sudo -n docker compose stop
 ```
 
@@ -294,11 +294,11 @@ sudo -n docker compose stop
 
 ## Troubleshooting
 
-- System `java` may be OpenJDK 25 after the Ubuntu cmdline-tools package. Always `export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64` (or `POSTMARK_JAVA_HOME`) before Gradle or the verifier.
+- System `java` may be OpenJDK 25 after the Ubuntu cmdline-tools package. Always `export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64` (or `REMANENCE_JAVA_HOME`) before Gradle or the verifier.
 - Builds need `ANDROID_HOME` / `ANDROID_SDK_ROOT` at `/usr/lib/android-sdk` with `platforms/android-36` and `build-tools/36.0.0`. Do not use Build-Tools 19.1.0.
 - Docker: `docker info` first. If it fails, the verifier tries `sudo -n docker` and will not prompt. Configure passwordless `sudo -n docker` or a docker-group login; do not hang on a sudo password.
-- Port collisions: host PostgreSQL is `127.0.0.1:55432`, API is `127.0.0.1:8000`. Override with `POSTMARK_DB_PORT` / `POSTMARK_API_PORT`. Keep the test URL, `-Ppostmark.apiBaseUrl=http://127.0.0.1:<api-port>/`, `POSTMARK_TEST_API_BASE_URL`, curl, and `adb reverse tcp:<api-port> tcp:<api-port>` on that same port. Base URLs must end with `/`.
+- Port collisions: host PostgreSQL is `127.0.0.1:55432`, API is `127.0.0.1:8000`. Override with `REMANENCE_DB_PORT` / `REMANENCE_API_PORT`. Keep the test URL, `-Premanence.apiBaseUrl=http://127.0.0.1:<api-port>/`, `REMANENCE_TEST_API_BASE_URL`, curl, and `adb reverse tcp:<api-port> tcp:<api-port>` on that same port. Base URLs must end with `/`.
 - `adb devices -l` must show `device`. `unauthorized` means the phone has not approved this host; `offline` means reconnect/unlock USB debugging.
 - Home `Architecture approved · API unavailable`: check `curl` `/healthz`, `docker compose ps -a`, and that `adb reverse` is still active for the debug API port.
-- `INSTALL_FAILED_UPDATE_INCOMPATIBLE` means a differently signed/versioned `app.postmark.memory` is already installed. `adb uninstall app.postmark.memory` deletes local app data on the device; only then is it an acceptable last resort.
-- Never put production database passwords or other production secrets in Compose, `POSTMARK_TEST_DATABASE_URL`, or these examples. `postmark-dev-only` is local-development-only.
+- `INSTALL_FAILED_UPDATE_INCOMPATIBLE` means a differently signed/versioned `dev.hryshyn.remanence` is already installed. `adb uninstall dev.hryshyn.remanence` deletes local app data on the device; only then is it an acceptable last resort.
+- Never put production database passwords or other production secrets in Compose, `REMANENCE_TEST_DATABASE_URL`, or these examples. `remanence-dev-only` is local-development-only.

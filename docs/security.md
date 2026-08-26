@@ -207,7 +207,7 @@ canonical statement/ID verifier.
 
 The handle lookup response contains current display handle, immutable user ID, active key-bundle ID, encryption public key, signing public key, and server-issued directory version. The sender must show the resolved recipient and obtain an explicit confirmation before encryption.
 
-The publish statement/envelope bind the immutable user/key IDs, not the handle string. Finalize rejects a retired/revoked recipient bundle with `RECIPIENT_KEY_STALE`. The sender then re-resolves and creates only a new envelope for the same capsule key and statement version updated with the new key ID; ciphertext content must be re-signed because the statement binds the recipient key ID, but photo ciphertext need not be re-encrypted.
+The publish statement/envelope bind the immutable user/key IDs, not the handle string. Finalize rejects a retired/revoked recipient bundle with `RECIPIENT_KEY_STALE`. The sender then re-resolves and creates only a new envelope for the same capsule key and statement version updated with the new key ID; ciphertext content must be re-signed because the statement binds the recipient key ID, but photo ciphertext need not be re-encrypted. After process death the capsule key for that re-envelope comes only from the sender-owned wrapped retry material defined in §6.6; the recipient envelope itself is not sender-readable once sender and recipient are distinct accounts.
 
 Finalize resolves bundles by ID from the authoritative directory/database. A
 recipient bundle must be ACTIVE and owned by the recipient. A sender signing
@@ -310,8 +310,8 @@ Before M2 passes, automated tests must prove:
 4. Email invitation target identity: protocol v1 binds `recipient_user_id` in
    every artifact AAD. ADR-009 defers choosing a reserved future user ID versus
    a new protocol version; envelope-only re-wrap is insufficient.
-4. Compromised sender device: content captured/encrypted on that device cannot be trusted or made secret from it.
-5. Metadata minimization: sender/recipient graph and timing remain visible to the service; hiding them would require a materially different routing system and is not justified for MVP.
+5. Compromised sender device: content captured/encrypted on that device cannot be trusted or made secret from it.
+6. Metadata minimization: sender/recipient graph and timing remain visible to the service; hiding them would require a materially different routing system and is not justified for MVP.
 
 ## 16. Primary references
 

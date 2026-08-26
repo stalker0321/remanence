@@ -280,7 +280,7 @@ Validation requires sender ownership, current recipient bundle, exactly one reco
 
 Streams one complete `application/octet-stream` ciphertext body. Required headers are `Content-Length`, `X-Remanence-Ciphertext-SHA256`, and `Idempotency-Key`.
 
-The service hashes while streaming to a temporary object, compares length/hash, atomically promotes through `BlobStore`, and marks `STORED`. A hash-identical replay returns `204`; different bytes for a stored blob ID return `BLOB_CONFLICT`. There is no multipart/range API in v1. WorkManager resumes by skipping stored blobs.
+The service hashes while streaming to a temporary object, compares length/hash, promotes through `BlobStore`, and then marks `STORED` with an idempotent state transition. Promotion and the database state update are separate systems and are not one atomic transaction; if the state update fails after promotion, the stored object is unreferenced safe ciphertext that garbage collection removes, and a replay reconciles the blob as already stored without re-transfer. A hash-identical replay returns `204`; different bytes for a stored blob ID return `BLOB_CONFLICT`. There is no multipart/range API in v1. WorkManager resumes by skipping stored blobs.
 
 ### `POST /v1/capsules/{capsule_id}/finalize`
 
@@ -300,7 +300,7 @@ The service hashes while streaming to a temporary object, compares length/hash, 
 }
 ```
 
-Within one database transaction, finalize verifies draft ownership/state, non-expiry, current and matching user/key IDs, deterministic v1 statement structure, sender Ed25519 signature, exact stored blob declarations, envelope limits/hash, and artifact cardinality. It then inserts envelope/delivery state and marks `READY`.
+Within one database transaction, finalize verifies draft ownership/state, non-expiry, current and matching user/key IDs, deterministic v1 statement structure parsed with bounded input size/depth/field counts, sender Ed25519 signature, exact stored blob declarations and cardinality, envelope limits/hash, and artifact hashes/sizes. It then inserts envelope/delivery state and marks `READY`.
 
 The recipient key bundle must be ACTIVE and owned by the recipient. The sender
 signing bundle is resolved by ID, must belong to the sender, and must be
@@ -308,7 +308,7 @@ non-REVOKED; a valid RETIRED sender bundle is accepted for an existing draft.
 Neither an uploaded public key nor locally persisted adjacent key material is
 an authoritative verification source.
 
-A failed transaction leaves an unrouteable `DRAFT`. Identical finalize replay returns existing `READY`; different data returns `FINALIZE_CONFLICT`. `RECIPIENT_KEY_STALE` requires re-resolve, re-envelope, statement update, and re-sign, but not photo re-encryption.
+A failed transaction leaves an unrouteable `DRAFT`. Identical finalize replay returns existing `READY`; different data returns `FINALIZE_CONFLICT`. `RECIPIENT_KEY_STALE` requires re-resolve, re-envelope, statement update, and re-sign, but not photo re-encryption; on Android the capsule key for that re-envelope is recovered only from the local sender-owned wrapped retry material (`security.md` §6.6), never from the recipient envelope or any server-provided value.
 
 ### `DELETE /v1/capsules/{capsule_id}`
 
@@ -328,7 +328,7 @@ Only the bound recipient (or sender while its draft is unfinished) may download 
 
 ### `POST /v1/capsules/{capsule_id}/material-synced`
 
-Recipient may idempotently change server delivery state from `AVAILABLE` to `CIPHERTEXT_SYNCED`. This does not mean physically received, recognized, decrypted, or opened and is never queryable by the sender in MVP.
+Recipient may idempotently change server delivery state from `AVAILABLE` to `CIPHERTEXT_SYNCED`. The call is made only after every required content/photo ciphertext plus the recognition material is durably cached locally and hash-checked; it therefore means "all ciphertext material synced", not merely the recognition index, and still does not mean physically received, recognized, decrypted, or opened. It is never queryable by the sender in MVP.
 
 The client sends this only after the recognition manifest, content manifest,
 and every declared photo ciphertext are durably cached and independently

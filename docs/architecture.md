@@ -206,8 +206,9 @@ A grant is issued after:
 
 1. both front and back were captured in the current scan session;
 2. automatic recognition produced a unique accepted candidate, or the user selected a plausible ambiguous candidate;
-3. the recipient envelope opened successfully;
-4. signed artifact metadata and AEAD integrity verified.
+3. control/index acceptance already passed during sync, and full presentation acceptance now passes: every declared content/photo ciphertext is present and hash-verified against the signed statement, the content manifest AEAD/layout is verified, and the recipient envelope opened successfully.
+
+Recognition may create candidates from index material alone, but the grant itself never precedes the physical scan plus complete crypto verification and material availability.
 
 The default grant lifetime is ten minutes and is configurable in one place. Leaving the capsule screen, process death, logout, or expiration consumes/invalidates it. Screen rotation does not invalidate it while the process and navigation entry survive.
 
@@ -464,6 +465,7 @@ Chooser hints remain inside the encrypted recognition manifest or are re-encrypt
 - Both sides are captured and normalized.
 - Matching is local and fail-safe.
 - Automatic unique match or explicit plausible-candidate selection identifies a capsule.
+- The two-stage pipeline from incoming sync applies: index acceptance prepared candidates; before any plaintext, presentation acceptance verifies every required ciphertext binding plus content-manifest AEAD/layout.
 - Envelope, signed statement, and AEAD artifacts are verified before presentation.
 - The normalized delivered postcard produces a new immutable `RECIPIENT` front/back fingerprint pair.
 - The recipient pair becomes preferred for future scans; sender fingerprints remain as fallback.

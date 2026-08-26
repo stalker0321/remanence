@@ -64,6 +64,21 @@ M1 may route ciphertext through the real local backend, but it is intentionally 
 
 Goal: demonstrate the product north star end to end with two real accounts/installations and one physical postcard.
 
+Entry conditions and sequencing:
+
+- M2 extends the reviewed M1 publisher/outbox/crypto/scan components; it does
+  not introduce parallel implementations.
+- Server schema, storage, and API work may run while M1 hardware evidence is
+  pending.
+- Create/Scan integration is not accepted until the M1 physical CameraX/OpenCV
+  smoke result is recorded and any resulting fixes are incorporated.
+- Local incoming/outgoing/index state and background work are account-scoped
+  before a second account is allowed through the flow.
+- Sender-owned wrapped capsule-key retry material exists before
+  `RECIPIENT_KEY_STALE` recovery is implemented.
+- Control/index acceptance and full presentation acceptance are distinct
+  fail-closed stages sharing one canonical statement verifier.
+
 Scope:
 
 - sender resolves/explicitly confirms another user;
@@ -77,7 +92,29 @@ Scope:
 - offline later open when ciphertext is cached;
 - no gallery/inbox/history/deep-link path.
 
+M2 addresses only an existing registered recipient with a non-null immutable
+user ID and active key bundle. Handles remain required in this milestone.
+Email-addressed pre-registration invitations are reserved for M2.x and must
+not appear as tables, endpoint stubs, or incomplete UI in M2.
+
 M2 is the first complete product proof. It is not a claim of public-release recognition/security hardening.
+
+## M2.x — Email-addressed invitation (deferred)
+
+Goal: let the physical postcard introduce Remanence to a recipient who did not
+have an account when the capsule was created, without a postcard secret,
+server key escrow, or sender approval after verified registration.
+
+This milestone starts only after M2. ADR-009 records the extension seam and a
+critical unresolved protocol choice: protocol v1 binds `recipient_user_id` in
+artifact AAD, so the system must either reserve the pending UUID as the exact
+future user ID or introduce a new protocol version with a stable recipient
+target ID. “Add an envelope later” alone is not sufficient.
+
+Future scope includes verified provider identity, email privacy/expiry/abuse
+controls, optional-handle onboarding, a locally authenticated pending-target
+commitment, a persistent sender key-delivery queue, polling-based eventual
+delivery, and push only as an accelerator.
 
 ## M3 — Recognition hardening
 

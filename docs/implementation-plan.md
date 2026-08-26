@@ -203,59 +203,109 @@ Operational completion checks between tasks confirm commit/status/declared comma
 | M1-M16 | Create preferred recipient fingerprint after verified self receipt. | origin/preferred persistence test |
 | M1-M17 | Prove process restart requires rescan while ciphertext/key records survive. | instrumentation/manual evidence |
 
-## 10. M2 queue — server capsule routing
+## 10. M2 rebaseline gates and prerequisite queue
 
-| ID | Single outcome | Minimum verification |
-| --- | --- | --- |
-| M2-S01 | Add `capsules` SQLAlchemy model/state constraints. | metadata tests |
-| M2-S02 | Add `capsule_blobs` model/cardinality uniqueness. | constraint tests |
-| M2-S03 | Add recipient envelope and delivery-state models. | FK/uniqueness tests |
-| M2-S04 | Add idempotency-record model. | scope/expiry test |
-| M2-S05 | Add Alembic capsule/upload/delivery migration. | upgrade/downgrade/upgrade |
-| M2-S06 | Add capsule draft request validator. | protocol limit/cardinality tests |
-| M2-S07 | Add idempotent draft-create service. | replay/conflict tests |
-| M2-S08 | Expose draft-create endpoint with sender derived from auth. | authorization tests |
-| M2-S09 | Add streamed blob temporary write/hash verifier. | wrong size/hash cleanup tests |
-| M2-S10 | Add atomic blob promotion/state service. | identical/conflicting replay tests |
-| M2-S11 | Expose blob PUT endpoint with limits. | endpoint streaming/auth tests |
-| M2-S12 | Add deterministic publish-statement parser/declaration comparator. | malformed/mismatch tests |
-| M2-S13 | Add public Ed25519 statement verification. | wrong key/signature tests |
-| M2-S14 | Add finalize service transaction. | missing blob/stale key/rollback tests |
-| M2-S15 | Expose idempotent finalize endpoint. | replay/conflict tests |
-| M2-S16 | Add draft abort/expiry garbage-collection service. | ready protection/unreferenced cleanup test |
-| M2-S17 | Add incoming cursor query restricted to recipient. | pagination/cross-user tests |
-| M2-S18 | Expose incoming endpoint with redacted route-only DTO. | no-private-fields contract test |
-| M2-S19 | Expose authorized blob GET endpoint. | sender-draft/recipient-ready/unrelated matrix |
-| M2-S20 | Add material-synced transition with no sender query. | idempotency/privacy test |
+M2 is based on the completed M1 mechanisms, not on the pre-M1 design
+assumptions. Server-only work may proceed while the M1 hardware smoke is
+pending. Any Create/Scan integration commit must wait for that smoke result or
+incorporate its fixes. Email invitations are a future M2.x concern described
+in ADR-009; M2 implements existing-account recipients only.
 
-## 11. M2 queue — Android upload, sync, and two-user flow
+Each row is one implementation-agent assignment and should normally fit one
+short cycle. Dependencies are explicit so a worker never designs the next
+layer implicitly.
 
-| ID | Single outcome | Minimum verification |
-| --- | --- | --- |
-| M2-A01 | Add draft-create API client/repository mapping. | MockWebServer contract test |
-| M2-A02 | Add one-blob idempotent upload call with length/hash headers. | retry/header test |
-| M2-A03 | Add finalize API call and stale-key mapping. | contract test |
-| M2-A04 | Add per-capsule WorkManager upload chain. | worker state test |
-| M2-A05 | Make upload worker skip already stored blobs after restart. | process/repository test |
-| M2-A06 | Add stale-recipient re-resolve/re-envelope/re-sign transition. | no-photo-reencrypt test |
-| M2-A07 | Add current-send publish progress/errors only. | Compose/no-history test |
-| M2-A08 | Add incoming cursor API client/repository upsert. | page replay test |
-| M2-A09 | Add authenticated incoming WorkManager chain. | unique-work/account-scope test |
-| M2-A10 | Download/verify/open envelope and recognition ciphertext only. | wrong key/hash/context test |
-| M2-A11 | Re-encrypt sender fingerprints into local index with no UI projection. | plaintext/index privacy test |
-| M2-A12 | Add on-demand content/photo ciphertext downloader. | authorization/hash/cache test |
-| M2-A13 | Wire first-receipt scan to pending sender candidates. | two-candidate coordinator test |
-| M2-A14 | Persist delivered recipient pair only after verified automatic result. | order test |
-| M2-A15 | Require explicit physical-card confirmation before persisting manual-result pair. | state test |
-| M2-A16 | Prefer recipient pair on later scans and fall back only on no weak evidence. | ordering regression test |
-| M2-A17 | Add offline cached-content open after successful scan. | network-disabled test |
-| M2-A18 | Add clear connectivity-required state when content is absent. | UI/state test |
-| M2-A19 | Add duplicate-front/different-back end-to-end fixture. | auto-or-chooser integration test |
-| M2-A20 | Add unknown-postcard end-to-end fixture. | no-random-candidate test |
-| M2-A21 | Run automated M2 verification and plaintext-canary inspection. | evidence record |
-| M2-A22 | Run/document two-device physical scenario when devices are available. | signed manual checklist with APK/commit/device IDs |
+| ID | Depends on | Single outcome | Minimum verification |
+| --- | --- | --- | --- |
+| M2-P01 | rebrand baseline | Inventory actual M1 outbox/incoming/crypto/state components and map old M2 tasks to reuse/generalize/delete. | checked inventory; no parallel-component proposal |
+| M2-P02 | P01 | Add account-owner ID to incoming/outbox/blob/fingerprint/cursor domain and Room schema. | migration plus A/B DAO isolation tests |
+| M2-P03 | P02 | Require account scope on every DAO/index/outbox query used by M2. | A logout/B login returns zero A rows/candidates |
+| M2-P04 | P02 | Define account-scoped file roots and safe retention/purge policy. | cross-account path and cleanup tests |
+| M2-P05 | P02 | Add account-scoped WorkManager naming/tag/cancellation contract. | logout/account-switch worker cancellation test |
+| M2-P06 | P01 | Generalize the existing same-account publisher request/class for distinct sender/recipient without changing crypto framing. | self-send golden unchanged; distinct-ID AAD/statement/envelope test |
+| M2-P07 | P06 | Remove the Create self-recipient guard and feed the confirmed immutable recipient snapshot into the generalized publisher. | wrong/stale/unconfirmed recipient transition tests |
+| M2-P08 | P06 | Add sender-owned durable wrapped capsule-key retry material to the outbox. | wrong account/key/AAD fails; no plaintext storage canary |
+| M2-P09 | P08 | Delete sender retry material only on published/abort/terminal cleanup. | process restart and lifecycle cleanup tests |
+| M2-P10 | P01 | Extract one canonical statement/layout/ID verification core from `CapsuleAcceptanceGate`. | existing malformed/golden matrix remains green |
+| M2-P11 | P10 | Add control/index acceptance for envelope plus one delivered recognition blob while treating other bindings as declarations. | missing photos accepted only for index; recognition mismatch rejects |
+| M2-P12 | P10 | Add full presentation acceptance requiring every declared content/photo blob before plaintext. | missing/substituted blob and partial-plaintext rejection tests |
+| M2-P13 | P11,P12 | Pin local/server material-state semantics and legal compare-and-set transitions. | exhaustive transition table test |
+| M2-P14 | P01 | Record M1 physical CameraX/OpenCV smoke result and required corrections. | device/APK/commit evidence or explicit pending integration gate |
 
-## 12. Review and correction tasks
+**Checkpoint P:** review P01–P13 together before server/Android integration.
+
+## 11. M2 queue — server capsule routing
+
+| ID | Depends on | Single outcome | Minimum verification |
+| --- | --- | --- | --- |
+| M2-S01 | P01 | Add `capsules` SQLAlchemy model with ownership, expiry, and state constraints. | PostgreSQL metadata/constraint tests |
+| M2-S02 | S01 | Add `capsule_blobs` declaration model and uniqueness constraints. | PostgreSQL cardinality/ordinal tests |
+| M2-S03 | S01 | Add the single M2 recipient-envelope model. | owner/key FK and one-envelope tests |
+| M2-S04 | S01 | Add recipient delivery-state model; no open/scan fields. | privacy/uniqueness tests |
+| M2-S05 | S01 | Add scoped idempotency-record model and expiry index. | scope/hash/expiry tests |
+| M2-S06 | S01-S05 | Add one Alembic capsule/upload/delivery migration. | PostgreSQL upgrade/downgrade/upgrade |
+| M2-S07 | S06 | Add bounded draft request/parser validation for existing-user target only. | limits/cardinality/unknown-target tests |
+| M2-S08 | S07 | Add idempotent draft-create service with sender from auth. | replay/conflict/cross-user tests |
+| M2-S09 | S08 | Expose draft-create endpoint and redacted errors. | authorization/API contract tests |
+| M2-S10 | S06 | Add streaming temporary-object writer with actual byte cap and SHA-256. | oversized/truncated/hash-failure cleanup tests |
+| M2-S11 | S10 | Add idempotent object promotion plus blob-state compare-and-set. | identical/conflicting replay and failure injection |
+| M2-S12 | S11 | Expose authenticated blob PUT with required headers. | stream/auth/content-length tests |
+| M2-S13 | P10,S06 | Parse bounded canonical publish statements and compare exact declarations. | malformed/depth/size/mismatch corpus |
+| M2-S14 | S13 | Resolve authoritative sender/recipient bundles and verify Ed25519 signature. | wrong owner/key/signature; RETIRED sender/non-ACTIVE recipient matrix |
+| M2-S15 | S14,S12 | Add finalize PostgreSQL transaction; promotion orphans remain GC-safe ciphertext. | missing blob/stale key/rollback tests |
+| M2-S16 | S15 | Expose idempotent finalize endpoint. | replay/finalize-conflict tests |
+| M2-S17 | S16 | Add draft abort and expiry/unreferenced-object GC service. | READY protection and orphan cleanup test |
+| M2-S18 | S16 | Add recipient-only opaque cursor query. | stable pagination/page replay/cross-user tests |
+| M2-S19 | S18 | Expose route-only incoming DTO with no private/display fields. | response allow-list contract test |
+| M2-S20 | S16 | Expose recipient-only READY blob GET. | recipient/unrelated/draft authorization matrix |
+| M2-S21 | S20 | Add idempotent `CIPHERTEXT_SYNCED` transition after full material cache only. | no sender query and no scan/open timestamp tests |
+
+**Checkpoint S:** review authoritative-key finalize, storage failure injection,
+and authorization matrix before Android upload work consumes the API.
+
+## 12. M2 queue — Android upload, sync, and two-user flow
+
+| ID | Depends on | Single outcome | Minimum verification |
+| --- | --- | --- | --- |
+| M2-A01 | S09,P02 | Add draft-create client/repository mapping with existing-user target. | MockWebServer request/error contract |
+| M2-A02 | S12 | Add one-blob idempotent upload call with length/hash headers. | retry/header/body test |
+| M2-A03 | S16 | Add finalize client and structured stale-key mapping. | MockWebServer contract test |
+| M2-A04 | P05,A01-A03 | Add one account/capsule-scoped upload worker and legal state CAS. | worker account/state test |
+| M2-A05 | A04 | Resume after restart by reconciling server blob states and skipping STORED blobs. | process/repository replay test |
+| M2-A06 | P08,A03 | On stale recipient key, re-resolve and recover K from sender retry material. | restart + stale-key recovery test |
+| M2-A07 | A06 | Re-envelope and re-sign without changing artifact ciphertext. | byte-identical artifact/hash regression test |
+| M2-A08 | A04,P14 | Render current-send progress and recoverable/terminal errors only. | Compose state/no-history test |
+| M2-A09 | S19,P02 | Add account-scoped incoming cursor page upsert. | atomic page replay/cursor policy test |
+| M2-A10 | A09,P05 | Add authenticated account-scoped incoming WorkManager chain. | unique work/logout/account-switch test |
+| M2-A11 | P11,A09,S20 | Download and perform control/index acceptance on envelope + recognition blob. | wrong bundle/signature/hash/context matrix |
+| M2-A12 | A11 | Re-encrypt verified sender fingerprints and chooser hints into account-scoped local storage. | plaintext/storage/index privacy test |
+| M2-A13 | P12,S20 | Download/cache remaining content/photo ciphertext and run presentation acceptance. | authorization/hash/missing-material tests |
+| M2-A14 | A13,S21 | Mark `CIPHERTEXT_SYNCED` only after all required blobs are durable and hash-checked. | index-only never acknowledges test |
+| M2-A15 | A12,P14 | Feed only account-scoped verified sender candidates into the existing Scan flow. | two-candidate coordinator/no-list test |
+| M2-A16 | A15 | Persist recipient pair after verified automatic result. | generation/order test |
+| M2-A17 | A15 | Require explicit physical-card confirmation after a plausible manual chooser result. | state/confirmation test |
+| M2-A18 | A16,A17 | Prefer recipient pair later and retain sender fallback only under documented weak-evidence rule. | ordering regression test |
+| M2-A19 | A13,A15 | Issue presentation grant only after current scan and full presentation acceptance. | bypass/partial-material tests |
+| M2-A20 | A19 | Support later offline open from cached ciphertext after a fresh scan. | network-disabled/process-restart test |
+| M2-A21 | A19 | Show connectivity-required state when matched content is absent, with zero partial plaintext. | Compose/state test |
+| M2-A22 | A15 | Add duplicate-front/different-back end-to-end fixture. | automatic-or-plausible-chooser test |
+| M2-A23 | A15 | Add unknown-postcard fixture. | no-random-candidate test |
+| M2-A24 | all automated | Run PostgreSQL, BlobStore, Android, crypto, replay, account-switch, and plaintext-canary verification. | evidence record |
+| M2-A25 | A24,P14 | Run two-device existing-account physical transfer and later offline scan. | signed APK/commit/device checklist |
+
+**Checkpoints A:** review after upload A01–A08, incoming index A09–A12,
+presentation A13–A21, and final two-device evidence. Do not review every
+single implementation commit.
+
+## 13. Future M2.x — email invitation (architecture only)
+
+ADR-009 records the `RecipientTarget.ExistingUser | PendingEmail` seam. No M2
+task implements `PendingEmail`. Before M2.x work, an ADR must choose reserved
+future `user_id` versus a new protocol version, specify sender-job target
+commitment verification, and threat-model longer-lived sender envelopes,
+provider identity, email privacy, expiry, abuse, and eventual delivery.
+
+## 14. Review and correction tasks
 
 Review findings are not bundled. Each correction becomes a new task shaped as:
 

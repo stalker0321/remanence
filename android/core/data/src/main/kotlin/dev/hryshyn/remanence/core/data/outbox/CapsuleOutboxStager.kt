@@ -145,7 +145,7 @@ class CapsuleOutboxStager(
                     ) {
                         throw IllegalStateException("capsule already staged")
                     }
-                    capsuleDao.upsert(
+                    capsuleDao.insertOrAbort(
                         OutboxCapsuleEntity(
                             capsuleId = prepared.capsuleId.toString(),
                             idempotencyKey = prepared.idempotencyKey,
@@ -200,6 +200,14 @@ class CapsuleOutboxStager(
         withContext(Dispatchers.IO) {
             require(bytes.isNotEmpty()) { "refusing to persist empty bytes for $name" }
             val target = File(ciphertextDirectory, name)
+            // M2 review fix: a target that already exists is either another
+            // account's committed ciphertext or corrupt residue; overwriting
+            // it would silently damage the winner. Refuse BEFORE any byte of
+            // this invocation lands, so a foreign-owner capsule_id collision
+            // cannot touch winner-owned files either.
+            if (target.exists()) {
+                throw IllegalStateException("outbox file already present: $name")
+            }
             // Unique per-invocation temp name: two stagings can never rename
             // over or delete each other's in-flight temporary file.
             val temporary = File(ciphertextDirectory, "$name.tmp-${UUID.randomUUID()}")

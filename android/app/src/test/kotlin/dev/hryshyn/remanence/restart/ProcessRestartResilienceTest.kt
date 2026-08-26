@@ -94,7 +94,7 @@ class ProcessRestartResilienceTest {
         navigation.navigate(AppDestination.Capsule(grant.grantId.toString()))
 
         // 2. Persisted outbox: one ENCRYPTED capsule row plus its ciphertext blob.
-        database.outboxCapsuleDao().upsert(
+        database.outboxCapsuleDao().insertOrAbort(
             dev.hryshyn.remanence.core.data.db.OutboxCapsuleEntity(
                 capsuleId = capsuleId.toString(),
                 idempotencyKey = "idem-$capsuleId",

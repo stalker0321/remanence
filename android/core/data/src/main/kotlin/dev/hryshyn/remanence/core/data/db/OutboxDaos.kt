@@ -4,7 +4,6 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
-import androidx.room.Upsert
 
 /**
  * M2-P02/P03: every account-owned lookup, list, and compare-and-set on
@@ -15,9 +14,14 @@ import androidx.room.Upsert
 @Dao
 interface OutboxCapsuleDao {
 
-    /** Row creation only; the persisted [OutboxCapsuleEntity.ownerUserId] is authoritative afterwards. */
-    @Upsert
-    suspend fun upsert(capsule: OutboxCapsuleEntity)
+    /**
+     * Strict row creation: ANY capsule_id collision - including a foreign-
+     * owned one the staging pre-check cannot see by design - raises a SQLite
+     * constraint exception. Unlike an upsert it can NEVER be converted into
+     * an update that overwrites another local account's durable row.
+     */
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insertOrAbort(capsule: OutboxCapsuleEntity)
 
     @Query("DELETE FROM outbox_capsule")
     suspend fun clear()

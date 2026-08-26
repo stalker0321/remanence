@@ -220,7 +220,8 @@ class CapsuleOutboxStagerTest {
             stager.stage(prepared)
             throw AssertionError("expected failure")
         } catch (expected: IllegalStateException) {
-            assertEquals("could not persist $blockedBlobId.bin", expected.message)
+            // The existing blocker path must be refused BEFORE any overwrite.
+            assertEquals("outbox file already present: $blockedBlobId.bin", expected.message)
         }
 
         // Nothing of this invocation may survive: only the injected blocker
@@ -277,6 +278,87 @@ class CapsuleOutboxStagerTest {
         assertNull(database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId.toString(), otherOwner))
         assertTrue(database.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleId.toString(), otherOwner).isEmpty())
         assertEquals(5, database.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleId.toString(), OWNER).size)
+    }
+
+    /**
+     * M2 review regression: account B owns the committed capsule FIRST and
+     * account A attacks by reusing B's capsule_id. The collision must fail
+     * atomically BEFORE any winner row or file changes, and A must afterwards
+     * be able to neither overwrite nor delete any of B's material.
+     */
+    @Test
+    fun attackerCannotOverwriteOrDeleteWinnerByReusingItsCapsuleId() = runBlocking {
+        val winnerOwner = "0198f0a0-0000-7000-8000-00000000ab02"
+        val attackerOwner = OWNER
+        database = newFileBackedDatabase("stager-owner-collision.db")
+        ciphertextDirectory = File(context.filesDir, "outbox-staging-owner-collision")
+        val stager = CapsuleOutboxStager(database, ciphertextDirectory)
+
+        // B commits first, producing random ciphertext only it knows about.
+        stager.stage(preparedCapsule(ownerUserId = winnerOwner))
+
+        // Snapshot B exactly as committed.
+        val winnerRow =
+            database.outboxCapsuleDao()
+                .getByCapsuleIdAndOwner(capsuleId.toString(), winnerOwner)!!
+        val winnerBlobs =
+            database.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleId.toString(), winnerOwner)
+        val winnerFiles =
+            listOfNotNull(
+                winnerRow.envelopePath,
+                winnerRow.recognitionManifestPath,
+                winnerRow.contentManifestPath,
+                winnerRow.publishStatementPath,
+                winnerRow.publishStatementSignaturePath,
+            ).map { File(it) } + winnerBlobs.map { File(it.localCiphertextPath) }
+        val winnerBytes = winnerFiles.map { it.readBytes().toList() }
+
+        // A stages the SAME capsule id with fresh ciphertext bytes.
+        try {
+            stager.stage(preparedCapsule(ownerUserId = attackerOwner))
+            throw AssertionError("expected collision refusal")
+        } catch (expected: IllegalStateException) {
+            assertEquals(
+                "outbox file already present: envelope-$capsuleId.bin",
+                expected.message,
+            )
+        }
+
+        // Winner row is untouched, byte-for-byte logically identical.
+        assertEquals(
+            winnerRow,
+            database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId.toString(), winnerOwner),
+        )
+        assertEquals(5, database.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleId.toString(), winnerOwner).size)
+        winnerFiles.forEachIndexed { index, file ->
+            assertEquals(winnerBytes[index], file.readBytes().toList())
+        }
+        // No residue of A exists anywhere.
+        assertNull(
+            database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId.toString(), attackerOwner),
+        )
+        assertTrue(
+            database.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleId.toString(), attackerOwner).isEmpty(),
+        )
+
+        // A cannot mutate or delete B through any owner-required surface.
+        assertEquals(
+            0,
+            database.outboxCapsuleDao().transitionStateForOwner(
+                capsuleId.toString(),
+                attackerOwner,
+                OutboxCapsuleState.PUBLISHED,
+                listOf(OutboxCapsuleState.ENCRYPTED),
+            ),
+        )
+        assertEquals(
+            0,
+            database.outboxBlobDao().deleteByCapsuleIdAndOwner(capsuleId.toString(), attackerOwner),
+        )
+        assertEquals(
+            5,
+            database.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleId.toString(), winnerOwner).size,
+        )
     }
 
     @Test

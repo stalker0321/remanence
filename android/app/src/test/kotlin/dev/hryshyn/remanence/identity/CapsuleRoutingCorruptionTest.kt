@@ -258,7 +258,13 @@ class CapsuleRoutingCorruptionTest {
 
     private suspend fun tamperRow(transform: (OutboxCapsuleEntity) -> OutboxCapsuleEntity) {
         val row = database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleUuid.toString(), userUuid.toString())!!
-        database.outboxCapsuleDao().upsert(transform(row))
+        // Storage-level tamper of the test's OWN account row: strict insert
+        // refuses update-by-collision, so replace via scoped delete + insert.
+        database.openHelper.writableDatabase.execSQL(
+            "DELETE FROM outbox_capsule WHERE capsule_id = ? AND owner_user_id = ?",
+            arrayOf(row.capsuleId, userUuid.toString()),
+        )
+        database.outboxCapsuleDao().insertOrAbort(transform(row))
     }
 
     private fun scanViewModel(): ScanViewModel = ScanViewModel(

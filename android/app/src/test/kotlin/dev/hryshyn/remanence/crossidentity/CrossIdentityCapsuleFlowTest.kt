@@ -254,7 +254,13 @@ class CrossIdentityCapsuleFlowTest {
 
         // A FORGED replacement of the row-carried export is inert: trust is
         // decided by the boundary, so the authentic capsule still verifies.
-        database.outboxCapsuleDao().upsert(
+        // (Storage-level row replacement: strict-insert refuses an UPDATE-
+        // by-collision, so the tamper first removes its own account's row.)
+        database.openHelper.writableDatabase.execSQL(
+            "DELETE FROM outbox_capsule WHERE capsule_id = ? AND owner_user_id = ?",
+            arrayOf(capsuleUuid.toString(), senderUuid.toString()),
+        )
+        database.outboxCapsuleDao().insertOrAbort(
             row.copy(senderSigningPublicKeysetB64 = Base64.urlSafeEncode(attackerPublicExport())),
         )
         val afterTamper = runAcceptanceGate(

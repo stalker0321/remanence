@@ -137,7 +137,7 @@ class AccountScopeIsolationTest {
         )
 
     private suspend fun seedAccountAMaterial() {
-        database.outboxCapsuleDao().upsert(outboxCapsule(capsuleA, ownerA))
+        database.outboxCapsuleDao().insertOrAbort(outboxCapsule(capsuleA, ownerA))
         database.outboxBlobDao().upsertAll(listOf(outboxBlob(blobA1, capsuleA, ownerA)))
         database.incomingCapsuleDao().upsertAll(listOf(incomingCapsule(capsuleA, ownerA)))
         database.incomingEnvelopeDao().upsert(incomingEnvelope(capsuleA, ownerA))

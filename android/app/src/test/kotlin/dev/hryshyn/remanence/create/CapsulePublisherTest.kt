@@ -15,6 +15,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import dev.hryshyn.remanence.core.crypto.AccountIdentityGenerator
 import dev.hryshyn.remanence.core.crypto.CapsuleAcceptanceGate
 import dev.hryshyn.remanence.core.crypto.CapsuleAcceptanceInput
@@ -51,6 +54,8 @@ import dev.hryshyn.remanence.core.model.UserId
  * IDs are independently bound into the statement, the recipient envelope
  * context/AAD, and the PreparedOutboxCapsule routing fields.
  */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class CapsulePublisherTest {
 
     private val testKekBoundary = SoftwareKekBoundary()
@@ -1018,6 +1023,15 @@ class CapsulePublisherTest {
         // contain the plaintext keyset bytes).
         val envIdx = indexOf(prepared.envelopeCiphertext, capsuleKeysetBytes)
         assertTrue("raw capsule keyset must not appear in envelope ciphertext", envIdx < 0)
+        // M2-P08: the sender retry wrapped keyset record is the primary
+        // new storage surface for the capsule keyset material. The raw
+        // serialized keyset must NOT appear as a substring of the opaque
+        // retry bytes — only the wrapped ciphertext may be present.
+        val retryIdx = indexOf(prepared.senderRetryWrappedKeysetBytes!!, capsuleKeysetBytes)
+        assertTrue(
+            "raw capsule keyset must not appear in senderRetryWrappedKeysetBytes",
+            retryIdx < 0,
+        )
     }
 
     private fun indexOf(haystack: ByteArray, needle: ByteArray): Int {
@@ -1029,5 +1043,70 @@ class CapsulePublisherTest {
             return i
         }
         return -1
+    }
+
+    /**
+     * M2-P08 security canary: publish a real capsule through
+     * CapsulePublisher, stage it through CapsuleOutboxStager, read the
+     * actual .pwks file referenced by senderRetryKeysetPath, and prove
+     * the raw serialized capsule keyset is absent from those persisted
+     * bytes. The retry record is the primary new storage surface; the
+     * canary ensures no plaintext keyset material leaks into it on
+     * disk.
+     */
+    @Test
+    fun persistedRetryFileContainsNoRawCapsuleKeyset() {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        val stagingDir = java.io.File(context.filesDir, "retry-canary-staging-${System.nanoTime()}")
+        var database: dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase? = null
+        try {
+            stagingDir.mkdirs()
+            val roots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir)
+            val retryStore = dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore(roots)
+
+            // In-memory DB: no on-disk file to mis-path; the only durable
+            // artefact under test is the .pwks file on the staging roots.
+            database = androidx.room.Room.inMemoryDatabaseBuilder(
+                context,
+                dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase::class.java,
+            ).allowMainThreadQueries().build()
+
+            val stager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, roots, retryStore)
+
+            val prepared = publisher.publish(selfSendRequest())
+            kotlinx.coroutines.runBlocking { stager.stage(prepared) }
+
+            // Recover the raw capsule keyset from the envelope.
+            val opened = RecipientEnvelopeCryptor().open(
+                identity.encryptionPrivateHandle,
+                dev.hryshyn.remanence.core.model.RecipientEnvelopeContextInput(
+                    CapsuleId(capsuleId), UserId(userId), UserId(userId), KeyBundleId(bundleId),
+                ),
+                prepared.envelopeCiphertext,
+            )
+            val capsuleKeysetBytes = RecipientEnvelopePlaintext.parseFrom(opened).capsuleAeadKeyset.toByteArray()
+
+            // Read the entity and the actual .pwks file on disk.
+            val entity = kotlinx.coroutines.runBlocking {
+                database.outboxCapsuleDao()
+                    .getByCapsuleIdAndOwner(capsuleId.toString(), userId.toString())
+            }!!
+            assertNotNull("senderRetryKeysetPath must be set", entity.senderRetryKeysetPath)
+            val pwksFile = java.io.File(entity.senderRetryKeysetPath!!)
+            assertTrue("retry .pwks file must exist on disk", pwksFile.exists())
+            val persistedBytes = pwksFile.readBytes()
+
+            // The raw serialized capsule keyset must NOT be a substring of
+            // the persisted .pwks bytes — only the KEK-wrapped ciphertext
+            // may be present.
+            val idx = indexOf(persistedBytes, capsuleKeysetBytes)
+            assertTrue(
+                "raw capsule keyset must not appear in persisted .pwks file (found at offset $idx)",
+                idx < 0,
+            )
+        } finally {
+            database?.close()
+            stagingDir.deleteRecursively()
+        }
     }
 }

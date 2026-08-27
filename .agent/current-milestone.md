@@ -1,5 +1,8 @@
 # Current milestone
 
-`M1_SINGLE_ACCOUNT`
+`M2_TWO_USER_TRANSFER`
 
-Review 004 PASS at `35eac975ff1282539693b9445ef1d18a022a7fa1`. Qwen may implement only the single atomic task assigned by Codex. Next task: `M1-S11`. Physical Android device remains a blocker for APK installation, CameraX, CV, and physical M1/M2 evidence.
+Checkpoint P (P01-P13) PASS at `6431e6e`. Next task: integrate the
+reviewed M2 foundation with current `main`, then begin the server routing
+vertical slice. Physical Android CameraX/OpenCV evidence remains P14 and cannot
+be claimed until exercised on hardware.

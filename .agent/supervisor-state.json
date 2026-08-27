@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "current_milestone": "M1_SINGLE_ACCOUNT",
-  "current_task": "M1-S11",
-  "last_completed_implementation_commit": "35eac975ff1282539693b9445ef1d18a022a7fa1",
-  "last_reviewed_commit": "35eac975ff1282539693b9445ef1d18a022a7fa1",
+  "current_milestone": "M2_TWO_USER_TRANSFER",
+  "current_task": "M2_INTEGRATION_BASELINE",
+  "last_completed_implementation_commit": "6431e6e",
+  "last_reviewed_commit": "6431e6e",
   "known_blockers": [
     "No physical Android device is currently attached; APK installation, CameraX, CV, and physical M1/M2 evidence cannot be claimed until a device is available."
   ],
-  "implementation_tmux_target": "main:6",
+  "implementation_tmux_target": "main:1",
   "codex_tmux_target": "main:1",
   "task_max_expected_minutes": 10,
   "review_interval_minutes": 60

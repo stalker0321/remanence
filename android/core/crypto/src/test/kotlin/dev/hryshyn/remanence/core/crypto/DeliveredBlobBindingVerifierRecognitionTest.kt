@@ -210,4 +210,41 @@ class DeliveredBlobBindingVerifierRecognitionTest {
         )
         assertTrue(result)
     }
+
+    @Test
+    fun exactShortCiphertextWithMatchingSignedSizeAndHashPasses() {
+        val ciphertext = ByteArray(8) { (it + 1).toByte() }
+        val statement = listOf(fullRecognitionBinding(ciphertext))
+        val result = verifier.matchesRecognition(
+            bindings = statement,
+            recognitionBlobId = recognitionBlobId,
+            recognitionCiphertext = ciphertext,
+        )
+        assertTrue(result)
+    }
+
+    @Test
+    fun exactEmptyCiphertextWithMatchingSignedSizeAndHashPasses() {
+        val ciphertext = ByteArray(0)
+        val statement = listOf(fullRecognitionBinding(ciphertext))
+        val result = verifier.matchesRecognition(
+            bindings = statement,
+            recognitionBlobId = recognitionBlobId,
+            recognitionCiphertext = ciphertext,
+        )
+        assertTrue(result)
+    }
+
+    @Test
+    fun changedShortCiphertextStillRejects() {
+        val signed = ByteArray(8) { (it + 1).toByte() }
+        val delivered = signed.copyOf().also { it[0] = (it[0].toInt() xor 1).toByte() }
+        val statement = listOf(fullRecognitionBinding(signed))
+        val result = verifier.matchesRecognition(
+            bindings = statement,
+            recognitionBlobId = recognitionBlobId,
+            recognitionCiphertext = delivered,
+        )
+        assertFalse(result)
+    }
 }

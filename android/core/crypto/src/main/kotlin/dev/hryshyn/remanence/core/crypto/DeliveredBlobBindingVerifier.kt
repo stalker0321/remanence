@@ -27,7 +27,10 @@ import java.security.MessageDigest
  * always derived from the ciphertext bytes the caller actually holds;
  * no caller-supplied size/SHA fields are trusted independently. This is
  * for control/index sync only; the full [CapsuleAcceptanceGate] still
- * demands every declared blob.
+ * demands every declared blob. Both binding methods verify signed
+ * transport identity only: an exact delivered byte sequence of any
+ * length passes size plus SHA-256, while AEAD validity belongs to the
+ * later decrypt gate.
  *
  * M2-P12a adds the full-material check [matchesFullCoverage]: given the
  * canonical signed statement and the actual delivered ciphertext bytes
@@ -37,10 +40,13 @@ import java.security.MessageDigest
  * actual bytes the caller holds. The method rejects missing, extra,
  * duplicate IDs, wrong size/hash, and substitution. No
  * caller-supplied size or digest is trusted: the bytes are the only
- * source of transport identity. This is the P12a prerequisite used by
- * the future presentation gate; the existing metadata-based
- * [matches] method and the current [CapsuleAcceptanceGate] behavior
- * remain unchanged in this commit.
+ * source of transport identity. Both binding methods verify signed
+ * transport identity only: an exact delivered byte sequence of any
+ * length passes size plus SHA-256, while AEAD validity belongs to the
+ * later decrypt gate. This is the P12a prerequisite used by the future
+ * presentation gate; the existing metadata-based [matches] method and
+ * the current [CapsuleAcceptanceGate] behavior remain unchanged in
+ * this commit.
  */
 internal class DeliveredBlobBindingVerifier {
 
@@ -88,7 +94,6 @@ internal class DeliveredBlobBindingVerifier {
         val binding = recognitionBindings.single()
         if (binding.blobId != recognitionBlobId.toProtoBytes()) return false
         if (binding.ciphertextSize != recognitionCiphertext.size.toLong()) return false
-        if (recognitionCiphertext.size < SHA256_BYTES) return false
         val actualSha = MessageDigest.getInstance("SHA-256").digest(recognitionCiphertext)
         return MessageDigest.isEqual(binding.ciphertextSha256.toByteArray(), actualSha)
     }
@@ -103,7 +108,6 @@ internal class DeliveredBlobBindingVerifier {
         if (bindings.map { it.blobId }.toSet().size != bindings.size) return false
         return bindings.all { binding ->
             val ciphertext = byId[binding.blobId]?.single()?.ciphertext ?: return@all false
-            if (ciphertext.size < SHA256_BYTES) return@all false
             if (binding.ciphertextSize != ciphertext.size.toLong()) return@all false
             val actualSha = MessageDigest.getInstance("SHA-256").digest(ciphertext)
             MessageDigest.isEqual(binding.ciphertextSha256.toByteArray(), actualSha)

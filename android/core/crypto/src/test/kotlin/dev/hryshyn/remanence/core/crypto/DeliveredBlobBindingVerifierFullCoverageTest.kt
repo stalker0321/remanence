@@ -302,12 +302,47 @@ class DeliveredBlobBindingVerifierFullCoverageTest {
     }
 
     @Test
-    fun veryShortCiphertextRejectsBindingHashCheck() {
-        val tooShort = ByteArray(16) { 0x77 }
-        val binding = binding(photo1BlobId, ArtifactKind.PHOTO, 0, ByteArray(16) { 0x78 })
+    fun shortCiphertextWithMismatchedHashStillRejects() {
+        val ciphertext = ByteArray(16) { 0x77 }
+        val other = ByteArray(16) { 0x78 }
+        val binding = binding(photo1BlobId, ArtifactKind.PHOTO, 0, other)
         val result = verifier.matchesFullCoverage(
             bindings = listOf(binding),
-            delivered = listOf(DeliveredCiphertext(photo1BlobId, tooShort)),
+            delivered = listOf(DeliveredCiphertext(photo1BlobId, ciphertext)),
+        )
+        assertFalse(result)
+    }
+
+    @Test
+    fun exactShortCiphertextWithMatchingSignedSizeAndHashPasses() {
+        val ciphertext = ByteArray(8) { (it + 1).toByte() }
+        val binding = binding(photo1BlobId, ArtifactKind.PHOTO, 0, ciphertext)
+        val result = verifier.matchesFullCoverage(
+            bindings = listOf(binding),
+            delivered = listOf(DeliveredCiphertext(photo1BlobId, ciphertext)),
+        )
+        assertTrue(result)
+    }
+
+    @Test
+    fun exactEmptyCiphertextWithMatchingSignedSizeAndHashPasses() {
+        val ciphertext = ByteArray(0)
+        val binding = binding(photo1BlobId, ArtifactKind.PHOTO, 0, ciphertext)
+        val result = verifier.matchesFullCoverage(
+            bindings = listOf(binding),
+            delivered = listOf(DeliveredCiphertext(photo1BlobId, ciphertext)),
+        )
+        assertTrue(result)
+    }
+
+    @Test
+    fun changedShortCiphertextStillRejects() {
+        val signed = ByteArray(8) { (it + 1).toByte() }
+        val delivered = signed.copyOf().also { it[0] = (it[0].toInt() xor 1).toByte() }
+        val binding = binding(photo1BlobId, ArtifactKind.PHOTO, 0, signed)
+        val result = verifier.matchesFullCoverage(
+            bindings = listOf(binding),
+            delivered = listOf(DeliveredCiphertext(photo1BlobId, delivered)),
         )
         assertFalse(result)
     }

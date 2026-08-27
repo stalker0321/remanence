@@ -50,6 +50,20 @@ enum class RejectionReason {
      * emit this reason.
      */
     RECOGNITION_BINDING_INVALID,
+    /**
+     * Control/index acceptance only: the capsule keyset from the verified
+     * envelope, the AEAD primitive, or the recognition ciphertext failed
+     * integrity verification. The full [CapsuleAcceptanceGate] does not
+     * emit this reason.
+     */
+    RECOGNITION_AEAD_INVALID,
+    /**
+     * Control/index acceptance only: the decrypted recognition manifest
+     * did not agree with the signed capsule on identity or had empty
+     * front/back fingerprints. The full [CapsuleAcceptanceGate] does not
+     * emit this reason.
+     */
+    RECOGNITION_PAYLOAD_INVALID,
 }
 
 /**

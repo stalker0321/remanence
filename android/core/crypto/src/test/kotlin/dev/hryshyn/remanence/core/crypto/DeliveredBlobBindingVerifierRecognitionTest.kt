@@ -13,9 +13,10 @@ import kotlin.test.assertTrue
 /**
  * M2-P11 focused tests for the recognition-index binding check used by
  * [ControlIndexAcceptanceGate]. Verifies the contract: the statement
- * must declare exactly one RECOGNITION_MANIFEST binding with ordinal -1
- * and that binding must match the supplied recognition blob identity,
- * byte size, and constant-time SHA-256. Other content/photo bindings
+ * must declare exactly one RECOGNITION_MANIFEST binding with ordinal
+ * -1 and that binding must match the supplied recognition blob
+ * identity, the byte length of the supplied ciphertext, and the
+ * SHA-256 of the supplied ciphertext. Other content/photo bindings
  * are not consulted.
  */
 class DeliveredBlobBindingVerifierRecognitionTest {
@@ -45,8 +46,17 @@ class DeliveredBlobBindingVerifierRecognitionTest {
         .setCiphertextSha256(ByteString.copyFrom(hash))
         .build()
 
-    private fun fullRecognitionBinding(size: Long = 100L, hash: ByteArray = sha256("recognition".toByteArray())) =
-        binding(recognitionBlobId, ArtifactKind.RECOGNITION_MANIFEST, -1, size, hash)
+    private fun fullRecognitionBinding(
+        ciphertext: ByteArray = recognitionCiphertext(),
+    ): ArtifactBinding = binding(
+        recognitionBlobId,
+        ArtifactKind.RECOGNITION_MANIFEST,
+        -1,
+        size = ciphertext.size.toLong(),
+        hash = sha256(ciphertext),
+    )
+
+    private fun recognitionCiphertext(): ByteArray = ByteArray(100) { (it + 1).toByte() }
 
     private fun fullStatement(): List<ArtifactBinding> = listOf(
         fullRecognitionBinding(),
@@ -58,12 +68,11 @@ class DeliveredBlobBindingVerifierRecognitionTest {
 
     @Test
     fun fullStatementWithMatchingRecognitionMatches() {
-        val recognition = fullRecognitionBinding()
+        val ciphertext = recognitionCiphertext()
         val result = verifier.matchesRecognition(
             bindings = fullStatement(),
             recognitionBlobId = recognitionBlobId,
-            recognitionCiphertextSize = recognition.ciphertextSize,
-            recognitionCiphertextSha256 = recognition.ciphertextSha256.toByteArray(),
+            recognitionCiphertext = ciphertext,
         )
         assertTrue(result)
     }
@@ -78,8 +87,7 @@ class DeliveredBlobBindingVerifierRecognitionTest {
             verifier.matchesRecognition(
                 bindings = statement,
                 recognitionBlobId = recognitionBlobId,
-                recognitionCiphertextSize = 100L,
-                recognitionCiphertextSha256 = sha256("recognition".toByteArray()),
+                recognitionCiphertext = recognitionCiphertext(),
             ),
         )
     }
@@ -94,8 +102,7 @@ class DeliveredBlobBindingVerifierRecognitionTest {
             verifier.matchesRecognition(
                 bindings = statement,
                 recognitionBlobId = recognitionBlobId,
-                recognitionCiphertextSize = 100L,
-                recognitionCiphertextSha256 = sha256("recognition".toByteArray()),
+                recognitionCiphertext = recognitionCiphertext(),
             ),
         )
     }
@@ -110,8 +117,7 @@ class DeliveredBlobBindingVerifierRecognitionTest {
             verifier.matchesRecognition(
                 bindings = statement,
                 recognitionBlobId = recognitionBlobId,
-                recognitionCiphertextSize = 100L,
-                recognitionCiphertextSha256 = sha256("recognition".toByteArray()),
+                recognitionCiphertext = recognitionCiphertext(),
             ),
         )
     }
@@ -126,8 +132,7 @@ class DeliveredBlobBindingVerifierRecognitionTest {
             verifier.matchesRecognition(
                 bindings = statement,
                 recognitionBlobId = recognitionBlobId,
-                recognitionCiphertextSize = 100L,
-                recognitionCiphertextSha256 = sha256("recognition".toByteArray()),
+                recognitionCiphertext = recognitionCiphertext(),
             ),
         )
     }
@@ -143,8 +148,7 @@ class DeliveredBlobBindingVerifierRecognitionTest {
             verifier.matchesRecognition(
                 bindings = statement,
                 recognitionBlobId = recognitionBlobId,
-                recognitionCiphertextSize = 100L,
-                recognitionCiphertextSha256 = sha256("recognition".toByteArray()),
+                recognitionCiphertext = recognitionCiphertext(),
             ),
         )
     }
@@ -155,53 +159,54 @@ class DeliveredBlobBindingVerifierRecognitionTest {
             binding(recognitionBlobId, ArtifactKind.RECOGNITION_MANIFEST, -1, 100L, sha256("recognition".toByteArray())),
             binding(photo1BlobId, ArtifactKind.PHOTO, 0, 300L, sha256("p1".toByteArray())),
         )
+        val ciphertext = ByteArray(99) { 0x33 }
         assertFalse(
             verifier.matchesRecognition(
                 bindings = statement,
                 recognitionBlobId = recognitionBlobId,
-                recognitionCiphertextSize = 999L,
-                recognitionCiphertextSha256 = sha256("recognition".toByteArray()),
+                recognitionCiphertext = ciphertext,
             ),
         )
     }
 
     @Test
     fun wrongRecognitionHashRejects() {
+        val ciphertext = recognitionCiphertext()
+        val differentCiphertext = ciphertext.copyOf().also { it[0] = (it[0].toInt() xor 1).toByte() }
         val statement = listOf(
-            binding(recognitionBlobId, ArtifactKind.RECOGNITION_MANIFEST, -1, 100L, sha256("recognition".toByteArray())),
+            fullRecognitionBinding(ciphertext),
             binding(photo1BlobId, ArtifactKind.PHOTO, 0, 300L, sha256("p1".toByteArray())),
         )
         assertFalse(
             verifier.matchesRecognition(
                 bindings = statement,
                 recognitionBlobId = recognitionBlobId,
-                recognitionCiphertextSize = 100L,
-                recognitionCiphertextSha256 = sha256("evil".toByteArray()),
+                recognitionCiphertext = differentCiphertext,
             ),
         )
     }
 
     @Test
     fun nonFullStatementStillAcceptsRecognitionWhenItMatches() {
-        val statement = listOf(fullRecognitionBinding())
+        val ciphertext = recognitionCiphertext()
+        val statement = listOf(fullRecognitionBinding(ciphertext))
         assertTrue(
             verifier.matchesRecognition(
                 bindings = statement,
                 recognitionBlobId = recognitionBlobId,
-                recognitionCiphertextSize = 100L,
-                recognitionCiphertextSha256 = sha256("recognition".toByteArray()),
+                recognitionCiphertext = ciphertext,
             ),
         )
     }
 
     @Test
     fun fullStatementMissingAllContentAndPhotosStillAcceptsRecognition() {
-        val statement = listOf(fullRecognitionBinding())
+        val ciphertext = recognitionCiphertext()
+        val statement = listOf(fullRecognitionBinding(ciphertext))
         val result = verifier.matchesRecognition(
             bindings = statement,
             recognitionBlobId = recognitionBlobId,
-            recognitionCiphertextSize = 100L,
-            recognitionCiphertextSha256 = sha256("recognition".toByteArray()),
+            recognitionCiphertext = ciphertext,
         )
         assertTrue(result)
     }

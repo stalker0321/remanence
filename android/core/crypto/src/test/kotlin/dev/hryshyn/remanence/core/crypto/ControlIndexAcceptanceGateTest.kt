@@ -255,10 +255,42 @@ class ControlIndexAcceptanceGateTest {
     }
 
     @Test
-    fun malformedInnerManifestFailsAad() {
+    fun tamperedRecognitionCiphertextRemainsAeadInvalid() {
+        val capsule = buildIndexCapsule()
+        val tamperedCiphertext = capsule.recognitionCiphertext.copyOf().also { ciphertext ->
+            ciphertext[ciphertext.lastIndex] = (ciphertext[ciphertext.lastIndex].toInt() xor 1).toByte()
+        }
+        val originalStatement = PublishStatement.parseFrom(capsule.statementBytes)
+        val forgedStatement = originalStatement.toBuilder()
+            .setArtifacts(
+                0,
+                originalStatement.getArtifacts(0).toBuilder()
+                    .setCiphertextSize(tamperedCiphertext.size.toLong())
+                    .setCiphertextSha256(ByteString.copyFrom(sha256(tamperedCiphertext)))
+                    .build(),
+            )
+            .build()
+        val statementBytes = deterministicBytes(forgedStatement)
+        val signed = signer.sign(senderIdentity.signingPrivateHandle, statementBytes)
+        val envelope = envelopeFor(statementBytes, serializeKeyset(capsule.keyset), sha256(statementBytes))
+        val result = indexGate.verify(
+            indexInput(
+                capsule,
+                recognitionCiphertextOverride = tamperedCiphertext,
+                envelopeOverride = envelope,
+                statementOverride = statementBytes,
+                signatureOverride = signed.signature,
+            ),
+        )
+
+        assertEquals(RejectionReason.RECOGNITION_AEAD_INVALID, rejected(result))
+    }
+
+    @Test
+    fun malformedInnerManifestFailsPayload() {
         val capsule = buildIndexCapsuleWithMalformedPlaintext()
         val result = indexGate.verify(indexInput(capsule))
-        assertEquals(RejectionReason.RECOGNITION_AEAD_INVALID, rejected(result))
+        assertEquals(RejectionReason.RECOGNITION_PAYLOAD_INVALID, rejected(result))
     }
 
     private fun buildIndexCapsuleWithMalformedPlaintext(): IndexCapsule {
@@ -269,7 +301,7 @@ class ControlIndexAcceptanceGateTest {
             senderUserId = senderUser,
             recipientUserId = recipientUser,
         )
-        val garbagePlaintext = ByteArray(64) { 0x55 }
+        val garbagePlaintext = byteArrayOf(0x0a, 0x80.toByte())
         val recognitionCiphertext = CapsuleArtifactCryptor().encrypt(
             capsuleKeyset = keyset,
             context = dev.hryshyn.remanence.core.model.ArtifactAadInput(
@@ -304,23 +336,23 @@ class ControlIndexAcceptanceGateTest {
     }
 
     @Test
-    fun emptyFrontFingerprintFailsClosed() {
+    fun emptyFrontFingerprintFailsPayload() {
         val capsule = buildIndexCapsuleWithForgedManifest(
             frontFingerprint = ByteArray(0),
             backFingerprint = back,
         )
         val result = indexGate.verify(indexInput(capsule))
-        assertEquals(RejectionReason.RECOGNITION_AEAD_INVALID, rejected(result))
+        assertEquals(RejectionReason.RECOGNITION_PAYLOAD_INVALID, rejected(result))
     }
 
     @Test
-    fun emptyBackFingerprintFailsClosed() {
+    fun emptyBackFingerprintFailsPayload() {
         val capsule = buildIndexCapsuleWithForgedManifest(
             frontFingerprint = front,
             backFingerprint = ByteArray(0),
         )
         val result = indexGate.verify(indexInput(capsule))
-        assertEquals(RejectionReason.RECOGNITION_AEAD_INVALID, rejected(result))
+        assertEquals(RejectionReason.RECOGNITION_PAYLOAD_INVALID, rejected(result))
     }
 
     private fun buildIndexCapsuleWithForgedManifest(
@@ -379,7 +411,7 @@ class ControlIndexAcceptanceGateTest {
     }
 
     @Test
-    fun innerCapsuleIdMismatchFailsClosed() {
+    fun innerCapsuleIdMismatchFailsPayload() {
         val forgedKeyset = CapsuleKeysetGenerator().generate()
         val routing = RecognitionManifestCodec.RoutingContext(
             capsuleId = capsuleId,
@@ -461,7 +493,7 @@ class ControlIndexAcceptanceGateTest {
             recognitionCiphertext = forgedCiphertext,
         )
         val result = indexGate.verify(input)
-        assertEquals(RejectionReason.RECOGNITION_AEAD_INVALID, rejected(result))
+        assertEquals(RejectionReason.RECOGNITION_PAYLOAD_INVALID, rejected(result))
     }
 
     @Test

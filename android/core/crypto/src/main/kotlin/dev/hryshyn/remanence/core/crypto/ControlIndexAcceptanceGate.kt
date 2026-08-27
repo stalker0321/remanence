@@ -119,6 +119,8 @@ class ControlIndexAcceptanceGate(
 
         val content = try {
             recognitionCodec.decryptAndParse(keyset, routing, input.recognitionCiphertext)
+        } catch (_: RecognitionManifestPayloadException) {
+            return ControlIndexAcceptanceResult.Rejected(RejectionReason.RECOGNITION_PAYLOAD_INVALID)
         } catch (_: GeneralSecurityException) {
             return ControlIndexAcceptanceResult.Rejected(RejectionReason.RECOGNITION_AEAD_INVALID)
         } catch (_: Exception) {

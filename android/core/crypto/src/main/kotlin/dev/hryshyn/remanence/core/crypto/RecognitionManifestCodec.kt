@@ -10,6 +10,11 @@ import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
 import dev.hryshyn.remanence.core.model.CryptoContextEncoder
 import dev.hryshyn.remanence.core.model.NormalizedHandle
 
+internal class RecognitionManifestPayloadException : GeneralSecurityException {
+    constructor(message: String) : super(message)
+    constructor(message: String, cause: Throwable) : super(message, cause)
+}
+
 /** Locally decrypted view of one recognition manifest. */
 data class RecognitionManifestContent(
     val protocolVersion: Int,
@@ -77,7 +82,7 @@ class RecognitionManifestCodec {
         }
         val manifest = RecognitionManifest.parseFrom(bytes)
         if (manifest.protocolVersion != ProtocolV1.PROTOCOL_VERSION) {
-            throw GeneralSecurityException("unsupported manifest protocol version")
+            throw RecognitionManifestPayloadException("unsupported manifest protocol version")
         }
 
         val expectedCapsuleId = routingContext.capsuleId.toProtoBytes().toByteArray()
@@ -85,24 +90,24 @@ class RecognitionManifestCodec {
         if (actualCapsuleId.size != expectedCapsuleId.size ||
             !MessageDigest.isEqual(actualCapsuleId, expectedCapsuleId)
         ) {
-            throw GeneralSecurityException("recognition manifest capsule id does not match routing")
+            throw RecognitionManifestPayloadException("recognition manifest capsule id does not match routing")
         }
 
-        if (!manifest.hasChooserHint()) throw GeneralSecurityException("manifest missing chooser hint")
+        if (!manifest.hasChooserHint()) throw RecognitionManifestPayloadException("manifest missing chooser hint")
         val chooserHint = manifest.chooserHint
         val senderHandleSnapshot = chooserHint.senderHandleSnapshot
         if (NormalizedHandle.parse(senderHandleSnapshot).value != senderHandleSnapshot) {
-            throw GeneralSecurityException("recognition manifest sender handle is not canonical")
+            throw RecognitionManifestPayloadException("recognition manifest sender handle is not canonical")
         }
         val placeLabel = if (chooserHint.hasPlaceLabel()) chooserHint.placeLabel else null
         if (placeLabel != null && placeLabel.toByteArray(Charsets.UTF_8).size > PLACE_LABEL_MAX_BYTES) {
-            throw GeneralSecurityException("recognition manifest place label exceeds byte limit")
+            throw RecognitionManifestPayloadException("recognition manifest place label exceeds byte limit")
         }
 
         val frontFingerprint = manifest.frontFingerprint.toByteArray()
         val backFingerprint = manifest.backFingerprint.toByteArray()
         if (frontFingerprint.isEmpty() || backFingerprint.isEmpty()) {
-            throw GeneralSecurityException("recognition manifest fingerprints are incomplete")
+            throw RecognitionManifestPayloadException("recognition manifest fingerprints are incomplete")
         }
 
         RecognitionManifestContent(
@@ -114,10 +119,12 @@ class RecognitionManifestCodec {
             frontFingerprint = frontFingerprint,
             backFingerprint = backFingerprint,
         )
+    } catch (failure: RecognitionManifestPayloadException) {
+        throw failure
     } catch (failure: GeneralSecurityException) {
         throw failure
     } catch (failure: Exception) {
-        throw GeneralSecurityException("recognition manifest failed structural validation", failure)
+        throw RecognitionManifestPayloadException("recognition manifest failed structural validation", failure)
     }
 
     private fun manifestContext(routing: RoutingContext): ArtifactAadInput =

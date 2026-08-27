@@ -9,7 +9,6 @@ import dev.hryshyn.remanence.ui.scan.ScanViewModel
 import dev.hryshyn.remanence.ui.home.HomeCapabilityViewModel
 import dev.hryshyn.remanence.ui.auth.LoginViewModel
 import dev.hryshyn.remanence.ui.auth.RegistrationViewModel
-import java.io.File
 
 /**
  * FIX-M1-007-08: single Compose-facing factory so every screen ViewModel is
@@ -61,9 +60,9 @@ class RemanenceViewModelFactory(
                 ),
             ),
             profile = dev.hryshyn.remanence.core.recognition.RecognitionProfile.mvpOrbV1(),
-            // FIX-STATE-13: the staging ROOT; each publication owns
-            // create-staging/<capsule UUID>/ inside it.
-            stagingDirectory = File(container.appFilesRoot, "create-staging"),
+            // LUNA-01: plaintext staging resolves from the immutable owner
+            // snapshot into accounts/<owner>/temp/create/<capsule UUID>.
+            accountScopedFileRoots = container.accountScopedFileRoots,
             openPhotoSource = { pickerId ->
                 val uri = android.net.Uri.parse(pickerId)
                 dev.hryshyn.remanence.create.PhotoSource {

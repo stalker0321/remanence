@@ -139,7 +139,9 @@ class RootFlowLayoutTest {
             SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(context().filesDir, "root-flow"))),
         ),
         profile = RecognitionProfile.mvpOrbV1(),
-        stagingDirectory = File(context().filesDir, "root-flow-staging"),
+        accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(
+            File(context().filesDir, "root-flow-staging"),
+        ),
         openPhotoSource = { error("unused") },
         frontProcessor = RejectingProcessor(),
         backProcessor = RejectingProcessor(),

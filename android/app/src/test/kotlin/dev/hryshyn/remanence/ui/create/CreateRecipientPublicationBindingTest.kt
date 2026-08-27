@@ -203,7 +203,7 @@ class CreateRecipientPublicationBindingTest {
                 retryStore,
             ),
             profile = RecognitionProfile.mvpOrbV1(),
-            stagingDirectory = stagingDir,
+            accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir),
             openPhotoSource = { id ->
                 dev.hryshyn.remanence.create.PhotoSource {
                     java.io.ByteArrayInputStream("photo-$id".toByteArray())
@@ -219,7 +219,7 @@ class CreateRecipientPublicationBindingTest {
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
         )
-        vm.beginSession(1L)
+        vm.beginSession(1L, senderUserUuid.toString())
         vm.onResolved(snapshot)
         vm.confirmRecipient()
         vm.frontAttempt.onPermissionResult(true, false)

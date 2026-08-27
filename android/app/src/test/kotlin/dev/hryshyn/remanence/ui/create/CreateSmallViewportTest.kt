@@ -151,7 +151,9 @@ class CreateSmallViewportTest {
                 retryStore,
             ),
             profile = RecognitionProfile.mvpOrbV1(),
-            stagingDirectory = File(context().filesDir, "small-vp-staging"),
+            accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(
+                File(context().filesDir, "small-vp-staging"),
+            ),
             openPhotoSource = { error("unused") },
             frontProcessor = RejectingThenAccepting(),
             backProcessor = RejectingThenAccepting(),
@@ -236,7 +238,9 @@ class CreateSmallViewportTest {
                 retryStore,
             ),
             profile = RecognitionProfile.mvpOrbV1(),
-            stagingDirectory = File(context().filesDir, "small-vp-staging"),
+            accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(
+                File(context().filesDir, "small-vp-staging"),
+            ),
             openPhotoSource = { error("unused") },
             frontProcessor = StillProcessor { ProcessedStill.Accepted("p", ByteArray(1)) },
             backProcessor = StillProcessor { ProcessedStill.Accepted("p", ByteArray(1)) },
@@ -295,7 +299,9 @@ class CreateSmallViewportTest {
                 retryStore,
             ),
             profile = RecognitionProfile.mvpOrbV1(),
-            stagingDirectory = File(context().filesDir, "small-vp-staging"),
+            accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(
+                File(context().filesDir, "small-vp-staging"),
+            ),
             openPhotoSource = { error("unused") },
             frontProcessor = RejectingThenAccepting(),
             backProcessor = RejectingThenAccepting(),

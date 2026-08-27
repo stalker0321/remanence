@@ -238,7 +238,7 @@ class CreateRecipientBindingFailClosedTest {
                 retryStore,
             ),
             profile = RecognitionProfile.mvpOrbV1(),
-            stagingDirectory = stagingDir,
+            accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir),
         openPhotoSource = { id ->
             dev.hryshyn.remanence.create.PhotoSource {
                 java.io.ByteArrayInputStream("photo-$id".toByteArray())
@@ -268,7 +268,7 @@ class CreateRecipientBindingFailClosedTest {
     /** Drives a create session through FRONT + BACK + CONTENT for the
      * given [snapshot], leaving the VM parked at CONTENT. */
     private fun driveToContent(vm: CreateViewModel, snapshot: ResolvedHandleSnapshot) {
-        vm.beginSession(1L)
+        vm.beginSession(1L, senderUserUuid.toString())
         vm.onResolved(snapshot)
         vm.confirmRecipient()
         vm.frontAttempt.onPermissionResult(true, false)
@@ -308,7 +308,11 @@ class CreateRecipientBindingFailClosedTest {
     }
 
     private fun assertNoPlaintextStaging(capsuleId: String) {
-        val sessionDir = File(stagingDir, capsuleId)
+        val sessionDir = File(
+            dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir)
+                .createStagingRoot(UserId(senderUserUuid)),
+            capsuleId,
+        )
         val files = sessionDir.listFiles()?.toList().orEmpty()
         assertTrue(
             "session staging $capsuleId must not retain plaintext on disk; saw ${files.map { it.name }}",

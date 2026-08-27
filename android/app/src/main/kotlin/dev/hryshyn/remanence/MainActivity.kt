@@ -149,7 +149,13 @@ private fun RootSurface(container: AppContainer) {
             // FIX-REVIEW-02: every entry starts a fresh create session; the
             // same epoch across rotation is a deliberate no-op.
             val createEpoch by rootViewModel.createSessionEpoch.collectAsStateWithLifecycle()
-            LaunchedEffect(createEpoch) { createViewModel.beginSession(createEpoch) }
+            val authenticatedOwner = (authState as? AuthUiState.Authenticated)?.userId
+            LaunchedEffect(createEpoch, authenticatedOwner) {
+                // Capture the authenticated owner before Create can launch any
+                // suspending publish work; the ViewModel keeps this snapshot
+                // for all staging and cleanup paths.
+                createViewModel.beginSession(createEpoch, authenticatedOwner)
+            }
             androidx.compose.runtime.key(createEpoch) {
                 CreateScreen(viewModel = createViewModel)
             }

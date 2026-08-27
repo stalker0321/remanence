@@ -41,6 +41,7 @@ class AccountScopedFileRootsTest {
         val incoming = roots.child(ownerA, AccountScopedFileRoots.ChildRoot.INCOMING_CIPHERTEXT)
         val retry = roots.child(ownerA, AccountScopedFileRoots.ChildRoot.RETRY_MATERIAL)
         val temp = roots.child(ownerA, AccountScopedFileRoots.ChildRoot.TEMP)
+        val create = roots.createStagingRoot(ownerA)
 
         // Path segment uses the exact canonical 8-4-4-4-12 lowercase form.
         for (root in listOf(fingerprints, outbox, incoming, retry, temp)) {
@@ -54,6 +55,8 @@ class AccountScopedFileRootsTest {
         assertEquals("incoming-ciphertext", incoming.name)
         assertEquals("retry-material", retry.name)
         assertEquals("temp", temp.name)
+        assertEquals("create", create.name)
+        assertEquals(temp.canonicalFile, create.parentFile?.canonicalFile)
 
         // Each child sits directly beneath filesDir/accounts/<owner>/.
         val expectedParent = File(File(filesDir, "accounts"), ownerAUuid).canonicalFile
@@ -69,6 +72,8 @@ class AccountScopedFileRootsTest {
 
         val aTemp = roots.child(ownerA, AccountScopedFileRoots.ChildRoot.TEMP)
         val bTemp = roots.child(ownerB, AccountScopedFileRoots.ChildRoot.TEMP)
+        val aCreate = roots.createStagingRoot(ownerA)
+        val bCreate = roots.createStagingRoot(ownerB)
         val aFingerprints = roots.child(ownerA, AccountScopedFileRoots.ChildRoot.FINGERPRINTS)
         val bOutbox = roots.child(ownerB, AccountScopedFileRoots.ChildRoot.OUTBOX_CIPHERTEXT)
 
@@ -79,6 +84,10 @@ class AccountScopedFileRootsTest {
         assertTrue(bTemp.path.contains(ownerBUuid))
         assertFalse(aTemp.path.contains(ownerBUuid))
         assertFalse(bTemp.path.contains(ownerAUuid))
+        assertTrue(aCreate.path.contains(ownerAUuid))
+        assertTrue(bCreate.path.contains(ownerBUuid))
+        assertFalse(aCreate.path.contains(ownerBUuid))
+        assertFalse(bCreate.path.contains(ownerAUuid))
 
         // Resolving the same child twice returns the same canonical path.
         assertEquals(

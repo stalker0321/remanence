@@ -191,7 +191,7 @@ class CreateContentPublishRecoveryTest {
             persistence = persistence,
             outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir()), retryStore),
             profile = RecognitionProfile.mvpOrbV1(),
-            stagingDirectory = stagingDir(),
+            accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir()),
             openPhotoSource = { error("picker streams not used here") },
             frontProcessor = ScriptedProcessor(synthetic(FingerprintSide.FRONT)),
             backProcessor = ScriptedProcessor(synthetic(FingerprintSide.BACK)),
@@ -201,7 +201,7 @@ class CreateContentPublishRecoveryTest {
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
         )
-        vm.beginSession(1L)
+        vm.beginSession(1L, userUuid.toString())
 
         // Walk the production table to CONTENT.
         vm.onResolved(selfSnapshot())

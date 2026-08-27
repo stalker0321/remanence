@@ -58,6 +58,18 @@ class AccountScopedFileRoots(
     }
 
     /**
+     * Resolves the plaintext Create staging root beneath the owner's TEMP
+     * root: `filesDir/accounts/<owner>/temp/create/`. The directory is not
+     * created by this call.
+     */
+    fun createStagingRoot(owner: UserId): File {
+        val tempPath = child(owner, ChildRoot.TEMP)
+        val createPath = File(tempPath, CREATE_STAGING_DIR)
+        requireContained(createPath, tempPath, owner, ChildRoot.TEMP)
+        return createPath
+    }
+
+    /**
      * Returns the canonical owner directory `filesDir/accounts/<owner>/`
      * for retention/purge callers that operate on the whole account root
      * at once. The directory is not created by this call.
@@ -96,5 +108,6 @@ class AccountScopedFileRoots(
 
     private companion object {
         const val ACCOUNTS_DIR = "accounts"
+        const val CREATE_STAGING_DIR = "create"
     }
 }

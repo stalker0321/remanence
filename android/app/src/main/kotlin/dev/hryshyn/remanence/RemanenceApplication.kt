@@ -266,9 +266,6 @@ class AppContainer(
         )
     }
 
-    /** App-private root for bounded staging directories. */
-    val appFilesRoot: File get() = appContext.filesDir
-
     /**
      * FIX-REVIEW-03: THE single memory-only scan-grant authority
      * (docs/architecture.md section 5). Issued by the scan flow after real

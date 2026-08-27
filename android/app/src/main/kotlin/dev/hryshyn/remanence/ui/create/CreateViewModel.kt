@@ -28,6 +28,7 @@ import kotlinx.coroutines.withContext
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
 import dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot
 import dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager
+import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.UserId
@@ -53,9 +54,10 @@ data class SenderIdentitySnapshot(
  * finally-equivalent path; cancellation tears the session down.
  *
  * FIX-STATE-13: every publication owns the isolated staging subdirectory
- * `<staging root>/<capsule UUID>/`; neither a superseded publish nor session
- * teardown can remove another session's staged artifacts, and abandoned
- * directories from process death are swept only by scoped UUID matching.
+ * `accounts/<owner>/temp/create/<capsule UUID>`; neither a superseded publish
+ * nor session teardown can remove another account's or session's staged
+ * artifacts, and abandoned directories from process death are swept only by
+ * scoped owner + UUID matching.
  *
  * FIX-STATE-01: every capture side runs through ONE authoritative
  * [CaptureAttemptController]; a delivered still always terminates its
@@ -71,11 +73,11 @@ class CreateViewModel(
     private val outboxStager: CapsuleOutboxStager,
     profile: RecognitionProfile,
     /**
-     * FIX-STATE-13: the staging ROOT (`files/create-staging` in production).
-     * Each create session owns the subdirectory `<root>/<capsule UUID>/`;
-     * cleanup is strictly per-session - no shared delete-all exists anymore.
+     * M2-P04/LUNA-01: immutable account-scoped file roots. Create plaintext
+     * is resolved beneath the captured owner's TEMP/create root; there is no
+     * global staging root or fallback.
      */
-    private val stagingDirectory: File,
+    private val accountScopedFileRoots: AccountScopedFileRoots,
     private val openPhotoSource: (pickerId: String) -> dev.hryshyn.remanence.create.PhotoSource,
     private val clockMillis: () -> Long = System::currentTimeMillis,
     /**
@@ -190,6 +192,9 @@ class CreateViewModel(
     private var publishJob: Job? = null
     private var createSessionGeneration: Long = 0L
 
+    /** Owner captured synchronously at session entry, before publish suspends. */
+    private var sessionOwner: UserId? = null
+
     /**
      * FIX-STATE-13: capsule ids whose publication job is still alive and
      * therefore OWNS its staging subdirectory. A cancelled-but-still-running
@@ -204,6 +209,7 @@ class CreateViewModel(
      * newer session already replaced. */
     private data class PublishInputs(
         val capsuleId: String,
+        val owner: UserId,
         val recipient: ResolvedHandleSnapshot,
         val noteText: String?,
         val frontFingerprintId: String,
@@ -219,20 +225,29 @@ class CreateViewModel(
     // ---------------------------------------------------------------------
 
     /**
-     * FIX-REVIEW-02: every fresh entry starts a NEW session - a new capsule
+     * FIX-REVIEW-02/LUNA-01: every fresh entry starts a NEW session - a new capsule
      * ID, RECIPIENT_LOOKUP, and empty recipient/photos/note/checklist/errors/
      * capture refs. Persisted sender fingerprints and outbox rows are never
-     * touched. A same-epoch call is a no-op (rotation safety).
+     * touched. The authenticated owner is parsed and captured before any
+     * publication suspension; a missing or malformed owner is retained as a
+     * fail-closed null and can never select a storage root. A same-epoch call
+     * with the same owner is a no-op (rotation safety).
      *
      * FIX-STATE-13: staging is session-owned. The replaced session's
      * directory is removed here only when NO publication still owns it; an
      * in-flight (possibly cancellation-delayed) publish keeps exclusive
      * cleanup rights over its own directory. Afterwards a SCOPED recovery
-     * sweep removes only abandoned `create-staging/<capsule UUID>/`
-     * directories left behind by a process death - never arbitrary files.
+     * sweep removes only abandoned
+     * `accounts/<owner>/temp/create/<capsule UUID>` directories left behind by
+     * a process death - never another owner's files or arbitrary entries.
      */
-    fun beginSession(epoch: Long) {
-        if (begunEpoch == epoch) return
+    fun beginSession(epoch: Long, ownerUserId: String? = sessionOwner?.toRestString()) {
+        val nextOwner = ownerUserId?.let { raw ->
+            runCatching { UserId.parseRest(raw) }.getOrNull()
+        }
+        if (begunEpoch == epoch && sessionOwner == nextOwner) return
+        val previousOwner = sessionOwner
+        val previousCapsuleId = _capsuleId
         begunEpoch = epoch
         createSessionGeneration += 1
         deliveryGeneration += 1
@@ -241,8 +256,11 @@ class CreateViewModel(
         // the local job handle - endSession()/an earlier beginSession() may
         // already have detached a publication that is still running its
         // non-cooperative work and owns its directory until it terminates.
-        if (_capsuleId !in inFlightPublications) deleteSessionStaging(_capsuleId)
+        if (previousCapsuleId !in inFlightPublications) {
+            deleteSessionStaging(previousOwner, previousCapsuleId)
+        }
         _capsuleId = UUID.randomUUID().toString()
+        sessionOwner = nextOwner
         _step.value = Step.RECIPIENT_LOOKUP
         // FIX-M1-ONDEVICE-01: pending and confirmed recipient material both die.
         recipientFlow.clearTransientMaterial()
@@ -256,7 +274,7 @@ class CreateViewModel(
         backFingerprintId = null
         _flowError.value = null
         _publishError.value = null
-        sweepAbandonedStagingDirectoriesLocked()
+        sweepAbandonedStagingDirectoriesLocked(sessionOwner)
     }
 
     // ---------------------------------------------------------------------
@@ -463,11 +481,17 @@ class CreateViewModel(
             failGuard("a recipient must be confirmed before publishing")
             return
         }
+        val owner = sessionOwner
+        if (owner == null) {
+            failGuard("authenticated owner is unavailable; publishing is disabled")
+            return
+        }
         clearGuardError()
         // FIX-STATE-11: immutable inputs of THIS session, captured before any
         // suspend boundary.
         val inputs = PublishInputs(
             capsuleId = capsuleId,
+            owner = owner,
             recipient = boundRecipient,
             noteText = if (noteEditor.isEmpty) null else noteEditor.text,
             frontFingerprintId = requireNotNull(frontFingerprintId),
@@ -502,11 +526,13 @@ class CreateViewModel(
     private fun isPublishCurrent(generation: Long): Boolean =
         generation == createSessionGeneration && _step.value == Step.PUBLISHING
 
-    private suspend fun clearStagedPhotosGuarded(capsuleId: String) {
+    private suspend fun clearStagedPhotosGuarded(owner: UserId, capsuleId: String) {
         // FIX-STATE-11: guaranteed plaintext removal even on cancellation -
         // but NEVER any state publication from this path.
         // FIX-STATE-13: only the OWNING session's directory is touched.
-        withContext(NonCancellable + ioDispatcher) { deleteSessionStaging(capsuleId) }
+        withContext(NonCancellable + ioDispatcher) {
+            deleteSessionStaging(owner, capsuleId)
+        }
     }
 
     private suspend fun publish(generation: Long, inputs: PublishInputs) {
@@ -516,10 +542,10 @@ class CreateViewModel(
         } catch (superseded: PublishSuperseded) {
             // The owning session is gone: ITS staging dies, nothing is
             // published, and no newer session's artifacts are touched.
-            clearStagedPhotosGuarded(inputs.capsuleId)
+            clearStagedPhotosGuarded(inputs.owner, inputs.capsuleId)
         } catch (cancelled: CancellationException) {
             // Session teardown: staged plaintext dies with this scope below.
-            clearStagedPhotosGuarded(inputs.capsuleId)
+            clearStagedPhotosGuarded(inputs.owner, inputs.capsuleId)
             throw cancelled
         } catch (failure: Exception) {
             if (!isPublishCurrent(generation)) return
@@ -549,6 +575,11 @@ class CreateViewModel(
             failPublishing("local identity is unavailable; recovery required", generation)
             return
         }
+        val senderOwner = runCatching { UserId.parseRest(sender.userId) }.getOrNull()
+        if (senderOwner != inputs.owner) {
+            failPublishing("authenticated owner changed; publishing cancelled", generation)
+            return
+        }
         val frontBytes = try {
             withContext(ioDispatcher) { persistence.decrypt(inputs.frontFingerprintId) }
         } catch (_: Exception) {
@@ -566,13 +597,13 @@ class CreateViewModel(
             return
         }
 
-            // FIX-STATE-13: normalized plaintext photos live ONLY inside this
-            // call and ONLY inside THIS publication's own subdirectory
-            // (`<staging root>/<capsule UUID>/`); every staged artifact is
-            // deleted before this method returns or throws, and no other
+            // FIX-STATE-13/LUNA-01: normalized plaintext photos live ONLY
+            // inside this call and ONLY inside THIS publication's own
+            // account-scoped directory; every staged artifact is deleted
+            // before this method returns or throws, and no other account or
             // session's directory is ever touched.
             val pipeline = dev.hryshyn.remanence.create.PhotoStagingPipeline(
-                stagingDirectoryFor(inputs.capsuleId),
+                stagingDirectoryFor(inputs.owner, inputs.capsuleId),
                 // The port owns its dispatcher hop; stageAll below adds IO.
                 normalizer = photoNormalizer,
             )
@@ -601,7 +632,7 @@ class CreateViewModel(
                         recipientUserId = snapshot.userId,
                         senderKeyBundleId = KeyBundleId(UUID.fromString(sender.activeKeyBundleId)),
                         recipientKeyBundleId = snapshot.keyBundleId,
-                        ownerUserId = sender.userId,
+                        ownerUserId = inputs.owner.toRestString(),
                         senderHandleSnapshot = sender.handle,
                         createdAtEpochSeconds = clockMillis() / 1000L,
                         photoJpegs = photoBytes,
@@ -621,7 +652,9 @@ class CreateViewModel(
                 _step.value = Step.PUBLISHED
             } finally {
                 // Normalized plaintext staging never survives this call.
-                withContext(ioDispatcher) { deleteSessionStaging(inputs.capsuleId) }
+                withContext(ioDispatcher) {
+                    deleteSessionStaging(inputs.owner, inputs.capsuleId)
+                }
             }
     }
 
@@ -637,28 +670,33 @@ class CreateViewModel(
     }
 
     /**
-     * FIX-STATE-13: staging is session-owned. [stagingDirectory] is the ROOT;
-     * every publication stages plaintext only inside its own
-     * `<root>/<capsule UUID>/` subdirectory, so concurrent sessions and a
-     * cancellation-delayed stale publish can never delete each other's files.
+     * FIX-STATE-13/LUNA-01: staging is account + session-owned. Every
+     * publication stages plaintext only inside its own
+     * `accounts/<owner>/temp/create/<capsule UUID>` directory, so concurrent
+     * sessions, account switches, and cancellation-delayed stale publishes
+     * can never delete each other's files.
      */
-    private fun stagingDirectoryFor(capsuleId: String): File = File(stagingDirectory, capsuleId)
+    private fun stagingDirectoryFor(owner: UserId, capsuleId: String): File =
+        File(accountScopedFileRoots.createStagingRoot(owner), capsuleId)
 
     /** Removes ONE session's own staging directory; absent means already clean. */
-    private fun deleteSessionStaging(capsuleId: String) {
-        val dir = stagingDirectoryFor(capsuleId)
+    private fun deleteSessionStaging(owner: UserId?, capsuleId: String) {
+        if (owner == null) return
+        val dir = stagingDirectoryFor(owner, capsuleId)
         if (dir.exists()) dir.deleteRecursively()
     }
 
     /**
-     * FIX-STATE-13 scoped recovery after process death (docs/architecture.md:
+     * FIX-STATE-13/LUNA-01 scoped recovery after process death (docs/architecture.md:
      * "discard incomplete plaintext/raw capture state"): removes ONLY
-     * directories whose name parses as the capsule UUID of an ABANDONED
-     * publication - not the current session's, not one still owned by a live
-     * publish job, and never arbitrary files or unknown entries.
+     * directories beneath THIS OWNER's create root whose name parses as the
+     * capsule UUID of an ABANDONED publication - not the current session's,
+     * not one still owned by a live publish job, and never another owner's
+     * files, arbitrary files, or unknown entries.
      */
-    private fun sweepAbandonedStagingDirectoriesLocked() {
-        val children = stagingDirectory.listFiles() ?: return
+    private fun sweepAbandonedStagingDirectoriesLocked(owner: UserId?) {
+        if (owner == null) return
+        val children = accountScopedFileRoots.createStagingRoot(owner).listFiles() ?: return
         for (child in children) {
             if (!child.isDirectory) continue
             val capsuleId = runCatching { UUID.fromString(child.name) }.getOrNull() ?: continue
@@ -687,11 +725,14 @@ class CreateViewModel(
         // own NonCancellable cleanup guarantees staged plaintext removal.
         createSessionGeneration += 1
         deliveryGeneration += 1
+        val owner = sessionOwner
+        val capsuleId = _capsuleId
         cancelPublishingLocked()
         recipientFlow.clearTransientMaterial()
         // FIX-STATE-13: only when no live publication still owns THIS session's
         // directory may teardown remove it directly.
-        if (_capsuleId !in inFlightPublications) deleteSessionStaging(_capsuleId)
+        if (capsuleId !in inFlightPublications) deleteSessionStaging(owner, capsuleId)
+        sessionOwner = null
     }
 
     override fun onCleared() {

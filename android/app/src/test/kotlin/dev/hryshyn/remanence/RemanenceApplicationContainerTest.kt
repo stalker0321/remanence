@@ -18,6 +18,8 @@ import org.robolectric.annotation.Config
 import dev.hryshyn.remanence.core.crypto.IdentityBundleRepository
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
 import dev.hryshyn.remanence.core.data.db.FingerprintSide
+import dev.hryshyn.remanence.ui.create.CreateViewModel
+import dev.hryshyn.remanence.wiring.RemanenceViewModelFactory
 
 /**
  * I01: the application container builds one coherent object graph - Tink,
@@ -41,6 +43,7 @@ class RemanenceApplicationContainerTest {
         File(context.filesDir, "accounts").deleteRecursively()
         File(context.filesDir, "identity").deleteRecursively()
         File(context.filesDir, "session").deleteRecursively()
+        File(context.filesDir, "create-staging").deleteRecursively()
         File(context.getDatabasePath(AppContainer.DATABASE_NAME).parentFile, "container-test.db")
             .let { file -> listOf(file, File(file.parentFile, "container-test.db-wal"), File(file.parentFile, "container-test.db-shm")) }
             .forEach { it.delete() }
@@ -105,5 +108,23 @@ class RemanenceApplicationContainerTest {
     @Test
     fun databaseNameIsTheSingleConfiguredFile() {
         assertEquals("remanence.db", AppContainer.DATABASE_NAME)
+    }
+
+    @Test
+    fun productionCreateWiringNeverSweepsTheGlobalStagingDirectory() {
+        val globalStaging = File(context.filesDir, "create-staging")
+        val globalLeftover = File(
+            globalStaging,
+            "11111111-2222-4333-8444-555555555555",
+        ).apply { mkdirs() }
+
+        val container = AppContainer(context, kekBoundaryOverride = SoftwareKekBoundary())
+        val createViewModel = RemanenceViewModelFactory(container)
+            .create(CreateViewModel::class.java)
+
+        createViewModel.beginSession(1L, "9db5c67a-3a4e-45d1-8b0f-2f14a9bb1001")
+
+        assertTrue("legacy global staging must be ignored", globalLeftover.isDirectory)
+        createViewModel.endSession()
     }
 }

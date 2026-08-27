@@ -192,6 +192,10 @@ class CreatePublishLifetimeTest {
         signingPrivateHandle = identity.signingPrivateHandle,
     )
 
+    private fun createStagingRoot(): File =
+        dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir)
+            .createStagingRoot(UserId(userUuid))
+
     /** Builds a ViewModel parked at CONTENT with photos + note ready. */
     private fun contentStage(
         identityGate: CompletableDeferred<SenderIdentitySnapshot>,
@@ -206,7 +210,7 @@ class CreatePublishLifetimeTest {
             persistence = persistence,
             outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(outboxDir), retryStore),
             profile = RecognitionProfile.mvpOrbV1(),
-            stagingDirectory = stagingDir,
+            accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir),
             openPhotoSource = { id ->
                 dev.hryshyn.remanence.create.PhotoSource {
                     java.io.ByteArrayInputStream("photo-$id".toByteArray())
@@ -223,7 +227,7 @@ class CreatePublishLifetimeTest {
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
         )
-        vm.beginSession(1L)
+        vm.beginSession(1L, userUuid.toString())
         vm.onResolved(selfSnapshot())
         vm.confirmRecipient()
         vm.frontAttempt.onPermissionResult(true, false)
@@ -259,11 +263,11 @@ class CreatePublishLifetimeTest {
         vm.startPublishing()
         assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value)
         // Parked INSIDE normalization before any file was written.
-        assertTrue(stagingDir.listFiles()?.isEmpty() == true)
+        assertTrue(createStagingRoot().listFiles()?.isEmpty() ?: true)
 
         // FIX-STATE-13: a plaintext artifact exists INSIDE the owning
         // session's own staging subdirectory when the exit happens.
-        val sessionDir = File(stagingDir, vm.capsuleId).apply { mkdirs() }
+        val sessionDir = File(createStagingRoot(), vm.capsuleId).apply { mkdirs() }
         File(sessionDir, "mid-flight.jpg").writeBytes("plaintext".toByteArray())
 
         // Exit tears the publication down.
@@ -275,11 +279,11 @@ class CreatePublishLifetimeTest {
 
         assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value) // dead surface
         assertNull(vm.publishError.value)
-        assertTrue(stagingDir.listFiles()?.isEmpty() == true)
+        assertTrue(createStagingRoot().listFiles()?.isEmpty() ?: true)
         runBlockingNullable { assertNull(outboxRow(oldCapsuleId)) }
 
         // Re-entry starts fresh and the old job cannot mark IT published.
-        vm.beginSession(2L)
+        vm.beginSession(2L, userUuid.toString())
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
         assertNull(vm.confirmedRecipient.value)
         runBlockingNullable { assertNull(outboxRow(oldCapsuleId)) }
@@ -296,7 +300,7 @@ class CreatePublishLifetimeTest {
         assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value)
 
         // New epoch while parked at the identity boundary.
-        vm.beginSession(2L)
+        vm.beginSession(2L, userUuid.toString())
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
         assertNull(vm.confirmedRecipient.value)
 
@@ -307,7 +311,7 @@ class CreatePublishLifetimeTest {
         assertNull(vm.publishError.value)
         assertNull(vm.flowError.value)
         runBlockingNullable { assertNull(outboxRow(oldCapsuleId)) }
-        assertTrue(stagingDir.listFiles()?.isEmpty() == true)
+        assertTrue(createStagingRoot().listFiles()?.isEmpty() ?: true)
     }
 
     @Test
@@ -354,7 +358,7 @@ class CreatePublishLifetimeTest {
             assertNotNull(row)
             assertEquals(OutboxCapsuleState.ENCRYPTED, row!!.state)
         }
-        assertTrue(stagingDir.listFiles()?.isEmpty() == true)
+        assertTrue(createStagingRoot().listFiles()?.isEmpty() ?: true)
     }
 
     private fun runBlockingNullable(block: suspend () -> Unit) {

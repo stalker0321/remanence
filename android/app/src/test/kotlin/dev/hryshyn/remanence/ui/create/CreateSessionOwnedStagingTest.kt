@@ -43,13 +43,14 @@ import dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper
 import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 
 /**
- * FIX-STATE-13 regression: staging is SESSION-OWNED. Every publication stages
- * plaintext only inside `create-staging/<capsule UUID>/` and cleans up exactly
- * its own directory. THE race: an old publication cancelled while parked in a
- * non-cooperative normalization keeps running; meanwhile a NEW epoch starts
- * and really publishes. When the stale job finally wakes, its cleanup removes
- * ONLY its own directory - the new session's staged files survive untouched
- * and the new publication creates exactly its own outbox row.
+ * FIX-STATE-13/LUNA-01 regression: staging is ACCOUNT + SESSION-OWNED. Every
+ * publication stages plaintext only inside
+ * `accounts/<owner>/temp/create/<capsule UUID>/` and cleans up exactly its own
+ * directory. THE race: an old publication for A cancelled while parked in a
+ * non-cooperative normalization keeps running; meanwhile account B starts a
+ * new session and really publishes. When the stale job finally wakes, its
+ * cleanup removes ONLY A's directory - B's staged files survive untouched and
+ * B's publication creates exactly its own outbox row.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -63,6 +64,7 @@ class CreateSessionOwnedStagingTest {
 
     private val identity = AccountIdentityGenerator().generate()
     private val userUuid = UUID.fromString("7c111111-2222-4333-8444-555555555555")
+    private val switchedUserUuid = UUID.fromString("7c222222-3333-4444-8555-666666666666")
     private val bundleUuid = UUID.fromString("7c333333-4444-4555-8666-777777777777")
 
     private val testKekBoundary = SoftwareKekBoundary()
@@ -150,8 +152,8 @@ class CreateSessionOwnedStagingTest {
         directoryVersion = "v1",
     )
 
-    private fun senderIdentity() = SenderIdentitySnapshot(
-        userId = userUuid.toString(),
+    private fun senderIdentity(owner: UUID = userUuid) = SenderIdentitySnapshot(
+        userId = owner.toString(),
         handle = "mykola",
         activeKeyBundleId = bundleUuid.toString(),
         encryptionPrivateHandle = identity.encryptionPrivateHandle,
@@ -201,6 +203,7 @@ class CreateSessionOwnedStagingTest {
         normalizer: dev.hryshyn.remanence.create.PhotoNormalizerPort,
         identityGate: CompletableDeferred<SenderIdentitySnapshot>,
         identityCalls: AtomicInteger,
+        laterOwner: UUID = userUuid,
     ): CreateViewModel {
         val persistence = RecordingPersistence()
         val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(stagingRoot.parentFile, "session-owned-outbox")))
@@ -210,12 +213,12 @@ class CreateSessionOwnedStagingTest {
             identityProvider = {
                 // The first (stale) publication parks at the identity boundary
                 // until released; every later session resolves immediately.
-                if (identityCalls.incrementAndGet() == 1) identityGate.await() else senderIdentity()
+                if (identityCalls.incrementAndGet() == 1) identityGate.await() else senderIdentity(laterOwner)
             },
             persistence = persistence,
             outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(stagingRoot.parentFile, "session-owned-outbox")), retryStore),
             profile = RecognitionProfile.mvpOrbV1(),
-            stagingDirectory = stagingRoot,
+            accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingRoot),
             openPhotoSource = { id ->
                 dev.hryshyn.remanence.create.PhotoSource {
                     java.io.ByteArrayInputStream(id.toByteArray(Charsets.US_ASCII))
@@ -269,23 +272,24 @@ class CreateSessionOwnedStagingTest {
     // ------------------------------------------------------------------
 
     @Test
-    fun stalePublicationCleanupSparesTheNewSessionArtifactsAndRow() {
+    fun accountSwitchDuringSuspendedPublishCleansOnlyTheCapturedOwner() {
         val oldPark = CountDownLatch(1)
         val newGate = CompletableDeferred<Unit>()
         val normalizer = GatedNormalizer(oldPark, newGate)
         val identityGate = CompletableDeferred<SenderIdentitySnapshot>()
         val identityCalls = AtomicInteger(0)
-        val vm = newViewModel(normalizer, identityGate, identityCalls)
+        val vm = newViewModel(normalizer, identityGate, identityCalls, switchedUserUuid)
 
-        // --- Epoch 1: publish and park inside non-cooperative normalization.
-        vm.beginSession(1L)
+        // --- Account A: publish and park inside non-cooperative normalization.
+        vm.beginSession(1L, userUuid.toString())
         driveToReadyContent(vm, listOf("old-1", "old-2", "old-3"))
         val oldCapsuleId = vm.capsuleId
-        val oldDir = File(stagingRoot, oldCapsuleId)
+        val roots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingRoot)
+        val oldDir = File(roots.createStagingRoot(UserId(userUuid)), oldCapsuleId)
 
         vm.startPublishing()
         assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value)
-        identityGate.complete(senderIdentity())
+        identityGate.complete(senderIdentity(userUuid))
         // First old photo staged into ITS OWN directory; second one parked.
         awaitCondition("first staged file in $oldDir") {
             oldDir.listFiles()?.map { it.name } == listOf("photo-00.jpg")
@@ -297,16 +301,23 @@ class CreateSessionOwnedStagingTest {
         // The directory belongs to the still-running publication: untouched.
         assertTrue(oldDir.isDirectory)
 
-        // --- Epoch 2: a fresh session REALLY publishes.
-        vm.beginSession(2L)
+        // --- Account switch: a fresh B session REALLY publishes.
+        val bMarker = File(
+            roots.createStagingRoot(UserId(switchedUserUuid)),
+            "account-b-marker.txt",
+        ).apply {
+            parentFile!!.mkdirs()
+            writeText("B must survive")
+        }
+        vm.beginSession(2L, switchedUserUuid.toString())
         val newCapsuleId = vm.capsuleId
         assertTrue(newCapsuleId != oldCapsuleId)
-        // The sweep must respect the in-flight owner of the old directory.
+        // The sweep is B-scoped and cannot touch A's in-flight directory.
         assertTrue(oldDir.isDirectory)
         assertEquals(listOf("photo-00.jpg"), oldDir.listFiles()?.map { it.name })
 
         driveToReadyContent(vm, listOf("new-1", "new-2", "new-3"))
-        val newDir = File(stagingRoot, newCapsuleId)
+        val newDir = File(roots.createStagingRoot(UserId(switchedUserUuid)), newCapsuleId)
 
         vm.startPublishing()
         assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value)
@@ -324,7 +335,7 @@ class CreateSessionOwnedStagingTest {
         oldPark.countDown()
         awaitCondition("stale session directory removed") { !oldDir.exists() }
 
-        // The stale cleanup touched ONLY its own directory.
+        // The stale cleanup touched ONLY A's captured directory.
         assertTrue(newDir.isDirectory)
         assertEquals(
             listOf("photo-00.jpg", "photo-01.jpg"),
@@ -332,6 +343,7 @@ class CreateSessionOwnedStagingTest {
         )
         assertEquals(newFile0.toList(), File(newDir, "photo-00.jpg").readBytes().toList())
         assertEquals(newFile1.toList(), File(newDir, "photo-01.jpg").readBytes().toList())
+        assertEquals("B must survive", bMarker.readText())
 
         // --- The new publication finishes with exactly its own outbox row.
         newGate.complete(Unit)
@@ -340,10 +352,10 @@ class CreateSessionOwnedStagingTest {
 
         runBlockingNullable {
             assertNull(database.outboxCapsuleDao().getByCapsuleIdAndOwner(oldCapsuleId, userUuid.toString()))
-            val row = database.outboxCapsuleDao().getByCapsuleIdAndOwner(newCapsuleId, userUuid.toString())
+            val row = database.outboxCapsuleDao().getByCapsuleIdAndOwner(newCapsuleId, switchedUserUuid.toString())
             assertNotNull(row)
             assertEquals(OutboxCapsuleState.ENCRYPTED, row!!.state)
-            assertTrue(database.outboxBlobDao().getAllByCapsuleIdAndOwner(newCapsuleId, userUuid.toString()).size >= 5)
+            assertTrue(database.outboxBlobDao().getAllByCapsuleIdAndOwner(newCapsuleId, switchedUserUuid.toString()).size >= 5)
         }
 
         // Own-directory cleanup after SUCCESS too: no plaintext survives.
@@ -359,17 +371,20 @@ class CreateSessionOwnedStagingTest {
             AtomicInteger(0),
         )
 
+        val roots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingRoot)
+        val createRoot = roots.createStagingRoot(UserId(userUuid))
+        check(createRoot.mkdirs())
         // Abandoned leftovers of a dead process, planted before any sweep.
-        val abandonedA = File(stagingRoot, "11111111-2222-4333-8444-555555555555")
+        val abandonedA = File(createRoot, "11111111-2222-4333-8444-555555555555")
         File(abandonedA, "nested").mkdirs()
         File(abandonedA, "leftover.jpg").writeBytes(byteArrayOf(1))
-        val abandonedUppercase = File(stagingRoot, "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE")
+        val abandonedUppercase = File(createRoot, "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE")
         abandonedUppercase.mkdirs()
         // NOT session-shaped entries must never be touched by the sweep.
-        val foreignDir = File(stagingRoot, "not-a-uuid").apply { mkdirs() }
-        val looseFile = File(stagingRoot, "stray.txt").apply { writeBytes(byteArrayOf(2)) }
+        val foreignDir = File(createRoot, "not-a-uuid").apply { mkdirs() }
+        val looseFile = File(createRoot, "stray.txt").apply { writeBytes(byteArrayOf(2)) }
 
-        vm.beginSession(1L)
+        vm.beginSession(1L, userUuid.toString())
         assertTrue(!abandonedA.exists())
         assertTrue(!abandonedUppercase.exists())
         assertTrue(foreignDir.isDirectory)
@@ -377,13 +392,13 @@ class CreateSessionOwnedStagingTest {
 
         // The live epoch-1 session stages artifacts into its OWN directory;
         // another process-death leftover appears alongside it.
-        val epochOneDir = File(stagingRoot, vm.capsuleId).apply { mkdirs() }
+        val epochOneDir = File(createRoot, vm.capsuleId).apply { mkdirs() }
         val liveMarker = File(epochOneDir, "live.txt").apply { writeBytes(byteArrayOf(3)) }
-        val abandonedB = File(stagingRoot, "99999999-8888-4777-8666-555555555555").apply { mkdirs() }
+        val abandonedB = File(createRoot, "99999999-8888-4777-8666-555555555555").apply { mkdirs() }
 
         // Rotating to epoch 2 removes the replaced IDLE session's own
         // directory and the newly abandoned one - and nothing else.
-        vm.beginSession(2L)
+        vm.beginSession(2L, userUuid.toString())
         assertTrue(!epochOneDir.exists())
         assertTrue(!liveMarker.isFile)
         assertTrue(!abandonedB.exists())
@@ -391,8 +406,49 @@ class CreateSessionOwnedStagingTest {
         assertTrue(looseFile.isFile)
         assertEquals(
             setOf(foreignDir.name, looseFile.name),
-            stagingRoot.listFiles()?.map { it.name }?.toSet(),
+            createRoot.listFiles()?.map { it.name }?.toSet(),
         )
+    }
+
+    @Test
+    fun accountCreateStagingRootsAreDisjoint() {
+        val roots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingRoot)
+        val ownerA = roots.createStagingRoot(UserId(userUuid))
+        val ownerB = roots.createStagingRoot(UserId(switchedUserUuid))
+        val aPlaintext = File(ownerA, "capsule-a/photo-00.jpg").apply {
+            parentFile!!.mkdirs()
+            writeText("A")
+        }
+        val bPlaintext = File(ownerB, "capsule-b/photo-00.jpg").apply {
+            parentFile!!.mkdirs()
+            writeText("B")
+        }
+
+        assertTrue(aPlaintext.canonicalPath.startsWith(ownerA.canonicalPath))
+        assertTrue(bPlaintext.canonicalPath.startsWith(ownerB.canonicalPath))
+        assertTrue(aPlaintext.canonicalPath.contains(userUuid.toString()))
+        assertTrue(bPlaintext.canonicalPath.contains(switchedUserUuid.toString()))
+        assertTrue(aPlaintext.canonicalPath != bPlaintext.canonicalPath)
+        assertEquals("A", aPlaintext.readText())
+        assertEquals("B", bPlaintext.readText())
+    }
+
+    @Test
+    fun missingOwnerFailsClosedWithoutCreatingGlobalOrAccountStaging() {
+        val vm = newViewModel(
+            GatedNormalizer(CountDownLatch(1), CompletableDeferred(Unit)),
+            CompletableDeferred(),
+            AtomicInteger(0),
+        )
+        vm.beginSession(1L)
+        driveToReadyContent(vm, listOf("photo-1", "photo-2", "photo-3"))
+
+        vm.startPublishing()
+
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        assertTrue(vm.flowError.value?.contains("owner", ignoreCase = true) == true)
+        assertTrue(!File(stagingRoot, "accounts").exists())
+        assertTrue(!File(stagingRoot.parentFile, "create-staging").exists())
     }
 
     private fun runBlockingNullable(block: suspend () -> Unit) {

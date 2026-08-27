@@ -14,7 +14,6 @@ import dev.hryshyn.remanence.core.recognition.PerspectiveWarper
 import dev.hryshyn.remanence.core.recognition.PostcardContourDetector
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.core.recognition.StillCapturePipeline
-import java.io.File
 
 /**
  * FIX-M1-007-11: the REAL capture processor behind the create flow's
@@ -78,9 +77,4 @@ class RealStillFingerprintProcessor(
 
     private fun rejected(reasons: Set<dev.hryshyn.remanence.core.recognition.QualityReason>): ProcessedStill =
         ProcessedStill.Rejected(reasons)
-
-    companion object {
-        /** Staging root for normalized photo plaintext during one create session. */
-        fun stagingDirectory(filesRoot: File): File = File(filesRoot, "create-staging")
-    }
 }

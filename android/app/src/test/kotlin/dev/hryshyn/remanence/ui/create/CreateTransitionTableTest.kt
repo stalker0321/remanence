@@ -236,7 +236,7 @@ class CreateTransitionTableTest {
                 retryStore,
             ),
             profile = RecognitionProfile.mvpOrbV1(),
-            stagingDirectory = stagingDir,
+            accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir),
             openPhotoSource = openPhotoSource,
             frontProcessor = frontProcessor,
             backProcessor = backProcessor,
@@ -250,7 +250,7 @@ class CreateTransitionTableTest {
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
         )
-        vm.beginSession(1L)
+        vm.beginSession(1L, userUuid.toString())
         return vm to persistence
     }
 
@@ -546,7 +546,11 @@ class CreateTransitionTableTest {
         assertEquals("still here", vm.noteEditor.text)
         assertTrue(persistence.stored.isNotEmpty())
         // Plaintext staging never survives the failure.
-        assertTrue(stagingDir.listFiles()?.isEmpty() == true)
+        assertTrue(
+            dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir)
+                .createStagingRoot(UserId(userUuid))
+                .listFiles()?.isEmpty() ?: true,
+        )
         Unit
     }
 

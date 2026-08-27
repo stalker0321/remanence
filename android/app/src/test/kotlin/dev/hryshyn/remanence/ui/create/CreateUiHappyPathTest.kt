@@ -204,7 +204,7 @@ class CreateUiHappyPathTest {
             persistence = persistence,
             outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir()), retryStore),
             profile = RecognitionProfile.mvpOrbV1(),
-            stagingDirectory = stagingDir(),
+            accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir()),
             openPhotoSource = { id ->
                 dev.hryshyn.remanence.create.PhotoSource {
                     java.io.ByteArrayInputStream("photo-$id".toByteArray())
@@ -218,7 +218,7 @@ class CreateUiHappyPathTest {
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
         )
-        vm.beginSession(1L)
+        vm.beginSession(1L, userUuid.toString())
 
         val live = AtomicReference<FakeStillCameraAdapter?>(null)
         composeRule.setContent {

@@ -103,6 +103,16 @@ class AccountStorageRetentionTest {
             }
             touch(dir, name)
         }
+        // Create plaintext staging is nested under TEMP and must follow the
+        // same owner boundary as the rest of the temporary material.
+        val aCreatePhoto = touch(
+            roots.createStagingRoot(ownerA),
+            "capsule-a/photo-00.jpg",
+        )
+        val bCreatePhoto = touch(
+            roots.createStagingRoot(ownerB),
+            "capsule-b/photo-00.jpg",
+        )
 
         // Snapshot B's file count before any operation.
         val bFingerprintCount = fileCount(roots.child(ownerB, AccountScopedFileRoots.ChildRoot.FINGERPRINTS))
@@ -131,12 +141,14 @@ class AccountStorageRetentionTest {
         // Only A's temp is removed.
         val aTemp = roots.child(ownerA, AccountScopedFileRoots.ChildRoot.TEMP)
         assertFalse("A temp must be purged on logout", aTemp.exists())
+        assertFalse("A Create staging must be purged with A temp", aCreatePhoto.exists())
         // B is untouched across every root.
         assertEquals(bFingerprintCount, fileCount(roots.child(ownerB, AccountScopedFileRoots.ChildRoot.FINGERPRINTS)))
         assertEquals(bOutboxCount, fileCount(roots.child(ownerB, AccountScopedFileRoots.ChildRoot.OUTBOX_CIPHERTEXT)))
         assertEquals(bIncomingCount, fileCount(roots.child(ownerB, AccountScopedFileRoots.ChildRoot.INCOMING_CIPHERTEXT)))
         assertEquals(bRetryCount, fileCount(roots.child(ownerB, AccountScopedFileRoots.ChildRoot.RETRY_MATERIAL)))
         assertEquals(bTempCount, fileCount(roots.child(ownerB, AccountScopedFileRoots.ChildRoot.TEMP)))
+        assertTrue("B Create staging must survive A logout", bCreatePhoto.isFile)
         // B's account directory still exists.
         assertTrue(roots.accountDirectory(ownerB).exists())
         // A's account directory still exists because only temp was purged.

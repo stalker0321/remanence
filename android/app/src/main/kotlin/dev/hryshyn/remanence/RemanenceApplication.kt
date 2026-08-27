@@ -108,6 +108,15 @@ class AppContainer(
         dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(appContext.filesDir)
     }
 
+    /**
+     * M2-P04 retention boundary over the account-scoped roots: normal logout
+     * purges only the owner's temp directory; durable encrypted material
+     * stays for that same account's next login.
+     */
+    val accountStorageRetention: dev.hryshyn.remanence.core.data.storage.AccountStorageRetention by lazy {
+        dev.hryshyn.remanence.core.data.storage.AccountStorageRetention(accountScopedFileRoots)
+    }
+
     val identityRepository: IdentityBundleRepository by lazy {
         IdentityBundleRepository(
             baseDirectory = File(appContext.filesDir, "identity"),
@@ -262,6 +271,18 @@ class AppContainer(
             grants = {
                 // App-level grant state dies with the account context.
                 appLevelGrantCleanup.forEach { cleanup -> cleanup() }
+            },
+            // M2-P04: the owner is snapshotted from the still-live local_account
+            // row BEFORE it is cleared, and cleanup targets ONLY that account's
+            // temp root. A missing row means no attributable owner - nothing
+            // may be deleted on a guess.
+            logoutOwnerSnapshot = {
+                val row = currentAccountStore.loadEntity()
+                    ?: error("logout storage cleanup requires an authenticated local account")
+                dev.hryshyn.remanence.core.model.UserId.parseRest(row.userId)
+            },
+            tempStorageCleanup = { owner ->
+                accountStorageRetention.onLogout(owner)
             },
         )
     }

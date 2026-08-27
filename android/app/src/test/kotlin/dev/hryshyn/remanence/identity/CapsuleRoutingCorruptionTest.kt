@@ -49,6 +49,7 @@ import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 
 /**
  * FIX-REVIEW2-01 regression: persisted routing identity material is parsed
@@ -259,7 +260,7 @@ class CapsuleRoutingCorruptionTest {
                     TinkProtoKeysetFormat.parseKeysetWithoutSecret(identity.encryptionPublicKeyset),
             ),
         )
-        CapsuleOutboxStager(database, roots).stage(prepared)
+        CapsuleOutboxStager(database, roots, SenderRetryMaterialStore(roots)).stage(prepared)
     }
 
     private suspend fun tamperRow(transform: (OutboxCapsuleEntity) -> OutboxCapsuleEntity) {

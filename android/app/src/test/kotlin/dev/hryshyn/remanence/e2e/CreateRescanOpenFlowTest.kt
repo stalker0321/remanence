@@ -14,6 +14,7 @@ import dev.hryshyn.remanence.wiring.KekBoundSecretSealer
 import com.google.crypto.tink.TinkProtoKeysetFormat
 import java.io.File
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
+import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 import java.security.MessageDigest
 import java.util.UUID
 import kotlinx.coroutines.runBlocking
@@ -167,7 +168,7 @@ class CreateRescanOpenFlowTest {
                     TinkProtoKeysetFormat.parseKeysetWithoutSecret(identity.encryptionPublicKeyset),
             ),
         )
-        CapsuleOutboxStager(database, roots).stage(prepared)
+        CapsuleOutboxStager(database, roots, SenderRetryMaterialStore(roots)).stage(prepared)
         return outboxDir
     }
 

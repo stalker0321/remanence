@@ -57,6 +57,7 @@ import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.core.recognition.ScanGrantManager
 import dev.hryshyn.remanence.core.recognition.FingerprintSide as RecognitionSide
+import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 
 /**
  * Physical-device regression for the verified-grant handoff: a REAL verified
@@ -172,7 +173,8 @@ class ScanGrantRoutingTest {
             capsuleUuid.toString(), FingerprintSide.BACK, FingerprintOrigin.SENDER,
             RecognitionProfile.mvpOrbV1().profileId, back,
         )
-        CapsuleOutboxStager(database, roots).stage(
+        val retryStore = SenderRetryMaterialStore(roots)
+        CapsuleOutboxStager(database, roots, retryStore).stage(
             CapsulePublisher().publish(
                 CapsulePublishRequest(
                     capsuleId = CapsuleId(capsuleUuid),

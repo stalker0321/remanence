@@ -44,6 +44,7 @@ import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 
 /**
  * FIX-M1-ONDEVICE-01 regression, production-shaped: the REAL [CreateScreen]
@@ -144,16 +145,19 @@ class CreateRecipientConfirmFlowTest {
         stagingDir.deleteRecursively()
     }
 
-    private fun viewModel(directory: RecipientDirectoryPort) = CreateViewModel(
-        directory = directory,
-        accessTokenProvider = { "token" },
-        identityProvider = { null },
-        persistence = NoPersistence(),
-        outboxStager = CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir)),
-        profile = RecognitionProfile.mvpOrbV1(),
-        stagingDirectory = stagingDir,
-        openPhotoSource = { error("photo picker not used in this test") },
-    )
+    private fun viewModel(directory: RecipientDirectoryPort): CreateViewModel {
+        val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir))
+        return CreateViewModel(
+            directory = directory,
+            accessTokenProvider = { "token" },
+            identityProvider = { null },
+            persistence = NoPersistence(),
+            outboxStager = CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir), retryStore),
+            profile = RecognitionProfile.mvpOrbV1(),
+            stagingDirectory = stagingDir,
+            openPhotoSource = { error("photo picker not used in this test") },
+        )
+    }
 
     private fun setContent(viewModel: CreateViewModel) {
         composeRule.setContent {

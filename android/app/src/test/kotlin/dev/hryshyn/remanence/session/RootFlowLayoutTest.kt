@@ -22,6 +22,7 @@ import dev.hryshyn.remanence.ui.create.RecipientDirectoryPort
 import dev.hryshyn.remanence.ui.create.CreateViewModel
 import dev.hryshyn.remanence.ui.navigation.AppDestination
 import dev.hryshyn.remanence.ui.navigation.AuthUiState
+import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 import java.io.File
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
@@ -127,6 +128,7 @@ class RootFlowLayoutTest {
         outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(
             database,
             dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(context().filesDir, "root-flow")),
+            SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(context().filesDir, "root-flow"))),
         ),
         profile = RecognitionProfile.mvpOrbV1(),
         stagingDirectory = File(context().filesDir, "root-flow-staging"),

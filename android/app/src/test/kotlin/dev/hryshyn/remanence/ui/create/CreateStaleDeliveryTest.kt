@@ -32,6 +32,7 @@ import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 
 /**
  * FIX-STATE-08 (E): dispose/exit DURING processing. The pipeline result of an
@@ -109,12 +110,13 @@ class CreateStaleDeliveryTest {
 
     @Test
     fun exitDuringProcessingLeavesTheFreshSessionUntouched() {
+        val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir))
         val vm = CreateViewModel(
             directory = StaticDirectory(),
             accessTokenProvider = { null },
             identityProvider = { null },
             persistence = NoPersistence(),
-            outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir)),
+            outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir), retryStore),
             profile = RecognitionProfile.mvpOrbV1(),
             stagingDirectory = stagingDir,
             openPhotoSource = { error("unused") },

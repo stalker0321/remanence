@@ -28,6 +28,7 @@ import dev.hryshyn.remanence.core.recognition.PostcardFingerprint
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.core.recognition.ExtractionQuality
 import dev.hryshyn.remanence.core.recognition.FingerprintCodec
+import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
@@ -174,6 +175,7 @@ class CreateRecipientPublicationBindingTest {
         snapshot: ResolvedHandleSnapshot,
     ): CreateViewModel {
         val persistence = RecordingPersistence()
+        val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(outboxDir))
         val vm = CreateViewModel(
             directory = StaticDirectory(),
             accessTokenProvider = { null },
@@ -190,6 +192,7 @@ class CreateRecipientPublicationBindingTest {
             outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(
                 database,
                 dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(outboxDir),
+                retryStore,
             ),
             profile = RecognitionProfile.mvpOrbV1(),
             stagingDirectory = stagingDir,

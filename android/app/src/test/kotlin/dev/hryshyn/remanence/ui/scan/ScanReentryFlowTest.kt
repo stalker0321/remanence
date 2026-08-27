@@ -42,6 +42,7 @@ import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 
 /**
  * FIX-REVIEW-02 regression for Scan: after a REAL scan reaches a verified
@@ -161,7 +162,7 @@ class ScanReentryFlowTest {
                     TinkProtoKeysetFormat.parseKeysetWithoutSecret(identity.encryptionPublicKeyset),
             ),
         )
-        CapsuleOutboxStager(database, roots).stage(prepared)
+        CapsuleOutboxStager(database, roots, SenderRetryMaterialStore(roots)).stage(prepared)
     }
 
     private fun scanViewModel(clock: Long = 0L): ScanViewModel = ScanViewModel(

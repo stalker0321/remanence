@@ -54,6 +54,11 @@ class RemanenceViewModelFactory(
                 // M2-P04: staged ciphertext lands in each owner's own
                 // accounts/<owner>/outbox-ciphertext root.
                 container.accountScopedFileRoots,
+                // M2-P08: the per-account retry material store resolved from
+                // the same account-scoped roots the stager already owns.
+                dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore(
+                    container.accountScopedFileRoots,
+                ),
             ),
             profile = dev.hryshyn.remanence.core.recognition.RecognitionProfile.mvpOrbV1(),
             // FIX-STATE-13: the staging ROOT; each publication owns

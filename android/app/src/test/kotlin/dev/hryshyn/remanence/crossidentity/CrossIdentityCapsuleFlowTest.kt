@@ -33,6 +33,7 @@ import dev.hryshyn.remanence.core.model.RecipientEnvelopeContextInput
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 
 /**
  * FIX-REVIEW-04 / FIX-REVIEW2-04 regression: persisted/authenticated capsule
@@ -148,7 +149,7 @@ class CrossIdentityCapsuleFlowTest {
                 ),
             ),
         )
-        CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(outboxDir)).stage(prepared)
+        CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(outboxDir), SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(outboxDir))).stage(prepared)
     }
 
     @Suppress("SameParameterValue")
@@ -398,7 +399,7 @@ class CrossIdentityCapsuleFlowTest {
                 ),
             ),
         )
-        CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(outboxDir)).stage(prepared)
+        CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(outboxDir), SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(outboxDir))).stage(prepared)
     }
 
     private fun attackerPublicExport(): ByteArray =

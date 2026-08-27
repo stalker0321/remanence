@@ -47,6 +47,7 @@ import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.QualityReason
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 
 /**
  * FIX-STATE-08 (D) / FIX-STATE-04: on a 320dp-wide, 480dp-tall phone every
@@ -130,6 +131,7 @@ class CreateSmallViewportTest {
 
     @Test
     fun rejectionPanelAndRetakeAreVisibleWithoutScrollingOnTinyScreens() {
+        val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(context().filesDir, "small-vp")))
         val vm = CreateViewModel(
             directory = StaticDirectory(),
             accessTokenProvider = { null },
@@ -138,6 +140,7 @@ class CreateSmallViewportTest {
             outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(
                 database,
                 dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(context().filesDir, "small-vp")),
+                retryStore,
             ),
             profile = RecognitionProfile.mvpOrbV1(),
             stagingDirectory = File(context().filesDir, "small-vp-staging"),
@@ -211,6 +214,7 @@ class CreateSmallViewportTest {
 
     @Test
     fun contentErrorsBelowTheFoldAreReachableByScrollingOnTinyScreens() {
+        val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(context().filesDir, "small-vp")))
         val vm = CreateViewModel(
             directory = StaticDirectory(),
             accessTokenProvider = { null },
@@ -219,6 +223,7 @@ class CreateSmallViewportTest {
             outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(
                 database,
                 dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(context().filesDir, "small-vp")),
+                retryStore,
             ),
             profile = RecognitionProfile.mvpOrbV1(),
             stagingDirectory = File(context().filesDir, "small-vp-staging"),
@@ -266,6 +271,7 @@ class CreateSmallViewportTest {
 
     @Test
     fun capturePreviewHasDeterministicNonzeroHeightAndRecoveryStaysReachable() {
+        val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(context().filesDir, "small-vp")))
         val vm = CreateViewModel(
             directory = StaticDirectory(),
             accessTokenProvider = { null },
@@ -274,6 +280,7 @@ class CreateSmallViewportTest {
             outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(
                 database,
                 dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(context().filesDir, "small-vp")),
+                retryStore,
             ),
             profile = RecognitionProfile.mvpOrbV1(),
             stagingDirectory = File(context().filesDir, "small-vp-staging"),

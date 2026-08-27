@@ -35,6 +35,7 @@ import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 
 /**
  * FIX-STATE-08 (I): the GOLDEN transition table. From every synchronous flow
@@ -155,21 +156,24 @@ class CreateGoldenTransitionTableTest {
             DirectoryLookupResult.NotFound
     }
 
-    private fun newViewModel(): CreateViewModel = CreateViewModel(
-        directory = StaticDirectory(),
-        accessTokenProvider = { null },
-        // Parked identity keeps the PUBLISHING transition observable.
-        identityProvider = { CompletableDeferred<SenderIdentitySnapshot>().await() },
-        persistence = NoPersistence(),
-        outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir)),
-        profile = RecognitionProfile.mvpOrbV1(),
-        stagingDirectory = stagingDir,
-        openPhotoSource = { error("unused") },
-        frontProcessor = Accepting(goldenSynthetic(FingerprintSide.FRONT)),
-        backProcessor = Accepting(goldenSynthetic(FingerprintSide.BACK)),
-        cpuDispatcher = testDispatcher,
-        ioDispatcher = testDispatcher,
-    ).also { it.beginSession(1L) }
+    private fun newViewModel(): CreateViewModel {
+        val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir))
+        return CreateViewModel(
+            directory = StaticDirectory(),
+            accessTokenProvider = { null },
+            // Parked identity keeps the PUBLISHING transition observable.
+            identityProvider = { CompletableDeferred<SenderIdentitySnapshot>().await() },
+            persistence = NoPersistence(),
+            outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir), retryStore),
+            profile = RecognitionProfile.mvpOrbV1(),
+            stagingDirectory = stagingDir,
+            openPhotoSource = { error("unused") },
+            frontProcessor = Accepting(goldenSynthetic(FingerprintSide.FRONT)),
+            backProcessor = Accepting(goldenSynthetic(FingerprintSide.BACK)),
+            cpuDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher,
+        ).also { it.beginSession(1L) }
+    }
 
     private fun selfSnapshot() = ResolvedHandleSnapshot(
         userId = UserId(UUID.fromString("9c111111-2222-4333-8444-555555555555")),

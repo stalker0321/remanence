@@ -22,6 +22,7 @@ import dev.hryshyn.remanence.core.recognition.FingerprintKeypoint
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.PostcardFingerprint
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
@@ -216,17 +217,20 @@ class CreateRecipientBindingFailClosedTest {
         },
         identityGate: CompletableDeferred<SenderIdentitySnapshot>? = null,
         normalizerGate: CompletableDeferred<Unit>? = null,
-    ): CreateViewModel = CreateViewModel(
-        directory = directory,
-        accessTokenProvider = { null },
-        identityProvider = { identityGate?.await() ?: senderIdentitySnapshot() },
-        persistence = RecordingPersistence(),
-        outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(
-            database,
-            dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(outboxDir),
-        ),
-        profile = RecognitionProfile.mvpOrbV1(),
-        stagingDirectory = stagingDir,
+    ): CreateViewModel {
+        val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(outboxDir))
+        return CreateViewModel(
+            directory = directory,
+            accessTokenProvider = { null },
+            identityProvider = { identityGate?.await() ?: senderIdentitySnapshot() },
+            persistence = RecordingPersistence(),
+            outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(
+                database,
+                dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(outboxDir),
+                retryStore,
+            ),
+            profile = RecognitionProfile.mvpOrbV1(),
+            stagingDirectory = stagingDir,
         openPhotoSource = { id ->
             dev.hryshyn.remanence.create.PhotoSource {
                 java.io.ByteArrayInputStream("photo-$id".toByteArray())
@@ -240,7 +244,8 @@ class CreateRecipientBindingFailClosedTest {
         },
         cpuDispatcher = testDispatcher,
         ioDispatcher = testDispatcher,
-    )
+        )
+    }
 
     private fun senderIdentitySnapshot() = SenderIdentitySnapshot(
         userId = senderUserUuid.toString(),

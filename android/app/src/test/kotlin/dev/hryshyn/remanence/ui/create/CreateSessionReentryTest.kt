@@ -29,6 +29,7 @@ import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 
 /**
  * FIX-REVIEW-02 regression: the production CreateViewModel is Activity-scoped
@@ -110,16 +111,19 @@ class CreateSessionReentryTest {
         directoryVersion = "v1",
     )
 
-    private fun viewModel() = CreateViewModel(
-        directory = SelfDirectory(),
-        accessTokenProvider = { null },
-        identityProvider = { null },
-        persistence = NoPersistence(),
-        outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir)),
-        profile = RecognitionProfile.mvpOrbV1(),
-        stagingDirectory = stagingDir,
-        openPhotoSource = { error("photo picker not used in this test") },
-    )
+    private fun viewModel(): CreateViewModel {
+        val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir))
+        return CreateViewModel(
+            directory = SelfDirectory(),
+            accessTokenProvider = { null },
+            identityProvider = { null },
+            persistence = NoPersistence(),
+            outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir), retryStore),
+            profile = RecognitionProfile.mvpOrbV1(),
+            stagingDirectory = stagingDir,
+            openPhotoSource = { error("photo picker not used in this test") },
+        )
+    }
 
     /** Drives one session deep into the flow through public gates only. */
     private fun progressThroughFlow(vm: CreateViewModel): String {

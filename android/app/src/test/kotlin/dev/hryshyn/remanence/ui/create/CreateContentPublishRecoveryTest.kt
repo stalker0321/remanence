@@ -51,6 +51,7 @@ import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 
 /**
  * FIX-STATE-06 regression: content input is observable (typed note echoes,
@@ -172,6 +173,7 @@ class CreateContentPublishRecoveryTest {
         identityGate: CompletableDeferred<SenderIdentitySnapshot>? = null,
     ): Triple<CreateViewModel, RecordingPersistence, androidx.compose.ui.test.junit4.ComposeTestRule> {
         val persistence = RecordingPersistence()
+        val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir()))
         val vm = CreateViewModel(
             directory = StaticDirectory(),
             accessTokenProvider = { null },
@@ -179,7 +181,7 @@ class CreateContentPublishRecoveryTest {
                 if (identityGate != null) identityGate.await() else null
             },
             persistence = persistence,
-            outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir())),
+            outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir()), retryStore),
             profile = RecognitionProfile.mvpOrbV1(),
             stagingDirectory = stagingDir(),
             openPhotoSource = { error("picker streams not used here") },

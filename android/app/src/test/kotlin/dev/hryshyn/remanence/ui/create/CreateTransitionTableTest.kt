@@ -41,6 +41,7 @@ import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.QualityReason
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 
 /**
  * FIX-STATE-02 regression proof: THE create transition table. Every event is
@@ -215,6 +216,7 @@ class CreateTransitionTableTest {
         },
     ): Pair<CreateViewModel, RecordingPersistence> {
         val persistence = RecordingPersistence()
+        val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(stagingDir.parentFile, "transition-outbox")))
         val vm = CreateViewModel(
             directory = StaticDirectory(),
             accessTokenProvider = { null },
@@ -223,6 +225,7 @@ class CreateTransitionTableTest {
             outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(
                 database,
                 dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(stagingDir.parentFile, "transition-outbox")),
+                retryStore,
             ),
             profile = RecognitionProfile.mvpOrbV1(),
             stagingDirectory = stagingDir,

@@ -47,6 +47,7 @@ import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 
 /**
  * FIX-STATE-08 (A): the create happy path driven through the REAL production
@@ -179,6 +180,7 @@ class CreateUiHappyPathTest {
     @Test
     fun fullCreateHappyPathThroughTheRealSurfaceEndsPublished() = runBlocking {
         val persistence = RecordingPersistence()
+        val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir()))
         val vm = CreateViewModel(
             directory = SelfDirectory(),
             accessTokenProvider = { "test-token" },
@@ -192,7 +194,7 @@ class CreateUiHappyPathTest {
                 )
             },
             persistence = persistence,
-            outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir())),
+            outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir()), retryStore),
             profile = RecognitionProfile.mvpOrbV1(),
             stagingDirectory = stagingDir(),
             openPhotoSource = { id ->

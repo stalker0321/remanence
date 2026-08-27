@@ -167,36 +167,117 @@ class OutboxDaosTest {
         }
 
     @Test
-    fun capsuleStateTransitionHonorsAllowedOriginsAndRecordsError() = runBlocking {
+    fun capsuleNamedTransitionsFollowTheCanonicalLifecycle() = runBlocking {
         val record = capsule()
         insertCapsule(record)
 
-        assertEquals(0, capsuleDao.transitionStateForOwner(record.capsuleId, OWNER, OutboxCapsuleState.UPLOADING, listOf(OutboxCapsuleState.PUBLISHED)))
-        assertEquals(1, capsuleDao.transitionStateForOwner(record.capsuleId, OWNER, OutboxCapsuleState.ENCRYPTED, listOf(OutboxCapsuleState.PREPARING)))
-        assertEquals(1, capsuleDao.transitionStateForOwner(record.capsuleId, OWNER, OutboxCapsuleState.UPLOADING, listOf(OutboxCapsuleState.ENCRYPTED)))
-
-        assertEquals(
-            1,
-            capsuleDao.transitionStateWithErrorForOwner(
-                record.capsuleId,
-                OWNER,
-                OutboxCapsuleState.RETRYABLE_FAILURE,
-                listOf(OutboxCapsuleState.UPLOADING),
-                "BLOB_HASH_MISMATCH",
-            ),
-        )
+        assertEquals(1, capsuleDao.markEncryptedForOwner(record.capsuleId, OWNER))
+        assertEquals(0, capsuleDao.markEncryptedForOwner(record.capsuleId, OWNER))
+        assertEquals(1, capsuleDao.beginUploadForOwner(record.capsuleId, OWNER))
+        assertEquals(1, capsuleDao.markRetryableFailureForOwner(record.capsuleId, OWNER, "BLOB_HASH_MISMATCH"))
+        assertEquals(1, capsuleDao.beginUploadForOwner(record.capsuleId, OWNER))
+        assertEquals(1, capsuleDao.beginFinalizeForOwner(record.capsuleId, OWNER))
+        assertEquals(1, capsuleDao.markPublishedForOwner(record.capsuleId, OWNER))
+        assertEquals(0, capsuleDao.markPublishedForOwner(record.capsuleId, OWNER))
         val loaded = capsuleDao.getByCapsuleIdAndOwner(record.capsuleId, OWNER)!!
-        assertEquals(OutboxCapsuleState.RETRYABLE_FAILURE, loaded.state)
+        assertEquals(OutboxCapsuleState.PUBLISHED, loaded.state)
         assertEquals("BLOB_HASH_MISMATCH", loaded.lastErrorCode)
+    }
+
+    @Test
+    fun everyNamedTransitionAcceptsOnlyItsCanonicalSourceStates() = runBlocking {
+        OutboxCapsuleState.values().forEach { source ->
+            val encrypted = capsule(
+                capsuleId = "matrix-encrypted-${source.name}",
+                idempotencyKey = "matrix-encrypted-idem-${source.name}",
+                state = source,
+            )
+            val upload = capsule(
+                capsuleId = "matrix-upload-${source.name}",
+                idempotencyKey = "matrix-upload-idem-${source.name}",
+                state = source,
+            )
+            val finalize = capsule(
+                capsuleId = "matrix-finalize-${source.name}",
+                idempotencyKey = "matrix-finalize-idem-${source.name}",
+                state = source,
+            )
+            val published = capsule(
+                capsuleId = "matrix-published-${source.name}",
+                idempotencyKey = "matrix-published-idem-${source.name}",
+                state = source,
+            )
+            val retryable = capsule(
+                capsuleId = "matrix-retryable-${source.name}",
+                idempotencyKey = "matrix-retryable-idem-${source.name}",
+                state = source,
+            )
+            val terminal = capsule(
+                capsuleId = "matrix-terminal-${source.name}",
+                idempotencyKey = "matrix-terminal-idem-${source.name}",
+                state = source,
+            )
+            for (row in listOf(encrypted, upload, finalize, published, retryable, terminal)) {
+                insertCapsule(row)
+            }
+
+            assertEquals(
+                if (source == OutboxCapsuleState.PREPARING) 1 else 0,
+                capsuleDao.markEncryptedForOwner(encrypted.capsuleId, OWNER),
+            )
+            assertEquals(
+                if (source == OutboxCapsuleState.ENCRYPTED || source == OutboxCapsuleState.RETRYABLE_FAILURE) 1 else 0,
+                capsuleDao.beginUploadForOwner(upload.capsuleId, OWNER),
+            )
+            assertEquals(
+                if (source == OutboxCapsuleState.UPLOADING) 1 else 0,
+                capsuleDao.beginFinalizeForOwner(finalize.capsuleId, OWNER),
+            )
+            assertEquals(
+                if (source == OutboxCapsuleState.FINALIZING) 1 else 0,
+                capsuleDao.markPublishedForOwner(published.capsuleId, OWNER),
+            )
+            assertEquals(
+                if (source == OutboxCapsuleState.ENCRYPTED ||
+                    source == OutboxCapsuleState.UPLOADING ||
+                    source == OutboxCapsuleState.FINALIZING
+                ) 1 else 0,
+                capsuleDao.markRetryableFailureForOwner(retryable.capsuleId, OWNER, "retry-${source.name}"),
+            )
+            assertEquals(
+                if (source != OutboxCapsuleState.PUBLISHED && source != OutboxCapsuleState.TERMINAL_FAILURE) 1 else 0,
+                capsuleDao.markTerminalFailureForOwner(terminal.capsuleId, OWNER, "terminal-${source.name}"),
+            )
+
+            val retryableAfter = capsuleDao.getByCapsuleIdAndOwner(retryable.capsuleId, OWNER)!!
+            assertEquals(source == OutboxCapsuleState.ENCRYPTED ||
+                source == OutboxCapsuleState.UPLOADING ||
+                source == OutboxCapsuleState.FINALIZING, retryableAfter.lastErrorCode != null)
+            if (retryableAfter.lastErrorCode != null) {
+                assertEquals("retry-${source.name}", retryableAfter.lastErrorCode)
+            }
+            val terminalAfter = capsuleDao.getByCapsuleIdAndOwner(terminal.capsuleId, OWNER)!!
+            assertEquals(
+                if (source != OutboxCapsuleState.PUBLISHED && source != OutboxCapsuleState.TERMINAL_FAILURE) {
+                    "terminal-${source.name}"
+                } else {
+                    null
+                },
+                terminalAfter.lastErrorCode,
+            )
+        }
     }
 
     @Test
     fun publishedTerminalStateCannotReturnToUploading() = runBlocking {
         val record = capsule()
         insertCapsule(record)
-        capsuleDao.transitionStateForOwner(record.capsuleId, OWNER, OutboxCapsuleState.FINALIZING, listOf(OutboxCapsuleState.UPLOADING))
-        capsuleDao.transitionStateForOwner(record.capsuleId, OWNER, OutboxCapsuleState.PUBLISHED, listOf(OutboxCapsuleState.FINALIZING))
-        assertEquals(0, capsuleDao.transitionStateForOwner(record.capsuleId, OWNER, OutboxCapsuleState.UPLOADING, listOf(OutboxCapsuleState.PUBLISHED)))
+        capsuleDao.markEncryptedForOwner(record.capsuleId, OWNER)
+        capsuleDao.beginUploadForOwner(record.capsuleId, OWNER)
+        capsuleDao.beginFinalizeForOwner(record.capsuleId, OWNER)
+        assertEquals(1, capsuleDao.markPublishedForOwner(record.capsuleId, OWNER))
+        assertEquals(0, capsuleDao.beginUploadForOwner(record.capsuleId, OWNER))
+        assertEquals(0, capsuleDao.markTerminalFailureForOwner(record.capsuleId, OWNER, "late"))
     }
 
     @Test
@@ -352,25 +433,8 @@ class OutboxDaosTest {
         assertTrue(blobDao.getAllByCapsuleIdAndOwner(record.capsuleId, OTHER_OWNER).isEmpty())
         assertEquals(0, blobDao.countByKindAndOwner(record.capsuleId, OTHER_OWNER, "PHOTO"))
 
-        assertEquals(
-            0,
-            capsuleDao.transitionStateForOwner(
-                record.capsuleId,
-                OTHER_OWNER,
-                OutboxCapsuleState.PUBLISHED,
-                listOf(OutboxCapsuleState.ENCRYPTED),
-            ),
-        )
-        assertEquals(
-            0,
-            capsuleDao.transitionStateWithErrorForOwner(
-                record.capsuleId,
-                OTHER_OWNER,
-                OutboxCapsuleState.TERMINAL_FAILURE,
-                listOf(OutboxCapsuleState.PREPARING),
-                "X",
-            ),
-        )
+        assertEquals(0, capsuleDao.markPublishedForOwner(record.capsuleId, OTHER_OWNER))
+        assertEquals(0, capsuleDao.markTerminalFailureForOwner(record.capsuleId, OTHER_OWNER, "X"))
         assertEquals(0, blobDao.markStoredForOwner("blob-up", OTHER_OWNER))
         assertEquals(0, blobDao.incrementAttemptCountForOwner("blob-up", OTHER_OWNER))
         assertEquals(0, blobDao.deleteByCapsuleIdAndOwner(record.capsuleId, OTHER_OWNER))

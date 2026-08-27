@@ -31,6 +31,8 @@ class DaoSurfaceTest {
             OutboxCapsuleDao::class.java,
             "insertStrict",
             "findOwnersOfImmutableIds",
+            "transitionStateForOwner",
+            "transitionStateWithErrorForOwner",
             "clear",
         )
         assertNotPublic(
@@ -46,6 +48,7 @@ class DaoSurfaceTest {
 
         assertNoPublicStateOrAllowedFrom(BlobCacheDao::class.java, BlobCacheState::class.java)
         assertNoPublicStateOrAllowedFrom(OutboxBlobDao::class.java, OutboxBlobUploadState::class.java)
+        assertNoPublicStateOrAllowedFrom(OutboxCapsuleDao::class.java, OutboxCapsuleState::class.java)
 
         assertPublicMethod(RecognitionFingerprintDao::class.java, "clearForOwner")
         assertPublicMethod(OutboxCapsuleDao::class.java, "clearForOwner")
@@ -57,6 +60,12 @@ class DaoSurfaceTest {
         assertPublicMethod(BlobCacheDao::class.java, "markCorruptForOwner")
         assertPublicMethod(BlobCacheDao::class.java, "retryDownloadForOwner")
         assertPublicMethod(OutboxBlobDao::class.java, "markStoredForOwner")
+        assertPublicMethod(OutboxCapsuleDao::class.java, "markEncryptedForOwner")
+        assertPublicMethod(OutboxCapsuleDao::class.java, "beginUploadForOwner")
+        assertPublicMethod(OutboxCapsuleDao::class.java, "beginFinalizeForOwner")
+        assertPublicMethod(OutboxCapsuleDao::class.java, "markPublishedForOwner")
+        assertPublicMethod(OutboxCapsuleDao::class.java, "markRetryableFailureForOwner")
+        assertPublicMethod(OutboxCapsuleDao::class.java, "markTerminalFailureForOwner")
     }
 
     private fun assertPublicWriteHasOwner(daoClass: Class<*>, methodName: String) {

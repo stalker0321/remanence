@@ -57,28 +57,59 @@ abstract class OutboxCapsuleDao {
     )
     abstract suspend fun getByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String): OutboxCapsuleEntity?
 
-    /** Owner-guarded compare-and-set state transition; 0 rows means refused. */
+    /** Owner-guarded PREPARING -> ENCRYPTED CAS; 0 rows means refused. */
     @Query(
-        "UPDATE outbox_capsule SET state = :newState " +
-            "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId AND state IN (:allowedFrom)",
+        "UPDATE outbox_capsule SET state = 'ENCRYPTED' " +
+            "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId " +
+            "AND state = 'PREPARING'",
     )
-    abstract suspend fun transitionStateForOwner(
+    abstract suspend fun markEncryptedForOwner(capsuleId: String, ownerUserId: String): Int
+
+    /** Owner-guarded ENCRYPTED/RETRYABLE_FAILURE -> UPLOADING CAS. */
+    @Query(
+        "UPDATE outbox_capsule SET state = 'UPLOADING' " +
+            "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId " +
+            "AND state IN ('ENCRYPTED', 'RETRYABLE_FAILURE')",
+    )
+    abstract suspend fun beginUploadForOwner(capsuleId: String, ownerUserId: String): Int
+
+    /** Owner-guarded UPLOADING -> FINALIZING CAS; 0 rows means refused. */
+    @Query(
+        "UPDATE outbox_capsule SET state = 'FINALIZING' " +
+            "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId " +
+            "AND state = 'UPLOADING'",
+    )
+    abstract suspend fun beginFinalizeForOwner(capsuleId: String, ownerUserId: String): Int
+
+    /** Owner-guarded FINALIZING -> PUBLISHED CAS; 0 rows means refused. */
+    @Query(
+        "UPDATE outbox_capsule SET state = 'PUBLISHED' " +
+            "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId " +
+            "AND state = 'FINALIZING'",
+    )
+    abstract suspend fun markPublishedForOwner(capsuleId: String, ownerUserId: String): Int
+
+    /** Owner-guarded recoverable failure transition with its structured code. */
+    @Query(
+        "UPDATE outbox_capsule SET last_error_code = :errorCode, state = 'RETRYABLE_FAILURE' " +
+            "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId " +
+            "AND state IN ('ENCRYPTED', 'UPLOADING', 'FINALIZING')",
+    )
+    abstract suspend fun markRetryableFailureForOwner(
         capsuleId: String,
         ownerUserId: String,
-        newState: OutboxCapsuleState,
-        allowedFrom: List<OutboxCapsuleState>,
+        errorCode: String?,
     ): Int
 
-    /** Owner-guarded CAS with a structured error code; 0 rows means refused. */
+    /** Owner-guarded terminal failure transition with its structured code. */
     @Query(
-        "UPDATE outbox_capsule SET last_error_code = :errorCode, state = :newState " +
-            "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId AND state IN (:allowedFrom)",
+        "UPDATE outbox_capsule SET last_error_code = :errorCode, state = 'TERMINAL_FAILURE' " +
+            "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId " +
+            "AND state IN ('PREPARING', 'ENCRYPTED', 'UPLOADING', 'FINALIZING', 'RETRYABLE_FAILURE')",
     )
-    abstract suspend fun transitionStateWithErrorForOwner(
+    abstract suspend fun markTerminalFailureForOwner(
         capsuleId: String,
         ownerUserId: String,
-        newState: OutboxCapsuleState,
-        allowedFrom: List<OutboxCapsuleState>,
         errorCode: String?,
     ): Int
 

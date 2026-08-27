@@ -277,11 +277,9 @@ class CapsuleOutboxStager(
                             lastErrorCode = null,
                         ),
                     )
-                    val transitioned = capsuleDao.transitionStateForOwner(
+                    val transitioned = capsuleDao.markEncryptedForOwner(
                         prepared.capsuleId.toString(),
                         prepared.ownerUserId,
-                        OutboxCapsuleState.ENCRYPTED,
-                        listOf(OutboxCapsuleState.PREPARING),
                     )
                     check(transitioned == 1) { "staging must move PREPARING to ENCRYPTED" }
                     database.outboxBlobDao().upsertAll(

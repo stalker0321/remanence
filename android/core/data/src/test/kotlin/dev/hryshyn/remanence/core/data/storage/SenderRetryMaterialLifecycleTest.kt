@@ -118,6 +118,31 @@ class SenderRetryMaterialLifecycleTest {
     ): OutboxCapsuleEntity =
         database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId, ownerUserId)!!
 
+    private suspend fun publishCapsule(
+        capsuleId: String = CAPSULE_1,
+        ownerUserId: String = OWNER_A,
+    ) {
+        val dao = database.outboxCapsuleDao()
+        assertEquals(1, dao.beginUploadForOwner(capsuleId, ownerUserId))
+        assertEquals(1, dao.beginFinalizeForOwner(capsuleId, ownerUserId))
+        assertEquals(1, dao.markPublishedForOwner(capsuleId, ownerUserId))
+    }
+
+    private suspend fun markTerminalFailure(
+        capsuleId: String = CAPSULE_1,
+        ownerUserId: String = OWNER_A,
+        errorCode: String = "perm-fail",
+    ) {
+        assertEquals(
+            1,
+            database.outboxCapsuleDao().markTerminalFailureForOwner(
+                capsuleId,
+                ownerUserId,
+                errorCode,
+            ),
+        )
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     //  ROW_ABSENT for absent rows
     // ═══════════════════════════════════════════════════════════════════
@@ -190,10 +215,7 @@ class SenderRetryMaterialLifecycleTest {
     @Test
     fun reconcileRefusesPublished() = runBlocking {
         insertAndStage()
-        database.outboxCapsuleDao().transitionStateForOwner(
-            CAPSULE_1, OWNER_A, OutboxCapsuleState.PUBLISHED,
-            listOf(OutboxCapsuleState.ENCRYPTED),
-        )
+        publishCapsule()
         val result = lifecycle.reconcileNonterminal(ownerA, capsule1)
         assertEquals(SenderRetryMaterialLifecycle.Result.STATE_NOT_ELIGIBLE, result)
         assertNotNull(retryStore.read(ownerA, capsule1))
@@ -203,10 +225,7 @@ class SenderRetryMaterialLifecycleTest {
     @Test
     fun reconcileRefusesTerminalFailure() = runBlocking {
         insertAndStage(state = OutboxCapsuleState.PREPARING)
-        database.outboxCapsuleDao().transitionStateWithErrorForOwner(
-            CAPSULE_1, OWNER_A, OutboxCapsuleState.TERMINAL_FAILURE,
-            listOf(OutboxCapsuleState.PREPARING), "perm-fail",
-        )
+        markTerminalFailure()
         val result = lifecycle.reconcileNonterminal(ownerA, capsule1)
         assertEquals(SenderRetryMaterialLifecycle.Result.STATE_NOT_ELIGIBLE, result)
         assertNotNull(retryStore.read(ownerA, capsule1))
@@ -330,10 +349,7 @@ class SenderRetryMaterialLifecycleTest {
     @Test
     fun publishedRemovesFileAndPointer() = runBlocking {
         insertAndStage(state = OutboxCapsuleState.ENCRYPTED)
-        database.outboxCapsuleDao().transitionStateForOwner(
-            CAPSULE_1, OWNER_A, OutboxCapsuleState.PUBLISHED,
-            listOf(OutboxCapsuleState.ENCRYPTED),
-        )
+        publishCapsule()
         assertEquals(OutboxCapsuleState.PUBLISHED, liveEntity().state)
 
         val result = lifecycle.cleanupForTerminalState(ownerA, capsule1)
@@ -349,10 +365,7 @@ class SenderRetryMaterialLifecycleTest {
     @Test
     fun terminalFailureRemovesFileAndPointer() = runBlocking {
         insertAndStage(state = OutboxCapsuleState.PREPARING)
-        database.outboxCapsuleDao().transitionStateWithErrorForOwner(
-            CAPSULE_1, OWNER_A, OutboxCapsuleState.TERMINAL_FAILURE,
-            listOf(OutboxCapsuleState.PREPARING), "perm-fail",
-        )
+        markTerminalFailure()
         assertEquals(OutboxCapsuleState.TERMINAL_FAILURE, liveEntity().state)
 
         val result = lifecycle.cleanupForTerminalState(ownerA, capsule1)
@@ -370,10 +383,7 @@ class SenderRetryMaterialLifecycleTest {
     fun crashWindowTerminalReplayClearsPointer() = runBlocking {
         // Stage retry material, transition to TERMINAL_FAILURE.
         insertAndStage(state = OutboxCapsuleState.PREPARING)
-        database.outboxCapsuleDao().transitionStateWithErrorForOwner(
-            CAPSULE_1, OWNER_A, OutboxCapsuleState.TERMINAL_FAILURE,
-            listOf(OutboxCapsuleState.PREPARING), "perm-fail",
-        )
+        markTerminalFailure()
         // Simulate crash window: terminal cleanup deleted file but
         // process died before pointer was cleared.
         retryStore.expectedPath(ownerA, capsule1).delete()
@@ -392,10 +402,7 @@ class SenderRetryMaterialLifecycleTest {
     @Test
     fun crashWindowPUBLISHEDReplayClearsPointer() = runBlocking {
         insertAndStage(state = OutboxCapsuleState.ENCRYPTED)
-        database.outboxCapsuleDao().transitionStateForOwner(
-            CAPSULE_1, OWNER_A, OutboxCapsuleState.PUBLISHED,
-            listOf(OutboxCapsuleState.ENCRYPTED),
-        )
+        publishCapsule()
         // Crash window: file deleted, pointer still live.
         retryStore.expectedPath(ownerA, capsule1).delete()
         assertNotNull(liveEntity().senderRetryKeysetPath)
@@ -447,10 +454,7 @@ class SenderRetryMaterialLifecycleTest {
     @Test
     fun repeatedTerminalCleanupIsIdempotent() = runBlocking {
         insertAndStage()
-        database.outboxCapsuleDao().transitionStateForOwner(
-            CAPSULE_1, OWNER_A, OutboxCapsuleState.PUBLISHED,
-            listOf(OutboxCapsuleState.ENCRYPTED),
-        )
+        publishCapsule()
         val first = lifecycle.cleanupForTerminalState(ownerA, capsule1)
         assertEquals(SenderRetryMaterialLifecycle.Result.OK, first)
         assertNull(retryStore.read(ownerA, capsule1))
@@ -476,10 +480,7 @@ class SenderRetryMaterialLifecycleTest {
     @Test
     fun terminalCasReturnsZeroReReadNullIsOk() = runBlocking {
         insertAndStage(state = OutboxCapsuleState.ENCRYPTED)
-        database.outboxCapsuleDao().transitionStateForOwner(
-            CAPSULE_1, OWNER_A, OutboxCapsuleState.PUBLISHED,
-            listOf(OutboxCapsuleState.ENCRYPTED),
-        )
+        publishCapsule()
         // Delete file + concurrent pointer clear before our call.
         retryStore.expectedPath(ownerA, capsule1).delete()
         val path = liveEntity().senderRetryKeysetPath!!
@@ -497,10 +498,7 @@ class SenderRetryMaterialLifecycleTest {
     @Test
     fun terminalCasReturnsZeroReReadStillLiveIsConflict() = runBlocking {
         insertAndStage(state = OutboxCapsuleState.ENCRYPTED)
-        database.outboxCapsuleDao().transitionStateForOwner(
-            CAPSULE_1, OWNER_A, OutboxCapsuleState.PUBLISHED,
-            listOf(OutboxCapsuleState.ENCRYPTED),
-        )
+        publishCapsule()
         val path = liveEntity().senderRetryKeysetPath!!
 
         // Simulate concurrent mutation: replace pointer with different
@@ -598,10 +596,7 @@ class SenderRetryMaterialLifecycleTest {
     @Test
     fun terminalCasReturnsZeroReReadRowDeletedIsOk() = runBlocking {
         insertAndStage(state = OutboxCapsuleState.ENCRYPTED)
-        database.outboxCapsuleDao().transitionStateForOwner(
-            CAPSULE_1, OWNER_A, OutboxCapsuleState.PUBLISHED,
-            listOf(OutboxCapsuleState.ENCRYPTED),
-        )
+        publishCapsule()
         retryStore.expectedPath(ownerA, capsule1).delete()
         // Concurrent row deletion.
         database.outboxCapsuleDao().clearForOwner(OWNER_A)
@@ -621,10 +616,7 @@ class SenderRetryMaterialLifecycleTest {
         insertCapsule(
             entity(state = OutboxCapsuleState.ENCRYPTED, senderRetryKeysetPath = wrongPath),
         )
-        database.outboxCapsuleDao().transitionStateForOwner(
-            CAPSULE_1, OWNER_A, OutboxCapsuleState.PUBLISHED,
-            listOf(OutboxCapsuleState.ENCRYPTED),
-        )
+        publishCapsule()
         val result = lifecycle.cleanupForTerminalState(ownerA, capsule1)
         assertEquals(SenderRetryMaterialLifecycle.Result.POINTER_MISMATCH, result)
         assertNotNull(retryStore.read(ownerA, capsule1))
@@ -692,10 +684,7 @@ class SenderRetryMaterialLifecycleTest {
         insertCapsule(
             entity(capsuleId = CAPSULE_2, state = OutboxCapsuleState.ENCRYPTED, senderRetryKeysetPath = pathB),
         )
-        database.outboxCapsuleDao().transitionStateForOwner(
-            CAPSULE_1, OWNER_A, OutboxCapsuleState.PUBLISHED,
-            listOf(OutboxCapsuleState.ENCRYPTED),
-        )
+        publishCapsule()
         val result = lifecycle.cleanupForTerminalState(ownerA, capsule1)
         assertEquals(SenderRetryMaterialLifecycle.Result.OK, result)
         assertNull(retryStore.read(ownerA, capsule1))
@@ -731,10 +720,7 @@ class SenderRetryMaterialLifecycleTest {
         // Insert entity in ENCRYPTED state (no retry material pointer),
         // then transition to PUBLISHED so terminal cleanup is eligible.
         insertCapsule(entity(senderRetryKeysetPath = null))
-        database.outboxCapsuleDao().transitionStateForOwner(
-            CAPSULE_1, OWNER_A, OutboxCapsuleState.PUBLISHED,
-            listOf(OutboxCapsuleState.ENCRYPTED),
-        )
+        publishCapsule()
         val result = lifecycle.cleanupForTerminalState(ownerA, capsule1)
         assertEquals(SenderRetryMaterialLifecycle.Result.OK, result)
         assertNull(liveEntity().senderRetryKeysetPath)

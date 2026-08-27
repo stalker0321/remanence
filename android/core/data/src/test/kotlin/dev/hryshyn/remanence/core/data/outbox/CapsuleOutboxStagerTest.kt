@@ -362,12 +362,7 @@ class CapsuleOutboxStagerTest {
         // A cannot mutate or delete B through any owner-required surface.
         assertEquals(
             0,
-            database.outboxCapsuleDao().transitionStateForOwner(
-                capsuleId.toString(),
-                attackerOwner,
-                OutboxCapsuleState.PUBLISHED,
-                listOf(OutboxCapsuleState.ENCRYPTED),
-            ),
+            database.outboxCapsuleDao().markPublishedForOwner(capsuleId.toString(), attackerOwner),
         )
         assertEquals(
             0,
@@ -614,12 +609,7 @@ class CapsuleOutboxStagerTest {
         // The guarded transition only accepts PREPARING as origin.
         assertEquals(
             0,
-            database.outboxCapsuleDao().transitionStateForOwner(
-                capsuleId.toString(),
-                OWNER,
-                OutboxCapsuleState.ENCRYPTED,
-                listOf(OutboxCapsuleState.PREPARING),
-            ),
+            database.outboxCapsuleDao().markEncryptedForOwner(capsuleId.toString(), OWNER),
         )
     }
 

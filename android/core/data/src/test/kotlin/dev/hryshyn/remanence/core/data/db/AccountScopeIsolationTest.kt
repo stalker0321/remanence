@@ -170,12 +170,12 @@ class AccountScopeIsolationTest {
         assertEquals(
             0,
             database.outboxCapsuleDao()
-                .transitionStateForOwner(capsuleA, ownerB, OutboxCapsuleState.UPLOADING, listOf(OutboxCapsuleState.ENCRYPTED)),
+                .beginUploadForOwner(capsuleA, ownerB),
         )
         assertEquals(
             0,
             database.outboxCapsuleDao()
-                .transitionStateWithErrorForOwner(capsuleA, ownerB, OutboxCapsuleState.TERMINAL_FAILURE, listOf(OutboxCapsuleState.ENCRYPTED), "x"),
+                .markTerminalFailureForOwner(capsuleA, ownerB, "x"),
         )
         assertEquals(
             0,
@@ -210,7 +210,7 @@ class AccountScopeIsolationTest {
         assertEquals(
             1,
             database.outboxCapsuleDao()
-                .transitionStateForOwner(capsuleA, ownerA, OutboxCapsuleState.UPLOADING, listOf(OutboxCapsuleState.ENCRYPTED)),
+                .beginUploadForOwner(capsuleA, ownerA),
         )
     }
 

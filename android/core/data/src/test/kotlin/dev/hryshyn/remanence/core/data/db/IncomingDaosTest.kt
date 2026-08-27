@@ -4,9 +4,11 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import dev.hryshyn.remanence.core.model.LocalMaterialState
+import java.lang.reflect.Modifier
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -74,16 +76,16 @@ class IncomingDaosTest {
     @Test
     fun upsertThenReadReturnsRoutedMetadataOnly() = runBlocking {
         val record = capsule()
-        capsuleDao.upsertAllForOwner(listOf(record))
+        capsuleDao.upsertAllForOwner(OWNER, listOf(record))
         assertEquals(record.signedStatementBytes.toList(), capsuleDao.getByCapsuleIdAndOwner(record.capsuleId, OWNER)!!.signedStatementBytes.toList())
     }
 
     @Test
     fun replayedUpsertIsIdempotentByCapsuleId() = runBlocking {
         val record = capsule()
-        capsuleDao.upsertAllForOwner(listOf(record))
+        capsuleDao.upsertAllForOwner(OWNER, listOf(record))
         val updated = record.copy(serverStatus = "READY", readyAtEpochMs = 1_755_000_999_999)
-        capsuleDao.upsertAllForOwner(listOf(updated))
+        capsuleDao.upsertAllForOwner(OWNER, listOf(updated))
 
         val loaded = capsuleDao.getByCapsuleIdAndOwner(record.capsuleId, OWNER)!!
         assertEquals(updated.readyAtEpochMs, loaded.readyAtEpochMs)
@@ -102,7 +104,7 @@ class IncomingDaosTest {
             val capsuleId = "0198f0a0-0000-7000-8000-00000000s${state.name.take(2)}"
             assertThrows(IllegalArgumentException::class.java) {
                 runBlocking {
-                    capsuleDao.upsertAllForOwner(listOf(capsule(capsuleId = capsuleId, state = state)))
+                    capsuleDao.upsertAllForOwner(OWNER, listOf(capsule(capsuleId = capsuleId, state = state)))
                 }
             }
             assertNull(capsuleDao.getByCapsuleIdAndOwner(capsuleId, OWNER))
@@ -119,7 +121,7 @@ class IncomingDaosTest {
         )
 
         assertThrows(IllegalArgumentException::class.java) {
-            runBlocking { capsuleDao.upsertAllForOwner(listOf(valid, invalid)) }
+            runBlocking { capsuleDao.upsertAllForOwner(OWNER, listOf(valid, invalid)) }
         }
 
         assertNull(capsuleDao.getByCapsuleIdAndOwner(valid.capsuleId, OWNER))
@@ -130,7 +132,7 @@ class IncomingDaosTest {
     @Test
     fun sameOwnerReplayCannotOverwriteAdvancedStoredState() = runBlocking {
         val record = capsule()
-        capsuleDao.upsertAllForOwner(listOf(record))
+        capsuleDao.upsertAllForOwner(OWNER, listOf(record))
         assertTrue(
             capsuleDao.transitionMaterialStateForOwner(
                 ownerUserId = OWNER,
@@ -140,6 +142,7 @@ class IncomingDaosTest {
         )
 
         capsuleDao.upsertAllForOwner(
+            OWNER,
             listOf(
                 record.copy(
                     serverStatus = "READY-REPLAY",
@@ -156,7 +159,7 @@ class IncomingDaosTest {
     @Test
     fun materialStateTransitionsFollowCanonicalForwardChainThroughRoom() = runBlocking {
         val record = capsule(state = LocalMaterialState.DISCOVERED)
-        capsuleDao.upsertAllForOwner(listOf(record))
+        capsuleDao.upsertAllForOwner(OWNER, listOf(record))
 
         val forwardStates = listOf(
             LocalMaterialState.INDEX_CACHED,
@@ -195,7 +198,7 @@ class IncomingDaosTest {
     @Test
     fun idempotentReplayIsPreciseNoWriteResult() = runBlocking {
         val record = capsule()
-        capsuleDao.upsertAllForOwner(listOf(record))
+        capsuleDao.upsertAllForOwner(OWNER, listOf(record))
         val changesBefore = totalChanges()
 
         val result = capsuleDao.transitionMaterialStateForOwner(
@@ -215,7 +218,7 @@ class IncomingDaosTest {
     @Test
     fun rejectedAndMissingTransitionsAreDistinctNoWriteResults() = runBlocking {
         val record = capsule()
-        capsuleDao.upsertAllForOwner(listOf(record))
+        capsuleDao.upsertAllForOwner(OWNER, listOf(record))
         val changesBeforeRejected = totalChanges()
 
         val rejected = capsuleDao.transitionMaterialStateForOwner(
@@ -240,7 +243,7 @@ class IncomingDaosTest {
     @Test
     fun corruptEntryOnlyRecoversToDiscovered() = runBlocking {
         val record = capsule()
-        capsuleDao.upsertAllForOwner(listOf(record))
+        capsuleDao.upsertAllForOwner(OWNER, listOf(record))
 
         val enteredCorrupt = capsuleDao.transitionMaterialStateForOwner(
             ownerUserId = OWNER,
@@ -270,7 +273,7 @@ class IncomingDaosTest {
     @Test
     fun casLossIsConcurrentOrStaleAndNeverAccepted() = runBlocking {
         val record = capsule()
-        capsuleDao.upsertAllForOwner(listOf(record))
+        capsuleDao.upsertAllForOwner(OWNER, listOf(record))
         database.openHelper.writableDatabase.execSQL(
             "CREATE TRIGGER force_material_cas_loss " +
                 "BEFORE UPDATE OF material_state ON incoming_capsule " +
@@ -295,8 +298,8 @@ class IncomingDaosTest {
     @Test
     fun envelopeUpsertIsIdempotentAndReplaySafe() = runBlocking {
         val record = envelope()
-        envelopeDao.upsertForOwner(record)
-        envelopeDao.upsertForOwner(record.copy(receivedAtEpochMs = 1_755_000_200_000))
+        envelopeDao.upsertForOwner(OWNER, record)
+        envelopeDao.upsertForOwner(OWNER, record.copy(receivedAtEpochMs = 1_755_000_200_000))
 
         val loaded = envelopeDao.getByCapsuleIdAndOwner(record.capsuleId, OWNER)!!
         assertEquals(1_755_000_200_000, loaded.receivedAtEpochMs)
@@ -305,14 +308,156 @@ class IncomingDaosTest {
     }
 
     @Test
-    fun clearRemovesIncomingRecords() = runBlocking {
-        val id = "0198f0a0-0000-7000-8000-00000000ca02"
-        capsuleDao.upsertAllForOwner(listOf(capsule(capsuleId = id)))
-        envelopeDao.upsertForOwner(envelope(capsuleId = id))
-        capsuleDao.clear()
-        envelopeDao.clear()
-        assertNull(capsuleDao.getByCapsuleIdAndOwner(id, OWNER))
-        assertNull(envelopeDao.getByCapsuleIdAndOwner(id, OWNER))
+    fun clearForOwnerRemovesOnlyOwnerRecords() = runBlocking {
+        val ownerA = "0198f0a0-0000-7000-8000-00000000ow01"
+        val ownerB = "0198f0a0-0000-7000-8000-00000000ow02"
+        val idA = "0198f0a0-0000-7000-8000-00000000ca02"
+        val idB = "0198f0a0-0000-7000-8000-00000000ca03"
+        capsuleDao.upsertAllForOwner(ownerA, listOf(capsule(capsuleId = idA)))
+        envelopeDao.upsertForOwner(ownerA, envelope(capsuleId = idA))
+        capsuleDao.upsertAllForOwner(ownerB, listOf(capsule(capsuleId = idB).copy(ownerUserId = ownerB)))
+        envelopeDao.upsertForOwner(ownerB, envelope(capsuleId = idB).copy(ownerUserId = ownerB))
+
+        capsuleDao.clearForOwner(ownerA)
+        envelopeDao.clearForOwner(ownerA)
+
+        assertNull(capsuleDao.getByCapsuleIdAndOwner(idA, ownerA))
+        assertNull(envelopeDao.getByCapsuleIdAndOwner(idA, ownerA))
+        assertNotNull(capsuleDao.getByCapsuleIdAndOwner(idB, ownerB))
+        assertNotNull(envelopeDao.getByCapsuleIdAndOwner(idB, ownerB))
+    }
+
+    @Test
+    fun capsuleForeignOwnerUpsertIsRefusedAndOriginalRowUnchanged() = runBlocking {
+        val ownerB = "0198f0a0-0000-7000-8000-00000000ow02"
+        val original = capsule()
+        capsuleDao.upsertAllForOwner(OWNER, listOf(original))
+        val before = capsuleDao.getByCapsuleIdAndOwner(original.capsuleId, OWNER)!!
+
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking {
+                capsuleDao.upsertAllForOwner(
+                    ownerB,
+                    listOf(original.copy(ownerUserId = ownerB, serverStatus = "HACKED")),
+                )
+            }
+        }
+
+        assertEquals(1, countRows("incoming_capsule"))
+        val after = capsuleDao.getByCapsuleIdAndOwner(original.capsuleId, OWNER)!!
+        assertEquals(before, after)
+        assertEquals(OWNER, after.ownerUserId)
+    }
+
+    @Test
+    fun ownerArgumentMismatchIsRejectedBeforeAnyIncomingWrite() = runBlocking {
+        val ownerB = "0198f0a0-0000-7000-8000-00000000ow02"
+        val originalCapsule = capsule()
+        val originalEnvelope = envelope()
+        capsuleDao.upsertAllForOwner(OWNER, listOf(originalCapsule))
+        envelopeDao.upsertForOwner(OWNER, originalEnvelope)
+        val capsuleCandidate = originalCapsule.copy(ownerUserId = ownerB, serverStatus = "HACKED")
+        val envelopeCandidate = originalEnvelope.copy(ownerUserId = ownerB, hpkeCiphertext = byteArrayOf(1))
+
+        assertThrows(IllegalArgumentException::class.java) {
+            runBlocking { capsuleDao.upsertAllForOwner(OWNER, listOf(capsuleCandidate)) }
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            runBlocking { envelopeDao.upsertForOwner(OWNER, envelopeCandidate) }
+        }
+
+        val capsuleAfter = capsuleDao.getByCapsuleIdAndOwner(originalCapsule.capsuleId, OWNER)!!
+        assertEquals(originalCapsule, capsuleAfter)
+        assertEquals(OWNER, capsuleAfter.ownerUserId)
+        val envelopeAfter = envelopeDao.getByCapsuleIdAndOwner(originalEnvelope.capsuleId, OWNER)!!
+        assertEquals(originalEnvelope, envelopeAfter)
+        assertEquals(OWNER, envelopeAfter.ownerUserId)
+    }
+
+    @Test
+    fun envelopeForeignOwnerUpsertIsRefusedAndOriginalRowUnchanged() = runBlocking {
+        val ownerB = "0198f0a0-0000-7000-8000-00000000ow02"
+        val original = envelope()
+        envelopeDao.upsertForOwner(OWNER, original)
+        val before = envelopeDao.getByCapsuleIdAndOwner(original.capsuleId, OWNER)!!
+
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking {
+                envelopeDao.upsertForOwner(
+                    ownerB,
+                    original.copy(ownerUserId = ownerB, hpkeCiphertext = byteArrayOf(1)),
+                )
+            }
+        }
+
+        assertEquals(1, countRows("incoming_envelope"))
+        val after = envelopeDao.getByCapsuleIdAndOwner(original.capsuleId, OWNER)!!
+        assertTrue(before.hpkeCiphertext.contentEquals(after.hpkeCiphertext))
+        assertTrue(before.transportSha256.contentEquals(after.transportSha256))
+        assertEquals(before.receivedAtEpochMs, after.receivedAtEpochMs)
+        assertEquals(OWNER, after.ownerUserId)
+    }
+
+    @Test
+    fun batchPreflightRejectsEntireBatchOnAnyOwnerMismatch() = runBlocking {
+        val ownerB = "0198f0a0-0000-7000-8000-00000000ow02"
+        val idA = "0198f0a0-0000-7000-8000-00000000ca03"
+        val idB = "0198f0a0-0000-7000-8000-00000000ca04"
+        val aOwned = capsule(capsuleId = idA).copy(ownerUserId = OWNER)
+        capsuleDao.upsertAllForOwner(OWNER, listOf(aOwned))
+
+        val mixedBatch = listOf(
+            capsule(capsuleId = idB),
+            capsule(capsuleId = idA).copy(ownerUserId = ownerB),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            runBlocking { capsuleDao.upsertAllForOwner(OWNER, mixedBatch) }
+        }
+
+        assertNull(capsuleDao.getByCapsuleIdAndOwner(idB, OWNER))
+        assertEquals(1, countRows("incoming_capsule"))
+    }
+
+    @Test
+    fun publicIncomingDaoSurfaceHasNoGlobalClearOrRawWritePrimitives() {
+        val capsulePublic = IncomingCapsuleDao::class.java.methods
+        val envelopePublic = IncomingEnvelopeDao::class.java.methods
+
+        assertPublicSurfaceIsOwnerBound(
+            capsulePublic,
+            upsertName = "upsertAllForOwner",
+            entityParameterType = List::class.java,
+        )
+        assertPublicSurfaceIsOwnerBound(
+            envelopePublic,
+            upsertName = "upsertForOwner",
+            entityParameterType = IncomingEnvelopeEntity::class.java,
+        )
+    }
+
+    private fun assertPublicSurfaceIsOwnerBound(
+        methods: Array<java.lang.reflect.Method>,
+        upsertName: String,
+        entityParameterType: Class<*>,
+    ) {
+        assertTrue(methods.none { it.name == "clear" })
+        assertTrue(methods.any { it.name == "clearForOwner" })
+        assertTrue(
+            methods.none {
+                it.name in setOf(
+                    "findOwnerOf",
+                    "findOwnerOfRaw",
+                    "insertIgnoring",
+                    "updateReplayFieldsForOwner",
+                    "updateReplayFieldsRaw",
+                )
+            },
+        )
+        val upserts = methods.filter { it.name == upsertName }
+        assertEquals(1, upserts.size)
+        assertEquals(String::class.java, upserts.single().parameterTypes.first())
+        assertTrue(entityParameterType in upserts.single().parameterTypes)
+        assertTrue(Modifier.isPublic(upserts.single().modifiers))
     }
 
     private fun countRows(table: String): Int =

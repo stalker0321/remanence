@@ -140,9 +140,9 @@ class AccountScopeIsolationTest {
     private suspend fun seedAccountAMaterial() {
         database.outboxCapsuleDao().insertOrAbort(outboxCapsule(capsuleA, ownerA))
         database.outboxBlobDao().upsertAll(listOf(outboxBlob(blobA1, capsuleA, ownerA)))
-        database.incomingCapsuleDao().upsertAllForOwner(listOf(incomingCapsule(capsuleA, ownerA)))
-        database.incomingEnvelopeDao().upsertForOwner(incomingEnvelope(capsuleA, ownerA))
-        database.blobCacheDao().upsertForOwner(blobCache(blobA1, capsuleA, ownerA))
+        database.incomingCapsuleDao().upsertAllForOwner(ownerA, listOf(incomingCapsule(capsuleA, ownerA)))
+        database.incomingEnvelopeDao().upsertForOwner(ownerA, incomingEnvelope(capsuleA, ownerA))
+        database.blobCacheDao().upsertForOwner(ownerA, blobCache(blobA1, capsuleA, ownerA))
         database.recognitionFingerprintDao().insertAll(listOf(fingerprint("fp-a", capsuleA, ownerA)))
     }
 

@@ -90,9 +90,9 @@ class IncomingCacheIsolationTest {
     @Test
     fun afterLogoutAAndLoginBZeroARowsAreExposedOrMutable() = runBlocking {
         // --- logged in as A: sync page writes A-owned cached material ---
-        database.incomingCapsuleDao().upsertAllForOwner(listOf(incomingCapsule(capsuleA, ownerA)))
-        database.incomingEnvelopeDao().upsertForOwner(incomingEnvelope(capsuleA, ownerA))
-        database.blobCacheDao().upsertForOwner(blobCache(blobA, capsuleA, ownerA))
+        database.incomingCapsuleDao().upsertAllForOwner(ownerA, listOf(incomingCapsule(capsuleA, ownerA)))
+        database.incomingEnvelopeDao().upsertForOwner(ownerA, incomingEnvelope(capsuleA, ownerA))
+        database.blobCacheDao().upsertForOwner(ownerA, blobCache(blobA, capsuleA, ownerA))
         database.syncCursorDao().advance(SyncCursorEntity(ownerA, "incoming", "page-a3", 300))
 
         // ... material fully resolved under its owning account:
@@ -162,13 +162,13 @@ class IncomingCacheIsolationTest {
     @Test
     fun foreignOwnerCapsuleReplayIsRefusedAndOriginalRowUnchanged() = runBlocking {
         val original = incomingCapsule(capsuleA, ownerA)
-        database.incomingCapsuleDao().upsertAllForOwner(listOf(original))
+        database.incomingCapsuleDao().upsertAllForOwner(ownerA, listOf(original))
         val before = database.incomingCapsuleDao().getByCapsuleIdAndOwner(capsuleA, ownerA)!!
 
         val bReplaysSameCapsuleId =
             listOf(original.copy(ownerUserId = ownerB, serverStatus = "READY"))
         assertThrows(IllegalStateException::class.java) {
-            runBlocking { database.incomingCapsuleDao().upsertAllForOwner(bReplaysSameCapsuleId) }
+            runBlocking { database.incomingCapsuleDao().upsertAllForOwner(ownerB, bReplaysSameCapsuleId) }
         }
 
         assertEquals(1, countRows("incoming_capsule"))
@@ -181,9 +181,10 @@ class IncomingCacheIsolationTest {
     @Test
     fun sameOwnerCapsuleReplayUpdatesOnlyAllowedFields() = runBlocking {
         val original = incomingCapsule(capsuleA, ownerA)
-        database.incomingCapsuleDao().upsertAllForOwner(listOf(original))
+        database.incomingCapsuleDao().upsertAllForOwner(ownerA, listOf(original))
 
         database.incomingCapsuleDao().upsertAllForOwner(
+            ownerA,
             listOf(
                 original.copy(
                     serverStatus = "READY",
@@ -207,14 +208,14 @@ class IncomingCacheIsolationTest {
     @Test
     fun foreignOwnerEnvelopeReplayIsRefusedAndOriginalRowUnchanged() = runBlocking {
         val original = incomingEnvelope(capsuleA, ownerA)
-        database.incomingEnvelopeDao().upsertForOwner(original)
+        database.incomingEnvelopeDao().upsertForOwner(ownerA, original)
 
         val before = database.incomingEnvelopeDao().getByCapsuleIdAndOwner(capsuleA, ownerA)!!
 
         assertThrows(IllegalStateException::class.java) {
             runBlocking {
                 database.incomingEnvelopeDao()
-                    .upsertForOwner(original.copy(ownerUserId = ownerB, hpkeCiphertext = byteArrayOf(1)))
+                    .upsertForOwner(ownerB, original.copy(ownerUserId = ownerB, hpkeCiphertext = byteArrayOf(1)))
             }
         }
 
@@ -229,14 +230,14 @@ class IncomingCacheIsolationTest {
     @Test
     fun foreignOwnerBlobCacheReplayIsRefusedAndOriginalRowUnchanged() = runBlocking {
         val original = blobCache(blobA, capsuleA, ownerA)
-        database.blobCacheDao().upsertForOwner(original)
+        database.blobCacheDao().upsertForOwner(ownerA, original)
 
         val before = database.blobCacheDao().getByBlobIdAndOwner(blobA, ownerA)!!
 
         assertThrows(IllegalStateException::class.java) {
             runBlocking {
                 database.blobCacheDao()
-                    .upsertForOwner(original.copy(ownerUserId = ownerB, localPath = "b/stolen.bin"))
+                    .upsertForOwner(ownerB, original.copy(ownerUserId = ownerB, localPath = "b/stolen.bin"))
             }
         }
 
@@ -252,7 +253,7 @@ class IncomingCacheIsolationTest {
     @Test
     fun sameOwnerBlobCacheReplayUpdatesFieldsWithoutTouchingCacheState() = runBlocking {
         val original = blobCache(blobA, capsuleA, ownerA)
-        database.blobCacheDao().upsertForOwner(original)
+        database.blobCacheDao().upsertForOwner(ownerA, original)
         assertEquals(
             1,
             database.blobCacheDao()
@@ -260,6 +261,7 @@ class IncomingCacheIsolationTest {
         )
 
         database.blobCacheDao().upsertForOwner(
+            ownerA,
             original.copy(localPath = "files/capsules/ca01/blob-bl01-replayed.bin"),
         )
 
@@ -279,9 +281,9 @@ class IncomingCacheIsolationTest {
     fun bAccumulatesItsOwnIncomingMaterialAlongsideARetainedRows() = runBlocking {
         val capsuleB = UUID.randomUUID().toString()
         // A caches first; then B accumulates its own pages independently.
-        database.incomingCapsuleDao().upsertAllForOwner(listOf(incomingCapsule(capsuleA, ownerA)))
-        database.incomingCapsuleDao().upsertAllForOwner(listOf(incomingCapsule(capsuleB, ownerB)))
-        database.blobCacheDao().upsertForOwner(blobCache(blobA, capsuleA, ownerA))
+        database.incomingCapsuleDao().upsertAllForOwner(ownerA, listOf(incomingCapsule(capsuleA, ownerA)))
+        database.incomingCapsuleDao().upsertAllForOwner(ownerB, listOf(incomingCapsule(capsuleB, ownerB)))
+        database.blobCacheDao().upsertForOwner(ownerA, blobCache(blobA, capsuleA, ownerA))
 
         // B advances only its own material state.
         assertTrue(

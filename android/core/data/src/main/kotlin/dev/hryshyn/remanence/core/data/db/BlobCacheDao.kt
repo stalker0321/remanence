@@ -7,24 +7,32 @@ import androidx.room.Query
 import androidx.room.Transaction
 
 /**
- * M2-P02/P03 + review fix: every account-owned lookup, list, compare-and-set,
- * and cleanup REQUIRES the row's immutable owner_user_id. Writes go ONLY
- * through [upsertForOwner]: the same local account may replay/update its own
- * cache entry's transport fields, while a different account presenting the
- * same immutable blob ID is REFUSED with the original row left unchanged.
- */
+ * M2-P02/P03 + review fix + D01: every account-owned lookup, list,
+ * compare-and-set, and cleanup REQUIRES the row's immutable owner_user_id.
+ * Writes go ONLY through [upsertForOwner]: the same local account may
+ * replay/update its own cache entry's transport fields, while a different
+ * account presenting the same immutable blob ID is REFUSED with the original
+ * row left unchanged.
+ *
+ * D01: converted from interface to abstract class. Internal probe/write
+ * primitives are [protected]; only owner-scoped public surface remains.
+     */
 @Dao
-interface BlobCacheDao {
+abstract class BlobCacheDao {
 
     /**
-     * Owner-preserving idempotent cache write. [BlobCacheEntity.cacheState]
+     * Owner-preserving idempotent cache write. [ownerUserId] is authoritative;
+     * the entity owner must match it before any database work. [BlobCacheEntity.cacheState]
      * is NOT a replay field - it changes only through the owner-guarded CAS -
      * so replaying never rewinds a download state.
-     */
+    */
     @Transaction
-    suspend fun upsertForOwner(blob: BlobCacheEntity) {
+    open suspend fun upsertForOwner(ownerUserId: String, blob: BlobCacheEntity) {
+        require(blob.ownerUserId == ownerUserId) {
+            "blob cache ${blob.blobId} owner does not match the authoritative owner"
+        }
         val existingOwner = findOwnerOf(blob.blobId)
-        if (existingOwner != null && existingOwner != blob.ownerUserId) {
+        if (existingOwner != null && existingOwner != ownerUserId) {
             throw IllegalStateException(
                 "blob cache ${blob.blobId} already cached for another local account",
             )
@@ -32,7 +40,7 @@ interface BlobCacheDao {
         insertIgnoring(blob)
         updateReplayFieldsForOwner(
             blobId = blob.blobId,
-            ownerUserId = blob.ownerUserId,
+            ownerUserId = ownerUserId,
             kind = blob.kind,
             ordinal = blob.ordinal,
             expectedSizeBytes = blob.expectedSizeBytes,
@@ -43,10 +51,10 @@ interface BlobCacheDao {
 
     /** Minimal ownership probe: never returns full unscoped rows. */
     @Query("SELECT owner_user_id FROM blob_cache WHERE blob_id = :blobId LIMIT 1")
-    suspend fun findOwnerOf(blobId: String): String?
+    protected abstract suspend fun findOwnerOf(blobId: String): String?
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
-    suspend fun insertIgnoring(blob: BlobCacheEntity)
+    protected abstract suspend fun insertIgnoring(blob: BlobCacheEntity)
 
     @Query(
         "UPDATE blob_cache SET kind = :kind, ordinal = :ordinal, " +
@@ -54,7 +62,7 @@ interface BlobCacheDao {
             "local_path = :localPath " +
             "WHERE blob_id = :blobId AND owner_user_id = :ownerUserId",
     )
-    suspend fun updateReplayFieldsForOwner(
+    protected abstract suspend fun updateReplayFieldsForOwner(
         blobId: String,
         ownerUserId: String,
         kind: String,
@@ -64,29 +72,30 @@ interface BlobCacheDao {
         localPath: String,
     )
 
-    @Query("DELETE FROM blob_cache")
-    suspend fun clear()
+    /** Owner-scoped teardown: removes only rows belonging to [ownerUserId]. */
+    @Query("DELETE FROM blob_cache WHERE owner_user_id = :ownerUserId")
+    abstract suspend fun clearForOwner(ownerUserId: String)
 
     /** Resolves the cache entry ONLY when owned by [ownerUserId]. */
     @Query(
         "SELECT * FROM blob_cache " +
             "WHERE blob_id = :blobId AND owner_user_id = :ownerUserId",
     )
-    suspend fun getByBlobIdAndOwner(blobId: String, ownerUserId: String): BlobCacheEntity?
+    abstract suspend fun getByBlobIdAndOwner(blobId: String, ownerUserId: String): BlobCacheEntity?
 
     /** Lists the capsule's cached blobs ONLY when owned by [ownerUserId]. */
     @Query(
         "SELECT * FROM blob_cache " +
             "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId",
     )
-    suspend fun getAllByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String): List<BlobCacheEntity>
+    abstract suspend fun getAllByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String): List<BlobCacheEntity>
 
     /** Owner-guarded cache-state CAS; 0 rows means refused. */
     @Query(
         "UPDATE blob_cache SET cache_state = :newState " +
             "WHERE blob_id = :blobId AND owner_user_id = :ownerUserId AND cache_state IN (:allowedFrom)",
     )
-    suspend fun transitionStateForOwner(
+    abstract suspend fun transitionStateForOwner(
         blobId: String,
         ownerUserId: String,
         newState: BlobCacheState,
@@ -97,5 +106,5 @@ interface BlobCacheDao {
     @Query(
         "DELETE FROM blob_cache WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId",
     )
-    suspend fun deleteByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String): Int
+    abstract suspend fun deleteByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String): Int
 }

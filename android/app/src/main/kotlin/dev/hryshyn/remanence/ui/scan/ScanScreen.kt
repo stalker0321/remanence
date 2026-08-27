@@ -43,11 +43,12 @@ fun ScanScreen(
      */
     adapterFactory: (() -> dev.hryshyn.remanence.capture.StillCameraAdapter)? = null,
     requestPermissionOnAttach: Boolean = true,
+    onScreenDispose: () -> Unit = viewModel::resetSession,
 ) {
     val matchState by viewModel.matchState.collectAsStateWithLifecycle()
 
     DisposableEffect(Unit) {
-        onDispose { viewModel.resetSession() }
+        onDispose(onScreenDispose)
     }
 
     Column(

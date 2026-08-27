@@ -82,6 +82,7 @@ data class RecognitionProfile(
         val confidenceRectangularityWeight: Double = 0.30,
         val confidenceEdgeSupportWeight: Double = 0.20,
         val confidenceGuideProximityWeight: Double = 0.10,
+        val minContourConfidence: Double,
     )
 
     companion object {
@@ -157,6 +158,7 @@ data class RecognitionProfile(
                 confidenceRectangularityWeight = 0.30,
                 confidenceEdgeSupportWeight = 0.20,
                 confidenceGuideProximityWeight = 0.10,
+                minContourConfidence = 0.70,
             ),
         )
 
@@ -241,6 +243,11 @@ internal data class ProfileDto(
             ranking.autoMarginOverRunnerUp,
             ranking.duplicateFrontBackMinScore,
             ranking.chooserCompositeMin,
+            ranking.confidenceAreaWeight,
+            ranking.confidenceRectangularityWeight,
+            ranking.confidenceEdgeSupportWeight,
+            ranking.confidenceGuideProximityWeight,
+            ranking.minContourConfidence,
         ),
     )
 
@@ -309,6 +316,7 @@ internal data class ProfileDto(
         val confidenceRectangularityWeight: Double = 0.30,
         val confidenceEdgeSupportWeight: Double = 0.20,
         val confidenceGuideProximityWeight: Double = 0.10,
+        val minContourConfidence: Double,
     )
 }
 
@@ -323,6 +331,7 @@ private fun RecognitionProfile.validate() {
         require(maxNearBlackFraction in 0.0..1.0)
         require(maxClippedWhiteFraction in 0.0..1.0)
         require(maxGlareRegionFraction in 0.0..1.0)
+        require(minRectangularity in 0.0..1.0)
     }
     with(orb) {
         require(nfeatures > 0 && nlevels > 0 && edgeThreshold > 0 && patchSize > 0)
@@ -356,6 +365,7 @@ private fun RecognitionProfile.validate() {
         require(autoMarginOverRunnerUp in 0.0..1.0)
         require(duplicateFrontBackMinScore in 0.0..1.0)
         require(chooserCompositeMin in 0.0..autoCompositeMin) { "chooser floor must not exceed automatic floor" }
+        require(minContourConfidence in 0.0..1.0)
         // Confidence weights must form a convex combination (epsilon-tolerant).
         val weightSum = confidenceAreaWeight + confidenceRectangularityWeight +
             confidenceEdgeSupportWeight + confidenceGuideProximityWeight
@@ -378,6 +388,7 @@ internal fun RecognitionProfile.toDto() = ProfileDto(
         capture.maxNearBlackFraction,
         capture.maxClippedWhiteFraction,
         capture.maxGlareRegionFraction,
+        capture.minRectangularity,
     ),
     orb = ProfileDto.OrbDto(
         orb.nfeatures,
@@ -424,6 +435,7 @@ internal fun RecognitionProfile.toDto() = ProfileDto(
         ranking.confidenceRectangularityWeight,
         ranking.confidenceEdgeSupportWeight,
         ranking.confidenceGuideProximityWeight,
+        ranking.minContourConfidence,
     ),
 )
 

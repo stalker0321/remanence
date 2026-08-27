@@ -40,6 +40,7 @@ import dev.hryshyn.remanence.ui.home.HomeCapabilityViewModel
 import dev.hryshyn.remanence.ui.home.HomeScreen
 import dev.hryshyn.remanence.wiring.RemanenceViewModelFactory
 import dev.hryshyn.remanence.ui.navigation.AuthUiState
+import dev.hryshyn.remanence.ui.navigation.AppDestination
 import dev.hryshyn.remanence.core.data.network.HealthCheckResult
 
 class MainActivity : ComponentActivity() {
@@ -191,13 +192,20 @@ private fun RootSurface(container: AppContainer) {
         capsuleIdResolver = rootViewModel::capsuleIdFor,
         scanContent = {
             val scanViewModel: ScanViewModel = viewModel(factory = factory)
-            // FIX-REVIEW-02: every entry is a fresh FRONT-first scan; a stale
-            // Granted from a previous session can never re-navigate because
-            // beginSession clears the terminal before this screen renders.
+            // FIX-REVIEW-02/ANDROID-HOTFIX-A: every entry is a fresh FRONT-
+            // first scan; initialize the epoch before allowing any camera UI
+            // to compose. LaunchedEffect runs after composition, so the gate
+            // is required for a retained VM whose old controller is still
+            // Granted/Binding while a new epoch is being entered.
             val scanEpoch by rootViewModel.scanSessionEpoch.collectAsStateWithLifecycle()
+            val initializedEpoch by scanViewModel.initializedEpoch.collectAsStateWithLifecycle()
             LaunchedEffect(scanEpoch) { scanViewModel.beginSession(scanEpoch) }
-            androidx.compose.runtime.key(scanEpoch) {
-                ScanFlowSurface(rootViewModel = rootViewModel, scanViewModel = scanViewModel)
+            if (initializedEpoch == scanEpoch) {
+                androidx.compose.runtime.key(scanEpoch) {
+                    ScanFlowSurface(rootViewModel = rootViewModel, scanViewModel = scanViewModel)
+                }
+            } else {
+                Text("Preparing scan…", modifier = Modifier.testTag("scan_session_initializing"))
             }
         },
         onExitFlow = rootViewModel::returnToHome,
@@ -217,7 +225,17 @@ private fun ScanFlowSurface(rootViewModel: RootViewModel, scanViewModel: ScanVie
         // the capsule ID through THE authoritative grant manager itself.
         rootViewModel.openCapsuleWithGrant(grantId = granted.grantId)
     }
-    ScanScreen(viewModel = scanViewModel)
+    ScanScreen(
+        viewModel = scanViewModel,
+        // Activity recreation disposes/recreates Compose but keeps the
+        // ViewModel and root destination. Only an actual route exit should
+        // tear down the scan; this preserves same-epoch rotation state.
+        onScreenDispose = {
+            if (rootViewModel.destination.value != AppDestination.Scan) {
+                scanViewModel.resetSession()
+            }
+        },
+    )
 }
 
 /**

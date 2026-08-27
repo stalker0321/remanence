@@ -7,12 +7,17 @@ enum class QualityReason {
     TOO_BLURRY,
     TOO_DARK,
     GLARE_EXCESSIVE,
+    FEATURES_INSUFFICIENT,
 }
 
 data class CaptureQualityInput(
     val signals: CaptureQualitySignals,
     val detectedAreaRatio: Double,
     val rectangularity: Double,
+    /** Aspect ratio of the chosen crop, normalized so landscape/portrait agree. */
+    val cropAspectRatio: Double? = null,
+    /** Short edge after the perspective warp, when the crop has been warped. */
+    val croppedShortEdgePx: Int? = null,
 )
 
 /**
@@ -35,6 +40,14 @@ class CaptureQualityGate(private val profile: RecognitionProfile) {
         }
         if (input.detectedAreaRatio < gates.minCardAreaRatio) reasons += QualityReason.CARD_TOO_SMALL
         if (input.rectangularity < gates.minRectangularity) reasons += QualityReason.CROP_UNCERTAIN
+        input.cropAspectRatio?.let { ratio ->
+            if (ratio !in gates.aspectRatioMin..gates.aspectRatioMax) {
+                reasons += QualityReason.CROP_UNCERTAIN
+            }
+        }
+        input.croppedShortEdgePx?.let { shortEdge ->
+            if (shortEdge < gates.minShortEdgeAfterWarpPx) reasons += QualityReason.CROP_UNCERTAIN
+        }
         return reasons
     }
 }

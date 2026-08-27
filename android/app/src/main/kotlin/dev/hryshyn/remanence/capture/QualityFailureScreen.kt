@@ -19,13 +19,15 @@ fun guidanceFor(reason: QualityReason): String = when (reason) {
     QualityReason.CARD_TOO_SMALL ->
         "Move closer so the postcard fills more of the frame."
     QualityReason.CROP_UNCERTAIN ->
-        "Align the card edges with the outline and hold steadier."
+        "Keep all four postcard edges inside the on-screen landscape outline."
     QualityReason.TOO_BLURRY ->
         "Hold still and let the camera focus before capturing."
     QualityReason.TOO_DARK ->
         "Add light or move out of the shadow over the postcard."
     QualityReason.GLARE_EXCESSIVE ->
         "Tilt the postcard away from direct light to remove glare."
+    QualityReason.FEATURES_INSUFFICIENT ->
+        "Use a well-lit postcard with visible print and keep the whole card inside the outline."
 }
 
 /**

@@ -8,11 +8,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.background
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -24,11 +27,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import dev.hryshyn.remanence.core.recognition.PostcardGuideGeometry
 import dev.hryshyn.remanence.core.recognition.QualityReason
 
 /**
@@ -219,10 +225,15 @@ private fun LivePreviewContent(
     // composed adapter.preview below, so the hosted PreviewView already
     // exists - CameraXStillCameraAdapter.bind() requires it.
     LaunchedEffect(adapter) {
-        if (controller.phase !is CaptureAttemptPhase.Binding) return@LaunchedEffect
+        val phaseAtBind = controller.phase
+        val allowAlreadyReady = phaseAtBind is CaptureAttemptPhase.Ready
+        if (!allowAlreadyReady && phaseAtBind !is CaptureAttemptPhase.Binding) return@LaunchedEffect
+        val callbackToken = controller.currentBindingCallbackToken()
         adapter.bind(
-            onReady = { controller.onPreviewBound() },
-            onError = { reason -> runCatching { controller.onBindFailed(reason) } },
+            // The token makes a callback queued across reset/re-entry inert,
+            // while current binding violations remain loud in the controller.
+            onReady = { controller.onPreviewBound(callbackToken, allowAlreadyReady) },
+            onError = { reason -> controller.onBindFailed(callbackToken, reason, allowAlreadyReady) },
         )
     }
 
@@ -248,6 +259,17 @@ private fun LivePreviewContent(
                 // never measure to zero height. Composed in the SAME commit
                 // that created the adapter, before the bind effect runs.
                 adapter.preview(Modifier.matchParentSize())
+                PostcardGuideOverlay(modifier = Modifier.matchParentSize())
+                Text(
+                    "Keep all four postcard edges inside the landscape outline.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .background(Color.Black.copy(alpha = 0.70f))
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                        .testTag("postcard_guide_instruction"),
+                )
             }
         }
         Spacer(Modifier.height(8.dp))
@@ -262,7 +284,7 @@ private fun LivePreviewContent(
                     if (onBeginAttempt()) {
                         adapter.captureStill(
                             onDelivered = onDelivered,
-                            onError = { reason -> runCatching { controller.fail(reason) } },
+                            onError = { reason -> controller.fail(reason) },
                         )
                     }
                 },
@@ -278,6 +300,35 @@ private fun LivePreviewContent(
 
             else -> Unit
         }
+    }
+}
+
+/**
+ * Visible capture guide. Its normalized rectangle is the same geometry the
+ * still processor uses when contour detection has no credible quadrilateral.
+ */
+@Composable
+private fun PostcardGuideOverlay(modifier: Modifier) {
+    Canvas(modifier = modifier.testTag("postcard_guide_overlay")) {
+        val guide = PostcardGuideGeometry.normalizedFor(size.width.toDouble(), size.height.toDouble())
+        val left = (guide.left * size.width).toFloat()
+        val top = (guide.top * size.height).toFloat()
+        val right = (guide.right * size.width).toFloat()
+        val bottom = (guide.bottom * size.height).toFloat()
+        // The dark under-stroke keeps the guide legible over both bright and
+        // dark camera content; the white line is the user-facing outline.
+        drawRect(
+            color = Color.Black.copy(alpha = 0.85f),
+            topLeft = androidx.compose.ui.geometry.Offset(left, top),
+            size = androidx.compose.ui.geometry.Size(right - left, bottom - top),
+            style = Stroke(width = 7f),
+        )
+        drawRect(
+            color = Color.White,
+            topLeft = androidx.compose.ui.geometry.Offset(left, top),
+            size = androidx.compose.ui.geometry.Size(right - left, bottom - top),
+            style = Stroke(width = 3f),
+        )
     }
 }
 

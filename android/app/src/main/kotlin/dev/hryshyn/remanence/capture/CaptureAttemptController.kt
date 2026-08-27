@@ -109,6 +109,13 @@ sealed interface CaptureAttemptPhase {
  */
 class CaptureAttemptController {
 
+    /**
+     * Binding callback ownership. It changes whenever a binding starts, a
+     * capture takes over, or the session is reset, allowing a callback already
+     * queued by CameraX to be ignored without weakening current-state checks.
+     */
+    private var bindingCallbackToken: Long = 0L
+
     var permission: CapturePermissionStep by mutableStateOf(CapturePermissionStep.NotRequested)
         private set
 
@@ -143,16 +150,35 @@ class CaptureAttemptController {
     }
 
     /** Preview use case reported bound; the shutter becomes available. */
-    fun onPreviewBound() {
+    fun onPreviewBound(): Boolean = onPreviewBound(bindingCallbackToken)
+
+    /**
+     * Camera adapter entry point. A callback from an invalidated binding is
+     * benign and returns false; a callback for the current binding still
+     * fails loudly when the controller sequence is invalid.
+     */
+    fun onPreviewBound(callbackToken: Long, allowAlreadyReady: Boolean = false): Boolean {
+        if (callbackToken != bindingCallbackToken) return false
         check(permission == CapturePermissionStep.Granted) { "preview cannot bind without camera permission" }
+        if (allowAlreadyReady && phase is CaptureAttemptPhase.Ready) return true
         check(phase is CaptureAttemptPhase.Binding) { "unexpected preview binding while $phase" }
         phase = CaptureAttemptPhase.Ready
+        return true
     }
 
     /** Camera setup failed before any attempt could begin. */
-    fun onBindFailed(reason: String) {
+    fun onBindFailed(reason: String) = onBindFailed(bindingCallbackToken, reason)
+
+    /** See [onPreviewBound] for the stale-binding distinction. */
+    fun onBindFailed(callbackToken: Long, reason: String, allowAlreadyReady: Boolean = false): Boolean {
+        if (callbackToken != bindingCallbackToken) return false
+        if (allowAlreadyReady && phase is CaptureAttemptPhase.Ready) {
+            phase = CaptureAttemptPhase.Failed(attemptId, reason)
+            return true
+        }
         check(phase is CaptureAttemptPhase.Binding) { "binding failure outside Binding, was $phase" }
         phase = CaptureAttemptPhase.Failed(attemptId, reason)
+        return true
     }
 
     /**
@@ -161,6 +187,9 @@ class CaptureAttemptController {
      */
     fun beginAttempt(): Long {
         check(phase is CaptureAttemptPhase.Ready) { "capture attempt requires Ready, was $phase" }
+        // A rebinding after rotation may still have a queued onReady. The
+        // camera is no longer waiting for that callback once capture starts.
+        bindingCallbackToken += 1
         attemptId += 1
         phase = CaptureAttemptPhase.Capturing
         return attemptId
@@ -227,15 +256,17 @@ class CaptureAttemptController {
 
     /**
      * Flow-level restart (for example the scan "start over"): unconditionally
-     * drops any phase back to Binding without publishing results. Never
-     * throws; safe to call repeatedly.
+     * drops any phase back to a NEW Binding cycle without publishing results.
+     * Starting a new cycle even from Binding invalidates callbacks already
+     * queued by the old camera host. Never throws; safe to call repeatedly.
      */
     fun restartCapture() {
-        if (phase !is CaptureAttemptPhase.Binding) enterBinding()
+        enterBinding()
     }
 
     /** Fresh session teardown: permission and phase reset, ids stay monotonic. */
     fun reset() {
+        bindingCallbackToken += 1
         permission = CapturePermissionStep.NotRequested
         phase = null
     }
@@ -245,6 +276,10 @@ class CaptureAttemptController {
 
     private fun enterBinding() {
         bindEpoch += 1
+        bindingCallbackToken += 1
         phase = CaptureAttemptPhase.Binding
     }
+
+    /** Token captured by the adapter for this exact binding cycle. */
+    internal fun currentBindingCallbackToken(): Long = bindingCallbackToken
 }

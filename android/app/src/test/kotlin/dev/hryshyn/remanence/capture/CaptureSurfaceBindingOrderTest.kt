@@ -108,6 +108,8 @@ class CaptureSurfaceBindingOrderTest {
 
         assertEquals(CaptureAttemptPhase.Ready, controller.phase)
         composeRule.onNodeWithTag("binding_race_shutter").assertIsDisplayed()
+        composeRule.onNodeWithTag("postcard_guide_overlay").assertIsDisplayed()
+        composeRule.onNodeWithTag("postcard_guide_instruction").assertIsDisplayed()
     }
 
     @Test
@@ -148,5 +150,20 @@ class CaptureSurfaceBindingOrderTest {
         composeRule.waitForIdle()
         assertEquals(CaptureAttemptPhase.Ready, controller.phase)
         composeRule.onNodeWithTag("binding_race_shutter").assertIsDisplayed()
+    }
+
+    @Test
+    fun queuedReadyFromResetBindingIsInertWithoutHidingCurrentStateBugs() {
+        setContent()
+        grantPermission()
+        val first = live.get()!!
+
+        composeRule.runOnIdle { controller.reset() }
+        composeRule.waitForIdle()
+        first.emitQueuedReadyAfterRelease()
+        composeRule.waitForIdle()
+
+        assertEquals(CapturePermissionStep.NotRequested, controller.permission)
+        assertEquals(null, controller.phase)
     }
 }

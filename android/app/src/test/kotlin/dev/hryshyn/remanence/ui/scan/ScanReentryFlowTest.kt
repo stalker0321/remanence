@@ -12,6 +12,9 @@ import dev.hryshyn.remanence.ui.navigation.AppDestination
 import dev.hryshyn.remanence.ui.navigation.AppNavigationController
 import dev.hryshyn.remanence.ui.navigation.AuthUiState
 import dev.hryshyn.remanence.wiring.KekBoundSecretSealer
+import dev.hryshyn.remanence.session.RootViewModel
+import dev.hryshyn.remanence.session.SessionState
+import dev.hryshyn.remanence.session.SessionStateResolver
 import com.google.crypto.tink.TinkProtoKeysetFormat
 import java.io.File
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
@@ -24,6 +27,7 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -45,6 +49,7 @@ import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
+import dev.hryshyn.remanence.core.recognition.ScanGrantManager
 
 /**
  * FIX-REVIEW-02 regression for Scan: after a REAL scan reaches a verified
@@ -172,7 +177,10 @@ class ScanReentryFlowTest {
         CapsuleOutboxStager(database, roots, SenderRetryMaterialStore(roots)).stage(prepared)
     }
 
-    private fun scanViewModel(clock: Long = 0L): ScanViewModel = ScanViewModel(
+    private fun scanViewModel(
+        clock: Long = 0L,
+        grants: ScanGrantManager = ScanGrantManager(clockMillis = { clock }),
+    ): ScanViewModel = ScanViewModel(
         persistence = store(),
         database = database,
         profile = RecognitionProfile.mvpOrbV1(),
@@ -199,6 +207,7 @@ class ScanReentryFlowTest {
                 },
             ),
         grantsClockMillis = { clock },
+        grants = grants,
         frontProcessor = MatchingProcessor(syntheticFingerprint(11, FingerprintSide.FRONT)),
         backProcessor = MatchingProcessor(syntheticFingerprint(22, FingerprintSide.BACK)),
         cpuDispatcher = testDispatcher,
@@ -275,6 +284,61 @@ class ScanReentryFlowTest {
         vm.beginSession(epoch = 1L)
 
         assertEquals(dev.hryshyn.remanence.scan.ScanSessionState.AWAITING_BACK, vm.captureSession.state)
+        database.close()
+    }
+
+    /**
+     * ANDROID-HOTFIX-A regression: model the production Scan -> guarded
+     * Capsule -> close -> Scan sequence. The first scan's adapter callback is
+     * delivered after the capsule closes and the next epoch has reset the
+     * retained VM; it must be inert, while the new epoch remains FRONT-first.
+     */
+    @Test
+    fun capsuleCloseThenScanDropsLateCallbackFromPreviousBinding() = runBlocking {
+        stagePublishedCapsule()
+        val grants = ScanGrantManager(clockMillis = { 0L })
+        val vm = scanViewModel(grants = grants)
+        val root = RootViewModel(
+            sessionBootstrap = object : SessionStateResolver {
+                override suspend fun bootstrap() =
+                    SessionState.Active("u", "mykola", true, true)
+
+                override suspend fun logout() = SessionState.SignedOut
+            },
+            grants = grants,
+            clockMillis = { 0L },
+        )
+
+        root.openScan()
+        vm.beginSession(root.scanSessionEpoch.value)
+        capturePairThroughRealDelivery(vm)
+        awaitCondition { vm.terminal.value is ScanTerminalState.Granted }
+        val granted = vm.terminal.value as ScanTerminalState.Granted
+        root.openCapsuleWithGrant(granted.grantId)
+        assertEquals(AppDestination.Capsule(granted.grantId), root.destination.value)
+
+        // Model a camera bind that is still pending when the route is left.
+        // ScanScreen.onDispose performs this reset while its old callback may
+        // still be queued. Capture the old binding's ownership before reset.
+        vm.frontAttempt.restartCapture()
+        val oldBindingToken = vm.frontAttempt.currentBindingCallbackToken()
+        vm.resetSession()
+        assertEquals(dev.hryshyn.remanence.capture.CaptureAttemptPhase.Binding, vm.frontAttempt.phase)
+
+        root.closeCapsule()
+        assertEquals(AppDestination.Home, root.destination.value)
+        root.openScan()
+        vm.beginSession(root.scanSessionEpoch.value)
+
+        assertEquals(dev.hryshyn.remanence.scan.ScanSessionState.AWAITING_FRONT, vm.captureSession.state)
+        assertEquals(dev.hryshyn.remanence.capture.CapturePermissionStep.NotRequested, vm.frontAttempt.permission)
+        assertFalse(vm.frontAttempt.onPreviewBound(oldBindingToken))
+        assertEquals(null, vm.frontAttempt.phase)
+
+        // The new epoch can bind normally after the stale callback is dropped.
+        vm.frontAttempt.onPermissionResult(granted = true, canAskAgain = false)
+        assertTrue(vm.frontAttempt.onPreviewBound())
+
         database.close()
     }
 }

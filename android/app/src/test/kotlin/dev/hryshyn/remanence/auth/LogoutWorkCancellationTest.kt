@@ -20,6 +20,9 @@ import dev.hryshyn.remanence.sync.NoOpWorker
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -53,6 +56,7 @@ private object NoopTokenPort : SessionTokenPort {
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class LogoutWorkCancellationTest {
 
     private val ownerA = UserId(UUID.fromString("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
@@ -207,6 +211,68 @@ class LogoutWorkCancellationTest {
         assertEquals(storageBoom, outcome.tempStorageCleanupFailure)
         assertEquals(workBoom, outcome.workCancellationFailure)
     }
+
+    /**
+     * M2-P05 review-fix regression: teardown steps cannot START while the
+     * account-work cancellation is still being awaited. The controllably
+     * suspended port holds the awaited operation open; while it pends no
+     * server/credential/cleanup/account/grant step has fired; only after the
+     * gate releases does the whole remaining sequence run, in order.
+     */
+    @org.junit.Test
+    fun teardownWaitsForTheAwaitedCancellationToFinishFirst() = runTest {
+            val observed = mutableListOf<String>()
+            val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+
+            val useCase = LogoutUseCase(
+                serverLogout = ServerLogoutPort {
+                    observed += "server"
+                    AuthResult.Success(Unit, 204)
+                },
+                accessToken = { "bearer" },
+                tokens = NoopTokenPort,
+                credentialSink = RecordingSink(),
+                accounts = { observed += "accounts" },
+                grants = { observed += "grants" },
+                logoutOwnerSnapshot = { ownerA },
+                tempStorageCleanup = { _ -> observed += "cleanup" },
+                workCancellation = { owner ->
+                    org.junit.Assert.assertEquals(ownerA, owner)
+                    observed += "cancel-start"
+                    gate.await() // the awaited WorkManager-operation boundary
+                    observed += "cancel-end"
+                },
+            )
+
+            var outcome: LogoutOutcome? = null
+            val job = launch {
+                outcome = useCase.logout()
+            }
+
+            // Drive virtual time: the port ran and now suspends awaiting the
+            // WorkManager operation. No teardown step may have started.
+            advanceUntilIdle()
+            assertEquals(listOf("cancel-start"), observed)
+
+            // The awaited cancellation completes...
+            gate.complete(Unit)
+            advanceUntilIdle()
+            job.join()
+
+            // ...and ONLY THEN does the rest of teardown run, in order.
+            assertNull(outcome?.workCancellationFailure)
+            org.junit.Assert.assertEquals(
+                listOf(
+                    "cancel-start",
+                    "cancel-end",
+                    "server",
+                    "cleanup",
+                    "accounts",
+                    "grants",
+                ),
+                observed,
+            )
+        }
 
     // ---------------------------------------------------------------
     // Production wiring (real AppContainer over the work-testing stack).

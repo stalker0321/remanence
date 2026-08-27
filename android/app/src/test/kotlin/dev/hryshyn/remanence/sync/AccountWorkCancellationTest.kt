@@ -78,7 +78,7 @@ class AccountWorkCancellationTest {
         val aOutbox = enqueue(AccountWorkIdentity.outbox(userA, capsuleA))
         val aOutboxOther = enqueue(AccountWorkIdentity.outbox(userA, capsuleB))
 
-        val usedTag = cancellation.cancelForAccount(userA)
+        val usedTag = kotlinx.coroutines.runBlocking { cancellation.cancelForAccount(userA) }
 
         assertEquals(accountTagA, usedTag)
         assertState(listOf(aIncoming, aOutbox, aOutboxOther), WorkInfo.State.CANCELLED)
@@ -91,7 +91,7 @@ class AccountWorkCancellationTest {
         val bOutboxOther = enqueue(AccountWorkIdentity.outbox(userB, capsuleB))
         val aIncoming = enqueue(AccountWorkIdentity.incomingSync(userA))
 
-        cancellation.cancelForAccount(userA)
+        kotlinx.coroutines.runBlocking { cancellation.cancelForAccount(userA) }
 
         // A is gone.
         assertState(listOf(aIncoming), WorkInfo.State.CANCELLED)
@@ -107,7 +107,7 @@ class AccountWorkCancellationTest {
         val globalOnly = enqueue(AccountWorkIdentity(uniqueName = "remanence.global-only", tags = listOf(globalTag)))
         val accountA = enqueue(AccountWorkIdentity.incomingSync(userA))
 
-        cancellation.cancelForAccount(userA)
+        kotlinx.coroutines.runBlocking { cancellation.cancelForAccount(userA) }
 
         assertState(listOf(accountA), WorkInfo.State.CANCELLED)
         assertState(listOf(globalOnly), WorkInfo.State.ENQUEUED)
@@ -122,7 +122,7 @@ class AccountWorkCancellationTest {
         // construction, remove every chain we just queued, including
         // account B's. We instead assert that the account tag is the
         // exact string used and that it is NOT the global tag.
-        val direct = cancellation.cancelForAccount(userA)
+        val direct = kotlinx.coroutines.runBlocking { cancellation.cancelForAccount(userA) }
         assertNotEquals(globalTag, direct)
         assertTrue(
             "the cancel selector must be the canonical account tag, was '$direct'",
@@ -136,7 +136,7 @@ class AccountWorkCancellationTest {
         val ghost: UserId = UserId(UUID.fromString("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"))
 
         // A logout for a never-queued account must not touch B.
-        val usedTag = cancellation.cancelForAccount(ghost)
+        val usedTag = kotlinx.coroutines.runBlocking { cancellation.cancelForAccount(ghost) }
         assertEquals(AccountWorkIdentity.accountTag(ghost), usedTag)
         assertNotEquals(accountTagA, usedTag)
         assertNotEquals(accountTagB, usedTag)

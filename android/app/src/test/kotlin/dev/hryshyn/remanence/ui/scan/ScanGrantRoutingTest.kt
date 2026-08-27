@@ -46,6 +46,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import dev.hryshyn.remanence.core.crypto.AccountIdentityGenerator
+import dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
 import dev.hryshyn.remanence.core.data.db.FingerprintSide
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
@@ -87,11 +88,16 @@ class ScanGrantRoutingTest {
     private val capsuleUuid = UUID.fromString("5f111111-2222-4333-8444-555555555555")
     private val userUuid = UUID.fromString("5f222222-3333-4444-8555-666666666666")
     private val bundleUuid = UUID.fromString("5f333333-4444-4555-8666-777777777777")
+    private val testKekBoundary = SoftwareKekBoundary()
+    private val testAlias = "test-sender-retry-${java.util.UUID.randomUUID()}"
+    private lateinit var testWrapper: SenderRetryKeysetWrapper
 
     private var now = 1_000L
 
     @Before
     fun setUp() {
+        testKekBoundary.createAes256GcmKey(testAlias)
+        testWrapper = SenderRetryKeysetWrapper(testKekBoundary)
         Dispatchers.setMain(testDispatcher)
         context = ApplicationProvider.getApplicationContext()
         database = Room.inMemoryDatabaseBuilder(context, RemanenceLocalDatabase::class.java)
@@ -175,7 +181,7 @@ class ScanGrantRoutingTest {
         )
         val retryStore = SenderRetryMaterialStore(roots)
         CapsuleOutboxStager(database, roots, retryStore).stage(
-            CapsulePublisher().publish(
+            CapsulePublisher(testWrapper, testAlias).publish(
                 CapsulePublishRequest(
                     capsuleId = CapsuleId(capsuleUuid),
                     senderUserId = UserId(userUuid),

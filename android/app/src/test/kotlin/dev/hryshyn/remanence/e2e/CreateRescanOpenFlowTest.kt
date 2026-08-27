@@ -33,6 +33,7 @@ import dev.hryshyn.remanence.core.crypto.AccountIdentityGenerator
 import dev.hryshyn.remanence.core.crypto.CapsuleAcceptanceGate
 import dev.hryshyn.remanence.core.crypto.CapsuleAcceptanceInput
 import dev.hryshyn.remanence.core.crypto.CapsuleAcceptanceResult
+import dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper
 import dev.hryshyn.remanence.core.crypto.CapsuleKeysetParser
 import dev.hryshyn.remanence.core.crypto.RecipientEnvelopeCryptor
 import dev.hryshyn.remanence.core.recognition.CapsuleVerifier
@@ -79,6 +80,9 @@ class CreateRescanOpenFlowTest {
     private val capsuleUuid = UUID.fromString("5e111111-2222-4333-8444-555555555555")
     private val userUuid = UUID.fromString("5e222222-3333-4444-8555-666666666666")
     private val bundleUuid = UUID.fromString("5e333333-4444-4555-8666-777777777777")
+    private val testKekBoundary = SoftwareKekBoundary()
+    private val testAlias = "test-sender-retry-${java.util.UUID.randomUUID()}"
+    private lateinit var testWrapper: SenderRetryKeysetWrapper
 
     private fun newDb(name: String) =
         Room.databaseBuilder(context, RemanenceLocalDatabase::class.java, name)
@@ -120,6 +124,8 @@ class CreateRescanOpenFlowTest {
 
     @Before
     fun setUp() {
+        testKekBoundary.createAes256GcmKey(testAlias)
+        testWrapper = SenderRetryKeysetWrapper(testKekBoundary)
         context = ApplicationProvider.getApplicationContext()
         database = newDb("e2e-flow.db")
         filesRoot = File(context.filesDir, "e2e-artifacts").apply { mkdirs() }
@@ -147,7 +153,7 @@ class CreateRescanOpenFlowTest {
             RecognitionProfile.mvpOrbV1().profileId,
             syntheticFingerprint(22, RecognitionSide.BACK),
         )
-        val prepared = CapsulePublisher().publish(
+        val prepared = CapsulePublisher(testWrapper, testAlias).publish(
             CapsulePublishRequest(
                 capsuleId = CapsuleId(capsuleUuid),
                 senderUserId = UserId(userUuid),

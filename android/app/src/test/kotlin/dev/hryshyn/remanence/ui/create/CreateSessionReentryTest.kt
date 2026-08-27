@@ -29,6 +29,8 @@ import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.auth.SoftwareKekBoundary
+import dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper
 import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 
 /**
@@ -48,8 +50,14 @@ class CreateSessionReentryTest {
     private lateinit var database: RemanenceLocalDatabase
     private lateinit var stagingDir: File
 
+    private val testKekBoundary = SoftwareKekBoundary()
+    private val testAlias = "test-sender-retry-${java.util.UUID.randomUUID()}"
+    private lateinit var testWrapper: SenderRetryKeysetWrapper
+
     @Before
     fun setUp() {
+        testKekBoundary.createAes256GcmKey(testAlias)
+        testWrapper = SenderRetryKeysetWrapper(testKekBoundary)
         Dispatchers.setMain(testDispatcher)
         val context = ApplicationProvider.getApplicationContext<Context>()
         database = Room.inMemoryDatabaseBuilder(context, RemanenceLocalDatabase::class.java)
@@ -122,6 +130,8 @@ class CreateSessionReentryTest {
             profile = RecognitionProfile.mvpOrbV1(),
             stagingDirectory = stagingDir,
             openPhotoSource = { error("photo picker not used in this test") },
+            senderRetryKeysetWrapper = testWrapper,
+            senderRetryKekAlias = testAlias,
         )
     }
 

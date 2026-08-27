@@ -28,6 +28,8 @@ import dev.hryshyn.remanence.core.recognition.PostcardFingerprint
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.core.recognition.ExtractionQuality
 import dev.hryshyn.remanence.core.recognition.FingerprintCodec
+import dev.hryshyn.remanence.auth.SoftwareKekBoundary
+import dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper
 import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 import java.io.File
 import java.util.UUID
@@ -86,8 +88,14 @@ class CreateRecipientPublicationBindingTest {
     private lateinit var stagingDir: File
     private lateinit var outboxDir: File
 
+    private val testKekBoundary = SoftwareKekBoundary()
+    private val testAlias = "test-sender-retry-${java.util.UUID.randomUUID()}"
+    private lateinit var testWrapper: SenderRetryKeysetWrapper
+
     @Before
     fun setUp() {
+        testKekBoundary.createAes256GcmKey(testAlias)
+        testWrapper = SenderRetryKeysetWrapper(testKekBoundary)
         Dispatchers.setMain(testDispatcher)
         TinkPrimitives.ensureRegistered()
         val context = ApplicationProvider.getApplicationContext<Context>()
@@ -208,6 +216,8 @@ class CreateRecipientPublicationBindingTest {
             },
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
+            senderRetryKeysetWrapper = testWrapper,
+            senderRetryKekAlias = testAlias,
         )
         vm.beginSession(1L)
         vm.onResolved(snapshot)

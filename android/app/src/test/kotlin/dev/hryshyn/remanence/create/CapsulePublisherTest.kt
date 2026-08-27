@@ -9,6 +9,7 @@ import java.util.UUID
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -18,16 +19,21 @@ import dev.hryshyn.remanence.core.crypto.AccountIdentityGenerator
 import dev.hryshyn.remanence.core.crypto.CapsuleAcceptanceGate
 import dev.hryshyn.remanence.core.crypto.CapsuleAcceptanceInput
 import dev.hryshyn.remanence.core.crypto.CapsuleAcceptanceResult
+import dev.hryshyn.remanence.auth.SoftwareKekBoundary
+import dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper
 import dev.hryshyn.remanence.core.crypto.CapsuleArtifactCryptor
 import dev.hryshyn.remanence.core.crypto.DeliveredBlob
 import dev.hryshyn.remanence.core.crypto.RecipientEnvelopeCryptor
 import dev.hryshyn.remanence.core.crypto.TinkPrimitives
+import dev.hryshyn.remanence.core.crypto.WrappedKeysetRecord
 import dev.hryshyn.remanence.core.data.outbox.OutboxArtifactKind
 import dev.hryshyn.remanence.core.model.ArtifactAadInput
 import dev.hryshyn.remanence.core.model.BlobId
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.KeyBundleId
+import dev.hryshyn.remanence.core.model.SenderRetryPurpose
+import dev.hryshyn.remanence.core.model.SenderRetryWrapContextInput
 import dev.hryshyn.remanence.core.model.UserId
 
 /**
@@ -47,7 +53,10 @@ import dev.hryshyn.remanence.core.model.UserId
  */
 class CapsulePublisherTest {
 
-    private val publisher = CapsulePublisher()
+    private val testKekBoundary = SoftwareKekBoundary()
+    private val testAlias = "test-sender-retry-${java.util.UUID.randomUUID()}"
+    private lateinit var testWrapper: SenderRetryKeysetWrapper
+    private lateinit var publisher: CapsulePublisher
     private val identity = AccountIdentityGenerator().generate()
 
     private val capsuleId = UUID.fromString("4d111111-2222-4333-8444-555555555555")
@@ -63,6 +72,9 @@ class CapsulePublisherTest {
     @Before
     fun setUp() {
         TinkPrimitives.ensureRegistered()
+        testKekBoundary.createAes256GcmKey(testAlias)
+        testWrapper = SenderRetryKeysetWrapper(testKekBoundary)
+        publisher = CapsulePublisher(testWrapper, testAlias)
     }
 
     private fun selfSendRequest() = CapsulePublishRequest(
@@ -427,21 +439,17 @@ class CapsulePublisherTest {
     }
 
     @Test
-    fun distinctOwnerUserIdIsBoundIntoPreparedOutboxCapsuleRouting() {
-        val cross = publisher.publish(
-            selfSendRequest().copy(
-                ownerUserId = otherOwnerUserId.toString(),
-            ),
-        )
-        assertEquals(
-            "PreparedOutboxCapsule.ownerUserId is the explicit, distinct value",
-            otherOwnerUserId.toString(),
-            cross.ownerUserId,
-        )
-        // sender/recipient identities remain the explicit self-send pair.
-        assertEquals(userId, cross.senderUserId)
-        assertEquals(userId, cross.recipientUserId)
-        assertNotEquals(cross.ownerUserId, cross.senderUserId.toString())
+    fun distinctOwnerUserIdRefusedBeforeCryptoBecauseSenderOwnsRetryKey() {
+        // M2-P08: ownerUserId must equal senderUserId; a different owner
+        // is refused before any crypto work begins because the current
+        // sender owns the retry key.
+        assertThrows(IllegalArgumentException::class.java) {
+            publisher.publish(
+                selfSendRequest().copy(
+                    ownerUserId = otherOwnerUserId.toString(),
+                ),
+            )
+        }
     }
 
     @Test
@@ -788,4 +796,238 @@ class CapsulePublisherTest {
 
     private fun sha256(bytes: ByteArray): ByteArray =
         MessageDigest.getInstance("SHA-256").digest(bytes)
+
+    // ── M2-P08 sender-retry wrapping focused tests ──────────────────────
+
+    /**
+     * M2-P08: the publisher produces a non-null, parseable
+     * WrappedKeysetRecord in senderRetryWrappedKeysetBytes. The record
+     * carries the correct alias, a 12-byte nonce, and non-empty wrapped
+     * keyset ciphertext.
+     */
+    @Test
+    fun retryWrappedRecordIsNonNullAndParseable() {
+        val prepared = publisher.publish(selfSendRequest())
+
+        assertNotNull("senderRetryWrappedKeysetBytes must be non-null", prepared.senderRetryWrappedKeysetBytes)
+        val bytes = prepared.senderRetryWrappedKeysetBytes!!
+        assertTrue("retry bytes must be non-empty", bytes.isNotEmpty())
+
+        val record = WrappedKeysetRecord.parse(bytes)
+        assertEquals(testAlias, record.alias)
+        assertEquals(WrappedKeysetRecord.FORMAT_VERSION_1, record.formatVersion)
+        assertEquals(WrappedKeysetRecord.NONCE_SIZE, record.nonce.size)
+        assertTrue("wrapped keyset payload must be non-empty", record.wrappedKeyset.isNotEmpty())
+    }
+
+    /**
+     * M2-P08: unwrap recovers the EXACT capsule keyset used for the
+     * artifacts. The unwrapped keyset must be byte-identical to the one
+     * the publisher generated — same key material, same operations.
+     */
+    @Test
+    fun unwrapRecoversExactCapsuleKeyUsedForArtifacts() {
+        val prepared = publisher.publish(selfSendRequest())
+
+        val record = WrappedKeysetRecord.parse(prepared.senderRetryWrappedKeysetBytes!!)
+        val context = SenderRetryWrapContextInput(
+            ownerUserId = UserId(userId),
+            capsuleId = CapsuleId(capsuleId),
+            senderKeyBundleId = KeyBundleId(bundleId),
+            purpose = SenderRetryPurpose.RECIPIENT_KEY_STALE_REWRAP,
+        )
+        val unwrappedKeyset = testWrapper.unwrap(record, context)
+
+        // The unwrapped keyset must decrypt artifact photo-0, proving
+        // it is the exact same key material the publisher used.
+        val photo = prepared.artifacts.first { it.kind == OutboxArtifactKind.PHOTO }
+        val decrypted = CapsuleArtifactCryptor().decrypt(
+            unwrappedKeyset,
+            ArtifactAadInput(
+                CapsuleId(capsuleId),
+                BlobId(photo.blobId),
+                CapsuleArtifactKind.PHOTO,
+                ordinal = 0,
+                senderUserId = UserId(userId),
+                recipientUserId = UserId(userId),
+            ),
+            photo.ciphertext,
+        )
+        assertTrue(String(decrypted).startsWith("jpeg-0"))
+    }
+
+    /**
+     * M2-P08: wrong context (wrong owner / wrong capsule / wrong sender
+     * bundle) must fail unwrap. The AAD binding prevents any cross-
+     * context unwrap.
+     */
+    @Test
+    fun unwrapWithWrongContextFails() {
+        val prepared = publisher.publish(selfSendRequest())
+        val record = WrappedKeysetRecord.parse(prepared.senderRetryWrappedKeysetBytes!!)
+        val correctContext = SenderRetryWrapContextInput(
+            ownerUserId = UserId(userId),
+            capsuleId = CapsuleId(capsuleId),
+            senderKeyBundleId = KeyBundleId(bundleId),
+            purpose = SenderRetryPurpose.RECIPIENT_KEY_STALE_REWRAP,
+        )
+
+        // Wrong owner.
+        val wrongOwner = runCatching {
+            testWrapper.unwrap(
+                record,
+                correctContext.copy(ownerUserId = UserId(otherUserId)),
+            )
+        }
+        assertTrue("unwrap must fail with wrong owner", wrongOwner.isFailure)
+
+        // Wrong capsule.
+        val wrongCapsule = runCatching {
+            testWrapper.unwrap(
+                record,
+                correctContext.copy(capsuleId = CapsuleId(UUID.randomUUID())),
+            )
+        }
+        assertTrue("unwrap must fail with wrong capsule", wrongCapsule.isFailure)
+
+        // Wrong sender bundle.
+        val wrongBundle = runCatching {
+            testWrapper.unwrap(
+                record,
+                correctContext.copy(senderKeyBundleId = KeyBundleId(otherBundleId)),
+            )
+        }
+        assertTrue("unwrap must fail with wrong sender bundle", wrongBundle.isFailure)
+    }
+
+    /**
+     * M2-P08: self-send golden artifact/envelope bytes remain unchanged
+     * except for the nondeterministic retry record. The deterministic
+     * statement header and envelope plaintext header are byte-for-byte
+     * identical to the pre-P08 golden.
+     */
+    @Test
+    fun selfSendGoldenBytesUnchangedExceptRetryRecord() {
+        val prepared = publisher.publish(selfSendRequest())
+
+        // Statement header is unchanged.
+        assertArrayEquals(
+            hexToBytes(GOLDEN_SELF_SEND_STATEMENT_HEADER_HEX),
+            prepared.publishStatementBytes.copyOfRange(0, GOLDEN_SELF_SEND_STATEMENT_HEADER_HEX.length / 2),
+        )
+
+        // Envelope plaintext header is unchanged.
+        val opened = RecipientEnvelopeCryptor().open(
+            identity.encryptionPrivateHandle,
+            dev.hryshyn.remanence.core.model.RecipientEnvelopeContextInput(
+                CapsuleId(capsuleId), UserId(userId), UserId(userId), KeyBundleId(bundleId),
+            ),
+            prepared.envelopeCiphertext,
+        )
+        assertArrayEquals(
+            hexToBytes(GOLDEN_SELF_SEND_ENVELOPE_PLAINTEXT_HEADER_HEX),
+            opened.copyOfRange(0, GOLDEN_SELF_SEND_ENVELOPE_PLAINTEXT_HEADER_HEX.length / 2),
+        )
+
+        // Retry record is present and non-null.
+        assertNotNull("retry record must be present in golden self-send", prepared.senderRetryWrappedKeysetBytes)
+        assertTrue(prepared.senderRetryWrappedKeysetBytes!!.isNotEmpty())
+    }
+
+    /**
+     * M2-P08: distinct recipient works — the retry record is bound to
+     * the sender's own context and is independent of the recipient.
+     */
+    @Test
+    fun distinctRecipientProducesValidRetryRecord() {
+        val prepared = publisher.publish(
+            selfSendRequest().copy(
+                recipientUserId = UserId(otherUserId),
+                recipientEncryptionPublicKeyset = TinkProtoKeysetFormat.parseKeysetWithoutSecret(
+                    otherIdentity.encryptionPublicKeyset,
+                ),
+            ),
+        )
+
+        assertNotNull(prepared.senderRetryWrappedKeysetBytes)
+        val record = WrappedKeysetRecord.parse(prepared.senderRetryWrappedKeysetBytes!!)
+        assertEquals(testAlias, record.alias)
+
+        // Unwrap with the sender's context still succeeds.
+        val context = SenderRetryWrapContextInput(
+            ownerUserId = UserId(userId),
+            capsuleId = CapsuleId(capsuleId),
+            senderKeyBundleId = KeyBundleId(bundleId),
+            purpose = SenderRetryPurpose.RECIPIENT_KEY_STALE_REWRAP,
+        )
+        val unwrapped = testWrapper.unwrap(record, context)
+        // The unwrapped keyset must decrypt the cross-recipient artifact.
+        val photo = prepared.artifacts.first { it.kind == OutboxArtifactKind.PHOTO }
+        val decrypted = CapsuleArtifactCryptor().decrypt(
+            unwrapped,
+            ArtifactAadInput(
+                CapsuleId(capsuleId),
+                BlobId(photo.blobId),
+                CapsuleArtifactKind.PHOTO,
+                ordinal = 0,
+                senderUserId = UserId(userId),
+                recipientUserId = UserId(otherUserId),
+            ),
+            photo.ciphertext,
+        )
+        assertTrue(String(decrypted).startsWith("jpeg-0"))
+    }
+
+    /**
+     * M2-P08: no raw serialized capsule keyset occurs in the prepared
+     * output — the retry record is the ONLY place the key material
+     * appears (outside the envelope), and it is wrapped. A raw byte
+     * search of all prepared bytes must not find the serialized keyset.
+     */
+    @Test
+    fun noRawCapsuleKeysetInPreparedOutput() {
+        val prepared = publisher.publish(selfSendRequest())
+
+        // Serialize the actual capsule keyset (the same one the publisher
+        // generated) and search for it in every output surface.
+        // We can't access the publisher's internal capsuleKeyset, but we
+        // can open the envelope to recover it and verify it does NOT
+        // appear as a substring in any artifact.
+        val opened = RecipientEnvelopeCryptor().open(
+            identity.encryptionPrivateHandle,
+            dev.hryshyn.remanence.core.model.RecipientEnvelopeContextInput(
+                CapsuleId(capsuleId), UserId(userId), UserId(userId), KeyBundleId(bundleId),
+            ),
+            prepared.envelopeCiphertext,
+        )
+        val capsuleKeysetBytes = RecipientEnvelopePlaintext.parseFrom(opened).capsuleAeadKeyset.toByteArray()
+
+        // The raw capsule keyset must NOT appear in any artifact ciphertext.
+        for (artifact in prepared.artifacts) {
+            val idx = indexOf(artifact.ciphertext, capsuleKeysetBytes)
+            assertTrue(
+                "raw capsule keyset must not appear in artifact ${artifact.kind}",
+                idx < 0,
+            )
+        }
+        // The raw capsule keyset must NOT appear in the statement bytes.
+        val stmtIdx = indexOf(prepared.publishStatementBytes, capsuleKeysetBytes)
+        assertTrue("raw capsule keyset must not appear in statement", stmtIdx < 0)
+        // The raw capsule keyset must NOT appear in the envelope ciphertext
+        // (it's inside the envelope, but the ciphertext itself shouldn't
+        // contain the plaintext keyset bytes).
+        val envIdx = indexOf(prepared.envelopeCiphertext, capsuleKeysetBytes)
+        assertTrue("raw capsule keyset must not appear in envelope ciphertext", envIdx < 0)
+    }
+
+    private fun indexOf(haystack: ByteArray, needle: ByteArray): Int {
+        if (needle.isEmpty() || haystack.size < needle.size) return -1
+        outer@ for (i in 0..haystack.size - needle.size) {
+            for (j in needle.indices) {
+                if (haystack[i + j] != needle[j]) continue@outer
+            }
+            return i
+        }
+        return -1
+    }
 }

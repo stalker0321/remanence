@@ -32,6 +32,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import dev.hryshyn.remanence.core.crypto.AccountIdentityGenerator
+import dev.hryshyn.remanence.auth.SoftwareKekBoundary
+import dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
 import dev.hryshyn.remanence.core.data.db.FingerprintSide as DbFingerprintSide
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
@@ -67,9 +69,14 @@ class ScanReentryFlowTest {
     private val capsuleUuid = UUID.fromString("6a111111-2222-4333-8444-555555555555")
     private val userUuid = UUID.fromString("6a222222-3333-4444-8555-666666666666")
     private val bundleUuid = UUID.fromString("6a333333-4444-4555-8666-777777777777")
+    private val testKekBoundary = SoftwareKekBoundary()
+    private val testAlias = "test-sender-retry-${java.util.UUID.randomUUID()}"
+    private lateinit var testWrapper: SenderRetryKeysetWrapper
 
     @Before
     fun setUp() {
+        testKekBoundary.createAes256GcmKey(testAlias)
+        testWrapper = SenderRetryKeysetWrapper(testKekBoundary)
         Dispatchers.setMain(testDispatcher)
         context = ApplicationProvider.getApplicationContext()
         database = Room.databaseBuilder(context, RemanenceLocalDatabase::class.java, "scan-reentry.db")
@@ -141,7 +148,7 @@ class ScanReentryFlowTest {
             RecognitionProfile.mvpOrbV1().profileId,
             syntheticFingerprint(22, FingerprintSide.BACK),
         )
-        val prepared = CapsulePublisher().publish(
+        val prepared = CapsulePublisher(testWrapper, testAlias).publish(
             CapsulePublishRequest(
                 capsuleId = CapsuleId(capsuleUuid),
                 senderUserId = UserId(userUuid),

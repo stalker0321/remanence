@@ -22,6 +22,8 @@ import dev.hryshyn.remanence.ui.create.RecipientDirectoryPort
 import dev.hryshyn.remanence.ui.create.CreateViewModel
 import dev.hryshyn.remanence.ui.navigation.AppDestination
 import dev.hryshyn.remanence.ui.navigation.AuthUiState
+import dev.hryshyn.remanence.auth.SoftwareKekBoundary
+import dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper
 import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 import java.io.File
 import java.util.concurrent.atomic.AtomicReference
@@ -64,8 +66,14 @@ class RootFlowLayoutTest {
 
     private lateinit var database: RemanenceLocalDatabase
 
+    private val testKekBoundary = SoftwareKekBoundary()
+    private val testAlias = "test-sender-retry-${java.util.UUID.randomUUID()}"
+    private lateinit var testWrapper: SenderRetryKeysetWrapper
+
     @Before
     fun setUp() {
+        testKekBoundary.createAes256GcmKey(testAlias)
+        testWrapper = SenderRetryKeysetWrapper(testKekBoundary)
         Dispatchers.setMain(testDispatcher)
         val context = ApplicationProvider.getApplicationContext<Context>()
         database = Room.inMemoryDatabaseBuilder(context, RemanenceLocalDatabase::class.java)
@@ -137,6 +145,8 @@ class RootFlowLayoutTest {
         backProcessor = RejectingProcessor(),
         cpuDispatcher = testDispatcher,
         ioDispatcher = testDispatcher,
+        senderRetryKeysetWrapper = testWrapper,
+        senderRetryKekAlias = testAlias,
     ).also { it.beginSession(1L) }
 
     private fun context(): Context = ApplicationProvider.getApplicationContext()

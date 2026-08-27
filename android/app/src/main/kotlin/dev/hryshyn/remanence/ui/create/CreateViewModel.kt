@@ -104,6 +104,14 @@ class CreateViewModel(
             normalized.height,
         )
     },
+    /**
+     * M2-P08: the sender-retry keyset wrapper and dedicated KEK alias.
+     * The publisher wraps the freshly generated capsule keyset through
+     * these; the wrapper MUST be injected, not created internally, so
+     * tests can substitute an [InMemoryKekBoundary]-backed wrapper.
+     */
+    private val senderRetryKeysetWrapper: dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper,
+    private val senderRetryKekAlias: String,
 ) : ViewModel() {
 
     enum class Step { RECIPIENT_LOOKUP, RECIPIENT_CONFIRM, FRONT, BACK_CHECKLIST, BACK, CONTENT, PUBLISHING, PUBLISHED }
@@ -576,7 +584,10 @@ class CreateViewModel(
                 val photoBytes = staged.map { withContext(ioDispatcher) { it.file.readBytes() } }
                 ensureCurrent()
                 val prepared = withContext(cpuDispatcher) {
-                CapsulePublisher().publish(
+                CapsulePublisher(
+                    senderRetryKeysetWrapper = senderRetryKeysetWrapper,
+                    alias = senderRetryKekAlias,
+                ).publish(
                     CapsulePublishRequest(
                         capsuleId = CapsuleId(UUID.fromString(inputs.capsuleId)),
                         senderUserId = UserId(UUID.fromString(sender.userId)),

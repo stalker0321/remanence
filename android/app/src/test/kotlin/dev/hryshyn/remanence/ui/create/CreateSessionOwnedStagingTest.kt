@@ -38,6 +38,8 @@ import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.auth.SoftwareKekBoundary
+import dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper
 import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 
 /**
@@ -63,8 +65,14 @@ class CreateSessionOwnedStagingTest {
     private val userUuid = UUID.fromString("7c111111-2222-4333-8444-555555555555")
     private val bundleUuid = UUID.fromString("7c333333-4444-4555-8666-777777777777")
 
+    private val testKekBoundary = SoftwareKekBoundary()
+    private val testAlias = "test-sender-retry-${java.util.UUID.randomUUID()}"
+    private lateinit var testWrapper: SenderRetryKeysetWrapper
+
     @Before
     fun setUp() {
+        testKekBoundary.createAes256GcmKey(testAlias)
+        testWrapper = SenderRetryKeysetWrapper(testKekBoundary)
         Dispatchers.setMain(testDispatcher)
         val context = ApplicationProvider.getApplicationContext<Context>()
         database = Room.inMemoryDatabaseBuilder(context, RemanenceLocalDatabase::class.java)
@@ -218,6 +226,8 @@ class CreateSessionOwnedStagingTest {
             cpuDispatcher = Dispatchers.Default,
             ioDispatcher = Dispatchers.IO,
             photoNormalizer = normalizer,
+            senderRetryKeysetWrapper = testWrapper,
+            senderRetryKekAlias = testAlias,
         )
     }
 

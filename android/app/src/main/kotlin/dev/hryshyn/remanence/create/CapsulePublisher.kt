@@ -12,7 +12,9 @@ import dev.hryshyn.remanence.core.crypto.PhotoArtifactEncryptor
 import dev.hryshyn.remanence.core.crypto.PublishStatementSigner
 import dev.hryshyn.remanence.core.crypto.RecipientEnvelopeCryptor
 import dev.hryshyn.remanence.core.crypto.RecognitionManifestCodec
+import dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper
 import dev.hryshyn.remanence.core.crypto.TinkPrimitives
+import dev.hryshyn.remanence.core.crypto.WrappedKeysetRecord
 import dev.hryshyn.remanence.core.data.outbox.OutboxArtifactKind
 import dev.hryshyn.remanence.core.data.outbox.PreparedOutboxArtifact
 import dev.hryshyn.remanence.core.data.outbox.PreparedOutboxCapsule
@@ -26,6 +28,8 @@ import dev.hryshyn.remanence.core.model.PublishStatementBuilder
 import dev.hryshyn.remanence.core.model.PublishArtifact
 import dev.hryshyn.remanence.core.model.PublishStatementInput
 import dev.hryshyn.remanence.core.model.RecipientEnvelopeContextInput
+import dev.hryshyn.remanence.core.model.SenderRetryPurpose
+import dev.hryshyn.remanence.core.model.SenderRetryWrapContextInput
 import dev.hryshyn.remanence.core.model.UserId
 
 /**
@@ -86,11 +90,25 @@ data class CapsulePublishRequest(
  * inferred from the sender. The cryptographic framing is unchanged from the
  * prior M1 same-account path; only the routing inputs became explicit and
  * required.
+ *
+ * M2-P08: the publisher now receives a [SenderRetryKeysetWrapper] and the
+ * dedicated KEK [alias] to wrap the freshly generated capsule keyset as a
+ * sender-owned retry material record. The [ownerUserId] must equal the
+ * [senderUserId] (the current sender owns the retry key). The wrapped
+ * record is serialized and set on [PreparedOutboxCapsule.senderRetryWrappedKeysetBytes].
  */
-class CapsulePublisher {
+class CapsulePublisher(
+    private val senderRetryKeysetWrapper: SenderRetryKeysetWrapper,
+    private val alias: String,
+) {
 
     fun publish(request: CapsulePublishRequest): PreparedOutboxCapsule {
         require(request.photoJpegs.size in 3..5) { "3..5 photos required" }
+        // M2-P08: the current sender owns the retry key; ownerUserId
+        // must equal senderUserId before any crypto work begins.
+        require(request.ownerUserId == request.senderUserId.value.toString()) {
+            "ownerUserId must equal senderUserId (current sender owns the retry key)"
+        }
         TinkPrimitives.ensureRegistered()
         val senderUser = request.senderUserId
         // M2-P06: distinct routing identities for every context/AAD. Read
@@ -202,6 +220,21 @@ class CapsulePublisher {
             envelopePlaintext,
         )
 
+        // 6. M2-P08: wrap the capsule keyset as sender-owned retry
+        //    material. The same capsuleKeyset that encrypts the artifacts
+        //    is wrapped; no copy, no extra keyset.
+        val retryContext = SenderRetryWrapContextInput(
+            ownerUserId = UserId(request.senderUserId.value),
+            capsuleId = request.capsuleId,
+            senderKeyBundleId = senderBundle,
+            purpose = SenderRetryPurpose.RECIPIENT_KEY_STALE_REWRAP,
+        )
+        val wrappedRetryRecord = senderRetryKeysetWrapper.wrap(
+            alias = alias,
+            keyset = capsuleKeyset,
+            context = retryContext,
+        )
+
         return PreparedOutboxCapsule(
             capsuleId = request.capsuleId.value,
             idempotencyKey = "publish-${request.capsuleId.toRestString()}",
@@ -222,6 +255,9 @@ class CapsulePublisher {
             artifacts = artifacts,
             publishStatementBytes = signed.deterministicStatementBytes,
             publishStatementSignature = signed.signature,
+            // M2-P08: serialized wrapped retry record; the stager
+            // persists this through SenderRetryMaterialStore.
+            senderRetryWrappedKeysetBytes = wrappedRetryRecord.serialize(),
         )
     }
 

@@ -71,6 +71,10 @@ class RemanenceViewModelFactory(
                         ?: throw java.io.IOException("photo picker stream unavailable")
                 }
             },
+            // M2-P08: sender-retry keyset wrapper + dedicated KEK alias
+            // from the AppContainer-owned sender-retry boundary.
+            senderRetryKeysetWrapper = container.senderRetryKeysetWrapper,
+            senderRetryKekAlias = container.senderRetryKekAlias,
         ) as T
         ScanViewModel::class.java -> ScanViewModel(
             persistence = container.fingerprintPersistence,

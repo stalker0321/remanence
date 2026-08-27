@@ -35,6 +35,8 @@ import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.auth.SoftwareKekBoundary
+import dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper
 import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 
 /**
@@ -60,8 +62,14 @@ class CreateGoldenTransitionTableTest {
     private val CONTENT = CreateViewModel.Step.CONTENT
     private val PUBLISHING = CreateViewModel.Step.PUBLISHING
 
+    private val testKekBoundary = SoftwareKekBoundary()
+    private val testAlias = "test-sender-retry-${java.util.UUID.randomUUID()}"
+    private lateinit var testWrapper: SenderRetryKeysetWrapper
+
     @Before
     fun setUp() {
+        testKekBoundary.createAes256GcmKey(testAlias)
+        testWrapper = SenderRetryKeysetWrapper(testKekBoundary)
         Dispatchers.setMain(testDispatcher)
         val context = ApplicationProvider.getApplicationContext<Context>()
         database = Room.inMemoryDatabaseBuilder(context, RemanenceLocalDatabase::class.java)
@@ -172,6 +180,8 @@ class CreateGoldenTransitionTableTest {
             backProcessor = Accepting(goldenSynthetic(FingerprintSide.BACK)),
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
+            senderRetryKeysetWrapper = testWrapper,
+            senderRetryKekAlias = testAlias,
         ).also { it.beginSession(1L) }
     }
 

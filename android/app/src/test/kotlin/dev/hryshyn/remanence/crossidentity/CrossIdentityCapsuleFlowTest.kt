@@ -22,7 +22,9 @@ import dev.hryshyn.remanence.core.crypto.AccountIdentityGenerator
 import dev.hryshyn.remanence.core.crypto.CapsuleAcceptanceGate
 import dev.hryshyn.remanence.core.crypto.CapsuleAcceptanceInput
 import dev.hryshyn.remanence.core.crypto.CapsuleAcceptanceResult
+import dev.hryshyn.remanence.auth.SoftwareKekBoundary
 import dev.hryshyn.remanence.core.crypto.RecipientEnvelopeCryptor
+import dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.network.HistoricalKeyBundle
 import dev.hryshyn.remanence.core.data.network.KeyBundleByIdResult
@@ -62,6 +64,9 @@ class CrossIdentityCapsuleFlowTest {
     private val recipientUuid = UUID.fromString("8c333333-4444-4555-8666-777777777777")
     private val senderBundleUuid = UUID.fromString("8c444444-5555-4666-8777-888888888888")
     private val recipientBundleUuid = UUID.fromString("8c555555-6666-4777-8888-999999999999")
+    private val testKekBoundary = SoftwareKekBoundary()
+    private val testAlias = "test-sender-retry-${java.util.UUID.randomUUID()}"
+    private lateinit var testWrapper: SenderRetryKeysetWrapper
 
     /** Authenticated directory contents the tests control explicitly. */
     private val directory = mutableMapOf<String, KeyBundleByIdResult>()
@@ -81,6 +86,8 @@ class CrossIdentityCapsuleFlowTest {
 
     @Before
     fun setUp() {
+        testKekBoundary.createAes256GcmKey(testAlias)
+        testWrapper = SenderRetryKeysetWrapper(testKekBoundary)
         context = ApplicationProvider.getApplicationContext()
         database = Room.inMemoryDatabaseBuilder(context, RemanenceLocalDatabase::class.java)
             .allowMainThreadQueries()
@@ -127,7 +134,7 @@ class CrossIdentityCapsuleFlowTest {
     }
 
     private suspend fun publishAndStageCrossIdentity() {
-        val prepared = CapsulePublisher().publish(
+        val prepared = CapsulePublisher(testWrapper, testAlias).publish(
             CapsulePublishRequest(
                 capsuleId = CapsuleId(capsuleUuid),
                 senderUserId = UserId(senderUuid),
@@ -377,7 +384,7 @@ class CrossIdentityCapsuleFlowTest {
     }
 
     private suspend fun publishSelfSend() {
-        val prepared = CapsulePublisher().publish(
+        val prepared = CapsulePublisher(testWrapper, testAlias).publish(
             CapsulePublishRequest(
                 capsuleId = CapsuleId(capsuleUuid),
                 senderUserId = UserId(senderUuid),

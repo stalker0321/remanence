@@ -41,6 +41,8 @@ import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.QualityReason
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.auth.SoftwareKekBoundary
+import dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper
 import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 
 /**
@@ -61,8 +63,14 @@ class CreateTransitionTableTest {
     private lateinit var database: RemanenceLocalDatabase
     private lateinit var stagingDir: File
 
+    private val testKekBoundary = SoftwareKekBoundary()
+    private val testAlias = "test-sender-retry-${java.util.UUID.randomUUID()}"
+    private lateinit var testWrapper: SenderRetryKeysetWrapper
+
     @Before
     fun setUp() {
+        testKekBoundary.createAes256GcmKey(testAlias)
+        testWrapper = SenderRetryKeysetWrapper(testKekBoundary)
         Dispatchers.setMain(testDispatcher)
         val context = ApplicationProvider.getApplicationContext<Context>()
         database = Room.inMemoryDatabaseBuilder(context, RemanenceLocalDatabase::class.java)
@@ -239,6 +247,8 @@ class CreateTransitionTableTest {
             // dispatcher so transition assertions are deterministic.
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
+            senderRetryKeysetWrapper = testWrapper,
+            senderRetryKekAlias = testAlias,
         )
         vm.beginSession(1L)
         return vm to persistence

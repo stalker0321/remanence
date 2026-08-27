@@ -199,6 +199,26 @@ class AppContainer(
     /** Identity KEK alias used for wrapping the HPKE/Ed25519 private keysets. */
     val identityKekAlias: String = IDENTITY_KEK_ALIAS
 
+    /**
+     * M2-P08: dedicated KEK alias for wrapping the sender-owned retry
+     * capsule keyset. The KEK is lazily ensured on first use so a cold
+     * start never blocks on key generation; the alias is fixed and
+     * immutable.
+     */
+    val senderRetryKekAlias: String = SENDER_RETRY_KEK_ALIAS
+
+    /**
+     * M2-P08: the sender-retry keyset wrapper bound to the
+     * [senderRetryKekAlias] KEK. The KEK is lazily created if it does
+     * not yet exist; once created it is never replaced.
+     */
+    val senderRetryKeysetWrapper: dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper by lazy {
+        if (!kekBoundary.hasKey(senderRetryKekAlias)) {
+            kekBoundary.createAes256GcmKey(senderRetryKekAlias)
+        }
+        dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper(kekBoundary)
+    }
+
     val registrationIdentityAdapter: TinkRegistrationIdentityAdapter by lazy {
         TinkRegistrationIdentityAdapter(identityRepository, kekBoundary, identityKekAlias)
     }
@@ -460,5 +480,6 @@ class AppContainer(
         const val DATABASE_NAME: String = "remanence.db"
         const val SESSION_TOKEN_KEK_ALIAS: String = "remanence.session.v1"
         const val IDENTITY_KEK_ALIAS: String = "remanence.identity.v1"
+        const val SENDER_RETRY_KEK_ALIAS: String = "remanence.sender-retry.v1"
     }
 }

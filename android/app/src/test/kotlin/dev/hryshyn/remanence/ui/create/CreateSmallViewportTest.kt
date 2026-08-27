@@ -47,6 +47,8 @@ import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.QualityReason
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.auth.SoftwareKekBoundary
+import dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper
 import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 
 /**
@@ -66,8 +68,14 @@ class CreateSmallViewportTest {
 
     private lateinit var database: RemanenceLocalDatabase
 
+    private val testKekBoundary = SoftwareKekBoundary()
+    private val testAlias = "test-sender-retry-${java.util.UUID.randomUUID()}"
+    private lateinit var testWrapper: SenderRetryKeysetWrapper
+
     @Before
     fun setUp() {
+        testKekBoundary.createAes256GcmKey(testAlias)
+        testWrapper = SenderRetryKeysetWrapper(testKekBoundary)
         Dispatchers.setMain(testDispatcher)
         val context = ApplicationProvider.getApplicationContext<Context>()
         database = Room.inMemoryDatabaseBuilder(context, RemanenceLocalDatabase::class.java)
@@ -149,6 +157,8 @@ class CreateSmallViewportTest {
             backProcessor = RejectingThenAccepting(),
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
+            senderRetryKeysetWrapper = testWrapper,
+            senderRetryKekAlias = testAlias,
         )
         vm.beginSession(1L)
 
@@ -232,6 +242,8 @@ class CreateSmallViewportTest {
             backProcessor = StillProcessor { ProcessedStill.Accepted("p", ByteArray(1)) },
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
+            senderRetryKeysetWrapper = testWrapper,
+            senderRetryKekAlias = testAlias,
         )
         vm.beginSession(1L)
 
@@ -289,6 +301,8 @@ class CreateSmallViewportTest {
             backProcessor = RejectingThenAccepting(),
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
+            senderRetryKeysetWrapper = testWrapper,
+            senderRetryKekAlias = testAlias,
         )
         vm.beginSession(1L)
         vm.onResolved(selfSnapshot())

@@ -57,6 +57,30 @@ interface OutboxCapsuleDao {
         allowedFrom: List<OutboxCapsuleState>,
         errorCode: String?,
     ): Int
+
+    /**
+     * M2-P09: owner-scoped conditional clear of the retry material
+     * pointer. The update fires ONLY when the capsule is owned by
+     * [ownerUserId] AND the stored pointer equals [expectedPath]
+     * (or both are NULL). Returns 1 when the pointer was cleared,
+     * 0 when refused (wrong owner, wrong capsule, or pointer
+     * already cleared/mismatched). The caller MUST delete or
+     * confirm the file is missing BEFORE calling this; if death
+     * occurs between file deletion and pointer clear, replay sees
+     * a missing file and re-clears harmlessly.
+     */
+    @Query(
+        "UPDATE outbox_capsule SET sender_retry_keyset_path = NULL " +
+            "WHERE capsule_id = :capsuleId " +
+            "AND owner_user_id = :ownerUserId " +
+            "AND (sender_retry_keyset_path = :expectedPath " +
+            "     OR (sender_retry_keyset_path IS NULL AND :expectedPath IS NULL))",
+    )
+    suspend fun clearSenderRetryKeysetPath(
+        capsuleId: String,
+        ownerUserId: String,
+        expectedPath: String?,
+    ): Int
 }
 
 /**

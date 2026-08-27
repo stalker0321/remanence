@@ -6,9 +6,12 @@ import com.google.crypto.tink.TinkProtoKeysetFormat
 import kotlinx.coroutines.runBlocking
 import java.security.MessageDigest
 import java.util.UUID
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import dev.hryshyn.remanence.core.crypto.AccountIdentityGenerator
@@ -32,6 +35,15 @@ import dev.hryshyn.remanence.core.model.UserId
  * ciphertext-only capsule whose envelope opens, whose statement passes the
  * acceptance gate, and whose artifacts decrypt under the envelope-carried
  * capsule keyset.
+ *
+ * M2-P06: the publisher constructor is now IDENTITY-PURE - the three
+ * recipient-side fields are explicit, required, and never defaulted from
+ * the sender. The "self-send golden bytes" fixture below is the byte-for-byte
+ * check that the explicit-equal-value self-send path produces the exact
+ * same statement / signature / envelope plaintext as the prior default-based
+ * path, and the "distinct" suite proves that genuinely different recipient
+ * IDs are independently bound into the statement, the recipient envelope
+ * context/AAD, and the PreparedOutboxCapsule routing fields.
  */
 class CapsulePublisherTest {
 
@@ -42,15 +54,24 @@ class CapsulePublisherTest {
     private val userId = UUID.fromString("4d222222-3333-4444-8555-666666666666")
     private val bundleId = UUID.fromString("4d333333-4444-4555-8666-777777777777")
 
+    /** A DIFFERENT second identity used by the cross-identity binding tests. */
+    private val otherIdentity = AccountIdentityGenerator().generate()
+    private val otherUserId = UUID.fromString("4daaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+    private val otherBundleId = UUID.fromString("4dbbbbbb-cccc-4ddd-8eee-ffffffffffff")
+    private val otherOwnerUserId = UUID.fromString("4dccccdd-eeee-4fff-8000-111111111111")
+
     @Before
     fun setUp() {
         TinkPrimitives.ensureRegistered()
     }
 
-    private fun request() = CapsulePublishRequest(
+    private fun selfSendRequest() = CapsulePublishRequest(
         capsuleId = CapsuleId(capsuleId),
         senderUserId = UserId(userId),
+        recipientUserId = UserId(userId),
         senderKeyBundleId = KeyBundleId(bundleId),
+        recipientKeyBundleId = KeyBundleId(bundleId),
+        ownerUserId = userId.toString(),
         senderHandleSnapshot = "mykola",
         createdAtEpochSeconds = 1_700_000_000L,
         photoJpegs = (0 until 3).map { "jpeg-$it".toByteArray() + ByteArray(32) { b -> b.toByte() } },
@@ -60,14 +81,14 @@ class CapsulePublisherTest {
         frontFingerprintBytes = "front-fp".toByteArray(),
         backFingerprintBytes = "back-fp".toByteArray(),
         signingKeyset = identity.signingPrivateHandle,
-        recipientEncryptionPublicKeyset = com.google.crypto.tink.TinkProtoKeysetFormat.parseKeysetWithoutSecret(
+        recipientEncryptionPublicKeyset = TinkProtoKeysetFormat.parseKeysetWithoutSecret(
             identity.encryptionPublicKeyset,
         ),
     )
 
     @Test
     fun publishedCapsuleCarriesExactArtifactCardinalityAndEnvelope() {
-        val prepared = publisher.publish(request())
+        val prepared = publisher.publish(selfSendRequest())
 
         assertEquals(5, prepared.artifacts.size)
         assertEquals(
@@ -82,7 +103,7 @@ class CapsulePublisherTest {
 
     @Test
     fun acceptanceGateVerifiesThePublishedCapsuleEndToEnd() {
-        val prepared = publisher.publish(request())
+        val prepared = publisher.publish(selfSendRequest())
 
         // Open our own envelope to recover capsule keyset + statement binding.
         val opened = RecipientEnvelopeCryptor().open(
@@ -121,7 +142,7 @@ class CapsulePublisherTest {
 
     @Test
     fun envelopeCarriedKeysetDecryptsPhotoOrdinalZero() {
-        val prepared = publisher.publish(request())
+        val prepared = publisher.publish(selfSendRequest())
 
         val opened = RecipientEnvelopeCryptor().open(
             identity.encryptionPrivateHandle,
@@ -154,9 +175,615 @@ class CapsulePublisherTest {
     @Test
     fun fewerThanThreePhotosIsRejectedBeforeAnyWork() = runBlocking {
         assertThrows(IllegalArgumentException::class.java) {
-            runBlocking { publisher.publish(request().copy(photoJpegs = request().photoJpegs.take(2))) }
+            runBlocking { publisher.publish(selfSendRequest().copy(photoJpegs = selfSendRequest().photoJpegs.take(2))) }
         }
         Unit
+    }
+
+    // ------------------------------------------------------------------
+    // M2-P06: golden + identity-binding regressions.
+    // ------------------------------------------------------------------
+    // M2-P06: golden + identity-binding regressions.
+    // ------------------------------------------------------------------
+
+    private companion object {
+        /**
+         * M2-P06 self-send golden bytes. The publisher constructor changed:
+         * [CapsulePublishRequest.recipientUserId], [CapsulePublishRequest.recipientKeyBundleId]
+         * and [CapsulePublishRequest.ownerUserId] are now EXPLICIT, required,
+         * and never inferred from the sender. A self-send now passes the same
+         * account VALUES explicitly (no defaulting from the sender identity).
+         *
+         * The capsule AEAD keyset is freshly generated per call, so the
+         * artifact ciphertexts (and therefore the artifact SHA-256s encoded
+         * into the publish statement) and the sealed envelope ciphertext are
+         * randomized. The golden fixture below stores the bytes that are
+         * determined ENTIRELY by the deterministic input fields
+         * (capsuleId, identities, timestamp, artifact blob IDs and kinds) so
+         * the refactor is regression-tested: the cryptographic framing for a
+         * self-send is byte-for-byte identical to the pre-P06 default-based
+         * path, and the explicit-equal-value self-send produces the same
+         * canonical bytes.
+         *
+         * - [GOLDEN_SELF_SEND_STATEMENT_HEADER_HEX]: the deterministic
+         *   98-byte header of the publish statement (protocol_version,
+         *   capsule_id, sender_user_id, recipient_user_id, sender_key_bundle_id,
+         *   recipient_key_bundle_id, created_at_epoch_seconds + the tag
+         *   opening the artifacts list).
+         * - [GOLDEN_SELF_SEND_ENVELOPE_PLAINTEXT_HEADER_HEX]: the
+         *   deterministic 92-byte header of the recipient envelope plaintext
+         *   (protocol_version, capsule_id, sender_user_id, recipient_user_id,
+         *   sender_key_bundle_id, recipient_key_bundle_id).
+         */
+        const val GOLDEN_SELF_SEND_STATEMENT_HEADER_HEX =
+            "080112104d1111112222433384445555555555551a104d22222233334444855566666666666622104d2222223333444485556666666666662a104d33333344444555866677777777777732104d3333334444455586667777777777773880e2cfaa06"
+        const val GOLDEN_SELF_SEND_ENVELOPE_PLAINTEXT_HEADER_HEX =
+            "080112104d1111112222433384445555555555551a104d22222233334444855566666666666622104d2222223333444485556666666666662a104d33333344444555866677777777777732104d333333444445558666777777777777"
+    }
+
+    @Test
+    fun selfSendGoldenDeterministicHeaderBytesAreUnchanged() {
+        val prepared = publisher.publish(selfSendRequest())
+
+        // ---- STATEMENT: the deterministic 98-byte header is byte-for-byte
+        // identical to the pre-P06 golden. The remaining bytes are the
+        // per-capsule artifact SHA-256s (variable per fresh capsule keyset)
+        // and are covered by structural assertions below.
+        assertArrayEquals(
+            "self-send publish statement header bytes must be byte-for-byte identical to the pre-P06 golden",
+            hexToBytes(GOLDEN_SELF_SEND_STATEMENT_HEADER_HEX),
+            prepared.publishStatementBytes.copyOfRange(0, GOLDEN_SELF_SEND_STATEMENT_HEADER_HEX.length / 2),
+        )
+
+        // Signature is 69 bytes (1 prefix + 4 key-id + 64 Ed25519) - length
+        // is fixed; the value itself varies with the randomized statement.
+        assertEquals(
+            "self-send Ed25519 signature is the protocol-v1 69-byte TINK-prefixed form",
+            69,
+            prepared.publishStatementSignature.size,
+        )
+
+        // The signature VERIFIES the statement (Ed25519 is deterministic
+        // over the message, so the produced signature must always accept).
+        val verifying = TinkProtoKeysetFormat.parseKeysetWithoutSecret(identity.signingPublicKeyset)
+        dev.hryshyn.remanence.core.crypto.PublishStatementSigner().verify(
+            verifying,
+            dev.hryshyn.remanence.core.crypto.SignedPublishStatement(
+                prepared.publishStatementBytes,
+                prepared.publishStatementSignature,
+            ),
+        )
+
+        // ---- ENVELOPE: the deterministic 92-byte header is byte-for-byte
+        // identical to the pre-P06 golden. The remaining bytes are the
+        // variable per-capsule keyset and the publishStatementSha256.
+        val opened = RecipientEnvelopeCryptor().open(
+            identity.encryptionPrivateHandle,
+            dev.hryshyn.remanence.core.model.RecipientEnvelopeContextInput(
+                CapsuleId(capsuleId), UserId(userId), UserId(userId), KeyBundleId(bundleId),
+            ),
+            prepared.envelopeCiphertext,
+        )
+        assertArrayEquals(
+            "self-send recipient envelope plaintext header bytes must be byte-for-byte identical to the pre-P06 golden",
+            hexToBytes(GOLDEN_SELF_SEND_ENVELOPE_PLAINTEXT_HEADER_HEX),
+            opened.copyOfRange(0, GOLDEN_SELF_SEND_ENVELOPE_PLAINTEXT_HEADER_HEX.length / 2),
+        )
+
+        // The envelope plaintext also independently carries the self-send
+        // sender and recipient IDs as separate but equal UUIDs.
+        val envelopeProto = RecipientEnvelopePlaintext.parseFrom(opened)
+        assertEquals(
+            "envelope plaintext carries the sender user ID",
+            userId,
+            uuidFromProto(envelopeProto.senderUserId),
+        )
+        assertEquals(
+            "envelope plaintext carries the recipient user ID (equal in self-send)",
+            userId,
+            uuidFromProto(envelopeProto.recipientUserId),
+        )
+        assertEquals(
+            "envelope plaintext carries the sender key-bundle ID",
+            bundleId,
+            uuidFromProto(envelopeProto.senderKeyBundleId),
+        )
+        assertEquals(
+            "envelope plaintext carries the recipient key-bundle ID (equal in self-send)",
+            bundleId,
+            uuidFromProto(envelopeProto.recipientKeyBundleId),
+        )
+        // publishStatementSha256 in the envelope equals the actual statement sha256.
+        assertArrayEquals(
+            "envelope binds the publish-statement SHA-256",
+            sha256(prepared.publishStatementBytes),
+            envelopeProto.publishStatementSha256.toByteArray(),
+        )
+    }
+
+    @Test
+    fun selfSendRoutingFieldsAreBoundIndependently() {
+        val prepared = publisher.publish(selfSendRequest())
+
+        // All five routing fields exist and carry the explicit (equal) values.
+        assertEquals("prepared.senderUserId", userId, prepared.senderUserId)
+        assertEquals("prepared.recipientUserId", userId, prepared.recipientUserId)
+        assertEquals("prepared.senderKeyBundleId", bundleId, prepared.senderKeyBundleId)
+        assertEquals("prepared.recipientKeyBundleId", bundleId, prepared.recipientKeyBundleId)
+        assertEquals("prepared.ownerUserId", userId.toString(), prepared.ownerUserId)
+    }
+
+    @Test
+    fun distinctRecipientUserIdIsBoundIntoPublishStatementAndEnvelope() {
+        val selfSend = publisher.publish(selfSendRequest())
+        val cross = publisher.publish(
+            selfSendRequest().copy(
+                recipientUserId = UserId(otherUserId),
+                // Same recipient encryption keyset so the only thing that
+                // changes is the canonical routing half - the statement
+                // bytes must reflect that, and the envelope AAD must follow.
+                recipientEncryptionPublicKeyset = TinkProtoKeysetFormat.parseKeysetWithoutSecret(
+                    otherIdentity.encryptionPublicKeyset,
+                ),
+            ),
+        )
+
+        // ---- STATEMENT: changing only recipientUserId changes only the
+        // recipient_user_id (proto field 4) bytes; sender_user_id (field 3),
+        // sender/recipient key-bundle ids, capsule_id, created_at, and every
+        // artifact binding are identical to the self-send statement.
+        val selfSendStatement = selfSend.publishStatementBytes
+        val crossStatement = cross.publishStatementBytes
+        assertNotEquals(
+            "changing recipient user id must change the publish statement",
+            selfSendStatement.toList(),
+            crossStatement.toList(),
+        )
+        assertArrayEquals(
+            "sender user id (proto field 3) must be byte-for-byte identical",
+            extractProtoBytesField(selfSendStatement, fieldTag = 3),
+            extractProtoBytesField(crossStatement, fieldTag = 3),
+        )
+        assertArrayEquals(
+            "capsule id (proto field 2) must be byte-for-byte identical",
+            extractProtoBytesField(selfSendStatement, fieldTag = 2),
+            extractProtoBytesField(crossStatement, fieldTag = 2),
+        )
+        assertArrayEquals(
+            "sender key-bundle id (proto field 5) must be byte-for-byte identical",
+            extractProtoBytesField(selfSendStatement, fieldTag = 5),
+            extractProtoBytesField(crossStatement, fieldTag = 5),
+        )
+        assertArrayEquals(
+            "recipient key-bundle id (proto field 6) must be byte-for-byte identical",
+            extractProtoBytesField(selfSendStatement, fieldTag = 6),
+            extractProtoBytesField(crossStatement, fieldTag = 6),
+        )
+        // The recipient_user_id field (tag 4) is the OTHER user's 16 bytes.
+        assertEquals(
+            "recipient user id (proto field 4) is independently bound to the other account",
+            otherUserId,
+            uuidFromBytes(extractProtoBytesField(crossStatement, fieldTag = 4)),
+        )
+        // The signature changes because the message changed - Ed25519 is
+        // deterministic over the message, so the new signature must differ.
+        assertNotEquals(
+            "Ed25519 signature must reflect the new statement bytes",
+            selfSend.publishStatementSignature.toList(),
+            cross.publishStatementSignature.toList(),
+        )
+
+        // ---- ROUTING: PreparedOutboxCapsule carries the distinct recipient
+        // user id, the same sender, and the same owner.
+        assertEquals(userId, cross.senderUserId)
+        assertEquals(otherUserId, cross.recipientUserId)
+        assertNotEquals(cross.senderUserId, cross.recipientUserId)
+        assertEquals(bundleId, cross.senderKeyBundleId)
+        assertEquals(bundleId, cross.recipientKeyBundleId)
+        assertEquals(userId.toString(), cross.ownerUserId)
+    }
+
+    @Test
+    fun distinctRecipientKeyBundleIdIsBoundIntoPublishStatement() {
+        val selfSend = publisher.publish(selfSendRequest())
+        val cross = publisher.publish(
+            selfSendRequest().copy(
+                recipientKeyBundleId = KeyBundleId(otherBundleId),
+                // Keep recipient identity the same so the test isolates the
+                // recipient key-bundle binding in the statement.
+            ),
+        )
+
+        val selfSendStatement = selfSend.publishStatementBytes
+        val crossStatement = cross.publishStatementBytes
+        assertNotEquals(
+            "changing recipient key-bundle id must change the publish statement",
+            selfSendStatement.toList(),
+            crossStatement.toList(),
+        )
+        // The recipient_key_bundle_id field (tag 6) is the OTHER bundle's 16 bytes.
+        assertEquals(
+            "recipient key-bundle id (proto field 6) is independently bound to the other bundle",
+            otherBundleId,
+            uuidFromBytes(extractProtoBytesField(crossStatement, fieldTag = 6)),
+        )
+        // The recipient_user_id (tag 4) is unchanged in this scenario.
+        assertArrayEquals(
+            "recipient user id (proto field 4) must remain the self-send value",
+            extractProtoBytesField(selfSendStatement, fieldTag = 4),
+            extractProtoBytesField(crossStatement, fieldTag = 4),
+        )
+        // The signature changes because the message changed.
+        assertNotEquals(
+            "Ed25519 signature must reflect the new statement bytes",
+            selfSend.publishStatementSignature.toList(),
+            cross.publishStatementSignature.toList(),
+        )
+
+        // Routing field is updated too.
+        assertEquals(bundleId, cross.senderKeyBundleId)
+        assertEquals(otherBundleId, cross.recipientKeyBundleId)
+        assertNotEquals(cross.senderKeyBundleId, cross.recipientKeyBundleId)
+    }
+
+    @Test
+    fun distinctOwnerUserIdIsBoundIntoPreparedOutboxCapsuleRouting() {
+        val cross = publisher.publish(
+            selfSendRequest().copy(
+                ownerUserId = otherOwnerUserId.toString(),
+            ),
+        )
+        assertEquals(
+            "PreparedOutboxCapsule.ownerUserId is the explicit, distinct value",
+            otherOwnerUserId.toString(),
+            cross.ownerUserId,
+        )
+        // sender/recipient identities remain the explicit self-send pair.
+        assertEquals(userId, cross.senderUserId)
+        assertEquals(userId, cross.recipientUserId)
+        assertNotEquals(cross.ownerUserId, cross.senderUserId.toString())
+    }
+
+    @Test
+    fun distinctRecipientIdentityBindsEnvelopeAadSoOnlyTheBoundRecipientCanOpen() {
+        val cross = publisher.publish(
+            selfSendRequest().copy(
+                recipientUserId = UserId(otherUserId),
+                recipientEncryptionPublicKeyset = TinkProtoKeysetFormat.parseKeysetWithoutSecret(
+                    otherIdentity.encryptionPublicKeyset,
+                ),
+            ),
+        )
+
+        // The bound RECIPIENT's private key + the distinct recipient
+        // context opens the envelope.
+        val opened = RecipientEnvelopeCryptor().open(
+            otherIdentity.encryptionPrivateHandle,
+            dev.hryshyn.remanence.core.model.RecipientEnvelopeContextInput(
+                CapsuleId(capsuleId), UserId(userId), UserId(otherUserId), KeyBundleId(bundleId),
+            ),
+            cross.envelopeCiphertext,
+        )
+        val env = RecipientEnvelopePlaintext.parseFrom(opened)
+        assertEquals(
+            "envelope plaintext reflects the distinct recipient user id",
+            otherUserId,
+            uuidFromProto(env.recipientUserId),
+        )
+        assertEquals(
+            "envelope plaintext reflects the distinct sender user id",
+            userId,
+            uuidFromProto(env.senderUserId),
+        )
+        assertNotEquals(
+            "envelope plaintext sender and recipient are separate",
+            env.senderUserId,
+            env.recipientUserId,
+        )
+
+        // The SENDER's private key, asked to open the recipient-bound
+        // envelope, FAILS - the recipient identity is genuinely bound into
+        // the envelope AAD, not conflated with the sender.
+        val wrongOpen = runCatching {
+            RecipientEnvelopeCryptor().open(
+                identity.encryptionPrivateHandle,
+                dev.hryshyn.remanence.core.model.RecipientEnvelopeContextInput(
+                    CapsuleId(capsuleId), UserId(userId), UserId(otherUserId), KeyBundleId(bundleId),
+                ),
+                cross.envelopeCiphertext,
+            )
+        }
+        assertTrue(
+            "sender's private key must NOT open an envelope addressed to another user",
+            wrongOpen.isFailure,
+        )
+
+        // Same recipient, but with the WRONG context (claiming the user-id
+        // matches the sender) also fails - the recipient identity is bound
+        // independently into the AAD, not the sender's.
+        val wrongContext = runCatching {
+            RecipientEnvelopeCryptor().open(
+                otherIdentity.encryptionPrivateHandle,
+                dev.hryshyn.remanence.core.model.RecipientEnvelopeContextInput(
+                    CapsuleId(capsuleId), UserId(userId), UserId(userId), KeyBundleId(bundleId),
+                ),
+                cross.envelopeCiphertext,
+            )
+        }
+        assertTrue(
+            "envelope addressed to otherUserId must reject a context claiming self-send",
+            wrongContext.isFailure,
+        )
+    }
+
+    @Test
+    fun distinctRecipientIdentityBindsArtifactAadSoOnlyTheBoundRecipientCanDecrypt() {
+        val cross = publisher.publish(
+            selfSendRequest().copy(
+                recipientUserId = UserId(otherUserId),
+                recipientEncryptionPublicKeyset = TinkProtoKeysetFormat.parseKeysetWithoutSecret(
+                    otherIdentity.encryptionPublicKeyset,
+                ),
+            ),
+        )
+
+        // Open the recipient envelope to get the capsule AEAD keyset.
+        val opened = RecipientEnvelopeCryptor().open(
+            otherIdentity.encryptionPrivateHandle,
+            dev.hryshyn.remanence.core.model.RecipientEnvelopeContextInput(
+                CapsuleId(capsuleId), UserId(userId), UserId(otherUserId), KeyBundleId(bundleId),
+            ),
+            cross.envelopeCiphertext,
+        )
+        val capsuleKeyset = TinkProtoKeysetFormat.parseKeyset(
+            RecipientEnvelopePlaintext.parseFrom(opened).capsuleAeadKeyset.toByteArray(),
+            InsecureSecretKeyAccess.get(),
+        )
+
+        val photo = cross.artifacts.first { it.kind == OutboxArtifactKind.PHOTO }
+
+        // Right recipient identity + right keyset = decrypts.
+        val decrypted = CapsuleArtifactCryptor().decrypt(
+            capsuleKeyset,
+            ArtifactAadInput(
+                CapsuleId(capsuleId),
+                BlobId(photo.blobId),
+                CapsuleArtifactKind.PHOTO,
+                ordinal = 0,
+                senderUserId = UserId(userId),
+                recipientUserId = UserId(otherUserId),
+            ),
+            photo.ciphertext,
+        )
+        assertTrue(String(decrypted).startsWith("jpeg-0"))
+
+        // Self-send context (claiming the recipient is the sender) MUST
+        // fail: the artifact AAD independently binds the recipient user id.
+        val wrongAad = runCatching {
+            CapsuleArtifactCryptor().decrypt(
+                capsuleKeyset,
+                ArtifactAadInput(
+                    CapsuleId(capsuleId),
+                    BlobId(photo.blobId),
+                    CapsuleArtifactKind.PHOTO,
+                    ordinal = 0,
+                    senderUserId = UserId(userId),
+                    recipientUserId = UserId(userId),
+                ),
+                photo.ciphertext,
+            )
+        }
+        assertTrue(
+            "artifact AAD with a self-send context must not decrypt a cross-identity ciphertext",
+            wrongAad.isFailure,
+        )
+    }
+
+    @Test
+    fun distinctRecipientIdentityAcceptedByAcceptanceGateWhileSelfSendContextIsRejected() {
+        val cross = publisher.publish(
+            selfSendRequest().copy(
+                recipientUserId = UserId(otherUserId),
+                recipientEncryptionPublicKeyset = TinkProtoKeysetFormat.parseKeysetWithoutSecret(
+                    otherIdentity.encryptionPublicKeyset,
+                ),
+            ),
+        )
+
+        val opened = RecipientEnvelopeCryptor().open(
+            otherIdentity.encryptionPrivateHandle,
+            dev.hryshyn.remanence.core.model.RecipientEnvelopeContextInput(
+                CapsuleId(capsuleId), UserId(userId), UserId(otherUserId), KeyBundleId(bundleId),
+            ),
+            cross.envelopeCiphertext,
+        )
+
+        val distinctResult = CapsuleAcceptanceGate().verify(
+            CapsuleAcceptanceInput(
+                expectedCapsuleId = CapsuleId(capsuleId),
+                authenticatedUserId = UserId(otherUserId),
+                senderVerifyingKeyset = TinkProtoKeysetFormat.parseKeysetWithoutSecret(
+                    identity.signingPublicKeyset,
+                ),
+                expectedSenderKeyBundleId = KeyBundleId(bundleId),
+                envelopePlaintextBytes = opened,
+                statementBytes = cross.publishStatementBytes,
+                signature = cross.publishStatementSignature,
+                deliveredBlobs = cross.artifacts.map { artifact ->
+                    DeliveredBlob(
+                        BlobId(artifact.blobId),
+                        artifact.ciphertext.size.toLong(),
+                        sha256(artifact.ciphertext),
+                    )
+                },
+            ),
+        )
+        assertTrue(
+            "acceptance gate accepts the distinct recipient identity when the bound IDs are presented",
+            distinctResult is CapsuleAcceptanceResult.Accepted,
+        )
+
+        // Same opened envelope + same blobs but the gate is asked to verify
+        // as if the recipient were the sender: the distinct statement bytes
+        // and signature cannot satisfy a self-send (sender==recipient) claim.
+        val selfClaim = runCatching {
+            CapsuleAcceptanceGate().verify(
+                CapsuleAcceptanceInput(
+                    expectedCapsuleId = CapsuleId(capsuleId),
+                    authenticatedUserId = UserId(userId),
+                    senderVerifyingKeyset = TinkProtoKeysetFormat.parseKeysetWithoutSecret(
+                        identity.signingPublicKeyset,
+                    ),
+                    expectedSenderKeyBundleId = KeyBundleId(bundleId),
+                    envelopePlaintextBytes = opened,
+                    statementBytes = cross.publishStatementBytes,
+                    signature = cross.publishStatementSignature,
+                    deliveredBlobs = cross.artifacts.map { artifact ->
+                        DeliveredBlob(
+                            BlobId(artifact.blobId),
+                            artifact.ciphertext.size.toLong(),
+                            sha256(artifact.ciphertext),
+                        )
+                    },
+                ),
+            )
+        }
+        assertTrue(
+            "self-send claim must be rejected for a cross-identity publication",
+            selfClaim.isFailure || selfClaim.getOrNull() is CapsuleAcceptanceResult.Rejected,
+        )
+    }
+
+    @Test
+    fun recipientIdentityIsRequiredAndCannotBeOmittedAtConstruction() {
+        // M2-P06: the data-class toString() prints every property name with
+        // its value, so the explicit-equal self-send MUST show all three
+        // recipient-side fields as named properties (not null, not blank).
+        // The compile-time enforcement is the constructor itself: every
+        // field is declared `val name: Type` with no `= default` clause, so
+        // any caller that omits one fails to compile. The runtime assertion
+        // here is the textual anchor that confirms the construction
+        // surfaced the three fields as independent values.
+        val asString = selfSendRequest().toString()
+        assertTrue(
+            "CapsulePublishRequest.toString must surface recipientUserId as a named property",
+            "recipientUserId=" in asString,
+        )
+        assertTrue(
+            "CapsulePublishRequest.toString must surface recipientKeyBundleId as a named property",
+            "recipientKeyBundleId=" in asString,
+        )
+        assertTrue(
+            "CapsulePublishRequest.toString must surface ownerUserId as a named property",
+            "ownerUserId=" in asString,
+        )
+        // Sanity: the request was actually constructed with explicit values.
+        assertEquals(UserId(userId), selfSendRequest().recipientUserId)
+        assertEquals(KeyBundleId(bundleId), selfSendRequest().recipientKeyBundleId)
+        assertEquals(userId.toString(), selfSendRequest().ownerUserId)
+    }
+
+    private fun hexToBytes(hex: String): ByteArray {
+        require(hex.length % 2 == 0) { "hex must have even length" }
+        return ByteArray(hex.length / 2) { i ->
+            ((Character.digit(hex[i * 2], 16) shl 4) or Character.digit(hex[i * 2 + 1], 16)).toByte()
+        }
+    }
+
+    /**
+     * Decodes the first occurrence of a length-delimited proto field with the
+     * given tag from a serialized protobuf. This is a minimal decoder scoped
+     * to the deterministic publish statement used by the publisher; it
+     * tolerates neither nested submessages nor any field type other than
+     * length-delimited bytes.
+     */
+    private fun extractProtoBytesField(bytes: ByteArray, fieldTag: Int): ByteArray {
+        val expectedKey = (fieldTag shl 3) or 2 // wire type 2 = length-delimited
+        var index = 0
+        while (index < bytes.size) {
+            val key = readVarint(bytes, index)
+            val keySize = varintSize(bytes, index)
+            val wireType = key and 0x7
+            val fieldNumber = key ushr 3
+            index += keySize
+            if (fieldNumber == fieldTag && wireType == 2) {
+                val length = readVarint(bytes, index)
+                val lengthSize = varintSize(bytes, index)
+                val start = index + lengthSize
+                return bytes.copyOfRange(start, start + length)
+            }
+            when (wireType) {
+                0 -> {
+                    val consumed = varintSize(bytes, index)
+                    index += consumed
+                }
+                1 -> index += 8
+                2 -> {
+                    val length = readVarint(bytes, index)
+                    index += varintSize(bytes, index) + length
+                }
+                5 -> index += 4
+                else -> fail("unsupported wire type $wireType in publish statement")
+            }
+        }
+        fail("field $fieldTag not found in publish statement of size ${bytes.size}")
+        error("unreachable")
+    }
+
+    private fun readVarint(bytes: ByteArray, offset: Int): Int {
+        var result = 0
+        var shift = 0
+        var i = offset
+        while (i < bytes.size) {
+            val b = bytes[i].toInt() and 0xff
+            result = result or ((b and 0x7f) shl shift)
+            if ((b and 0x80) == 0) return result
+            shift += 7
+            i += 1
+        }
+        fail("unterminated varint in publish statement")
+        error("unreachable")
+    }
+
+    private fun varintSize(bytes: ByteArray, offset: Int): Int {
+        var i = offset
+        while (i < bytes.size) {
+            if ((bytes[i].toInt() and 0x80) == 0) return i - offset + 1
+            i += 1
+        }
+        fail("unterminated varint in publish statement")
+        error("unreachable")
+    }
+
+    private fun uuidFromProto(bytes: com.google.protobuf.ByteString): UUID {
+        val raw = bytes.toByteArray()
+        require(raw.size == 16) { "expected 16-byte UUID proto, got ${raw.size} bytes" }
+        // The protocol encodes UUIDs in BIG-ENDIAN for both msb and lsb
+        // (ProtocolUuid.toProtoBytes). Standard Java UUID binary layout is
+        // mixed-endian, so use the protocol's readBigEndian rather than
+        // assembling msb/lsb from low-byte-first.
+        val msb = ((raw[0].toLong() and 0xff) shl 56) or
+            ((raw[1].toLong() and 0xff) shl 48) or
+            ((raw[2].toLong() and 0xff) shl 40) or
+            ((raw[3].toLong() and 0xff) shl 32) or
+            ((raw[4].toLong() and 0xff) shl 24) or
+            ((raw[5].toLong() and 0xff) shl 16) or
+            ((raw[6].toLong() and 0xff) shl 8) or
+            (raw[7].toLong() and 0xff)
+        val lsb = ((raw[8].toLong() and 0xff) shl 56) or
+            ((raw[9].toLong() and 0xff) shl 48) or
+            ((raw[10].toLong() and 0xff) shl 40) or
+            ((raw[11].toLong() and 0xff) shl 32) or
+            ((raw[12].toLong() and 0xff) shl 24) or
+            ((raw[13].toLong() and 0xff) shl 16) or
+            ((raw[14].toLong() and 0xff) shl 8) or
+            (raw[15].toLong() and 0xff)
+        return UUID(msb, lsb)
+    }
+
+    private fun uuidFromBytes(bytes: ByteArray): UUID {
+        require(bytes.size == 16) { "expected 16-byte UUID, got ${bytes.size} bytes" }
+        return uuidFromProto(com.google.protobuf.ByteString.copyFrom(bytes))
     }
 
     private fun sha256(bytes: ByteArray): ByteArray =

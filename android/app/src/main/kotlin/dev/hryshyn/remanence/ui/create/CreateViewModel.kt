@@ -566,7 +566,13 @@ class CreateViewModel(
                     CapsulePublishRequest(
                         capsuleId = CapsuleId(UUID.fromString(inputs.capsuleId)),
                         senderUserId = UserId(UUID.fromString(sender.userId)),
+                        // M2-P06: M1 self-send passes the same account VALUES
+                        // explicitly; M2-P07 will feed the distinct confirmed
+                        // recipient snapshot here.
+                        recipientUserId = UserId(UUID.fromString(sender.userId)),
                         senderKeyBundleId = KeyBundleId(UUID.fromString(sender.activeKeyBundleId)),
+                        recipientKeyBundleId = KeyBundleId(UUID.fromString(sender.activeKeyBundleId)),
+                        ownerUserId = sender.userId,
                         senderHandleSnapshot = sender.handle,
                         createdAtEpochSeconds = clockMillis() / 1000L,
                         photoJpegs = photoBytes,

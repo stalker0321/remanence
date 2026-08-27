@@ -133,6 +133,7 @@ class CrossIdentityCapsuleFlowTest {
                 recipientUserId = UserId(recipientUuid),
                 senderKeyBundleId = KeyBundleId(senderBundleUuid),
                 recipientKeyBundleId = KeyBundleId(recipientBundleUuid),
+                ownerUserId = senderUuid.toString(),
                 senderHandleSnapshot = "sender-handle",
                 createdAtEpochSeconds = 1_700_000_000L,
                 photoJpegs = (0 until 3).map { "photo-$it".toByteArray() },
@@ -379,7 +380,10 @@ class CrossIdentityCapsuleFlowTest {
             CapsulePublishRequest(
                 capsuleId = CapsuleId(capsuleUuid),
                 senderUserId = UserId(senderUuid),
+                recipientUserId = UserId(senderUuid),
                 senderKeyBundleId = KeyBundleId(senderBundleUuid),
+                recipientKeyBundleId = KeyBundleId(senderBundleUuid),
+                ownerUserId = senderUuid.toString(),
                 senderHandleSnapshot = "mykola",
                 createdAtEpochSeconds = 1_700_000_000L,
                 photoJpegs = (0 until 3).map { "photo-$it".toByteArray() },

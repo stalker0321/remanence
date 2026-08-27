@@ -28,25 +28,37 @@ import dev.hryshyn.remanence.core.model.PublishStatementInput
 import dev.hryshyn.remanence.core.model.RecipientEnvelopeContextInput
 import dev.hryshyn.remanence.core.model.UserId
 
-/** Inputs for one capsule: content plus both identity halves. */
+/**
+ * Inputs for one capsule: content plus BOTH identity halves - the SENDER and
+ * the RECIPIENT. M2-P06: the three routing-side fields
+ * ([recipientUserId], [recipientKeyBundleId], [ownerUserId]) are explicit,
+ * required, and must NEVER be inferred from the sender. A self-send passes
+ * equal VALUES explicitly; a cross-identity publication passes distinct ones.
+ * No value may default from the sender identity; identity conflation is
+ * impossible at construction.
+ */
 data class CapsulePublishRequest(
     val capsuleId: CapsuleId,
     val senderUserId: UserId,
     /**
-     * FIX-REVIEW-04: the RECIPIENT identity is explicit and separate. M1
-     * self-send defaults to the same account VALUES - naturally equal, never
-     * conflated by assumption.
+     * The RECIPIENT user identity - explicit, separate from [senderUserId],
+     * and required. M1 self-send passes the same account VALUE explicitly;
+     * a cross-identity publication passes a distinct one.
      */
-    val recipientUserId: UserId = senderUserId,
+    val recipientUserId: UserId,
     val senderKeyBundleId: KeyBundleId,
-    val recipientKeyBundleId: KeyBundleId = senderKeyBundleId,
     /**
-     * M2-P02: immutable local account that will own every staged outbox row.
-     * M1 self-send defaults to the sender's own account VALUES - the
-     * authenticated local account under the single-account milestone. The
-     * distinct-owner form is passed explicitly once P03 wires scoping.
+     * The RECIPIENT key-bundle identity - explicit, separate from
+     * [senderKeyBundleId], and required.
      */
-    val ownerUserId: String = senderUserId.toRestString(),
+    val recipientKeyBundleId: KeyBundleId,
+    /**
+     * The immutable local account that will own every staged outbox row.
+     * M2-P02 / M2-P04: explicit and required. A self-send passes the
+     * sender's own account VALUE explicitly; a distinct-owner form is
+     * passed explicitly once P03/P07 wire scoping.
+     */
+    val ownerUserId: String,
     val senderHandleSnapshot: String,
     val createdAtEpochSeconds: Long,
     /** Exactly 3..5 normalized JPEGs. */
@@ -63,12 +75,17 @@ data class CapsulePublishRequest(
 )
 
 /**
- * I08: produces the complete ciphertext-only capsule for the SAME ACCOUNT -
- * recognition manifest, content manifest, 3-5 encrypted photos, the recipient
- * envelope sealing the capsule keyset to our own identity, and the signed
- * publish statement - in exactly the shape CapsuleOutboxStager persists.
- * Every artifact uses the canonical AAD/context encodings; no plaintext
- * leaves this class.
+ * I08: produces the complete ciphertext-only capsule for the given sender
+ * AND recipient identities - recognition manifest, content manifest, 3-5
+ * encrypted photos, the recipient envelope sealing the capsule keyset to the
+ * recipient, and the signed publish statement - in exactly the shape
+ * CapsuleOutboxStager persists. Every artifact uses the canonical
+ * AAD/context encodings; no plaintext leaves this class.
+ *
+ * M2-P06: the recipient identity is now passed in the request itself, not
+ * inferred from the sender. The cryptographic framing is unchanged from the
+ * prior M1 same-account path; only the routing inputs became explicit and
+ * required.
  */
 class CapsulePublisher {
 
@@ -76,7 +93,8 @@ class CapsulePublisher {
         require(request.photoJpegs.size in 3..5) { "3..5 photos required" }
         TinkPrimitives.ensureRegistered()
         val senderUser = request.senderUserId
-        // FIX-REVIEW-04: distinct routing identities for every context/AAD.
+        // M2-P06: distinct routing identities for every context/AAD. Read
+        // them out of the request - never derived from the sender.
         val recipientUser = request.recipientUserId
         val senderBundle = request.senderKeyBundleId
         val recipientBundle = request.recipientKeyBundleId

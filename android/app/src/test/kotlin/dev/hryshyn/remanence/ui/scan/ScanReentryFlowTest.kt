@@ -144,7 +144,10 @@ class ScanReentryFlowTest {
             CapsulePublishRequest(
                 capsuleId = CapsuleId(capsuleUuid),
                 senderUserId = UserId(userUuid),
+                recipientUserId = UserId(userUuid),
                 senderKeyBundleId = KeyBundleId(bundleUuid),
+                recipientKeyBundleId = KeyBundleId(bundleUuid),
+                ownerUserId = userUuid.toString(),
                 senderHandleSnapshot = "mykola",
                 createdAtEpochSeconds = 1_700_000_000L,
                 photoJpegs = (0 until 3).map { "photo-$it".toByteArray() },

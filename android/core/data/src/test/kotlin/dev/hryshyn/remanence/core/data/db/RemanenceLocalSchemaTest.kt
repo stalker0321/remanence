@@ -140,6 +140,93 @@ class RemanenceLocalSchemaTest {
         helper.runMigrationsAndValidate(DB_V4_NAME, 4, true)
     }
 
+    @Test
+    fun exportedSchemaCreatesAndValidatesAtVersionFive() {
+        helper.createDatabase(DB_V5_NAME, 5).use { created ->
+            assertTrue(created.isDatabaseIntegrityOk)
+            created.close()
+        }
+        // Validates the reopened database against the v5 entity
+        // definitions, including the new sender_retry_keyset_path
+        // column on outbox_capsule.
+        helper.runMigrationsAndValidate(DB_V5_NAME, 5, true)
+    }
+
+    /**
+     * M2-P08 schema-only continuation: every pre-v5 row must survive
+     * the migration with the new sender_retry_keyset_path column
+     * set to NULL. The column has no SQL default; the existing rows
+     * land at NULL because the ALTER adds a nullable column.
+     */
+    @Test
+    fun migrationFourToFiveAddsNullableSenderRetryPointerPreservingAllData() {
+        helper.createDatabase(DB_MIGRATION_4_5_NAME, 4).use { v4 ->
+            // One row per logical outbox material: a v4-shaped
+            // outbox_capsule carrying the M2-P02 owner attribution
+            // and the M1 publisher material paths.
+            v4.execSQL(
+                "INSERT INTO local_account (user_id, handle_normalized, active_key_bundle_id, " +
+                    "registered_at_epoch_ms, last_authenticated_at_epoch_ms) " +
+                    "VALUES ('0198f0a0-0000-7000-8000-00000000ow01', 'mykola', 'bundle-a', 10, 11)",
+            )
+            v4.execSQL(
+                "INSERT INTO outbox_capsule (capsule_id, idempotency_key, owner_user_id, " +
+                    "sender_user_id, recipient_user_id, sender_key_bundle_id, recipient_key_bundle_id, " +
+                    "sender_signing_public_keyset_b64, state, " +
+                    "recognition_manifest_path, content_manifest_path, envelope_path, " +
+                    "publish_statement_path, publish_statement_signature_path, last_error_code) " +
+                    "VALUES ('cap-v4', 'idem-v4', '0198f0a0-0000-7000-8000-00000000ow01', " +
+                    "'sender-v4', 'recipient-v4', 'sbundle-v4', 'rbundle-v4', " +
+                    "'cHViaGljLWtleXNldA', 'ENCRYPTED', " +
+                    "'/tmp/rec-v4.bin', '/tmp/con-v4.bin', '/tmp/env-v4.bin', " +
+                    "'/tmp/st-v4.bin', '/tmp/sig-v4.bin', NULL)",
+            )
+            assertTrue(v4.isDatabaseIntegrityOk)
+        }
+
+        val migrated = helper.runMigrationsAndValidate(
+            DB_MIGRATION_4_5_NAME,
+            5,
+            true,
+            RemanenceLocalDatabase.MIGRATION_4_5,
+        )
+
+        // The pre-v5 row survives with every existing column intact
+        // and the new sender_retry_keyset_path column at NULL.
+        migrated.query(
+            "SELECT capsule_id, owner_user_id, state, publish_statement_path, " +
+                "sender_retry_keyset_path FROM outbox_capsule",
+        ).use { cursor ->
+            cursor.moveToFirst()
+            assertEquals("cap-v4", cursor.getString(0))
+            assertEquals("0198f0a0-0000-7000-8000-00000000ow01", cursor.getString(1))
+            assertEquals("ENCRYPTED", cursor.getString(2))
+            assertEquals("/tmp/st-v4.bin", cursor.getString(3))
+            // Nullable column with no SQL default: the legacy row's
+            // pointer is NULL after the migration, exactly as
+            // documented.
+            assertNull(cursor.getString(4))
+        }
+
+        // A non-null pointer can be written and read back through
+        // the post-migration schema; the migration did not lock the
+        // column at a constant.
+        migrated.execSQL(
+            "UPDATE outbox_capsule SET sender_retry_keyset_path = " +
+                "'/files/accounts/0198f0a0-0000-7000-8000-00000000ow01/retry-material/cap-v4.bin' " +
+                "WHERE capsule_id = 'cap-v4'",
+        )
+        migrated.query("SELECT sender_retry_keyset_path FROM outbox_capsule").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(
+                "/files/accounts/0198f0a0-0000-7000-8000-00000000ow01/retry-material/cap-v4.bin",
+                cursor.getString(0),
+            )
+        }
+        assertTrue(migrated.isDatabaseIntegrityOk)
+        migrated.close()
+    }
+
     /**
      * M2-P02 canonical attribution: the M1 device held exactly ONE local
      * account, so when exactly one `local_account` row exists at upgrade time
@@ -301,10 +388,12 @@ class RemanenceLocalSchemaTest {
         const val DB_MIGRATION_NAME = "remanence-migration-test.db"
         const val DB_V3_NAME = "remanence-schema-v3-test.db"
         const val DB_V4_NAME = "remanence-schema-v4-test.db"
+        const val DB_V5_NAME = "remanence-schema-v5-test.db"
         const val REOPEN_DB_NAME = "remanence-reopen-test.db"
         const val DB_STAMP_NAME = "remanence-v3to4-stamp-test.db"
         const val DB_UNATTRIBUTED_NAME = "remanence-v3to4-unattributed-test.db"
         const val DB_MULTI_ACCOUNT_NAME = "remanence-v3to4-multi-account-test.db"
+        const val DB_MIGRATION_4_5_NAME = "remanence-v4to5-migration-test.db"
 
         /** Material tables that carry the immutable owning account from v4 on. */
         val SCOPED_TABLES =

@@ -37,6 +37,14 @@ enum class OutboxCapsuleState {
  * may write the empty sentinel: legacy v3 rows upgraded without exactly one
  * `local_account` row stay unattributed ('') and are unreachable through
  * every owner-scoped DAO primitive (fail-safe isolation, never guessed).
+ *
+ * M2-P08 schema-only continuation: [senderRetryKeysetPath] is an optional
+ * app-private pointer to the on-disk account-scoped retry-material file
+ * for THIS capsule. The column is NULL for every legacy v4 row and stays
+ * NULL until the lifecycle (out of scope here) writes one. The pointer
+ * is a local filesystem path ONLY - never keyset bytes, never the
+ * recipient envelope, never a handle, never an email. Resolved reads
+ * stay owner-scoped through the existing DAO contract.
  */
 @Entity(
     tableName = "outbox_capsule",
@@ -77,6 +85,19 @@ data class OutboxCapsuleEntity(
     val publishStatementPath: String?,
     @ColumnInfo(name = "publish_statement_signature_path")
     val publishStatementSignaturePath: String?,
+    /**
+     * M2-P08: app-private pointer to the on-disk account-scoped retry-
+     * material file for this capsule, when one is set. NULL for every
+     * pre-v5 row, and NULL until a future lifecycle step writes one.
+     * The value is a local filesystem path ONLY - never keyset bytes,
+     * never the recipient envelope, never a handle, never an email.
+     * The column has no default at the SQLite layer; existing rows
+     * migrate with NULL. Defaults to null at the data-class level so
+     * existing callers (notably the production outbox stager) compile
+     * and continue to write NULL for every row they stage.
+     */
+    @ColumnInfo(name = "sender_retry_keyset_path")
+    val senderRetryKeysetPath: String? = null,
     @ColumnInfo(name = "last_error_code")
     val lastErrorCode: String?,
 )

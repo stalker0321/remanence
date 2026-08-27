@@ -64,6 +64,7 @@ class OutboxDaosTest {
         envelopePath = null,
         publishStatementPath = null,
         publishStatementSignaturePath = null,
+        senderRetryKeysetPath = null,
         lastErrorCode = null,
     )
 
@@ -310,5 +311,68 @@ class OutboxDaosTest {
         // The owner's material is untouched and still fully resolvable.
         assertNotNull(capsuleDao.getByCapsuleIdAndOwner(record.capsuleId, OWNER)!!)
         assertEquals(OutboxCapsuleState.PREPARING, capsuleDao.getByCapsuleIdAndOwner(record.capsuleId, OWNER)!!.state)
+    }
+
+    /**
+     * M2-P08 schema-only continuation: the new
+     * `sender_retry_keyset_path` column is NULL by default. A row
+     * inserted without an explicit pointer reads back with NULL, and
+     * the value is observable only through the owner-scoped DAO
+     * lookup, never through an unscoped query.
+     */
+    @Test
+    fun senderRetryKeysetPathDefaultsToNullAndRoundTripsThroughOwnerScopedLookup(): Unit = runBlocking {
+        // Default-null: a row inserted without an explicit pointer
+        // reads back with NULL.
+        val defaulted = capsule()
+        capsuleDao.insertOrAbort(defaulted)
+        val loadedDefault = capsuleDao.getByCapsuleIdAndOwner(defaulted.capsuleId, OWNER)!!
+        assertNull(
+            "the new column MUST default to NULL on insert",
+            loadedDefault.senderRetryKeysetPath,
+        )
+
+        // Non-null: a row inserted with a pointer round-trips
+        // through the owner-scoped DAO lookup.
+        val pointerPath =
+            "files/accounts/$OWNER/retry-material/${defaulted.capsuleId}.bin"
+        val withPointer = capsule(
+            capsuleId = "0198f0a0-0000-7000-8000-00000000ca03",
+            idempotencyKey = "0198f0a0-0000-7000-8000-00000000id03",
+        ).copy(senderRetryKeysetPath = pointerPath)
+        capsuleDao.insertOrAbort(withPointer)
+        val loadedPointer = capsuleDao.getByCapsuleIdAndOwner(withPointer.capsuleId, OWNER)!!
+        assertEquals(pointerPath, loadedPointer.senderRetryKeysetPath)
+
+        // Wrong owner: the pointer is hidden behind the owner-scoped
+        // DAO contract. A second account can neither observe this
+        // row nor see the pointer value.
+        assertNull(capsuleDao.getByCapsuleIdAndOwner(withPointer.capsuleId, OTHER_OWNER))
+        assertNull(capsuleDao.getByCapsuleIdAndOwner(defaulted.capsuleId, OTHER_OWNER))
+    }
+
+    /**
+     * M2-P08 schema-only continuation: an inserted pointer is opaque
+     * at the entity layer. The value is a string typed by the
+     * column, and the only invariant checked here is that exactly
+     * what was written is what the owner-scoped lookup reads back -
+     * never keyset bytes, never a handle, never an email, because
+     * the lifecycle (out of scope) is the only writer of the
+     * column and the column carries a path only.
+     */
+    @Test
+    fun senderRetryKeysetPathIsRoundTrippedAsAString(): Unit = runBlocking {
+        val raw =
+            "files/accounts/$OWNER/retry-material/cap-pointer.bin"
+        val record = capsule(
+            capsuleId = "0198f0a0-0000-7000-8000-00000000ca04",
+            idempotencyKey = "0198f0a0-0000-7000-8000-00000000id04",
+        ).copy(senderRetryKeysetPath = raw)
+        capsuleDao.insertOrAbort(record)
+        val loaded = capsuleDao.getByCapsuleIdAndOwner(record.capsuleId, OWNER)!!
+        assertEquals(raw, loaded.senderRetryKeysetPath)
+        // The string is opaque to the entity; the only structural
+        // contract is owner-scoping.
+        assertEquals(OWNER, loaded.ownerUserId)
     }
 }

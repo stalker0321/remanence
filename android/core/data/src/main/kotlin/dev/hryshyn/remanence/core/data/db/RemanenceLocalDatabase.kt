@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         RecognitionFingerprintEntity::class,
         SyncCursorEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 abstract class RemanenceLocalDatabase : RoomDatabase() {
@@ -137,5 +137,21 @@ abstract class RemanenceLocalDatabase : RoomDatabase() {
                 "blob_cache",
                 "recognition_fingerprint",
             )
+
+        /**
+         * v5 (M2-P08) schema-only continuation: add the optional
+         * `sender_retry_keyset_path` column to outbox_capsule so a
+         * future lifecycle step can record the on-disk account-scoped
+         * retry-material file pointer for this capsule. The column is
+         * nullable with no default - every existing v4 row keeps
+         * NULL. The pointer is a local filesystem path ONLY; this
+         * migration never writes keyset bytes, the recipient
+         * envelope, a handle, or an email to the database.
+         */
+        val MIGRATION_4_5: Migration = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE outbox_capsule ADD COLUMN sender_retry_keyset_path TEXT")
+            }
+        }
     }
 }

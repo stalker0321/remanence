@@ -2,8 +2,12 @@ package dev.hryshyn.remanence.auth
 
 import dev.hryshyn.remanence.session.SessionTokenPort
 import dev.hryshyn.remanence.core.data.network.AuthResult
-import dev.hryshyn.remanence.core.data.network.SessionRotationSink
 import dev.hryshyn.remanence.core.model.UserId
+import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 
 /** Port over the server logout endpoint (protocol.md section 5). */
 fun interface ServerLogoutPort {
@@ -44,20 +48,35 @@ fun interface LogoutWorkCancellationPort {
     suspend fun cancelAccountWork(owner: UserId)
 }
 
+/** Port over the in-memory session credential sink used by logout. */
+fun interface LogoutCredentialSink {
+    fun clear()
+}
+
 /** Observable result of [LogoutUseCase.logout]. */
 data class LogoutOutcome(
+    /** Failure while proving the owner for account-scoped cleanup. */
+    val ownerSnapshotFailure: Exception? = null,
     /**
      * Non-null when the account-scoped temp cleanup failed. Teardown of
      * credentials, local account, and grants is NEVER skipped because of
      * it; tests (and future telemetry) read the failure here instead of a
      * silent pass.
      */
-    val tempStorageCleanupFailure: Throwable? = null,
+    val tempStorageCleanupFailure: Exception? = null,
     /**
      * Non-null when the account-scoped work cancellation failed. Same
      * guarantees as above: observable, never teardown-blocking.
      */
-    val workCancellationFailure: Throwable? = null,
+    val workCancellationFailure: Exception? = null,
+    /** Failure clearing the in-memory session credential sink. */
+    val credentialSinkClearFailure: Exception? = null,
+    /** Failure clearing the sealed refresh-token store. */
+    val refreshTokenClearFailure: Exception? = null,
+    /** Failure clearing the owner-independent local account row. */
+    val localAccountClearFailure: Exception? = null,
+    /** Failure invalidating the owner-independent scan grant state. */
+    val scanGrantInvalidationFailure: Exception? = null,
 )
 
 /**
@@ -69,12 +88,11 @@ data class LogoutOutcome(
  * 1. cancel that ACCOUNT's WorkManager chains through the narrow
  *    cancellation port - BEFORE any server/network teardown and before any
  *    credential or local-account state clears, so no background chain can
- *    observe a half-torn session. A cancellation exception is recorded in
- *    [LogoutOutcome.workCancellationFailure] and never blocks steps 2..6;
+ *    observe a half-torn session. It must finish or fail before step 2;
  * 2. attempt SERVER logout while the bearer is still live (best-effort:
  *    an unreachable server never traps credentials on the device);
- * 3. clear SESSION material (memory-only access token plus sealed rotating
- *    refresh token) through the atomic rotation sink;
+ * 3. clear SESSION material: the in-memory credential sink, then the sealed
+ *    rotating refresh-token store;
  * 4. run ACCOUNT-SCOPED storage retention against the snapshotted owner -
  *    normal logout purges only that account's temp directory and leaves its
  *    durable encrypted material plus every other account's root untouched.
@@ -82,6 +100,14 @@ data class LogoutOutcome(
  *    5 and 6;
  * 5. clear LOCAL state: the `local_account` Room row;
  * 6. invalidate any SCAN GRANT held by the running session.
+ *
+ * The bounded sequence runs in [NonCancellable], and each operational local
+ * [Exception] is recorded independently so a later local step is still
+ * attempted. A [CancellationException] is remembered, not treated as a
+ * successful result; after the sequence the caller's cancellation is
+ * rethrown. Fatal [Error] values are never caught. Owner-scoped steps are
+ * skipped when the single owner snapshot fails, while all unscoped steps
+ * still run.
  * Wrapped identity keysets and durable ciphertext stay on disk for this same
  * account, exactly as docs/security.md section 9 requires.
  *
@@ -95,7 +121,7 @@ class LogoutUseCase(
     private val serverLogout: ServerLogoutPort,
     private val accessToken: CurrentAccessTokenPort,
     private val tokens: SessionTokenPort,
-    private val credentialSink: SessionRotationSink,
+    private val credentialSink: LogoutCredentialSink,
     private val accounts: suspend () -> Unit,
     private val grants: () -> Unit,
     private val logoutOwnerSnapshot: LogoutOwnerSnapshotPort? = null,
@@ -103,68 +129,128 @@ class LogoutUseCase(
     private val workCancellation: LogoutWorkCancellationPort? = null,
 ) {
 
-    /** Runs every step in order; local completion is unconditional. */
+    /** Runs the bounded sequence once, preserving cancellation after cleanup. */
     suspend fun logout(): LogoutOutcome {
-        // 0. Immutable owner snapshot - before any identity context changes.
-        var owner: UserId? = null
-        if (logoutOwnerSnapshot != null) {
-            owner = try {
-                logoutOwnerSnapshot.currentOwnerForTeardown()
-            } catch (_: Exception) {
-                null
-            }
+        val callerContext = currentCoroutineContext()
+        var cancellationFailure: CancellationException? = null
+
+        fun rememberCancellation(failure: CancellationException) {
+            if (cancellationFailure == null) cancellationFailure = failure
         }
 
-        // 1. Account-scoped work cancellation, strictly against the
-        // snapshot, BEFORE server/network teardown and before any credential
-        // or account state clears. Failure is observable but must never
-        // block teardown below; a missing owner skips it entirely.
-        var workFailure: Throwable? = null
-        val cancellation = workCancellation
-        val cancelTarget = owner
-        if (cancellation != null && cancelTarget != null) {
+        val outcome = withContext(NonCancellable) {
+            // 0. Immutable owner snapshot - before any identity context changes.
+            var owner: UserId? = null
+            var ownerSnapshotFailure: Exception? = null
+            val snapshot = logoutOwnerSnapshot
+            if (snapshot != null) {
+                try {
+                    owner = snapshot.currentOwnerForTeardown()
+                } catch (cancelled: CancellationException) {
+                    rememberCancellation(cancelled)
+                } catch (failure: Exception) {
+                    ownerSnapshotFailure = failure
+                }
+            }
+
+            // 1. Account-scoped work cancellation, strictly against the
+            // snapshot, before server/network teardown and every local clear.
+            // Awaiting this port is part of the ordering contract.
+            var workFailure: Exception? = null
+            val cancellation = workCancellation
+            val cancelTarget = owner
+            if (cancellation != null && cancelTarget != null) {
+                try {
+                    cancellation.cancelAccountWork(cancelTarget)
+                } catch (cancelled: CancellationException) {
+                    rememberCancellation(cancelled)
+                } catch (failure: Exception) {
+                    workFailure = failure
+                }
+            }
+
+            // 2. Server revocation while the bearer is live. It is best
+            // effort and never blocks local teardown; fatal Errors propagate.
+            val bearer = accessToken.get()
+            if (bearer != null) {
+                try {
+                    serverLogout.logout(bearer)
+                } catch (cancelled: CancellationException) {
+                    rememberCancellation(cancelled)
+                } catch (_: Exception) {
+                    // Network and protocol failures are intentionally not a
+                    // reason to skip local security teardown.
+                }
+            }
+
+            // 3a. In-memory credential sink.
+            var credentialFailure: Exception? = null
             try {
-                cancellation.cancelAccountWork(cancelTarget)
-            } catch (reported: Throwable) {
-                workFailure = reported
+                credentialSink.clear()
+            } catch (cancelled: CancellationException) {
+                rememberCancellation(cancelled)
+            } catch (failure: Exception) {
+                credentialFailure = failure
             }
-        }
 
-        // 2. Server revocation next, while the access token still works.
-        val bearer = accessToken.get()
-        if (bearer != null) {
+            // 3b. Sealed rotating refresh-token store.
+            var refreshTokenFailure: Exception? = null
             try {
-                serverLogout.logout(bearer)
-            } catch (_: Exception) {
-                // Best effort only: offline logout must remain possible.
+                tokens.clearToken()
+            } catch (cancelled: CancellationException) {
+                rememberCancellation(cancelled)
+            } catch (failure: Exception) {
+                refreshTokenFailure = failure
             }
-        }
 
-        // 3. Session credentials: memory + sealed storage, atomically.
-        credentialSink.clear()
-        runCatching { tokens.clearToken() }
+            // 4. Account-scoped temp cleanup, strictly against the snapshot.
+            var cleanupFailure: Exception? = null
+            val cleanup = tempStorageCleanup
+            if (cleanup != null && cancelTarget != null) {
+                try {
+                    cleanup.cleanupTemp(cancelTarget)
+                } catch (cancelled: CancellationException) {
+                    rememberCancellation(cancelled)
+                } catch (failure: Exception) {
+                    cleanupFailure = failure
+                }
+            }
 
-        // 4. Account-scoped temp cleanup, strictly against the snapshot.
-        // Failure is observable but must never block teardown below.
-        var cleanupFailure: Throwable? = null
-        val cleanup = tempStorageCleanup
-        if (cleanup != null && cancelTarget != null) {
+            // 5. Local account row.
+            var accountFailure: Exception? = null
             try {
-                cleanup.cleanupTemp(cancelTarget)
-            } catch (reported: Throwable) {
-                cleanupFailure = reported
+                accounts()
+            } catch (cancelled: CancellationException) {
+                rememberCancellation(cancelled)
+            } catch (failure: Exception) {
+                accountFailure = failure
             }
+
+            // 6. Any scan grant of the running session dies with the account.
+            var grantsFailure: Exception? = null
+            try {
+                grants()
+            } catch (cancelled: CancellationException) {
+                rememberCancellation(cancelled)
+            } catch (failure: Exception) {
+                grantsFailure = failure
+            }
+
+            LogoutOutcome(
+                ownerSnapshotFailure = ownerSnapshotFailure,
+                tempStorageCleanupFailure = cleanupFailure,
+                workCancellationFailure = workFailure,
+                credentialSinkClearFailure = credentialFailure,
+                refreshTokenClearFailure = refreshTokenFailure,
+                localAccountClearFailure = accountFailure,
+                scanGrantInvalidationFailure = grantsFailure,
+            )
         }
 
-        // 5. Local account row.
-        accounts()
-
-        // 6. Any scan grant of the running session dies with the account.
-        grants()
-
-        return LogoutOutcome(
-            tempStorageCleanupFailure = cleanupFailure,
-            workCancellationFailure = workFailure,
-        )
+        // A cancellation that happened outside a teardown port must still be
+        // reported by the caller's own Job after NonCancellable has finished.
+        callerContext.ensureActive()
+        cancellationFailure?.let { throw it }
+        return outcome
     }
 }

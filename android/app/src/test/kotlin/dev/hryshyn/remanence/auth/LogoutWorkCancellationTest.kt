@@ -11,7 +11,6 @@ import androidx.work.WorkManager
 import androidx.work.testing.WorkManagerTestInitHelper
 import dev.hryshyn.remanence.AppContainer
 import dev.hryshyn.remanence.core.data.network.AuthResult
-import dev.hryshyn.remanence.core.data.network.SessionRotationSink
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.session.SessionTokenPort
@@ -20,12 +19,14 @@ import dev.hryshyn.remanence.sync.NoOpWorker
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
@@ -33,15 +34,18 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-private class RecordingSink : SessionRotationSink {
-    override fun rotate(accessToken: String, refreshToken: String) = Unit
-    override fun clear() = Unit
+private class RecordingSink(private val trace: MutableList<String>? = null) : LogoutCredentialSink {
+    override fun clear() {
+        trace?.add("credentials")
+    }
 }
 
-private object NoopTokenPort : SessionTokenPort {
+private class RecordingTokenPort(private val trace: MutableList<String>? = null) : SessionTokenPort {
     override fun readToken(): String? = null
     override fun saveToken(refreshToken: String) = Unit
-    override fun clearToken() = Unit
+    override fun clearToken() {
+        trace?.add("tokens")
+    }
 }
 
 /**
@@ -50,8 +54,9 @@ private object NoopTokenPort : SessionTokenPort {
  * before credentials or the local_account row clear; an owner change landing
  * mid-call can never redirect the request to another account; a missing owner
  * SKIPS cancellation instead of cancelling anything globally; and a failing
- * cancellation is observable on [LogoutOutcome] while every remaining
- * teardown step still completes. The final test proves the REAL AppContainer
+ * operational cancellation failure is observable on [LogoutOutcome] while
+ * every remaining teardown step still completes; CancellationException is
+ * rethrown after bounded cleanup. The final test proves the REAL AppContainer
  * wiring (WorkManager-backed) cancels only the logged-out account's chains.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -77,8 +82,8 @@ class LogoutWorkCancellationTest {
             AuthResult.Success(Unit, 204)
         },
         accessToken = { "bearer" },
-        tokens = NoopTokenPort.also { },
-        credentialSink = RecordingSink(),
+        tokens = RecordingTokenPort(trace),
+        credentialSink = RecordingSink(trace),
         accounts = {
             trace += "accounts"
             liveRow.set(null)
@@ -111,6 +116,8 @@ class LogoutWorkCancellationTest {
                 "snapshot:${ownerA.toRestString().take(13)}",
                 "cancel:A",
                 "server",
+                "credentials",
+                "tokens",
                 "cleanup",
                 "accounts",
                 "grants",
@@ -164,7 +171,7 @@ class LogoutWorkCancellationTest {
         assertNull(outcome.workCancellationFailure)
         assertEquals(emptyList<UserId>(), cancelled)
         // Teardown completes fully without any guess or global cancellation.
-        assertEquals(listOf("server", "accounts", "grants"), trace)
+        assertEquals(listOf("server", "credentials", "tokens", "accounts", "grants"), trace)
     }
 
     @Test
@@ -178,8 +185,8 @@ class LogoutWorkCancellationTest {
                 AuthResult.Success(Unit, 204)
             },
             accessToken = { "bearer" },
-            tokens = NoopTokenPort,
-            credentialSink = RecordingSink(),
+            tokens = RecordingTokenPort(trace),
+            credentialSink = RecordingSink(trace),
             accounts = { trace += "accounts" },
             grants = { trace += "grants" },
             logoutOwnerSnapshot = { ownerA },
@@ -188,7 +195,7 @@ class LogoutWorkCancellationTest {
         ).logout()
 
         assertEquals(boom, outcome.workCancellationFailure)
-        assertEquals(listOf("server", "cleanup", "accounts", "grants"), trace)
+        assertEquals(listOf("server", "credentials", "tokens", "cleanup", "accounts", "grants"), trace)
     }
 
     @Test
@@ -199,7 +206,7 @@ class LogoutWorkCancellationTest {
         val outcome = LogoutUseCase(
             serverLogout = ServerLogoutPort { AuthResult.Success(Unit, 204) },
             accessToken = { "bearer" },
-            tokens = NoopTokenPort,
+            tokens = RecordingTokenPort(),
             credentialSink = RecordingSink(),
             accounts = {},
             grants = {},
@@ -221,58 +228,151 @@ class LogoutWorkCancellationTest {
      */
     @org.junit.Test
     fun teardownWaitsForTheAwaitedCancellationToFinishFirst() = runTest {
-            val observed = mutableListOf<String>()
-            val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val observed = mutableListOf<String>()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
 
-            val useCase = LogoutUseCase(
-                serverLogout = ServerLogoutPort {
-                    observed += "server"
-                    AuthResult.Success(Unit, 204)
-                },
-                accessToken = { "bearer" },
-                tokens = NoopTokenPort,
-                credentialSink = RecordingSink(),
-                accounts = { observed += "accounts" },
-                grants = { observed += "grants" },
-                logoutOwnerSnapshot = { ownerA },
-                tempStorageCleanup = { _ -> observed += "cleanup" },
-                workCancellation = { owner ->
-                    org.junit.Assert.assertEquals(ownerA, owner)
-                    observed += "cancel-start"
-                    gate.await() // the awaited WorkManager-operation boundary
-                    observed += "cancel-end"
-                },
-            )
+        val useCase = LogoutUseCase(
+            serverLogout = ServerLogoutPort {
+                observed += "server"
+                AuthResult.Success(Unit, 204)
+            },
+            accessToken = { "bearer" },
+            tokens = RecordingTokenPort(observed),
+            credentialSink = RecordingSink(observed),
+            accounts = { observed += "accounts" },
+            grants = { observed += "grants" },
+            logoutOwnerSnapshot = { ownerA },
+            tempStorageCleanup = { _ -> observed += "cleanup" },
+            workCancellation = { owner ->
+                org.junit.Assert.assertEquals(ownerA, owner)
+                observed += "cancel-start"
+                gate.await() // the awaited WorkManager-operation boundary
+                observed += "cancel-end"
+            },
+        )
 
-            var outcome: LogoutOutcome? = null
-            val job = launch {
-                outcome = useCase.logout()
-            }
-
-            // Drive virtual time: the port ran and now suspends awaiting the
-            // WorkManager operation. No teardown step may have started.
-            advanceUntilIdle()
-            assertEquals(listOf("cancel-start"), observed)
-
-            // The awaited cancellation completes...
-            gate.complete(Unit)
-            advanceUntilIdle()
-            job.join()
-
-            // ...and ONLY THEN does the rest of teardown run, in order.
-            assertNull(outcome?.workCancellationFailure)
-            org.junit.Assert.assertEquals(
-                listOf(
-                    "cancel-start",
-                    "cancel-end",
-                    "server",
-                    "cleanup",
-                    "accounts",
-                    "grants",
-                ),
-                observed,
-            )
+        var outcome: LogoutOutcome? = null
+        val job = launch {
+            outcome = useCase.logout()
         }
+
+        // Drive virtual time: the port ran and now suspends awaiting the
+        // WorkManager operation. No teardown step may have started.
+        advanceUntilIdle()
+        assertEquals(listOf("cancel-start"), observed)
+
+        // The awaited cancellation completes...
+        gate.complete(Unit)
+        advanceUntilIdle()
+        job.join()
+
+        // ...and ONLY THEN does the rest of teardown run, in order.
+        assertNull(outcome?.workCancellationFailure)
+        org.junit.Assert.assertEquals(
+            listOf(
+                "cancel-start",
+                "cancel-end",
+                "server",
+                "credentials",
+                "tokens",
+                "cleanup",
+                "accounts",
+                "grants",
+            ),
+            observed,
+        )
+    }
+
+    @Test
+    fun callerCancellationDuringWorkWaitsForCleanupThenIsRethrown() = runTest {
+        val observed = mutableListOf<String>()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        var thrown: CancellationException? = null
+
+        val subject = LogoutUseCase(
+            serverLogout = ServerLogoutPort {
+                observed += "server"
+                AuthResult.Success(Unit, 204)
+            },
+            accessToken = { "bearer" },
+            tokens = RecordingTokenPort(observed),
+            credentialSink = RecordingSink(observed),
+            accounts = { observed += "accounts" },
+            grants = { observed += "grants" },
+            logoutOwnerSnapshot = { ownerA },
+            tempStorageCleanup = { _ -> observed += "cleanup" },
+            workCancellation = { owner ->
+                assertEquals(ownerA, owner)
+                observed += "cancel-start"
+                gate.await()
+                observed += "cancel-end"
+            },
+        )
+
+        val job = launch {
+            try {
+                subject.logout()
+            } catch (cancelled: CancellationException) {
+                thrown = cancelled
+            }
+        }
+
+        advanceUntilIdle()
+        assertEquals(listOf("cancel-start"), observed)
+        job.cancel(CancellationException("caller cancelled"))
+        gate.complete(Unit)
+        advanceUntilIdle()
+        job.join()
+
+        assertNotNull(thrown)
+        assertEquals(
+            listOf(
+                "cancel-start",
+                "cancel-end",
+                "server",
+                "credentials",
+                "tokens",
+                "cleanup",
+                "accounts",
+                "grants",
+            ),
+            observed,
+        )
+    }
+
+    @Test
+    fun cancellationFromWorkRunsLaterLocalStepsAndIsRethrown() {
+        val trace = mutableListOf<String>()
+        val cancellation = CancellationException("work cancellation interrupted")
+
+        try {
+            runBlocking {
+                useCase(
+                    trace,
+                    AtomicReference(ownerA),
+                    mutableListOf(),
+                    cancellationBehavior = { throw cancellation },
+                ).logout()
+            }
+            org.junit.Assert.fail("expected cancellation")
+        } catch (expected: CancellationException) {
+            org.junit.Assert.assertEquals(cancellation, expected)
+        }
+
+        assertEquals(
+            listOf(
+                "snapshot:${ownerA.toRestString().take(13)}",
+                "cancel:A",
+                "server",
+                "credentials",
+                "tokens",
+                "cleanup",
+                "accounts",
+                "grants",
+            ),
+            trace,
+        )
+    }
 
     // ---------------------------------------------------------------
     // Production wiring (real AppContainer over the work-testing stack).

@@ -282,8 +282,13 @@ class AppContainer(
     }
 
     /**
-     * FIX-M1-007-07 logout ordering: server revocation first (best effort),
-     * then session credentials, the local_account row, and scan grants.
+     * FIX-M1-007-07 logout ordering: snapshot the owner, await its
+     * account-scoped WorkManager cancellation, attempt server revocation,
+     * clear in-memory credentials, clear the sealed refresh token, purge that
+     * owner's TEMP root, clear the local_account row, then invalidate scan
+     * grants. The rotation sink remains atomic for refresh failure handling;
+     * logout uses only the credential-clear boundary so each store is cleared
+     * exactly once.
      */
     val logoutUseCase: dev.hryshyn.remanence.auth.LogoutUseCase by lazy {
         dev.hryshyn.remanence.auth.LogoutUseCase(
@@ -294,7 +299,9 @@ class AppContainer(
                 override fun saveToken(refreshToken: String) = sessionTokenStore.save(refreshToken)
                 override fun clearToken() = sessionTokenStore.clear()
             },
-            credentialSink = sessionRotationSink,
+            credentialSink = dev.hryshyn.remanence.auth.LogoutCredentialSink {
+                authTokenHolder.clearSession()
+            },
             accounts = { currentAccountStore.clear() },
             grants = {
                 // App-level grant state dies with the account context.

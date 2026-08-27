@@ -10,6 +10,7 @@ import dev.hryshyn.remanence.core.model.UserId
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -28,9 +29,9 @@ import org.robolectric.annotation.Config
  * The owner is snapshotted from the live `local_account` BEFORE it clears;
  * normal logout purges ONLY that account's temp root while every durable
  * root of the same account and EVERYTHING of another account survives;
- * offline logout and cleanup failures must both complete teardown, with the
- * failure observable on [LogoutOutcome], and no call may ever target an
- * account whose ownership was not proved at snapshot time.
+ * offline logout and cleanup failures must both complete teardown, with each
+ * operational failure observable on [LogoutOutcome], and no call may ever
+ * target an account whose ownership was not proved at snapshot time.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -102,8 +103,7 @@ class LogoutStorageCleanupTest {
                     sortedTrace += "tokens"
                 }
             },
-            credentialSink = object : dev.hryshyn.remanence.core.data.network.SessionRotationSink {
-                override fun rotate(accessToken: String, refreshToken: String) = Unit
+            credentialSink = object : LogoutCredentialSink {
                 override fun clear() {
                     sortedTrace += "credentials"
                 }
@@ -119,12 +119,16 @@ class LogoutStorageCleanupTest {
             // The port receives exactly ONE owner - proven by the snapshot -
             // never a re-read from live state that could have flipped.
             tempStorageCleanup = LogoutTempCleanupPort { owner -> cleanupBehavior?.invoke(owner) },
+            workCancellation = LogoutWorkCancellationPort { owner ->
+                sortedTrace += "work"
+                assertEquals(ownerA, owner)
+            },
 
         )
     }
 
     @Test
-    fun logoutRunsSnapshotServerCredentialsCleanupThenAccountsAndGrants() = runBlocking {
+    fun logoutRunsSnapshotWorkServerCredentialsCleanupThenAccountsAndGrants() = runBlocking {
         seedAccountsMaterial()
         val trace = mutableListOf<String>()
         val outcome = useCase(trace).logout()
@@ -133,6 +137,7 @@ class LogoutStorageCleanupTest {
         assertEquals(
             listOf(
                 "snapshot:${ownerA.toRestString().take(13)}",
+                "work",
                 "server",
                 "credentials",
                 "tokens",
@@ -169,7 +174,10 @@ class LogoutStorageCleanupTest {
 
         assertNull(outcome.tempStorageCleanupFailure)
         assertFalse(child(ownerA, AccountScopedFileRoots.ChildRoot.TEMP).exists())
-        assertEquals(listOf("server", "credentials", "tokens", "cleanup", "accounts", "grants"), trace.drop(1))
+        assertEquals(
+            listOf("snapshot:${ownerA.toRestString().take(13)}", "work", "server", "credentials", "tokens", "cleanup", "accounts", "grants"),
+            trace,
+        )
     }
 
     @Test
@@ -215,17 +223,55 @@ class LogoutStorageCleanupTest {
         seedAccountsMaterial()
         currentAccountRow.set(null)
         val cleaned = mutableListOf<UserId>()
+        val trace = mutableListOf<String>()
 
         val outcome = useCase(
+            trace = trace,
             cleanupBehavior = { owner ->
                 cleaned += owner
                 retention.onLogout(owner)
             },
         ).logout()
 
-        assertNull(outcome.tempStorageCleanupFailure)
+        assertTrue(outcome.ownerSnapshotFailure is IllegalStateException)
+        assertNull(outcome.workCancellationFailure)
         assertTrue(cleaned.isEmpty())
+        assertEquals(listOf("server", "credentials", "tokens", "accounts", "grants"), trace)
         // Nothing anywhere was deleted on a guess.
         assertTrue(child(ownerA, AccountScopedFileRoots.ChildRoot.TEMP).resolve("seed.bin").exists())
+    }
+
+    @Test
+    fun cancellationFromTempCleanupStillClearsAccountAndGrantsThenIsRethrown() {
+        seedAccountsMaterial()
+        val trace = mutableListOf<String>()
+        val cancellation = CancellationException("temp cleanup interrupted")
+
+        try {
+            runBlocking {
+                useCase(
+                    trace,
+                    cleanupBehavior = {
+                        throw cancellation
+                    },
+                ).logout()
+            }
+            org.junit.Assert.fail("expected cancellation")
+        } catch (expected: CancellationException) {
+            assertEquals(cancellation, expected)
+        }
+
+        assertEquals(
+            listOf(
+                "snapshot:${ownerA.toRestString().take(13)}",
+                "work",
+                "server",
+                "credentials",
+                "tokens",
+                "accounts",
+                "grants",
+            ),
+            trace,
+        )
     }
 }

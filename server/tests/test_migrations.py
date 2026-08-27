@@ -11,19 +11,35 @@ from sqlalchemy.engine import make_url
 
 _ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 _BASELINE = "0001_m0_baseline"
-_HEAD = "0002_m1_accounts"
+_HEAD = "0003_m2_capsule_routing"
 _HEAD_TABLES = {
     "alembic_version",
     "users",
     "auth_credentials",
     "auth_sessions",
     "user_key_bundles",
+    "capsules",
+    "capsule_blobs",
+    "capsule_envelopes",
+    "recipient_delivery_state",
+    "capsule_idempotency_records",
 }
 _REQUIRED_FKS = {
     "fk_auth_credentials_user_id_users": "c",
     "fk_auth_sessions_user_id_users": "c",
     "fk_auth_sessions_parent_session_id_auth_sessions": "r",
     "fk_user_key_bundles_user_id_users": "c",
+    "fk_capsules_sender_user_id_users": "r",
+    "fk_capsules_recipient_user_id_users": "r",
+    "fk_capsules_sender_key_bundle_id_user_key_bundles": "r",
+    "fk_capsules_recipient_key_bundle_id_user_key_bundles": "r",
+    "fk_capsule_blobs_capsule_id_capsules": "c",
+    "fk_capsule_envelopes_capsule_id_capsules": "c",
+    "fk_capsule_envelopes_recipient_user_id_users": "r",
+    "fk_capsule_envelopes_recipient_key_bundle_id_user_key_bundles": "r",
+    "fk_recipient_delivery_state_recipient_user_id_users": "r",
+    "fk_recipient_delivery_state_capsule_id_capsules": "c",
+    "fk_capsule_idempotency_records_owner_user_id_users": "c",
 }
 _REQUIRED_NAMED_CONSTRAINTS = {
     "pk_users",
@@ -43,6 +59,38 @@ _REQUIRED_NAMED_CONSTRAINTS = {
     "ck_auth_sessions_refresh_token_hash_32",
     "ck_auth_sessions_expiry_order",
     "ck_user_key_bundles_protocol_version_positive",
+    "pk_capsules",
+    "pk_capsule_blobs",
+    "pk_capsule_envelopes",
+    "pk_recipient_delivery_state",
+    "pk_capsule_idempotency_records",
+    "fk_capsules_sender_user_id_users",
+    "fk_capsules_recipient_user_id_users",
+    "fk_capsules_sender_key_bundle_id_user_key_bundles",
+    "fk_capsules_recipient_key_bundle_id_user_key_bundles",
+    "fk_capsule_blobs_capsule_id_capsules",
+    "fk_capsule_envelopes_capsule_id_capsules",
+    "fk_capsule_envelopes_recipient_user_id_users",
+    "fk_capsule_envelopes_recipient_key_bundle_id_user_key_bundles",
+    "fk_recipient_delivery_state_recipient_user_id_users",
+    "fk_recipient_delivery_state_capsule_id_capsules",
+    "fk_capsule_idempotency_records_owner_user_id_users",
+    "uq_capsule_blobs_object_key",
+    "ck_capsules_protocol_version_positive",
+    "ck_capsules_draft_expiry_order",
+    "ck_capsules_signed_statement_sha256_32",
+    "ck_capsules_state_finalization_shape",
+    "ck_capsule_blobs_expected_ciphertext_size_positive",
+    "ck_capsule_blobs_expected_ciphertext_sha256_32",
+    "ck_capsule_blobs_kind_ordinal_shape",
+    "ck_capsule_envelopes_ciphertext_size_bounds",
+    "ck_capsule_envelopes_ciphertext_size_matches",
+    "ck_capsule_envelopes_ciphertext_sha256_32",
+    "ck_recipient_delivery_state_state_timestamp_coherence",
+    "ck_capsule_idempotency_records_method_uppercase",
+    "ck_capsule_idempotency_records_request_sha256_32",
+    "ck_capsule_idempotency_records_response_status_range",
+    "ck_capsule_idempotency_records_expiry_order",
 }
 
 
@@ -84,30 +132,32 @@ def _alembic_version(conn: psycopg.Connection) -> list[str]:
     return [row[0] for row in rows]
 
 
-def _enum_labels(conn: psycopg.Connection) -> list[str]:
+def _enum_labels(conn: psycopg.Connection, enum_name: str = "key_bundle_status") -> list[str]:
     rows = conn.execute(
         """
         SELECT e.enumlabel
         FROM pg_enum AS e
         JOIN pg_type AS t ON t.oid = e.enumtypid
         JOIN pg_namespace AS n ON n.oid = t.typnamespace
-        WHERE t.typname = 'key_bundle_status' AND n.nspname = 'public'
+        WHERE t.typname = %s AND n.nspname = 'public'
         ORDER BY e.enumsortorder
-        """
+        """,
+        (enum_name,),
     ).fetchall()
     return [row[0] for row in rows]
 
 
-def _enum_exists(conn: psycopg.Connection) -> bool:
+def _enum_exists(conn: psycopg.Connection, enum_name: str = "key_bundle_status") -> bool:
     row = conn.execute(
         """
         SELECT EXISTS (
             SELECT 1
             FROM pg_type AS t
             JOIN pg_namespace AS n ON n.oid = t.typnamespace
-            WHERE t.typname = 'key_bundle_status' AND n.nspname = 'public'
+            WHERE t.typname = %s AND n.nspname = 'public'
         )
-        """
+        """,
+        (enum_name,),
     ).fetchone()
     assert row is not None
     return bool(row[0])
@@ -128,19 +178,61 @@ def _constraint_names_by_table(conn: psycopg.Connection, table: str) -> dict[str
 def _assert_baseline(conn: psycopg.Connection) -> None:
     assert _alembic_version(conn) == [_BASELINE]
     assert _public_tables(conn) == {"alembic_version"}
-    assert not _enum_exists(conn)
+    for enum_name in (
+        "key_bundle_status",
+        "capsule_state",
+        "capsule_blob_kind",
+        "capsule_blob_state",
+        "recipient_delivery_status",
+    ):
+        assert not _enum_exists(conn, enum_name)
+
+
+def _assert_m1_schema(conn: psycopg.Connection) -> None:
+    assert _alembic_version(conn) == ["0002_m1_accounts"]
+    assert _public_tables(conn) == {
+        "alembic_version",
+        "users",
+        "auth_credentials",
+        "auth_sessions",
+        "user_key_bundles",
+    }
+    assert _enum_labels(conn) == ["ACTIVE", "RETIRED", "REVOKED"]
+    for enum_name in (
+        "capsule_state",
+        "capsule_blob_kind",
+        "capsule_blob_state",
+        "recipient_delivery_status",
+    ):
+        assert not _enum_exists(conn, enum_name)
 
 
 def _assert_head_schema(conn: psycopg.Connection) -> None:
     assert _alembic_version(conn) == [_HEAD]
     assert _public_tables(conn) == _HEAD_TABLES
     assert _enum_labels(conn) == ["ACTIVE", "RETIRED", "REVOKED"]
+    assert _enum_labels(conn, "capsule_state") == ["DRAFT", "READY", "ABORTED"]
+    assert _enum_labels(conn, "capsule_blob_kind") == [
+        "RECOGNITION_MANIFEST",
+        "CONTENT_MANIFEST",
+        "PHOTO",
+    ]
+    assert _enum_labels(conn, "capsule_blob_state") == ["DECLARED", "STORED"]
+    assert _enum_labels(conn, "recipient_delivery_status") == [
+        "AVAILABLE",
+        "CIPHERTEXT_SYNCED",
+    ]
 
     primary_keys = {
         "users": "pk_users",
         "auth_credentials": "pk_auth_credentials",
         "auth_sessions": "pk_auth_sessions",
         "user_key_bundles": "pk_user_key_bundles",
+        "capsules": "pk_capsules",
+        "capsule_blobs": "pk_capsule_blobs",
+        "capsule_envelopes": "pk_capsule_envelopes",
+        "recipient_delivery_state": "pk_recipient_delivery_state",
+        "capsule_idempotency_records": "pk_capsule_idempotency_records",
     }
     for table, name in primary_keys.items():
         constraints = _constraint_names_by_table(conn, table)
@@ -200,6 +292,47 @@ def _assert_head_schema(conn: psycopg.Connection) -> None:
     compact = definition.replace(" ", "")
     assert "user_key_bundlesUSINGbtree(user_id)WHERE(status='ACTIVE'::key_bundle_status)" in compact
 
+    expected_indexes = {
+        "ix_capsules_sender_user_id",
+        "ix_capsules_recipient_user_id",
+        "ix_capsules_draft_expires_at",
+        "ix_capsule_blobs_capsule_id",
+        "uq_capsule_blobs_one_recognition_manifest_per_capsule",
+        "uq_capsule_blobs_one_content_manifest_per_capsule",
+        "uq_capsule_blobs_photo_ordinal_per_capsule",
+        "ix_capsule_idempotency_records_expires_at",
+    }
+    actual_indexes = {
+        row[0]
+        for row in conn.execute(
+            """
+            SELECT indexname
+            FROM pg_indexes
+            WHERE schemaname = 'public'
+            """
+        ).fetchall()
+    }
+    assert expected_indexes <= actual_indexes
+
+    expected_partial_indexes = {
+        "uq_capsule_blobs_one_recognition_manifest_per_capsule": "kind = 'RECOGNITION_MANIFEST'",
+        "uq_capsule_blobs_one_content_manifest_per_capsule": "kind = 'CONTENT_MANIFEST'",
+        "uq_capsule_blobs_photo_ordinal_per_capsule": "kind = 'PHOTO'",
+    }
+    for index_name, predicate in expected_partial_indexes.items():
+        row = conn.execute(
+            """
+            SELECT indexdef
+            FROM pg_indexes
+            WHERE schemaname = 'public' AND indexname = %s
+            """,
+            (index_name,),
+        ).fetchone()
+        assert row is not None
+        definition = row[0]
+        assert definition.startswith("CREATE UNIQUE INDEX")
+        assert predicate in definition
+
 
 def _drop_database(admin: psycopg.Connection, database: str) -> None:
     admin.execute(
@@ -239,6 +372,15 @@ def test_account_migration_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
 
         config = Config(str(_ALEMBIC_INI))
         config.set_main_option("path_separator", "os")
+
+        command.upgrade(config, "head")
+        with _connect_db(url, database) as conn:
+            _assert_head_schema(conn)
+        command.check(config)
+
+        command.downgrade(config, "0002_m1_accounts")
+        with _connect_db(url, database) as conn:
+            _assert_m1_schema(conn)
 
         command.upgrade(config, "head")
         with _connect_db(url, database) as conn:

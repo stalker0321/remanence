@@ -19,6 +19,7 @@ from remanence.api.dependencies import (
 )
 from remanence.api.directory import router as directory_router
 from remanence.api.health import router as health_router
+from remanence.api.capsules import router as capsules_router
 from remanence.api.users import router as users_router
 from remanence.db.session import build_engine, build_session_factory
 from remanence.settings import AppMode, Settings
@@ -78,4 +79,5 @@ def create_app(
     app.include_router(auth_router)
     app.include_router(users_router)
     app.include_router(directory_router)
+    app.include_router(capsules_router)
     return app

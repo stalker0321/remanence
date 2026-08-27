@@ -95,6 +95,9 @@ class ContentManifestCodec {
         }
 
         val parsed = manifest.photosList.map { entry ->
+            if (entry.mediaType != MEDIA_TYPE_JPEG) {
+                throw GeneralSecurityException("content manifest photo media type is not JPEG")
+            }
             val photoBytes = entry.blobId.toByteArray()
             if (photoBytes.size != PHOTO_BLOB_ID_BYTES) {
                 throw GeneralSecurityException("content manifest photo blob id has invalid length")
@@ -110,10 +113,13 @@ class ContentManifestCodec {
         if (parsed.size !in MIN_PHOTOS..MAX_PHOTOS) {
             throw GeneralSecurityException("content manifest photo count out of v1 range")
         }
-        val ordinals = parsed.map { it.ordinal }.sorted()
+        val ordinals = parsed.map { it.ordinal }
         val expectedOrdinals = (0 until parsed.size).toList()
         if (ordinals != expectedOrdinals) {
             throw GeneralSecurityException("content manifest photo ordinals are not a 0-based sequence")
+        }
+        if (parsed.map { it.blobId }.toSet().size != parsed.size) {
+            throw GeneralSecurityException("content manifest photo blob ids are not unique")
         }
         parsed.forEach {
             if (it.width !in 1..MAX_DIMENSION_PX || it.height !in 1..MAX_DIMENSION_PX) {
@@ -143,6 +149,9 @@ class ContentManifestCodec {
         val ordinals = photos.map { it.ordinal }.sorted()
         if (ordinals != (0 until photos.size).toList()) {
             throw IllegalArgumentException("photo ordinals must be unique and sequential from 0")
+        }
+        if (photos.map { it.blobId }.toSet().size != photos.size) {
+            throw IllegalArgumentException("photo blob ids must be unique")
         }
         photos.forEach {
             require(it.width in 1..MAX_DIMENSION_PX && it.height in 1..MAX_DIMENSION_PX) {

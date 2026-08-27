@@ -1,6 +1,7 @@
 package dev.hryshyn.remanence.core.crypto
 
 import com.google.crypto.tink.KeysetHandle
+import dev.hryshyn.remanence.core.model.ArtifactAadInput
 import java.util.UUID
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -10,7 +11,9 @@ import kotlin.test.assertFailsWith
 import java.security.GeneralSecurityException
 import dev.hryshyn.remanence.core.model.BlobId
 import dev.hryshyn.remanence.core.model.CapsuleId
+import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
 import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.protocol.v1.RecognitionManifest
 
 class RecognitionManifestCodecTest {
 
@@ -73,6 +76,86 @@ class RecognitionManifestCodecTest {
     }
 
     @Test
+    fun wrongInnerCapsuleIdFailsClosedAfterValidReencryption() {
+        val otherCapsule = CapsuleId(UUID.fromString("9f0a1234-5678-4abc-9def-aabbccdd9999"))
+        val manifest = decryptedManifest().toBuilder()
+            .setCapsuleId(otherCapsule.toProtoBytes())
+            .build()
+
+        assertFailsWith<GeneralSecurityException> {
+            codec.decryptAndParse(keyset, routing, encryptManifest(manifest))
+        }
+    }
+
+    @Test
+    fun nonCanonicalSenderHandleFailsClosedAfterValidReencryption() {
+        val manifest = decryptedManifest().toBuilder()
+            .setChooserHint(
+                decryptedManifest().chooserHint.toBuilder()
+                    .setSenderHandleSnapshot("@Mykola")
+                    .build(),
+            )
+            .build()
+
+        assertFailsWith<GeneralSecurityException> {
+            codec.decryptAndParse(keyset, routing, encryptManifest(manifest))
+        }
+    }
+
+    @Test
+    fun invalidSenderHandleFailsClosedAfterValidReencryption() {
+        val original = decryptedManifest()
+        val manifest = original.toBuilder()
+            .setChooserHint(original.chooserHint.toBuilder().setSenderHandleSnapshot("bad-name").build())
+            .build()
+
+        assertFailsWith<GeneralSecurityException> {
+            codec.decryptAndParse(keyset, routing, encryptManifest(manifest))
+        }
+    }
+
+    @Test
+    fun oversizedUtf8PlaceLabelFailsClosedAfterValidReencryption() {
+        val original = decryptedManifest()
+        val manifest = original.toBuilder()
+            .setChooserHint(original.chooserHint.toBuilder().setPlaceLabel("м".repeat(61)).build())
+            .build()
+
+        assertFailsWith<GeneralSecurityException> {
+            codec.decryptAndParse(keyset, routing, encryptManifest(manifest))
+        }
+    }
+
+    @Test
+    fun emptyFrontFingerprintFailsClosedAfterValidReencryption() {
+        val manifest = decryptedManifest().toBuilder().clearFrontFingerprint().build()
+
+        assertFailsWith<GeneralSecurityException> {
+            codec.decryptAndParse(keyset, routing, encryptManifest(manifest))
+        }
+    }
+
+    @Test
+    fun emptyBackFingerprintFailsClosedAfterValidReencryption() {
+        val manifest = decryptedManifest().toBuilder().clearBackFingerprint().build()
+
+        assertFailsWith<GeneralSecurityException> {
+            codec.decryptAndParse(keyset, routing, encryptManifest(manifest))
+        }
+    }
+
+    @Test
+    fun malformedProtobufPlaintextFailsClosed() {
+        // A valid AEAD wrapper around a truncated length-delimited protobuf
+        // field must still normalize parsing failure to GeneralSecurityException.
+        val ciphertext = encryptPlaintext(byteArrayOf(0x0a, 0x80.toByte()))
+
+        assertFailsWith<GeneralSecurityException> {
+            codec.decryptAndParse(keyset, routing, ciphertext)
+        }
+    }
+
+    @Test
     fun wrongCapsuleKeyFailsClosed() {
         val ciphertext = codec.buildAndEncrypt(
             capsuleKeyset = keyset,
@@ -121,6 +204,23 @@ class RecognitionManifestCodecTest {
     }
 
     @Test
+    fun nonCanonicalSenderHandleRejectedBeforeEncryption() {
+        for (handle in listOf("@mykola", "Mykola", "ab")) {
+            assertFailsWith<IllegalArgumentException> {
+                codec.buildAndEncrypt(
+                    capsuleKeyset = keyset,
+                    routingContext = routing,
+                    senderHandleSnapshot = handle,
+                    createdAtEpochSeconds = 1L,
+                    placeLabel = null,
+                    frontFingerprint = front,
+                    backFingerprint = back,
+                )
+            }
+        }
+    }
+
+    @Test
     fun missingFingerprintRejected() {
         assertFailsWith<IllegalArgumentException> {
             codec.buildAndEncrypt(
@@ -134,4 +234,51 @@ class RecognitionManifestCodecTest {
             )
         }
     }
+
+    @Test
+    fun missingBackFingerprintRejected() {
+        assertFailsWith<IllegalArgumentException> {
+            codec.buildAndEncrypt(
+                capsuleKeyset = keyset,
+                routingContext = routing,
+                senderHandleSnapshot = "mykola",
+                createdAtEpochSeconds = 1L,
+                placeLabel = null,
+                frontFingerprint = front,
+                backFingerprint = ByteArray(0),
+            )
+        }
+    }
+
+    private fun decryptedManifest(): RecognitionManifest = RecognitionManifest.parseFrom(
+        CapsuleArtifactCryptor().decrypt(keyset, recognitionAad(), validCiphertext()),
+    )
+
+    private fun validCiphertext(): ByteArray = codec.buildAndEncrypt(
+        capsuleKeyset = keyset,
+        routingContext = routing,
+        senderHandleSnapshot = "mykola",
+        createdAtEpochSeconds = 1L,
+        placeLabel = null,
+        frontFingerprint = front,
+        backFingerprint = back,
+    )
+
+    private fun encryptManifest(manifest: RecognitionManifest): ByteArray =
+        encryptPlaintext(manifest.toByteArray())
+
+    private fun encryptPlaintext(plaintext: ByteArray): ByteArray = CapsuleArtifactCryptor().encrypt(
+        capsuleKeyset = keyset,
+        context = recognitionAad(),
+        plaintext = plaintext,
+    )
+
+    private fun recognitionAad(): ArtifactAadInput = ArtifactAadInput(
+        capsuleId = routing.capsuleId,
+        blobId = routing.blobId,
+        artifactKind = CapsuleArtifactKind.RECOGNITION_MANIFEST,
+        ordinal = -1,
+        senderUserId = routing.senderUserId,
+        recipientUserId = routing.recipientUserId,
+    )
 }

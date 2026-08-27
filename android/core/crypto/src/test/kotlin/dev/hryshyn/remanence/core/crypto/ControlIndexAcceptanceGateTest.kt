@@ -304,23 +304,23 @@ class ControlIndexAcceptanceGateTest {
     }
 
     @Test
-    fun emptyFrontFingerprintFailsPayload() {
+    fun emptyFrontFingerprintFailsClosed() {
         val capsule = buildIndexCapsuleWithForgedManifest(
             frontFingerprint = ByteArray(0),
             backFingerprint = back,
         )
         val result = indexGate.verify(indexInput(capsule))
-        assertEquals(RejectionReason.RECOGNITION_PAYLOAD_INVALID, rejected(result))
+        assertEquals(RejectionReason.RECOGNITION_AEAD_INVALID, rejected(result))
     }
 
     @Test
-    fun emptyBackFingerprintFailsPayload() {
+    fun emptyBackFingerprintFailsClosed() {
         val capsule = buildIndexCapsuleWithForgedManifest(
             frontFingerprint = front,
             backFingerprint = ByteArray(0),
         )
         val result = indexGate.verify(indexInput(capsule))
-        assertEquals(RejectionReason.RECOGNITION_PAYLOAD_INVALID, rejected(result))
+        assertEquals(RejectionReason.RECOGNITION_AEAD_INVALID, rejected(result))
     }
 
     private fun buildIndexCapsuleWithForgedManifest(
@@ -379,7 +379,7 @@ class ControlIndexAcceptanceGateTest {
     }
 
     @Test
-    fun innerCapsuleIdMismatchFailsPayload() {
+    fun innerCapsuleIdMismatchFailsClosed() {
         val forgedKeyset = CapsuleKeysetGenerator().generate()
         val routing = RecognitionManifestCodec.RoutingContext(
             capsuleId = capsuleId,
@@ -461,7 +461,7 @@ class ControlIndexAcceptanceGateTest {
             recognitionCiphertext = forgedCiphertext,
         )
         val result = indexGate.verify(input)
-        assertEquals(RejectionReason.RECOGNITION_PAYLOAD_INVALID, rejected(result))
+        assertEquals(RejectionReason.RECOGNITION_AEAD_INVALID, rejected(result))
     }
 
     @Test

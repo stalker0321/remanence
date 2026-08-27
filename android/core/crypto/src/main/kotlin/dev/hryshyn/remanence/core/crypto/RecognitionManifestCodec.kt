@@ -4,9 +4,11 @@ import dev.hryshyn.remanence.protocol.v1.ChooserHint
 import dev.hryshyn.remanence.protocol.v1.RecognitionManifest
 import com.google.crypto.tink.KeysetHandle
 import java.security.GeneralSecurityException
+import java.security.MessageDigest
 import dev.hryshyn.remanence.core.model.ArtifactAadInput
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
 import dev.hryshyn.remanence.core.model.CryptoContextEncoder
+import dev.hryshyn.remanence.core.model.NormalizedHandle
 
 /** Locally decrypted view of one recognition manifest. */
 data class RecognitionManifestContent(
@@ -35,7 +37,7 @@ class RecognitionManifestCodec {
         frontFingerprint: ByteArray,
         backFingerprint: ByteArray,
     ): ByteArray {
-        require(senderHandleSnapshot.isNotEmpty() && senderHandleSnapshot.length <= HANDLE_SNAPSHOT_MAX) {
+        require(NormalizedHandle.parse(senderHandleSnapshot).value == senderHandleSnapshot) {
             "invalid sender handle snapshot"
         }
         placeLabel?.let {
@@ -67,26 +69,55 @@ class RecognitionManifestCodec {
         capsuleKeyset: KeysetHandle,
         routingContext: RoutingContext,
         ciphertext: ByteArray,
-    ): RecognitionManifestContent {
+    ): RecognitionManifestContent = try {
         val bytes = try {
             CapsuleArtifactCryptor().decrypt(capsuleKeyset, manifestContext(routingContext), ciphertext)
         } catch (failure: GeneralSecurityException) {
-            throw GeneralSecurityException("recognition manifest failed integrity verification")
+            throw GeneralSecurityException("recognition manifest failed integrity verification", failure)
         }
         val manifest = RecognitionManifest.parseFrom(bytes)
         if (manifest.protocolVersion != ProtocolV1.PROTOCOL_VERSION) {
             throw GeneralSecurityException("unsupported manifest protocol version")
         }
+
+        val expectedCapsuleId = routingContext.capsuleId.toProtoBytes().toByteArray()
+        val actualCapsuleId = manifest.capsuleId.toByteArray()
+        if (actualCapsuleId.size != expectedCapsuleId.size ||
+            !MessageDigest.isEqual(actualCapsuleId, expectedCapsuleId)
+        ) {
+            throw GeneralSecurityException("recognition manifest capsule id does not match routing")
+        }
+
         if (!manifest.hasChooserHint()) throw GeneralSecurityException("manifest missing chooser hint")
-        return RecognitionManifestContent(
+        val chooserHint = manifest.chooserHint
+        val senderHandleSnapshot = chooserHint.senderHandleSnapshot
+        if (NormalizedHandle.parse(senderHandleSnapshot).value != senderHandleSnapshot) {
+            throw GeneralSecurityException("recognition manifest sender handle is not canonical")
+        }
+        val placeLabel = if (chooserHint.hasPlaceLabel()) chooserHint.placeLabel else null
+        if (placeLabel != null && placeLabel.toByteArray(Charsets.UTF_8).size > PLACE_LABEL_MAX_BYTES) {
+            throw GeneralSecurityException("recognition manifest place label exceeds byte limit")
+        }
+
+        val frontFingerprint = manifest.frontFingerprint.toByteArray()
+        val backFingerprint = manifest.backFingerprint.toByteArray()
+        if (frontFingerprint.isEmpty() || backFingerprint.isEmpty()) {
+            throw GeneralSecurityException("recognition manifest fingerprints are incomplete")
+        }
+
+        RecognitionManifestContent(
             protocolVersion = manifest.protocolVersion,
-            capsuleIdRaw = manifest.capsuleId.toByteArray(),
-            senderHandleSnapshot = manifest.chooserHint.senderHandleSnapshot,
-            createdAtEpochSeconds = manifest.chooserHint.createdAtEpochSeconds,
-            placeLabel = if (manifest.chooserHint.hasPlaceLabel()) manifest.chooserHint.placeLabel else null,
-            frontFingerprint = manifest.frontFingerprint.toByteArray(),
-            backFingerprint = manifest.backFingerprint.toByteArray(),
+            capsuleIdRaw = actualCapsuleId,
+            senderHandleSnapshot = senderHandleSnapshot,
+            createdAtEpochSeconds = chooserHint.createdAtEpochSeconds,
+            placeLabel = placeLabel,
+            frontFingerprint = frontFingerprint,
+            backFingerprint = backFingerprint,
         )
+    } catch (failure: GeneralSecurityException) {
+        throw failure
+    } catch (failure: Exception) {
+        throw GeneralSecurityException("recognition manifest failed structural validation", failure)
     }
 
     private fun manifestContext(routing: RoutingContext): ArtifactAadInput =
@@ -115,7 +146,6 @@ class RecognitionManifestCodec {
     }
 
     private companion object {
-        const val HANDLE_SNAPSHOT_MAX = 30
         const val PLACE_LABEL_MAX_BYTES = 120
     }
 }

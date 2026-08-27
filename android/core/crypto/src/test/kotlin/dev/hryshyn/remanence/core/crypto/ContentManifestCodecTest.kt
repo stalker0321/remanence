@@ -82,6 +82,14 @@ class ContentManifestCodecTest {
     }
 
     @Test
+    fun duplicateBlobIdsRejectedBeforeEncryption() {
+        val bad = photos(3).toMutableList()
+        bad[1] = bad[1].copy(blobId = bad[0].blobId)
+
+        assertFailsWith<IllegalArgumentException> { codec.buildAndEncrypt(keyset, routing, bad, null) }
+    }
+
+    @Test
     fun gappedOrdinalsRejected() {
         val bad = listOf(photo(0, 'a'), photo(2, 'b'), photo(3, 'c'))
         assertFailsWith<IllegalArgumentException> { codec.buildAndEncrypt(keyset, routing, bad, null) }
@@ -200,10 +208,73 @@ class ContentManifestCodecTest {
         // bind to the routing; a mismatch fails closed with
         // GeneralSecurityException, never IllegalArgumentException.
         val otherCapsule = CapsuleId(UUID.fromString("9f0a1234-5678-4abc-9def-aabbccdd9999"))
-        val ciphertext = codec.buildAndEncrypt(keyset, routing, photos(3), null)
-        val otherRouting = routing.copy(capsuleId = otherCapsule)
+        val manifestBytes = CapsuleArtifactCryptor().decrypt(
+            keyset,
+            contentAad(),
+            codec.buildAndEncrypt(keyset, routing, photos(3), null),
+        )
+        val manifest = dev.hryshyn.remanence.protocol.v1.ContentManifest.parseFrom(manifestBytes)
+            .toBuilder()
+            .setCapsuleId(otherCapsule.toProtoBytes())
+            .build()
+        val ciphertext = encryptAsContentManifest(routing.capsuleId, manifest.toByteArray())
         assertFailsWith<GeneralSecurityException> {
-            codec.decryptAndParse(keyset, otherRouting, ciphertext)
+            codec.decryptAndParse(keyset, routing, ciphertext)
+        }
+    }
+
+    @Test
+    fun wrongMediaTypeOnDecryptedManifestFailsClosed() {
+        val manifestBytes = CapsuleArtifactCryptor().decrypt(
+            keyset,
+            contentAad(),
+            codec.buildAndEncrypt(keyset, routing, photos(3), null),
+        )
+        val parsed = dev.hryshyn.remanence.protocol.v1.ContentManifest.parseFrom(manifestBytes)
+        val builder = parsed.toBuilder()
+        builder.setPhotos(0, parsed.getPhotos(0).toBuilder().setMediaType("image/png").build())
+        val ciphertext = encryptAsContentManifest(routing.capsuleId, builder.build().toByteArray())
+
+        assertFailsWith<GeneralSecurityException> {
+            codec.decryptAndParse(keyset, routing, ciphertext)
+        }
+    }
+
+    @Test
+    fun permutedPhotoListOnDecryptedManifestFailsClosed() {
+        val manifestBytes = CapsuleArtifactCryptor().decrypt(
+            keyset,
+            contentAad(),
+            codec.buildAndEncrypt(keyset, routing, photos(3), null),
+        )
+        val parsed = dev.hryshyn.remanence.protocol.v1.ContentManifest.parseFrom(manifestBytes)
+        val builder = parsed.toBuilder().clearPhotos()
+        builder.addPhotos(parsed.getPhotos(1))
+        builder.addPhotos(parsed.getPhotos(0))
+        builder.addPhotos(parsed.getPhotos(2))
+        val ciphertext = encryptAsContentManifest(routing.capsuleId, builder.build().toByteArray())
+
+        assertFailsWith<GeneralSecurityException> {
+            codec.decryptAndParse(keyset, routing, ciphertext)
+        }
+    }
+
+    @Test
+    fun duplicatePhotoBlobIdOnDecryptedManifestFailsClosed() {
+        val manifestBytes = CapsuleArtifactCryptor().decrypt(
+            keyset,
+            contentAad(),
+            codec.buildAndEncrypt(keyset, routing, photos(3), null),
+        )
+        val parsed = dev.hryshyn.remanence.protocol.v1.ContentManifest.parseFrom(manifestBytes)
+        val duplicate = parsed.getPhotos(1).toBuilder()
+            .setBlobId(parsed.getPhotos(0).blobId)
+            .build()
+        val builder = parsed.toBuilder().setPhotos(1, duplicate)
+        val ciphertext = encryptAsContentManifest(routing.capsuleId, builder.build().toByteArray())
+
+        assertFailsWith<GeneralSecurityException> {
+            codec.decryptAndParse(keyset, routing, ciphertext)
         }
     }
 

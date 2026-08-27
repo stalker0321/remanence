@@ -153,6 +153,84 @@ class RemanenceLocalSchemaTest {
     }
 
     /**
+     * M2-P08 wiring regression: the full production migration chain
+     * (1→2→3→4→5) must produce a v5 schema without destructive fallback.
+     * A v1 database carrying pre-M2 rows is migrated through ALL four
+     * migrations, and the final schema must be valid at version 5 and
+     * must contain the sender_retry_keyset_path column.
+     *
+     * This is NOT a per-migration test; it proves the registration
+     * list in production is complete.
+     */
+    @Test
+    fun fullMigrationChainReachesV5WithoutDestructiveFallback() {
+        val dbName = "remanence-full-chain-v1-to-v5.db"
+        helper.createDatabase(dbName, 1).use { v1 ->
+            // Insert a minimal pre-M2 row so we can verify it survives
+            // the entire chain without being destroyed.
+            v1.execSQL(
+                "INSERT INTO outbox_capsule " +
+                    "(capsule_id, idempotency_key, recipient_user_id, recipient_key_bundle_id, " +
+                    "state, recognition_manifest_path, content_manifest_path, envelope_path, " +
+                    "last_error_code) " +
+                    "VALUES ('chain-cap-1', 'chain-idem-1', 'recipient', 'rbundle', 'ENCRYPTED', " +
+                    "'/tmp/rec.bin', '/tmp/con.bin', '/tmp/env.bin', NULL)",
+            )
+            v1.execSQL(
+                "INSERT INTO outbox_blob " +
+                    "(blob_id, capsule_id, kind, ordinal, local_ciphertext_path, " +
+                    "size_bytes, sha256, upload_state, attempt_count) " +
+                    "VALUES ('chain-blob-1', 'chain-cap-1', 'PHOTO', 0, '/tmp/blob.bin', " +
+                    "10, x'00', 'PENDING', 0)",
+            )
+            v1.close()
+        }
+
+        // Run the complete migration chain — exactly the same list that
+        // the production Room.databaseBuilder registers (after the fix
+        // that added MIGRATION_4_5). If any migration is missing or
+        // incorrect, runMigrationsAndValidate will throw.
+        val migrated = helper.runMigrationsAndValidate(
+            dbName,
+            5,
+            true,
+            RemanenceLocalDatabase.MIGRATION_1_2,
+            RemanenceLocalDatabase.MIGRATION_2_3,
+            RemanenceLocalDatabase.MIGRATION_3_4,
+            RemanenceLocalDatabase.MIGRATION_4_5,
+        )
+        assertTrue(migrated.isDatabaseIntegrityOk)
+
+        // Verify the v1 row survived: it now has owner_user_id
+        // (from MIGRATION_3_4), sender columns (from MIGRATION_2_3),
+        // statement columns (from MIGRATION_1_2), and a NULL
+        // sender_retry_keyset_path (from MIGRATION_4_5).
+        migrated.query("SELECT * FROM outbox_capsule WHERE capsule_id = 'chain-cap-1'").use { cursor ->
+            assertEquals(1, cursor.count)
+            cursor.moveToFirst()
+            assertEquals("ENCRYPTED", cursor.getString(cursor.getColumnIndexOrThrow("state")))
+            assertEquals("/tmp/env.bin", cursor.getString(cursor.getColumnIndexOrThrow("envelope_path")))
+            // M2-P02: owner_user_id was stamped by MIGRATION_3_4.
+            val ownerIdx = cursor.getColumnIndexOrThrow("owner_user_id")
+            assertTrue("owner_user_id must exist after migration", ownerIdx >= 0)
+            // M1 statement columns survived.
+            val stmtIdx = cursor.getColumnIndexOrThrow("publish_statement_path")
+            assertTrue("publish_statement_path must exist after migration", stmtIdx >= 0)
+            // M2-P08: sender_retry_keyset_path is NULL for the legacy row.
+            val retryIdx = cursor.getColumnIndexOrThrow("sender_retry_keyset_path")
+            assertTrue("sender_retry_keyset_path must exist at v5", retryIdx >= 0)
+            assertNull(cursor.getString(retryIdx))
+        }
+
+        // Verify outbox_blob row survived.
+        migrated.query("SELECT * FROM outbox_blob WHERE blob_id = 'chain-blob-1'").use { cursor ->
+            assertEquals(1, cursor.count)
+            cursor.moveToFirst()
+            assertEquals("PENDING", cursor.getString(cursor.getColumnIndexOrThrow("upload_state")))
+        }
+    }
+
+    /**
      * M2-P08 schema-only continuation: every pre-v5 row must survive
      * the migration with the new sender_retry_keyset_path column
      * set to NULL. The column has no SQL default; the existing rows

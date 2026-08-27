@@ -76,6 +76,7 @@ class AppContainer(
                 RemanenceLocalDatabase.MIGRATION_1_2,
                 RemanenceLocalDatabase.MIGRATION_2_3,
                 RemanenceLocalDatabase.MIGRATION_3_4,
+                RemanenceLocalDatabase.MIGRATION_4_5,
             )
             .build()
     }

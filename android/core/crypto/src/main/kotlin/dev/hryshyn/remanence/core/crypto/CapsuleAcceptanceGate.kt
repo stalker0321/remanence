@@ -5,9 +5,7 @@ import dev.hryshyn.remanence.core.model.BlobId
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.UserId
-import dev.hryshyn.remanence.protocol.v1.ArtifactBinding
 import dev.hryshyn.remanence.protocol.v1.PublishStatement
-import java.security.MessageDigest
 
 /** One delivered blob with its transport identity as fetched from storage. */
 data class DeliveredBlob(
@@ -60,16 +58,23 @@ enum class RejectionReason {
  * unparseable protobuf, unknown enums, malformed typed IDs, invalid layouts,
  * and unusable capsule keysets all reject closed with a reason and perform no
  * cryptographic or storage side effects.
+ *
+ * M2-P10 composition: the gate composes [CanonicalControlVerifier] (the
+ * canonical, signature, ID-agreement, statement-hash, and layout stages) and
+ * [DeliveredBlobBindingVerifier] (the exact full-material blob-binding
+ * stage). Both are package-internal; neither decrypts artifacts.
  */
 class CapsuleAcceptanceGate(
-    private val signer: PublishStatementSigner = PublishStatementSigner(),
-    private val capsuleKeysetParser: CapsuleKeysetParser = CapsuleKeysetParser(),
+    signer: PublishStatementSigner = PublishStatementSigner(),
+    capsuleKeysetParser: CapsuleKeysetParser = CapsuleKeysetParser(),
 ) {
 
     private val controlVerifier: CanonicalControlVerifier = CanonicalControlVerifier(
         signer = signer,
         capsuleKeysetParser = capsuleKeysetParser,
     )
+
+    private val blobBindingVerifier: DeliveredBlobBindingVerifier = DeliveredBlobBindingVerifier()
 
     fun verify(input: CapsuleAcceptanceInput): CapsuleAcceptanceResult {
         val control = controlVerifier.verify(
@@ -88,25 +93,9 @@ class CapsuleAcceptanceGate(
                 return CapsuleAcceptanceResult.Rejected(control.reason)
             is CanonicalControlResult.Verified -> control.control
         }
-        if (!blobsMatch(verified.statement.artifactsList, input.deliveredBlobs)) {
+        if (!blobBindingVerifier.matches(verified.statement.artifactsList, input.deliveredBlobs)) {
             return CapsuleAcceptanceResult.Rejected(RejectionReason.BLOB_SUBSTITUTION)
         }
         return CapsuleAcceptanceResult.Accepted(verified.statement)
-    }
-
-    private fun blobsMatch(bindings: List<ArtifactBinding>, delivered: List<DeliveredBlob>): Boolean {
-        if (bindings.size != delivered.size) return false
-        val byId = delivered.groupBy { it.blobId.toProtoBytes() }
-        if (byId.any { it.value.size != 1 }) return false
-        return bindings.all { binding ->
-            val blob = byId[binding.blobId]?.single() ?: return@all false
-            blob.ciphertextSize == binding.ciphertextSize &&
-                blob.ciphertextSha256.size == SHA256_BYTES &&
-                MessageDigest.isEqual(blob.ciphertextSha256, binding.ciphertextSha256.toByteArray())
-        }
-    }
-
-    private companion object {
-        const val SHA256_BYTES = 32
     }
 }

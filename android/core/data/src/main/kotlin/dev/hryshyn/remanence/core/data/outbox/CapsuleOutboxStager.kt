@@ -95,6 +95,24 @@ class CapsuleOutboxStager(
 
     private val stagingMutex = Mutex()
 
+    /**
+     * M2-P04 review fix: fail closed BEFORE any byte is written if the
+     * resolved owner OUTBOX_CIPHERTEXT root cannot be materialized - a plain
+     * file (or symlink) occupying the directory path, or a refused mkdirs.
+     * Everything that follows (file writes, cleanup, Room rows) assumes a
+     * usable directory, so staging must never start half-ready. The failure
+     * is strictly local to this account's own root: no other account's
+     * directory can be inspected or touched by a wrong or missing owner
+     * directory.
+     */
+    private suspend fun ensureOwnerCiphertextRoot(directory: File) =
+        withContext(Dispatchers.IO) {
+            val created = !directory.exists() && directory.mkdirs()
+            check(created || (directory.exists() && directory.isDirectory)) {
+                "cannot prepare outbox ciphertext root for this account"
+            }
+        }
+
     suspend fun stage(prepared: PreparedOutboxCapsule): StagedOutboxCapsule {
         validate(prepared)
         // One typed owner resolution per stage: the directory this invocation
@@ -117,9 +135,7 @@ class CapsuleOutboxStager(
         )?.let {
             throw IllegalStateException("capsule already staged")
         }
-        withContext(Dispatchers.IO) {
-            ciphertextDirectory.mkdirs()
-        }
+        ensureOwnerCiphertextRoot(ciphertextDirectory)
 
         return stagingMutex.withLock {
             // Re-check under the lock and BEFORE any byte is written so a

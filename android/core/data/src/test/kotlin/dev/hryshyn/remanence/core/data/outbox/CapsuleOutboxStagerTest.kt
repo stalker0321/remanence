@@ -369,7 +369,7 @@ class CapsuleOutboxStagerTest {
             5,
             database.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleId.toString(), winnerOwner).size,
         )
-   
+
         // Filesystem isolation: B's committed files live only under B's own
         // outbox root; A's refused attempt left NOTHING in its directory.
         val winnerRoot = outboxRoot(winnerOwner)
@@ -478,6 +478,92 @@ class CapsuleOutboxStagerTest {
             assertEquals(winnerBytes[index], file.readBytes().toList())
         }
     }
+
+    /**
+     * M2-P04 review fix: when the account OUTBOX_CIPHERTEXT root cannot be
+     * created (its owner directory is occupied by a plain file), staging
+     * fails explicitly BEFORE writing anything - no Room row, no blob row,
+     * no filesystem residue, and another account's root stays untouched.
+     */
+    @Test
+    fun ownerSlotOccupiedByFileRefusesStagingBeforeAnyWrite() = runBlocking {
+        database = newFileBackedDatabase("stager-root-blocked-file.db")
+        val otherOwner = "0198f0a0-0000-7000-8000-00000000ab02"
+        // Occupy the owner's directory slot with a plain FILE.
+        val blockedOwnerSlot = File(context.filesDir, "accounts/$OWNER")
+        blockedOwnerSlot.parentFile!!.mkdirs()
+        assertTrue(blockedOwnerSlot.createNewFile())
+
+        val stager = CapsuleOutboxStager(database, storageRoots)
+        try {
+            stager.stage(preparedCapsule())
+            throw AssertionError("expected refusal")
+        } catch (expected: IllegalStateException) {
+            assertEquals("cannot prepare outbox ciphertext root for this account", expected.message)
+        }
+
+        // Refused atomically: Room knows nothing, filesystem was not touched
+        // beneath the boundary, and NO residue exists anywhere in accounts/.
+        assertNull(database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId.toString(), OWNER))
+        assertTrue(database.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleId.toString(), OWNER).isEmpty())
+        assertEquals(0, countOutboxCapsuleRows())
+        assertFalse(blockedOwnerSlot.isDirectory)
+
+        // Another account keeps working normally beside the blocked one.
+        val stagedForOther =
+            stager.stage(preparedCapsule(ownerUserId = otherOwner, capsuleUuid = UUID.fromString("3c111111-2222-4333-8444-555555555555"), blobIdBase = 5_000_000L))
+        assertTrue(File(stagedForOther.envelopePath).exists())
+        assertNotNull(
+            database.outboxCapsuleDao()
+                .getByCapsuleIdAndOwner("3c111111-2222-4333-8444-555555555555", otherOwner),
+        )
+    }
+
+    /**
+     * M2-P04 review fix: an existing NON-DIRECTORY at the resolved
+     * outbox-ciphertext path refuses staging fail-closed before any write;
+     * Room stays empty and the hostile entry itself is left unmodified so
+     * ownership never silently migrates onto it.
+     */
+    @Test
+    fun nonDirectoryOutboxRootRefusesStagingAndPreservesOtherAccounts() = runBlocking {
+        database = newFileBackedDatabase("stager-root-nondir.db")
+        // A plain regular FILE occupies the root path itself.
+        val ownerDir = File(context.filesDir, "accounts/$OWNER")
+        val fileOccupant =
+            File(ownerDir, "outbox-ciphertext").apply {
+                ownerDir.mkdirs()
+                writeText("not a directory")
+            }
+        val occupantBytes = fileOccupant.readBytes()
+        assertFalse(fileOccupant.isDirectory)
+
+        val otherOwner = "0198f0a0-0000-7000-8000-00000000ab02"
+        val bSeed = File(outboxRoot(otherOwner), "seed.bin")
+            .apply { parentFile!!.mkdirs(); writeBytes(byteArrayOf(7, 7, 7)) }
+
+        val stager = CapsuleOutboxStager(database, storageRoots)
+        try {
+            stager.stage(preparedCapsule())
+            throw AssertionError("expected refusal")
+        } catch (expected: IllegalStateException) {
+            assertEquals("cannot prepare outbox ciphertext root for this account", expected.message)
+        }
+
+        assertNull(database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId.toString(), OWNER))
+        assertEquals(0, countOutboxCapsuleRows())
+        // The occupant is untouched byte-for-byte; nothing was written around it.
+        assertTrue(fileOccupant.readBytes().contentEquals(occupantBytes))
+        assertTrue(fileOccupant.isFile)
+        // The other account's root data survives byte-for-byte too.
+        assertTrue(bSeed.readBytes().contentEquals(byteArrayOf(7, 7, 7)))
+    }
+
+    private fun countOutboxCapsuleRows(): Int =
+        database.openHelper.readableDatabase.query("SELECT COUNT(*) FROM outbox_capsule").use { cursor ->
+            cursor.moveToFirst()
+            cursor.getInt(0)
+        }
 
     @Test
     fun concurrentStagingOfSameCapsuleProducesExactlyOneWinner() = runBlocking {

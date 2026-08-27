@@ -302,6 +302,10 @@ The service hashes while streaming to a temporary object, compares length/hash, 
 
 Within one database transaction, finalize verifies draft ownership/state, non-expiry, current and matching user/key IDs, deterministic v1 statement structure parsed with bounded input size/depth/field counts, sender Ed25519 signature, exact stored blob declarations and cardinality, envelope limits/hash, and artifact hashes/sizes. It then inserts envelope/delivery state and marks `READY`.
 
+The finalized capsule stores the canonical `PublishStatement` bytes and the raw
+69-byte TINK signature in separate fields; the stored statement hash covers only
+the canonical statement bytes.
+
 The recipient key bundle must be ACTIVE and owned by the recipient. The sender
 signing bundle is resolved by ID, must belong to the sender, and must be
 non-REVOKED; a valid RETIRED sender bundle is accepted for an existing draft.

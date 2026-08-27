@@ -79,6 +79,7 @@ _REQUIRED_NAMED_CONSTRAINTS = {
     "ck_capsules_protocol_version_positive",
     "ck_capsules_draft_expiry_order",
     "ck_capsules_signed_statement_sha256_32",
+    "ck_capsules_publish_signature_69",
     "ck_capsules_state_finalization_shape",
     "ck_capsule_blobs_expected_ciphertext_size_positive",
     "ck_capsule_blobs_expected_ciphertext_sha256_32",
@@ -222,6 +223,16 @@ def _assert_head_schema(conn: psycopg.Connection) -> None:
         "AVAILABLE",
         "CIPHERTEXT_SYNCED",
     ]
+    publish_signature = conn.execute(
+        """
+        SELECT data_type, is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'capsules'
+          AND column_name = 'publish_signature'
+        """
+    ).fetchone()
+    assert publish_signature == ("bytea", "YES")
 
     primary_keys = {
         "users": "pk_users",

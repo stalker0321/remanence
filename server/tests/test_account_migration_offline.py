@@ -64,7 +64,11 @@ EXPECTED_UPGRADE_FRAGMENTS = [
     "CONSTRAINT ck_capsules_draft_expiry_order CHECK (draft_expires_at > created_at)",
     "CONSTRAINT ck_capsules_signed_statement_sha256_32 CHECK "
     "(signed_statement_sha256 IS NULL OR octet_length(signed_statement_sha256) = 32)",
+    "CONSTRAINT ck_capsules_publish_signature_69 CHECK "
+    "(publish_signature IS NULL OR octet_length(publish_signature) = 69)",
     "CONSTRAINT ck_capsules_state_finalization_shape CHECK",
+    "AND signed_statement_sha256 IS NOT NULL AND publish_signature IS NOT NULL) OR",
+    "AND signed_statement_sha256 IS NULL AND publish_signature IS NULL))",
     "CREATE INDEX ix_capsules_sender_user_id ON capsules (sender_user_id)",
     "CREATE INDEX ix_capsules_recipient_user_id ON capsules (recipient_user_id)",
     "CREATE INDEX ix_capsules_draft_expires_at ON capsules (draft_expires_at)",
@@ -153,6 +157,7 @@ def test_upgrade_emits_column_types_and_defaults(offline_config: Config) -> None
     assert "password_hash VARCHAR(512) NOT NULL" in sql
     assert "access_token_hash BYTEA NOT NULL" in sql
     assert "encryption_public_keyset BYTEA NOT NULL" in sql
+    assert "publish_signature BYTEA" in sql
     assert "protocol_version SMALLINT NOT NULL" in sql
     assert "status key_bundle_status NOT NULL" in sql
     assert "created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL" in sql

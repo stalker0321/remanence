@@ -279,6 +279,7 @@ class CapsuleDraftService:
                 state=CapsuleState.DRAFT,
                 signed_statement=None,
                 signed_statement_sha256=None,
+                publish_signature=None,
                 created_at=canonical_now,
                 ready_at=None,
                 draft_expires_at=draft_expires_at,

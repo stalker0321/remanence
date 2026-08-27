@@ -73,6 +73,7 @@ def _authoritative_data(fixture: dict) -> tuple[Capsule, list[CapsuleBlob]]:
         recipient_key_bundle_id=UUID(fixture["recipient_key_bundle_id"]),
         protocol_version=1,
         state=CapsuleState.DRAFT,
+        publish_signature=None,
         created_at=datetime.fromtimestamp(fixture["created_at_epoch_seconds"], timezone.utc),
         draft_expires_at=datetime.fromtimestamp(fixture["created_at_epoch_seconds"], timezone.utc) + timedelta(days=7),
     )

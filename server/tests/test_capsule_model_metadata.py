@@ -19,6 +19,7 @@ EXPECTED_COLUMNS = frozenset(
         "state",
         "signed_statement",
         "signed_statement_sha256",
+        "publish_signature",
         "created_at",
         "ready_at",
         "draft_expires_at",
@@ -56,7 +57,7 @@ def test_capsule_state_members_exact() -> None:
 def test_table_name_and_exact_column_set() -> None:
     assert Capsule.__tablename__ == "capsules"
     assert set(_table().columns.keys()) == EXPECTED_COLUMNS
-    assert len(_table().columns) == 12
+    assert len(_table().columns) == 13
 
 
 def test_column_types_and_nullability_exact() -> None:
@@ -73,12 +74,13 @@ def test_column_types_and_nullability_exact() -> None:
     protocol_version = _column("protocol_version")
     assert isinstance(protocol_version.type, SmallInteger)
     assert protocol_version.type.python_type is int
-    for name in ("signed_statement", "signed_statement_sha256"):
+    for name in ("signed_statement", "signed_statement_sha256", "publish_signature"):
         column = _column(name)
         assert isinstance(column.type, LargeBinary), name
         assert column.type.python_type is bytes, name
     assert _column("signed_statement").type.length is None
     assert _column("signed_statement_sha256").type.length == 32
+    assert _column("publish_signature").type.length == 69
     state = _column("state")
     assert isinstance(state.type, Enum)
     assert state.type.name == "capsule_state"
@@ -108,6 +110,7 @@ def test_client_generated_id_and_plain_field_defaults() -> None:
         "state",
         "signed_statement",
         "signed_statement_sha256",
+        "publish_signature",
         "ready_at",
         "draft_expires_at",
     ):
@@ -156,7 +159,7 @@ def test_exactly_four_named_restrict_fks() -> None:
         assert constraint.ondelete == "RESTRICT"
 
 
-def test_exactly_four_named_checks_and_normalized_sql() -> None:
+def test_exactly_five_named_checks_and_normalized_sql() -> None:
     checks = {
         constraint.name: " ".join(str(constraint.sqltext).split())
         for constraint in _table().constraints
@@ -168,11 +171,15 @@ def test_exactly_four_named_checks_and_normalized_sql() -> None:
         "ck_capsules_signed_statement_sha256_32": (
             "signed_statement_sha256 IS NULL OR octet_length(signed_statement_sha256) = 32"
         ),
+        "ck_capsules_publish_signature_69": (
+            "publish_signature IS NULL OR octet_length(publish_signature) = 69"
+        ),
         "ck_capsules_state_finalization_shape": (
             "((state = 'READY' AND ready_at IS NOT NULL AND signed_statement IS NOT NULL "
-            "AND signed_statement_sha256 IS NOT NULL) OR (state IN ('DRAFT', 'ABORTED') "
+            "AND signed_statement_sha256 IS NOT NULL AND publish_signature IS NOT NULL) OR "
+            "(state IN ('DRAFT', 'ABORTED') "
             "AND ready_at IS NULL AND signed_statement IS NULL "
-            "AND signed_statement_sha256 IS NULL))"
+            "AND signed_statement_sha256 IS NULL AND publish_signature IS NULL))"
         ),
     }
 
@@ -202,6 +209,12 @@ def test_self_send_is_not_forbidden_and_no_orm_relationships() -> None:
         and "recipient_user_id" in str(constraint.sqltext)
     ]
     assert list(Capsule.__mapper__.relationships) == []
+
+
+def test_publish_signature_is_opaque_public_signature_bytes_only() -> None:
+    assert _column("publish_signature").type.python_type is bytes
+    assert "private" not in {column.name.lower() for column in _table().columns}
+    assert "private_key" not in {column.name.lower() for column in _table().columns}
 
 
 def test_referenced_tables_are_registered_in_shared_metadata() -> None:

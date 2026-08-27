@@ -358,7 +358,8 @@ Old bundles remain readable so existing capsules remain verifiable/decryptable a
 - `sender_key_bundle_id`, `recipient_key_bundle_id` FKs;
 - protocol version;
 - state `DRAFT`, `READY`, `ABORTED`;
-- signed publish-statement bytes and hash after finalize;
+- canonical signed PublishStatement bytes, their SHA-256, and the raw 69-byte
+  TINK publish signature stored/routed as separate fields after finalize;
 - `created_at`, `ready_at`, `draft_expires_at`.
 
 Only authenticated sender may create/upload/finalize its draft. Only the bound recipient may list/download a ready capsule.

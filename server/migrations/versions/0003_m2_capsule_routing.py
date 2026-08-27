@@ -88,6 +88,7 @@ def upgrade() -> None:
         sa.Column("state", capsule_state, nullable=False),
         sa.Column("signed_statement", sa.LargeBinary(), nullable=True),
         sa.Column("signed_statement_sha256", sa.LargeBinary(length=32), nullable=True),
+        sa.Column("publish_signature", sa.LargeBinary(length=69), nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -134,10 +135,15 @@ def upgrade() -> None:
             name="ck_capsules_signed_statement_sha256_32",
         ),
         sa.CheckConstraint(
+            "publish_signature IS NULL OR octet_length(publish_signature) = 69",
+            name="ck_capsules_publish_signature_69",
+        ),
+        sa.CheckConstraint(
             "((state = 'READY' AND ready_at IS NOT NULL AND signed_statement IS NOT NULL "
-            "AND signed_statement_sha256 IS NOT NULL) OR "
+            "AND signed_statement_sha256 IS NOT NULL AND publish_signature IS NOT NULL) OR "
             "(state IN ('DRAFT', 'ABORTED') AND ready_at IS NULL "
-            "AND signed_statement IS NULL AND signed_statement_sha256 IS NULL))",
+            "AND signed_statement IS NULL AND signed_statement_sha256 IS NULL "
+            "AND publish_signature IS NULL))",
             name="ck_capsules_state_finalization_shape",
         ),
     )

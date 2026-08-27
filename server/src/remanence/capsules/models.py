@@ -44,10 +44,15 @@ class Capsule(Base):
             name="ck_capsules_signed_statement_sha256_32",
         ),
         CheckConstraint(
+            "publish_signature IS NULL OR octet_length(publish_signature) = 69",
+            name="ck_capsules_publish_signature_69",
+        ),
+        CheckConstraint(
             "((state = 'READY' AND ready_at IS NOT NULL AND signed_statement IS NOT NULL "
-            "AND signed_statement_sha256 IS NOT NULL) OR "
+            "AND signed_statement_sha256 IS NOT NULL AND publish_signature IS NOT NULL) OR "
             "(state IN ('DRAFT', 'ABORTED') AND ready_at IS NULL "
-            "AND signed_statement IS NULL AND signed_statement_sha256 IS NULL))",
+            "AND signed_statement IS NULL AND signed_statement_sha256 IS NULL "
+            "AND publish_signature IS NULL))",
             name="ck_capsules_state_finalization_shape",
         ),
         Index("ix_capsules_sender_user_id", "sender_user_id"),
@@ -104,6 +109,10 @@ class Capsule(Base):
     signed_statement: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     signed_statement_sha256: Mapped[bytes | None] = mapped_column(
         LargeBinary(32),
+        nullable=True,
+    )
+    publish_signature: Mapped[bytes | None] = mapped_column(
+        LargeBinary(69),
         nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(

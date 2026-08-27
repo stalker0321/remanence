@@ -108,6 +108,7 @@ def _add_draft(
         state=state,
         signed_statement=b"signed-statement" if is_ready else None,
         signed_statement_sha256=_digest(b"signed-statement") if is_ready else None,
+        publish_signature=b"p" * 69 if is_ready else None,
         created_at=_NOW,
         ready_at=_NOW if is_ready else None,
         draft_expires_at=_NOW + timedelta(days=7),

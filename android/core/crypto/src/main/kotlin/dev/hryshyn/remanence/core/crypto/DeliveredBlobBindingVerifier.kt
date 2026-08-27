@@ -1,6 +1,8 @@
 package dev.hryshyn.remanence.core.crypto
 
+import dev.hryshyn.remanence.core.model.BlobId
 import dev.hryshyn.remanence.protocol.v1.ArtifactBinding
+import dev.hryshyn.remanence.protocol.v1.ArtifactKind
 import java.security.MessageDigest
 
 /**
@@ -13,6 +15,16 @@ import java.security.MessageDigest
  * The check is byte-for-byte equivalent to the previous in-line gate step:
  * the order of comparisons and the [RejectionReason.BLOB_SUBSTITUTION]
  * outcome it produces are pinned by the existing test matrix.
+ *
+ * M2-P11 adds the recognition-index check
+ * [matchesRecognition]: given the canonical signed statement, an explicit
+ * recognition [BlobId], and the delivered recognition ciphertext size and
+ * SHA-256, the statement must contain exactly one
+ * `RECOGNITION_MANIFEST` binding with ordinal `-1` and that binding must
+ * match the supplied identity, byte size, and constant-time SHA-256. Other
+ * content/photo bindings may be absent — they are not consulted and not
+ * marked verified. This is for control/index sync only; the full
+ * [CapsuleAcceptanceGate] still demands every declared blob.
  */
 internal class DeliveredBlobBindingVerifier {
 
@@ -20,6 +32,18 @@ internal class DeliveredBlobBindingVerifier {
         bindings: List<ArtifactBinding>,
         delivered: List<DeliveredBlob>,
     ): Boolean = blobsMatch(bindings, delivered)
+
+    fun matchesRecognition(
+        bindings: List<ArtifactBinding>,
+        recognitionBlobId: BlobId,
+        recognitionCiphertextSize: Long,
+        recognitionCiphertextSha256: ByteArray,
+    ): Boolean = recognitionBindingMatches(
+        bindings,
+        recognitionBlobId,
+        recognitionCiphertextSize,
+        recognitionCiphertextSha256,
+    )
 
     private fun blobsMatch(bindings: List<ArtifactBinding>, delivered: List<DeliveredBlob>): Boolean {
         if (bindings.size != delivered.size) return false
@@ -33,7 +57,28 @@ internal class DeliveredBlobBindingVerifier {
         }
     }
 
+    private fun recognitionBindingMatches(
+        bindings: List<ArtifactBinding>,
+        recognitionBlobId: BlobId,
+        recognitionCiphertextSize: Long,
+        recognitionCiphertextSha256: ByteArray,
+    ): Boolean {
+        val recognitionBindings = bindings.filter { binding ->
+            binding.kind == ArtifactKind.RECOGNITION_MANIFEST && binding.ordinal == RECOGNITION_ORDINAL
+        }
+        if (recognitionBindings.size != 1) return false
+        val binding = recognitionBindings.single()
+        if (binding.blobId != recognitionBlobId.toProtoBytes()) return false
+        if (binding.ciphertextSize != recognitionCiphertextSize) return false
+        if (recognitionCiphertextSha256.size != SHA256_BYTES) return false
+        return MessageDigest.isEqual(
+            binding.ciphertextSha256.toByteArray(),
+            recognitionCiphertextSha256,
+        )
+    }
+
     private companion object {
         const val SHA256_BYTES = 32
+        const val RECOGNITION_ORDINAL = -1
     }
 }

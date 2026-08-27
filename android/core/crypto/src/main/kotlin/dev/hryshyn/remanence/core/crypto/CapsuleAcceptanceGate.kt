@@ -43,6 +43,13 @@ enum class RejectionReason {
     STATEMENT_HASH_MISMATCH,
     LAYOUT_INVALID,
     BLOB_SUBSTITUTION,
+    /**
+     * Control/index acceptance only: the signed statement does not carry
+     * exactly one RECOGNITION_MANIFEST binding that matches the delivered
+     * recognition blob identity. The full [CapsuleAcceptanceGate] does not
+     * emit this reason.
+     */
+    RECOGNITION_BINDING_INVALID,
 }
 
 /**

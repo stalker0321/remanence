@@ -10,6 +10,16 @@ from remanence.storage.base import (
     InvalidBlobKeyError,
 )
 from remanence.storage.local import LocalBlobPathResolver, LocalFileBlobStore
+from remanence.storage.staging import (
+    CiphertextStager,
+    CiphertextStagingError,
+    InvalidStagingExpectationError,
+    StagedBlob,
+    StagingHashMismatchError,
+    StagingIOError,
+    StagingSizeExceededError,
+    StagingSizeTruncatedError,
+)
 
 __all__ = [
     "BlobConflictError",
@@ -21,4 +31,12 @@ __all__ = [
     "InvalidBlobKeyError",
     "LocalBlobPathResolver",
     "LocalFileBlobStore",
+    "CiphertextStager",
+    "CiphertextStagingError",
+    "InvalidStagingExpectationError",
+    "StagedBlob",
+    "StagingHashMismatchError",
+    "StagingIOError",
+    "StagingSizeExceededError",
+    "StagingSizeTruncatedError",
 ]

@@ -131,6 +131,14 @@ class ScanViewModel(
     private val _terminal = MutableStateFlow<ScanTerminalState>(ScanTerminalState.Idle)
     val terminal: StateFlow<ScanTerminalState> = _terminal.asStateFlow()
 
+    /**
+     * Published only after [beginSession] has reset the retained controllers.
+     * The root surface gates camera composition on this value so a new epoch
+     * cannot bind against the previous epoch's permission/binding state.
+     */
+    private val _initializedEpoch = MutableStateFlow<Long?>(null)
+    val initializedEpoch: StateFlow<Long?> = _initializedEpoch.asStateFlow()
+
     private val queuedStill = AtomicReference<ScannedSide?>()
     private val frontProcessor = frontProcessor
     private val backProcessor = backProcessor
@@ -171,6 +179,7 @@ class ScanViewModel(
         queuedStill.set(null)
         _matchState.value = ScanMatchUiState.AwaitingCapture
         _terminal.value = ScanTerminalState.Idle
+        _initializedEpoch.value = epoch
     }
 
     // ------------------------------------------------------------------

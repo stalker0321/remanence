@@ -27,10 +27,15 @@ An unknown postcard that has no capsule in the local index must produce `NO_MATC
 
 Both sender and recipient use the same still-capture component and profile:
 
-1. Show a fixed postcard guide and short instruction.
+1. Show a fixed landscape postcard guide and short instruction. The guide is
+   the shared normalized geometry used by the preview overlay and the still
+   crop at every preview/capture aspect ratio.
 2. Capture JPEG still with CameraX `ImageCapture`; no continuous `ImageAnalysis`.
 3. Apply EXIF orientation, decode a bounded-resolution working bitmap, and strip metadata.
-4. Detect the postcard quadrilateral and show the proposed crop briefly.
+4. Detect the postcard quadrilateral and show the proposed crop briefly. If no
+   convex four-point contour is credible, use only the bounded guide-aligned
+   central crop; never silently use the full frame. The same blur, exposure,
+   glare, and usable-ORB gates apply to either crop source.
 5. If automatic corners fail or are visibly wrong, allow manual four-corner correction; do not silently use the full frame.
 6. Run quality gates. Failed quality returns a specific recapture instruction.
 7. Perspective-normalize and extract a fingerprint.
@@ -62,6 +67,7 @@ Initial capture gates for `mvp-orb-v1`:
 | Canonical long edge | 1600 px |
 | Maximum corner outside frame | 0 px |
 | Accepted aspect ratio | 1.15–2.20, either orientation |
+| Minimum contour ranking confidence | 0.70 |
 | Minimum Laplacian variance on canonical grayscale | 80 |
 | Maximum near-black pixel fraction | 0.25 |
 | Maximum clipped-white pixel fraction | 0.20 |

@@ -60,4 +60,9 @@ class StrictFakeStillCameraAdapter : StillCameraAdapter {
         check(releaseCalls == 0) { "a released adapter must never deliver onReady" }
         onReady?.invoke()
     }
+
+    /** Simulates a CameraX callback already queued when release invalidated it. */
+    fun emitQueuedReadyAfterRelease() {
+        onReady?.invoke()
+    }
 }

@@ -24,6 +24,7 @@ class RecognitionProfileTest {
             assertEquals(0.25, maxNearBlackFraction)
             assertEquals(0.20, maxClippedWhiteFraction)
             assertEquals(0.12, maxGlareRegionFraction)
+            assertEquals(0.80, minRectangularity)
         }
         with(seed.orb) {
             assertEquals(1500, nfeatures)
@@ -66,6 +67,7 @@ class RecognitionProfileTest {
             assertEquals(0.12, autoMarginOverRunnerUp)
             assertEquals(0.65, duplicateFrontBackMinScore)
             assertEquals(0.40, chooserCompositeMin)
+            assertEquals(0.70, minContourConfidence)
         }
     }
 
@@ -98,6 +100,14 @@ class RecognitionProfileTest {
     fun missingFieldFailsClosed() {
         val base = RecognitionProfileJson.encode(seed)
         val missing = base.replace("\"canonicalLongEdgePx\": 1600,", "")
+        assertTrue(missing != base)
+        assertFailsWith<Exception> { RecognitionProfile.fromJson(missing) }
+    }
+
+    @Test
+    fun missingContourConfidenceFailsClosed() {
+        val base = RecognitionProfileJson.encode(seed)
+        val missing = base.replace("\"minContourConfidence\": 0.7", "")
         assertTrue(missing != base)
         assertFailsWith<Exception> { RecognitionProfile.fromJson(missing) }
     }

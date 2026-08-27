@@ -18,10 +18,21 @@ import dev.hryshyn.remanence.core.crypto.SessionTokenStore
  */
 class SessionBootstrapTest {
 
-    private class FakeIdentity(var encryption: Boolean = true, var signing: Boolean = true) :
+    private val bundleA = "00000000-0000-4000-8000-000000000001"
+    private val bundleB = "00000000-0000-4000-8000-000000000002"
+
+    private class FakeIdentity(private val localBundleId: String? = "00000000-0000-4000-8000-000000000001") :
         IdentityAvailabilityPort {
-        override fun encryptionKeysetAvailable(): Boolean = encryption
-        override fun signingKeysetAvailable(): Boolean = signing
+        var calls: Int = 0
+            private set
+        var checkedBundleId: String? = null
+            private set
+
+        override fun hasIdentityFor(activeKeyBundleId: String): Boolean {
+            calls++
+            checkedBundleId = activeKeyBundleId
+            return localBundleId == activeKeyBundleId
+        }
     }
 
     private class SoftwareBoundary : KekBoundary {
@@ -55,8 +66,10 @@ class SessionBootstrapTest {
 
     private class FakeRefresher(var outcome: SessionRefreshOutcome) : SessionRefresher {
         var requestedWith: String? = null
+        var calls: Int = 0
 
         override suspend fun refresh(storedRefreshToken: String): SessionRefreshOutcome {
+            calls++
             requestedWith = storedRefreshToken
             return outcome
         }
@@ -66,19 +79,20 @@ class SessionBootstrapTest {
         val bootstrap: SessionBootstrap,
         val tokens: TokenPort,
         val refresher: FakeRefresher,
+        val identity: FakeIdentity,
     )
 
     private fun fixture(
         savedRefresh: String? = "stored-refresh-token",
         refresherOutcome: SessionRefreshOutcome = SessionRefreshOutcome.Rotated("fresh-access", "fresh-refresh"),
         identity: FakeIdentity = FakeIdentity(),
-        summary: PersistedAccountSummary? = PersistedAccountSummary("user-1", "mykola"),
+        summary: PersistedAccountSummary? = PersistedAccountSummary("user-1", "mykola", bundleA),
     ): Fixture {
         val dir = createTempDirectory("session").toFile().apply { deleteOnExit() }
         val tokens = TokenPort(dir, savedRefresh)
         val refresher = FakeRefresher(refresherOutcome)
         val bootstrap = SessionBootstrap(tokens, identity, { summary }, refresher)
-        return Fixture(bootstrap, tokens, refresher)
+        return Fixture(bootstrap, tokens, refresher, identity)
     }
 
     @Test
@@ -100,10 +114,58 @@ class SessionBootstrapTest {
 
     @Test
     fun missingIdentityIsRecoveryRequiredBeforeAnyNetworkCall() = runBlocking {
-        val f = fixture(identity = FakeIdentity(signing = false), refresherOutcome = SessionRefreshOutcome.Rejected)
+        val f = fixture(
+            identity = FakeIdentity(localBundleId = null),
+            refresherOutcome = SessionRefreshOutcome.Rejected,
+        )
 
         assertEquals(SessionState.RecoveryRequired, f.bootstrap.bootstrap())
         assertEquals(null, f.refresher.requestedWith)
+    }
+
+    @Test
+    fun matchingPersistedBundleProducesNormalActiveState() = runBlocking {
+        val f = fixture(identity = FakeIdentity(localBundleId = bundleA))
+
+        val active = f.bootstrap.bootstrap() as SessionState.Active
+
+        assertEquals("stored-refresh-token", f.refresher.requestedWith)
+        assertEquals(bundleA, f.identity.checkedBundleId)
+        assertEquals(bundleA, active.activeKeyBundleId)
+        assertEquals(1, f.refresher.calls)
+    }
+
+    @Test
+    fun differentPersistedBundleCannotUseAnotherAccountsLocalIdentity() = runBlocking {
+        val f = fixture(
+            identity = FakeIdentity(localBundleId = bundleA),
+            summary = PersistedAccountSummary("user-b", "other", bundleB),
+        )
+
+        assertEquals(SessionState.RecoveryRequired, f.bootstrap.bootstrap())
+        assertEquals(1, f.identity.calls)
+        assertEquals(0, f.refresher.calls)
+        assertEquals(bundleB, f.identity.checkedBundleId)
+    }
+
+    @Test
+    fun missingPersistedSummaryIsRecoveryRequiredBeforeRefresh() = runBlocking {
+        val f = fixture(summary = null)
+
+        assertEquals(SessionState.RecoveryRequired, f.bootstrap.bootstrap())
+        assertEquals(0, f.identity.calls)
+        assertEquals(0, f.refresher.calls)
+    }
+
+    @Test
+    fun unusablePersistedBundleIsRecoveryRequiredBeforeRefresh() = runBlocking {
+        val f = fixture(
+            summary = PersistedAccountSummary("user-1", "mykola", "not-a-bundle"),
+        )
+
+        assertEquals(SessionState.RecoveryRequired, f.bootstrap.bootstrap())
+        assertEquals(0, f.identity.calls)
+        assertEquals(0, f.refresher.calls)
     }
 
     @Test
@@ -117,6 +179,7 @@ class SessionBootstrapTest {
         val active = state as SessionState.Active
         assertEquals("user-1", active.userId)
         assertEquals("mykola", active.handle)
+        assertEquals(bundleA, active.activeKeyBundleId)
         assertFalse(!active.hasEncryptionKeyset || !active.hasSigningKeyset)
         // The rotated REFRESH token replaced the stored one, sealed on disk.
         assertEquals("fresh-refresh", f.tokens.readToken())
@@ -142,13 +205,11 @@ class SessionBootstrapTest {
 
     @Test
     fun logoutClearsTheSealedTokenAndReturnsToSignedOutWhileKeysRemain() = runBlocking {
-        val identity = FakeIdentity()
-        val f = fixture(identity = identity)
+        val f = fixture()
 
         val afterLogout = f.bootstrap.logout()
 
         assertEquals(SessionState.SignedOut, afterLogout)
-        assertTrue(identity.encryption && identity.signing)
         assertEquals(1, f.tokens.clearCount)
         // A subsequent cold start finds no token: signed out, keys still on disk.
         assertEquals(SessionState.SignedOut, fixture(savedRefresh = null).bootstrap.bootstrap())

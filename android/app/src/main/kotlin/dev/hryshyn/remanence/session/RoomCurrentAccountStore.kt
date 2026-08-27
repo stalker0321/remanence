@@ -26,7 +26,13 @@ class RoomCurrentAccountStore(private val dao: LocalAccountDao) {
     }
 
     suspend fun load(): PersistedAccountSummary? =
-        dao.getAccount()?.let { PersistedAccountSummary(it.userId, it.handleNormalized) }
+        dao.getAccount()?.let {
+            PersistedAccountSummary(
+                userId = it.userId,
+                handle = it.handleNormalized,
+                activeKeyBundleId = it.activeKeyBundleId,
+            )
+        }
 
     suspend fun loadEntity(): LocalAccountEntity? = dao.getAccount()
 

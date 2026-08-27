@@ -276,6 +276,7 @@ class RootViewModel(
                     AuthUiState.Authenticated(
                         userId = resolved.userId ?: "",
                         handle = resolved.handle ?: "",
+                        activeKeyBundleId = resolved.activeKeyBundleId,
                     )
             }
         } catch (cancelled: CancellationException) {

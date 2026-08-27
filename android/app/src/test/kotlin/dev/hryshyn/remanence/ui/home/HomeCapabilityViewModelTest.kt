@@ -20,6 +20,7 @@ import org.junit.Test
 class HomeCapabilityViewModelTest {
 
     private val testDispatcher = UnconfinedTestDispatcher()
+    private val activeBundleId = "00000000-0000-4000-8000-000000000001"
 
     @Before
     fun setUp() {
@@ -32,18 +33,12 @@ class HomeCapabilityViewModelTest {
     }
 
     private class FakeIdentity(
-        var encryption: Boolean = true,
-        var signing: Boolean = true,
+        var has: Boolean = true,
         var explode: Boolean = false,
     ) : IdentityAvailabilityPort {
-        override fun encryptionKeysetAvailable(): Boolean {
+        override fun hasIdentityFor(activeKeyBundleId: String): Boolean {
             if (explode) throw IllegalStateException("storage gone")
-            return encryption
-        }
-
-        override fun signingKeysetAvailable(): Boolean {
-            if (explode) throw IllegalStateException("storage gone")
-            return signing
+            return has
         }
     }
 
@@ -80,7 +75,7 @@ class HomeCapabilityViewModelTest {
     fun authenticatedWithBothKeysetsIsCryptoReady() {
         val vm = viewModel(FakeIdentity())
 
-        vm.onAuthStateChanged(AuthUiState.Authenticated("user-1", "mykola"))
+        vm.onAuthStateChanged(AuthUiState.Authenticated("user-1", "mykola", activeBundleId))
 
         assertEquals(
             AccountCapabilityState.CryptoReady(userId = "user-1", handle = "mykola"),
@@ -89,10 +84,10 @@ class HomeCapabilityViewModelTest {
     }
 
     @Test
-    fun authenticatedButMissingSigningKeysetFallsBackToRecovery() {
-        val vm = viewModel(FakeIdentity(signing = false))
+    fun authenticatedButMissingLocalIdentityFallsBackToRecovery() {
+        val vm = viewModel(FakeIdentity(has = false))
 
-        vm.onAuthStateChanged(AuthUiState.Authenticated("user-1", "mykola"))
+        vm.onAuthStateChanged(AuthUiState.Authenticated("user-1", "mykola", activeBundleId))
 
         assertEquals(AccountCapabilityState.RecoveryRequired, vm.capability.value)
     }
@@ -101,7 +96,7 @@ class HomeCapabilityViewModelTest {
     fun identityAvailabilityFailureNeverYieldsCryptoReady() {
         val vm = viewModel(FakeIdentity(explode = true))
 
-        vm.onAuthStateChanged(AuthUiState.Authenticated("user-1", "mykola"))
+        vm.onAuthStateChanged(AuthUiState.Authenticated("user-1", "mykola", activeBundleId))
 
         assertEquals(AccountCapabilityState.RecoveryRequired, vm.capability.value)
     }

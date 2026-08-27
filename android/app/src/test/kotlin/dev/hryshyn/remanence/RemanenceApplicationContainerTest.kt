@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import dev.hryshyn.remanence.auth.SoftwareKekBoundary
 import java.io.File
+import java.util.UUID
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -73,6 +74,10 @@ class RemanenceApplicationContainerTest {
             handle = "mykola",
             activeKeyBundleId = "00000000-0000-4000-8000-000000000001",
         )
+        assertEquals(
+            "00000000-0000-4000-8000-000000000001",
+            container.currentAccountStore.load()?.activeKeyBundleId,
+        )
         container.fingerprintPersistence.persist(
             capsuleId = "capsule-1",
             side = FingerprintSide.FRONT,
@@ -97,6 +102,26 @@ class RemanenceApplicationContainerTest {
 
         assertEquals(IdentityBundleRepository.LoadResult.RecoveryRequired, result)
         assertFalse(appContainer.identityRepository.exists())
+    }
+
+    @Test
+    fun coldStartIdentityAvailabilityRequiresTheExactDerivedBundleId() {
+        val appContainer = AppContainer(context, kekBoundaryOverride = SoftwareKekBoundary())
+        if (!appContainer.kekBoundary.hasKey(appContainer.identityKekAlias)) {
+            appContainer.kekBoundary.createAes256GcmKey(appContainer.identityKekAlias)
+        }
+        appContainer.identityRepository.createFresh(appContainer.identityKekAlias)
+
+        val exports = appContainer.identityRepository.loadPublicExports()
+            as IdentityBundleRepository.PublicExportsResult.Available
+        val derivedBundleId = UUID.nameUUIDFromBytes(exports.encryptionPublicKeyset).toString()
+
+        assertTrue(appContainer.identityAvailability.hasIdentityFor(derivedBundleId))
+        assertFalse(
+            appContainer.identityAvailability.hasIdentityFor(
+                "00000000-0000-4000-8000-000000000002",
+            ),
+        )
     }
 
     @Test

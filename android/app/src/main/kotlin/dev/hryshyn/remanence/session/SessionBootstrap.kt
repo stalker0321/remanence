@@ -1,5 +1,7 @@
 package dev.hryshyn.remanence.session
 
+import dev.hryshyn.remanence.core.model.KeyBundleId
+
 /**
  * M1-I02 cold-start session state (docs/security.md section 8): the single
  * source every surface reads at launch. Deliberately multi-valued - a server
@@ -26,6 +28,7 @@ sealed interface SessionState {
         val handle: String?,
         val hasEncryptionKeyset: Boolean,
         val hasSigningKeyset: Boolean,
+        val activeKeyBundleId: String? = null,
     ) : SessionState
 }
 
@@ -43,9 +46,8 @@ interface SessionTokenPort {
 
 /** Port over the wrapped identity keysets on disk. */
 interface IdentityAvailabilityPort {
-    fun encryptionKeysetAvailable(): Boolean
-
-    fun signingKeysetAvailable(): Boolean
+    /** True only when the locally loaded identity derives exactly this bundle ID. */
+    fun hasIdentityFor(activeKeyBundleId: String): Boolean
 }
 
 fun interface AccountSummaryPort {
@@ -102,9 +104,16 @@ class SessionBootstrap(
         val stored = readSealedToken()
             ?: return SessionState.SignedOut
 
-        val encryption = identity.encryptionKeysetAvailable()
-        val signing = identity.signingKeysetAvailable()
-        if (!encryption || !signing) {
+        val summary = account.load()
+        if (summary == null || !isCanonicalKeyBundleId(summary.activeKeyBundleId)) {
+            return SessionState.RecoveryRequired
+        }
+        val identityMatches = try {
+            identity.hasIdentityFor(summary.activeKeyBundleId)
+        } catch (_: Exception) {
+            false
+        }
+        if (!identityMatches) {
             return SessionState.RecoveryRequired
         }
 
@@ -122,12 +131,12 @@ class SessionBootstrap(
                     false
                 }
                 if (!persisted) return SessionState.SignedOut
-                val summary = account.load()
                 SessionState.Active(
-                    userId = summary?.userId,
-                    handle = summary?.handle,
+                    userId = summary.userId,
+                    handle = summary.handle,
                     hasEncryptionKeyset = true,
                     hasSigningKeyset = true,
+                    activeKeyBundleId = summary.activeKeyBundleId,
                 )
             }
 
@@ -162,5 +171,13 @@ class SessionBootstrap(
         } catch (_: Exception) {
             tokens.clearToken()
             null
+        }
+
+    private fun isCanonicalKeyBundleId(raw: String): Boolean =
+        try {
+            KeyBundleId.parseRest(raw)
+            true
+        } catch (_: IllegalArgumentException) {
+            false
         }
 }

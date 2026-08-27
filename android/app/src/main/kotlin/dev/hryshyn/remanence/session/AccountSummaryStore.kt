@@ -4,4 +4,5 @@ package dev.hryshyn.remanence.session
 data class PersistedAccountSummary(
     val userId: String,
     val handle: String,
+    val activeKeyBundleId: String,
 )

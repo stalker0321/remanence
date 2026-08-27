@@ -29,7 +29,7 @@ class HomeCapabilityViewModel(
 
             AuthUiState.RecoveryRequired -> AccountCapabilityState.RecoveryRequired
 
-            is AuthUiState.Authenticated -> if (cryptoReady()) {
+            is AuthUiState.Authenticated -> if (cryptoReady(authState.activeKeyBundleId)) {
                 AccountCapabilityState.CryptoReady(authState.userId, authState.handle)
             } else {
                 AccountCapabilityState.RecoveryRequired
@@ -37,9 +37,10 @@ class HomeCapabilityViewModel(
         }
     }
 
-    private fun cryptoReady(): Boolean = try {
-        identityAvailability.encryptionKeysetAvailable() && identityAvailability.signingKeysetAvailable()
-    } catch (_: Exception) {
-        false
-    }
+    private fun cryptoReady(activeKeyBundleId: String?): Boolean =
+        activeKeyBundleId != null && try {
+            identityAvailability.hasIdentityFor(activeKeyBundleId)
+        } catch (_: Exception) {
+            false
+        }
 }

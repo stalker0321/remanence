@@ -17,6 +17,7 @@ sealed interface AuthUiState {
     data class Authenticated(
         val userId: String,
         val handle: String,
+        val activeKeyBundleId: String? = null,
     ) : AuthUiState
 }
 

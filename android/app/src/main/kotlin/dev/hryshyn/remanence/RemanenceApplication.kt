@@ -430,11 +430,11 @@ class AppContainer(
      */
     val identityAvailability: IdentityAvailabilityPort by lazy {
         object : IdentityAvailabilityPort {
-            private fun bothAvailable(): Boolean =
-                identityRepository.exists() &&
-                    identityRepository.load() !is IdentityBundleRepository.LoadResult.RecoveryRequired
-            override fun encryptionKeysetAvailable(): Boolean = bothAvailable()
-            override fun signingKeysetAvailable(): Boolean = bothAvailable()
+            override fun hasIdentityFor(activeKeyBundleId: String): Boolean {
+                val exports = identityRepository.loadPublicExports()
+                return exports is IdentityBundleRepository.PublicExportsResult.Available &&
+                    deriveKeyBundleId(exports.encryptionPublicKeyset) == activeKeyBundleId
+            }
         }
     }
 

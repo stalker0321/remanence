@@ -194,7 +194,7 @@ class CreatePublishLifetimeTest {
             accessTokenProvider = { null },
             identityProvider = { identityGate.await() },
             persistence = persistence,
-            outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, outboxDir),
+            outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(outboxDir)),
             profile = RecognitionProfile.mvpOrbV1(),
             stagingDirectory = stagingDir,
             openPhotoSource = { id ->

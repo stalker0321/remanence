@@ -126,7 +126,7 @@ class RootFlowLayoutTest {
         persistence = NoPersistence(),
         outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(
             database,
-            File(context().filesDir, "root-flow"),
+            dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(context().filesDir, "root-flow")),
         ),
         profile = RecognitionProfile.mvpOrbV1(),
         stagingDirectory = File(context().filesDir, "root-flow-staging"),

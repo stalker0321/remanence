@@ -147,7 +147,7 @@ class CrossIdentityCapsuleFlowTest {
                 ),
             ),
         )
-        CapsuleOutboxStager(database, outboxDir).stage(prepared)
+        CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(outboxDir)).stage(prepared)
     }
 
     @Suppress("SameParameterValue")
@@ -394,7 +394,7 @@ class CrossIdentityCapsuleFlowTest {
                 ),
             ),
         )
-        CapsuleOutboxStager(database, outboxDir).stage(prepared)
+        CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(outboxDir)).stage(prepared)
     }
 
     private fun attackerPublicExport(): ByteArray =

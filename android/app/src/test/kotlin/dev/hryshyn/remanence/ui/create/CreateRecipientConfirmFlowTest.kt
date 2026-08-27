@@ -149,7 +149,7 @@ class CreateRecipientConfirmFlowTest {
         accessTokenProvider = { "token" },
         identityProvider = { null },
         persistence = NoPersistence(),
-        outboxStager = CapsuleOutboxStager(database, stagingDir),
+        outboxStager = CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir)),
         profile = RecognitionProfile.mvpOrbV1(),
         stagingDirectory = stagingDir,
         openPhotoSource = { error("photo picker not used in this test") },

@@ -161,7 +161,7 @@ class CreateGoldenTransitionTableTest {
         // Parked identity keeps the PUBLISHING transition observable.
         identityProvider = { CompletableDeferred<SenderIdentitySnapshot>().await() },
         persistence = NoPersistence(),
-        outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, stagingDir),
+        outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir)),
         profile = RecognitionProfile.mvpOrbV1(),
         stagingDirectory = stagingDir,
         openPhotoSource = { error("unused") },

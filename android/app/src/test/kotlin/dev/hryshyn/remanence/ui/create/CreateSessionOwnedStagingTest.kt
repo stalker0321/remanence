@@ -203,7 +203,7 @@ class CreateSessionOwnedStagingTest {
                 if (identityCalls.incrementAndGet() == 1) identityGate.await() else senderIdentity()
             },
             persistence = persistence,
-            outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, File(stagingRoot.parentFile, "session-owned-outbox")),
+            outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(stagingRoot.parentFile, "session-owned-outbox"))),
             profile = RecognitionProfile.mvpOrbV1(),
             stagingDirectory = stagingRoot,
             openPhotoSource = { id ->

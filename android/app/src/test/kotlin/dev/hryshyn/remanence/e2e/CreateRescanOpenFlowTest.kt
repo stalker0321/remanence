@@ -164,7 +164,7 @@ class CreateRescanOpenFlowTest {
                     TinkProtoKeysetFormat.parseKeysetWithoutSecret(identity.encryptionPublicKeyset),
             ),
         )
-        CapsuleOutboxStager(database, outboxDir).stage(prepared)
+        CapsuleOutboxStager(database, roots).stage(prepared)
         return outboxDir
     }
 

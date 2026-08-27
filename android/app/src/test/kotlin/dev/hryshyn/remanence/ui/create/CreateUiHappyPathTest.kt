@@ -192,7 +192,7 @@ class CreateUiHappyPathTest {
                 )
             },
             persistence = persistence,
-            outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, stagingDir()),
+            outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir())),
             profile = RecognitionProfile.mvpOrbV1(),
             stagingDirectory = stagingDir(),
             openPhotoSource = { id ->

@@ -256,7 +256,7 @@ class CapsuleRoutingCorruptionTest {
                     TinkProtoKeysetFormat.parseKeysetWithoutSecret(identity.encryptionPublicKeyset),
             ),
         )
-        CapsuleOutboxStager(database, File(filesRoot, "outbox")).stage(prepared)
+        CapsuleOutboxStager(database, roots).stage(prepared)
     }
 
     private suspend fun tamperRow(transform: (OutboxCapsuleEntity) -> OutboxCapsuleEntity) {

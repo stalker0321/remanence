@@ -51,7 +51,9 @@ class RemanenceViewModelFactory(
             persistence = container.fingerprintPersistence,
             outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(
                 container.database,
-                File(container.appFilesRoot, "outbox-ciphertext"),
+                // M2-P04: staged ciphertext lands in each owner's own
+                // accounts/<owner>/outbox-ciphertext root.
+                container.accountScopedFileRoots,
             ),
             profile = dev.hryshyn.remanence.core.recognition.RecognitionProfile.mvpOrbV1(),
             // FIX-STATE-13: the staging ROOT; each publication owns

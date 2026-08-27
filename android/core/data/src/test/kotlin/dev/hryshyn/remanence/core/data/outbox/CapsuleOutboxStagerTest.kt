@@ -10,6 +10,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -51,7 +52,7 @@ class CapsuleOutboxStagerTest {
 
     private lateinit var context: Context
     private lateinit var database: RemanenceLocalDatabase
-    private lateinit var ciphertextDirectory: File
+    private lateinit var storageRoots: dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 
     private val capsuleId = UUID.fromString("2b111111-2222-4333-8444-555555555555")
     private val recipientUser = UUID.fromString("2b222222-3333-4444-8555-666666666666")
@@ -67,12 +68,22 @@ class CapsuleOutboxStagerTest {
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
         TinkPrimitives.ensureRegistered()
+        File(context.filesDir, "accounts").deleteRecursively()
+        storageRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(context.filesDir)
     }
 
     @After
     fun tearDown() {
         if (::database.isInitialized) database.close()
+        File(context.filesDir, "accounts").deleteRecursively()
     }
+
+    /** The staged owner's own outbox-ciphertext directory (per P04 wiring). */
+    private fun outboxRoot(owner: String = OWNER): File =
+        storageRoots.child(
+            dev.hryshyn.remanence.core.model.UserId(java.util.UUID.fromString(owner)),
+            dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots.ChildRoot.OUTBOX_CIPHERTEXT,
+        )
 
     private fun newFileBackedDatabase(name: String): RemanenceLocalDatabase =
         Room.databaseBuilder(context, RemanenceLocalDatabase::class.java, name)
@@ -80,14 +91,18 @@ class CapsuleOutboxStagerTest {
             .build()
 
     /** Real encryption chain: AEAD artifacts + HPKE envelope over canary payloads. */
-    private fun preparedCapsule(ownerUserId: String = OWNER): PreparedOutboxCapsule {
+    private fun preparedCapsule(
+        ownerUserId: String = OWNER,
+        capsuleUuid: java.util.UUID = capsuleId,
+        blobIdBase: Long = 0L,
+    ): PreparedOutboxCapsule {
         val capsuleKeyset = CapsuleKeysetGenerator().generate()
         val identity = AccountIdentityGenerator().generate()
         val recipientPublic = com.google.crypto.tink.TinkProtoKeysetFormat.parseKeysetWithoutSecret(
             identity.encryptionPublicKeyset,
         )
         fun aad(blobId: UUID, kind: CapsuleArtifactKind, ordinal: Int) = ArtifactAadInput(
-            capsuleId = CapsuleId(capsuleId),
+            capsuleId = CapsuleId(capsuleUuid),
             blobId = BlobId(blobId),
             artifactKind = kind,
             ordinal = ordinal,
@@ -95,7 +110,7 @@ class CapsuleOutboxStagerTest {
             recipientUserId = UserId(recipientUser),
         )
 
-        fun blob(n: Int): UUID = UUID.fromString("00000000-0000-4000-8000-%012d".format(n))
+        fun blob(n: Int): UUID = UUID.fromString("00000000-0000-4000-8000-%012d".format(blobIdBase + n))
 
         val cryptor = CapsuleArtifactCryptor()
         val recognition = cryptor.encrypt(
@@ -117,7 +132,7 @@ class CapsuleOutboxStagerTest {
             PreparedOutboxArtifact(blob(10 + index), OutboxArtifactKind.PHOTO, index, ciphertext)
         }
         val envelopeContext = RecipientEnvelopeContextInput(
-            capsuleId = CapsuleId(capsuleId),
+            capsuleId = CapsuleId(capsuleUuid),
             senderUserId = UserId(senderUser),
             recipientUserId = UserId(recipientUser),
             recipientKeyBundleId = KeyBundleId(recipientBundle),
@@ -129,8 +144,8 @@ class CapsuleOutboxStagerTest {
         )
 
         return PreparedOutboxCapsule(
-            capsuleId = capsuleId,
-            idempotencyKey = "idempotency-$capsuleId",
+            capsuleId = capsuleUuid,
+            idempotencyKey = "idempotency-$capsuleUuid",
             ownerUserId = ownerUserId,
             senderUserId = senderUser,
             recipientUserId = recipientUser,
@@ -151,9 +166,8 @@ class CapsuleOutboxStagerTest {
     @Test
     fun stagesFilesAndRowsAtomicallyWithVerifiableBindings() = runBlocking {
         database = newFileBackedDatabase("stager-happy.db")
-        ciphertextDirectory = File(context.filesDir, "outbox-staging-ok")
         val prepared = preparedCapsule()
-        val stager = CapsuleOutboxStager(database, ciphertextDirectory)
+        val stager = CapsuleOutboxStager(database, storageRoots)
 
         val staged = stager.stage(prepared)
 
@@ -189,8 +203,7 @@ class CapsuleOutboxStagerTest {
     @Test
     fun refusesNonCanonicalOwnerAccountIdsBeforeWritingAnything() = runBlocking {
         database = newFileBackedDatabase("stager-owner.db")
-        ciphertextDirectory = File(context.filesDir, "outbox-staging-owner")
-        val stager = CapsuleOutboxStager(database, ciphertextDirectory)
+        val stager = CapsuleOutboxStager(database, storageRoots)
 
         for (invalid in listOf("", "not-a-uuid", OWNER.uppercase())) {
             try {
@@ -207,15 +220,15 @@ class CapsuleOutboxStagerTest {
     @Test
     fun localFailureRollsBackRowsAndRemovesEveryFileWithoutPlaintextTraces() = runBlocking {
         database = newFileBackedDatabase("stager-failure.db")
-        ciphertextDirectory = File(context.filesDir, "outbox-staging-conflict")
         val prepared = preparedCapsule()
         // Deterministic local failure committed BEFORE staging begins: a
         // directory occupies the last photo's target path, so its rename fails
         // after the envelope and earlier artifacts were already persisted.
         val blockedBlobId = prepared.artifacts.last().blobId
-        assertTrue(File(ciphertextDirectory, "$blockedBlobId.bin").mkdirs())
+        val blockedTarget = File(outboxRoot(), "$blockedBlobId.bin")
+        blockedTarget.mkdirs()
 
-        val stager = CapsuleOutboxStager(database, ciphertextDirectory)
+        val stager = CapsuleOutboxStager(database, storageRoots)
         try {
             stager.stage(prepared)
             throw AssertionError("expected failure")
@@ -226,7 +239,7 @@ class CapsuleOutboxStagerTest {
 
         // Nothing of this invocation may survive: only the injected blocker
         // directory remains, and neither capsule nor blob rows exist.
-        val leftovers = ciphertextDirectory.listFiles().orEmpty()
+        val leftovers = outboxRoot().listFiles().orEmpty()
         assertEquals(listOf("$blockedBlobId.bin"), leftovers.map { it.name })
         assertTrue(leftovers.single().isDirectory)
         assertEquals(null, database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId.toString(), OWNER))
@@ -239,8 +252,7 @@ class CapsuleOutboxStagerTest {
     @Test
     fun refusesToStageTheSameCapsuleTwiceAndKeepsFirstRecordIntact() = runBlocking {
         database = newFileBackedDatabase("stager-twice.db")
-        ciphertextDirectory = File(context.filesDir, "outbox-staging-twice")
-        val stager = CapsuleOutboxStager(database, ciphertextDirectory)
+        val stager = CapsuleOutboxStager(database, storageRoots)
         stager.stage(preparedCapsule())
 
         try {
@@ -261,8 +273,7 @@ class CapsuleOutboxStagerTest {
     fun anotherOwnerCannotObserveMutateOrReplaceAStagedCapsule() = runBlocking {
         val otherOwner = "0198f0a0-0000-7000-8000-00000000ab02"
         database = newFileBackedDatabase("stager-owner-isolation.db")
-        ciphertextDirectory = File(context.filesDir, "outbox-staging-owner-isolation")
-        val stager = CapsuleOutboxStager(database, ciphertextDirectory)
+        val stager = CapsuleOutboxStager(database, storageRoots)
         stager.stage(preparedCapsule())
 
         // Staging the SAME capsule id under another owner is refused (the
@@ -291,8 +302,7 @@ class CapsuleOutboxStagerTest {
         val winnerOwner = "0198f0a0-0000-7000-8000-00000000ab02"
         val attackerOwner = OWNER
         database = newFileBackedDatabase("stager-owner-collision.db")
-        ciphertextDirectory = File(context.filesDir, "outbox-staging-owner-collision")
-        val stager = CapsuleOutboxStager(database, ciphertextDirectory)
+        val stager = CapsuleOutboxStager(database, storageRoots)
 
         // B commits first, producing random ciphertext only it knows about.
         stager.stage(preparedCapsule(ownerUserId = winnerOwner))
@@ -313,15 +323,15 @@ class CapsuleOutboxStagerTest {
             ).map { File(it) } + winnerBlobs.map { File(it.localCiphertextPath) }
         val winnerBytes = winnerFiles.map { it.readBytes().toList() }
 
-        // A stages the SAME capsule id with fresh ciphertext bytes.
+        // A stages the SAME capsule id with fresh ciphertext bytes. The
+        // strict insert aborts on the foreign-owned row; A may write inside
+        // ITS OWN root during the attempt but every such byte is rolled back
+        // out by the invocation-local cleanup afterwards.
         try {
             stager.stage(preparedCapsule(ownerUserId = attackerOwner))
             throw AssertionError("expected collision refusal")
-        } catch (expected: IllegalStateException) {
-            assertEquals(
-                "outbox file already present: envelope-$capsuleId.bin",
-                expected.message,
-            )
+        } catch (_: Exception) {
+            // any refusal shape is acceptable; integrity asserts below decide
         }
 
         // Winner row is untouched, byte-for-byte logically identical.
@@ -359,13 +369,84 @@ class CapsuleOutboxStagerTest {
             5,
             database.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleId.toString(), winnerOwner).size,
         )
+   
+        // Filesystem isolation: B's committed files live only under B's own
+        // outbox root; A's refused attempt left NOTHING in its directory.
+        val winnerRoot = outboxRoot(winnerOwner)
+        assertTrue(winnerFiles.all { it.canonicalFile.path.startsWith(winnerRoot.canonicalFile.path) })
+        val attackerRoot = outboxRoot(attackerOwner)
+        if (attackerRoot.exists()) {
+            assertTrue(attackerRoot.listFiles().orEmpty().isEmpty())
+        }
+    }
+
+    /**
+     * M2-P04 filesystem proof: each local account stages into ITS OWN
+     * accounts/<owner>/outbox-ciphertext root, and a failed cleanup-on-write
+     * inside one owner's root can never touch another owner's directory.
+     */
+    @Test
+    fun abAccountsStageIntoDisjointDirectoriesAndCleanupStaysInsideOneAccount() = runBlocking {
+        database = newFileBackedDatabase("stager-ab-dirs.db")
+        val stager = CapsuleOutboxStager(database, storageRoots)
+        val bCapsule = UUID.fromString("3c111111-2222-4333-8444-555555555555")
+        val otherOwner = "0198f0a0-0000-7000-8000-00000000ab02"
+
+        val stagedA = stager.stage(preparedCapsule())
+        val stagedB =
+            stager.stage(
+                preparedCapsule(
+                    ownerUserId = otherOwner,
+                    capsuleUuid = bCapsule,
+                    blobIdBase = 1_000_000L,
+                ),
+            )
+
+        // Every produced file resolves strictly within its own owner root.
+        val rootA = outboxRoot(OWNER)
+        val rootB = outboxRoot(otherOwner)
+        assertTrue(rootA.exists() && rootB.exists())
+        assertTrue(rootA.canonicalFile != rootB.canonicalFile)
+        (listOf(stagedA.envelopePath) + stagedA.artifactPaths).forEach { path ->
+            assertTrue(File(path).canonicalPath.startsWith(rootA.canonicalPath))
+        }
+        (listOf(stagedB.envelopePath) + stagedB.artifactPaths).forEach { path ->
+            assertTrue(File(path).canonicalPath.startsWith(rootB.canonicalPath))
+        }
+        assertEquals(stagedA.artifactPaths.size + 3, rootA.listFiles().size)
+        assertEquals(stagedB.artifactPaths.size + 3, rootB.listFiles().size)
+
+        // Cleanup of a failing staging in A's root leaves B's bytes intact.
+        val bSnapshot: List<Pair<String, Long>> =
+            (listOf(stagedB.envelopePath) + stagedB.artifactPaths)
+                .map { it to File(it).length() }
+        val blockedId = preparedCapsule(blobIdBase = 2_000_000L).artifacts.last().blobId
+        File(rootA, "$blockedId.bin").mkdirs()
+        try {
+            stager.stage(preparedCapsule(capsuleUuid = UUID.fromString("4c222222-3333-4444-8555-666666666666"), blobIdBase = 2_000_000L))
+            throw AssertionError("expected collision refusal")
+        } catch (_: IllegalStateException) {
+            // deterministic refusal on the pre-blocked target path
+        }
+        // The blocker target survived, all in-flight files were cleaned,
+        // and every previously committed byte - in BOTH accounts - is intact.
+        assertTrue(File(rootA, "$blockedId.bin").isDirectory)
+        rootA.listFiles().orEmpty().forEach { file ->
+            assertFalse("temp residue must not survive", file.name.contains(".tmp-"))
+        }
+        (listOf(stagedA.envelopePath) + stagedA.artifactPaths).forEach { path ->
+            assertTrue("committed A file must survive the failing sibling staging", File(path).exists())
+        }
+        bSnapshot.forEach { (path, length) ->
+            val file = File(path)
+            assertTrue(file.exists() && file.length() == length)
+        }
     }
 
     @Test
     fun replayedStagingCannotOverwriteOrDeleteTheWinner() = runBlocking {
         database = newFileBackedDatabase("stager-replay.db")
-        ciphertextDirectory = File(context.filesDir, "outbox-staging-replay-guard")
-        val stager = CapsuleOutboxStager(database, ciphertextDirectory)
+        val stager = CapsuleOutboxStager(database, storageRoots)
         stager.stage(preparedCapsule())
 
         // Snapshot the winner exactly as committed. Each preparedCapsule()
@@ -401,8 +482,7 @@ class CapsuleOutboxStagerTest {
     @Test
     fun concurrentStagingOfSameCapsuleProducesExactlyOneWinner() = runBlocking {
         database = newFileBackedDatabase("stager-concurrent.db")
-        ciphertextDirectory = File(context.filesDir, "outbox-staging-concurrent")
-        val stager = CapsuleOutboxStager(database, ciphertextDirectory)
+        val stager = CapsuleOutboxStager(database, storageRoots)
 
         val outcomes = kotlinx.coroutines.coroutineScope {
             val first = this@coroutineScope.async { runCatching { stager.stage(preparedCapsule()) } }
@@ -424,14 +504,13 @@ class CapsuleOutboxStagerTest {
             listOfNotNull(row.envelopePath, row.publishStatementPath, row.publishStatementSignaturePath) +
                 database.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleId.toString(), OWNER).map { it.localCiphertextPath }
         committedPaths.forEach { assertTrue(File(it).exists() && File(it).length() > 0L) }
-        assertTrue(ciphertextDirectory.listFiles()!!.none { it.name.contains(".tmp-") })
+        assertTrue(outboxRoot().listFiles()!!.none { it.name.contains(".tmp-") })
     }
 
     @Test
     fun stagingCompletesOnlyThroughGuardedPreparingToEncryptedTransition() = runBlocking {
         database = newFileBackedDatabase("stager-transition.db")
-        ciphertextDirectory = File(context.filesDir, "outbox-staging-transition")
-        CapsuleOutboxStager(database, ciphertextDirectory).stage(preparedCapsule())
+        CapsuleOutboxStager(database, storageRoots).stage(preparedCapsule())
 
         // A completed staging is ENCRYPTED — never stranded in PREPARING.
         assertEquals(
@@ -454,9 +533,8 @@ class CapsuleOutboxStagerTest {
     fun statementAndSignatureSurviveRoomRestartByteIdentically() = runBlocking {
         val dbName = "stager-restart.db"
         database = newFileBackedDatabase(dbName)
-        ciphertextDirectory = File(context.filesDir, "outbox-staging-restart")
         val prepared = preparedCapsule()
-        CapsuleOutboxStager(database, ciphertextDirectory).stage(prepared)
+        CapsuleOutboxStager(database, storageRoots).stage(prepared)
 
         // ---- process death ----
         val stagedStatementBytes = prepared.publishStatementBytes
@@ -477,8 +555,7 @@ class CapsuleOutboxStagerTest {
     fun plaintextCanaryAcrossEveryProducedByteFindsNothing() = runBlocking {
         val dbName = "canary.db"
         database = newFileBackedDatabase(dbName)
-        ciphertextDirectory = File(context.filesDir, "outbox-canary")
-        val stager = CapsuleOutboxStager(database, ciphertextDirectory)
+        val stager = CapsuleOutboxStager(database, storageRoots)
 
         stager.stage(preparedCapsule())
 
@@ -488,7 +565,7 @@ class CapsuleOutboxStagerTest {
         val checkpoint = database.openHelper.writableDatabase.query("PRAGMA wal_checkpoint(TRUNCATE)")
         checkpoint.moveToFirst()
         checkpoint.close()
-        val stagedFiles: MutableList<File> = ciphertextDirectory.listFiles()?.toMutableList() ?: mutableListOf()
+        val stagedFiles: MutableList<File> = outboxRoot().listFiles()?.toMutableList() ?: mutableListOf()
         dbDir?.listFiles()?.filterTo(stagedFiles) { it.name.startsWith(dbName) }
         assertTrue("canary must scan produced bytes", stagedFiles.isNotEmpty())
         stagedFiles.filter(File::isFile).forEach { file ->

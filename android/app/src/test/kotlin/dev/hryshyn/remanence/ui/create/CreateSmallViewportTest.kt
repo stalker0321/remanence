@@ -137,7 +137,7 @@ class CreateSmallViewportTest {
             persistence = NoPersistence(),
             outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(
                 database,
-                File(context().filesDir, "small-vp"),
+                dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(context().filesDir, "small-vp")),
             ),
             profile = RecognitionProfile.mvpOrbV1(),
             stagingDirectory = File(context().filesDir, "small-vp-staging"),
@@ -218,7 +218,7 @@ class CreateSmallViewportTest {
             persistence = NoPersistence(),
             outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(
                 database,
-                File(context().filesDir, "small-vp"),
+                dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(context().filesDir, "small-vp")),
             ),
             profile = RecognitionProfile.mvpOrbV1(),
             stagingDirectory = File(context().filesDir, "small-vp-staging"),
@@ -273,7 +273,7 @@ class CreateSmallViewportTest {
             persistence = NoPersistence(),
             outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(
                 database,
-                File(context().filesDir, "small-vp"),
+                dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(context().filesDir, "small-vp")),
             ),
             profile = RecognitionProfile.mvpOrbV1(),
             stagingDirectory = File(context().filesDir, "small-vp-staging"),

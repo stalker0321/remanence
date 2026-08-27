@@ -222,7 +222,7 @@ class CreateTransitionTableTest {
             persistence = persistence,
             outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(
                 database,
-                File(stagingDir.parentFile, "transition-outbox"),
+                dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(stagingDir.parentFile, "transition-outbox")),
             ),
             profile = RecognitionProfile.mvpOrbV1(),
             stagingDirectory = stagingDir,

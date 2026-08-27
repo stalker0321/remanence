@@ -2,6 +2,8 @@ package dev.hryshyn.remanence.core.data.outbox
 
 import androidx.room.withTransaction
 import java.io.File
+import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
+import dev.hryshyn.remanence.core.model.UserId
 import java.security.MessageDigest
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
@@ -78,16 +80,30 @@ data class StagedOutboxCapsule(
  * mutex serializes staging, and the authoritative re-check lives inside the
  * transaction. Only ciphertext is ever written: callers hand over encrypted
  * bytes and this class stores them verbatim.
+ *
+ * M2-P04 account storage scoping: every stage call resolves the staged
+ * owner's [AccountScopedFileRoots.ChildRoot.OUTBOX_CIPHERTEXT] root from
+ * `prepared.ownerUserId`. There is no shared outbox directory; all writes,
+ * pre-checks, and collision cleanup happen strictly inside THAT account's
+ * own directory, so a failed foreign-owner collision can never touch another
+ * owner's material.
  */
 class CapsuleOutboxStager(
     private val database: RemanenceLocalDatabase,
-    private val ciphertextDirectory: File,
+    private val roots: AccountScopedFileRoots,
 ) {
 
     private val stagingMutex = Mutex()
 
     suspend fun stage(prepared: PreparedOutboxCapsule): StagedOutboxCapsule {
         validate(prepared)
+        // One typed owner resolution per stage: the directory this invocation
+        // reads, writes, and cleans up belongs to exactly this account.
+        val ownerId = UserId.parseRest(prepared.ownerUserId)
+        val ciphertextDirectory = roots.child(
+            ownerId,
+            AccountScopedFileRoots.ChildRoot.OUTBOX_CIPHERTEXT,
+        )
         val capsuleDao = database.outboxCapsuleDao()
         // M2-P03: account-scoped replay refusals - a lookup and every durable
         // transition carry the staging owner so only the owning account's own
@@ -118,16 +134,23 @@ class CapsuleOutboxStager(
             val created = ArrayList<File>(prepared.artifacts.size + 3)
             try {
                 val envelopePath =
-                    writeBytes(created, "envelope-${prepared.capsuleId}.bin", prepared.envelopeCiphertext)
+                    writeBytes(
+                        ciphertextDirectory,
+                        created,
+                        "envelope-${prepared.capsuleId}.bin",
+                        prepared.envelopeCiphertext,
+                    )
                 val artifactPaths = prepared.artifacts.map { artifact ->
-                    writeBytes(created, "${artifact.blobId}.bin", artifact.ciphertext)
+                    writeBytes(ciphertextDirectory, created, "${artifact.blobId}.bin", artifact.ciphertext)
                 }
                 val statementPath = writeBytes(
+                    ciphertextDirectory,
                     created,
                     "statement-${prepared.capsuleId}.bin",
                     prepared.publishStatementBytes,
                 )
                 val signaturePath = writeBytes(
+                    ciphertextDirectory,
                     created,
                     "signature-${prepared.capsuleId}.bin",
                     prepared.publishStatementSignature,
@@ -196,10 +219,16 @@ class CapsuleOutboxStager(
         }
     }
 
-    private suspend fun writeBytes(created: MutableList<File>, name: String, bytes: ByteArray): String =
+    /** Writes [bytes] beneath the owner's own ciphertext directory; refuses to overwrite any pre-existing target. */
+    private suspend fun writeBytes(
+        ownerCiphertextRoot: File,
+        created: MutableList<File>,
+        name: String,
+        bytes: ByteArray,
+    ): String =
         withContext(Dispatchers.IO) {
             require(bytes.isNotEmpty()) { "refusing to persist empty bytes for $name" }
-            val target = File(ciphertextDirectory, name)
+            val target = File(ownerCiphertextRoot, name)
             // M2 review fix: a target that already exists is either another
             // account's committed ciphertext or corrupt residue; overwriting
             // it would silently damage the winner. Refuse BEFORE any byte of
@@ -210,7 +239,7 @@ class CapsuleOutboxStager(
             }
             // Unique per-invocation temp name: two stagings can never rename
             // over or delete each other's in-flight temporary file.
-            val temporary = File(ciphertextDirectory, "$name.tmp-${UUID.randomUUID()}")
+            val temporary = File(ownerCiphertextRoot, "$name.tmp-${UUID.randomUUID()}")
             try {
                 temporary.writeBytes(bytes)
                 if (!temporary.renameTo(target)) {

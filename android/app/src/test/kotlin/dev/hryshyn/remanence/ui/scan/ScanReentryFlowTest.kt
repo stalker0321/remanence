@@ -158,7 +158,7 @@ class ScanReentryFlowTest {
                     TinkProtoKeysetFormat.parseKeysetWithoutSecret(identity.encryptionPublicKeyset),
             ),
         )
-        CapsuleOutboxStager(database, File(filesRoot, "outbox")).stage(prepared)
+        CapsuleOutboxStager(database, roots).stage(prepared)
     }
 
     private fun scanViewModel(clock: Long = 0L): ScanViewModel = ScanViewModel(

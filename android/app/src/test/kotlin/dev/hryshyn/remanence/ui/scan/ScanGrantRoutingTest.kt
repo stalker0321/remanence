@@ -172,7 +172,7 @@ class ScanGrantRoutingTest {
             capsuleUuid.toString(), FingerprintSide.BACK, FingerprintOrigin.SENDER,
             RecognitionProfile.mvpOrbV1().profileId, back,
         )
-        CapsuleOutboxStager(database, outboxDir).stage(
+        CapsuleOutboxStager(database, roots).stage(
             SameAccountCapsulePublisher().publish(
                 SameAccountCapsuleRequest(
                     capsuleId = CapsuleId(capsuleUuid),

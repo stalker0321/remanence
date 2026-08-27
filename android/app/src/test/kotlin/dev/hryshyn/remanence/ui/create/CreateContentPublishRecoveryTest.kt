@@ -179,7 +179,7 @@ class CreateContentPublishRecoveryTest {
                 if (identityGate != null) identityGate.await() else null
             },
             persistence = persistence,
-            outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, stagingDir()),
+            outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir())),
             profile = RecognitionProfile.mvpOrbV1(),
             stagingDirectory = stagingDir(),
             openPhotoSource = { error("picker streams not used here") },

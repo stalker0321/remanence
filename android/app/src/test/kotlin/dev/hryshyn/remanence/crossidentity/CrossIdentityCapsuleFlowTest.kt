@@ -126,8 +126,8 @@ class CrossIdentityCapsuleFlowTest {
     }
 
     private suspend fun publishAndStageCrossIdentity() {
-        val prepared = SameAccountCapsulePublisher().publish(
-            SameAccountCapsuleRequest(
+        val prepared = CapsulePublisher().publish(
+            CapsulePublishRequest(
                 capsuleId = CapsuleId(capsuleUuid),
                 senderUserId = UserId(senderUuid),
                 recipientUserId = UserId(recipientUuid),
@@ -375,8 +375,8 @@ class CrossIdentityCapsuleFlowTest {
     }
 
     private suspend fun publishSelfSend() {
-        val prepared = SameAccountCapsulePublisher().publish(
-            SameAccountCapsuleRequest(
+        val prepared = CapsulePublisher().publish(
+            CapsulePublishRequest(
                 capsuleId = CapsuleId(capsuleUuid),
                 senderUserId = UserId(senderUuid),
                 senderKeyBundleId = KeyBundleId(senderBundleUuid),

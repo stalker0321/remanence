@@ -11,8 +11,8 @@ import dev.hryshyn.remanence.capture.CaptureAttemptPhase
 import dev.hryshyn.remanence.capture.CapturePermissionStep
 import dev.hryshyn.remanence.capture.ProcessedStill
 import dev.hryshyn.remanence.capture.StillProcessor
-import dev.hryshyn.remanence.create.SameAccountCapsulePublisher
-import dev.hryshyn.remanence.create.SameAccountCapsuleRequest
+import dev.hryshyn.remanence.create.CapsulePublisher
+import dev.hryshyn.remanence.create.CapsulePublishRequest
 import dev.hryshyn.remanence.identity.DirectorySenderKeyStore
 import dev.hryshyn.remanence.session.RootViewModel
 import dev.hryshyn.remanence.session.SessionState
@@ -173,8 +173,8 @@ class ScanGrantRoutingTest {
             RecognitionProfile.mvpOrbV1().profileId, back,
         )
         CapsuleOutboxStager(database, roots).stage(
-            SameAccountCapsulePublisher().publish(
-                SameAccountCapsuleRequest(
+            CapsulePublisher().publish(
+                CapsulePublishRequest(
                     capsuleId = CapsuleId(capsuleUuid),
                     senderUserId = UserId(userUuid),
                     senderKeyBundleId = KeyBundleId(bundleUuid),

@@ -33,9 +33,9 @@ import dev.hryshyn.remanence.core.model.UserId
  * acceptance gate, and whose artifacts decrypt under the envelope-carried
  * capsule keyset.
  */
-class SameAccountCapsulePublisherTest {
+class CapsulePublisherTest {
 
-    private val publisher = SameAccountCapsulePublisher()
+    private val publisher = CapsulePublisher()
     private val identity = AccountIdentityGenerator().generate()
 
     private val capsuleId = UUID.fromString("4d111111-2222-4333-8444-555555555555")
@@ -47,7 +47,7 @@ class SameAccountCapsulePublisherTest {
         TinkPrimitives.ensureRegistered()
     }
 
-    private fun request() = SameAccountCapsuleRequest(
+    private fun request() = CapsulePublishRequest(
         capsuleId = CapsuleId(capsuleId),
         senderUserId = UserId(userId),
         senderKeyBundleId = KeyBundleId(bundleId),

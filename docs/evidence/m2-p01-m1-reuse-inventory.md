@@ -54,7 +54,7 @@ scan state machine, or parallel outbox is proposed anywhere below.
 
 ### Create/publisher wiring — `android/app/.../create/`, `ui/create/`
 
-- `SameAccountCapsulePublisher.kt`: request ALREADY carries distinct
+- `CapsulePublisher.kt`: request ALREADY carries distinct
   `senderUserId`/`recipientUserId` and bundle IDs (defaults equal; FIX-REVIEW-04);
   every AAD/statement/envelope context uses them separately; recipient public
   keyset is a parameter.
@@ -160,7 +160,7 @@ Under `server/src/remanence/`:
 | P03 account scope on every query/index used by M2 | Small DAO surface: `OutboxDaos.kt`, `IncomingDaos.kt`, `BlobCacheDao.kt`, `RecognitionFingerprintDao.kt`; CAS patterns already present | GENERALIZE |
 | P04 account-scoped file roots + retention/purge | Constructor-injected roots (AppContainer table above); atomic-delete precedents in `CapsuleOutboxStager`, `EncryptedFingerprintStore.deleteBaseline` | GENERALIZE (policy itself has no prior code) |
 | P05 WorkManager naming/tag/cancellation contract | Nothing — add first `androidx.work` dependency/workers; cancellation hook point = `LogoutUseCase` teardown step | NEW |
-| P06 distinct sender/recipient publisher without crypto-framing change | `SameAccountCapsuleRequest` distinct-ID fields + contexts; regressions `SameAccountCapsulePublisherTest`, `CrossIdentityCapsuleFlowTest` | GENERALIZE (make recipient explicit end-to-end; drop equal defaults) |
+| P06 distinct sender/recipient publisher without crypto-framing change | `CapsulePublishRequest` distinct-ID fields + contexts; regressions `CapsulePublisherTest`, `CrossIdentityCapsuleFlowTest` | GENERALIZE (make recipient explicit end-to-end; drop equal defaults) |
 | P07 remove self-recipient guard; feed confirmed snapshot | Guard at `CreateViewModel.publishSealed`; snapshot at `CreateSessionStore.confirmedRecipient`; stale/wrong-recipient tests `CreateStaleDeliveryTest`, `CreateRecipientConfirmFlowTest` | REPLACE/DELETE (guard) + GENERALIZE (wiring) |
 | P08 sender-owned durable wrapped K in outbox | Wrapping mechanics `KeysetKekWrapper`/`WrappedKeysetRecord`/`AndroidKeystoreKekBoundary`; record+Room-reference pattern like statement/signature paths | GENERALIZE wrapping (extend AAD to bind account/capsule/sender-bundle/purpose per security.md §6.6) + NEW storage slot/column |
 | P09 delete retry material on published/abort/terminal | Cleanup precedents: stager owned-cleanup, `EncryptedFingerprintStore.deleteBaseline`/`deleteFileOf` | GENERALIZE pattern into NEW lifecycle rule |

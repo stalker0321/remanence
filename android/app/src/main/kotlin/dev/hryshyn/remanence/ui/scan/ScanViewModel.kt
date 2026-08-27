@@ -640,7 +640,7 @@ class ScanViewModel(
         )
     }
 
-    /** Mirrors SameAccountCapsulePublisher's deterministic recognition blob id. */
+    /** Mirrors CapsulePublisher's deterministic recognition blob id. */
     private fun deriveRecognitionBlobId(capsuleId: UUID): BlobId {
         val base = CapsuleId(capsuleId).toProtoBytes().toByteArray()
         base[0] = RECOGNITION_BLOB_BYTE.toByte()

@@ -29,7 +29,7 @@ import dev.hryshyn.remanence.core.model.RecipientEnvelopeContextInput
 import dev.hryshyn.remanence.core.model.UserId
 
 /** Inputs for one capsule: content plus both identity halves. */
-data class SameAccountCapsuleRequest(
+data class CapsulePublishRequest(
     val capsuleId: CapsuleId,
     val senderUserId: UserId,
     /**
@@ -70,9 +70,9 @@ data class SameAccountCapsuleRequest(
  * Every artifact uses the canonical AAD/context encodings; no plaintext
  * leaves this class.
  */
-class SameAccountCapsulePublisher {
+class CapsulePublisher {
 
-    fun publish(request: SameAccountCapsuleRequest): PreparedOutboxCapsule {
+    fun publish(request: CapsulePublishRequest): PreparedOutboxCapsule {
         require(request.photoJpegs.size in 3..5) { "3..5 photos required" }
         TinkPrimitives.ensureRegistered()
         val senderUser = request.senderUserId

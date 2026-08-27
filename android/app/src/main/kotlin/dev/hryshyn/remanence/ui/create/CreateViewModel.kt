@@ -8,8 +8,8 @@ import dev.hryshyn.remanence.capture.FrontCaptureFlow
 import dev.hryshyn.remanence.capture.FrontCaptureOutcome
 import dev.hryshyn.remanence.capture.PreparedBackGate
 import dev.hryshyn.remanence.create.RealStillFingerprintProcessor
-import dev.hryshyn.remanence.create.SameAccountCapsulePublisher
-import dev.hryshyn.remanence.create.SameAccountCapsuleRequest
+import dev.hryshyn.remanence.create.CapsulePublisher
+import dev.hryshyn.remanence.create.CapsulePublishRequest
 import com.google.crypto.tink.KeysetHandle
 import com.google.crypto.tink.TinkProtoKeysetFormat
 import com.google.crypto.tink.subtle.Base64
@@ -562,8 +562,8 @@ class CreateViewModel(
                 val photoBytes = staged.map { withContext(ioDispatcher) { it.file.readBytes() } }
                 ensureCurrent()
                 val prepared = withContext(cpuDispatcher) {
-                SameAccountCapsulePublisher().publish(
-                    SameAccountCapsuleRequest(
+                CapsulePublisher().publish(
+                    CapsulePublishRequest(
                         capsuleId = CapsuleId(UUID.fromString(inputs.capsuleId)),
                         senderUserId = UserId(UUID.fromString(sender.userId)),
                         senderKeyBundleId = KeyBundleId(UUID.fromString(sender.activeKeyBundleId)),

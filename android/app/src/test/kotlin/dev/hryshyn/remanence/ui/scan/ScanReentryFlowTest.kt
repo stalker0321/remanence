@@ -6,8 +6,8 @@ import androidx.test.core.app.ApplicationProvider
 import dev.hryshyn.remanence.capture.ProcessedStill
 import dev.hryshyn.remanence.capture.StillProcessor
 import dev.hryshyn.remanence.ui.create.SenderIdentitySnapshot
-import dev.hryshyn.remanence.create.SameAccountCapsulePublisher
-import dev.hryshyn.remanence.create.SameAccountCapsuleRequest
+import dev.hryshyn.remanence.create.CapsulePublisher
+import dev.hryshyn.remanence.create.CapsulePublishRequest
 import dev.hryshyn.remanence.ui.navigation.AppDestination
 import dev.hryshyn.remanence.ui.navigation.AppNavigationController
 import dev.hryshyn.remanence.ui.navigation.AuthUiState
@@ -140,8 +140,8 @@ class ScanReentryFlowTest {
             RecognitionProfile.mvpOrbV1().profileId,
             syntheticFingerprint(22, FingerprintSide.BACK),
         )
-        val prepared = SameAccountCapsulePublisher().publish(
-            SameAccountCapsuleRequest(
+        val prepared = CapsulePublisher().publish(
+            CapsulePublishRequest(
                 capsuleId = CapsuleId(capsuleUuid),
                 senderUserId = UserId(userUuid),
                 senderKeyBundleId = KeyBundleId(bundleUuid),

@@ -65,6 +65,7 @@ dependencies {
     implementation(libs.androidx.camera.camera2)
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
+    implementation(libs.androidx.work.runtime)
 
     testImplementation(platform(libs.androidx.compose.bom))
     testImplementation(libs.compose.ui.test.junit4)
@@ -72,6 +73,7 @@ dependencies {
     testImplementation(libs.robolectric)
     testImplementation(libs.junit4)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.androidx.work.testing)
     debugImplementation(libs.compose.ui.test.manifest)
 }
 

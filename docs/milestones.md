@@ -131,7 +131,31 @@ Scope:
 - optional ORB-versus-SIFT experiment only if ORB misses the agreed gate;
 - captured match reports and regression fixtures without private user data.
 
-## M4 — Security, recovery-path, and failure hardening
+## M4 — Durable E2EE identity and account recovery
+
+Goal: make reinstall, device replacement, and cross-platform migration normally
+recoverable without giving the backend an E2EE escrow secret.
+
+Scope:
+
+- ADR-010 Account Recovery Key and versioned RecoveryPackage protocol;
+- device-local ARK wrapping distinct from long-term account keysets;
+- encrypted server-held recovery packages and multiple RecoveryWrappers;
+- registered-device enrollment, existing-device transfer, and revocation;
+- Android default recovery adapter selected only after a compatibility/security spike;
+- iOS and browser/PWA adapter design proving the wire protocol is platform-neutral;
+- capability negotiation and fallback when passkey/WebAuthn PRF is unavailable;
+- optional random manual recovery secret;
+- recovery-readiness UX and explicit unrecoverable-state warning;
+- reinstall, lost-device, same-platform, cross-platform, rotation, rollback,
+  provider-loss, and total-secret-loss tests;
+- recovery followed by encrypted prefetch/index restoration and offline postcard opening.
+
+This milestone is a public-release gate. M2 may remain an explicitly
+unrecoverable engineering/product proof, but a public release may not silently
+depend on one installation's Keystore/Keychain material.
+
+## M5 — Security and failure hardening
 
 Goal: prove confidentiality/integrity/state recovery under adversarial and interrupted conditions.
 
@@ -143,10 +167,10 @@ Scope:
 - upload interruption, finalize replay, stale key, storage/database restart;
 - Room and Alembic migrations from prior versions;
 - log/storage plaintext scans;
-- recovery package export/import or an explicit release decision to remain unrecoverable;
+- recovery-package/wrapper tampering, rollback, generation, and authorization checks;
 - key rotation/revocation behavior.
 
-## M5 — Focused UX polish
+## M6 — Focused UX polish
 
 Goal: make the proven mechanisms understandable without increasing engagement pressure.
 
@@ -160,16 +184,17 @@ Scope:
 - capsule presentation and accessibility;
 - removal of any accidental counts, lists, deep links, or social language.
 
-## M6 — Music investigation (not core MVP)
+## M7 — Music investigation (not core MVP)
 
 Goal: separately evaluate legal/provider/playback constraints.
 
-No provider SDK, downloader, track search, or playback code enters the core product before an ADR and explicit product decision. `TrackAttachment` remains absent/null through M0–M5.
+No provider SDK, downloader, track search, or playback code enters the core product before an ADR and explicit product decision. `TrackAttachment` remains absent/null through M0–M6.
 
 ## Release interpretation
 
 - **Testable engineering sample:** M0 passes and APK/backend run.
 - **Mechanism sample:** M1 passes on a physical Android device.
 - **Product proof:** M2 passes with two physical installations.
-- **Candidate for limited external testing:** M2 + relevant M3/M4 security/recognition gates pass.
+- **Candidate for limited external testing:** M2 + relevant M3/M5 security/recognition gates pass with an explicit unrecoverable-build warning.
+- **Public recovery readiness:** M4 and its security checks in M5 pass.
 - **Public release:** requires a separate privacy/legal/operations decision; not implied by these milestones.

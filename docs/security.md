@@ -240,19 +240,26 @@ Before recovery export/import is implemented, loss of the only device means:
 
 The UI/documentation must state this honestly. Support staff cannot recover content.
 
-### Future-compatible recovery package
+### Pre-release recovery architecture
 
-The initial private key format remains exportable and versioned so M4 can add:
+ADR-010 defines the accepted recovery architecture. A random 256-bit Account
+Recovery Key (ARK) is a platform-neutral wrapping root for a versioned recovery
+package containing all still-needed private HPKE/signing keysets. It is not a
+capsule key or the account signing identity, and account keys are not derived
+from it. Each device protects the ARK with its own device-local secure key.
 
-1. a random 256-bit account recovery key (ARK), generated client-side;
-2. an AEAD-encrypted identity bundle containing all still-needed private keysets;
-3. server storage of only the encrypted recovery blob;
-4. a user-held recovery code/QR that encodes the ARK with checksum/error detection;
-5. recovery on a new authenticated device without revealing ARK or private keys to the server.
+The server stores only an ARK-encrypted recovery package and one or more opaque
+ARK recovery wrappers. A wrapper is decryptable only with a client-held
+capability supplied by a recovery adapter, an existing-device transfer, or an
+optional random manual recovery secret. Authentication, federated login, a
+normal passkey assertion, and Android account restore do not by themselves
+provide that unwrap secret. WebAuthn PRF is a candidate adapter only when the
+actual authenticator/provider reports support.
 
-Password-derived encryption is not selected for the recovery package because typical account passwords provide weak offline-attack resistance. If a password-derived option is ever added, its KDF and UX require a separate threat review.
-
-Multi-device synchronization is not implemented in M2. A second device later imports the same account identity via the recovery/transfer ceremony; it does not silently receive private keys from the server.
+Password-derived encryption is not selected because typical account passwords
+permit offline guessing. Any future password option requires a separate KDF and
+threat review. Multi-device recovery is not implemented in M2; until the
+dedicated recovery milestone passes, device loss remains honestly unrecoverable.
 
 ## 11. Recognition and back-side privacy
 

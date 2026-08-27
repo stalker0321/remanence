@@ -319,3 +319,23 @@ Commit: fix(<area>): <single correction>
 ```
 
 If a correction requires changing architecture rather than conforming to it, implementation stops. Codex writes/reviews an ADR first; Grok implements only after approval.
+
+## 15. Pre-release recovery milestone
+
+ADR-010 is the normative starting point. This queue begins after the M2
+two-user product proof and must pass before public release. Platform API names
+are deliberately absent from protocol tasks until the compatibility spike
+selects adapters from observed capabilities.
+
+| ID | Depends on | Single outcome | Minimum verification |
+| --- | --- | --- | --- |
+| REC-01 | M2 | Threat/compatibility spike for Android restore, credential providers, passkey/WebAuthn PRF, Apple/iCloud, browser/PWA, and migration. | primary-source matrix plus device/browser probes; no assumed secret-export capability |
+| REC-02 | REC-01 | Define versioned RecoveryPackage, ARK wrapper, generation/rollback, device, and recovery-method contracts. | ADR/protocol vectors and backend-has-no-unwrap-secret proof |
+| REC-03 | REC-02 | Generate ARK and protect it with a per-installation device key independently from account HPKE/signing keysets. | reinstall/lost-device fixtures; DeviceKey != ARK invariant |
+| REC-04 | REC-02 | Persist encrypted recovery packages and multiple opaque wrappers on the server. | authz, tamper, rollback, deletion, and plaintext-canary tests |
+| REC-05 | REC-03,REC-04 | Implement the selected Android recovery adapter with capability negotiation and fallback. | physical reinstall and replacement-device recovery |
+| REC-06 | REC-03,REC-04 | Implement authenticated existing-device enrollment/transfer and device revocation. | A-to-B, Android-to-other-platform harness, replay/MITM/revocation tests |
+| REC-07 | REC-04 | Add optional random manual recovery secret wrapper. | wrong/checksum/bruteforce-boundary tests; never mandatory onboarding |
+| REC-08 | REC-05,REC-06 | Restore account key history, encrypted prefetch, and recognition index on a fresh installation. | old physical postcards open offline after recovery |
+| REC-09 | REC-05..REC-08 | Add recovery-readiness UX and explicit unrecoverable-state policy. | no silent unprotected account; accessibility/error tests |
+| REC-10 | all REC | Independent security review and destructive recovery drill. | lost device/provider/all-secrets matrices with expected fail-safe outcomes |

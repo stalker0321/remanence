@@ -150,7 +150,13 @@ A rooted device, modified client, unlocked-device attacker, screenshot, or direc
 - The current public handle is unique after ASCII lowercase normalization and matches `[a-z0-9_.]` with a documented length limit.
 - Recipient confirmation MUST bind the current display handle to immutable `user_id` and the selected active public-key ID.
 - Password reset and E2EE recovery are separate. Recovering authentication MUST NOT be presented as recovering encrypted memories.
-- Key loss behavior and the future recovery path are architecture/security concerns; incomplete recovery UI does not weaken the rule that the server never receives a private identity key.
+- Public release requires ADR-010 durable account-key recovery. M2 remains an
+  explicitly unrecoverable product proof until that milestone passes; this
+  limitation must never be hidden from testers.
+- Recovery uses a platform-neutral account recovery root with independently
+  replaceable adapters. Google, Apple, passkeys, and device transfer are not
+  themselves the Remanence cryptographic identity.
+- Key loss behavior and recovery UI do not weaken the rule that the server never receives a private identity key, plaintext account recovery root, or an unwrap secret.
 
 ## 15. MVP success boundary
 

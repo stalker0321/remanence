@@ -90,17 +90,32 @@ abstract class BlobCacheDao {
     )
     abstract suspend fun getAllByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String): List<BlobCacheEntity>
 
-    /** Owner-guarded cache-state CAS; 0 rows means refused. */
+    /** Owner-guarded DOWNLOADING -> CACHED CAS; 0 rows means refused. */
     @Query(
-        "UPDATE blob_cache SET cache_state = :newState " +
-            "WHERE blob_id = :blobId AND owner_user_id = :ownerUserId AND cache_state IN (:allowedFrom)",
+        "UPDATE blob_cache SET cache_state = 'CACHED' " +
+            "WHERE blob_id = :blobId AND owner_user_id = :ownerUserId " +
+            "AND cache_state = 'DOWNLOADING'",
     )
-    abstract suspend fun transitionStateForOwner(
+    abstract suspend fun markCachedForOwner(
         blobId: String,
         ownerUserId: String,
-        newState: BlobCacheState,
-        allowedFrom: List<BlobCacheState>,
     ): Int
+
+    /** Owner-guarded DOWNLOADING/CACHED -> CORRUPT CAS; 0 rows means refused. */
+    @Query(
+        "UPDATE blob_cache SET cache_state = 'CORRUPT' " +
+            "WHERE blob_id = :blobId AND owner_user_id = :ownerUserId " +
+            "AND cache_state IN ('DOWNLOADING', 'CACHED')",
+    )
+    abstract suspend fun markCorruptForOwner(blobId: String, ownerUserId: String): Int
+
+    /** Owner-guarded CORRUPT -> DOWNLOADING CAS; 0 rows means refused. */
+    @Query(
+        "UPDATE blob_cache SET cache_state = 'DOWNLOADING' " +
+            "WHERE blob_id = :blobId AND owner_user_id = :ownerUserId " +
+            "AND cache_state = 'CORRUPT'",
+    )
+    abstract suspend fun retryDownloadForOwner(blobId: String, ownerUserId: String): Int
 
     /** Reports rows removed; refuses any capsule not owned by [ownerUserId]. */
     @Query(

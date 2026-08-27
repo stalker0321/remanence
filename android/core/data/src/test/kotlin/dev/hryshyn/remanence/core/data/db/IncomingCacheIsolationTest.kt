@@ -119,13 +119,7 @@ class IncomingCacheIsolationTest {
         )
         assertEquals(
             0,
-            database.blobCacheDao()
-                .transitionStateForOwner(
-                    blobA,
-                    ownerB,
-                    BlobCacheState.CACHED,
-                    listOf(BlobCacheState.DOWNLOADING),
-                ),
+            database.blobCacheDao().markCachedForOwner(blobA, ownerB),
         )
 
         // Cleanup refuses B; A's durable rows survive it untouched.
@@ -257,7 +251,7 @@ class IncomingCacheIsolationTest {
         assertEquals(
             1,
             database.blobCacheDao()
-                .transitionStateForOwner(blobA, ownerA, BlobCacheState.CACHED, listOf(BlobCacheState.DOWNLOADING)),
+                .markCachedForOwner(blobA, ownerA),
         )
 
         database.blobCacheDao().upsertForOwner(

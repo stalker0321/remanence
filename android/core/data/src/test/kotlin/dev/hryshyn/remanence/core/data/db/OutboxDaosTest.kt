@@ -309,8 +309,9 @@ class OutboxDaosTest {
         assertEquals(1, blobDao.incrementAttemptCountForOwner("blob-up", OWNER))
         assertEquals(1, blobDao.incrementAttemptCountForOwner("blob-up", OWNER))
 
-        assertEquals(1, blobDao.transitionUploadStateForOwner("blob-up", OWNER, OutboxBlobUploadState.STORED, listOf(OutboxBlobUploadState.PENDING)))
-        assertEquals(0, blobDao.transitionUploadStateForOwner("blob-up", OWNER, OutboxBlobUploadState.STORED, listOf(OutboxBlobUploadState.PENDING)))
+        assertEquals(0, blobDao.markStoredForOwner("missing-blob", OWNER))
+        assertEquals(1, blobDao.markStoredForOwner("blob-up", OWNER))
+        assertEquals(0, blobDao.markStoredForOwner("blob-up", OWNER))
 
         val stored = blobDao.getAllByCapsuleIdAndOwner("0198f0a0-0000-7000-8000-00000000ca01", OWNER).single { it.blobId == "blob-up" }
         assertEquals(OutboxBlobUploadState.STORED, stored.uploadState)
@@ -370,15 +371,7 @@ class OutboxDaosTest {
                 "X",
             ),
         )
-        assertEquals(
-            0,
-            blobDao.transitionUploadStateForOwner(
-                "blob-up",
-                OTHER_OWNER,
-                OutboxBlobUploadState.STORED,
-                listOf(OutboxBlobUploadState.PENDING),
-            ),
-        )
+        assertEquals(0, blobDao.markStoredForOwner("blob-up", OTHER_OWNER))
         assertEquals(0, blobDao.incrementAttemptCountForOwner("blob-up", OTHER_OWNER))
         assertEquals(0, blobDao.deleteByCapsuleIdAndOwner(record.capsuleId, OTHER_OWNER))
 

@@ -64,26 +64,53 @@ class BlobCacheDaoTest {
     }
 
     @Test
-    fun stateTransitionOnlyFromAllowedOriginStates() = runBlocking {
+    fun fixedCacheTransitionsAcceptOnlyCanonicalEdges() = runBlocking {
         val record = blob()
         dao.upsertForOwner(OWNER, record)
 
-        val illegal = dao.transitionStateForOwner(record.blobId, OWNER, BlobCacheState.CACHED, listOf(BlobCacheState.CORRUPT))
-        assertEquals(0, illegal)
-
-        val legal = dao.transitionStateForOwner(record.blobId, OWNER, BlobCacheState.CACHED, listOf(BlobCacheState.DOWNLOADING))
-        assertEquals(1, legal)
-        assertEquals(BlobCacheState.CACHED, dao.getByBlobIdAndOwner(record.blobId, OWNER)!!.cacheState)
+        assertEquals(1, dao.markCachedForOwner(record.blobId, OWNER))
+        assertEquals(0, dao.markCachedForOwner(record.blobId, OWNER))
+        assertEquals(0, dao.retryDownloadForOwner(record.blobId, OWNER))
+        assertEquals(1, dao.markCorruptForOwner(record.blobId, OWNER))
+        assertEquals(0, dao.markCorruptForOwner(record.blobId, OWNER))
+        assertEquals(1, dao.retryDownloadForOwner(record.blobId, OWNER))
+        assertEquals(0, dao.retryDownloadForOwner(record.blobId, OWNER))
+        assertEquals(BlobCacheState.DOWNLOADING, dao.getByBlobIdAndOwner(record.blobId, OWNER)!!.cacheState)
     }
 
     @Test
-    fun cachedBlobCanBeMarkedCorruptForRepair() = runBlocking {
-        val record = blob(state = BlobCacheState.DOWNLOADING)
+    fun downloadingBlobCanBeMarkedCorruptWithoutCallerSelectedStates() = runBlocking {
+        val record = blob(blobId = "0198f0a0-0000-7000-8000-00000000bl02")
         dao.upsertForOwner(OWNER, record)
-        dao.transitionStateForOwner(record.blobId, OWNER, BlobCacheState.CACHED, listOf(BlobCacheState.DOWNLOADING))
-        val rows = dao.transitionStateForOwner(record.blobId, OWNER, BlobCacheState.CORRUPT, listOf(BlobCacheState.CACHED))
-        assertEquals(1, rows)
+        assertEquals(1, dao.markCorruptForOwner(record.blobId, OWNER))
         assertEquals(BlobCacheState.CORRUPT, dao.getByBlobIdAndOwner(record.blobId, OWNER)!!.cacheState)
+    }
+
+    @Test
+    fun skipsAndRegressionsAreNoOps() = runBlocking {
+        val record = blob(blobId = "0198f0a0-0000-7000-8000-00000000bl03")
+        dao.upsertForOwner(OWNER, record)
+
+        assertEquals(0, dao.retryDownloadForOwner(record.blobId, OWNER))
+        assertEquals(1, dao.markCorruptForOwner(record.blobId, OWNER))
+        assertEquals(0, dao.markCachedForOwner(record.blobId, OWNER))
+        assertEquals(0, dao.markCorruptForOwner(record.blobId, OWNER))
+        assertEquals(BlobCacheState.CORRUPT, dao.getByBlobIdAndOwner(record.blobId, OWNER)!!.cacheState)
+    }
+
+    @Test
+    fun missingAndWrongOwnerRowsReturnZeroForEveryFixedTransition() = runBlocking {
+        val record = blob(blobId = "0198f0a0-0000-7000-8000-00000000bl04")
+        dao.upsertForOwner(OWNER, record)
+        val otherOwner = "0198f0a0-0000-7000-8000-00000000ow02"
+
+        assertEquals(0, dao.markCachedForOwner("missing-blob", OWNER))
+        assertEquals(0, dao.markCorruptForOwner("missing-blob", OWNER))
+        assertEquals(0, dao.retryDownloadForOwner("missing-blob", OWNER))
+        assertEquals(0, dao.markCachedForOwner(record.blobId, otherOwner))
+        assertEquals(0, dao.markCorruptForOwner(record.blobId, otherOwner))
+        assertEquals(0, dao.retryDownloadForOwner(record.blobId, otherOwner))
+        assertEquals(BlobCacheState.DOWNLOADING, dao.getByBlobIdAndOwner(record.blobId, OWNER)!!.cacheState)
     }
 
     @Test
@@ -150,7 +177,14 @@ class BlobCacheDaoTest {
                     "findOwnerOf",
                     "insertIgnoring",
                     "updateReplayFieldsForOwner",
+                    "transitionStateForOwner",
                 )
+            },
+        )
+        assertTrue(
+            methods.none { method ->
+                method.parameterTypes.any { it == BlobCacheState::class.java } ||
+                    method.genericParameterTypes.any { it.toString().contains("BlobCacheState") }
             },
         )
         val upsert = methods.single { it.name == "upsertForOwner" }

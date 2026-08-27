@@ -179,8 +179,7 @@ class AccountScopeIsolationTest {
         )
         assertEquals(
             0,
-            database.outboxBlobDao()
-                .transitionUploadStateForOwner(blobA1, ownerB, OutboxBlobUploadState.STORED, listOf(OutboxBlobUploadState.PENDING)),
+            database.outboxBlobDao().markStoredForOwner(blobA1, ownerB),
         )
         assertEquals(0, database.outboxBlobDao().incrementAttemptCountForOwner(blobA1, ownerB))
         assertTrue(
@@ -194,7 +193,7 @@ class AccountScopeIsolationTest {
         assertEquals(
             0,
             database.blobCacheDao()
-                .transitionStateForOwner(blobA1, ownerB, BlobCacheState.CACHED, listOf(BlobCacheState.DOWNLOADING)),
+                .markCachedForOwner(blobA1, ownerB),
         )
         assertEquals(0, database.recognitionFingerprintDao().deleteByFingerprintIdAndOwner("fp-a", ownerB))
         assertEquals(0, database.outboxBlobDao().deleteByCapsuleIdAndOwner(capsuleA, ownerB))

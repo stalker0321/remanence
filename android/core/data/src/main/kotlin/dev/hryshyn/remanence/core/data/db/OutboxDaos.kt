@@ -172,17 +172,13 @@ abstract class OutboxBlobDao {
     )
     abstract suspend fun countByKindAndOwner(capsuleId: String, ownerUserId: String, kind: String): Int
 
-    /** Owner-guarded upload-state CAS; 0 rows means refused. */
+    /** Owner-guarded PENDING -> STORED CAS; 0 rows means refused. */
     @Query(
-        "UPDATE outbox_blob SET upload_state = :newState " +
-            "WHERE blob_id = :blobId AND owner_user_id = :ownerUserId AND upload_state IN (:allowedFrom)",
+        "UPDATE outbox_blob SET upload_state = 'STORED' " +
+            "WHERE blob_id = :blobId AND owner_user_id = :ownerUserId " +
+            "AND upload_state = 'PENDING'",
     )
-    abstract suspend fun transitionUploadStateForOwner(
-        blobId: String,
-        ownerUserId: String,
-        newState: OutboxBlobUploadState,
-        allowedFrom: List<OutboxBlobUploadState>,
-    ): Int
+    abstract suspend fun markStoredForOwner(blobId: String, ownerUserId: String): Int
 
     /** Counts a retry attempt only for the owning account; returns 0 when refused. */
     @Query(

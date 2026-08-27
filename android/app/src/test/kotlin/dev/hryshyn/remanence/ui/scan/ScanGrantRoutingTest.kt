@@ -23,6 +23,7 @@ import dev.hryshyn.remanence.wiring.KekBoundSecretSealer
 import dev.hryshyn.remanence.wiring.RemanenceViewModelFactory
 import com.google.crypto.tink.TinkProtoKeysetFormat
 import java.io.File
+import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -78,6 +79,7 @@ class ScanGrantRoutingTest {
     private lateinit var context: Context
     private lateinit var database: RemanenceLocalDatabase
     private lateinit var filesRoot: File
+    private lateinit var roots: AccountScopedFileRoots
     private lateinit var outboxDir: File
 
     private val identity = AccountIdentityGenerator().generate()
@@ -95,6 +97,7 @@ class ScanGrantRoutingTest {
             .allowMainThreadQueries()
             .build()
         filesRoot = File(context.filesDir, "grant-routing-artifacts").apply { mkdirs() }
+        roots = AccountScopedFileRoots(filesRoot)
         outboxDir = File(filesRoot, "outbox").apply { mkdirs() }
         now = 1_000L
     }
@@ -123,7 +126,7 @@ class ScanGrantRoutingTest {
     }
 
     private fun store() = EncryptedFingerprintStore(
-        File(filesRoot, "fingerprints"),
+        roots,
         KekBoundSecretSealer(
             SoftwareKekBoundary(),
             KekBoundSecretSealer.FINGERPRINT_SEALING_ALIAS,

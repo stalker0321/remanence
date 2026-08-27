@@ -14,6 +14,7 @@ import dev.hryshyn.remanence.ui.navigation.AuthUiState
 import dev.hryshyn.remanence.wiring.KekBoundSecretSealer
 import com.google.crypto.tink.TinkProtoKeysetFormat
 import java.io.File
+import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -59,6 +60,7 @@ class ScanReentryFlowTest {
     private lateinit var context: Context
     private lateinit var database: RemanenceLocalDatabase
     private lateinit var filesRoot: File
+    private lateinit var roots: AccountScopedFileRoots
 
     private val identity = AccountIdentityGenerator().generate()
     private val capsuleUuid = UUID.fromString("6a111111-2222-4333-8444-555555555555")
@@ -73,6 +75,7 @@ class ScanReentryFlowTest {
             .allowMainThreadQueries()
             .build()
         filesRoot = File(context.filesDir, "scan-reentry").apply { mkdirs() }
+        roots = AccountScopedFileRoots(filesRoot)
     }
 
     @After
@@ -86,7 +89,7 @@ class ScanReentryFlowTest {
     }
 
     private fun store() = EncryptedFingerprintStore(
-        File(filesRoot, "fingerprints"),
+        roots,
         KekBoundSecretSealer(dev.hryshyn.remanence.auth.SoftwareKekBoundary(), KekBoundSecretSealer.FINGERPRINT_SEALING_ALIAS),
         database.recognitionFingerprintDao(),
         ownerUserIdProvider = { userUuid.toString() },

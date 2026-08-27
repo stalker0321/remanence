@@ -6,6 +6,8 @@ import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
 import dev.hryshyn.remanence.core.data.db.FingerprintSide
 import dev.hryshyn.remanence.core.data.db.RecognitionFingerprintDao
 import dev.hryshyn.remanence.core.data.db.RecognitionFingerprintEntity
+import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
+import dev.hryshyn.remanence.core.model.UserId
 
 /** Raised when the same (capsule, side, origin) baseline already exists. */
 class DuplicateFingerprintException(capsuleId: String, side: FingerprintSide) :
@@ -17,14 +19,19 @@ class DuplicateFingerprintException(capsuleId: String, side: FingerprintSide) :
  * section 11). Plaintext never touches disk: sealing happens before the
  * atomic write, and any mid-way failure removes artifacts this call created.
  *
- * M2-P02 account scoping: every persisted row carries the immutable owning
- * local account from [ownerUserIdProvider]. Like the injected clock and id
- * factories, the provider is resolved per call; production wiring resolves it
- * against the authenticated `local_account` row, so rows written without an
- * active account are impossible through auth-gated flows.
+ * M2-P04 account storage scoping: every operation snapshots the authenticated
+ * local account EXACTLY ONCE through [ownerUserIdProvider], parses it into
+ * the typed [UserId] (fail-closed against missing or non-canonical values),
+ * and resolves THAT owner's [AccountScopedFileRoots.ChildRoot.FINGERPRINTS]
+ * root for all file work. There is no shared `filesDir/fingerprints` root;
+ * two accounts physically cannot collide because each resolves its own
+ * directory. Stored [RecognitionFingerprintEntity.encryptedPath] values are
+ * relative to the OWNER root of the account that wrote them, so reading,
+ * deleting, or sweeping another account's ciphertext through a swapped-in
+ * provider value would resolve outside this snapshot's own directory.
  */
 class EncryptedFingerprintStore(
-    private val filesRoot: File,
+    private val roots: AccountScopedFileRoots,
     private val sealer: SecretSealer,
     private val dao: RecognitionFingerprintDao,
     private val ownerUserIdProvider: suspend () -> String,
@@ -32,15 +39,33 @@ class EncryptedFingerprintStore(
     private val newId: () -> String = { UUID.randomUUID().toString() },
 ) : SealedFingerprintPersistence {
 
-    init {
-        if (!filesRoot.exists() && !filesRoot.mkdirs()) {
-            throw IllegalStateException("cannot create fingerprint storage root")
+    /**
+     * The immutable owner snapshot one whole operation runs against: the
+     * typed user id used by every DAO query plus its FINGERPRINTS root used
+     * by every file access.
+     */
+    private data class OwnerSnapshot(val ownerId: UserId, val fingerprintsRoot: File)
+
+    /**
+     * Snapshots the authenticated owner exactly once per operation and
+     * resolves its fingerprints root. Missing or non-canonical owners fail
+     * closed here - nothing partial may depend on an unattributed call.
+     */
+    private suspend fun snapshotOwner(): OwnerSnapshot {
+        val ownerId = UserId.parseRest(ownerUserIdProvider())
+        return OwnerSnapshot(ownerId, roots.child(ownerId, AccountScopedFileRoots.ChildRoot.FINGERPRINTS))
+    }
+
+    private fun ensureOwnerRoot(root: File) {
+        if (!root.exists() && !root.mkdirs()) {
+            throw IllegalStateException("cannot create account fingerprint storage root")
         }
     }
 
     /**
-     * Seals [plaintextBytes], writes them atomically, and records the strict
-     * owner-scoped reference row. Returns the generated fingerprint ID.
+     * Seals [plaintextBytes], writes them atomically beneath the owner root,
+     * and records the strict owner-scoped reference row. Returns the
+     * generated fingerprint ID.
      */
     override suspend fun persist(
         capsuleId: String,
@@ -49,14 +74,17 @@ class EncryptedFingerprintStore(
         profileId: String,
         plaintextBytes: ByteArray,
     ): String {
-        val existing = dao.getByCapsuleIdAndOriginAndOwner(capsuleId, origin, currentOwner())
+        val owner = snapshotOwner()
+        ensureOwnerRoot(owner.fingerprintsRoot)
+        val existing =
+            dao.getByCapsuleIdAndOriginAndOwner(capsuleId, origin, owner.ownerId.toRestString())
         if (existing.any { it.side == side }) {
             throw DuplicateFingerprintException(capsuleId, side)
         }
         require(plaintextBytes.isNotEmpty()) { "fingerprint bytes are empty" }
 
         val fingerprintId = newId()
-        val target = fileFor(fingerprintId)
+        val target = owner.fileFor(fingerprintId)
         // Domain-separated AAD binds these ciphertext bytes to their row.
         val aad = aadFor(fingerprintId)
         val sealed = sealer.seal(plaintextBytes, aad)
@@ -66,12 +94,12 @@ class EncryptedFingerprintStore(
                 listOf(
                     RecognitionFingerprintEntity(
                         fingerprintId = fingerprintId,
-                        ownerUserId = currentOwner(),
+                        ownerUserId = owner.ownerId.toRestString(),
                         capsuleId = capsuleId,
                         side = side,
                         origin = origin,
                         fingerprintProfileId = profileId,
-                        encryptedPath = target.relativeTo(filesRoot).path,
+                        encryptedPath = target.relativeTo(owner.fingerprintsRoot).path,
                         createdAtEpochMs = nowEpochMs(),
                         preferred = false,
                     ),
@@ -88,10 +116,15 @@ class EncryptedFingerprintStore(
         capsuleId: String,
         side: FingerprintSide,
         origin: FingerprintOrigin,
-    ): Boolean = dao.getByCapsuleIdAndOriginAndOwner(capsuleId, origin, currentOwner()).any { it.side == side }
+    ): Boolean {
+        val owner = snapshotOwner()
+        return dao.getByCapsuleIdAndOriginAndOwner(capsuleId, origin, owner.ownerId.toRestString())
+            .any { it.side == side }
+    }
 
     override suspend fun setPreferredPair(capsuleId: String, origin: FingerprintOrigin) {
-        dao.setPreferredPairForOwner(capsuleId, origin, currentOwner())
+        val owner = snapshotOwner()
+        dao.setPreferredPairForOwner(capsuleId, origin, owner.ownerId.toRestString())
     }
 
     override suspend fun deleteBaseline(
@@ -99,19 +132,21 @@ class EncryptedFingerprintStore(
         side: FingerprintSide,
         origin: FingerprintOrigin,
     ) {
-        val entity = dao.getByCapsuleIdAndOriginAndOwner(capsuleId, origin, currentOwner())
+        val owner = snapshotOwner()
+        val entity = dao.getByCapsuleIdAndOriginAndOwner(capsuleId, origin, owner.ownerId.toRestString())
             .firstOrNull { it.side == side } ?: return
-        filesRoot.resolve(entity.encryptedPath).delete()
-        check(dao.deleteByFingerprintIdAndOwner(entity.fingerprintId, currentOwner()) == 1) {
+        owner.resolve(entity.encryptedPath).delete()
+        check(dao.deleteByFingerprintIdAndOwner(entity.fingerprintId, owner.ownerId.toRestString()) == 1) {
             "owned baseline row vanished mid-delete"
         }
     }
 
-    /** Loads the row, reads its file, and unseals; anything unexpected fails closed. */
+    /** Loads the owned row, reads its file from the SAME owner root, and unseals; anything unexpected fails closed. */
     override suspend fun decrypt(fingerprintId: String): ByteArray {
-        val entity = dao.getByFingerprintIdAndOwner(fingerprintId, currentOwner())
+        val owner = snapshotOwner()
+        val entity = dao.getByFingerprintIdAndOwner(fingerprintId, owner.ownerId.toRestString())
             ?: throw IllegalStateException("unknown fingerprint record")
-        val file = filesRoot.resolve(entity.encryptedPath)
+        val file = owner.resolve(entity.encryptedPath)
         if (!file.exists()) {
             throw IllegalStateException("encrypted fingerprint bytes are missing")
         }
@@ -120,20 +155,29 @@ class EncryptedFingerprintStore(
 
     /** Removes the ciphertext file of one owned record; the Room row must be removed by callers. */
     suspend fun deleteFileOf(fingerprintId: String) {
-        val entity = dao.getByFingerprintIdAndOwner(fingerprintId, currentOwner()) ?: return
-        filesRoot.resolve(entity.encryptedPath).delete()
+        val owner = snapshotOwner()
+        val entity = dao.getByFingerprintIdAndOwner(fingerprintId, owner.ownerId.toRestString()) ?: return
+        owner.resolve(entity.encryptedPath).delete()
     }
 
-    private suspend fun currentOwner(): String = ownerUserIdProvider()
+    /** Resolves a stored RELATIVE path strictly within THIS snapshot's own fingerprints root. */
+    private fun OwnerSnapshot.resolve(relativePath: String): File {
+        val canonicalRoot = fingerprintsRoot.canonicalFile
+        val candidate = File(canonicalRoot, relativePath).canonicalFile
+        require(candidate.path.startsWith("$canonicalRoot${File.separator}")) {
+            "stored fingerprint path escapes the account storage boundary"
+        }
+        return candidate
+    }
 
-    private fun fileFor(fingerprintId: String): File =
-        File(filesRoot, "$fingerprintId.fpw")
+    private fun OwnerSnapshot.fileFor(fingerprintId: String): File =
+        File(fingerprintsRoot, "$fingerprintId.fpw")
 
     private fun aadFor(fingerprintId: String): ByteArray =
         "postmark/local-fp/v1:$fingerprintId".toByteArray(Charsets.UTF_8)
 
     private fun atomicWrite(target: File, bytes: ByteArray) {
-        val temporary = File(filesRoot, "${target.name}.tmp")
+        val temporary = File(target.parentFile, "${target.name}.tmp")
         try {
             temporary.writeBytes(bytes)
             if (!temporary.renameTo(target)) {

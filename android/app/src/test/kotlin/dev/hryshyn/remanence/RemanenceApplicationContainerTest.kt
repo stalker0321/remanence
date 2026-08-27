@@ -38,7 +38,7 @@ class RemanenceApplicationContainerTest {
 
     @After
     fun tearDown() {
-        File(context.filesDir, "fingerprints").deleteRecursively()
+        File(context.filesDir, "accounts").deleteRecursively()
         File(context.filesDir, "identity").deleteRecursively()
         File(context.filesDir, "session").deleteRecursively()
         File(context.getDatabasePath(AppContainer.DATABASE_NAME).parentFile, "container-test.db")
@@ -62,6 +62,14 @@ class RemanenceApplicationContainerTest {
 
         container.database.openHelper.writableDatabase // force open
 
+        // Persistence flows are auth-gated: the fingerprint store resolves a
+        // canonical owner through local_account before any file is touched.
+        val authenticatedOwner = "9db5c67a-3a4e-45d1-8b0f-2f14a9bb1001"
+        container.currentAccountStore.record(
+            userId = authenticatedOwner,
+            handle = "mykola",
+            activeKeyBundleId = "00000000-0000-4000-8000-000000000001",
+        )
         container.fingerprintPersistence.persist(
             capsuleId = "capsule-1",
             side = FingerprintSide.FRONT,

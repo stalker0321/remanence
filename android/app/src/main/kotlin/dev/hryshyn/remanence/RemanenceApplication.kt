@@ -84,17 +84,28 @@ class AppContainer(
     val kekBoundary: KekBoundary = kekBoundaryOverride ?: AndroidKeystoreKekBoundary()
 
     /**
-     * M2-P02: every sealed fingerprint row is attributed to the authenticated
-     * local account at write time. All persistence flows run post-auth, so
-     * the row always exists when this resolves.
+     * M2-P02/P04: every sealed fingerprint row is attributed to the
+     * authenticated local account at write time, and its ciphertext file
+     * lives beneath THAT account's `accounts/<owner>/fingerprints/` root -
+     * there is no shared fingerprints directory. All persistence flows run
+     * post-auth, so the row always exists when this resolves.
      */
     val fingerprintPersistence: SealedFingerprintPersistence by lazy {
         EncryptedFingerprintStore(
-            filesRoot = File(appContext.filesDir, "fingerprints"),
+            roots = accountScopedFileRoots,
             sealer = KekBoundSecretSealer(kekBoundary, KekBoundSecretSealer.FINGERPRINT_SEALING_ALIAS),
             dao = database.recognitionFingerprintDao(),
-            ownerUserIdProvider = { currentAccountStore.loadEntity()?.userId.orEmpty() },
+            ownerUserIdProvider = {
+                val row = currentAccountStore.loadEntity()
+                    ?: error("fingerprint persistence requires an authenticated local account")
+                row.userId
+            },
         )
+    }
+
+    /** Pure resolver for the fixed per-account storage roots. */
+    val accountScopedFileRoots: dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots by lazy {
+        dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(appContext.filesDir)
     }
 
     val identityRepository: IdentityBundleRepository by lazy {

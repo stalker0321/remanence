@@ -18,6 +18,8 @@ import org.robolectric.annotation.Config
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
 import dev.hryshyn.remanence.core.data.db.FingerprintSide
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
+import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
+
 
 private class XorSealerForRecipient : SecretSealer {
     override fun seal(plaintext: ByteArray, aad: ByteArray): ByteArray =
@@ -33,11 +35,12 @@ private class XorSealerForRecipient : SecretSealer {
 class RecipientBaselineCreatorTest {
 
     private companion object {
-        const val OWNER = "0198f0a0-0000-7000-8000-00000000ow01"
+        const val OWNER = "5108f0a0-0000-7000-8000-00000000aa01"
     }
 
     private lateinit var database: RemanenceLocalDatabase
     private lateinit var filesRoot: File
+    private lateinit var roots: AccountScopedFileRoots
     private lateinit var creator: RecipientBaselineCreator
 
     private val capsuleId = "3c111111-2222-4333-8444-555555555555"
@@ -56,8 +59,9 @@ class RecipientBaselineCreatorTest {
             .build()
         filesRoot = File(context.filesDir, "recipient-baseline-test")
         filesRoot.mkdirs()
+        roots = AccountScopedFileRoots(filesRoot)
         creator = RecipientBaselineCreator(
-            EncryptedFingerprintStore(filesRoot, XorSealerForRecipient(), database.recognitionFingerprintDao(), ownerUserIdProvider = { "0198f0a0-0000-7000-8000-00000000ow01" }),
+            EncryptedFingerprintStore(roots, XorSealerForRecipient(), database.recognitionFingerprintDao(), ownerUserIdProvider = { "5108f0a0-0000-7000-8000-00000000aa01" }),
         )
     }
 
@@ -68,7 +72,7 @@ class RecipientBaselineCreatorTest {
     }
 
     private suspend fun seedSenderPair(preferred: Boolean) {
-        val store = EncryptedFingerprintStore(filesRoot, XorSealerForRecipient(), database.recognitionFingerprintDao(), ownerUserIdProvider = { "0198f0a0-0000-7000-8000-00000000ow01" })
+        val store = EncryptedFingerprintStore(roots, XorSealerForRecipient(), database.recognitionFingerprintDao(), ownerUserIdProvider = { "5108f0a0-0000-7000-8000-00000000aa01" })
         store.persist(capsuleId, FingerprintSide.FRONT, FingerprintOrigin.SENDER, "mvp-orb-v1", "sender-front".toByteArray())
         store.persist(capsuleId, FingerprintSide.BACK, FingerprintOrigin.SENDER, "mvp-orb-v1", "sender-back".toByteArray())
         if (preferred) {
@@ -93,7 +97,7 @@ class RecipientBaselineCreatorTest {
 
         // The recipient baseline is sealed and round-trips.
         val frontRow = recipientRows.single { it.side == FingerprintSide.FRONT }
-        val store = EncryptedFingerprintStore(filesRoot, XorSealerForRecipient(), database.recognitionFingerprintDao(), ownerUserIdProvider = { "0198f0a0-0000-7000-8000-00000000ow01" })
+        val store = EncryptedFingerprintStore(roots, XorSealerForRecipient(), database.recognitionFingerprintDao(), ownerUserIdProvider = { "5108f0a0-0000-7000-8000-00000000aa01" })
         assertEquals("fp-FRONT", String(store.decrypt(frontRow.fingerprintId)))
     }
 
@@ -120,7 +124,7 @@ class RecipientBaselineCreatorTest {
     @Test
     fun failedBackPersistenceRollsThePairBackInsteadOfLeavingHalfABaseline() = runBlocking {
         val failingStore = EncryptedFingerprintStore(
-            File(filesRoot, "unwritable-root").apply { mkdirs() },
+            AccountScopedFileRoots(File(filesRoot, "unwritable-root")),
             object : SecretSealer {
                 override fun seal(plaintext: ByteArray, aad: ByteArray): ByteArray =
                     ByteArray(plaintext.size)
@@ -128,7 +132,7 @@ class RecipientBaselineCreatorTest {
                     ByteArray(ciphertext.size)
             },
             database.recognitionFingerprintDao(),
-            ownerUserIdProvider = { "0198f0a0-0000-7000-8000-00000000ow01" },
+            ownerUserIdProvider = { "5108f0a0-0000-7000-8000-00000000aa01" },
         )
         var attempts = 0
         val flakyCreator = RecipientBaselineCreator(failingStore)

@@ -13,6 +13,7 @@ import dev.hryshyn.remanence.ui.navigation.CapsuleAccess
 import dev.hryshyn.remanence.wiring.KekBoundSecretSealer
 import com.google.crypto.tink.TinkProtoKeysetFormat
 import java.io.File
+import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import java.security.MessageDigest
 import java.util.UUID
 import kotlinx.coroutines.runBlocking
@@ -70,6 +71,7 @@ class CreateRescanOpenFlowTest {
     private lateinit var context: Context
     private lateinit var database: RemanenceLocalDatabase
     private lateinit var filesRoot: File
+    private lateinit var roots: AccountScopedFileRoots
     private lateinit var outboxDir: File
 
     private val identity = AccountIdentityGenerator().generate()
@@ -84,10 +86,10 @@ class CreateRescanOpenFlowTest {
 
     /** REAL sealer: AES-GCM under a software KEK boundary - no XOR anywhere. */
     private fun store() = EncryptedFingerprintStore(
-        File(filesRoot, "fingerprints"),
+        roots,
         KekBoundSecretSealer(SoftwareKekBoundary(), KekBoundSecretSealer.FINGERPRINT_SEALING_ALIAS),
         database.recognitionFingerprintDao(),
-        ownerUserIdProvider = { "0198f0a0-0000-7000-8000-00000000ow01" },
+        ownerUserIdProvider = { userUuid.toString() },
     )
 
     private fun syntheticFingerprint(seed: Int, side: RecognitionSide): ByteArray {
@@ -120,6 +122,7 @@ class CreateRescanOpenFlowTest {
         context = ApplicationProvider.getApplicationContext()
         database = newDb("e2e-flow.db")
         filesRoot = File(context.filesDir, "e2e-artifacts").apply { mkdirs() }
+        roots = AccountScopedFileRoots(filesRoot)
         outboxDir = File(filesRoot, "outbox").apply { mkdirs() }
     }
 
@@ -349,7 +352,7 @@ class CreateRescanOpenFlowTest {
 
     private suspend fun reopenedDbFingerprint(side: FingerprintSide) =
         database.recognitionFingerprintDao()
-            .getByCapsuleIdAndOriginAndOwner(capsuleUuid.toString(), FingerprintOrigin.SENDER, "0198f0a0-0000-7000-8000-00000000ow01")
+            .getByCapsuleIdAndOriginAndOwner(capsuleUuid.toString(), FingerprintOrigin.SENDER, userUuid.toString())
             .single { it.side == side }
 
     private fun indexOf(haystack: ByteArray, needle: ByteArray): Boolean {

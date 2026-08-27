@@ -22,6 +22,7 @@ import org.robolectric.annotation.Config
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
 import dev.hryshyn.remanence.core.data.db.FingerprintSide
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
+import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 
 /** XOR sealer like the store tests: reversible bytes, no real crypto needed here. */
 private class CandidateIsolationXorSealer : SecretSealer {
@@ -43,13 +44,15 @@ private class CandidateIsolationXorSealer : SecretSealer {
 @Config(sdk = [34])
 class RecognitionCandidateIsolationTest {
 
-    private val ownerA = "0198f0a0-0000-7000-8000-00000000ow01"
-    private val ownerB = "0198f0a0-0000-7000-8000-00000000ow02"
+    private val ownerA = "5108f0a0-0000-7000-8000-00000000aa01"
+    private val ownerAId = dev.hryshyn.remanence.core.model.UserId(java.util.UUID.fromString(ownerA))
+    private val ownerB = "5108f0a0-0000-7000-8000-00000000bb02"
     private val capsuleId = "0198f0a0-0000-7000-8000-00000000ca01"
     private val profileId = "mvp-orb-v1"
 
     private lateinit var database: RemanenceLocalDatabase
     private lateinit var filesRoot: File
+    private lateinit var roots: AccountScopedFileRoots
 
     @Before
     fun setUp() {
@@ -59,6 +62,7 @@ class RecognitionCandidateIsolationTest {
             .build()
         filesRoot = File(context.filesDir, "fingerprints-candidate-isolation")
         filesRoot.mkdirs()
+        roots = AccountScopedFileRoots(filesRoot)
     }
 
     @After
@@ -69,7 +73,7 @@ class RecognitionCandidateIsolationTest {
 
     private fun store(ownerUserId: String) =
         EncryptedFingerprintStore(
-            filesRoot = filesRoot,
+            roots = roots,
             sealer = CandidateIsolationXorSealer(),
             dao = database.recognitionFingerprintDao(),
             ownerUserIdProvider = { ownerUserId },
@@ -115,7 +119,8 @@ class RecognitionCandidateIsolationTest {
             database.recognitionFingerprintDao().deleteByFingerprintIdAndOwner(frontId, ownerB),
         )
         storeB.deleteFileOf(backId) // silently inert: record not owned by B
-        assertTrue(File(filesRoot.resolve(storeARelativePathOrThrow(backId)).absolutePath).exists())
+        assertTrue(roots.child(ownerAId, AccountScopedFileRoots.ChildRoot.FINGERPRINTS)
+            .resolve(storeARelativePathOrThrow(backId)).exists())
 
         // A's capsule identity stays globally unique - B cannot claim it either.
         assertThrows(SQLiteConstraintException::class.java) {

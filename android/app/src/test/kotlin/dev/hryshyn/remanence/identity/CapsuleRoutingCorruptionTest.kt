@@ -17,6 +17,7 @@ import com.google.crypto.tink.InsecureSecretKeyAccess
 import com.google.crypto.tink.TinkProtoKeysetFormat
 import com.google.crypto.tink.subtle.Base64
 import java.io.File
+import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -68,6 +69,7 @@ class CapsuleRoutingCorruptionTest {
     private lateinit var context: Context
     private lateinit var database: RemanenceLocalDatabase
     private lateinit var filesRoot: File
+    private lateinit var roots: AccountScopedFileRoots
 
     private val identity = AccountIdentityGenerator().generate()
     private val capsuleUuid = UUID.fromString("9d111111-2222-4333-8444-555555555555")
@@ -83,6 +85,7 @@ class CapsuleRoutingCorruptionTest {
             .allowMainThreadQueries()
             .build()
         filesRoot = File(context.filesDir, "routing-corruption").apply { mkdirs() }
+        roots = AccountScopedFileRoots(filesRoot)
     }
 
     @After
@@ -213,7 +216,7 @@ class CapsuleRoutingCorruptionTest {
         Base64.urlSafeEncode(identity.signingPublicKeyset)
 
     private fun store() = EncryptedFingerprintStore(
-        File(filesRoot, "fingerprints"),
+        roots,
         KekBoundSecretSealer(SoftwareKekBoundary(), KekBoundSecretSealer.FINGERPRINT_SEALING_ALIAS),
         database.recognitionFingerprintDao(),
         ownerUserIdProvider = { userUuid.toString() },

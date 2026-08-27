@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.core.model
 import dev.hryshyn.remanence.protocol.v1.ArtifactAadContext
 import dev.hryshyn.remanence.protocol.v1.ArtifactKind
 import dev.hryshyn.remanence.protocol.v1.RecipientEnvelopeContext
+import dev.hryshyn.remanence.protocol.v1.SenderRetryWrapContext
 import com.google.protobuf.ByteString
 import com.google.protobuf.CodedOutputStream
 import com.google.protobuf.MessageLite
@@ -27,6 +28,15 @@ object CryptoContextEncoder {
     const val ARTIFACT_AAD_PREFIX = "postmark/artifact/v1"
     const val ENVELOPE_INFO_PREFIX = "postmark/envelope/v1"
 
+    /**
+     * M2-P08: frozen ASCII prefix binding the sender-retry wrap AAD to
+     * its exact context kind. MUST stay distinct from
+     * [ARTIFACT_AAD_PREFIX] and [ENVELOPE_INFO_PREFIX] so a wrapped
+     * retry keyset can never be confused with an artifact AAD or a
+     * recipient envelope context.
+     */
+    const val SENDER_RETRY_WRAP_AAD_PREFIX = "postmark/sender-retry-wrap/v1"
+
     fun artifactAad(input: ArtifactAadInput): ByteString {
         validateOrdinal(input.artifactKind, input.ordinal)
         val context = ArtifactAadContext.newBuilder()
@@ -50,6 +60,29 @@ object CryptoContextEncoder {
             .setRecipientKeyBundleId(input.recipientKeyBundleId.toProtoBytes())
             .build()
         return encode(ENVELOPE_INFO_PREFIX, context)
+    }
+
+    /**
+     * M2-P08: deterministic AAD for a sender-retry wrap. Re-derives
+     * the AAD on every wrap and every unwrap so a wrapped keyset can
+     * only be opened by a caller that supplies the matching
+     * owner_user_id, capsule_id, sender_key_bundle_id, and purpose.
+     * The proto payload is built with `useDeterministicSerialization`
+     * inside [encode] and is therefore bit-for-bit reproducible
+     * across processes, architectures, and protobuf-library versions.
+     */
+    fun senderRetryWrapAad(input: SenderRetryWrapContextInput): ByteString {
+        require(input.purpose in SenderRetryPurpose.ACCEPTED) {
+            "only ${SenderRetryPurpose.ACCEPTED} are accepted; got ${input.purpose}"
+        }
+        val context = SenderRetryWrapContext.newBuilder()
+            .setProtocolVersion(ProtocolV1Limits.PROTOCOL_VERSION)
+            .setOwnerUserId(input.ownerUserId.toProtoBytes())
+            .setCapsuleId(input.capsuleId.toProtoBytes())
+            .setSenderKeyBundleId(input.senderKeyBundleId.toProtoBytes())
+            .setPurpose(input.purpose.toProto())
+            .build()
+        return encode(SENDER_RETRY_WRAP_AAD_PREFIX, context)
     }
 
     private fun validateOrdinal(kind: CapsuleArtifactKind, ordinal: Int) {

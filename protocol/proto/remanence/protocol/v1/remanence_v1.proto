@@ -99,3 +99,25 @@ message ContentManifest {
   optional string note = 4;
   optional TrackAttachment track = 5; // MUST be absent in MVP
 }
+
+// M2-P08: the bounded purpose of a sender-owned wrapped retry keyset.
+// Only RECIPIENT_KEY_STALE_REWRAP is currently defined; future kinds MUST
+// be appended and explicitly accepted by the SenderRetryKeysetWrapper.
+enum SenderRetryPurpose {
+  SENDER_RETRY_PURPOSE_UNSPECIFIED = 0;
+  RECIPIENT_KEY_STALE_REWRAP = 1;
+}
+
+// M2-P08: deterministic AAD context binding a sender-owned wrapped
+// retry keyset to the exact capsule + sender bundle + purpose it was
+// wrapped for. Serialized once and re-used on every wrap / unwrap so
+// a wrapped keyset can only ever be opened by a caller that supplies
+// the matching owner_user_id, capsule_id, sender_key_bundle_id, and
+// purpose. No plaintext, no keyset bytes, no version payload.
+message SenderRetryWrapContext {
+  uint32 protocol_version = 1; // exactly 1
+  bytes owner_user_id = 2; // UUID bytes exactly 16
+  bytes capsule_id = 3; // UUID bytes exactly 16
+  bytes sender_key_bundle_id = 4; // UUID bytes exactly 16
+  SenderRetryPurpose purpose = 5;
+}

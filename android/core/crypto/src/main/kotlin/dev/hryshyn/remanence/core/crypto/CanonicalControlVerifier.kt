@@ -7,6 +7,7 @@ import dev.hryshyn.remanence.core.model.ArtifactLayoutValidation
 import dev.hryshyn.remanence.core.model.ArtifactLayoutValidator
 import dev.hryshyn.remanence.core.model.ArtifactSlot
 import dev.hryshyn.remanence.core.model.BlobId
+import dev.hryshyn.remanence.core.model.CanonicalArtifactOrder
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.KeyBundleId
@@ -105,6 +106,9 @@ internal class CanonicalControlVerifier(
             ?: return CanonicalControlResult.Rejected(RejectionReason.LAYOUT_INVALID)
         if (ArtifactLayoutValidator.validate(slots) !is ArtifactLayoutValidation.Valid) {
             return CanonicalControlResult.Rejected(RejectionReason.LAYOUT_INVALID)
+        }
+        if (!CanonicalArtifactOrder.isCanonical(slots)) {
+            return CanonicalControlResult.Rejected(RejectionReason.NON_CANONICAL_BYTES)
         }
 
         return CanonicalControlResult.Verified(VerifiedCanonicalControl(statement, envelope))

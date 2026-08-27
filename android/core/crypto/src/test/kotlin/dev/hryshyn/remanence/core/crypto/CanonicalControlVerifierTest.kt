@@ -4,6 +4,7 @@ import com.google.crypto.tink.KeyTemplates
 import com.google.crypto.tink.KeysetHandle
 import com.google.crypto.tink.TinkProtoKeysetFormat
 import com.google.protobuf.ByteString
+import com.google.protobuf.CodedOutputStream
 import dev.hryshyn.remanence.core.model.ArtifactSlot
 import dev.hryshyn.remanence.core.model.BlobId
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
@@ -142,6 +143,33 @@ class CanonicalControlVerifierTest {
     private fun senderVerifyingKeyset() =
         TinkProtoKeysetFormat.parseKeysetWithoutSecret(senderIdentity.signingPublicKeyset)
 
+    private fun reorderedCapsule(order: List<Int>): SealedCapsule {
+        val canonical = sealedCapsule()
+        val statement = PublishStatement.parseFrom(canonical.statementBytes)
+        val reorderedStatement = statement.toBuilder()
+            .clearArtifacts()
+            .apply { order.forEach { index -> addArtifacts(statement.getArtifacts(index)) } }
+            .build()
+        val bytes = deterministicBytes(reorderedStatement)
+        val signed = signer.sign(senderIdentity.signingPrivateHandle, bytes)
+        return SealedCapsule(
+            statementBytes = bytes,
+            signature = signed.signature,
+            envelopeBytes = envelopeFor(bytes),
+            blobs = blobsFor(bytes),
+        )
+    }
+
+    private fun deterministicBytes(statement: PublishStatement): ByteArray {
+        val bytes = ByteArray(statement.serializedSize)
+        val output = CodedOutputStream.newInstance(bytes)
+        output.useDeterministicSerialization()
+        statement.writeTo(output)
+        output.flush()
+        output.checkNoSpaceLeft()
+        return bytes
+    }
+
     private fun controlInput(
         capsule: SealedCapsule,
         verifyingKeyset: KeysetHandle = senderVerifyingKeyset(),
@@ -169,6 +197,26 @@ class CanonicalControlVerifierTest {
         val verified = assertIs<CanonicalControlResult.Verified>(result)
         assertEquals(5, verified.control.statement.artifactsCount)
         assertEquals(capsule.statementBytes.toList(), verified.control.statement.toByteArray().toList())
+    }
+
+    @Test
+    fun deterministicallySerializedKindPermutationIsRejectedAsNonCanonical() {
+        val reordered = reorderedCapsule(listOf(1, 0, 2, 3, 4))
+
+        assertEquals(
+            RejectionReason.NON_CANONICAL_BYTES,
+            rejected(verifier.verify(controlInput(reordered))),
+        )
+    }
+
+    @Test
+    fun deterministicallySerializedPhotoOrdinalPermutationIsRejectedAsNonCanonical() {
+        val reordered = reorderedCapsule(listOf(0, 1, 3, 2, 4))
+
+        assertEquals(
+            RejectionReason.NON_CANONICAL_BYTES,
+            rejected(verifier.verify(controlInput(reordered))),
+        )
     }
 
     @Test

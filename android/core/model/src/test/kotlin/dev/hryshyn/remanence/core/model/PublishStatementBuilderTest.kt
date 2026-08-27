@@ -63,6 +63,37 @@ class PublishStatementBuilderTest {
     }
 
     @Test
+    fun everyArtifactPermutationBuildsTheSameCanonicalBytesAndOrder() {
+        val fixture = loadFixture()
+        val canonical = assertIs<PublishStatementBuildResult.Success>(PublishStatementBuilder.build(fixture.input()))
+        val permutations = permutations(fixture.input().artifacts)
+
+        assertEquals(120, permutations.size)
+        for (permutation in permutations) {
+            val built = assertIs<PublishStatementBuildResult.Success>(
+                PublishStatementBuilder.build(fixture.input().copy(artifacts = permutation)),
+            )
+            assertEquals(canonical.deterministicBytes, built.deterministicBytes)
+            assertTrue(
+                CanonicalArtifactOrder.isCanonical(
+                    built.statement.artifactsList.map { binding ->
+                        ArtifactSlot(
+                            blobId = BlobId.fromProtoBytes(binding.blobId),
+                            kind = when (binding.kind) {
+                                ArtifactKind.RECOGNITION_MANIFEST -> CapsuleArtifactKind.RECOGNITION_MANIFEST
+                                ArtifactKind.CONTENT_MANIFEST -> CapsuleArtifactKind.CONTENT_MANIFEST
+                                ArtifactKind.PHOTO -> CapsuleArtifactKind.PHOTO
+                                else -> error("unexpected fixture kind")
+                            },
+                            ordinal = binding.ordinal,
+                        )
+                    },
+                ),
+            )
+        }
+    }
+
+    @Test
     fun inputListIsNotMutated() {
         val fixture = loadFixture()
         val mutable = fixture.input().artifacts.toMutableList()
@@ -135,6 +166,16 @@ class PublishStatementBuilderTest {
         }
         return input.copy(artifacts = artifacts)
     }
+
+    private fun <T> permutations(items: List<T>): List<List<T>> =
+        if (items.isEmpty()) {
+            listOf(emptyList())
+        } else {
+            items.flatMapIndexed { index, item ->
+                permutations(items.filterIndexed { itemIndex, _ -> itemIndex != index })
+                    .map { remainder -> listOf(item) + remainder }
+            }
+        }
 
     private fun loadFixture(): GoldenFixture {
         val resource = javaClass.classLoader.getResource("publish-statement-v1.json")

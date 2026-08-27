@@ -52,7 +52,9 @@ object PublishStatementBuilder {
                 return PublishStatementBuildResult.InvalidCiphertextSize
             }
         }
-        val sorted = input.artifacts.sortedWith(ARTIFACT_ORDER)
+        val sorted = input.artifacts.sortedWith { left, right ->
+            CanonicalArtifactOrder.compare(left.slot, right.slot)
+        }
         val statement = PublishStatement.newBuilder()
             .setProtocolVersion(ProtocolV1Limits.PROTOCOL_VERSION)
             .setCapsuleId(input.capsuleId.toProtoBytes())
@@ -101,29 +103,6 @@ object PublishStatementBuilder {
             CapsuleArtifactKind.PHOTO ->
                 ProtocolV1Limits.ENCRYPTED_PHOTO_MAX_CIPHERTEXT_BYTES
         }
-
-    private val ARTIFACT_ORDER = Comparator<PublishArtifact> { left, right ->
-        val kindCmp = generatedKind(left.slot.kind).number - generatedKind(right.slot.kind).number
-        if (kindCmp != 0) {
-            return@Comparator kindCmp
-        }
-        val ordinalCmp = left.slot.ordinal.compareTo(right.slot.ordinal)
-        if (ordinalCmp != 0) {
-            return@Comparator ordinalCmp
-        }
-        compareUnsignedBytes(left.slot.blobId.toProtoBytes(), right.slot.blobId.toProtoBytes())
-    }
-
-    private fun compareUnsignedBytes(left: ByteString, right: ByteString): Int {
-        val length = minOf(left.size(), right.size())
-        for (index in 0 until length) {
-            val delta = (left.byteAt(index).toInt() and 0xff) - (right.byteAt(index).toInt() and 0xff)
-            if (delta != 0) {
-                return delta
-            }
-        }
-        return left.size().compareTo(right.size())
-    }
 
     private const val SHA256_BYTES = 32
 }

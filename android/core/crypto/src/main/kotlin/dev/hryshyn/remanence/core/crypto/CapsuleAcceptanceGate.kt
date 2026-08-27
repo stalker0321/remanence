@@ -75,6 +75,21 @@ enum class RejectionReason {
      * emit this reason.
      */
     RECOGNITION_PAYLOAD_INVALID,
+    /**
+     * Presentation acceptance only: parsing the capsule keyset from the
+     * verified envelope, decrypting the content manifest, or
+     * structurally validating the parsed manifest (including the inner
+     * capsule id binding) failed. The full [CapsuleAcceptanceGate] and
+     * the control/index gate do not emit this reason.
+     */
+    CONTENT_AEAD_INVALID,
+    /**
+     * Presentation acceptance only: the decrypted content manifest's
+     * photo descriptors did not exactly match the signed PHOTO
+     * bindings by blob id and ordinal. The full [CapsuleAcceptanceGate]
+     * and the control/index gate do not emit this reason.
+     */
+    CONTENT_DESCRIPTORS_MISMATCH,
 }
 
 /**

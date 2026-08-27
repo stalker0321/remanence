@@ -117,6 +117,16 @@ class AppContainer(
         dev.hryshyn.remanence.core.data.storage.AccountStorageRetention(accountScopedFileRoots)
     }
 
+    /**
+     * M2-P05 cancellation boundary over WorkManager: cancelForAccount acts
+     * ONLY on one canonical `remanence.account.<owner>` tag.
+     */
+    val accountWorkCancellation: dev.hryshyn.remanence.sync.AccountWorkCancellation by lazy {
+        dev.hryshyn.remanence.sync.AccountWorkCancellation(
+            androidx.work.WorkManager.getInstance(appContext),
+        )
+    }
+
     val identityRepository: IdentityBundleRepository by lazy {
         IdentityBundleRepository(
             baseDirectory = File(appContext.filesDir, "identity"),
@@ -283,6 +293,12 @@ class AppContainer(
             },
             tempStorageCleanup = { owner ->
                 accountStorageRetention.onLogout(owner)
+            },
+            // M2-P05: the SAME immutable snapshot is the only cancellation
+            // target; exactly that account's chains are cancelled before any
+            // server/network teardown or credential state clears.
+            workCancellation = { owner ->
+                accountWorkCancellation.cancelForAccount(owner)
             },
         )
     }

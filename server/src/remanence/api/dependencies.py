@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from remanence.auth.session_repository import AuthSessionRepository
 from remanence.auth.tokens import hash_opaque_token
+from remanence.storage import BlobStore, CiphertextStager
 from remanence.users.models import User
 
 _ACCESS_TOKEN_PREFIX = "pm_at_"
@@ -24,6 +25,10 @@ class DatabaseUnavailableError(RuntimeError):
 
 
 class AuthenticationRequiredError(RuntimeError):
+    pass
+
+
+class StorageUnavailableError(RuntimeError):
     pass
 
 
@@ -42,6 +47,20 @@ def get_db_session(request: Request) -> Iterator[Session]:
         yield session
     finally:
         session.close()
+
+
+def get_blob_store(request: Request) -> BlobStore:
+    store = getattr(request.app.state, "blob_store", None)
+    if store is None:
+        raise StorageUnavailableError()
+    return store
+
+
+def get_ciphertext_stager(request: Request) -> CiphertextStager:
+    stager = getattr(request.app.state, "ciphertext_stager", None)
+    if stager is None:
+        raise StorageUnavailableError()
+    return stager
 
 
 def _validate_access_token(token: str) -> None:

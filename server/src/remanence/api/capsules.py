@@ -1,7 +1,10 @@
 """Authenticated capsule draft creation endpoint."""
 
 import hashlib
+import re
 import uuid
+from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -13,6 +16,8 @@ from sqlalchemy.orm import Session
 from remanence.api.auth_schemas import ProblemDetail
 from remanence.api.dependencies import (
     AuthenticatedPrincipal,
+    get_blob_store,
+    get_ciphertext_stager,
     get_authenticated_principal,
     get_db_session,
 )
@@ -21,16 +26,41 @@ from remanence.capsules.draft_service import (
     CapsuleDraftService,
     CapsuleDraftServiceError,
 )
+from remanence.capsules.encoding import decode_canonical_base64url
 from remanence.capsules.limits import MAX_CREATE_DRAFT_REQUEST_BYTES
+from remanence.capsules.limits import LIMITS_V1
+from remanence.capsules.promotion_service import (
+    CapsuleBlobPromotionError,
+    CapsuleBlobPromotionService,
+)
 from remanence.capsules.schemas import (
     CapsuleDraftValidationError,
     parse_create_capsule_draft_request,
+)
+from remanence.storage import (
+    BlobStore,
+    CiphertextStager,
+    InvalidStagingExpectationError,
+    StagedBlob,
+    StagingHashMismatchError,
+    StagingIOError,
+    StagingSizeExceededError,
+    StagingSizeTruncatedError,
 )
 
 
 router = APIRouter()
 
 _IDEMPOTENCY_HEADER = b"idempotency-key"
+_CONTENT_LENGTH_HEADER = b"content-length"
+_CONTENT_TYPE_HEADER = b"content-type"
+_CIPHERTEXT_HASH_HEADER = b"x-remanence-ciphertext-sha256"
+_CONTENT_ENCODING_HEADER = b"content-encoding"
+_TRANSFER_ENCODING_HEADER = b"transfer-encoding"
+_RANGE_HEADER = b"range"
+_CONTENT_RANGE_HEADER = b"content-range"
+_OCTET_STREAM = "application/octet-stream"
+_DECIMAL = re.compile(r"[0-9]+")
 _ERRORS = {
     "VALIDATION_FAILED": (422, "Invalid request"),
     "IDEMPOTENCY_CONFLICT": (409, "Idempotency conflict"),
@@ -40,6 +70,13 @@ _ERRORS = {
     "KEY_BUNDLE_INVALID": (409, "Key bundle invalid"),
     "AUTH_INVALID": (401, "Authentication required"),
     "INTERNAL_ERROR": (500, "Internal server error"),
+    "CAPSULE_NOT_FOUND": (404, "Capsule not found"),
+    "CAPSULE_STATE_INVALID": (409, "Capsule state invalid"),
+    "DRAFT_EXPIRED": (409, "Draft expired"),
+    "BLOB_NOT_DECLARED": (404, "Blob not declared"),
+    "BLOB_SIZE_INVALID": (400, "Blob size invalid"),
+    "BLOB_HASH_MISMATCH": (400, "Blob hash mismatch"),
+    "BLOB_CONFLICT": (409, "Blob conflict"),
 }
 
 
@@ -57,6 +94,13 @@ class CapsuleDraftResponse(BaseModel):
     state: Literal["DRAFT"]
     draft_expires_at: datetime
     blobs: list[CapsuleDraftBlobResponse]
+
+
+@dataclass(frozen=True)
+class _UploadHeaders:
+    expected_size: int
+    expected_sha256_hex: str
+    idempotency_key: uuid.UUID
 
 
 async def _read_bounded_body(request: Request) -> bytes:
@@ -92,6 +136,92 @@ def _single_idempotency_key(request: Request) -> uuid.UUID:
     return parsed
 
 
+def _header_values(
+    headers: Iterable[tuple[bytes, bytes]],
+    name: bytes,
+) -> list[bytes]:
+    return [value for header_name, value in headers if header_name.lower() == name]
+
+
+def _single_raw_header(headers: Iterable[tuple[bytes, bytes]], name: bytes) -> bytes:
+    values = _header_values(headers, name)
+    if len(values) != 1 or not isinstance(values[0], bytes):
+        raise CapsuleDraftValidationError()
+    return values[0]
+
+
+def _canonical_path_uuid(value: str) -> uuid.UUID:
+    try:
+        parsed = uuid.UUID(value)
+    except (AttributeError, TypeError, ValueError):
+        raise CapsuleDraftValidationError() from None
+    if str(parsed) != value:
+        raise CapsuleDraftValidationError()
+    return parsed
+
+
+def _parse_upload_headers(headers: Iterable[tuple[bytes, bytes]]) -> _UploadHeaders:
+    if any(
+        _header_values(headers, name)
+        for name in (
+            _CONTENT_ENCODING_HEADER,
+            _TRANSFER_ENCODING_HEADER,
+            _RANGE_HEADER,
+            _CONTENT_RANGE_HEADER,
+        )
+    ):
+        raise CapsuleDraftValidationError()
+
+    content_type = _single_raw_header(headers, _CONTENT_TYPE_HEADER)
+    try:
+        if content_type.decode("ascii").strip(" \t") != _OCTET_STREAM:
+            raise CapsuleDraftValidationError()
+    except UnicodeDecodeError:
+        raise CapsuleDraftValidationError() from None
+
+    content_length = _single_raw_header(headers, _CONTENT_LENGTH_HEADER)
+    try:
+        length_text = content_length.decode("ascii")
+    except UnicodeDecodeError:
+        raise CapsuleDraftValidationError() from None
+    if (
+        _DECIMAL.fullmatch(length_text) is None
+        or length_text.startswith("0")
+        or len(length_text) > len(str(LIMITS_V1.encrypted_photo_max_ciphertext_bytes))
+    ):
+        raise CapsuleDraftValidationError()
+    try:
+        expected_size = int(length_text)
+    except (ValueError, OverflowError):
+        raise CapsuleDraftValidationError() from None
+    if not 0 < expected_size <= LIMITS_V1.encrypted_photo_max_ciphertext_bytes:
+        raise CapsuleDraftValidationError()
+
+    digest_header = _single_raw_header(headers, _CIPHERTEXT_HASH_HEADER)
+    try:
+        digest_text = digest_header.decode("ascii")
+        expected_sha256_hex = decode_canonical_base64url(
+            digest_text,
+            expected_length=32,
+        ).hex()
+    except (UnicodeDecodeError, TypeError, ValueError):
+        raise CapsuleDraftValidationError() from None
+
+    idempotency_key = _single_raw_header(headers, _IDEMPOTENCY_HEADER)
+    try:
+        idempotency_text = idempotency_key.decode("ascii")
+        parsed_idempotency_key = uuid.UUID(idempotency_text)
+    except (UnicodeDecodeError, AttributeError, TypeError, ValueError):
+        raise CapsuleDraftValidationError() from None
+    if str(parsed_idempotency_key) != idempotency_text:
+        raise CapsuleDraftValidationError()
+    return _UploadHeaders(
+        expected_size=expected_size,
+        expected_sha256_hex=expected_sha256_hex,
+        idempotency_key=parsed_idempotency_key,
+    )
+
+
 def _problem_response(code: str) -> JSONResponse:
     status, title = _ERRORS.get(code, _ERRORS["INTERNAL_ERROR"])
     safe_code = code if code in _ERRORS else "INTERNAL_ERROR"
@@ -118,6 +248,65 @@ def _response_dto(result: CapsuleDraftResult) -> CapsuleDraftResponse:
             for blob in result.blobs
         ],
     )
+
+
+@router.put(
+    "/v1/capsules/{capsule_id}/blobs/{blob_id}",
+    status_code=204,
+    response_model=None,
+)
+async def upload_capsule_blob(
+    capsule_id: str,
+    blob_id: str,
+    request: Request,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    session: Session = Depends(get_db_session, use_cache=False),
+    blob_store: BlobStore = Depends(get_blob_store),
+    ciphertext_stager: CiphertextStager = Depends(get_ciphertext_stager),
+) -> Response | JSONResponse:
+    staged: StagedBlob | None = None
+    service_owns_staged = False
+    try:
+        parsed_capsule_id = _canonical_path_uuid(capsule_id)
+        parsed_blob_id = _canonical_path_uuid(blob_id)
+        upload_headers = _parse_upload_headers(request.scope.get("headers", []))
+        staged = await ciphertext_stager.stage(
+            request.stream(),
+            expected_size=upload_headers.expected_size,
+            expected_sha256=upload_headers.expected_sha256_hex,
+            max_bytes=LIMITS_V1.encrypted_photo_max_ciphertext_bytes,
+        )
+        with session.begin():
+            service = CapsuleBlobPromotionService(session, blob_store)
+            service_owns_staged = True
+            service.promote_blob(
+                authenticated_sender_user_id=principal.user_id,
+                capsule_id=parsed_capsule_id,
+                blob_id=parsed_blob_id,
+                staged_blob=staged,
+                now=datetime.now(timezone.utc),
+            )
+        return Response(status_code=204)
+    except CapsuleDraftValidationError as exc:
+        return _problem_response(exc.code)
+    except (StagingSizeExceededError, StagingSizeTruncatedError):
+        return _problem_response("BLOB_SIZE_INVALID")
+    except StagingHashMismatchError:
+        return _problem_response("BLOB_HASH_MISMATCH")
+    except InvalidStagingExpectationError:
+        return _problem_response("VALIDATION_FAILED")
+    except StagingIOError:
+        return _problem_response("INTERNAL_ERROR")
+    except CapsuleBlobPromotionError as exc:
+        return _problem_response(exc.code)
+    except Exception:
+        return _problem_response("INTERNAL_ERROR")
+    finally:
+        if staged is not None and not service_owns_staged:
+            try:
+                staged.cleanup()
+            except Exception:
+                pass
 
 
 @router.post(

@@ -81,11 +81,29 @@ class OutboxDaosTest {
         attemptCount = 0,
     )
 
+    private suspend fun insertCapsule(capsule: OutboxCapsuleEntity) {
+        capsuleDao.insertOrAbort(capsule.ownerUserId, capsule)
+    }
+
+    private suspend fun insertBlobs(blobs: List<OutboxBlobEntity>) {
+        blobDao.upsertAll(blobs.first().ownerUserId, blobs)
+    }
+
     @Test
     fun upsertThenReadReturnsOutboxRecord() = runBlocking {
         val record = capsule(state = OutboxCapsuleState.ENCRYPTED)
-        capsuleDao.insertOrAbort(record)
+        insertCapsule(record)
         assertEquals(OutboxCapsuleState.ENCRYPTED, capsuleDao.getByCapsuleIdAndOwner(record.capsuleId, OWNER)!!.state)
+    }
+
+    @Test
+    fun authoritativeOwnerMismatchIsRejectedBeforeAnyOutboxWrite() = runBlocking {
+        val candidate = capsule().copy(ownerUserId = OTHER_OWNER)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            runBlocking { capsuleDao.insertOrAbort(OWNER, candidate) }
+        }
+        assertEquals(0, countOutboxRows())
     }
 
     /**
@@ -96,12 +114,12 @@ class OutboxDaosTest {
     @Test
     fun collidingCapsuleRowInsertIsRefusedNotConvertedIntoAnUpdate(): Unit = runBlocking {
         val original = capsule(capsuleId = "capsule-a")
-        capsuleDao.insertOrAbort(original)
+        insertCapsule(original)
 
         // Same idempotency key under another capsule ID: refused outright.
         assertThrows(SQLiteConstraintException::class.java) {
             runBlocking {
-                capsuleDao.insertOrAbort(
+                insertCapsule(
                     capsule(capsuleId = "capsule-b", idempotencyKey = "0198f0a0-0000-7000-8000-00000000id01"),
                 )
             }
@@ -111,7 +129,7 @@ class OutboxDaosTest {
 
         // Same owner re-inserting its own capsule ID is equally refused.
         assertThrows(SQLiteConstraintException::class.java) {
-            runBlocking { capsuleDao.insertOrAbort(capsule()) }
+            runBlocking { insertCapsule(capsule()) }
         }
     }
 
@@ -124,14 +142,14 @@ class OutboxDaosTest {
     fun foreignOwnerCollidingCapsuleIdCannotOverwriteTheOriginalRow(): Unit = runBlocking {
         val sharedCapsuleId = "0198f0a0-0000-7000-8000-00000000ca77"
         val originalB = capsule(capsuleId = sharedCapsuleId).copy(ownerUserId = OTHER_OWNER)
-        capsuleDao.insertOrAbort(originalB)
+        insertCapsule(originalB)
 
         val aAttemptsToReuseBCapsuleId =
             capsule(capsuleId = sharedCapsuleId).copy(ownerUserId = OWNER)
-        val constraintViolation = assertThrows(SQLiteConstraintException::class.java) {
-            runBlocking { capsuleDao.insertOrAbort(aAttemptsToReuseBCapsuleId) }
+        val constraintViolation = assertThrows(IllegalStateException::class.java) {
+            runBlocking { insertCapsule(aAttemptsToReuseBCapsuleId) }
         }
-        assertTrue(constraintViolation.message!!.contains("outbox_capsule"))
+        assertTrue(constraintViolation.message!!.contains("another local account"))
 
         // B's logical row is exactly as committed before A's attempt.
         val loaded = capsuleDao.getByCapsuleIdAndOwner(sharedCapsuleId, OTHER_OWNER)!!
@@ -151,7 +169,7 @@ class OutboxDaosTest {
     @Test
     fun capsuleStateTransitionHonorsAllowedOriginsAndRecordsError() = runBlocking {
         val record = capsule()
-        capsuleDao.insertOrAbort(record)
+        insertCapsule(record)
 
         assertEquals(0, capsuleDao.transitionStateForOwner(record.capsuleId, OWNER, OutboxCapsuleState.UPLOADING, listOf(OutboxCapsuleState.PUBLISHED)))
         assertEquals(1, capsuleDao.transitionStateForOwner(record.capsuleId, OWNER, OutboxCapsuleState.ENCRYPTED, listOf(OutboxCapsuleState.PREPARING)))
@@ -175,7 +193,7 @@ class OutboxDaosTest {
     @Test
     fun publishedTerminalStateCannotReturnToUploading() = runBlocking {
         val record = capsule()
-        capsuleDao.insertOrAbort(record)
+        insertCapsule(record)
         capsuleDao.transitionStateForOwner(record.capsuleId, OWNER, OutboxCapsuleState.FINALIZING, listOf(OutboxCapsuleState.UPLOADING))
         capsuleDao.transitionStateForOwner(record.capsuleId, OWNER, OutboxCapsuleState.PUBLISHED, listOf(OutboxCapsuleState.FINALIZING))
         assertEquals(0, capsuleDao.transitionStateForOwner(record.capsuleId, OWNER, OutboxCapsuleState.UPLOADING, listOf(OutboxCapsuleState.PUBLISHED)))
@@ -183,7 +201,7 @@ class OutboxDaosTest {
 
     @Test
     fun blobCardinalityQueriesExposeArtifactCounts() = runBlocking {
-        blobDao.upsertAll(
+        insertBlobs(
             listOf(
                 blob("blob-rec", "RECOGNITION_MANIFEST", null),
                 blob("blob-con", "CONTENT_MANIFEST", null),
@@ -197,7 +215,7 @@ class OutboxDaosTest {
         assertEquals(3, blobDao.countByKindAndOwner("0198f0a0-0000-7000-8000-00000000ca01", OWNER, "PHOTO"))
         assertEquals(5, blobDao.getAllByCapsuleIdAndOwner("0198f0a0-0000-7000-8000-00000000ca01", OWNER).size)
 
-        blobDao.upsertAll(listOf(blob("blob-p3", "PHOTO", 3), blob("blob-p4", "PHOTO", 4)))
+        insertBlobs(listOf(blob("blob-p3", "PHOTO", 3), blob("blob-p4", "PHOTO", 4)))
         assertEquals(5, blobDao.countByKindAndOwner("0198f0a0-0000-7000-8000-00000000ca01", OWNER, "PHOTO"))
 
         // M2-P02: an occupied (kind, ordinal) slot is a HARD conflict - blob
@@ -208,7 +226,7 @@ class OutboxDaosTest {
             .single { it.ordinal == 0 }
         assertThrows(SQLiteConstraintException::class.java) {
             kotlinx.coroutines.runBlocking {
-                blobDao.upsertAll(listOf(blob("blob-dup-ordinal", "PHOTO", 0)))
+                insertBlobs(listOf(blob("blob-dup-ordinal", "PHOTO", 0)))
             }
         }
         assertEquals(5, blobDao.countByKindAndOwner("0198f0a0-0000-7000-8000-00000000ca01", OWNER, "PHOTO"))
@@ -227,9 +245,65 @@ class OutboxDaosTest {
     }
 
     @Test
+    fun blobBatchPreflightLeavesEarlierRowsUninsertedOnForeignIdCollision() = runBlocking {
+        val foreign = blob("blob-foreign", "PHOTO", 99).copy(
+            ownerUserId = OTHER_OWNER,
+            capsuleId = "0198f0a0-0000-7000-8000-00000000ca99",
+        )
+        blobDao.upsertAll(OTHER_OWNER, listOf(foreign))
+
+        val newForOwner = blob("blob-new", "PHOTO", 10)
+        val attemptedForeignReuse = foreign.copy(ownerUserId = OWNER)
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking { blobDao.upsertAll(OWNER, listOf(newForOwner, attemptedForeignReuse)) }
+        }
+
+        assertTrue(blobDao.getAllByCapsuleIdAndOwner(newForOwner.capsuleId, OWNER).isEmpty())
+        assertEquals(
+            foreign,
+            blobDao.getAllByCapsuleIdAndOwner(foreign.capsuleId, OTHER_OWNER).single(),
+        )
+    }
+
+    @Test
+    fun blobBatchOwnerMismatchLeavesEarlierRowsUninserted() = runBlocking {
+        val first = blob("blob-first", "PHOTO", 10)
+        val mismatched = blob("blob-mismatch", "PHOTO", 11).copy(ownerUserId = OTHER_OWNER)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            runBlocking { blobDao.upsertAll(OWNER, listOf(first, mismatched)) }
+        }
+        assertTrue(blobDao.getAllByCapsuleIdAndOwner(first.capsuleId, OWNER).isEmpty())
+    }
+
+    @Test
+    fun outboxCleanupIsOwnerScoped() = runBlocking {
+        val ownerCapsule = capsule(capsuleId = "capsule-owner")
+        val otherCapsule = capsule(
+            capsuleId = "capsule-other",
+            idempotencyKey = "0198f0a0-0000-7000-8000-00000000id02",
+        ).copy(ownerUserId = OTHER_OWNER)
+        insertCapsule(ownerCapsule)
+        insertCapsule(otherCapsule)
+        insertBlobs(listOf(blob("blob-owner", "PHOTO", 0)))
+        blobDao.upsertAll(OTHER_OWNER, listOf(blob("blob-other", "PHOTO", 0).copy(
+            capsuleId = otherCapsule.capsuleId,
+            ownerUserId = OTHER_OWNER,
+        )))
+
+        capsuleDao.clearForOwner(OWNER)
+        blobDao.clearForOwner(OWNER)
+
+        assertNull(capsuleDao.getByCapsuleIdAndOwner(ownerCapsule.capsuleId, OWNER))
+        assertNotNull(capsuleDao.getByCapsuleIdAndOwner(otherCapsule.capsuleId, OTHER_OWNER))
+        assertEquals(1, countOutboxRows())
+        assertEquals(1, blobDao.getAllByCapsuleIdAndOwner(otherCapsule.capsuleId, OTHER_OWNER).size)
+    }
+
+    @Test
     fun blobUploadTransitionAndAttemptCounter() = runBlocking {
         val record = blob("blob-up", "PHOTO", 4)
-        blobDao.upsertAll(listOf(record))
+        insertBlobs(listOf(record))
 
         assertEquals(0, blobDao.incrementAttemptCountForOwner("missing-blob", OWNER))
         assertEquals(1, blobDao.incrementAttemptCountForOwner("blob-up", OWNER))
@@ -245,13 +319,13 @@ class OutboxDaosTest {
 
     @Test
     fun deleteByCapsuleRemovesOnlyThatCapsuleBlobs() = runBlocking {
-        capsuleDao.insertOrAbort(capsule())
+        insertCapsule(capsule())
         val otherCapsule = capsule(
             capsuleId = "0198f0a0-0000-7000-8000-00000000ca02",
             idempotencyKey = "0198f0a0-0000-7000-8000-00000000id02",
         )
-        capsuleDao.insertOrAbort(otherCapsule)
-        blobDao.upsertAll(
+        insertCapsule(otherCapsule)
+        insertBlobs(
             listOf(
                 blob("blob-a", "PHOTO", 0).copy(capsuleId = otherCapsule.capsuleId),
                 blob("blob-b", "PHOTO", 1),
@@ -270,8 +344,8 @@ class OutboxDaosTest {
     @Test
     fun wrongOwnerSeesNothingAndMutatesNothing() = runBlocking {
         val record = capsule()
-        capsuleDao.insertOrAbort(record)
-        blobDao.upsertAll(listOf(blob("blob-up", "PHOTO", 4)))
+        insertCapsule(record)
+        insertBlobs(listOf(blob("blob-up", "PHOTO", 4)))
 
         assertNull(capsuleDao.getByCapsuleIdAndOwner(record.capsuleId, OTHER_OWNER))
         assertTrue(blobDao.getAllByCapsuleIdAndOwner(record.capsuleId, OTHER_OWNER).isEmpty())
@@ -325,7 +399,7 @@ class OutboxDaosTest {
         // Default-null: a row inserted without an explicit pointer
         // reads back with NULL.
         val defaulted = capsule()
-        capsuleDao.insertOrAbort(defaulted)
+        insertCapsule(defaulted)
         val loadedDefault = capsuleDao.getByCapsuleIdAndOwner(defaulted.capsuleId, OWNER)!!
         assertNull(
             "the new column MUST default to NULL on insert",
@@ -340,7 +414,7 @@ class OutboxDaosTest {
             capsuleId = "0198f0a0-0000-7000-8000-00000000ca03",
             idempotencyKey = "0198f0a0-0000-7000-8000-00000000id03",
         ).copy(senderRetryKeysetPath = pointerPath)
-        capsuleDao.insertOrAbort(withPointer)
+        insertCapsule(withPointer)
         val loadedPointer = capsuleDao.getByCapsuleIdAndOwner(withPointer.capsuleId, OWNER)!!
         assertEquals(pointerPath, loadedPointer.senderRetryKeysetPath)
 
@@ -368,7 +442,7 @@ class OutboxDaosTest {
             capsuleId = "0198f0a0-0000-7000-8000-00000000ca04",
             idempotencyKey = "0198f0a0-0000-7000-8000-00000000id04",
         ).copy(senderRetryKeysetPath = raw)
-        capsuleDao.insertOrAbort(record)
+        insertCapsule(record)
         val loaded = capsuleDao.getByCapsuleIdAndOwner(record.capsuleId, OWNER)!!
         assertEquals(raw, loaded.senderRetryKeysetPath)
         // The string is opaque to the entity; the only structural

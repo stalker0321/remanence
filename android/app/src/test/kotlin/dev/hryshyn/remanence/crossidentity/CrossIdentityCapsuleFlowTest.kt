@@ -270,6 +270,7 @@ class CrossIdentityCapsuleFlowTest {
             arrayOf(capsuleUuid.toString(), senderUuid.toString()),
         )
         database.outboxCapsuleDao().insertOrAbort(
+            senderUuid.toString(),
             row.copy(senderSigningPublicKeysetB64 = Base64.urlSafeEncode(attackerPublicExport())),
         )
         val afterTamper = runAcceptanceGate(

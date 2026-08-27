@@ -277,7 +277,7 @@ class CapsuleRoutingCorruptionTest {
             "DELETE FROM outbox_capsule WHERE capsule_id = ? AND owner_user_id = ?",
             arrayOf(row.capsuleId, userUuid.toString()),
         )
-        database.outboxCapsuleDao().insertOrAbort(transform(row))
+        database.outboxCapsuleDao().insertOrAbort(userUuid.toString(), transform(row))
     }
 
     private fun scanViewModel(): ScanViewModel = ScanViewModel(

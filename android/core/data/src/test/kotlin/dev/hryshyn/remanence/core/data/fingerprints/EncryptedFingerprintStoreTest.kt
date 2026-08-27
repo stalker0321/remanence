@@ -20,6 +20,7 @@ import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
 import dev.hryshyn.remanence.core.data.db.FingerprintSide
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.db.RecognitionFingerprintDao
+import dev.hryshyn.remanence.core.data.db.RecognitionFingerprintEntity
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.model.UserId
 
@@ -32,6 +33,51 @@ private class XorSealer(private val failOnTamperedAad: Boolean = false) : Secret
 
     override fun unseal(ciphertext: ByteArray, aad: ByteArray): ByteArray =
         ByteArray(ciphertext.size) { (ciphertext[it].toInt() xor 0x5A).toByte() }
+}
+
+private class DelegatingRecognitionFingerprintDao(
+    private val delegate: RecognitionFingerprintDao,
+    private val insertAction: suspend (String, List<RecognitionFingerprintEntity>) -> Unit,
+) : RecognitionFingerprintDao() {
+    override suspend fun insertAll(ownerUserId: String, fingerprints: List<RecognitionFingerprintEntity>) =
+        insertAction(ownerUserId, fingerprints)
+
+    override suspend fun clearForOwner(ownerUserId: String) = delegate.clearForOwner(ownerUserId)
+
+    override suspend fun getAllForOwner(ownerUserId: String) = delegate.getAllForOwner(ownerUserId)
+
+    override suspend fun getAllByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String) =
+        delegate.getAllByCapsuleIdAndOwner(capsuleId, ownerUserId)
+
+    override suspend fun getByFingerprintIdAndOwner(fingerprintId: String, ownerUserId: String) =
+        delegate.getByFingerprintIdAndOwner(fingerprintId, ownerUserId)
+
+    override suspend fun getByCapsuleIdAndOriginAndOwner(
+        capsuleId: String,
+        origin: FingerprintOrigin,
+        ownerUserId: String,
+    ) = delegate.getByCapsuleIdAndOriginAndOwner(capsuleId, origin, ownerUserId)
+
+    override suspend fun deleteByFingerprintIdAndOwner(fingerprintId: String, ownerUserId: String) =
+        delegate.deleteByFingerprintIdAndOwner(fingerprintId, ownerUserId)
+
+    override suspend fun deleteByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String) =
+        delegate.deleteByCapsuleIdAndOwner(capsuleId, ownerUserId)
+
+    override suspend fun insertStrict(fingerprints: List<RecognitionFingerprintEntity>) =
+        error("test-only delegate does not expose insert primitive")
+
+    override suspend fun findOwnerOf(fingerprintId: String): String? =
+        error("test-only delegate does not expose ownership primitive")
+
+    override suspend fun clearPreferredForOwner(capsuleId: String, ownerUserId: String) =
+        error("test-only delegate does not expose preferred primitive")
+
+    override suspend fun markPreferredForOwner(
+        capsuleId: String,
+        origin: FingerprintOrigin,
+        ownerUserId: String,
+    ) = error("test-only delegate does not expose preferred primitive")
 }
 
 @RunWith(RobolectricTestRunner::class)
@@ -112,10 +158,8 @@ class EncryptedFingerprintStoreTest {
     @Test
     fun failedInsertRemovesItsCiphertextFileOnly() = runBlocking {
         val dao = database.recognitionFingerprintDao()
-        val explodingDao = object : RecognitionFingerprintDao by dao {
-            override suspend fun insertAll(fingerprints: List<dev.hryshyn.remanence.core.data.db.RecognitionFingerprintEntity>) {
-                throw IllegalStateException("database exploded")
-            }
+        val explodingDao = DelegatingRecognitionFingerprintDao(dao) { _, _ ->
+            throw IllegalStateException("database exploded")
         }
         val sut = EncryptedFingerprintStore(
             roots,
@@ -173,13 +217,10 @@ class EncryptedFingerprintStoreTest {
         // Flip the provider value AFTER the snapshot has been taken but
         // BEFORE the insert records the row: the captured snapshot of the
         // original owner must win for both the file root and the row.
-        val swapDuringInsert =
-            object : RecognitionFingerprintDao by database.recognitionFingerprintDao() {
-                override suspend fun insertAll(fingerprints: List<dev.hryshyn.remanence.core.data.db.RecognitionFingerprintEntity>) {
-                    ownerProviderValue.set(otherId.toRestString())
-                    database.recognitionFingerprintDao().insertAll(fingerprints)
-                }
-            }
+        val swapDuringInsert = DelegatingRecognitionFingerprintDao(database.recognitionFingerprintDao()) { owner, fingerprints ->
+            ownerProviderValue.set(otherId.toRestString())
+            database.recognitionFingerprintDao().insertAll(owner, fingerprints)
+        }
         val swappingStore = EncryptedFingerprintStore(
             roots,
             XorSealer(),

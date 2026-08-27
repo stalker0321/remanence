@@ -94,6 +94,10 @@ class SenderRetryMaterialLifecycleTest {
         bytes: ByteArray = RETRY_BYTES,
     ): String = retryStore.write(owner, capsule, bytes)
 
+    private suspend fun insertCapsule(entity: OutboxCapsuleEntity) {
+        database.outboxCapsuleDao().insertOrAbort(entity.ownerUserId, entity)
+    }
+
     private suspend fun insertAndStage(
         capsuleId: String = CAPSULE_1,
         ownerUserId: String = OWNER_A,
@@ -104,7 +108,7 @@ class SenderRetryMaterialLifecycleTest {
             capsule = CapsuleId.parseRest(capsuleId),
         )
         val e = entity(capsuleId = capsuleId, ownerUserId = ownerUserId, state = state, senderRetryKeysetPath = path)
-        database.outboxCapsuleDao().insertOrAbort(e)
+        insertCapsule(e)
         return e
     }
 
@@ -301,7 +305,7 @@ class SenderRetryMaterialLifecycleTest {
         for ((state, capsuleUuid) in states) {
             val cid = CapsuleId.parseRest(capsuleUuid)
             val path = writeRetryMaterial(capsule = cid)
-            database.outboxCapsuleDao().insertOrAbort(
+            insertCapsule(
                 entity(capsuleId = capsuleUuid, state = state, senderRetryKeysetPath = path),
             )
             retryStore.expectedPath(ownerA, cid).delete()
@@ -600,7 +604,7 @@ class SenderRetryMaterialLifecycleTest {
         )
         retryStore.expectedPath(ownerA, capsule1).delete()
         // Concurrent row deletion.
-        database.outboxCapsuleDao().clear()
+        database.outboxCapsuleDao().clearForOwner(OWNER_A)
 
         val result = lifecycle.cleanupForTerminalState(ownerA, capsule1)
         assertEquals(SenderRetryMaterialLifecycle.Result.OK, result)
@@ -614,7 +618,7 @@ class SenderRetryMaterialLifecycleTest {
     fun pointerMismatchOnTerminalRefusesToDelete() = runBlocking {
         val realPath = writeRetryMaterial()
         val wrongPath = realPath.replace(".pwks", ".wrong")
-        database.outboxCapsuleDao().insertOrAbort(
+        insertCapsule(
             entity(state = OutboxCapsuleState.ENCRYPTED, senderRetryKeysetPath = wrongPath),
         )
         database.outboxCapsuleDao().transitionStateForOwner(
@@ -631,7 +635,7 @@ class SenderRetryMaterialLifecycleTest {
     fun pointerMismatchOnAbortRefusesToDelete() = runBlocking {
         val realPath = writeRetryMaterial()
         val wrongPath = realPath.replace(".pwks", ".corrupt")
-        database.outboxCapsuleDao().insertOrAbort(
+        insertCapsule(
             entity(senderRetryKeysetPath = wrongPath),
         )
         val result = lifecycle.cleanupForAbort(ownerA, capsule1)
@@ -644,7 +648,7 @@ class SenderRetryMaterialLifecycleTest {
     fun pointerMismatchOnReconcileRefusesToDelete() = runBlocking {
         val realPath = writeRetryMaterial()
         val wrongPath = realPath + ".extra"
-        database.outboxCapsuleDao().insertOrAbort(
+        insertCapsule(
             entity(senderRetryKeysetPath = wrongPath),
         )
         val result = lifecycle.reconcileNonterminal(ownerA, capsule1)
@@ -667,7 +671,7 @@ class SenderRetryMaterialLifecycleTest {
         assertTrue(target.mkdirs())
         File(target, "child").writeBytes("locked".toByteArray())
 
-        database.outboxCapsuleDao().insertOrAbort(entity(senderRetryKeysetPath = path))
+        insertCapsule(entity(senderRetryKeysetPath = path))
 
         val result = lifecycle.cleanupForAbort(ownerA, capsule1)
         assertEquals(SenderRetryMaterialLifecycle.Result.DELETE_FAILED, result)
@@ -682,10 +686,10 @@ class SenderRetryMaterialLifecycleTest {
     fun cleanupOfANeverTouchesB() = runBlocking {
         val pathA = writeRetryMaterial(owner = ownerA, capsule = capsule1)
         val pathB = writeRetryMaterial(owner = ownerA, capsule = capsule2)
-        database.outboxCapsuleDao().insertOrAbort(
+        insertCapsule(
             entity(capsuleId = CAPSULE_1, state = OutboxCapsuleState.ENCRYPTED, senderRetryKeysetPath = pathA),
         )
-        database.outboxCapsuleDao().insertOrAbort(
+        insertCapsule(
             entity(capsuleId = CAPSULE_2, state = OutboxCapsuleState.ENCRYPTED, senderRetryKeysetPath = pathB),
         )
         database.outboxCapsuleDao().transitionStateForOwner(
@@ -704,10 +708,10 @@ class SenderRetryMaterialLifecycleTest {
     fun cleanupOfOwnerANeverTouchesOwnerB() = runBlocking {
         val pathA = writeRetryMaterial(owner = ownerA, capsule = capsule1)
         val pathB = writeRetryMaterial(owner = ownerB, capsule = capsule2)
-        database.outboxCapsuleDao().insertOrAbort(
+        insertCapsule(
             entity(capsuleId = CAPSULE_1, ownerUserId = OWNER_A, state = OutboxCapsuleState.ENCRYPTED, senderRetryKeysetPath = pathA),
         )
-        database.outboxCapsuleDao().insertOrAbort(
+        insertCapsule(
             entity(capsuleId = CAPSULE_2, ownerUserId = OWNER_B, state = OutboxCapsuleState.ENCRYPTED, senderRetryKeysetPath = pathB),
         )
         val result = lifecycle.cleanupForAbort(ownerA, capsule1)
@@ -726,7 +730,7 @@ class SenderRetryMaterialLifecycleTest {
     fun nullPointerTerminalIsNoOp() = runBlocking {
         // Insert entity in ENCRYPTED state (no retry material pointer),
         // then transition to PUBLISHED so terminal cleanup is eligible.
-        database.outboxCapsuleDao().insertOrAbort(entity(senderRetryKeysetPath = null))
+        insertCapsule(entity(senderRetryKeysetPath = null))
         database.outboxCapsuleDao().transitionStateForOwner(
             CAPSULE_1, OWNER_A, OutboxCapsuleState.PUBLISHED,
             listOf(OutboxCapsuleState.ENCRYPTED),
@@ -738,7 +742,7 @@ class SenderRetryMaterialLifecycleTest {
 
     @Test
     fun nullPointerReconcileIsNoOp() = runBlocking {
-        database.outboxCapsuleDao().insertOrAbort(entity(senderRetryKeysetPath = null))
+        insertCapsule(entity(senderRetryKeysetPath = null))
         val result = lifecycle.reconcileNonterminal(ownerA, capsule1)
         assertEquals(SenderRetryMaterialLifecycle.Result.OK, result)
         assertNull(liveEntity().senderRetryKeysetPath)

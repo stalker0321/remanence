@@ -91,7 +91,8 @@ class EncryptedFingerprintStore(
         try {
             atomicWrite(target, sealed)
             dao.insertAll(
-                listOf(
+                ownerUserId = owner.ownerId.toRestString(),
+                fingerprints = listOf(
                     RecognitionFingerprintEntity(
                         fingerprintId = fingerprintId,
                         ownerUserId = owner.ownerId.toRestString(),

@@ -95,6 +95,7 @@ class ProcessRestartResilienceTest {
 
         // 2. Persisted outbox: one ENCRYPTED capsule row plus its ciphertext blob.
         database.outboxCapsuleDao().insertOrAbort(
+            OWNER_USER_ID,
             dev.hryshyn.remanence.core.data.db.OutboxCapsuleEntity(
                 capsuleId = capsuleId.toString(),
                 idempotencyKey = "idem-$capsuleId",
@@ -115,6 +116,7 @@ class ProcessRestartResilienceTest {
         )
         val blobFile = File(filesRoot, "$capsuleId.bin").also { it.writeBytes(blobBytes) }
         database.outboxBlobDao().upsertAll(
+            OWNER_USER_ID,
             listOf(
                 dev.hryshyn.remanence.core.data.db.OutboxBlobEntity(
                     blobId = UUID.randomUUID().toString(),
@@ -135,6 +137,7 @@ class ProcessRestartResilienceTest {
         val fingerprintDir = File(filesRoot, "fingerprints").apply { mkdirs() }
         val sealedFp = File(fingerprintDir, "front.fpw").apply { writeBytes(byteArrayOf(7, 7, 7)) }
         database.recognitionFingerprintDao().insertAll(
+            OWNER_USER_ID,
             listOf(
                 dev.hryshyn.remanence.core.data.db.RecognitionFingerprintEntity(
                     fingerprintId = "fp-1",

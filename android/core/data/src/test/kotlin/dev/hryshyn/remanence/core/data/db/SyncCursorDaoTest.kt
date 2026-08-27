@@ -8,6 +8,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -45,6 +46,9 @@ class SyncCursorDaoTest {
         lastSyncedAtEpochMs = ts,
     )
 
+    private suspend fun advance(candidate: SyncCursorEntity): Boolean =
+        dao.advance(candidate.userId, candidate)
+
     @Test
     fun missingCursorReadsNull() = runBlocking {
         assertNull(dao.get(userId, "incoming"))
@@ -52,14 +56,25 @@ class SyncCursorDaoTest {
 
     @Test
     fun firstAdvanceInsertsPosition() = runBlocking {
-        assertTrue(dao.advance(cursor(1_755_000_000_000, "opaque-cursor-1")))
+        assertTrue(advance(cursor(1_755_000_000_000, "opaque-cursor-1")))
         assertEquals("opaque-cursor-1", dao.get(userId, "incoming")!!.serverCursor)
     }
 
     @Test
+    fun authoritativeOwnerMismatchIsRejectedBeforeAdvance() = runBlocking {
+        val candidate = cursor(1_000, "cursor-other").copy(userId = "0198f0a0-0000-7000-8000-00000000us02")
+
+        assertThrows(IllegalArgumentException::class.java) {
+            runBlocking { dao.advance(userId, candidate) }
+        }
+        assertNull(dao.get(userId, "incoming"))
+        assertNull(dao.get(candidate.userId, "incoming"))
+    }
+
+    @Test
     fun newerTimestampMovesCursorForward() = runBlocking {
-        dao.advance(cursor(1_000, "cursor-old"))
-        assertTrue(dao.advance(cursor(2_000, "cursor-new")))
+        advance(cursor(1_000, "cursor-old"))
+        assertTrue(advance(cursor(2_000, "cursor-new")))
         val stored = dao.get(userId, "incoming")!!
         assertEquals("cursor-new", stored.serverCursor)
         assertEquals(2_000, stored.lastSyncedAtEpochMs)
@@ -67,9 +82,9 @@ class SyncCursorDaoTest {
 
     @Test
     fun replayWithEqualOrOlderTimestampNeverRewinds() = runBlocking {
-        dao.advance(cursor(2_000, "cursor-new"))
-        assertFalse(dao.advance(cursor(2_000, "cursor-new")))
-        assertFalse(dao.advance(cursor(1_000, "cursor-old")))
+        advance(cursor(2_000, "cursor-new"))
+        assertFalse(advance(cursor(2_000, "cursor-new")))
+        assertFalse(advance(cursor(1_000, "cursor-old")))
         val stored = dao.get(userId, "incoming")!!
         assertEquals("cursor-new", stored.serverCursor)
         assertEquals(2_000, stored.lastSyncedAtEpochMs)
@@ -78,9 +93,9 @@ class SyncCursorDaoTest {
     @Test
     fun streamsAndUsersAreIndependent() = runBlocking {
         val otherUser = "0198f0a0-0000-7000-8000-00000000us02"
-        dao.advance(cursor(1_000, "cursor-incoming", stream = "incoming"))
-        dao.advance(cursor(5_000, "cursor-outgoing", stream = "outgoing"))
-        dao.advance(cursor(9_000, "cursor-other", stream = "incoming").copy(userId = otherUser))
+        advance(cursor(1_000, "cursor-incoming", stream = "incoming"))
+        advance(cursor(5_000, "cursor-outgoing", stream = "outgoing"))
+        advance(cursor(9_000, "cursor-other", stream = "incoming").copy(userId = otherUser))
 
         assertEquals("cursor-incoming", dao.get(userId, "incoming")!!.serverCursor)
         assertEquals("cursor-outgoing", dao.get(userId, "outgoing")!!.serverCursor)
@@ -88,11 +103,11 @@ class SyncCursorDaoTest {
     }
 
     @Test
-    fun deleteByUserRemovesOnlyThatAccountCursors() = runBlocking {
+    fun clearForOwnerRemovesOnlyThatAccountCursors() = runBlocking {
         val otherUser = "0198f0a0-0000-7000-8000-00000000us02"
-        dao.advance(cursor(1_000, "cursor-a"))
-        dao.advance(cursor(1_000, "cursor-b").copy(userId = otherUser))
-        dao.deleteByUser(userId)
+        advance(cursor(1_000, "cursor-a"))
+        advance(cursor(1_000, "cursor-b").copy(userId = otherUser))
+        dao.clearForOwner(userId)
         assertNull(dao.get(userId, "incoming"))
         assertEquals("cursor-b", dao.get(otherUser, "incoming")!!.serverCursor)
     }

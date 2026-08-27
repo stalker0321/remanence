@@ -255,7 +255,8 @@ class CapsuleOutboxStager(
                         throw IllegalStateException("capsule already staged")
                     }
                     capsuleDao.insertOrAbort(
-                        OutboxCapsuleEntity(
+                        ownerUserId = prepared.ownerUserId,
+                        capsule = OutboxCapsuleEntity(
                             capsuleId = prepared.capsuleId.toString(),
                             idempotencyKey = prepared.idempotencyKey,
                             ownerUserId = prepared.ownerUserId,
@@ -284,7 +285,8 @@ class CapsuleOutboxStager(
                     )
                     check(transitioned == 1) { "staging must move PREPARING to ENCRYPTED" }
                     database.outboxBlobDao().upsertAll(
-                        prepared.artifacts.mapIndexed { index, artifact ->
+                        ownerUserId = prepared.ownerUserId,
+                        blobs = prepared.artifacts.mapIndexed { index, artifact ->
                             OutboxBlobEntity(
                                 blobId = artifact.blobId.toString(),
                                 ownerUserId = prepared.ownerUserId,

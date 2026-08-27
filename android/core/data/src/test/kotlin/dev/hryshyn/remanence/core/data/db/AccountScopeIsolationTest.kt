@@ -138,12 +138,12 @@ class AccountScopeIsolationTest {
         )
 
     private suspend fun seedAccountAMaterial() {
-        database.outboxCapsuleDao().insertOrAbort(outboxCapsule(capsuleA, ownerA))
-        database.outboxBlobDao().upsertAll(listOf(outboxBlob(blobA1, capsuleA, ownerA)))
+        database.outboxCapsuleDao().insertOrAbort(ownerA, outboxCapsule(capsuleA, ownerA))
+        database.outboxBlobDao().upsertAll(ownerA, listOf(outboxBlob(blobA1, capsuleA, ownerA)))
         database.incomingCapsuleDao().upsertAllForOwner(ownerA, listOf(incomingCapsule(capsuleA, ownerA)))
         database.incomingEnvelopeDao().upsertForOwner(ownerA, incomingEnvelope(capsuleA, ownerA))
         database.blobCacheDao().upsertForOwner(ownerA, blobCache(blobA1, capsuleA, ownerA))
-        database.recognitionFingerprintDao().insertAll(listOf(fingerprint("fp-a", capsuleA, ownerA)))
+        database.recognitionFingerprintDao().insertAll(ownerA, listOf(fingerprint("fp-a", capsuleA, ownerA)))
     }
 
     @Test
@@ -219,14 +219,14 @@ class AccountScopeIsolationTest {
     fun collidingCursorStreamsArePermittedAndIsolatedPerAccount() = runBlocking {
         val cursors = database.syncCursorDao()
         // Same stream name for both accounts - the architecture-permitted ID collision.
-        cursors.advance(SyncCursorEntity(ownerA, "incoming", "page-a1", 100))
-        cursors.advance(SyncCursorEntity(ownerB, "incoming", "page-b1", 200))
+        cursors.advance(ownerA, SyncCursorEntity(ownerA, "incoming", "page-a1", 100))
+        cursors.advance(ownerB, SyncCursorEntity(ownerB, "incoming", "page-b1", 200))
 
         assertEquals("page-a1", cursors.get(ownerA, "incoming")!!.serverCursor)
         assertEquals("page-b1", cursors.get(ownerB, "incoming")!!.serverCursor)
 
         // B's teardown cannot touch A's stream position.
-        cursors.deleteByUser(ownerB)
+        cursors.clearForOwner(ownerB)
         assertNotNull(cursors.get(ownerA, "incoming"))
         assertNull(cursors.get(ownerB, "incoming"))
     }
@@ -239,18 +239,18 @@ class AccountScopeIsolationTest {
         // uniqueness stays capsule-scoped because capsule IDs are globally
         // unique client-generated UUIDs.
         val foreignBlobOnACapsule = outboxBlob(UUID.randomUUID().toString(), capsuleA, ownerB)
-        val blobViolation = assertThrows(SQLiteConstraintException::class.java) {
+        val blobViolation = assertThrows(IllegalStateException::class.java) {
             kotlinx.coroutines.runBlocking {
-                database.outboxBlobDao().upsertAll(listOf(foreignBlobOnACapsule))
+                database.outboxBlobDao().upsertAll(ownerB, listOf(foreignBlobOnACapsule))
             }
         }
-        assertTrue(blobViolation.message!!.contains("outbox_blob"))
+        assertTrue(blobViolation.message!!.contains("another local account"))
 
         // B cannot claim the same (capsule, side, origin) baseline either.
         val fingerprintViolation = assertThrows(SQLiteConstraintException::class.java) {
             kotlinx.coroutines.runBlocking {
                 database.recognitionFingerprintDao()
-                    .insertAll(listOf(fingerprint(UUID.randomUUID().toString(), capsuleA, ownerB)))
+                    .insertAll(ownerB, listOf(fingerprint(UUID.randomUUID().toString(), capsuleA, ownerB)))
             }
         }
         assertTrue(fingerprintViolation.message!!.contains("recognition_fingerprint"))

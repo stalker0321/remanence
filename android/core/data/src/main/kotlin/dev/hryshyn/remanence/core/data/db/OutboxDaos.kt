@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 
 /**
  * M2-P02/P03: every account-owned lookup, list, and compare-and-set on
@@ -12,33 +13,56 @@ import androidx.room.Query
  * nor resume this account's material.
  */
 @Dao
-interface OutboxCapsuleDao {
+abstract class OutboxCapsuleDao {
 
     /**
-     * Strict row creation: ANY capsule_id collision - including a foreign-
-     * owned one the staging pre-check cannot see by design - raises a SQLite
-     * constraint exception. Unlike an upsert it can NEVER be converted into
-     * an update that overwrites another local account's durable row.
+     * Strict owner-authorized row creation. Foreign immutable-key collisions
+     * are rejected during preflight; same-owner duplicate keys still raise
+     * the existing SQLite constraint exception. Unlike an upsert, this can
+     * NEVER convert a collision into an update that overwrites a durable row.
      */
-    @Insert(onConflict = OnConflictStrategy.ABORT)
-    suspend fun insertOrAbort(capsule: OutboxCapsuleEntity)
+    @Transaction
+    open suspend fun insertOrAbort(ownerUserId: String, capsule: OutboxCapsuleEntity) {
+        require(capsule.ownerUserId == ownerUserId) {
+            "capsule ${capsule.capsuleId} owner does not match the authoritative owner"
+        }
+        findOwnersOfImmutableIds(capsule.capsuleId, capsule.idempotencyKey).forEach { existingOwner ->
+            if (existingOwner != ownerUserId) {
+                throw IllegalStateException(
+                    "capsule ${capsule.capsuleId} already belongs to another local account",
+                )
+            }
+        }
+        insertStrict(capsule)
+    }
 
-    @Query("DELETE FROM outbox_capsule")
-    suspend fun clear()
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    protected abstract suspend fun insertStrict(capsule: OutboxCapsuleEntity)
+
+    /** Minimal immutable-key ownership probe used only during authorized insert preflight. */
+    @Query(
+        "SELECT owner_user_id FROM outbox_capsule " +
+            "WHERE capsule_id = :capsuleId OR idempotency_key = :idempotencyKey",
+    )
+    protected abstract suspend fun findOwnersOfImmutableIds(capsuleId: String, idempotencyKey: String): List<String>
+
+    /** Owner-scoped teardown: removes only rows belonging to [ownerUserId]. */
+    @Query("DELETE FROM outbox_capsule WHERE owner_user_id = :ownerUserId")
+    abstract suspend fun clearForOwner(ownerUserId: String)
 
     /** Resolves the capsule ONLY when it is owned by [ownerUserId]. */
     @Query(
         "SELECT * FROM outbox_capsule " +
             "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId",
     )
-    suspend fun getByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String): OutboxCapsuleEntity?
+    abstract suspend fun getByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String): OutboxCapsuleEntity?
 
     /** Owner-guarded compare-and-set state transition; 0 rows means refused. */
     @Query(
         "UPDATE outbox_capsule SET state = :newState " +
             "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId AND state IN (:allowedFrom)",
     )
-    suspend fun transitionStateForOwner(
+    abstract suspend fun transitionStateForOwner(
         capsuleId: String,
         ownerUserId: String,
         newState: OutboxCapsuleState,
@@ -50,7 +74,7 @@ interface OutboxCapsuleDao {
         "UPDATE outbox_capsule SET last_error_code = :errorCode, state = :newState " +
             "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId AND state IN (:allowedFrom)",
     )
-    suspend fun transitionStateWithErrorForOwner(
+    abstract suspend fun transitionStateWithErrorForOwner(
         capsuleId: String,
         ownerUserId: String,
         newState: OutboxCapsuleState,
@@ -76,7 +100,7 @@ interface OutboxCapsuleDao {
             "AND (sender_retry_keyset_path = :expectedPath " +
             "     OR (sender_retry_keyset_path IS NULL AND :expectedPath IS NULL))",
     )
-    suspend fun clearSenderRetryKeysetPath(
+    abstract suspend fun clearSenderRetryKeysetPath(
         capsuleId: String,
         ownerUserId: String,
         expectedPath: String?,
@@ -84,39 +108,76 @@ interface OutboxCapsuleDao {
 }
 
 /**
- * M2-P02/P03: strict insert on conflict for row creation (a colliding blob ID
- * or capsule-scoped `(capsule_id, kind, ordinal)` relationship can NEVER be
- * converted into an update that silently reassigns another account's row),
- * and owner-required lookups/lists/CAS afterwards.
+ * M2-P02/P03: strict owner-authorized insert on conflict for row creation (a
+ * colliding blob ID or capsule-scoped `(capsule_id, kind, ordinal)` relationship
+ * can NEVER be converted into an update that silently reassigns another
+ * account's row), and owner-required lookups/lists/CAS afterwards.
  */
 @Dao
-interface OutboxBlobDao {
+abstract class OutboxBlobDao {
+
+    @Transaction
+    open suspend fun upsertAll(ownerUserId: String, blobs: List<OutboxBlobEntity>) {
+        blobs.forEach { blob ->
+            require(blob.ownerUserId == ownerUserId) {
+                "blob ${blob.blobId} owner does not match the authoritative owner"
+            }
+        }
+        blobs.forEach { blob ->
+            val existingIdOwner = findOwnerOfBlobId(blob.blobId)
+            if (existingIdOwner != null && existingIdOwner != ownerUserId) {
+                throw IllegalStateException(
+                    "blob ${blob.blobId} already belongs to another local account",
+                )
+            }
+            val existingSlotOwner = findOwnerOfCapsuleSlot(blob.capsuleId, blob.kind, blob.ordinal)
+            if (existingSlotOwner != null && existingSlotOwner != ownerUserId) {
+                throw IllegalStateException(
+                    "blob slot ${blob.capsuleId}/${blob.kind}/${blob.ordinal} already belongs to another local account",
+                )
+            }
+        }
+        insertStrict(blobs)
+    }
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
-    suspend fun upsertAll(blobs: List<OutboxBlobEntity>)
+    protected abstract suspend fun insertStrict(blobs: List<OutboxBlobEntity>)
 
-    @Query("DELETE FROM outbox_blob")
-    suspend fun clear()
+    /** Minimal immutable-ID ownership probe used only during authorized insert preflight. */
+    @Query("SELECT owner_user_id FROM outbox_blob WHERE blob_id = :blobId LIMIT 1")
+    protected abstract suspend fun findOwnerOfBlobId(blobId: String): String?
+
+    /** Minimal relationship-key ownership probe used to fail closed before a batch write. */
+    @Query(
+        "SELECT owner_user_id FROM outbox_blob " +
+            "WHERE capsule_id = :capsuleId AND kind = :kind " +
+            "AND (ordinal = :ordinal OR (ordinal IS NULL AND :ordinal IS NULL)) LIMIT 1",
+    )
+    protected abstract suspend fun findOwnerOfCapsuleSlot(capsuleId: String, kind: String, ordinal: Int?): String?
+
+    /** Owner-scoped teardown: removes only rows belonging to [ownerUserId]. */
+    @Query("DELETE FROM outbox_blob WHERE owner_user_id = :ownerUserId")
+    abstract suspend fun clearForOwner(ownerUserId: String)
 
     /** Lists the capsule's blobs ONLY when they are owned by [ownerUserId]. */
     @Query(
         "SELECT * FROM outbox_blob " +
             "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId",
     )
-    suspend fun getAllByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String): List<OutboxBlobEntity>
+    abstract suspend fun getAllByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String): List<OutboxBlobEntity>
 
     @Query(
         "SELECT COUNT(*) FROM outbox_blob " +
             "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId AND kind = :kind",
     )
-    suspend fun countByKindAndOwner(capsuleId: String, ownerUserId: String, kind: String): Int
+    abstract suspend fun countByKindAndOwner(capsuleId: String, ownerUserId: String, kind: String): Int
 
     /** Owner-guarded upload-state CAS; 0 rows means refused. */
     @Query(
         "UPDATE outbox_blob SET upload_state = :newState " +
             "WHERE blob_id = :blobId AND owner_user_id = :ownerUserId AND upload_state IN (:allowedFrom)",
     )
-    suspend fun transitionUploadStateForOwner(
+    abstract suspend fun transitionUploadStateForOwner(
         blobId: String,
         ownerUserId: String,
         newState: OutboxBlobUploadState,
@@ -128,11 +189,11 @@ interface OutboxBlobDao {
         "UPDATE outbox_blob SET attempt_count = attempt_count + 1 " +
             "WHERE blob_id = :blobId AND owner_user_id = :ownerUserId",
     )
-    suspend fun incrementAttemptCountForOwner(blobId: String, ownerUserId: String): Int
+    abstract suspend fun incrementAttemptCountForOwner(blobId: String, ownerUserId: String): Int
 
     /** Reports rows removed; refuses any capsule not owned by [ownerUserId]. */
     @Query(
         "DELETE FROM outbox_blob WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId",
     )
-    suspend fun deleteByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String): Int
+    abstract suspend fun deleteByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String): Int
 }

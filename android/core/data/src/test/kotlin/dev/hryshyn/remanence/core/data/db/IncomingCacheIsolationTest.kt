@@ -93,7 +93,7 @@ class IncomingCacheIsolationTest {
         database.incomingCapsuleDao().upsertAllForOwner(ownerA, listOf(incomingCapsule(capsuleA, ownerA)))
         database.incomingEnvelopeDao().upsertForOwner(ownerA, incomingEnvelope(capsuleA, ownerA))
         database.blobCacheDao().upsertForOwner(ownerA, blobCache(blobA, capsuleA, ownerA))
-        database.syncCursorDao().advance(SyncCursorEntity(ownerA, "incoming", "page-a3", 300))
+        database.syncCursorDao().advance(ownerA, SyncCursorEntity(ownerA, "incoming", "page-a3", 300))
 
         // ... material fully resolved under its owning account:
         assertNotNull(database.incomingCapsuleDao().getByCapsuleIdAndOwner(capsuleA, ownerA))
@@ -135,7 +135,7 @@ class IncomingCacheIsolationTest {
         // an older B replay can never move A's position either.
         assertTrue(
             database.syncCursorDao()
-                .advance(SyncCursorEntity(ownerB, "incoming", "page-b-first", 500)),
+                .advance(ownerB, SyncCursorEntity(ownerB, "incoming", "page-b-first", 500)),
         )
         assertEquals("page-b-first", database.syncCursorDao().get(ownerB, "incoming")!!.serverCursor)
         assertEquals("page-a3", database.syncCursorDao().get(ownerA, "incoming")!!.serverCursor)

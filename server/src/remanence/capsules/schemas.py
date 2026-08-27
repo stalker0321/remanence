@@ -1,23 +1,20 @@
 """Bounded schemas and parser for creating an existing-user capsule draft."""
 
-import base64
-import binascii
 import json
 import math
-import re
 import uuid
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from remanence.capsules.blob_models import CapsuleBlobKind
+from remanence.capsules.encoding import decode_canonical_base64url
 from remanence.capsules.limits import (
     LIMITS_V1,
     MAX_CREATE_DRAFT_REQUEST_BYTES,
     MAX_JSON_NESTING,
 )
 
-_BASE64URL_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _GENERIC_VALIDATION_MESSAGE = "invalid capsule draft request"
 _MAX_JSON_INTEGER_DIGITS = 20
 
@@ -49,16 +46,7 @@ def _canonical_uuid(value: object) -> uuid.UUID:
 
 
 def _validate_canonical_base64url(value: str) -> str:
-    if not value or "=" in value or _BASE64URL_RE.fullmatch(value) is None:
-        raise ValueError("invalid digest")
-    try:
-        padded = value + "=" * (-len(value) % 4)
-        decoded = base64.b64decode(padded, altchars=b"-_", validate=True)
-    except (ValueError, binascii.Error):
-        raise ValueError("invalid digest") from None
-    canonical = base64.urlsafe_b64encode(decoded).decode("ascii").rstrip("=")
-    if len(decoded) != 32 or canonical != value:
-        raise ValueError("invalid digest")
+    decode_canonical_base64url(value, expected_length=32)
     return value
 
 

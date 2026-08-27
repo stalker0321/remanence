@@ -142,7 +142,7 @@ class CrossIdentityCapsuleFlowTest {
                 senderKeyBundleId = KeyBundleId(senderBundleUuid),
                 recipientKeyBundleId = KeyBundleId(recipientBundleUuid),
                 ownerUserId = senderUuid.toString(),
-                senderHandleSnapshot = "sender-handle",
+                senderHandleSnapshot = "sender_handle",
                 createdAtEpochSeconds = 1_700_000_000L,
                 photoJpegs = (0 until 3).map { "photo-$it".toByteArray() },
                 photoWidthsPx = listOf(800, 800, 800),

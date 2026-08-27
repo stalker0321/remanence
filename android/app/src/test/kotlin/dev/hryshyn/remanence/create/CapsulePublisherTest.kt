@@ -1,6 +1,7 @@
 package dev.hryshyn.remanence.create
 
 import dev.hryshyn.remanence.protocol.v1.RecipientEnvelopePlaintext
+import com.google.crypto.tink.Aead
 import com.google.crypto.tink.InsecureSecretKeyAccess
 import com.google.crypto.tink.TinkProtoKeysetFormat
 import kotlinx.coroutines.runBlocking
@@ -26,6 +27,7 @@ import dev.hryshyn.remanence.auth.SoftwareKekBoundary
 import dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper
 import dev.hryshyn.remanence.core.crypto.CapsuleArtifactCryptor
 import dev.hryshyn.remanence.core.crypto.DeliveredBlob
+import dev.hryshyn.remanence.core.crypto.KekBoundary
 import dev.hryshyn.remanence.core.crypto.RecipientEnvelopeCryptor
 import dev.hryshyn.remanence.core.crypto.TinkPrimitives
 import dev.hryshyn.remanence.core.crypto.WrappedKeysetRecord
@@ -195,6 +197,47 @@ class CapsulePublisherTest {
             runBlocking { publisher.publish(selfSendRequest().copy(photoJpegs = selfSendRequest().photoJpegs.take(2))) }
         }
         Unit
+    }
+
+    @Test
+    fun photoWidthsTooShortAreRejectedBeforeRetryWrapping() {
+        assertPhotoMetadataCardinalityRejected(
+            selfSendRequest().copy(photoWidthsPx = listOf(800, 800)),
+        )
+    }
+
+    @Test
+    fun photoWidthsTooLongAreRejectedBeforeRetryWrapping() {
+        assertPhotoMetadataCardinalityRejected(
+            selfSendRequest().copy(photoWidthsPx = listOf(800, 800, 800, 800)),
+        )
+    }
+
+    @Test
+    fun photoHeightsTooShortAreRejectedBeforeRetryWrapping() {
+        assertPhotoMetadataCardinalityRejected(
+            selfSendRequest().copy(photoHeightsPx = listOf(600, 600)),
+        )
+    }
+
+    @Test
+    fun photoHeightsTooLongAreRejectedBeforeRetryWrapping() {
+        assertPhotoMetadataCardinalityRejected(
+            selfSendRequest().copy(photoHeightsPx = listOf(600, 600, 600, 600)),
+        )
+    }
+
+    private fun assertPhotoMetadataCardinalityRejected(request: CapsulePublishRequest) {
+        val boundary = CountingKekBoundary()
+        val alias = "test-cardinality-${UUID.randomUUID()}"
+        boundary.createAes256GcmKey(alias)
+        val guardedPublisher = CapsulePublisher(SenderRetryKeysetWrapper(boundary), alias)
+
+        val failure = assertThrows(IllegalArgumentException::class.java) {
+            guardedPublisher.publish(request)
+        }
+        assertEquals("photo metadata cardinality must match photoJpegs", failure.message)
+        assertEquals("retry wrapper must not be invoked on metadata preflight failure", 0, boundary.loadCalls)
     }
 
     // ------------------------------------------------------------------
@@ -1043,6 +1086,23 @@ class CapsulePublisherTest {
             return i
         }
         return -1
+    }
+
+    private class CountingKekBoundary : KekBoundary {
+        private val delegate = SoftwareKekBoundary()
+        var loadCalls: Int = 0
+            private set
+
+        override fun hasKey(alias: String): Boolean = delegate.hasKey(alias)
+
+        override fun createAes256GcmKey(alias: String) {
+            delegate.createAes256GcmKey(alias)
+        }
+
+        override fun loadKekAead(alias: String): Aead {
+            loadCalls++
+            return delegate.loadKekAead(alias)
+        }
     }
 
     /**

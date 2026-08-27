@@ -103,6 +103,10 @@ class CapsulePublisher(
 ) {
 
     fun publish(request: CapsulePublishRequest): PreparedOutboxCapsule {
+        require(
+            request.photoWidthsPx.size == request.photoJpegs.size &&
+                request.photoHeightsPx.size == request.photoJpegs.size,
+        ) { "photo metadata cardinality must match photoJpegs" }
         require(request.photoJpegs.size in 3..5) { "3..5 photos required" }
         // M2-P08: the current sender owns the retry key; ownerUserId
         // must equal senderUserId before any crypto work begins.

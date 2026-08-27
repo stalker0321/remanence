@@ -10,6 +10,9 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import select
+
+pytest_plugins = ("test_session_repository_create",)
 
 from remanence.capsules.blob_models import CapsuleBlob, CapsuleBlobKind, CapsuleBlobState
 from remanence.capsules.models import Capsule, CapsuleState
@@ -20,6 +23,8 @@ from remanence.capsules.publish_statement import (
     verify_publish_statement,
 )
 from remanence.protocol.v1 import remanence_v1_pb2 as protocol_pb2
+
+from test_capsule_draft_service import _create, _request, _seed_user
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -154,6 +159,59 @@ def test_golden_verifies_and_returns_immutable_redacted_result(fixture: dict) ->
         verified.canonical_bytes = b"x"
     assert repr(verified) == "VerifiedPublishStatement(<redacted>)"
     assert raw.hex() not in repr(verified)
+
+
+def test_service_created_fractional_time_is_accepted_by_s13_verifier(
+    session_factory,
+) -> None:
+    with session_factory() as session:
+        sender, sender_bundle = _seed_user(session, "vers")
+        recipient, recipient_bundle = _seed_user(session, "verr")
+        request = _request(
+            sender_bundle_id=sender_bundle.id,
+            recipient_user_id=recipient.id,
+            recipient_bundle_id=recipient_bundle.id,
+        )
+        input_now = datetime(2030, 1, 1, 12, 0, 0, 987654, tzinfo=timezone.utc)
+        canonical_now = input_now.replace(microsecond=0)
+        _create(
+            session,
+            sender_user_id=sender.id,
+            request=request,
+            now=input_now,
+        )
+        capsule = session.get(Capsule, request.capsule_id)
+        declarations = list(
+            session.scalars(
+                select(CapsuleBlob).where(CapsuleBlob.capsule_id == request.capsule_id)
+            )
+        )
+        assert capsule is not None
+        assert capsule.created_at == canonical_now
+        statement = protocol_pb2.PublishStatement(
+            protocol_version=capsule.protocol_version,
+            capsule_id=capsule.id.bytes,
+            sender_user_id=capsule.sender_user_id.bytes,
+            recipient_user_id=capsule.recipient_user_id.bytes,
+            sender_key_bundle_id=capsule.sender_key_bundle_id.bytes,
+            recipient_key_bundle_id=capsule.recipient_key_bundle_id.bytes,
+            created_at_epoch_seconds=int(canonical_now.timestamp()),
+        )
+        for declaration in sorted(declarations, key=lambda item: item.id.bytes):
+            statement.artifacts.add(
+                blob_id=declaration.id.bytes,
+                kind=getattr(protocol_pb2.ArtifactKind, declaration.kind.value),
+                ordinal=-1 if declaration.ordinal is None else declaration.ordinal,
+                ciphertext_size=declaration.expected_ciphertext_size,
+                ciphertext_sha256=declaration.expected_ciphertext_sha256,
+            )
+
+        verified = verify_publish_statement(
+            statement.SerializeToString(deterministic=True),
+            capsule,
+            declarations,
+        )
+        assert verified.created_at == canonical_now
 
 
 @pytest.mark.parametrize(

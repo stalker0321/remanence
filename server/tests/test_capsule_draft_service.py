@@ -288,6 +288,89 @@ def test_new_draft_persists_authoritative_rows_and_expiries(session_factory) -> 
         }
 
 
+def test_nonzero_microseconds_are_canonicalized_once_for_persistence_and_replay(
+    session_factory,
+) -> None:
+    with session_factory() as session:
+        sender, sender_bundle = _seed_user(session, "fracs")
+        recipient, recipient_bundle = _seed_user(session, "fracr")
+        request = _request(
+            sender_bundle_id=sender_bundle.id,
+            recipient_user_id=recipient.id,
+            recipient_bundle_id=recipient_bundle.id,
+        )
+        input_now = _NOW.replace(microsecond=654321)
+        canonical_now = input_now.replace(microsecond=0)
+        idempotency_key = uuid4()
+
+        created = _create(
+            session,
+            sender_user_id=sender.id,
+            request=request,
+            idempotency_key=idempotency_key,
+            now=input_now,
+        )
+        session.commit()
+
+        capsule = session.get(Capsule, request.capsule_id)
+        record = session.scalar(
+            select(CapsuleIdempotencyRecord).where(
+                CapsuleIdempotencyRecord.owner_user_id == sender.id,
+                CapsuleIdempotencyRecord.idempotency_key == idempotency_key,
+            )
+        )
+        assert capsule is not None
+        assert record is not None
+        assert capsule.created_at == canonical_now
+        assert record.created_at == canonical_now
+        assert created.draft_expires_at == canonical_now + timedelta(days=7)
+        assert capsule.draft_expires_at == canonical_now + timedelta(days=7)
+        assert record.expires_at == canonical_now + timedelta(hours=24)
+        assert record.response_json["draft_expires_at"] == capsule.draft_expires_at.isoformat()
+
+        replay = _create(
+            session,
+            sender_user_id=sender.id,
+            request=request,
+            idempotency_key=idempotency_key,
+            now=input_now + timedelta(seconds=1),
+        )
+        assert replay.is_replay is True
+        assert replay.draft_expires_at == canonical_now + timedelta(days=7)
+
+
+def test_subsecond_idempotency_record_replay_fails_closed(session_factory) -> None:
+    with session_factory() as session:
+        sender, sender_bundle = _seed_user(session, "legs")
+        recipient, recipient_bundle = _seed_user(session, "legr")
+        request = _request(
+            sender_bundle_id=sender_bundle.id,
+            recipient_user_id=recipient.id,
+            recipient_bundle_id=recipient_bundle.id,
+        )
+        key = uuid4()
+        _create(session, sender_user_id=sender.id, request=request, idempotency_key=key)
+        session.commit()
+        record = session.scalar(
+            select(CapsuleIdempotencyRecord).where(
+                CapsuleIdempotencyRecord.owner_user_id == sender.id,
+                CapsuleIdempotencyRecord.idempotency_key == key,
+            )
+        )
+        assert record is not None
+        record.created_at = record.created_at.replace(microsecond=1)
+        session.commit()
+        _assert_error(
+            lambda: _create(
+                session,
+                sender_user_id=sender.id,
+                request=request,
+                idempotency_key=key,
+            ),
+            "INTERNAL_ERROR",
+        )
+
+
 def test_same_scope_same_hash_replays_without_duplicate_rows(session_factory) -> None:
     with session_factory() as session:
         sender, sender_bundle = _seed_user(session, "sender")

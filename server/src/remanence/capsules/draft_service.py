@@ -3,7 +3,7 @@
 import hmac
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func, select
@@ -63,6 +63,15 @@ def _error(code: str) -> CapsuleDraftServiceError:
 def _require_utc(now: object) -> None:
     if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() != timedelta(0):
         raise _validation_error()
+
+
+def _is_utc_whole_second(value: object) -> bool:
+    return (
+        isinstance(value, datetime)
+        and value.tzinfo is not None
+        and value.utcoffset() == timedelta(0)
+        and value.microsecond == 0
+    )
 
 
 def _require_uuid(value: object) -> uuid.UUID:
@@ -164,6 +173,7 @@ class CapsuleDraftService:
         _require_uuid(idempotency_key)
         request_sha256 = _require_hash(request_sha256)
         _require_utc(now)
+        canonical_now = now.replace(microsecond=0)
 
         with self._session.no_autoflush:
             self._session.execute(
@@ -193,13 +203,18 @@ class CapsuleDraftService:
                 try:
                     if record.response_status != 201:
                         raise ValueError
-                    if not isinstance(record.created_at, datetime):
+                    if (
+                        not _is_utc_whole_second(record.created_at)
+                        or not _is_utc_whole_second(record.expires_at)
+                        or record.expires_at
+                        != record.created_at + _IDEMPOTENCY_LIFETIME
+                    ):
                         raise ValueError
                     return _parse_replay_result(
                         record.response_json,
                         request=request,
                         expected_draft_expires_at=(
-                            record.created_at
+                            record.created_at.astimezone(timezone.utc)
                             + timedelta(seconds=LIMITS_V1.draft_lifetime_seconds)
                         ),
                     )
@@ -243,7 +258,7 @@ class CapsuleDraftService:
             except (TypeError, ValueError):
                 raise _validation_error() from None
 
-            draft_expires_at = now + timedelta(seconds=LIMITS_V1.draft_lifetime_seconds)
+            draft_expires_at = canonical_now + timedelta(seconds=LIMITS_V1.draft_lifetime_seconds)
             result = CapsuleDraftResult(
                 capsule_id=request.capsule_id,
                 state=CapsuleState.DRAFT,
@@ -264,7 +279,7 @@ class CapsuleDraftService:
                 state=CapsuleState.DRAFT,
                 signed_statement=None,
                 signed_statement_sha256=None,
-                created_at=now,
+                created_at=canonical_now,
                 ready_at=None,
                 draft_expires_at=draft_expires_at,
             )
@@ -292,8 +307,8 @@ class CapsuleDraftService:
                     request_sha256=request_sha256,
                     response_status=201,
                     response_json=_response_json(result),
-                    created_at=now,
-                    expires_at=now + _IDEMPOTENCY_LIFETIME,
+                    created_at=canonical_now,
+                    expires_at=canonical_now + _IDEMPOTENCY_LIFETIME,
                 )
             )
             self._session.flush()

@@ -5,6 +5,30 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
+import dev.hryshyn.remanence.core.model.LocalMaterialState
+import dev.hryshyn.remanence.core.model.LocalMaterialTransition
+import dev.hryshyn.remanence.core.model.LocalMaterialTransitionEvaluator
+
+/** Outcome of the owner-scoped, canonical local-material transition operation. */
+sealed interface LocalMaterialTransitionResult {
+
+    /** The exact evaluator-approved transition was persisted by CAS. */
+    data class Accepted(val transition: LocalMaterialTransition.Accepted) : LocalMaterialTransitionResult
+
+    /** The requested state already equals the observed state; no SQL write was issued. */
+    data class IdempotentReplay(val transition: LocalMaterialTransition.IdempotentReplay) :
+        LocalMaterialTransitionResult
+
+    /** The evaluator rejected the requested transition; no SQL write was issued. */
+    data class Rejected(val transition: LocalMaterialTransition.Rejected) : LocalMaterialTransitionResult
+
+    /** No row exists for this capsule under this owner; no SQL write was issued. */
+    data object MissingRow : LocalMaterialTransitionResult
+
+    /** The observed state changed before the exact observed-state CAS; no transition was accepted. */
+    data class ConcurrentOrStale(val transition: LocalMaterialTransition.Accepted) :
+        LocalMaterialTransitionResult
+}
 
 /**
  * DAO over incoming routed metadata. Replaying a synced page must be
@@ -18,17 +42,35 @@ import androidx.room.Transaction
  * immutable capsule ID is REFUSED and the original row stays unchanged.
  */
 @Dao
-interface IncomingCapsuleDao {
+abstract class IncomingCapsuleDao {
 
     /**
      * Owner-preserving idempotent page write. On the same immutable capsule
      * ID: a row for another local account aborts the whole write
      * ([IllegalStateException]); otherwise insert-ignore plus an owner-scoped
      * update applies exactly the replay fields - routing identities,
-     * protocol version, and material state stay immutable here.
+     * protocol version, and material state stay immutable here. A new row may
+     * enter only as [LocalMaterialState.DISCOVERED]; existing same-owner
+     * replays do not use their candidate material state.
      */
     @Transaction
-    suspend fun upsertAllForOwner(capsules: List<IncomingCapsuleEntity>) {
+    open suspend fun upsertAllForOwner(capsules: List<IncomingCapsuleEntity>) {
+        // Preflight the complete page before issuing any write so an invalid
+        // fresh candidate cannot leave an earlier page item partially cached.
+        for (capsule in capsules) {
+            val existingOwner = findOwnerOf(capsule.capsuleId)
+            if (existingOwner == null && capsule.materialState != LocalMaterialState.DISCOVERED) {
+                throw IllegalArgumentException(
+                    "new incoming capsule ${capsule.capsuleId} must start in DISCOVERED",
+                )
+            }
+            if (existingOwner != null && existingOwner != capsule.ownerUserId) {
+                throw IllegalStateException(
+                    "incoming capsule ${capsule.capsuleId} already cached for another local account",
+                )
+            }
+        }
+
         for (capsule in capsules) {
             val existingOwner = findOwnerOf(capsule.capsuleId)
             if (existingOwner != null && existingOwner != capsule.ownerUserId) {
@@ -49,17 +91,17 @@ interface IncomingCapsuleDao {
 
     /** Minimal ownership probe: never returns full unscoped rows. */
     @Query("SELECT owner_user_id FROM incoming_capsule WHERE capsule_id = :capsuleId LIMIT 1")
-    suspend fun findOwnerOf(capsuleId: String): String?
+    protected abstract suspend fun findOwnerOf(capsuleId: String): String?
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
-    suspend fun insertIgnoring(capsules: List<IncomingCapsuleEntity>)
+    protected abstract suspend fun insertIgnoring(capsules: List<IncomingCapsuleEntity>)
 
     @Query(
         "UPDATE incoming_capsule SET server_status = :serverStatus, " +
             "ready_at_epoch_ms = :readyAtEpochMs, signed_statement_bytes = :signedStatementBytes " +
             "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId",
     )
-    suspend fun updateReplayFieldsForOwner(
+    protected abstract suspend fun updateReplayFieldsForOwner(
         capsuleId: String,
         ownerUserId: String,
         serverStatus: String,
@@ -68,25 +110,66 @@ interface IncomingCapsuleDao {
     )
 
     @Query("DELETE FROM incoming_capsule")
-    suspend fun clear()
+    abstract suspend fun clear()
 
     /** Resolves the incoming capsule ONLY when owned by [ownerUserId]. */
     @Query(
         "SELECT * FROM incoming_capsule " +
             "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId",
     )
-    suspend fun getByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String): IncomingCapsuleEntity?
+    abstract suspend fun getByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String): IncomingCapsuleEntity?
 
-    /** Owner-guarded material-state CAS; 0 rows means refused. */
+    /**
+     * Applies one canonical local-material request under the authenticated
+     * owner. The row is loaded with the owner predicate, evaluated by the
+     * core:model state machine, and only an evaluator-approved transition is
+     * exact-CASed from that observed state.
+     */
+    @Transaction
+    open suspend fun transitionMaterialStateForOwner(
+        ownerUserId: String,
+        capsuleId: String,
+        requestedTarget: LocalMaterialState,
+    ): LocalMaterialTransitionResult {
+        val row = getByCapsuleIdAndOwner(capsuleId, ownerUserId)
+            ?: return LocalMaterialTransitionResult.MissingRow
+        return when (
+            val transition = LocalMaterialTransitionEvaluator.evaluate(
+                row.materialState,
+                requestedTarget,
+            )
+        ) {
+            is LocalMaterialTransition.IdempotentReplay ->
+                LocalMaterialTransitionResult.IdempotentReplay(transition)
+            is LocalMaterialTransition.Rejected ->
+                LocalMaterialTransitionResult.Rejected(transition)
+            is LocalMaterialTransition.Accepted -> {
+                val updatedRows = compareAndSetMaterialStateForOwner(
+                    capsuleId = capsuleId,
+                    ownerUserId = ownerUserId,
+                    observedState = transition.from,
+                    newState = transition.to,
+                )
+                if (updatedRows == 1) {
+                    LocalMaterialTransitionResult.Accepted(transition)
+                } else {
+                    LocalMaterialTransitionResult.ConcurrentOrStale(transition)
+                }
+            }
+        }
+    }
+
+    /** Exact observed-state CAS used only by [transitionMaterialStateForOwner]. */
     @Query(
         "UPDATE incoming_capsule SET material_state = :newState " +
-            "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId AND material_state IN (:allowedFrom)",
+            "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId " +
+            "AND material_state = :observedState",
     )
-    suspend fun transitionMaterialStateForOwner(
+    protected abstract suspend fun compareAndSetMaterialStateForOwner(
         capsuleId: String,
         ownerUserId: String,
-        newState: IncomingMaterialState,
-        allowedFrom: List<IncomingMaterialState>,
+        observedState: LocalMaterialState,
+        newState: LocalMaterialState,
     ): Int
 }
 

@@ -4,6 +4,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteConstraintException
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import dev.hryshyn.remanence.core.model.LocalMaterialState
 import java.util.UUID
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -99,7 +100,7 @@ class AccountScopeIsolationTest {
         serverStatus = "READY",
         readyAtEpochMs = 1_755_000_000_000,
         signedStatementBytes = byteArrayOf(1, 2, 3),
-        materialState = IncomingMaterialState.DISCOVERED,
+        materialState = LocalMaterialState.DISCOVERED,
     )
 
     private fun incomingEnvelope(capsuleId: String, ownerUserId: String) = IncomingEnvelopeEntity(
@@ -182,10 +183,13 @@ class AccountScopeIsolationTest {
                 .transitionUploadStateForOwner(blobA1, ownerB, OutboxBlobUploadState.STORED, listOf(OutboxBlobUploadState.PENDING)),
         )
         assertEquals(0, database.outboxBlobDao().incrementAttemptCountForOwner(blobA1, ownerB))
-        assertEquals(
-            0,
+        assertTrue(
             database.incomingCapsuleDao()
-                .transitionMaterialStateForOwner(capsuleA, ownerB, IncomingMaterialState.INDEX_CACHED, listOf(IncomingMaterialState.DISCOVERED)),
+                .transitionMaterialStateForOwner(
+                    ownerUserId = ownerB,
+                    capsuleId = capsuleA,
+                    requestedTarget = LocalMaterialState.INDEX_CACHED,
+                ) is LocalMaterialTransitionResult.MissingRow,
         )
         assertEquals(
             0,

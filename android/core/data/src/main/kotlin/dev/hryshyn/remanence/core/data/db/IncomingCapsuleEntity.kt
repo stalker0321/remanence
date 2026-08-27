@@ -4,15 +4,7 @@ import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
-
-/** Local material state of an incoming capsule (architecture section 6). */
-enum class IncomingMaterialState {
-    DISCOVERED,
-    INDEX_CACHED,
-    MATERIAL_CACHED,
-    FINGERPRINT_ACCEPTED,
-    CORRUPT,
-}
+import dev.hryshyn.remanence.core.model.LocalMaterialState
 
 /**
  * Routed metadata of one incoming ciphertext-only capsule. Contains no note,
@@ -55,7 +47,7 @@ data class IncomingCapsuleEntity(
     @ColumnInfo(name = "signed_statement_bytes")
     val signedStatementBytes: ByteArray,
     @ColumnInfo(name = "material_state")
-    val materialState: IncomingMaterialState,
+    val materialState: LocalMaterialState,
 ) {
     override fun equals(other: Any?): Boolean =
         other is IncomingCapsuleEntity && other.capsuleId == capsuleId

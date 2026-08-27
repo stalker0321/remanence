@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.room.testing.MigrationTestHelper
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.platform.app.InstrumentationRegistry
+import dev.hryshyn.remanence.core.model.LocalMaterialState
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -150,6 +151,61 @@ class RemanenceLocalSchemaTest {
         // definitions, including the new sender_retry_keyset_path
         // column on outbox_capsule.
         helper.runMigrationsAndValidate(DB_V5_NAME, 5, true)
+    }
+
+    /**
+     * The Room enum type moved from core:data to core:model, but its persisted
+     * names did not change. Prove the v5 column remains compatible without a
+     * schema version bump or migration.
+     */
+    @Test
+    fun localMaterialStateTypeChangePreservesV5TextStorageAndNames() {
+        helper.createDatabase(DB_LOCAL_STATE_NAME, 5).use { v5 ->
+            var materialStateColumnIsText = false
+            v5.query("PRAGMA table_info(`incoming_capsule`)").use { cursor ->
+                val nameIndex = cursor.getColumnIndexOrThrow("name")
+                val typeIndex = cursor.getColumnIndexOrThrow("type")
+                while (cursor.moveToNext()) {
+                    if (cursor.getString(nameIndex) == "material_state") {
+                        assertEquals("TEXT", cursor.getString(typeIndex))
+                        materialStateColumnIsText = true
+                    }
+                }
+            }
+            assertTrue(materialStateColumnIsText)
+
+            for ((index, state) in LocalMaterialState.entries.withIndex()) {
+                v5.execSQL(
+                    "INSERT INTO incoming_capsule (" +
+                        "capsule_id, owner_user_id, sender_user_id, recipient_user_id, " +
+                        "sender_signing_key_bundle_id, recipient_encryption_key_bundle_id, " +
+                        "protocol_version, server_status, ready_at_epoch_ms, " +
+                        "signed_statement_bytes, material_state" +
+                        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    arrayOf(
+                        "state-cap-$index",
+                        "owner-state-test",
+                        "sender-state-test",
+                        "recipient-state-test",
+                        "sender-key-state-test",
+                        "recipient-key-state-test",
+                        1,
+                        "READY",
+                        1_755_000_000_000L,
+                        byteArrayOf(1, 2, 3),
+                        state.name,
+                    ),
+                )
+            }
+
+            val storedNames = mutableListOf<String>()
+            v5.query("SELECT material_state FROM incoming_capsule ORDER BY capsule_id").use { cursor ->
+                while (cursor.moveToNext()) storedNames += cursor.getString(0)
+            }
+            assertEquals(LocalMaterialState.entries.map { it.name }, storedNames)
+            assertTrue(v5.isDatabaseIntegrityOk)
+        }
+        helper.runMigrationsAndValidate(DB_LOCAL_STATE_NAME, 5, true)
     }
 
     /**
@@ -467,6 +523,7 @@ class RemanenceLocalSchemaTest {
         const val DB_V3_NAME = "remanence-schema-v3-test.db"
         const val DB_V4_NAME = "remanence-schema-v4-test.db"
         const val DB_V5_NAME = "remanence-schema-v5-test.db"
+        const val DB_LOCAL_STATE_NAME = "remanence-local-state-schema-test.db"
         const val REOPEN_DB_NAME = "remanence-reopen-test.db"
         const val DB_STAMP_NAME = "remanence-v3to4-stamp-test.db"
         const val DB_UNATTRIBUTED_NAME = "remanence-v3to4-unattributed-test.db"

@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.core.data.db
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import dev.hryshyn.remanence.core.model.LocalMaterialState
 import java.util.UUID
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -62,7 +63,7 @@ class IncomingCacheIsolationTest {
         serverStatus = "READY",
         readyAtEpochMs = 1_755_000_000_000,
         signedStatementBytes = byteArrayOf(1, 2, 3),
-        materialState = IncomingMaterialState.DISCOVERED,
+        materialState = LocalMaterialState.DISCOVERED,
     )
 
     private fun incomingEnvelope(capsuleId: String, ownerId: String) = IncomingEnvelopeEntity(
@@ -106,16 +107,15 @@ class IncomingCacheIsolationTest {
         assertNull(database.blobCacheDao().getByBlobIdAndOwner(blobA, ownerB))
         assertNull(database.syncCursorDao().get(ownerB, "incoming"))
 
-        // Every CAS transition refuses B (0 rows).
-        assertEquals(
-            0,
+        // B sees no owner-scoped row and therefore receives the distinct
+        // missing result; it cannot transition A's material.
+        assertTrue(
             database.incomingCapsuleDao()
                 .transitionMaterialStateForOwner(
-                    capsuleA,
-                    ownerB,
-                    IncomingMaterialState.INDEX_CACHED,
-                    listOf(IncomingMaterialState.DISCOVERED),
-                ),
+                    ownerUserId = ownerB,
+                    capsuleId = capsuleA,
+                    requestedTarget = LocalMaterialState.INDEX_CACHED,
+                ) is LocalMaterialTransitionResult.MissingRow,
         )
         assertEquals(
             0,
@@ -148,7 +148,7 @@ class IncomingCacheIsolationTest {
             database.blobCacheDao().getByBlobIdAndOwner(blobA, ownerA)!!.cacheState,
         )
         assertEquals(
-            IncomingMaterialState.DISCOVERED,
+            LocalMaterialState.DISCOVERED,
             database.incomingCapsuleDao().getByCapsuleIdAndOwner(capsuleA, ownerA)!!.materialState,
         )
         assertEquals("page-a3", database.syncCursorDao().get(ownerA, "incoming")!!.serverCursor)
@@ -199,7 +199,7 @@ class IncomingCacheIsolationTest {
         assertTrue(replayed.signedStatementBytes.contentEquals(byteArrayOf(9, 9)))
         // Immutable routing/state columns survive a replay untouched.
         assertEquals(1, countRows("incoming_capsule"))
-        assertEquals(IncomingMaterialState.DISCOVERED, replayed.materialState)
+        assertEquals(LocalMaterialState.DISCOVERED, replayed.materialState)
         assertTrue(original.senderUserId == replayed.senderUserId)
         assertTrue(original.recipientEncryptionKeyBundleId == replayed.recipientEncryptionKeyBundleId)
     }
@@ -284,18 +284,16 @@ class IncomingCacheIsolationTest {
         database.blobCacheDao().upsertForOwner(blobCache(blobA, capsuleA, ownerA))
 
         // B advances only its own material state.
-        assertEquals(
-            1,
+        assertTrue(
             database.incomingCapsuleDao()
                 .transitionMaterialStateForOwner(
-                    capsuleB,
-                    ownerB,
-                    IncomingMaterialState.INDEX_CACHED,
-                    listOf(IncomingMaterialState.DISCOVERED),
-                ),
+                    ownerUserId = ownerB,
+                    capsuleId = capsuleB,
+                    requestedTarget = LocalMaterialState.INDEX_CACHED,
+                ) is LocalMaterialTransitionResult.Accepted,
         )
         assertEquals(
-            IncomingMaterialState.DISCOVERED,
+            LocalMaterialState.DISCOVERED,
             database.incomingCapsuleDao().getByCapsuleIdAndOwner(capsuleA, ownerA)!!.materialState,
         )
         assertEquals(1, database.blobCacheDao().getAllByCapsuleIdAndOwner(capsuleA, ownerA).size)

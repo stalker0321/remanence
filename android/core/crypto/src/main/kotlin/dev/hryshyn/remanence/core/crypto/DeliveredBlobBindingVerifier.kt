@@ -28,6 +28,19 @@ import java.security.MessageDigest
  * no caller-supplied size/SHA fields are trusted independently. This is
  * for control/index sync only; the full [CapsuleAcceptanceGate] still
  * demands every declared blob.
+ *
+ * M2-P12a adds the full-material check [matchesFullCoverage]: given the
+ * canonical signed statement and the actual delivered ciphertext bytes
+ * for every declared artifact, every signed [ArtifactBinding] must
+ * exist exactly once in the delivered set, and each binding's signed
+ * size and SHA-256 must equal the size and SHA-256 derived from the
+ * actual bytes the caller holds. The method rejects missing, extra,
+ * duplicate IDs, wrong size/hash, and substitution. No
+ * caller-supplied size or digest is trusted: the bytes are the only
+ * source of transport identity. This is the P12a prerequisite used by
+ * the future presentation gate; the existing metadata-based
+ * [matches] method and the current [CapsuleAcceptanceGate] behavior
+ * remain unchanged in this commit.
  */
 internal class DeliveredBlobBindingVerifier {
 
@@ -45,6 +58,11 @@ internal class DeliveredBlobBindingVerifier {
         recognitionBlobId,
         recognitionCiphertext,
     )
+
+    fun matchesFullCoverage(
+        bindings: List<ArtifactBinding>,
+        delivered: List<DeliveredCiphertext>,
+    ): Boolean = fullCoverageMatches(bindings, delivered)
 
     private fun blobsMatch(bindings: List<ArtifactBinding>, delivered: List<DeliveredBlob>): Boolean {
         if (bindings.size != delivered.size) return false
@@ -73,6 +91,23 @@ internal class DeliveredBlobBindingVerifier {
         if (recognitionCiphertext.size < SHA256_BYTES) return false
         val actualSha = MessageDigest.getInstance("SHA-256").digest(recognitionCiphertext)
         return MessageDigest.isEqual(binding.ciphertextSha256.toByteArray(), actualSha)
+    }
+
+    private fun fullCoverageMatches(
+        bindings: List<ArtifactBinding>,
+        delivered: List<DeliveredCiphertext>,
+    ): Boolean {
+        if (bindings.size != delivered.size) return false
+        val byId = delivered.groupBy { it.blobId.toProtoBytes() }
+        if (byId.any { it.value.size != 1 }) return false
+        if (bindings.map { it.blobId }.toSet().size != bindings.size) return false
+        return bindings.all { binding ->
+            val ciphertext = byId[binding.blobId]?.single()?.ciphertext ?: return@all false
+            if (ciphertext.size < SHA256_BYTES) return@all false
+            if (binding.ciphertextSize != ciphertext.size.toLong()) return@all false
+            val actualSha = MessageDigest.getInstance("SHA-256").digest(ciphertext)
+            MessageDigest.isEqual(binding.ciphertextSha256.toByteArray(), actualSha)
+        }
     }
 
     private companion object {

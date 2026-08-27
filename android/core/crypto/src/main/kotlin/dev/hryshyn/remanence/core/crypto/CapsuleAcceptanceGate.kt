@@ -14,6 +14,17 @@ data class DeliveredBlob(
     val ciphertextSha256: ByteArray,
 )
 
+/**
+ * One delivered artifact ciphertext as held by the storage transport. The
+ * transport identity (size, SHA-256) is always derived from the actual
+ * bytes; no caller-supplied size or digest is trusted. Used by the
+ * full-material stage of [DeliveredBlobBindingVerifier] (M2-P12a).
+ */
+data class DeliveredCiphertext(
+    val blobId: BlobId,
+    val ciphertext: ByteArray,
+)
+
 /** Everything needed to judge a capsule before a single artifact is decrypted. */
 data class CapsuleAcceptanceInput(
     val expectedCapsuleId: CapsuleId,

@@ -244,9 +244,13 @@ The UI/documentation must state this honestly. Support staff cannot recover cont
 
 ADR-010 defines the accepted recovery architecture. A random 256-bit Account
 Recovery Key (ARK) is a platform-neutral wrapping root for a versioned recovery
-package containing all still-needed private HPKE/signing keysets. It is not a
-capsule key or the account signing identity, and account keys are not derived
-from it. Each device protects the ARK with its own device-local secure key.
+package. That package contains the active private HPKE/signing keysets and only
+retired HPKE private keys still needed to open old envelopes. Retired signing
+private keys are excluded unless a future protocol explicitly requires signing
+new data with them; historical verification uses durable public keys and
+authenticated transition records. The ARK is not a capsule key or the account
+signing identity, and account keys are not derived from it. Each device protects
+the ARK with its own device-local secure key.
 
 The server stores only an ARK-encrypted recovery package and one or more opaque
 ARK recovery wrappers. A wrapper is decryptable only with a client-held

@@ -33,10 +33,21 @@ Capsules continue to use random per-capsule AEAD keys and the existing account
 HPKE/signing key bundles. The ARK does not directly encrypt capsule media and is
 not used as a deterministic seed for those keys.
 
-The ARK encrypts a versioned **RecoveryPackage** containing the private account
-key material required to restore access, including active and still-required
-retired HPKE/signing keysets and their immutable bundle IDs. Key rotation must
-update this package before the old recovery generation is retired.
+The ARK encrypts a versioned **RecoveryPackage** containing only private account
+key material still required to restore access:
+
+- the current active HPKE and signing private keysets;
+- retired HPKE private keysets while old recipient envelopes still target them;
+- immutable bundle IDs and authenticated key-history/transition records needed
+  to validate the package generation.
+
+Retired signing private keys are excluded by default. Historical capsule
+signatures require the corresponding public keys, which belong in the durable
+public directory/key-transition history, not private recovery escrow. A retired
+signing private key may be retained only if a future protocol explicitly
+requires producing a new signature under that retired key; such a protocol
+requires its own ADR and retention/expiry rule. Key rotation must update and
+test the recovery package before an old decrypting HPKE key is removed.
 
 On a device, the ARK is wrapped by a device-local hardware-backed key where
 available. Loss of that device wrapper does not destroy the server-held
@@ -128,8 +139,10 @@ wrapper replacement, and device revocation.
 
 - M2 remains a two-device product proof and must state that its device-local
   identity is not yet recoverable.
-- Existing exportable Tink keysets become payload inside a versioned recovery
-  package rather than being replaced by an ARK-derived identity.
+- Existing still-required exportable Tink private keysets become payload inside
+  a versioned recovery package rather than being replaced by an ARK-derived
+  identity; retired signing private keys are not retained without an explicit
+  protocol need.
 - Server compromise alone does not reveal the ARK or capsule plaintext.
 - Multiple platforms can protect the same recovery root without creating
   different Remanence accounts or re-encrypting every capsule.

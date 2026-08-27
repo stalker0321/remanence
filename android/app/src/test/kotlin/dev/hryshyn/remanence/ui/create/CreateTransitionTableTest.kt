@@ -546,44 +546,10 @@ class CreateTransitionTableTest {
         }
     }
 
-    @Test
-    fun crossUserSnapshotIsRefusedAtPublishingTime() = runBlocking {
-        val other = AccountIdentityGenerator().generate()
-        val otherUserUuid = UUID.fromString("7d111111-2222-4333-8444-555555555555")
-        val otherBundleUuid = UUID.fromString("7d333333-4444-4555-8666-777777777777")
-        val front = ScriptedProcessor(ScriptedProcessor.Scripted.Accept(syntheticFingerprint(11, FingerprintSide.FRONT)))
-        val back = ScriptedProcessor(ScriptedProcessor.Scripted.Accept(syntheticFingerprint(22, FingerprintSide.BACK)))
-        val (vm, _) = viewModel(front, back)
-        // Resolve+confirm SOMEONE ELSE'S snapshot while our identity stays self.
-        vm.onResolved(
-            ResolvedHandleSnapshot(
-                userId = UserId(otherUserUuid),
-                handle = NormalizedHandle.parse("friend"),
-                keyBundleId = KeyBundleId(otherBundleUuid),
-                suite = "HPKE_X25519_HKDF_SHA256_AES256GCM__ED25519",
-                protocolVersion = 1,
-                encryptionPublicKeysetB64Url = b64Url(other.encryptionPublicKeyset),
-                signingPublicKeysetB64Url = b64Url(other.signingPublicKeyset),
-                keyBundleStatus = "ACTIVE",
-                directoryVersion = "v1",
-            ),
-        )
-        vm.confirmRecipient()
-        bindReady(vm.frontAttempt)
-        deliverFront(vm)
-        confirmChecklist(vm)
-        bindReady(vm.backAttempt)
-        deliverBack(vm)
-        repeat(3) { vm.photoSelection.toggle("content://x/$it") }
-
-        vm.startPublishing()
-        awaitTerminalPublish(vm)
-
-        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
-        assertTrue(vm.publishError.value!!.contains("own account"))
-        runBlocking {
-            assertTrue(database.outboxCapsuleDao().getByCapsuleIdAndOwner(vm.capsuleId, userUuid.toString()) == null)
-        }
-        Unit
-    }
+    // M2-P07: the M1 self-only publication guard is removed. The create
+    // transition table now admits cross-identity publication through the
+    // confirmed recipient snapshot; the M1 test
+    // `crossUserSnapshotIsRefusedAtPublishingTime` was deleted because it
+    // exercised the removed guard. Cross-identity binding is pinned in
+    // CreateRecipientPublicationBindingTest.
 }

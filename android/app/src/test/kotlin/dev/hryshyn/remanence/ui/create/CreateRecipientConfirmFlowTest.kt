@@ -284,7 +284,9 @@ class CreateRecipientConfirmFlowTest {
         composeRule.onNodeWithTag("confirm_button").performClick()
 
         // Confirming another recipient binds THEIR snapshot - never silently
-        // rewritten to self - so the M1 publisher's own-account guard decides.
+        // rewritten to self - so the publication will be addressed to that
+        // distinct identity. M2-P07: the prior M1 self-only guard is gone;
+        // cross-identity publication is the supported path.
         assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
         assertSame(otherResolved, vm.confirmedRecipient.value)
 

@@ -445,12 +445,22 @@ class CreateViewModel(
             failGuard("the note exceeds its byte limit")
             return
         }
+        // M2-P07: the publisher must NEVER receive a publication request without
+        // an attributable, explicitly confirmed recipient. The flow normally
+        // gates this via the step table, but a defensive fail-closed guard
+        // here makes the contract explicit and prevents a synchronously
+        // thrown NPE from the requireNotNull below reaching the UI.
+        val boundRecipient = confirmedRecipient.value
+        if (boundRecipient == null) {
+            failGuard("a recipient must be confirmed before publishing")
+            return
+        }
         clearGuardError()
         // FIX-STATE-11: immutable inputs of THIS session, captured before any
         // suspend boundary.
         val inputs = PublishInputs(
             capsuleId = capsuleId,
-            recipient = requireNotNull(confirmedRecipient.value),
+            recipient = boundRecipient,
             noteText = if (noteEditor.isEmpty) null else noteEditor.text,
             frontFingerprintId = requireNotNull(frontFingerprintId),
             backFingerprintId = requireNotNull(backFingerprintId),
@@ -516,15 +526,19 @@ class CreateViewModel(
         fun ensureCurrent() {
             if (!isPublishCurrent(generation)) throw PublishSuperseded()
         }
+        // M2-P07: the recipient identity, recipient key-bundle identity, and
+        // recipient encryption public keyset come ONLY from the explicitly
+        // confirmed immutable [ResolvedHandleSnapshot] captured into
+        // [PublishInputs] before any suspend boundary. The sender identity
+        // (user id, signing key, handle, owner) remains the authenticated
+        // local account. A self-send is a valid publication because the user
+        // may confirm their own handle - the request builder then receives
+        // EQUAL VALUES for sender and recipient, not a default.
         val snapshot = inputs.recipient
         val sender = identityProvider()
         ensureCurrent()
         if (sender == null) {
             failPublishing("local identity is unavailable; recovery required", generation)
-            return
-        }
-        if (snapshot.userId.value.toString() != sender.userId) {
-            failPublishing("this milestone publishes only to your own account", generation)
             return
         }
         val frontBytes = try {
@@ -566,12 +580,16 @@ class CreateViewModel(
                     CapsulePublishRequest(
                         capsuleId = CapsuleId(UUID.fromString(inputs.capsuleId)),
                         senderUserId = UserId(UUID.fromString(sender.userId)),
-                        // M2-P06: M1 self-send passes the same account VALUES
-                        // explicitly; M2-P07 will feed the distinct confirmed
-                        // recipient snapshot here.
-                        recipientUserId = UserId(UUID.fromString(sender.userId)),
+                        // M2-P07: the recipient identity, recipient key-bundle
+                        // identity, and recipient encryption public keyset come
+                        // ONLY from the explicitly confirmed immutable
+                        // [ResolvedHandleSnapshot] captured before any suspend
+                        // boundary. The sender fields (including ownerUserId)
+                        // remain the authenticated local account; a self-send
+                        // passes equal values explicitly.
+                        recipientUserId = snapshot.userId,
                         senderKeyBundleId = KeyBundleId(UUID.fromString(sender.activeKeyBundleId)),
-                        recipientKeyBundleId = KeyBundleId(UUID.fromString(sender.activeKeyBundleId)),
+                        recipientKeyBundleId = snapshot.keyBundleId,
                         ownerUserId = sender.userId,
                         senderHandleSnapshot = sender.handle,
                         createdAtEpochSeconds = clockMillis() / 1000L,
@@ -582,7 +600,6 @@ class CreateViewModel(
                         frontFingerprintBytes = frontBytes,
                         backFingerprintBytes = backBytes,
                         signingKeyset = sender.signingPrivateHandle,
-                        // M1 same-account: our own HPKE public half receives it.
                         recipientEncryptionPublicKeyset =
                             parsePublicHandle(snapshot.encryptionPublicKeysetB64Url),
                     ),

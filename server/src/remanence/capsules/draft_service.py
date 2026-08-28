@@ -95,12 +95,12 @@ def _parse_iso_utc(value: object) -> datetime:
     return parsed
 
 
-def _parse_replay_result(
+def _validate_replay_response(
     response_json: object,
     *,
     request: CreateCapsuleDraftRequest,
     expected_draft_expires_at: datetime,
-) -> CapsuleDraftResult:
+) -> None:
     if not isinstance(response_json, dict):
         raise ValueError
     if set(response_json) != {"capsule_id", "state", "draft_expires_at", "blobs", "is_replay"}:
@@ -118,27 +118,16 @@ def _parse_replay_result(
     if not isinstance(raw_blobs, list) or len(raw_blobs) != len(request.blobs):
         raise ValueError
 
-    parsed_blobs: list[CapsuleDraftBlobResult] = []
     for raw_blob, requested_blob in zip(raw_blobs, request.blobs, strict=True):
         if not isinstance(raw_blob, dict) or set(raw_blob) != {"blob_id", "state"}:
             raise ValueError
         if raw_blob["blob_id"] != str(requested_blob.blob_id):
             raise ValueError
-        if raw_blob["state"] != CapsuleBlobState.DECLARED.value:
+        if raw_blob["state"] not in {
+            CapsuleBlobState.DECLARED.value,
+            CapsuleBlobState.STORED.value,
+        }:
             raise ValueError
-        parsed_blobs.append(
-            CapsuleDraftBlobResult(
-                blob_id=requested_blob.blob_id,
-                state=CapsuleBlobState.DECLARED,
-            )
-        )
-    return CapsuleDraftResult(
-        capsule_id=request.capsule_id,
-        state=CapsuleState.DRAFT,
-        draft_expires_at=expiry,
-        blobs=tuple(parsed_blobs),
-        is_replay=True,
-    )
 
 
 def _response_json(result: CapsuleDraftResult) -> dict[str, Any]:
@@ -152,6 +141,101 @@ def _response_json(result: CapsuleDraftResult) -> dict[str, Any]:
         ],
         "is_replay": False,
     }
+
+
+def _decode_request_hashes(request: CreateCapsuleDraftRequest) -> list[bytes]:
+    try:
+        return [
+            decode_canonical_base64url(blob.ciphertext_sha256, expected_length=32)
+            for blob in request.blobs
+        ]
+    except (TypeError, ValueError):
+        raise _validation_error() from None
+
+
+def _authoritative_replay_result(
+    session: Session,
+    *,
+    record: CapsuleIdempotencyRecord,
+    request: CreateCapsuleDraftRequest,
+    authenticated_sender_user_id: uuid.UUID,
+) -> CapsuleDraftResult:
+    expected_draft_expires_at = (
+        record.created_at.astimezone(timezone.utc)
+        + timedelta(seconds=LIMITS_V1.draft_lifetime_seconds)
+    )
+    _validate_replay_response(
+        record.response_json,
+        request=request,
+        expected_draft_expires_at=expected_draft_expires_at,
+    )
+
+    capsule = session.scalar(
+        select(Capsule)
+        .where(Capsule.id == request.capsule_id)
+        .execution_options(populate_existing=True)
+    )
+    if capsule is None or capsule.sender_user_id != authenticated_sender_user_id:
+        raise _error("INTERNAL_ERROR")
+    if capsule.state is not CapsuleState.DRAFT:
+        raise _error("IDEMPOTENCY_CONFLICT")
+    if (
+        capsule.recipient_user_id != request.recipient_user_id
+        or capsule.sender_key_bundle_id != request.sender_key_bundle_id
+        or capsule.recipient_key_bundle_id != request.recipient_key_bundle_id
+        or capsule.protocol_version != request.protocol_version
+        or not _is_utc_whole_second(capsule.created_at)
+        or capsule.created_at.astimezone(timezone.utc)
+        != record.created_at.astimezone(timezone.utc)
+        or not _is_utc_whole_second(capsule.draft_expires_at)
+        or capsule.draft_expires_at.astimezone(timezone.utc)
+        != expected_draft_expires_at
+    ):
+        raise _error("INTERNAL_ERROR")
+
+    current_blobs = session.scalars(
+        select(CapsuleBlob)
+        .where(CapsuleBlob.capsule_id == request.capsule_id)
+        .execution_options(populate_existing=True)
+    ).all()
+    if len(current_blobs) != len(request.blobs):
+        raise _error("INTERNAL_ERROR")
+    blobs_by_id = {blob.id: blob for blob in current_blobs}
+    if len(blobs_by_id) != len(current_blobs):
+        raise _error("INTERNAL_ERROR")
+
+    decoded_hashes = _decode_request_hashes(request)
+    result_blobs: list[CapsuleDraftBlobResult] = []
+    for requested_blob, expected_hash in zip(request.blobs, decoded_hashes, strict=True):
+        current_blob = blobs_by_id.get(requested_blob.blob_id)
+        if current_blob is None:
+            raise _error("INTERNAL_ERROR")
+        if (
+            current_blob.capsule_id != request.capsule_id
+            or current_blob.kind is not requested_blob.kind
+            or current_blob.ordinal != requested_blob.ordinal
+            or current_blob.object_key
+            != f"capsules/{request.capsule_id}/{requested_blob.blob_id}.blob"
+            or current_blob.expected_ciphertext_size != requested_blob.ciphertext_size
+            or current_blob.expected_ciphertext_sha256 != expected_hash
+            or current_blob.state
+            not in (CapsuleBlobState.DECLARED, CapsuleBlobState.STORED)
+        ):
+            raise _error("INTERNAL_ERROR")
+        result_blobs.append(
+            CapsuleDraftBlobResult(
+                blob_id=requested_blob.blob_id,
+                state=current_blob.state,
+            )
+        )
+
+    return CapsuleDraftResult(
+        capsule_id=capsule.id,
+        state=capsule.state,
+        draft_expires_at=capsule.draft_expires_at,
+        blobs=tuple(result_blobs),
+        is_replay=True,
+    )
 
 
 class CapsuleDraftService:
@@ -210,13 +294,11 @@ class CapsuleDraftService:
                         != record.created_at + _IDEMPOTENCY_LIFETIME
                     ):
                         raise ValueError
-                    return _parse_replay_result(
-                        record.response_json,
+                    return _authoritative_replay_result(
+                        self._session,
+                        record=record,
                         request=request,
-                        expected_draft_expires_at=(
-                            record.created_at.astimezone(timezone.utc)
-                            + timedelta(seconds=LIMITS_V1.draft_lifetime_seconds)
-                        ),
+                        authenticated_sender_user_id=authenticated_sender_user_id,
                     )
                 except (TypeError, ValueError, OverflowError):
                     raise _error("INTERNAL_ERROR") from None
@@ -250,13 +332,7 @@ class CapsuleDraftService:
             ):
                 raise _error("RECIPIENT_KEY_STALE")
 
-            try:
-                decoded_hashes = [
-                    decode_canonical_base64url(blob.ciphertext_sha256, expected_length=32)
-                    for blob in request.blobs
-                ]
-            except (TypeError, ValueError):
-                raise _validation_error() from None
+            decoded_hashes = _decode_request_hashes(request)
 
             draft_expires_at = canonical_now + timedelta(seconds=LIMITS_V1.draft_lifetime_seconds)
             result = CapsuleDraftResult(

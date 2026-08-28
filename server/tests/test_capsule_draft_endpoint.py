@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 pytest_plugins = ("test_registration_endpoint",)
 
@@ -19,7 +19,7 @@ from remanence.api.dependencies import (
 )
 from remanence.capsules.blob_models import CapsuleBlob
 from remanence.capsules.idempotency_models import CapsuleIdempotencyRecord
-from remanence.capsules.models import Capsule
+from remanence.capsules.models import Capsule, CapsuleState
 from remanence.settings import AppMode, Settings
 from remanence.main import create_app
 from remanence.users.key_models import KeyBundleStatus, UserKeyBundle
@@ -226,6 +226,57 @@ def test_success_is_201_replay_is_200_and_response_allow_list_is_exact(client_fa
         assert _count(session, Capsule) == 1
         assert _count(session, CapsuleBlob) == 5
         assert _count(session, CapsuleIdempotencyRecord) == 1
+
+
+def test_replay_response_uses_current_blob_states(client_factory) -> None:
+    client, factory = client_factory
+    sender = _register(client, email="state-alice@example.com", handle="statealice")
+    recipient = _register(client, email="state-bob@example.com", handle="statebob")
+    payload = _draft_payload(sender, recipient)
+    key = uuid4()
+
+    first = _post(client, sender["access_token"], _raw(payload), key)
+    assert first.status_code == 201
+    stored_ids = [UUID(blob["blob_id"]) for blob in payload["blobs"][:2]]
+    with factory() as session:
+        session.execute(
+            update(CapsuleBlob)
+            .where(CapsuleBlob.id.in_(stored_ids))
+            .values(state="STORED")
+        )
+        session.commit()
+
+    replay = _post(client, sender["access_token"], _raw(payload), key)
+    assert replay.status_code == 200
+    assert [blob["state"] for blob in replay.json()["blobs"]] == [
+        "STORED",
+        "STORED",
+        "DECLARED",
+        "DECLARED",
+        "DECLARED",
+    ]
+    assert "is_replay" not in replay.json()
+
+
+def test_replay_after_abort_is_a_redacted_conflict(client_factory) -> None:
+    client, factory = client_factory
+    sender = _register(client, email="abort-alice@example.com", handle="abortalice")
+    recipient = _register(client, email="abort-bob@example.com", handle="abortbob")
+    payload = _draft_payload(sender, recipient)
+    key = uuid4()
+
+    first = _post(client, sender["access_token"], _raw(payload), key)
+    assert first.status_code == 201
+    with factory() as session:
+        session.execute(
+            update(Capsule)
+            .where(Capsule.id == UUID(payload["capsule_id"]))
+            .values(state=CapsuleState.ABORTED)
+        )
+        session.commit()
+
+    replay = _post(client, sender["access_token"], _raw(payload), key)
+    _assert_problem(replay, status=409, code="IDEMPOTENCY_CONFLICT")
 
 
 def test_conflict_mapping_and_sender_binding(client_factory) -> None:

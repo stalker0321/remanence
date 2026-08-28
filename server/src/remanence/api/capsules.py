@@ -84,7 +84,7 @@ class CapsuleDraftBlobResponse(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
     blob_id: uuid.UUID
-    state: Literal["DECLARED"]
+    state: Literal["DECLARED", "STORED"]
 
 
 class CapsuleDraftResponse(BaseModel):
@@ -241,10 +241,10 @@ def _problem_response(code: str) -> JSONResponse:
 def _response_dto(result: CapsuleDraftResult) -> CapsuleDraftResponse:
     return CapsuleDraftResponse(
         capsule_id=result.capsule_id,
-        state="DRAFT",
+        state=result.state.value,
         draft_expires_at=result.draft_expires_at,
         blobs=[
-            CapsuleDraftBlobResponse(blob_id=blob.blob_id, state="DECLARED")
+            CapsuleDraftBlobResponse(blob_id=blob.blob_id, state=blob.state.value)
             for blob in result.blobs
         ],
     )

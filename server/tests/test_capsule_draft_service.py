@@ -7,7 +7,7 @@ from threading import Barrier
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, update
 
 pytest_plugins = ("test_session_repository_create",)
 
@@ -401,6 +401,144 @@ def test_same_scope_same_hash_replays_without_duplicate_rows(session_factory) ->
             is_replay=True,
         )
         assert (_count(session, Capsule), _count(session, CapsuleBlob), _count(session, CapsuleIdempotencyRecord)) == counts_before
+
+
+def test_replay_derives_current_blob_states_without_rewriting_idempotency_response(
+    session_factory,
+) -> None:
+    with session_factory() as session:
+        sender, sender_bundle = _seed_user(session, "states")
+        recipient, recipient_bundle = _seed_user(session, "stater")
+        request = _request(
+            sender_bundle_id=sender_bundle.id,
+            recipient_user_id=recipient.id,
+            recipient_bundle_id=recipient_bundle.id,
+        )
+        key = uuid4()
+        _create(session, sender_user_id=sender.id, request=request, idempotency_key=key)
+        session.commit()
+        counts_before = (
+            _count(session, Capsule),
+            _count(session, CapsuleBlob),
+            _count(session, CapsuleIdempotencyRecord),
+        )
+        record = session.scalar(
+            select(CapsuleIdempotencyRecord).where(
+                CapsuleIdempotencyRecord.owner_user_id == sender.id,
+                CapsuleIdempotencyRecord.idempotency_key == key,
+            )
+        )
+        assert record is not None
+        frozen_response = record.response_json
+
+        stored_ids = [blob.blob_id for blob in request.blobs[:2]]
+        session.execute(
+            update(CapsuleBlob)
+            .where(CapsuleBlob.id.in_(stored_ids))
+            .values(state=CapsuleBlobState.STORED)
+        )
+        session.commit()
+
+        mixed = _create(
+            session,
+            sender_user_id=sender.id,
+            request=request,
+            idempotency_key=key,
+        )
+        assert mixed.is_replay is True
+        assert [blob.state for blob in mixed.blobs] == [
+            CapsuleBlobState.STORED,
+            CapsuleBlobState.STORED,
+            CapsuleBlobState.DECLARED,
+            CapsuleBlobState.DECLARED,
+            CapsuleBlobState.DECLARED,
+        ]
+
+        session.execute(
+            update(CapsuleBlob)
+            .where(CapsuleBlob.capsule_id == request.capsule_id)
+            .values(state=CapsuleBlobState.STORED)
+        )
+        session.commit()
+        all_stored = _create(
+            session,
+            sender_user_id=sender.id,
+            request=request,
+            idempotency_key=key,
+        )
+        assert all(blob.state is CapsuleBlobState.STORED for blob in all_stored.blobs)
+        assert record.response_json == frozen_response
+        assert (
+            _count(session, Capsule),
+            _count(session, CapsuleBlob),
+            _count(session, CapsuleIdempotencyRecord),
+        ) == counts_before
+
+
+@pytest.mark.parametrize("state", [CapsuleState.READY, CapsuleState.ABORTED])
+def test_replay_of_non_draft_capsule_is_a_redacted_conflict(session_factory, state: CapsuleState) -> None:
+    with session_factory() as session:
+        sender, sender_bundle = _seed_user(session, "terms")
+        recipient, recipient_bundle = _seed_user(session, "termr")
+        request = _request(
+            sender_bundle_id=sender_bundle.id,
+            recipient_user_id=recipient.id,
+            recipient_bundle_id=recipient_bundle.id,
+        )
+        key = uuid4()
+        _create(session, sender_user_id=sender.id, request=request, idempotency_key=key)
+        session.commit()
+        values = {"state": state}
+        if state is CapsuleState.READY:
+            values.update(
+                ready_at=_NOW,
+                signed_statement=b"statement",
+                signed_statement_sha256=_SERVICE_HASH,
+                publish_signature=b"s" * 69,
+            )
+        session.execute(update(Capsule).where(Capsule.id == request.capsule_id).values(**values))
+        session.commit()
+
+        _assert_error(
+            lambda: _create(
+                session,
+                sender_user_id=sender.id,
+                request=request,
+                idempotency_key=key,
+            ),
+            "IDEMPOTENCY_CONFLICT",
+        )
+
+
+def test_replay_with_corrupt_authoritative_blob_set_fails_closed(session_factory) -> None:
+    with session_factory() as session:
+        sender, sender_bundle = _seed_user(session, "corrupts")
+        recipient, recipient_bundle = _seed_user(session, "corruptr")
+        request = _request(
+            sender_bundle_id=sender_bundle.id,
+            recipient_user_id=recipient.id,
+            recipient_bundle_id=recipient_bundle.id,
+        )
+        key = uuid4()
+        _create(session, sender_user_id=sender.id, request=request, idempotency_key=key)
+        session.commit()
+        session.execute(
+            update(CapsuleBlob)
+            .where(CapsuleBlob.id == request.blobs[0].blob_id)
+            .values(expected_ciphertext_size=999)
+        )
+        session.commit()
+
+        error = _assert_error(
+            lambda: _create(
+                session,
+                sender_user_id=sender.id,
+                request=request,
+                idempotency_key=key,
+            ),
+            "INTERNAL_ERROR",
+        )
+        assert str(request.capsule_id) not in repr(error)
 
 
 def test_same_scope_different_hash_is_idempotency_conflict_without_write(session_factory) -> None:

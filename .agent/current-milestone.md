@@ -2,7 +2,8 @@
 
 `M2_TWO_USER_TRANSFER`
 
-Checkpoint P (P01-P13) PASS at `6431e6e`. Next task: integrate the
-reviewed M2 foundation with current `main`, then begin the server routing
-vertical slice. Physical Android CameraX/OpenCV evidence remains P14 and cannot
-be claimed until exercised on hardware.
+Checkpoint P and server Checkpoint S are PASS. Server S01-S21 completed and
+reviewed at `22c46e1`. Next implementation task: `M2-A01`, after evidence
+commit review and the integration decision. The P14 physical hardware blocker
+remains: CameraX/OpenCV and two-device evidence cannot be claimed until
+exercised on hardware.

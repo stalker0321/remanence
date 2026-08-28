@@ -46,6 +46,10 @@ data class IncomingCapsuleEntity(
     val readyAtEpochMs: Long,
     @ColumnInfo(name = "signed_statement_bytes")
     val signedStatementBytes: ByteArray,
+    @ColumnInfo(name = "signed_statement_sha256", defaultValue = "X''")
+    val signedStatementSha256: ByteArray = ByteArray(0),
+    @ColumnInfo(name = "publish_signature_bytes", defaultValue = "X''")
+    val publishSignatureBytes: ByteArray = ByteArray(0),
     @ColumnInfo(name = "material_state")
     val materialState: LocalMaterialState,
 ) {

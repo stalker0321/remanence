@@ -85,6 +85,7 @@ class AppContainer(
                 RemanenceLocalDatabase.MIGRATION_2_3,
                 RemanenceLocalDatabase.MIGRATION_3_4,
                 RemanenceLocalDatabase.MIGRATION_4_5,
+                RemanenceLocalDatabase.MIGRATION_5_6,
             )
             .build()
     }
@@ -257,6 +258,23 @@ class AppContainer(
     /** Immutable recipient lookup through the authenticated refreshing stack. */
     val recipientUserLookupRepository: dev.hryshyn.remanence.core.data.network.RecipientUserLookupRepository by lazy {
         apiStack.recipientUserLookupRepository
+    }
+
+    /** A09 account-scoped incoming page fetch and atomic Room commit seam. */
+    val incomingCapsuleSyncRepository: dev.hryshyn.remanence.core.data.db.IncomingCapsuleSyncRepository by lazy {
+        dev.hryshyn.remanence.core.data.db.IncomingCapsuleSyncRepository(
+            remote = apiStack.incomingCapsuleRepository,
+            database = database,
+            roots = accountScopedFileRoots,
+            currentSession = {
+                val account = currentAccountStore.load() ?: return@IncomingCapsuleSyncRepository null
+                val token = authTokenHolder.accessToken ?: return@IncomingCapsuleSyncRepository null
+                val owner = runCatching {
+                    dev.hryshyn.remanence.core.model.UserId.parseRest(account.userId)
+                }.getOrNull() ?: return@IncomingCapsuleSyncRepository null
+                dev.hryshyn.remanence.core.data.db.IncomingSyncSession(owner, token)
+            },
+        )
     }
 
     /**

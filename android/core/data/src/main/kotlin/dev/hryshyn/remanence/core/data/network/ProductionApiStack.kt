@@ -46,6 +46,10 @@ class ProductionApiStack private constructor(
     val recipientUserLookupRepository: RecipientUserLookupRepository =
         RecipientUserLookupRepository(authenticatedClient, baseUrl)
 
+    /** Account-scoped incoming cursor pages use the same authenticated stack. */
+    val incomingCapsuleRepository: IncomingCapsuleRepository =
+        IncomingCapsuleRepository(authenticatedClient, baseUrl)
+
     companion object {
         fun create(
             baseUrl: ApiBaseUrl,

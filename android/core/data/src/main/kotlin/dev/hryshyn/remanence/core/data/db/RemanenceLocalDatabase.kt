@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         RecognitionFingerprintEntity::class,
         SyncCursorEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 abstract class RemanenceLocalDatabase : RoomDatabase() {
@@ -39,6 +39,8 @@ abstract class RemanenceLocalDatabase : RoomDatabase() {
     abstract fun recognitionFingerprintDao(): RecognitionFingerprintDao
 
     abstract fun syncCursorDao(): SyncCursorDao
+
+    abstract fun incomingPageDao(): IncomingPageDao
 
     companion object {
         const val DATABASE_NAME: String = "remanence-local.db"
@@ -151,6 +153,26 @@ abstract class RemanenceLocalDatabase : RoomDatabase() {
         val MIGRATION_4_5: Migration = object : Migration(4, 5) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE outbox_capsule ADD COLUMN sender_retry_keyset_path TEXT")
+            }
+        }
+
+        /**
+         * v6 (M2-A09) completes the incoming ciphertext-only record with the
+         * server's signed-statement digest and raw publish signature. Legacy
+         * rows receive empty markers and remain unusable until A11's
+         * verification path has a complete response; no cryptographic value
+         * is fabricated during migration.
+         */
+        val MIGRATION_5_6: Migration = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE incoming_capsule " +
+                        "ADD COLUMN signed_statement_sha256 BLOB NOT NULL DEFAULT X''",
+                )
+                db.execSQL(
+                    "ALTER TABLE incoming_capsule " +
+                        "ADD COLUMN publish_signature_bytes BLOB NOT NULL DEFAULT X''",
+                )
             }
         }
     }

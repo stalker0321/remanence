@@ -153,6 +153,38 @@ class RemanenceLocalSchemaTest {
         helper.runMigrationsAndValidate(DB_V5_NAME, 5, true)
     }
 
+    @Test
+    fun migrationFiveToSixAddsIncomingSignatureMaterialWithoutInventingBytes() {
+        helper.createDatabase(DB_MIGRATION_5_6_NAME, 5).use { v5 ->
+            v5.execSQL(
+                "INSERT INTO incoming_capsule (" +
+                    "capsule_id, owner_user_id, sender_user_id, recipient_user_id, " +
+                    "sender_signing_key_bundle_id, recipient_encryption_key_bundle_id, " +
+                    "protocol_version, server_status, ready_at_epoch_ms, " +
+                    "signed_statement_bytes, material_state" +
+                    ") VALUES ('legacy-incoming', 'owner', 'sender', 'recipient', " +
+                    "'sender-key', 'recipient-key', 1, 'READY', 1, x'01', 'DISCOVERED')",
+            )
+        }
+
+        val migrated = helper.runMigrationsAndValidate(
+            DB_MIGRATION_5_6_NAME,
+            6,
+            true,
+            RemanenceLocalDatabase.MIGRATION_5_6,
+        )
+        migrated.query(
+            "SELECT signed_statement_sha256, publish_signature_bytes " +
+                "FROM incoming_capsule WHERE capsule_id = 'legacy-incoming'",
+        ).use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(0, cursor.getBlob(0).size)
+            assertEquals(0, cursor.getBlob(1).size)
+        }
+        assertTrue(migrated.isDatabaseIntegrityOk)
+        migrated.close()
+    }
+
     /**
      * The Room enum type moved from core:data to core:model, but its persisted
      * names did not change. Prove the v5 column remains compatible without a
@@ -529,6 +561,7 @@ class RemanenceLocalSchemaTest {
         const val DB_UNATTRIBUTED_NAME = "remanence-v3to4-unattributed-test.db"
         const val DB_MULTI_ACCOUNT_NAME = "remanence-v3to4-multi-account-test.db"
         const val DB_MIGRATION_4_5_NAME = "remanence-v4to5-migration-test.db"
+        const val DB_MIGRATION_5_6_NAME = "remanence-v5to6-migration-test.db"
 
         /** Material tables that carry the immutable owning account from v4 on. */
         val SCOPED_TABLES =

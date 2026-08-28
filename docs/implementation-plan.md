@@ -293,6 +293,16 @@ and authorization matrix before Android upload work consumes the API.
 | M2-A24 | all automated | Run PostgreSQL, BlobStore, Android, crypto, replay, account-switch, and plaintext-canary verification. | evidence record |
 | M2-A25 | A24,P14 | Run two-device existing-account physical transfer and later offline scan. | signed APK/commit/device checklist |
 
+M2-A09 adds the authenticated incoming cursor-page transport and the
+owner-scoped Room page commit boundary. The client validates the complete
+ciphertext-only response, preserves the server's opaque nullable cursor, and
+commits routed capsule metadata, one recipient envelope, and declared blob
+metadata (initially `DOWNLOADING`) atomically. Exact page replays preserve
+existing local cache state and reject immutable identity, binding, or path
+mismatches; account/session changes and any failed preflight or database write
+leave the page and cursor unchanged. Signature, HPKE, and control-payload
+verification remain later A11 work.
+
 ### M2-A06 bounded recovery notes
 
 The Android stale-recipient recovery writes replacement envelope, statement,

@@ -8,14 +8,17 @@ from io import BytesIO
 from pathlib import Path
 from uuid import UUID, uuid4
 
+import anyio
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import ClientDisconnect
 
 pytest_plugins = ("test_registration_endpoint",)
 
 from remanence.api.capsules import (
     _CACHE_CONTROL_PRIVATE_NO_STORE,
     _OwnedBlobBody,
+    _OwnedBlobStreamingResponse,
     _ciphertext_etag,
     iter_ready_blob_chunks,
 )
@@ -255,6 +258,80 @@ def test_owned_blob_body_closes_reader_and_context() -> None:
     cancelled.close()
     assert cancelled_reader.closed is True
     assert cancelled_context.exited is True
+
+
+def _owned_stream(payload: bytes) -> tuple[_OwnedBlobStreamingResponse, _ScriptedReader, _TrackingCM]:
+    reader = _ScriptedReader([payload, b""])
+    context = _TrackingCM(reader)
+    body = _OwnedBlobBody(context, reader, expected_size=len(payload))
+    response = _OwnedBlobStreamingResponse(
+        body,
+        status_code=200,
+        media_type="application/octet-stream",
+        headers={"Content-Length": str(len(payload))},
+    )
+    return response, reader, context
+
+
+def _run_asgi(response, *, spec_version: str, receive, send) -> BaseException | None:
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": spec_version},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/",
+        "raw_path": b"/",
+        "query_string": b"",
+        "headers": [],
+    }
+    caught: list[BaseException] = []
+
+    async def _main() -> None:
+        try:
+            await response(scope, receive, send)
+        except BaseException as exc:
+            caught.append(exc)
+
+    anyio.run(_main)
+    return caught[0] if caught else None
+
+
+def test_owned_stream_closes_on_asgi_24_send_oserror() -> None:
+    payload = b"photo-ciphertext"
+    response, reader, context = _owned_stream(payload)
+    sent: list[str] = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        sent.append(message["type"])
+        if message["type"] == "http.response.body" and message.get("more_body"):
+            raise OSError(32, "Broken pipe")
+
+    error = _run_asgi(response, spec_version="2.4", receive=receive, send=send)
+    assert isinstance(error, ClientDisconnect)
+    assert "http.response.start" in sent
+    assert "http.response.body" in sent
+    assert reader.closed is True
+    assert context.exited is True
+
+
+def test_owned_stream_closes_on_asgi_23_http_disconnect() -> None:
+    payload = b"photo-ciphertext"
+    response, reader, context = _owned_stream(payload)
+
+    async def receive():
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        if message["type"] == "http.response.body":
+            await anyio.Event().wait()
+
+    _run_asgi(response, spec_version="2.3", receive=receive, send=send)
+    assert reader.closed is True
+    assert context.exited is True
 
 
 def test_auth_precedes_path_and_range_without_transaction() -> None:

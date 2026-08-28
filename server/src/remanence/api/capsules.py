@@ -429,6 +429,32 @@ class _OwnedBlobBody:
         self.close()
 
 
+class _OwnedBlobStreamingResponse(StreamingResponse):
+    """StreamingResponse that always closes the acquired blob reader."""
+
+    def __init__(
+        self,
+        body: _OwnedBlobBody,
+        *,
+        status_code: int = 200,
+        headers: dict[str, str] | None = None,
+        media_type: str | None = None,
+    ) -> None:
+        self._owned_body = body
+        super().__init__(
+            body,
+            status_code=status_code,
+            headers=headers,
+            media_type=media_type,
+        )
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self._owned_body.close()
+
+
 def _response_dto(result: CapsuleDraftResult) -> CapsuleDraftResponse:
     return CapsuleDraftResponse(
         capsule_id=result.capsule_id,
@@ -556,7 +582,7 @@ def download_capsule_blob(
         )
         reader_cm = None
         reader = None
-        response = StreamingResponse(
+        response = _OwnedBlobStreamingResponse(
             stream,
             status_code=200,
             media_type=_OCTET_STREAM,

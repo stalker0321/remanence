@@ -314,6 +314,8 @@ an authoritative verification source.
 
 A failed transaction leaves an unrouteable `DRAFT`. Identical finalize replay returns existing `READY`; different data returns `FINALIZE_CONFLICT`. `RECIPIENT_KEY_STALE` requires re-resolve, re-envelope, statement update, and re-sign, but not photo re-encryption; on Android the capsule key for that re-envelope is recovered only from the local sender-owned wrapped retry material (`security.md` §6.6), never from the recipient envelope or any server-provided value.
 
+Finalize is explicitly exempt from the general JSON `Idempotency-Key` requirement. Its idempotency identity is the authenticated sender, capsule resource, and canonical finalize material; Android sends no `Idempotency-Key`, and the server ignores one if present. An identical `READY` replay returns `200`, while different material returns `FINALIZE_CONFLICT`.
+
 ### `DELETE /v1/capsules/{capsule_id}`
 
 Authenticated sender abort of an owned `DRAFT`, including an expired draft, returns empty `204`. Owned `ABORTED` replay is the same empty `204`; no `Idempotency-Key` is required. Missing or foreign capsules return `CAPSULE_NOT_FOUND`. `READY` cannot be revoked in MVP (`CAPSULE_STATE_INVALID`).

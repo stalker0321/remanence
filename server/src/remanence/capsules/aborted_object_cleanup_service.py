@@ -133,8 +133,8 @@ class AbortedObjectCleanupService:
             inactive = _session_is_inactive(produced)
         except Exception:
             mapped = _error("INTERNAL_ERROR")
-            inactive = False
         if mapped is not None:
+            _safe_close(produced)
             raise mapped
         if not inactive:
             raise _error("INTERNAL_ERROR")

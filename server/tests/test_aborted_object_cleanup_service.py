@@ -236,6 +236,27 @@ def test_factory_non_session_is_not_closed() -> None:
     assert alien.rolled_back is False
 
 
+def test_inactivity_check_raise_closes_session_and_stays_redacted() -> None:
+    class _FailProbeAndClose(_TrackingSession):
+        def in_transaction(self) -> bool:
+            raise RuntimeError("secret-inactive")
+
+        def close(self) -> None:
+            self.close_calls += 1
+            raise RuntimeError("secret-close")
+
+    session = _FailProbeAndClose()
+    service = AbortedObjectCleanupService(lambda: session, None)
+    _assert_error(
+        lambda: service.clean_aborted_objects(limit=1),
+        "INTERNAL_ERROR",
+        secrets=("secret-inactive", "secret-close"),
+    )
+    assert session.close_calls == 1
+    assert session.begin_calls == 0
+    assert session.rollback_calls == 0
+
+
 def test_factory_active_and_nested_sessions_are_left_untouched() -> None:
     active = _TrackingSession()
     active.begin()
@@ -449,6 +470,65 @@ def test_keyset_pages_examine_every_object_once_without_starvation(session_facto
     assert [key for _, _, key in expected] == recorder.deleted
     cursors = [page.next_cursor for page in pages[:-1]]
     assert len({(cursor.capsule_id, cursor.blob_id) for cursor in cursors}) == len(cursors)
+
+
+def test_keyset_crosses_batch_max_and_deletes_every_remaining_object(session_factory):
+    recorder = _RecordingStore()
+    with session_factory() as session:
+        sender, sender_bundle = _seed_user(session, "sender")
+        recipient, recipient_bundle = _seed_user(session, "recipient")
+        capsules = []
+        for _ in range(21):
+            capsule = _add_draft(
+                session,
+                sender=sender,
+                sender_bundle=sender_bundle,
+                recipient=recipient,
+                recipient_bundle=recipient_bundle,
+                with_idempotency=False,
+            )
+            capsule.state = CapsuleState.ABORTED
+            capsules.append(capsule)
+        session.commit()
+        expected = [
+            (blob.capsule_id, blob.id, blob.object_key)
+            for capsule_id in sorted(capsule.id for capsule in capsules)
+            for blob in _blobs(session, capsule_id)
+        ]
+        assert len(expected) == 105
+
+    first = _clean(session_factory, recorder, limit=100)
+    assert first.examined_count == 100
+    assert first.deleted_or_missing_count == 100
+    assert first.failed_count == 0
+    assert first.skipped_count == 0
+    assert first.has_more is True
+    assert first.next_cursor is not None
+    assert isinstance(first.next_cursor.capsule_id, UUID)
+    assert isinstance(first.next_cursor.blob_id, UUID)
+    assert (first.next_cursor.capsule_id, first.next_cursor.blob_id) == expected[99][:2]
+    assert recorder.deleted == [key for _, _, key in expected[:100]]
+
+    second = _clean(session_factory, recorder, limit=100, after_cursor=first.next_cursor)
+    assert second.examined_count == 5
+    assert second.deleted_or_missing_count == 5
+    assert second.failed_count == 0
+    assert second.skipped_count == 0
+    assert second.has_more is False
+    assert second.next_cursor is None
+    assert recorder.deleted == [key for _, _, key in expected]
+    assert len(set(recorder.deleted)) == 105
+
+    again = _clean(session_factory, recorder, limit=100)
+    assert again.examined_count == 100
+    assert again.has_more is True
+    assert again.next_cursor is not None
+    assert again.failed_count == 0
+    assert again.skipped_count == 0
+    assert again.deleted_or_missing_count == 100
+    assert recorder.deleted == [key for _, _, key in expected] + [
+        key for _, _, key in expected[:100]
+    ]
 
 
 def test_failed_key_is_retried_on_the_next_sweep(session_factory, tmp_path: Path):

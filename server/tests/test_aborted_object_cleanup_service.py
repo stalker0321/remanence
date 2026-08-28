@@ -17,9 +17,11 @@ from sqlalchemy.orm import object_session
 
 pytest_plugins = ("test_session_repository_create",)
 
+from remanence.capsules.abort_service import CapsuleAbortService
 from remanence.capsules.aborted_object_cleanup_service import (
     ABORTED_OBJECT_CLEANUP_BATCH_MAX,
     ABORTED_OBJECT_CLEANUP_BATCH_MIN,
+    AbortedObjectCleanupCursor,
     AbortedObjectCleanupError,
     AbortedObjectCleanupResult,
     AbortedObjectCleanupService,
@@ -54,7 +56,7 @@ def _assert_error(call, code: str) -> AbortedObjectCleanupError:
 
 def _forbid_commit_rollback(session, monkeypatch: pytest.MonkeyPatch) -> None:
     def forbidden(*_args: Any, **_kwargs: Any) -> None:
-        raise AssertionError("aborted object cleanup must not commit or rollback")
+        raise AssertionError("caller session must not be committed or rolled back by cleanup")
 
     monkeypatch.setattr(session, "commit", forbidden)
     monkeypatch.setattr(session, "rollback", forbidden)
@@ -116,18 +118,47 @@ def _blobs(session, capsule_id: UUID) -> list[CapsuleBlob]:
     )
 
 
-def _clean(session, store, *, limit: int = ABORTED_OBJECT_CLEANUP_BATCH_MAX):
-    return AbortedObjectCleanupService(session, store).clean_aborted_objects(limit=limit)
+def _clean(session_factory, store, *, limit: int = ABORTED_OBJECT_CLEANUP_BATCH_MAX, after_cursor=None):
+    return AbortedObjectCleanupService(session_factory, store).clean_aborted_objects(
+        limit=limit, after_cursor=after_cursor
+    )
 
 
-def test_invalid_limit_fail_closed_without_database() -> None:
-    service = AbortedObjectCleanupService(None, None)
+def _sweep(session_factory, store, *, limit: int) -> list[AbortedObjectCleanupResult]:
+    pages: list[AbortedObjectCleanupResult] = []
+    cursor = None
+    while True:
+        page = _clean(session_factory, store, limit=limit, after_cursor=cursor)
+        pages.append(page)
+        if page.has_more is False:
+            assert page.next_cursor is None
+            return pages
+        assert page.next_cursor is not None
+        cursor = page.next_cursor
+
+
+def test_invalid_limit_and_cursor_fail_closed_without_database() -> None:
+    def boom():
+        raise AssertionError("invalid inputs must not open a session")
+
+    service = AbortedObjectCleanupService(boom, None)
     for limit in (0, 101, -1, True, False, 1.0, "1"):
         _assert_error(lambda limit=limit: service.clean_aborted_objects(limit=limit), "VALIDATION_FAILED")
+    _assert_error(
+        lambda: service.clean_aborted_objects(limit=1, after_cursor="not-a-cursor"),
+        "VALIDATION_FAILED",
+    )
+    _assert_error(
+        lambda: service.clean_aborted_objects(
+            limit=1,
+            after_cursor=AbortedObjectCleanupCursor(capsule_id="x", blob_id=uuid4()),  # type: ignore[arg-type]
+        ),
+        "VALIDATION_FAILED",
+    )
     assert ABORTED_OBJECT_CLEANUP_BATCH_MIN == 1
     assert ABORTED_OBJECT_CLEANUP_BATCH_MAX == 100
     parameters = inspect.signature(AbortedObjectCleanupService.__init__).parameters
-    assert set(parameters) == {"self", "session", "blob_store"}
+    assert set(parameters) == {"self", "session_factory", "blob_store"}
     import remanence.capsules.aborted_object_cleanup_service as cleanup_module
 
     source = inspect.getsource(cleanup_module)
@@ -135,10 +166,48 @@ def test_invalid_limit_fail_closed_without_database() -> None:
     assert "CiphertextStager" not in source
     assert "rglob" not in source
     assert "listdir" not in source
-    assert "list_dir" not in source
+    assert "offset(" not in source
 
 
-def test_aborted_declared_and_stored_keys_are_deleted_and_rows_kept(session_factory, tmp_path: Path, monkeypatch):
+def test_uncommitted_abort_is_invisible_until_commit(session_factory, tmp_path: Path, monkeypatch):
+    store = LocalFileBlobStore(tmp_path / "blobs")
+    recorder = _RecordingStore(store)
+    with session_factory() as writer:
+        sender, sender_bundle = _seed_user(writer, "sender")
+        recipient, recipient_bundle = _seed_user(writer, "recipient")
+        capsule = _add_draft(
+            writer,
+            sender=sender,
+            sender_bundle=sender_bundle,
+            recipient=recipient,
+            recipient_bundle=recipient_bundle,
+        )
+        blob = _blobs(writer, capsule.id)[0]
+        blob.state = CapsuleBlobState.STORED
+        _put(store, blob, b"uncommitted")
+        writer.commit()
+        capsule.state = CapsuleState.ABORTED
+        writer.flush()
+        _forbid_commit_rollback(writer, monkeypatch)
+        unseen = _clean(session_factory, recorder, limit=10)
+        assert unseen.examined_count == 0
+        assert recorder.deleted == []
+        assert _exists(store, blob.object_key)
+        monkeypatch.undo()
+        writer.rollback()
+        assert writer.get(Capsule, capsule.id).state is CapsuleState.DRAFT
+        assert _exists(store, blob.object_key)
+        still_unseen = _clean(session_factory, recorder, limit=10)
+        assert still_unseen.examined_count == 0
+        assert _exists(store, blob.object_key)
+        writer.get(Capsule, capsule.id).state = CapsuleState.ABORTED
+        writer.commit()
+        seen = _clean(session_factory, recorder, limit=10)
+        assert seen.deleted_or_missing_count == 5
+        assert not _exists(store, blob.object_key)
+
+
+def test_aborted_declared_and_stored_keys_are_deleted_and_rows_kept(session_factory, tmp_path: Path):
     store = LocalFileBlobStore(tmp_path / "blobs")
     recorder = _RecordingStore(store)
     with session_factory() as session:
@@ -161,14 +230,14 @@ def test_aborted_declared_and_stored_keys_are_deleted_and_rows_kept(session_fact
         aborted_blobs = _blob_snapshot(session, aborted.id)
         live_blob_snap = _blob_snapshot(session, live.id)
         idempotency = session.scalar(select(func.count()).select_from(CapsuleIdempotencyRecord))
-        _forbid_commit_rollback(session, monkeypatch)
-        result = _clean(session, recorder, limit=10)
-        monkeypatch.undo()
+        result = _clean(session_factory, recorder, limit=10)
         assert isinstance(result, AbortedObjectCleanupResult)
         assert result.examined_count == 5
         assert result.deleted_or_missing_count == 5
         assert result.failed_count == 0
         assert result.skipped_count == 0
+        assert result.has_more is False
+        assert result.next_cursor is None
         assert repr(result) == "AbortedObjectCleanupResult(<redacted>)"
         assert stored.object_key in recorder.deleted
         assert declared.object_key in recorder.deleted
@@ -182,13 +251,63 @@ def test_aborted_declared_and_stored_keys_are_deleted_and_rows_kept(session_fact
         assert session.get(CapsuleBlob, stored.id).state is CapsuleBlobState.STORED
         assert session.get(CapsuleBlob, declared.id).state is CapsuleBlobState.DECLARED
         assert session.scalar(select(func.count()).select_from(CapsuleIdempotencyRecord)) == idempotency
-        session.rollback()
-        assert _capsule_shape(session.get(Capsule, aborted.id)) == aborted_shape
-        assert _blob_snapshot(session, aborted.id) == aborted_blobs
-        assert not _exists(store, stored.object_key)
 
 
-def test_missing_object_counts_as_success_and_failures_are_redacted_then_retried(
+def test_keyset_pages_examine_every_object_once_without_starvation(session_factory):
+    recorder = _RecordingStore()
+    with session_factory() as session:
+        sender, sender_bundle = _seed_user(session, "sender")
+        recipient, recipient_bundle = _seed_user(session, "recipient")
+        first = _add_draft(session, sender=sender, sender_bundle=sender_bundle, recipient=recipient, recipient_bundle=recipient_bundle)
+        second = _add_draft(session, sender=sender, sender_bundle=sender_bundle, recipient=recipient, recipient_bundle=recipient_bundle)
+        first.state = CapsuleState.ABORTED
+        second.state = CapsuleState.ABORTED
+        session.commit()
+        expected = [
+            (blob.capsule_id, blob.id, blob.object_key)
+            for capsule_id in sorted([first.id, second.id])
+            for blob in _blobs(session, capsule_id)
+        ]
+    pages = _sweep(session_factory, recorder, limit=3)
+    assert pages[0].has_more is True
+    assert pages[0].next_cursor is not None
+    assert pages[-1].has_more is False
+    assert pages[-1].next_cursor is None
+    assert sum(page.examined_count for page in pages) == 10
+    assert sum(page.deleted_or_missing_count for page in pages) == 10
+    assert [key for _, _, key in expected] == recorder.deleted
+    cursors = [page.next_cursor for page in pages[:-1]]
+    assert len({(cursor.capsule_id, cursor.blob_id) for cursor in cursors}) == len(cursors)
+
+
+def test_failed_key_is_retried_on_the_next_sweep(session_factory, tmp_path: Path):
+    store = LocalFileBlobStore(tmp_path / "blobs")
+    recorder = _RecordingStore(store)
+    with session_factory() as session:
+        sender, sender_bundle = _seed_user(session, "sender")
+        recipient, recipient_bundle = _seed_user(session, "recipient")
+        aborted = _add_draft(session, sender=sender, sender_bundle=sender_bundle, recipient=recipient, recipient_bundle=recipient_bundle)
+        aborted.state = CapsuleState.ABORTED
+        blobs = _blobs(session, aborted.id)
+        first = blobs[0]
+        first.state = CapsuleBlobState.STORED
+        _put(store, first, b"retry-me")
+        session.commit()
+        first_key = first.object_key
+    recorder.fail_keys.add(first_key)
+    pages = _sweep(session_factory, recorder, limit=2)
+    assert sum(page.failed_count for page in pages) == 1
+    assert sum(page.examined_count for page in pages) == 5
+    assert pages[-1].has_more is False
+    assert _exists(store, first_key)
+    recorder.fail_keys.clear()
+    retry_pages = _sweep(session_factory, recorder, limit=2)
+    assert sum(page.examined_count for page in retry_pages) == 5
+    assert sum(page.failed_count for page in retry_pages) == 0
+    assert not _exists(store, first_key)
+
+
+def test_missing_object_counts_as_success_and_failures_are_redacted(
     session_factory, tmp_path: Path
 ):
     store = LocalFileBlobStore(tmp_path / "blobs")
@@ -205,26 +324,20 @@ def test_missing_object_counts_as_success_and_failures_are_redacted_then_retried
         _put(store, first, b"one")
         _put(store, second, b"two")
         session.commit()
+        first_snap = _blob_snapshot(session, aborted.id)
         recorder.missing_keys.add(third.object_key)
         recorder.fail_keys.add(first.object_key)
         secret = first.object_key
-        first_snap = _blob_snapshot(session, aborted.id)
-        result = _clean(session, recorder, limit=10)
+        result = _clean(session_factory, recorder, limit=10)
         assert result.examined_count == 5
         assert result.deleted_or_missing_count == 4
         assert result.failed_count == 1
-        assert result.skipped_count == 0
+        assert result.has_more is False
         assert _exists(store, first.object_key)
         assert not _exists(store, second.object_key)
         assert secret not in repr(result)
         assert "secret-store" not in repr(result)
         assert _blob_snapshot(session, aborted.id) == first_snap
-        recorder.fail_keys.clear()
-        retry = _clean(session, recorder, limit=10)
-        assert retry.deleted_or_missing_count == 5
-        assert retry.failed_count == 0
-        assert not _exists(store, first.object_key)
-        assert session.get(CapsuleBlob, first.id).object_key == first.object_key
 
 
 def test_invalid_key_and_unexpected_errors_do_not_leak(session_factory):
@@ -238,7 +351,7 @@ def test_invalid_key_and_unexpected_errors_do_not_leak(session_factory):
         recorder.invalid_keys.add(blobs[0].object_key)
         recorder.unexpected_keys.add(blobs[1].object_key)
         session.commit()
-        result = _clean(session, recorder, limit=10)
+        result = _clean(session_factory, recorder, limit=10)
         assert result.failed_count == 2
         assert result.deleted_or_missing_count == 3
         leaked = repr(result) + str(result)
@@ -247,79 +360,55 @@ def test_invalid_key_and_unexpected_errors_do_not_leak(session_factory):
         assert "secret-boom" not in leaked
 
 
-def test_cleanup_limit_is_deterministic(session_factory):
-    recorder = _RecordingStore()
-    with session_factory() as session:
-        sender, sender_bundle = _seed_user(session, "sender")
-        recipient, recipient_bundle = _seed_user(session, "recipient")
-        aborted = _add_draft(session, sender=sender, sender_bundle=sender_bundle, recipient=recipient, recipient_bundle=recipient_bundle)
-        aborted.state = CapsuleState.ABORTED
-        session.commit()
-        ordered = [blob.id for blob in _blobs(session, aborted.id)]
-        result = _clean(session, recorder, limit=2)
-        assert result.examined_count == 2
-        assert result.deleted_or_missing_count == 2
-        expected = [
-            session.get(CapsuleBlob, ordered[0]).object_key,
-            session.get(CapsuleBlob, ordered[1]).object_key,
-        ]
-        assert recorder.deleted == expected
-
-
-def test_attached_stale_identity_map_skips_non_aborted(session_factory, tmp_path: Path, monkeypatch):
+def test_attached_stale_identity_map_skips_after_committed_unabort(
+    session_factory, tmp_path: Path, monkeypatch
+):
     store = LocalFileBlobStore(tmp_path / "blobs")
     recorder = _RecordingStore(store)
     with session_factory() as setup:
         sender, sender_bundle = _seed_user(setup, "sender")
         recipient, recipient_bundle = _seed_user(setup, "recipient")
         aborted = _add_draft(setup, sender=sender, sender_bundle=sender_bundle, recipient=recipient, recipient_bundle=recipient_bundle)
-        draft = _add_draft(setup, sender=sender, sender_bundle=sender_bundle, recipient=recipient, recipient_bundle=recipient_bundle)
+        other = _add_draft(setup, sender=sender, sender_bundle=sender_bundle, recipient=recipient, recipient_bundle=recipient_bundle)
         aborted.state = CapsuleState.ABORTED
+        other.state = CapsuleState.ABORTED
         aborted_blob = _blobs(setup, aborted.id)[0]
-        draft_blob = _blobs(setup, draft.id)[0]
+        other_blob = _blobs(setup, other.id)[0]
         aborted_blob.state = CapsuleBlobState.STORED
-        draft_blob.state = CapsuleBlobState.STORED
+        other_blob.state = CapsuleBlobState.STORED
         _put(store, aborted_blob, b"aborted-body")
-        _put(store, draft_blob, b"draft-body")
+        _put(store, other_blob, b"other-body")
         setup.commit()
         aborted_id = aborted.id
-        draft_id = draft.id
         aborted_blob_id = aborted_blob.id
-        draft_blob_id = draft_blob.id
+        other_id = other.id
+        other_blob_id = other_blob.id
         aborted_key = aborted_blob.object_key
-        draft_key = draft_blob.object_key
+        other_key = other_blob.object_key
 
-    gc_session = session_factory()
-    other_session = session_factory()
-    try:
-        attached = gc_session.get(Capsule, aborted_id)
-        attached_blob = gc_session.get(CapsuleBlob, aborted_blob_id)
-        assert gc_session.autoflush is False
-        assert object_session(attached) is gc_session
+    original = AbortedObjectCleanupService._candidate_blob_ids
+
+    def load_then_unabort(self, session, *, limit, after_cursor):
+        attached = session.get(Capsule, aborted_id)
+        assert object_session(attached) is session
         assert attached.state is CapsuleState.ABORTED
-        discovered = AbortedObjectCleanupService(gc_session, recorder)._candidate_blob_ids(limit=10)
-        assert (aborted_id, aborted_blob_id) in discovered
-        monkeypatch.setattr(
-            AbortedObjectCleanupService,
-            "_candidate_blob_ids",
-            lambda self, *, limit: [(aborted_id, aborted_blob_id), (draft_id, draft_blob_id)],
-        )
-        other = other_session.get(Capsule, aborted_id)
-        other.state = CapsuleState.DRAFT
-        other_session.commit()
+        discovered = original(self, session, limit=limit, after_cursor=after_cursor)
+        with session_factory() as writer:
+            row = writer.get(Capsule, aborted_id)
+            row.state = CapsuleState.DRAFT
+            writer.commit()
         assert attached.state is CapsuleState.ABORTED
-        result = AbortedObjectCleanupService(gc_session, recorder).clean_aborted_objects(limit=10)
-        assert result.examined_count == 2
-        assert result.skipped_count == 2
-        assert result.deleted_or_missing_count == 0
-        assert attached.state is CapsuleState.DRAFT
-        assert attached_blob.object_key == aborted_key
-        assert _exists(store, aborted_key)
-        assert _exists(store, draft_key)
-        gc_session.commit()
-    finally:
-        gc_session.close()
-        other_session.close()
+        return discovered
+
+    monkeypatch.setattr(AbortedObjectCleanupService, "_candidate_blob_ids", load_then_unabort)
+    result = _clean(session_factory, recorder, limit=10)
+    assert result.examined_count == 10
+    assert result.skipped_count == 5
+    assert result.deleted_or_missing_count == 5
+    assert aborted_key not in recorder.deleted
+    assert other_key in recorder.deleted
+    assert _exists(store, aborted_key)
+    assert not _exists(store, other_key)
 
 
 def test_two_concurrent_cleaners_are_idempotent(session_factory, tmp_path: Path):
@@ -339,12 +428,9 @@ def test_two_concurrent_cleaners_are_idempotent(session_factory, tmp_path: Path)
     barrier = Barrier(2)
 
     def worker():
-        with session_factory() as session:
-            session.execute(text("SET LOCAL lock_timeout = '5s'"))
-            barrier.wait(timeout=10)
-            result = _clean(session, store, limit=10)
-            session.commit()
-            return (result.deleted_or_missing_count, result.failed_count)
+        barrier.wait(timeout=10)
+        result = _clean(session_factory, store, limit=10)
+        return (result.deleted_or_missing_count, result.failed_count)
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         outcomes = [future.result(timeout=20) for future in (executor.submit(worker), executor.submit(worker))]
@@ -357,35 +443,36 @@ def test_two_concurrent_cleaners_are_idempotent(session_factory, tmp_path: Path)
     assert not _exists(store, key)
 
 
-def test_cleanup_versus_finalize_does_not_delete_draft_or_ready_objects(session_factory, tmp_path: Path):
+def test_cleanup_versus_stale_finalize_stays_aborted(session_factory, tmp_path: Path):
     from tink import tink_config
 
     from test_capsule_finalize_service import _ready_world
 
     tink_config.register()
-    recorder = _RecordingStore()
     with session_factory() as session:
         world = _ready_world(session, tmp_path)
         capsule_id = world["capsule"].id
         sender_id = world["sender"].id
-        keys = [blob.object_key for blob in _blobs(session, capsule_id)]
+        CapsuleAbortService(session).abort(
+            authenticated_sender_user_id=sender_id,
+            capsule_id=capsule_id,
+            now=_NOW,
+        )
         session.commit()
+        keys = [blob.object_key for blob in _blobs(session, capsule_id)]
+    recorder = _RecordingStore(world["store"])
     barrier = Barrier(2)
 
     def cleanup_worker():
-        with session_factory() as session:
-            session.execute(text("SET LOCAL lock_timeout = '5s'"))
-            barrier.wait(timeout=10)
-            result = _clean(session, recorder, limit=10)
-            session.commit()
-            return result.examined_count, result.deleted_or_missing_count
+        barrier.wait(timeout=10)
+        return _clean(session_factory, recorder, limit=10)
 
     def finalize_worker():
         with session_factory() as session:
             session.execute(text("SET LOCAL lock_timeout = '5s'"))
             barrier.wait(timeout=10)
             try:
-                result = CapsuleFinalizeService(session, world["store"]).finalize(
+                CapsuleFinalizeService(session, world["store"]).finalize(
                     authenticated_sender_user_id=sender_id,
                     capsule_id=capsule_id,
                     statement=world["statement"],
@@ -395,7 +482,7 @@ def test_cleanup_versus_finalize_does_not_delete_draft_or_ready_objects(session_
                     now=_NOW,
                 )
                 session.commit()
-                return ("ready", result.is_replay)
+                return ("ready", True)
             except CapsuleFinalizeError as error:
                 session.rollback()
                 return ("error", error.code)
@@ -403,17 +490,14 @@ def test_cleanup_versus_finalize_does_not_delete_draft_or_ready_objects(session_
     with ThreadPoolExecutor(max_workers=2) as executor:
         cleanup_future = executor.submit(cleanup_worker)
         finalize_future = executor.submit(finalize_worker)
-        examined, deleted = cleanup_future.result(timeout=20)
+        cleanup_result = cleanup_future.result(timeout=20)
         finalize_outcome = finalize_future.result(timeout=20)
 
     with session_factory() as session:
         capsule = session.get(Capsule, capsule_id)
-        assert capsule.state in {CapsuleState.DRAFT, CapsuleState.READY}
-        assert capsule.state is not CapsuleState.ABORTED
-        assert examined == 0
-        assert deleted == 0
-        assert recorder.deleted == []
-        if finalize_outcome[0] == "ready":
-            assert capsule.state is CapsuleState.READY
-        for key in keys:
-            assert _exists(world["store"], key)
+        assert capsule.state is CapsuleState.ABORTED
+        assert finalize_outcome == ("error", "CAPSULE_STATE_INVALID")
+        assert cleanup_result.examined_count == 5
+        assert cleanup_result.skipped_count == 0
+        assert cleanup_result.deleted_or_missing_count == 5
+        assert set(recorder.deleted) == set(keys)

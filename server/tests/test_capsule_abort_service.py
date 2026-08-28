@@ -12,7 +12,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import func, select, text
-from sqlalchemy.orm import make_transient
+from sqlalchemy.orm import object_session
 
 pytest_plugins = ("test_session_repository_create",)
 
@@ -426,13 +426,25 @@ def test_abort_does_not_use_caller_orm_capsule_or_blob_store(session_factory):
         )
         session.commit()
         stale = session.get(Capsule, capsule.id)
+        assert session.autoflush is False
+        assert object_session(stale) is session
         stale.state = CapsuleState.READY
-        make_transient(stale)
+        assert stale in session.dirty
+        assert session.is_modified(stale)
+        assert stale.ready_at is None
+        assert stale.signed_statement is None
         result = _abort(session, sender_id=sender.id, capsule_id=capsule.id)
-        session.commit()
         assert result.is_replay is False
-        assert session.get(Capsule, capsule.id).state is CapsuleState.ABORTED
-        assert stale.state is CapsuleState.READY
+        assert result.state is CapsuleState.ABORTED
+        assert object_session(stale) is session
+        assert stale.state is CapsuleState.ABORTED
+        assert stale.ready_at is None
+        assert stale.signed_statement is None
+        session.commit()
+        persisted = session.get(Capsule, capsule.id)
+        assert persisted is stale
+        assert persisted.state is CapsuleState.ABORTED
+        assert persisted.ready_at is None
         service = CapsuleAbortService(session)
         assert not hasattr(service, "_blob_store")
         import remanence.capsules.abort_service as abort_module

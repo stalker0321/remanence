@@ -42,6 +42,9 @@ sealed interface CapsuleUploadOutcome {
     /** The scoped capsule row no longer exists. */
     data object Missing : CapsuleUploadOutcome
 
+    /** A06 owns recovery; this marker intentionally parks unique work. */
+    data object RecipientKeyStale : CapsuleUploadOutcome
+
     data class Retryable(val errorCode: String) : CapsuleUploadOutcome
 
     data class TerminalFailure(val errorCode: String) : CapsuleUploadOutcome
@@ -55,7 +58,8 @@ sealed interface CapsuleUploadOutcome {
  * network call and durable transition. A04 deliberately replays every
  * declared blob on a retry; server/local STORED reconciliation and skipping
  * belong to A05. Ciphertext is read from the staged paths and is never
- * regenerated.
+ * regenerated. A05 startup discovery must exclude RETRYABLE_FAILURE rows
+ * marked RECIPIENT_KEY_STALE until A06 owns their recovery.
  */
 class CapsuleUploadOrchestrator(
     private val capsuleDao: OutboxCapsuleDao,
@@ -90,10 +94,14 @@ class CapsuleUploadOrchestrator(
             OutboxCapsuleState.PREPARING ->
                 return markTerminal(owner, capsuleId, "CAPSULE_STATE_INVALID")
             OutboxCapsuleState.ENCRYPTED,
-            OutboxCapsuleState.RETRYABLE_FAILURE,
             OutboxCapsuleState.UPLOADING,
             OutboxCapsuleState.FINALIZING,
             -> Unit
+            OutboxCapsuleState.RETRYABLE_FAILURE -> {
+                if (capsule.lastErrorCode == RECIPIENT_KEY_STALE) {
+                    return CapsuleUploadOutcome.RecipientKeyStale
+                }
+            }
         }
 
         val prepared = try {
@@ -377,8 +385,9 @@ class CapsuleUploadOrchestrator(
             CapsuleDraftFailure.NETWORK,
             CapsuleDraftFailure.AUTH_INVALID,
             CapsuleDraftFailure.INTERNAL_UNAVAILABLE,
-            CapsuleDraftFailure.RECIPIENT_KEY_STALE,
             -> return markRetryable(owner, capsuleId, failure.reason.name)
+            CapsuleDraftFailure.RECIPIENT_KEY_STALE ->
+                return markRecipientKeyStale(owner, capsuleId)
             CapsuleDraftFailure.VALIDATION_FAILED,
             CapsuleDraftFailure.IDEMPOTENCY_CONFLICT,
             CapsuleDraftFailure.RECIPIENT_NOT_CONFIRMED,
@@ -430,8 +439,9 @@ class CapsuleUploadOrchestrator(
             CapsuleFinalizeFailure.NETWORK,
             CapsuleFinalizeFailure.AUTH_INVALID,
             CapsuleFinalizeFailure.INTERNAL_UNAVAILABLE,
-            CapsuleFinalizeFailure.RECIPIENT_KEY_STALE,
             -> markRetryable(owner, capsuleId, failure.reason.name)
+            CapsuleFinalizeFailure.RECIPIENT_KEY_STALE ->
+                markRecipientKeyStale(owner, capsuleId)
             CapsuleFinalizeFailure.VALIDATION_FAILED,
             CapsuleFinalizeFailure.CAPSULE_NOT_FOUND,
             CapsuleFinalizeFailure.CAPSULE_STATE_INVALID,
@@ -460,6 +470,29 @@ class CapsuleUploadOrchestrator(
         return try {
             if (capsuleDao.markRetryableFailureForOwner(capsuleId.toRestString(), owner.toRestString(), code) == 1) {
                 CapsuleUploadOutcome.Retryable(code)
+            } else {
+                CapsuleUploadOutcome.Retryable("INTERNAL_ERROR")
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            CapsuleUploadOutcome.Retryable("INTERNAL_UNAVAILABLE")
+        }
+    }
+
+    private suspend fun markRecipientKeyStale(
+        owner: UserId,
+        capsuleId: CapsuleId,
+    ): CapsuleUploadOutcome {
+        if (!accountMatches(owner)) return CapsuleUploadOutcome.AccountMismatch
+        return try {
+            if (capsuleDao.markRetryableFailureForOwner(
+                    capsuleId.toRestString(),
+                    owner.toRestString(),
+                    RECIPIENT_KEY_STALE,
+                ) == 1
+            ) {
+                CapsuleUploadOutcome.RecipientKeyStale
             } else {
                 CapsuleUploadOutcome.Retryable("INTERNAL_ERROR")
             }
@@ -600,6 +633,7 @@ class CapsuleUploadOrchestrator(
 
     private companion object {
         const val TERMINAL_CLEANUP_RETRY = "RETRY_MATERIAL_CLEANUP"
+        const val RECIPIENT_KEY_STALE = "RECIPIENT_KEY_STALE"
         const val SHA256_BYTES = 32
     }
 }

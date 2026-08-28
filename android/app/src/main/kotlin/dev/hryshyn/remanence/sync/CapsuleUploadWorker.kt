@@ -23,17 +23,27 @@ class CapsuleUploadWorker(
         val owner = parseUser(inputData.getString(INPUT_OWNER_USER_ID)) ?: return Result.failure()
         val capsule = parseCapsule(inputData.getString(INPUT_CAPSULE_ID)) ?: return Result.failure()
         val application = applicationContext as? RemanenceApplication ?: return Result.failure()
-        return when (application.container.capsuleUploadOrchestrator.run(owner, capsule)) {
-            CapsuleUploadOutcome.Succeeded,
-            CapsuleUploadOutcome.Missing,
-            -> Result.success()
-            CapsuleUploadOutcome.AccountMismatch -> Result.failure()
-            is CapsuleUploadOutcome.Retryable -> Result.retry()
-            is CapsuleUploadOutcome.TerminalFailure -> Result.failure()
-        }
+        return mapOutcome(application.container.capsuleUploadOrchestrator.run(owner, capsule))
     }
 
     companion object {
+        /**
+         * A stale recipient key is a deliberate A06 parking result, not a
+         * transient scheduler retry. A05 startup discovery must likewise
+         * exclude stale-coded RETRYABLE_FAILURE rows until A06 owns them.
+         */
+        internal fun mapOutcome(outcome: CapsuleUploadOutcome): androidx.work.ListenableWorker.Result =
+            when (outcome) {
+                CapsuleUploadOutcome.Succeeded,
+                CapsuleUploadOutcome.Missing,
+                -> androidx.work.ListenableWorker.Result.success()
+                CapsuleUploadOutcome.AccountMismatch,
+                CapsuleUploadOutcome.RecipientKeyStale,
+                -> androidx.work.ListenableWorker.Result.failure()
+                is CapsuleUploadOutcome.Retryable -> androidx.work.ListenableWorker.Result.retry()
+                is CapsuleUploadOutcome.TerminalFailure -> androidx.work.ListenableWorker.Result.failure()
+            }
+
         const val INPUT_OWNER_USER_ID = "owner_user_id"
         const val INPUT_CAPSULE_ID = "capsule_id"
 

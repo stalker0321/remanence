@@ -401,8 +401,10 @@ class CapsuleUploadOrchestratorTest {
     fun staleRecipientKeyRemainsRetryableAndRetainsRetryMaterial() = runBlocking {
         seed(OutboxCapsuleState.ENCRYPTED, withRetryMaterial = true)
         var cleanupCalls = 0
+        var draftCalls = 0
         val orchestrator = orchestrator {
             createDraft = { _, _ ->
+                draftCalls += 1
                 CapsuleDraftResult.Failure(CapsuleDraftFailure.RECIPIENT_KEY_STALE, 409)
             }
             cleanupRetryMaterial = { _, _ ->
@@ -412,13 +414,49 @@ class CapsuleUploadOrchestratorTest {
         }
 
         assertEquals(
-            CapsuleUploadOutcome.Retryable(CapsuleDraftFailure.RECIPIENT_KEY_STALE.name),
+            CapsuleUploadOutcome.RecipientKeyStale,
             orchestrator.run(OWNER_TYPED, CAPSULE_TYPED),
         )
         assertEquals(OutboxCapsuleState.RETRYABLE_FAILURE, capsuleRow().state)
+        assertEquals(CapsuleDraftFailure.RECIPIENT_KEY_STALE.name, capsuleRow().lastErrorCode)
         assertEquals(0, cleanupCalls)
         assertTrue(capsuleRow().senderRetryKeysetPath != null)
         assertTrue(retryStore.expectedPath(OWNER_TYPED, CAPSULE_TYPED).exists())
+
+        assertEquals(CapsuleUploadOutcome.RecipientKeyStale, orchestrator.run(OWNER_TYPED, CAPSULE_TYPED))
+        assertEquals(1, draftCalls)
+        assertEquals(0, cleanupCalls)
+    }
+
+    @Test
+    fun finalizeStaleRecipientKeyIsParkedWithoutCleanupOrFurtherCalls() = runBlocking {
+        seed(OutboxCapsuleState.ENCRYPTED, withRetryMaterial = true)
+        var finalizeCalls = 0
+        var cleanupCalls = 0
+        val orchestrator = orchestrator {
+            createDraft = { request, _ -> draftSuccess(request) }
+            uploadBlob = { _, _ -> CapsuleBlobUploadResult.Success(204) }
+            finalizeCapsule = { _, _ ->
+                finalizeCalls += 1
+                CapsuleFinalizeResult.Failure(CapsuleFinalizeFailure.RECIPIENT_KEY_STALE, 409)
+            }
+            cleanupRetryMaterial = { _, _ ->
+                cleanupCalls += 1
+                error("stale recipient key must not clean retry material")
+            }
+        }
+
+        assertEquals(CapsuleUploadOutcome.RecipientKeyStale, orchestrator.run(OWNER_TYPED, CAPSULE_TYPED))
+        assertEquals(OutboxCapsuleState.RETRYABLE_FAILURE, capsuleRow().state)
+        assertEquals(CapsuleFinalizeFailure.RECIPIENT_KEY_STALE.name, capsuleRow().lastErrorCode)
+        assertEquals(1, finalizeCalls)
+        assertEquals(0, cleanupCalls)
+        assertTrue(capsuleRow().senderRetryKeysetPath != null)
+        assertTrue(retryStore.expectedPath(OWNER_TYPED, CAPSULE_TYPED).exists())
+
+        assertEquals(CapsuleUploadOutcome.RecipientKeyStale, orchestrator.run(OWNER_TYPED, CAPSULE_TYPED))
+        assertEquals(1, finalizeCalls)
+        assertEquals(0, cleanupCalls)
     }
 
     @Test

@@ -20,20 +20,31 @@ import dev.hryshyn.remanence.core.model.BlobId
 import dev.hryshyn.remanence.core.model.CapsuleId
 
 /** The already encrypted bytes and their transport binding for one blob. */
-data class CapsuleBlobUploadRequest(
+class CapsuleBlobUploadRequest(
     val capsuleId: CapsuleId,
     val blobId: BlobId,
-    val ciphertext: ByteArray,
-    val ciphertextSha256: ByteArray,
+    ciphertext: ByteArray,
+    ciphertextSha256: ByteArray,
     val idempotencyKey: UUID,
 ) {
+    private val ciphertextSnapshot = ciphertext.copyOf()
+    private val ciphertextSha256Snapshot = ciphertextSha256.copyOf()
+
+    /** Returns a copy so callers cannot mutate the bytes used by a later upload. */
+    val ciphertext: ByteArray
+        get() = ciphertextSnapshot.copyOf()
+
+    /** Returns a copy so callers cannot mutate the hash bound to the ciphertext. */
+    val ciphertextSha256: ByteArray
+        get() = ciphertextSha256Snapshot.copyOf()
+
     init {
-        require(ciphertext.isNotEmpty()) { "ciphertext must not be empty" }
-        require(ciphertextSha256.size == SHA256_BYTES) { "ciphertext hash must be SHA-256" }
+        require(ciphertextSnapshot.isNotEmpty()) { "ciphertext must not be empty" }
+        require(ciphertextSha256Snapshot.size == SHA256_BYTES) { "ciphertext hash must be SHA-256" }
         require(
             MessageDigest.isEqual(
-                MessageDigest.getInstance("SHA-256").digest(ciphertext),
-                ciphertextSha256,
+                MessageDigest.getInstance("SHA-256").digest(ciphertextSnapshot),
+                ciphertextSha256Snapshot,
             ),
         ) { "ciphertext hash does not match ciphertext" }
     }
@@ -92,16 +103,18 @@ class CapsuleBlobUploadRepository internal constructor(
         request: CapsuleBlobUploadRequest,
         accessToken: String,
     ): CapsuleBlobUploadResult {
+        val ciphertext = request.ciphertext
+        val ciphertextSha256 = request.ciphertextSha256
         val hashHeader = Base64.getUrlEncoder()
             .withoutPadding()
-            .encodeToString(request.ciphertextSha256)
-        val requestBody = request.ciphertext.toRequestBody(OCTET_STREAM_MEDIA_TYPE.toMediaTypeOrNull())
+            .encodeToString(ciphertextSha256)
+        val requestBody = ciphertext.toRequestBody(OCTET_STREAM_MEDIA_TYPE.toMediaTypeOrNull())
         val httpRequest = Request.Builder()
             .url(baseUrl.resolve("v1/capsules/${request.capsuleId.toRestString()}/blobs/${request.blobId.toRestString()}"))
             .header("Accept", JSON_MEDIA_TYPE)
             .header("Authorization", BEARER_PREFIX + accessToken)
             .header("Content-Type", OCTET_STREAM_MEDIA_TYPE)
-            .header("Content-Length", request.ciphertext.size.toString())
+            .header("Content-Length", ciphertext.size.toString())
             .header("X-Remanence-Ciphertext-SHA256", hashHeader)
             .header("Idempotency-Key", request.idempotencyKey.toString())
             .put(requestBody)
@@ -195,7 +208,6 @@ class CapsuleBlobUploadRepository internal constructor(
         private const val BEARER_PREFIX = "Bearer "
         private const val JSON_MEDIA_TYPE = "application/json"
         private const val OCTET_STREAM_MEDIA_TYPE = "application/octet-stream"
-        private const val PROBLEM_MEDIA_TYPE = "application/problem+json"
         private const val HTTP_NO_CONTENT = 204
         private const val MAX_RESPONSE_BYTES = 64 * 1024L
 

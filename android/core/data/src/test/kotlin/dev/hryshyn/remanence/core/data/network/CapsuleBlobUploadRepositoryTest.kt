@@ -172,6 +172,36 @@ class CapsuleBlobUploadRepositoryTest {
         }
     }
 
+    @Test
+    fun uploadUsesFrozenCiphertextAndHashAfterCallerMutatesInputsAndGetters() = runTest {
+        withServer { server ->
+            val originalCiphertext = "frozen-opaque-ciphertext".toByteArray()
+            val originalSha256 = sha256(originalCiphertext)
+            val expectedCiphertext = originalCiphertext.copyOf()
+            val expectedSha256 = originalSha256.copyOf()
+            val upload = CapsuleBlobUploadRequest(
+                capsuleId = capsuleId,
+                blobId = blobId,
+                ciphertext = originalCiphertext,
+                ciphertextSha256 = originalSha256,
+                idempotencyKey = idempotencyKey,
+            )
+            originalCiphertext[0] = 0
+            originalSha256[0] = 0
+            upload.ciphertext[0] = 0
+            upload.ciphertextSha256[0] = 0
+            server.enqueue(MockResponse.Builder().code(204).build())
+
+            val result = repository(server).uploadBlob(upload, accessToken = "pm_at_live")
+
+            assertEquals(CapsuleBlobUploadResult.Success(204), result)
+            val recorded = server.takeRequest()
+            assertEquals(expectedCiphertext.toList(), recorded.body!!.toByteArray().toList())
+            assertEquals(base64url(expectedSha256), recorded.headers["X-Remanence-Ciphertext-SHA256"])
+            assertEquals(expectedCiphertext.size.toString(), recorded.headers["Content-Length"])
+        }
+    }
+
     private fun repository(server: MockWebServer): CapsuleBlobUploadRepository =
         CapsuleBlobUploadRepository.create(ApiBaseUrl.parse(server.url("/").toString()))
 

@@ -2,15 +2,16 @@
 
 import base64
 import hashlib
+import hmac
 import re
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Literal
+from typing import BinaryIO, Literal
 
 from fastapi import APIRouter, Depends, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
@@ -55,14 +56,24 @@ from remanence.capsules.promotion_service import (
     CapsuleBlobPromotionError,
     CapsuleBlobPromotionService,
 )
+from remanence.capsules.recipient_blob_query_service import (
+    RecipientBlobQueryError,
+    RecipientBlobQueryService,
+    RecipientBlobSnapshot,
+)
 from remanence.capsules.schemas import (
     CapsuleDraftValidationError,
     parse_create_capsule_draft_request,
     parse_finalize_capsule_request,
 )
 from remanence.storage import (
+    BlobInfo,
+    BlobIntegrityError,
+    BlobNotFoundError,
     BlobStore,
+    BlobStoreError,
     CiphertextStager,
+    InvalidBlobKeyError,
     InvalidStagingExpectationError,
     StagedBlob,
     StagingHashMismatchError,
@@ -83,6 +94,8 @@ _TRANSFER_ENCODING_HEADER = b"transfer-encoding"
 _RANGE_HEADER = b"range"
 _CONTENT_RANGE_HEADER = b"content-range"
 _OCTET_STREAM = "application/octet-stream"
+_BLOB_DOWNLOAD_CHUNK_SIZE = 64 * 1024
+_CACHE_CONTROL_PRIVATE_NO_STORE = "private, no-store"
 _DECIMAL = re.compile(r"[0-9]+")
 _INCOMING_LIMIT_RE = re.compile(r"(?:[1-9]|[1-9][0-9]|100)")
 _STORAGE_UNAVAILABLE_CODES = frozenset({"STORAGE_IO"})
@@ -309,6 +322,76 @@ def _problem_response(request: Request, code: str) -> JSONResponse:
     )
 
 
+def _reject_range_headers(request: Request) -> None:
+    headers = request.scope.get("headers", [])
+    if _header_values(headers, _RANGE_HEADER) or _header_values(headers, _CONTENT_RANGE_HEADER):
+        raise CapsuleDraftValidationError()
+
+
+def _ciphertext_etag(digest: object) -> str:
+    """Strong ETag: quoted lowercase hex SHA-256 of the declared ciphertext."""
+
+    if type(digest) is not bytes or len(digest) != 32:
+        raise RecipientBlobQueryError("INTERNAL_ERROR")
+    return '"' + digest.hex() + '"'
+
+
+def _blob_info_matches_snapshot(info: object, snapshot: RecipientBlobSnapshot) -> bool:
+    if not isinstance(info, BlobInfo):
+        return False
+    if type(info.size) is not int or info.size != snapshot.expected_ciphertext_size:
+        return False
+    declared_hex = snapshot.expected_ciphertext_sha256.hex()
+    if type(info.sha256_hex) is not str or len(info.sha256_hex) != len(declared_hex):
+        return False
+    return hmac.compare_digest(info.sha256_hex, declared_hex)
+
+
+def iter_ready_blob_chunks(
+    reader: BinaryIO,
+    *,
+    expected_size: int,
+    chunk_size: int = _BLOB_DOWNLOAD_CHUNK_SIZE,
+) -> Iterator[bytes]:
+    if type(expected_size) is not int or expected_size <= 0 or type(chunk_size) is not int or chunk_size <= 0:
+        try:
+            reader.close()
+        except Exception:
+            pass
+        raise BlobIntegrityError("blob integrity check failed")
+    remaining = expected_size
+    try:
+        while remaining > 0:
+            try:
+                chunk = reader.read(min(chunk_size, remaining))
+            except Exception:
+                raise BlobStoreError("blob read failed") from None
+            if type(chunk) is not bytes or not chunk:
+                raise BlobIntegrityError("blob integrity check failed")
+            if len(chunk) > remaining:
+                raise BlobIntegrityError("blob integrity check failed")
+            remaining -= len(chunk)
+            yield chunk
+        try:
+            leftover = reader.read(1)
+        except Exception:
+            raise BlobStoreError("blob read failed") from None
+        if leftover:
+            raise BlobIntegrityError("blob integrity check failed")
+    finally:
+        try:
+            reader.close()
+        except Exception:
+            pass
+
+
+def _stream_ready_blob(
+    blob_store: BlobStore, object_key: str, expected_size: int
+) -> Iterator[bytes]:
+    with blob_store.open_reader(object_key) as reader:
+        yield from iter_ready_blob_chunks(reader, expected_size=expected_size)
+
+
 def _response_dto(result: CapsuleDraftResult) -> CapsuleDraftResponse:
     return CapsuleDraftResponse(
         capsule_id=result.capsule_id,
@@ -378,6 +461,63 @@ async def upload_capsule_blob(
                 staged.cleanup()
             except Exception:
                 pass
+
+
+@router.get(
+    "/v1/capsules/{capsule_id}/blobs/{blob_id}",
+    response_model=None,
+    status_code=200,
+)
+def download_capsule_blob(
+    capsule_id: str,
+    blob_id: str,
+    request: Request,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    session: Session = Depends(get_db_session, use_cache=False),
+    blob_store: BlobStore = Depends(get_blob_store),
+) -> Response | JSONResponse:
+    try:
+        parsed_capsule_id = _canonical_path_uuid(capsule_id)
+        parsed_blob_id = _canonical_path_uuid(blob_id)
+        _reject_range_headers(request)
+        with session.begin():
+            snapshot = RecipientBlobQueryService(session).get_ready_blob(
+                authenticated_recipient_user_id=principal.user_id,
+                capsule_id=parsed_capsule_id,
+                blob_id=parsed_blob_id,
+            )
+        if not isinstance(snapshot, RecipientBlobSnapshot):
+            raise RecipientBlobQueryError("INTERNAL_ERROR")
+        object_key = snapshot.object_key
+        if type(object_key) is not str or not object_key:
+            raise RecipientBlobQueryError("INTERNAL_ERROR")
+        try:
+            info = blob_store.stat(object_key)
+        except InvalidBlobKeyError:
+            return _problem_response(request, "INTERNAL_ERROR")
+        except BlobNotFoundError:
+            return _problem_response(request, "INTERNAL_UNAVAILABLE")
+        except BlobStoreError:
+            return _problem_response(request, "INTERNAL_UNAVAILABLE")
+        if not _blob_info_matches_snapshot(info, snapshot):
+            return _problem_response(request, "INTERNAL_ERROR")
+        etag = _ciphertext_etag(snapshot.expected_ciphertext_sha256)
+        return StreamingResponse(
+            _stream_ready_blob(blob_store, object_key, snapshot.expected_ciphertext_size),
+            status_code=200,
+            media_type=_OCTET_STREAM,
+            headers={
+                "Content-Length": str(info.size),
+                "ETag": etag,
+                "Cache-Control": _CACHE_CONTROL_PRIVATE_NO_STORE,
+            },
+        )
+    except CapsuleDraftValidationError as exc:
+        return _problem_response(request, exc.code)
+    except RecipientBlobQueryError as exc:
+        return _problem_response(request, exc.code)
+    except Exception:
+        return _problem_response(request, "INTERNAL_ERROR")
 
 
 @router.post(

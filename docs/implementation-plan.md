@@ -324,6 +324,14 @@ marked adopted before best-effort superseded-file cleanup, and ambiguous DAO
 completion preserves possible winners; the bounded orphan sweep follow-up
 must handle leftovers from those crash/uncertain-completion windows.
 
+The production stale markers are `RECIPIENT_KEY_STALE_DRAFT` and
+`RECIPIENT_KEY_STALE_FINALIZE`. A first wire stale response returns a
+retryable worker outcome so A06 gets its recovery invocation; a later recovery
+failure is parked as `RecipientKeyStale` and can be rediscovered by the
+owner-scoped activation resumer. The generic `RECIPIENT_KEY_STALE` marker was
+only present in unreleased intermediate commits, is explicitly fail-closed,
+and is not a released database contract.
+
 **Checkpoints A:** review after upload A01–A08, incoming index A09–A12,
 presentation A13–A21, and final two-device evidence. Do not review every
 single implementation commit.

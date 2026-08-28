@@ -87,6 +87,8 @@ sealed interface CapsuleUploadOutcome {
  * markers. Stale recipient rows are parked with an origin marker: draft-origin rows
  * remain RETRYABLE_FAILURE, while finalize-origin rows remain FINALIZING so a
  * changed request never replays createDraft against the same idempotency key.
+ * The owner-scoped activation resumer includes both explicit origin markers;
+ * only the unreleased generic marker is fail-closed.
  */
 class CapsuleUploadOrchestrator(
     private val capsuleDao: OutboxCapsuleDao,
@@ -122,6 +124,9 @@ class CapsuleUploadOrchestrator(
             capsule.state == OutboxCapsuleState.FINALIZING &&
                 capsule.lastErrorCode == RECIPIENT_KEY_STALE_FINALIZE -> StaleRecoveryOrigin.FINALIZE
             else -> null
+        }
+        if (capsule.lastErrorCode == LEGACY_RECIPIENT_KEY_STALE) {
+            return CapsuleUploadOutcome.RecipientKeyStale
         }
         if (capsule.lastErrorCode?.let { it in STALE_MARKERS } == true) {
             return staleOrigin?.let { recoverStaleRecipient(owner, capsuleId, capsule, it) }
@@ -1048,11 +1053,7 @@ class CapsuleUploadOrchestrator(
             StaleRecoveryOrigin.DRAFT -> markRetryable(owner, capsuleId, marker)
             StaleRecoveryOrigin.FINALIZE -> markFinalizeRetryable(owner, capsuleId, marker)
         }
-        return if (result == CapsuleUploadOutcome.Retryable(marker)) {
-            CapsuleUploadOutcome.RecipientKeyStale
-        } else {
-            result
-        }
+        return result
     }
 
     private suspend fun markFinalizeRetryable(
@@ -1223,11 +1224,10 @@ class CapsuleUploadOrchestrator(
 
     private companion object {
         const val TERMINAL_CLEANUP_RETRY = "RETRY_MATERIAL_CLEANUP"
-        const val RECIPIENT_KEY_STALE = "RECIPIENT_KEY_STALE"
         const val RECIPIENT_KEY_STALE_DRAFT = "RECIPIENT_KEY_STALE_DRAFT"
         const val RECIPIENT_KEY_STALE_FINALIZE = "RECIPIENT_KEY_STALE_FINALIZE"
+        const val LEGACY_RECIPIENT_KEY_STALE = "RECIPIENT_KEY_STALE"
         val STALE_MARKERS = setOf(
-            RECIPIENT_KEY_STALE,
             RECIPIENT_KEY_STALE_DRAFT,
             RECIPIENT_KEY_STALE_FINALIZE,
         )

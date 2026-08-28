@@ -42,10 +42,18 @@ class CapsuleUploadResumerTest {
     fun resumeEnqueuesEligibleIdsInDaoOrderOnEveryInvocation() = runBlocking {
         val expected = listOf(CAPSULE_A, CAPSULE_B, CAPSULE_C, CAPSULE_D, CAPSULE_E, CAPSULE_F, CAPSULE_G)
         seed(CAPSULE_G, OutboxCapsuleState.TERMINAL_FAILURE, retryPath = "retry/g")
-        seed(CAPSULE_C, OutboxCapsuleState.FINALIZING)
+        seed(
+            CAPSULE_C,
+            OutboxCapsuleState.FINALIZING,
+            lastErrorCode = "RECIPIENT_KEY_STALE_FINALIZE",
+        )
         seed(CAPSULE_F, OutboxCapsuleState.PUBLISHED, retryPath = "retry/f")
         seed(CAPSULE_A, OutboxCapsuleState.ENCRYPTED)
-        seed(CAPSULE_E, OutboxCapsuleState.RETRYABLE_FAILURE, lastErrorCode = "NETWORK")
+        seed(
+            CAPSULE_E,
+            OutboxCapsuleState.RETRYABLE_FAILURE,
+            lastErrorCode = "RECIPIENT_KEY_STALE_DRAFT",
+        )
         seed(CAPSULE_D, OutboxCapsuleState.RETRYABLE_FAILURE)
         seed(CAPSULE_B, OutboxCapsuleState.UPLOADING)
         val enqueued = mutableListOf<String>()
@@ -160,6 +168,28 @@ class CapsuleUploadResumerTest {
         }
 
         assertTrue(propagated)
+    }
+
+    @Test
+    fun processDeathAfterStaleMarkerPersistenceIsRediscovered() = runBlocking {
+        seed(
+            CAPSULE_A,
+            OutboxCapsuleState.RETRYABLE_FAILURE,
+            lastErrorCode = "RECIPIENT_KEY_STALE_DRAFT",
+        )
+        val enqueued = mutableListOf<CapsuleId>()
+        val resumer = CapsuleUploadResumer(
+            capsuleDao = database.outboxCapsuleDao(),
+            currentAccountUserId = { OWNER },
+            enqueue = { _, capsule -> enqueued += capsule },
+        )
+
+        val result = resumer.resume(OWNER_TYPED)
+
+        assertEquals(CapsuleUploadResumeStatus.COMPLETED, result.status)
+        assertEquals(1, result.discoveredCount)
+        assertEquals(1, result.enqueuedCount)
+        assertEquals(listOf(CAPSULE_TYPED_A), enqueued)
     }
 
     private suspend fun seed(

@@ -703,7 +703,7 @@ class CapsuleUploadOrchestratorTest {
         }
 
         assertEquals(
-            CapsuleUploadOutcome.RecipientKeyStale,
+            CapsuleUploadOutcome.Retryable("RECIPIENT_KEY_STALE_DRAFT"),
             orchestrator.run(OWNER_TYPED, CAPSULE_TYPED),
         )
         assertEquals(OutboxCapsuleState.RETRYABLE_FAILURE, capsuleRow().state)
@@ -735,7 +735,10 @@ class CapsuleUploadOrchestratorTest {
             }
         }
 
-        assertEquals(CapsuleUploadOutcome.RecipientKeyStale, orchestrator.run(OWNER_TYPED, CAPSULE_TYPED))
+        assertEquals(
+            CapsuleUploadOutcome.Retryable("RECIPIENT_KEY_STALE_FINALIZE"),
+            orchestrator.run(OWNER_TYPED, CAPSULE_TYPED),
+        )
         assertEquals(OutboxCapsuleState.FINALIZING, capsuleRow().state)
         assertEquals("RECIPIENT_KEY_STALE_FINALIZE", capsuleRow().lastErrorCode)
         assertEquals(1, finalizeCalls)

@@ -221,7 +221,7 @@ class OutboxDaosTest {
                 insertCapsule(row)
             }
 
-            assertEquals(
+        assertEquals(
                 if (source == OutboxCapsuleState.PREPARING) 1 else 0,
                 capsuleDao.markEncryptedForOwner(encrypted.capsuleId, OWNER),
             )
@@ -472,8 +472,11 @@ class OutboxDaosTest {
         )
         rows.forEach { insertCapsule(it) }
 
-        assertEquals(
-            listOf("resume-01", "resume-02", "resume-03", "resume-04", "resume-05", "resume-06", "resume-07"),
+            assertEquals(
+            listOf(
+                "resume-01", "resume-02", "resume-03", "resume-04", "resume-05", "resume-06", "resume-07",
+                "resume-12", "resume-13",
+            ),
             capsuleDao.getCapsuleIdsNeedingUploadForOwner(OWNER),
         )
         assertEquals(

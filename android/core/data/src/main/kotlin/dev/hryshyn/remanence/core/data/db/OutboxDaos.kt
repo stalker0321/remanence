@@ -66,13 +66,9 @@ abstract class OutboxCapsuleDao {
         "SELECT capsule_id FROM outbox_capsule " +
             "WHERE owner_user_id = :ownerUserId AND (" +
             "(state IN ('ENCRYPTED', 'UPLOADING', 'FINALIZING') " +
-            "    AND (last_error_code IS NULL OR last_error_code NOT IN " +
-            "        ('RECIPIENT_KEY_STALE', 'RECIPIENT_KEY_STALE_DRAFT', " +
-            "         'RECIPIENT_KEY_STALE_FINALIZE'))) " +
+            "    AND (last_error_code IS NULL OR last_error_code <> 'RECIPIENT_KEY_STALE')) " +
             "OR (state = 'RETRYABLE_FAILURE' " +
-            "    AND (last_error_code IS NULL OR last_error_code NOT IN " +
-            "        ('RECIPIENT_KEY_STALE', 'RECIPIENT_KEY_STALE_DRAFT', " +
-            "         'RECIPIENT_KEY_STALE_FINALIZE'))) " +
+            "    AND (last_error_code IS NULL OR last_error_code <> 'RECIPIENT_KEY_STALE')) " +
             "OR (state IN ('PUBLISHED', 'TERMINAL_FAILURE') " +
             "    AND sender_retry_keyset_path IS NOT NULL)" +
             ") ORDER BY capsule_id",

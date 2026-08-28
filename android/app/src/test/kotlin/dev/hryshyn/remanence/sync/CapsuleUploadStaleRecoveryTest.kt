@@ -332,7 +332,7 @@ class CapsuleUploadStaleRecoveryTest {
             arrayOf(CAPSULE.toRestString(), OWNER.toRestString()),
         )
         assertEquals(
-            CapsuleUploadOutcome.RecipientKeyStale,
+            CapsuleUploadOutcome.Retryable("RECIPIENT_KEY_STALE_FINALIZE"),
             orchestrator(
                 draftState = CapsuleDraftBlobState.STORED,
                 finalize = { _, _ ->

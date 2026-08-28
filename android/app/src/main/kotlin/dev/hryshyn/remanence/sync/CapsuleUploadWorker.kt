@@ -28,9 +28,9 @@ class CapsuleUploadWorker(
 
     companion object {
         /**
-         * A stale recipient key is a deliberate A06 parking result, not a
-         * transient scheduler retry. A05 startup discovery must likewise
-         * exclude stale-coded RETRYABLE_FAILURE rows until A06 owns them.
+         * The first stale result is retryable so WorkManager invokes A06
+         * recovery. Recovery failures return RecipientKeyStale and park the
+         * row without an unbounded blind retry loop.
          */
         internal fun mapOutcome(outcome: CapsuleUploadOutcome): androidx.work.ListenableWorker.Result =
             when (outcome) {

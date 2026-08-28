@@ -23,10 +23,26 @@ class CapsuleUploadWorkerTest {
     }
 
     @Test
-    fun staleRecipientKeyParksWorkAsFailure() {
+    fun parkedStaleRecipientKeyRecoveryFailureParksWorkAsFailure() {
         assertEquals(
             ListenableWorker.Result.failure(),
             CapsuleUploadWorker.mapOutcome(CapsuleUploadOutcome.RecipientKeyStale),
+        )
+    }
+
+    @Test
+    fun initialPersistedStaleRecipientKeySchedulesRecoveryRetry() {
+        assertEquals(
+            ListenableWorker.Result.retry(),
+            CapsuleUploadWorker.mapOutcome(
+                CapsuleUploadOutcome.Retryable("RECIPIENT_KEY_STALE_DRAFT"),
+            ),
+        )
+        assertEquals(
+            ListenableWorker.Result.retry(),
+            CapsuleUploadWorker.mapOutcome(
+                CapsuleUploadOutcome.Retryable("RECIPIENT_KEY_STALE_FINALIZE"),
+            ),
         )
     }
 

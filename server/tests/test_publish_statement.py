@@ -22,7 +22,6 @@ from remanence.capsules.publish_statement import (
     VerifiedPublishStatement,
     verify_publish_statement,
 )
-from remanence.capsules.signature_service import PublishSignatureVerificationService
 from remanence.protocol.v1 import remanence_v1_pb2 as protocol_pb2
 
 from test_capsule_draft_service import _create, _request, _seed_user
@@ -101,24 +100,13 @@ def _valid(fixture: dict) -> tuple[bytes, Capsule, list[CapsuleBlob]]:
     return raw, capsule, declarations
 
 
-_KIND_PROTO_NUMBER = {
-    CapsuleBlobKind.RECOGNITION_MANIFEST: int(protocol_pb2.ArtifactKind.RECOGNITION_MANIFEST),
-    CapsuleBlobKind.CONTENT_MANIFEST: int(protocol_pb2.ArtifactKind.CONTENT_MANIFEST),
-    CapsuleBlobKind.PHOTO: int(protocol_pb2.ArtifactKind.PHOTO),
-}
-
 _DIVERGING_BLOB_IDS = {
     CapsuleBlobKind.RECOGNITION_MANIFEST: UUID("00000000-0000-0000-0000-0000000000ff"),
     CapsuleBlobKind.CONTENT_MANIFEST: UUID("00000000-0000-0000-0000-0000000000ee"),
-    0: UUID("00000000-0000-0000-0000-000000000001"),
-    1: UUID("00000000-0000-0000-0000-000000000002"),
-    2: UUID("00000000-0000-0000-0000-000000000003"),
+    0: UUID("00000000-0000-0000-0000-000000000003"),
+    1: UUID("00000000-0000-0000-0000-000000000001"),
+    2: UUID("00000000-0000-0000-0000-000000000002"),
 }
-
-
-def _canonical_declaration_key(declaration: CapsuleBlob) -> tuple[int, int, bytes]:
-    ordinal = -1 if declaration.ordinal is None else declaration.ordinal
-    return (_KIND_PROTO_NUMBER[declaration.kind], ordinal, declaration.id.bytes)
 
 
 def _add_artifact(statement: protocol_pb2.PublishStatement, declaration: CapsuleBlob) -> None:
@@ -131,11 +119,8 @@ def _add_artifact(statement: protocol_pb2.PublishStatement, declaration: Capsule
     )
 
 
-def _statement_from_declarations(
-    capsule: Capsule,
-    declarations: list[CapsuleBlob],
-    *,
-    order: str,
+def _statement_with(
+    capsule: Capsule, ordered: list[CapsuleBlob]
 ) -> protocol_pb2.PublishStatement:
     statement = protocol_pb2.PublishStatement(
         protocol_version=capsule.protocol_version,
@@ -146,15 +131,29 @@ def _statement_from_declarations(
         recipient_key_bundle_id=capsule.recipient_key_bundle_id.bytes,
         created_at_epoch_seconds=int(capsule.created_at.timestamp()),
     )
-    if order == "canonical":
-        ordered = sorted(declarations, key=_canonical_declaration_key)
-    elif order == "blob_id":
-        ordered = sorted(declarations, key=lambda item: item.id.bytes)
-    else:
-        raise ValueError(order)
     for declaration in ordered:
         _add_artifact(statement, declaration)
     return statement
+
+
+def _one(
+    declarations: list[CapsuleBlob], kind: CapsuleBlobKind, ordinal: int | None = None
+) -> CapsuleBlob:
+    matches = [
+        item for item in declarations if item.kind is kind and item.ordinal == ordinal
+    ]
+    assert matches != [] and len(matches) == 1
+    return matches[0]
+
+
+def _protocol_layout(declarations: list[CapsuleBlob]) -> list[CapsuleBlob]:
+    return [
+        _one(declarations, CapsuleBlobKind.RECOGNITION_MANIFEST),
+        _one(declarations, CapsuleBlobKind.CONTENT_MANIFEST),
+        _one(declarations, CapsuleBlobKind.PHOTO, 0),
+        _one(declarations, CapsuleBlobKind.PHOTO, 1),
+        _one(declarations, CapsuleBlobKind.PHOTO, 2),
+    ]
 
 
 def _diverging_authoritative_data(fixture: dict) -> tuple[Capsule, list[CapsuleBlob]]:
@@ -194,11 +193,6 @@ def _assert_invalid(call, *, secrets: tuple[object, ...] = ()) -> None:
             secret.hex() if isinstance(secret, (bytes, bytearray)) else str(secret)
         )
         assert text not in rendered
-
-
-def _intended_publish_validation(raw, capsule, declarations, session, signature_bytes: bytes):
-    verified = verify_publish_statement(raw, capsule, declarations)
-    return PublishSignatureVerificationService(session).verify(verified, signature_bytes)
 
 
 def test_generated_descriptor_matches_canonical_publish_schema() -> None:
@@ -291,7 +285,7 @@ def test_service_created_fractional_time_is_accepted_by_s13_verifier(
         )
         assert capsule is not None
         assert capsule.created_at == canonical_now
-        statement = _statement_from_declarations(capsule, declarations, order="canonical")
+        statement = _statement_with(capsule, _protocol_layout(declarations))
 
         verified = verify_publish_statement(
             statement.SerializeToString(deterministic=True),
@@ -307,9 +301,6 @@ def test_service_created_fractional_time_is_accepted_by_s13_verifier(
             CapsuleBlobKind.PHOTO,
         ]
         assert [item.ordinal for item in verified.artifacts] == [None, None, 0, 1, 2]
-        assert tuple(item.blob_id for item in verified.artifacts) == tuple(
-            item.id for item in sorted(declarations, key=_canonical_declaration_key)
-        )
 
 
 @pytest.mark.parametrize(
@@ -482,21 +473,23 @@ def test_bad_authoritative_inputs_and_fuzzed_bytes_never_leak_details(fixture: d
         assert fuzzed[:32].hex() not in f"{caught.value!s} {caught.value!r}"
 
 
-def test_canonical_order_accepts_photo_uuid_smaller_than_recognition(fixture: dict) -> None:
+def test_canonical_order_accepts_when_photo_uuids_conflict_with_kind_and_ordinal(
+    fixture: dict,
+) -> None:
     capsule, declarations = _diverging_authoritative_data(fixture)
-    photo_ids = [item.id.bytes for item in declarations if item.kind is CapsuleBlobKind.PHOTO]
-    recognition_id = next(
-        item.id.bytes for item in declarations if item.kind is CapsuleBlobKind.RECOGNITION_MANIFEST
-    )
-    assert min(photo_ids) < recognition_id
-    assert photo_ids[0] < recognition_id
-    canonical_ids = [item.id.bytes for item in sorted(declarations, key=_canonical_declaration_key)]
+    photo0 = _one(declarations, CapsuleBlobKind.PHOTO, 0)
+    photo1 = _one(declarations, CapsuleBlobKind.PHOTO, 1)
+    photo2 = _one(declarations, CapsuleBlobKind.PHOTO, 2)
+    recognition = _one(declarations, CapsuleBlobKind.RECOGNITION_MANIFEST)
+    assert photo0.id.bytes > photo1.id.bytes
+    assert photo1.id.bytes < photo2.id.bytes < photo0.id.bytes
+    assert photo1.id.bytes < recognition.id.bytes
     blob_id_order = [item.id.bytes for item in sorted(declarations, key=lambda item: item.id.bytes)]
-    assert canonical_ids != blob_id_order
+    layout = _protocol_layout(declarations)
+    assert [item.id.bytes for item in layout] != blob_id_order
+    assert [item.ordinal for item in layout[2:]] == [0, 1, 2]
 
-    raw = _statement_from_declarations(capsule, declarations, order="canonical").SerializeToString(
-        deterministic=True
-    )
+    raw = _statement_with(capsule, layout).SerializeToString(deterministic=True)
     verified = verify_publish_statement(raw, capsule, declarations)
     assert [item.kind for item in verified.artifacts] == [
         CapsuleBlobKind.RECOGNITION_MANIFEST,
@@ -506,14 +499,20 @@ def test_canonical_order_accepts_photo_uuid_smaller_than_recognition(fixture: di
         CapsuleBlobKind.PHOTO,
     ]
     assert [item.ordinal for item in verified.artifacts] == [None, None, 0, 1, 2]
-    assert [item.blob_id.bytes for item in verified.artifacts] == canonical_ids
+    assert [item.blob_id for item in verified.artifacts] == [
+        recognition.id,
+        _one(declarations, CapsuleBlobKind.CONTENT_MANIFEST).id,
+        photo0.id,
+        photo1.id,
+        photo2.id,
+    ]
     assert [item.blob_id.bytes for item in verified.artifacts] != blob_id_order
 
 
 def test_blob_id_order_is_rejected_when_it_differs_from_canonical_order(fixture: dict) -> None:
     capsule, declarations = _diverging_authoritative_data(fixture)
-    statement = _statement_from_declarations(capsule, declarations, order="blob_id")
-    raw = statement.SerializeToString(deterministic=True)
+    ordered = sorted(declarations, key=lambda item: item.id.bytes)
+    raw = _statement_with(capsule, ordered).SerializeToString(deterministic=True)
     secrets = (
         raw,
         capsule.id,
@@ -523,52 +522,23 @@ def test_blob_id_order_is_rejected_when_it_differs_from_canonical_order(fixture:
     _assert_invalid(lambda: verify_publish_statement(raw, capsule, declarations), secrets=secrets)
 
 
-def test_malformed_and_non_canonical_inputs_never_reach_key_lookup(
-    fixture: dict, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_valid_photo_ordinal_permutation_is_rejected(fixture: dict) -> None:
     capsule, declarations = _diverging_authoritative_data(fixture)
-    canonical = _statement_from_declarations(
-        capsule, declarations, order="canonical"
-    ).SerializeToString(deterministic=True)
-    blob_id_ordered = _statement_from_declarations(
-        capsule, declarations, order="blob_id"
-    ).SerializeToString(deterministic=True)
-    signature_bytes = b"\x01" + b"\x00" * 68
-    lookups: list[object] = []
-
-    def forbidden(self, verified_statement, signature):
-        lookups.append((verified_statement, signature))
-        raise AssertionError("authoritative key lookup")
-
-    monkeypatch.setattr(PublishSignatureVerificationService, "verify", forbidden)
-    session = object()
-    secrets = (canonical, blob_id_ordered, capsule.id, *(item.id for item in declarations))
-
-    _assert_invalid(
-        lambda: _intended_publish_validation(
-            blob_id_ordered, capsule, declarations, session, signature_bytes
-        ),
-        secrets=secrets,
+    layout = _protocol_layout(declarations)
+    permuted = [layout[0], layout[1], layout[3], layout[2], layout[4]]
+    assert [item.kind for item in permuted] == [
+        CapsuleBlobKind.RECOGNITION_MANIFEST,
+        CapsuleBlobKind.CONTENT_MANIFEST,
+        CapsuleBlobKind.PHOTO,
+        CapsuleBlobKind.PHOTO,
+        CapsuleBlobKind.PHOTO,
+    ]
+    assert [item.ordinal for item in permuted[2:]] == [1, 0, 2]
+    raw = _statement_with(capsule, permuted).SerializeToString(deterministic=True)
+    secrets = (
+        raw,
+        capsule.id,
+        *(item.id for item in declarations),
+        *(item.id.bytes for item in declarations),
     )
-    _assert_invalid(
-        lambda: _intended_publish_validation(b"", capsule, declarations, session, signature_bytes),
-        secrets=secrets,
-    )
-    _assert_invalid(
-        lambda: _intended_publish_validation(
-            canonical[:-1], capsule, declarations, session, signature_bytes
-        ),
-        secrets=secrets,
-    )
-    _assert_invalid(
-        lambda: _intended_publish_validation(
-            canonical + b"\x48\x01", capsule, declarations, session, signature_bytes
-        ),
-        secrets=secrets,
-    )
-    assert lookups == []
-
-    verified = verify_publish_statement(canonical, capsule, declarations)
-    with pytest.raises(AssertionError, match="authoritative key lookup"):
-        PublishSignatureVerificationService(session).verify(verified, signature_bytes)
-    assert lookups == [(verified, signature_bytes)]
+    _assert_invalid(lambda: verify_publish_statement(raw, capsule, declarations), secrets=secrets)

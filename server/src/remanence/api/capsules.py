@@ -761,4 +761,3 @@ def list_incoming_capsules(
         return _problem_response(request, exc.code)
     except Exception:
         return _problem_response(request, "INTERNAL_ERROR")
-

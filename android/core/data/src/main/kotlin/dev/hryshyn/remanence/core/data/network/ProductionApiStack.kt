@@ -24,13 +24,23 @@ class ProductionApiStack private constructor(
         AuthRepository.create(baseUrl)
 
     /** Fully wired client for every authenticated API surface. */
-    val authenticatedClient: OkHttpClient =
+    private val authenticatedClient: OkHttpClient =
         RefreshingAuthenticator.attach(
             OkHttpClient.Builder(),
             bareAuthRepository,
             tokens,
             rotationSink,
         ).build()
+
+    /** Capsule clients share the serialized authenticated transport boundary. */
+    val capsuleDraftRepository: CapsuleDraftRepository =
+        CapsuleDraftRepository(authenticatedClient, baseUrl)
+
+    val capsuleBlobUploadRepository: CapsuleBlobUploadRepository =
+        CapsuleBlobUploadRepository(authenticatedClient, baseUrl)
+
+    val capsuleFinalizeRepository: CapsuleFinalizeRepository =
+        CapsuleFinalizeRepository(authenticatedClient, baseUrl)
 
     companion object {
         fun create(

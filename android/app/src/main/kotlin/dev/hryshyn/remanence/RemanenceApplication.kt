@@ -239,15 +239,15 @@ class AppContainer(
 
     /** A04's three existing authenticated capsule boundaries. */
     val capsuleDraftRepository: CapsuleDraftRepository by lazy {
-        CapsuleDraftRepository.create(apiBaseUrl)
+        apiStack.capsuleDraftRepository
     }
 
     val capsuleBlobUploadRepository: CapsuleBlobUploadRepository by lazy {
-        CapsuleBlobUploadRepository.create(apiBaseUrl)
+        apiStack.capsuleBlobUploadRepository
     }
 
     val capsuleFinalizeRepository: CapsuleFinalizeRepository by lazy {
-        CapsuleFinalizeRepository.create(apiBaseUrl)
+        apiStack.capsuleFinalizeRepository
     }
 
     /**

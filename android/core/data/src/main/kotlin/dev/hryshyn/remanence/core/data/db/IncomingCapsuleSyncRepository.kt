@@ -18,9 +18,9 @@ class IncomingSyncSession(
         require(accessToken.isNotEmpty()) { "incoming sync access token is required" }
     }
 
-    /** Token equality is a conservative session-generation check. */
+    /** Access tokens rotate during an authenticated request; the owner ID does not. */
     internal fun isSameSession(other: IncomingSyncSession): Boolean =
-        ownerUserId == other.ownerUserId && accessToken == other.accessToken
+        ownerUserId == other.ownerUserId
 
     override fun toString(): String = "IncomingSyncSession(<redacted>)"
 }

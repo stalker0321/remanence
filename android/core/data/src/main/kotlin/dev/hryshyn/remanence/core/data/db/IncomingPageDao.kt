@@ -9,10 +9,11 @@ import androidx.room.Transaction
 /**
  * One owner-scoped transaction boundary for an incoming server page.
  *
- * This DAO deliberately has no update/upsert SQL. A page either inserts a
- * missing immutable record or proves that the existing record is byte-for-
- * byte the same. Existing local cache state and timestamps are never replay
- * fields, so a page replay cannot rewind a later A11/A13 state.
+ * A page either inserts a missing immutable record, proves that the existing
+ * record is byte-for-byte the same, or completes the two empty cryptographic
+ * migration markers exactly once. Existing local cache state and timestamps
+ * are never replay fields, so a page replay cannot rewind a later A11/A13
+ * state.
  */
 @Dao
 abstract class IncomingPageDao {
@@ -62,6 +63,7 @@ abstract class IncomingPageDao {
             "incoming page blob is bound to an unknown capsule"
         }
 
+        val migratedCapsuleIds = mutableListOf<String>()
         for (capsule in capsules) {
             require(capsule.ownerUserId == ownerUserId) {
                 "incoming capsule owner does not match the authoritative owner"
@@ -71,7 +73,9 @@ abstract class IncomingPageDao {
                 "incoming capsule is already owned by another local account"
             }
             val existing = findCapsule(capsule.capsuleId)
-            if (existing != null) requireSameCapsule(existing, capsule)
+            if (existing != null && requireSameCapsuleOrMigration(existing, capsule)) {
+                migratedCapsuleIds += capsule.capsuleId
+            }
         }
 
         for (envelope in envelopes) {
@@ -99,8 +103,19 @@ abstract class IncomingPageDao {
         }
 
         // The complete preflight above is intentionally finished before any
-        // INSERT. A late conflict therefore rolls back an otherwise valid
+        // write. A late conflict therefore rolls back an otherwise valid
         // earlier capsule, envelope, or blob in this same transaction.
+        for (capsuleId in migratedCapsuleIds) {
+            val capsule = capsules.single { it.capsuleId == capsuleId }
+            check(
+                completeMigratedCapsuleCrypto(
+                    capsuleId = capsule.capsuleId,
+                    ownerUserId = ownerUserId,
+                    signedStatementSha256 = capsule.signedStatementSha256,
+                    publishSignatureBytes = capsule.publishSignatureBytes,
+                ) == 1,
+            ) { "incoming migrated capsule completion lost its compare-and-set" }
+        }
         val newCapsules = capsules.filter { findCapsule(it.capsuleId) == null }
         val newEnvelopes = envelopes.filter { findEnvelope(it.capsuleId) == null }
         val newBlobs = blobs.filter { findBlob(it.blobId) == null }
@@ -162,6 +177,19 @@ abstract class IncomingPageDao {
     @Insert(onConflict = OnConflictStrategy.ABORT)
     protected abstract suspend fun insertBlobs(blobs: List<BlobCacheEntity>)
 
+    @Query(
+        "UPDATE incoming_capsule SET signed_statement_sha256 = :signedStatementSha256, " +
+            "publish_signature_bytes = :publishSignatureBytes " +
+            "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId " +
+            "AND signed_statement_sha256 = X'' AND publish_signature_bytes = X''",
+    )
+    protected abstract suspend fun completeMigratedCapsuleCrypto(
+        capsuleId: String,
+        ownerUserId: String,
+        signedStatementSha256: ByteArray,
+        publishSignatureBytes: ByteArray,
+    ): Int
+
     @Insert(onConflict = OnConflictStrategy.ABORT)
     protected abstract suspend fun insertCursor(cursor: SyncCursorEntity)
 
@@ -177,10 +205,10 @@ abstract class IncomingPageDao {
         lastSyncedAtEpochMs: Long,
     ): Int
 
-    private fun requireSameCapsule(
+    private fun requireSameCapsuleOrMigration(
         existing: IncomingCapsuleEntity,
         candidate: IncomingCapsuleEntity,
-    ) {
+    ): Boolean {
         require(existing.ownerUserId == candidate.ownerUserId)
         require(existing.senderUserId == candidate.senderUserId)
         require(existing.recipientUserId == candidate.recipientUserId)
@@ -190,8 +218,24 @@ abstract class IncomingPageDao {
         require(existing.serverStatus == candidate.serverStatus)
         require(existing.readyAtEpochMs == candidate.readyAtEpochMs)
         require(existing.signedStatementBytes.contentEquals(candidate.signedStatementBytes))
+
+        val existingHashEmpty = existing.signedStatementSha256.isEmpty()
+        val existingSignatureEmpty = existing.publishSignatureBytes.isEmpty()
+        require(existingHashEmpty == existingSignatureEmpty) {
+            "incoming capsule has partial migration cryptographic material"
+        }
+        if (existingHashEmpty) {
+            if (candidate.signedStatementSha256.isEmpty() && candidate.publishSignatureBytes.isEmpty()) {
+                return false
+            }
+            require(candidate.signedStatementSha256.size == SHA256_BYTES)
+            require(candidate.publishSignatureBytes.size == PUBLISH_SIGNATURE_BYTES)
+            return true
+        }
+
         require(existing.signedStatementSha256.contentEquals(candidate.signedStatementSha256))
         require(existing.publishSignatureBytes.contentEquals(candidate.publishSignatureBytes))
+        return false
     }
 
     private fun requireSameEnvelope(
@@ -221,5 +265,7 @@ abstract class IncomingPageDao {
 
     private companion object {
         const val INCOMING_STREAM = "incoming"
+        const val SHA256_BYTES = 32
+        const val PUBLISH_SIGNATURE_BYTES = 69
     }
 }

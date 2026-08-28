@@ -301,7 +301,12 @@ metadata (initially `DOWNLOADING`) atomically. Exact page replays preserve
 existing local cache state and reject immutable identity, binding, or path
 mismatches; account/session changes and any failed preflight or database write
 leave the page and cursor unchanged. Signature, HPKE, and control-payload
-verification remain later A11 work.
+verification remain later A11 work. Rows migrated from v5 have both incoming
+statement-digest and publish-signature fields empty; a complete later page may
+fill both exactly once only when every other immutable capsule binding matches
+under the same owner. This completion does not advance local material state;
+A11 must independently verify the completed material before any state advance
+or plaintext handling.
 
 ### M2-A06 bounded recovery notes
 

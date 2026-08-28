@@ -159,9 +159,11 @@ abstract class RemanenceLocalDatabase : RoomDatabase() {
         /**
          * v6 (M2-A09) completes the incoming ciphertext-only record with the
          * server's signed-statement digest and raw publish signature. Legacy
-         * rows receive empty markers and remain unusable until A11's
-         * verification path has a complete response; no cryptographic value
-         * is fabricated during migration.
+         * rows receive both empty markers and no cryptographic value is
+         * fabricated during migration. A later complete A09 page may perform
+         * one owner-scoped, immutable-binding-checked completion of both
+         * markers; A11 must still verify the material before any state advance
+         * or plaintext handling.
          */
         val MIGRATION_5_6: Migration = object : Migration(5, 6) {
             override fun migrate(db: SupportSQLiteDatabase) {

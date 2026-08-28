@@ -129,6 +129,15 @@ class RecipientMaterialSyncedService:
         now: datetime,
     ) -> RecipientMaterialSyncedResult:
         with self._session.no_autoflush:
+            preflight_id = self._session.scalar(
+                select(Capsule.id).where(
+                    Capsule.id == capsule_id,
+                    Capsule.recipient_user_id == recipient_id,
+                    Capsule.state == CapsuleState.READY,
+                )
+            )
+            if preflight_id is None:
+                raise _error("CAPSULE_NOT_FOUND")
             self._session.execute(
                 select(func.pg_advisory_xact_lock(capsule_lock_key(capsule_id)))
             )

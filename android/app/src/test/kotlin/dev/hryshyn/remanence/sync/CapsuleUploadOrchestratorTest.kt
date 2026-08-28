@@ -707,7 +707,7 @@ class CapsuleUploadOrchestratorTest {
             orchestrator.run(OWNER_TYPED, CAPSULE_TYPED),
         )
         assertEquals(OutboxCapsuleState.RETRYABLE_FAILURE, capsuleRow().state)
-        assertEquals(CapsuleDraftFailure.RECIPIENT_KEY_STALE.name, capsuleRow().lastErrorCode)
+        assertEquals("RECIPIENT_KEY_STALE_DRAFT", capsuleRow().lastErrorCode)
         assertEquals(0, cleanupCalls)
         assertTrue(capsuleRow().senderRetryKeysetPath != null)
         assertTrue(retryStore.expectedPath(OWNER_TYPED, CAPSULE_TYPED).exists())
@@ -736,8 +736,8 @@ class CapsuleUploadOrchestratorTest {
         }
 
         assertEquals(CapsuleUploadOutcome.RecipientKeyStale, orchestrator.run(OWNER_TYPED, CAPSULE_TYPED))
-        assertEquals(OutboxCapsuleState.RETRYABLE_FAILURE, capsuleRow().state)
-        assertEquals(CapsuleFinalizeFailure.RECIPIENT_KEY_STALE.name, capsuleRow().lastErrorCode)
+        assertEquals(OutboxCapsuleState.FINALIZING, capsuleRow().state)
+        assertEquals("RECIPIENT_KEY_STALE_FINALIZE", capsuleRow().lastErrorCode)
         assertEquals(1, finalizeCalls)
         assertEquals(0, cleanupCalls)
         assertTrue(capsuleRow().senderRetryKeysetPath != null)

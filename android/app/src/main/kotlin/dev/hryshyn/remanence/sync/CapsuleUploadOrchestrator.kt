@@ -54,6 +54,8 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 /** Result of one account/capsule-scoped upload attempt. */
 sealed interface CapsuleUploadOutcome {
@@ -81,9 +83,10 @@ sealed interface CapsuleUploadOutcome {
  * network call and durable transition. A05a reconciles authoritative server
  * STORED blobs from the draft replay and skips only those blobs; remaining
  * blobs retain canonical order. Ciphertext is read from the staged paths and
- * is never regenerated. A05 startup discovery must exclude
- * RETRYABLE_FAILURE rows marked RECIPIENT_KEY_STALE until A06 owns their
- * recovery.
+ * is never regenerated. A05 startup discovery must exclude all stale-origin
+ * markers. Stale recipient rows are parked with an origin marker: draft-origin rows
+ * remain RETRYABLE_FAILURE, while finalize-origin rows remain FINALIZING so a
+ * changed request never replays createDraft against the same idempotency key.
  */
 class CapsuleUploadOrchestrator(
     private val capsuleDao: OutboxCapsuleDao,
@@ -100,6 +103,7 @@ class CapsuleUploadOrchestrator(
     private val senderRetryKeysetWrapper: SenderRetryKeysetWrapper? = null,
     private val loadSenderSigningKeyset: (suspend (UserId, KeyBundleId) -> KeysetHandle?)? = null,
     private val accountScopedFileRoots: AccountScopedFileRoots? = null,
+    private val supersededFilesCleanupHook: (() -> Unit)? = null,
 ) {
 
     suspend fun run(owner: UserId, capsuleId: CapsuleId): CapsuleUploadOutcome {
@@ -110,6 +114,18 @@ class CapsuleUploadOrchestrator(
             ?: return CapsuleUploadOutcome.Missing
         if (capsule.ownerUserId != ownerText || capsule.senderUserId != ownerText) {
             return markTerminal(owner, capsuleId, "INTERNAL_ERROR")
+        }
+
+        val staleOrigin = when {
+            capsule.state == OutboxCapsuleState.RETRYABLE_FAILURE &&
+                capsule.lastErrorCode == RECIPIENT_KEY_STALE_DRAFT -> StaleRecoveryOrigin.DRAFT
+            capsule.state == OutboxCapsuleState.FINALIZING &&
+                capsule.lastErrorCode == RECIPIENT_KEY_STALE_FINALIZE -> StaleRecoveryOrigin.FINALIZE
+            else -> null
+        }
+        if (capsule.lastErrorCode?.let { it in STALE_MARKERS } == true) {
+            return staleOrigin?.let { recoverStaleRecipient(owner, capsuleId, capsule, it) }
+                ?: CapsuleUploadOutcome.RecipientKeyStale
         }
 
         when (capsule.state) {
@@ -126,11 +142,7 @@ class CapsuleUploadOrchestrator(
             OutboxCapsuleState.UPLOADING,
             OutboxCapsuleState.FINALIZING,
             -> Unit
-            OutboxCapsuleState.RETRYABLE_FAILURE -> {
-                if (capsule.lastErrorCode == RECIPIENT_KEY_STALE) {
-                    return recoverStaleRecipient(owner, capsuleId, capsule)
-                }
-            }
+            OutboxCapsuleState.RETRYABLE_FAILURE -> Unit
         }
 
         val prepared = try {
@@ -221,14 +233,14 @@ class CapsuleUploadOrchestrator(
             capsule = capsule.copy(state = OutboxCapsuleState.FINALIZING)
         }
 
-        val token = accessToken() ?: return markRetryable(owner, capsuleId, "AUTH_INVALID")
+        val token = accessToken() ?: return markFinalizeRetryable(owner, capsuleId, "AUTH_INVALID")
         if (!accountMatches(owner)) return CapsuleUploadOutcome.AccountMismatch
         val finalizeResult = try {
             finalizeCapsule(finalizeRequest, token)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
-            return markRetryable(owner, capsuleId, "INTERNAL_UNAVAILABLE")
+            return markFinalizeRetryable(owner, capsuleId, "INTERNAL_UNAVAILABLE")
         }
         when (finalizeResult) {
             is CapsuleFinalizeResult.Failure ->
@@ -264,6 +276,7 @@ class CapsuleUploadOrchestrator(
         owner: UserId,
         capsuleId: CapsuleId,
         staleCapsule: OutboxCapsuleEntity,
+        origin: StaleRecoveryOrigin,
     ): CapsuleUploadOutcome {
         val retryStore = retryMaterialStore ?: return CapsuleUploadOutcome.RecipientKeyStale
         val retryWrapper = senderRetryKeysetWrapper ?: return CapsuleUploadOutcome.RecipientKeyStale
@@ -419,48 +432,91 @@ class CapsuleUploadOrchestrator(
         try {
             if (!accountMatches(owner)) return CapsuleUploadOutcome.AccountMismatch
             val transitioned = try {
-                capsuleDao.applyRecipientKeyRewrapForOwner(
-                    capsuleId = capsuleId.toRestString(),
-                    ownerUserId = owner.toRestString(),
-                    recipientUserId = prepared.recipientUserId.toRestString(),
-                    expectedRecipientKeyBundleId = prepared.recipientKeyBundleId.toRestString(),
-                    newRecipientKeyBundleId = snapshot.keyBundleId.toRestString(),
-                    newEnvelopePath = files.envelope.canonicalPath,
-                    newPublishStatementPath = files.statement.canonicalPath,
-                    newPublishStatementSignaturePath = files.signature.canonicalPath,
-                )
+                when (origin) {
+                    StaleRecoveryOrigin.DRAFT -> capsuleDao.applyDraftRecipientKeyRewrapForOwner(
+                        capsuleId = capsuleId.toRestString(),
+                        ownerUserId = owner.toRestString(),
+                        recipientUserId = prepared.recipientUserId.toRestString(),
+                        expectedRecipientKeyBundleId = prepared.recipientKeyBundleId.toRestString(),
+                        newRecipientKeyBundleId = snapshot.keyBundleId.toRestString(),
+                        newEnvelopePath = files.envelope.canonicalPath,
+                        newPublishStatementPath = files.statement.canonicalPath,
+                        newPublishStatementSignaturePath = files.signature.canonicalPath,
+                    )
+                    StaleRecoveryOrigin.FINALIZE -> capsuleDao.applyFinalizeRecipientKeyRewrapForOwner(
+                        capsuleId = capsuleId.toRestString(),
+                        ownerUserId = owner.toRestString(),
+                        recipientUserId = prepared.recipientUserId.toRestString(),
+                        expectedRecipientKeyBundleId = prepared.recipientKeyBundleId.toRestString(),
+                        newRecipientKeyBundleId = snapshot.keyBundleId.toRestString(),
+                        newEnvelopePath = files.envelope.canonicalPath,
+                        newPublishStatementPath = files.statement.canonicalPath,
+                        newPublishStatementSignaturePath = files.signature.canonicalPath,
+                    )
+                }
             } catch (cancelled: CancellationException) {
+                committed = replacementAdoptionStatus(owner, capsuleId, files) != false
                 throw cancelled
             } catch (_: Exception) {
+                committed = replacementAdoptionStatus(owner, capsuleId, files) != false
                 return CapsuleUploadOutcome.RecipientKeyStale
             }
             if (transitioned == 1) {
-                cleanupSupersededRecipientFiles(root, staleCapsule, prepared, files)
                 committed = true
+                runSupersededFilesCleanup(root, staleCapsule, prepared, files)
                 return run(owner, capsuleId)
             }
 
             val current = try {
                 capsuleDao.getByCapsuleIdAndOwner(capsuleId.toRestString(), owner.toRestString())
             } catch (cancelled: CancellationException) {
+                committed = replacementAdoptionStatus(owner, capsuleId, files) != false
                 throw cancelled
             } catch (_: Exception) {
+                committed = replacementAdoptionStatus(owner, capsuleId, files) != false
                 return CapsuleUploadOutcome.RecipientKeyStale
-            } ?: return CapsuleUploadOutcome.Missing
+            } ?: run {
+                committed = true
+                return CapsuleUploadOutcome.Missing
+            }
             val alreadyRewrapped = current.ownerUserId == owner.toRestString() &&
                 current.recipientUserId == prepared.recipientUserId.toRestString() &&
                 current.recipientKeyBundleId == snapshot.keyBundleId.toRestString() &&
                 current.state != OutboxCapsuleState.PREPARING &&
-                current.envelopePath?.let { isContained(root, File(it)) } == true &&
-                current.publishStatementPath?.let { isContained(root, File(it)) } == true &&
-                current.publishStatementSignaturePath?.let { isContained(root, File(it)) } == true
-            if (!alreadyRewrapped) return CapsuleUploadOutcome.RecipientKeyStale
+                current.envelopePath?.let { isContained(root, File(it)) && File(it).isFile } == true &&
+                current.publishStatementPath?.let { isContained(root, File(it)) && File(it).isFile } == true &&
+                current.publishStatementSignaturePath?.let { isContained(root, File(it)) && File(it).isFile } == true
+            if (!alreadyRewrapped) {
+                committed = true
+                return CapsuleUploadOutcome.RecipientKeyStale
+            }
             committed = current.envelopePath == files.envelope.canonicalPath &&
                 current.publishStatementPath == files.statement.canonicalPath &&
                 current.publishStatementSignaturePath == files.signature.canonicalPath
             return run(owner, capsuleId)
         } finally {
-            if (!committed) files.delete()
+            if (!committed) runCatching { files.delete() }
+        }
+    }
+
+    private suspend fun replacementAdoptionStatus(
+        owner: UserId,
+        capsuleId: CapsuleId,
+        files: RewrappedFiles,
+    ): Boolean? = withContext(NonCancellable) {
+        try {
+            val current = capsuleDao.getByCapsuleIdAndOwner(
+                capsuleId.toRestString(),
+                owner.toRestString(),
+            ) ?: return@withContext false
+            current.ownerUserId == owner.toRestString() &&
+                current.envelopePath == files.envelope.canonicalPath &&
+                current.publishStatementPath == files.statement.canonicalPath &&
+                current.publishStatementSignaturePath == files.signature.canonicalPath
+        } catch (_: CancellationException) {
+            null
+        } catch (_: Exception) {
+            null
         }
     }
 
@@ -549,25 +605,39 @@ class CapsuleUploadOrchestrator(
         prepared: PreparedCapsule,
         replacement: RewrappedFiles,
     ) {
-        val protectedPaths = buildSet {
-            add(replacement.envelope.canonicalPath)
-            add(replacement.statement.canonicalPath)
-            add(replacement.signature.canonicalPath)
-            prepared.blobs.forEach { blob ->
-                runCatching { add(File(blob.row.localCiphertextPath).canonicalPath) }
+        runCatching {
+            val protectedPaths = buildSet {
+                add(replacement.envelope.canonicalPath)
+                add(replacement.statement.canonicalPath)
+                add(replacement.signature.canonicalPath)
+                prepared.blobs.forEach { blob ->
+                    runCatching { add(File(blob.row.localCiphertextPath).canonicalPath) }
+                }
+            }
+            listOfNotNull(
+                previous.envelopePath,
+                previous.publishStatementPath,
+                previous.publishStatementSignaturePath,
+            ).forEach { rawPath ->
+                val candidate = File(rawPath)
+                val canonical = runCatching { candidate.canonicalPath }.getOrNull() ?: return@forEach
+                if (!isContained(root, candidate) || canonical in protectedPaths || !candidate.isFile) {
+                    return@forEach
+                }
+                runCatching { candidate.delete() }
             }
         }
-        listOfNotNull(
-            previous.envelopePath,
-            previous.publishStatementPath,
-            previous.publishStatementSignaturePath,
-        ).forEach { rawPath ->
-            val candidate = File(rawPath)
-            val canonical = runCatching { candidate.canonicalPath }.getOrNull() ?: return@forEach
-            if (!isContained(root, candidate) || canonical in protectedPaths || !candidate.isFile) {
-                return@forEach
-            }
-            runCatching { candidate.delete() }
+    }
+
+    private fun runSupersededFilesCleanup(
+        root: File,
+        previous: OutboxCapsuleEntity,
+        prepared: PreparedCapsule,
+        replacement: RewrappedFiles,
+    ) {
+        runCatching {
+            supersededFilesCleanupHook?.invoke()
+                ?: cleanupSupersededRecipientFiles(root, previous, prepared, replacement)
         }
     }
 
@@ -587,9 +657,9 @@ class CapsuleUploadOrchestrator(
         val signature: File,
     ) {
         fun delete() {
-            envelope.delete()
-            statement.delete()
-            signature.delete()
+            runCatching { envelope.delete() }
+            runCatching { statement.delete() }
+            runCatching { signature.delete() }
         }
     }
 
@@ -833,7 +903,7 @@ class CapsuleUploadOrchestrator(
         failure: CapsuleDraftResult.Failure,
     ): CapsuleUploadOutcome {
         if (failure.reason == CapsuleDraftFailure.RECIPIENT_KEY_STALE) {
-            return markRecipientKeyStale(owner, capsuleId)
+            return markRecipientKeyStale(owner, capsuleId, StaleRecoveryOrigin.DRAFT)
         }
         if (failure.reason == CapsuleDraftFailure.AUTH_INVALID || failure.retryable) {
             return markRetryable(owner, capsuleId, draftRetryableCode(failure.reason))
@@ -895,10 +965,10 @@ class CapsuleUploadOrchestrator(
         failure: CapsuleFinalizeResult.Failure,
     ): CapsuleUploadOutcome {
         if (failure.reason == CapsuleFinalizeFailure.RECIPIENT_KEY_STALE) {
-            return markRecipientKeyStale(owner, capsuleId)
+            return markRecipientKeyStale(owner, capsuleId, StaleRecoveryOrigin.FINALIZE)
         }
         if (failure.reason == CapsuleFinalizeFailure.AUTH_INVALID || failure.retryable) {
-            return markRetryable(owner, capsuleId, finalizeRetryableCode(failure.reason))
+            return markFinalizeRetryable(owner, capsuleId, finalizeRetryableCode(failure.reason))
         }
         return when (failure.reason) {
             CapsuleFinalizeFailure.VALIDATION_FAILED,
@@ -968,18 +1038,48 @@ class CapsuleUploadOrchestrator(
     private suspend fun markRecipientKeyStale(
         owner: UserId,
         capsuleId: CapsuleId,
+        origin: StaleRecoveryOrigin,
+    ): CapsuleUploadOutcome {
+        val marker = when (origin) {
+            StaleRecoveryOrigin.DRAFT -> RECIPIENT_KEY_STALE_DRAFT
+            StaleRecoveryOrigin.FINALIZE -> RECIPIENT_KEY_STALE_FINALIZE
+        }
+        val result = when (origin) {
+            StaleRecoveryOrigin.DRAFT -> markRetryable(owner, capsuleId, marker)
+            StaleRecoveryOrigin.FINALIZE -> markFinalizeRetryable(owner, capsuleId, marker)
+        }
+        return if (result == CapsuleUploadOutcome.Retryable(marker)) {
+            CapsuleUploadOutcome.RecipientKeyStale
+        } else {
+            result
+        }
+    }
+
+    private suspend fun markFinalizeRetryable(
+        owner: UserId,
+        capsuleId: CapsuleId,
+        code: String,
     ): CapsuleUploadOutcome {
         if (!accountMatches(owner)) return CapsuleUploadOutcome.AccountMismatch
         return try {
-            if (capsuleDao.markRetryableFailureForOwner(
+            if (capsuleDao.markFinalizeRetryableForOwner(
                     capsuleId.toRestString(),
                     owner.toRestString(),
-                    RECIPIENT_KEY_STALE,
+                    code,
                 ) == 1
             ) {
-                CapsuleUploadOutcome.RecipientKeyStale
+                CapsuleUploadOutcome.Retryable(code)
             } else {
-                CapsuleUploadOutcome.Retryable("INTERNAL_ERROR")
+                val current = capsuleDao.getByCapsuleIdAndOwner(
+                    capsuleId.toRestString(),
+                    owner.toRestString(),
+                )
+                when (current?.state) {
+                    OutboxCapsuleState.FINALIZING -> CapsuleUploadOutcome.Retryable(code)
+                    OutboxCapsuleState.PUBLISHED -> finishPublished(owner, capsuleId)
+                    null -> CapsuleUploadOutcome.Missing
+                    else -> CapsuleUploadOutcome.Retryable("INTERNAL_ERROR")
+                }
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -1116,9 +1216,21 @@ class CapsuleUploadOrchestrator(
         val ordinal: Int,
     )
 
+    private enum class StaleRecoveryOrigin {
+        DRAFT,
+        FINALIZE,
+    }
+
     private companion object {
         const val TERMINAL_CLEANUP_RETRY = "RETRY_MATERIAL_CLEANUP"
         const val RECIPIENT_KEY_STALE = "RECIPIENT_KEY_STALE"
+        const val RECIPIENT_KEY_STALE_DRAFT = "RECIPIENT_KEY_STALE_DRAFT"
+        const val RECIPIENT_KEY_STALE_FINALIZE = "RECIPIENT_KEY_STALE_FINALIZE"
+        val STALE_MARKERS = setOf(
+            RECIPIENT_KEY_STALE,
+            RECIPIENT_KEY_STALE_DRAFT,
+            RECIPIENT_KEY_STALE_FINALIZE,
+        )
         const val SUPPORTED_ACTIVE_STATUS = "ACTIVE"
         const val SUPPORTED_SUITE = "HPKE_X25519_HKDF_SHA256_AES256GCM__ED25519"
         const val SUPPORTED_PROTOCOL_VERSION = 1

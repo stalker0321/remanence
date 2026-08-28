@@ -52,6 +52,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -123,7 +124,7 @@ class CapsuleUploadStaleRecoveryTest {
             assertEquals(
                 1,
                 database.outboxCapsuleDao().markRetryableFailureForOwner(
-                    CAPSULE.toRestString(), OWNER.toRestString(), RECIPIENT_KEY_STALE,
+                    CAPSULE.toRestString(), OWNER.toRestString(), RECIPIENT_KEY_STALE_DRAFT,
                 ),
             )
         }
@@ -136,7 +137,7 @@ class CapsuleUploadStaleRecoveryTest {
     }
 
     @Test
-    fun staleFinalizeRecoveryRebindsOnlyRecipientMaterialAndSkipsStoredBlobs() = runBlocking {
+    fun draftOriginStaleRecoveryRebindsOnlyRecipientMaterialAndSkipsStoredBlobs() = runBlocking {
         val originalRow = capsuleRow()
         val originalBlobRows = database.outboxBlobDao().getAllByCapsuleIdAndOwner(
             CAPSULE.toRestString(), OWNER.toRestString(),
@@ -146,10 +147,23 @@ class CapsuleUploadStaleRecoveryTest {
         val oldStatement = PublishStatement.parseFrom(File(originalRow.publishStatementPath!!).readBytes())
         val uploads = mutableListOf<CapsuleBlobUploadRequest>()
         val reads = mutableListOf<String>()
+        var draftRequest: CapsuleDraftRequest? = null
         var finalizeRequest: CapsuleFinalizeRequest? = null
 
         val result = orchestrator(
             draftState = CapsuleDraftBlobState.STORED,
+            createDraft = { request, _ ->
+                draftRequest = request
+                CapsuleDraftResult.Success(
+                    CapsuleDraft(
+                        request.capsuleId,
+                        CapsuleDraftState.DRAFT,
+                        "2030-01-08T00:00:00Z",
+                        request.blobs.map { CapsuleDraftBlob(it.blobId, CapsuleDraftBlobState.STORED) },
+                    ),
+                    200,
+                )
+            },
             upload = { request, _ -> uploads += request; CapsuleBlobUploadResult.Success(204) },
             finalize = { request, _ ->
                 finalizeRequest = request
@@ -174,6 +188,7 @@ class CapsuleUploadStaleRecoveryTest {
         assertFalse(retryStore.expectedPath(OWNER, CAPSULE).exists())
 
         assertTrue(uploads.isEmpty())
+        assertEquals(NEW_RECIPIENT_BUNDLE, draftRequest!!.recipientTarget.keyBundleId)
         assertTrue(originalBlobRows.all { row -> row.attemptCount == 0 })
         assertTrue(originalBlobRows.all { row ->
             originalArtifactBytes.getValue(row.blobId).contentEquals(File(row.localCiphertextPath).readBytes())
@@ -215,30 +230,97 @@ class CapsuleUploadStaleRecoveryTest {
     }
 
     @Test
+    fun supersededCleanupFailureAfterCasLeavesReplacementReferencedAndPresent() = runBlocking {
+        val result = orchestrator(
+            supersededFilesCleanupHook = { error("superseded cleanup failed") },
+        ).run(OWNER, CAPSULE)
+
+        assertEquals(CapsuleUploadOutcome.Succeeded, result)
+        val current = capsuleRow()
+        assertNotNull(current.envelopePath)
+        assertNotNull(current.publishStatementPath)
+        assertNotNull(current.publishStatementSignaturePath)
+        assertTrue(File(current.envelopePath!!).isFile)
+        assertTrue(File(current.publishStatementPath!!).isFile)
+        assertTrue(File(current.publishStatementSignaturePath!!).isFile)
+    }
+
+    @Test
+    fun ambiguousCasExceptionOrCancellationNeverDeletesPossibleWinnerFiles() = runBlocking {
+        val throwingDao = CommitThenThrowCapsuleDao(database.outboxCapsuleDao(), cancelAfterCommit = false)
+        assertEquals(
+            CapsuleUploadOutcome.RecipientKeyStale,
+            orchestrator(capsuleDao = throwingDao).run(OWNER, CAPSULE),
+        )
+        assertReplacementFilesArePresent()
+
+        stageFreshStaleRow()
+        val cancellingDao = CommitThenThrowCapsuleDao(database.outboxCapsuleDao(), cancelAfterCommit = true)
+        var rethrown = false
+        try {
+            orchestrator(capsuleDao = cancellingDao).run(OWNER, CAPSULE)
+        } catch (_: CancellationException) {
+            rethrown = true
+        }
+        assertTrue(rethrown)
+        assertReplacementFilesArePresent()
+    }
+
+    private suspend fun assertReplacementFilesArePresent() {
+        val current = capsuleRow()
+        assertEquals(OutboxCapsuleState.ENCRYPTED, current.state)
+        assertEquals(NEW_RECIPIENT_BUNDLE.toRestString(), current.recipientKeyBundleId)
+        assertTrue(File(current.envelopePath!!).isFile)
+        assertTrue(File(current.publishStatementPath!!).isFile)
+        assertTrue(File(current.publishStatementSignaturePath!!).isFile)
+    }
+
+    @Test
     fun processRestartAfterRewrapCasReplaysNewMaterialWithoutReupload() = runBlocking {
+        stageFreshStaleRow(
+            marker = RECIPIENT_KEY_STALE_FINALIZE,
+            state = OutboxCapsuleState.FINALIZING,
+        )
         val lookupCalls = AtomicInteger(0)
+        var firstFinalizeRequest: CapsuleFinalizeRequest? = null
         val first = orchestrator(
             lookup = { _, _ -> lookupCalls.incrementAndGet(); foundRecipient() },
             draftState = CapsuleDraftBlobState.STORED,
-            finalize = { _, _ ->
+            createDraft = { _, _ -> error("finalize-origin recovery must not createDraft") },
+            finalize = { request, _ ->
+                firstFinalizeRequest = request
                 CapsuleFinalizeResult.Failure(CapsuleFinalizeFailure.NETWORK, retryable = true)
             },
         ).run(OWNER, CAPSULE)
         assertEquals(CapsuleUploadOutcome.Retryable(CapsuleFinalizeFailure.NETWORK.name), first)
-        assertEquals(OutboxCapsuleState.RETRYABLE_FAILURE, capsuleRow().state)
+        assertEquals(OutboxCapsuleState.FINALIZING, capsuleRow().state)
         assertEquals(CapsuleFinalizeFailure.NETWORK.name, capsuleRow().lastErrorCode)
         assertEquals(NEW_RECIPIENT_BUNDLE.toRestString(), capsuleRow().recipientKeyBundleId)
         assertTrue(capsuleRow().senderRetryKeysetPath != null)
 
         val uploads = mutableListOf<CapsuleBlobUploadRequest>()
+        var secondFinalizeRequest: CapsuleFinalizeRequest? = null
         val second = orchestrator(
             lookup = { _, _ -> lookupCalls.incrementAndGet(); foundRecipient() },
             draftState = CapsuleDraftBlobState.STORED,
+            createDraft = { _, _ -> error("finalize-origin replay must not createDraft") },
             upload = { request, _ -> uploads += request; CapsuleBlobUploadResult.Success(204) },
+            finalize = { request, _ ->
+                secondFinalizeRequest = request
+                readyResult()
+            },
         ).run(OWNER, CAPSULE)
         assertEquals(CapsuleUploadOutcome.Succeeded, second)
         assertEquals(1, lookupCalls.get())
         assertTrue(uploads.isEmpty())
+        assertNotNull(firstFinalizeRequest)
+        assertNotNull(secondFinalizeRequest)
+        assertArrayEquals(firstFinalizeRequest!!.statement, secondFinalizeRequest!!.statement)
+        assertArrayEquals(firstFinalizeRequest!!.signature, secondFinalizeRequest!!.signature)
+        assertArrayEquals(
+            firstFinalizeRequest!!.recipientEnvelopeCiphertext,
+            secondFinalizeRequest!!.recipientEnvelopeCiphertext,
+        )
         assertEquals(OutboxCapsuleState.PUBLISHED, capsuleRow().state)
     }
 
@@ -258,11 +340,15 @@ class CapsuleUploadStaleRecoveryTest {
                 },
             ).run(OWNER, CAPSULE),
         )
-        assertEquals(RECIPIENT_KEY_STALE, capsuleRow().lastErrorCode)
+        assertEquals(RECIPIENT_KEY_STALE_FINALIZE, capsuleRow().lastErrorCode)
+        assertEquals(OutboxCapsuleState.FINALIZING, capsuleRow().state)
 
         assertEquals(
             CapsuleUploadOutcome.Succeeded,
-            orchestrator(draftState = CapsuleDraftBlobState.STORED).run(OWNER, CAPSULE),
+            orchestrator(
+                draftState = CapsuleDraftBlobState.STORED,
+                createDraft = { _, _ -> error("finalize-origin recovery must not createDraft") },
+            ).run(OWNER, CAPSULE),
         )
         assertEquals(OutboxCapsuleState.PUBLISHED, capsuleRow().state)
     }
@@ -316,7 +402,7 @@ class CapsuleUploadStaleRecoveryTest {
         ).run(OWNER, CAPSULE)
 
         assertEquals(CapsuleUploadOutcome.RecipientKeyStale, result)
-        assertEquals(RECIPIENT_KEY_STALE, capsuleRow().lastErrorCode)
+        assertEquals(RECIPIENT_KEY_STALE_DRAFT, capsuleRow().lastErrorCode)
         assertTrue(capsuleRow().recipientKeyBundleId == OLD_RECIPIENT_BUNDLE.toRestString())
     }
 
@@ -324,13 +410,13 @@ class CapsuleUploadStaleRecoveryTest {
     fun missingCorruptOrWrongAadRetryMaterialLeavesRowParked() = runBlocking {
         retryStore.delete(OWNER, CAPSULE)
         assertEquals(CapsuleUploadOutcome.RecipientKeyStale, orchestrator().run(OWNER, CAPSULE))
-        assertEquals(RECIPIENT_KEY_STALE, capsuleRow().lastErrorCode)
+        assertEquals(RECIPIENT_KEY_STALE_DRAFT, capsuleRow().lastErrorCode)
 
         stageFreshStaleRow()
         val retryFile = retryStore.expectedPath(OWNER, CAPSULE)
         retryFile.writeBytes(byteArrayOf(1, 2, 3))
         assertEquals(CapsuleUploadOutcome.RecipientKeyStale, orchestrator().run(OWNER, CAPSULE))
-        assertEquals(RECIPIENT_KEY_STALE, capsuleRow().lastErrorCode)
+        assertEquals(RECIPIENT_KEY_STALE_DRAFT, capsuleRow().lastErrorCode)
 
         stageFreshStaleRow()
         database.openHelper.writableDatabase.execSQL(
@@ -338,7 +424,7 @@ class CapsuleUploadStaleRecoveryTest {
             arrayOf(OTHER_BUNDLE.toRestString(), CAPSULE.toRestString(), OWNER.toRestString()),
         )
         assertEquals(CapsuleUploadOutcome.RecipientKeyStale, orchestrator().run(OWNER, CAPSULE))
-        assertEquals(RECIPIENT_KEY_STALE, capsuleRow().lastErrorCode)
+        assertEquals(RECIPIENT_KEY_STALE_DRAFT, capsuleRow().lastErrorCode)
     }
 
     @Test
@@ -366,7 +452,7 @@ class CapsuleUploadStaleRecoveryTest {
         ).run(OWNER, CAPSULE)
         assertEquals(CapsuleUploadOutcome.AccountMismatch, switched)
         assertEquals(0, finalizeCalls)
-        assertEquals(RECIPIENT_KEY_STALE, capsuleRow().lastErrorCode)
+        assertEquals(RECIPIENT_KEY_STALE_DRAFT, capsuleRow().lastErrorCode)
 
         stageFreshStaleRow()
         var cancelled = false
@@ -376,7 +462,7 @@ class CapsuleUploadStaleRecoveryTest {
             cancelled = true
         }
         assertTrue(cancelled)
-        assertEquals(RECIPIENT_KEY_STALE, capsuleRow().lastErrorCode)
+        assertEquals(RECIPIENT_KEY_STALE_DRAFT, capsuleRow().lastErrorCode)
     }
 
     private fun orchestrator(
@@ -384,21 +470,7 @@ class CapsuleUploadStaleRecoveryTest {
         currentOwner: suspend () -> String? = { OWNER.toRestString() },
         lookup: suspend (UserId, String) -> RecipientUserLookupResult = { _, _ -> foundRecipient() },
         draftState: CapsuleDraftBlobState = CapsuleDraftBlobState.STORED,
-        upload: suspend (CapsuleBlobUploadRequest, String) -> CapsuleBlobUploadResult = { _, _ ->
-            CapsuleBlobUploadResult.Success(204)
-        },
-        finalize: suspend (CapsuleFinalizeRequest, String) -> CapsuleFinalizeResult = { request, _ ->
-            readyResult()
-        },
-        read: suspend (String) -> ByteArray = { File(it).readBytes() },
-        signingLoader: suspend (UserId, KeyBundleId) -> com.google.crypto.tink.KeysetHandle? =
-            { _, _ -> senderIdentity.signingPrivateHandle },
-    ): CapsuleUploadOrchestrator = CapsuleUploadOrchestrator(
-        capsuleDao = capsuleDao,
-        blobDao = database.outboxBlobDao(),
-        currentAccountUserId = currentOwner,
-        accessToken = { "access-token" },
-        createDraft = { request, _ ->
+        createDraft: suspend (CapsuleDraftRequest, String) -> CapsuleDraftResult = { request, _ ->
             CapsuleDraftResult.Success(
                 CapsuleDraft(
                     request.capsuleId,
@@ -409,7 +481,23 @@ class CapsuleUploadStaleRecoveryTest {
                 200,
             )
         },
-            uploadBlob = upload,
+        upload: suspend (CapsuleBlobUploadRequest, String) -> CapsuleBlobUploadResult = { _, _ ->
+            CapsuleBlobUploadResult.Success(204)
+        },
+        finalize: suspend (CapsuleFinalizeRequest, String) -> CapsuleFinalizeResult = { request, _ ->
+            readyResult()
+        },
+        read: suspend (String) -> ByteArray = { File(it).readBytes() },
+        signingLoader: suspend (UserId, KeyBundleId) -> com.google.crypto.tink.KeysetHandle? =
+            { _, _ -> senderIdentity.signingPrivateHandle },
+        supersededFilesCleanupHook: (() -> Unit)? = null,
+    ): CapsuleUploadOrchestrator = CapsuleUploadOrchestrator(
+        capsuleDao = capsuleDao,
+        blobDao = database.outboxBlobDao(),
+        currentAccountUserId = currentOwner,
+        accessToken = { "access-token" },
+        createDraft = createDraft,
+        uploadBlob = upload,
         finalizeCapsule = finalize,
         cleanupRetryMaterial = { owner, capsule -> retryLifecycle.cleanupForTerminalState(owner, capsule) },
         readCiphertext = read,
@@ -418,6 +506,7 @@ class CapsuleUploadStaleRecoveryTest {
         senderRetryKeysetWrapper = retryWrapper,
         loadSenderSigningKeyset = signingLoader,
         accountScopedFileRoots = roots,
+        supersededFilesCleanupHook = supersededFilesCleanupHook,
     )
 
     private fun foundRecipient(): RecipientUserLookupResult.Found =
@@ -435,7 +524,10 @@ class CapsuleUploadStaleRecoveryTest {
             ),
         )
 
-    private suspend fun stageFreshStaleRow() {
+    private suspend fun stageFreshStaleRow(
+        marker: String = RECIPIENT_KEY_STALE_DRAFT,
+        state: OutboxCapsuleState = OutboxCapsuleState.RETRYABLE_FAILURE,
+    ) {
         database.close()
         roots.child(OWNER, AccountScopedFileRoots.ChildRoot.OUTBOX_CIPHERTEXT).deleteRecursively()
         roots.child(OWNER, AccountScopedFileRoots.ChildRoot.RETRY_MATERIAL).deleteRecursively()
@@ -446,9 +538,17 @@ class CapsuleUploadStaleRecoveryTest {
         retryStore = SenderRetryMaterialStore(roots)
         retryLifecycle = SenderRetryMaterialLifecycle(retryStore, database.outboxCapsuleDao())
         CapsuleOutboxStager(database, roots, retryStore).stage(prepared)
-        database.outboxCapsuleDao().markRetryableFailureForOwner(
-            CAPSULE.toRestString(), OWNER.toRestString(), RECIPIENT_KEY_STALE,
-        )
+        if (state == OutboxCapsuleState.RETRYABLE_FAILURE) {
+            database.outboxCapsuleDao().markRetryableFailureForOwner(
+                CAPSULE.toRestString(), OWNER.toRestString(), marker,
+            )
+        } else {
+            database.openHelper.writableDatabase.execSQL(
+                "UPDATE outbox_capsule SET state = ?, last_error_code = ? " +
+                    "WHERE capsule_id = ? AND owner_user_id = ?",
+                arrayOf(state.name, marker, CAPSULE.toRestString(), OWNER.toRestString()),
+            )
+        }
     }
 
     private suspend fun capsuleRow() = database.outboxCapsuleDao().getByCapsuleIdAndOwner(
@@ -465,7 +565,7 @@ class CapsuleUploadStaleRecoveryTest {
             200,
         )
 
-    private class CasLosingCapsuleDao(
+    private open class CasLosingCapsuleDao(
         private val delegate: OutboxCapsuleDao,
         private val winnerRoot: File,
     ) : OutboxCapsuleDao() {
@@ -486,7 +586,7 @@ class CapsuleUploadStaleRecoveryTest {
         override suspend fun beginUploadForOwner(capsuleId: String, ownerUserId: String) =
             delegate.beginUploadForOwner(capsuleId, ownerUserId)
 
-        override suspend fun applyRecipientKeyRewrapForOwner(
+        override suspend fun applyDraftRecipientKeyRewrapForOwner(
             capsuleId: String,
             ownerUserId: String,
             recipientUserId: String,
@@ -509,7 +609,7 @@ class CapsuleUploadStaleRecoveryTest {
             )
             losers.zip(winnerPaths).forEach { (loser, winner) -> loser.copyTo(winner) }
             check(
-                delegate.applyRecipientKeyRewrapForOwner(
+                delegate.applyDraftRecipientKeyRewrapForOwner(
                     capsuleId,
                     ownerUserId,
                     recipientUserId,
@@ -524,11 +624,37 @@ class CapsuleUploadStaleRecoveryTest {
             return 0
         }
 
+        override suspend fun applyFinalizeRecipientKeyRewrapForOwner(
+            capsuleId: String,
+            ownerUserId: String,
+            recipientUserId: String,
+            expectedRecipientKeyBundleId: String,
+            newRecipientKeyBundleId: String,
+            newEnvelopePath: String,
+            newPublishStatementPath: String,
+            newPublishStatementSignaturePath: String,
+        ) = delegate.applyFinalizeRecipientKeyRewrapForOwner(
+            capsuleId,
+            ownerUserId,
+            recipientUserId,
+            expectedRecipientKeyBundleId,
+            newRecipientKeyBundleId,
+            newEnvelopePath,
+            newPublishStatementPath,
+            newPublishStatementSignaturePath,
+        )
+
         override suspend fun beginFinalizeForOwner(capsuleId: String, ownerUserId: String) =
             delegate.beginFinalizeForOwner(capsuleId, ownerUserId)
 
         override suspend fun markPublishedForOwner(capsuleId: String, ownerUserId: String) =
             delegate.markPublishedForOwner(capsuleId, ownerUserId)
+
+        override suspend fun markFinalizeRetryableForOwner(
+            capsuleId: String,
+            ownerUserId: String,
+            errorCode: String?,
+        ) = delegate.markFinalizeRetryableForOwner(capsuleId, ownerUserId, errorCode)
 
         override suspend fun markRetryableFailureForOwner(
             capsuleId: String,
@@ -554,6 +680,37 @@ class CapsuleUploadStaleRecoveryTest {
             emptyList()
     }
 
+    private class CommitThenThrowCapsuleDao(
+        private val delegateDao: OutboxCapsuleDao,
+        private val cancelAfterCommit: Boolean,
+    ) : CasLosingCapsuleDao(delegateDao, File(System.getProperty("java.io.tmpdir"), "a06-unused")) {
+        override suspend fun applyDraftRecipientKeyRewrapForOwner(
+            capsuleId: String,
+            ownerUserId: String,
+            recipientUserId: String,
+            expectedRecipientKeyBundleId: String,
+            newRecipientKeyBundleId: String,
+            newEnvelopePath: String,
+            newPublishStatementPath: String,
+            newPublishStatementSignaturePath: String,
+        ): Int {
+            check(
+                delegateDao.applyDraftRecipientKeyRewrapForOwner(
+                    capsuleId,
+                    ownerUserId,
+                    recipientUserId,
+                    expectedRecipientKeyBundleId,
+                    newRecipientKeyBundleId,
+                    newEnvelopePath,
+                    newPublishStatementPath,
+                    newPublishStatementSignaturePath,
+                ) == 1,
+            )
+            if (cancelAfterCommit) throw CancellationException("after successful CAS")
+            error("after successful CAS")
+        }
+    }
+
     private companion object {
         val OWNER = UserId.parseRest("a6000000-0000-4000-8000-000000000001")
         val RECIPIENT = UserId.parseRest("a6000000-0000-4000-8000-000000000002")
@@ -563,6 +720,7 @@ class CapsuleUploadStaleRecoveryTest {
         val NEW_RECIPIENT_BUNDLE = KeyBundleId.parseRest("a6000000-0000-4000-8000-000000000006")
         val OTHER_BUNDLE = KeyBundleId.parseRest("a6000000-0000-4000-8000-000000000007")
         val OTHER_OWNER = UserId.parseRest("a6000000-0000-4000-8000-000000000008")
-        const val RECIPIENT_KEY_STALE = "RECIPIENT_KEY_STALE"
+        const val RECIPIENT_KEY_STALE_DRAFT = "RECIPIENT_KEY_STALE_DRAFT"
+        const val RECIPIENT_KEY_STALE_FINALIZE = "RECIPIENT_KEY_STALE_FINALIZE"
     }
 }

@@ -65,9 +65,14 @@ abstract class OutboxCapsuleDao {
     @Query(
         "SELECT capsule_id FROM outbox_capsule " +
             "WHERE owner_user_id = :ownerUserId AND (" +
-            "state IN ('ENCRYPTED', 'UPLOADING', 'FINALIZING') " +
+            "(state IN ('ENCRYPTED', 'UPLOADING', 'FINALIZING') " +
+            "    AND (last_error_code IS NULL OR last_error_code NOT IN " +
+            "        ('RECIPIENT_KEY_STALE', 'RECIPIENT_KEY_STALE_DRAFT', " +
+            "         'RECIPIENT_KEY_STALE_FINALIZE'))) " +
             "OR (state = 'RETRYABLE_FAILURE' " +
-            "    AND (last_error_code IS NULL OR last_error_code <> 'RECIPIENT_KEY_STALE')) " +
+            "    AND (last_error_code IS NULL OR last_error_code NOT IN " +
+            "        ('RECIPIENT_KEY_STALE', 'RECIPIENT_KEY_STALE_DRAFT', " +
+            "         'RECIPIENT_KEY_STALE_FINALIZE'))) " +
             "OR (state IN ('PUBLISHED', 'TERMINAL_FAILURE') " +
             "    AND sender_retry_keyset_path IS NOT NULL)" +
             ") ORDER BY capsule_id",
@@ -90,26 +95,48 @@ abstract class OutboxCapsuleDao {
     )
     abstract suspend fun beginUploadForOwner(capsuleId: String, ownerUserId: String): Int
 
-    /**
-     * A06 owner-guarded stale-recipient rewrap CAS. Files are written before
-     * this transition; publishing UPLOADING makes a process death after the
-     * CAS replay through the ordinary draft/blob reconciliation path.
-     */
+    /** A06 draft-origin stale rewrap: retryable parked row -> fresh draft phase. */
     @Query(
         "UPDATE outbox_capsule SET " +
             "recipient_key_bundle_id = :newRecipientKeyBundleId, " +
             "envelope_path = :newEnvelopePath, " +
             "publish_statement_path = :newPublishStatementPath, " +
             "publish_statement_signature_path = :newPublishStatementSignaturePath, " +
-            "state = 'UPLOADING', last_error_code = NULL " +
+            "state = 'ENCRYPTED', last_error_code = NULL " +
             "WHERE capsule_id = :capsuleId " +
             "AND owner_user_id = :ownerUserId " +
             "AND recipient_user_id = :recipientUserId " +
             "AND recipient_key_bundle_id = :expectedRecipientKeyBundleId " +
             "AND state = 'RETRYABLE_FAILURE' " +
-            "AND last_error_code = 'RECIPIENT_KEY_STALE'",
+            "AND last_error_code = 'RECIPIENT_KEY_STALE_DRAFT'",
     )
-    abstract suspend fun applyRecipientKeyRewrapForOwner(
+    abstract suspend fun applyDraftRecipientKeyRewrapForOwner(
+        capsuleId: String,
+        ownerUserId: String,
+        recipientUserId: String,
+        expectedRecipientKeyBundleId: String,
+        newRecipientKeyBundleId: String,
+        newEnvelopePath: String,
+        newPublishStatementPath: String,
+        newPublishStatementSignaturePath: String,
+    ): Int
+
+    /** A06 finalize-origin stale rewrap: parked finalize phase -> finalize phase. */
+    @Query(
+        "UPDATE outbox_capsule SET " +
+            "recipient_key_bundle_id = :newRecipientKeyBundleId, " +
+            "envelope_path = :newEnvelopePath, " +
+            "publish_statement_path = :newPublishStatementPath, " +
+            "publish_statement_signature_path = :newPublishStatementSignaturePath, " +
+            "state = 'FINALIZING', last_error_code = NULL " +
+            "WHERE capsule_id = :capsuleId " +
+            "AND owner_user_id = :ownerUserId " +
+            "AND recipient_user_id = :recipientUserId " +
+            "AND recipient_key_bundle_id = :expectedRecipientKeyBundleId " +
+            "AND state = 'FINALIZING' " +
+            "AND last_error_code = 'RECIPIENT_KEY_STALE_FINALIZE'",
+    )
+    abstract suspend fun applyFinalizeRecipientKeyRewrapForOwner(
         capsuleId: String,
         ownerUserId: String,
         recipientUserId: String,
@@ -135,6 +162,18 @@ abstract class OutboxCapsuleDao {
             "AND state = 'FINALIZING'",
     )
     abstract suspend fun markPublishedForOwner(capsuleId: String, ownerUserId: String): Int
+
+    /** Owner-guarded finalize retry marker that preserves FINALIZING for replay. */
+    @Query(
+        "UPDATE outbox_capsule SET last_error_code = :errorCode " +
+            "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId " +
+            "AND state = 'FINALIZING'",
+    )
+    abstract suspend fun markFinalizeRetryableForOwner(
+        capsuleId: String,
+        ownerUserId: String,
+        errorCode: String?,
+    ): Int
 
     /** Owner-guarded recoverable failure transition with its structured code. */
     @Query(

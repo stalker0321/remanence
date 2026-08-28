@@ -315,6 +315,15 @@ in its AAD, then re-sign with the current active sender key and update the
 statement sender bundle ID, subject to the server contract; it must not retain
 retired signing private keys solely for this recovery.
 
+Stale recovery also preserves its origin phase: draft-origin parking re-enters
+ENCRYPTED, while finalize-origin parking remains FINALIZING. The server binds
+the draft idempotency key to the original request SHA, so a finalize-origin
+replay must not call createDraft with a changed recipient bundle; it must
+replay finalize against the existing server draft. Replacement files are
+marked adopted before best-effort superseded-file cleanup, and ambiguous DAO
+completion preserves possible winners; the bounded orphan sweep follow-up
+must handle leftovers from those crash/uncertain-completion windows.
+
 **Checkpoints A:** review after upload A01–A08, incoming index A09–A12,
 presentation A13–A21, and final two-device evidence. Do not review every
 single implementation commit.

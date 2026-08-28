@@ -5,6 +5,7 @@ import com.google.crypto.tink.KeysetHandle
 import com.google.crypto.tink.TinkProtoKeysetFormat
 import com.google.protobuf.ByteString
 import java.security.MessageDigest
+import java.util.UUID
 import dev.hryshyn.remanence.core.crypto.CapsuleKeysetGenerator
 import dev.hryshyn.remanence.core.crypto.ContentManifestCodec
 import dev.hryshyn.remanence.core.crypto.ManifestPhoto
@@ -241,7 +242,9 @@ class CapsulePublisher(
 
         return PreparedOutboxCapsule(
             capsuleId = request.capsuleId.value,
-            idempotencyKey = "publish-${request.capsuleId.toRestString()}",
+            // A01 sends this persisted key to the server's UUID-bound draft
+            // contract; it is generated once and retained in the outbox.
+            idempotencyKey = UUID.randomUUID().toString(),
             ownerUserId = request.ownerUserId,
             senderUserId = senderUser.value,
             recipientUserId = recipientUser.value,

@@ -14,6 +14,9 @@ import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.fingerprints.EncryptedFingerprintStore
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
 import dev.hryshyn.remanence.core.data.network.ApiBaseUrl
+import dev.hryshyn.remanence.core.data.network.CapsuleBlobUploadRepository
+import dev.hryshyn.remanence.core.data.network.CapsuleDraftRepository
+import dev.hryshyn.remanence.core.data.network.CapsuleFinalizeRepository
 import dev.hryshyn.remanence.core.data.network.RegisterRequestDto
 import dev.hryshyn.remanence.core.data.network.RegisterResponseDto
 import dev.hryshyn.remanence.core.data.network.AuthRepository
@@ -24,6 +27,7 @@ import dev.hryshyn.remanence.wiring.KekBoundSecretSealer
 import dev.hryshyn.remanence.session.IdentityAvailabilityPort
 import dev.hryshyn.remanence.session.SessionBootstrap
 import dev.hryshyn.remanence.session.SessionTokenPort
+import dev.hryshyn.remanence.sync.CapsuleUploadOrchestrator
 import dev.hryshyn.remanence.wiring.TinkRegistrationIdentityAdapter
 
 /**
@@ -233,6 +237,19 @@ class AppContainer(
         dev.hryshyn.remanence.core.data.network.KeyBundleByIdRepository.create(apiBaseUrl)
     }
 
+    /** A04's three existing authenticated capsule boundaries. */
+    val capsuleDraftRepository: CapsuleDraftRepository by lazy {
+        CapsuleDraftRepository.create(apiBaseUrl)
+    }
+
+    val capsuleBlobUploadRepository: CapsuleBlobUploadRepository by lazy {
+        CapsuleBlobUploadRepository.create(apiBaseUrl)
+    }
+
+    val capsuleFinalizeRepository: CapsuleFinalizeRepository by lazy {
+        CapsuleFinalizeRepository.create(apiBaseUrl)
+    }
+
     /**
      * FIX-REVIEW2-04: THE trusted sender-key boundary for capsule
      * verification. Other senders resolve only through the authenticated
@@ -279,6 +296,26 @@ class AppContainer(
     /** FIX-M1-007-07: the current account lives in the real local_account table. */
     val currentAccountStore: dev.hryshyn.remanence.session.RoomCurrentAccountStore by lazy {
         dev.hryshyn.remanence.session.RoomCurrentAccountStore(database.localAccountDao())
+    }
+
+    /** One account/capsule upload boundary used by [CapsuleUploadWorker]. */
+    val capsuleUploadOrchestrator: CapsuleUploadOrchestrator by lazy {
+        val retryLifecycle = dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialLifecycle(
+            retryStore = dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore(accountScopedFileRoots),
+            capsuleDao = database.outboxCapsuleDao(),
+        )
+        CapsuleUploadOrchestrator(
+            capsuleDao = database.outboxCapsuleDao(),
+            blobDao = database.outboxBlobDao(),
+            currentAccountUserId = { currentAccountStore.load()?.userId },
+            accessToken = { authTokenHolder.accessToken },
+            createDraft = { request, token -> capsuleDraftRepository.createDraft(request, token) },
+            uploadBlob = { request, token -> capsuleBlobUploadRepository.uploadBlob(request, token) },
+            finalizeCapsule = { request, token -> capsuleFinalizeRepository.finalize(request, token) },
+            cleanupRetryMaterial = { owner, capsule ->
+                retryLifecycle.cleanupForTerminalState(owner, capsule)
+            },
+        )
     }
 
     /**

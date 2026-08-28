@@ -25,6 +25,7 @@ from remanence.api.dependencies import (
 from remanence.api.problems import PROBLEM_CATALOG, problem_response
 from remanence.capsules.abort_service import CapsuleAbortError, CapsuleAbortService
 from remanence.capsules.blob_models import CapsuleBlobKind
+from remanence.capsules.delivery_models import RecipientDeliveryStatus
 from remanence.capsules.draft_service import (
     CapsuleDraftResult,
     CapsuleDraftService,
@@ -61,6 +62,11 @@ from remanence.capsules.recipient_blob_query_service import (
     RecipientBlobQueryService,
     RecipientBlobSnapshot,
 )
+from remanence.capsules.recipient_material_synced_service import (
+    RecipientMaterialSyncedError,
+    RecipientMaterialSyncedResult,
+    RecipientMaterialSyncedService,
+)
 from remanence.capsules.schemas import (
     CapsuleDraftValidationError,
     parse_create_capsule_draft_request,
@@ -94,6 +100,7 @@ _TRANSFER_ENCODING_HEADER = b"transfer-encoding"
 _RANGE_HEADER = b"range"
 _CONTENT_RANGE_HEADER = b"content-range"
 _OCTET_STREAM = "application/octet-stream"
+_JSON_MEDIA_TYPE = "application/json"
 _BLOB_DOWNLOAD_CHUNK_SIZE = 64 * 1024
 _CACHE_CONTROL_PRIVATE_NO_STORE = "private, no-store"
 _DECIMAL = re.compile(r"[0-9]+")
@@ -199,6 +206,39 @@ async def _read_bounded_body(
     if total == 0:
         raise CapsuleDraftValidationError()
     return b"".join(chunks)
+
+
+async def _require_empty_material_synced_body(request: Request) -> None:
+    """Reject request-body tricks without buffering an input payload."""
+
+    headers = request.scope.get("headers", [])
+    content_length = _header_values(headers, _CONTENT_LENGTH_HEADER)
+    if len(content_length) > 1:
+        raise CapsuleDraftValidationError()
+    if content_length:
+        if not isinstance(content_length[0], bytes) or content_length[0] != b"0":
+            raise CapsuleDraftValidationError()
+
+    if _header_values(headers, _TRANSFER_ENCODING_HEADER) or _header_values(
+        headers, _CONTENT_ENCODING_HEADER
+    ):
+        raise CapsuleDraftValidationError()
+
+    content_type = _header_values(headers, _CONTENT_TYPE_HEADER)
+    if len(content_type) > 1:
+        raise CapsuleDraftValidationError()
+    if content_type:
+        if not isinstance(content_type[0], bytes):
+            raise CapsuleDraftValidationError()
+        try:
+            if content_type[0].decode("ascii").strip(" \t") != _JSON_MEDIA_TYPE:
+                raise CapsuleDraftValidationError()
+        except (AttributeError, TypeError, UnicodeDecodeError):
+            raise CapsuleDraftValidationError() from None
+
+    async for chunk in request.stream():
+        if not isinstance(chunk, bytes) or chunk:
+            raise CapsuleDraftValidationError()
 
 
 def _single_idempotency_key(request: Request) -> uuid.UUID:
@@ -465,6 +505,55 @@ def _response_dto(result: CapsuleDraftResult) -> CapsuleDraftResponse:
             for blob in result.blobs
         ],
     )
+
+
+def _require_material_synced_result(
+    result: object, *, capsule_id: uuid.UUID
+) -> RecipientMaterialSyncedResult:
+    if not isinstance(result, RecipientMaterialSyncedResult):
+        raise RecipientMaterialSyncedError("INTERNAL_ERROR")
+    if result.capsule_id != capsule_id:
+        raise RecipientMaterialSyncedError("INTERNAL_ERROR")
+    if result.state is not RecipientDeliveryStatus.CIPHERTEXT_SYNCED:
+        raise RecipientMaterialSyncedError("INTERNAL_ERROR")
+    synced_at = result.ciphertext_synced_at
+    if (
+        not isinstance(synced_at, datetime)
+        or synced_at.tzinfo is None
+        or synced_at.utcoffset() != timedelta(0)
+    ):
+        raise RecipientMaterialSyncedError("INTERNAL_ERROR")
+    return result
+
+
+@router.post(
+    "/v1/capsules/{capsule_id}/material-synced",
+    status_code=204,
+    response_model=None,
+)
+async def mark_capsule_material_synced(
+    capsule_id: str,
+    request: Request,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    session: Session = Depends(get_db_session, use_cache=False),
+) -> Response | JSONResponse:
+    try:
+        parsed_capsule_id = _canonical_path_uuid(capsule_id)
+        await _require_empty_material_synced_body(request)
+        with session.begin():
+            result = RecipientMaterialSyncedService(session).mark_material_synced(
+                authenticated_recipient_user_id=principal.user_id,
+                capsule_id=parsed_capsule_id,
+                now=datetime.now(timezone.utc),
+            )
+            _require_material_synced_result(result, capsule_id=parsed_capsule_id)
+        return Response(status_code=204)
+    except CapsuleDraftValidationError as exc:
+        return _problem_response(request, exc.code)
+    except RecipientMaterialSyncedError as exc:
+        return _problem_response(request, exc.code)
+    except Exception:
+        return _problem_response(request, "INTERNAL_ERROR")
 
 
 @router.put(

@@ -34,10 +34,9 @@ class CapsuleUploadWorker(
          */
         internal fun mapOutcome(outcome: CapsuleUploadOutcome): androidx.work.ListenableWorker.Result =
             when (outcome) {
-                CapsuleUploadOutcome.Succeeded,
-                CapsuleUploadOutcome.Missing,
-                -> androidx.work.ListenableWorker.Result.success()
+                CapsuleUploadOutcome.Succeeded -> androidx.work.ListenableWorker.Result.success()
                 CapsuleUploadOutcome.AccountMismatch,
+                CapsuleUploadOutcome.Missing,
                 CapsuleUploadOutcome.RecipientKeyStale,
                 -> androidx.work.ListenableWorker.Result.failure()
                 is CapsuleUploadOutcome.Retryable -> androidx.work.ListenableWorker.Result.retry()

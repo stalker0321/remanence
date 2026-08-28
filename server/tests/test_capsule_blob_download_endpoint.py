@@ -15,6 +15,7 @@ pytest_plugins = ("test_registration_endpoint",)
 
 from remanence.api.capsules import (
     _CACHE_CONTROL_PRIVATE_NO_STORE,
+    _OwnedBlobBody,
     _ciphertext_etag,
     iter_ready_blob_chunks,
 )
@@ -76,11 +77,11 @@ def _snapshot(*, object_key: str, payload: bytes, capsule_id: UUID | None = None
 
 
 class _ScriptedReader:
-    def __init__(self, script: list[bytes | BaseException]) -> None:
+    def __init__(self, script: list[object]) -> None:
         self.script = list(script)
         self.closed = False
 
-    def read(self, n: int) -> bytes:
+    def read(self, n: int) -> object:
         if self.closed:
             raise AssertionError("read after close")
         if not self.script:
@@ -94,6 +95,28 @@ class _ScriptedReader:
         self.closed = True
 
 
+class _TrackingCM:
+    def __init__(self, reader: _ScriptedReader, *, enter_error: BaseException | None = None) -> None:
+        self.reader = reader
+        self.enter_error = enter_error
+        self.entered = False
+        self.exited = False
+
+    def __enter__(self) -> _ScriptedReader:
+        if self.enter_error is not None:
+            raise self.enter_error
+        self.entered = True
+        return self.reader
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        self.exited = True
+        try:
+            self.reader.close()
+        except Exception:
+            pass
+        return False
+
+
 class _RecordingStore:
     def __init__(
         self,
@@ -103,14 +126,19 @@ class _RecordingStore:
         size: int | None = None,
         sha256_hex: str | None = None,
         stat_error: BaseException | None = None,
+        open_error: BaseException | None = None,
+        open_enter_error: BaseException | None = None,
     ) -> None:
         self.payload = payload
         self.object_key = object_key
         self.size = len(payload) if size is None else size
         self.sha256_hex = _digest(payload).hex() if sha256_hex is None else sha256_hex
         self.stat_error = stat_error
+        self.open_error = open_error
+        self.open_enter_error = open_enter_error
         self.stat_keys: list[str] = []
         self.open_keys: list[str] = []
+        self.contexts: list[_TrackingCM] = []
 
     def stat(self, key: str) -> BlobInfo:
         self.stat_keys.append(key)
@@ -120,12 +148,12 @@ class _RecordingStore:
 
     def open_reader(self, key: str):
         self.open_keys.append(key)
-
-        @contextmanager
-        def _opened():
-            yield BytesIO(self.payload)
-
-        return _opened()
+        if self.open_error is not None:
+            raise self.open_error
+        reader = _ScriptedReader([self.payload, b""])
+        context = _TrackingCM(reader, enter_error=self.open_enter_error)
+        self.contexts.append(context)
+        return context
 
 
 def _session_begin(rolled: dict | None = None):
@@ -197,6 +225,37 @@ def test_iter_ready_blob_chunks_short_extra_and_read_errors_close() -> None:
     assert "secret-read-fail" not in str(caught.value)
     assert str(caught.value) == "blob read failed"
 
+    for sentinel in (None, bytearray(b""), "", b"x"):
+        reader = _ScriptedReader([b"ab", sentinel])
+        with pytest.raises(BlobIntegrityError):
+            list(iter_ready_blob_chunks(reader, expected_size=2, chunk_size=2))
+        assert reader.closed is True
+
+
+def test_owned_blob_body_closes_reader_and_context() -> None:
+    payload = b"ab"
+    reader = _ScriptedReader([payload, b""])
+    context = _TrackingCM(reader)
+    body = _OwnedBlobBody(context, reader, expected_size=2)
+    assert b"".join(body) == payload
+    assert reader.closed is True
+    assert context.exited is True
+
+    short_reader = _ScriptedReader([b"a", b""])
+    short_context = _TrackingCM(short_reader)
+    failing = _OwnedBlobBody(short_context, short_reader, expected_size=2)
+    with pytest.raises(BlobIntegrityError):
+        list(failing)
+    assert short_reader.closed is True
+    assert short_context.exited is True
+
+    cancelled_reader = _ScriptedReader([payload, b""])
+    cancelled_context = _TrackingCM(cancelled_reader)
+    cancelled = _OwnedBlobBody(cancelled_context, cancelled_reader, expected_size=2)
+    cancelled.close()
+    assert cancelled_reader.closed is True
+    assert cancelled_context.exited is True
+
 
 def test_auth_precedes_path_and_range_without_transaction() -> None:
     missing_auth = create_app(settings=Settings(mode=AppMode.TEST))
@@ -266,9 +325,12 @@ def test_download_uses_snapshot_object_key_and_returns_exact_headers(
     assert store.stat_keys == [object_key]
     assert store.open_keys == [object_key]
     assert reconstructed not in store.stat_keys
+    assert reconstructed not in store.open_keys
     assert _OBJECT_KEY_CANARY not in response.text
     assert object_key not in response.text
     assert "Content-Disposition" not in response.headers
+    assert store.contexts[0].entered is True
+    assert store.contexts[0].exited is True
 
 
 def test_missing_store_stat_mismatch_invalid_key_and_not_found(
@@ -328,6 +390,58 @@ def test_missing_store_stat_mismatch_invalid_key_and_not_found(
     _assert_problem(hash_response, status=500, code="INTERNAL_ERROR")
     assert hash_mismatch.open_keys == []
     assert _OBJECT_KEY_CANARY not in hash_response.text
+
+
+def test_stat_success_open_reader_failure_is_redacted_problem(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"body"
+    snapshot = _snapshot(object_key=_OBJECT_KEY_CANARY, payload=payload)
+    monkeypatch.setattr(
+        RecipientBlobQueryService,
+        "get_ready_blob",
+        lambda self, **kwargs: snapshot,
+    )
+    user_id = uuid4()
+    path = f"/v1/capsules/{snapshot.capsule_id}/blobs/{snapshot.blob_id}"
+
+    missing = _RecordingStore(
+        payload=payload,
+        object_key=_OBJECT_KEY_CANARY,
+        open_error=BlobNotFoundError(_OBJECT_KEY_CANARY),
+    )
+    missing_response = _mocked_app(user_id=user_id, session=_session_begin(), blob_store=missing).get(path)
+    _assert_problem(missing_response, status=503, code="INTERNAL_ERROR")
+    assert missing_response.json()["retryable"] is True
+    assert missing.stat_keys == [_OBJECT_KEY_CANARY]
+    assert missing.open_keys == [_OBJECT_KEY_CANARY]
+    assert missing_response.status_code != 200
+    assert _OBJECT_KEY_CANARY not in missing_response.text
+
+    invalid = _RecordingStore(
+        payload=payload,
+        object_key=_OBJECT_KEY_CANARY,
+        open_enter_error=InvalidBlobKeyError(f"bad:{_OBJECT_KEY_CANARY}"),
+    )
+    invalid_response = _mocked_app(user_id=user_id, session=_session_begin(), blob_store=invalid).get(path)
+    _assert_problem(invalid_response, status=500, code="INTERNAL_ERROR")
+    assert invalid.stat_keys == [_OBJECT_KEY_CANARY]
+    assert invalid.open_keys == [_OBJECT_KEY_CANARY]
+    assert invalid.contexts[0].entered is False
+    assert _OBJECT_KEY_CANARY not in invalid_response.text
+    assert "bad:" not in invalid_response.text
+
+    io_error = _RecordingStore(
+        payload=payload,
+        object_key=_OBJECT_KEY_CANARY,
+        open_error=BlobStoreError("secret-open-io"),
+    )
+    io_response = _mocked_app(user_id=user_id, session=_session_begin(), blob_store=io_error).get(path)
+    _assert_problem(io_response, status=503, code="INTERNAL_ERROR")
+    assert io_response.json()["retryable"] is True
+    assert io_error.open_keys == [_OBJECT_KEY_CANARY]
+    assert "secret-open-io" not in io_response.text
+    assert _OBJECT_KEY_CANARY not in io_response.text
 
 
 def test_service_errors_map_through_problem_contract(monkeypatch: pytest.MonkeyPatch) -> None:

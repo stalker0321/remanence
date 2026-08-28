@@ -376,7 +376,7 @@ def iter_ready_blob_chunks(
             leftover = reader.read(1)
         except Exception:
             raise BlobStoreError("blob read failed") from None
-        if leftover:
+        if type(leftover) is not bytes or leftover != b"":
             raise BlobIntegrityError("blob integrity check failed")
     finally:
         try:
@@ -385,11 +385,48 @@ def iter_ready_blob_chunks(
             pass
 
 
-def _stream_ready_blob(
-    blob_store: BlobStore, object_key: str, expected_size: int
-) -> Iterator[bytes]:
-    with blob_store.open_reader(object_key) as reader:
-        yield from iter_ready_blob_chunks(reader, expected_size=expected_size)
+class _OwnedBlobBody:
+    """Yields blob chunks and always closes the acquired reader context."""
+
+    __slots__ = ("_cm", "_reader", "_chunks", "_closed")
+
+    def __init__(self, reader_cm: object, reader: BinaryIO, *, expected_size: int) -> None:
+        self._cm = reader_cm
+        self._reader = reader
+        self._chunks = iter_ready_blob_chunks(reader, expected_size=expected_size)
+        self._closed = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        return self
+
+    def __next__(self) -> bytes:
+        try:
+            return next(self._chunks)
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._chunks.close()
+        except Exception:
+            pass
+        try:
+            self._reader.close()
+        except Exception:
+            pass
+        try:
+            exit_cm = getattr(self._cm, "__exit__", None)
+            if exit_cm is not None:
+                exit_cm(None, None, None)
+        except Exception:
+            pass
+
+    async def aclose(self) -> None:
+        self.close()
 
 
 def _response_dto(result: CapsuleDraftResult) -> CapsuleDraftResponse:
@@ -476,6 +513,9 @@ def download_capsule_blob(
     session: Session = Depends(get_db_session, use_cache=False),
     blob_store: BlobStore = Depends(get_blob_store),
 ) -> Response | JSONResponse:
+    reader_cm: object | None = None
+    reader: BinaryIO | None = None
+    stream: _OwnedBlobBody | None = None
     try:
         parsed_capsule_id = _canonical_path_uuid(capsule_id)
         parsed_blob_id = _canonical_path_uuid(blob_id)
@@ -502,8 +542,22 @@ def download_capsule_blob(
         if not _blob_info_matches_snapshot(info, snapshot):
             return _problem_response(request, "INTERNAL_ERROR")
         etag = _ciphertext_etag(snapshot.expected_ciphertext_sha256)
-        return StreamingResponse(
-            _stream_ready_blob(blob_store, object_key, snapshot.expected_ciphertext_size),
+        try:
+            reader_cm = blob_store.open_reader(object_key)
+            reader = reader_cm.__enter__()
+        except InvalidBlobKeyError:
+            return _problem_response(request, "INTERNAL_ERROR")
+        except BlobNotFoundError:
+            return _problem_response(request, "INTERNAL_UNAVAILABLE")
+        except BlobStoreError:
+            return _problem_response(request, "INTERNAL_UNAVAILABLE")
+        stream = _OwnedBlobBody(
+            reader_cm, reader, expected_size=snapshot.expected_ciphertext_size
+        )
+        reader_cm = None
+        reader = None
+        response = StreamingResponse(
+            stream,
             status_code=200,
             media_type=_OCTET_STREAM,
             headers={
@@ -512,12 +566,32 @@ def download_capsule_blob(
                 "Cache-Control": _CACHE_CONTROL_PRIVATE_NO_STORE,
             },
         )
+        stream = None
+        return response
     except CapsuleDraftValidationError as exc:
         return _problem_response(request, exc.code)
     except RecipientBlobQueryError as exc:
         return _problem_response(request, exc.code)
     except Exception:
         return _problem_response(request, "INTERNAL_ERROR")
+    finally:
+        if stream is not None:
+            try:
+                stream.close()
+            except Exception:
+                pass
+        elif reader is not None:
+            try:
+                reader.close()
+            except Exception:
+                pass
+            if reader_cm is not None:
+                try:
+                    exit_cm = getattr(reader_cm, "__exit__", None)
+                    if exit_cm is not None:
+                        exit_cm(None, None, None)
+                except Exception:
+                    pass
 
 
 @router.post(

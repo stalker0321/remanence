@@ -109,7 +109,7 @@ class SenderRetryMaterialStore(
                     "sender retry material directory resolved to null for $capsule",
                 )
             try {
-                if (!parent.exists() && !parent.mkdirs()) {
+                if (!parent.exists() && !parent.mkdirs() && (!parent.exists() || !parent.isDirectory())) {
                     throw SenderRetryMaterialStorageException(
                         "could not prepare sender retry material directory",
                     )

@@ -504,7 +504,15 @@ class SenderRetryMaterialStoreTest {
             awaitAll(*jobs.toTypedArray())
         }
         assertEquals(3, outcomes.size)
-        assertTrue("every distinct-pair write must succeed", outcomes.all { it.isSuccess })
+        val failures = outcomes.filter { it.isFailure }.joinToString { result ->
+            result.exceptionOrNull()?.let { failure ->
+                "${failure::class.simpleName}: ${failure.message}"
+            } ?: "unknown failure"
+        }
+        assertTrue(
+            "every distinct-pair write must succeed; failures=$failures",
+            outcomes.all { it.isSuccess },
+        )
         assertTrue(persistedFile(ownerA, capsuleA1).exists())
         assertTrue(persistedFile(ownerA, capsuleA2).exists())
         assertTrue(persistedFile(ownerB, capsuleB1).exists())

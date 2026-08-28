@@ -3,10 +3,11 @@
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException as FastAPIHTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy import Engine
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from remanence.api.auth import router as auth_router
 from remanence.api.dependencies import (
@@ -78,6 +79,20 @@ def create_app(
     @app.exception_handler(RequestValidationError)
     def _validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
         return problem_response(request, "VALIDATION_FAILED")
+
+    def _http_exception(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+        if exc.status_code == 404:
+            return problem_response(request, "ROUTE_NOT_FOUND")
+        if exc.status_code == 405:
+            allow = None
+            if exc.headers:
+                allow = exc.headers.get("allow") or exc.headers.get("Allow")
+            extra = {"Allow": allow} if allow else None
+            return problem_response(request, "METHOD_NOT_ALLOWED", extra_headers=extra)
+        return problem_response(request, "INTERNAL_ERROR")
+
+    app.add_exception_handler(StarletteHTTPException, _http_exception)
+    app.add_exception_handler(FastAPIHTTPException, _http_exception)
 
     @app.exception_handler(Exception)
     def _unhandled(request: Request, exc: Exception) -> JSONResponse:

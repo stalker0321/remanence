@@ -9,6 +9,7 @@ M4: the current session repository cannot authoritatively distinguish expiry
 from other invalid access tokens without broader auth changes.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
 from uuid import uuid4
@@ -236,6 +237,18 @@ PROBLEM_CATALOG: Final[dict[str, ProblemSpec]] = {
         "Validation failed",
         "The request is invalid.",
     ),
+    "ROUTE_NOT_FOUND": _spec(
+        "ROUTE_NOT_FOUND",
+        404,
+        "Route not found",
+        "The route was not found.",
+    ),
+    "METHOD_NOT_ALLOWED": _spec(
+        "METHOD_NOT_ALLOWED",
+        405,
+        "Method not allowed",
+        "The method is not allowed.",
+    ),
     "INTERNAL_ERROR": _spec(
         "INTERNAL_ERROR",
         500,
@@ -328,12 +341,18 @@ def problem_response(
     code: str,
     *,
     www_authenticate: bool = False,
+    extra_headers: Mapping[str, str] | None = None,
 ) -> JSONResponse:
     request_id = request_id_of(request)
     spec = resolve_problem(code)
     headers = {REQUEST_ID_HEADER: request_id}
     if www_authenticate:
         headers["WWW-Authenticate"] = "Bearer"
+    if extra_headers is not None:
+        for name, value in extra_headers.items():
+            if name.lower() == REQUEST_ID_HEADER.lower():
+                continue
+            headers[name] = value
     return JSONResponse(
         status_code=spec.status,
         content=problem_payload(code, request_id),

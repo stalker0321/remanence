@@ -332,5 +332,3 @@ class RefreshResponse(BaseModel):
     @classmethod
     def _utc_aware(cls, value: datetime) -> datetime:
         return validate_utc_aware(value)
-
-

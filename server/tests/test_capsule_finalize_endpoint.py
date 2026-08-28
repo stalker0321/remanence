@@ -325,6 +325,51 @@ def test_mocked_service_error_rolls_back_begin(monkeypatch: pytest.MonkeyPatch) 
     assert rolled_back["value"] is True
 
 
+@pytest.mark.parametrize(
+    ("service_code", "status"),
+    [
+        ("STORAGE_IO", 503),
+        ("STORAGE_INTEGRITY", 500),
+        ("STORAGE_INVALID", 500),
+        ("STORAGE_NOT_FOUND", 500),
+        ("AUTH_INVALID", 401),
+        ("NOT_A_PUBLIC_CODE", 500),
+    ],
+)
+def test_finalize_maps_internal_codes_at_http_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    service_code: str,
+    status: int,
+) -> None:
+    def fake_finalize(self, **kwargs):
+        raise CapsuleFinalizeError(service_code)
+
+    class _Session:
+        def begin(self):
+            @contextmanager
+            def _begin():
+                yield self
+
+            return _begin()
+
+    monkeypatch.setattr(CapsuleFinalizeService, "finalize", fake_finalize)
+    app = create_app(settings=Settings(mode=AppMode.TEST))
+    app.dependency_overrides[get_authenticated_principal] = lambda: AuthenticatedPrincipal(
+        user_id=uuid4(), session_id=uuid4()
+    )
+    app.dependency_overrides[get_db_session] = lambda: _Session()
+    app.state.blob_store = object()
+    client = TestClient(app)
+    response = client.post(f"/v1/capsules/{uuid4()}/finalize", content=_finalize_body())
+    expected_code = "AUTH_INVALID" if service_code == "AUTH_INVALID" else "INTERNAL_ERROR"
+    _assert_problem(response, status=status, code=expected_code)
+    assert service_code not in response.text or service_code == "AUTH_INVALID"
+    if service_code == "AUTH_INVALID":
+        assert response.headers["www-authenticate"] == "Bearer"
+    else:
+        assert "www-authenticate" not in {key.lower() for key in response.headers}
+
+
 def test_max_legal_finalize_body_parses_and_reaches_service(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

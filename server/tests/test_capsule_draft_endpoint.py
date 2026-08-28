@@ -3,6 +3,7 @@
 import base64
 import copy
 import json
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
@@ -19,6 +20,7 @@ from remanence.api.dependencies import (
     get_db_session,
 )
 from remanence.capsules.blob_models import CapsuleBlob
+from remanence.capsules.draft_service import CapsuleDraftService, CapsuleDraftServiceError
 from remanence.capsules.idempotency_models import CapsuleIdempotencyRecord
 from remanence.capsules.models import Capsule, CapsuleState
 from remanence.settings import AppMode, Settings
@@ -429,3 +431,72 @@ def test_transaction_rolls_back_after_parent_flush_on_child_failure(client_facto
         assert _count(session, Capsule) == 1
         assert _count(session, CapsuleBlob) == 5
         assert _count(session, CapsuleIdempotencyRecord) == 1
+
+
+class _BeginSession:
+    def begin(self):
+        @contextmanager
+        def _begin():
+            yield self
+
+        return _begin()
+
+
+def _mocked_draft_client(monkeypatch: pytest.MonkeyPatch, service_code: str) -> TestClient:
+    def fake_create_draft(self, **kwargs):
+        raise CapsuleDraftServiceError(service_code)
+
+    monkeypatch.setattr(CapsuleDraftService, "create_draft", fake_create_draft)
+    app = create_app(settings=Settings(mode=AppMode.TEST))
+    app.dependency_overrides[get_authenticated_principal] = lambda: AuthenticatedPrincipal(
+        user_id=uuid4(), session_id=uuid4()
+    )
+    app.dependency_overrides[get_db_session] = lambda: _BeginSession()
+    return TestClient(app)
+
+
+def _synthetic_draft_raw() -> bytes:
+    sender = {"user": {"user_id": str(uuid4())}, "active_key_bundle_id": str(uuid4())}
+    recipient = {"user": {"user_id": str(uuid4())}, "active_key_bundle_id": str(uuid4())}
+    return _raw(_draft_payload(sender, recipient))
+
+
+def test_draft_service_auth_invalid_includes_www_authenticate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _mocked_draft_client(monkeypatch, "AUTH_INVALID")
+    response = client.post(
+        "/v1/capsules",
+        content=_synthetic_draft_raw(),
+        headers={"Idempotency-Key": str(uuid4())},
+    )
+    _assert_problem(response, status=401, code="AUTH_INVALID")
+    assert response.headers["www-authenticate"] == "Bearer"
+
+
+@pytest.mark.parametrize(
+    ("service_code", "status", "catalog_key"),
+    [
+        ("STORAGE_IO", 503, "INTERNAL_UNAVAILABLE"),
+        ("STORAGE_INTEGRITY", 500, "INTERNAL_ERROR"),
+        ("STORAGE_INVALID", 500, "INTERNAL_ERROR"),
+        ("STORAGE_NOT_FOUND", 500, "INTERNAL_ERROR"),
+        ("NOT_A_PUBLIC_CODE", 500, "INTERNAL_ERROR"),
+    ],
+)
+def test_draft_maps_internal_storage_codes_at_http_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    service_code: str,
+    status: int,
+    catalog_key: str,
+) -> None:
+    client = _mocked_draft_client(monkeypatch, service_code)
+    response = client.post(
+        "/v1/capsules",
+        content=_synthetic_draft_raw(),
+        headers={"Idempotency-Key": str(uuid4())},
+    )
+    _assert_problem(response, status=status, code="INTERNAL_ERROR")
+    assert response.json() == problem_payload(catalog_key, response.headers["x-request-id"])
+    assert service_code not in response.text
+    assert "capsule draft operation failed" not in response.text

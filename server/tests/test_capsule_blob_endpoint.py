@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import inspect
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
@@ -26,6 +27,10 @@ from remanence.api.dependencies import (
     get_db_session,
 )
 from remanence.capsules.blob_models import CapsuleBlob, CapsuleBlobState
+from remanence.capsules.promotion_service import (
+    CapsuleBlobPromotionError,
+    CapsuleBlobPromotionService,
+)
 from remanence.capsules.models import Capsule, CapsuleState
 from remanence.capsules.limits import LIMITS_V1
 from remanence.main import create_app
@@ -152,6 +157,57 @@ def test_path_uuid_parser_rejects_alternate_spellings() -> None:
     for alternate in (str(value).upper(), "{" + str(value) + "}", "not-a-uuid"):
         with pytest.raises(CapsuleDraftValidationError):
             _canonical_path_uuid(alternate)
+
+
+@pytest.mark.parametrize(
+    ("service_code", "status"),
+    [
+        ("STORAGE_IO", 503),
+        ("STORAGE_INTEGRITY", 500),
+        ("STORAGE_INVALID", 500),
+        ("STORAGE_NOT_FOUND", 500),
+        ("NOT_A_PUBLIC_CODE", 500),
+    ],
+)
+def test_upload_maps_internal_storage_codes_at_http_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    service_code: str,
+    status: int,
+) -> None:
+    def fake_promote(self, **kwargs):
+        raise CapsuleBlobPromotionError(service_code)
+
+    monkeypatch.setattr(CapsuleBlobPromotionService, "promote_blob", fake_promote)
+    app = create_app(settings=Settings(mode=AppMode.TEST))
+    app.dependency_overrides[get_authenticated_principal] = lambda: AuthenticatedPrincipal(
+        uuid4(), uuid4()
+    )
+
+    class _Session:
+        def begin(self):
+            @contextmanager
+            def _begin():
+                yield self
+
+            return _begin()
+
+    app.dependency_overrides[get_db_session] = lambda: _Session()
+    payload = b"body"
+    with TestClient(app) as client:
+        _wire_storage(client, tmp_path)
+        response = client.put(
+            f"/v1/capsules/{uuid4()}/blobs/{uuid4()}",
+            content=payload,
+            headers=_upload_headers(payload),
+        )
+    _assert_problem(response, status=status, code="INTERNAL_ERROR")
+    assert service_code not in response.text
+    assert "capsule blob promotion failed" not in response.text
+    if status == 503:
+        assert response.json()["retryable"] is True
+    else:
+        assert response.json()["retryable"] is False
 
 
 def test_upload_missing_storage_wiring_fails_closed() -> None:
@@ -295,8 +351,10 @@ def test_upload_storage_failure_and_db_failure_keep_problem_redacted(client_fact
 
     client.app.state.blob_store = FailingStore()
     failure = _upload(client, sender, draft, payload)
-    _assert_problem(failure, status=500, code="INTERNAL_ERROR")
+    _assert_problem(failure, status=503, code="INTERNAL_ERROR")
+    assert failure.json()["retryable"] is True
     assert "private storage error" not in failure.text
+    assert "STORAGE_IO" not in failure.text
     assert _temp_files(tmp_path / "staging") == []
 
     client.app.state.blob_store = store

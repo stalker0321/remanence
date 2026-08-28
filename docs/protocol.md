@@ -373,9 +373,12 @@ Required stable codes:
 - `CAPSULE_NOT_FOUND`, `CAPSULE_STATE_INVALID`, `DRAFT_EXPIRED`;
 - `BLOB_NOT_DECLARED`, `BLOB_SIZE_INVALID`, `BLOB_HASH_MISMATCH`, `BLOB_CONFLICT`;
 - `STATEMENT_INVALID`, `SIGNATURE_INVALID`, `ENVELOPE_INVALID`, `FINALIZE_CONFLICT`;
-- `IDEMPOTENCY_CONFLICT`, `PROTOCOL_UNSUPPORTED`, `VALIDATION_FAILED`, `INTERNAL_ERROR`.
+- `IDEMPOTENCY_CONFLICT`, `PROTOCOL_UNSUPPORTED`, `VALIDATION_FAILED`, `INTERNAL_ERROR`;
+- `ROUTE_NOT_FOUND`, `METHOD_NOT_ALLOWED`.
 
 Unexpected crypto/parsing detail is not returned. `retryable` is true only for transient server/network classes, never integrity failures.
+
+M2 access-token failures emit `AUTH_INVALID` for expired and unknown tokens alike. The session repository cannot yet distinguish expiry; `AUTH_EXPIRED` is reserved until M4 expiry-aware lookup.
 
 ## 12. MVP limits
 

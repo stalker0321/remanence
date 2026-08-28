@@ -93,8 +93,14 @@ def test_catalog_required_codes_and_internal_unavailable() -> None:
         "PROTOCOL_UNSUPPORTED",
         "VALIDATION_FAILED",
         "INTERNAL_ERROR",
+        "ROUTE_NOT_FOUND",
+        "METHOD_NOT_ALLOWED",
     }
     assert required <= set(PROBLEM_CATALOG)
+    assert "STORAGE_IO" not in PROBLEM_CATALOG
+    assert "STORAGE_INTEGRITY" not in PROBLEM_CATALOG
+    assert "STORAGE_INVALID" not in PROBLEM_CATALOG
+    assert "STORAGE_NOT_FOUND" not in PROBLEM_CATALOG
     unavailable = PROBLEM_CATALOG["INTERNAL_UNAVAILABLE"]
     assert unavailable.code == "INTERNAL_ERROR"
     assert unavailable.status == 503
@@ -296,3 +302,35 @@ def test_registration_conflicts_and_directory_codes(client_factory) -> None:
     assert logout_unknown.status_code == 204
     _assert_request_id(logout_unknown.headers["x-request-id"])
     assert logout_unknown.content == b""
+
+
+def test_unknown_route_and_wrong_method_use_problem_contract() -> None:
+    from fastapi import HTTPException
+
+    app = create_app(settings=Settings(mode=AppMode.TEST))
+
+    @app.get("/test/forbidden")
+    def forbidden() -> None:
+        raise HTTPException(status_code=403, detail="secret-framework-detail")
+
+    client = TestClient(app)
+    missing = client.get("/definitely-not-a-route", headers={"X-Request-ID": "client-id"})
+    body = assert_problem(missing, "ROUTE_NOT_FOUND")
+    serialized = json.dumps(body)
+    assert "Not Found" not in serialized
+    assert "secret-framework-detail" not in missing.text
+    assert body["request_id"] != "client-id"
+    assert body["retryable"] is False
+
+    wrong = client.post("/healthz")
+    wrong_body = assert_problem(wrong, "METHOD_NOT_ALLOWED")
+    assert "Method Not Allowed" not in json.dumps(wrong_body)
+    assert "allow" in wrong.headers
+    assert "GET" in wrong.headers["allow"].upper()
+    assert wrong_body["retryable"] is False
+
+    other = client.get("/test/forbidden")
+    other_body = assert_problem(other, "INTERNAL_ERROR")
+    assert "secret-framework-detail" not in other.text
+    assert "Forbidden" not in json.dumps(other_body)
+    assert other_body["status"] == 500

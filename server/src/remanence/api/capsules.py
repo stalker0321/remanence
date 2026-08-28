@@ -20,7 +20,7 @@ from remanence.api.dependencies import (
     get_authenticated_principal,
     get_db_session,
 )
-from remanence.api.problems import problem_response
+from remanence.api.problems import PROBLEM_CATALOG, problem_response
 from remanence.capsules.draft_service import (
     CapsuleDraftResult,
     CapsuleDraftService,
@@ -72,6 +72,10 @@ _RANGE_HEADER = b"range"
 _CONTENT_RANGE_HEADER = b"content-range"
 _OCTET_STREAM = "application/octet-stream"
 _DECIMAL = re.compile(r"[0-9]+")
+_STORAGE_UNAVAILABLE_CODES = frozenset({"STORAGE_IO"})
+_STORAGE_INTERNAL_CODES = frozenset(
+    {"STORAGE_INTEGRITY", "STORAGE_INVALID", "STORAGE_NOT_FOUND"}
+)
 
 
 class CapsuleDraftBlobResponse(BaseModel):
@@ -226,8 +230,21 @@ def _parse_upload_headers(headers: Iterable[tuple[bytes, bytes]]) -> _UploadHead
     )
 
 
+def _map_capsule_problem_code(code: str) -> str:
+    if code in _STORAGE_UNAVAILABLE_CODES:
+        return "INTERNAL_UNAVAILABLE"
+    if code in _STORAGE_INTERNAL_CODES or code not in PROBLEM_CATALOG:
+        return "INTERNAL_ERROR"
+    return code
+
+
 def _problem_response(request: Request, code: str) -> JSONResponse:
-    return problem_response(request, code)
+    mapped = _map_capsule_problem_code(code)
+    return problem_response(
+        request,
+        mapped,
+        www_authenticate=(mapped == "AUTH_INVALID"),
+    )
 
 
 def _response_dto(result: CapsuleDraftResult) -> CapsuleDraftResponse:

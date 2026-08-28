@@ -208,6 +208,17 @@ class CapsuleUploadResumerTest {
 
         override suspend fun beginUploadForOwner(capsuleId: String, ownerUserId: String) = 0
 
+        override suspend fun applyRecipientKeyRewrapForOwner(
+            capsuleId: String,
+            ownerUserId: String,
+            recipientUserId: String,
+            expectedRecipientKeyBundleId: String,
+            newRecipientKeyBundleId: String,
+            newEnvelopePath: String,
+            newPublishStatementPath: String,
+            newPublishStatementSignaturePath: String,
+        ) = 0
+
         override suspend fun beginFinalizeForOwner(capsuleId: String, ownerUserId: String) = 0
 
         override suspend fun markPublishedForOwner(capsuleId: String, ownerUserId: String) = 0

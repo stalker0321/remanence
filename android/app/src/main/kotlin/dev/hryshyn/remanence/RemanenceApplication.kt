@@ -309,8 +309,11 @@ class AppContainer(
 
     /** One account/capsule upload boundary used by [CapsuleUploadWorker]. */
     val capsuleUploadOrchestrator: CapsuleUploadOrchestrator by lazy {
+        val retryStore = dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore(
+            accountScopedFileRoots,
+        )
         val retryLifecycle = dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialLifecycle(
-            retryStore = dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore(accountScopedFileRoots),
+            retryStore = retryStore,
             capsuleDao = database.outboxCapsuleDao(),
         )
         CapsuleUploadOrchestrator(
@@ -324,6 +327,25 @@ class AppContainer(
             cleanupRetryMaterial = { owner, capsule ->
                 retryLifecycle.cleanupForTerminalState(owner, capsule)
             },
+            recipientUserLookup = { recipient, token ->
+                recipientUserLookupRepository.lookup(recipient, token)
+            },
+            retryMaterialStore = retryStore,
+            senderRetryKeysetWrapper = senderRetryKeysetWrapper,
+            loadSenderSigningKeyset = { owner, senderBundle ->
+                val account = currentAccountStore.loadEntity()
+                if (account?.userId != owner.toRestString() ||
+                    account.activeKeyBundleId != senderBundle.toRestString()
+                ) {
+                    null
+                } else {
+                    when (val loaded = identityRepository.load()) {
+                        is IdentityBundleRepository.LoadResult.Available -> loaded.signingHandle
+                        IdentityBundleRepository.LoadResult.RecoveryRequired -> null
+                    }
+                }
+            },
+            accountScopedFileRoots = accountScopedFileRoots,
         )
     }
 

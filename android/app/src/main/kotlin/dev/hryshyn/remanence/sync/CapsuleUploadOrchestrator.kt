@@ -1,5 +1,14 @@
 package dev.hryshyn.remanence.sync
 
+import com.google.crypto.tink.KeysetHandle
+import com.google.crypto.tink.TinkProtoKeysetFormat
+import com.google.crypto.tink.subtle.Base64
+import com.google.protobuf.ByteString
+import dev.hryshyn.remanence.create.CapsulePublisher
+import dev.hryshyn.remanence.create.RecipientRewrapRequest
+import dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper
+import dev.hryshyn.remanence.core.crypto.TinkPrimitives
+import dev.hryshyn.remanence.core.crypto.WrappedKeysetRecord
 import dev.hryshyn.remanence.core.data.db.OutboxBlobDao
 import dev.hryshyn.remanence.core.data.db.OutboxBlobEntity
 import dev.hryshyn.remanence.core.data.db.OutboxBlobUploadState
@@ -18,6 +27,9 @@ import dev.hryshyn.remanence.core.data.network.CapsuleDraftResult
 import dev.hryshyn.remanence.core.data.network.CapsuleFinalizeFailure
 import dev.hryshyn.remanence.core.data.network.CapsuleFinalizeRequest
 import dev.hryshyn.remanence.core.data.network.CapsuleFinalizeResult
+import dev.hryshyn.remanence.core.data.network.RecipientUserLookupResult
+import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
+import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialLifecycle
 import dev.hryshyn.remanence.core.model.ArtifactLayoutValidation
 import dev.hryshyn.remanence.core.model.ArtifactLayoutValidator
@@ -27,9 +39,17 @@ import dev.hryshyn.remanence.core.model.CanonicalArtifactOrder
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.KeyBundleId
+import dev.hryshyn.remanence.core.model.PublishArtifact
+import dev.hryshyn.remanence.core.model.PublishStatementBuildResult
+import dev.hryshyn.remanence.core.model.PublishStatementBuilder
+import dev.hryshyn.remanence.core.model.PublishStatementInput
 import dev.hryshyn.remanence.core.model.RecipientTarget
+import dev.hryshyn.remanence.core.model.SenderRetryPurpose
+import dev.hryshyn.remanence.core.model.SenderRetryWrapContextInput
 import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.protocol.v1.PublishStatement
 import java.io.File
+import java.io.FileOutputStream
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.UUID
@@ -75,6 +95,11 @@ class CapsuleUploadOrchestrator(
     private val finalizeCapsule: suspend (CapsuleFinalizeRequest, String) -> CapsuleFinalizeResult,
     private val cleanupRetryMaterial: suspend (UserId, CapsuleId) -> SenderRetryMaterialLifecycle.Result,
     private val readCiphertext: suspend (String) -> ByteArray = { path -> File(path).readBytes() },
+    private val recipientUserLookup: (suspend (UserId, String) -> RecipientUserLookupResult)? = null,
+    private val retryMaterialStore: SenderRetryMaterialStore? = null,
+    private val senderRetryKeysetWrapper: SenderRetryKeysetWrapper? = null,
+    private val loadSenderSigningKeyset: (suspend (UserId, KeyBundleId) -> KeysetHandle?)? = null,
+    private val accountScopedFileRoots: AccountScopedFileRoots? = null,
 ) {
 
     suspend fun run(owner: UserId, capsuleId: CapsuleId): CapsuleUploadOutcome {
@@ -103,7 +128,7 @@ class CapsuleUploadOrchestrator(
             -> Unit
             OutboxCapsuleState.RETRYABLE_FAILURE -> {
                 if (capsule.lastErrorCode == RECIPIENT_KEY_STALE) {
-                    return CapsuleUploadOutcome.RecipientKeyStale
+                    return recoverStaleRecipient(owner, capsuleId, capsule)
                 }
             }
         }
@@ -227,6 +252,308 @@ class CapsuleUploadOrchestrator(
             }
         }
         return finishPublished(owner, capsuleId)
+    }
+
+    /**
+     * A06 recovery for a parked stale-recipient row. The old recipient
+     * envelope is never used as a key source: the capsule key comes only
+     * from the sender-owned retry record, and the immutable recipient ID is
+     * the only directory lookup input.
+     */
+    private suspend fun recoverStaleRecipient(
+        owner: UserId,
+        capsuleId: CapsuleId,
+        staleCapsule: OutboxCapsuleEntity,
+    ): CapsuleUploadOutcome {
+        val retryStore = retryMaterialStore ?: return CapsuleUploadOutcome.RecipientKeyStale
+        val retryWrapper = senderRetryKeysetWrapper ?: return CapsuleUploadOutcome.RecipientKeyStale
+        val signingLoader = loadSenderSigningKeyset ?: return CapsuleUploadOutcome.RecipientKeyStale
+        val roots = accountScopedFileRoots ?: return CapsuleUploadOutcome.RecipientKeyStale
+        if (!accountMatches(owner)) return CapsuleUploadOutcome.AccountMismatch
+
+        val prepared = try {
+            prepare(staleCapsule, owner, capsuleId)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return CapsuleUploadOutcome.RecipientKeyStale
+        }
+        val retryPath = staleCapsule.senderRetryKeysetPath ?: return CapsuleUploadOutcome.RecipientKeyStale
+        val expectedRetryPath = try {
+            retryStore.expectedPath(owner, capsuleId).canonicalPath
+        } catch (_: Exception) {
+            return CapsuleUploadOutcome.RecipientKeyStale
+        }
+        if (retryPath != expectedRetryPath) return CapsuleUploadOutcome.RecipientKeyStale
+
+        val wrappedBytes = try {
+            retryStore.read(owner, capsuleId)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return CapsuleUploadOutcome.RecipientKeyStale
+        } ?: return CapsuleUploadOutcome.RecipientKeyStale
+
+        val retryRecord = try {
+            WrappedKeysetRecord.parse(wrappedBytes)
+        } catch (_: Exception) {
+            return CapsuleUploadOutcome.RecipientKeyStale
+        }
+        val capsuleKeyset = try {
+            retryWrapper.unwrap(
+                retryRecord,
+                SenderRetryWrapContextInput(
+                    ownerUserId = owner,
+                    capsuleId = capsuleId,
+                    senderKeyBundleId = prepared.senderKeyBundleId,
+                    purpose = SenderRetryPurpose.RECIPIENT_KEY_STALE_REWRAP,
+                ),
+            )
+        } catch (_: Exception) {
+            return CapsuleUploadOutcome.RecipientKeyStale
+        }
+        if (!accountMatches(owner)) return CapsuleUploadOutcome.AccountMismatch
+
+        val token = accessToken() ?: return CapsuleUploadOutcome.RecipientKeyStale
+        if (!accountMatches(owner)) return CapsuleUploadOutcome.AccountMismatch
+        val lookup = try {
+            recipientUserLookup?.invoke(prepared.recipientUserId, token)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            null
+        } ?: return CapsuleUploadOutcome.RecipientKeyStale
+        val snapshot = (lookup as? RecipientUserLookupResult.Found)?.snapshot
+            ?: return CapsuleUploadOutcome.RecipientKeyStale
+        if (!isUsableActiveRecipient(prepared.recipientUserId, snapshot)) {
+            return CapsuleUploadOutcome.RecipientKeyStale
+        }
+
+        TinkPrimitives.ensureRegistered()
+        val recipientPublicKeyset = try {
+            TinkProtoKeysetFormat.parseKeysetWithoutSecret(
+                Base64.urlSafeDecode(snapshot.encryptionPublicKeysetB64Url),
+            )
+        } catch (_: Exception) {
+            return CapsuleUploadOutcome.RecipientKeyStale
+        }
+        val signingKeyset = try {
+            signingLoader(owner, prepared.senderKeyBundleId)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            null
+        } ?: return CapsuleUploadOutcome.RecipientKeyStale
+        if (!accountMatches(owner)) return CapsuleUploadOutcome.AccountMismatch
+        if (!sameSigningPublicKey(staleCapsule, signingKeyset)) {
+            return CapsuleUploadOutcome.RecipientKeyStale
+        }
+
+        val root = try {
+            roots.child(owner, AccountScopedFileRoots.ChildRoot.OUTBOX_CIPHERTEXT).canonicalFile
+        } catch (_: Exception) {
+            return CapsuleUploadOutcome.RecipientKeyStale
+        }
+        val oldStatementPath = staleCapsule.publishStatementPath ?: return CapsuleUploadOutcome.RecipientKeyStale
+        if (!isContained(root, File(oldStatementPath))) {
+            return CapsuleUploadOutcome.RecipientKeyStale
+        }
+        val oldStatementBytes = try {
+            readCiphertext(oldStatementPath)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return CapsuleUploadOutcome.RecipientKeyStale
+        }
+        val oldStatement = try {
+            PublishStatement.parseFrom(oldStatementBytes)
+        } catch (_: Exception) {
+            return CapsuleUploadOutcome.RecipientKeyStale
+        }
+        val publishArtifacts = prepared.blobs.map { blob ->
+            PublishArtifact(
+                slot = ArtifactSlot(blob.blobId, blob.kind, blob.ordinal),
+                ciphertextSize = blob.row.sizeBytes,
+                ciphertextSha256 = ByteString.copyFrom(blob.row.sha256),
+            )
+        }
+        val expectedOldStatement = PublishStatementBuilder.build(
+            PublishStatementInput(
+                capsuleId = capsuleId,
+                senderUserId = owner,
+                recipientUserId = prepared.recipientUserId,
+                senderKeyBundleId = prepared.senderKeyBundleId,
+                recipientKeyBundleId = prepared.recipientKeyBundleId,
+                createdAtEpochSeconds = oldStatement.createdAtEpochSeconds,
+                artifacts = publishArtifacts,
+            ),
+        ) as? PublishStatementBuildResult.Success ?: return CapsuleUploadOutcome.RecipientKeyStale
+        if (!expectedOldStatement.deterministicBytes.toByteArray().contentEquals(oldStatementBytes)) {
+            return CapsuleUploadOutcome.RecipientKeyStale
+        }
+        if (!accountMatches(owner)) return CapsuleUploadOutcome.AccountMismatch
+
+        val rewrapped = try {
+            CapsulePublisher(retryWrapper, retryRecord.alias).rewrapRecipient(
+                RecipientRewrapRequest(
+                    capsuleId = capsuleId,
+                    senderUserId = owner,
+                    recipientUserId = prepared.recipientUserId,
+                    senderKeyBundleId = prepared.senderKeyBundleId,
+                    recipientKeyBundleId = snapshot.keyBundleId,
+                    createdAtEpochSeconds = oldStatement.createdAtEpochSeconds,
+                    artifacts = publishArtifacts,
+                    capsuleKeyset = capsuleKeyset,
+                    signingKeyset = signingKeyset,
+                    recipientEncryptionPublicKeyset = recipientPublicKeyset,
+                ),
+            )
+        } catch (_: Exception) {
+            return CapsuleUploadOutcome.RecipientKeyStale
+        }
+        if (!accountMatches(owner)) return CapsuleUploadOutcome.AccountMismatch
+
+        val files = writeRewrappedFiles(root, capsuleId, snapshot.keyBundleId, rewrapped)
+            ?: return CapsuleUploadOutcome.RecipientKeyStale
+        var committed = false
+        try {
+            if (!accountMatches(owner)) return CapsuleUploadOutcome.AccountMismatch
+            val transitioned = try {
+                capsuleDao.applyRecipientKeyRewrapForOwner(
+                    capsuleId = capsuleId.toRestString(),
+                    ownerUserId = owner.toRestString(),
+                    recipientUserId = prepared.recipientUserId.toRestString(),
+                    expectedRecipientKeyBundleId = prepared.recipientKeyBundleId.toRestString(),
+                    newRecipientKeyBundleId = snapshot.keyBundleId.toRestString(),
+                    newEnvelopePath = files.envelope.canonicalPath,
+                    newPublishStatementPath = files.statement.canonicalPath,
+                    newPublishStatementSignaturePath = files.signature.canonicalPath,
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                return CapsuleUploadOutcome.RecipientKeyStale
+            }
+            if (transitioned == 1) {
+                committed = true
+                return run(owner, capsuleId)
+            }
+
+            val current = try {
+                capsuleDao.getByCapsuleIdAndOwner(capsuleId.toRestString(), owner.toRestString())
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                return CapsuleUploadOutcome.RecipientKeyStale
+            } ?: return CapsuleUploadOutcome.Missing
+            val alreadyRewrapped = current.ownerUserId == owner.toRestString() &&
+                current.recipientUserId == prepared.recipientUserId.toRestString() &&
+                current.recipientKeyBundleId == snapshot.keyBundleId.toRestString() &&
+                current.state != OutboxCapsuleState.PREPARING &&
+                current.envelopePath?.let { isContained(root, File(it)) } == true &&
+                current.publishStatementPath?.let { isContained(root, File(it)) } == true &&
+                current.publishStatementSignaturePath?.let { isContained(root, File(it)) } == true
+            if (!alreadyRewrapped) return CapsuleUploadOutcome.RecipientKeyStale
+            committed = current.envelopePath == files.envelope.canonicalPath &&
+                current.publishStatementPath == files.statement.canonicalPath &&
+                current.publishStatementSignaturePath == files.signature.canonicalPath
+            return run(owner, capsuleId)
+        } finally {
+            if (!committed) files.delete()
+        }
+    }
+
+    private fun isUsableActiveRecipient(
+        requestedUserId: UserId,
+        snapshot: dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot,
+    ): Boolean =
+        snapshot.userId == requestedUserId &&
+            snapshot.keyBundleStatus == SUPPORTED_ACTIVE_STATUS &&
+            snapshot.suite == SUPPORTED_SUITE &&
+            snapshot.protocolVersion == SUPPORTED_PROTOCOL_VERSION
+
+    private fun sameSigningPublicKey(capsule: OutboxCapsuleEntity, signingKeyset: KeysetHandle): Boolean {
+        val persisted = capsule.senderSigningPublicKeysetB64 ?: return false
+        return try {
+            val actual = TinkProtoKeysetFormat.serializeKeysetWithoutSecret(signingKeyset.publicKeysetHandle)
+            actual.contentEquals(Base64.urlSafeDecode(persisted))
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun writeRewrappedFiles(
+        root: File,
+        capsuleId: CapsuleId,
+        recipientKeyBundleId: KeyBundleId,
+        material: dev.hryshyn.remanence.create.RewrappedRecipientMaterial,
+    ): RewrappedFiles? {
+        val suffix = "${capsuleId.toRestString()}-${recipientKeyBundleId.toRestString()}-${UUID.randomUUID()}"
+        val created = ArrayList<File>(3)
+        var complete = false
+        return try {
+            if (!root.exists() && !root.mkdirs()) return null
+            if (!root.isDirectory) return null
+            val envelope = writeRewrappedFile(root, "envelope-$suffix.bin", material.envelopeCiphertext, created)
+                ?: return null
+            val statement = writeRewrappedFile(root, "statement-$suffix.bin", material.publishStatementBytes, created)
+                ?: return null
+            val signature = writeRewrappedFile(root, "signature-$suffix.bin", material.publishStatementSignature, created)
+                ?: return null
+            complete = true
+            RewrappedFiles(envelope, statement, signature)
+        } catch (_: Exception) {
+            null
+        } finally {
+            if (!complete) created.forEach(File::delete)
+        }
+    }
+
+    private fun writeRewrappedFile(
+        root: File,
+        name: String,
+        bytes: ByteArray,
+        created: MutableList<File>,
+    ): File? {
+        if (bytes.isEmpty()) return null
+        val target = File(root, name)
+        if (!isContained(root, target) || target.exists()) return null
+        val temporary = File(root, "$name.tmp-${UUID.randomUUID()}")
+        return try {
+            FileOutputStream(temporary).use { output ->
+                output.write(bytes)
+                output.flush()
+                output.fd.sync()
+            }
+            if (!temporary.renameTo(target) || !isContained(root, target)) return null
+            val canonical = target.canonicalFile
+            created += canonical
+            canonical
+        } finally {
+            temporary.delete()
+        }
+    }
+
+    private fun isContained(root: File, candidate: File): Boolean = try {
+        val rootPath = root.canonicalFile.path
+        val candidatePath = candidate.canonicalFile.path
+        candidatePath.startsWith(
+            if (rootPath.endsWith(File.separator)) rootPath else "$rootPath${File.separator}",
+        )
+    } catch (_: Exception) {
+        false
+    }
+
+    private data class RewrappedFiles(
+        val envelope: File,
+        val statement: File,
+        val signature: File,
+    ) {
+        fun delete() {
+            envelope.delete()
+            statement.delete()
+            signature.delete()
+        }
     }
 
     private suspend fun reconcileStoredBlobs(
@@ -755,6 +1082,9 @@ class CapsuleUploadOrchestrator(
     private companion object {
         const val TERMINAL_CLEANUP_RETRY = "RETRY_MATERIAL_CLEANUP"
         const val RECIPIENT_KEY_STALE = "RECIPIENT_KEY_STALE"
+        const val SUPPORTED_ACTIVE_STATUS = "ACTIVE"
+        const val SUPPORTED_SUITE = "HPKE_X25519_HKDF_SHA256_AES256GCM__ED25519"
+        const val SUPPORTED_PROTOCOL_VERSION = 1
         const val SHA256_BYTES = 32
     }
 }

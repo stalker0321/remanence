@@ -90,6 +90,36 @@ abstract class OutboxCapsuleDao {
     )
     abstract suspend fun beginUploadForOwner(capsuleId: String, ownerUserId: String): Int
 
+    /**
+     * A06 owner-guarded stale-recipient rewrap CAS. Files are written before
+     * this transition; publishing UPLOADING makes a process death after the
+     * CAS replay through the ordinary draft/blob reconciliation path.
+     */
+    @Query(
+        "UPDATE outbox_capsule SET " +
+            "recipient_key_bundle_id = :newRecipientKeyBundleId, " +
+            "envelope_path = :newEnvelopePath, " +
+            "publish_statement_path = :newPublishStatementPath, " +
+            "publish_statement_signature_path = :newPublishStatementSignaturePath, " +
+            "state = 'UPLOADING', last_error_code = NULL " +
+            "WHERE capsule_id = :capsuleId " +
+            "AND owner_user_id = :ownerUserId " +
+            "AND recipient_user_id = :recipientUserId " +
+            "AND recipient_key_bundle_id = :expectedRecipientKeyBundleId " +
+            "AND state = 'RETRYABLE_FAILURE' " +
+            "AND last_error_code = 'RECIPIENT_KEY_STALE'",
+    )
+    abstract suspend fun applyRecipientKeyRewrapForOwner(
+        capsuleId: String,
+        ownerUserId: String,
+        recipientUserId: String,
+        expectedRecipientKeyBundleId: String,
+        newRecipientKeyBundleId: String,
+        newEnvelopePath: String,
+        newPublishStatementPath: String,
+        newPublishStatementSignaturePath: String,
+    ): Int
+
     /** Owner-guarded UPLOADING -> FINALIZING CAS; 0 rows means refused. */
     @Query(
         "UPDATE outbox_capsule SET state = 'FINALIZING' " +

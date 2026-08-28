@@ -79,6 +79,27 @@ data class CapsulePublishRequest(
     val recipientEncryptionPublicKeyset: KeysetHandle,
 )
 
+/** A06: rebinds only recipient-facing material to a newly resolved bundle. */
+internal data class RecipientRewrapRequest(
+    val capsuleId: CapsuleId,
+    val senderUserId: UserId,
+    val recipientUserId: UserId,
+    val senderKeyBundleId: KeyBundleId,
+    val recipientKeyBundleId: KeyBundleId,
+    val createdAtEpochSeconds: Long,
+    val artifacts: List<PublishArtifact>,
+    val capsuleKeyset: KeysetHandle,
+    val signingKeyset: KeysetHandle,
+    val recipientEncryptionPublicKeyset: KeysetHandle,
+)
+
+/** The three ciphertext-only files replaced by an A06 rewrap. */
+internal data class RewrappedRecipientMaterial(
+    val envelopeCiphertext: ByteArray,
+    val publishStatementBytes: ByteArray,
+    val publishStatementSignature: ByteArray,
+)
+
 /**
  * I08: produces the complete ciphertext-only capsule for the given sender
  * AND recipient identities - recognition manifest, content manifest, 3-5
@@ -265,6 +286,58 @@ class CapsulePublisher(
             // M2-P08: serialized wrapped retry record; the stager
             // persists this through SenderRetryMaterialStore.
             senderRetryWrappedKeysetBytes = wrappedRetryRecord.serialize(),
+        )
+    }
+
+    /**
+     * Rebuilds the recipient envelope and signed publish statement without
+     * generating a capsule key or touching any encrypted artifact bytes.
+     * The caller must have recovered the original capsule key from the
+     * owner/capsule-scoped sender retry material.
+     */
+    internal fun rewrapRecipient(request: RecipientRewrapRequest): RewrappedRecipientMaterial {
+        TinkPrimitives.ensureRegistered()
+        val built = PublishStatementBuilder.build(
+            PublishStatementInput(
+                request.capsuleId,
+                request.senderUserId,
+                request.recipientUserId,
+                request.senderKeyBundleId,
+                request.recipientKeyBundleId,
+                request.createdAtEpochSeconds,
+                request.artifacts,
+            ),
+        ) as? PublishStatementBuildResult.Success
+            ?: throw IllegalArgumentException("statement layout rejected")
+        val signed = PublishStatementSigner().sign(
+            request.signingKeyset,
+            built.deterministicBytes.toByteArray(),
+        )
+        val envelopePlaintext = RecipientEnvelopePlaintext.newBuilder()
+            .setProtocolVersion(1)
+            .setCapsuleId(built.statement.capsuleId)
+            .setSenderUserId(built.statement.senderUserId)
+            .setRecipientUserId(built.statement.recipientUserId)
+            .setSenderKeyBundleId(built.statement.senderKeyBundleId)
+            .setRecipientKeyBundleId(built.statement.recipientKeyBundleId)
+            .setCapsuleAeadKeyset(serializedCapsuleKeyset(request.capsuleKeyset))
+            .setPublishStatementSha256(ByteString.copyFrom(sha256(signed.deterministicStatementBytes)))
+            .build()
+            .toByteArray()
+        val envelope = RecipientEnvelopeCryptor().seal(
+            request.recipientEncryptionPublicKeyset,
+            RecipientEnvelopeContextInput(
+                request.capsuleId,
+                request.senderUserId,
+                request.recipientUserId,
+                request.recipientKeyBundleId,
+            ),
+            envelopePlaintext,
+        )
+        return RewrappedRecipientMaterial(
+            envelopeCiphertext = envelope,
+            publishStatementBytes = signed.deterministicStatementBytes,
+            publishStatementSignature = signed.signature,
         )
     }
 

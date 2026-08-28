@@ -35,7 +35,7 @@ from remanence.capsules.finalize_service import (
     CapsuleFinalizeService,
 )
 from remanence.capsules.idempotency_models import CapsuleIdempotencyRecord
-from remanence.capsules.limits import MAX_FINALIZE_REQUEST_BYTES
+from remanence.capsules.limits import LIMITS_V1, MAX_FINALIZE_REQUEST_BYTES
 from remanence.capsules.models import Capsule, CapsuleState
 from remanence.capsules.publish_statement import MAX_PUBLISH_STATEMENT_BYTES
 from remanence.capsules.schemas import CapsuleDraftValidationError, parse_finalize_capsule_request
@@ -197,6 +197,11 @@ def _transport_client() -> TestClient:
 def test_transport_auth_path_and_size_limits_do_not_require_database() -> None:
     client = _transport_client()
     capsule_id = str(uuid4())
+    exact_cap = client.post(
+        f"/v1/capsules/{capsule_id}/finalize",
+        content=b"x" * MAX_FINALIZE_REQUEST_BYTES,
+    )
+    _assert_problem(exact_cap, status=422, code="VALIDATION_FAILED")
     oversized = client.post(
         f"/v1/capsules/{capsule_id}/finalize",
         content=b"x" * (MAX_FINALIZE_REQUEST_BYTES + 1),
@@ -220,6 +225,7 @@ def test_transport_auth_path_and_size_limits_do_not_require_database() -> None:
     missing_auth.dependency_overrides[get_db_session] = lambda: object()
     missing_auth.state.blob_store = object()
     unauth = TestClient(missing_auth)
+    # Shared FastAPI AuthenticationRequiredError handler (not a new ProblemDetail).
     unauth_resp = unauth.post(f"/v1/capsules/{capsule_id}/finalize", content=_finalize_body())
     _assert_problem(unauth_resp, status=401, code="AUTHENTICATION_REQUIRED")
 
@@ -318,6 +324,93 @@ def test_mocked_service_error_rolls_back_begin(monkeypatch: pytest.MonkeyPatch) 
     response = client.post(f"/v1/capsules/{uuid4()}/finalize", content=_finalize_body())
     _assert_problem(response, status=409, code="RECIPIENT_KEY_STALE")
     assert rolled_back["value"] is True
+
+
+def test_max_legal_finalize_body_parses_and_reaches_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[dict] = []
+    capsule_id = uuid4()
+    ready_at = datetime(2030, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    def fake_finalize(self, **kwargs):
+        captured.append(kwargs)
+        return CapsuleFinalizeResult(
+            capsule_id=kwargs["capsule_id"],
+            state=CapsuleState.READY,
+            ready_at=ready_at,
+            recipient_key_bundle_id=uuid4(),
+            is_replay=False,
+        )
+
+    monkeypatch.setattr(CapsuleFinalizeService, "finalize", fake_finalize)
+    statement = b"s" * MAX_PUBLISH_STATEMENT_BYTES
+    ciphertext = b"e" * LIMITS_V1.recipient_envelope_max_ciphertext_bytes
+    raw = _finalize_body(statement=statement, ciphertext=ciphertext)
+    assert len(raw) <= MAX_FINALIZE_REQUEST_BYTES
+    parsed = parse_finalize_capsule_request(raw)
+    assert len(parsed.signed_publish_statement.statement) == MAX_PUBLISH_STATEMENT_BYTES
+    assert len(parsed.recipient_envelope.ciphertext) == LIMITS_V1.recipient_envelope_max_ciphertext_bytes
+
+    app = create_app(settings=Settings(mode=AppMode.TEST))
+    app.dependency_overrides[get_authenticated_principal] = lambda: AuthenticatedPrincipal(
+        user_id=uuid4(), session_id=uuid4()
+    )
+
+    class _Session:
+        def begin(self):
+            @contextmanager
+            def _begin():
+                yield self
+            return _begin()
+
+    app.dependency_overrides[get_db_session] = lambda: _Session()
+    app.state.blob_store = object()
+    client = TestClient(app)
+    response = client.post(f"/v1/capsules/{capsule_id}/finalize", content=raw)
+    assert response.status_code == 201, response.text
+    assert len(captured) == 1
+    assert captured[0]["statement"] == statement
+    assert captured[0]["envelope"].ciphertext == ciphertext
+
+
+def test_malformed_service_result_is_500_and_rolls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rolled_back = {"value": False}
+
+    def fake_finalize(self, **kwargs):
+        return CapsuleFinalizeResult(
+            capsule_id=kwargs["capsule_id"],
+            state=CapsuleState.DRAFT,
+            ready_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+            recipient_key_bundle_id=uuid4(),
+            is_replay="yes",  # type: ignore[arg-type]
+        )
+
+    class _Session:
+        def begin(self):
+            @contextmanager
+            def _begin():
+                try:
+                    yield self
+                except Exception:
+                    rolled_back["value"] = True
+                    raise
+            return _begin()
+
+    monkeypatch.setattr(CapsuleFinalizeService, "finalize", fake_finalize)
+    app = create_app(settings=Settings(mode=AppMode.TEST))
+    app.dependency_overrides[get_authenticated_principal] = lambda: AuthenticatedPrincipal(
+        user_id=uuid4(), session_id=uuid4()
+    )
+    app.dependency_overrides[get_db_session] = lambda: _Session()
+    app.state.blob_store = object()
+    client = TestClient(app)
+    response = client.post(f"/v1/capsules/{uuid4()}/finalize", content=_finalize_body())
+    _assert_problem(response, status=500, code="INTERNAL_ERROR")
+    assert rolled_back["value"] is True
+    assert "is_replay" not in response.json()
 
 
 def _register_with_keys(client: TestClient, *, email: str | None = None, handle: str | None = None, signing_public: bytes) -> dict:

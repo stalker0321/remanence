@@ -5,7 +5,7 @@ import re
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -30,6 +30,7 @@ from remanence.capsules.encoding import decode_canonical_base64url
 from remanence.capsules.finalize_service import (
     CapsuleFinalizeEnvelope,
     CapsuleFinalizeError,
+    CapsuleFinalizeResult,
     CapsuleFinalizeService,
 )
 from remanence.capsules.limits import (
@@ -87,9 +88,9 @@ _ERRORS = {
     "BLOB_SIZE_INVALID": (400, "Blob size invalid"),
     "BLOB_HASH_MISMATCH": (400, "Blob hash mismatch"),
     "BLOB_CONFLICT": (409, "Blob conflict"),
-    "STATEMENT_INVALID": (400, "Invalid statement"),
-    "SIGNATURE_INVALID": (400, "Invalid signature"),
-    "ENVELOPE_INVALID": (400, "Invalid envelope"),
+    "STATEMENT_INVALID": (422, "Invalid statement"),
+    "SIGNATURE_INVALID": (422, "Invalid signature"),
+    "ENVELOPE_INVALID": (422, "Invalid envelope"),
     "FINALIZE_CONFLICT": (409, "Finalize conflict"),
     "KEY_BUNDLE_REVOKED": (409, "Key bundle revoked"),
 }
@@ -369,14 +370,33 @@ async def create_capsule_draft(
     return _response_dto(result)
 
 
-def _finalize_response_dto(result) -> CapsuleFinalizeResponse:
+def _accepted_finalize_response(result: object) -> tuple[CapsuleFinalizeResponse, bool]:
+    if not isinstance(result, CapsuleFinalizeResult):
+        raise CapsuleFinalizeError("INTERNAL_ERROR")
     if result.state is not CapsuleState.READY:
         raise CapsuleFinalizeError("INTERNAL_ERROR")
-    return CapsuleFinalizeResponse(
-        capsule_id=result.capsule_id,
-        state="READY",
-        ready_at=result.ready_at,
-    )
+    if type(result.is_replay) is not bool:
+        raise CapsuleFinalizeError("INTERNAL_ERROR")
+    if not isinstance(result.capsule_id, uuid.UUID):
+        raise CapsuleFinalizeError("INTERNAL_ERROR")
+    ready_at = result.ready_at
+    if (
+        not isinstance(ready_at, datetime)
+        or ready_at.tzinfo is None
+        or ready_at.utcoffset() != timedelta(0)
+    ):
+        raise CapsuleFinalizeError("INTERNAL_ERROR")
+    try:
+        dto = CapsuleFinalizeResponse.model_validate(
+            {
+                "capsule_id": result.capsule_id,
+                "state": "READY",
+                "ready_at": ready_at,
+            }
+        )
+    except Exception:
+        raise CapsuleFinalizeError("INTERNAL_ERROR") from None
+    return dto, result.is_replay
 
 
 @router.post(
@@ -413,8 +433,9 @@ async def finalize_capsule(
                 ),
                 now=datetime.now(timezone.utc),
             )
-        response.status_code = 200 if result.is_replay else 201
-        return _finalize_response_dto(result)
+            dto, is_replay = _accepted_finalize_response(result)
+        response.status_code = 200 if is_replay else 201
+        return dto
     except CapsuleDraftValidationError as exc:
         return _problem_response(exc.code)
     except CapsuleFinalizeError as exc:

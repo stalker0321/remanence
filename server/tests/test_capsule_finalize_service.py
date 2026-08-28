@@ -1059,7 +1059,7 @@ def test_ready_replay_request_conflicts_and_envelope_hash_invariant(session_fact
 
         conflicts = [
             {"statement": world["statement"] + b"\x00"},
-            {"signature_bytes": world["signature"][:-1] + b"\x00"},
+            {"signature_bytes": world["signature"][:-1] + bytes([world["signature"][-1] ^ 0x01])},
             {"envelope": _envelope(world["recipient_bundle"].id, b"other-envelope")},
             {
                 "envelope": CapsuleFinalizeEnvelope(

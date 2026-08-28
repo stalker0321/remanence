@@ -23,6 +23,7 @@ from remanence.db.session import build_engine, build_session_factory
 from remanence.main import create_app
 from remanence.settings import AppMode, Settings
 from remanence.users.key_models import UserKeyBundle
+from remanence.api.problems import problem_payload
 from remanence.users.models import User
 
 _ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
@@ -164,12 +165,7 @@ def test_duplicate_email_409_no_partial_rows(client_factory) -> None:
     assert response.status_code == 409
     assert response.headers["content-type"].startswith("application/problem+json")
     body = response.json()
-    assert body == {
-        "type": "https://remanence.invalid/problems/account-conflict",
-        "title": "Account conflict",
-        "status": 409,
-        "code": "ACCOUNT_CONFLICT",
-    }
+    assert body == problem_payload("EMAIL_UNAVAILABLE", response.headers["x-request-id"])
     serialized = str(body)
     for secret in ("alice@example.com", "bob", "correct horse battery staple", second["key_bundle"]["encryption_public_keyset"], second["key_bundle"]["signing_public_keyset"]):
         assert secret not in serialized
@@ -186,12 +182,7 @@ def test_duplicate_handle_409_indistinguishable(client_factory) -> None:
     response = client.post("/v1/auth/register", json=second)
     assert response.status_code == 409
     body = response.json()
-    assert body == {
-        "type": "https://remanence.invalid/problems/account-conflict",
-        "title": "Account conflict",
-        "status": 409,
-        "code": "ACCOUNT_CONFLICT",
-    }
+    assert body == problem_payload("HANDLE_UNAVAILABLE", response.headers["x-request-id"])
     assert "bob@example.com" not in json.dumps(body)
     with factory() as session:
         assert len(session.scalars(select(User)).all()) == 1
@@ -204,18 +195,12 @@ def test_malformed_inputs_fixed_422(client_factory) -> None:
         {**_valid_payload(), "key_bundle": {**_valid_payload()["key_bundle"], "encryption_public_keyset": "A" * 6000}},
         {**_valid_payload(), "key_bundle": {**_valid_payload()["key_bundle"], "signing_public_keyset": "not-base64!!"}},
     ]
-    expected = {
-        "type": "https://remanence.invalid/problems/invalid-request",
-        "title": "Invalid request",
-        "status": 422,
-        "code": "INVALID_REQUEST",
-    }
     for payload in bad_payloads:
         response = client.post("/v1/auth/register", json=payload)
         assert response.status_code == 422
         assert response.headers["content-type"].startswith("application/problem+json")
         body = response.json()
-        assert body == expected
+        assert body == problem_payload("VALIDATION_FAILED", response.headers["x-request-id"])
         serialized = json.dumps(body)
         assert "short" not in serialized
         assert payload["key_bundle"]["encryption_public_keyset"] not in serialized
@@ -230,9 +215,4 @@ def test_test_app_without_factory_health_ok_register_503() -> None:
     assert response.status_code == 503
     assert response.headers["content-type"].startswith("application/problem+json")
     body = response.json()
-    assert body == {
-        "type": "https://remanence.invalid/problems/service-unavailable",
-        "title": "Service unavailable",
-        "status": 503,
-        "code": "SERVICE_UNAVAILABLE",
-    }
+    assert body == problem_payload("INTERNAL_UNAVAILABLE", response.headers["x-request-id"])

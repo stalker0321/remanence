@@ -26,6 +26,7 @@ from remanence.main import create_app
 from remanence.users.key_models import KeyBundleStatus, UserKeyBundle
 from remanence.users.models import User
 
+from remanence.api.problems import PROBLEM_BODY_FIELDS, PROBLEM_CATALOG, problem_payload
 from test_registration_endpoint import _valid_payload
 
 
@@ -105,12 +106,17 @@ def _post(client: TestClient, token: str, raw: bytes, key: UUID | None = None):
 
 
 def _assert_problem(response, *, status: int, code: str) -> None:
+    catalog_key = "INTERNAL_UNAVAILABLE" if code == "INTERNAL_ERROR" and status == 503 else code
+    spec = PROBLEM_CATALOG[catalog_key]
+    assert spec.status == status
     assert response.status_code == status
     assert response.headers["content-type"].startswith("application/problem+json")
+    header_id = response.headers["x-request-id"]
     body = response.json()
-    assert set(body) == {"type", "title", "status", "code"}
+    assert set(body) == PROBLEM_BODY_FIELDS
+    assert body == problem_payload(catalog_key, header_id)
     assert body["status"] == status
-    assert body["code"] == code
+    assert body["code"] == spec.code
 
 
 def _count(session, model) -> int:
@@ -176,7 +182,7 @@ def test_missing_and_malformed_duplicate_idempotency_headers_are_422(client_fact
 def test_authentication_is_required(client_factory) -> None:
     client, _factory = client_factory
     response = client.post("/v1/capsules", content=b"{}", headers={"Idempotency-Key": str(uuid4())})
-    _assert_problem(response, status=401, code="AUTHENTICATION_REQUIRED")
+    _assert_problem(response, status=401, code="AUTH_INVALID")
 
 
 def test_duplicate_json_keys_and_streamed_body_cap_are_redacted(client_factory) -> None:

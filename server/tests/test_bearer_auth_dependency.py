@@ -19,6 +19,7 @@ from sqlalchemy.engine import make_url
 from tink.proto import ed25519_pb2, hpke_pb2, tink_pb2
 
 from remanence.api.auth_schemas import LoginRequest, LoginResponse, RegistrationRequest, RegistrationResponse
+from remanence.api.problems import problem_payload
 from remanence.api.dependencies import (
     AuthenticatedPrincipal,
     get_authenticated_principal,
@@ -34,12 +35,7 @@ _HPKE_KEY = bytes(range(32))
 _ED_KEY = bytes(range(32, 64))
 _PASSWORD = "correct horse battery staple"
 
-_EXPECTED_401 = {
-    "type": "https://remanence.invalid/problems/authentication-required",
-    "title": "Authentication required",
-    "status": 401,
-    "code": "AUTHENTICATION_REQUIRED",
-}
+
 
 
 def _hpke_public_key() -> hpke_pb2.HpkePublicKey:
@@ -150,7 +146,7 @@ def _assert_401(response) -> None:
     assert response.status_code == 401
     assert response.headers["content-type"].startswith("application/problem+json")
     assert response.headers["www-authenticate"] == "Bearer"
-    assert response.json() == _EXPECTED_401
+    assert response.json() == problem_payload("AUTH_INVALID", response.headers["x-request-id"])
 
 
 def test_valid_access_returns_opaque_ids(auth_env) -> None:
@@ -178,14 +174,14 @@ def test_missing_and_malformed_identical_401(auth_env) -> None:
         "unknown": {"Authorization": "Bearer " + "pm_at_" + "C" * 43},
         "malformed payload": {"Authorization": "Bearer pm_at_short"},
     }
-    responses = []
+    shapes = []
     for label, headers in cases.items():
         response = client.get("/test/protected", headers=headers)
         _assert_401(response)
-        responses.append(response)
-    for response in responses[1:]:
-        assert response.content == responses[0].content
-        assert response.headers["www-authenticate"] == responses[0].headers["www-authenticate"]
+        body = response.json()
+        shapes.append({key: value for key, value in body.items() if key != "request_id"})
+        assert response.headers["www-authenticate"] == "Bearer"
+    assert all(shape == shapes[0] for shape in shapes[1:])
 
 
 def test_rotated_old_access_invalid_after_refresh(auth_env) -> None:

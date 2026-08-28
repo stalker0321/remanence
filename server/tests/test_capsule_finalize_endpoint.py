@@ -225,9 +225,8 @@ def test_transport_auth_path_and_size_limits_do_not_require_database() -> None:
     missing_auth.dependency_overrides[get_db_session] = lambda: object()
     missing_auth.state.blob_store = object()
     unauth = TestClient(missing_auth)
-    # Shared FastAPI AuthenticationRequiredError handler (not a new ProblemDetail).
     unauth_resp = unauth.post(f"/v1/capsules/{capsule_id}/finalize", content=_finalize_body())
-    _assert_problem(unauth_resp, status=401, code="AUTHENTICATION_REQUIRED")
+    _assert_problem(unauth_resp, status=401, code="AUTH_INVALID")
 
 
 def test_mocked_service_returns_allow_list_and_ignores_idempotency_headers(

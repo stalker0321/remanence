@@ -14,8 +14,8 @@ from remanence.api.auth_schemas import (
     RegistrationRequest,
     RegistrationResponse,
     RegistrationUserResponse,
-    registration_validation_problem,
 )
+from remanence.api.problems import PROBLEM_BODY_FIELDS, PROBLEM_CATALOG, ProblemDetail as CanonicalProblemDetail
 from remanence.users.key_bundle_validation import (
     ED25519_PUBLIC_KEY_TYPE_URL,
     HPKE_PUBLIC_KEY_TYPE_URL,
@@ -218,16 +218,37 @@ def test_repr_and_error_str_omit_password_and_keysets() -> None:
 
 
 def test_fixed_problem_identical_for_distinct_failures() -> None:
-    first = registration_validation_problem()
-    second = registration_validation_problem()
+    assert ProblemDetail is CanonicalProblemDetail
+    spec = PROBLEM_CATALOG["VALIDATION_FAILED"]
+    request_id = "00000000-0000-4000-8000-000000000001"
+    first = ProblemDetail(
+        type=spec.type,
+        title=spec.title,
+        status=spec.status,
+        code=spec.code,
+        detail=spec.detail,
+        request_id=request_id,
+        retryable=spec.retryable,
+    )
+    second = ProblemDetail(
+        type=spec.type,
+        title=spec.title,
+        status=spec.status,
+        code=spec.code,
+        detail=spec.detail,
+        request_id=request_id,
+        retryable=spec.retryable,
+    )
     assert first == second
-    assert first.type == "https://remanence.invalid/problems/invalid-request"
-    assert first.title == "Invalid request"
+    assert first.type == "https://remanence.invalid/problems/validation-failed"
+    assert first.title == "Validation failed"
     assert first.status == 422
-    assert first.code == "INVALID_REQUEST"
+    assert first.code == "VALIDATION_FAILED"
     dumped = first.model_dump()
-    assert "detail" not in dumped
+    assert set(dumped) == PROBLEM_BODY_FIELDS
+    assert dumped["detail"] == spec.detail
     assert "errors" not in dumped
+    assert "fields" not in dumped
 
 
 def test_response_repr_hides_tokens_but_dump_includes() -> None:

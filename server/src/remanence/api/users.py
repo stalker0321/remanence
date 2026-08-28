@@ -1,6 +1,6 @@
 """Authenticated current-account and handle-change endpoints."""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -11,55 +11,28 @@ from remanence.api.auth_schemas import (
     HandleChangeRequest,
     HandleChangeResponse,
     MeResponse,
-    ProblemDetail,
 )
 from remanence.api.dependencies import AuthenticatedPrincipal, get_authenticated_principal, get_db_session
+from remanence.api.problems import problem_response
 from remanence.users.key_models import KeyBundleStatus, UserKeyBundle
 from remanence.users.models import User
 
 router = APIRouter()
 
 
-def _account_state_invalid_response() -> JSONResponse:
-    problem = ProblemDetail(
-        type="https://remanence.invalid/problems/account-state-invalid",
-        title="Account state invalid",
-        status=409,
-        code="ACCOUNT_STATE_INVALID",
-    )
-    return JSONResponse(
-        status_code=409,
-        content=problem.model_dump(),
-        media_type="application/problem+json",
-    )
-
-
-def _handle_conflict_response() -> JSONResponse:
-    problem = ProblemDetail(
-        type="https://remanence.invalid/problems/handle-conflict",
-        title="Handle conflict",
-        status=409,
-        code="HANDLE_CONFLICT",
-    )
-    return JSONResponse(
-        status_code=409,
-        content=problem.model_dump(),
-        media_type="application/problem+json",
-    )
-
-
 @router.patch("/v1/me/handle", response_model=HandleChangeResponse)
 def change_handle(
     payload: HandleChangeRequest,
+    request: Request,
     principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
     session: Session = Depends(get_db_session),
-) -> HandleChangeResponse:
+) -> HandleChangeResponse | JSONResponse:
     try:
         user = session.scalar(
             select(User).where(User.id == principal.user_id).with_for_update()
         )
         if user is None:
-            return _account_state_invalid_response()
+            return problem_response(request, "INTERNAL_ERROR")
         user.handle_normalized = payload.handle
         user.handle_display = payload.handle
         session.flush()
@@ -68,18 +41,19 @@ def change_handle(
         session.rollback()
         if "uq_users_handle_normalized" not in str(exc.orig):
             raise
-        return _handle_conflict_response()
+        return problem_response(request, "HANDLE_UNAVAILABLE")
     return HandleChangeResponse(user_id=user.id, handle=user.handle_normalized)
 
 
 @router.get("/v1/me", response_model=MeResponse)
 def me(
+    request: Request,
     principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
     session=Depends(get_db_session),
-) -> MeResponse:
+) -> MeResponse | JSONResponse:
     user = session.get(User, principal.user_id)
     if user is None:
-        return _account_state_invalid_response()
+        return problem_response(request, "INTERNAL_ERROR")
     key_bundle = session.scalar(
         select(UserKeyBundle).where(
             UserKeyBundle.user_id == principal.user_id,
@@ -87,7 +61,7 @@ def me(
         )
     )
     if key_bundle is None:
-        return _account_state_invalid_response()
+        return problem_response(request, "INTERNAL_ERROR")
     return MeResponse(
         user_id=user.id,
         email=user.email_normalized,

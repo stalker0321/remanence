@@ -164,7 +164,7 @@ def test_upload_missing_storage_wiring_fails_closed() -> None:
             content=b"body",
             headers=_upload_headers(b"body"),
         )
-    _assert_problem(response, status=500, code="INTERNAL_ERROR")
+    _assert_problem(response, status=503, code="INTERNAL_ERROR")
 
 
 def test_upload_authentication_and_transport_rejections(client_factory) -> None:
@@ -174,7 +174,7 @@ def test_upload_authentication_and_transport_rejections(client_factory) -> None:
     path = f"/v1/capsules/{uuid4()}/blobs/{uuid4()}"
 
     unauthenticated = client.put(path, content=payload, headers=_upload_headers(payload))
-    _assert_problem(unauthenticated, status=401, code="AUTHENTICATION_REQUIRED")
+    _assert_problem(unauthenticated, status=401, code="AUTH_INVALID")
 
     for content_type in ("application/octet-stream; charset=utf-8", "text/plain"):
         response = client.put(
@@ -201,19 +201,19 @@ def test_upload_body_stream_bounds_and_hash_fail_before_db_service(client_factor
         content=b"xx",
         headers={"Authorization": f"Bearer {sender['access_token']}", **_upload_headers(b"xx", length="1")},
     )
-    _assert_problem(too_long, status=400, code="BLOB_SIZE_INVALID")
+    _assert_problem(too_long, status=422, code="BLOB_SIZE_INVALID")
     truncated = client.put(
         path,
         content=b"x",
         headers={"Authorization": f"Bearer {sender['access_token']}", **_upload_headers(b"x", length="2")},
     )
-    _assert_problem(truncated, status=400, code="BLOB_SIZE_INVALID")
+    _assert_problem(truncated, status=422, code="BLOB_SIZE_INVALID")
     hash_bad = client.put(
         path,
         content=b"x",
         headers={"Authorization": f"Bearer {sender['access_token']}", **_upload_headers(b"x", digest=_sha256(b"y"))},
     )
-    _assert_problem(hash_bad, status=400, code="BLOB_HASH_MISMATCH")
+    _assert_problem(hash_bad, status=422, code="BLOB_HASH_MISMATCH")
     assert _temp_files(tmp_path / "staging") == []
 
 

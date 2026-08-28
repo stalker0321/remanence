@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.engine import make_url
 from tink.proto import ed25519_pb2, hpke_pb2, tink_pb2
 
+from remanence.api.problems import problem_payload
 from remanence.auth.models import AuthCredential, AuthSession
 from remanence.db.session import build_engine, build_session_factory
 from remanence.main import create_app
@@ -150,12 +151,7 @@ def test_duplicate_handle_fixed_409_original_unchanged(handle_env) -> None:
     assert response.status_code == 409
     assert response.headers["content-type"].startswith("application/problem+json")
     body = response.json()
-    assert body == {
-        "type": "https://remanence.invalid/problems/handle-conflict",
-        "title": "Handle conflict",
-        "status": 409,
-        "code": "HANDLE_CONFLICT",
-    }
+    assert body == problem_payload("HANDLE_UNAVAILABLE", response.headers["x-request-id"])
     assert "bob" not in str(body)
     with factory() as session:
         alice = next(u for u in session.scalars(select(User)).all() if u.handle_normalized == "alice")
@@ -168,7 +164,7 @@ def test_case_only_collision_409(handle_env) -> None:
     _seed(client, email="bob@example.com", handle="BOB")
     response = client.patch("/v1/me/handle", json={"handle": "Bob"}, headers={"Authorization": f"Bearer {seed_a['access_token']}"})
     assert response.status_code == 409
-    assert response.json()["code"] == "HANDLE_CONFLICT"
+    assert response.json()["code"] == "HANDLE_UNAVAILABLE"
 
 
 def test_invalid_handles_422_redacted(handle_env) -> None:
@@ -181,9 +177,11 @@ def test_invalid_handles_422_redacted(handle_env) -> None:
         assert response.status_code == 422
         assert response.headers["content-type"].startswith("application/problem+json")
         body = response.json()
-        assert body["code"] == "INVALID_REQUEST"
+        assert body["code"] == "VALIDATION_FAILED"
         if handle:
-            assert handle not in str(body)
+            assert handle not in body["detail"]
+            assert handle not in body["title"]
+            assert handle not in body["code"]
     extra = client.patch("/v1/me/handle", json={"handle": "new_name", "extra": 1}, headers=headers)
     assert extra.status_code == 422
 
@@ -192,7 +190,7 @@ def test_unauth_401(handle_env) -> None:
     client, _ = handle_env
     response = client.patch("/v1/me/handle", json={"handle": "new_name"})
     assert response.status_code == 401
-    assert response.json()["code"] == "AUTHENTICATION_REQUIRED"
+    assert response.json()["code"] == "AUTH_INVALID"
 
 
 def test_immutable_ids_across_handle_change(handle_env) -> None:

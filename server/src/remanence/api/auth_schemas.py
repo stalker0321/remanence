@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from email_validator import validate_email
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
+from remanence.api.problems import ProblemDetail as ProblemDetail
 from remanence.users.handles import normalize_handle
 from remanence.users.key_bundle_validation import (
     ED25519_PUBLIC_KEY_TYPE_URL,
@@ -333,19 +334,3 @@ class RefreshResponse(BaseModel):
         return validate_utc_aware(value)
 
 
-class ProblemDetail(BaseModel):
-    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
-
-    type: str
-    title: str
-    status: int
-    code: str
-
-
-def registration_validation_problem() -> ProblemDetail:
-    return ProblemDetail(
-        type="https://remanence.invalid/problems/invalid-request",
-        title="Invalid request",
-        status=422,
-        code="INVALID_REQUEST",
-    )

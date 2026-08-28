@@ -2,9 +2,7 @@
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Response
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, Request, Response
 from pydantic import SecretStr
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -13,15 +11,14 @@ from remanence.api.auth_schemas import (
     ActiveKeyBundleResponse,
     LoginRequest,
     LoginResponse,
-    ProblemDetail,
     RefreshRequest,
     RefreshResponse,
     RegistrationRequest,
     RegistrationResponse,
     RegistrationUserResponse,
-    registration_validation_problem,
 )
-from remanence.api.dependencies import DatabaseUnavailableError, get_access_bearer_token, get_db_session
+from remanence.api.dependencies import get_access_bearer_token, get_db_session
+from remanence.api.problems import problem_response
 from remanence.auth.login import LoginService, LoginStatus
 from remanence.auth.logout import LogoutService
 from remanence.auth.passwords import PasswordService
@@ -36,97 +33,15 @@ from remanence.users.key_bundle_validation import PublicKeyBundleValidationError
 router = APIRouter()
 
 
-def _account_conflict_problem() -> ProblemDetail:
-    return ProblemDetail(
-        type="https://remanence.invalid/problems/account-conflict",
-        title="Account conflict",
-        status=409,
-        code="ACCOUNT_CONFLICT",
-    )
-
-
-def _conflict_response() -> JSONResponse:
-    return JSONResponse(
-        status_code=409,
-        content=_account_conflict_problem().model_dump(),
-        media_type="application/problem+json",
-    )
-
-
-def _invalid_response() -> JSONResponse:
-    return JSONResponse(
-        status_code=422,
-        content=registration_validation_problem().model_dump(),
-        media_type="application/problem+json",
-    )
-
-
-def _service_unavailable_problem() -> ProblemDetail:
-    return ProblemDetail(
-        type="https://remanence.invalid/problems/service-unavailable",
-        title="Service unavailable",
-        status=503,
-        code="SERVICE_UNAVAILABLE",
-    )
-
-
-def register_database_unavailable_handler(request: object, exc: DatabaseUnavailableError) -> JSONResponse:
-    return JSONResponse(
-        status_code=503,
-        content=_service_unavailable_problem().model_dump(),
-        media_type="application/problem+json",
-    )
-
-
-def register_validation_error_handler(request: object, exc: RequestValidationError) -> JSONResponse:
-    return JSONResponse(
-        status_code=422,
-        content=registration_validation_problem().model_dump(),
-        media_type="application/problem+json",
-    )
-
-
-def _invalid_credentials_problem() -> ProblemDetail:
-    return ProblemDetail(
-        type="https://remanence.invalid/problems/invalid-credentials",
-        title="Invalid credentials",
-        status=401,
-        code="INVALID_CREDENTIALS",
-    )
-
-
-def _invalid_credentials_response() -> JSONResponse:
-    return JSONResponse(
-        status_code=401,
-        content=_invalid_credentials_problem().model_dump(),
-        media_type="application/problem+json",
-    )
-
-
-def _invalid_refresh_problem() -> ProblemDetail:
-    return ProblemDetail(
-        type="https://remanence.invalid/problems/invalid-refresh-token",
-        title="Invalid refresh token",
-        status=401,
-        code="INVALID_REFRESH_TOKEN",
-    )
-
-
-def _session_replayed_problem() -> ProblemDetail:
-    return ProblemDetail(
-        type="https://remanence.invalid/problems/session-replayed",
-        title="Session replayed",
-        status=401,
-        code="SESSION_REPLAYED",
-    )
-
-
-def _problem_response(status: int, problem: ProblemDetail) -> JSONResponse:
-    return JSONResponse(
-        status_code=status,
-        content=problem.model_dump(),
-        media_type="application/problem+json",
-    )
+def _registration_conflict_code(exc: IntegrityError) -> str | None:
+    orig = str(getattr(exc, "orig", exc))
+    if "uq_users_email_normalized" in orig:
+        return "EMAIL_UNAVAILABLE"
+    if "uq_users_handle_normalized" in orig:
+        return "HANDLE_UNAVAILABLE"
+    if "user_key_bundles_pkey" in orig or "pk_user_key_bundles" in orig:
+        return "KEY_BUNDLE_INVALID"
+    return None
 
 
 @router.post("/v1/auth/logout", status_code=204)
@@ -148,6 +63,7 @@ def logout(
 )
 def refresh(
     payload: RefreshRequest,
+    request: Request,
     session: Session = Depends(get_db_session),
 ) -> RefreshResponse:
     with session.begin():
@@ -156,9 +72,9 @@ def refresh(
             datetime.now(timezone.utc),
         )
     if result.status is RefreshRotationStatus.INVALID:
-        return _problem_response(401, _invalid_refresh_problem())
+        return problem_response(request, "AUTH_INVALID")
     if result.status is RefreshRotationStatus.REPLAYED:
-        return _problem_response(401, _session_replayed_problem())
+        return problem_response(request, "SESSION_REPLAYED")
     return RefreshResponse(
         session_id=result.session_id,
         access_token=result.access_token,
@@ -175,6 +91,7 @@ def refresh(
 )
 def login(
     payload: LoginRequest,
+    request: Request,
     session: Session = Depends(get_db_session),
 ) -> LoginResponse:
     with session.begin():
@@ -184,7 +101,7 @@ def login(
             now=datetime.now(timezone.utc),
         )
     if result.status is not LoginStatus.SUCCESS:
-        return _invalid_credentials_response()
+        return problem_response(request, "AUTH_INVALID")
     return LoginResponse(
         user=RegistrationUserResponse(
             user_id=result.user_id,
@@ -213,6 +130,7 @@ def login(
 )
 def register(
     payload: RegistrationRequest,
+    request: Request,
     session: Session = Depends(get_db_session),
 ) -> RegistrationResponse:
     try:
@@ -229,15 +147,14 @@ def register(
                 now=datetime.now(timezone.utc),
             )
     except IntegrityError as exc:
-        if (
-            "uq_users_email_normalized" not in str(exc.orig)
-            and "uq_users_handle_normalized" not in str(exc.orig)
-            and "user_key_bundles_pkey" not in str(exc.orig)
-        ):
+        code = _registration_conflict_code(exc)
+        if code is None:
             raise
-        return _conflict_response()
-    except (ValueError, PublicKeyBundleValidationError):
-        return _invalid_response()
+        return problem_response(request, code)
+    except PublicKeyBundleValidationError:
+        return problem_response(request, "KEY_BUNDLE_INVALID")
+    except ValueError:
+        return problem_response(request, "VALIDATION_FAILED")
     return RegistrationResponse(
         user=RegistrationUserResponse(
             user_id=result.user_id,

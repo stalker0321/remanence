@@ -1,5 +1,6 @@
 import os
 from collections.abc import Iterator
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -26,6 +27,7 @@ def test_explicit_test_settings_health() -> None:
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
     assert response.headers["content-type"].startswith("application/json")
+    assert str(UUID(response.headers["x-request-id"])) == response.headers["x-request-id"]
     assert app.state.settings is settings
     assert settings.database_url is None
     assert settings.blob_root is None
@@ -42,3 +44,4 @@ def test_create_app_reads_test_mode_from_env(monkeypatch: pytest.MonkeyPatch) ->
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
     assert response.headers["content-type"].startswith("application/json")
+    assert str(UUID(response.headers["x-request-id"])) == response.headers["x-request-id"]

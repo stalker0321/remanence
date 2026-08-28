@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.engine import make_url
 from tink.proto import ed25519_pb2, hpke_pb2, tink_pb2
 
+from remanence.api.problems import problem_payload
 from remanence.auth.models import AuthSession
 from remanence.auth.tokens import hash_opaque_token
 from remanence.db.session import build_engine, build_session_factory
@@ -166,12 +167,7 @@ def test_refresh_reuse_old_returns_replayed_and_revokes_lineage(refresh_env) -> 
     assert second.status_code == 401
     assert second.headers["content-type"].startswith("application/problem+json")
     body = second.json()
-    assert body == {
-        "type": "https://remanence.invalid/problems/session-replayed",
-        "title": "Session replayed",
-        "status": 401,
-        "code": "SESSION_REPLAYED",
-    }
+    assert body == problem_payload("SESSION_REPLAYED", second.headers["x-request-id"])
     assert seed["refresh_token"] not in json.dumps(body)
     with factory() as session:
         rows = session.scalars(select(AuthSession)).all()
@@ -188,7 +184,7 @@ def test_child_token_after_revoke_invalid(refresh_env) -> None:
     _ = client.post("/v1/auth/refresh", json={"refresh_token": seed["refresh_token"]})
     response = client.post("/v1/auth/refresh", json={"refresh_token": child_refresh})
     assert response.status_code == 401
-    assert response.json()["code"] == "INVALID_REFRESH_TOKEN"
+    assert response.json()["code"] == "AUTH_INVALID"
     with factory() as session:
         assert len(session.scalars(select(AuthSession)).all()) == 2
 
@@ -198,7 +194,7 @@ def test_unknown_refresh_identical_invalid_no_child(refresh_env) -> None:
     _seed(client)
     unknown = client.post("/v1/auth/refresh", json={"refresh_token": "pm_rt_" + "A" * 43})
     assert unknown.status_code == 401
-    assert unknown.json()["code"] == "INVALID_REFRESH_TOKEN"
+    assert unknown.json()["code"] == "AUTH_INVALID"
     assert unknown.headers["content-type"].startswith("application/problem+json")
     with factory() as session:
         assert len(session.scalars(select(AuthSession)).all()) == 1
@@ -212,17 +208,11 @@ def test_malformed_tokens_422_redacted(refresh_env) -> None:
         {"refresh_token": "pm_rt_" + "A" * 40},
         {"refresh_token": "pm_rt_\u00e9\u00e9\u00e9"},
     ]
-    expected = {
-        "type": "https://remanence.invalid/problems/invalid-request",
-        "title": "Invalid request",
-        "status": 422,
-        "code": "INVALID_REQUEST",
-    }
     for payload in malformed:
         response = client.post("/v1/auth/refresh", json=payload)
         assert response.status_code == 422
         assert response.headers["content-type"].startswith("application/problem+json")
-        assert response.json() == expected
+        assert response.json() == problem_payload("VALIDATION_FAILED", response.headers["x-request-id"])
         serialized = json.dumps(response.json())
         assert payload["refresh_token"] not in serialized
 

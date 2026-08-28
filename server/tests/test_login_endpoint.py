@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.engine import make_url
 from tink.proto import ed25519_pb2, hpke_pb2, tink_pb2
 
+from remanence.api.problems import problem_payload
 from remanence.auth.models import AuthCredential, AuthSession
 from remanence.auth.passwords import PasswordService
 from remanence.auth.tokens import hash_opaque_token
@@ -184,21 +185,19 @@ def test_wrong_password_nonexistent_disabled_identical_401_no_session(login_env)
         session.commit()
     disabled = client.post("/v1/auth/login", json={"email": "alice@example.com", "password": _PASSWORD})
 
-    expected = {
-        "type": "https://remanence.invalid/problems/invalid-credentials",
-        "title": "Invalid credentials",
-        "status": 401,
-        "code": "INVALID_CREDENTIALS",
-    }
+    shapes = []
     for response in (wrong, nonexistent, disabled):
         assert response.status_code == 401
         assert response.headers["content-type"].startswith("application/problem+json")
-        assert response.json() == expected
-        serialized = json.dumps(response.json())
+        body = response.json()
+        assert body == problem_payload("AUTH_INVALID", response.headers["x-request-id"])
+        shapes.append({key: value for key, value in body.items() if key != "request_id"})
+        serialized = json.dumps(body)
         assert "alice@example.com" not in serialized
         assert "nobody@example.com" not in serialized
         assert "wrong-password-here" not in serialized
         assert _PASSWORD not in serialized
+    assert shapes[0] == shapes[1] == shapes[2]
     with factory() as session:
         assert len(session.scalars(select(AuthSession)).all()) == 1
 
@@ -255,12 +254,7 @@ def test_malformed_login_input_422_redacted(login_env) -> None:
     assert response.status_code == 422
     assert response.headers["content-type"].startswith("application/problem+json")
     body = response.json()
-    assert body == {
-        "type": "https://remanence.invalid/problems/invalid-request",
-        "title": "Invalid request",
-        "status": 422,
-        "code": "INVALID_REQUEST",
-    }
+    assert body == problem_payload("VALIDATION_FAILED", response.headers["x-request-id"])
     serialized = json.dumps(body)
     assert "not-an-email" not in serialized
     assert "short" not in serialized

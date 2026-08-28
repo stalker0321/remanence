@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.engine import make_url
 from tink.proto import ed25519_pb2, hpke_pb2, tink_pb2
 
+from remanence.api.problems import problem_payload
 from remanence.auth.models import AuthCredential, AuthSession
 from remanence.db.session import build_engine, build_session_factory
 from remanence.main import create_app
@@ -170,15 +171,16 @@ def test_missing_wrong_expired_revoked_rotated_identical_401(me_env) -> None:
     assert refresh.status_code == 200
     rotated_old = seed2["access_token"]
     cases["rotated"] = {"Authorization": f"Bearer {rotated_old}"}
-    responses = []
+    shapes = []
     for label, headers in cases.items():
         response = client.get("/v1/me", headers=headers if headers is not None else {})
         assert response.status_code == 401, label
         assert response.headers["content-type"].startswith("application/problem+json")
         assert response.headers["www-authenticate"] == "Bearer"
-        responses.append(response)
-    for response in responses[1:]:
-        assert response.content == responses[0].content
+        body = response.json()
+        assert body == problem_payload("AUTH_INVALID", response.headers["x-request-id"])
+        shapes.append({key: value for key, value in body.items() if key != "request_id"})
+    assert all(shape == shapes[0] for shape in shapes[1:])
 
 
 def test_handle_email_belong_to_authenticated_user(me_env) -> None:
@@ -202,14 +204,9 @@ def test_missing_active_bundle_maps_fixed_409(me_env) -> None:
         bundle.status = KeyBundleStatus.RETIRED
         session.commit()
     response = client.get("/v1/me", headers={"Authorization": f"Bearer {seed['access_token']}"})
-    assert response.status_code == 409
+    assert response.status_code == 500
     assert response.headers["content-type"].startswith("application/problem+json")
-    assert response.json() == {
-        "type": "https://remanence.invalid/problems/account-state-invalid",
-        "title": "Account state invalid",
-        "status": 409,
-        "code": "ACCOUNT_STATE_INVALID",
-    }
+    assert response.json() == problem_payload("INTERNAL_ERROR", response.headers["x-request-id"])
 
 
 def test_health_unchanged(me_env) -> None:

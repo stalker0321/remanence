@@ -13,7 +13,6 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from remanence.api.auth_schemas import ProblemDetail
 from remanence.api.dependencies import (
     AuthenticatedPrincipal,
     get_blob_store,
@@ -21,6 +20,7 @@ from remanence.api.dependencies import (
     get_authenticated_principal,
     get_db_session,
 )
+from remanence.api.problems import problem_response
 from remanence.capsules.draft_service import (
     CapsuleDraftResult,
     CapsuleDraftService,
@@ -72,28 +72,6 @@ _RANGE_HEADER = b"range"
 _CONTENT_RANGE_HEADER = b"content-range"
 _OCTET_STREAM = "application/octet-stream"
 _DECIMAL = re.compile(r"[0-9]+")
-_ERRORS = {
-    "VALIDATION_FAILED": (422, "Invalid request"),
-    "IDEMPOTENCY_CONFLICT": (409, "Idempotency conflict"),
-    "RECIPIENT_NOT_CONFIRMED": (409, "Recipient not confirmed"),
-    "RECIPIENT_KEY_STALE": (409, "Recipient key stale"),
-    "KEY_BUNDLE_NOT_FOUND": (404, "Key bundle not found"),
-    "KEY_BUNDLE_INVALID": (409, "Key bundle invalid"),
-    "AUTH_INVALID": (401, "Authentication required"),
-    "INTERNAL_ERROR": (500, "Internal server error"),
-    "CAPSULE_NOT_FOUND": (404, "Capsule not found"),
-    "CAPSULE_STATE_INVALID": (409, "Capsule state invalid"),
-    "DRAFT_EXPIRED": (409, "Draft expired"),
-    "BLOB_NOT_DECLARED": (404, "Blob not declared"),
-    "BLOB_SIZE_INVALID": (400, "Blob size invalid"),
-    "BLOB_HASH_MISMATCH": (400, "Blob hash mismatch"),
-    "BLOB_CONFLICT": (409, "Blob conflict"),
-    "STATEMENT_INVALID": (422, "Invalid statement"),
-    "SIGNATURE_INVALID": (422, "Invalid signature"),
-    "ENVELOPE_INVALID": (422, "Invalid envelope"),
-    "FINALIZE_CONFLICT": (409, "Finalize conflict"),
-    "KEY_BUNDLE_REVOKED": (409, "Key bundle revoked"),
-}
 
 
 class CapsuleDraftBlobResponse(BaseModel):
@@ -248,20 +226,8 @@ def _parse_upload_headers(headers: Iterable[tuple[bytes, bytes]]) -> _UploadHead
     )
 
 
-def _problem_response(code: str) -> JSONResponse:
-    status, title = _ERRORS.get(code, _ERRORS["INTERNAL_ERROR"])
-    safe_code = code if code in _ERRORS else "INTERNAL_ERROR"
-    problem = ProblemDetail(
-        type=f"https://remanence.invalid/problems/{safe_code.lower().replace('_', '-')}",
-        title=title,
-        status=status,
-        code=safe_code,
-    )
-    return JSONResponse(
-        status_code=status,
-        content=problem.model_dump(),
-        media_type="application/problem+json",
-    )
+def _problem_response(request: Request, code: str) -> JSONResponse:
+    return problem_response(request, code)
 
 
 def _response_dto(result: CapsuleDraftResult) -> CapsuleDraftResponse:
@@ -314,19 +280,19 @@ async def upload_capsule_blob(
             )
         return Response(status_code=204)
     except CapsuleDraftValidationError as exc:
-        return _problem_response(exc.code)
+        return _problem_response(request, exc.code)
     except (StagingSizeExceededError, StagingSizeTruncatedError):
-        return _problem_response("BLOB_SIZE_INVALID")
+        return _problem_response(request, "BLOB_SIZE_INVALID")
     except StagingHashMismatchError:
-        return _problem_response("BLOB_HASH_MISMATCH")
+        return _problem_response(request, "BLOB_HASH_MISMATCH")
     except InvalidStagingExpectationError:
-        return _problem_response("VALIDATION_FAILED")
+        return _problem_response(request, "VALIDATION_FAILED")
     except StagingIOError:
-        return _problem_response("INTERNAL_ERROR")
+        return _problem_response(request, "INTERNAL_UNAVAILABLE")
     except CapsuleBlobPromotionError as exc:
-        return _problem_response(exc.code)
+        return _problem_response(request, exc.code)
     except Exception:
-        return _problem_response("INTERNAL_ERROR")
+        return _problem_response(request, "INTERNAL_ERROR")
     finally:
         if staged is not None and not service_owns_staged:
             try:
@@ -360,11 +326,11 @@ async def create_capsule_draft(
                 now=datetime.now(timezone.utc),
             )
     except CapsuleDraftValidationError as exc:
-        return _problem_response(exc.code)
+        return _problem_response(request, exc.code)
     except CapsuleDraftServiceError as exc:
-        return _problem_response(exc.code)
+        return _problem_response(request, exc.code)
     except Exception:
-        return _problem_response("INTERNAL_ERROR")
+        return _problem_response(request, "INTERNAL_ERROR")
 
     response.status_code = 200 if result.is_replay else 201
     return _response_dto(result)
@@ -437,8 +403,8 @@ async def finalize_capsule(
         response.status_code = 200 if is_replay else 201
         return dto
     except CapsuleDraftValidationError as exc:
-        return _problem_response(exc.code)
+        return _problem_response(request, exc.code)
     except CapsuleFinalizeError as exc:
-        return _problem_response(exc.code)
+        return _problem_response(request, exc.code)
     except Exception:
-        return _problem_response("INTERNAL_ERROR")
+        return _problem_response(request, "INTERNAL_ERROR")

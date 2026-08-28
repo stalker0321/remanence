@@ -187,4 +187,4 @@ def test_unauthenticated_lookup_401(bundle_env) -> None:
     seed = _seed(client)
     response = client.get(f"/v1/directory/key-bundles/{seed['active_key_bundle_id']}")
     assert response.status_code == 401
-    assert response.json()["code"] == "AUTHENTICATION_REQUIRED"
+    assert response.json()["code"] == "AUTH_INVALID"

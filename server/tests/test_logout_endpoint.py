@@ -195,7 +195,7 @@ def test_missing_malformed_authorization_401(logout_env) -> None:
     missing = client.post("/v1/auth/logout")
     assert missing.status_code == 401
     assert missing.headers["content-type"].startswith("application/problem+json")
-    assert missing.json()["code"] == "AUTHENTICATION_REQUIRED"
+    assert missing.json()["code"] == "AUTH_INVALID"
     malformed = client.post("/v1/auth/logout", headers={"Authorization": "Basic abc"})
     assert malformed.status_code == 401
-    assert malformed.json()["code"] == "AUTHENTICATION_REQUIRED"
+    assert malformed.json()["code"] == "AUTH_INVALID"

@@ -165,11 +165,20 @@ def test_unknown_handle_404_handle_not_found(directory_env) -> None:
     client, _ = directory_env
     seed = _seed(client)
     headers = {"Authorization": f"Bearer {seed['access_token']}"}
-    for handle in ["nobody", "@ghost_user", "ab", "BAD!", "%20"]:
+    for handle in ["nobody", "@ghost_user"]:
         response = client.get(f"/v1/directory/handles/{handle}", headers=headers)
         assert response.status_code == 404, handle
         assert response.headers["content-type"].startswith("application/problem+json")
         assert response.json()["code"] == "HANDLE_NOT_FOUND"
+    for handle in ["ab", "BAD!", "%20"]:
+        response = client.get(f"/v1/directory/handles/{handle}", headers=headers)
+        assert response.status_code == 422, handle
+        assert response.headers["content-type"].startswith("application/problem+json")
+        assert response.json()["code"] == "HANDLE_INVALID"
+        body = response.json()
+        assert handle not in body["detail"]
+        assert handle not in body["title"]
+        assert handle not in body["code"]
 
 
 def test_unauthenticated_lookup_401(directory_env) -> None:
@@ -177,4 +186,4 @@ def test_unauthenticated_lookup_401(directory_env) -> None:
     _seed(client)
     response = client.get("/v1/directory/handles/alice")
     assert response.status_code == 401
-    assert response.json()["code"] == "AUTHENTICATION_REQUIRED"
+    assert response.json()["code"] == "AUTH_INVALID"

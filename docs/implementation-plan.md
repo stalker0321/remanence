@@ -293,6 +293,28 @@ and authorization matrix before Android upload work consumes the API.
 | M2-A24 | all automated | Run PostgreSQL, BlobStore, Android, crypto, replay, account-switch, and plaintext-canary verification. | evidence record |
 | M2-A25 | A24,P14 | Run two-device existing-account physical transfer and later offline scan. | signed APK/commit/device checklist |
 
+### M2-A06 bounded recovery notes
+
+The Android stale-recipient recovery writes replacement envelope, statement,
+and signature files beneath the owner outbox root before its owner-guarded
+Room CAS, then best-effort deletes only the three superseded recipient-facing
+files after the new paths are committed. It never deletes blob files or sender
+retry material. A process death before the CAS, or after the CAS and before
+that best-effort deletion, can leave ciphertext-only orphan files: current
+A05 discovery returns capsule IDs and has no orphan-path sweep. A bounded
+follow-up must add an owner-scoped orphan cleanup/reconciliation mechanism
+before claiming crash-proof superseded-file cleanup; this A06 task does not
+add a schema or discovery redesign.
+
+M2 has no sender key-rotation flow (the protocol reserves rotation endpoints
+for M4). Accordingly, the current Android loader requires the live active
+sender bundle to match the persisted capsule sender bundle and parks stale
+recovery when the historical signing key is unavailable. A future rotation
+recovery task must unwrap retry material with the historical sender bundle ID
+in its AAD, then re-sign with the current active sender key and update the
+statement sender bundle ID, subject to the server contract; it must not retain
+retired signing private keys solely for this recovery.
+
 **Checkpoints A:** review after upload A01–A08, incoming index A09–A12,
 presentation A13–A21, and final two-device evidence. Do not review every
 single implementation commit.

@@ -13,6 +13,7 @@ import dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper
 import dev.hryshyn.remanence.core.crypto.SignedPublishStatement
 import dev.hryshyn.remanence.core.crypto.TinkPrimitives
 import dev.hryshyn.remanence.core.data.db.OutboxCapsuleState
+import dev.hryshyn.remanence.core.data.db.OutboxCapsuleDao
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.network.CapsuleBlobUploadRequest
 import dev.hryshyn.remanence.core.data.network.CapsuleBlobUploadResult
@@ -166,6 +167,9 @@ class CapsuleUploadStaleRecoveryTest {
         assertNotEquals(originalRow.envelopePath, current.envelopePath)
         assertNotEquals(originalRow.publishStatementPath, current.publishStatementPath)
         assertNotEquals(originalRow.publishStatementSignaturePath, current.publishStatementSignaturePath)
+        assertFalse(File(originalRow.envelopePath!!).exists())
+        assertFalse(File(originalRow.publishStatementPath!!).exists())
+        assertFalse(File(originalRow.publishStatementSignaturePath!!).exists())
         assertTrue(current.senderRetryKeysetPath == null)
         assertFalse(retryStore.expectedPath(OWNER, CAPSULE).exists())
 
@@ -264,6 +268,59 @@ class CapsuleUploadStaleRecoveryTest {
     }
 
     @Test
+    fun sameRecipientBundleRemainsParkedWithoutCreatingReplacementFiles() = runBlocking {
+        val before = roots.child(OWNER, AccountScopedFileRoots.ChildRoot.OUTBOX_CIPHERTEXT)
+            .listFiles()!!.map { it.name }.toSet()
+        var finalizeCalls = 0
+        val result = orchestrator(
+            lookup = { _, _ ->
+                RecipientUserLookupResult.Found(
+                    foundRecipient().snapshot.copy(keyBundleId = OLD_RECIPIENT_BUNDLE),
+                )
+            },
+            finalize = { _, _ -> finalizeCalls += 1; readyResult() },
+        ).run(OWNER, CAPSULE)
+
+        assertEquals(CapsuleUploadOutcome.RecipientKeyStale, result)
+        assertEquals(0, finalizeCalls)
+        assertEquals(before, roots.child(OWNER, AccountScopedFileRoots.ChildRoot.OUTBOX_CIPHERTEXT)
+            .listFiles()!!.map { it.name }.toSet())
+        assertEquals(OLD_RECIPIENT_BUNDLE.toRestString(), capsuleRow().recipientKeyBundleId)
+    }
+
+    @Test
+    fun casLoserDeletesOnlyItsFilesAndResumesUsingWinnerMaterial() = runBlocking {
+        val losingDao = CasLosingCapsuleDao(
+            delegate = database.outboxCapsuleDao(),
+            winnerRoot = roots.child(OWNER, AccountScopedFileRoots.ChildRoot.OUTBOX_CIPHERTEXT).canonicalFile,
+        )
+        var finalizeCalls = 0
+        val result = orchestrator(
+            capsuleDao = losingDao,
+            draftState = CapsuleDraftBlobState.STORED,
+            finalize = { _, _ -> finalizeCalls += 1; readyResult() },
+        ).run(OWNER, CAPSULE)
+
+        assertEquals(CapsuleUploadOutcome.Succeeded, result)
+        assertEquals(1, finalizeCalls)
+        assertTrue(losingDao.winnerPaths.all(File::exists))
+        assertTrue(losingDao.loserPaths.none(File::exists))
+        assertEquals(losingDao.winnerPaths[0].canonicalPath, capsuleRow().envelopePath)
+        assertEquals(OutboxCapsuleState.PUBLISHED, capsuleRow().state)
+    }
+
+    @Test
+    fun unavailableHistoricalSenderSigningKeyFailsClosedForCurrentM2() = runBlocking {
+        val result = orchestrator(
+            signingLoader = { _, _ -> null },
+        ).run(OWNER, CAPSULE)
+
+        assertEquals(CapsuleUploadOutcome.RecipientKeyStale, result)
+        assertEquals(RECIPIENT_KEY_STALE, capsuleRow().lastErrorCode)
+        assertTrue(capsuleRow().recipientKeyBundleId == OLD_RECIPIENT_BUNDLE.toRestString())
+    }
+
+    @Test
     fun missingCorruptOrWrongAadRetryMaterialLeavesRowParked() = runBlocking {
         retryStore.delete(OWNER, CAPSULE)
         assertEquals(CapsuleUploadOutcome.RecipientKeyStale, orchestrator().run(OWNER, CAPSULE))
@@ -323,6 +380,7 @@ class CapsuleUploadStaleRecoveryTest {
     }
 
     private fun orchestrator(
+        capsuleDao: OutboxCapsuleDao = database.outboxCapsuleDao(),
         currentOwner: suspend () -> String? = { OWNER.toRestString() },
         lookup: suspend (UserId, String) -> RecipientUserLookupResult = { _, _ -> foundRecipient() },
         draftState: CapsuleDraftBlobState = CapsuleDraftBlobState.STORED,
@@ -333,8 +391,10 @@ class CapsuleUploadStaleRecoveryTest {
             readyResult()
         },
         read: suspend (String) -> ByteArray = { File(it).readBytes() },
+        signingLoader: suspend (UserId, KeyBundleId) -> com.google.crypto.tink.KeysetHandle? =
+            { _, _ -> senderIdentity.signingPrivateHandle },
     ): CapsuleUploadOrchestrator = CapsuleUploadOrchestrator(
-        capsuleDao = database.outboxCapsuleDao(),
+        capsuleDao = capsuleDao,
         blobDao = database.outboxBlobDao(),
         currentAccountUserId = currentOwner,
         accessToken = { "access-token" },
@@ -356,7 +416,7 @@ class CapsuleUploadStaleRecoveryTest {
         recipientUserLookup = lookup,
         retryMaterialStore = retryStore,
         senderRetryKeysetWrapper = retryWrapper,
-        loadSenderSigningKeyset = { _, _ -> senderIdentity.signingPrivateHandle },
+        loadSenderSigningKeyset = signingLoader,
         accountScopedFileRoots = roots,
     )
 
@@ -404,6 +464,95 @@ class CapsuleUploadStaleRecoveryTest {
             ),
             200,
         )
+
+    private class CasLosingCapsuleDao(
+        private val delegate: OutboxCapsuleDao,
+        private val winnerRoot: File,
+    ) : OutboxCapsuleDao() {
+        lateinit var loserPaths: List<File>
+        lateinit var winnerPaths: List<File>
+
+        override suspend fun clearForOwner(ownerUserId: String) = delegate.clearForOwner(ownerUserId)
+
+        override suspend fun getByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String) =
+            delegate.getByCapsuleIdAndOwner(capsuleId, ownerUserId)
+
+        override suspend fun getCapsuleIdsNeedingUploadForOwner(ownerUserId: String) =
+            delegate.getCapsuleIdsNeedingUploadForOwner(ownerUserId)
+
+        override suspend fun markEncryptedForOwner(capsuleId: String, ownerUserId: String) =
+            delegate.markEncryptedForOwner(capsuleId, ownerUserId)
+
+        override suspend fun beginUploadForOwner(capsuleId: String, ownerUserId: String) =
+            delegate.beginUploadForOwner(capsuleId, ownerUserId)
+
+        override suspend fun applyRecipientKeyRewrapForOwner(
+            capsuleId: String,
+            ownerUserId: String,
+            recipientUserId: String,
+            expectedRecipientKeyBundleId: String,
+            newRecipientKeyBundleId: String,
+            newEnvelopePath: String,
+            newPublishStatementPath: String,
+            newPublishStatementSignaturePath: String,
+        ): Int {
+            val token = UUID.randomUUID().toString()
+            val losers = listOf(
+                File(newEnvelopePath),
+                File(newPublishStatementPath),
+                File(newPublishStatementSignaturePath),
+            )
+            winnerPaths = listOf(
+                File(winnerRoot, "winner-envelope-$token.bin"),
+                File(winnerRoot, "winner-statement-$token.bin"),
+                File(winnerRoot, "winner-signature-$token.bin"),
+            )
+            losers.zip(winnerPaths).forEach { (loser, winner) -> loser.copyTo(winner) }
+            check(
+                delegate.applyRecipientKeyRewrapForOwner(
+                    capsuleId,
+                    ownerUserId,
+                    recipientUserId,
+                    expectedRecipientKeyBundleId,
+                    newRecipientKeyBundleId,
+                    winnerPaths[0].canonicalPath,
+                    winnerPaths[1].canonicalPath,
+                    winnerPaths[2].canonicalPath,
+                ) == 1,
+            )
+            loserPaths = losers
+            return 0
+        }
+
+        override suspend fun beginFinalizeForOwner(capsuleId: String, ownerUserId: String) =
+            delegate.beginFinalizeForOwner(capsuleId, ownerUserId)
+
+        override suspend fun markPublishedForOwner(capsuleId: String, ownerUserId: String) =
+            delegate.markPublishedForOwner(capsuleId, ownerUserId)
+
+        override suspend fun markRetryableFailureForOwner(
+            capsuleId: String,
+            ownerUserId: String,
+            errorCode: String?,
+        ) = delegate.markRetryableFailureForOwner(capsuleId, ownerUserId, errorCode)
+
+        override suspend fun markTerminalFailureForOwner(
+            capsuleId: String,
+            ownerUserId: String,
+            errorCode: String?,
+        ) = delegate.markTerminalFailureForOwner(capsuleId, ownerUserId, errorCode)
+
+        override suspend fun clearSenderRetryKeysetPath(
+            capsuleId: String,
+            ownerUserId: String,
+            expectedPath: String?,
+        ) = delegate.clearSenderRetryKeysetPath(capsuleId, ownerUserId, expectedPath)
+
+        override suspend fun insertStrict(capsule: dev.hryshyn.remanence.core.data.db.OutboxCapsuleEntity) = Unit
+
+        override suspend fun findOwnersOfImmutableIds(capsuleId: String, idempotencyKey: String): List<String> =
+            emptyList()
+    }
 
     private companion object {
         val OWNER = UserId.parseRest("a6000000-0000-4000-8000-000000000001")

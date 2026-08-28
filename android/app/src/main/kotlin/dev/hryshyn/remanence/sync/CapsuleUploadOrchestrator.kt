@@ -325,7 +325,7 @@ class CapsuleUploadOrchestrator(
         } ?: return CapsuleUploadOutcome.RecipientKeyStale
         val snapshot = (lookup as? RecipientUserLookupResult.Found)?.snapshot
             ?: return CapsuleUploadOutcome.RecipientKeyStale
-        if (!isUsableActiveRecipient(prepared.recipientUserId, snapshot)) {
+        if (!isUsableActiveRecipient(prepared.recipientUserId, prepared.recipientKeyBundleId, snapshot)) {
             return CapsuleUploadOutcome.RecipientKeyStale
         }
 
@@ -435,6 +435,7 @@ class CapsuleUploadOrchestrator(
                 return CapsuleUploadOutcome.RecipientKeyStale
             }
             if (transitioned == 1) {
+                cleanupSupersededRecipientFiles(root, staleCapsule, prepared, files)
                 committed = true
                 return run(owner, capsuleId)
             }
@@ -465,9 +466,11 @@ class CapsuleUploadOrchestrator(
 
     private fun isUsableActiveRecipient(
         requestedUserId: UserId,
+        staleRecipientKeyBundleId: KeyBundleId,
         snapshot: dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot,
     ): Boolean =
         snapshot.userId == requestedUserId &&
+            snapshot.keyBundleId != staleRecipientKeyBundleId &&
             snapshot.keyBundleStatus == SUPPORTED_ACTIVE_STATUS &&
             snapshot.suite == SUPPORTED_SUITE &&
             snapshot.protocolVersion == SUPPORTED_PROTOCOL_VERSION
@@ -531,6 +534,40 @@ class CapsuleUploadOrchestrator(
             canonical
         } finally {
             temporary.delete()
+        }
+    }
+
+    /**
+     * Removes only superseded recipient-facing files after the new row is
+     * committed. This is deliberately best-effort: a failed delete cannot
+     * roll back or relabel the already committed upload. Blob paths and the
+     * sender retry path are never candidates for this cleanup.
+     */
+    private fun cleanupSupersededRecipientFiles(
+        root: File,
+        previous: OutboxCapsuleEntity,
+        prepared: PreparedCapsule,
+        replacement: RewrappedFiles,
+    ) {
+        val protectedPaths = buildSet {
+            add(replacement.envelope.canonicalPath)
+            add(replacement.statement.canonicalPath)
+            add(replacement.signature.canonicalPath)
+            prepared.blobs.forEach { blob ->
+                runCatching { add(File(blob.row.localCiphertextPath).canonicalPath) }
+            }
+        }
+        listOfNotNull(
+            previous.envelopePath,
+            previous.publishStatementPath,
+            previous.publishStatementSignaturePath,
+        ).forEach { rawPath ->
+            val candidate = File(rawPath)
+            val canonical = runCatching { candidate.canonicalPath }.getOrNull() ?: return@forEach
+            if (!isContained(root, candidate) || canonical in protectedPaths || !candidate.isFile) {
+                return@forEach
+            }
+            runCatching { candidate.delete() }
         }
     }
 

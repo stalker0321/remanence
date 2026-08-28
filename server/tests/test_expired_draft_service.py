@@ -7,10 +7,12 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from threading import Barrier
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import func, select, text
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import object_session
 
 pytest_plugins = ("test_session_repository_create",)
 
@@ -201,12 +203,12 @@ def test_batch_order_and_limit_are_deterministic(session_factory):
         assert session.get(Capsule, leftover.id).state is CapsuleState.ABORTED
 
 
-def test_stale_candidate_is_skipped_after_authoritative_reread(session_factory, monkeypatch):
-    with session_factory() as session:
-        sender, sender_bundle = _seed_user(session, "sender")
-        recipient, recipient_bundle = _seed_user(session, "recipient")
+def test_attached_stale_identity_map_uses_authoritative_reread(session_factory, monkeypatch):
+    with session_factory() as setup:
+        sender, sender_bundle = _seed_user(setup, "sender")
+        recipient, recipient_bundle = _seed_user(setup, "recipient")
         extended = _add_draft(
-            session,
+            setup,
             sender=sender,
             sender_bundle=sender_bundle,
             recipient=recipient,
@@ -214,30 +216,108 @@ def test_stale_candidate_is_skipped_after_authoritative_reread(session_factory, 
             created_at=_NOW - timedelta(days=8),
             draft_expires_at=_NOW - timedelta(days=1),
         )
-        became_ready = _add_ready(
+        still_expired = _add_draft(
+            setup,
+            sender=sender,
+            sender_bundle=sender_bundle,
+            recipient=recipient,
+            recipient_bundle=recipient_bundle,
+            created_at=_NOW - timedelta(days=7),
+            draft_expires_at=_NOW - timedelta(hours=1),
+        )
+        setup.commit()
+        extended_id = extended.id
+        still_expired_id = still_expired.id
+        stale_expiry = extended.draft_expires_at
+
+    gc_session = session_factory()
+    other_session = session_factory()
+    try:
+        attached = gc_session.get(Capsule, extended_id)
+        also_attached = gc_session.get(Capsule, still_expired_id)
+        assert gc_session.autoflush is False
+        assert object_session(attached) is gc_session
+        assert attached.state is CapsuleState.DRAFT
+        assert attached.draft_expires_at == stale_expiry
+        discovered = ExpiredDraftMarkingService(gc_session)._candidate_ids(now=_NOW, limit=10)
+        assert discovered == [extended_id, still_expired_id]
+        monkeypatch.setattr(
+            ExpiredDraftMarkingService,
+            "_candidate_ids",
+            lambda self, *, now, limit: discovered,
+        )
+
+        other = other_session.get(Capsule, extended_id)
+        other.draft_expires_at = _NOW + timedelta(days=1)
+        other_session.commit()
+        assert attached.draft_expires_at == stale_expiry
+        assert attached.state is CapsuleState.DRAFT
+        assert also_attached.state is CapsuleState.DRAFT
+
+        result = ExpiredDraftMarkingService(gc_session).mark_expired_drafts(now=_NOW, limit=10)
+        assert result.examined_count == 2
+        assert result.aborted_count == 1
+        assert attached.state is CapsuleState.DRAFT
+        assert attached.draft_expires_at == _NOW + timedelta(days=1)
+        assert also_attached.state is CapsuleState.ABORTED
+        gc_session.commit()
+    finally:
+        gc_session.close()
+        other_session.close()
+
+    with session_factory() as session:
+        assert session.get(Capsule, extended_id).state is CapsuleState.DRAFT
+        assert session.get(Capsule, still_expired_id).state is CapsuleState.ABORTED
+
+
+def test_injected_failure_after_first_flush_rolls_back_batch(session_factory, monkeypatch):
+    with session_factory() as session:
+        sender, sender_bundle = _seed_user(session, "sender")
+        recipient, recipient_bundle = _seed_user(session, "recipient")
+        first = _add_draft(
             session,
             sender=sender,
             sender_bundle=sender_bundle,
             recipient=recipient,
             recipient_bundle=recipient_bundle,
+            created_at=_NOW - timedelta(days=8),
+            draft_expires_at=_NOW - timedelta(hours=2),
         )
-        missing_id = uuid4()
-        session.commit()
-        stale_ids = [extended.id, became_ready.id, missing_id]
-        monkeypatch.setattr(
-            ExpiredDraftMarkingService,
-            "_candidate_ids",
-            lambda self, *, now, limit: stale_ids,
+        second = _add_draft(
+            session,
+            sender=sender,
+            sender_bundle=sender_bundle,
+            recipient=recipient,
+            recipient_bundle=recipient_bundle,
+            created_at=_NOW - timedelta(days=7),
+            draft_expires_at=_NOW - timedelta(hours=1),
         )
-        extended.draft_expires_at = _NOW + timedelta(days=1)
-        session.flush()
-        result = _mark(session, now=_NOW, limit=10)
         session.commit()
-        assert result.examined_count == 3
-        assert result.aborted_count == 0
-        assert session.get(Capsule, extended.id).state is CapsuleState.DRAFT
-        assert session.get(Capsule, became_ready.id).state is CapsuleState.READY
-        assert session.get(Capsule, missing_id) is None
+        first_shape = _capsule_shape(session.get(Capsule, first.id))
+        second_shape = _capsule_shape(session.get(Capsule, second.id))
+        first_blobs = _blob_snapshot(session, first.id)
+        second_blobs = _blob_snapshot(session, second.id)
+        idempotency_before = session.scalar(select(func.count()).select_from(CapsuleIdempotencyRecord))
+
+        original_flush = session.flush
+
+        def flush_then_fail(*args: Any, **kwargs: Any) -> None:
+            original_flush(*args, **kwargs)
+            raise SQLAlchemyError("injected after first candidate flush")
+
+        monkeypatch.setattr(session, "flush", flush_then_fail)
+        _forbid_commit_rollback(session, monkeypatch)
+        _assert_error(lambda: _mark(session, now=_NOW, limit=10), "INTERNAL_ERROR")
+        monkeypatch.undo()
+        session.rollback()
+        session.expire_all()
+        assert _capsule_shape(session.get(Capsule, first.id)) == first_shape
+        assert _capsule_shape(session.get(Capsule, second.id)) == second_shape
+        assert session.get(Capsule, first.id).state is CapsuleState.DRAFT
+        assert session.get(Capsule, second.id).state is CapsuleState.DRAFT
+        assert _blob_snapshot(session, first.id) == first_blobs
+        assert _blob_snapshot(session, second.id) == second_blobs
+        assert session.scalar(select(func.count()).select_from(CapsuleIdempotencyRecord)) == idempotency_before
 
 
 def test_caller_rollback_restores_draft(session_factory, monkeypatch):
@@ -368,17 +448,47 @@ def test_gc_versus_explicit_abort_stays_aborted(session_factory):
         assert gc_aborted in (0, 1)
 
 
-def test_gc_versus_finalize_has_one_legal_terminal_state(session_factory, tmp_path):
+def test_unexpired_same_now_gc_skips_and_finalize_may_ready(session_factory, tmp_path):
     from tink import tink_config
 
     from test_capsule_finalize_service import _ready_world
 
     tink_config.register()
-    gc_now = _NOW + timedelta(days=8)
-
     with session_factory() as session:
         world = _ready_world(session, tmp_path)
         capsule_id = world["capsule"].id
+        sender_id = world["sender"].id
+        session.commit()
+        skipped = _mark(session, now=_NOW, limit=10)
+        assert skipped.examined_count == 0
+        assert skipped.aborted_count == 0
+        assert session.get(Capsule, capsule_id).state is CapsuleState.DRAFT
+        result = CapsuleFinalizeService(session, world["store"]).finalize(
+            authenticated_sender_user_id=sender_id,
+            capsule_id=capsule_id,
+            statement=world["statement"],
+            signature=world["signature"],
+            sender_key_bundle_id=world["sender_bundle"].id,
+            envelope=world["envelope"],
+            now=_NOW,
+        )
+        session.commit()
+        assert result.is_replay is False
+        assert session.get(Capsule, capsule_id).state is CapsuleState.READY
+
+
+def test_expired_same_now_gc_versus_finalize_never_ready(session_factory, tmp_path):
+    from tink import tink_config
+
+    from test_capsule_finalize_service import _ready_world
+
+    tink_config.register()
+    with session_factory() as session:
+        world = _ready_world(session, tmp_path)
+        capsule = session.get(Capsule, world["capsule"].id)
+        capsule.created_at = _NOW - timedelta(days=8)
+        capsule.draft_expires_at = _NOW - timedelta(seconds=1)
+        capsule_id = capsule.id
         sender_id = world["sender"].id
         session.commit()
     barrier = Barrier(2)
@@ -387,7 +497,7 @@ def test_gc_versus_finalize_has_one_legal_terminal_state(session_factory, tmp_pa
         with session_factory() as session:
             session.execute(text("SET LOCAL lock_timeout = '5s'"))
             barrier.wait(timeout=10)
-            result = _mark(session, now=gc_now, limit=10)
+            result = _mark(session, now=_NOW, limit=10)
             session.commit()
             return result.aborted_count
 
@@ -396,7 +506,7 @@ def test_gc_versus_finalize_has_one_legal_terminal_state(session_factory, tmp_pa
             session.execute(text("SET LOCAL lock_timeout = '5s'"))
             barrier.wait(timeout=10)
             try:
-                result = CapsuleFinalizeService(session, world["store"]).finalize(
+                CapsuleFinalizeService(session, world["store"]).finalize(
                     authenticated_sender_user_id=sender_id,
                     capsule_id=capsule_id,
                     statement=world["statement"],
@@ -406,7 +516,7 @@ def test_gc_versus_finalize_has_one_legal_terminal_state(session_factory, tmp_pa
                     now=_NOW,
                 )
                 session.commit()
-                return ("ready", result.is_replay)
+                return ("ready", True)
             except CapsuleFinalizeError as error:
                 session.rollback()
                 return ("error", error.code)
@@ -419,13 +529,11 @@ def test_gc_versus_finalize_has_one_legal_terminal_state(session_factory, tmp_pa
 
     with session_factory() as session:
         capsule = session.get(Capsule, capsule_id)
-        if capsule.state is CapsuleState.ABORTED:
-            assert gc_aborted == 1
-            assert finalize_outcome == ("error", "CAPSULE_STATE_INVALID")
-            assert capsule.ready_at is None
-            assert capsule.signed_statement is None
-        else:
-            assert capsule.state is CapsuleState.READY
-            assert gc_aborted == 0
-            assert finalize_outcome == ("ready", False)
-            assert capsule.ready_at is not None
+        assert capsule.state is CapsuleState.ABORTED
+        assert capsule.ready_at is None
+        assert capsule.signed_statement is None
+        assert finalize_outcome in {
+            ("error", "DRAFT_EXPIRED"),
+            ("error", "CAPSULE_STATE_INVALID"),
+        }
+        assert gc_aborted == 1

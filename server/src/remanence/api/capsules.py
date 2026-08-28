@@ -1,5 +1,6 @@
 """Authenticated capsule draft creation endpoint."""
 
+import base64
 import hashlib
 import re
 import uuid
@@ -22,6 +23,7 @@ from remanence.api.dependencies import (
 )
 from remanence.api.problems import PROBLEM_CATALOG, problem_response
 from remanence.capsules.abort_service import CapsuleAbortError, CapsuleAbortService
+from remanence.capsules.blob_models import CapsuleBlobKind
 from remanence.capsules.draft_service import (
     CapsuleDraftResult,
     CapsuleDraftService,
@@ -33,6 +35,15 @@ from remanence.capsules.finalize_service import (
     CapsuleFinalizeError,
     CapsuleFinalizeResult,
     CapsuleFinalizeService,
+)
+from remanence.capsules.incoming_cursor import IncomingCursorCodecError, decode_incoming_cursor, encode_incoming_cursor
+from remanence.capsules.incoming_query_service import (
+    IncomingBlobSnapshot,
+    IncomingCapsulePage,
+    IncomingCapsuleQueryError,
+    IncomingCapsuleQueryService,
+    IncomingCapsuleSnapshot,
+    IncomingEnvelopeSnapshot,
 )
 from remanence.capsules.limits import (
     LIMITS_V1,
@@ -73,6 +84,7 @@ _RANGE_HEADER = b"range"
 _CONTENT_RANGE_HEADER = b"content-range"
 _OCTET_STREAM = "application/octet-stream"
 _DECIMAL = re.compile(r"[0-9]+")
+_INCOMING_LIMIT_RE = re.compile(r"(?:[1-9]|[1-9][0-9]|100)")
 _STORAGE_UNAVAILABLE_CODES = frozenset({"STORAGE_IO"})
 _STORAGE_INTERNAL_CODES = frozenset(
     {"STORAGE_INTEGRITY", "STORAGE_INVALID", "STORAGE_NOT_FOUND"}
@@ -101,6 +113,55 @@ class CapsuleFinalizeResponse(BaseModel):
     capsule_id: uuid.UUID
     state: Literal["READY"]
     ready_at: datetime
+
+
+class IncomingSignedStatementResponse(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True, frozen=True)
+
+    statement: str
+    statement_sha256: str
+    signature: str
+
+
+class IncomingEnvelopeResponse(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True, frozen=True)
+
+    recipient_key_bundle_id: uuid.UUID
+    ciphertext: str
+    ciphertext_size: int
+    ciphertext_sha256: str
+
+
+class IncomingBlobResponse(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True, frozen=True)
+
+    blob_id: uuid.UUID
+    kind: Literal["RECOGNITION_MANIFEST", "CONTENT_MANIFEST", "PHOTO"]
+    ordinal: int | None
+    ciphertext_size: int
+    ciphertext_sha256: str
+
+
+class IncomingCapsuleItemResponse(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True, frozen=True)
+
+    capsule_id: uuid.UUID
+    sender_user_id: uuid.UUID
+    recipient_user_id: uuid.UUID
+    sender_key_bundle_id: uuid.UUID
+    recipient_key_bundle_id: uuid.UUID
+    protocol_version: int
+    ready_at: datetime
+    signed_publish_statement: IncomingSignedStatementResponse
+    recipient_envelope: IncomingEnvelopeResponse
+    blobs: tuple[IncomingBlobResponse, ...]
+
+
+class IncomingCapsulesResponse(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True, frozen=True)
+
+    items: tuple[IncomingCapsuleItemResponse, ...]
+    next_cursor: str | None
 
 
 @dataclass(frozen=True)
@@ -454,3 +515,250 @@ def abort_capsule(
         return _problem_response(request, exc.code)
     except Exception:
         return _problem_response(request, "INTERNAL_ERROR")
+
+
+def _canonical_b64url(value: object) -> str:
+    if type(value) is not bytes or not value:
+        raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+    encoded = base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+    mapped: IncomingCapsuleQueryError | None = None
+    decoded: bytes | None = None
+    try:
+        decoded = decode_canonical_base64url(encoded, expected_length=len(value))
+    except Exception:
+        mapped = IncomingCapsuleQueryError("INTERNAL_ERROR")
+    if mapped is not None:
+        raise mapped
+    if decoded != value:
+        raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+    return encoded
+
+
+def _parse_incoming_query(request: Request) -> tuple[str | None, int]:
+    raw = request.scope.get("query_string", b"")
+    if raw is None:
+        raw = b""
+    if not isinstance(raw, (bytes, bytearray)):
+        raise CapsuleDraftValidationError()
+    try:
+        text = bytes(raw).decode("ascii")
+    except UnicodeDecodeError:
+        raise CapsuleDraftValidationError() from None
+    cursor_values: list[str] = []
+    limit_values: list[str] = []
+    if text:
+        for part in text.split("&"):
+            if not part or "=" not in part:
+                raise CapsuleDraftValidationError()
+            name, value = part.split("=", 1)
+            if name == "cursor":
+                cursor_values.append(value)
+            elif name == "limit":
+                limit_values.append(value)
+            else:
+                raise CapsuleDraftValidationError()
+    if len(cursor_values) > 1 or len(limit_values) > 1:
+        raise CapsuleDraftValidationError()
+    cursor: str | None = None
+    if cursor_values:
+        cursor = cursor_values[0]
+        if not cursor:
+            raise CapsuleDraftValidationError()
+        mapped: IncomingCapsuleQueryError | CapsuleDraftValidationError | None = None
+        try:
+            decode_incoming_cursor(cursor)
+        except IncomingCursorCodecError:
+            mapped = CapsuleDraftValidationError()
+        except Exception:
+            mapped = CapsuleDraftValidationError()
+        if mapped is not None:
+            raise mapped
+    limit = LIMITS_V1.incoming_page_default
+    if limit_values:
+        limit_text = limit_values[0]
+        if _INCOMING_LIMIT_RE.fullmatch(limit_text) is None:
+            raise CapsuleDraftValidationError()
+        parsed_limit = int(limit_text)
+        if type(parsed_limit) is not int:
+            raise CapsuleDraftValidationError()
+        if not 1 <= parsed_limit <= LIMITS_V1.incoming_page_max:
+            raise CapsuleDraftValidationError()
+        limit = parsed_limit
+    return cursor, limit
+
+
+def _incoming_blob_response(blob: object) -> IncomingBlobResponse:
+    if not isinstance(blob, IncomingBlobSnapshot):
+        raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+    if not isinstance(blob.blob_id, uuid.UUID):
+        raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+    if blob.kind is CapsuleBlobKind.PHOTO:
+        kind: Literal["RECOGNITION_MANIFEST", "CONTENT_MANIFEST", "PHOTO"] = "PHOTO"
+        if type(blob.ordinal) is not int:
+            raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+        ordinal: int | None = blob.ordinal
+    elif blob.kind is CapsuleBlobKind.RECOGNITION_MANIFEST:
+        kind = "RECOGNITION_MANIFEST"
+        if blob.ordinal is not None:
+            raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+        ordinal = None
+    elif blob.kind is CapsuleBlobKind.CONTENT_MANIFEST:
+        kind = "CONTENT_MANIFEST"
+        if blob.ordinal is not None:
+            raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+        ordinal = None
+    else:
+        raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+    if type(blob.expected_ciphertext_size) is not int:
+        raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+    try:
+        return IncomingBlobResponse(
+            blob_id=blob.blob_id,
+            kind=kind,
+            ordinal=ordinal,
+            ciphertext_size=blob.expected_ciphertext_size,
+            ciphertext_sha256=_canonical_b64url(blob.expected_ciphertext_sha256),
+        )
+    except IncomingCapsuleQueryError:
+        raise
+    except Exception:
+        raise IncomingCapsuleQueryError("INTERNAL_ERROR") from None
+
+
+def _incoming_item_response(
+    item: object, *, recipient_id: uuid.UUID
+) -> IncomingCapsuleItemResponse:
+    if not isinstance(item, IncomingCapsuleSnapshot):
+        raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+    ids = (
+        item.capsule_id,
+        item.sender_user_id,
+        item.recipient_user_id,
+        item.sender_key_bundle_id,
+        item.recipient_key_bundle_id,
+    )
+    if any(not isinstance(value, uuid.UUID) for value in ids):
+        raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+    if item.recipient_user_id != recipient_id:
+        raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+    if type(item.protocol_version) is not int or item.protocol_version != LIMITS_V1.protocol_version:
+        raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+    ready_at = item.ready_at
+    if (
+        not isinstance(ready_at, datetime)
+        or ready_at.tzinfo is None
+        or ready_at.utcoffset() != timedelta(0)
+    ):
+        raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+    envelope = item.envelope
+    if not isinstance(envelope, IncomingEnvelopeSnapshot):
+        raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+    if not isinstance(envelope.recipient_key_bundle_id, uuid.UUID):
+        raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+    if envelope.recipient_key_bundle_id != item.recipient_key_bundle_id:
+        raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+    if type(envelope.ciphertext_size) is not int:
+        raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+    if not isinstance(item.blobs, tuple):
+        raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+    try:
+        statement = IncomingSignedStatementResponse(
+            statement=_canonical_b64url(item.signed_statement),
+            statement_sha256=_canonical_b64url(item.signed_statement_sha256),
+            signature=_canonical_b64url(item.publish_signature),
+        )
+        envelope_dto = IncomingEnvelopeResponse(
+            recipient_key_bundle_id=envelope.recipient_key_bundle_id,
+            ciphertext=_canonical_b64url(envelope.ciphertext),
+            ciphertext_size=envelope.ciphertext_size,
+            ciphertext_sha256=_canonical_b64url(envelope.ciphertext_sha256),
+        )
+        blobs = tuple(_incoming_blob_response(blob) for blob in item.blobs)
+        return IncomingCapsuleItemResponse(
+            capsule_id=item.capsule_id,
+            sender_user_id=item.sender_user_id,
+            recipient_user_id=item.recipient_user_id,
+            sender_key_bundle_id=item.sender_key_bundle_id,
+            recipient_key_bundle_id=item.recipient_key_bundle_id,
+            protocol_version=item.protocol_version,
+            ready_at=ready_at,
+            signed_publish_statement=statement,
+            recipient_envelope=envelope_dto,
+            blobs=blobs,
+        )
+    except IncomingCapsuleQueryError:
+        raise
+    except Exception:
+        raise IncomingCapsuleQueryError("INTERNAL_ERROR") from None
+
+
+def _incoming_page_response(
+    result: object, *, recipient_id: uuid.UUID
+) -> IncomingCapsulesResponse:
+    if not isinstance(result, IncomingCapsulePage):
+        raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+    if type(result.has_more) is not bool:
+        raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+    if not isinstance(result.items, tuple):
+        raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+    items = tuple(_incoming_item_response(item, recipient_id=recipient_id) for item in result.items)
+    if result.has_more is True:
+        if not items or type(result.next_cursor) is not str or not result.next_cursor:
+            raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+        last = result.items[-1]
+        if not isinstance(last, IncomingCapsuleSnapshot):
+            raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+        encoded: str | None = None
+        mapped: IncomingCapsuleQueryError | None = None
+        try:
+            encoded = encode_incoming_cursor(ready_at=last.ready_at, capsule_id=last.capsule_id)
+        except Exception:
+            mapped = IncomingCapsuleQueryError("INTERNAL_ERROR")
+        if mapped is not None:
+            raise mapped
+        if encoded != result.next_cursor:
+            raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+        next_cursor: str | None = result.next_cursor
+    else:
+        if result.next_cursor is not None:
+            raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+        next_cursor = None
+    try:
+        return IncomingCapsulesResponse(items=items, next_cursor=next_cursor)
+    except IncomingCapsuleQueryError:
+        raise
+    except Exception:
+        raise IncomingCapsuleQueryError("INTERNAL_ERROR") from None
+
+
+@router.get(
+    "/v1/capsules/incoming",
+    response_model=IncomingCapsulesResponse,
+    status_code=200,
+)
+def list_incoming_capsules(
+    request: Request,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    session: Session = Depends(get_db_session, use_cache=False),
+) -> IncomingCapsulesResponse | JSONResponse:
+    try:
+        cursor, limit = _parse_incoming_query(request)
+        with session.begin():
+            result = IncomingCapsuleQueryService(session).list_incoming(
+                authenticated_recipient_user_id=principal.user_id,
+                cursor=cursor,
+                limit=limit,
+            )
+            dto = _incoming_page_response(result, recipient_id=principal.user_id)
+            try:
+                payload = dto.model_dump(mode="json")
+            except Exception:
+                raise IncomingCapsuleQueryError("INTERNAL_ERROR") from None
+        return JSONResponse(content=payload, status_code=200)
+    except CapsuleDraftValidationError as exc:
+        return _problem_response(request, exc.code)
+    except IncomingCapsuleQueryError as exc:
+        return _problem_response(request, exc.code)
+    except Exception:
+        return _problem_response(request, "INTERNAL_ERROR")
+

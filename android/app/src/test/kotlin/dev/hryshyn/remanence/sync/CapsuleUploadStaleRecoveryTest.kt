@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.sync
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import androidx.work.ListenableWorker
 import com.google.crypto.tink.TinkProtoKeysetFormat
 import com.google.crypto.tink.subtle.Base64
 import dev.hryshyn.remanence.auth.SoftwareKekBoundary
@@ -331,15 +332,20 @@ class CapsuleUploadStaleRecoveryTest {
                 "WHERE capsule_id = ? AND owner_user_id = ?",
             arrayOf(CAPSULE.toRestString(), OWNER.toRestString()),
         )
+        val originalArtifactBytes = database.outboxBlobDao()
+            .getAllByCapsuleIdAndOwner(CAPSULE.toRestString(), OWNER.toRestString())
+            .associate { it.blobId to File(it.localCiphertextPath).readBytes() }
+        val firstOutcome = orchestrator(
+            draftState = CapsuleDraftBlobState.STORED,
+            finalize = { _, _ ->
+                CapsuleFinalizeResult.Failure(CapsuleFinalizeFailure.RECIPIENT_KEY_STALE, retryable = false)
+            },
+        ).run(OWNER, CAPSULE)
         assertEquals(
             CapsuleUploadOutcome.Retryable("RECIPIENT_KEY_STALE_FINALIZE"),
-            orchestrator(
-                draftState = CapsuleDraftBlobState.STORED,
-                finalize = { _, _ ->
-                    CapsuleFinalizeResult.Failure(CapsuleFinalizeFailure.RECIPIENT_KEY_STALE, retryable = false)
-                },
-            ).run(OWNER, CAPSULE),
+            firstOutcome,
         )
+        assertEquals(ListenableWorker.Result.retry(), CapsuleUploadWorker.mapOutcome(firstOutcome))
         assertEquals(RECIPIENT_KEY_STALE_FINALIZE, capsuleRow().lastErrorCode)
         assertEquals(OutboxCapsuleState.FINALIZING, capsuleRow().state)
 
@@ -351,6 +357,12 @@ class CapsuleUploadStaleRecoveryTest {
             ).run(OWNER, CAPSULE),
         )
         assertEquals(OutboxCapsuleState.PUBLISHED, capsuleRow().state)
+        assertTrue(originalArtifactBytes.all { (blobId, bytes) ->
+            val row = database.outboxBlobDao()
+                .getAllByCapsuleIdAndOwner(CAPSULE.toRestString(), OWNER.toRestString())
+                .singleOrNull { it.blobId == blobId }
+            row != null && bytes.contentEquals(File(row.localCiphertextPath).readBytes())
+        })
     }
 
     @Test

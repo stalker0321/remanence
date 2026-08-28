@@ -465,6 +465,10 @@ class OutboxDaosTest {
                 .copy(lastErrorCode = "RECIPIENT_KEY_STALE_DRAFT"),
             capsule("resume-13", "resume-idem-13", OutboxCapsuleState.FINALIZING)
                 .copy(lastErrorCode = "RECIPIENT_KEY_STALE_FINALIZE"),
+            capsule("resume-14", "resume-idem-14", OutboxCapsuleState.RETRYABLE_FAILURE)
+                .copy(lastErrorCode = "RECIPIENT_KEY_STALE_FINALIZE"),
+            capsule("resume-15", "resume-idem-15", OutboxCapsuleState.FINALIZING)
+                .copy(lastErrorCode = "RECIPIENT_KEY_STALE_DRAFT"),
             capsule("resume-10", "resume-idem-10", OutboxCapsuleState.PUBLISHED),
             capsule("resume-11", "resume-idem-11", OutboxCapsuleState.TERMINAL_FAILURE),
             capsule("resume-00", "resume-idem-00", OutboxCapsuleState.ENCRYPTED)

@@ -65,12 +65,21 @@ abstract class OutboxCapsuleDao {
     @Query(
         "SELECT capsule_id FROM outbox_capsule " +
             "WHERE owner_user_id = :ownerUserId AND (" +
-            "(state IN ('ENCRYPTED', 'UPLOADING', 'FINALIZING') " +
-            "    AND (last_error_code IS NULL OR last_error_code <> 'RECIPIENT_KEY_STALE')) " +
+            "(state IN ('ENCRYPTED', 'UPLOADING') " +
+            "    AND (last_error_code IS NULL OR last_error_code NOT IN " +
+            "        ('RECIPIENT_KEY_STALE', 'RECIPIENT_KEY_STALE_DRAFT', " +
+            "         'RECIPIENT_KEY_STALE_FINALIZE'))) " +
+            "OR (state = 'FINALIZING' " +
+            "    AND (last_error_code IS NULL OR last_error_code NOT IN " +
+            "        ('RECIPIENT_KEY_STALE', 'RECIPIENT_KEY_STALE_DRAFT'))) " +
             "OR (state = 'RETRYABLE_FAILURE' " +
-            "    AND (last_error_code IS NULL OR last_error_code <> 'RECIPIENT_KEY_STALE')) " +
+            "    AND (last_error_code IS NULL OR last_error_code NOT IN " +
+            "        ('RECIPIENT_KEY_STALE', 'RECIPIENT_KEY_STALE_FINALIZE'))) " +
             "OR (state IN ('PUBLISHED', 'TERMINAL_FAILURE') " +
-            "    AND sender_retry_keyset_path IS NOT NULL)" +
+            "    AND sender_retry_keyset_path IS NOT NULL " +
+            "    AND (last_error_code IS NULL OR last_error_code NOT IN " +
+            "        ('RECIPIENT_KEY_STALE', 'RECIPIENT_KEY_STALE_DRAFT', " +
+            "         'RECIPIENT_KEY_STALE_FINALIZE')))" +
             ") ORDER BY capsule_id",
     )
     abstract suspend fun getCapsuleIdsNeedingUploadForOwner(ownerUserId: String): List<String>

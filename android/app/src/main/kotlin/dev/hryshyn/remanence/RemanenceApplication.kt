@@ -3,6 +3,8 @@ package dev.hryshyn.remanence
 import android.app.Application
 import android.content.Context
 import androidx.room.Room
+import androidx.work.WorkManager
+import androidx.work.await
 import java.io.File
 import dev.hryshyn.remanence.core.crypto.AndroidKeystoreKekBoundary
 import dev.hryshyn.remanence.core.crypto.IdentityBundleRepository
@@ -28,6 +30,8 @@ import dev.hryshyn.remanence.session.IdentityAvailabilityPort
 import dev.hryshyn.remanence.session.SessionBootstrap
 import dev.hryshyn.remanence.session.SessionTokenPort
 import dev.hryshyn.remanence.sync.CapsuleUploadOrchestrator
+import dev.hryshyn.remanence.sync.CapsuleUploadResumer
+import dev.hryshyn.remanence.sync.CapsuleUploadWorker
 import dev.hryshyn.remanence.wiring.TinkRegistrationIdentityAdapter
 
 /**
@@ -314,6 +318,21 @@ class AppContainer(
             finalizeCapsule = { request, token -> capsuleFinalizeRepository.finalize(request, token) },
             cleanupRetryMaterial = { owner, capsule ->
                 retryLifecycle.cleanupForTerminalState(owner, capsule)
+            },
+        )
+    }
+
+    /** A05b owner-scoped restart discovery boundary; lifecycle wiring stays at the root. */
+    val capsuleUploadResumer: CapsuleUploadResumer by lazy {
+        CapsuleUploadResumer(
+            capsuleDao = database.outboxCapsuleDao(),
+            currentAccountUserId = { currentAccountStore.load()?.userId },
+            enqueue = { owner, capsule ->
+                CapsuleUploadWorker.enqueue(
+                    WorkManager.getInstance(appContext),
+                    owner,
+                    capsule,
+                ).await()
             },
         )
     }

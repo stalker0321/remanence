@@ -3,7 +3,14 @@ package dev.hryshyn.remanence
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import androidx.work.Configuration
+import androidx.work.ListenableWorker
+import androidx.work.WorkManager
+import androidx.work.WorkerFactory
+import androidx.work.testing.WorkManagerTestInitHelper
 import dev.hryshyn.remanence.auth.SoftwareKekBoundary
+import dev.hryshyn.remanence.core.data.db.OutboxCapsuleEntity
+import dev.hryshyn.remanence.core.data.db.OutboxCapsuleState
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.runBlocking
@@ -19,6 +26,10 @@ import org.robolectric.annotation.Config
 import dev.hryshyn.remanence.core.crypto.IdentityBundleRepository
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
 import dev.hryshyn.remanence.core.data.db.FingerprintSide
+import dev.hryshyn.remanence.core.model.CapsuleId
+import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.sync.CapsuleUploadWorker
+import dev.hryshyn.remanence.sync.NoOpWorker
 import dev.hryshyn.remanence.ui.create.CreateViewModel
 import dev.hryshyn.remanence.wiring.RemanenceViewModelFactory
 
@@ -152,4 +163,78 @@ class RemanenceApplicationContainerTest {
         assertTrue("legacy global staging must be ignored", globalLeftover.isDirectory)
         createViewModel.endSession()
     }
+
+    @Test
+    fun capsuleUploadResumerWiringUsesCurrentOwnerAndUniqueWorkerBoundary() = runBlocking {
+        WorkManagerTestInitHelper.initializeTestWorkManager(
+            context,
+            Configuration.Builder()
+                .setMinimumLoggingLevel(android.util.Log.ERROR)
+                .setWorkerFactory(object : WorkerFactory() {
+                    override fun createWorker(
+                        appContext: Context,
+                        workerClassName: String,
+                        workerParameters: androidx.work.WorkerParameters,
+                    ): ListenableWorker? = if (workerClassName == CapsuleUploadWorker::class.java.name) {
+                        // The production request is inspected without running
+                        // its Android application/Keystore dependencies.
+                        NoOpWorker(appContext, workerParameters)
+                    } else {
+                        null
+                    }
+                })
+                .build(),
+        )
+        val container = AppContainer(context, kekBoundaryOverride = SoftwareKekBoundary())
+        val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000c501")
+        val otherOwner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000c502")
+        val capsule = CapsuleId.parseRest("0198f0a0-0000-7000-8000-00000000c511")
+        val otherCapsule = CapsuleId.parseRest("0198f0a0-0000-7000-8000-00000000c512")
+
+        try {
+            container.currentAccountStore.record(owner.toRestString(), "mykola", "0198f0a0-0000-7000-8000-00000000c521")
+            val row = outboxCapsule(capsule, owner)
+            val foreignRow = outboxCapsule(otherCapsule, otherOwner)
+            container.database.outboxCapsuleDao().insertOrAbort(owner.toRestString(), row)
+            container.database.outboxCapsuleDao().insertOrAbort(otherOwner.toRestString(), foreignRow)
+
+            val result = container.capsuleUploadResumer.resume(owner)
+
+            assertEquals(dev.hryshyn.remanence.sync.CapsuleUploadResumeStatus.COMPLETED, result.status)
+            assertEquals(1, result.discoveredCount)
+            assertEquals(1, result.enqueuedCount)
+            val uniqueName = dev.hryshyn.remanence.sync.AccountWorkIdentity.outbox(owner, capsule).uniqueName
+            val info = WorkManager.getInstance(context).getWorkInfosForUniqueWork(uniqueName).get().single()
+            assertTrue(info.tags.containsAll(dev.hryshyn.remanence.sync.AccountWorkIdentity.outbox(owner, capsule).tags))
+            assertTrue(
+                info.tags.none { it.contains("path") || it.contains("token") || it.contains("key") },
+            )
+        } finally {
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+            container.database.outboxCapsuleDao().clearForOwner(owner.toRestString())
+            container.database.outboxCapsuleDao().clearForOwner(otherOwner.toRestString())
+            container.currentAccountStore.clear()
+            container.database.close()
+            WorkManagerTestInitHelper.closeWorkDatabase()
+        }
+    }
+
+    private fun outboxCapsule(capsule: CapsuleId, owner: UserId) = OutboxCapsuleEntity(
+        capsuleId = capsule.toRestString(),
+        idempotencyKey = "idem-${capsule.toRestString()}",
+        ownerUserId = owner.toRestString(),
+        senderUserId = owner.toRestString(),
+        recipientUserId = "0198f0a0-0000-7000-8000-00000000c531",
+        senderKeyBundleId = null,
+        recipientKeyBundleId = "0198f0a0-0000-7000-8000-00000000c532",
+        senderSigningPublicKeysetB64 = null,
+        state = OutboxCapsuleState.ENCRYPTED,
+        recognitionManifestPath = null,
+        contentManifestPath = null,
+        envelopePath = null,
+        publishStatementPath = null,
+        publishStatementSignaturePath = null,
+        senderRetryKeysetPath = null,
+        lastErrorCode = null,
+    )
 }

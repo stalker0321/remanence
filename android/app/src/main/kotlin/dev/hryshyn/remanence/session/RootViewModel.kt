@@ -6,6 +6,7 @@ import dev.hryshyn.remanence.ui.navigation.AppDestination
 import dev.hryshyn.remanence.ui.navigation.AppNavigationController
 import dev.hryshyn.remanence.ui.navigation.AuthUiState
 import dev.hryshyn.remanence.ui.navigation.CapsuleAccess
+import dev.hryshyn.remanence.core.model.UserId
 import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -43,6 +44,8 @@ class RootViewModel(
      * expiry wake-up for the presented capsule. Injected for determinism.
      */
     private val clockMillis: () -> Long = System::currentTimeMillis,
+    /** Best-effort owner-scoped upload discovery after a proven Active session. */
+    private val resumeCapsuleUploads: suspend (UserId) -> Unit = {},
 ) : ViewModel() {
 
     private val controller = AppNavigationController(AuthUiState.SignedOut)
@@ -267,17 +270,20 @@ class RootViewModel(
      * than silently presenting a stale authenticated root.
      */
     suspend fun resolveNow() {
+        var activeUserId: String? = null
         val next = try {
             when (val resolved = sessionBootstrap.bootstrap()) {
                 SessionState.SignedOut -> AuthUiState.SignedOut
                 SessionState.RecoveryRequired -> AuthUiState.RecoveryRequired
                 SessionState.RequiresConnectivity -> AuthUiState.RequiresConnectivity
-                is SessionState.Active ->
+                is SessionState.Active -> {
+                    activeUserId = resolved.userId
                     AuthUiState.Authenticated(
                         userId = resolved.userId ?: "",
                         handle = resolved.handle ?: "",
                         activeKeyBundleId = resolved.activeKeyBundleId,
                     )
+                }
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -285,6 +291,18 @@ class RootViewModel(
             AuthUiState.RequiresConnectivity
         }
         publish(next)
+
+        val rawActiveUserId = activeUserId
+        if (next is AuthUiState.Authenticated && !rawActiveUserId.isNullOrBlank()) {
+            val owner = runCatching { UserId.parseRest(rawActiveUserId) }.getOrNull() ?: return
+            try {
+                resumeCapsuleUploads(owner)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Discovery is best-effort; authenticated navigation remains intact.
+            }
+        }
     }
 
     private fun publish(next: AuthUiState) {

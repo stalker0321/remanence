@@ -28,6 +28,9 @@ class RemanenceViewModelFactory(
             logoutAction = { container.logoutUseCase.logout() },
             // FIX-REVIEW-03: THE one authoritative grant lifecycle.
             grants = container.scanGrants,
+            resumeCapsuleUploads = { owner ->
+                container.capsuleUploadResumer.resume(owner)
+            },
         ) as T
         LoginViewModel::class.java -> LoginViewModel(container.loginUseCase) as T
         RegistrationViewModel::class.java -> RegistrationViewModel(container.registrationUseCase) as T

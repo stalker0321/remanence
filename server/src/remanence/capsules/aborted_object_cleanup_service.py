@@ -2,14 +2,16 @@
 
 This service never marks drafts. Callers must already have committed ABORTED
 via abort or expired-draft marking. Unlike those services, cleanup does not
-accept a live Session: it opens a fresh Session/transaction per
-clean_aborted_objects call so it cannot observe an uncommitted DRAFT->ABORTED
-flush that later rolls back. It mutates no database rows. Advisory
-transaction locks are acquired in that short-lived transaction and released
-when the call returns. V1 still holds those locks across a bounded
-synchronous BlobStore.delete. Pagination is a schema-free keyset cursor, not
-offset. Failed or skipped keys are advanced past in this sweep and retried
-only on a later sweep from a null cursor.
+accept a live Session: each clean_aborted_objects call asks session_factory
+for a Session that must be inactive (no transaction, no nested transaction).
+An already-active Session is rejected untouched because it may belong to
+another caller. Once accepted, cleanup owns begin/commit/rollback/close.
+That keeps uncommitted DRAFT->ABORTED flushes invisible. It mutates no
+database rows. Advisory transaction locks live only in that short-lived
+transaction. V1 still holds those locks across a bounded synchronous
+BlobStore.delete. Pagination is a schema-free keyset cursor, not offset.
+Failed or skipped keys are advanced past in this sweep and retried only on
+a later sweep from a null cursor.
 """
 
 from __future__ import annotations
@@ -90,12 +92,53 @@ def _require_cursor(value: object) -> AbortedObjectCleanupCursor | None:
     return value
 
 
+def _session_is_inactive(session: Session) -> bool:
+    return (not session.in_transaction()) and (not session.in_nested_transaction())
+
+
+def _safe_rollback(session: Session) -> None:
+    try:
+        session.rollback()
+    except Exception:
+        return
+
+
+def _safe_close(session: Session) -> bool:
+    try:
+        session.close()
+    except Exception:
+        return False
+    return True
+
+
 class AbortedObjectCleanupService:
     """Remove store objects for committed ABORTED blobs without mutating rows."""
 
     def __init__(self, session_factory: SessionFactory, blob_store: BlobStore) -> None:
         self._session_factory = session_factory
         self._blob_store = blob_store
+
+    def _acquire_inactive_session(self) -> Session:
+        mapped: AbortedObjectCleanupError | None = None
+        produced: object | None = None
+        try:
+            produced = self._session_factory()
+        except Exception:
+            mapped = _error("INTERNAL_ERROR")
+        if mapped is not None:
+            raise mapped
+        if not isinstance(produced, Session):
+            raise _error("INTERNAL_ERROR")
+        try:
+            inactive = _session_is_inactive(produced)
+        except Exception:
+            mapped = _error("INTERNAL_ERROR")
+            inactive = False
+        if mapped is not None:
+            raise mapped
+        if not inactive:
+            raise _error("INTERNAL_ERROR")
+        return produced
 
     def clean_aborted_objects(
         self,
@@ -105,20 +148,27 @@ class AbortedObjectCleanupService:
     ) -> AbortedObjectCleanupResult:
         limit = _require_limit(limit)
         after_cursor = _require_cursor(after_cursor)
-        if not callable(self._session_factory):
-            raise _error("VALIDATION_FAILED")
-        session = self._session_factory()
+        session = self._acquire_inactive_session()
+        primary: AbortedObjectCleanupError | None = None
+        result: AbortedObjectCleanupResult | None = None
         try:
-            with session.begin():
-                return self._clean_aborted_objects(
-                    session, limit=limit, after_cursor=after_cursor
-                )
-        except AbortedObjectCleanupError:
-            raise
+            session.begin()
+            result = self._clean_aborted_objects(
+                session, limit=limit, after_cursor=after_cursor
+            )
+            session.commit()
+        except AbortedObjectCleanupError as exc:
+            primary = exc
+            _safe_rollback(session)
         except Exception:
-            raise _error("INTERNAL_ERROR") from None
-        finally:
-            session.close()
+            primary = _error("INTERNAL_ERROR")
+            _safe_rollback(session)
+        closed = _safe_close(session)
+        if primary is not None:
+            raise primary
+        if not closed or result is None:
+            raise _error("INTERNAL_ERROR")
+        return result
 
     def _candidate_blob_ids(
         self,

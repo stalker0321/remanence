@@ -13,7 +13,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import func, select, text
-from sqlalchemy.orm import object_session
+from sqlalchemy.orm import Session, object_session
 
 pytest_plugins = ("test_session_repository_create",)
 
@@ -45,12 +45,17 @@ def _sha(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _assert_error(call, code: str) -> AbortedObjectCleanupError:
+def _assert_error(call, code: str, *, secrets: tuple[str, ...] = ()) -> AbortedObjectCleanupError:
     with pytest.raises(AbortedObjectCleanupError) as caught:
         call()
     assert caught.value.code == code
     assert str(caught.value) == "aborted object cleanup failed"
     assert repr(caught.value) == f"AbortedObjectCleanupError(code={code!r})"
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    rendered = str(caught.value) + repr(caught.value)
+    for secret in secrets:
+        assert secret not in rendered
     return caught.value
 
 
@@ -167,6 +172,172 @@ def test_invalid_limit_and_cursor_fail_closed_without_database() -> None:
     assert "rglob" not in source
     assert "listdir" not in source
     assert "offset(" not in source
+
+
+class _TrackingSession(Session):
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.close_calls = 0
+        self.rollback_calls = 0
+        self.begin_calls = 0
+
+    def begin(self, *args: Any, **kwargs: Any):
+        self.begin_calls += 1
+        return super().begin(*args, **kwargs)
+
+    def rollback(self) -> None:
+        self.rollback_calls += 1
+        super().rollback()
+
+    def close(self) -> None:
+        self.close_calls += 1
+        super().close()
+
+
+def _empty_cleanup_result() -> AbortedObjectCleanupResult:
+    return AbortedObjectCleanupResult(
+        examined_count=0,
+        deleted_or_missing_count=0,
+        failed_count=0,
+        skipped_count=0,
+        has_more=False,
+        next_cursor=None,
+    )
+
+
+def test_factory_raises_secret_is_internal_and_redacted() -> None:
+    def factory():
+        raise RuntimeError("secret-factory-token")
+
+    service = AbortedObjectCleanupService(factory, None)
+    _assert_error(
+        lambda: service.clean_aborted_objects(limit=1),
+        "INTERNAL_ERROR",
+        secrets=("secret-factory-token",),
+    )
+
+
+def test_factory_non_session_is_not_closed() -> None:
+    class _Alien:
+        def __init__(self) -> None:
+            self.closed = False
+            self.rolled_back = False
+
+        def close(self) -> None:
+            self.closed = True
+
+        def rollback(self) -> None:
+            self.rolled_back = True
+
+    alien = _Alien()
+    service = AbortedObjectCleanupService(lambda: alien, None)
+    _assert_error(lambda: service.clean_aborted_objects(limit=1), "INTERNAL_ERROR")
+    assert alien.closed is False
+    assert alien.rolled_back is False
+
+
+def test_factory_active_and_nested_sessions_are_left_untouched() -> None:
+    active = _TrackingSession()
+    active.begin()
+    assert active.in_transaction()
+    service = AbortedObjectCleanupService(lambda: active, None)
+    _assert_error(lambda: service.clean_aborted_objects(limit=1), "INTERNAL_ERROR")
+    assert active.close_calls == 0
+    assert active.rollback_calls == 0
+    assert active.in_transaction()
+
+    nested = _TrackingSession()
+    nested.begin()
+    nested.begin_nested()
+    assert nested.in_nested_transaction()
+    nested_service = AbortedObjectCleanupService(lambda: nested, None)
+    _assert_error(lambda: nested_service.clean_aborted_objects(limit=1), "INTERNAL_ERROR")
+    assert nested.close_calls == 0
+    assert nested.rollback_calls == 0
+    assert nested.in_nested_transaction()
+    nested.close()
+    active.close()
+
+
+def test_begin_failure_is_internal_redacted_and_session_is_closed() -> None:
+    class _FailBegin(_TrackingSession):
+        def begin(self, *args: Any, **kwargs: Any):
+            self.begin_calls += 1
+            raise RuntimeError("secret-begin")
+
+    session = _FailBegin()
+    service = AbortedObjectCleanupService(lambda: session, None)
+    _assert_error(
+        lambda: service.clean_aborted_objects(limit=1),
+        "INTERNAL_ERROR",
+        secrets=("secret-begin",),
+    )
+    assert session.begin_calls == 1
+    assert session.close_calls == 1
+
+
+def test_close_failure_after_success_is_internal_redacted(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FailClose(_TrackingSession):
+        def close(self) -> None:
+            self.close_calls += 1
+            raise RuntimeError("secret-close")
+
+    session = _FailClose()
+    monkeypatch.setattr(
+        AbortedObjectCleanupService,
+        "_clean_aborted_objects",
+        lambda self, *args, **kwargs: _empty_cleanup_result(),
+    )
+    service = AbortedObjectCleanupService(lambda: session, None)
+    _assert_error(
+        lambda: service.clean_aborted_objects(limit=1),
+        "INTERNAL_ERROR",
+        secrets=("secret-close",),
+    )
+    assert session.close_calls == 1
+    assert session.begin_calls == 1
+
+
+def test_primary_typed_error_is_preserved_when_close_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FailClose(_TrackingSession):
+        def close(self) -> None:
+            self.close_calls += 1
+            raise RuntimeError("secret-close")
+
+    session = _FailClose()
+
+    def boom(self, *args: Any, **kwargs: Any):
+        raise AbortedObjectCleanupError("VALIDATION_FAILED")
+
+    monkeypatch.setattr(AbortedObjectCleanupService, "_clean_aborted_objects", boom)
+    service = AbortedObjectCleanupService(lambda: session, None)
+    _assert_error(
+        lambda: service.clean_aborted_objects(limit=1),
+        "VALIDATION_FAILED",
+        secrets=("secret-close",),
+    )
+    assert session.close_calls == 1
+
+
+def test_generic_body_error_and_close_failure_map_internal(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FailClose(_TrackingSession):
+        def close(self) -> None:
+            self.close_calls += 1
+            raise RuntimeError("secret-close")
+
+    session = _FailClose()
+
+    def boom(self, *args: Any, **kwargs: Any):
+        raise RuntimeError("secret-body")
+
+    monkeypatch.setattr(AbortedObjectCleanupService, "_clean_aborted_objects", boom)
+    service = AbortedObjectCleanupService(lambda: session, None)
+    _assert_error(
+        lambda: service.clean_aborted_objects(limit=1),
+        "INTERNAL_ERROR",
+        secrets=("secret-close", "secret-body"),
+    )
+    assert session.close_calls == 1
 
 
 def test_uncommitted_abort_is_invisible_until_commit(session_factory, tmp_path: Path, monkeypatch):

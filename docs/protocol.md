@@ -244,6 +244,10 @@ Request `{ "handle": "new_handle" }`. Database uniqueness is atomic. Response re
 
 Returns `404 HANDLE_NOT_FOUND` or user summary, active public key bundle, and an opaque `directory_version`. The sender does not cache it beyond the current create flow and stores immutable IDs/key ID after explicit confirmation.
 
+### `GET /v1/directory/users/{user_id}`
+
+Requires authentication and resolves an immutable recipient user ID to the same public-only user summary, current handle, current `ACTIVE` public key bundle, and opaque `directory_version` shape as handle lookup. The response user ID and key-bundle user ID equal the requested UUID; retired and revoked bundles are never returned. An unknown user or user without an active public bundle returns terminal `404 USER_NOT_FOUND` with `retryable: false`; malformed UUID paths return `422 VALIDATION_FAILED`. Email and private key material are never returned.
+
 ### `GET /v1/directory/key-bundles/{key_bundle_id}`
 
 Returns the immutable public portion of an `ACTIVE`, `RETIRED`, or `REVOKED` bundle by ID to an authenticated client. Recipients use this endpoint to verify capsules signed before a sender rotated keys. It never resolves routing by handle and never returns email/private material. A revoked response remains available but is marked `REVOKED`; MVP fails closed and does not present a capsule authenticated only by a revoked bundle.
@@ -368,7 +372,7 @@ Errors contain `type`, `title`, HTTP `status`, stable `code`, redacted `detail`,
 Required stable codes:
 
 - `AUTH_INVALID`, `AUTH_EXPIRED`, `SESSION_REPLAYED`, `RATE_LIMITED`;
-- `EMAIL_UNAVAILABLE`, `HANDLE_INVALID`, `HANDLE_UNAVAILABLE`, `HANDLE_NOT_FOUND`;
+- `EMAIL_UNAVAILABLE`, `HANDLE_INVALID`, `HANDLE_UNAVAILABLE`, `HANDLE_NOT_FOUND`, `USER_NOT_FOUND`;
 - `RECIPIENT_NOT_CONFIRMED`, `RECIPIENT_KEY_STALE`, `KEY_BUNDLE_INVALID`, `KEY_BUNDLE_NOT_FOUND`, `KEY_BUNDLE_REVOKED`;
 - `CAPSULE_NOT_FOUND`, `CAPSULE_STATE_INVALID`, `DRAFT_EXPIRED`;
 - `BLOB_NOT_DECLARED`, `BLOB_SIZE_INVALID`, `BLOB_HASH_MISMATCH`, `BLOB_CONFLICT`;

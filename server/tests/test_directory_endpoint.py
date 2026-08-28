@@ -3,7 +3,7 @@
 import base64
 import os
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import psycopg
 import pytest
@@ -17,6 +17,7 @@ from tink.proto import ed25519_pb2, hpke_pb2, tink_pb2
 from remanence.db.session import build_engine, build_session_factory
 from remanence.main import create_app
 from remanence.settings import AppMode, Settings
+from remanence.users.key_models import KeyBundleStatus, UserKeyBundle
 
 _ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 _HPKE_KEY = bytes(range(32))
@@ -187,3 +188,139 @@ def test_unauthenticated_lookup_401(directory_env) -> None:
     response = client.get("/v1/directory/handles/alice")
     assert response.status_code == 401
     assert response.json()["code"] == "AUTH_INVALID"
+
+
+def test_lookup_by_user_id_returns_exact_public_allow_list(directory_env) -> None:
+    client, _ = directory_env
+    seed = _seed(client)
+    headers = {"Authorization": f"Bearer {seed['access_token']}"}
+    response = client.get(f"/v1/directory/users/{seed['user']['user_id']}", headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"user", "key_bundle", "directory_version"}
+    assert body["user"] == {
+        "user_id": seed["user"]["user_id"],
+        "handle": "alice",
+    }
+    assert body["key_bundle"]["key_bundle_id"] == seed["active_key_bundle_id"]
+    assert body["key_bundle"]["user_id"] == seed["user"]["user_id"]
+    assert body["key_bundle"]["status"] == "ACTIVE"
+    assert set(body["key_bundle"]) == {
+        "key_bundle_id",
+        "user_id",
+        "suite",
+        "protocol_version",
+        "encryption_public_keyset",
+        "signing_public_keyset",
+        "status",
+        "created_at",
+    }
+    serialized = str(body)
+    assert "alice@example.com" not in serialized
+    assert "email" not in serialized
+    assert "private" not in serialized.lower()
+
+
+def test_lookup_by_user_id_returns_current_handle_after_rename(directory_env) -> None:
+    client, _ = directory_env
+    seed = _seed(client)
+    headers = {"Authorization": f"Bearer {seed['access_token']}"}
+    changed = client.patch(
+        "/v1/me/handle",
+        json={"handle": "@Renamed_Alice"},
+        headers=headers,
+    )
+    assert changed.status_code == 200
+
+    response = client.get(f"/v1/directory/users/{seed['user']['user_id']}", headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["user"] == {
+        "user_id": seed["user"]["user_id"],
+        "handle": "renamed_alice",
+    }
+    assert body["key_bundle"]["user_id"] == seed["user"]["user_id"]
+
+
+def test_lookup_by_user_id_returns_only_current_active_bundle(directory_env) -> None:
+    client, factory = directory_env
+    seed = _seed(client)
+    headers = {"Authorization": f"Bearer {seed['access_token']}"}
+    old_bundle_id = seed["active_key_bundle_id"]
+
+    with factory() as session:
+        old_bundle = session.get(UserKeyBundle, UUID(old_bundle_id))
+        assert old_bundle is not None
+        old_bundle.status = KeyBundleStatus.RETIRED
+        session.commit()
+
+    retired_only = client.get(
+        f"/v1/directory/users/{seed['user']['user_id']}",
+        headers=headers,
+    )
+    assert retired_only.status_code == 404
+    assert retired_only.json()["code"] == "USER_NOT_FOUND"
+
+    new_bundle_id = uuid4()
+    with factory() as session:
+        old_bundle = session.get(UserKeyBundle, UUID(old_bundle_id))
+        assert old_bundle is not None
+        session.add(
+            UserKeyBundle(
+                id=new_bundle_id,
+                user_id=old_bundle.user_id,
+                encryption_public_keyset=old_bundle.encryption_public_keyset,
+                signing_public_keyset=old_bundle.signing_public_keyset,
+                suite=old_bundle.suite,
+                protocol_version=old_bundle.protocol_version,
+                status=KeyBundleStatus.ACTIVE,
+            )
+        )
+        session.commit()
+
+    response = client.get(
+        f"/v1/directory/users/{seed['user']['user_id']}",
+        headers=headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["user"]["user_id"] == seed["user"]["user_id"]
+    assert body["key_bundle"]["user_id"] == seed["user"]["user_id"]
+    assert body["key_bundle"]["key_bundle_id"] == str(new_bundle_id)
+    assert body["key_bundle"]["status"] == "ACTIVE"
+
+
+def test_unknown_user_returns_terminal_user_not_found(directory_env) -> None:
+    client, _ = directory_env
+    seed = _seed(client)
+    headers = {"Authorization": f"Bearer {seed['access_token']}"}
+    response = client.get(f"/v1/directory/users/{uuid4()}", headers=headers)
+    assert response.status_code == 404
+    assert response.headers["content-type"].startswith("application/problem+json")
+    body = response.json()
+    assert body["code"] == "USER_NOT_FOUND"
+    assert body["type"] == "https://remanence.invalid/problems/user-not-found"
+    assert body["retryable"] is False
+    assert "HANDLE_NOT_FOUND" not in response.text
+
+
+def test_user_id_lookup_requires_valid_authentication(directory_env) -> None:
+    client, _ = directory_env
+    seed = _seed(client)
+    path = f"/v1/directory/users/{seed['user']['user_id']}"
+    for headers in ({}, {"Authorization": "Bearer invalid"}):
+        response = client.get(path, headers=headers)
+        assert response.status_code == 401
+        assert response.json()["code"] == "AUTH_INVALID"
+
+
+def test_malformed_user_id_returns_redacted_validation_problem(directory_env) -> None:
+    client, _ = directory_env
+    seed = _seed(client)
+    headers = {"Authorization": f"Bearer {seed['access_token']}"}
+    response = client.get("/v1/directory/users/not-a-uuid", headers=headers)
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("application/problem+json")
+    body = response.json()
+    assert body["code"] == "VALIDATION_FAILED"
+    assert "not-a-uuid" not in response.text

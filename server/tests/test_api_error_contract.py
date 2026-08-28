@@ -73,6 +73,7 @@ def test_catalog_required_codes_and_internal_unavailable() -> None:
         "HANDLE_INVALID",
         "HANDLE_UNAVAILABLE",
         "HANDLE_NOT_FOUND",
+        "USER_NOT_FOUND",
         "RECIPIENT_NOT_CONFIRMED",
         "RECIPIENT_KEY_STALE",
         "KEY_BUNDLE_INVALID",
@@ -121,6 +122,13 @@ def test_unknown_code_falls_back_to_internal_error() -> None:
     assert payload["detail"] == PROBLEM_CATALOG["INTERNAL_ERROR"].detail
     assert "NOT_A_REAL_CODE" not in json.dumps(payload)
     assert resolve_problem("NOT_A_REAL_CODE") is PROBLEM_CATALOG["INTERNAL_ERROR"]
+
+
+def test_user_not_found_is_terminal_catalog_entry() -> None:
+    spec = PROBLEM_CATALOG["USER_NOT_FOUND"]
+    assert spec.status == 404
+    assert spec.code == "USER_NOT_FOUND"
+    assert spec.retryable is False
 
 
 def test_problem_detail_forbids_unknown_fields_and_dumps_required_only() -> None:

@@ -77,12 +77,11 @@ def _require_uuid(value: object) -> uuid.UUID:
     return value
 
 
-def _require_utc_whole_second(value: object) -> datetime:
+def _require_utc(value: object) -> datetime:
     if (
         not isinstance(value, datetime)
         or value.tzinfo is None
         or value.utcoffset() != timedelta(0)
-        or value.microsecond != 0
     ):
         raise _error("VALIDATION_FAILED")
     return value
@@ -154,7 +153,7 @@ class CapsuleFinalizeService:
         _require_uuid(envelope.recipient_key_bundle_id)
         _require_bytes(envelope.ciphertext)
         _require_bytes(envelope.ciphertext_sha256)
-        now = _require_utc_whole_second(now)
+        now = _require_utc(now)
 
         try:
             return self._finalize(
@@ -357,6 +356,8 @@ class CapsuleFinalizeService:
         ):
             return False
         if delivery.recipient_user_id != capsule.recipient_user_id or delivery.capsule_id != capsule.id:
+            return False
+        if delivery.available_at != capsule.ready_at:
             return False
         if delivery.state is RecipientDeliveryStatus.AVAILABLE:
             return delivery.ciphertext_synced_at is None

@@ -831,10 +831,50 @@ def test_expired_draft_and_invalid_envelope_are_redacted(session_factory, tmp_pa
         assert session.get(Capsule, world["capsule"].id).state is CapsuleState.DRAFT
 
 
-def test_fractional_now_is_rejected(session_factory, tmp_path):
+def test_fractional_now_is_preserved_on_ready_and_available_at(session_factory, tmp_path):
     with session_factory() as session:
         world = _ready_world(session, tmp_path)
-        _assert_error(
+        now = _NOW.replace(microsecond=123456)
+        result = _finalize(
+            session,
+            world["store"],
+            sender_id=world["sender"].id,
+            capsule=world["capsule"],
+            statement=world["statement"],
+            signature_bytes=world["signature"],
+            envelope=world["envelope"],
+            now=now,
+        )
+        session.commit()
+        assert result.ready_at == now
+        capsule = session.get(Capsule, world["capsule"].id)
+        delivery = session.get(
+            RecipientDeliveryState, (world["recipient"].id, world["capsule"].id)
+        )
+        assert capsule.ready_at == now
+        assert delivery.available_at == capsule.ready_at == now
+
+
+def test_ready_replay_rejects_available_at_ready_at_mismatch(session_factory, tmp_path):
+    with session_factory() as session:
+        world = _ready_world(session, tmp_path)
+        _finalize(
+            session,
+            world["store"],
+            sender_id=world["sender"].id,
+            capsule=world["capsule"],
+            statement=world["statement"],
+            signature_bytes=world["signature"],
+            envelope=world["envelope"],
+        )
+        session.commit()
+        session.execute(
+            update(RecipientDeliveryState)
+            .where(RecipientDeliveryState.capsule_id == world["capsule"].id)
+            .values(available_at=_NOW + timedelta(seconds=1))
+        )
+        session.commit()
+        error = _assert_error(
             lambda: _finalize(
                 session,
                 world["store"],
@@ -843,10 +883,17 @@ def test_fractional_now_is_rejected(session_factory, tmp_path):
                 statement=world["statement"],
                 signature_bytes=world["signature"],
                 envelope=world["envelope"],
-                now=_NOW.replace(microsecond=1),
             ),
-            "VALIDATION_FAILED",
+            "INTERNAL_ERROR",
         )
+        assert str(world["capsule"].id) not in repr(error)
+        session.rollback()
+        capsule = session.get(Capsule, world["capsule"].id)
+        delivery = session.get(
+            RecipientDeliveryState, (world["recipient"].id, world["capsule"].id)
+        )
+        assert capsule.state is CapsuleState.READY
+        assert delivery.available_at != capsule.ready_at
 
 
 def test_invalid_statement_with_active_candidate_does_not_lookup_stat_or_dirty(

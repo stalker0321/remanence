@@ -2,6 +2,7 @@ package dev.hryshyn.remanence.sync
 
 import dev.hryshyn.remanence.core.data.db.OutboxBlobDao
 import dev.hryshyn.remanence.core.data.db.OutboxBlobEntity
+import dev.hryshyn.remanence.core.data.db.OutboxBlobUploadState
 import dev.hryshyn.remanence.core.data.db.OutboxCapsuleDao
 import dev.hryshyn.remanence.core.data.db.OutboxCapsuleEntity
 import dev.hryshyn.remanence.core.data.db.OutboxCapsuleState
@@ -9,6 +10,8 @@ import dev.hryshyn.remanence.core.data.network.CapsuleBlobUploadFailure
 import dev.hryshyn.remanence.core.data.network.CapsuleBlobUploadRequest
 import dev.hryshyn.remanence.core.data.network.CapsuleBlobUploadResult
 import dev.hryshyn.remanence.core.data.network.CapsuleDraftBlobDeclaration
+import dev.hryshyn.remanence.core.data.network.CapsuleDraftBlobState
+import dev.hryshyn.remanence.core.data.network.CapsuleDraft
 import dev.hryshyn.remanence.core.data.network.CapsuleDraftFailure
 import dev.hryshyn.remanence.core.data.network.CapsuleDraftRequest
 import dev.hryshyn.remanence.core.data.network.CapsuleDraftResult
@@ -55,11 +58,12 @@ sealed interface CapsuleUploadOutcome {
  *
  * The worker identity is the only caller-supplied scope. Every Room read and
  * CAS carries that owner, and the live account is checked before every
- * network call and durable transition. A04 deliberately replays every
- * declared blob on a retry; server/local STORED reconciliation and skipping
- * belong to A05. Ciphertext is read from the staged paths and is never
- * regenerated. A05 startup discovery must exclude RETRYABLE_FAILURE rows
- * marked RECIPIENT_KEY_STALE until A06 owns their recovery.
+ * network call and durable transition. A05a reconciles authoritative server
+ * STORED blobs from the draft replay and skips only those blobs; remaining
+ * blobs retain canonical order. Ciphertext is read from the staged paths and
+ * is never regenerated. A05 startup discovery must exclude
+ * RETRYABLE_FAILURE rows marked RECIPIENT_KEY_STALE until A06 owns their
+ * recovery.
  */
 class CapsuleUploadOrchestrator(
     private val capsuleDao: OutboxCapsuleDao,
@@ -113,6 +117,7 @@ class CapsuleUploadOrchestrator(
         }
         if (prepared == null) return markTerminal(owner, capsuleId, "INTERNAL_ERROR")
 
+        var serverStoredBlobIds: Set<BlobId> = emptySet()
         if (capsule.state != OutboxCapsuleState.FINALIZING) {
             val token = accessToken() ?: return markRetryable(owner, capsuleId, "AUTH_INVALID")
             if (!accountMatches(owner)) return CapsuleUploadOutcome.AccountMismatch
@@ -123,11 +128,16 @@ class CapsuleUploadOrchestrator(
             } catch (_: Exception) {
                 return markRetryable(owner, capsuleId, "INTERNAL_UNAVAILABLE")
             }
-            when (draftResult) {
-                is CapsuleDraftResult.Success -> Unit
+            val draft = when (draftResult) {
+                is CapsuleDraftResult.Success -> draftResult.draft
                 is CapsuleDraftResult.Failure ->
                     return applyDraftFailure(owner, capsuleId, draftResult)
             }
+            reconcileStoredBlobs(owner, capsuleId, prepared, draft)?.let { return it }
+            serverStoredBlobIds = draft.blobs
+                .filter { it.state == CapsuleDraftBlobState.STORED }
+                .map { it.blobId }
+                .toSet()
 
             if (capsule.state == OutboxCapsuleState.ENCRYPTED ||
                 capsule.state == OutboxCapsuleState.RETRYABLE_FAILURE
@@ -151,6 +161,7 @@ class CapsuleUploadOrchestrator(
             }
 
             for (blob in prepared.blobs) {
+                if (blob.blobId in serverStoredBlobIds) continue
                 val result = uploadOne(owner, capsuleId, blob)
                 if (result != null) return result
             }
@@ -216,6 +227,82 @@ class CapsuleUploadOrchestrator(
             }
         }
         return finishPublished(owner, capsuleId)
+    }
+
+    private suspend fun reconcileStoredBlobs(
+        owner: UserId,
+        capsuleId: CapsuleId,
+        prepared: PreparedCapsule,
+        draft: CapsuleDraft,
+    ): CapsuleUploadOutcome? {
+        val ownerText = owner.toRestString()
+        val capsuleText = capsuleId.toRestString()
+        if (!accountMatches(owner)) return CapsuleUploadOutcome.AccountMismatch
+        if (draft.capsuleId != capsuleId ||
+            draft.blobs.map { it.blobId } != prepared.blobs.map { it.blobId }
+        ) {
+            return CapsuleUploadOutcome.Retryable("INTERNAL_ERROR")
+        }
+
+        val preparedById = prepared.blobs.associateBy { it.blobId }
+        for (serverBlob in draft.blobs.filter { it.state == CapsuleDraftBlobState.STORED }) {
+            if (!accountMatches(owner)) return CapsuleUploadOutcome.AccountMismatch
+            val preparedBlob = preparedById[serverBlob.blobId]
+                ?: return CapsuleUploadOutcome.Retryable("INTERNAL_ERROR")
+            if (preparedBlob.row.blobId != serverBlob.blobId.toRestString() ||
+                preparedBlob.row.capsuleId != capsuleText ||
+                preparedBlob.row.ownerUserId != ownerText
+            ) {
+                return CapsuleUploadOutcome.Retryable("INTERNAL_ERROR")
+            }
+
+            val existing = try {
+                blobDao.getAllByCapsuleIdAndOwner(capsuleText, ownerText)
+                    .firstOrNull { it.blobId == serverBlob.blobId.toRestString() }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                return CapsuleUploadOutcome.Retryable("INTERNAL_UNAVAILABLE")
+            }
+            if (!accountMatches(owner)) return CapsuleUploadOutcome.AccountMismatch
+            if (existing == null ||
+                existing.blobId != serverBlob.blobId.toRestString() ||
+                existing.capsuleId != capsuleText ||
+                existing.ownerUserId != ownerText
+            ) {
+                return CapsuleUploadOutcome.Retryable("INTERNAL_ERROR")
+            }
+
+            val marked = try {
+                blobDao.markStoredForOwner(serverBlob.blobId.toRestString(), ownerText)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                return CapsuleUploadOutcome.Retryable("INTERNAL_UNAVAILABLE")
+            }
+            if (!accountMatches(owner)) return CapsuleUploadOutcome.AccountMismatch
+            if (marked == 1) continue
+            if (marked != 0) return CapsuleUploadOutcome.Retryable("INTERNAL_ERROR")
+
+            val reread = try {
+                blobDao.getAllByCapsuleIdAndOwner(capsuleText, ownerText)
+                    .firstOrNull { it.blobId == serverBlob.blobId.toRestString() }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                return CapsuleUploadOutcome.Retryable("INTERNAL_UNAVAILABLE")
+            }
+            if (!accountMatches(owner)) return CapsuleUploadOutcome.AccountMismatch
+            if (reread == null ||
+                reread.blobId != serverBlob.blobId.toRestString() ||
+                reread.capsuleId != capsuleText ||
+                reread.ownerUserId != ownerText ||
+                reread.uploadState != OutboxBlobUploadState.STORED
+            ) {
+                return CapsuleUploadOutcome.Retryable("INTERNAL_ERROR")
+            }
+        }
+        return null
     }
 
     private suspend fun uploadOne(

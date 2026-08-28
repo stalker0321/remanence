@@ -155,6 +155,242 @@ class CapsuleUploadOrchestratorTest {
     }
 
     @Test
+    fun mixedDraftReplayReconcilesStoredBlobsAndUploadsRemainingInCanonicalOrder() = runBlocking {
+        seed(OutboxCapsuleState.ENCRYPTED)
+        val draftIds = mutableListOf<String>()
+        val uploadedIds = mutableListOf<String>()
+        var finalizeCalls = 0
+        val states = listOf(
+            CapsuleDraftBlobState.STORED,
+            CapsuleDraftBlobState.DECLARED,
+            CapsuleDraftBlobState.STORED,
+            CapsuleDraftBlobState.DECLARED,
+            CapsuleDraftBlobState.DECLARED,
+        )
+        val orchestrator = orchestrator {
+            createDraft = { request, _ ->
+                draftIds += request.blobs.map { it.blobId.toRestString() }
+                draftSuccess(request, states)
+            }
+            uploadBlob = { request, _ ->
+                uploadedIds += request.blobId.toRestString()
+                CapsuleBlobUploadResult.Success(204)
+            }
+            finalizeCapsule = { _, _ ->
+                finalizeCalls += 1
+                CapsuleFinalizeResult.Success(
+                    CapsuleFinalize(CAPSULE_TYPED, CapsuleFinalizeState.READY, "2030-01-08T00:00:00Z"),
+                    201,
+                )
+            }
+        }
+
+        assertEquals(CapsuleUploadOutcome.Succeeded, orchestrator.run(OWNER_TYPED, CAPSULE_TYPED))
+        assertEquals(
+            listOf(draftIds[1], draftIds[3], draftIds[4]),
+            uploadedIds,
+        )
+        assertEquals(1, finalizeCalls)
+        val rows = blobRows().associateBy { it.blobId }
+        assertEquals(OutboxBlobUploadState.STORED, rows[draftIds[0]]!!.uploadState)
+        assertEquals(OutboxBlobUploadState.STORED, rows[draftIds[2]]!!.uploadState)
+        assertEquals(OutboxCapsuleState.PUBLISHED, capsuleRow().state)
+    }
+
+    @Test
+    fun serverStoredBlobIsNotReadOrCountedAgain() = runBlocking {
+        seed(OutboxCapsuleState.ENCRYPTED)
+        val initialRows = blobRows().associateBy { it.blobId }
+        val serverStoredId = initialRows.values.first { it.kind == "RECOGNITION_MANIFEST" }.blobId
+        val reads = mutableListOf<String>()
+        val uploadedIds = mutableListOf<String>()
+        val orchestrator = orchestrator {
+            createDraft = { request, _ ->
+                draftSuccess(
+                    request,
+                    request.blobs.map { blob ->
+                        if (blob.blobId.toRestString() == serverStoredId) {
+                            CapsuleDraftBlobState.STORED
+                        } else {
+                            CapsuleDraftBlobState.DECLARED
+                        }
+                    },
+                )
+            }
+            readCiphertext = { path ->
+                reads += path
+                File(path).readBytes()
+            }
+            uploadBlob = { request, _ ->
+                uploadedIds += request.blobId.toRestString()
+                CapsuleBlobUploadResult.Success(204)
+            }
+        }
+
+        assertEquals(CapsuleUploadOutcome.Succeeded, orchestrator.run(OWNER_TYPED, CAPSULE_TYPED))
+        assertFalse(reads.contains(initialRows.getValue(serverStoredId).localCiphertextPath))
+        assertFalse(uploadedIds.contains(serverStoredId))
+        assertEquals(initialRows.getValue(serverStoredId).attemptCount, blobRows().first { it.blobId == serverStoredId }.attemptCount)
+    }
+
+    @Test
+    fun locallyStoredBlobIsReuploadedWhenDraftReportsDeclared() = runBlocking {
+        seed(OutboxCapsuleState.ENCRYPTED)
+        val localStoredId = blobRows().first { it.kind == "RECOGNITION_MANIFEST" }.blobId
+        assertEquals(1, database.outboxBlobDao().markStoredForOwner(localStoredId, OWNER))
+        val uploadedIds = mutableListOf<String>()
+        val orchestrator = orchestrator {
+            createDraft = { request, _ -> draftSuccess(request) }
+            uploadBlob = { request, _ ->
+                uploadedIds += request.blobId.toRestString()
+                CapsuleBlobUploadResult.Success(204)
+            }
+        }
+
+        assertEquals(CapsuleUploadOutcome.Succeeded, orchestrator.run(OWNER_TYPED, CAPSULE_TYPED))
+        assertEquals(blobRows().map { it.blobId }.toSet(), uploadedIds.toSet())
+        assertEquals(1, uploadedIds.count { it == localStoredId })
+        assertEquals(1, blobRows().first { it.blobId == localStoredId }.attemptCount)
+    }
+
+    @Test
+    fun missingReconciliationBlobReturnsRetryableWithoutBlobOrFinalizeCalls() = runBlocking {
+        seed(OutboxCapsuleState.ENCRYPTED)
+        var uploadCalls = 0
+        var finalizeCalls = 0
+        val orchestrator = orchestrator {
+            createDraft = { request, _ ->
+                database.outboxBlobDao().deleteByCapsuleIdAndOwner(CAPSULE, OWNER)
+                draftSuccess(
+                    request,
+                    List(request.blobs.size) { index ->
+                        if (index == 0) CapsuleDraftBlobState.STORED else CapsuleDraftBlobState.DECLARED
+                    },
+                )
+            }
+            uploadBlob = { _, _ ->
+                uploadCalls += 1
+                CapsuleBlobUploadResult.Success(204)
+            }
+            finalizeCapsule = { _, _ ->
+                finalizeCalls += 1
+                CapsuleFinalizeResult.Success(
+                    CapsuleFinalize(CAPSULE_TYPED, CapsuleFinalizeState.READY, "2030-01-08T00:00:00Z"),
+                    201,
+                )
+            }
+        }
+
+        assertEquals(
+            CapsuleUploadOutcome.Retryable("INTERNAL_ERROR"),
+            orchestrator.run(OWNER_TYPED, CAPSULE_TYPED),
+        )
+        assertEquals(0, uploadCalls)
+        assertEquals(0, finalizeCalls)
+        assertEquals(OutboxCapsuleState.ENCRYPTED, capsuleRow().state)
+    }
+
+    @Test
+    fun accountSwitchDuringReconciliationStopsBeforeBlobOrFinalizeCalls() = runBlocking {
+        seed(OutboxCapsuleState.ENCRYPTED)
+        var liveOwner = OWNER
+        var uploadCalls = 0
+        var finalizeCalls = 0
+        val orchestrator = orchestrator(currentOwnerProvider = { liveOwner }) {
+            createDraft = { request, _ ->
+                liveOwner = OTHER_OWNER
+                draftSuccess(
+                    request,
+                    List(request.blobs.size) { index ->
+                        if (index == 0) CapsuleDraftBlobState.STORED else CapsuleDraftBlobState.DECLARED
+                    },
+                )
+            }
+            uploadBlob = { _, _ ->
+                uploadCalls += 1
+                CapsuleBlobUploadResult.Success(204)
+            }
+            finalizeCapsule = { _, _ ->
+                finalizeCalls += 1
+                CapsuleFinalizeResult.Success(
+                    CapsuleFinalize(CAPSULE_TYPED, CapsuleFinalizeState.READY, "2030-01-08T00:00:00Z"),
+                    201,
+                )
+            }
+        }
+
+        assertEquals(CapsuleUploadOutcome.AccountMismatch, orchestrator.run(OWNER_TYPED, CAPSULE_TYPED))
+        assertEquals(0, uploadCalls)
+        assertEquals(0, finalizeCalls)
+        assertEquals(OutboxCapsuleState.ENCRYPTED, capsuleRow().state)
+        assertTrue(blobRows().all { it.uploadState == OutboxBlobUploadState.PENDING })
+    }
+
+    @Test
+    fun restartReplaySkipsPreviouslyStoredBlobsAndCompletesRemainingUpload() = runBlocking {
+        seed(OutboxCapsuleState.ENCRYPTED)
+        val firstDraftIds = mutableListOf<String>()
+        var firstUploadCount = 0
+        val firstOrchestrator = orchestrator {
+            createDraft = { request, _ ->
+                firstDraftIds += request.blobs.map { it.blobId.toRestString() }
+                draftSuccess(request)
+            }
+            uploadBlob = { request, _ ->
+                firstUploadCount += 1
+                if (firstUploadCount == 3) {
+                    CapsuleBlobUploadResult.Failure(CapsuleBlobUploadFailure.NETWORK, retryable = true)
+                } else {
+                    CapsuleBlobUploadResult.Success(204)
+                }
+            }
+        }
+
+        assertEquals(
+            CapsuleUploadOutcome.Retryable(CapsuleBlobUploadFailure.NETWORK.name),
+            firstOrchestrator.run(OWNER_TYPED, CAPSULE_TYPED),
+        )
+        assertEquals(OutboxCapsuleState.RETRYABLE_FAILURE, capsuleRow().state)
+        val partialRows = blobRows().associateBy { it.blobId }
+        val previouslyStoredIds = firstDraftIds.take(2)
+        assertTrue(previouslyStoredIds.all { partialRows.getValue(it).uploadState == OutboxBlobUploadState.STORED })
+        assertTrue(previouslyStoredIds.all { partialRows.getValue(it).attemptCount == 1 })
+
+        val secondReads = mutableListOf<String>()
+        val secondUploadedIds = mutableListOf<String>()
+        val secondOrchestrator = orchestrator {
+            createDraft = { request, _ ->
+                draftSuccess(
+                    request,
+                    request.blobs.map { blob ->
+                        if (blob.blobId.toRestString() in previouslyStoredIds) {
+                            CapsuleDraftBlobState.STORED
+                        } else {
+                            CapsuleDraftBlobState.DECLARED
+                        }
+                    },
+                )
+            }
+            readCiphertext = { path ->
+                secondReads += path
+                File(path).readBytes()
+            }
+            uploadBlob = { request, _ ->
+                secondUploadedIds += request.blobId.toRestString()
+                CapsuleBlobUploadResult.Success(204)
+            }
+        }
+
+        assertEquals(CapsuleUploadOutcome.Succeeded, secondOrchestrator.run(OWNER_TYPED, CAPSULE_TYPED))
+        assertEquals(firstDraftIds.drop(2), secondUploadedIds)
+        previouslyStoredIds.forEach { blobId ->
+            assertFalse(secondReads.contains(partialRows.getValue(blobId).localCiphertextPath))
+            assertEquals(1, blobRows().first { it.blobId == blobId }.attemptCount)
+        }
+        assertEquals(OutboxCapsuleState.PUBLISHED, capsuleRow().state)
+    }
+
+    @Test
     fun networkFailureMarksRetryableAndDoesNotFinalizeOrDeleteRetryMaterial() = runBlocking {
         seed(OutboxCapsuleState.ENCRYPTED)
         val events = mutableListOf<String>()
@@ -607,19 +843,20 @@ class CapsuleUploadOrchestratorTest {
 
     private fun orchestrator(
         currentOwner: String = OWNER,
+        currentOwnerProvider: (() -> String?)? = null,
         configure: OrchestratorConfig.() -> Unit = {},
     ): CapsuleUploadOrchestrator {
         val config = OrchestratorConfig().apply(configure)
         return CapsuleUploadOrchestrator(
             capsuleDao = database.outboxCapsuleDao(),
             blobDao = database.outboxBlobDao(),
-            currentAccountUserId = { currentOwner },
+            currentAccountUserId = { currentOwnerProvider?.invoke() ?: currentOwner },
             accessToken = { "access-token" },
             createDraft = config.createDraft,
             uploadBlob = config.uploadBlob,
             finalizeCapsule = config.finalizeCapsule,
             cleanupRetryMaterial = config.cleanupRetryMaterial,
-            readCiphertext = { path -> File(path).readBytes() },
+            readCiphertext = config.readCiphertext,
         )
     }
 
@@ -639,15 +876,22 @@ class CapsuleUploadOrchestratorTest {
         var cleanupRetryMaterial: suspend (UserId, CapsuleId) -> SenderRetryMaterialLifecycle.Result = { _, _ ->
             SenderRetryMaterialLifecycle.Result.OK
         }
+        var readCiphertext: suspend (String) -> ByteArray = { path -> File(path).readBytes() }
     }
 
     private fun draftSuccess(request: CapsuleDraftRequest): CapsuleDraftResult.Success =
+        draftSuccess(request, List(request.blobs.size) { CapsuleDraftBlobState.DECLARED })
+
+    private fun draftSuccess(
+        request: CapsuleDraftRequest,
+        states: List<CapsuleDraftBlobState>,
+    ): CapsuleDraftResult.Success =
         CapsuleDraftResult.Success(
             CapsuleDraft(
                 request.capsuleId,
                 CapsuleDraftState.DRAFT,
                 "2030-01-08T00:00:00Z",
-                request.blobs.map { CapsuleDraftBlob(it.blobId, CapsuleDraftBlobState.DECLARED) },
+                request.blobs.mapIndexed { index, blob -> CapsuleDraftBlob(blob.blobId, states[index]) },
             ),
             201,
         )

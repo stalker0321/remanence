@@ -4,6 +4,7 @@ import dev.hryshyn.remanence.core.data.db.OutboxCapsuleDao
 import dev.hryshyn.remanence.core.data.db.OutboxCapsuleState
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.UserId
+import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * M2-P09: sender retry material lifecycle boundary.
@@ -165,10 +166,11 @@ class SenderRetryMaterialLifecycle(
         val expectedPath = retryStore.expectedPath(owner, capsule).canonicalPath
         if (storedPath != expectedPath) return Result.POINTER_MISMATCH
 
-        val deleteResult = runCatching {
+        try {
             retryStore.delete(owner, capsule)
-        }
-        if (deleteResult.isFailure) {
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
             return Result.DELETE_FAILED
         }
 

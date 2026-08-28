@@ -24,17 +24,21 @@ import dev.hryshyn.remanence.core.data.network.CapsuleFinalizeFailure
 import dev.hryshyn.remanence.core.data.network.CapsuleFinalizeRequest
 import dev.hryshyn.remanence.core.data.network.CapsuleFinalizeResult
 import dev.hryshyn.remanence.core.data.network.CapsuleFinalizeState
+import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialLifecycle
+import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.UserId
 import java.io.File
 import java.security.MessageDigest
 import java.util.UUID
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -48,6 +52,8 @@ class CapsuleUploadOrchestratorTest {
 
     private lateinit var database: RemanenceLocalDatabase
     private lateinit var files: File
+    private lateinit var retryStore: SenderRetryMaterialStore
+    private lateinit var retryLifecycle: SenderRetryMaterialLifecycle
 
     @Before
     fun setUp() {
@@ -56,6 +62,9 @@ class CapsuleUploadOrchestratorTest {
             .allowMainThreadQueries()
             .build()
         files = File(context.cacheDir, "a04-${UUID.randomUUID()}").apply { mkdirs() }
+        val roots = AccountScopedFileRoots(files)
+        retryStore = SenderRetryMaterialStore(roots)
+        retryLifecycle = SenderRetryMaterialLifecycle(retryStore, database.outboxCapsuleDao())
     }
 
     @After
@@ -198,7 +207,7 @@ class CapsuleUploadOrchestratorTest {
 
     @Test
     fun protocolFailureMarksTerminalAndDoesNotPretendToPublish() = runBlocking {
-        seed(OutboxCapsuleState.ENCRYPTED)
+        seed(OutboxCapsuleState.ENCRYPTED, withRetryMaterial = true)
         val events = mutableListOf<String>()
         val orchestrator = orchestrator {
             createDraft = { _, _ ->
@@ -213,6 +222,10 @@ class CapsuleUploadOrchestratorTest {
                 events += "finalize"
                 error("finalize must not run after terminal draft failure")
             }
+            cleanupRetryMaterial = { owner, capsule ->
+                events += "cleanup"
+                retryLifecycle.cleanupForTerminalState(owner, capsule)
+            }
         }
 
         assertEquals(
@@ -221,7 +234,263 @@ class CapsuleUploadOrchestratorTest {
         )
         assertEquals(OutboxCapsuleState.TERMINAL_FAILURE, capsuleRow().state)
         assertEquals(CapsuleDraftFailure.VALIDATION_FAILED.name, capsuleRow().lastErrorCode)
-        assertEquals(listOf("draft"), events)
+        assertEquals(listOf("draft", "cleanup"), events)
+        assertNull(capsuleRow().senderRetryKeysetPath)
+        assertNull(retryStore.read(OWNER_TYPED, CAPSULE_TYPED))
+    }
+
+    @Test
+    fun terminalBlobFailureCleansRetryMaterialAfterDurableCas() = runBlocking {
+        seed(OutboxCapsuleState.ENCRYPTED, withRetryMaterial = true)
+        val events = mutableListOf<String>()
+        val orchestrator = orchestrator {
+            createDraft = { request, _ ->
+                events += "draft"
+                draftSuccess(request)
+            }
+            uploadBlob = { _, _ ->
+                events += "upload"
+                CapsuleBlobUploadResult.Failure(CapsuleBlobUploadFailure.BLOB_SIZE_INVALID)
+            }
+            finalizeCapsule = { _, _ ->
+                error("finalize must not run after terminal blob failure")
+            }
+            cleanupRetryMaterial = { owner, capsule ->
+                events += "cleanup"
+                retryLifecycle.cleanupForTerminalState(owner, capsule)
+            }
+        }
+
+        assertEquals(
+            CapsuleUploadOutcome.TerminalFailure(CapsuleBlobUploadFailure.BLOB_SIZE_INVALID.name),
+            orchestrator.run(OWNER_TYPED, CAPSULE_TYPED),
+        )
+        assertEquals(OutboxCapsuleState.TERMINAL_FAILURE, capsuleRow().state)
+        assertEquals(CapsuleBlobUploadFailure.BLOB_SIZE_INVALID.name, capsuleRow().lastErrorCode)
+        assertEquals(listOf("draft", "upload", "cleanup"), events)
+        assertNull(capsuleRow().senderRetryKeysetPath)
+        assertNull(retryStore.read(OWNER_TYPED, CAPSULE_TYPED))
+    }
+
+    @Test
+    fun terminalFinalizeFailureCleansRetryMaterialAfterDurableCas() = runBlocking {
+        seed(OutboxCapsuleState.ENCRYPTED, withRetryMaterial = true)
+        val events = mutableListOf<String>()
+        val orchestrator = orchestrator {
+            createDraft = { request, _ ->
+                events += "draft"
+                draftSuccess(request)
+            }
+            uploadBlob = { request, _ ->
+                events += "upload:${request.blobId.toRestString()}"
+                CapsuleBlobUploadResult.Success(204)
+            }
+            finalizeCapsule = { _, _ ->
+                events += "finalize"
+                CapsuleFinalizeResult.Failure(CapsuleFinalizeFailure.SIGNATURE_INVALID, 422)
+            }
+            cleanupRetryMaterial = { owner, capsule ->
+                events += "cleanup"
+                retryLifecycle.cleanupForTerminalState(owner, capsule)
+            }
+        }
+
+        assertEquals(
+            CapsuleUploadOutcome.TerminalFailure(CapsuleFinalizeFailure.SIGNATURE_INVALID.name),
+            orchestrator.run(OWNER_TYPED, CAPSULE_TYPED),
+        )
+        assertEquals(OutboxCapsuleState.TERMINAL_FAILURE, capsuleRow().state)
+        assertEquals(CapsuleFinalizeFailure.SIGNATURE_INVALID.name, capsuleRow().lastErrorCode)
+        assertEquals("cleanup", events.last())
+        assertNull(capsuleRow().senderRetryKeysetPath)
+        assertNull(retryStore.read(OWNER_TYPED, CAPSULE_TYPED))
+    }
+
+    @Test
+    fun terminalReplayCleansWithoutCallingNetworkAndPreservesOriginalError() = runBlocking {
+        seed(
+            OutboxCapsuleState.TERMINAL_FAILURE,
+            withRetryMaterial = true,
+            errorCode = "ORIGINAL_TERMINAL_ERROR",
+        )
+        val events = mutableListOf<String>()
+        val orchestrator = orchestrator {
+            createDraft = { _, _ -> error("terminal replay must not create a draft") }
+            uploadBlob = { _, _ -> error("terminal replay must not upload") }
+            finalizeCapsule = { _, _ -> error("terminal replay must not finalize") }
+            cleanupRetryMaterial = { owner, capsule ->
+                events += "cleanup"
+                retryLifecycle.cleanupForTerminalState(owner, capsule)
+            }
+        }
+
+        assertEquals(
+            CapsuleUploadOutcome.TerminalFailure("ORIGINAL_TERMINAL_ERROR"),
+            orchestrator.run(OWNER_TYPED, CAPSULE_TYPED),
+        )
+        assertEquals(listOf("cleanup"), events)
+        assertEquals(OutboxCapsuleState.TERMINAL_FAILURE, capsuleRow().state)
+        assertEquals("ORIGINAL_TERMINAL_ERROR", capsuleRow().lastErrorCode)
+        assertNull(capsuleRow().senderRetryKeysetPath)
+        assertNull(retryStore.read(OWNER_TYPED, CAPSULE_TYPED))
+    }
+
+    @Test
+    fun terminalReplayWithMissingFileClearsLivePointer() = runBlocking {
+        seed(
+            OutboxCapsuleState.TERMINAL_FAILURE,
+            withRetryMaterial = true,
+            errorCode = "ORIGINAL_TERMINAL_ERROR",
+        )
+        assertTrue(retryStore.expectedPath(OWNER_TYPED, CAPSULE_TYPED).delete())
+        assertTrue(capsuleRow().senderRetryKeysetPath != null)
+
+        val orchestrator = orchestrator {
+            cleanupRetryMaterial = { owner, capsule ->
+                retryLifecycle.cleanupForTerminalState(owner, capsule)
+            }
+        }
+
+        assertEquals(
+            CapsuleUploadOutcome.TerminalFailure("ORIGINAL_TERMINAL_ERROR"),
+            orchestrator.run(OWNER_TYPED, CAPSULE_TYPED),
+        )
+        assertNull(capsuleRow().senderRetryKeysetPath)
+        assertEquals(OutboxCapsuleState.TERMINAL_FAILURE, capsuleRow().state)
+    }
+
+    @Test
+    fun terminalCleanupFailureIsRetryableAndReplayCanFinishCleanup() = runBlocking {
+        seed(
+            OutboxCapsuleState.TERMINAL_FAILURE,
+            withRetryMaterial = true,
+            errorCode = "ORIGINAL_TERMINAL_ERROR",
+        )
+        var failCleanup = true
+        val orchestrator = orchestrator {
+            cleanupRetryMaterial = { owner, capsule ->
+                if (failCleanup) {
+                    failCleanup = false
+                    SenderRetryMaterialLifecycle.Result.DELETE_FAILED
+                } else {
+                    retryLifecycle.cleanupForTerminalState(owner, capsule)
+                }
+            }
+        }
+
+        assertEquals(
+            CapsuleUploadOutcome.Retryable("RETRY_MATERIAL_CLEANUP"),
+            orchestrator.run(OWNER_TYPED, CAPSULE_TYPED),
+        )
+        assertEquals(OutboxCapsuleState.TERMINAL_FAILURE, capsuleRow().state)
+        assertEquals("ORIGINAL_TERMINAL_ERROR", capsuleRow().lastErrorCode)
+        assertTrue(capsuleRow().senderRetryKeysetPath != null)
+        assertTrue(retryStore.expectedPath(OWNER_TYPED, CAPSULE_TYPED).exists())
+
+        assertEquals(
+            CapsuleUploadOutcome.TerminalFailure("ORIGINAL_TERMINAL_ERROR"),
+            orchestrator.run(OWNER_TYPED, CAPSULE_TYPED),
+        )
+        assertEquals(OutboxCapsuleState.TERMINAL_FAILURE, capsuleRow().state)
+        assertEquals("ORIGINAL_TERMINAL_ERROR", capsuleRow().lastErrorCode)
+        assertNull(capsuleRow().senderRetryKeysetPath)
+        assertNull(retryStore.read(OWNER_TYPED, CAPSULE_TYPED))
+    }
+
+    @Test
+    fun staleRecipientKeyRemainsRetryableAndRetainsRetryMaterial() = runBlocking {
+        seed(OutboxCapsuleState.ENCRYPTED, withRetryMaterial = true)
+        var cleanupCalls = 0
+        val orchestrator = orchestrator {
+            createDraft = { _, _ ->
+                CapsuleDraftResult.Failure(CapsuleDraftFailure.RECIPIENT_KEY_STALE, 409)
+            }
+            cleanupRetryMaterial = { _, _ ->
+                cleanupCalls += 1
+                error("stale recipient key must not clean retry material")
+            }
+        }
+
+        assertEquals(
+            CapsuleUploadOutcome.Retryable(CapsuleDraftFailure.RECIPIENT_KEY_STALE.name),
+            orchestrator.run(OWNER_TYPED, CAPSULE_TYPED),
+        )
+        assertEquals(OutboxCapsuleState.RETRYABLE_FAILURE, capsuleRow().state)
+        assertEquals(0, cleanupCalls)
+        assertTrue(capsuleRow().senderRetryKeysetPath != null)
+        assertTrue(retryStore.expectedPath(OWNER_TYPED, CAPSULE_TYPED).exists())
+    }
+
+    @Test
+    fun cancellationBeforeTerminalDecisionRethrowsAndRetainsRetryMaterial() = runBlocking {
+        seed(OutboxCapsuleState.ENCRYPTED, withRetryMaterial = true)
+        var cleanupCalls = 0
+        val orchestrator = orchestrator {
+            createDraft = { _, _ -> throw CancellationException("cancelled") }
+            cleanupRetryMaterial = { _, _ ->
+                cleanupCalls += 1
+                SenderRetryMaterialLifecycle.Result.OK
+            }
+        }
+
+        var rethrown = false
+        try {
+            orchestrator.run(OWNER_TYPED, CAPSULE_TYPED)
+        } catch (_: CancellationException) {
+            rethrown = true
+        }
+        assertTrue(rethrown)
+        assertEquals(0, cleanupCalls)
+        assertEquals(OutboxCapsuleState.ENCRYPTED, capsuleRow().state)
+        assertTrue(retryStore.expectedPath(OWNER_TYPED, CAPSULE_TYPED).exists())
+    }
+
+    @Test
+    fun cancellationDuringTerminalCleanupRethrowsAfterDurableTerminalCas() = runBlocking {
+        seed(OutboxCapsuleState.ENCRYPTED, withRetryMaterial = true)
+        val orchestrator = orchestrator {
+            createDraft = { _, _ ->
+                CapsuleDraftResult.Failure(CapsuleDraftFailure.VALIDATION_FAILED, 422)
+            }
+            cleanupRetryMaterial = { _, _ -> throw CancellationException("cancelled") }
+        }
+
+        var rethrown = false
+        try {
+            orchestrator.run(OWNER_TYPED, CAPSULE_TYPED)
+        } catch (_: CancellationException) {
+            rethrown = true
+        }
+        assertTrue(rethrown)
+        assertEquals(OutboxCapsuleState.TERMINAL_FAILURE, capsuleRow().state)
+        assertEquals(CapsuleDraftFailure.VALIDATION_FAILED.name, capsuleRow().lastErrorCode)
+        assertTrue(capsuleRow().senderRetryKeysetPath != null)
+        assertTrue(retryStore.expectedPath(OWNER_TYPED, CAPSULE_TYPED).exists())
+    }
+
+    @Test
+    fun terminalAccountMismatchDoesNotCleanRetryMaterial() = runBlocking {
+        seed(
+            OutboxCapsuleState.TERMINAL_FAILURE,
+            withRetryMaterial = true,
+            errorCode = "ORIGINAL_TERMINAL_ERROR",
+        )
+        var cleanupCalls = 0
+        val orchestrator = orchestrator(currentOwner = OTHER_OWNER) {
+            cleanupRetryMaterial = { _, _ ->
+                cleanupCalls += 1
+                error("foreign account must not clean retry material")
+            }
+        }
+
+        assertEquals(
+            CapsuleUploadOutcome.AccountMismatch,
+            orchestrator.run(OWNER_TYPED, CAPSULE_TYPED),
+        )
+        assertEquals(0, cleanupCalls)
+        assertEquals(OutboxCapsuleState.TERMINAL_FAILURE, capsuleRow().state)
+        assertTrue(capsuleRow().senderRetryKeysetPath != null)
+        assertTrue(retryStore.expectedPath(OWNER_TYPED, CAPSULE_TYPED).exists())
     }
 
     @Test
@@ -292,7 +561,16 @@ class CapsuleUploadOrchestratorTest {
             201,
         )
 
-    private suspend fun seed(state: OutboxCapsuleState) {
+    private suspend fun seed(
+        state: OutboxCapsuleState,
+        withRetryMaterial: Boolean = false,
+        errorCode: String? = null,
+    ) {
+        val retryPath = if (withRetryMaterial) {
+            retryStore.write(OWNER_TYPED, CAPSULE_TYPED, RETRY_BYTES)
+        } else {
+            null
+        }
         val capsule = OutboxCapsuleEntity(
             capsuleId = CAPSULE,
             idempotencyKey = IDEMPOTENCY,
@@ -308,8 +586,8 @@ class CapsuleUploadOrchestratorTest {
             envelopePath = File(files, "envelope.bin").absolutePath,
             publishStatementPath = File(files, "statement.bin").absolutePath,
             publishStatementSignaturePath = File(files, "signature.bin").absolutePath,
-            senderRetryKeysetPath = null,
-            lastErrorCode = null,
+            senderRetryKeysetPath = retryPath,
+            lastErrorCode = errorCode,
         )
         File(files, "envelope.bin").writeBytes("opaque-envelope".toByteArray())
         File(files, "statement.bin").writeBytes("canonical-statement".toByteArray())
@@ -357,6 +635,8 @@ class CapsuleUploadOrchestratorTest {
         const val RECIPIENT = "0198f0a0-0000-7000-8000-00000000a421"
         const val SENDER_BUNDLE = "0198f0a0-0000-7000-8000-00000000a431"
         const val RECIPIENT_BUNDLE = "0198f0a0-0000-7000-8000-00000000a432"
+
+        val RETRY_BYTES = "opaque-retry-material".toByteArray()
 
         val OWNER_TYPED = UserId.parseRest(OWNER)
         val CAPSULE_TYPED = CapsuleId.parseRest(CAPSULE)

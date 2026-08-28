@@ -82,7 +82,11 @@ class CapsuleUploadOrchestrator(
         when (capsule.state) {
             OutboxCapsuleState.PUBLISHED -> return finishPublished(owner, capsuleId)
             OutboxCapsuleState.TERMINAL_FAILURE ->
-                return CapsuleUploadOutcome.TerminalFailure(capsule.lastErrorCode ?: "INTERNAL_ERROR")
+                return finalizeTerminalFailure(
+                    owner,
+                    capsuleId,
+                    capsule.lastErrorCode ?: "INTERNAL_ERROR",
+                )
             OutboxCapsuleState.PREPARING ->
                 return markTerminal(owner, capsuleId, "CAPSULE_STATE_INVALID")
             OutboxCapsuleState.ENCRYPTED,
@@ -473,15 +477,73 @@ class CapsuleUploadOrchestrator(
     ): CapsuleUploadOutcome {
         if (!accountMatches(owner)) return CapsuleUploadOutcome.AccountMismatch
         return try {
-            if (capsuleDao.markTerminalFailureForOwner(capsuleId.toRestString(), owner.toRestString(), code) == 1) {
-                CapsuleUploadOutcome.TerminalFailure(code)
+            val transitioned = capsuleDao.markTerminalFailureForOwner(
+                capsuleId.toRestString(),
+                owner.toRestString(),
+                code,
+            )
+            if (transitioned == 1) {
+                finalizeTerminalFailure(owner, capsuleId, code)
             } else {
-                CapsuleUploadOutcome.Retryable("INTERNAL_ERROR")
+                val current = capsuleDao.getByCapsuleIdAndOwner(
+                    capsuleId.toRestString(),
+                    owner.toRestString(),
+                )
+                if (current?.state == OutboxCapsuleState.TERMINAL_FAILURE) {
+                    finalizeTerminalFailure(
+                        owner,
+                        capsuleId,
+                        current.lastErrorCode ?: "INTERNAL_ERROR",
+                    )
+                } else {
+                    CapsuleUploadOutcome.Retryable("INTERNAL_ERROR")
+                }
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
             CapsuleUploadOutcome.Retryable("INTERNAL_UNAVAILABLE")
+        }
+    }
+
+    /**
+     * Completes terminal handling only after an owner-scoped read confirms
+     * that the durable row is terminal. This is shared by a newly accepted
+     * terminal CAS and by a replay that starts with TERMINAL_FAILURE, so a
+     * cleanup failure remains retryable without changing the original error.
+     */
+    private suspend fun finalizeTerminalFailure(
+        owner: UserId,
+        capsuleId: CapsuleId,
+        requestedErrorCode: String,
+    ): CapsuleUploadOutcome {
+        if (!accountMatches(owner)) return CapsuleUploadOutcome.AccountMismatch
+
+        val persisted = try {
+            capsuleDao.getByCapsuleIdAndOwner(capsuleId.toRestString(), owner.toRestString())
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return CapsuleUploadOutcome.Retryable("INTERNAL_UNAVAILABLE")
+        } ?: return CapsuleUploadOutcome.Missing
+
+        if (persisted.state != OutboxCapsuleState.TERMINAL_FAILURE) {
+            return CapsuleUploadOutcome.Retryable("INTERNAL_ERROR")
+        }
+        val originalErrorCode = persisted.lastErrorCode ?: requestedErrorCode
+        if (!accountMatches(owner)) return CapsuleUploadOutcome.AccountMismatch
+
+        val cleanup = try {
+            cleanupRetryMaterial(owner, capsuleId)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return CapsuleUploadOutcome.Retryable(TERMINAL_CLEANUP_RETRY)
+        }
+        return if (cleanup == SenderRetryMaterialLifecycle.Result.OK) {
+            CapsuleUploadOutcome.TerminalFailure(originalErrorCode)
+        } else {
+            CapsuleUploadOutcome.Retryable(TERMINAL_CLEANUP_RETRY)
         }
     }
 
@@ -537,6 +599,7 @@ class CapsuleUploadOrchestrator(
     )
 
     private companion object {
+        const val TERMINAL_CLEANUP_RETRY = "RETRY_MATERIAL_CLEANUP"
         const val SHA256_BYTES = 32
     }
 }

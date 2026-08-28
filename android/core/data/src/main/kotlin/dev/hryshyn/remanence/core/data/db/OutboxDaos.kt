@@ -57,6 +57,23 @@ abstract class OutboxCapsuleDao {
     )
     abstract suspend fun getByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String): OutboxCapsuleEntity?
 
+    /**
+     * Returns only owner-scoped capsule IDs whose persisted state can be
+     * replayed by the upload worker. Capsule ID is the stable ordering key;
+     * no paths, keys, or other capsule material cross this discovery boundary.
+     */
+    @Query(
+        "SELECT capsule_id FROM outbox_capsule " +
+            "WHERE owner_user_id = :ownerUserId AND (" +
+            "state IN ('ENCRYPTED', 'UPLOADING', 'FINALIZING') " +
+            "OR (state = 'RETRYABLE_FAILURE' " +
+            "    AND (last_error_code IS NULL OR last_error_code <> 'RECIPIENT_KEY_STALE')) " +
+            "OR (state IN ('PUBLISHED', 'TERMINAL_FAILURE') " +
+            "    AND sender_retry_keyset_path IS NOT NULL)" +
+            ") ORDER BY capsule_id",
+    )
+    abstract suspend fun getCapsuleIdsNeedingUploadForOwner(ownerUserId: String): List<String>
+
     /** Owner-guarded PREPARING -> ENCRYPTED CAS; 0 rows means refused. */
     @Query(
         "UPDATE outbox_capsule SET state = 'ENCRYPTED' " +

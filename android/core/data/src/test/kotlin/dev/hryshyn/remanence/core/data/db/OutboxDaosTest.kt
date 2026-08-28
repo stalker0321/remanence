@@ -444,6 +444,40 @@ class OutboxDaosTest {
         assertEquals(OutboxCapsuleState.PREPARING, capsuleDao.getByCapsuleIdAndOwner(record.capsuleId, OWNER)!!.state)
     }
 
+    @Test
+    fun uploadDiscoveryReturnsOnlyReplayableOwnerRowsInStableOrder() = runBlocking {
+        val retryPointer = "files/outbox/retry-material.bin"
+        val rows = listOf(
+            capsule("resume-07", "resume-idem-07", OutboxCapsuleState.PUBLISHED)
+                .copy(senderRetryKeysetPath = retryPointer),
+            capsule("resume-03", "resume-idem-03", OutboxCapsuleState.ENCRYPTED),
+            capsule("resume-05", "resume-idem-05", OutboxCapsuleState.RETRYABLE_FAILURE),
+            capsule("resume-01", "resume-idem-01", OutboxCapsuleState.UPLOADING),
+            capsule("resume-06", "resume-idem-06", OutboxCapsuleState.TERMINAL_FAILURE)
+                .copy(senderRetryKeysetPath = retryPointer),
+            capsule("resume-02", "resume-idem-02", OutboxCapsuleState.FINALIZING),
+            capsule("resume-04", "resume-idem-04", OutboxCapsuleState.RETRYABLE_FAILURE)
+                .copy(lastErrorCode = "NETWORK"),
+            capsule("resume-08", "resume-idem-08", OutboxCapsuleState.PREPARING),
+            capsule("resume-09", "resume-idem-09", OutboxCapsuleState.RETRYABLE_FAILURE)
+                .copy(lastErrorCode = "RECIPIENT_KEY_STALE"),
+            capsule("resume-10", "resume-idem-10", OutboxCapsuleState.PUBLISHED),
+            capsule("resume-11", "resume-idem-11", OutboxCapsuleState.TERMINAL_FAILURE),
+            capsule("resume-00", "resume-idem-00", OutboxCapsuleState.ENCRYPTED)
+                .copy(ownerUserId = OTHER_OWNER),
+        )
+        rows.forEach { insertCapsule(it) }
+
+        assertEquals(
+            listOf("resume-01", "resume-02", "resume-03", "resume-04", "resume-05", "resume-06", "resume-07"),
+            capsuleDao.getCapsuleIdsNeedingUploadForOwner(OWNER),
+        )
+        assertEquals(
+            listOf("resume-00"),
+            capsuleDao.getCapsuleIdsNeedingUploadForOwner(OTHER_OWNER),
+        )
+    }
+
     /**
      * M2-P08 schema-only continuation: the new
      * `sender_retry_keyset_path` column is NULL by default. A row

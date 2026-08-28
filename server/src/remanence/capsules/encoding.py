@@ -8,9 +8,7 @@ import re
 _BASE64URL_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
-def decode_canonical_base64url(value: object, *, expected_length: int) -> bytes:
-    """Decode one unpadded, canonical base64url value of an exact size."""
-
+def _decode_canonical_unpadded_base64url(value: object) -> bytes:
     if not isinstance(value, str) or not value or "=" in value:
         raise ValueError("invalid base64url")
     if _BASE64URL_RE.fullmatch(value) is None:
@@ -21,6 +19,26 @@ def decode_canonical_base64url(value: object, *, expected_length: int) -> bytes:
     except (ValueError, binascii.Error):
         raise ValueError("invalid base64url") from None
     canonical = base64.urlsafe_b64encode(decoded).decode("ascii").rstrip("=")
-    if len(decoded) != expected_length or canonical != value:
+    if canonical != value:
+        raise ValueError("invalid base64url")
+    return decoded
+
+
+def decode_canonical_base64url(value: object, *, expected_length: int) -> bytes:
+    """Decode one unpadded, canonical base64url value of an exact size."""
+
+    decoded = _decode_canonical_unpadded_base64url(value)
+    if len(decoded) != expected_length:
+        raise ValueError("invalid base64url")
+    return decoded
+
+
+def decode_canonical_base64url_bounded(
+    value: object, *, min_length: int, max_length: int
+) -> bytes:
+    """Decode one unpadded, canonical base64url value within inclusive bounds."""
+
+    decoded = _decode_canonical_unpadded_base64url(value)
+    if not min_length <= len(decoded) <= max_length:
         raise ValueError("invalid base64url")
     return decoded

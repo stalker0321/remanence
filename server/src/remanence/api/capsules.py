@@ -27,8 +27,17 @@ from remanence.capsules.draft_service import (
     CapsuleDraftServiceError,
 )
 from remanence.capsules.encoding import decode_canonical_base64url
-from remanence.capsules.limits import MAX_CREATE_DRAFT_REQUEST_BYTES
-from remanence.capsules.limits import LIMITS_V1
+from remanence.capsules.finalize_service import (
+    CapsuleFinalizeEnvelope,
+    CapsuleFinalizeError,
+    CapsuleFinalizeService,
+)
+from remanence.capsules.limits import (
+    LIMITS_V1,
+    MAX_CREATE_DRAFT_REQUEST_BYTES,
+    MAX_FINALIZE_REQUEST_BYTES,
+)
+from remanence.capsules.models import CapsuleState
 from remanence.capsules.promotion_service import (
     CapsuleBlobPromotionError,
     CapsuleBlobPromotionService,
@@ -36,6 +45,7 @@ from remanence.capsules.promotion_service import (
 from remanence.capsules.schemas import (
     CapsuleDraftValidationError,
     parse_create_capsule_draft_request,
+    parse_finalize_capsule_request,
 )
 from remanence.storage import (
     BlobStore,
@@ -77,6 +87,11 @@ _ERRORS = {
     "BLOB_SIZE_INVALID": (400, "Blob size invalid"),
     "BLOB_HASH_MISMATCH": (400, "Blob hash mismatch"),
     "BLOB_CONFLICT": (409, "Blob conflict"),
+    "STATEMENT_INVALID": (400, "Invalid statement"),
+    "SIGNATURE_INVALID": (400, "Invalid signature"),
+    "ENVELOPE_INVALID": (400, "Invalid envelope"),
+    "FINALIZE_CONFLICT": (409, "Finalize conflict"),
+    "KEY_BUNDLE_REVOKED": (409, "Key bundle revoked"),
 }
 
 
@@ -96,6 +111,14 @@ class CapsuleDraftResponse(BaseModel):
     blobs: list[CapsuleDraftBlobResponse]
 
 
+class CapsuleFinalizeResponse(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    capsule_id: uuid.UUID
+    state: Literal["READY"]
+    ready_at: datetime
+
+
 @dataclass(frozen=True)
 class _UploadHeaders:
     expected_size: int
@@ -103,13 +126,15 @@ class _UploadHeaders:
     idempotency_key: uuid.UUID
 
 
-async def _read_bounded_body(request: Request) -> bytes:
+async def _read_bounded_body(
+    request: Request, *, max_bytes: int = MAX_CREATE_DRAFT_REQUEST_BYTES
+) -> bytes:
     chunks: list[bytes] = []
     total = 0
     async for chunk in request.stream():
         if not isinstance(chunk, bytes):
             raise CapsuleDraftValidationError()
-        if len(chunk) > MAX_CREATE_DRAFT_REQUEST_BYTES - total:
+        if len(chunk) > max_bytes - total:
             raise CapsuleDraftValidationError()
         chunks.append(chunk)
         total += len(chunk)
@@ -342,3 +367,57 @@ async def create_capsule_draft(
 
     response.status_code = 200 if result.is_replay else 201
     return _response_dto(result)
+
+
+def _finalize_response_dto(result) -> CapsuleFinalizeResponse:
+    if result.state is not CapsuleState.READY:
+        raise CapsuleFinalizeError("INTERNAL_ERROR")
+    return CapsuleFinalizeResponse(
+        capsule_id=result.capsule_id,
+        state="READY",
+        ready_at=result.ready_at,
+    )
+
+
+@router.post(
+    "/v1/capsules/{capsule_id}/finalize",
+    response_model=CapsuleFinalizeResponse,
+    status_code=201,
+)
+async def finalize_capsule(
+    capsule_id: str,
+    request: Request,
+    response: Response,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    session: Session = Depends(get_db_session, use_cache=False),
+    blob_store: BlobStore = Depends(get_blob_store),
+) -> CapsuleFinalizeResponse | JSONResponse:
+    try:
+        parsed_capsule_id = _canonical_path_uuid(capsule_id)
+        raw_body = await _read_bounded_body(
+            request, max_bytes=MAX_FINALIZE_REQUEST_BYTES
+        )
+        parsed = parse_finalize_capsule_request(raw_body)
+        with session.begin():
+            result = CapsuleFinalizeService(session, blob_store).finalize(
+                authenticated_sender_user_id=principal.user_id,
+                capsule_id=parsed_capsule_id,
+                statement=parsed.signed_publish_statement.statement,
+                signature=parsed.signed_publish_statement.signature,
+                sender_key_bundle_id=parsed.signed_publish_statement.sender_key_bundle_id,
+                envelope=CapsuleFinalizeEnvelope(
+                    recipient_key_bundle_id=parsed.recipient_envelope.recipient_key_bundle_id,
+                    ciphertext=parsed.recipient_envelope.ciphertext,
+                    ciphertext_size=parsed.recipient_envelope.ciphertext_size,
+                    ciphertext_sha256=parsed.recipient_envelope.ciphertext_sha256,
+                ),
+                now=datetime.now(timezone.utc),
+            )
+        response.status_code = 200 if result.is_replay else 201
+        return _finalize_response_dto(result)
+    except CapsuleDraftValidationError as exc:
+        return _problem_response(exc.code)
+    except CapsuleFinalizeError as exc:
+        return _problem_response(exc.code)
+    except Exception:
+        return _problem_response("INTERNAL_ERROR")

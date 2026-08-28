@@ -1,5 +1,7 @@
 """Bounded schemas and parser for creating an existing-user capsule draft."""
 
+import hashlib
+import hmac
 import json
 import math
 import uuid
@@ -8,12 +10,17 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from remanence.capsules.blob_models import CapsuleBlobKind
-from remanence.capsules.encoding import decode_canonical_base64url
+from remanence.capsules.encoding import (
+    decode_canonical_base64url,
+    decode_canonical_base64url_bounded,
+)
 from remanence.capsules.limits import (
     LIMITS_V1,
     MAX_CREATE_DRAFT_REQUEST_BYTES,
+    MAX_FINALIZE_REQUEST_BYTES,
     MAX_JSON_NESTING,
 )
+from remanence.capsules.publish_statement import MAX_PUBLISH_STATEMENT_BYTES
 
 _GENERIC_VALIDATION_MESSAGE = "invalid capsule draft request"
 _MAX_JSON_INTEGER_DIGITS = 20
@@ -219,4 +226,110 @@ def parse_create_capsule_draft_request(raw: bytes) -> CreateCapsuleDraftRequest:
             raise _InvalidJson
         return CreateCapsuleDraftRequest.model_validate(decoded)
     except (UnicodeDecodeError, json.JSONDecodeError, _InvalidJson, ValidationError):
+        raise CapsuleDraftValidationError from None
+
+
+_SIGNATURE_LENGTH = 69
+
+
+def _decode_json_object(raw: bytes, *, max_bytes: int) -> dict[str, Any]:
+    if not isinstance(raw, bytes) or not raw or len(raw) > max_bytes:
+        raise CapsuleDraftValidationError from None
+    try:
+        document = raw.decode("utf-8")
+        _validate_json_nesting(document)
+        try:
+            decoded = json.loads(
+                document,
+                object_pairs_hook=_reject_duplicate_object_keys,
+                parse_int=_parse_bounded_int,
+                parse_constant=_reject_non_finite_constant,
+                parse_float=_reject_non_finite_number,
+            )
+        except (ValueError, OverflowError):
+            raise CapsuleDraftValidationError from None
+        if not isinstance(decoded, dict):
+            raise _InvalidJson
+        return decoded
+    except (UnicodeDecodeError, json.JSONDecodeError, _InvalidJson):
+        raise CapsuleDraftValidationError from None
+
+
+class SignedPublishStatementRequest(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True)
+
+    statement: bytes
+    signature: bytes
+    sender_key_bundle_id: uuid.UUID
+
+    @field_validator("statement", mode="before")
+    @classmethod
+    def _decode_statement(cls, value: object) -> bytes:
+        return decode_canonical_base64url_bounded(
+            value,
+            min_length=1,
+            max_length=MAX_PUBLISH_STATEMENT_BYTES,
+        )
+
+    @field_validator("signature", mode="before")
+    @classmethod
+    def _decode_signature(cls, value: object) -> bytes:
+        return decode_canonical_base64url(value, expected_length=_SIGNATURE_LENGTH)
+
+    @field_validator("sender_key_bundle_id", mode="before")
+    @classmethod
+    def _canonical_sender_bundle_id(cls, value: object) -> uuid.UUID:
+        return _canonical_uuid(value)
+
+
+class FinalizeRecipientEnvelopeRequest(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True)
+
+    recipient_key_bundle_id: uuid.UUID
+    ciphertext: bytes
+    ciphertext_size: int = Field(ge=1, le=LIMITS_V1.recipient_envelope_max_ciphertext_bytes)
+    ciphertext_sha256: bytes
+
+    @field_validator("recipient_key_bundle_id", mode="before")
+    @classmethod
+    def _canonical_recipient_bundle_id(cls, value: object) -> uuid.UUID:
+        return _canonical_uuid(value)
+
+    @field_validator("ciphertext", mode="before")
+    @classmethod
+    def _decode_ciphertext(cls, value: object) -> bytes:
+        return decode_canonical_base64url_bounded(
+            value,
+            min_length=1,
+            max_length=LIMITS_V1.recipient_envelope_max_ciphertext_bytes,
+        )
+
+    @field_validator("ciphertext_sha256", mode="before")
+    @classmethod
+    def _decode_digest(cls, value: object) -> bytes:
+        return decode_canonical_base64url(value, expected_length=32)
+
+    @model_validator(mode="after")
+    def _ciphertext_length_and_hash(self) -> "FinalizeRecipientEnvelopeRequest":
+        if len(self.ciphertext) != self.ciphertext_size:
+            raise ValueError("invalid envelope")
+        if not hmac.compare_digest(hashlib.sha256(self.ciphertext).digest(), self.ciphertext_sha256):
+            raise ValueError("invalid envelope")
+        return self
+
+
+class FinalizeCapsuleRequest(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True)
+
+    signed_publish_statement: SignedPublishStatementRequest
+    recipient_envelope: FinalizeRecipientEnvelopeRequest
+
+
+def parse_finalize_capsule_request(raw: bytes) -> FinalizeCapsuleRequest:
+    """Parse a bounded JSON finalize request without exposing parser details."""
+
+    decoded = _decode_json_object(raw, max_bytes=MAX_FINALIZE_REQUEST_BYTES)
+    try:
+        return FinalizeCapsuleRequest.model_validate(decoded)
+    except ValidationError:
         raise CapsuleDraftValidationError from None

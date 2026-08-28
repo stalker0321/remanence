@@ -42,4 +42,8 @@ LIMITS_V1 = ProtocolV1Limits()
 # The request envelope is bounded before JSON parsing. This is deliberately
 # separate from the artifact limits in protocol/fixtures/limits-v1.json.
 MAX_CREATE_DRAFT_REQUEST_BYTES = 16 * 1024
+# Legal finalize JSON is dominated by unpadded base64url of a 16 KiB envelope
+# plus a 4 KiB statement. 32 KiB is above that expansion and below the draft
+# photo-body cap; it must not be used as the draft request limit.
+MAX_FINALIZE_REQUEST_BYTES = 32 * 1024
 MAX_JSON_NESTING = 8

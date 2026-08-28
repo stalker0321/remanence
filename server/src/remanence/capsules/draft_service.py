@@ -123,10 +123,7 @@ def _validate_replay_response(
             raise ValueError
         if raw_blob["blob_id"] != str(requested_blob.blob_id):
             raise ValueError
-        if raw_blob["state"] not in {
-            CapsuleBlobState.DECLARED.value,
-            CapsuleBlobState.STORED.value,
-        }:
+        if raw_blob["state"] != CapsuleBlobState.DECLARED.value:
             raise ValueError
 
 
@@ -159,6 +156,7 @@ def _authoritative_replay_result(
     record: CapsuleIdempotencyRecord,
     request: CreateCapsuleDraftRequest,
     authenticated_sender_user_id: uuid.UUID,
+    now: datetime,
 ) -> CapsuleDraftResult:
     expected_draft_expires_at = (
         record.created_at.astimezone(timezone.utc)
@@ -178,7 +176,7 @@ def _authoritative_replay_result(
     if capsule is None or capsule.sender_user_id != authenticated_sender_user_id:
         raise _error("INTERNAL_ERROR")
     if capsule.state is not CapsuleState.DRAFT:
-        raise _error("IDEMPOTENCY_CONFLICT")
+        raise _error("CAPSULE_STATE_INVALID")
     if (
         capsule.recipient_user_id != request.recipient_user_id
         or capsule.sender_key_bundle_id != request.sender_key_bundle_id
@@ -192,6 +190,8 @@ def _authoritative_replay_result(
         != expected_draft_expires_at
     ):
         raise _error("INTERNAL_ERROR")
+    if now >= capsule.draft_expires_at:
+        raise _error("DRAFT_EXPIRED")
 
     current_blobs = session.scalars(
         select(CapsuleBlob)
@@ -299,6 +299,7 @@ class CapsuleDraftService:
                         record=record,
                         request=request,
                         authenticated_sender_user_id=authenticated_sender_user_id,
+                        now=canonical_now,
                     )
                 except (TypeError, ValueError, OverflowError):
                     raise _error("INTERNAL_ERROR") from None

@@ -475,6 +475,54 @@ def test_replay_derives_current_blob_states_without_rewriting_idempotency_respon
         ) == counts_before
 
 
+def test_mutated_historical_stored_response_fails_closed(session_factory) -> None:
+    with session_factory() as session:
+        sender, sender_bundle = _seed_user(session, "frozen")
+        recipient, recipient_bundle = _seed_user(session, "frozenr")
+        request = _request(
+            sender_bundle_id=sender_bundle.id,
+            recipient_user_id=recipient.id,
+            recipient_bundle_id=recipient_bundle.id,
+        )
+        key = uuid4()
+        _create(session, sender_user_id=sender.id, request=request, idempotency_key=key)
+        session.commit()
+        record = session.scalar(
+            select(CapsuleIdempotencyRecord).where(
+                CapsuleIdempotencyRecord.owner_user_id == sender.id,
+                CapsuleIdempotencyRecord.idempotency_key == key,
+            )
+        )
+        assert record is not None
+        mutated_response = dict(record.response_json)
+        mutated_response["blobs"] = [
+            {"blob_id": blob["blob_id"], "state": "STORED"}
+            for blob in record.response_json["blobs"]
+        ]
+        record.response_json = mutated_response
+        session.commit()
+        counts_before = (
+            _count(session, Capsule),
+            _count(session, CapsuleBlob),
+            _count(session, CapsuleIdempotencyRecord),
+        )
+
+        _assert_error(
+            lambda: _create(
+                session,
+                sender_user_id=sender.id,
+                request=request,
+                idempotency_key=key,
+            ),
+            "INTERNAL_ERROR",
+        )
+        assert (
+            _count(session, Capsule),
+            _count(session, CapsuleBlob),
+            _count(session, CapsuleIdempotencyRecord),
+        ) == counts_before
+
+
 @pytest.mark.parametrize("state", [CapsuleState.READY, CapsuleState.ABORTED])
 def test_replay_of_non_draft_capsule_is_a_redacted_conflict(session_factory, state: CapsuleState) -> None:
     with session_factory() as session:
@@ -506,8 +554,45 @@ def test_replay_of_non_draft_capsule_is_a_redacted_conflict(session_factory, sta
                 request=request,
                 idempotency_key=key,
             ),
-            "IDEMPOTENCY_CONFLICT",
+            "CAPSULE_STATE_INVALID",
         )
+
+
+def test_expired_draft_replay_is_a_redacted_error_without_write(session_factory) -> None:
+    with session_factory() as session:
+        sender, sender_bundle = _seed_user(session, "expiry")
+        recipient, recipient_bundle = _seed_user(session, "expiryr")
+        request = _request(
+            sender_bundle_id=sender_bundle.id,
+            recipient_user_id=recipient.id,
+            recipient_bundle_id=recipient_bundle.id,
+        )
+        key = uuid4()
+        _create(session, sender_user_id=sender.id, request=request, idempotency_key=key)
+        session.commit()
+        capsule = session.get(Capsule, request.capsule_id)
+        assert capsule is not None
+        counts_before = (
+            _count(session, Capsule),
+            _count(session, CapsuleBlob),
+            _count(session, CapsuleIdempotencyRecord),
+        )
+
+        _assert_error(
+            lambda: _create(
+                session,
+                sender_user_id=sender.id,
+                request=request,
+                idempotency_key=key,
+                now=capsule.draft_expires_at,
+            ),
+            "DRAFT_EXPIRED",
+        )
+        assert (
+            _count(session, Capsule),
+            _count(session, CapsuleBlob),
+            _count(session, CapsuleIdempotencyRecord),
+        ) == counts_before
 
 
 def test_replay_with_corrupt_authoritative_blob_set_fails_closed(session_factory) -> None:

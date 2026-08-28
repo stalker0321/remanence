@@ -3,7 +3,7 @@
 import base64
 import copy
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
@@ -12,6 +12,7 @@ from sqlalchemy import func, select, update
 
 pytest_plugins = ("test_registration_endpoint",)
 
+import remanence.api.capsules as capsules_api
 from remanence.api.dependencies import (
     AuthenticatedPrincipal,
     get_authenticated_principal,
@@ -258,7 +259,39 @@ def test_replay_response_uses_current_blob_states(client_factory) -> None:
     assert "is_replay" not in replay.json()
 
 
-def test_replay_after_abort_is_a_redacted_conflict(client_factory) -> None:
+def test_mutated_historical_stored_response_is_internal_error(client_factory) -> None:
+    client, factory = client_factory
+    sender = _register(client, email="frozen-alice@example.com", handle="frozenalice")
+    recipient = _register(client, email="frozen-bob@example.com", handle="frozenbob")
+    payload = _draft_payload(sender, recipient)
+    key = uuid4()
+
+    first = _post(client, sender["access_token"], _raw(payload), key)
+    assert first.status_code == 201
+    with factory() as session:
+        record = session.scalar(
+            select(CapsuleIdempotencyRecord).where(
+                CapsuleIdempotencyRecord.owner_user_id == UUID(sender["user"]["user_id"]),
+                CapsuleIdempotencyRecord.idempotency_key == key,
+            )
+        )
+        assert record is not None
+        response_json = dict(record.response_json)
+        response_json["blobs"] = [
+            {"blob_id": blob["blob_id"], "state": "STORED"}
+            for blob in record.response_json["blobs"]
+        ]
+        record.response_json = response_json
+        session.commit()
+
+    replay = _post(client, sender["access_token"], _raw(payload), key)
+    _assert_problem(replay, status=500, code="INTERNAL_ERROR")
+
+
+@pytest.mark.parametrize("state", [CapsuleState.READY, CapsuleState.ABORTED])
+def test_replay_after_terminal_capsule_is_a_redacted_state_error(
+    client_factory, state: CapsuleState
+) -> None:
     client, factory = client_factory
     sender = _register(client, email="abort-alice@example.com", handle="abortalice")
     recipient = _register(client, email="abort-bob@example.com", handle="abortbob")
@@ -268,15 +301,47 @@ def test_replay_after_abort_is_a_redacted_conflict(client_factory) -> None:
     first = _post(client, sender["access_token"], _raw(payload), key)
     assert first.status_code == 201
     with factory() as session:
+        values = {"state": state}
+        if state is CapsuleState.READY:
+            values.update(
+                ready_at=datetime.now(timezone.utc),
+                signed_statement=b"statement",
+                signed_statement_sha256=bytes(range(32)),
+                publish_signature=b"s" * 69,
+            )
         session.execute(
             update(Capsule)
             .where(Capsule.id == UUID(payload["capsule_id"]))
-            .values(state=CapsuleState.ABORTED)
+            .values(**values)
         )
         session.commit()
 
     replay = _post(client, sender["access_token"], _raw(payload), key)
-    _assert_problem(replay, status=409, code="IDEMPOTENCY_CONFLICT")
+    _assert_problem(replay, status=409, code="CAPSULE_STATE_INVALID")
+
+
+def test_expired_replay_is_a_redacted_error(client_factory, monkeypatch) -> None:
+    client, factory = client_factory
+    sender = _register(client, email="expiry-alice@example.com", handle="expiryalice")
+    recipient = _register(client, email="expiry-bob@example.com", handle="expirybob")
+    payload = _draft_payload(sender, recipient)
+    key = uuid4()
+
+    first = _post(client, sender["access_token"], _raw(payload), key)
+    assert first.status_code == 201
+    with factory() as session:
+        capsule = session.get(Capsule, UUID(payload["capsule_id"]))
+        assert capsule is not None
+        expired_at = capsule.draft_expires_at + timedelta(seconds=1)
+
+    class _ExpiredDateTime:
+        @classmethod
+        def now(cls, tz=None):
+            return expired_at
+
+    monkeypatch.setattr(capsules_api, "datetime", _ExpiredDateTime)
+    replay = _post(client, sender["access_token"], _raw(payload), key)
+    _assert_problem(replay, status=409, code="DRAFT_EXPIRED")
 
 
 def test_conflict_mapping_and_sender_binding(client_factory) -> None:

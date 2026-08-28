@@ -8,6 +8,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -116,7 +117,7 @@ class CapsuleFinalizeRepositoryTest {
                 MockResponse.Builder()
                     .code(409)
                     .setHeader("Content-Type", "application/problem+json")
-                    .body(problemJson("RECIPIENT_KEY_STALE"))
+                    .body(problemJson("RECIPIENT_KEY_STALE", 409, false))
                     .build(),
             )
 
@@ -126,7 +127,53 @@ class CapsuleFinalizeRepositoryTest {
 
             assertEquals(CapsuleFinalizeFailure.RECIPIENT_KEY_STALE, failure.reason)
             assertEquals(409, failure.httpStatus)
+            assertFalse(failure.retryable)
             assertFalse(failure.toString().contains(SECRET_DETAIL))
+        }
+    }
+
+    @Test
+    fun retryabilityPreservesCanonicalProblemsAndRejectsContradictions() = runTest {
+        withServer { server ->
+            fun enqueue(status: Int, code: String, retryable: Boolean) {
+                server.enqueue(
+                    MockResponse.Builder()
+                        .code(status)
+                        .setHeader("Content-Type", "application/problem+json")
+                        .body(problemJson(code, status, retryable))
+                        .build(),
+                )
+            }
+
+            enqueue(429, "RATE_LIMITED", true)
+            val rateLimited = assertIs<CapsuleFinalizeResult.Failure>(repository(server).finalize(request(), "pm_at_live"))
+            assertEquals(CapsuleFinalizeFailure.RATE_LIMITED, rateLimited.reason)
+            assertTrue(rateLimited.retryable)
+
+            enqueue(503, "INTERNAL_ERROR", true)
+            val unavailable = assertIs<CapsuleFinalizeResult.Failure>(repository(server).finalize(request(), "pm_at_live"))
+            assertEquals(CapsuleFinalizeFailure.INTERNAL_ERROR, unavailable.reason)
+            assertTrue(unavailable.retryable)
+
+            enqueue(500, "INTERNAL_ERROR", false)
+            val internal = assertIs<CapsuleFinalizeResult.Failure>(repository(server).finalize(request(), "pm_at_live"))
+            assertEquals(CapsuleFinalizeFailure.INTERNAL_ERROR, internal.reason)
+            assertFalse(internal.retryable)
+
+            enqueue(422, "SIGNATURE_INVALID", false)
+            val integrity = assertIs<CapsuleFinalizeResult.Failure>(repository(server).finalize(request(), "pm_at_live"))
+            assertEquals(CapsuleFinalizeFailure.SIGNATURE_INVALID, integrity.reason)
+            assertFalse(integrity.retryable)
+
+            enqueue(503, "INTERNAL_ERROR", false)
+            val contradictory503 = assertIs<CapsuleFinalizeResult.Failure>(repository(server).finalize(request(), "pm_at_live"))
+            assertEquals(CapsuleFinalizeFailure.HTTP, contradictory503.reason)
+            assertTrue(contradictory503.retryable)
+
+            enqueue(409, "RECIPIENT_KEY_STALE", true)
+            val contradictory409 = assertIs<CapsuleFinalizeResult.Failure>(repository(server).finalize(request(), "pm_at_live"))
+            assertEquals(CapsuleFinalizeFailure.HTTP, contradictory409.reason)
+            assertFalse(contradictory409.retryable)
         }
     }
 
@@ -150,7 +197,58 @@ class CapsuleFinalizeRepositoryTest {
                 repository(server).finalize(request(), accessToken = "pm_at_live"),
             )
             assertEquals(CapsuleFinalizeFailure.INVALID_RESPONSE, oversized.reason)
+            assertTrue(oversized.retryable)
         }
+    }
+
+    @Test
+    fun malformedAndProxyResponsesUseHttpRetryabilityFallback() = runTest {
+        withServer { server ->
+            fun enqueue(status: Int, contentType: String?, body: String) {
+                server.enqueue(
+                    MockResponse.Builder()
+                        .code(status)
+                        .apply { if (contentType != null) setHeader("Content-Type", contentType) }
+                        .body(body)
+                        .build(),
+                )
+            }
+
+            enqueue(503, "application/problem+json", "not-json")
+            assertTrue(assertIs<CapsuleFinalizeResult.Failure>(repository(server).finalize(request(), "pm_at_live")).retryable)
+
+            enqueue(503, "text/plain", "proxy failure")
+            assertTrue(assertIs<CapsuleFinalizeResult.Failure>(repository(server).finalize(request(), "pm_at_live")).retryable)
+
+            enqueue(429, "application/problem+json", "not-json")
+            assertTrue(assertIs<CapsuleFinalizeResult.Failure>(repository(server).finalize(request(), "pm_at_live")).retryable)
+
+            enqueue(429, "text/plain", "rate limited")
+            assertTrue(assertIs<CapsuleFinalizeResult.Failure>(repository(server).finalize(request(), "pm_at_live")).retryable)
+
+            enqueue(429, "application/problem+json", "x".repeat(64 * 1024 + 1))
+            assertTrue(assertIs<CapsuleFinalizeResult.Failure>(repository(server).finalize(request(), "pm_at_live")).retryable)
+
+            enqueue(418, "application/problem+json", "not-json")
+            assertFalse(assertIs<CapsuleFinalizeResult.Failure>(repository(server).finalize(request(), "pm_at_live")).retryable)
+
+            enqueue(201, "application/json", "not-json")
+            assertFalse(assertIs<CapsuleFinalizeResult.Failure>(repository(server).finalize(request(), "pm_at_live")).retryable)
+        }
+    }
+
+    @Test
+    fun networkFailureIsRetryable() = runTest {
+        val server = MockWebServer()
+        server.start()
+        val baseUrl = ApiBaseUrl.parse(server.url("/").toString())
+        server.close()
+
+        val failure = assertIs<CapsuleFinalizeResult.Failure>(
+            CapsuleFinalizeRepository.create(baseUrl).finalize(request(), "pm_at_live"),
+        )
+        assertEquals(CapsuleFinalizeFailure.NETWORK, failure.reason)
+        assertTrue(failure.retryable)
     }
 
     @Test
@@ -196,8 +294,8 @@ class CapsuleFinalizeRepositoryTest {
     private fun successJson(): String =
         """{"capsule_id":"${capsuleId.toRestString()}","state":"READY","ready_at":"2030-01-01T12:00:00Z"}"""
 
-    private fun problemJson(code: String): String =
-        """{"type":"https://remanence.invalid/problems/${code.lowercase()}","title":"safe","status":409,"code":"$code","detail":"$SECRET_DETAIL","request_id":"0198f0a0-0000-7000-8000-00000000ac01","retryable":false}"""
+    private fun problemJson(code: String, status: Int, retryable: Boolean): String =
+        """{"type":"https://remanence.invalid/problems/${code.lowercase()}","title":"safe","status":$status,"code":"$code","detail":"$SECRET_DETAIL","request_id":"0198f0a0-0000-7000-8000-00000000ac01","retryable":$retryable}"""
 
     private companion object {
         val STATEMENT = "canonical-publish-statement".toByteArray()

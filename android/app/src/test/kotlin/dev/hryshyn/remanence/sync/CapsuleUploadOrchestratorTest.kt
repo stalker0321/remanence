@@ -168,7 +168,7 @@ class CapsuleUploadOrchestratorTest {
                 events += "upload"
                 if (failUploadOnce) {
                     failUploadOnce = false
-                    CapsuleBlobUploadResult.Failure(CapsuleBlobUploadFailure.NETWORK)
+                    CapsuleBlobUploadResult.Failure(CapsuleBlobUploadFailure.NETWORK, retryable = true)
                 } else {
                     CapsuleBlobUploadResult.Success(204)
                 }
@@ -206,13 +206,66 @@ class CapsuleUploadOrchestratorTest {
     }
 
     @Test
+    fun retryableProblemFlagKeepsGenericFailureRecoverable() = runBlocking {
+        seed(OutboxCapsuleState.ENCRYPTED, withRetryMaterial = true)
+        val orchestrator = orchestrator {
+            createDraft = { request, _ -> draftSuccess(request) }
+            uploadBlob = { _, _ ->
+                CapsuleBlobUploadResult.Failure(
+                    CapsuleBlobUploadFailure.INTERNAL_ERROR,
+                    httpStatus = 503,
+                    retryable = true,
+                )
+            }
+            cleanupRetryMaterial = { _, _ ->
+                error("retryable backend failure must retain retry material")
+            }
+        }
+
+        assertEquals(
+            CapsuleUploadOutcome.Retryable(CapsuleBlobUploadFailure.INTERNAL_ERROR.name),
+            orchestrator.run(OWNER_TYPED, CAPSULE_TYPED),
+        )
+        assertEquals(OutboxCapsuleState.RETRYABLE_FAILURE, capsuleRow().state)
+        assertEquals(CapsuleBlobUploadFailure.INTERNAL_ERROR.name, capsuleRow().lastErrorCode)
+        assertTrue(capsuleRow().senderRetryKeysetPath != null)
+        assertTrue(retryStore.expectedPath(OWNER_TYPED, CAPSULE_TYPED).exists())
+    }
+
+    @Test
+    fun authInvalidRemainsRecoverableAndRetainsRetryMaterial() = runBlocking {
+        seed(OutboxCapsuleState.ENCRYPTED, withRetryMaterial = true)
+        val orchestrator = orchestrator {
+            createDraft = { _, _ ->
+                CapsuleDraftResult.Failure(
+                    CapsuleDraftFailure.AUTH_INVALID,
+                    httpStatus = 401,
+                    retryable = false,
+                )
+            }
+            cleanupRetryMaterial = { _, _ ->
+                error("auth recovery must retain retry material")
+            }
+        }
+
+        assertEquals(
+            CapsuleUploadOutcome.Retryable(CapsuleDraftFailure.AUTH_INVALID.name),
+            orchestrator.run(OWNER_TYPED, CAPSULE_TYPED),
+        )
+        assertEquals(OutboxCapsuleState.RETRYABLE_FAILURE, capsuleRow().state)
+        assertEquals(CapsuleDraftFailure.AUTH_INVALID.name, capsuleRow().lastErrorCode)
+        assertTrue(capsuleRow().senderRetryKeysetPath != null)
+        assertTrue(retryStore.expectedPath(OWNER_TYPED, CAPSULE_TYPED).exists())
+    }
+
+    @Test
     fun protocolFailureMarksTerminalAndDoesNotPretendToPublish() = runBlocking {
         seed(OutboxCapsuleState.ENCRYPTED, withRetryMaterial = true)
         val events = mutableListOf<String>()
         val orchestrator = orchestrator {
             createDraft = { _, _ ->
                 events += "draft"
-                CapsuleDraftResult.Failure(CapsuleDraftFailure.VALIDATION_FAILED, 422)
+                CapsuleDraftResult.Failure(CapsuleDraftFailure.VALIDATION_FAILED, 422, retryable = false)
             }
             uploadBlob = { _, _ ->
                 events += "upload"
@@ -250,7 +303,7 @@ class CapsuleUploadOrchestratorTest {
             }
             uploadBlob = { _, _ ->
                 events += "upload"
-                CapsuleBlobUploadResult.Failure(CapsuleBlobUploadFailure.BLOB_SIZE_INVALID)
+                CapsuleBlobUploadResult.Failure(CapsuleBlobUploadFailure.BLOB_SIZE_INVALID, retryable = false)
             }
             finalizeCapsule = { _, _ ->
                 error("finalize must not run after terminal blob failure")
@@ -287,7 +340,7 @@ class CapsuleUploadOrchestratorTest {
             }
             finalizeCapsule = { _, _ ->
                 events += "finalize"
-                CapsuleFinalizeResult.Failure(CapsuleFinalizeFailure.SIGNATURE_INVALID, 422)
+                CapsuleFinalizeResult.Failure(CapsuleFinalizeFailure.SIGNATURE_INVALID, 422, retryable = false)
             }
             cleanupRetryMaterial = { owner, capsule ->
                 events += "cleanup"
@@ -405,7 +458,7 @@ class CapsuleUploadOrchestratorTest {
         val orchestrator = orchestrator {
             createDraft = { _, _ ->
                 draftCalls += 1
-                CapsuleDraftResult.Failure(CapsuleDraftFailure.RECIPIENT_KEY_STALE, 409)
+            CapsuleDraftResult.Failure(CapsuleDraftFailure.RECIPIENT_KEY_STALE, 409, retryable = false)
             }
             cleanupRetryMaterial = { _, _ ->
                 cleanupCalls += 1
@@ -438,7 +491,7 @@ class CapsuleUploadOrchestratorTest {
             uploadBlob = { _, _ -> CapsuleBlobUploadResult.Success(204) }
             finalizeCapsule = { _, _ ->
                 finalizeCalls += 1
-                CapsuleFinalizeResult.Failure(CapsuleFinalizeFailure.RECIPIENT_KEY_STALE, 409)
+                CapsuleFinalizeResult.Failure(CapsuleFinalizeFailure.RECIPIENT_KEY_STALE, 409, retryable = false)
             }
             cleanupRetryMaterial = { _, _ ->
                 cleanupCalls += 1
@@ -488,7 +541,7 @@ class CapsuleUploadOrchestratorTest {
         seed(OutboxCapsuleState.ENCRYPTED, withRetryMaterial = true)
         val orchestrator = orchestrator {
             createDraft = { _, _ ->
-                CapsuleDraftResult.Failure(CapsuleDraftFailure.VALIDATION_FAILED, 422)
+                CapsuleDraftResult.Failure(CapsuleDraftFailure.VALIDATION_FAILED, 422, retryable = false)
             }
             cleanupRetryMaterial = { _, _ -> throw CancellationException("cancelled") }
         }

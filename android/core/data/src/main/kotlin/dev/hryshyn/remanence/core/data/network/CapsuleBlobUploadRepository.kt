@@ -6,9 +6,6 @@ import java.security.MessageDigest
 import java.util.Base64
 import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
-import kotlinx.serialization.SerialName
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.SerializationException
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -58,6 +55,7 @@ class CapsuleBlobUploadRequest(
 
 enum class CapsuleBlobUploadFailure {
     NETWORK,
+    RATE_LIMITED,
     HTTP,
     INVALID_RESPONSE,
     AUTH_INVALID,
@@ -79,19 +77,9 @@ sealed interface CapsuleBlobUploadResult {
     data class Failure(
         val reason: CapsuleBlobUploadFailure,
         val httpStatus: Int? = null,
+        val retryable: Boolean,
     ) : CapsuleBlobUploadResult
 }
-
-@Serializable
-private data class CapsuleBlobProblemResponseDto(
-    val type: String,
-    val title: String,
-    val status: Int,
-    val code: String,
-    val detail: String,
-    val request_id: String,
-    val retryable: Boolean,
-)
 
 /** Authenticated, resource-idempotent upload of one encrypted capsule blob. */
 class CapsuleBlobUploadRepository internal constructor(
@@ -127,7 +115,7 @@ class CapsuleBlobUploadRepository internal constructor(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: IOException) {
-            CapsuleBlobUploadResult.Failure(CapsuleBlobUploadFailure.NETWORK)
+            CapsuleBlobUploadResult.Failure(CapsuleBlobUploadFailure.NETWORK, retryable = true)
         }
     }
 
@@ -136,6 +124,7 @@ class CapsuleBlobUploadRepository internal constructor(
             ?: return CapsuleBlobUploadResult.Failure(
                 CapsuleBlobUploadFailure.INVALID_RESPONSE,
                 response.code,
+                retryable = capsuleHttpFallbackIsRetryable(response.code),
             )
         if (response.code == HTTP_NO_CONTENT) {
             return if (bytes.isEmpty()) {
@@ -144,6 +133,7 @@ class CapsuleBlobUploadRepository internal constructor(
                 CapsuleBlobUploadResult.Failure(
                     CapsuleBlobUploadFailure.INVALID_RESPONSE,
                     response.code,
+                    retryable = false,
                 )
             }
         }
@@ -151,37 +141,33 @@ class CapsuleBlobUploadRepository internal constructor(
             return CapsuleBlobUploadResult.Failure(
                 CapsuleBlobUploadFailure.INVALID_RESPONSE,
                 response.code,
+                retryable = capsuleHttpFallbackIsRetryable(response.code),
             )
         }
-        val problemCode = parseProblemCode(bytes.toString(Charsets.UTF_8))
+        val problem = parseProblem(bytes.toString(Charsets.UTF_8), response.code)
         return CapsuleBlobUploadResult.Failure(
-            problemCode ?: CapsuleBlobUploadFailure.HTTP,
-            response.code,
+            reason = problem?.let { mapProblemCode(it.code) } ?: CapsuleBlobUploadFailure.HTTP,
+            httpStatus = response.code,
+            retryable = problem?.retryable ?: capsuleHttpFallbackIsRetryable(response.code),
         )
     }
 
-    private fun parseProblemCode(text: String): CapsuleBlobUploadFailure? {
-        val code = try {
-            NetworkJson.decodeFromString<CapsuleBlobProblemResponseDto>(text).code
-        } catch (_: SerializationException) {
-            return null
-        } catch (_: IllegalArgumentException) {
-            return null
-        }
-        return when (code) {
-            "AUTH_INVALID" -> CapsuleBlobUploadFailure.AUTH_INVALID
-            "VALIDATION_FAILED" -> CapsuleBlobUploadFailure.VALIDATION_FAILED
-            "CAPSULE_NOT_FOUND" -> CapsuleBlobUploadFailure.CAPSULE_NOT_FOUND
-            "CAPSULE_STATE_INVALID" -> CapsuleBlobUploadFailure.CAPSULE_STATE_INVALID
-            "DRAFT_EXPIRED" -> CapsuleBlobUploadFailure.DRAFT_EXPIRED
-            "BLOB_NOT_DECLARED" -> CapsuleBlobUploadFailure.BLOB_NOT_DECLARED
-            "BLOB_SIZE_INVALID" -> CapsuleBlobUploadFailure.BLOB_SIZE_INVALID
-            "BLOB_HASH_MISMATCH" -> CapsuleBlobUploadFailure.BLOB_HASH_MISMATCH
-            "BLOB_CONFLICT" -> CapsuleBlobUploadFailure.BLOB_CONFLICT
-            "INTERNAL_UNAVAILABLE" -> CapsuleBlobUploadFailure.INTERNAL_UNAVAILABLE
-            "INTERNAL_ERROR" -> CapsuleBlobUploadFailure.INTERNAL_ERROR
-            else -> null
-        }
+    private fun parseProblem(text: String, httpStatus: Int): ClassifiedCapsuleProblem? =
+        classifyCapsuleProblem(text, httpStatus, BLOB_PROBLEM_CODES)
+
+    private fun mapProblemCode(code: String): CapsuleBlobUploadFailure = when (code) {
+        "AUTH_INVALID" -> CapsuleBlobUploadFailure.AUTH_INVALID
+        "RATE_LIMITED" -> CapsuleBlobUploadFailure.RATE_LIMITED
+        "VALIDATION_FAILED" -> CapsuleBlobUploadFailure.VALIDATION_FAILED
+        "CAPSULE_NOT_FOUND" -> CapsuleBlobUploadFailure.CAPSULE_NOT_FOUND
+        "CAPSULE_STATE_INVALID" -> CapsuleBlobUploadFailure.CAPSULE_STATE_INVALID
+        "DRAFT_EXPIRED" -> CapsuleBlobUploadFailure.DRAFT_EXPIRED
+        "BLOB_NOT_DECLARED" -> CapsuleBlobUploadFailure.BLOB_NOT_DECLARED
+        "BLOB_SIZE_INVALID" -> CapsuleBlobUploadFailure.BLOB_SIZE_INVALID
+        "BLOB_HASH_MISMATCH" -> CapsuleBlobUploadFailure.BLOB_HASH_MISMATCH
+        "BLOB_CONFLICT" -> CapsuleBlobUploadFailure.BLOB_CONFLICT
+        "INTERNAL_ERROR" -> CapsuleBlobUploadFailure.INTERNAL_ERROR
+        else -> CapsuleBlobUploadFailure.HTTP
     }
 
     private fun isProblemJson(response: Response): Boolean {
@@ -210,6 +196,20 @@ class CapsuleBlobUploadRepository internal constructor(
         private const val OCTET_STREAM_MEDIA_TYPE = "application/octet-stream"
         private const val HTTP_NO_CONTENT = 204
         private const val MAX_RESPONSE_BYTES = 64 * 1024L
+
+        private val BLOB_PROBLEM_CODES = setOf(
+            "AUTH_INVALID",
+            "RATE_LIMITED",
+            "VALIDATION_FAILED",
+            "CAPSULE_NOT_FOUND",
+            "CAPSULE_STATE_INVALID",
+            "DRAFT_EXPIRED",
+            "BLOB_NOT_DECLARED",
+            "BLOB_SIZE_INVALID",
+            "BLOB_HASH_MISMATCH",
+            "BLOB_CONFLICT",
+            "INTERNAL_ERROR",
+        )
 
         fun create(baseUrl: ApiBaseUrl): CapsuleBlobUploadRepository =
             CapsuleBlobUploadRepository(HttpClientFactory.create(), baseUrl)

@@ -1,6 +1,7 @@
 package dev.hryshyn.remanence.core.data.network
 
 import kotlin.test.Test
+import kotlin.test.assertFalse
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
@@ -175,7 +176,106 @@ class CapsuleDraftRepositoryTest {
             val failure = assertIs<CapsuleDraftResult.Failure>(repository(server).createDraft(request(), "pm_at_live"))
             assertEquals(CapsuleDraftFailure.IDEMPOTENCY_CONFLICT, failure.reason)
             assertEquals(409, failure.httpStatus)
+            assertFalse(failure.retryable)
         }
+    }
+
+    @Test
+    fun retryabilityPreservesCanonicalProblemsAndUsesSafeFallbacks() = runTest {
+        withServer { server ->
+            fun enqueue(status: Int, code: String, retryable: Boolean) {
+                server.enqueue(
+                    MockResponse.Builder()
+                        .code(status)
+                        .setHeader("Content-Type", "application/problem+json")
+                        .body(problemJson(code, status, retryable))
+                        .build(),
+                )
+            }
+
+            enqueue(429, "RATE_LIMITED", true)
+            val rateLimited = assertIs<CapsuleDraftResult.Failure>(repository(server).createDraft(request(), "pm_at_live"))
+            assertEquals(CapsuleDraftFailure.RATE_LIMITED, rateLimited.reason)
+            assertTrue(rateLimited.retryable)
+
+            enqueue(503, "INTERNAL_ERROR", true)
+            val unavailable = assertIs<CapsuleDraftResult.Failure>(repository(server).createDraft(request(), "pm_at_live"))
+            assertEquals(CapsuleDraftFailure.INTERNAL_ERROR, unavailable.reason)
+            assertTrue(unavailable.retryable)
+
+            enqueue(500, "INTERNAL_ERROR", false)
+            val internal = assertIs<CapsuleDraftResult.Failure>(repository(server).createDraft(request(), "pm_at_live"))
+            assertEquals(CapsuleDraftFailure.INTERNAL_ERROR, internal.reason)
+            assertFalse(internal.retryable)
+
+            enqueue(422, "VALIDATION_FAILED", false)
+            val validation = assertIs<CapsuleDraftResult.Failure>(repository(server).createDraft(request(), "pm_at_live"))
+            assertEquals(CapsuleDraftFailure.VALIDATION_FAILED, validation.reason)
+            assertFalse(validation.retryable)
+
+            enqueue(503, "INTERNAL_ERROR", false)
+            val contradictory503 = assertIs<CapsuleDraftResult.Failure>(repository(server).createDraft(request(), "pm_at_live"))
+            assertEquals(CapsuleDraftFailure.HTTP, contradictory503.reason)
+            assertTrue(contradictory503.retryable)
+
+            enqueue(409, "RECIPIENT_KEY_STALE", true)
+            val contradictory409 = assertIs<CapsuleDraftResult.Failure>(repository(server).createDraft(request(), "pm_at_live"))
+            assertEquals(CapsuleDraftFailure.HTTP, contradictory409.reason)
+            assertFalse(contradictory409.retryable)
+        }
+    }
+
+    @Test
+    fun networkAndMalformedResponsesUseHttpRetryabilityFallback() = runTest {
+        withServer { server ->
+            fun enqueue(status: Int, contentType: String?, body: String) {
+                server.enqueue(
+                    MockResponse.Builder()
+                        .code(status)
+                        .apply { if (contentType != null) setHeader("Content-Type", contentType) }
+                        .body(body)
+                        .build(),
+                )
+            }
+
+            enqueue(503, "application/problem+json", "not-json")
+            assertTrue(assertIs<CapsuleDraftResult.Failure>(repository(server).createDraft(request(), "pm_at_live")).retryable)
+
+            enqueue(503, "text/plain", "proxy failure")
+            assertTrue(assertIs<CapsuleDraftResult.Failure>(repository(server).createDraft(request(), "pm_at_live")).retryable)
+
+            enqueue(503, "application/problem+json", "x".repeat(64 * 1024 + 1))
+            assertTrue(assertIs<CapsuleDraftResult.Failure>(repository(server).createDraft(request(), "pm_at_live")).retryable)
+
+            enqueue(429, "application/problem+json", "not-json")
+            assertTrue(assertIs<CapsuleDraftResult.Failure>(repository(server).createDraft(request(), "pm_at_live")).retryable)
+
+            enqueue(429, "text/plain", "rate limited")
+            assertTrue(assertIs<CapsuleDraftResult.Failure>(repository(server).createDraft(request(), "pm_at_live")).retryable)
+
+            enqueue(429, "application/problem+json", "x".repeat(64 * 1024 + 1))
+            assertTrue(assertIs<CapsuleDraftResult.Failure>(repository(server).createDraft(request(), "pm_at_live")).retryable)
+
+            enqueue(418, "application/problem+json", "not-json")
+            assertFalse(assertIs<CapsuleDraftResult.Failure>(repository(server).createDraft(request(), "pm_at_live")).retryable)
+
+            enqueue(201, "application/json", "not-json")
+            assertFalse(assertIs<CapsuleDraftResult.Failure>(repository(server).createDraft(request(), "pm_at_live")).retryable)
+        }
+    }
+
+    @Test
+    fun networkFailureIsRetryable() = runTest {
+        val server = MockWebServer()
+        server.start()
+        val baseUrl = ApiBaseUrl.parse(server.url("/").toString())
+        server.close()
+
+        val failure = assertIs<CapsuleDraftResult.Failure>(
+            CapsuleDraftRepository.create(baseUrl).createDraft(request(), "pm_at_live"),
+        )
+        assertEquals(CapsuleDraftFailure.NETWORK, failure.reason)
+        assertTrue(failure.retryable)
     }
 
     @Test
@@ -202,7 +302,11 @@ class CapsuleDraftRepositoryTest {
             )
             val failure = assertIs<CapsuleDraftResult.Failure>(repository(server).createDraft(request(), "pm_at_live"))
             assertEquals(CapsuleDraftFailure.HTTP, failure.reason)
+            assertTrue(failure.retryable)
             assertTrue(!failure.toString().contains("private detail"))
         }
     }
+
+    private fun problemJson(code: String, status: Int, retryable: Boolean): String =
+        """{"type":"https://remanence.invalid/problems/${code.lowercase()}","title":"safe","status":$status,"code":"$code","detail":"private detail","request_id":"0198f0a0-0000-7000-8000-00000000ac01","retryable":$retryable}"""
 }

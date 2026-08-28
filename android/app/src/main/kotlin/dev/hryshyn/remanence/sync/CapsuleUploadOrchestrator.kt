@@ -381,13 +381,13 @@ class CapsuleUploadOrchestrator(
         capsuleId: CapsuleId,
         failure: CapsuleDraftResult.Failure,
     ): CapsuleUploadOutcome {
+        if (failure.reason == CapsuleDraftFailure.RECIPIENT_KEY_STALE) {
+            return markRecipientKeyStale(owner, capsuleId)
+        }
+        if (failure.reason == CapsuleDraftFailure.AUTH_INVALID || failure.retryable) {
+            return markRetryable(owner, capsuleId, draftRetryableCode(failure.reason))
+        }
         val code = when (failure.reason) {
-            CapsuleDraftFailure.NETWORK,
-            CapsuleDraftFailure.AUTH_INVALID,
-            CapsuleDraftFailure.INTERNAL_UNAVAILABLE,
-            -> return markRetryable(owner, capsuleId, failure.reason.name)
-            CapsuleDraftFailure.RECIPIENT_KEY_STALE ->
-                return markRecipientKeyStale(owner, capsuleId)
             CapsuleDraftFailure.VALIDATION_FAILED,
             CapsuleDraftFailure.IDEMPOTENCY_CONFLICT,
             CapsuleDraftFailure.RECIPIENT_NOT_CONFIRMED,
@@ -396,9 +396,14 @@ class CapsuleUploadOrchestrator(
             CapsuleDraftFailure.CAPSULE_STATE_INVALID,
             CapsuleDraftFailure.DRAFT_EXPIRED,
             -> failure.reason.name
+            CapsuleDraftFailure.NETWORK,
+            CapsuleDraftFailure.RATE_LIMITED,
             CapsuleDraftFailure.HTTP,
             CapsuleDraftFailure.INVALID_RESPONSE,
+            CapsuleDraftFailure.INTERNAL_UNAVAILABLE,
             CapsuleDraftFailure.INTERNAL_ERROR,
+            CapsuleDraftFailure.AUTH_INVALID,
+            CapsuleDraftFailure.RECIPIENT_KEY_STALE,
             -> "INTERNAL_ERROR"
         }
         return markTerminal(owner, capsuleId, code)
@@ -409,11 +414,10 @@ class CapsuleUploadOrchestrator(
         capsuleId: CapsuleId,
         failure: CapsuleBlobUploadResult.Failure,
     ): CapsuleUploadOutcome {
+        if (failure.reason == CapsuleBlobUploadFailure.AUTH_INVALID || failure.retryable) {
+            return markRetryable(owner, capsuleId, blobRetryableCode(failure.reason))
+        }
         return when (failure.reason) {
-            CapsuleBlobUploadFailure.NETWORK,
-            CapsuleBlobUploadFailure.AUTH_INVALID,
-            CapsuleBlobUploadFailure.INTERNAL_UNAVAILABLE,
-            -> markRetryable(owner, capsuleId, failure.reason.name)
             CapsuleBlobUploadFailure.VALIDATION_FAILED,
             CapsuleBlobUploadFailure.CAPSULE_NOT_FOUND,
             CapsuleBlobUploadFailure.CAPSULE_STATE_INVALID,
@@ -423,8 +427,12 @@ class CapsuleUploadOrchestrator(
             CapsuleBlobUploadFailure.BLOB_HASH_MISMATCH,
             CapsuleBlobUploadFailure.BLOB_CONFLICT,
             -> markTerminal(owner, capsuleId, failure.reason.name)
+            CapsuleBlobUploadFailure.NETWORK,
+            CapsuleBlobUploadFailure.RATE_LIMITED,
             CapsuleBlobUploadFailure.HTTP,
             CapsuleBlobUploadFailure.INVALID_RESPONSE,
+            CapsuleBlobUploadFailure.AUTH_INVALID,
+            CapsuleBlobUploadFailure.INTERNAL_UNAVAILABLE,
             CapsuleBlobUploadFailure.INTERNAL_ERROR,
             -> markTerminal(owner, capsuleId, "INTERNAL_ERROR")
         }
@@ -435,13 +443,13 @@ class CapsuleUploadOrchestrator(
         capsuleId: CapsuleId,
         failure: CapsuleFinalizeResult.Failure,
     ): CapsuleUploadOutcome {
+        if (failure.reason == CapsuleFinalizeFailure.RECIPIENT_KEY_STALE) {
+            return markRecipientKeyStale(owner, capsuleId)
+        }
+        if (failure.reason == CapsuleFinalizeFailure.AUTH_INVALID || failure.retryable) {
+            return markRetryable(owner, capsuleId, finalizeRetryableCode(failure.reason))
+        }
         return when (failure.reason) {
-            CapsuleFinalizeFailure.NETWORK,
-            CapsuleFinalizeFailure.AUTH_INVALID,
-            CapsuleFinalizeFailure.INTERNAL_UNAVAILABLE,
-            -> markRetryable(owner, capsuleId, failure.reason.name)
-            CapsuleFinalizeFailure.RECIPIENT_KEY_STALE ->
-                markRecipientKeyStale(owner, capsuleId)
             CapsuleFinalizeFailure.VALIDATION_FAILED,
             CapsuleFinalizeFailure.CAPSULE_NOT_FOUND,
             CapsuleFinalizeFailure.CAPSULE_STATE_INVALID,
@@ -454,11 +462,37 @@ class CapsuleUploadOrchestrator(
             CapsuleFinalizeFailure.ENVELOPE_INVALID,
             CapsuleFinalizeFailure.FINALIZE_CONFLICT,
             -> markTerminal(owner, capsuleId, failure.reason.name)
+            CapsuleFinalizeFailure.NETWORK,
+            CapsuleFinalizeFailure.RATE_LIMITED,
             CapsuleFinalizeFailure.HTTP,
             CapsuleFinalizeFailure.INVALID_RESPONSE,
+            CapsuleFinalizeFailure.AUTH_INVALID,
+            CapsuleFinalizeFailure.RECIPIENT_KEY_STALE,
+            CapsuleFinalizeFailure.INTERNAL_UNAVAILABLE,
             CapsuleFinalizeFailure.INTERNAL_ERROR,
             -> markTerminal(owner, capsuleId, "INTERNAL_ERROR")
         }
+    }
+
+    private fun draftRetryableCode(reason: CapsuleDraftFailure): String = when (reason) {
+        CapsuleDraftFailure.HTTP,
+        CapsuleDraftFailure.INVALID_RESPONSE,
+        -> "INTERNAL_UNAVAILABLE"
+        else -> reason.name
+    }
+
+    private fun blobRetryableCode(reason: CapsuleBlobUploadFailure): String = when (reason) {
+        CapsuleBlobUploadFailure.HTTP,
+        CapsuleBlobUploadFailure.INVALID_RESPONSE,
+        -> "INTERNAL_UNAVAILABLE"
+        else -> reason.name
+    }
+
+    private fun finalizeRetryableCode(reason: CapsuleFinalizeFailure): String = when (reason) {
+        CapsuleFinalizeFailure.HTTP,
+        CapsuleFinalizeFailure.INVALID_RESPONSE,
+        -> "INTERNAL_UNAVAILABLE"
+        else -> reason.name
     }
 
     private suspend fun markRetryable(

@@ -8,6 +8,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
@@ -82,30 +83,33 @@ class CapsuleBlobUploadRepositoryTest {
     fun stableBlobProblemCodesMapWithoutRetainingDetails() = runTest {
         withServer { server ->
             val cases = listOf(
-                "AUTH_INVALID" to CapsuleBlobUploadFailure.AUTH_INVALID,
-                "VALIDATION_FAILED" to CapsuleBlobUploadFailure.VALIDATION_FAILED,
-                "CAPSULE_NOT_FOUND" to CapsuleBlobUploadFailure.CAPSULE_NOT_FOUND,
-                "CAPSULE_STATE_INVALID" to CapsuleBlobUploadFailure.CAPSULE_STATE_INVALID,
-                "DRAFT_EXPIRED" to CapsuleBlobUploadFailure.DRAFT_EXPIRED,
-                "BLOB_NOT_DECLARED" to CapsuleBlobUploadFailure.BLOB_NOT_DECLARED,
-                "BLOB_SIZE_INVALID" to CapsuleBlobUploadFailure.BLOB_SIZE_INVALID,
-                "BLOB_HASH_MISMATCH" to CapsuleBlobUploadFailure.BLOB_HASH_MISMATCH,
-                "BLOB_CONFLICT" to CapsuleBlobUploadFailure.BLOB_CONFLICT,
-                "INTERNAL_UNAVAILABLE" to CapsuleBlobUploadFailure.INTERNAL_UNAVAILABLE,
-                "INTERNAL_ERROR" to CapsuleBlobUploadFailure.INTERNAL_ERROR,
+                Triple("AUTH_INVALID", CapsuleBlobUploadFailure.AUTH_INVALID, 401 to false),
+                Triple("VALIDATION_FAILED", CapsuleBlobUploadFailure.VALIDATION_FAILED, 422 to false),
+                Triple("CAPSULE_NOT_FOUND", CapsuleBlobUploadFailure.CAPSULE_NOT_FOUND, 404 to false),
+                Triple("CAPSULE_STATE_INVALID", CapsuleBlobUploadFailure.CAPSULE_STATE_INVALID, 409 to false),
+                Triple("DRAFT_EXPIRED", CapsuleBlobUploadFailure.DRAFT_EXPIRED, 409 to false),
+                Triple("BLOB_NOT_DECLARED", CapsuleBlobUploadFailure.BLOB_NOT_DECLARED, 404 to false),
+                Triple("BLOB_SIZE_INVALID", CapsuleBlobUploadFailure.BLOB_SIZE_INVALID, 422 to false),
+                Triple("BLOB_HASH_MISMATCH", CapsuleBlobUploadFailure.BLOB_HASH_MISMATCH, 422 to false),
+                Triple("BLOB_CONFLICT", CapsuleBlobUploadFailure.BLOB_CONFLICT, 409 to false),
+                Triple("RATE_LIMITED", CapsuleBlobUploadFailure.RATE_LIMITED, 429 to true),
+                Triple("INTERNAL_ERROR", CapsuleBlobUploadFailure.INTERNAL_ERROR, 503 to true),
+                Triple("INTERNAL_ERROR", CapsuleBlobUploadFailure.INTERNAL_ERROR, 500 to false),
             )
-            cases.forEach { (code, expected) ->
+            cases.forEach { (code, expected, statusAndRetryable) ->
+                val (status, retryable) = statusAndRetryable
                 server.enqueue(
                     MockResponse.Builder()
-                        .code(if (code == "AUTH_INVALID") 401 else if (code == "INTERNAL_UNAVAILABLE") 503 else 409)
+                        .code(status)
                         .setHeader("Content-Type", "application/problem+json")
-                        .body(problemJson(code))
+                        .body(problemJson(code, status, retryable))
                         .build(),
                 )
                 val failure = assertIs<CapsuleBlobUploadResult.Failure>(
                     repository(server).uploadBlob(request(), accessToken = "pm_at_live"),
                 )
                 assertEquals(expected, failure.reason)
+                assertEquals(retryable, failure.retryable)
                 assertFalse(failure.toString().contains(SECRET_DETAIL))
             }
         }
@@ -122,7 +126,7 @@ class CapsuleBlobUploadRepositoryTest {
 
             server.enqueue(
                 MockResponse.Builder()
-                    .code(500)
+                    .code(503)
                     .setHeader("Content-Type", "application/problem+json")
                     .body("x".repeat(64 * 1024 + 1))
                     .build(),
@@ -131,6 +135,7 @@ class CapsuleBlobUploadRepositoryTest {
                 repository(server).uploadBlob(request(), accessToken = "pm_at_live"),
             )
             assertEquals(CapsuleBlobUploadFailure.INVALID_RESPONSE, oversized.reason)
+            assertTrue(oversized.retryable)
 
             server.enqueue(
                 MockResponse.Builder()
@@ -143,7 +148,58 @@ class CapsuleBlobUploadRepositoryTest {
                 repository(server).uploadBlob(request(), accessToken = "pm_at_live"),
             )
             assertEquals(CapsuleBlobUploadFailure.HTTP, malformed.reason)
+            assertFalse(malformed.retryable)
         }
+    }
+
+    @Test
+    fun malformedAndProxyResponsesUseHttpRetryabilityFallback() = runTest {
+        withServer { server ->
+            fun enqueue(status: Int, contentType: String?, body: String) {
+                server.enqueue(
+                    MockResponse.Builder()
+                        .code(status)
+                        .apply { if (contentType != null) setHeader("Content-Type", contentType) }
+                        .body(body)
+                        .build(),
+                )
+            }
+
+            enqueue(503, "application/problem+json", "not-json")
+            assertTrue(assertIs<CapsuleBlobUploadResult.Failure>(repository(server).uploadBlob(request(), "pm_at_live")).retryable)
+
+            enqueue(503, "text/plain", "proxy failure")
+            assertTrue(assertIs<CapsuleBlobUploadResult.Failure>(repository(server).uploadBlob(request(), "pm_at_live")).retryable)
+
+            enqueue(429, "application/problem+json", "not-json")
+            assertTrue(assertIs<CapsuleBlobUploadResult.Failure>(repository(server).uploadBlob(request(), "pm_at_live")).retryable)
+
+            enqueue(429, "text/plain", "rate limited")
+            assertTrue(assertIs<CapsuleBlobUploadResult.Failure>(repository(server).uploadBlob(request(), "pm_at_live")).retryable)
+
+            enqueue(429, "application/problem+json", "x".repeat(64 * 1024 + 1))
+            assertTrue(assertIs<CapsuleBlobUploadResult.Failure>(repository(server).uploadBlob(request(), "pm_at_live")).retryable)
+
+            enqueue(418, "application/problem+json", "not-json")
+            assertFalse(assertIs<CapsuleBlobUploadResult.Failure>(repository(server).uploadBlob(request(), "pm_at_live")).retryable)
+
+            enqueue(201, "application/json", "not-json")
+            assertFalse(assertIs<CapsuleBlobUploadResult.Failure>(repository(server).uploadBlob(request(), "pm_at_live")).retryable)
+        }
+    }
+
+    @Test
+    fun networkFailureIsRetryable() = runTest {
+        val server = MockWebServer()
+        server.start()
+        val baseUrl = ApiBaseUrl.parse(server.url("/").toString())
+        server.close()
+
+        val failure = assertIs<CapsuleBlobUploadResult.Failure>(
+            CapsuleBlobUploadRepository.create(baseUrl).uploadBlob(request(), "pm_at_live"),
+        )
+        assertEquals(CapsuleBlobUploadFailure.NETWORK, failure.reason)
+        assertTrue(failure.retryable)
     }
 
     @Test
@@ -205,9 +261,9 @@ class CapsuleBlobUploadRepositoryTest {
     private fun repository(server: MockWebServer): CapsuleBlobUploadRepository =
         CapsuleBlobUploadRepository.create(ApiBaseUrl.parse(server.url("/").toString()))
 
-    private fun problemJson(code: String): String =
+    private fun problemJson(code: String, status: Int, retryable: Boolean): String =
         """
-        {"type":"https://remanence.invalid/problems/$code","title":"safe","status":409,"code":"$code","detail":"$SECRET_DETAIL","request_id":"0198f0a0-0000-7000-8000-00000000ac01","retryable":false}
+        {"type":"https://remanence.invalid/problems/$code","title":"safe","status":$status,"code":"$code","detail":"$SECRET_DETAIL","request_id":"0198f0a0-0000-7000-8000-00000000ac01","retryable":$retryable}
         """.trimIndent()
 
     private companion object {

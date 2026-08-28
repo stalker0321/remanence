@@ -73,6 +73,7 @@ data class CapsuleDraft(
 
 enum class CapsuleDraftFailure {
     NETWORK,
+    RATE_LIMITED,
     HTTP,
     INVALID_RESPONSE,
     AUTH_INVALID,
@@ -97,6 +98,7 @@ sealed interface CapsuleDraftResult {
     data class Failure(
         val reason: CapsuleDraftFailure,
         val httpStatus: Int? = null,
+        val retryable: Boolean,
     ) : CapsuleDraftResult
 }
 
@@ -131,17 +133,6 @@ private data class CapsuleDraftResponseDto(
     val state: String,
     @SerialName("draft_expires_at") val draftExpiresAt: String,
     val blobs: List<CapsuleDraftBlobResponseDto>,
-)
-
-@Serializable
-private data class ProblemResponseDto(
-    val type: String,
-    val title: String,
-    val status: Int,
-    val code: String,
-    val detail: String,
-    val request_id: String,
-    val retryable: Boolean,
 )
 
 /** Authenticated client for the existing-user M2 draft-create endpoint. */
@@ -191,7 +182,7 @@ class CapsuleDraftRepository internal constructor(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: IOException) {
-            CapsuleDraftResult.Failure(CapsuleDraftFailure.NETWORK)
+            CapsuleDraftResult.Failure(CapsuleDraftFailure.NETWORK, retryable = true)
         }
     }
 
@@ -199,35 +190,45 @@ class CapsuleDraftRepository internal constructor(
         response: Response,
         request: CapsuleDraftRequest,
     ): CapsuleDraftResult {
-        val body = response.body
+        val bytes = readBounded(response.body) ?: return CapsuleDraftResult.Failure(
+            CapsuleDraftFailure.INVALID_RESPONSE,
+            response.code,
+            retryable = capsuleHttpFallbackIsRetryable(response.code),
+        )
+        val text = bytes.toString(Charsets.UTF_8)
+        if (response.code != HTTP_CREATED && response.code != HTTP_OK) {
+            if (!isProblemJson(response)) {
+                return CapsuleDraftResult.Failure(
+                    CapsuleDraftFailure.INVALID_RESPONSE,
+                    response.code,
+                    retryable = capsuleHttpFallbackIsRetryable(response.code),
+                )
+            }
+            val problem = parseProblem(text, response.code)
+            return CapsuleDraftResult.Failure(
+                reason = problem?.let { mapProblemCode(it.code) } ?: CapsuleDraftFailure.HTTP,
+                httpStatus = response.code,
+                retryable = problem?.retryable ?: capsuleHttpFallbackIsRetryable(response.code),
+            )
+        }
         if (!isJson(response)) {
             return CapsuleDraftResult.Failure(
                 CapsuleDraftFailure.INVALID_RESPONSE,
                 response.code,
-            )
-        }
-        val bytes = readBounded(body) ?: return CapsuleDraftResult.Failure(
-            CapsuleDraftFailure.INVALID_RESPONSE,
-            response.code,
-        )
-        val text = bytes.toString(Charsets.UTF_8)
-        if (response.code != HTTP_CREATED && response.code != HTTP_OK) {
-            return CapsuleDraftResult.Failure(
-                reason = parseProblemCode(text) ?: CapsuleDraftFailure.HTTP,
-                httpStatus = response.code,
+                retryable = false,
             )
         }
         val dto = try {
             NetworkJson.decodeFromString<CapsuleDraftResponseDto>(text)
         } catch (_: SerializationException) {
-            return CapsuleDraftResult.Failure(CapsuleDraftFailure.INVALID_RESPONSE, response.code)
+            return CapsuleDraftResult.Failure(CapsuleDraftFailure.INVALID_RESPONSE, response.code, retryable = false)
         } catch (_: IllegalArgumentException) {
-            return CapsuleDraftResult.Failure(CapsuleDraftFailure.INVALID_RESPONSE, response.code)
+            return CapsuleDraftResult.Failure(CapsuleDraftFailure.INVALID_RESPONSE, response.code, retryable = false)
         }
         return try {
             CapsuleDraftResult.Success(mapResponse(dto, request), response.code)
         } catch (_: IllegalArgumentException) {
-            CapsuleDraftResult.Failure(CapsuleDraftFailure.INVALID_RESPONSE, response.code)
+            CapsuleDraftResult.Failure(CapsuleDraftFailure.INVALID_RESPONSE, response.code, retryable = false)
         }
     }
 
@@ -256,34 +257,33 @@ class CapsuleDraftRepository internal constructor(
         )
     }
 
-    private fun parseProblemCode(text: String): CapsuleDraftFailure? {
-        val code = try {
-            NetworkJson.decodeFromString<ProblemResponseDto>(text).code
-        } catch (_: SerializationException) {
-            return null
-        } catch (_: IllegalArgumentException) {
-            return null
-        }
-        return when (code) {
-            "AUTH_INVALID" -> CapsuleDraftFailure.AUTH_INVALID
-            "VALIDATION_FAILED" -> CapsuleDraftFailure.VALIDATION_FAILED
-            "IDEMPOTENCY_CONFLICT" -> CapsuleDraftFailure.IDEMPOTENCY_CONFLICT
-            "RECIPIENT_NOT_CONFIRMED" -> CapsuleDraftFailure.RECIPIENT_NOT_CONFIRMED
-            "RECIPIENT_KEY_STALE" -> CapsuleDraftFailure.RECIPIENT_KEY_STALE
-            "KEY_BUNDLE_NOT_FOUND" -> CapsuleDraftFailure.KEY_BUNDLE_NOT_FOUND
-            "KEY_BUNDLE_INVALID" -> CapsuleDraftFailure.KEY_BUNDLE_INVALID
-            "CAPSULE_STATE_INVALID" -> CapsuleDraftFailure.CAPSULE_STATE_INVALID
-            "DRAFT_EXPIRED" -> CapsuleDraftFailure.DRAFT_EXPIRED
-            "INTERNAL_UNAVAILABLE" -> CapsuleDraftFailure.INTERNAL_UNAVAILABLE
-            "INTERNAL_ERROR" -> CapsuleDraftFailure.INTERNAL_ERROR
-            else -> null
-        }
+    private fun parseProblem(text: String, httpStatus: Int): ClassifiedCapsuleProblem? =
+        classifyCapsuleProblem(text, httpStatus, DRAFT_PROBLEM_CODES)
+
+    private fun mapProblemCode(code: String): CapsuleDraftFailure = when (code) {
+        "AUTH_INVALID" -> CapsuleDraftFailure.AUTH_INVALID
+        "RATE_LIMITED" -> CapsuleDraftFailure.RATE_LIMITED
+        "VALIDATION_FAILED" -> CapsuleDraftFailure.VALIDATION_FAILED
+        "IDEMPOTENCY_CONFLICT" -> CapsuleDraftFailure.IDEMPOTENCY_CONFLICT
+        "RECIPIENT_NOT_CONFIRMED" -> CapsuleDraftFailure.RECIPIENT_NOT_CONFIRMED
+        "RECIPIENT_KEY_STALE" -> CapsuleDraftFailure.RECIPIENT_KEY_STALE
+        "KEY_BUNDLE_NOT_FOUND" -> CapsuleDraftFailure.KEY_BUNDLE_NOT_FOUND
+        "KEY_BUNDLE_INVALID" -> CapsuleDraftFailure.KEY_BUNDLE_INVALID
+        "CAPSULE_STATE_INVALID" -> CapsuleDraftFailure.CAPSULE_STATE_INVALID
+        "DRAFT_EXPIRED" -> CapsuleDraftFailure.DRAFT_EXPIRED
+        "INTERNAL_ERROR" -> CapsuleDraftFailure.INTERNAL_ERROR
+        else -> CapsuleDraftFailure.HTTP
     }
 
     private fun isJson(response: Response): Boolean {
         val contentType = response.body.contentType() ?: return false
         return contentType.type == "application" &&
             contentType.subtype in setOf("json", "problem+json")
+    }
+
+    private fun isProblemJson(response: Response): Boolean {
+        val contentType = response.body.contentType() ?: return false
+        return contentType.type == "application" && contentType.subtype == "problem+json"
     }
 
     private fun readBounded(body: ResponseBody): ByteArray? {
@@ -309,6 +309,20 @@ class CapsuleDraftRepository internal constructor(
         private const val HTTP_CREATED = 201
         private const val HTTP_OK = 200
         private const val MAX_RESPONSE_BYTES = 64 * 1024L
+
+        private val DRAFT_PROBLEM_CODES = setOf(
+            "AUTH_INVALID",
+            "RATE_LIMITED",
+            "VALIDATION_FAILED",
+            "IDEMPOTENCY_CONFLICT",
+            "RECIPIENT_NOT_CONFIRMED",
+            "RECIPIENT_KEY_STALE",
+            "KEY_BUNDLE_NOT_FOUND",
+            "KEY_BUNDLE_INVALID",
+            "CAPSULE_STATE_INVALID",
+            "DRAFT_EXPIRED",
+            "INTERNAL_ERROR",
+        )
 
         fun create(baseUrl: ApiBaseUrl): CapsuleDraftRepository =
             CapsuleDraftRepository(HttpClientFactory.create(), baseUrl)

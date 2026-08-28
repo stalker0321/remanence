@@ -94,6 +94,7 @@ data class CapsuleFinalize(
 
 enum class CapsuleFinalizeFailure {
     NETWORK,
+    RATE_LIMITED,
     HTTP,
     INVALID_RESPONSE,
     AUTH_INVALID,
@@ -122,6 +123,7 @@ sealed interface CapsuleFinalizeResult {
     data class Failure(
         val reason: CapsuleFinalizeFailure,
         val httpStatus: Int? = null,
+        val retryable: Boolean,
     ) : CapsuleFinalizeResult
 }
 
@@ -151,17 +153,6 @@ private data class CapsuleFinalizeResponseDto(
     @SerialName("capsule_id") val capsuleId: String,
     val state: String,
     @SerialName("ready_at") val readyAt: String,
-)
-
-@Serializable
-private data class CapsuleFinalizeProblemResponseDto(
-    val type: String,
-    val title: String,
-    val status: Int,
-    val code: String,
-    val detail: String,
-    val request_id: String,
-    val retryable: Boolean,
 )
 
 /** Authenticated finalize call for one signed, fully uploaded draft. */
@@ -207,7 +198,7 @@ class CapsuleFinalizeRepository internal constructor(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: IOException) {
-            CapsuleFinalizeResult.Failure(CapsuleFinalizeFailure.NETWORK)
+            CapsuleFinalizeResult.Failure(CapsuleFinalizeFailure.NETWORK, retryable = true)
         }
     }
 
@@ -219,36 +210,41 @@ class CapsuleFinalizeRepository internal constructor(
             ?: return CapsuleFinalizeResult.Failure(
                 CapsuleFinalizeFailure.INVALID_RESPONSE,
                 response.code,
+                retryable = capsuleHttpFallbackIsRetryable(response.code),
             )
         if (response.code != HTTP_CREATED && response.code != HTTP_OK) {
             if (!isJson(response, PROBLEM_JSON_SUBTYPE)) {
                 return CapsuleFinalizeResult.Failure(
                     CapsuleFinalizeFailure.INVALID_RESPONSE,
                     response.code,
+                    retryable = capsuleHttpFallbackIsRetryable(response.code),
                 )
             }
+            val problem = parseProblem(bytes.toString(Charsets.UTF_8), response.code)
             return CapsuleFinalizeResult.Failure(
-                parseProblemCode(bytes.toString(Charsets.UTF_8)) ?: CapsuleFinalizeFailure.HTTP,
-                response.code,
+                reason = problem?.let { mapProblemCode(it.code) } ?: CapsuleFinalizeFailure.HTTP,
+                httpStatus = response.code,
+                retryable = problem?.retryable ?: capsuleHttpFallbackIsRetryable(response.code),
             )
         }
         if (!isJson(response, JSON_SUBTYPE)) {
             return CapsuleFinalizeResult.Failure(
                 CapsuleFinalizeFailure.INVALID_RESPONSE,
                 response.code,
+                retryable = false,
             )
         }
         val dto = try {
             NetworkJson.decodeFromString<CapsuleFinalizeResponseDto>(bytes.toString(Charsets.UTF_8))
         } catch (_: SerializationException) {
-            return CapsuleFinalizeResult.Failure(CapsuleFinalizeFailure.INVALID_RESPONSE, response.code)
+            return CapsuleFinalizeResult.Failure(CapsuleFinalizeFailure.INVALID_RESPONSE, response.code, retryable = false)
         } catch (_: IllegalArgumentException) {
-            return CapsuleFinalizeResult.Failure(CapsuleFinalizeFailure.INVALID_RESPONSE, response.code)
+            return CapsuleFinalizeResult.Failure(CapsuleFinalizeFailure.INVALID_RESPONSE, response.code, retryable = false)
         }
         return try {
             CapsuleFinalizeResult.Success(mapResponse(dto, request), response.code)
         } catch (_: IllegalArgumentException) {
-            CapsuleFinalizeResult.Failure(CapsuleFinalizeFailure.INVALID_RESPONSE, response.code)
+            CapsuleFinalizeResult.Failure(CapsuleFinalizeFailure.INVALID_RESPONSE, response.code, retryable = false)
         }
     }
 
@@ -267,32 +263,26 @@ class CapsuleFinalizeRepository internal constructor(
         )
     }
 
-    private fun parseProblemCode(text: String): CapsuleFinalizeFailure? {
-        val code = try {
-            NetworkJson.decodeFromString<CapsuleFinalizeProblemResponseDto>(text).code
-        } catch (_: SerializationException) {
-            return null
-        } catch (_: IllegalArgumentException) {
-            return null
-        }
-        return when (code) {
-            "AUTH_INVALID" -> CapsuleFinalizeFailure.AUTH_INVALID
-            "VALIDATION_FAILED" -> CapsuleFinalizeFailure.VALIDATION_FAILED
-            "CAPSULE_NOT_FOUND" -> CapsuleFinalizeFailure.CAPSULE_NOT_FOUND
-            "CAPSULE_STATE_INVALID" -> CapsuleFinalizeFailure.CAPSULE_STATE_INVALID
-            "DRAFT_EXPIRED" -> CapsuleFinalizeFailure.DRAFT_EXPIRED
-            "KEY_BUNDLE_NOT_FOUND" -> CapsuleFinalizeFailure.KEY_BUNDLE_NOT_FOUND
-            "KEY_BUNDLE_INVALID" -> CapsuleFinalizeFailure.KEY_BUNDLE_INVALID
-            "KEY_BUNDLE_REVOKED" -> CapsuleFinalizeFailure.KEY_BUNDLE_REVOKED
-            "RECIPIENT_KEY_STALE" -> CapsuleFinalizeFailure.RECIPIENT_KEY_STALE
-            "STATEMENT_INVALID" -> CapsuleFinalizeFailure.STATEMENT_INVALID
-            "SIGNATURE_INVALID" -> CapsuleFinalizeFailure.SIGNATURE_INVALID
-            "ENVELOPE_INVALID" -> CapsuleFinalizeFailure.ENVELOPE_INVALID
-            "FINALIZE_CONFLICT" -> CapsuleFinalizeFailure.FINALIZE_CONFLICT
-            "INTERNAL_UNAVAILABLE" -> CapsuleFinalizeFailure.INTERNAL_UNAVAILABLE
-            "INTERNAL_ERROR" -> CapsuleFinalizeFailure.INTERNAL_ERROR
-            else -> null
-        }
+    private fun parseProblem(text: String, httpStatus: Int): ClassifiedCapsuleProblem? =
+        classifyCapsuleProblem(text, httpStatus, FINALIZE_PROBLEM_CODES)
+
+    private fun mapProblemCode(code: String): CapsuleFinalizeFailure = when (code) {
+        "AUTH_INVALID" -> CapsuleFinalizeFailure.AUTH_INVALID
+        "RATE_LIMITED" -> CapsuleFinalizeFailure.RATE_LIMITED
+        "VALIDATION_FAILED" -> CapsuleFinalizeFailure.VALIDATION_FAILED
+        "CAPSULE_NOT_FOUND" -> CapsuleFinalizeFailure.CAPSULE_NOT_FOUND
+        "CAPSULE_STATE_INVALID" -> CapsuleFinalizeFailure.CAPSULE_STATE_INVALID
+        "DRAFT_EXPIRED" -> CapsuleFinalizeFailure.DRAFT_EXPIRED
+        "KEY_BUNDLE_NOT_FOUND" -> CapsuleFinalizeFailure.KEY_BUNDLE_NOT_FOUND
+        "KEY_BUNDLE_INVALID" -> CapsuleFinalizeFailure.KEY_BUNDLE_INVALID
+        "KEY_BUNDLE_REVOKED" -> CapsuleFinalizeFailure.KEY_BUNDLE_REVOKED
+        "RECIPIENT_KEY_STALE" -> CapsuleFinalizeFailure.RECIPIENT_KEY_STALE
+        "STATEMENT_INVALID" -> CapsuleFinalizeFailure.STATEMENT_INVALID
+        "SIGNATURE_INVALID" -> CapsuleFinalizeFailure.SIGNATURE_INVALID
+        "ENVELOPE_INVALID" -> CapsuleFinalizeFailure.ENVELOPE_INVALID
+        "FINALIZE_CONFLICT" -> CapsuleFinalizeFailure.FINALIZE_CONFLICT
+        "INTERNAL_ERROR" -> CapsuleFinalizeFailure.INTERNAL_ERROR
+        else -> CapsuleFinalizeFailure.HTTP
     }
 
     private fun isJson(response: Response, expectedSubtype: String): Boolean {
@@ -326,6 +316,24 @@ class CapsuleFinalizeRepository internal constructor(
         private const val HTTP_CREATED = 201
         private const val HTTP_OK = 200
         private const val MAX_RESPONSE_BYTES = 64 * 1024L
+
+        private val FINALIZE_PROBLEM_CODES = setOf(
+            "AUTH_INVALID",
+            "RATE_LIMITED",
+            "VALIDATION_FAILED",
+            "CAPSULE_NOT_FOUND",
+            "CAPSULE_STATE_INVALID",
+            "DRAFT_EXPIRED",
+            "KEY_BUNDLE_NOT_FOUND",
+            "KEY_BUNDLE_INVALID",
+            "KEY_BUNDLE_REVOKED",
+            "RECIPIENT_KEY_STALE",
+            "STATEMENT_INVALID",
+            "SIGNATURE_INVALID",
+            "ENVELOPE_INVALID",
+            "FINALIZE_CONFLICT",
+            "INTERNAL_ERROR",
+        )
 
         fun create(baseUrl: ApiBaseUrl): CapsuleFinalizeRepository =
             CapsuleFinalizeRepository(HttpClientFactory.create(), baseUrl)

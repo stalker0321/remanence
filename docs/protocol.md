@@ -316,7 +316,7 @@ A failed transaction leaves an unrouteable `DRAFT`. Identical finalize replay re
 
 ### `DELETE /v1/capsules/{capsule_id}`
 
-Sender may abort only a `DRAFT`; returns `204`. Ready capsules cannot be revoked in MVP. Expired drafts and unreferenced blobs are garbage-collected.
+Authenticated sender abort of an owned `DRAFT`, including an expired draft, returns empty `204`. Owned `ABORTED` replay is the same empty `204`; no `Idempotency-Key` is required. Missing or foreign capsules return `CAPSULE_NOT_FOUND`. `READY` cannot be revoked in MVP (`CAPSULE_STATE_INVALID`).
 
 ## 8. Recipient delivery endpoints
 

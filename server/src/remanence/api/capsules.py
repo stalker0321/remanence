@@ -21,6 +21,7 @@ from remanence.api.dependencies import (
     get_db_session,
 )
 from remanence.api.problems import PROBLEM_CATALOG, problem_response
+from remanence.capsules.abort_service import CapsuleAbortError, CapsuleAbortService
 from remanence.capsules.draft_service import (
     CapsuleDraftResult,
     CapsuleDraftService,
@@ -422,6 +423,34 @@ async def finalize_capsule(
     except CapsuleDraftValidationError as exc:
         return _problem_response(request, exc.code)
     except CapsuleFinalizeError as exc:
+        return _problem_response(request, exc.code)
+    except Exception:
+        return _problem_response(request, "INTERNAL_ERROR")
+
+
+@router.delete(
+    "/v1/capsules/{capsule_id}",
+    status_code=204,
+    response_model=None,
+)
+def abort_capsule(
+    capsule_id: str,
+    request: Request,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    session: Session = Depends(get_db_session, use_cache=False),
+) -> Response | JSONResponse:
+    try:
+        parsed_capsule_id = _canonical_path_uuid(capsule_id)
+        with session.begin():
+            CapsuleAbortService(session).abort(
+                authenticated_sender_user_id=principal.user_id,
+                capsule_id=parsed_capsule_id,
+                now=datetime.now(timezone.utc),
+            )
+        return Response(status_code=204)
+    except CapsuleDraftValidationError as exc:
+        return _problem_response(request, exc.code)
+    except CapsuleAbortError as exc:
         return _problem_response(request, exc.code)
     except Exception:
         return _problem_response(request, "INTERNAL_ERROR")

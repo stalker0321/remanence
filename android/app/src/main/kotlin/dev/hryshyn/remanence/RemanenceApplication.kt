@@ -254,6 +254,11 @@ class AppContainer(
         apiStack.capsuleFinalizeRepository
     }
 
+    /** Immutable recipient lookup through the authenticated refreshing stack. */
+    val recipientUserLookupRepository: dev.hryshyn.remanence.core.data.network.RecipientUserLookupRepository by lazy {
+        apiStack.recipientUserLookupRepository
+    }
+
     /**
      * FIX-REVIEW2-04: THE trusted sender-key boundary for capsule
      * verification. Other senders resolve only through the authenticated

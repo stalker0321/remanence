@@ -42,6 +42,10 @@ class ProductionApiStack private constructor(
     val capsuleFinalizeRepository: CapsuleFinalizeRepository =
         CapsuleFinalizeRepository(authenticatedClient, baseUrl)
 
+    /** Immutable recipient lookup shares the authenticated refreshing client. */
+    val recipientUserLookupRepository: RecipientUserLookupRepository =
+        RecipientUserLookupRepository(authenticatedClient, baseUrl)
+
     companion object {
         fun create(
             baseUrl: ApiBaseUrl,

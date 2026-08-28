@@ -64,6 +64,7 @@ private val capsuleProblemJson = Json {
 
 private val TERMINAL_CODE_STATUSES = mapOf(
     "AUTH_INVALID" to 401,
+    "USER_NOT_FOUND" to 404,
     "VALIDATION_FAILED" to 422,
     "IDEMPOTENCY_CONFLICT" to 409,
     "RECIPIENT_NOT_CONFIRMED" to 409,

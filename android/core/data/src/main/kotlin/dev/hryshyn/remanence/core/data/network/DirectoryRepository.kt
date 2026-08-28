@@ -94,17 +94,7 @@ class DirectoryRepository internal constructor(
     }
 
     internal fun mapToSnapshot(dto: DirectoryLookupResponseDto): ResolvedHandleSnapshot =
-        ResolvedHandleSnapshot(
-            userId = UserId.parseRest(dto.user.userId),
-            handle = NormalizedHandle.parse(dto.user.handle),
-            keyBundleId = KeyBundleId.parseRest(dto.keyBundle.keyBundleId),
-            suite = dto.keyBundle.suite,
-            protocolVersion = dto.keyBundle.protocolVersion,
-            encryptionPublicKeysetB64Url = dto.keyBundle.encryptionPublicKeyset,
-            signingPublicKeysetB64Url = dto.keyBundle.signingPublicKeyset,
-            keyBundleStatus = dto.keyBundle.status,
-            directoryVersion = dto.directoryVersion,
-        )
+        mapDirectoryLookupToSnapshot(dto)
 
     companion object {
         fun create(baseUrl: ApiBaseUrl): DirectoryRepository =
@@ -114,3 +104,17 @@ class DirectoryRepository internal constructor(
         const val BEARER_PREFIX: String = RefreshingAuthenticator.BEARER_PREFIX
     }
 }
+
+/** Shared structural mapping for the two public-shape directory lookups. */
+internal fun mapDirectoryLookupToSnapshot(dto: DirectoryLookupResponseDto): ResolvedHandleSnapshot =
+    ResolvedHandleSnapshot(
+        userId = UserId.parseRest(dto.user.userId),
+        handle = NormalizedHandle.parse(dto.user.handle),
+        keyBundleId = KeyBundleId.parseRest(dto.keyBundle.keyBundleId),
+        suite = dto.keyBundle.suite,
+        protocolVersion = dto.keyBundle.protocolVersion,
+        encryptionPublicKeysetB64Url = dto.keyBundle.encryptionPublicKeyset,
+        signingPublicKeysetB64Url = dto.keyBundle.signingPublicKeyset,
+        keyBundleStatus = dto.keyBundle.status,
+        directoryVersion = dto.directoryVersion,
+    )

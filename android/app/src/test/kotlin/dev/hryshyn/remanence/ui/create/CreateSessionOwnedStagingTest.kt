@@ -35,6 +35,7 @@ import dev.hryshyn.remanence.core.data.network.DirectoryLookupResult
 import dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.NormalizedHandle
+import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
@@ -204,6 +205,7 @@ class CreateSessionOwnedStagingTest {
         identityGate: CompletableDeferred<SenderIdentitySnapshot>,
         identityCalls: AtomicInteger,
         laterOwner: UUID = userUuid,
+        enqueueUpload: suspend (UserId, CapsuleId) -> Unit = { _, _ -> },
     ): CreateViewModel {
         val persistence = RecordingPersistence()
         val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(stagingRoot.parentFile, "session-owned-outbox")))
@@ -231,6 +233,7 @@ class CreateSessionOwnedStagingTest {
             photoNormalizer = normalizer,
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
+            enqueueUpload = enqueueUpload,
         )
     }
 
@@ -278,7 +281,14 @@ class CreateSessionOwnedStagingTest {
         val normalizer = GatedNormalizer(oldPark, newGate)
         val identityGate = CompletableDeferred<SenderIdentitySnapshot>()
         val identityCalls = AtomicInteger(0)
-        val vm = newViewModel(normalizer, identityGate, identityCalls, switchedUserUuid)
+        val enqueued = mutableListOf<Pair<UserId, CapsuleId>>()
+        val vm = newViewModel(
+            normalizer,
+            identityGate,
+            identityCalls,
+            switchedUserUuid,
+            enqueueUpload = { owner, capsule -> enqueued += owner to capsule },
+        )
 
         // --- Account A: publish and park inside non-cooperative normalization.
         vm.beginSession(1L, userUuid.toString())
@@ -347,8 +357,12 @@ class CreateSessionOwnedStagingTest {
 
         // --- The new publication finishes with exactly its own outbox row.
         newGate.complete(Unit)
-        awaitStep(vm, CreateViewModel.Step.PUBLISHED)
+        awaitStep(vm, CreateViewModel.Step.UPLOAD_PENDING)
         assertNull(vm.publishError.value)
+        assertEquals(
+            listOf(UserId(switchedUserUuid) to CapsuleId(UUID.fromString(newCapsuleId))),
+            enqueued,
+        )
 
         runBlockingNullable {
             assertNull(database.outboxCapsuleDao().getByCapsuleIdAndOwner(oldCapsuleId, userUuid.toString()))

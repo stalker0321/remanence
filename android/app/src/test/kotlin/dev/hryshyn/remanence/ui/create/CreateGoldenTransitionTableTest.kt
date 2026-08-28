@@ -182,6 +182,7 @@ class CreateGoldenTransitionTableTest {
             ioDispatcher = testDispatcher,
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
+            enqueueUpload = { _, _ -> },
         ).also { it.beginSession(1L, "9c111111-2222-4333-8444-555555555555") }
     }
 

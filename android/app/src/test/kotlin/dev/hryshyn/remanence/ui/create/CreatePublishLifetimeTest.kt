@@ -13,6 +13,7 @@ import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -34,6 +35,7 @@ import dev.hryshyn.remanence.core.data.network.DirectoryLookupResult
 import dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.NormalizedHandle
+import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
@@ -200,6 +202,7 @@ class CreatePublishLifetimeTest {
     private fun contentStage(
         identityGate: CompletableDeferred<SenderIdentitySnapshot>,
         normalizerGate: CompletableDeferred<Unit>? = null,
+        enqueueUpload: suspend (UserId, CapsuleId) -> Unit = { _, _ -> },
     ): CreateViewModel {
         val persistence = RecordingPersistence()
         val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(outboxDir))
@@ -226,6 +229,7 @@ class CreatePublishLifetimeTest {
             ioDispatcher = testDispatcher,
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
+            enqueueUpload = enqueueUpload,
         )
         vm.beginSession(1L, userUuid.toString())
         vm.onResolved(selfSnapshot())
@@ -254,10 +258,67 @@ class CreatePublishLifetimeTest {
     // ------------------------------------------------------------------
 
     @Test
+    fun stagingPrecedesEnqueueAndLeavesCreateInUploadPending() = runBlocking {
+        val enqueued = mutableListOf<Pair<UserId, CapsuleId>>()
+        val vm = contentStage(
+            CompletableDeferred<SenderIdentitySnapshot>().apply { complete(senderIdentity()) },
+            enqueueUpload = { owner, capsule ->
+                val row = outboxRow(capsule.toRestString())
+                assertNotNull(row)
+                assertEquals(OutboxCapsuleState.ENCRYPTED, row!!.state)
+                enqueued += owner to capsule
+            },
+        )
+
+        vm.startPublishing()
+        awaitTerminalPublish(vm)
+
+        assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
+        assertEquals(listOf(UserId(userUuid) to CapsuleId(UUID.fromString(vm.capsuleId))), enqueued)
+        assertEquals(OutboxCapsuleState.ENCRYPTED, outboxRow(vm.capsuleId)!!.state)
+    }
+
+    @Test
+    fun enqueueFailureLeavesEncryptedRowRecoverableAndNeverPublished() = runBlocking {
+        val vm = contentStage(
+            CompletableDeferred<SenderIdentitySnapshot>().apply { complete(senderIdentity()) },
+            enqueueUpload = { _, _ -> throw IllegalStateException("work unavailable") },
+        )
+
+        vm.startPublishing()
+        awaitTerminalPublish(vm)
+
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        assertEquals("upload could not be queued; retry available", vm.publishError.value)
+        val row = outboxRow(vm.capsuleId)
+        assertNotNull(row)
+        assertEquals(OutboxCapsuleState.ENCRYPTED, row!!.state)
+        assertTrue(row.senderRetryKeysetPath == null || File(row.senderRetryKeysetPath!!).exists())
+    }
+
+    @Test
+    fun stagingFailureDoesNotEnqueueOrClaimSuccess() = runBlocking {
+        outboxDir.writeText("outbox root is unavailable")
+        val enqueued = mutableListOf<CapsuleId>()
+        val vm = contentStage(
+            CompletableDeferred<SenderIdentitySnapshot>().apply { complete(senderIdentity()) },
+            enqueueUpload = { _, capsule -> enqueued += capsule },
+        )
+
+        vm.startPublishing()
+        awaitTerminalPublish(vm)
+
+        assertTrue(enqueued.isEmpty())
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        assertNull(outboxRow(vm.capsuleId))
+    }
+
+    @Test
     fun exitDuringNormalizationLeavesNoOutboxRowAndNoLateMutation() {
         val normalizerGate = CompletableDeferred<Unit>()
         val identityGate = CompletableDeferred<SenderIdentitySnapshot>()
-        val vm = contentStage(identityGate, normalizerGate)
+        val enqueued = mutableListOf<CapsuleId>()
+        val vm = contentStage(identityGate, normalizerGate, enqueueUpload = { _, capsule -> enqueued += capsule })
         val oldCapsuleId = vm.capsuleId
 
         vm.startPublishing()
@@ -279,6 +340,7 @@ class CreatePublishLifetimeTest {
 
         assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value) // dead surface
         assertNull(vm.publishError.value)
+        assertTrue(enqueued.isEmpty())
         assertTrue(createStagingRoot().listFiles()?.isEmpty() ?: true)
         runBlockingNullable { assertNull(outboxRow(oldCapsuleId)) }
 
@@ -293,7 +355,8 @@ class CreatePublishLifetimeTest {
     @Test
     fun beginNewEpochWhilePublishSuspendedCannotMarkNewSessionPublished() {
         val identityGate = CompletableDeferred<SenderIdentitySnapshot>()
-        val vm = contentStage(identityGate)
+        val enqueued = mutableListOf<CapsuleId>()
+        val vm = contentStage(identityGate, enqueueUpload = { _, capsule -> enqueued += capsule })
         val oldCapsuleId = vm.capsuleId
 
         vm.startPublishing()
@@ -310,6 +373,7 @@ class CreatePublishLifetimeTest {
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
         assertNull(vm.publishError.value)
         assertNull(vm.flowError.value)
+        assertTrue(enqueued.isEmpty())
         runBlockingNullable { assertNull(outboxRow(oldCapsuleId)) }
         assertTrue(createStagingRoot().listFiles()?.isEmpty() ?: true)
     }
@@ -339,7 +403,7 @@ class CreatePublishLifetimeTest {
             }
             Thread.sleep(20)
         }
-        assertEquals(CreateViewModel.Step.PUBLISHED, vm.step.value)
+        assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
         runBlockingNullable {
             val row = outboxRow(capsuleId)
             assertNotNull(row)
@@ -350,9 +414,9 @@ class CreatePublishLifetimeTest {
         }
         assertTrue("expected full artifact set", blobCount >= 5)
 
-        // Replay from PUBLISHED is impossible: still one row, still sealed.
+        // The worker has not completed yet: staging is still one encrypted row.
         vm.startPublishing()
-        assertEquals(CreateViewModel.Step.PUBLISHED, vm.step.value)
+        assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
         runBlockingNullable {
             val row = outboxRow(capsuleId)
             assertNotNull(row)
@@ -363,5 +427,15 @@ class CreatePublishLifetimeTest {
 
     private fun runBlockingNullable(block: suspend () -> Unit) {
         kotlinx.coroutines.runBlocking { block() }
+    }
+
+    private fun awaitTerminalPublish(vm: CreateViewModel) {
+        val deadline = System.currentTimeMillis() + 10_000
+        while (vm.step.value == CreateViewModel.Step.PUBLISHING) {
+            if (System.currentTimeMillis() > deadline) {
+                error("publishing never reached a terminal step; publishError=" + vm.publishError.value)
+            }
+            Thread.sleep(20)
+        }
     }
 }

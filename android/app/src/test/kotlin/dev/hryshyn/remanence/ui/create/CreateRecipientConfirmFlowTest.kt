@@ -166,6 +166,7 @@ class CreateRecipientConfirmFlowTest {
             openPhotoSource = { error("photo picker not used in this test") },
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
+            enqueueUpload = { _, _ -> },
         )
     }
 

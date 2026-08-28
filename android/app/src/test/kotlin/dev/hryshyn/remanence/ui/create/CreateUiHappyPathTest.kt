@@ -55,7 +55,7 @@ import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
  * FIX-STATE-08 (A): the create happy path driven through the REAL production
  * UI - typed handle lookup, explicit confirmation, FRONT capture through the
  * camera adapter seam, checklist boxes + Continue, BACK capture, three photos
- * via the production picker sink, note input, publish - ending PUBLISHED with
+ * via the production picker sink, note input, publish - ending UPLOAD_PENDING with
  * the capsule staged in the durable outbox. No ViewModel method is called
  * that the UI itself would not call.
  */
@@ -186,7 +186,7 @@ class CreateUiHappyPathTest {
     }
 
     @Test
-    fun fullCreateHappyPathThroughTheRealSurfaceEndsPublished() = runBlocking {
+    fun fullCreateHappyPathThroughTheRealSurfaceEndsUploadPending() = runBlocking {
         val persistence = RecordingPersistence()
         val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir()))
         val vm = CreateViewModel(
@@ -217,6 +217,7 @@ class CreateUiHappyPathTest {
             ioDispatcher = testDispatcher,
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
+            enqueueUpload = { _, _ -> },
         )
         vm.beginSession(1L, userUuid.toString())
 
@@ -304,10 +305,10 @@ class CreateUiHappyPathTest {
         composeRule.waitForIdle()
         assertEquals(
             "publishError=" + vm.publishError.value + " flowError=" + vm.flowError.value,
-            CreateViewModel.Step.PUBLISHED,
+            CreateViewModel.Step.UPLOAD_PENDING,
             vm.step.value,
         )
-        composeRule.onNodeWithTag("create_published").assertIsDisplayed()
+        composeRule.onNodeWithTag("create_upload_pending").assertIsDisplayed()
 
         val row = database.outboxCapsuleDao().getByCapsuleIdAndOwner(vm.capsuleId, userUuid.toString())
         assertTrue(row != null)

@@ -149,6 +149,7 @@ class RootFlowLayoutTest {
         ioDispatcher = testDispatcher,
         senderRetryKeysetWrapper = testWrapper,
         senderRetryKekAlias = testAlias,
+        enqueueUpload = { _, _ -> },
     ).also { it.beginSession(1L) }
 
     private fun context(): Context = ApplicationProvider.getApplicationContext()

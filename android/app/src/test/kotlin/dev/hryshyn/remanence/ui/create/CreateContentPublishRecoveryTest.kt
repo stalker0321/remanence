@@ -200,6 +200,7 @@ class CreateContentPublishRecoveryTest {
             ioDispatcher = testDispatcher,
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
+            enqueueUpload = { _, _ -> },
         )
         vm.beginSession(1L, userUuid.toString())
 

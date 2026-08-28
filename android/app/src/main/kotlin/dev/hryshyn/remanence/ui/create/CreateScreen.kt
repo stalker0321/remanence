@@ -82,7 +82,8 @@ fun CreateScreen(
                 CreateViewModel.Step.BACK -> "5 - Capture the prepared BACK"
                 CreateViewModel.Step.CONTENT -> "6 - Choose 3-5 photos and an optional note"
                 CreateViewModel.Step.PUBLISHING -> "7 - Encrypting and staging"
-                CreateViewModel.Step.PUBLISHED -> "Done - Capsule sealed into the outbox"
+                CreateViewModel.Step.UPLOAD_PENDING -> "7 - Encrypted capsule queued for upload"
+                CreateViewModel.Step.PUBLISHED -> "Done - Capsule published and ready"
             },
             style = MaterialTheme.typography.labelLarge,
             modifier = Modifier.testTag("create_step_label"),
@@ -126,6 +127,10 @@ fun CreateScreen(
                 Spacer(Modifier.height(8.dp))
                 Text("Encrypting locally...", modifier = Modifier.testTag("create_publishing"))
             }
+            CreateViewModel.Step.UPLOAD_PENDING -> Text(
+                "Encrypted capsule queued. Upload will continue in the background.",
+                modifier = Modifier.testTag("create_upload_pending"),
+            )
             CreateViewModel.Step.PUBLISHED -> Text(
                 "Capsule sealed. Send the physical postcard.",
                 modifier = Modifier.testTag("create_published"),

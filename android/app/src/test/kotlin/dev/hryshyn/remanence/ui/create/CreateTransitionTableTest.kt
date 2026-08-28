@@ -249,6 +249,7 @@ class CreateTransitionTableTest {
             ioDispatcher = testDispatcher,
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
+            enqueueUpload = { _, _ -> },
         )
         vm.beginSession(1L, userUuid.toString())
         return vm to persistence
@@ -311,7 +312,7 @@ class CreateTransitionTableTest {
     }
 
     @Test
-    fun goldenHappyPathFromLookupThroughPublished() = runBlocking {
+    fun goldenHappyPathFromLookupThroughUploadPending() = runBlocking {
         val front = ScriptedProcessor(ScriptedProcessor.Scripted.Accept(syntheticFingerprint(11, FingerprintSide.FRONT)))
         val back = ScriptedProcessor(ScriptedProcessor.Scripted.Accept(syntheticFingerprint(22, FingerprintSide.BACK)))
         val (vm, persistence) = viewModel(
@@ -343,7 +344,7 @@ class CreateTransitionTableTest {
 
         assertEquals(
             "publishError=" + vm.publishError.value + " flowError=" + vm.flowError.value,
-            CreateViewModel.Step.PUBLISHED,
+            CreateViewModel.Step.UPLOAD_PENDING,
             vm.step.value,
         )
         assertNull(vm.publishError.value)

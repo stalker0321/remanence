@@ -218,6 +218,7 @@ class CreateRecipientPublicationBindingTest {
             ioDispatcher = testDispatcher,
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
+            enqueueUpload = { _, _ -> },
         )
         vm.beginSession(1L, senderUserUuid.toString())
         vm.onResolved(snapshot)
@@ -265,7 +266,7 @@ class CreateRecipientPublicationBindingTest {
 
         assertEquals(
             "publishing must complete when the captured recipient is distinct from the sender",
-            CreateViewModel.Step.PUBLISHED,
+            CreateViewModel.Step.UPLOAD_PENDING,
             vm.step.value,
         )
         assertTrue(vm.publishError.value == null)
@@ -294,7 +295,7 @@ class CreateRecipientPublicationBindingTest {
 
         vm.startPublishing()
         awaitTerminalPublish(vm)
-        assertEquals(CreateViewModel.Step.PUBLISHED, vm.step.value)
+        assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
 
         val row = requireNotNull(outboxRow(capsuleId))
         val envelopeBytes = File(requireNotNull(row.envelopePath)).readBytes()
@@ -383,7 +384,7 @@ class CreateRecipientPublicationBindingTest {
         vm.startPublishing()
         awaitTerminalPublish(vm)
 
-        assertEquals(CreateViewModel.Step.PUBLISHED, vm.step.value)
+        assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
         val row = requireNotNull(outboxRow(capsuleId))
         assertEquals(senderUserUuid.toString(), row.senderUserId)
         assertEquals(senderUserUuid.toString(), row.recipientUserId)

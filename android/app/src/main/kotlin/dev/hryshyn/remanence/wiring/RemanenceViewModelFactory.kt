@@ -2,6 +2,8 @@ package dev.hryshyn.remanence.wiring
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.work.WorkManager
+import androidx.work.await
 import dev.hryshyn.remanence.AppContainer
 import dev.hryshyn.remanence.session.RootViewModel
 import dev.hryshyn.remanence.ui.create.CreateViewModel
@@ -9,6 +11,7 @@ import dev.hryshyn.remanence.ui.scan.ScanViewModel
 import dev.hryshyn.remanence.ui.home.HomeCapabilityViewModel
 import dev.hryshyn.remanence.ui.auth.LoginViewModel
 import dev.hryshyn.remanence.ui.auth.RegistrationViewModel
+import dev.hryshyn.remanence.sync.CapsuleUploadWorker
 
 /**
  * FIX-M1-007-08: single Compose-facing factory so every screen ViewModel is
@@ -74,6 +77,15 @@ class RemanenceViewModelFactory(
             // from the AppContainer-owned sender-retry boundary.
             senderRetryKeysetWrapper = container.senderRetryKeysetWrapper,
             senderRetryKekAlias = container.senderRetryKekAlias,
+            // A04: acknowledge unique upload scheduling before showing the
+            // non-success staged/pending state to the user.
+            enqueueUpload = { owner, capsule ->
+                CapsuleUploadWorker.enqueue(
+                    WorkManager.getInstance(container.appContext),
+                    owner,
+                    capsule,
+                ).await()
+            },
         ) as T
         ScanViewModel::class.java -> ScanViewModel(
             persistence = container.fingerprintPersistence,

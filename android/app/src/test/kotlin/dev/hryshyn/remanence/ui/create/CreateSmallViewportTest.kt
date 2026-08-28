@@ -161,6 +161,7 @@ class CreateSmallViewportTest {
             ioDispatcher = testDispatcher,
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
+            enqueueUpload = { _, _ -> },
         )
         vm.beginSession(1L)
 
@@ -248,6 +249,7 @@ class CreateSmallViewportTest {
             ioDispatcher = testDispatcher,
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
+            enqueueUpload = { _, _ -> },
         )
         vm.beginSession(1L)
 
@@ -309,6 +311,7 @@ class CreateSmallViewportTest {
             ioDispatcher = testDispatcher,
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
+            enqueueUpload = { _, _ -> },
         )
         vm.beginSession(1L)
         vm.onResolved(selfSnapshot())

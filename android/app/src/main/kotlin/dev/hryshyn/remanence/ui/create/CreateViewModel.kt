@@ -49,7 +49,7 @@ data class SenderIdentitySnapshot(
  * directory resolve + explicit confirmation, front capture through the ORB
  * processor into sealed persistence, checklist-gated prepared back, Photo
  * Picker 3-5 plus bounded note, and ONE sealing path: the ciphertext-only
- * publisher feeding the durable outbox. There is no second, all-plaintext
+ * publisher feeding the durable outbox and account-scoped upload work. There is no second, all-plaintext
  * route. Plaintext staging lives only inside [publish] and is cleared in a
  * finally-equivalent path; cancellation tears the session down.
  *
@@ -114,9 +114,20 @@ class CreateViewModel(
      */
     private val senderRetryKeysetWrapper: dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper,
     private val senderRetryKekAlias: String,
+    private val enqueueUpload: suspend (UserId, CapsuleId) -> Unit,
 ) : ViewModel() {
 
-    enum class Step { RECIPIENT_LOOKUP, RECIPIENT_CONFIRM, FRONT, BACK_CHECKLIST, BACK, CONTENT, PUBLISHING, PUBLISHED }
+    enum class Step {
+        RECIPIENT_LOOKUP,
+        RECIPIENT_CONFIRM,
+        FRONT,
+        BACK_CHECKLIST,
+        BACK,
+        CONTENT,
+        PUBLISHING,
+        UPLOAD_PENDING,
+        PUBLISHED,
+    }
 
     val pickerVm = RecipientPickerViewModel(directory, accessTokenProvider, viewModelScope)
 
@@ -649,7 +660,26 @@ class CreateViewModel(
                 }
                 ensureCurrent()
                 outboxStager.stage(prepared)
-                _step.value = Step.PUBLISHED
+                ensureCurrent()
+                val currentSender = identityProvider()
+                ensureCurrent()
+                val currentOwner = currentSender?.userId?.let { raw ->
+                    runCatching { UserId.parseRest(raw) }.getOrNull()
+                }
+                if (currentOwner != inputs.owner) {
+                    failPublishing("authenticated owner changed; publishing cancelled", generation)
+                    return
+                }
+                try {
+                    enqueueUpload(inputs.owner, CapsuleId.parseRest(inputs.capsuleId))
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    failPublishing("upload could not be queued; retry available", generation)
+                    return
+                }
+                ensureCurrent()
+                _step.value = Step.UPLOAD_PENDING
             } finally {
                 // Normalized plaintext staging never survives this call.
                 withContext(ioDispatcher) {

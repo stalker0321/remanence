@@ -254,6 +254,7 @@ class CreateRecipientBindingFailClosedTest {
         ioDispatcher = testDispatcher,
         senderRetryKeysetWrapper = testWrapper,
         senderRetryKekAlias = testAlias,
+        enqueueUpload = { _, _ -> },
         )
     }
 
@@ -388,7 +389,7 @@ class CreateRecipientBindingFailClosedTest {
         // resolution attempt.
         vm.startPublishing()
         awaitTerminalPublish(vm)
-        assertEquals(CreateViewModel.Step.PUBLISHED, vm.step.value)
+        assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
 
         val row = requireNotNull(
             database.outboxCapsuleDao()
@@ -431,7 +432,7 @@ class CreateRecipientBindingFailClosedTest {
         normalizerGate.complete(Unit)
         identityGate.complete(senderIdentitySnapshot())
         awaitTerminalPublish(vm)
-        assertEquals(CreateViewModel.Step.PUBLISHED, vm.step.value)
+        assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
 
         val row = requireNotNull(
             database.outboxCapsuleDao()

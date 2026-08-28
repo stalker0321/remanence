@@ -134,6 +134,7 @@ class CreateStaleDeliveryTest {
             ioDispatcher = cpuDispatcher,
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
+            enqueueUpload = { _, _ -> },
         )
         vm.beginSession(1L)
 

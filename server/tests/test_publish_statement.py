@@ -22,6 +22,7 @@ from remanence.capsules.publish_statement import (
     VerifiedPublishStatement,
     verify_publish_statement,
 )
+from remanence.capsules.signature_service import PublishSignatureVerificationService
 from remanence.protocol.v1 import remanence_v1_pb2 as protocol_pb2
 
 from test_capsule_draft_service import _create, _request, _seed_user
@@ -100,11 +101,104 @@ def _valid(fixture: dict) -> tuple[bytes, Capsule, list[CapsuleBlob]]:
     return raw, capsule, declarations
 
 
-def _assert_invalid(call) -> None:
+_KIND_PROTO_NUMBER = {
+    CapsuleBlobKind.RECOGNITION_MANIFEST: int(protocol_pb2.ArtifactKind.RECOGNITION_MANIFEST),
+    CapsuleBlobKind.CONTENT_MANIFEST: int(protocol_pb2.ArtifactKind.CONTENT_MANIFEST),
+    CapsuleBlobKind.PHOTO: int(protocol_pb2.ArtifactKind.PHOTO),
+}
+
+_DIVERGING_BLOB_IDS = {
+    CapsuleBlobKind.RECOGNITION_MANIFEST: UUID("00000000-0000-0000-0000-0000000000ff"),
+    CapsuleBlobKind.CONTENT_MANIFEST: UUID("00000000-0000-0000-0000-0000000000ee"),
+    0: UUID("00000000-0000-0000-0000-000000000001"),
+    1: UUID("00000000-0000-0000-0000-000000000002"),
+    2: UUID("00000000-0000-0000-0000-000000000003"),
+}
+
+
+def _canonical_declaration_key(declaration: CapsuleBlob) -> tuple[int, int, bytes]:
+    ordinal = -1 if declaration.ordinal is None else declaration.ordinal
+    return (_KIND_PROTO_NUMBER[declaration.kind], ordinal, declaration.id.bytes)
+
+
+def _add_artifact(statement: protocol_pb2.PublishStatement, declaration: CapsuleBlob) -> None:
+    statement.artifacts.add(
+        blob_id=declaration.id.bytes,
+        kind=getattr(protocol_pb2.ArtifactKind, declaration.kind.value),
+        ordinal=-1 if declaration.ordinal is None else declaration.ordinal,
+        ciphertext_size=declaration.expected_ciphertext_size,
+        ciphertext_sha256=declaration.expected_ciphertext_sha256,
+    )
+
+
+def _statement_from_declarations(
+    capsule: Capsule,
+    declarations: list[CapsuleBlob],
+    *,
+    order: str,
+) -> protocol_pb2.PublishStatement:
+    statement = protocol_pb2.PublishStatement(
+        protocol_version=capsule.protocol_version,
+        capsule_id=capsule.id.bytes,
+        sender_user_id=capsule.sender_user_id.bytes,
+        recipient_user_id=capsule.recipient_user_id.bytes,
+        sender_key_bundle_id=capsule.sender_key_bundle_id.bytes,
+        recipient_key_bundle_id=capsule.recipient_key_bundle_id.bytes,
+        created_at_epoch_seconds=int(capsule.created_at.timestamp()),
+    )
+    if order == "canonical":
+        ordered = sorted(declarations, key=_canonical_declaration_key)
+    elif order == "blob_id":
+        ordered = sorted(declarations, key=lambda item: item.id.bytes)
+    else:
+        raise ValueError(order)
+    for declaration in ordered:
+        _add_artifact(statement, declaration)
+    return statement
+
+
+def _diverging_authoritative_data(fixture: dict) -> tuple[Capsule, list[CapsuleBlob]]:
+    capsule, declarations = _authoritative_data(fixture)
+    remapped: list[CapsuleBlob] = []
+    for declaration in declarations:
+        blob_id = (
+            _DIVERGING_BLOB_IDS[declaration.kind]
+            if declaration.kind is not CapsuleBlobKind.PHOTO
+            else _DIVERGING_BLOB_IDS[declaration.ordinal]
+        )
+        remapped.append(
+            CapsuleBlob(
+                id=blob_id,
+                capsule_id=capsule.id,
+                kind=declaration.kind,
+                ordinal=declaration.ordinal,
+                object_key=f"capsules/{capsule.id}/{blob_id}.blob",
+                expected_ciphertext_size=declaration.expected_ciphertext_size,
+                expected_ciphertext_sha256=declaration.expected_ciphertext_sha256,
+                state=declaration.state,
+            )
+        )
+    return capsule, remapped
+
+
+def _assert_invalid(call, *, secrets: tuple[object, ...] = ()) -> None:
     with pytest.raises(PublishStatementInvalidError) as caught:
         call()
     assert str(caught.value) == "publish statement is invalid"
     assert repr(caught.value) == "PublishStatementInvalidError(code='STATEMENT_INVALID')"
+    rendered = f"{caught.value!s} {caught.value!r}"
+    for secret in secrets:
+        if secret is None:
+            continue
+        text = secret if isinstance(secret, str) else (
+            secret.hex() if isinstance(secret, (bytes, bytearray)) else str(secret)
+        )
+        assert text not in rendered
+
+
+def _intended_publish_validation(raw, capsule, declarations, session, signature_bytes: bytes):
+    verified = verify_publish_statement(raw, capsule, declarations)
+    return PublishSignatureVerificationService(session).verify(verified, signature_bytes)
 
 
 def test_generated_descriptor_matches_canonical_publish_schema() -> None:
@@ -153,8 +247,16 @@ def test_golden_verifies_and_returns_immutable_redacted_result(fixture: dict) ->
     assert isinstance(verified, VerifiedPublishStatement)
     assert verified.canonical_bytes == raw
     assert verified.sha256 == hashlib.sha256(raw).digest()
+    assert [item.kind for item in verified.artifacts] == [
+        CapsuleBlobKind.RECOGNITION_MANIFEST,
+        CapsuleBlobKind.CONTENT_MANIFEST,
+        CapsuleBlobKind.PHOTO,
+        CapsuleBlobKind.PHOTO,
+        CapsuleBlobKind.PHOTO,
+    ]
+    assert [item.ordinal for item in verified.artifacts] == [None, None, 0, 1, 2]
     assert tuple(item.blob_id for item in verified.artifacts) == tuple(
-        sorted((item.id for item in declarations), key=lambda value: value.bytes)
+        UUID(value) for value in fixture["expected_sorted_blob_ids"]
     )
     with pytest.raises(AttributeError):
         verified.canonical_bytes = b"x"
@@ -189,23 +291,7 @@ def test_service_created_fractional_time_is_accepted_by_s13_verifier(
         )
         assert capsule is not None
         assert capsule.created_at == canonical_now
-        statement = protocol_pb2.PublishStatement(
-            protocol_version=capsule.protocol_version,
-            capsule_id=capsule.id.bytes,
-            sender_user_id=capsule.sender_user_id.bytes,
-            recipient_user_id=capsule.recipient_user_id.bytes,
-            sender_key_bundle_id=capsule.sender_key_bundle_id.bytes,
-            recipient_key_bundle_id=capsule.recipient_key_bundle_id.bytes,
-            created_at_epoch_seconds=int(canonical_now.timestamp()),
-        )
-        for declaration in sorted(declarations, key=lambda item: item.id.bytes):
-            statement.artifacts.add(
-                blob_id=declaration.id.bytes,
-                kind=getattr(protocol_pb2.ArtifactKind, declaration.kind.value),
-                ordinal=-1 if declaration.ordinal is None else declaration.ordinal,
-                ciphertext_size=declaration.expected_ciphertext_size,
-                ciphertext_sha256=declaration.expected_ciphertext_sha256,
-            )
+        statement = _statement_from_declarations(capsule, declarations, order="canonical")
 
         verified = verify_publish_statement(
             statement.SerializeToString(deterministic=True),
@@ -213,6 +299,17 @@ def test_service_created_fractional_time_is_accepted_by_s13_verifier(
             declarations,
         )
         assert verified.created_at == canonical_now
+        assert [item.kind for item in verified.artifacts] == [
+            CapsuleBlobKind.RECOGNITION_MANIFEST,
+            CapsuleBlobKind.CONTENT_MANIFEST,
+            CapsuleBlobKind.PHOTO,
+            CapsuleBlobKind.PHOTO,
+            CapsuleBlobKind.PHOTO,
+        ]
+        assert [item.ordinal for item in verified.artifacts] == [None, None, 0, 1, 2]
+        assert tuple(item.blob_id for item in verified.artifacts) == tuple(
+            item.id for item in sorted(declarations, key=_canonical_declaration_key)
+        )
 
 
 @pytest.mark.parametrize(
@@ -365,12 +462,113 @@ def test_declared_and_stored_declarations_are_accepted(fixture: dict, state: Cap
 
 def test_bad_authoritative_inputs_and_fuzzed_bytes_never_leak_details(fixture: dict) -> None:
     raw, capsule, declarations = _valid(fixture)
-    _assert_invalid(lambda: verify_publish_statement(raw, object(), declarations))
-    _assert_invalid(lambda: verify_publish_statement(raw, capsule, [object(), *declarations[1:]]))
-    _assert_invalid(lambda: verify_publish_statement(raw, capsule, [*declarations, declarations[0], declarations[1], declarations[2]]))
+    _assert_invalid(lambda: verify_publish_statement(raw, object(), declarations), secrets=(raw,))
+    _assert_invalid(
+        lambda: verify_publish_statement(raw, capsule, [object(), *declarations[1:]]),
+        secrets=(raw, capsule.id),
+    )
+    _assert_invalid(
+        lambda: verify_publish_statement(
+            raw, capsule, [*declarations, declarations[0], declarations[1], declarations[2]]
+        ),
+        secrets=(raw, capsule.id),
+    )
     for seed in range(100):
         fuzzed = hashlib.sha256(seed.to_bytes(2, "big")).digest() * 128
         with pytest.raises(PublishStatementInvalidError) as caught:
             verify_publish_statement(fuzzed[:MAX_PUBLISH_STATEMENT_BYTES], capsule, declarations)
         assert str(caught.value) == "publish statement is invalid"
         assert repr(caught.value) == "PublishStatementInvalidError(code='STATEMENT_INVALID')"
+        assert fuzzed[:32].hex() not in f"{caught.value!s} {caught.value!r}"
+
+
+def test_canonical_order_accepts_photo_uuid_smaller_than_recognition(fixture: dict) -> None:
+    capsule, declarations = _diverging_authoritative_data(fixture)
+    photo_ids = [item.id.bytes for item in declarations if item.kind is CapsuleBlobKind.PHOTO]
+    recognition_id = next(
+        item.id.bytes for item in declarations if item.kind is CapsuleBlobKind.RECOGNITION_MANIFEST
+    )
+    assert min(photo_ids) < recognition_id
+    assert photo_ids[0] < recognition_id
+    canonical_ids = [item.id.bytes for item in sorted(declarations, key=_canonical_declaration_key)]
+    blob_id_order = [item.id.bytes for item in sorted(declarations, key=lambda item: item.id.bytes)]
+    assert canonical_ids != blob_id_order
+
+    raw = _statement_from_declarations(capsule, declarations, order="canonical").SerializeToString(
+        deterministic=True
+    )
+    verified = verify_publish_statement(raw, capsule, declarations)
+    assert [item.kind for item in verified.artifacts] == [
+        CapsuleBlobKind.RECOGNITION_MANIFEST,
+        CapsuleBlobKind.CONTENT_MANIFEST,
+        CapsuleBlobKind.PHOTO,
+        CapsuleBlobKind.PHOTO,
+        CapsuleBlobKind.PHOTO,
+    ]
+    assert [item.ordinal for item in verified.artifacts] == [None, None, 0, 1, 2]
+    assert [item.blob_id.bytes for item in verified.artifacts] == canonical_ids
+    assert [item.blob_id.bytes for item in verified.artifacts] != blob_id_order
+
+
+def test_blob_id_order_is_rejected_when_it_differs_from_canonical_order(fixture: dict) -> None:
+    capsule, declarations = _diverging_authoritative_data(fixture)
+    statement = _statement_from_declarations(capsule, declarations, order="blob_id")
+    raw = statement.SerializeToString(deterministic=True)
+    secrets = (
+        raw,
+        capsule.id,
+        *(item.id for item in declarations),
+        *(item.id.bytes for item in declarations),
+    )
+    _assert_invalid(lambda: verify_publish_statement(raw, capsule, declarations), secrets=secrets)
+
+
+def test_malformed_and_non_canonical_inputs_never_reach_key_lookup(
+    fixture: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capsule, declarations = _diverging_authoritative_data(fixture)
+    canonical = _statement_from_declarations(
+        capsule, declarations, order="canonical"
+    ).SerializeToString(deterministic=True)
+    blob_id_ordered = _statement_from_declarations(
+        capsule, declarations, order="blob_id"
+    ).SerializeToString(deterministic=True)
+    signature_bytes = b"\x01" + b"\x00" * 68
+    lookups: list[object] = []
+
+    def forbidden(self, verified_statement, signature):
+        lookups.append((verified_statement, signature))
+        raise AssertionError("authoritative key lookup")
+
+    monkeypatch.setattr(PublishSignatureVerificationService, "verify", forbidden)
+    session = object()
+    secrets = (canonical, blob_id_ordered, capsule.id, *(item.id for item in declarations))
+
+    _assert_invalid(
+        lambda: _intended_publish_validation(
+            blob_id_ordered, capsule, declarations, session, signature_bytes
+        ),
+        secrets=secrets,
+    )
+    _assert_invalid(
+        lambda: _intended_publish_validation(b"", capsule, declarations, session, signature_bytes),
+        secrets=secrets,
+    )
+    _assert_invalid(
+        lambda: _intended_publish_validation(
+            canonical[:-1], capsule, declarations, session, signature_bytes
+        ),
+        secrets=secrets,
+    )
+    _assert_invalid(
+        lambda: _intended_publish_validation(
+            canonical + b"\x48\x01", capsule, declarations, session, signature_bytes
+        ),
+        secrets=secrets,
+    )
+    assert lookups == []
+
+    verified = verify_publish_statement(canonical, capsule, declarations)
+    with pytest.raises(AssertionError, match="authoritative key lookup"):
+        PublishSignatureVerificationService(session).verify(verified, signature_bytes)
+    assert lookups == [(verified, signature_bytes)]

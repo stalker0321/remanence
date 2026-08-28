@@ -28,6 +28,11 @@ _PROTO_KIND_TO_MODEL: Final = {
     ArtifactKind.CONTENT_MANIFEST: CapsuleBlobKind.CONTENT_MANIFEST,
     ArtifactKind.PHOTO: CapsuleBlobKind.PHOTO,
 }
+_MODEL_KIND_TO_PROTO_NUMBER: Final = {
+    CapsuleBlobKind.RECOGNITION_MANIFEST: int(ArtifactKind.RECOGNITION_MANIFEST),
+    CapsuleBlobKind.CONTENT_MANIFEST: int(ArtifactKind.CONTENT_MANIFEST),
+    CapsuleBlobKind.PHOTO: int(ArtifactKind.PHOTO),
+}
 _MODEL_KIND_MAX_SIZE: Final = {
     CapsuleBlobKind.RECOGNITION_MANIFEST: LIMITS_V1.recognition_manifest_max_ciphertext_bytes,
     CapsuleBlobKind.CONTENT_MANIFEST: LIMITS_V1.content_manifest_max_ciphertext_bytes,
@@ -106,7 +111,7 @@ def verify_publish_statement(
             raise PublishStatementInvalidError
 
         by_id = _declarations_by_id(declarations, capsule.id)
-        expected_ids = sorted(by_id)
+        expected_ids = _canonical_declaration_blob_ids(by_id)
         if [bytes(artifact.blob_id) for artifact in statement.artifacts] != expected_ids:
             raise PublishStatementInvalidError
 
@@ -234,6 +239,23 @@ def _epoch_seconds(value: datetime) -> int:
     if not -(1 << 63) <= seconds <= (1 << 63) - 1:
         raise PublishStatementInvalidError
     return seconds
+
+
+def _canonical_artifact_key(declaration: CapsuleBlob) -> tuple[int, int, bytes]:
+    kind_number = _MODEL_KIND_TO_PROTO_NUMBER.get(declaration.kind)
+    if kind_number is None or not isinstance(declaration.id, uuid.UUID):
+        raise PublishStatementInvalidError
+    ordinal = -1 if declaration.ordinal is None else declaration.ordinal
+    if type(ordinal) is not int:
+        raise PublishStatementInvalidError
+    return (kind_number, ordinal, declaration.id.bytes)
+
+
+def _canonical_declaration_blob_ids(by_id: dict[bytes, CapsuleBlob]) -> list[bytes]:
+    return [
+        declaration.id.bytes
+        for declaration in sorted(by_id.values(), key=_canonical_artifact_key)
+    ]
 
 
 def _declarations_by_id(

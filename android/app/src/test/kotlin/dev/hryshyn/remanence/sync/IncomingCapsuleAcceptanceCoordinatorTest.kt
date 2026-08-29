@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.sync
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import dev.hryshyn.remanence.core.crypto.RecognitionManifestContent
 import dev.hryshyn.remanence.core.data.db.BlobCacheEntity
 import dev.hryshyn.remanence.core.data.db.BlobCacheState
 import dev.hryshyn.remanence.core.data.db.IncomingCapsuleEntity
@@ -27,6 +28,7 @@ import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.LocalMaterialState
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.protocol.v1.PublishStatement
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
@@ -45,6 +47,7 @@ import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -95,12 +98,21 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
         seed()
         val events = mutableListOf<String>()
         var requested: IncomingControlIndexAcceptanceRequest? = null
+        val verifiedPayload = verifiedPayload()
         val result = coordinator(
             download = writingDownloader { events += "download" },
             control = IncomingControlIndexAcceptancePort { request ->
                 events += "crypto"
                 requested = request
-                IncomingControlIndexAcceptancePortResult.Verified
+                IncomingControlIndexAcceptancePortResult.Verified(verifiedPayload)
+            },
+            persistence = IncomingVerifiedControlIndexPersistencePort { request, authenticatedOwner ->
+                events += "persist"
+                assertEquals(owner, authenticatedOwner)
+                assertEquals(owner, request.ownerUserId)
+                assertEquals(capsule, request.capsuleId)
+                assertSame(verifiedPayload, request.verified)
+                IncomingVerifiedControlIndexPersistenceResult.Durable
             },
             adoptionPort = IncomingRecognitionAdoptionPort { request ->
                 events += "adopt"
@@ -118,7 +130,7 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
         ).accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
 
         assertIs<IncomingCapsuleAcceptanceResult.Committed>(result)
-        assertEquals(listOf("download", "crypto", "adopt", "commit"), events)
+        assertEquals(listOf("download", "crypto", "persist", "adopt", "commit"), events)
         assertEquals(recoveryTempPath(), requested!!.recognitionCiphertextFile)
         assertFalse(recoveryTempPath().exists())
         assertArrayEquals(bytes, incomingCiphertextPath().readBytes())
@@ -333,6 +345,96 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
     }
 
     @Test
+    fun verifiedPersistenceMustSucceedBeforeAdoptionAndCanBeReplayed() = runBlocking {
+        seed()
+        val payload = verifiedPayload()
+        var cryptoCalls = 0
+        var adoptionCalls = 0
+        var commitCalls = 0
+        val first = coordinator(
+            control = IncomingControlIndexAcceptancePort {
+                cryptoCalls += 1
+                IncomingControlIndexAcceptancePortResult.Verified(payload)
+            },
+            persistence = IncomingVerifiedControlIndexPersistencePort { _, _ ->
+                IncomingVerifiedControlIndexPersistenceResult.Retryable(
+                    IncomingVerifiedControlIndexPersistenceRetryReason.LOCAL_STORAGE,
+                )
+            },
+            adoptionPort = IncomingRecognitionAdoptionPort {
+                adoptionCalls += 1
+                throw AssertionError("persistence must precede adoption")
+            },
+            commitPort = IncomingIndexCommitPort { _, _ ->
+                commitCalls += 1
+                throw AssertionError("persistence must precede commit")
+            },
+        ).accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+
+        assertEquals(
+            IncomingCapsuleAcceptanceRetryReason.VERIFIED_PAYLOAD_PERSISTENCE,
+            assertIs<IncomingCapsuleAcceptanceResult.Retryable>(first).reason,
+        )
+        assertEquals(1, cryptoCalls)
+        assertEquals(0, adoptionCalls)
+        assertEquals(0, commitCalls)
+        assertFalse(recoveryTempPath().exists())
+        assertInitialState()
+
+        val second = coordinator(
+            control = IncomingControlIndexAcceptancePort {
+                cryptoCalls += 1
+                IncomingControlIndexAcceptancePortResult.Verified(payload)
+            },
+            adoptionPort = IncomingRecognitionAdoptionPort {
+                adoptionCalls += 1
+                adopter.adopt(it)
+            },
+            commitPort = IncomingIndexCommitPort { request, authenticatedOwner ->
+                commitCalls += 1
+                committer.commit(request, authenticatedOwner)
+            },
+        ).accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+
+        assertIs<IncomingCapsuleAcceptanceResult.Committed>(second)
+        assertEquals(2, cryptoCalls)
+        assertEquals(1, adoptionCalls)
+        assertEquals(1, commitCalls)
+        assertEquals(BlobCacheState.CACHED, cachedBlobState())
+    }
+
+    @Test
+    fun verifiedPersistenceCancellationStopsBeforeAdoptionAndCommit() = runBlocking {
+        seed()
+        val cancellation = CancellationException("persistence cancelled")
+        var adoptionCalls = 0
+        var commitCalls = 0
+        var propagated = false
+        try {
+            coordinator(
+                persistence = IncomingVerifiedControlIndexPersistencePort { _, _ ->
+                    throw cancellation
+                },
+                adoptionPort = IncomingRecognitionAdoptionPort {
+                    adoptionCalls += 1
+                    throw AssertionError("cancelled persistence must stop adoption")
+                },
+                commitPort = IncomingIndexCommitPort { _, _ ->
+                    commitCalls += 1
+                    throw AssertionError("cancelled persistence must stop commit")
+                },
+            ).accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+        } catch (_: CancellationException) {
+            propagated = true
+        }
+        assertTrue(propagated)
+        assertEquals(0, adoptionCalls)
+        assertEquals(0, commitCalls)
+        assertFalse(recoveryTempPath().exists())
+        assertInitialState()
+    }
+
+    @Test
     fun accountChangesAtEachBoundaryFailClosedBeforeAdvancement() = runBlocking {
         seed()
         val beforeMetadata = coordinator(
@@ -384,6 +486,7 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
                 IncomingSyncSession(owner, "token"),
                 IncomingSyncSession(owner, "token"),
                 IncomingSyncSession(owner, "token"),
+                IncomingSyncSession(owner, "token"),
                 IncomingSyncSession(otherOwner, "other-token"),
             ),
             adoptionPort = IncomingRecognitionAdoptionPort {
@@ -402,6 +505,7 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
         var commits = 0
         val beforeCommit = coordinator(
             session = sessionSequence(
+                IncomingSyncSession(owner, "token"),
                 IncomingSyncSession(owner, "token"),
                 IncomingSyncSession(owner, "token"),
                 IncomingSyncSession(owner, "token"),
@@ -507,8 +611,18 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
     @Test
     fun resultsAndInputsAreRedacted() {
         val request = IncomingCapsuleAcceptanceRequest(owner, capsule)
+        val payload = verifiedPayload()
         assertFalse(request.toString().contains(owner.toRestString()))
         assertFalse(request.toString().contains(capsule.toRestString()))
+        assertFalse(payload.toString().contains("sender"))
+        assertFalse(
+            IncomingControlIndexAcceptancePortResult.Verified(payload)
+                .toString().contains("sender"),
+        )
+        assertFalse(
+            IncomingVerifiedControlIndexPersistenceRequest(owner, capsule, payload)
+                .toString().contains("sender"),
+        )
         assertFalse(
             IncomingCapsuleAcceptanceResult.Retryable(
                 IncomingCapsuleAcceptanceRetryReason.DOWNLOAD,
@@ -525,8 +639,12 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
         session: suspend () -> IncomingSyncSession? = { IncomingSyncSession(owner, "token") },
         download: IncomingRecipientBlobDownloader = writingDownloader(),
         control: IncomingControlIndexAcceptancePort = IncomingControlIndexAcceptancePort {
-            IncomingControlIndexAcceptancePortResult.Verified
+            IncomingControlIndexAcceptancePortResult.Verified(verifiedPayload())
         },
+        persistence: IncomingVerifiedControlIndexPersistencePort =
+            IncomingVerifiedControlIndexPersistencePort { _, _ ->
+                IncomingVerifiedControlIndexPersistenceResult.Durable
+            },
         adoptionPort: IncomingRecognitionAdoptionPort = IncomingRecognitionAdoptionPort {
             adopter.adopt(it)
         },
@@ -541,6 +659,7 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
         currentSession = session,
         download = download,
         controlAcceptance = control,
+        verifiedControlIndexPersistence = persistence,
         adoption = adoptionPort,
         commit = commitPort,
     )
@@ -646,6 +765,19 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
 
     private fun sha256(value: ByteArray): ByteArray =
         MessageDigest.getInstance("SHA-256").digest(value)
+
+    private fun verifiedPayload() = IncomingVerifiedControlIndexPayload(
+        statement = PublishStatement.getDefaultInstance(),
+        recognition = RecognitionManifestContent(
+            protocolVersion = ProtocolV1Limits.PROTOCOL_VERSION,
+            capsuleIdRaw = ByteArray(0),
+            senderHandleSnapshot = "sender",
+            createdAtEpochSeconds = 1,
+            placeLabel = null,
+            frontFingerprint = byteArrayOf(1),
+            backFingerprint = byteArrayOf(2),
+        ),
+    )
 
     private inline fun <reified T> assertIs(value: Any?): T {
         assertTrue(value is T)

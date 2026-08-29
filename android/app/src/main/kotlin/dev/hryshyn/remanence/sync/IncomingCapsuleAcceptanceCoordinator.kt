@@ -3,7 +3,6 @@ package dev.hryshyn.remanence.sync
 import dev.hryshyn.remanence.core.data.db.BlobCacheDao
 import dev.hryshyn.remanence.core.data.db.BlobCacheState
 import dev.hryshyn.remanence.core.data.db.IncomingCapsuleDao
-import dev.hryshyn.remanence.core.data.db.IncomingCapsuleSyncRepository
 import dev.hryshyn.remanence.core.data.db.IncomingEnvelopeDao
 import dev.hryshyn.remanence.core.data.db.IncomingSyncSession
 import dev.hryshyn.remanence.core.data.db.IncomingIndexAcceptanceCommitRequest
@@ -17,12 +16,14 @@ import dev.hryshyn.remanence.core.data.storage.DurableIncomingCiphertextFile
 import dev.hryshyn.remanence.core.data.storage.IncomingRecognitionCiphertextAdopter
 import dev.hryshyn.remanence.core.data.storage.IncomingRecognitionCiphertextAdoptionRequest
 import dev.hryshyn.remanence.core.data.storage.IncomingRecognitionCiphertextAdoptionResult
+import dev.hryshyn.remanence.core.crypto.RecognitionManifestContent
 import dev.hryshyn.remanence.core.model.BlobId
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.LocalMaterialState
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.protocol.v1.PublishStatement
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -51,6 +52,7 @@ enum class IncomingCapsuleAcceptanceRetryReason {
     LOCAL_STORAGE,
     DOWNLOAD,
     CRYPTO_ACCEPTANCE,
+    VERIFIED_PAYLOAD_PERSISTENCE,
     ADOPTION,
     ROOM_COMMIT,
 }
@@ -67,6 +69,7 @@ enum class IncomingCapsuleAcceptanceRejectionReason {
     RECOVERY_TEMP_INVALID,
     DOWNLOAD_REJECTED,
     CRYPTO_REJECTED,
+    PERSISTENCE_REJECTED,
     ADOPTION_REJECTED,
     ROOM_COMMIT_REJECTED,
     DURABLE_STATE_INVALID,
@@ -100,11 +103,68 @@ fun interface IncomingControlIndexAcceptancePort {
 
 /** Redacted A11b outcome needed by this composition boundary. */
 sealed interface IncomingControlIndexAcceptancePortResult {
-    data object Verified : IncomingControlIndexAcceptancePortResult
+    class Verified(
+        val payload: IncomingVerifiedControlIndexPayload,
+    ) : IncomingControlIndexAcceptancePortResult {
+        override fun toString(): String =
+            "IncomingControlIndexAcceptancePortResult.Verified(<redacted>)"
+    }
     data class Retryable(val reason: IncomingAcceptanceRetryReason) :
         IncomingControlIndexAcceptancePortResult
     data class Rejected(val reason: IncomingAcceptanceRejectionReason) :
         IncomingControlIndexAcceptancePortResult
+}
+
+/** The only in-memory handoff of A11b's verified statement and recognition. */
+class IncomingVerifiedControlIndexPayload internal constructor(
+    val statement: PublishStatement,
+    val recognition: RecognitionManifestContent,
+) {
+    override fun toString(): String = "IncomingVerifiedControlIndexPayload(<redacted>)"
+}
+
+class IncomingVerifiedControlIndexPersistenceRequest internal constructor(
+    val ownerUserId: UserId,
+    val capsuleId: CapsuleId,
+    val verified: IncomingVerifiedControlIndexPayload,
+) {
+    override fun toString(): String =
+        "IncomingVerifiedControlIndexPersistenceRequest(<redacted>)"
+}
+
+enum class IncomingVerifiedControlIndexPersistenceRetryReason {
+    DEPENDENCY_UNAVAILABLE,
+    LOCAL_STORAGE,
+}
+
+enum class IncomingVerifiedControlIndexPersistenceRejectionReason {
+    OWNER_MISMATCH,
+    ACCOUNT_CHANGED,
+    INVALID_VERIFIED_PAYLOAD,
+}
+
+/**
+ * Mandatory A12 boundary. Implementations must return [Durable] only after
+ * the verified fingerprints/hints are durably encrypted under this account;
+ * there is intentionally no no-op production implementation.
+ */
+fun interface IncomingVerifiedControlIndexPersistencePort {
+    suspend fun persist(
+        request: IncomingVerifiedControlIndexPersistenceRequest,
+        authenticatedOwnerUserId: UserId,
+    ): IncomingVerifiedControlIndexPersistenceResult
+}
+
+sealed interface IncomingVerifiedControlIndexPersistenceResult {
+    data object Durable : IncomingVerifiedControlIndexPersistenceResult
+
+    data class Retryable(
+        val reason: IncomingVerifiedControlIndexPersistenceRetryReason,
+    ) : IncomingVerifiedControlIndexPersistenceResult
+
+    data class Rejected(
+        val reason: IncomingVerifiedControlIndexPersistenceRejectionReason,
+    ) : IncomingVerifiedControlIndexPersistenceResult
 }
 
 /** Production binding for the already accepted A11c1 file adoption boundary. */
@@ -124,7 +184,8 @@ fun interface IncomingIndexCommitPort {
 
 /**
  * Composes one discovered capsule's recognition path. It owns no scheduling,
- * page loop, content prefetch, UI, or A12 persistence behavior.
+ * page loop, content prefetch, UI, or A12 storage implementation. Its
+ * mandatory A12 persistence port must succeed before adoption or Room commit.
  *
  * The Room declaration and file are revalidated at each boundary. The only
  * filesystem/Room guarantee is A11c2's documented file preflight followed by
@@ -142,6 +203,7 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
     private val currentSession: suspend () -> IncomingSyncSession?,
     private val download: IncomingRecipientBlobDownloader,
     private val controlAcceptance: IncomingControlIndexAcceptancePort,
+    private val verifiedControlIndexPersistence: IncomingVerifiedControlIndexPersistencePort,
     private val adoption: IncomingRecognitionAdoptionPort,
     private val commit: IncomingIndexCommitPort,
 ) {
@@ -155,6 +217,7 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
         currentSession: suspend () -> IncomingSyncSession?,
         recipientBlobDownloadRepository: RecipientBlobDownloadRepository,
         controlIndexAcceptanceCoordinator: IncomingControlIndexAcceptanceCoordinator,
+        verifiedControlIndexPersistence: IncomingVerifiedControlIndexPersistencePort,
         incomingRecognitionCiphertextAdopter: IncomingRecognitionCiphertextAdopter,
         incomingIndexAcceptanceCommitter: IncomingIndexAcceptanceCommitter,
     ) : this(
@@ -169,13 +232,19 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
         controlAcceptance = IncomingControlIndexAcceptancePort { request ->
             when (val result = controlIndexAcceptanceCoordinator.accept(request)) {
                 is IncomingControlIndexAcceptanceResult.Verified ->
-                    IncomingControlIndexAcceptancePortResult.Verified
+                    IncomingControlIndexAcceptancePortResult.Verified(
+                        IncomingVerifiedControlIndexPayload(
+                            statement = result.statement,
+                            recognition = result.recognition,
+                        ),
+                    )
                 is IncomingControlIndexAcceptanceResult.Retryable ->
                     IncomingControlIndexAcceptancePortResult.Retryable(result.reason)
                 is IncomingControlIndexAcceptanceResult.Rejected ->
                     IncomingControlIndexAcceptancePortResult.Rejected(result.reason)
             }
         },
+        verifiedControlIndexPersistence = verifiedControlIndexPersistence,
         adoption = IncomingRecognitionAdoptionPort { request ->
             incomingRecognitionCiphertextAdopter.adopt(request)
         },
@@ -376,11 +445,52 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
                         else -> rejected(IncomingCapsuleAcceptanceRejectionReason.CRYPTO_REJECTED)
                     }
                 }
-                IncomingControlIndexAcceptancePortResult.Verified -> Unit
+                is IncomingControlIndexAcceptancePortResult.Verified -> {
+                    val persistenceSession = when (
+                        val checked = sessionFor(request.ownerUserId, initial = false)
+                    ) {
+                        is SessionCheck.Ready -> checked.session
+                        is SessionCheck.Failure -> return@withContext checked.result
+                    }
+                    val persistenceResult = try {
+                        verifiedControlIndexPersistence.persist(
+                            IncomingVerifiedControlIndexPersistenceRequest(
+                                ownerUserId = request.ownerUserId,
+                                capsuleId = request.capsuleId,
+                                verified = cryptoResult.payload,
+                            ),
+                            authenticatedOwnerUserId = persistenceSession.ownerUserId,
+                        )
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        return@withContext retryable(
+                            IncomingCapsuleAcceptanceRetryReason.VERIFIED_PAYLOAD_PERSISTENCE,
+                        )
+                    }
+                    when (persistenceResult) {
+                        IncomingVerifiedControlIndexPersistenceResult.Durable -> Unit
+                        is IncomingVerifiedControlIndexPersistenceResult.Retryable ->
+                            return@withContext retryable(
+                                IncomingCapsuleAcceptanceRetryReason.VERIFIED_PAYLOAD_PERSISTENCE,
+                            )
+                        is IncomingVerifiedControlIndexPersistenceResult.Rejected -> {
+                            return@withContext when (persistenceResult.reason) {
+                                IncomingVerifiedControlIndexPersistenceRejectionReason.OWNER_MISMATCH ->
+                                    rejected(IncomingCapsuleAcceptanceRejectionReason.OWNER_MISMATCH)
+                                IncomingVerifiedControlIndexPersistenceRejectionReason.ACCOUNT_CHANGED ->
+                                    rejected(IncomingCapsuleAcceptanceRejectionReason.ACCOUNT_CHANGED)
+                                IncomingVerifiedControlIndexPersistenceRejectionReason.INVALID_VERIFIED_PAYLOAD ->
+                                    rejected(IncomingCapsuleAcceptanceRejectionReason.PERSISTENCE_REJECTED)
+                            }
+                        }
+                    }
+                }
             }
 
-            // The account is checked immediately before the file can leave
-            // TEMP. A switch therefore cannot advance a durable owner row.
+            // The account is checked again immediately before the file can
+            // leave TEMP. A switch during A12 therefore cannot advance a
+            // durable owner row.
             when (val checked = sessionFor(request.ownerUserId, initial = false)) {
                 is SessionCheck.Ready -> checked.session
                 is SessionCheck.Failure -> return@withContext checked.result

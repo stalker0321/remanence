@@ -44,6 +44,7 @@ enum class SenderIndexBundleStageFailure {
     PATH_UNSAFE,
     DESTINATION_CONFLICT,
     SEALING_FAILED,
+    DEPENDENCY_UNAVAILABLE,
     LOCAL_STORAGE,
     ATOMIC_MOVE_UNAVAILABLE,
     DURABILITY_UNAVAILABLE,
@@ -222,7 +223,7 @@ class SenderIndexBundleStager internal constructor(
                         true,
                     )
                     SemanticInspection.UNAVAILABLE -> return@withLock failure(
-                        SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                        SenderIndexBundleStageFailure.DEPENDENCY_UNAVAILABLE,
                         true,
                     )
                     SemanticInspection.MISMATCH,
@@ -241,9 +242,12 @@ class SenderIndexBundleStager internal constructor(
                     // existing unreadable/unavailable TEMP is therefore
                     // preserved and retried conservatively; only a fresh
                     // unique .part is disposable by its creating invocation.
-                    SemanticInspection.INVALID,
-                    SemanticInspection.UNAVAILABLE -> return@withLock failure(
+                    SemanticInspection.INVALID -> return@withLock failure(
                         SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                        true,
+                    )
+                    SemanticInspection.UNAVAILABLE -> return@withLock failure(
+                        SenderIndexBundleStageFailure.DEPENDENCY_UNAVAILABLE,
                         true,
                     )
                     SemanticInspection.READ_FAILURE -> return@withLock failure(
@@ -473,6 +477,8 @@ class SenderIndexBundleStager internal constructor(
         SemanticInspection.MISMATCH,
         SemanticInspection.UNSAFE,
         -> failure(SenderIndexBundleStageFailure.DESTINATION_CONFLICT, false)
+        SemanticInspection.UNAVAILABLE ->
+            failure(SenderIndexBundleStageFailure.DEPENDENCY_UNAVAILABLE, true)
         else -> failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
     }
 
@@ -505,6 +511,8 @@ class SenderIndexBundleStager internal constructor(
             SemanticInspection.MISMATCH,
             SemanticInspection.UNSAFE,
             -> failure(SenderIndexBundleStageFailure.DESTINATION_CONFLICT, false)
+            SemanticInspection.UNAVAILABLE ->
+                failure(SenderIndexBundleStageFailure.DEPENDENCY_UNAVAILABLE, true)
             else -> failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
         }
     }
@@ -766,12 +774,23 @@ class SenderIndexBundleStager internal constructor(
             SemanticInspection.READ_FAILURE ->
                 return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
             SemanticInspection.UNAVAILABLE ->
-                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+                return failure(SenderIndexBundleStageFailure.DEPENDENCY_UNAVAILABLE, true)
             else -> Unit // keep an unknown orphan; never risk the winner
         }
 
-        val verified = verifyDestination(paths.destination, expectedPlaintext, aad)
-            ?: return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+        val verified = when (
+            val verification = verifyDestination(paths.destination, expectedPlaintext, aad)
+        ) {
+            is DestinationVerification.Verified -> verification.bytes
+            is DestinationVerification.Failure -> return failure(
+                if (verification.inspection == SemanticInspection.UNAVAILABLE) {
+                    SenderIndexBundleStageFailure.DEPENDENCY_UNAVAILABLE
+                } else {
+                    SenderIndexBundleStageFailure.LOCAL_STORAGE
+                },
+                true,
+            )
+        }
         return try {
             SenderIndexBundleStageResult.Staged(
                 durable = DurableSenderIndexBundle(
@@ -794,19 +813,26 @@ class SenderIndexBundleStager internal constructor(
         path: Path,
         expectedPlaintext: ByteArray,
         aad: ByteArray,
-    ): VerifiedBytes? {
+    ): DestinationVerification {
         val read = readBounded(path)
-        if (read !is ReadResult.Bytes) return null
+        if (read !is ReadResult.Bytes) {
+            return DestinationVerification.Failure(
+                (read as ReadResult.Failure).inspection,
+            )
+        }
         return try {
-            if (inspectSemantic(path, expectedPlaintext, aad) == SemanticInspection.MATCH) {
+            val inspection = inspectSemantic(path, expectedPlaintext, aad)
+            if (inspection == SemanticInspection.MATCH) {
                 // VerifiedBytes owns this digest until finish copies it into
                 // the opaque capability.
-                VerifiedBytes(
-                    sha256 = MessageDigest.getInstance("SHA-256").digest(read.bytes),
-                    sizeBytes = read.bytes.size.toLong(),
+                DestinationVerification.Verified(
+                    VerifiedBytes(
+                        sha256 = MessageDigest.getInstance("SHA-256").digest(read.bytes),
+                        sizeBytes = read.bytes.size.toLong(),
+                    ),
                 )
             } else {
-                null
+                DestinationVerification.Failure(inspection)
             }
         } finally {
             // This complete ciphertext buffer is never allowed to escape.
@@ -830,7 +856,8 @@ class SenderIndexBundleStager internal constructor(
             )
             SemanticInspection.MISSING,
             SemanticInspection.READ_FAILURE -> failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
-            SemanticInspection.UNAVAILABLE -> failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+            SemanticInspection.UNAVAILABLE ->
+                failure(SenderIndexBundleStageFailure.DEPENDENCY_UNAVAILABLE, true)
             SemanticInspection.MISMATCH,
             SemanticInspection.UNSAFE,
             SemanticInspection.INVALID,
@@ -892,6 +919,11 @@ class SenderIndexBundleStager internal constructor(
     }
 
     private data class VerifiedBytes(val sha256: ByteArray, val sizeBytes: Long)
+
+    private sealed interface DestinationVerification {
+        data class Verified(val bytes: VerifiedBytes) : DestinationVerification
+        data class Failure(val inspection: SemanticInspection) : DestinationVerification
+    }
 
     private sealed interface ReadResult {
         data class Bytes(val bytes: ByteArray) : ReadResult

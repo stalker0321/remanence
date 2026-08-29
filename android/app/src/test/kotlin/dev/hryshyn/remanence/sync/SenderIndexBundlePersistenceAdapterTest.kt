@@ -9,6 +9,12 @@ import dev.hryshyn.remanence.index.DurableSenderIndexBundle
 import dev.hryshyn.remanence.index.SenderIndexBundleStageFailure
 import dev.hryshyn.remanence.index.SenderIndexBundleStageRequest
 import dev.hryshyn.remanence.index.SenderIndexBundleStageResult
+import dev.hryshyn.remanence.core.recognition.ExtractionQuality
+import dev.hryshyn.remanence.core.recognition.FingerprintCodec
+import dev.hryshyn.remanence.core.recognition.FingerprintKeypoint
+import dev.hryshyn.remanence.core.recognition.FingerprintSide
+import dev.hryshyn.remanence.core.recognition.PostcardFingerprint
+import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import java.io.File
 import java.io.IOException
 import kotlin.coroutines.cancellation.CancellationException
@@ -140,6 +146,8 @@ class SenderIndexBundlePersistenceAdapterTest {
         val cases = listOf(
             SenderIndexBundleStageFailure.SEALING_FAILED to
                 IncomingVerifiedControlIndexPersistenceRetryReason.DEPENDENCY_UNAVAILABLE,
+            SenderIndexBundleStageFailure.DEPENDENCY_UNAVAILABLE to
+                IncomingVerifiedControlIndexPersistenceRetryReason.DEPENDENCY_UNAVAILABLE,
             SenderIndexBundleStageFailure.LOCAL_STORAGE to
                 IncomingVerifiedControlIndexPersistenceRetryReason.LOCAL_STORAGE,
         )
@@ -206,6 +214,46 @@ class SenderIndexBundlePersistenceAdapterTest {
     }
 
     @Test
+    fun realStagerReplayUnsealFailureIsDependencyUnavailable() = runBlocking {
+        val filesDir = File(
+            System.getProperty("java.io.tmpdir"),
+            "remanence-a12b-replay-${System.nanoTime()}",
+        )
+        check(filesDir.mkdirs())
+        try {
+            val sealer = ReplayUnavailableSealer()
+            val adapter = SenderIndexBundlePersistenceAdapter(
+                dev.hryshyn.remanence.index.SenderIndexBundleStager(
+                    AccountScopedFileRoots(filesDir),
+                    sealer,
+                ),
+            )
+            val validRequest = IncomingVerifiedControlIndexPersistenceRequest(
+                ownerUserId = owner,
+                capsuleId = capsule,
+                verified = IncomingVerifiedControlIndexPayload(
+                    statement = PublishStatement.getDefaultInstance(),
+                    recognition = validRecognition(),
+                ),
+            )
+
+            assertSame(
+                IncomingVerifiedControlIndexPersistenceResult.Durable,
+                adapter.persist(validRequest, owner),
+            )
+            sealer.unsealUnavailable = true
+            assertEquals(
+                IncomingVerifiedControlIndexPersistenceResult.Retryable(
+                    IncomingVerifiedControlIndexPersistenceRetryReason.DEPENDENCY_UNAVAILABLE,
+                ),
+                adapter.persist(validRequest, owner),
+            )
+        } finally {
+            filesDir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun cancellationPropagatesUnchanged() = runBlocking {
         val cancellation = CancellationException("private cancellation")
         var thrown: Throwable? = null
@@ -248,4 +296,47 @@ class SenderIndexBundlePersistenceAdapterTest {
         ciphertextSha256 = ByteArray(32) { 7 },
         ciphertextSizeBytes = 7,
     )
+
+    private fun validRecognition() = recognition.copy(
+        frontFingerprint = fingerprint(FingerprintSide.FRONT),
+        backFingerprint = fingerprint(FingerprintSide.BACK),
+    )
+
+    private fun fingerprint(side: FingerprintSide): ByteArray = FingerprintCodec.serialize(
+        PostcardFingerprint(
+            profileId = RecognitionProfile.MVP_ORB_V1_ID,
+            side = side,
+            canonicalWidthPx = 1200,
+            canonicalHeightPx = 800,
+            coarseHash64 = 17L,
+            keypoints = listOf(
+                FingerprintKeypoint(
+                    xNormalized = 0.5,
+                    yNormalized = 0.5,
+                    scaleNormalized = 1.0,
+                    angleCentiDegrees = 9000,
+                    responseQuantized = 2,
+                    octave = 0,
+                ),
+            ),
+            descriptors = listOf(ByteArray(FingerprintCodec.DESCRIPTOR_BYTES) { 3 }),
+            quality = ExtractionQuality(
+                blurScore = 1.0,
+                exposureScore = 1.0,
+                glareFraction = 0.1,
+                detectedAreaRatio = 0.5,
+            ),
+        ),
+    )
+}
+
+private class ReplayUnavailableSealer : SecretSealer {
+    var unsealUnavailable = false
+
+    override fun seal(plaintext: ByteArray, aad: ByteArray): ByteArray = plaintext.copyOf()
+
+    override fun unseal(ciphertext: ByteArray, aad: ByteArray): ByteArray {
+        if (unsealUnavailable) error("injected provider unavailable")
+        return ciphertext.copyOf()
+    }
 }

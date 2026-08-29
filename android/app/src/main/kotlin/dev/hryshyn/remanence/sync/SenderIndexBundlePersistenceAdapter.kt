@@ -74,6 +74,9 @@ class SenderIndexBundlePersistenceAdapter internal constructor(
                 rejected(IncomingVerifiedControlIndexPersistenceRejectionReason.LOCAL_CAPABILITY_UNAVAILABLE)
             }
 
+            SenderIndexBundleStageFailure.DEPENDENCY_UNAVAILABLE ->
+                retryable(IncomingVerifiedControlIndexPersistenceRetryReason.DEPENDENCY_UNAVAILABLE)
+
             SenderIndexBundleStageFailure.LOCAL_STORAGE ->
                 retryable(IncomingVerifiedControlIndexPersistenceRetryReason.LOCAL_STORAGE)
         }

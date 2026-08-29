@@ -587,7 +587,7 @@ class SenderIndexBundleStagerTest {
 
         sealer.unsealUnavailable = true
         val unavailableTemporary = stager.stage(request(ownerA)) as SenderIndexBundleStageResult.Failure
-        assertEquals(SenderIndexBundleStageFailure.LOCAL_STORAGE, unavailableTemporary.reason)
+        assertEquals(SenderIndexBundleStageFailure.DEPENDENCY_UNAVAILABLE, unavailableTemporary.reason)
         assertTrue(unavailableTemporary.retryable)
         assertTrue(temporary(ownerA).isFile)
         assertTrue(fs.createdParts.all { !Files.exists(it, LinkOption.NOFOLLOW_LINKS) })
@@ -601,7 +601,7 @@ class SenderIndexBundleStagerTest {
 
         sealer.unsealUnavailable = true
         val unavailableDestination = stager.stage(request(ownerA)) as SenderIndexBundleStageResult.Failure
-        assertEquals(SenderIndexBundleStageFailure.LOCAL_STORAGE, unavailableDestination.reason)
+        assertEquals(SenderIndexBundleStageFailure.DEPENDENCY_UNAVAILABLE, unavailableDestination.reason)
         assertTrue(unavailableDestination.retryable)
         assertArrayEquals(winner, destination(ownerA).readBytes())
         assertEquals(sealCallsAfterFirst, sealer.sealCalls)

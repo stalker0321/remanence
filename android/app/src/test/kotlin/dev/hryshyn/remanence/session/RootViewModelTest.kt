@@ -6,6 +6,8 @@ import dev.hryshyn.remanence.core.model.UserId
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -15,6 +17,7 @@ import kotlinx.coroutines.test.setMain
 import kotlin.coroutines.cancellation.CancellationException
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -295,6 +298,51 @@ class RootViewModelTest {
         advanceUntilIdle()
         assertEquals(AuthUiState.RequiresConnectivity, vm.authState.value)
         assertEquals(AppDestination.Authentication, vm.destination.value)
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+    }
+
+    @Test
+    fun staleSchedulingFailureCannotOverwriteTrailingTerminalResolution() = runTest {
+        val resolver = MutableOutcomeResolver(SessionState.SignedOut)
+        val scheduleEntered = CompletableDeferred<Unit>()
+        val failSchedule = CompletableDeferred<Unit>()
+        lateinit var vm: RootViewModel
+        vm = RootViewModel(
+            resolver,
+            scheduleIncomingSync = {
+                if (scheduleEntered.complete(Unit)) {
+                    resolver.state = SessionState.SignedOut
+                    // Request generation N+1 while generation N is still in
+                    // its scheduling callback. The coordinator runs the
+                    // trailing terminal resolution after N fails.
+                    vm.onAppForegrounded()
+                    failSchedule.await()
+                    error("scheduled work rejected")
+                }
+            },
+        )
+        advanceUntilIdle()
+
+        val states = mutableListOf<AuthUiState>()
+        val observer = backgroundScope.launch {
+            vm.authState.collect { states += it }
+        }
+        resolver.state = SessionState.Active(
+            "0198f0a0-0000-7000-8000-00000000b520",
+            "mykola",
+            true,
+            true,
+        )
+        vm.onAppForegrounded()
+        advanceUntilIdle()
+        assertTrue(scheduleEntered.isCompleted)
+
+        failSchedule.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(AuthUiState.SignedOut, vm.authState.value)
+        assertFalse(states.contains(AuthUiState.RequiresConnectivity))
+        observer.cancel()
         vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
     }
 

@@ -412,9 +412,7 @@ class RootViewModel(
                 // Work scheduling is part of the bootstrap boundary: do not
                 // leave a resolved-looking root when the authenticated chain
                 // could not be accepted by WorkManager.
-                if (isCurrentRefresh(generation)) {
-                    publish(AuthUiState.RequiresConnectivity)
-                }
+                publishIfCurrent(generation, AuthUiState.RequiresConnectivity)
             }
         }
     }

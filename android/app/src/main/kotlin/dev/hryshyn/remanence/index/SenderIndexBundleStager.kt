@@ -11,7 +11,6 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.file.FileAlreadyExistsException
-import java.nio.file.FileSystemException
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
@@ -20,6 +19,7 @@ import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -227,11 +227,6 @@ class SenderIndexBundleStager internal constructor(
                     fileSystem.atomicNoReplaceLink(paths.temporary, paths.destination)
                 } catch (_: FileAlreadyExistsException) {
                     return@withLock reconcileExistingDestination(request, paths, plaintext!!, aad!!)
-                } catch (_: FileSystemException) {
-                    return@withLock failure(
-                        SenderIndexBundleStageFailure.ATOMIC_MOVE_UNAVAILABLE,
-                        false,
-                    )
                 } catch (_: UnsupportedOperationException) {
                     return@withLock failure(
                         SenderIndexBundleStageFailure.ATOMIC_MOVE_UNAVAILABLE,
@@ -312,12 +307,19 @@ class SenderIndexBundleStager internal constructor(
                 return failure(SenderIndexBundleStageFailure.SEALING_FAILED, false)
             }
 
+            val partWasAbsentBeforeCreate = try {
+                fileSystem.attributes(paths.part) == null
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+            }
             try {
                 fileSystem.openWriteNew(paths.part).use { output ->
                     // CREATE_NEW ownership is established when the stream is
-                    // returned. The part remains an inert orphan on a
-                    // process-death window can leave it for a later
-                    // invocation; once returned, this invocation owns the
+                    // returned. A process-death window can leave the part as
+                    // an inert orphan for a later invocation; once returned,
+                    // this invocation owns the
                     // exact path and cleans it on every handled outcome.
                     partCreated = true
                     output.write(sealed!!)
@@ -328,38 +330,45 @@ class SenderIndexBundleStager internal constructor(
                     return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
                 }
             } catch (cancelled: CancellationException) {
+                if (!partCreated) {
+                    partCreated = claimAmbiguousPart(paths.part, partWasAbsentBeforeCreate)
+                }
                 throw cancelled
+            } catch (_: FileAlreadyExistsException) {
+                // CREATE_NEW did not establish ownership of an existing
+                // path. Never delete it, even if this generated name
+                // happened to collide.
+                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
             } catch (_: SecurityException) {
+                if (!partCreated) {
+                    partCreated = claimAmbiguousPart(paths.part, partWasAbsentBeforeCreate)
+                }
                 return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
             } catch (_: IOException) {
+                if (!partCreated) {
+                    partCreated = claimAmbiguousPart(paths.part, partWasAbsentBeforeCreate)
+                }
                 return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
             } catch (_: UnsupportedOperationException) {
+                if (!partCreated) {
+                    partCreated = claimAmbiguousPart(paths.part, partWasAbsentBeforeCreate)
+                }
                 return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
             } catch (_: RuntimeException) {
+                if (!partCreated) {
+                    partCreated = claimAmbiguousPart(paths.part, partWasAbsentBeforeCreate)
+                }
                 return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
             }
 
             try {
                 fileSystem.atomicNoReplaceLink(paths.part, paths.temporary)
             } catch (_: FileAlreadyExistsException) {
-                // The target-existing outcome is definitive for createLink;
-                // our part was not adopted. It is left inert and ignored on
-                // later invocations; no broad orphan deletion is attempted.
-                return when (inspectSemantic(paths.temporary, expectedPlaintext, aad)) {
-                    SemanticInspection.MATCH -> null
-                    SemanticInspection.READ_FAILURE,
-                    SemanticInspection.INVALID,
-                    SemanticInspection.UNAVAILABLE,
-                    SemanticInspection.MISSING,
-                    -> failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
-                    SemanticInspection.MISMATCH,
-                    SemanticInspection.UNSAFE,
-                    -> failure(SenderIndexBundleStageFailure.DESTINATION_CONFLICT, false)
-                }
-            } catch (_: FileSystemException) {
-                // An unsupported/cross-device hard link cannot be replaced
-                // with copy or rename without weakening no-overwrite safety.
-                return failure(SenderIndexBundleStageFailure.ATOMIC_MOVE_UNAVAILABLE, false)
+                return reconcileTemporaryAfterLinkFailure(
+                    paths,
+                    expectedPlaintext,
+                    aad,
+                ) { partCreated = false }
             } catch (_: UnsupportedOperationException) {
                 return failure(SenderIndexBundleStageFailure.ATOMIC_MOVE_UNAVAILABLE, false)
             } catch (cancelled: CancellationException) {
@@ -367,43 +376,94 @@ class SenderIndexBundleStager internal constructor(
             } catch (_: SecurityException) {
                 return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
             } catch (_: IOException) {
-                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+                return reconcileTemporaryAfterLinkFailure(
+                    paths,
+                    expectedPlaintext,
+                    aad,
+                ) { partCreated = false }
             } catch (_: RuntimeException) {
                 return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
             }
 
-            forceFile(paths.temporary)?.let { return it }
-            if (!forceDirectoryBestEffort(paths.temporary.parent!!)) {
-                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
-            }
-            try {
-                if (!deleteOwnedPart(paths.part)) {
-                    return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
-                }
+            return completeTemporaryPublication(paths, expectedPlaintext, aad) {
                 partCreated = false
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
-            }
-            if (!forceDirectoryBestEffort(paths.part.parent!!)) {
-                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
-            }
-            return when (inspectSemantic(paths.temporary, expectedPlaintext, aad)) {
-                SemanticInspection.MATCH -> null
-                SemanticInspection.READ_FAILURE,
-                SemanticInspection.INVALID,
-                SemanticInspection.UNAVAILABLE,
-                SemanticInspection.MISSING,
-                -> failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
-                SemanticInspection.MISMATCH,
-                SemanticInspection.UNSAFE,
-                -> failure(SenderIndexBundleStageFailure.DESTINATION_CONFLICT, false)
             }
         } finally {
             sealed?.let(wipe)
-            if (partCreated) cleanupOwnedPartBestEffort(paths.part)
+            if (partCreated) {
+                withContext(NonCancellable) {
+                    cleanupOwnedPartBestEffort(paths.part)
+                }
+            }
         }
+    }
+
+    private suspend fun reconcileTemporaryAfterLinkFailure(
+        paths: StagePaths,
+        expectedPlaintext: ByteArray,
+        aad: ByteArray,
+        onPartConsumed: () -> Unit = {},
+    ): SenderIndexBundleStageResult.Failure? = when (
+        inspectSemantic(paths.temporary, expectedPlaintext, aad)
+    ) {
+        SemanticInspection.MATCH -> completeTemporaryPublication(
+            paths,
+            expectedPlaintext,
+            aad,
+            onPartConsumed,
+        )
+        SemanticInspection.MISMATCH,
+        SemanticInspection.UNSAFE,
+        -> failure(SenderIndexBundleStageFailure.DESTINATION_CONFLICT, false)
+        else -> failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+    }
+
+    private suspend fun completeTemporaryPublication(
+        paths: StagePaths,
+        expectedPlaintext: ByteArray,
+        aad: ByteArray,
+        onPartConsumed: () -> Unit,
+    ): SenderIndexBundleStageResult.Failure? {
+        forceFile(paths.temporary)?.let { return it }
+        if (!forceDirectoryBestEffort(paths.temporary.parent!!)) {
+            return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+        }
+        try {
+            if (!deleteOwnedPart(paths.part)) {
+                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+            }
+            onPartConsumed()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+        }
+        if (!forceDirectoryBestEffort(paths.part.parent!!)) {
+            return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+        }
+        return when (inspectSemantic(paths.temporary, expectedPlaintext, aad)) {
+            SemanticInspection.MATCH -> null
+            SemanticInspection.MISMATCH,
+            SemanticInspection.UNSAFE,
+            -> failure(SenderIndexBundleStageFailure.DESTINATION_CONFLICT, false)
+            else -> failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+        }
+    }
+
+    /**
+     * An open adapter may create the file and then throw before returning its
+     * stream. Claim ownership only when the exact path was absent before
+     * CREATE_NEW and is now a regular no-follow file; FileAlreadyExists never
+     * reaches this helper.
+     */
+    private fun claimAmbiguousPart(path: Path, wasAbsentBeforeCreate: Boolean): Boolean {
+        if (!wasAbsentBeforeCreate) return false
+        val attributes = try {
+            fileSystem.attributes(path)
+        } catch (_: Exception) {
+            return false
+        }
+        return attributes != null && attributes.isRegularFile && !attributes.isSymbolicLink
     }
 
     /** Delete only this invocation's no-follow regular part, then persist the unlink. */
@@ -430,20 +490,22 @@ class SenderIndexBundleStager internal constructor(
     private fun cleanupOwnedPartBestEffort(path: Path) {
         val attributes = try {
             fileSystem.attributes(path)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
         } catch (_: Exception) {
             return
         }
         if (attributes?.isSymbolicLink == true || attributes?.isRegularFile == false) return
         try {
             fileSystem.deleteIfExists(path)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
         } catch (_: Exception) {
             return
         }
-        forceDirectoryBestEffort(path.parent!!)
+        try {
+            forceDirectoryBestEffort(path.parent!!)
+        } catch (_: Exception) {
+            // This helper runs from finally and must never mask the original
+            // result or cancellation, including an explicit provider-thrown
+            // CancellationException.
+        }
     }
 
     private fun isDirectoryChainSafe(root: Path, leaf: Path): Boolean {
@@ -723,9 +785,13 @@ class SenderIndexBundleStager internal constructor(
                 aad,
                 replayed = true,
             )
+            SemanticInspection.MISSING,
             SemanticInspection.READ_FAILURE -> failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
             SemanticInspection.UNAVAILABLE -> failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
-            else -> failure(SenderIndexBundleStageFailure.DESTINATION_CONFLICT, false)
+            SemanticInspection.MISMATCH,
+            SemanticInspection.UNSAFE,
+            SemanticInspection.INVALID,
+            -> failure(SenderIndexBundleStageFailure.DESTINATION_CONFLICT, false)
         }
     }
 

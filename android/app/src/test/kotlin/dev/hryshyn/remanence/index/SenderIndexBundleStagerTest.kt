@@ -23,6 +23,7 @@ import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.UUID
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -33,6 +34,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlin.coroutines.cancellation.CancellationException
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -328,6 +330,53 @@ class SenderIndexBundleStagerTest {
     }
 
     @Test
+    fun handledOpenFailureAfterCreateCleansTheCurrentInvocationPart() = runBlocking {
+        val fs = RecordingFileSystem().apply { failAfterCreateOpen = true }
+        val result = SenderIndexBundleStager(
+            roots = roots,
+            sealer = RandomAuthenticatedSealer(),
+            codec = SenderIndexBundleCodec(),
+            fileSystem = fs,
+            wipe = { it.fill(0) },
+        ).stage(request(ownerA)) as SenderIndexBundleStageResult.Failure
+
+        assertEquals(SenderIndexBundleStageFailure.LOCAL_STORAGE, result.reason)
+        assertEquals(1, fs.createdParts.size)
+        assertFalse(Files.exists(fs.createdParts.single(), LinkOption.NOFOLLOW_LINKS))
+        assertFalse(temporary(ownerA).exists())
+        assertFalse(destination(ownerA).exists())
+    }
+
+    @Test
+    fun cancellationAfterAmbiguousCreateCleansPartAndPreservesOriginalCancellation() = runBlocking {
+        val original = CancellationException("original cancellation")
+        val cleanupFailure = CancellationException("cleanup cancellation")
+        val fs = RecordingFileSystem().apply {
+            cancelAfterCreate = original
+            cleanupForceCancellation = cleanupFailure
+        }
+        var thrown: Throwable? = null
+        try {
+            SenderIndexBundleStager(
+                roots = roots,
+                sealer = RandomAuthenticatedSealer(),
+                codec = SenderIndexBundleCodec(),
+                fileSystem = fs,
+                wipe = { it.fill(0) },
+            ).stage(request(ownerA))
+        } catch (failure: Throwable) {
+            thrown = failure
+        }
+
+        assertTrue(
+            "thrown=$thrown original=$original same=${thrown === original}",
+            thrown === original || thrown?.cause === original,
+        )
+        assertEquals(1, fs.createdParts.size)
+        assertFalse(Files.exists(fs.createdParts.single(), LinkOption.NOFOLLOW_LINKS))
+    }
+
+    @Test
     fun handledTemporaryLinkFailureCleansTheCurrentInvocationPart() = runBlocking {
         val fs = RecordingFileSystem().apply { failLink = true }
         val result = SenderIndexBundleStager(
@@ -338,7 +387,7 @@ class SenderIndexBundleStagerTest {
             wipe = { it.fill(0) },
         ).stage(request(ownerA)) as SenderIndexBundleStageResult.Failure
 
-        assertEquals(SenderIndexBundleStageFailure.ATOMIC_MOVE_UNAVAILABLE, result.reason)
+        assertEquals(SenderIndexBundleStageFailure.LOCAL_STORAGE, result.reason)
         assertEquals(1, fs.createdParts.size)
         assertFalse(Files.exists(fs.createdParts.single(), LinkOption.NOFOLLOW_LINKS))
         assertFalse(temporary(ownerA).exists())
@@ -346,22 +395,54 @@ class SenderIndexBundleStagerTest {
     }
 
     @Test
-    fun partialPartFromSimulatedProcessDeathIsIgnoredByAReconstructedStager() = runBlocking {
-        val fs = RecordingFileSystem().apply { leaveOrphanAfterCreate = true }
-        val sealer = RandomAuthenticatedSealer()
-        val first = SenderIndexBundleStager(
+    fun temporaryLinkIoAfterTargetCreationReconcilesToSuccess() = runBlocking {
+        val fs = RecordingFileSystem().apply { throwAfterTemporaryLink = true }
+        val result = SenderIndexBundleStager(
             roots = roots,
-            sealer = sealer,
+            sealer = RandomAuthenticatedSealer(),
             codec = SenderIndexBundleCodec(),
             fileSystem = fs,
             wipe = { it.fill(0) },
-        ).stage(request(ownerA)) as SenderIndexBundleStageResult.Failure
+        ).stage(request(ownerA))
 
-        assertEquals(SenderIndexBundleStageFailure.LOCAL_STORAGE, first.reason)
+        assertTrue(result is SenderIndexBundleStageResult.Staged)
+        assertTrue(destination(ownerA).isFile)
         assertFalse(temporary(ownerA).exists())
-        val partialPart = fs.createdParts.single()
-        assertTrue(partialPart.fileName.toString().endsWith(".part"))
-        assertTrue(Files.isRegularFile(partialPart, LinkOption.NOFOLLOW_LINKS))
+        assertTrue(fs.createdParts.all { !Files.exists(it, LinkOption.NOFOLLOW_LINKS) })
+    }
+
+    @Test
+    fun destinationLinkIoAfterTargetCreationReconcilesToReplay() = runBlocking {
+        val fs = RecordingFileSystem().apply { throwAfterDestinationLink = true }
+        val result = SenderIndexBundleStager(
+            roots = roots,
+            sealer = RandomAuthenticatedSealer(),
+            codec = SenderIndexBundleCodec(),
+            fileSystem = fs,
+            wipe = { it.fill(0) },
+        ).stage(request(ownerA))
+
+        val staged = result as SenderIndexBundleStageResult.Staged
+        assertTrue(staged.replayed)
+        assertTrue(destination(ownerA).isFile)
+        assertFalse(temporary(ownerA).exists())
+        assertTrue(fs.createdParts.all { !Files.exists(it, LinkOption.NOFOLLOW_LINKS) })
+    }
+
+    @Test
+    fun partialPartFromSimulatedProcessDeathIsIgnoredByAReconstructedStager() = runBlocking {
+        val fs = RecordingFileSystem()
+        val sealer = RandomAuthenticatedSealer()
+        val partParent = File(
+            roots.child(ownerA, AccountScopedFileRoots.ChildRoot.FINGERPRINTS),
+            "capsules",
+        ).apply { check(mkdirs()) }
+        val partialPart = File(
+            partParent,
+            "${capsule.toRestString()}.index.bundle.${UUID.randomUUID()}.part",
+        )
+        partialPart.writeBytes(byteArrayOf(1, 2, 3, 4))
+        assertTrue(Files.isRegularFile(partialPart.toPath(), LinkOption.NOFOLLOW_LINKS))
         assertFalse(destination(ownerA).exists())
 
         val second = SenderIndexBundleStager(
@@ -377,7 +458,7 @@ class SenderIndexBundleStagerTest {
         assertFalse(temporary(ownerA).exists())
         // The interrupted process's unique part is harmless and cannot block
         // this invocation's fresh part or canonical destination.
-        assertTrue(Files.isRegularFile(partialPart, LinkOption.NOFOLLOW_LINKS))
+        assertTrue(Files.isRegularFile(partialPart.toPath(), LinkOption.NOFOLLOW_LINKS))
         assertTrue(fs.createdParts.drop(1).all { !Files.exists(it, LinkOption.NOFOLLOW_LINKS) })
     }
 
@@ -394,7 +475,7 @@ class SenderIndexBundleStagerTest {
         )
 
         val first = stager.stage(request(ownerA)) as SenderIndexBundleStageResult.Failure
-        assertEquals(SenderIndexBundleStageFailure.ATOMIC_MOVE_UNAVAILABLE, first.reason)
+        assertEquals(SenderIndexBundleStageFailure.LOCAL_STORAGE, first.reason)
         assertTrue(temporary(ownerA).isFile)
         assertTrue(fs.createdParts.all { !Files.exists(it, LinkOption.NOFOLLOW_LINKS) })
         val sealCallsAfterFirst = sealer.sealCalls
@@ -625,10 +706,14 @@ private class RecordingFileSystem : SenderIndexBundleFileSystem {
     var zeroRead = false
     var failWrite = false
     var failAfterWriteBytes: Int? = null
+    var failAfterCreateOpen = false
+    var cancelAfterCreate: CancellationException? = null
+    var cleanupForceCancellation: CancellationException? = null
     var failLink = false
     var failDestinationLink = false
+    var throwAfterTemporaryLink = false
+    var throwAfterDestinationLink = false
     val createdParts = mutableListOf<Path>()
-    var leaveOrphanAfterCreate = false
 
     override fun attributes(path: Path): SenderIndexBundleFileAttributes? = try {
         val attributes = Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
@@ -665,11 +750,14 @@ private class RecordingFileSystem : SenderIndexBundleFileSystem {
         }
         val delegate = Files.newOutputStream(path, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
         createdParts.add(path)
-        if (leaveOrphanAfterCreate) {
-            leaveOrphanAfterCreate = false
+        if (failAfterCreateOpen || cancelAfterCreate != null) {
+            val cancellation = cancelAfterCreate
+            failAfterCreateOpen = false
+            cancelAfterCreate = null
             delegate.write(byteArrayOf(1, 2, 3, 4))
             delegate.close()
-            throw IOException("simulated process death after part creation")
+            if (cancellation != null) throw cancellation
+            throw IOException("injected open failure after create")
         }
         val limit = failAfterWriteBytes ?: return delegate
         failAfterWriteBytes = null
@@ -704,6 +792,14 @@ private class RecordingFileSystem : SenderIndexBundleFileSystem {
             throw java.nio.file.FileSystemException("injected link failure")
         }
         Files.createLink(destination, source)
+        if (destination.fileName.toString().endsWith(".index.bundle.tmp") && throwAfterTemporaryLink) {
+            throwAfterTemporaryLink = false
+            throw java.nio.file.FileSystemException("injected post-link temporary failure")
+        }
+        if (destination.fileName.toString().endsWith(".index.bundle") && throwAfterDestinationLink) {
+            throwAfterDestinationLink = false
+            throw IOException("injected post-link destination failure")
+        }
     }
 
     override fun deleteIfExists(path: Path): Boolean {
@@ -723,6 +819,10 @@ private class RecordingFileSystem : SenderIndexBundleFileSystem {
 
     override fun forceDirectory(path: Path) {
         events += "force-dir:${path.fileName}"
+        cleanupForceCancellation?.let {
+            cleanupForceCancellation = null
+            throw it
+        }
         java.nio.channels.FileChannel.open(path, StandardOpenOption.READ).use { it.force(true) }
     }
 }

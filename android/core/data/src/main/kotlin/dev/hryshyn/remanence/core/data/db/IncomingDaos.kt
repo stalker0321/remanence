@@ -155,6 +155,38 @@ abstract class IncomingCapsuleDao {
     abstract suspend fun getByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String): IncomingCapsuleEntity?
 
     /**
+     * Exact owner-scoped quarantine CAS. Only a READY capsule still in
+     * DISCOVERED may enter CORRUPT. A refused CAS is reconciled through the
+     * same owner/capsule lookup, so a foreign row is indistinguishable from a
+     * missing row. This operation never mutates blob or filesystem state.
+     */
+    open suspend fun quarantineReadyDiscoveredForOwner(
+        ownerUserId: String,
+        capsuleId: String,
+    ): IncomingCapsuleQuarantineResult = resolveIncomingCapsuleQuarantine(
+        compareAndSet = {
+            quarantineReadyDiscoveredCas(
+                ownerUserId = ownerUserId,
+                capsuleId = capsuleId,
+            )
+        },
+        rereadOwnedCapsule = {
+            getByCapsuleIdAndOwner(capsuleId, ownerUserId)
+        },
+    )
+
+    /** Dedicated quarantine CAS; do not replace with the generic transition. */
+    @Query(
+        "UPDATE incoming_capsule SET material_state = 'CORRUPT' " +
+            "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId " +
+            "AND server_status = 'READY' AND material_state = 'DISCOVERED'",
+    )
+    protected abstract suspend fun quarantineReadyDiscoveredCas(
+        ownerUserId: String,
+        capsuleId: String,
+    ): Int
+
+    /**
      * Applies one canonical local-material request under the authenticated
      * owner. The row is loaded with the owner predicate, evaluated by the
      * core:model state machine, and only an evaluator-approved transition is

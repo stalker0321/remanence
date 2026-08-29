@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import dev.hryshyn.remanence.core.crypto.RecognitionManifestContent
+import dev.hryshyn.remanence.core.data.fingerprints.SecretSealer
 import dev.hryshyn.remanence.core.data.db.BlobCacheEntity
 import dev.hryshyn.remanence.core.data.db.BlobCacheState
 import dev.hryshyn.remanence.core.data.db.IncomingCapsuleEntity
@@ -14,8 +15,12 @@ import dev.hryshyn.remanence.core.data.db.IncomingIndexAcceptanceCommitResult
 import dev.hryshyn.remanence.core.data.db.IncomingIndexAcceptanceCommitter
 import dev.hryshyn.remanence.core.data.db.IncomingIndexAcceptanceFailure
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
+import dev.hryshyn.remanence.core.data.network.ApiBaseUrl
+import dev.hryshyn.remanence.core.data.network.AuthTokenHolder
+import dev.hryshyn.remanence.core.data.network.ProductionApiStack
 import dev.hryshyn.remanence.core.data.network.RecipientBlobDownloadFailure
 import dev.hryshyn.remanence.core.data.network.RecipientBlobDownloadResult
+import dev.hryshyn.remanence.core.data.network.SessionRotationSink
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.data.storage.IncomingRecognitionCiphertextAdopter
 import dev.hryshyn.remanence.core.data.storage.IncomingRecognitionCiphertextAdoptionFailure
@@ -28,11 +33,23 @@ import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.LocalMaterialState
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.core.recognition.ExtractionQuality
+import dev.hryshyn.remanence.core.recognition.FingerprintCodec
+import dev.hryshyn.remanence.core.recognition.FingerprintKeypoint
+import dev.hryshyn.remanence.core.recognition.FingerprintSide
+import dev.hryshyn.remanence.core.recognition.PostcardFingerprint
+import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.identity.TrustedSenderKeyStore
+import dev.hryshyn.remanence.index.SenderIndexBundleReader
+import dev.hryshyn.remanence.index.SenderIndexBundleStageRequest
+import dev.hryshyn.remanence.index.SenderIndexBundleStageResult
+import dev.hryshyn.remanence.index.SenderIndexBundleStager
 import dev.hryshyn.remanence.protocol.v1.PublishStatement
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
 import java.security.MessageDigest
+import java.security.SecureRandom
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -54,6 +71,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -167,6 +187,104 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
         assertIs<IncomingCapsuleAcceptanceResult.IdempotentReplay>(replay)
         assertEquals(1, downloads.get())
         assertEquals(1, snapshotClosed)
+    }
+
+    @Test
+    fun alreadyAcceptedReplayAccountSwitchBeforeInspectionFailsClosedWithoutSideEffects() = runBlocking {
+        seed()
+        promoteToAlreadyAccepted()
+        val beforeCiphertext = incomingCiphertextPath().readBytes()
+        val beforeCapsuleState = database.incomingCapsuleDao()
+            .getByCapsuleIdAndOwner(capsule.toRestString(), owner.toRestString())!!
+            .materialState
+        val beforeBlobState = cachedBlobState()
+        var inspectionCalls = 0
+
+        val result = coordinator(
+            session = sessionSequence(
+                IncomingSyncSession(owner, "token"),
+                IncomingSyncSession(otherOwner, "other-token"),
+            ),
+            inspection = IncomingSenderIndexBundleInspectionPort {
+                inspectionCalls += 1
+                throw AssertionError("account-changed replay must not inspect durable index")
+            },
+            download = IncomingRecipientBlobDownloader { _, _ ->
+                throw AssertionError("account-changed replay must not download")
+            },
+            control = IncomingControlIndexAcceptancePort {
+                throw AssertionError("account-changed replay must not run crypto")
+            },
+            persistence = IncomingVerifiedControlIndexPersistencePort { _, _ ->
+                throw AssertionError("account-changed replay must not persist")
+            },
+            adoptionPort = IncomingRecognitionAdoptionPort {
+                throw AssertionError("account-changed replay must not adopt")
+            },
+            commitPort = IncomingIndexCommitPort { _, _ ->
+                throw AssertionError("account-changed replay must not commit")
+            },
+        ).accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+
+        assertEquals(
+            IncomingCapsuleAcceptanceRejectionReason.ACCOUNT_CHANGED,
+            assertIs<IncomingCapsuleAcceptanceResult.Rejected>(result).reason,
+        )
+        assertEquals(0, inspectionCalls)
+        assertEquals(beforeCiphertext.toList(), incomingCiphertextPath().readBytes().toList())
+        assertEquals(
+            beforeCapsuleState,
+            database.incomingCapsuleDao()
+                .getByCapsuleIdAndOwner(capsule.toRestString(), owner.toRestString())!!
+                .materialState,
+        )
+        assertEquals(beforeBlobState, cachedBlobState())
+    }
+
+    @Test
+    fun productionConstructorBindsRealReaderForAcceptedReplayAndRejectsMissingBundle() = runBlocking {
+        seed()
+        promoteToAlreadyAccepted()
+        val sealer = CoordinatorAuthenticatedSealer()
+        val staged = SenderIndexBundleStager(roots, sealer).stage(
+            SenderIndexBundleStageRequest(
+                authenticatedOwnerUserId = owner,
+                ownerUserId = owner,
+                capsuleId = capsule,
+                verifiedRecognition = indexRecognition(),
+            ),
+        )
+        assertTrue(staged is SenderIndexBundleStageResult.Staged)
+
+        val reader = SenderIndexBundleReader(roots, sealer)
+        val replay = productionCoordinator(reader).accept(
+            IncomingCapsuleAcceptanceRequest(owner, capsule),
+        )
+        assertIs<IncomingCapsuleAcceptanceResult.IdempotentReplay>(replay)
+
+        val inspected = reader.inspect(
+            dev.hryshyn.remanence.index.SenderIndexBundleReadRequest(owner, owner, capsule),
+        )
+        val snapshot = assertIs<dev.hryshyn.remanence.index.SenderIndexBundleReadResult.Available>(inspected)
+            .snapshot
+        assertEquals(capsule, snapshot.capsuleId)
+        snapshot.close()
+        var closed = false
+        try {
+            snapshot.capsuleId
+        } catch (_: IllegalStateException) {
+            closed = true
+        }
+        assertTrue(closed)
+
+        incomingIndexBundlePath().delete()
+        val missing = productionCoordinator(reader).accept(
+            IncomingCapsuleAcceptanceRequest(owner, capsule),
+        )
+        assertEquals(
+            IncomingCapsuleAcceptanceRejectionReason.DURABLE_STATE_INVALID,
+            assertIs<IncomingCapsuleAcceptanceResult.Rejected>(missing).reason,
+        )
     }
 
     @Test
@@ -864,6 +982,47 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
         senderIndexBundleInspection = inspection,
     )
 
+    private fun productionCoordinator(
+        reader: SenderIndexBundleReader,
+        session: suspend () -> IncomingSyncSession? = { IncomingSyncSession(owner, "token") },
+    ): IncomingCapsuleAcceptanceCoordinator {
+        val apiStack = ProductionApiStack.create(
+            baseUrl = ApiBaseUrl.parse("http://localhost/"),
+            tokens = AuthTokenHolder(),
+            rotationSink = object : SessionRotationSink {
+                override fun rotate(accessToken: String, refreshToken: String) = Unit
+                override fun clear() = Unit
+            },
+        )
+        val unusedControlCoordinator = IncomingControlIndexAcceptanceCoordinator(
+            incomingCapsuleDao = database.incomingCapsuleDao(),
+            incomingEnvelopeDao = database.incomingEnvelopeDao(),
+            blobCacheDao = database.blobCacheDao(),
+            currentRecipientIdentity = { null },
+            trustedSenderKeys = object : TrustedSenderKeyStore {
+                override suspend fun senderVerifyingKeyset(
+                    senderUserId: UserId,
+                    senderKeyBundleId: KeyBundleId,
+                ) = error("unused in accepted replay")
+            },
+        )
+        return IncomingCapsuleAcceptanceCoordinator(
+            incomingCapsuleDao = database.incomingCapsuleDao(),
+            incomingEnvelopeDao = database.incomingEnvelopeDao(),
+            blobCacheDao = database.blobCacheDao(),
+            roots = roots,
+            currentSession = session,
+            recipientBlobDownloadRepository = apiStack.recipientBlobDownloadRepository,
+            controlIndexAcceptanceCoordinator = unusedControlCoordinator,
+            senderIndexBundleReader = reader,
+            verifiedControlIndexPersistence = IncomingVerifiedControlIndexPersistencePort { _, _ ->
+                IncomingVerifiedControlIndexPersistenceResult.Durable
+            },
+            incomingRecognitionCiphertextAdopter = adopter,
+            incomingIndexAcceptanceCommitter = committer,
+        )
+    }
+
     private fun availableInspection(
         onClose: () -> Unit = {},
     ): IncomingSenderIndexBundleInspectionPort =
@@ -988,6 +1147,44 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
         .resolve("capsules/${capsule.toRestString()}/blobs/${id.toRestString()}.ciphertext")
         .toFile()
 
+    private fun incomingIndexBundlePath(): File = File(
+        roots.child(owner, AccountScopedFileRoots.ChildRoot.FINGERPRINTS),
+        "capsules/${capsule.toRestString()}.index.bundle",
+    )
+
+    private fun indexRecognition(): RecognitionManifestContent = verifiedPayload().recognition.copy(
+        capsuleIdRaw = capsule.toProtoBytes().toByteArray(),
+        frontFingerprint = indexFingerprint(FingerprintSide.FRONT),
+        backFingerprint = indexFingerprint(FingerprintSide.BACK),
+    )
+
+    private fun indexFingerprint(side: FingerprintSide): ByteArray = FingerprintCodec.serialize(
+        PostcardFingerprint(
+            profileId = RecognitionProfile.MVP_ORB_V1_ID,
+            side = side,
+            canonicalWidthPx = 1200,
+            canonicalHeightPx = 800,
+            coarseHash64 = 17L,
+            keypoints = listOf(
+                FingerprintKeypoint(
+                    xNormalized = 0.5,
+                    yNormalized = 0.5,
+                    scaleNormalized = 1.0,
+                    angleCentiDegrees = 9000,
+                    responseQuantized = 2,
+                    octave = 0,
+                ),
+            ),
+            descriptors = listOf(ByteArray(FingerprintCodec.DESCRIPTOR_BYTES) { 3 }),
+            quality = ExtractionQuality(
+                blurScore = 1.0,
+                exposureScore = 1.0,
+                glareFraction = 0.1,
+                detectedAreaRatio = 0.5,
+            ),
+        ),
+    )
+
     private fun sha256(value: ByteArray): ByteArray =
         MessageDigest.getInstance("SHA-256").digest(value)
 
@@ -1008,5 +1205,26 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
         assertTrue(value is T)
         @Suppress("UNCHECKED_CAST")
         return value as T
+    }
+}
+
+private class CoordinatorAuthenticatedSealer : SecretSealer {
+    private val key = SecretKeySpec(ByteArray(32) { (it + 1).toByte() }, "AES")
+    private val random = SecureRandom()
+
+    override fun seal(plaintext: ByteArray, aad: ByteArray): ByteArray {
+        val iv = ByteArray(12).also(random::nextBytes)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(128, iv))
+        cipher.updateAAD(aad)
+        return iv + cipher.doFinal(plaintext)
+    }
+
+    override fun unseal(ciphertext: ByteArray, aad: ByteArray): ByteArray {
+        require(ciphertext.size > 12)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, ciphertext.copyOf(12)))
+        cipher.updateAAD(aad)
+        return cipher.doFinal(ciphertext.copyOfRange(12, ciphertext.size))
     }
 }

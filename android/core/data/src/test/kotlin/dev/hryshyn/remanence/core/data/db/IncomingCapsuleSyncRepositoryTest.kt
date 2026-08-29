@@ -513,6 +513,20 @@ class IncomingCapsuleSyncRepositoryTest {
         assertEquals(0, countRows("incoming_capsule"))
     }
 
+    @Test
+    fun expectedOwnerMismatchStopsBeforeRequestOrPersistence() = runTest {
+        val result = repository {
+            IncomingSyncSession(UserId.parseRest(OTHER_OWNER), "other-access-token")
+        }.syncNextPage(expectedOwner = UserId.parseRest(OWNER))
+        val failure = assertIs<IncomingSyncResult.Failure>(result)
+
+        assertEquals(IncomingSyncFailure.ACCOUNT_CHANGED, failure.reason)
+        assertFalse(failure.retryable)
+        assertEquals(0, server.requestCount)
+        assertEquals(0, countRows("incoming_capsule"))
+        assertNull(database.syncCursorDao().get(OWNER, INCOMING_STREAM))
+    }
+
     private fun repository(
         clock: () -> Long = { 1_000L },
         session: suspend () -> IncomingSyncSession? = {

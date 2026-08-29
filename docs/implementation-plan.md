@@ -276,7 +276,7 @@ and authorization matrix before Android upload work consumes the API.
 | M2-A07 | A06 | Re-envelope and re-sign without changing artifact ciphertext. | byte-identical artifact/hash regression test |
 | M2-A08 | A04,P14 | Render current-send progress and recoverable/terminal errors only. | Compose state/no-history test |
 | M2-A09 | S19,P02 | Add account-scoped incoming cursor page upsert. | atomic page replay/cursor policy test |
-| M2-A10 | A09,P05 | Add authenticated account-scoped incoming WorkManager chain. | unique work/logout/account-switch test |
+| M2-A10 | A09,P05 | A10a: add the bounded authenticated account-scoped incoming page worker; A10b wires scheduling and lifecycle entry points. | page-loop, unique work, logout/account-switch tests |
 | M2-A11 | P11,A09,S20 | Download and perform control/index acceptance on envelope + recognition blob. | wrong bundle/signature/hash/context matrix |
 | M2-A12 | A11 | Re-encrypt verified sender fingerprints and chooser hints into account-scoped local storage. | plaintext/storage/index privacy test |
 | M2-A13 | P12,S20 | Prefetch/cache every assigned capsule's remaining content/photo ciphertext by default, before scan, and verify transport bindings without decrypting content. Ciphertext download may precede envelope availability. | authorization/hash/restart/no-pre-scan-plaintext tests |

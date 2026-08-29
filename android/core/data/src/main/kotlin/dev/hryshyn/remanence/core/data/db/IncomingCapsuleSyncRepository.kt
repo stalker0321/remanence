@@ -66,7 +66,10 @@ class IncomingCapsuleSyncRepository(
     private val clockEpochMs: () -> Long = System::currentTimeMillis,
 ) {
 
-    suspend fun syncNextPage(limit: Int = DEFAULT_LIMIT): IncomingSyncResult {
+    suspend fun syncNextPage(
+        limit: Int = DEFAULT_LIMIT,
+        expectedOwner: UserId? = null,
+    ): IncomingSyncResult {
         if (limit !in 1..MAX_PAGE_SIZE) {
             return IncomingSyncResult.Failure(
                 reason = IncomingSyncFailure.VALIDATION_FAILED,
@@ -75,6 +78,9 @@ class IncomingCapsuleSyncRepository(
         }
 
         val initialSession = liveSession() ?: return noActiveSession()
+        if (expectedOwner != null && initialSession.ownerUserId != expectedOwner) {
+            return accountChanged()
+        }
         val owner = initialSession.ownerUserId.toRestString()
         val expectedCursor = try {
             database.syncCursorDao()

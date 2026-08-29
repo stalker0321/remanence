@@ -19,6 +19,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.padding
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.hryshyn.remanence.session.AuthenticatedHomeChrome
@@ -58,6 +60,17 @@ class MainActivity : ComponentActivity() {
 }
 
 /**
+ * The single Compose lifecycle bridge for authenticated restart/resume work.
+ * The root owns the resolution; WorkManager KEEP coalesces duplicate attempts.
+ */
+@Composable
+internal fun ForegroundResumeEffect(onResume: () -> Unit) {
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        onResume()
+    }
+}
+
+/**
  * FIX-M1-007-08: every ViewModel is lifecycle-scoped, every state is
  * collected with [collectAsStateWithLifecycle], and the root surface changes
  * ONLY after an async auth flow reaches its terminal result - submit clicks
@@ -69,6 +82,7 @@ private fun RootSurface(container: AppContainer) {
 
     // I02/I03: cold-start session bootstrap decides the first surface.
     val rootViewModel: RootViewModel = viewModel(factory = factory)
+    ForegroundResumeEffect(rootViewModel::onAppForegrounded)
     val loginViewModel: LoginViewModel = viewModel(factory = factory)
     val registrationViewModel: RegistrationViewModel = viewModel(factory = factory)
     val capabilityViewModel: HomeCapabilityViewModel = viewModel(factory = factory)
@@ -81,7 +95,7 @@ private fun RootSurface(container: AppContainer) {
         }
     }
 
-    // The root re-resolves ONLY when a submit flow reaches its terminal state.
+    // The root re-resolves after a terminal submit flow and on foreground.
     val loginSubmit by loginViewModel.submitState.collectAsStateWithLifecycle()
     LaunchedEffect(loginSubmit) {
         if (loginSubmit is LoginSubmitState.LoggedIn) {

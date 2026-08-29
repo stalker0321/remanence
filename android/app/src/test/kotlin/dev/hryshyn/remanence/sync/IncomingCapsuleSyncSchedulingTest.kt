@@ -47,12 +47,14 @@ class IncomingCapsuleSyncSchedulingTest {
         val identity = AccountWorkIdentity.incomingSync(owner)
 
         IncomingCapsuleSyncWorker.enqueue(workManager, owner)
+        val firstId = workManager.getWorkInfosForUniqueWork(identity.uniqueName).get().single().id
         IncomingCapsuleSyncWorker.enqueue(workManager, owner)
 
         val infos = workManager.getWorkInfosForUniqueWork(identity.uniqueName).get()
 
         assertEquals(1, infos.size)
         val info = infos.single()
+        assertEquals(firstId, info.id)
         assertEquals(WorkInfo.State.ENQUEUED, info.state)
         assertTrue(info.tags.containsAll(identity.tags))
         assertEquals(NetworkType.CONNECTED, info.constraints.requiredNetworkType)

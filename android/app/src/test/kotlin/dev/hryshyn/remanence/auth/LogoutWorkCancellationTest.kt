@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.Configuration
 import androidx.work.Constraints
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
@@ -15,6 +16,7 @@ import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.session.SessionTokenPort
 import dev.hryshyn.remanence.sync.AccountWorkIdentity
+import dev.hryshyn.remanence.sync.IncomingCapsuleSyncWorker
 import dev.hryshyn.remanence.sync.NoOpWorker
 import java.io.File
 import java.util.UUID
@@ -28,6 +30,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -407,6 +410,13 @@ class LogoutWorkCancellationTest {
         return request.id
     }
 
+    private fun enqueueIncomingFor(workManager: WorkManager, userId: UserId): UUID {
+        val identity = AccountWorkIdentity.incomingSync(userId)
+        val request = IncomingCapsuleSyncWorker.request(userId)
+        workManager.enqueueUniqueWork(identity.uniqueName, ExistingWorkPolicy.KEEP, request)
+        return request.id
+    }
+
     private fun assertState(wm: WorkManager, id: UUID, expected: WorkInfo.State) {
         val info = wm.getWorkInfoById(id).get()
         org.junit.Assert.assertNotNull("work $id missing from WorkManager", info)
@@ -419,7 +429,21 @@ class LogoutWorkCancellationTest {
         // the container resolves at logout time.
         WorkManagerTestInitHelper.initializeTestWorkManager(
             context,
-            Configuration.Builder().setMinimumLoggingLevel(android.util.Log.ERROR).build(),
+            Configuration.Builder()
+                .setMinimumLoggingLevel(android.util.Log.ERROR)
+                .setWorkerFactory(object : androidx.work.WorkerFactory() {
+                    override fun createWorker(
+                        appContext: Context,
+                        workerClassName: String,
+                        workerParameters: androidx.work.WorkerParameters,
+                    ): androidx.work.ListenableWorker? =
+                        if (workerClassName == IncomingCapsuleSyncWorker::class.java.name) {
+                            NoOpWorker(appContext, workerParameters)
+                        } else {
+                            null
+                        }
+                })
+                .build(),
         )
 
         val container = AppContainer(context, kekBoundaryOverride = SoftwareKekBoundary())
@@ -434,7 +458,8 @@ class LogoutWorkCancellationTest {
 
         // Background chains: two for the logging-out owner, one for another.
         val wm = WorkManager.getInstance(context)
-        val aIncoming = enqueueFor(wm, UserId(UUID.fromString(owner)), CapsuleId(UUID.randomUUID()))
+        val ownerId = UserId(UUID.fromString(owner))
+        val aIncoming = enqueueIncomingFor(wm, ownerId)
         val aOutbox = enqueueFor(wm, UserId(UUID.fromString(owner)), CapsuleId(UUID.randomUUID()))
         val bChain = enqueueFor(wm, ownerB, CapsuleId(UUID.randomUUID()))
 
@@ -451,9 +476,29 @@ class LogoutWorkCancellationTest {
         assertState(wm, aIncoming, WorkInfo.State.CANCELLED)
         assertState(wm, aOutbox, WorkInfo.State.CANCELLED)
         assertState(wm, bChain, WorkInfo.State.ENQUEUED)
+        assertNull(container.currentAccountStore.load())
+
+        // A later login/foreground for B creates only B's distinct incoming
+        // chain; A's cancelled chain is never reused.
+        container.currentAccountStore.record(
+            ownerB.toRestString(),
+            "other",
+            "00000000-0000-4000-8000-000000000002",
+        )
+        container.authTokenHolder.updateTokens("b-access-token", "b-refresh-token")
+        container.scheduleIncomingSync(ownerB)
+        val bIncoming = wm.getWorkInfosForUniqueWork(
+            AccountWorkIdentity.incomingSync(ownerB).uniqueName,
+        ).get()
+        assertEquals(1, bIncoming.size)
+        assertEquals(WorkInfo.State.ENQUEUED, bIncoming.single().state)
+        assertTrue(
+            bIncoming.single().tags.contains(AccountWorkIdentity.accountTag(ownerB)),
+        )
+        assertState(wm, aIncoming, WorkInfo.State.CANCELLED)
 
         // Local teardown finished: the local_account row was cleared.
-        assertEquals(null, container.currentAccountStore.load())
+        assertEquals(ownerB.toRestString(), container.currentAccountStore.load()?.userId)
         container.database.close()
     }
 }

@@ -5,6 +5,8 @@ import androidx.lifecycle.viewModelScope
 import dev.hryshyn.remanence.core.model.UserId
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -13,6 +15,7 @@ import kotlinx.coroutines.test.setMain
 import kotlin.coroutines.cancellation.CancellationException
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import dev.hryshyn.remanence.ui.navigation.AppDestination
@@ -59,6 +62,44 @@ class RootViewModelTest {
 
     private class MutableOutcomeResolver(var state: SessionState) : SessionStateResolver {
         override suspend fun bootstrap(): SessionState = state
+
+        override suspend fun logout(): SessionState = SessionState.SignedOut
+    }
+
+    private class GatedActiveResolver(
+        private val owner: UserId,
+    ) : SessionStateResolver {
+        val firstEntered = CompletableDeferred<Unit>()
+        val firstGate = CompletableDeferred<Unit>()
+        val secondEntered = CompletableDeferred<Unit>()
+        val secondGate = CompletableDeferred<Unit>()
+        var calls = 0
+            private set
+        var maxConcurrent = 0
+            private set
+        private var concurrent = 0
+
+        override suspend fun bootstrap(): SessionState {
+            val call = ++calls
+            concurrent += 1
+            maxConcurrent = maxOf(maxConcurrent, concurrent)
+            try {
+                when (call) {
+                    1 -> {
+                        firstEntered.complete(Unit)
+                        firstGate.await()
+                    }
+                    2 -> {
+                        secondEntered.complete(Unit)
+                        secondGate.await()
+                    }
+                    else -> error("unexpected refresh")
+                }
+                return SessionState.Active(owner.toRestString(), "mykola", true, true)
+            } finally {
+                concurrent -= 1
+            }
+        }
 
         override suspend fun logout(): SessionState = SessionState.SignedOut
     }
@@ -134,6 +175,81 @@ class RootViewModelTest {
     }
 
     @Test
+    fun foregroundResolutionRepeatsAuthenticatedSchedulingAfterColdStart() = runTest {
+        val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000b507")
+        val scheduled = mutableListOf<UserId>()
+        val vm = RootViewModel(
+            MutableOutcomeResolver(SessionState.Active(owner.toRestString(), "mykola", true, true)),
+            scheduleIncomingSync = { scheduled += it },
+        )
+
+        advanceUntilIdle()
+        assertEquals(listOf(owner), scheduled)
+
+        vm.onAppForegrounded()
+        advanceUntilIdle()
+
+        assertEquals(listOf(owner, owner), scheduled)
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+    }
+
+    @Test
+    fun refreshSignalsSerializeCoalesceAndRunOneTrailingResolution() = runTest {
+        val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000b510")
+        val resolver = GatedActiveResolver(owner)
+        val scheduled = mutableListOf<UserId>()
+        val vm = RootViewModel(
+            resolver,
+            scheduleIncomingSync = { scheduled += it },
+        )
+
+        advanceUntilIdle()
+        assertTrue(resolver.firstEntered.isCompleted)
+        assertEquals(1, resolver.calls)
+
+        vm.onAppForegrounded()
+        vm.onSessionEstablished()
+        vm.onAppForegrounded()
+        advanceUntilIdle()
+        assertEquals(1, resolver.calls)
+
+        resolver.firstGate.complete(Unit)
+        advanceUntilIdle()
+        assertTrue(resolver.secondEntered.isCompleted)
+        assertEquals(2, resolver.calls)
+        assertEquals(1, resolver.maxConcurrent)
+        assertEquals(AuthUiState.SignedOut, vm.authState.value)
+
+        resolver.secondGate.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(2, resolver.calls)
+        assertEquals(1, resolver.maxConcurrent)
+        assertEquals(AuthUiState.Authenticated(owner.toRestString(), "mykola"), vm.authState.value)
+        assertEquals(AppDestination.Home, vm.destination.value)
+        assertEquals(listOf(owner), scheduled)
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+    }
+
+    @Test
+    fun freshRootReconstructionResolvesPersistedActiveSessionAgain() = runTest {
+        val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000b508")
+        val scheduled = mutableListOf<UserId>()
+
+        repeat(2) {
+            val vm = RootViewModel(
+                FixedOutcomeResolver(SessionState.Active(owner.toRestString(), "mykola", true, true)),
+                scheduleIncomingSync = { scheduled += it },
+            )
+            advanceUntilIdle()
+            assertEquals(AuthUiState.Authenticated(owner.toRestString(), "mykola"), vm.authState.value)
+            vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+        }
+
+        assertEquals(listOf(owner, owner), scheduled)
+    }
+
+    @Test
     fun authenticatedResolutionResumesUploadsBeforeSchedulingIncomingSync() = runTest {
         val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000b505")
         val order = mutableListOf<String>()
@@ -156,14 +272,27 @@ class RootViewModelTest {
     }
 
     @Test
-    fun incomingSchedulingFailureUsesExistingConnectivityBootstrapPolicy() = runTest {
+    fun foregroundSchedulingFailureUsesExistingConnectivityBootstrapPolicy() = runTest {
+        val resolver = MutableOutcomeResolver(
+            SessionState.Active("0198f0a0-0000-7000-8000-00000000b506", "mykola", true, true),
+        )
         val vm = RootViewModel(
-            MutableOutcomeResolver(
-                SessionState.Active("0198f0a0-0000-7000-8000-00000000b506", "mykola", true, true),
-            ),
+            resolver,
             scheduleIncomingSync = { error("WorkManager unavailable") },
         )
 
+        advanceUntilIdle()
+        assertEquals(AuthUiState.RequiresConnectivity, vm.authState.value)
+        assertEquals(AppDestination.Authentication, vm.destination.value)
+
+        resolver.state = SessionState.Active(
+            "0198f0a0-0000-7000-8000-00000000b506",
+            "mykola",
+            true,
+            true,
+        )
+        vm.onAppForegrounded()
+        advanceUntilIdle()
         assertEquals(AuthUiState.RequiresConnectivity, vm.authState.value)
         assertEquals(AppDestination.Authentication, vm.destination.value)
         vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
@@ -190,6 +319,54 @@ class RootViewModelTest {
 
         assertEquals(0, hookCalls)
         assertEquals(0, incomingHookCalls)
+    }
+
+    @Test
+    fun foregroundNonActiveStatesNeverScheduleIncoming() = runTest {
+        val states = listOf(
+            SessionState.SignedOut,
+            SessionState.RecoveryRequired,
+            SessionState.RequiresConnectivity,
+        )
+        var incomingHookCalls = 0
+
+        states.forEach { state ->
+            val vm = RootViewModel(
+                MutableOutcomeResolver(state),
+                scheduleIncomingSync = { incomingHookCalls++ },
+            )
+            vm.onAppForegrounded()
+            advanceUntilIdle()
+            vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+        }
+
+        assertEquals(0, incomingHookCalls)
+    }
+
+    @Test
+    fun foregroundCancellationCancelsRefreshChildNormally() = runTest {
+        val callbackCancelled = CompletableDeferred<Unit>()
+        val resolver = MutableOutcomeResolver(SessionState.SignedOut)
+        val vm = RootViewModel(
+            resolver,
+            scheduleIncomingSync = {
+                suspendCancellableCoroutine { continuation ->
+                    continuation.invokeOnCancellation { callbackCancelled.complete(Unit) }
+                }
+            },
+        )
+
+        resolver.state = SessionState.Active(
+            "0198f0a0-0000-7000-8000-00000000b509",
+            "mykola",
+            true,
+            true,
+        )
+        vm.onAppForegrounded()
+        advanceUntilIdle()
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+
+        assertTrue(callbackCancelled.isCompleted)
     }
 
     @Test

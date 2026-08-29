@@ -9,6 +9,9 @@ import dev.hryshyn.remanence.ui.navigation.CapsuleAccess
 import dev.hryshyn.remanence.core.model.UserId
 import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -49,6 +52,13 @@ class RootViewModel(
     /** Authenticated owner-scoped incoming chain enqueue after upload discovery. */
     private val scheduleIncomingSync: suspend (UserId) -> Unit = {},
 ) : ViewModel() {
+
+    /** Serializes root refresh requests while retaining one trailing request. */
+    private val refreshMutex = Mutex()
+    private var refreshRunning = false
+    private var refreshPending = false
+    private var refreshGeneration = 0L
+    private val refreshWaiters = mutableListOf<CompletableDeferred<Unit>>()
 
     private val controller = AppNavigationController(AuthUiState.SignedOut)
 
@@ -100,6 +110,15 @@ class RootViewModel(
      * terminal success - never called mid-flight by the UI.
      */
     fun onSessionEstablished() {
+        refreshAsync()
+    }
+
+    /**
+     * Re-resolves the authenticated session when the app returns to the
+     * foreground. Non-active states never reach either scheduling callback;
+     * the existing account-scoped KEEP chains absorb duplicate attempts.
+     */
+    fun onAppForegrounded() {
         refreshAsync()
     }
 
@@ -272,6 +291,85 @@ class RootViewModel(
      * than silently presenting a stale authenticated root.
      */
     suspend fun resolveNow() {
+        val waiter = CompletableDeferred<Unit>()
+        val startsRunner = refreshMutex.withLock {
+            refreshGeneration += 1
+            refreshWaiters += waiter
+            if (refreshRunning) {
+                refreshPending = true
+                false
+            } else {
+                refreshRunning = true
+                true
+            }
+        }
+
+        if (startsRunner) {
+            runRefreshCoordinator()
+        }
+
+        try {
+            waiter.await()
+        } catch (cancelled: CancellationException) {
+            refreshMutex.withLock { refreshWaiters.remove(waiter) }
+            throw cancelled
+        }
+    }
+
+    private suspend fun runRefreshCoordinator() {
+        try {
+            while (true) {
+                val generation = refreshMutex.withLock { refreshGeneration }
+                performResolveNow(generation)
+                val waitersToComplete = refreshMutex.withLock {
+                    if (refreshPending) {
+                        refreshPending = false
+                        null
+                    } else {
+                        refreshRunning = false
+                        refreshWaiters.toList().also { refreshWaiters.clear() }
+                    }
+                }
+                if (waitersToComplete == null) continue
+                waitersToComplete.forEach { it.complete(Unit) }
+                return
+            }
+        } catch (cancelled: CancellationException) {
+            failRefreshWaiters(cancelled)
+            throw cancelled
+        } catch (failure: Exception) {
+            failRefreshWaiters(failure)
+            throw failure
+        }
+    }
+
+    private suspend fun failRefreshWaiters(failure: Throwable) {
+        val waitersToComplete = refreshMutex.withLock {
+            refreshRunning = false
+            refreshPending = false
+            refreshWaiters.toList().also { refreshWaiters.clear() }
+        }
+        waitersToComplete.forEach { it.completeExceptionally(failure) }
+    }
+
+    private suspend fun publishIfCurrent(
+        generation: Long,
+        next: AuthUiState,
+    ): Boolean = refreshMutex.withLock {
+        if (refreshGeneration != generation) {
+            false
+        } else {
+            // Keep the generation check and state publication atomic so a
+            // later request cannot be followed by a stale Authenticated state.
+            publish(next)
+            true
+        }
+    }
+
+    private suspend fun isCurrentRefresh(generation: Long): Boolean =
+        refreshMutex.withLock { refreshGeneration == generation }
+
+    private suspend fun performResolveNow(generation: Long) {
         var activeUserId: String? = null
         val next = try {
             when (val resolved = sessionBootstrap.bootstrap()) {
@@ -292,11 +390,12 @@ class RootViewModel(
         } catch (_: Exception) {
             AuthUiState.RequiresConnectivity
         }
-        publish(next)
+        if (!publishIfCurrent(generation, next)) return
 
         val rawActiveUserId = activeUserId
         if (next is AuthUiState.Authenticated && !rawActiveUserId.isNullOrBlank()) {
             val owner = runCatching { UserId.parseRest(rawActiveUserId) }.getOrNull() ?: return
+            if (!isCurrentRefresh(generation)) return
             try {
                 resumeCapsuleUploads(owner)
             } catch (cancelled: CancellationException) {
@@ -304,6 +403,7 @@ class RootViewModel(
             } catch (_: Exception) {
                 // Discovery is best-effort; authenticated navigation remains intact.
             }
+            if (!isCurrentRefresh(generation)) return
             try {
                 scheduleIncomingSync(owner)
             } catch (cancelled: CancellationException) {
@@ -312,7 +412,9 @@ class RootViewModel(
                 // Work scheduling is part of the bootstrap boundary: do not
                 // leave a resolved-looking root when the authenticated chain
                 // could not be accepted by WorkManager.
-                publish(AuthUiState.RequiresConnectivity)
+                if (isCurrentRefresh(generation)) {
+                    publish(AuthUiState.RequiresConnectivity)
+                }
             }
         }
     }

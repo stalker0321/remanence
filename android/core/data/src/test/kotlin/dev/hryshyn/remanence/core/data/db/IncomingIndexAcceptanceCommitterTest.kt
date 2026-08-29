@@ -21,6 +21,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.test.runTest
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -72,7 +73,7 @@ class IncomingIndexAcceptanceCommitterTest {
     fun happyPathChangesBothRowsInOneOwnerScopedCommit() = runTest {
         val request = seedAndAdopt()
 
-        assertIs<IncomingIndexAcceptanceCommitResult.Committed>(committer.commit(request))
+        assertIs<IncomingIndexAcceptanceCommitResult.Committed>(committer.commit(request, owner))
         assertEquals(
             LocalMaterialState.INDEX_CACHED,
             database.incomingCapsuleDao().getByCapsuleIdAndOwner(capsule.toRestString(), owner.toRestString())!!.materialState,
@@ -84,6 +85,36 @@ class IncomingIndexAcceptanceCommitterTest {
     }
 
     @Test
+    fun missingAuthenticatedOwnerLeavesFileAndRowsUntouched() = runTest {
+        val request = seedAndAdopt()
+        val before = request.durableCiphertext.asFile().readBytes()
+
+        val result = assertIs<IncomingIndexAcceptanceCommitResult.Failure>(
+            committer.commit(request, authenticatedOwnerUserId = null),
+        )
+
+        assertEquals(IncomingIndexAcceptanceFailure.NO_AUTHENTICATED_OWNER, result.reason)
+        assertFalse(result.retryable)
+        assertArrayEquals(before, request.durableCiphertext.asFile().readBytes())
+        assertUnchanged()
+    }
+
+    @Test
+    fun mismatchedAuthenticatedOwnerLeavesFileAndRowsUntouched() = runTest {
+        val request = seedAndAdopt()
+        val before = request.durableCiphertext.asFile().readBytes()
+
+        val result = assertIs<IncomingIndexAcceptanceCommitResult.Failure>(
+            committer.commit(request, authenticatedOwnerUserId = otherOwner),
+        )
+
+        assertEquals(IncomingIndexAcceptanceFailure.OWNER_MISMATCH, result.reason)
+        assertFalse(result.retryable)
+        assertArrayEquals(before, request.durableCiphertext.asFile().readBytes())
+        assertUnchanged()
+    }
+
+    @Test
     fun secondCasFailureRollsBackFirstCas() = runTest {
         val request = seedAndAdopt()
         database.openHelper.writableDatabase.execSQL(
@@ -91,7 +122,7 @@ class IncomingIndexAcceptanceCommitterTest {
                 "WHEN NEW.material_state = 'INDEX_CACHED' BEGIN SELECT RAISE(IGNORE); END",
         )
 
-        val result = committer.commit(request)
+        val result = committer.commit(request, owner)
 
         val failure = assertIs<IncomingIndexAcceptanceCommitResult.Failure>(result)
         assertEquals(IncomingIndexAcceptanceFailure.CONCURRENT_OR_STALE, failure.reason)
@@ -109,9 +140,21 @@ class IncomingIndexAcceptanceCommitterTest {
     @Test
     fun exactReplayIsIdempotentOnlyWhenBothRowsAndBindingsMatch() = runTest {
         val request = seedAndAdopt()
-        assertIs<IncomingIndexAcceptanceCommitResult.Committed>(committer.commit(request))
+        assertIs<IncomingIndexAcceptanceCommitResult.Committed>(committer.commit(request, owner))
 
-        assertIs<IncomingIndexAcceptanceCommitResult.IdempotentReplay>(committer.commit(request))
+        assertEquals(
+            IncomingIndexAcceptanceFailure.NO_AUTHENTICATED_OWNER,
+            assertIs<IncomingIndexAcceptanceCommitResult.Failure>(
+                committer.commit(request, authenticatedOwnerUserId = null),
+            ).reason,
+        )
+        assertEquals(
+            IncomingIndexAcceptanceFailure.OWNER_MISMATCH,
+            assertIs<IncomingIndexAcceptanceCommitResult.Failure>(
+                committer.commit(request, authenticatedOwnerUserId = otherOwner),
+            ).reason,
+        )
+        assertIs<IncomingIndexAcceptanceCommitResult.IdempotentReplay>(committer.commit(request, owner))
     }
 
     @Test
@@ -142,7 +185,7 @@ class IncomingIndexAcceptanceCommitterTest {
         )
 
         listOf(wrongOwnerRequest, wrongCapsule, wrongBlob, wrongPath).forEach { candidate ->
-            val result = assertIs<IncomingIndexAcceptanceCommitResult.Failure>(committer.commit(candidate))
+            val result = assertIs<IncomingIndexAcceptanceCommitResult.Failure>(committer.commit(candidate, owner))
             assertFalse(result.retryable)
         }
         assertUnchanged()
@@ -156,11 +199,11 @@ class IncomingIndexAcceptanceCommitterTest {
 
         assertEquals(
             IncomingIndexAcceptanceFailure.SOURCE_INTEGRITY_MISMATCH,
-            assertIs<IncomingIndexAcceptanceCommitResult.Failure>(committer.commit(wrongHash)).reason,
+            assertIs<IncomingIndexAcceptanceCommitResult.Failure>(committer.commit(wrongHash, owner)).reason,
         )
         assertEquals(
             IncomingIndexAcceptanceFailure.SOURCE_INTEGRITY_MISMATCH,
-            assertIs<IncomingIndexAcceptanceCommitResult.Failure>(committer.commit(wrongSize)).reason,
+            assertIs<IncomingIndexAcceptanceCommitResult.Failure>(committer.commit(wrongSize, owner)).reason,
         )
         assertUnchanged()
     }
@@ -176,7 +219,7 @@ class IncomingIndexAcceptanceCommitterTest {
         )
         assertEquals(
             IncomingIndexAcceptanceFailure.IMMUTABLE_BINDING_MISMATCH,
-            assertIs<IncomingIndexAcceptanceCommitResult.Failure>(committer.commit(request)).reason,
+            assertIs<IncomingIndexAcceptanceCommitResult.Failure>(committer.commit(request, owner)).reason,
         )
         assertUnchanged()
 
@@ -186,7 +229,7 @@ class IncomingIndexAcceptanceCommitterTest {
         )
         assertEquals(
             IncomingIndexAcceptanceFailure.IMMUTABLE_BINDING_MISMATCH,
-            assertIs<IncomingIndexAcceptanceCommitResult.Failure>(committer.commit(request)).reason,
+            assertIs<IncomingIndexAcceptanceCommitResult.Failure>(committer.commit(request, owner)).reason,
         )
         assertUnchanged()
 
@@ -196,7 +239,7 @@ class IncomingIndexAcceptanceCommitterTest {
         )
         assertEquals(
             IncomingIndexAcceptanceFailure.IMMUTABLE_BINDING_MISMATCH,
-            assertIs<IncomingIndexAcceptanceCommitResult.Failure>(committer.commit(request)).reason,
+            assertIs<IncomingIndexAcceptanceCommitResult.Failure>(committer.commit(request, owner)).reason,
         )
         assertUnchanged()
     }
@@ -211,7 +254,7 @@ class IncomingIndexAcceptanceCommitterTest {
             listOf(capsuleRow.copy(serverStatus = "AVAILABLE")),
         )
 
-        val result = assertIs<IncomingIndexAcceptanceCommitResult.Failure>(committer.commit(request))
+        val result = assertIs<IncomingIndexAcceptanceCommitResult.Failure>(committer.commit(request, owner))
 
         assertFalse(result.retryable)
         assertEquals(IncomingIndexAcceptanceFailure.IMMUTABLE_BINDING_MISMATCH, result.reason)
@@ -226,7 +269,7 @@ class IncomingIndexAcceptanceCommitterTest {
             RemanenceLocalDatabase::class.java,
         ).allowMainThreadQueries().build()
         try {
-            val missing = IncomingIndexAcceptanceCommitter(missingDatabase, roots).commit(request)
+            val missing = IncomingIndexAcceptanceCommitter(missingDatabase, roots).commit(request, owner)
             assertEquals(
                 IncomingIndexAcceptanceFailure.MISSING_ROW,
                 assertIs<IncomingIndexAcceptanceCommitResult.Failure>(missing).reason,
@@ -236,7 +279,7 @@ class IncomingIndexAcceptanceCommitterTest {
         }
 
         val ownerBRequest = seedAndAdopt(ownerUserId = otherOwner, persistRows = false)
-        val isolated = committer.commit(ownerBRequest)
+        val isolated = committer.commit(ownerBRequest, otherOwner)
         assertEquals(
             IncomingIndexAcceptanceFailure.MISSING_ROW,
             assertIs<IncomingIndexAcceptanceCommitResult.Failure>(isolated).reason,
@@ -252,7 +295,7 @@ class IncomingIndexAcceptanceCommitterTest {
         )
         assertEquals(
             IncomingIndexAcceptanceFailure.ILLEGAL_STATE,
-            assertIs<IncomingIndexAcceptanceCommitResult.Failure>(committer.commit(illegal)).reason,
+            assertIs<IncomingIndexAcceptanceCommitResult.Failure>(committer.commit(illegal, owner)).reason,
         )
         assertState(LocalMaterialState.CORRUPT, BlobCacheState.DOWNLOADING)
 
@@ -263,7 +306,7 @@ class IncomingIndexAcceptanceCommitterTest {
         )
         assertEquals(
             IncomingIndexAcceptanceFailure.ILLEGAL_STATE,
-            assertIs<IncomingIndexAcceptanceCommitResult.Failure>(committer.commit(mixed)).reason,
+            assertIs<IncomingIndexAcceptanceCommitResult.Failure>(committer.commit(mixed, owner)).reason,
         )
         assertState(LocalMaterialState.DISCOVERED, BlobCacheState.CACHED)
     }
@@ -274,8 +317,8 @@ class IncomingIndexAcceptanceCommitterTest {
 
         val results = coroutineScope {
             listOf(
-                async(Dispatchers.IO) { committer.commit(request) },
-                async(Dispatchers.IO) { committer.commit(request) },
+                async(Dispatchers.IO) { committer.commit(request, owner) },
+                async(Dispatchers.IO) { committer.commit(request, owner) },
             ).awaitAll()
         }
 
@@ -296,7 +339,7 @@ class IncomingIndexAcceptanceCommitterTest {
         val request = seedAndAdopt()
         request.durableCiphertext.asFile().writeBytes("corrupt".toByteArray())
 
-        val result = assertIs<IncomingIndexAcceptanceCommitResult.Failure>(committer.commit(request))
+        val result = assertIs<IncomingIndexAcceptanceCommitResult.Failure>(committer.commit(request, owner))
 
         assertEquals(IncomingIndexAcceptanceFailure.SOURCE_INTEGRITY_MISMATCH, result.reason)
         assertUnchanged()
@@ -310,7 +353,7 @@ class IncomingIndexAcceptanceCommitterTest {
         Files.delete(destination)
         Files.createSymbolicLink(destination, target.toPath())
 
-        val result = assertIs<IncomingIndexAcceptanceCommitResult.Failure>(committer.commit(request))
+        val result = assertIs<IncomingIndexAcceptanceCommitResult.Failure>(committer.commit(request, owner))
 
         assertFalse(result.retryable)
         assertEquals(IncomingIndexAcceptanceFailure.CAPABILITY_MISMATCH, result.reason)
@@ -325,7 +368,7 @@ class IncomingIndexAcceptanceCommitterTest {
         Files.move(blobs, relocated)
         Files.createSymbolicLink(blobs, relocated)
 
-        val result = assertIs<IncomingIndexAcceptanceCommitResult.Failure>(committer.commit(request))
+        val result = assertIs<IncomingIndexAcceptanceCommitResult.Failure>(committer.commit(request, owner))
 
         assertFalse(result.retryable)
         assertEquals(IncomingIndexAcceptanceFailure.CAPABILITY_MISMATCH, result.reason)
@@ -336,7 +379,7 @@ class IncomingIndexAcceptanceCommitterTest {
     fun requestAndFailureAreRedacted() = runTest {
         val request = seedAndAdopt()
         val failure = assertIs<IncomingIndexAcceptanceCommitResult.Failure>(
-            committer.commit(request.copy(expectedSha256 = ByteArray(32) { 3 })),
+            committer.commit(request.copy(expectedSha256 = ByteArray(32) { 3 }), owner),
         )
 
         assertFalse(request.toString().contains(request.durableCiphertext.asFile().path))

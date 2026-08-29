@@ -104,8 +104,16 @@ class IncomingIndexAcceptanceCommitter(
 
     suspend fun commit(
         request: IncomingIndexAcceptanceCommitRequest,
+        authenticatedOwnerUserId: UserId?,
     ): IncomingIndexAcceptanceCommitResult = withContext(Dispatchers.IO) {
         coroutineContext.ensureActive()
+
+        if (authenticatedOwnerUserId == null) {
+            return@withContext failure(IncomingIndexAcceptanceFailure.NO_AUTHENTICATED_OWNER, false)
+        }
+        if (authenticatedOwnerUserId != request.ownerUserId) {
+            return@withContext failure(IncomingIndexAcceptanceFailure.OWNER_MISMATCH, false)
+        }
 
         val owner = request.ownerUserId.toRestString()
         val capsule = request.capsuleId.toRestString()

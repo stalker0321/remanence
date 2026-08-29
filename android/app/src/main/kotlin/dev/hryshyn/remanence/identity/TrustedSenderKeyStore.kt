@@ -31,9 +31,11 @@ interface TrustedSenderKeyStore {
 
 enum class SenderKeyUntrustedReason {
     MALFORMED_KEY,
+    BUNDLE_ID_MISMATCH,
     UNKNOWN_BUNDLE,
     OWNER_MISMATCH,
     REVOKED,
+    UNSUPPORTED_PROTOCOL_OR_SUITE,
 }
 
 enum class SenderKeyUnavailableReason {

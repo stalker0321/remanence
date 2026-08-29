@@ -2,7 +2,9 @@ package dev.hryshyn.remanence.identity
 
 import dev.hryshyn.remanence.core.data.network.KeyBundleByIdResult
 import dev.hryshyn.remanence.core.model.KeyBundleId
+import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.wiring.PreparedIdentity
 
 /**
  * FIX-REVIEW2-04: production [TrustedSenderKeyStore] over the authenticated
@@ -54,6 +56,15 @@ class DirectorySenderKeyStore(
             is KeyBundleByIdResult.Failure ->
                 SenderKeyResolution.Unavailable(SenderKeyUnavailableReason.DIRECTORY_UNAVAILABLE)
             is KeyBundleByIdResult.Found -> when {
+                result.bundle.keyBundleId != senderKeyBundleId ->
+                    SenderKeyResolution.Untrusted(SenderKeyUntrustedReason.BUNDLE_ID_MISMATCH)
+
+                result.bundle.protocolVersion != ProtocolV1Limits.PROTOCOL_VERSION ||
+                    result.bundle.suite != PreparedIdentity.SUITE ->
+                    SenderKeyResolution.Untrusted(
+                        SenderKeyUntrustedReason.UNSUPPORTED_PROTOCOL_OR_SUITE,
+                    )
+
                 result.bundle.ownerUserId != senderUserId ->
                     SenderKeyResolution.Untrusted(SenderKeyUntrustedReason.OWNER_MISMATCH)
 

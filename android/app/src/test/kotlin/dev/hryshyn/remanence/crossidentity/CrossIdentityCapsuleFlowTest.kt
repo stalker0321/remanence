@@ -302,6 +302,62 @@ class CrossIdentityCapsuleFlowTest {
     fun directorySenderResolutionClassifiesTerminalAndUnavailableOutcomes() = runBlocking {
         val attacker = AccountIdentityGenerator().generate()
 
+        val wrongBundleId = activeEntry(
+            UserId(senderUuid),
+            Base64.urlSafeEncode(senderIdentity.signingPublicKeyset),
+        )
+        directory[senderBundleUuid.toString()] = wrongBundleId.copy(
+            bundle = wrongBundleId.bundle.copy(keyBundleId = KeyBundleId(recipientBundleUuid)),
+        )
+        assertEquals(
+            dev.hryshyn.remanence.identity.SenderKeyResolution.Untrusted(
+                dev.hryshyn.remanence.identity.SenderKeyUntrustedReason.BUNDLE_ID_MISMATCH,
+            ),
+            trustedStore().senderVerifyingKeyset(UserId(senderUuid), KeyBundleId(senderBundleUuid)),
+        )
+
+        val wrongProtocol = activeEntry(
+            UserId(senderUuid),
+            Base64.urlSafeEncode(senderIdentity.signingPublicKeyset),
+        )
+        directory[senderBundleUuid.toString()] = wrongProtocol.copy(
+            bundle = wrongProtocol.bundle.copy(protocolVersion = 99),
+        )
+        assertEquals(
+            dev.hryshyn.remanence.identity.SenderKeyResolution.Untrusted(
+                dev.hryshyn.remanence.identity.SenderKeyUntrustedReason.UNSUPPORTED_PROTOCOL_OR_SUITE,
+            ),
+            trustedStore().senderVerifyingKeyset(UserId(senderUuid), KeyBundleId(senderBundleUuid)),
+        )
+
+        val wrongSuite = activeEntry(
+            UserId(senderUuid),
+            Base64.urlSafeEncode(senderIdentity.signingPublicKeyset),
+        )
+        directory[senderBundleUuid.toString()] = wrongSuite.copy(
+            bundle = wrongSuite.bundle.copy(suite = "UNSUPPORTED_SUITE"),
+        )
+        assertEquals(
+            dev.hryshyn.remanence.identity.SenderKeyResolution.Untrusted(
+                dev.hryshyn.remanence.identity.SenderKeyUntrustedReason.UNSUPPORTED_PROTOCOL_OR_SUITE,
+            ),
+            trustedStore().senderVerifyingKeyset(UserId(senderUuid), KeyBundleId(senderBundleUuid)),
+        )
+
+        for (status in listOf("ACTIVE", "RETIRED")) {
+            val canonical = activeEntry(
+                UserId(senderUuid),
+                Base64.urlSafeEncode(senderIdentity.signingPublicKeyset),
+            )
+            directory[senderBundleUuid.toString()] = canonical.copy(
+                bundle = canonical.bundle.copy(status = status),
+            )
+            assertTrue(
+                trustedStore().senderVerifyingKeyset(UserId(senderUuid), KeyBundleId(senderBundleUuid))
+                    is dev.hryshyn.remanence.identity.SenderKeyResolution.Trusted,
+            )
+        }
+
         // Wrong OWNER: the bundle exists but belongs to someone else.
         directory[senderBundleUuid.toString()] = activeEntry(UserId(recipientUuid), Base64.urlSafeEncode(attacker.signingPublicKeyset))
         assertEquals(

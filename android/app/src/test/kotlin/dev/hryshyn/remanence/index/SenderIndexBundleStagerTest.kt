@@ -225,6 +225,42 @@ class SenderIndexBundleStagerTest {
     }
 
     @Test
+    fun untrustedFreshPartPathsFailClosedWithoutDeletingOutsideOrExistingFiles() = runBlocking {
+        val fingerprints = roots.child(ownerA, AccountScopedFileRoots.ChildRoot.FINGERPRINTS)
+        val parent = File(fingerprints, "capsules").apply { check(mkdirs()) }
+        val outside = File(filesDir, "outside").apply { check(mkdirs()) }
+        val baseName = "${capsule.toRestString()}.index.bundle"
+        val outsideCandidate = File(outside, "outside.part").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        val symlinkTarget = File(outside, "symlink-target").apply { writeBytes(byteArrayOf(4, 5, 6)) }
+        val symlinkCandidate = File(parent, "$baseName.symlink.part")
+        Files.createSymbolicLink(symlinkCandidate.toPath(), symlinkTarget.toPath())
+        val nonRegularCandidate = File(parent, "$baseName.directory.part").apply { check(mkdirs()) }
+        val wrongPrefixCandidate = File(parent, "wrong-prefix.part").apply { writeBytes(byteArrayOf(7, 8, 9)) }
+
+        listOf(outsideCandidate.toPath(), symlinkCandidate.toPath(), nonRegularCandidate.toPath(), wrongPrefixCandidate.toPath())
+            .forEach { candidate ->
+                val fs = RecordingFileSystem().apply { providedFreshPart = candidate }
+                val result = SenderIndexBundleStager(
+                    roots = roots,
+                    sealer = RandomAuthenticatedSealer(),
+                    codec = SenderIndexBundleCodec(),
+                    fileSystem = fs,
+                    wipe = { it.fill(0) },
+                ).stage(request(ownerA)) as SenderIndexBundleStageResult.Failure
+
+                assertEquals(SenderIndexBundleStageFailure.PATH_UNSAFE, result.reason)
+                assertTrue(fs.deletedPaths.isEmpty())
+                assertTrue(fs.openedWritePaths.isEmpty())
+                assertTrue(fs.events.none { it == "link" })
+            }
+
+        assertArrayEquals(byteArrayOf(1, 2, 3), outsideCandidate.readBytes())
+        assertArrayEquals(byteArrayOf(4, 5, 6), symlinkTarget.readBytes())
+        assertArrayEquals(byteArrayOf(7, 8, 9), wrongPrefixCandidate.readBytes())
+        assertTrue(nonRegularCandidate.isDirectory)
+    }
+
+    @Test
     fun successfulConcurrentSameCapsuleStageHasOneSafeWinner() = runBlocking {
         val fs = RecordingFileSystem()
         val stager = SenderIndexBundleStager(
@@ -245,6 +281,41 @@ class SenderIndexBundleStagerTest {
         assertTrue(staged.any { it.replayed })
         assertTrue(staged.map { it.durable.asFile().canonicalFile }.distinct().size == 1)
         assertTrue(fs.createdParts.all { !Files.exists(it, LinkOption.NOFOLLOW_LINKS) })
+    }
+
+    @Test
+    fun ownedPartPublicationAndUnlinkHaveOrderedParentDurability() = runBlocking {
+        val fs = RecordingFileSystem()
+        val result = SenderIndexBundleStager(
+            roots = roots,
+            sealer = RandomAuthenticatedSealer(),
+            codec = SenderIndexBundleCodec(),
+            fileSystem = fs,
+            wipe = { it.fill(0) },
+        ).stage(request(ownerA)) as SenderIndexBundleStageResult.Staged
+        val ownedPart = fs.createdParts.single()
+        val parent = ownedPart.parent
+        val firstLink = fs.events.indexOf("link")
+        val partForce = fs.events.indexOf("force-file:${ownedPart.fileName}")
+        val firstParentForce = fs.events.indexOf("force-dir:${parent.fileName}")
+        val temporaryForce = fs.events.indexOf("force-file:${temporary(ownerA).toPath().fileName}")
+        val partDelete = fs.events.indexOf("delete:${ownedPart.fileName}")
+        val sourceParentForceAfterDelete = fs.events.withIndex()
+            .firstOrNull { it.index > partDelete && it.value == "force-dir:${parent.fileName}" }
+            ?.index ?: -1
+        val destinationLink = fs.events.lastIndexOf("link")
+        val destinationForce = fs.events.indexOf("force-file:${destination(ownerA).toPath().fileName}")
+
+        assertTrue(result.durable.asFile().isFile)
+        assertEquals(parent, fs.forceDirectoryPaths.first())
+        assertTrue(fs.forceDirectoryPaths.all { it == parent })
+        assertTrue(fs.deletedPaths.any { it == ownedPart })
+        assertTrue(partForce < firstParentForce)
+        assertTrue(firstParentForce < firstLink)
+        assertTrue(firstLink < temporaryForce)
+        assertTrue(temporaryForce < partDelete)
+        assertTrue(partDelete < sourceParentForceAfterDelete)
+        assertTrue(destinationLink < destinationForce)
     }
 
     @Test
@@ -330,29 +401,11 @@ class SenderIndexBundleStagerTest {
     }
 
     @Test
-    fun handledOpenFailureAfterCreateCleansTheCurrentInvocationPart() = runBlocking {
-        val fs = RecordingFileSystem().apply { failAfterCreateOpen = true }
-        val result = SenderIndexBundleStager(
-            roots = roots,
-            sealer = RandomAuthenticatedSealer(),
-            codec = SenderIndexBundleCodec(),
-            fileSystem = fs,
-            wipe = { it.fill(0) },
-        ).stage(request(ownerA)) as SenderIndexBundleStageResult.Failure
-
-        assertEquals(SenderIndexBundleStageFailure.LOCAL_STORAGE, result.reason)
-        assertEquals(1, fs.createdParts.size)
-        assertFalse(Files.exists(fs.createdParts.single(), LinkOption.NOFOLLOW_LINKS))
-        assertFalse(temporary(ownerA).exists())
-        assertFalse(destination(ownerA).exists())
-    }
-
-    @Test
-    fun cancellationAfterAmbiguousCreateCleansPartAndPreservesOriginalCancellation() = runBlocking {
+    fun cancellationAfterOwnedPartCreationCleansPartAndPreservesOriginalCancellation() = runBlocking {
         val original = CancellationException("original cancellation")
         val cleanupFailure = CancellationException("cleanup cancellation")
         val fs = RecordingFileSystem().apply {
-            cancelAfterCreate = original
+            cancelDuringWrite = original
             cleanupForceCancellation = cleanupFailure
         }
         var thrown: Throwable? = null
@@ -374,6 +427,34 @@ class SenderIndexBundleStagerTest {
         )
         assertEquals(1, fs.createdParts.size)
         assertFalse(Files.exists(fs.createdParts.single(), LinkOption.NOFOLLOW_LINKS))
+    }
+
+    @Test
+    fun freshPartCreationFailureDoesNotDeleteAnotherPart() = runBlocking {
+        val parent = File(
+            roots.child(ownerA, AccountScopedFileRoots.ChildRoot.FINGERPRINTS),
+            "capsules",
+        ).apply { check(mkdirs()) }
+        val orphan = File(
+            parent,
+            "${capsule.toRestString()}.index.bundle.${UUID.randomUUID()}.part",
+        ).apply { writeBytes(byteArrayOf(9, 8, 7)) }
+        val fs = RecordingFileSystem().apply { failFreshPartCreation = true }
+
+        val result = SenderIndexBundleStager(
+            roots = roots,
+            sealer = RandomAuthenticatedSealer(),
+            codec = SenderIndexBundleCodec(),
+            fileSystem = fs,
+            wipe = { it.fill(0) },
+        ).stage(request(ownerA)) as SenderIndexBundleStageResult.Failure
+
+        assertEquals(SenderIndexBundleStageFailure.LOCAL_STORAGE, result.reason)
+        assertTrue(orphan.exists())
+        assertArrayEquals(byteArrayOf(9, 8, 7), orphan.readBytes())
+        assertTrue(fs.createdParts.isEmpty())
+        assertTrue(fs.deletedPaths.isEmpty())
+        assertTrue(fs.events.none { it == "link" })
     }
 
     @Test
@@ -706,14 +787,18 @@ private class RecordingFileSystem : SenderIndexBundleFileSystem {
     var zeroRead = false
     var failWrite = false
     var failAfterWriteBytes: Int? = null
-    var failAfterCreateOpen = false
-    var cancelAfterCreate: CancellationException? = null
+    var failFreshPartCreation = false
+    var providedFreshPart: Path? = null
+    var cancelDuringWrite: CancellationException? = null
     var cleanupForceCancellation: CancellationException? = null
     var failLink = false
     var failDestinationLink = false
     var throwAfterTemporaryLink = false
     var throwAfterDestinationLink = false
     val createdParts = mutableListOf<Path>()
+    val deletedPaths = mutableListOf<Path>()
+    val openedWritePaths = mutableListOf<Path>()
+    val forceDirectoryPaths = mutableListOf<Path>()
 
     override fun attributes(path: Path): SenderIndexBundleFileAttributes? = try {
         val attributes = Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
@@ -743,21 +828,45 @@ private class RecordingFileSystem : SenderIndexBundleFileSystem {
         }
     }
 
-    override fun openWriteNew(path: Path): OutputStream {
+    override fun createFreshPart(parent: Path, prefix: String, suffix: String): Path {
+        if (failFreshPartCreation) {
+            failFreshPartCreation = false
+            throw IOException("injected fresh part creation failure")
+        }
+        providedFreshPart?.let { return it }
+        return Files.createTempFile(parent, prefix, suffix).also { createdParts.add(it) }
+    }
+
+    override fun openWrite(path: Path): OutputStream {
+        openedWritePaths.add(path)
         if (failWrite) {
             failWrite = false
             throw IOException("injected write failure")
         }
-        val delegate = Files.newOutputStream(path, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
-        createdParts.add(path)
-        if (failAfterCreateOpen || cancelAfterCreate != null) {
-            val cancellation = cancelAfterCreate
-            failAfterCreateOpen = false
-            cancelAfterCreate = null
-            delegate.write(byteArrayOf(1, 2, 3, 4))
-            delegate.close()
-            if (cancellation != null) throw cancellation
-            throw IOException("injected open failure after create")
+        val delegate = Files.newOutputStream(path, StandardOpenOption.WRITE)
+        val cancellation = cancelDuringWrite
+        if (cancellation != null) {
+            cancelDuringWrite = null
+            return object : OutputStream() {
+                private var triggered = false
+
+                override fun write(value: Int) {
+                    write(byteArrayOf(value.toByte()), 0, 1)
+                }
+
+                override fun write(buffer: ByteArray, offset: Int, length: Int) {
+                    if (!triggered) {
+                        triggered = true
+                        delegate.write(buffer, offset, minOf(length, 4))
+                        throw cancellation
+                    }
+                    delegate.write(buffer, offset, length)
+                }
+
+                override fun flush() = delegate.flush()
+
+                override fun close() = delegate.close()
+            }
         }
         val limit = failAfterWriteBytes ?: return delegate
         failAfterWriteBytes = null
@@ -803,7 +912,8 @@ private class RecordingFileSystem : SenderIndexBundleFileSystem {
     }
 
     override fun deleteIfExists(path: Path): Boolean {
-        events += "delete"
+        events += "delete:${path.fileName}"
+        deletedPaths.add(path)
         return Files.deleteIfExists(path)
     }
 
@@ -819,6 +929,7 @@ private class RecordingFileSystem : SenderIndexBundleFileSystem {
 
     override fun forceDirectory(path: Path) {
         events += "force-dir:${path.fileName}"
+        forceDirectoryPaths.add(path)
         cleanupForceCancellation?.let {
             cleanupForceCancellation = null
             throw it

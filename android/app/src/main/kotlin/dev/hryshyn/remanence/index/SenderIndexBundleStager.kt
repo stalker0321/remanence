@@ -17,7 +17,6 @@ import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
-import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.ensureActive
@@ -269,7 +268,8 @@ class SenderIndexBundleStager internal constructor(
             parent = parent,
             destination = parent.resolve(baseName).normalize(),
             temporary = parent.resolve("$baseName.tmp").normalize(),
-            part = parent.resolve("$baseName.${UUID.randomUUID()}.part").normalize(),
+            partPrefix = "$baseName.",
+            partSuffix = ".part",
         )
     }
 
@@ -293,7 +293,7 @@ class SenderIndexBundleStager internal constructor(
         expectedPlaintext: ByteArray,
         aad: ByteArray,
     ): SenderIndexBundleStageResult.Failure? {
-        var partCreated = false
+        var ownedPart: Path? = null
         var sealed: ByteArray? = null
         try {
             sealed = try {
@@ -307,68 +307,84 @@ class SenderIndexBundleStager internal constructor(
                 return failure(SenderIndexBundleStageFailure.SEALING_FAILED, false)
             }
 
-            val partWasAbsentBeforeCreate = try {
-                fileSystem.attributes(paths.part) == null
+            val returnedPart = try {
+                fileSystem.createFreshPart(
+                    parent = paths.parent,
+                    prefix = paths.partPrefix,
+                    suffix = paths.partSuffix,
+                )
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
                 return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
             }
+            val normalizedPart = try {
+                val normalized = returnedPart.toAbsolutePath().normalize()
+                if (returnedPart != normalized ||
+                    normalized.parent != paths.parent ||
+                    !normalized.startsWith(paths.root) ||
+                    normalized.fileName.toString().length <=
+                        paths.partPrefix.length + paths.partSuffix.length ||
+                    !normalized.fileName.toString().startsWith(paths.partPrefix) ||
+                    !normalized.fileName.toString().endsWith(paths.partSuffix)
+                ) {
+                    return failure(SenderIndexBundleStageFailure.PATH_UNSAFE, false)
+                }
+                normalized
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                return failure(SenderIndexBundleStageFailure.PATH_UNSAFE, false)
+            }
+            // Shape validation proves this exact path is inside the canonical
+            // parent before ownership is retained for cleanup.
+            ownedPart = normalizedPart
+            val partAttributes = try {
+                fileSystem.attributes(normalizedPart)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+            }
+            if (partAttributes == null ||
+                partAttributes.isSymbolicLink ||
+                !partAttributes.isRegularFile
+            ) {
+                ownedPart = null
+                return failure(SenderIndexBundleStageFailure.PATH_UNSAFE, false)
+            }
             try {
-                fileSystem.openWriteNew(paths.part).use { output ->
-                    // CREATE_NEW ownership is established when the stream is
-                    // returned. A process-death window can leave the part as
-                    // an inert orphan for a later invocation; once returned,
-                    // this invocation owns the
-                    // exact path and cleans it on every handled outcome.
-                    partCreated = true
+                fileSystem.openWrite(normalizedPart).use { output ->
                     output.write(sealed!!)
                     output.flush()
                 }
-                forceFile(paths.part)?.let { return it }
-                if (!forceDirectoryBestEffort(paths.part.parent!!)) {
+                forceFile(normalizedPart)?.let { return it }
+                if (!forceDirectoryBestEffort(normalizedPart.parent!!)) {
                     return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
                 }
             } catch (cancelled: CancellationException) {
-                if (!partCreated) {
-                    partCreated = claimAmbiguousPart(paths.part, partWasAbsentBeforeCreate)
-                }
                 throw cancelled
             } catch (_: FileAlreadyExistsException) {
-                // CREATE_NEW did not establish ownership of an existing
-                // path. Never delete it, even if this generated name
-                // happened to collide.
                 return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
             } catch (_: SecurityException) {
-                if (!partCreated) {
-                    partCreated = claimAmbiguousPart(paths.part, partWasAbsentBeforeCreate)
-                }
                 return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
             } catch (_: IOException) {
-                if (!partCreated) {
-                    partCreated = claimAmbiguousPart(paths.part, partWasAbsentBeforeCreate)
-                }
                 return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
             } catch (_: UnsupportedOperationException) {
-                if (!partCreated) {
-                    partCreated = claimAmbiguousPart(paths.part, partWasAbsentBeforeCreate)
-                }
                 return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
             } catch (_: RuntimeException) {
-                if (!partCreated) {
-                    partCreated = claimAmbiguousPart(paths.part, partWasAbsentBeforeCreate)
-                }
                 return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
             }
 
             try {
-                fileSystem.atomicNoReplaceLink(paths.part, paths.temporary)
+                fileSystem.atomicNoReplaceLink(normalizedPart, paths.temporary)
             } catch (_: FileAlreadyExistsException) {
                 return reconcileTemporaryAfterLinkFailure(
                     paths,
+                    normalizedPart,
                     expectedPlaintext,
                     aad,
-                ) { partCreated = false }
+                ) { ownedPart = null }
             } catch (_: UnsupportedOperationException) {
                 return failure(SenderIndexBundleStageFailure.ATOMIC_MOVE_UNAVAILABLE, false)
             } catch (cancelled: CancellationException) {
@@ -378,21 +394,22 @@ class SenderIndexBundleStager internal constructor(
             } catch (_: IOException) {
                 return reconcileTemporaryAfterLinkFailure(
                     paths,
+                    normalizedPart,
                     expectedPlaintext,
                     aad,
-                ) { partCreated = false }
+                ) { ownedPart = null }
             } catch (_: RuntimeException) {
                 return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
             }
 
-            return completeTemporaryPublication(paths, expectedPlaintext, aad) {
-                partCreated = false
+            return completeTemporaryPublication(paths, normalizedPart, expectedPlaintext, aad) {
+                ownedPart = null
             }
         } finally {
             sealed?.let(wipe)
-            if (partCreated) {
+            ownedPart?.let { part ->
                 withContext(NonCancellable) {
-                    cleanupOwnedPartBestEffort(paths.part)
+                    cleanupOwnedPartBestEffort(part)
                 }
             }
         }
@@ -400,6 +417,7 @@ class SenderIndexBundleStager internal constructor(
 
     private suspend fun reconcileTemporaryAfterLinkFailure(
         paths: StagePaths,
+        ownedPart: Path,
         expectedPlaintext: ByteArray,
         aad: ByteArray,
         onPartConsumed: () -> Unit = {},
@@ -408,6 +426,7 @@ class SenderIndexBundleStager internal constructor(
     ) {
         SemanticInspection.MATCH -> completeTemporaryPublication(
             paths,
+            ownedPart,
             expectedPlaintext,
             aad,
             onPartConsumed,
@@ -420,6 +439,7 @@ class SenderIndexBundleStager internal constructor(
 
     private suspend fun completeTemporaryPublication(
         paths: StagePaths,
+        ownedPart: Path,
         expectedPlaintext: ByteArray,
         aad: ByteArray,
         onPartConsumed: () -> Unit,
@@ -429,7 +449,7 @@ class SenderIndexBundleStager internal constructor(
             return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
         }
         try {
-            if (!deleteOwnedPart(paths.part)) {
+            if (!deleteOwnedPart(ownedPart)) {
                 return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
             }
             onPartConsumed()
@@ -438,7 +458,7 @@ class SenderIndexBundleStager internal constructor(
         } catch (_: Exception) {
             return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
         }
-        if (!forceDirectoryBestEffort(paths.part.parent!!)) {
+        if (!forceDirectoryBestEffort(ownedPart.parent!!)) {
             return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
         }
         return when (inspectSemantic(paths.temporary, expectedPlaintext, aad)) {
@@ -448,22 +468,6 @@ class SenderIndexBundleStager internal constructor(
             -> failure(SenderIndexBundleStageFailure.DESTINATION_CONFLICT, false)
             else -> failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
         }
-    }
-
-    /**
-     * An open adapter may create the file and then throw before returning its
-     * stream. Claim ownership only when the exact path was absent before
-     * CREATE_NEW and is now a regular no-follow file; FileAlreadyExists never
-     * reaches this helper.
-     */
-    private fun claimAmbiguousPart(path: Path, wasAbsentBeforeCreate: Boolean): Boolean {
-        if (!wasAbsentBeforeCreate) return false
-        val attributes = try {
-            fileSystem.attributes(path)
-        } catch (_: Exception) {
-            return false
-        }
-        return attributes != null && attributes.isRegularFile && !attributes.isSymbolicLink
     }
 
     /** Delete only this invocation's no-follow regular part, then persist the unlink. */
@@ -823,13 +827,13 @@ class SenderIndexBundleStager internal constructor(
         val parent: Path,
         val destination: Path,
         val temporary: Path,
-        val part: Path,
+        val partPrefix: String,
+        val partSuffix: String,
     ) {
         fun areSafe(fileSystem: SenderIndexBundleFileSystem): Boolean =
             isSafe(fileSystem, root) && isSafe(fileSystem, parent) &&
                 isSafe(fileSystem, destination) && isSafe(fileSystem, temporary) &&
-                isSafe(fileSystem, part) && destination.startsWith(root) &&
-                temporary.startsWith(root) && part.startsWith(root)
+                destination.startsWith(root) && temporary.startsWith(root)
 
         private fun isSafe(fileSystem: SenderIndexBundleFileSystem, path: Path): Boolean {
             var current: Path? = path
@@ -895,7 +899,8 @@ internal interface SenderIndexBundleFileSystem {
     fun attributes(path: Path): SenderIndexBundleFileAttributes?
     fun makeDirectories(path: Path)
     fun openRead(path: Path): InputStream
-    fun openWriteNew(path: Path): OutputStream
+    fun createFreshPart(parent: Path, prefix: String, suffix: String): Path
+    fun openWrite(path: Path): OutputStream
     fun atomicNoReplaceLink(source: Path, destination: Path)
     fun deleteIfExists(path: Path): Boolean
     fun forceFile(path: Path)
@@ -926,8 +931,11 @@ private object RealSenderIndexBundleFileSystem : SenderIndexBundleFileSystem {
     override fun openRead(path: Path): InputStream =
         Files.newInputStream(path, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)
 
-    override fun openWriteNew(path: Path): OutputStream =
-        Files.newOutputStream(path, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
+    override fun createFreshPart(parent: Path, prefix: String, suffix: String): Path =
+        Files.createTempFile(parent, prefix, suffix)
+
+    override fun openWrite(path: Path): OutputStream =
+        Files.newOutputStream(path, StandardOpenOption.WRITE)
 
     override fun atomicNoReplaceLink(source: Path, destination: Path) {
         Files.createLink(destination, source)

@@ -69,19 +69,60 @@ sealed interface SenderIndexBundleReadResult {
  * Wipeable in-memory view for a later account-scoped candidate reader. It has
  * no file, ciphertext, key, or path capability and never renders payload
  * fields. Callers must close it when candidate loading is complete.
+ *
+ * Getter results are caller-owned JVM values. An immutable String obtained
+ * before close cannot be erased by this class; close wipes the snapshot's
+ * internal mutable copies and rejects all later getter access.
  */
 class SenderIndexBundleInspectionSnapshot internal constructor(
-    val localFormatVersion: Int,
-    val capsuleId: CapsuleId,
-    val senderHandleSnapshot: String,
-    val createdAtEpochSeconds: Long,
-    val placeLabel: String?,
+    localFormatVersion: Int,
+    capsuleId: CapsuleId,
+    senderHandleSnapshot: String,
+    createdAtEpochSeconds: Long,
+    placeLabel: String?,
     frontFingerprint: ByteArray,
     backFingerprint: ByteArray,
+    private val wipeBytes: (ByteArray) -> Unit,
+    private val wipeChars: (CharArray) -> Unit,
 ) : AutoCloseable {
+    private val localFormatVersionValue = localFormatVersion
+    private val capsuleIdValue = capsuleId
+    private val senderHandleChars = senderHandleSnapshot.toCharArray()
+    private val createdAtEpochSecondsValue = createdAtEpochSeconds
+    private val placeLabelChars = placeLabel?.toCharArray()
     private val frontFingerprintBytes = frontFingerprint.copyOf()
     private val backFingerprintBytes = backFingerprint.copyOf()
     private var closed = false
+
+    val localFormatVersion: Int
+        get() {
+            checkOpen()
+            return localFormatVersionValue
+        }
+
+    val capsuleId: CapsuleId
+        get() {
+            checkOpen()
+            return capsuleIdValue
+        }
+
+    val senderHandleSnapshot: String
+        get() {
+            checkOpen()
+            return String(senderHandleChars)
+        }
+
+    val createdAtEpochSeconds: Long
+        get() {
+            checkOpen()
+            return createdAtEpochSecondsValue
+        }
+
+    val placeLabel: String?
+        get() {
+            checkOpen()
+            return placeLabelChars?.let(::String)
+        }
 
     val frontFingerprint: ByteArray
         get() = openCopy(frontFingerprintBytes)
@@ -91,16 +132,37 @@ class SenderIndexBundleInspectionSnapshot internal constructor(
 
     override fun close() {
         if (closed) return
-        frontFingerprintBytes.fill(0)
-        backFingerprintBytes.fill(0)
         closed = true
+        try {
+            frontFingerprintBytes.fill(0)
+            wipeBytes(frontFingerprintBytes)
+        } finally {
+            try {
+                backFingerprintBytes.fill(0)
+                wipeBytes(backFingerprintBytes)
+            } finally {
+                try {
+                    senderHandleChars.fill('\u0000')
+                    wipeChars(senderHandleChars)
+                } finally {
+                    placeLabelChars?.let { chars ->
+                        chars.fill('\u0000')
+                        wipeChars(chars)
+                    }
+                }
+            }
+        }
     }
 
     override fun toString(): String = "SenderIndexBundleInspectionSnapshot(<redacted>)"
 
     private fun openCopy(bytes: ByteArray): ByteArray {
-        check(!closed) { "sender index snapshot is closed" }
+        checkOpen()
         return bytes.copyOf()
+    }
+
+    private fun checkOpen() {
+        check(!closed) { "sender index snapshot is closed" }
     }
 }
 
@@ -116,6 +178,7 @@ class SenderIndexBundleReader internal constructor(
     private val codec: SenderIndexBundleCodec,
     private val fileSystem: SenderIndexBundleReaderFileSystem,
     private val wipe: (ByteArray) -> Unit,
+    private val wipeChars: (CharArray) -> Unit = { it.fill('\u0000') },
 ) {
 
     constructor(
@@ -127,6 +190,7 @@ class SenderIndexBundleReader internal constructor(
         codec = SenderIndexBundleCodec(),
         fileSystem = RealSenderIndexBundleReaderFileSystem,
         wipe = { it.fill(0) },
+        wipeChars = { it.fill('\u0000') },
     )
 
     /** Inspects only the authenticated owner's deterministic bundle path. */
@@ -251,6 +315,8 @@ class SenderIndexBundleReader internal constructor(
                     placeLabel = decoded!!.placeLabel,
                     frontFingerprint = decoded!!.frontFingerprint,
                     backFingerprint = decoded!!.backFingerprint,
+                    wipeBytes = wipe,
+                    wipeChars = wipeChars,
                 ),
             )
         } finally {

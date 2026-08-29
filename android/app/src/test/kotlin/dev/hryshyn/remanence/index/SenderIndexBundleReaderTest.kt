@@ -91,16 +91,28 @@ class SenderIndexBundleReaderTest {
         ) as SenderIndexBundleStageResult.Staged
         val bytesBefore = destination(owner, capsule).readBytes()
         val wiped = mutableListOf<ByteArray>()
-        val reader = reader(sealer) { bytes ->
-            wiped += bytes
-            bytes.fill(0)
-        }
+        val wipedChars = mutableListOf<CharArray>()
+        val reader = reader(
+            sealer = sealer,
+            wipe = { bytes ->
+                wiped += bytes
+                bytes.fill(0)
+            },
+            wipeChars = { chars ->
+                wipedChars += chars
+                chars.fill('\u0000')
+            },
+        )
 
         val first = reader.inspect(readRequest(owner, owner, capsule))
         val snapshot = (first as SenderIndexBundleReadResult.Available).snapshot
+        val callerOwnedHandle = snapshot.senderHandleSnapshot
+        val callerOwnedPlace = snapshot.placeLabel
+        assertEquals(SenderIndexBundleCodec.FORMAT_VERSION, snapshot.localFormatVersion)
         assertEquals(capsule, snapshot.capsuleId)
-        assertEquals(recognition().senderHandleSnapshot, snapshot.senderHandleSnapshot)
-        assertEquals(recognition().placeLabel, snapshot.placeLabel)
+        assertEquals(recognition().senderHandleSnapshot, callerOwnedHandle)
+        assertEquals(recognition().placeLabel, callerOwnedPlace)
+        assertEquals(recognition().createdAtEpochSeconds, snapshot.createdAtEpochSeconds)
         assertArrayEquals(recognition().frontFingerprint, snapshot.frontFingerprint)
         val front = snapshot.frontFingerprint
         front[0] = (front[0] + 1).toByte()
@@ -109,7 +121,19 @@ class SenderIndexBundleReaderTest {
         assertFalse(first.toString().contains(filesDir.path))
         snapshot.close()
         snapshot.close()
-        assertThrowsIllegalState { snapshot.frontFingerprint }
+        assertEquals("alice_1", callerOwnedHandle)
+        assertEquals("Paris", callerOwnedPlace)
+        listOf<() -> Any?>(
+            { snapshot.localFormatVersion },
+            { snapshot.capsuleId },
+            { snapshot.senderHandleSnapshot },
+            { snapshot.createdAtEpochSeconds },
+            { snapshot.placeLabel },
+            { snapshot.frontFingerprint },
+            { snapshot.backFingerprint },
+        ).forEach(::assertThrowsIllegalState)
+        assertTrue(wipedChars.isNotEmpty())
+        assertTrue(wipedChars.all { chars -> chars.all { it == '\u0000' } })
 
         val reconstructed = SenderIndexBundleReader(roots, sealer)
             .inspect(readRequest(owner, owner, capsule))
@@ -294,6 +318,86 @@ class SenderIndexBundleReaderTest {
     }
 
     @Test
+    fun boundedStreamingRejectsTruncatedZeroReadAndOverflowWithoutMutation() = runBlocking {
+        val sealer = AesGcmSealer()
+        SenderIndexBundleStager(roots, sealer).stage(
+            SenderIndexBundleStageRequest(owner, owner, capsule, recognition()),
+        )
+        val original = destination(owner, capsule).readBytes()
+        val expectedSize = original.size.toLong()
+
+        val truncatedWipes = mutableListOf<ByteArray>()
+        val truncatedFileSystem = ScriptedReaderFileSystem(
+            target = destination(owner, capsule).toPath(),
+            reportedSize = expectedSize,
+            streamFactory = { original.copyOf(original.size - 1).inputStream() },
+        )
+        assertEquals(
+            SenderIndexBundleReadResult.Corrupt(
+                SenderIndexBundleReadCorruptReason.CIPHERTEXT_TRUNCATED,
+            ),
+            reader(
+                sealer = sealer,
+                fileSystem = truncatedFileSystem,
+                wipe = { bytes ->
+                    truncatedWipes += bytes
+                    bytes.fill(0)
+                },
+            ).inspect(readRequest(owner, owner, capsule)),
+        )
+        assertArrayEquals(original, destination(owner, capsule).readBytes())
+        assertTrue(truncatedWipes.isNotEmpty())
+        assertTrue(truncatedWipes.all { bytes -> bytes.all { it == 0.toByte() } })
+
+        val zeroReadWipes = mutableListOf<ByteArray>()
+        val zeroReadFileSystem = ScriptedReaderFileSystem(
+            target = destination(owner, capsule).toPath(),
+            reportedSize = expectedSize,
+            streamFactory = { ZeroReadInputStream() },
+        )
+        assertEquals(
+            SenderIndexBundleReadResult.Unavailable(
+                SenderIndexBundleReadUnavailableReason.LOCAL_STORAGE,
+            ),
+            reader(
+                sealer = sealer,
+                fileSystem = zeroReadFileSystem,
+                wipe = { bytes ->
+                    zeroReadWipes += bytes
+                    bytes.fill(0)
+                },
+            ).inspect(readRequest(owner, owner, capsule)),
+        )
+        assertEquals(1, zeroReadFileSystem.readCount)
+        assertArrayEquals(original, destination(owner, capsule).readBytes())
+        assertTrue(zeroReadWipes.isNotEmpty())
+        assertTrue(zeroReadWipes.all { bytes -> bytes.all { it == 0.toByte() } })
+
+        val overflowWipes = mutableListOf<ByteArray>()
+        val overflowFileSystem = ScriptedReaderFileSystem(
+            target = destination(owner, capsule).toPath(),
+            reportedSize = expectedSize,
+            streamFactory = { (original + byteArrayOf(9)).inputStream() },
+        )
+        assertEquals(
+            SenderIndexBundleReadResult.Corrupt(
+                SenderIndexBundleReadCorruptReason.CIPHERTEXT_SIZE_CHANGED,
+            ),
+            reader(
+                sealer = sealer,
+                fileSystem = overflowFileSystem,
+                wipe = { bytes ->
+                    overflowWipes += bytes
+                    bytes.fill(0)
+                },
+            ).inspect(readRequest(owner, owner, capsule)),
+        )
+        assertArrayEquals(original, destination(owner, capsule).readBytes())
+        assertTrue(overflowWipes.isNotEmpty())
+        assertTrue(overflowWipes.all { bytes -> bytes.all { it == 0.toByte() } })
+    }
+
+    @Test
     fun readFailureIsRetryableAndCancellationIdentityPropagates() = runBlocking {
         val sealer = AesGcmSealer()
         SenderIndexBundleStager(roots, sealer).stage(
@@ -349,12 +453,14 @@ class SenderIndexBundleReaderTest {
         sealer: SecretSealer,
         fileSystem: SenderIndexBundleReaderFileSystem = RealTestFileSystem,
         wipe: (ByteArray) -> Unit = { it.fill(0) },
+        wipeChars: (CharArray) -> Unit = { it.fill('\u0000') },
     ) = SenderIndexBundleReader(
         roots = roots,
         sealer = sealer,
         codec = SenderIndexBundleCodec(),
         fileSystem = fileSystem,
         wipe = wipe,
+        wipeChars = wipeChars,
     )
 
     private fun readRequest(
@@ -411,7 +517,7 @@ class SenderIndexBundleReaderTest {
         ),
     )
 
-    private fun assertThrowsIllegalState(block: () -> Unit) {
+    private fun assertThrowsIllegalState(block: () -> Any?) {
         try {
             block()
             throw AssertionError("expected failure")
@@ -470,6 +576,37 @@ private class FailingReadFileSystem(private val failingPath: Path) : SenderIndex
         if (path == failingPath) throw IOException("injected read failure")
         return RealTestFileSystem.openRead(path)
     }
+}
+
+private class ScriptedReaderFileSystem(
+    private val target: Path,
+    private val reportedSize: Long,
+    private val streamFactory: () -> InputStream,
+) : SenderIndexBundleReaderFileSystem {
+    var readCount = 0
+
+    override fun attributes(path: Path): SenderIndexBundleFileAttributes? =
+        if (path == target) {
+            SenderIndexBundleFileAttributes(
+                isSymbolicLink = false,
+                isRegularFile = true,
+                isDirectory = false,
+                size = reportedSize,
+            )
+        } else {
+            RealTestFileSystem.attributes(path)
+        }
+
+    override fun openRead(path: Path): InputStream {
+        readCount += 1
+        return streamFactory()
+    }
+}
+
+private class ZeroReadInputStream : InputStream() {
+    override fun read(): Int = 0
+
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int = 0
 }
 
 private open class AesGcmSealer : SecretSealer {

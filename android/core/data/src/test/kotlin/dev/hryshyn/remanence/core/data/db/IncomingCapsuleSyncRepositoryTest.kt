@@ -54,13 +54,15 @@ class IncomingCapsuleSyncRepositoryTest {
     }
 
     @Test
-    fun successfulPageIsAtomicOwnerScopedAndPersistsOpaqueNullCursor() = runTest {
-        server.enqueue(json(pageJson()))
+    fun successfulPageIsAtomicOwnerScopedAndPersistsTerminalHighWatermark() = runTest {
+        server.enqueue(json(pageJson(nextCursor = TERMINAL_CURSOR)))
         val repository = repository()
 
         val result = repository.syncNextPage()
 
-        assertIs<IncomingSyncResult.Committed>(result)
+        val committed = assertIs<IncomingSyncResult.Committed>(result)
+        assertFalse(committed.hasMore)
+        assertEquals(TERMINAL_CURSOR, committed.page.nextCursor)
         val request = server.takeRequest()
         assertEquals("/v1/capsules/incoming", request.url.encodedPath)
         assertEquals("50", request.url.queryParameter("limit"))
@@ -68,7 +70,7 @@ class IncomingCapsuleSyncRepositoryTest {
         assertEquals(1, countRows("incoming_capsule"))
         assertEquals(1, countRows("incoming_envelope"))
         assertEquals(5, countRows("blob_cache"))
-        assertEquals(null, database.syncCursorDao().get(OWNER, INCOMING_STREAM)!!.serverCursor)
+        assertEquals(TERMINAL_CURSOR, database.syncCursorDao().get(OWNER, INCOMING_STREAM)!!.serverCursor)
         val storedBlob = database.blobCacheDao().getByBlobIdAndOwner(BLOB_IDS.first(), OWNER)!!
         assertEquals(BlobCacheState.DOWNLOADING, storedBlob.cacheState)
         assertTrue(storedBlob.localPath.contains("/accounts/$OWNER/incoming-ciphertext/"))
@@ -116,6 +118,106 @@ class IncomingCapsuleSyncRepositoryTest {
             database.incomingCapsuleDao().getByCapsuleIdAndOwner(CAPSULE_ID, OWNER)!!.materialState,
         )
         assertEquals("opaque-cursor", database.syncCursorDao().get(OWNER, INCOMING_STREAM)!!.serverCursor)
+    }
+
+    @Test
+    fun hasMorePageThenTerminalPageCommitsBothCursorsAndExposesLoopSignal() = runTest {
+        server.enqueue(json(pageJson(nextCursor = "page-one", hasMore = true)))
+        server.enqueue(
+            json(
+                pageJson(
+                    capsuleId = SECOND_CAPSULE_ID,
+                    nextCursor = TERMINAL_CURSOR,
+                    items = listOf(itemJson(capsuleId = SECOND_CAPSULE_ID, blobIds = SECOND_BLOB_IDS)),
+                ),
+            ),
+        )
+        val repository = repository()
+
+        val first = assertIs<IncomingSyncResult.Committed>(repository.syncNextPage())
+        val second = assertIs<IncomingSyncResult.Committed>(repository.syncNextPage())
+
+        assertTrue(first.hasMore)
+        assertTrue(first.page.hasMore)
+        assertEquals("page-one", first.page.nextCursor)
+        assertFalse(second.hasMore)
+        assertFalse(second.page.hasMore)
+        assertEquals(TERMINAL_CURSOR, second.page.nextCursor)
+        assertEquals(2, countRows("incoming_capsule"))
+        assertEquals(TERMINAL_CURSOR, database.syncCursorDao().get(OWNER, INCOMING_STREAM)!!.serverCursor)
+        assertEquals(null, server.takeRequest().url.queryParameter("cursor"))
+        assertEquals("page-one", server.takeRequest().url.queryParameter("cursor"))
+    }
+
+    @Test
+    fun initialEmptyPageRequiresNullCursorAndCommitsNoRows() = runTest {
+        server.enqueue(json(pageJson(items = emptyList(), hasMore = false, nextCursor = null)))
+
+        val result = assertIs<IncomingSyncResult.Committed>(repository().syncNextPage())
+
+        assertFalse(result.hasMore)
+        assertNull(result.page.nextCursor)
+        assertNull(server.takeRequest().url.queryParameter("cursor"))
+        assertEquals(0, countRows("incoming_capsule"))
+        assertNull(database.syncCursorDao().get(OWNER, INCOMING_STREAM)!!.serverCursor)
+    }
+
+    @Test
+    fun emptyContinuationEchoesDurableTerminalCursorOnLaterInvocation() = runTest {
+        server.enqueue(json(pageJson(nextCursor = TERMINAL_CURSOR)))
+        server.enqueue(json(pageJson(items = emptyList(), hasMore = false, nextCursor = TERMINAL_CURSOR)))
+        val repository = repository()
+
+        assertIs<IncomingSyncResult.Committed>(repository.syncNextPage())
+        val empty = assertIs<IncomingSyncResult.Committed>(repository.syncNextPage())
+
+        assertFalse(empty.hasMore)
+        assertEquals(TERMINAL_CURSOR, empty.page.nextCursor)
+        server.takeRequest()
+        assertEquals(TERMINAL_CURSOR, server.takeRequest().url.queryParameter("cursor"))
+        assertEquals(TERMINAL_CURSOR, database.syncCursorDao().get(OWNER, INCOMING_STREAM)!!.serverCursor)
+        assertEquals(1, countRows("incoming_capsule"))
+    }
+
+    @Test
+    fun emptyContinuationCursorMismatchRollsBackWithoutAdvancingCursor() = runTest {
+        server.enqueue(json(pageJson(nextCursor = TERMINAL_CURSOR)))
+        server.enqueue(json(pageJson(items = emptyList(), hasMore = false, nextCursor = "invented-cursor")))
+        val repository = repository()
+
+        assertIs<IncomingSyncResult.Committed>(repository.syncNextPage())
+        val failure = assertIs<IncomingSyncResult.Failure>(repository.syncNextPage())
+
+        assertEquals(IncomingSyncFailure.INVALID_RESPONSE, failure.reason)
+        assertFalse(failure.retryable)
+        server.takeRequest()
+        assertEquals(TERMINAL_CURSOR, server.takeRequest().url.queryParameter("cursor"))
+        assertEquals(TERMINAL_CURSOR, database.syncCursorDao().get(OWNER, INCOMING_STREAM)!!.serverCursor)
+        assertEquals(1, countRows("incoming_capsule"))
+    }
+
+    @Test
+    fun malformedPaginationCombinationsFailBeforeAnyPersistence() = runTest {
+        val malformedPages = listOf(
+            pageJson().replace("\"has_more\":false,", ""),
+            pageJson().replace("\"has_more\":false", "\"has_more\":\"false\""),
+            pageJson(nextCursor = null),
+            pageJson(hasMore = true, nextCursor = null),
+            pageJson(items = emptyList(), hasMore = true, nextCursor = null),
+            pageJson(items = emptyList(), hasMore = false, nextCursor = "invented-cursor"),
+        )
+
+        for ((index, body) in malformedPages.withIndex()) {
+            server.enqueue(json(body))
+            val result = repository().syncNextPage()
+            assertTrue(result is IncomingSyncResult.Failure, "malformed pagination case $index was accepted")
+            val failure = result
+
+            assertEquals(IncomingSyncFailure.INVALID_RESPONSE, failure.reason)
+            assertFalse(failure.retryable)
+            assertEquals(0, countRows("incoming_capsule"))
+            assertNull(database.syncCursorDao().get(OWNER, INCOMING_STREAM))
+        }
     }
 
     @Test
@@ -375,7 +477,7 @@ class IncomingCapsuleSyncRepositoryTest {
             MockResponse.Builder()
                 .code(200)
                 .setHeader("Content-Type", "application/json")
-                .body(pageJson().replace("\"next_cursor\":null", "\"next_cursor\":null,\"email\":\"secret@example.com\""))
+                .body(pageJson().replace("\"has_more\":false,", "\"has_more\":false,\"email\":\"secret@example.com\","))
                 .build(),
         )
         val extraField = assertIs<IncomingSyncResult.Failure>(repository().syncNextPage())
@@ -438,7 +540,8 @@ class IncomingCapsuleSyncRepositoryTest {
         recipientId: String = OWNER,
         envelopeCiphertext: ByteArray = ENVELOPE_CIPHERTEXT,
         envelopeKeyBundleId: String = RECIPIENT_BUNDLE_ID,
-        nextCursor: String? = null,
+        hasMore: Boolean = false,
+        nextCursor: String? = TERMINAL_CURSOR,
         blobDigests: List<ByteArray> = BLOB_DIGESTS,
         items: List<String> = listOf(
             itemJson(
@@ -450,7 +553,7 @@ class IncomingCapsuleSyncRepositoryTest {
             ),
         ),
     ): String = """
-        {"items":[${items.joinToString(",")}],"next_cursor":${nextCursor?.let { "\"$it\"" } ?: "null"}}
+        {"items":[${items.joinToString(",")}],"has_more":$hasMore,"next_cursor":${nextCursor?.let { "\"$it\"" } ?: "null"}}
     """.trimIndent()
 
     private fun itemJson(
@@ -528,6 +631,7 @@ class IncomingCapsuleSyncRepositoryTest {
         const val SENDER_BUNDLE_ID = "0198f0a0-0000-7000-8000-00000000b003"
         const val ACCESS_TOKEN = "access-token"
         const val ROTATED_ACCESS_TOKEN = "rotated-access-token"
+        const val TERMINAL_CURSOR = "terminal-cursor"
         const val INCOMING_STREAM = "incoming"
         val READY_AT_EPOCH_MS = Instant.parse("2026-08-28T00:00:00Z").toEpochMilli()
         val SIGNED_STATEMENT = byteArrayOf(1, 2, 3)

@@ -41,7 +41,11 @@ enum class IncomingSyncFailure {
 sealed interface IncomingSyncResult {
     data class Committed(
         val page: IncomingCapsulePage,
-    ) : IncomingSyncResult
+    ) : IncomingSyncResult {
+        /** A10 must stop on the server's explicit loop signal, not cursor nullability. */
+        val hasMore: Boolean
+            get() = page.hasMore
+    }
 
     data class Failure(
         val reason: IncomingSyncFailure,

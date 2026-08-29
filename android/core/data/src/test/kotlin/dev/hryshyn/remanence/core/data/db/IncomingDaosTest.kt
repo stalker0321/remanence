@@ -105,6 +105,42 @@ class IncomingDaosTest {
     }
 
     @Test
+    fun pageCommitPersistsTerminalCursorAndEmptyContinuation() = runBlocking {
+        val record = capsule()
+        database.incomingPageDao().commitPage(
+            ownerUserId = OWNER,
+            expectedCursor = null,
+            capsules = listOf(record),
+            envelopes = listOf(envelope()),
+            blobs = emptyList(),
+            nextCursor = "terminal-cursor",
+            committedAtEpochMs = 1_755_000_200_000,
+        )
+
+        database.incomingPageDao().commitPage(
+            ownerUserId = OWNER,
+            expectedCursor = "terminal-cursor",
+            capsules = emptyList(),
+            envelopes = emptyList(),
+            blobs = emptyList(),
+            nextCursor = "terminal-cursor",
+            committedAtEpochMs = 1_755_000_300_000,
+        )
+
+        assertEquals(
+            "terminal-cursor",
+            database.syncCursorDao().get(OWNER, "incoming")!!.serverCursor,
+        )
+        val storedCapsule = capsuleDao.getByCapsuleIdAndOwner(record.capsuleId, OWNER)!!
+        assertEquals(record.capsuleId, storedCapsule.capsuleId)
+        assertEquals(record.ownerUserId, storedCapsule.ownerUserId)
+        assertEquals(record.signedStatementBytes.toList(), storedCapsule.signedStatementBytes.toList())
+        val storedEnvelope = envelopeDao.getByCapsuleIdAndOwner(record.capsuleId, OWNER)!!
+        assertEquals(envelope().hpkeCiphertext.toList(), storedEnvelope.hpkeCiphertext.toList())
+        assertEquals(envelope().transportSha256.toList(), storedEnvelope.transportSha256.toList())
+    }
+
+    @Test
     fun replayedUpsertIsIdempotentByCapsuleId() = runBlocking {
         val record = capsule()
         capsuleDao.upsertAllForOwner(OWNER, listOf(record))

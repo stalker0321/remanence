@@ -11,6 +11,9 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.decodeFromJsonElement
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -64,6 +67,7 @@ data class IncomingBlobDeclaration(
 /** One bounded opaque cursor page returned by the incoming endpoint. */
 data class IncomingCapsulePage(
     val items: List<IncomingCapsule>,
+    val hasMore: Boolean,
     val nextCursor: String?,
 ) {
     override fun toString(): String = "IncomingCapsulePage(<redacted>)"
@@ -133,6 +137,7 @@ private data class IncomingCapsuleDto(
 @Serializable
 private data class IncomingCapsulesResponseDto(
     val items: List<IncomingCapsuleDto>,
+    @SerialName("has_more") val hasMore: Boolean,
     @SerialName("next_cursor") val nextCursor: String?,
 )
 
@@ -179,7 +184,7 @@ class IncomingCapsuleRepository internal constructor(
 
         return try {
             client.newCall(requestBuilder.build()).executeAsync().use { response ->
-                interpret(response, ownerUserId, limit)
+                interpret(response, ownerUserId, cursor, limit)
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -194,6 +199,7 @@ class IncomingCapsuleRepository internal constructor(
     private fun interpret(
         response: Response,
         ownerUserId: UserId,
+        requestedCursor: String?,
         limit: Int,
     ): IncomingCapsuleResult {
         val status = response.code
@@ -229,7 +235,11 @@ class IncomingCapsuleRepository internal constructor(
 
         if (!isJson(response)) return invalidResponse(status)
         val dto = try {
-            NetworkJson.decodeFromString<IncomingCapsulesResponseDto>(text)
+            val root = NetworkJson.parseToJsonElement(text)
+            require(root is JsonObject)
+            val hasMore = root["has_more"]
+            require(hasMore is JsonPrimitive && !hasMore.isString)
+            NetworkJson.decodeFromJsonElement<IncomingCapsulesResponseDto>(root)
         } catch (_: SerializationException) {
             return invalidResponse(status)
         } catch (_: IllegalArgumentException) {
@@ -237,7 +247,7 @@ class IncomingCapsuleRepository internal constructor(
         }
         return try {
             IncomingCapsuleResult.Success(
-                page = mapPage(dto, ownerUserId, limit),
+                page = mapPage(dto, ownerUserId, requestedCursor, limit),
                 httpStatus = status,
             )
         } catch (_: IllegalArgumentException) {
@@ -250,6 +260,7 @@ class IncomingCapsuleRepository internal constructor(
     private fun mapPage(
         dto: IncomingCapsulesResponseDto,
         ownerUserId: UserId,
+        requestedCursor: String?,
         limit: Int,
     ): IncomingCapsulePage {
         require(dto.items.size <= limit)
@@ -260,11 +271,24 @@ class IncomingCapsuleRepository internal constructor(
             require(seenCapsules.add(capsule.capsuleId))
             capsule
         }
-        val nextCursor = dto.nextCursor?.also {
-            require(it.isNotBlank() && it.length <= MAX_CURSOR_CHARS)
-            require(items.isNotEmpty())
+        val nextCursor = if (items.isNotEmpty()) {
+            requireNotNull(dto.nextCursor) { "incoming nonempty page cursor is required" }
+                .also { require(it.isNotBlank() && it.length <= MAX_CURSOR_CHARS) }
+        } else {
+            require(dto.nextCursor == requestedCursor) {
+                "incoming empty page cursor does not echo the requested cursor"
+            }
+            dto.nextCursor?.also {
+                require(it.isNotBlank() && it.length <= MAX_CURSOR_CHARS)
+            }
         }
-        return IncomingCapsulePage(items = items, nextCursor = nextCursor)
+        require(!dto.hasMore || items.isNotEmpty()) {
+            "incoming has_more page must contain items"
+        }
+        require(!dto.hasMore || nextCursor != null) {
+            "incoming has_more page cursor is required"
+        }
+        return IncomingCapsulePage(items = items, hasMore = dto.hasMore, nextCursor = nextCursor)
     }
 
     private fun mapCapsule(

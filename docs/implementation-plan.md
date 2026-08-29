@@ -295,7 +295,8 @@ and authorization matrix before Android upload work consumes the API.
 
 M2-A09 adds the authenticated incoming cursor-page transport and the
 owner-scoped Room page commit boundary. The client validates the complete
-ciphertext-only response, preserves the server's opaque nullable cursor, and
+ciphertext-only response, preserves the server's explicit `has_more` loop
+signal and opaque cursor, and
 commits routed capsule metadata, one recipient envelope, and declared blob
 metadata (initially `DOWNLOADING`) atomically. Exact page replays preserve
 existing local cache state and reject immutable identity, binding, or path

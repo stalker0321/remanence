@@ -13,6 +13,9 @@ import dev.hryshyn.remanence.core.crypto.KeysetKekWrapper
 import dev.hryshyn.remanence.core.crypto.SessionTokenStore
 import dev.hryshyn.remanence.core.crypto.TinkPrimitives
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
+import dev.hryshyn.remanence.core.data.db.BlobCacheDao
+import dev.hryshyn.remanence.core.data.db.IncomingCapsuleDao
+import dev.hryshyn.remanence.core.data.db.IncomingEnvelopeDao
 import dev.hryshyn.remanence.core.data.db.IncomingSyncSession
 import dev.hryshyn.remanence.core.data.fingerprints.EncryptedFingerprintStore
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
@@ -20,6 +23,7 @@ import dev.hryshyn.remanence.core.data.network.ApiBaseUrl
 import dev.hryshyn.remanence.core.data.network.CapsuleBlobUploadRepository
 import dev.hryshyn.remanence.core.data.network.CapsuleDraftRepository
 import dev.hryshyn.remanence.core.data.network.CapsuleFinalizeRepository
+import dev.hryshyn.remanence.core.data.network.RecipientBlobDownloadRepository
 import dev.hryshyn.remanence.core.data.network.RegisterRequestDto
 import dev.hryshyn.remanence.core.data.network.RegisterResponseDto
 import dev.hryshyn.remanence.core.data.network.AuthRepository
@@ -29,6 +33,7 @@ import dev.hryshyn.remanence.core.data.network.RegistrationUserDto
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.data.storage.IncomingRecognitionCiphertextAdopter
+import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.data.db.IncomingIndexAcceptanceCommitter
 import dev.hryshyn.remanence.index.SenderIndexBundleReader
 import dev.hryshyn.remanence.index.SenderIndexBundleStager
@@ -67,14 +72,65 @@ class RemanenceApplication : Application() {
 }
 
 /**
+ * The immutable A11d1 production composition. It contains only concrete,
+ * already-owned dependencies; credentials, private handles, plaintext, and
+ * caller-selected paths are intentionally absent.
+ */
+internal class IncomingCapsuleAcceptanceComposition(
+    internal val incomingCapsuleDao: IncomingCapsuleDao,
+    internal val incomingEnvelopeDao: IncomingEnvelopeDao,
+    internal val blobCacheDao: BlobCacheDao,
+    internal val roots: AccountScopedFileRoots,
+    internal val recipientBlobDownloadRepository: RecipientBlobDownloadRepository,
+    internal val controlIndexAcceptanceCoordinator: IncomingControlIndexAcceptanceCoordinator,
+    internal val senderIndexBundleReader: SenderIndexBundleReader,
+    internal val verifiedControlIndexPersistence: SenderIndexBundlePersistenceAdapter,
+    internal val incomingRecognitionCiphertextAdopter: IncomingRecognitionCiphertextAdopter,
+    internal val incomingIndexAcceptanceCommitter: IncomingIndexAcceptanceCommitter,
+) {
+
+    internal fun create(
+        currentSession: suspend () -> IncomingSyncSession?,
+    ): IncomingCapsuleAcceptanceCoordinator = IncomingCapsuleAcceptanceCoordinator(
+        incomingCapsuleDao = incomingCapsuleDao,
+        incomingEnvelopeDao = incomingEnvelopeDao,
+        blobCacheDao = blobCacheDao,
+        roots = roots,
+        currentSession = currentSession,
+        recipientBlobDownloadRepository = recipientBlobDownloadRepository,
+        controlIndexAcceptanceCoordinator = controlIndexAcceptanceCoordinator,
+        senderIndexBundleReader = senderIndexBundleReader,
+        verifiedControlIndexPersistence = verifiedControlIndexPersistence,
+        incomingRecognitionCiphertextAdopter = incomingRecognitionCiphertextAdopter,
+        incomingIndexAcceptanceCommitter = incomingIndexAcceptanceCommitter,
+    )
+
+    override fun toString(): String =
+        "IncomingCapsuleAcceptanceComposition(<redacted>)"
+}
+
+/**
  * The one place the object graph is assembled. Members are lazy individually;
  * Keystore-touching members stay lazy so plain unit contexts never need
  * hardware-backed keys.
  */
-class AppContainer(
+class AppContainer private constructor(
     context: Context,
-    kekBoundaryOverride: KekBoundary? = null,
+    kekBoundaryOverride: KekBoundary?,
+    private val identityLoadOverride: (() -> IdentityBundleRepository.LoadResult)?,
+    @Suppress("UNUSED_PARAMETER") constructionMarker: Unit,
 ) {
+
+    constructor(
+        context: Context,
+        kekBoundaryOverride: KekBoundary? = null,
+    ) : this(context, kekBoundaryOverride, null, Unit)
+
+    internal constructor(
+        context: Context,
+        kekBoundaryOverride: KekBoundary?,
+        identityLoadOverride: () -> IdentityBundleRepository.LoadResult,
+    ) : this(context, kekBoundaryOverride, identityLoadOverride, Unit)
 
     init {
         // Tink primitive registration is process-global and must precede any
@@ -159,6 +215,10 @@ class AppContainer(
             wrapper = KeysetKekWrapper(kekBoundary),
         )
     }
+
+    private val incomingAcceptanceIdentityLoader:
+        () -> IdentityBundleRepository.LoadResult =
+        identityLoadOverride ?: { identityRepository.load() }
 
     val sessionTokenStore: SessionTokenStore by lazy {
         if (!kekBoundary.hasKey(SESSION_TOKEN_KEK_ALIAS)) {
@@ -363,21 +423,27 @@ class AppContainer(
         IncomingIndexAcceptanceCommitter(database, accountScopedFileRoots)
     }
 
-    /** A11d1 composition; construction is lazy and no worker/scheduler is invoked here. */
-    val incomingCapsuleAcceptanceCoordinator: IncomingCapsuleAcceptanceCoordinator by lazy {
-        IncomingCapsuleAcceptanceCoordinator(
+    /** A11d1 concrete composition; no fallback or alternate constructor path. */
+    internal val incomingCapsuleAcceptanceComposition: IncomingCapsuleAcceptanceComposition by lazy {
+        IncomingCapsuleAcceptanceComposition(
             incomingCapsuleDao = database.incomingCapsuleDao(),
             incomingEnvelopeDao = database.incomingEnvelopeDao(),
             blobCacheDao = database.blobCacheDao(),
             roots = accountScopedFileRoots,
-            currentSession = { currentIncomingAcceptanceSession() },
-            recipientBlobDownloadRepository = apiStack.recipientBlobDownloadRepository,
+            recipientBlobDownloadRepository = recipientBlobDownloadRepository,
             controlIndexAcceptanceCoordinator = incomingControlIndexAcceptanceCoordinator,
             senderIndexBundleReader = senderIndexBundleReader,
             verifiedControlIndexPersistence = senderIndexBundlePersistenceAdapter,
             incomingRecognitionCiphertextAdopter = incomingRecognitionCiphertextAdopter,
             incomingIndexAcceptanceCommitter = incomingIndexAcceptanceCommitter,
         )
+    }
+
+    /** A11d1 composition; construction is lazy and no worker/scheduler is invoked here. */
+    val incomingCapsuleAcceptanceCoordinator: IncomingCapsuleAcceptanceCoordinator by lazy {
+        incomingCapsuleAcceptanceComposition.create {
+            currentIncomingAcceptanceSession()
+        }
     }
 
     /**
@@ -503,7 +569,7 @@ class AppContainer(
     ): CurrentRecipientEncryptionIdentity? {
         val account = currentAuthenticatedAccount() ?: return null
         val token = authTokenHolder.accessToken?.takeIf { it.isNotBlank() } ?: return null
-        val loaded = identityRepository.load()
+        val loaded = incomingAcceptanceIdentityLoader()
         val encryptionHandle = when (loaded) {
             is IdentityBundleRepository.LoadResult.Available -> loaded.encryptionHandle
             IdentityBundleRepository.LoadResult.RecoveryRequired -> return null

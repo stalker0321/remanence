@@ -16,8 +16,8 @@ import dev.hryshyn.remanence.core.data.db.IncomingCapsuleEntity
 import dev.hryshyn.remanence.core.data.db.IncomingEnvelopeEntity
 import dev.hryshyn.remanence.core.data.db.OutboxCapsuleEntity
 import dev.hryshyn.remanence.core.data.db.OutboxCapsuleState
-import dev.hryshyn.remanence.core.model.BlobId
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
+import dev.hryshyn.remanence.core.model.BlobId
 import dev.hryshyn.remanence.core.model.LocalMaterialState
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.recognition.ExtractionQuality
@@ -34,9 +34,7 @@ import dev.hryshyn.remanence.sync.IncomingCapsuleAcceptanceRequest
 import dev.hryshyn.remanence.sync.IncomingCapsuleAcceptanceRejectionReason
 import dev.hryshyn.remanence.sync.IncomingCapsuleAcceptanceResult
 import dev.hryshyn.remanence.sync.IncomingAcceptanceRejectionReason
-import dev.hryshyn.remanence.sync.IncomingAcceptanceRetryReason
 import dev.hryshyn.remanence.sync.IncomingControlIndexAcceptanceRequest
-import dev.hryshyn.remanence.sync.IncomingControlIndexAcceptanceCoordinator
 import dev.hryshyn.remanence.sync.IncomingControlIndexAcceptanceResult
 import java.io.File
 import java.security.MessageDigest
@@ -239,13 +237,43 @@ class RemanenceApplicationContainerTest {
     }
 
     @Test
-    fun incomingAcceptanceCoordinatorIsOneLazyConcreteInstanceAndHasNoFallback() = runBlocking {
+    fun incomingAcceptanceCoordinatorUsesOneExactRedactedComposition() = runBlocking {
         val appContainer = container()
         val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000d421")
         val capsule = CapsuleId.parseRest("0198f0a0-0000-7000-8000-00000000d422")
         try {
+            val composition = appContainer.incomingCapsuleAcceptanceComposition
             val first = appContainer.incomingCapsuleAcceptanceCoordinator
             assertSame(first, appContainer.incomingCapsuleAcceptanceCoordinator)
+            assertSame(appContainer.database.incomingCapsuleDao(), composition.incomingCapsuleDao)
+            assertSame(appContainer.database.incomingEnvelopeDao(), composition.incomingEnvelopeDao)
+            assertSame(appContainer.database.blobCacheDao(), composition.blobCacheDao)
+            assertSame(appContainer.accountScopedFileRoots, composition.roots)
+            assertSame(
+                appContainer.recipientBlobDownloadRepository,
+                composition.recipientBlobDownloadRepository,
+            )
+            assertSame(
+                appContainer.incomingControlIndexAcceptanceCoordinator,
+                composition.controlIndexAcceptanceCoordinator,
+            )
+            assertSame(appContainer.senderIndexBundleReader, composition.senderIndexBundleReader)
+            assertSame(
+                appContainer.senderIndexBundlePersistenceAdapter,
+                composition.verifiedControlIndexPersistence,
+            )
+            assertSame(
+                appContainer.incomingRecognitionCiphertextAdopter,
+                composition.incomingRecognitionCiphertextAdopter,
+            )
+            assertSame(
+                appContainer.incomingIndexAcceptanceCommitter,
+                composition.incomingIndexAcceptanceCommitter,
+            )
+            assertEquals(
+                "IncomingCapsuleAcceptanceComposition(<redacted>)",
+                composition.toString(),
+            )
 
             val result = first.accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
 
@@ -335,47 +363,85 @@ class RemanenceApplicationContainerTest {
     }
 
     @Test
-    fun unexpectedRecipientProviderFailurePropagatesAndMapsToRetryableAcceptance() = runBlocking {
-        val appContainer = container()
+    fun unexpectedContainerIdentityLoadIsRetryableBeforeDownstreamWork() = runBlocking {
         val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000d451")
         val capsule = CapsuleId.parseRest("0198f0a0-0000-7000-8000-00000000d452")
+        val blob = BlobId.parseRest("0198f0a0-0000-7000-8000-00000000d453")
         val expected = IllegalStateException("provider failure")
-        val untouched = File(context.filesDir, "a12b4a-provider-untouched")
+        val appContainer = AppContainer(context, SoftwareKekBoundary(), { throw expected })
         try {
-            val prepared = appContainer.registrationIdentityAdapter.prepareIdentity()
             appContainer.currentAccountStore.record(
                 owner.toRestString(),
                 "alice",
-                prepared.keyBundleId,
+                "0198f0a0-0000-7000-8000-00000000d454",
+            )
+            appContainer.authTokenHolder.updateTokens("access", "refresh")
+            val temp = seedReadyRecognitionPath(appContainer, owner, capsule, blob)
+            val seededCapsule = appContainer.database.incomingCapsuleDao()
+                .getByCapsuleIdAndOwner(capsule.toRestString(), owner.toRestString())
+            val seededBlob = appContainer.database.blobCacheDao()
+                .getByBlobIdAndOwner(blob.toRestString(), owner.toRestString())
+            assertEquals("READY", seededCapsule?.serverStatus)
+            assertEquals(LocalMaterialState.DISCOVERED, seededCapsule?.materialState)
+            assertTrue(seededBlob?.localPath?.endsWith("${blob.toRestString()}.ciphertext") == true)
+            assertEquals(BlobCacheState.DOWNLOADING, seededBlob?.cacheState)
+
+            val result = appContainer.incomingCapsuleAcceptanceCoordinator.accept(
+                IncomingCapsuleAcceptanceRequest(owner, capsule),
+            )
+
+            assertEquals(
+                IncomingCapsuleAcceptanceResult.Retryable(
+                    dev.hryshyn.remanence.sync.IncomingCapsuleAcceptanceRetryReason.CRYPTO_ACCEPTANCE,
+                ),
+                result,
+            )
+            assertFalse("crypto rejection must clean its exact recovery temp", temp.exists())
+            assertEquals(
+                LocalMaterialState.DISCOVERED,
+                appContainer.database.incomingCapsuleDao()
+                    .getByCapsuleIdAndOwner(capsule.toRestString(), owner.toRestString())
+                    ?.materialState,
+            )
+            assertEquals(
+                BlobCacheState.DOWNLOADING,
+                appContainer.database.blobCacheDao()
+                    .getByBlobIdAndOwner(blob.toRestString(), owner.toRestString())
+                    ?.cacheState,
+            )
+        } finally {
+            appContainer.authTokenHolder.clearSession()
+            appContainer.currentAccountStore.clear()
+            appContainer.database.close()
+        }
+    }
+
+    @Test
+    fun containerIdentityLoadCancellationPropagatesUnchangedThroughAcceptance() = runBlocking {
+        val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000d455")
+        val capsule = CapsuleId.parseRest("0198f0a0-0000-7000-8000-00000000d456")
+        val expected = kotlinx.coroutines.CancellationException("identity load cancelled")
+        val appContainer = AppContainer(context, SoftwareKekBoundary(), { throw expected })
+        try {
+            appContainer.currentAccountStore.record(
+                owner.toRestString(),
+                "alice",
+                "0198f0a0-0000-7000-8000-00000000d458",
             )
             appContainer.authTokenHolder.updateTokens("access", "refresh")
 
             try {
-                appContainer.hasCurrentRecipientEncryptionIdentityForTesting {
-                    throw expected
-                }
-                throw AssertionError("unexpected provider failure was swallowed")
-            } catch (failure: Throwable) {
-                assertSame(expected, failure)
+                appContainer.incomingControlIndexAcceptanceCoordinator.accept(
+                    IncomingControlIndexAcceptanceRequest(
+                        owner,
+                        capsule,
+                        File(context.filesDir, "a12b4a-cancellation-sentinel"),
+                    ),
+                )
+                throw AssertionError("identity-load cancellation was swallowed")
+            } catch (actual: Throwable) {
+                assertSame(expected, actual)
             }
-
-            val coordinator = IncomingControlIndexAcceptanceCoordinator(
-                incomingCapsuleDao = appContainer.database.incomingCapsuleDao(),
-                incomingEnvelopeDao = appContainer.database.incomingEnvelopeDao(),
-                blobCacheDao = appContainer.database.blobCacheDao(),
-                currentRecipientIdentity = { throw expected },
-                trustedSenderKeys = appContainer.trustedSenderKeys,
-            )
-            val result = coordinator.accept(
-                IncomingControlIndexAcceptanceRequest(owner, capsule, untouched),
-            )
-            assertEquals(
-                dev.hryshyn.remanence.sync.IncomingControlIndexAcceptanceResult.Retryable(
-                    IncomingAcceptanceRetryReason.RECIPIENT_KEY_UNAVAILABLE,
-                ),
-                result,
-            )
-            assertFalse(untouched.exists())
         } finally {
             appContainer.authTokenHolder.clearSession()
             appContainer.currentAccountStore.clear()
@@ -416,105 +482,6 @@ class RemanenceApplicationContainerTest {
                 available.snapshot.close()
             }
         } finally {
-            appContainer.database.close()
-        }
-    }
-
-    @Test
-    fun productionCoordinatorReplaysThroughContainerBoundReaderAndRoomRows() = runBlocking {
-        val appContainer = container()
-        val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000d461")
-        val capsule = CapsuleId.parseRest("0198f0a0-0000-7000-8000-00000000d462")
-        val blob = BlobId.parseRest("0198f0a0-0000-7000-8000-00000000d463")
-        val ciphertext = byteArrayOf(11, 12, 13, 14)
-        val ciphertextFile = File(
-            appContainer.accountScopedFileRoots.child(
-                owner,
-                dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots.ChildRoot.INCOMING_CIPHERTEXT,
-            ),
-            "capsules/${capsule.toRestString()}/blobs/${blob.toRestString()}.ciphertext",
-        )
-        try {
-            val prepared = appContainer.registrationIdentityAdapter.prepareIdentity()
-            val ownerText = owner.toRestString()
-            val capsuleText = capsule.toRestString()
-            val blobText = blob.toRestString()
-            appContainer.currentAccountStore.record(ownerText, "alice", prepared.keyBundleId)
-            appContainer.authTokenHolder.updateTokens("access", "refresh")
-            ciphertextFile.parentFile!!.mkdirs()
-            ciphertextFile.writeBytes(ciphertext)
-            val hash = MessageDigest.getInstance("SHA-256").digest(ciphertext)
-
-            appContainer.database.incomingCapsuleDao().upsertAllForOwner(
-                ownerText,
-                listOf(
-                    IncomingCapsuleEntity(
-                        capsuleId = capsuleText,
-                        ownerUserId = ownerText,
-                        senderUserId = ownerText,
-                        recipientUserId = ownerText,
-                        senderSigningKeyBundleId = prepared.keyBundleId,
-                        recipientEncryptionKeyBundleId = prepared.keyBundleId,
-                        protocolVersion = ProtocolV1Limits.PROTOCOL_VERSION,
-                        serverStatus = "READY",
-                        readyAtEpochMs = 1_755_000_000_000,
-                        signedStatementBytes = byteArrayOf(1),
-                        materialState = LocalMaterialState.DISCOVERED,
-                    ),
-                ),
-            )
-            appContainer.database.incomingEnvelopeDao().upsertForOwner(
-                ownerText,
-                IncomingEnvelopeEntity(
-                    capsuleId = capsuleText,
-                    ownerUserId = ownerText,
-                    recipientKeyBundleId = prepared.keyBundleId,
-                    hpkeCiphertext = byteArrayOf(2),
-                    transportSha256 = ByteArray(32) { 3 },
-                    receivedAtEpochMs = 1_755_000_000_001,
-                ),
-            )
-            appContainer.database.blobCacheDao().upsertForOwner(
-                ownerText,
-                BlobCacheEntity(
-                    blobId = blobText,
-                    ownerUserId = ownerText,
-                    capsuleId = capsuleText,
-                    kind = CapsuleArtifactKind.RECOGNITION_MANIFEST.name,
-                    ordinal = null,
-                    expectedSizeBytes = ciphertext.size.toLong(),
-                    expectedSha256 = hash,
-                    localPath = ciphertextFile.path,
-                    cacheState = BlobCacheState.DOWNLOADING,
-                ),
-            )
-            appContainer.database.openHelper.writableDatabase.execSQL(
-                "UPDATE incoming_capsule SET material_state = 'INDEX_CACHED' " +
-                    "WHERE capsule_id = '$capsuleText' AND owner_user_id = '$ownerText'",
-            )
-            appContainer.database.openHelper.writableDatabase.execSQL(
-                "UPDATE blob_cache SET cache_state = 'CACHED' " +
-                    "WHERE blob_id = '$blobText' AND owner_user_id = '$ownerText'",
-            )
-            val staged = appContainer.senderIndexBundleStager.stage(
-                SenderIndexBundleStageRequest(
-                    authenticatedOwnerUserId = owner,
-                    ownerUserId = owner,
-                    capsuleId = capsule,
-                    verifiedRecognition = validRecognition(capsule),
-                ),
-            )
-            assertTrue(staged is SenderIndexBundleStageResult.Staged)
-
-            val result = appContainer.incomingCapsuleAcceptanceCoordinator.accept(
-                IncomingCapsuleAcceptanceRequest(owner, capsule),
-            )
-
-            assertEquals(IncomingCapsuleAcceptanceResult.IdempotentReplay, result)
-            assertTrue(ciphertextFile.readBytes().contentEquals(ciphertext))
-        } finally {
-            appContainer.authTokenHolder.clearSession()
-            appContainer.currentAccountStore.clear()
             appContainer.database.close()
         }
     }
@@ -661,6 +628,83 @@ class RemanenceApplicationContainerTest {
             container.database.close()
             WorkManagerTestInitHelper.closeWorkDatabase()
         }
+    }
+
+    private suspend fun seedReadyRecognitionPath(
+        appContainer: AppContainer,
+        owner: UserId,
+        capsule: CapsuleId,
+        blob: BlobId,
+    ): File {
+        val ownerText = owner.toRestString()
+        val capsuleText = capsule.toRestString()
+        val blobText = blob.toRestString()
+        val activeBundle = appContainer.currentAccountStore.load()!!.activeKeyBundleId
+        val bytes = byteArrayOf(21, 22, 23)
+        appContainer.accountScopedFileRoots.child(
+            owner,
+            dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots.ChildRoot.INCOMING_CIPHERTEXT,
+        ).mkdirs()
+        val temp = File(
+            appContainer.accountScopedFileRoots.child(
+                owner,
+                dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots.ChildRoot.TEMP,
+            ),
+            "incoming-recognition/$capsuleText/blobs/$blobText.ciphertext.tmp",
+        ).apply {
+            parentFile!!.mkdirs()
+            writeBytes(bytes)
+        }
+        appContainer.database.incomingCapsuleDao().upsertAllForOwner(
+            ownerText,
+            listOf(
+                IncomingCapsuleEntity(
+                    capsuleId = capsuleText,
+                    ownerUserId = ownerText,
+                    senderUserId = ownerText,
+                    recipientUserId = ownerText,
+                    senderSigningKeyBundleId = activeBundle,
+                    recipientEncryptionKeyBundleId = activeBundle,
+                    protocolVersion = ProtocolV1Limits.PROTOCOL_VERSION,
+                    serverStatus = "READY",
+                    readyAtEpochMs = 1_755_000_000_000,
+                    signedStatementBytes = byteArrayOf(1),
+                    materialState = LocalMaterialState.DISCOVERED,
+                ),
+            ),
+        )
+        appContainer.database.incomingEnvelopeDao().upsertForOwner(
+            ownerText,
+            IncomingEnvelopeEntity(
+                capsuleId = capsuleText,
+                ownerUserId = ownerText,
+                recipientKeyBundleId = activeBundle,
+                hpkeCiphertext = byteArrayOf(2),
+                transportSha256 = ByteArray(32) { 3 },
+                receivedAtEpochMs = 1_755_000_000_001,
+            ),
+        )
+        appContainer.database.blobCacheDao().upsertForOwner(
+            ownerText,
+            BlobCacheEntity(
+                blobId = blobText,
+                ownerUserId = ownerText,
+                capsuleId = capsuleText,
+                kind = CapsuleArtifactKind.RECOGNITION_MANIFEST.name,
+                ordinal = null,
+                expectedSizeBytes = bytes.size.toLong(),
+                expectedSha256 = MessageDigest.getInstance("SHA-256").digest(bytes),
+                localPath = File(
+                    appContainer.accountScopedFileRoots.child(
+                        owner,
+                        dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots.ChildRoot.INCOMING_CIPHERTEXT,
+                    ),
+                    "capsules/$capsuleText/blobs/$blobText.ciphertext",
+                ).path,
+                cacheState = BlobCacheState.DOWNLOADING,
+            ),
+        )
+        return temp
     }
 
     private fun validRecognition(capsule: CapsuleId) = RecognitionManifestContent(

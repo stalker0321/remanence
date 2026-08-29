@@ -81,6 +81,30 @@ class IncomingDaosTest {
     }
 
     @Test
+    fun migratedEmptyCryptoRejectsEmptyCandidateWithoutAdvancingCursor() = runBlocking {
+        val legacy = capsule()
+        capsuleDao.upsertAllForOwner(OWNER, listOf(legacy))
+
+        assertThrows(IllegalArgumentException::class.java) {
+            runBlocking {
+                database.incomingPageDao().commitPage(
+                    ownerUserId = OWNER,
+                    expectedCursor = null,
+                    capsules = listOf(legacy),
+                    envelopes = listOf(envelope()),
+                    blobs = emptyList(),
+                    nextCursor = "must-not-advance",
+                    committedAtEpochMs = 1_755_000_200_000,
+                )
+            }
+        }
+
+        assertEquals(legacy, capsuleDao.getByCapsuleIdAndOwner(legacy.capsuleId, OWNER))
+        assertNull(database.syncCursorDao().get(OWNER, "incoming"))
+        assertNull(envelopeDao.getByCapsuleIdAndOwner(legacy.capsuleId, OWNER))
+    }
+
+    @Test
     fun replayedUpsertIsIdempotentByCapsuleId() = runBlocking {
         val record = capsule()
         capsuleDao.upsertAllForOwner(OWNER, listOf(record))

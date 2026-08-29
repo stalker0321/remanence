@@ -225,9 +225,8 @@ abstract class IncomingPageDao {
             "incoming capsule has partial migration cryptographic material"
         }
         if (existingHashEmpty) {
-            if (candidate.signedStatementSha256.isEmpty() && candidate.publishSignatureBytes.isEmpty()) {
-                return false
-            }
+            // An empty candidate cannot prove that the migrated row is ready
+            // for A11. It is not an idempotent replay; fail closed instead.
             require(candidate.signedStatementSha256.size == SHA256_BYTES)
             require(candidate.publishSignatureBytes.size == PUBLISH_SIGNATURE_BYTES)
             return true

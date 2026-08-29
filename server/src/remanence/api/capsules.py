@@ -1023,7 +1023,7 @@ def _incoming_item_response(
 
 
 def _incoming_page_response(
-    result: object, *, recipient_id: uuid.UUID
+    result: object, *, recipient_id: uuid.UUID, requested_cursor: str | None
 ) -> IncomingCapsulesResponse:
     if not isinstance(result, IncomingCapsulePage):
         raise IncomingCapsuleQueryError("INTERNAL_ERROR")
@@ -1062,6 +1062,8 @@ def _incoming_page_response(
             raise IncomingCapsuleQueryError("INTERNAL_ERROR")
         next_cursor: str | None = result.next_cursor
     else:
+        if result.next_cursor != requested_cursor:
+            raise IncomingCapsuleQueryError("INTERNAL_ERROR")
         next_cursor = result.next_cursor
     try:
         return IncomingCapsulesResponse(
@@ -1091,7 +1093,11 @@ def list_incoming_capsules(
                 cursor=cursor,
                 limit=limit,
             )
-            dto = _incoming_page_response(result, recipient_id=principal.user_id)
+            dto = _incoming_page_response(
+                result,
+                recipient_id=principal.user_id,
+                requested_cursor=cursor,
+            )
             try:
                 payload = dto.model_dump(mode="json")
             except Exception:

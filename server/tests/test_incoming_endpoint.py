@@ -369,6 +369,61 @@ def test_response_dump_failure_is_redacted_internal(monkeypatch: pytest.MonkeyPa
         boom(None)
 
 
+def test_empty_page_with_different_canonical_cursor_is_redacted_and_rolled_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested = encode_incoming_cursor(ready_at=_NOW, capsule_id=uuid4())
+    different = encode_incoming_cursor(
+        ready_at=_NOW + timedelta(seconds=1), capsule_id=uuid4()
+    )
+
+    def fake_list(self, **kwargs):
+        return IncomingCapsulePage(items=(), has_more=False, next_cursor=different)
+
+    client, _principal_id, rolled = _mocked_client(monkeypatch, fake_list)
+    response = _get(client, "unused", f"cursor={requested}")
+
+    _assert_problem(response, status=500, code="INTERNAL_ERROR")
+    assert rolled["value"] is True
+    assert different not in response.text
+
+
+def test_empty_continuation_echoes_exact_requested_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested = encode_incoming_cursor(ready_at=_NOW, capsule_id=uuid4())
+
+    def fake_list(self, **kwargs):
+        return IncomingCapsulePage(items=(), has_more=False, next_cursor=requested)
+
+    client, _principal_id, rolled = _mocked_client(monkeypatch, fake_list)
+    response = _get(client, "unused", f"cursor={requested}")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    _assert_page_keys(body)
+    assert body["items"] == []
+    assert body["has_more"] is False
+    assert body["next_cursor"] == requested
+    assert rolled["value"] is False
+
+
+def test_initial_empty_page_requires_null_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    invented = encode_incoming_cursor(ready_at=_NOW, capsule_id=uuid4())
+
+    def fake_list(self, **kwargs):
+        return IncomingCapsulePage(items=(), has_more=False, next_cursor=invented)
+
+    client, _principal_id, rolled = _mocked_client(monkeypatch, fake_list)
+    response = _get(client, "unused")
+
+    _assert_problem(response, status=500, code="INTERNAL_ERROR")
+    assert rolled["value"] is True
+    assert invented not in response.text
+
+
 def test_live_isolation_ready_only_synced_allow_list_and_bytes(client_factory) -> None:
     client, factory = client_factory
     sender_reg = _register(client, email=f"{_EMAIL_CANARY}-{uuid4().hex[:8]}@example.com", handle=f"snd{uuid4().hex[:8]}")

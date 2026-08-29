@@ -10,8 +10,15 @@ import androidx.work.WorkerFactory
 import androidx.work.testing.WorkManagerTestInitHelper
 import dev.hryshyn.remanence.auth.SoftwareKekBoundary
 import dev.hryshyn.remanence.core.crypto.RecognitionManifestContent
+import dev.hryshyn.remanence.core.data.db.BlobCacheEntity
+import dev.hryshyn.remanence.core.data.db.BlobCacheState
+import dev.hryshyn.remanence.core.data.db.IncomingCapsuleEntity
+import dev.hryshyn.remanence.core.data.db.IncomingEnvelopeEntity
 import dev.hryshyn.remanence.core.data.db.OutboxCapsuleEntity
 import dev.hryshyn.remanence.core.data.db.OutboxCapsuleState
+import dev.hryshyn.remanence.core.model.BlobId
+import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
+import dev.hryshyn.remanence.core.model.LocalMaterialState
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.recognition.ExtractionQuality
 import dev.hryshyn.remanence.core.recognition.FingerprintCodec
@@ -27,9 +34,12 @@ import dev.hryshyn.remanence.sync.IncomingCapsuleAcceptanceRequest
 import dev.hryshyn.remanence.sync.IncomingCapsuleAcceptanceRejectionReason
 import dev.hryshyn.remanence.sync.IncomingCapsuleAcceptanceResult
 import dev.hryshyn.remanence.sync.IncomingAcceptanceRejectionReason
+import dev.hryshyn.remanence.sync.IncomingAcceptanceRetryReason
 import dev.hryshyn.remanence.sync.IncomingControlIndexAcceptanceRequest
+import dev.hryshyn.remanence.sync.IncomingControlIndexAcceptanceCoordinator
 import dev.hryshyn.remanence.sync.IncomingControlIndexAcceptanceResult
 import java.io.File
+import java.security.MessageDigest
 import java.util.UUID
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -159,23 +169,30 @@ class RemanenceApplicationContainerTest {
     fun incomingAcceptanceSessionRejectsClearedOrRotatedTokenBeforePublication() = runBlocking {
         val appContainer = container()
         val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000d401")
+        val switchedOwner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000d403")
         try {
-            appContainer.currentAccountStore.record(
-                owner.toRestString(),
-                "alice",
-                "0198f0a0-0000-7000-8000-00000000d402",
-            )
-
-            listOf(false, true).forEach { rotate ->
+            listOf("switch", "clear", "rotate").forEach { change ->
+                appContainer.currentAccountStore.record(
+                    owner.toRestString(),
+                    "alice",
+                    "0198f0a0-0000-7000-8000-00000000d402",
+                )
                 appContainer.authTokenHolder.updateTokens("old-access", "old-refresh")
                 val hasSession = appContainer.hasIncomingAcceptanceSessionForTesting {
-                    if (rotate) {
-                        appContainer.authTokenHolder.updateTokens("new-access", "new-refresh")
-                    } else {
-                        appContainer.authTokenHolder.clearSession()
+                    when (change) {
+                        "switch" -> appContainer.currentAccountStore.record(
+                            switchedOwner.toRestString(),
+                            "bob",
+                            "0198f0a0-0000-7000-8000-00000000d404",
+                        )
+                        "clear" -> appContainer.authTokenHolder.clearSession()
+                        "rotate" -> appContainer.authTokenHolder.updateTokens(
+                            "new-access",
+                            "new-refresh",
+                        )
                     }
                 }
-                assertFalse("credential changed during session publication", hasSession)
+                assertFalse("session published after $change", hasSession)
             }
         } finally {
             appContainer.authTokenHolder.clearSession()
@@ -188,24 +205,31 @@ class RemanenceApplicationContainerTest {
     fun recipientIdentityRejectsClearedOrRotatedTokenBeforePublication() = runBlocking {
         val appContainer = container()
         val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000d411")
+        val switchedOwner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000d413")
         try {
             val prepared = appContainer.registrationIdentityAdapter.prepareIdentity()
-            appContainer.currentAccountStore.record(
-                owner.toRestString(),
-                "alice",
-                prepared.keyBundleId,
-            )
-
-            listOf(false, true).forEach { rotate ->
+            listOf("switch", "clear", "rotate").forEach { change ->
+                appContainer.currentAccountStore.record(
+                    owner.toRestString(),
+                    "alice",
+                    prepared.keyBundleId,
+                )
                 appContainer.authTokenHolder.updateTokens("old-access", "old-refresh")
                 val hasIdentity = appContainer.hasCurrentRecipientEncryptionIdentityForTesting {
-                    if (rotate) {
-                        appContainer.authTokenHolder.updateTokens("new-access", "new-refresh")
-                    } else {
-                        appContainer.authTokenHolder.clearSession()
+                    when (change) {
+                        "switch" -> appContainer.currentAccountStore.record(
+                            switchedOwner.toRestString(),
+                            "bob",
+                            prepared.keyBundleId,
+                        )
+                        "clear" -> appContainer.authTokenHolder.clearSession()
+                        "rotate" -> appContainer.authTokenHolder.updateTokens(
+                            "new-access",
+                            "new-refresh",
+                        )
                     }
                 }
-                assertFalse("credential changed during identity publication", hasIdentity)
+                assertFalse("identity published after $change", hasIdentity)
             }
         } finally {
             appContainer.authTokenHolder.clearSession()
@@ -311,6 +335,55 @@ class RemanenceApplicationContainerTest {
     }
 
     @Test
+    fun unexpectedRecipientProviderFailurePropagatesAndMapsToRetryableAcceptance() = runBlocking {
+        val appContainer = container()
+        val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000d451")
+        val capsule = CapsuleId.parseRest("0198f0a0-0000-7000-8000-00000000d452")
+        val expected = IllegalStateException("provider failure")
+        val untouched = File(context.filesDir, "a12b4a-provider-untouched")
+        try {
+            val prepared = appContainer.registrationIdentityAdapter.prepareIdentity()
+            appContainer.currentAccountStore.record(
+                owner.toRestString(),
+                "alice",
+                prepared.keyBundleId,
+            )
+            appContainer.authTokenHolder.updateTokens("access", "refresh")
+
+            try {
+                appContainer.hasCurrentRecipientEncryptionIdentityForTesting {
+                    throw expected
+                }
+                throw AssertionError("unexpected provider failure was swallowed")
+            } catch (failure: Throwable) {
+                assertSame(expected, failure)
+            }
+
+            val coordinator = IncomingControlIndexAcceptanceCoordinator(
+                incomingCapsuleDao = appContainer.database.incomingCapsuleDao(),
+                incomingEnvelopeDao = appContainer.database.incomingEnvelopeDao(),
+                blobCacheDao = appContainer.database.blobCacheDao(),
+                currentRecipientIdentity = { throw expected },
+                trustedSenderKeys = appContainer.trustedSenderKeys,
+            )
+            val result = coordinator.accept(
+                IncomingControlIndexAcceptanceRequest(owner, capsule, untouched),
+            )
+            assertEquals(
+                dev.hryshyn.remanence.sync.IncomingControlIndexAcceptanceResult.Retryable(
+                    IncomingAcceptanceRetryReason.RECIPIENT_KEY_UNAVAILABLE,
+                ),
+                result,
+            )
+            assertFalse(untouched.exists())
+        } finally {
+            appContainer.authTokenHolder.clearSession()
+            appContainer.currentAccountStore.clear()
+            appContainer.database.close()
+        }
+    }
+
+    @Test
     fun sharedSenderIndexSealerStagesAndReadsOwnerCapsuleBundle() = runBlocking {
         val appContainer = container()
         val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000d441")
@@ -343,6 +416,105 @@ class RemanenceApplicationContainerTest {
                 available.snapshot.close()
             }
         } finally {
+            appContainer.database.close()
+        }
+    }
+
+    @Test
+    fun productionCoordinatorReplaysThroughContainerBoundReaderAndRoomRows() = runBlocking {
+        val appContainer = container()
+        val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000d461")
+        val capsule = CapsuleId.parseRest("0198f0a0-0000-7000-8000-00000000d462")
+        val blob = BlobId.parseRest("0198f0a0-0000-7000-8000-00000000d463")
+        val ciphertext = byteArrayOf(11, 12, 13, 14)
+        val ciphertextFile = File(
+            appContainer.accountScopedFileRoots.child(
+                owner,
+                dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots.ChildRoot.INCOMING_CIPHERTEXT,
+            ),
+            "capsules/${capsule.toRestString()}/blobs/${blob.toRestString()}.ciphertext",
+        )
+        try {
+            val prepared = appContainer.registrationIdentityAdapter.prepareIdentity()
+            val ownerText = owner.toRestString()
+            val capsuleText = capsule.toRestString()
+            val blobText = blob.toRestString()
+            appContainer.currentAccountStore.record(ownerText, "alice", prepared.keyBundleId)
+            appContainer.authTokenHolder.updateTokens("access", "refresh")
+            ciphertextFile.parentFile!!.mkdirs()
+            ciphertextFile.writeBytes(ciphertext)
+            val hash = MessageDigest.getInstance("SHA-256").digest(ciphertext)
+
+            appContainer.database.incomingCapsuleDao().upsertAllForOwner(
+                ownerText,
+                listOf(
+                    IncomingCapsuleEntity(
+                        capsuleId = capsuleText,
+                        ownerUserId = ownerText,
+                        senderUserId = ownerText,
+                        recipientUserId = ownerText,
+                        senderSigningKeyBundleId = prepared.keyBundleId,
+                        recipientEncryptionKeyBundleId = prepared.keyBundleId,
+                        protocolVersion = ProtocolV1Limits.PROTOCOL_VERSION,
+                        serverStatus = "READY",
+                        readyAtEpochMs = 1_755_000_000_000,
+                        signedStatementBytes = byteArrayOf(1),
+                        materialState = LocalMaterialState.DISCOVERED,
+                    ),
+                ),
+            )
+            appContainer.database.incomingEnvelopeDao().upsertForOwner(
+                ownerText,
+                IncomingEnvelopeEntity(
+                    capsuleId = capsuleText,
+                    ownerUserId = ownerText,
+                    recipientKeyBundleId = prepared.keyBundleId,
+                    hpkeCiphertext = byteArrayOf(2),
+                    transportSha256 = ByteArray(32) { 3 },
+                    receivedAtEpochMs = 1_755_000_000_001,
+                ),
+            )
+            appContainer.database.blobCacheDao().upsertForOwner(
+                ownerText,
+                BlobCacheEntity(
+                    blobId = blobText,
+                    ownerUserId = ownerText,
+                    capsuleId = capsuleText,
+                    kind = CapsuleArtifactKind.RECOGNITION_MANIFEST.name,
+                    ordinal = null,
+                    expectedSizeBytes = ciphertext.size.toLong(),
+                    expectedSha256 = hash,
+                    localPath = ciphertextFile.path,
+                    cacheState = BlobCacheState.DOWNLOADING,
+                ),
+            )
+            appContainer.database.openHelper.writableDatabase.execSQL(
+                "UPDATE incoming_capsule SET material_state = 'INDEX_CACHED' " +
+                    "WHERE capsule_id = '$capsuleText' AND owner_user_id = '$ownerText'",
+            )
+            appContainer.database.openHelper.writableDatabase.execSQL(
+                "UPDATE blob_cache SET cache_state = 'CACHED' " +
+                    "WHERE blob_id = '$blobText' AND owner_user_id = '$ownerText'",
+            )
+            val staged = appContainer.senderIndexBundleStager.stage(
+                SenderIndexBundleStageRequest(
+                    authenticatedOwnerUserId = owner,
+                    ownerUserId = owner,
+                    capsuleId = capsule,
+                    verifiedRecognition = validRecognition(capsule),
+                ),
+            )
+            assertTrue(staged is SenderIndexBundleStageResult.Staged)
+
+            val result = appContainer.incomingCapsuleAcceptanceCoordinator.accept(
+                IncomingCapsuleAcceptanceRequest(owner, capsule),
+            )
+
+            assertEquals(IncomingCapsuleAcceptanceResult.IdempotentReplay, result)
+            assertTrue(ciphertextFile.readBytes().contentEquals(ciphertext))
+        } finally {
+            appContainer.authTokenHolder.clearSession()
+            appContainer.currentAccountStore.clear()
             appContainer.database.close()
         }
     }

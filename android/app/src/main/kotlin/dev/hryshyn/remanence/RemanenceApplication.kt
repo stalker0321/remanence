@@ -490,9 +490,8 @@ class AppContainer(
     ): IncomingSyncSession? {
         val account = currentAuthenticatedAccount() ?: return null
         val token = authTokenHolder.accessToken?.takeIf { it.isNotBlank() } ?: return null
-        val accountStillCurrent = currentAuthenticatedAccount() == account
         beforeCredentialRecheck()
-        if (!accountStillCurrent || authTokenHolder.accessToken != token) return null
+        if (currentAuthenticatedAccount() != account || authTokenHolder.accessToken != token) return null
         return IncomingSyncSession(account.ownerUserId, token)
     }
 
@@ -504,30 +503,23 @@ class AppContainer(
     ): CurrentRecipientEncryptionIdentity? {
         val account = currentAuthenticatedAccount() ?: return null
         val token = authTokenHolder.accessToken?.takeIf { it.isNotBlank() } ?: return null
-        val loaded = try {
-            identityRepository.load()
-        } catch (_: Exception) {
-            return null
-        }
+        val loaded = identityRepository.load()
         val encryptionHandle = when (loaded) {
             is IdentityBundleRepository.LoadResult.Available -> loaded.encryptionHandle
             IdentityBundleRepository.LoadResult.RecoveryRequired -> return null
         }
-        val publicExport = try {
-            com.google.crypto.tink.TinkProtoKeysetFormat.serializeKeysetWithoutSecret(
-                encryptionHandle.publicKeysetHandle,
-            )
-        } catch (_: Exception) {
-            return null
-        }
+        val publicExport = com.google.crypto.tink.TinkProtoKeysetFormat.serializeKeysetWithoutSecret(
+            encryptionHandle.publicKeysetHandle,
+        )
         val exactBundle = try {
             deriveKeyBundleId(publicExport) == account.activeKeyBundleId.toRestString()
         } finally {
             publicExport.fill(0)
         }
-        val accountStillCurrent = currentAuthenticatedAccount() == account
         beforeCredentialRecheck()
-        if (!exactBundle || !accountStillCurrent || authTokenHolder.accessToken != token) return null
+        if (!exactBundle || currentAuthenticatedAccount() != account ||
+            authTokenHolder.accessToken != token
+        ) return null
         return CurrentRecipientEncryptionIdentity(
             ownerUserId = account.ownerUserId,
             activeKeyBundleId = account.activeKeyBundleId,

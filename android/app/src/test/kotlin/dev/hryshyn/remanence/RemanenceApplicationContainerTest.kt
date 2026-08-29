@@ -29,6 +29,7 @@ import dev.hryshyn.remanence.core.data.db.FingerprintSide
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.sync.CapsuleUploadWorker
+import dev.hryshyn.remanence.sync.IncomingCapsuleSyncWorker
 import dev.hryshyn.remanence.sync.NoOpWorker
 import dev.hryshyn.remanence.ui.create.CreateViewModel
 import dev.hryshyn.remanence.wiring.RemanenceViewModelFactory
@@ -214,6 +215,66 @@ class RemanenceApplicationContainerTest {
             container.database.outboxCapsuleDao().clearForOwner(owner.toRestString())
             container.database.outboxCapsuleDao().clearForOwner(otherOwner.toRestString())
             container.currentAccountStore.clear()
+            container.database.close()
+            WorkManagerTestInitHelper.closeWorkDatabase()
+        }
+    }
+
+    @Test
+    fun containerSchedulesIncomingOnlyForTheCurrentOwnerWithLiveCredentials() = runBlocking {
+        WorkManagerTestInitHelper.initializeTestWorkManager(
+            context,
+            Configuration.Builder()
+                .setMinimumLoggingLevel(android.util.Log.ERROR)
+                .setWorkerFactory(object : WorkerFactory() {
+                    override fun createWorker(
+                        appContext: Context,
+                        workerClassName: String,
+                        workerParameters: androidx.work.WorkerParameters,
+                    ): ListenableWorker? = if (workerClassName == IncomingCapsuleSyncWorker::class.java.name) {
+                        NoOpWorker(appContext, workerParameters)
+                    } else {
+                        null
+                    }
+                })
+                .build(),
+        )
+        val container = AppContainer(context, kekBoundaryOverride = SoftwareKekBoundary())
+        val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000c601")
+        val otherOwner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000c602")
+        val workManager = WorkManager.getInstance(context)
+
+        try {
+            val ownerWorkName = dev.hryshyn.remanence.sync.AccountWorkIdentity
+                .incomingSync(owner).uniqueName
+            val otherWorkName = dev.hryshyn.remanence.sync.AccountWorkIdentity
+                .incomingSync(otherOwner).uniqueName
+
+            // No local account or access token means the authenticated-root
+            // callback is a no-op, even when handed a typed owner.
+            container.scheduleIncomingSync(owner)
+            assertTrue(workManager.getWorkInfosForUniqueWork(ownerWorkName).get().isEmpty())
+
+            container.currentAccountStore.record(
+                owner.toRestString(),
+                "mykola",
+                "0198f0a0-0000-7000-8000-00000000c603",
+            )
+            container.scheduleIncomingSync(owner)
+            assertTrue(workManager.getWorkInfosForUniqueWork(ownerWorkName).get().isEmpty())
+
+            container.authTokenHolder.updateTokens("access-token", "refresh-token")
+            container.scheduleIncomingSync(owner)
+            container.scheduleIncomingSync(owner)
+            assertEquals(1, workManager.getWorkInfosForUniqueWork(ownerWorkName).get().size)
+
+            // A valid but different owner cannot reuse the authenticated A
+            // container boundary to enqueue B's chain.
+            container.scheduleIncomingSync(otherOwner)
+            assertTrue(workManager.getWorkInfosForUniqueWork(otherWorkName).get().isEmpty())
+        } finally {
+            container.currentAccountStore.clear()
+            container.authTokenHolder.clearSession()
             container.database.close()
             WorkManagerTestInitHelper.closeWorkDatabase()
         }

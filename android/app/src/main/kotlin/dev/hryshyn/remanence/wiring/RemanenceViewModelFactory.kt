@@ -31,6 +31,9 @@ class RemanenceViewModelFactory(
             resumeCapsuleUploads = { owner ->
                 container.capsuleUploadResumer.resume(owner)
             },
+            scheduleIncomingSync = { owner ->
+                container.scheduleIncomingSync(owner)
+            },
         ) as T
         LoginViewModel::class.java -> LoginViewModel(container.loginUseCase) as T
         RegistrationViewModel::class.java -> RegistrationViewModel(container.registrationUseCase) as T

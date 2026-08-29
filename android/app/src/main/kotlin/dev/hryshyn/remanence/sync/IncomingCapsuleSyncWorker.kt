@@ -1,10 +1,16 @@
 package dev.hryshyn.remanence.sync
 
 import android.content.Context
+import androidx.work.BackoffPolicy
 import androidx.work.CoroutineWorker
+import androidx.work.Constraints
+import androidx.work.ExistingWorkPolicy
 import androidx.work.ListenableWorker
 import androidx.work.OneTimeWorkRequest
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.Operation
+import androidx.work.NetworkType
+import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import dev.hryshyn.remanence.RemanenceApplication
@@ -12,11 +18,15 @@ import dev.hryshyn.remanence.core.data.db.IncomingSyncFailure
 import dev.hryshyn.remanence.core.data.db.IncomingSyncResult
 import dev.hryshyn.remanence.core.model.UserId
 import kotlin.coroutines.cancellation.CancellationException
+import java.util.concurrent.TimeUnit
 
 /** Maximum number of pages one foreground/background invocation may commit. */
 internal const val MAX_PAGES_PER_RUN = 10
 
-/** Account-scoped incoming page worker; scheduling remains an A10b concern. */
+/** WorkManager's exponential retry is platform-capped; this is its explicit initial delay. */
+internal const val INCOMING_SYNC_BACKOFF_INITIAL_MILLIS = 30_000L
+
+/** Account-scoped incoming page worker and its one-time request builder. */
 class IncomingCapsuleSyncWorker(
     appContext: Context,
     workerParams: WorkerParameters,
@@ -47,9 +57,27 @@ class IncomingCapsuleSyncWorker(
             val identity = AccountWorkIdentity.incomingSync(owner)
             return OneTimeWorkRequestBuilder<IncomingCapsuleSyncWorker>()
                 .setInputData(workDataOf(INPUT_OWNER_USER_ID to owner.toRestString()))
+                .setConstraints(
+                    Constraints.Builder()
+                        .setRequiredNetworkType(NetworkType.CONNECTED)
+                        .build(),
+                )
+                .setBackoffCriteria(
+                    BackoffPolicy.EXPONENTIAL,
+                    INCOMING_SYNC_BACKOFF_INITIAL_MILLIS,
+                    TimeUnit.MILLISECONDS,
+                )
                 .also { builder -> identity.tags.forEach(builder::addTag) }
                 .build()
         }
+
+        /** Enqueues exactly one account-scoped KEEP chain. */
+        fun enqueue(workManager: WorkManager, owner: UserId): Operation =
+            workManager.enqueueUniqueWork(
+                AccountWorkIdentity.incomingSync(owner).uniqueName,
+                ExistingWorkPolicy.KEEP,
+                request(owner),
+            )
 
         internal fun mapOutcome(outcome: IncomingSyncRunOutcome): ListenableWorker.Result =
             when (outcome) {

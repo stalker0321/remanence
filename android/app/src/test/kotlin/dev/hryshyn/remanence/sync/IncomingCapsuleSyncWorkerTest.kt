@@ -1,6 +1,8 @@
 package dev.hryshyn.remanence.sync
 
 import androidx.work.ListenableWorker
+import androidx.work.BackoffPolicy
+import androidx.work.NetworkType
 import dev.hryshyn.remanence.core.data.db.IncomingSyncFailure
 import dev.hryshyn.remanence.core.data.db.IncomingSyncResult
 import dev.hryshyn.remanence.core.data.network.IncomingCapsule
@@ -195,6 +197,9 @@ class IncomingCapsuleSyncWorkerTest {
         assertTrue(
             request.tags.containsAll(AccountWorkIdentity.incomingSync(OWNER).tags),
         )
+        assertEquals(NetworkType.CONNECTED, request.workSpec.constraints.requiredNetworkType)
+        assertEquals(BackoffPolicy.EXPONENTIAL, request.workSpec.backoffPolicy)
+        assertEquals(INCOMING_SYNC_BACKOFF_INITIAL_MILLIS, request.workSpec.backoffDelayDuration)
     }
 
     private fun loop(pages: FakePages, maxPages: Int = MAX_PAGES_PER_RUN) = IncomingSyncPageLoop(

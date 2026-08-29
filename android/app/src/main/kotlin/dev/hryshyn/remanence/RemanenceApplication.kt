@@ -25,6 +25,7 @@ import dev.hryshyn.remanence.core.data.network.AuthRepository
 import dev.hryshyn.remanence.core.data.network.AuthResult
 import dev.hryshyn.remanence.core.data.network.HealthRepository
 import dev.hryshyn.remanence.core.data.network.RegistrationUserDto
+import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.wiring.KekBoundSecretSealer
 import dev.hryshyn.remanence.session.IdentityAvailabilityPort
 import dev.hryshyn.remanence.session.SessionBootstrap
@@ -380,6 +381,18 @@ class AppContainer(
                 ).await()
             },
         )
+    }
+
+    /** A10b authenticated incoming scheduling boundary; invalid or stale owners are ignored. */
+    suspend fun scheduleIncomingSync(owner: UserId) {
+        val liveOwner = currentAccountStore.load()?.userId?.let { raw ->
+            runCatching { UserId.parseRest(raw) }.getOrNull()
+        } ?: return
+        if (liveOwner != owner || authTokenHolder.accessToken == null) return
+        dev.hryshyn.remanence.sync.IncomingCapsuleSyncWorker.enqueue(
+            WorkManager.getInstance(appContext),
+            owner,
+        ).await()
     }
 
     /**

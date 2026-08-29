@@ -46,6 +46,8 @@ class RootViewModel(
     private val clockMillis: () -> Long = System::currentTimeMillis,
     /** Best-effort owner-scoped upload discovery after a proven Active session. */
     private val resumeCapsuleUploads: suspend (UserId) -> Unit = {},
+    /** Authenticated owner-scoped incoming chain enqueue after upload discovery. */
+    private val scheduleIncomingSync: suspend (UserId) -> Unit = {},
 ) : ViewModel() {
 
     private val controller = AppNavigationController(AuthUiState.SignedOut)
@@ -301,6 +303,16 @@ class RootViewModel(
                 throw cancelled
             } catch (_: Exception) {
                 // Discovery is best-effort; authenticated navigation remains intact.
+            }
+            try {
+                scheduleIncomingSync(owner)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Work scheduling is part of the bootstrap boundary: do not
+                // leave a resolved-looking root when the authenticated chain
+                // could not be accepted by WorkManager.
+                publish(AuthUiState.RequiresConnectivity)
             }
         }
     }

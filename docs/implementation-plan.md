@@ -309,6 +309,12 @@ under the same owner. This completion does not advance local material state;
 A11 must independently verify the completed material before any state advance
 or plaintext handling.
 
+M2-A10b wires the existing authenticated page worker through one
+account-scoped `enqueueUniqueWork` chain with `KEEP`, `CONNECTED`, and bounded
+exponential backoff. Authenticated root resolution resumes outbox uploads
+first, then enqueues incoming sync after the current owner is revalidated;
+foreground/resume/restart lifecycle triggers remain M2-A10c.
+
 ### M2-A06 bounded recovery notes
 
 The Android stale-recipient recovery writes replacement envelope, statement,

@@ -134,6 +134,42 @@ class RootViewModelTest {
     }
 
     @Test
+    fun authenticatedResolutionResumesUploadsBeforeSchedulingIncomingSync() = runTest {
+        val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000b505")
+        val order = mutableListOf<String>()
+        val vm = RootViewModel(
+            MutableOutcomeResolver(SessionState.Active(owner.toRestString(), "mykola", true, true)),
+            resumeCapsuleUploads = { activeOwner ->
+                assertEquals(owner, activeOwner)
+                order += "uploads"
+            },
+            scheduleIncomingSync = { activeOwner ->
+                assertEquals(owner, activeOwner)
+                order += "incoming"
+            },
+        )
+
+        assertEquals(listOf("uploads", "incoming"), order)
+        assertEquals(AuthUiState.Authenticated(owner.toRestString(), "mykola"), vm.authState.value)
+        assertEquals(AppDestination.Home, vm.destination.value)
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+    }
+
+    @Test
+    fun incomingSchedulingFailureUsesExistingConnectivityBootstrapPolicy() = runTest {
+        val vm = RootViewModel(
+            MutableOutcomeResolver(
+                SessionState.Active("0198f0a0-0000-7000-8000-00000000b506", "mykola", true, true),
+            ),
+            scheduleIncomingSync = { error("WorkManager unavailable") },
+        )
+
+        assertEquals(AuthUiState.RequiresConnectivity, vm.authState.value)
+        assertEquals(AppDestination.Authentication, vm.destination.value)
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+    }
+
+    @Test
     fun nonActiveStatesNeverInvokeResumeHook() = runTest {
         val states = listOf(
             SessionState.SignedOut,
@@ -141,27 +177,32 @@ class RootViewModelTest {
             SessionState.RequiresConnectivity,
         )
         var hookCalls = 0
+        var incomingHookCalls = 0
 
         states.forEach { state ->
             val vm = RootViewModel(
                 MutableOutcomeResolver(state),
                 resumeCapsuleUploads = { hookCalls++ },
+                scheduleIncomingSync = { incomingHookCalls++ },
             )
             vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
         }
 
         assertEquals(0, hookCalls)
+        assertEquals(0, incomingHookCalls)
     }
 
     @Test
     fun nullBlankAndMalformedActiveIdsPublishSafelyWithoutResume() = runTest {
         val invalidIds = listOf(null, "", "  ", "not-a-canonical-user-id")
         var hookCalls = 0
+        var incomingHookCalls = 0
 
         invalidIds.forEach { rawUserId ->
             val vm = RootViewModel(
                 MutableOutcomeResolver(SessionState.Active(rawUserId, "mykola", true, true)),
                 resumeCapsuleUploads = { hookCalls++ },
+                scheduleIncomingSync = { incomingHookCalls++ },
             )
             assertEquals(AuthUiState.Authenticated(rawUserId ?: "", "mykola"), vm.authState.value)
             assertEquals(AppDestination.Home, vm.destination.value)
@@ -169,6 +210,7 @@ class RootViewModelTest {
         }
 
         assertEquals(0, hookCalls)
+        assertEquals(0, incomingHookCalls)
     }
 
     @Test

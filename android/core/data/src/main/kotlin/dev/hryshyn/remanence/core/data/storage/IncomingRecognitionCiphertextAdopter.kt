@@ -476,7 +476,14 @@ class IncomingRecognitionCiphertextAdopter internal constructor(
                     return failure(IncomingRecognitionCiphertextAdoptionFailure.LOCAL_STORAGE, retryable = true)
                 }
             }
-            FileVerification.MISSING,
+            FileVerification.MISSING -> {
+                // A prior attempt may have unlinked the source and then
+                // failed to persist that unlink. Close that durability gap
+                // on replay without requiring the source to reappear.
+                if (!forceDirectoryBestEffort(paths.source.parent!!)) {
+                    return failure(IncomingRecognitionCiphertextAdoptionFailure.LOCAL_STORAGE, retryable = true)
+                }
+            }
             FileVerification.SYMLINK,
             FileVerification.NOT_REGULAR,
             FileVerification.MISMATCH,

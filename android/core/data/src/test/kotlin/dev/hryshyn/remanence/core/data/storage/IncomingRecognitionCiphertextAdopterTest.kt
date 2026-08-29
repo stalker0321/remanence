@@ -328,6 +328,38 @@ class IncomingRecognitionCiphertextAdopterTest {
     }
 
     @Test
+    fun replayAfterPostUnlinkSourceForceFailureClosesMissingSourceDurabilityGap() = runBlocking {
+        val bytes = "replay-source-force".toByteArray()
+        val source = source(ownerA, "replay-source-force.tmp", bytes)
+        val fs = RecordingFileSystem().apply { failSourceParentForce = true }
+        val adopter = IncomingRecognitionCiphertextAdopter(roots, fs)
+        val destinationParent = destination(ownerA).parentFile!!.toPath()
+        val sourceParent = source.parentFile!!.toPath()
+
+        val first = adopter.adopt(request(source, bytes))
+
+        assertEquals(
+            IncomingRecognitionCiphertextAdoptionFailure.LOCAL_STORAGE,
+            (first as IncomingRecognitionCiphertextAdoptionResult.Failure).reason,
+        )
+        assertFalse(source.exists())
+        assertArrayEquals(bytes, destination(ownerA).readBytes())
+
+        fs.failSourceParentForce = false
+        val beforeReplay = fs.directoryForcePaths.size
+        val replay = adopter.adopt(request(source, bytes))
+
+        assertTrue(replay is IncomingRecognitionCiphertextAdoptionResult.Adopted)
+        assertEquals(
+            listOf(destinationParent, sourceParent, destinationParent, sourceParent),
+            fs.directoryForcePaths,
+        )
+        assertEquals(listOf(source.toPath()), fs.deletedPaths)
+        assertTrue(fs.directoryForcePaths.size > beforeReplay)
+        assertArrayEquals(bytes, destination(ownerA).readBytes())
+    }
+
+    @Test
     fun directoryForcesUseDestinationParentBeforeUnlinkAndSourceParentAfterUnlink() = runBlocking {
         val bytes = "directory-order".toByteArray()
         val source = source(ownerA, "nested/recognition.tmp", bytes)
@@ -430,6 +462,7 @@ class IncomingRecognitionCiphertextAdopterTest {
         var failFileForce = false
         var unsupportedFileForce = false
         var failDirectoryForce = false
+        var failSourceParentForce = false
         var failDelete = false
         var forceFileCalls = 0
         val directoryForcePaths = mutableListOf<Path>()
@@ -482,13 +515,16 @@ class IncomingRecognitionCiphertextAdopterTest {
         }
 
         override fun forceDirectory(path: Path) {
-            if (failDirectoryForce) throw IOException("injected directory force failure")
             directoryForcePaths.add(path)
             directoryForceEvents.add(if (path.toString().contains("incoming-ciphertext")) {
                 "destination"
             } else {
                 "source"
             })
+            if (failDirectoryForce) throw IOException("injected directory force failure")
+            if (failSourceParentForce && !path.toString().contains("incoming-ciphertext")) {
+                throw IOException("injected source-parent force failure")
+            }
             java.nio.channels.FileChannel.open(path, StandardOpenOption.READ).use { it.force(true) }
         }
     }

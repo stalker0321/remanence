@@ -328,7 +328,7 @@ Authenticated sender abort of an owned `DRAFT`, including an expired draft, retu
 
 Returns only `READY` capsules for the authenticated recipient, oldest page first. Each item carries route/key IDs, protocol/ready time, signed statement, recipient envelope, and blob declarations. It contains no note, place, sender handle, thumbnail, recognition result, or open state.
 
-The cursor is an opaque encoding of `(ready_at, capsule_id)` and is safe to replay. Local upsert by IDs makes replay idempotent. `limit` defaults 50 and maxes 100.
+The response is exactly `{items, has_more, next_cursor}`. `has_more` is the authoritative loop-stop field. The cursor is an opaque encoding of `(ready_at, capsule_id)` and is safe to replay. When `items` is non-empty, `next_cursor` is the canonical cursor of the final returned item even when `has_more` is false. When a valid non-null cursor yields an empty page, the server echoes that cursor; an initial empty page may return `null`. `next_cursor` never moves backward or advances independently of the final item or valid input cursor. Local upsert by IDs makes replay idempotent. `limit` defaults 50 and maxes 100.
 
 ### `GET /v1/capsules/{capsule_id}/blobs/{blob_id}`
 

@@ -181,6 +181,7 @@ class IncomingCapsulesResponse(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True, frozen=True)
 
     items: tuple[IncomingCapsuleItemResponse, ...]
+    has_more: bool
     next_cursor: str | None
 
 
@@ -1031,9 +1032,21 @@ def _incoming_page_response(
     if not isinstance(result.items, tuple):
         raise IncomingCapsuleQueryError("INTERNAL_ERROR")
     items = tuple(_incoming_item_response(item, recipient_id=recipient_id) for item in result.items)
-    if result.has_more is True:
-        if not items or type(result.next_cursor) is not str or not result.next_cursor:
+    if result.has_more is True and not items:
+        raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+    if result.next_cursor is not None:
+        if type(result.next_cursor) is not str or not result.next_cursor:
             raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+        try:
+            decoded = decode_incoming_cursor(result.next_cursor)
+            canonical = encode_incoming_cursor(
+                ready_at=decoded.ready_at, capsule_id=decoded.capsule_id
+            )
+        except Exception:
+            raise IncomingCapsuleQueryError("INTERNAL_ERROR") from None
+        if canonical != result.next_cursor:
+            raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+    if items:
         last = result.items[-1]
         if not isinstance(last, IncomingCapsuleSnapshot):
             raise IncomingCapsuleQueryError("INTERNAL_ERROR")
@@ -1049,11 +1062,11 @@ def _incoming_page_response(
             raise IncomingCapsuleQueryError("INTERNAL_ERROR")
         next_cursor: str | None = result.next_cursor
     else:
-        if result.next_cursor is not None:
-            raise IncomingCapsuleQueryError("INTERNAL_ERROR")
-        next_cursor = None
+        next_cursor = result.next_cursor
     try:
-        return IncomingCapsulesResponse(items=items, next_cursor=next_cursor)
+        return IncomingCapsulesResponse(
+            items=items, has_more=result.has_more, next_cursor=next_cursor
+        )
     except IncomingCapsuleQueryError:
         raise
     except Exception:

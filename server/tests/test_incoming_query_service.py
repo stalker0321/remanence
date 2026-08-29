@@ -322,7 +322,10 @@ def test_oldest_order_tied_timestamp_uuid_order_and_replay(session_factory, monk
         assert second == second_replay
         assert [item.capsule_id for item in second.items] == [expected_ids[2]]
         assert second.has_more is False
-        assert second.next_cursor is None
+        assert second.next_cursor == encode_incoming_cursor(
+            ready_at=second.items[-1].ready_at,
+            capsule_id=second.items[-1].capsule_id,
+        )
         assert isinstance(first.items[0], IncomingCapsuleSnapshot)
         assert first.items[0].blobs[0].kind is CapsuleBlobKind.RECOGNITION_MANIFEST
         assert first.items[0].blobs[1].kind is CapsuleBlobKind.CONTENT_MANIFEST
@@ -359,7 +362,10 @@ def test_page_default_max_and_limit_plus_one(session_factory):
         full = _query(session, recipient.id, limit=LIMITS_V1.incoming_page_max)
         assert len(full.items) == 51
         assert full.has_more is False
-        assert full.next_cursor is None
+        assert full.next_cursor == encode_incoming_cursor(
+            ready_at=full.items[-1].ready_at,
+            capsule_id=full.items[-1].capsule_id,
+        )
         tiny = _query(session, recipient.id, limit=1)
         assert len(tiny.items) == 1
         assert tiny.has_more is True
@@ -367,6 +373,10 @@ def test_page_default_max_and_limit_plus_one(session_factory):
         rest = _query(session, recipient.id, cursor=tiny.next_cursor, limit=100)
         assert [item.capsule_id for item in rest.items] == list(ordered[1:])
         assert rest.has_more is False
+        assert rest.next_cursor == encode_incoming_cursor(
+            ready_at=rest.items[-1].ready_at,
+            capsule_id=rest.items[-1].capsule_id,
+        )
 
 
 def test_insertion_after_cursor_is_visible_on_continuation(session_factory):
@@ -415,6 +425,80 @@ def test_insertion_after_cursor_is_visible_on_continuation(session_factory):
         continuation = _query(session, recipient.id, cursor=page.next_cursor, limit=2)
         assert [item.capsule_id for item in continuation.items] == [inserted.id, third.id]
         assert continuation.has_more is False
+        assert continuation.next_cursor == encode_incoming_cursor(
+            ready_at=continuation.items[-1].ready_at,
+            capsule_id=continuation.items[-1].capsule_id,
+        )
+
+
+def test_terminal_cursor_is_high_watermark_for_later_insertions(session_factory):
+    with session_factory() as session:
+        sender, sender_bundle = _seed_user(session, "sender")
+        recipient, recipient_bundle = _seed_user(session, "recipient")
+        first = _add_incoming_ready(
+            session,
+            sender=sender,
+            sender_bundle=sender_bundle,
+            recipient=recipient,
+            recipient_bundle=recipient_bundle,
+            ready_at=_NOW,
+        )
+        session.commit()
+
+        terminal = _query(session, recipient.id, limit=100)
+        terminal_cursor = encode_incoming_cursor(
+            ready_at=first.ready_at, capsule_id=first.id
+        )
+        assert [item.capsule_id for item in terminal.items] == [first.id]
+        assert terminal.has_more is False
+        assert terminal.next_cursor == terminal_cursor
+
+        later = _add_incoming_ready(
+            session,
+            sender=sender,
+            sender_bundle=sender_bundle,
+            recipient=recipient,
+            recipient_bundle=recipient_bundle,
+            ready_at=_NOW + timedelta(seconds=1),
+        )
+        session.commit()
+
+        continuation = _query(session, recipient.id, cursor=terminal_cursor, limit=100)
+        assert [item.capsule_id for item in continuation.items] == [later.id]
+        assert continuation.has_more is False
+        assert continuation.next_cursor == encode_incoming_cursor(
+            ready_at=later.ready_at, capsule_id=later.id
+        )
+
+
+def test_empty_initial_and_empty_continuation_cursor_semantics(session_factory):
+    with session_factory() as session:
+        sender, sender_bundle = _seed_user(session, "sender")
+        recipient, recipient_bundle = _seed_user(session, "recipient")
+        initial = _query(session, recipient.id, limit=100)
+        assert initial.items == ()
+        assert initial.has_more is False
+        assert initial.next_cursor is None
+
+        only = _add_incoming_ready(
+            session,
+            sender=sender,
+            sender_bundle=sender_bundle,
+            recipient=recipient,
+            recipient_bundle=recipient_bundle,
+            ready_at=_NOW,
+        )
+        session.commit()
+        terminal = _query(session, recipient.id, limit=100)
+        assert terminal.next_cursor is not None
+
+        empty_continuation = _query(
+            session, recipient.id, cursor=terminal.next_cursor, limit=100
+        )
+        assert empty_continuation.items == ()
+        assert empty_continuation.has_more is False
+        assert empty_continuation.next_cursor == terminal.next_cursor
+        assert only.id == terminal.items[0].capsule_id
 
 
 def test_cross_user_draft_aborted_excluded_and_ciphertext_synced_included(session_factory):

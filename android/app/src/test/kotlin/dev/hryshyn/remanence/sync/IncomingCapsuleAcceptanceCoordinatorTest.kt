@@ -40,14 +40,22 @@ import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.PostcardFingerprint
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.identity.TrustedSenderKeyStore
+import dev.hryshyn.remanence.index.SenderIndexBundleCodec
+import dev.hryshyn.remanence.index.SenderIndexBundleFileAttributes
 import dev.hryshyn.remanence.index.SenderIndexBundleReader
+import dev.hryshyn.remanence.index.SenderIndexBundleReaderFileSystem
 import dev.hryshyn.remanence.index.SenderIndexBundleStageRequest
 import dev.hryshyn.remanence.index.SenderIndexBundleStageResult
 import dev.hryshyn.remanence.index.SenderIndexBundleStager
 import dev.hryshyn.remanence.protocol.v1.PublishStatement
 import java.io.File
 import java.io.IOException
+import java.io.InputStream
 import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
+import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.concurrent.CountDownLatch
@@ -194,6 +202,12 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
         seed()
         promoteToAlreadyAccepted()
         val beforeCiphertext = incomingCiphertextPath().readBytes()
+        val recoveryTemp = recoveryTempPath()
+        val indexDestination = incomingIndexBundlePath()
+        val beforeRecoveryTemp = recoveryTemp.takeIf(File::exists)?.readBytes()
+        val beforeIndexDestination = indexDestination.takeIf(File::exists)?.readBytes()
+        assertFalse(recoveryTemp.exists())
+        assertFalse(indexDestination.exists())
         val beforeCapsuleState = database.incomingCapsuleDao()
             .getByCapsuleIdAndOwner(capsule.toRestString(), owner.toRestString())!!
             .materialState
@@ -231,7 +245,9 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
             assertIs<IncomingCapsuleAcceptanceResult.Rejected>(result).reason,
         )
         assertEquals(0, inspectionCalls)
-        assertEquals(beforeCiphertext.toList(), incomingCiphertextPath().readBytes().toList())
+        assertArrayEquals(beforeCiphertext, incomingCiphertextPath().readBytes())
+        assertEquals(beforeRecoveryTemp?.toList(), recoveryTemp.takeIf(File::exists)?.readBytes()?.toList())
+        assertEquals(beforeIndexDestination?.toList(), indexDestination.takeIf(File::exists)?.readBytes()?.toList())
         assertEquals(
             beforeCapsuleState,
             database.incomingCapsuleDao()
@@ -256,26 +272,23 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
         )
         assertTrue(staged is SenderIndexBundleStageResult.Staged)
 
-        val reader = SenderIndexBundleReader(roots, sealer)
+        val snapshotCloseCalls = AtomicInteger(0)
+        val reader = SenderIndexBundleReader(
+            roots = roots,
+            sealer = sealer,
+            codec = SenderIndexBundleCodec(),
+            fileSystem = CoordinatorReaderFileSystem,
+            wipe = { it.fill(0) },
+            wipeChars = {
+                snapshotCloseCalls.incrementAndGet()
+                it.fill('\u0000')
+            },
+        )
         val replay = productionCoordinator(reader).accept(
             IncomingCapsuleAcceptanceRequest(owner, capsule),
         )
         assertIs<IncomingCapsuleAcceptanceResult.IdempotentReplay>(replay)
-
-        val inspected = reader.inspect(
-            dev.hryshyn.remanence.index.SenderIndexBundleReadRequest(owner, owner, capsule),
-        )
-        val snapshot = assertIs<dev.hryshyn.remanence.index.SenderIndexBundleReadResult.Available>(inspected)
-            .snapshot
-        assertEquals(capsule, snapshot.capsuleId)
-        snapshot.close()
-        var closed = false
-        try {
-            snapshot.capsuleId
-        } catch (_: IllegalStateException) {
-            closed = true
-        }
-        assertTrue(closed)
+        assertEquals(1, snapshotCloseCalls.get())
 
         incomingIndexBundlePath().delete()
         val missing = productionCoordinator(reader).accept(
@@ -1206,6 +1219,30 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
         @Suppress("UNCHECKED_CAST")
         return value as T
     }
+}
+
+private object CoordinatorReaderFileSystem : SenderIndexBundleReaderFileSystem {
+    override fun attributes(path: Path): SenderIndexBundleFileAttributes? = try {
+        val attributes = Files.readAttributes(
+            path,
+            BasicFileAttributes::class.java,
+            LinkOption.NOFOLLOW_LINKS,
+        )
+        SenderIndexBundleFileAttributes(
+            isSymbolicLink = attributes.isSymbolicLink,
+            isRegularFile = attributes.isRegularFile,
+            isDirectory = attributes.isDirectory,
+            size = attributes.size(),
+        )
+    } catch (_: java.nio.file.NoSuchFileException) {
+        null
+    }
+
+    override fun openRead(path: Path): InputStream = Files.newInputStream(
+        path,
+        StandardOpenOption.READ,
+        LinkOption.NOFOLLOW_LINKS,
+    )
 }
 
 private class CoordinatorAuthenticatedSealer : SecretSealer {

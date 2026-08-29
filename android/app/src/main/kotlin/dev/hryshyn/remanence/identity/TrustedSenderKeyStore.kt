@@ -29,12 +29,27 @@ interface TrustedSenderKeyStore {
     ): SenderKeyResolution
 }
 
-/** Outcome of one trusted lookup; anything but [Trusted] fails closed. */
+enum class SenderKeyUntrustedReason {
+    MALFORMED_KEY,
+    UNKNOWN_BUNDLE,
+    OWNER_MISMATCH,
+    REVOKED,
+}
+
+enum class SenderKeyUnavailableReason {
+    NO_SESSION_OR_SOURCE,
+    DIRECTORY_UNAVAILABLE,
+}
+
+/** Outcome of one trusted lookup; only [Trusted] supplies verification material. */
 sealed interface SenderKeyResolution {
 
     /** Directory-proven (or provably own) Ed25519 public keyset. */
     data class Trusted(val verifyingKeyset: KeysetHandle) : SenderKeyResolution
 
-    /** Unknown bundle, owner mismatch, revoked status, malformed material, or unavailable source. */
-    data class Untrusted(val reason: String) : SenderKeyResolution
+    /** Terminal identity/key rejection; callers must not substitute another key. */
+    data class Untrusted(val reason: SenderKeyUntrustedReason) : SenderKeyResolution
+
+    /** Operationally unavailable source; callers may retry without trusting any key. */
+    data class Unavailable(val reason: SenderKeyUnavailableReason) : SenderKeyResolution
 }

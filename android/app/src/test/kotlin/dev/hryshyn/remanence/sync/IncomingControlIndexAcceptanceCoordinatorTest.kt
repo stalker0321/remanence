@@ -161,13 +161,33 @@ class IncomingControlIndexAcceptanceCoordinatorTest {
     fun untrustedSenderKeyIsTerminalWithoutFallback() = runBlocking {
         val result = coordinator(
             trustedSenderKeys = fakeTrustedSender { _, _ ->
-                TrustedSenderResolution.Untrusted("not used by the coordinator")
+                TrustedSenderResolution.Untrusted(
+                    dev.hryshyn.remanence.identity.SenderKeyUntrustedReason.REVOKED,
+                )
             },
         ).accept(request())
 
         assertEquals(
             IncomingControlIndexAcceptanceResult.Rejected(
                 IncomingAcceptanceRejectionReason.SENDER_KEY_REJECTED,
+            ),
+            result,
+        )
+    }
+
+    @Test
+    fun unavailableSenderKeyIsRetryableWithoutFallback() = runBlocking {
+        val result = coordinator(
+            trustedSenderKeys = fakeTrustedSender { _, _ ->
+                TrustedSenderResolution.Unavailable(
+                    dev.hryshyn.remanence.identity.SenderKeyUnavailableReason.DIRECTORY_UNAVAILABLE,
+                )
+            },
+        ).accept(request())
+
+        assertEquals(
+            IncomingControlIndexAcceptanceResult.Retryable(
+                IncomingAcceptanceRetryReason.SENDER_KEY_UNAVAILABLE,
             ),
             result,
         )

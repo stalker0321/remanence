@@ -43,26 +43,28 @@ class DirectorySenderKeyStore(
         val own = ownAccount()
         if (own != null && own.userId == senderUserId && own.activeKeyBundleId == senderKeyBundleId) {
             val handle = CapsuleRoutingPolicy.senderVerifyingKeysetOrNull(own.publicSigningExportB64Url)
-                ?: return SenderKeyResolution.Untrusted("own signing export unreadable")
+                ?: return SenderKeyResolution.Untrusted(SenderKeyUntrustedReason.MALFORMED_KEY)
             return SenderKeyResolution.Trusted(handle)
         }
 
         return when (val result = directoryFetch(senderKeyBundleId.value.toString())) {
-            null -> SenderKeyResolution.Untrusted("directory unavailable")
-            KeyBundleByIdResult.NotFound -> SenderKeyResolution.Untrusted("bundle unknown to the directory")
-            is KeyBundleByIdResult.Failure -> SenderKeyResolution.Untrusted("directory lookup failed")
+            null -> SenderKeyResolution.Unavailable(SenderKeyUnavailableReason.NO_SESSION_OR_SOURCE)
+            KeyBundleByIdResult.NotFound ->
+                SenderKeyResolution.Untrusted(SenderKeyUntrustedReason.UNKNOWN_BUNDLE)
+            is KeyBundleByIdResult.Failure ->
+                SenderKeyResolution.Unavailable(SenderKeyUnavailableReason.DIRECTORY_UNAVAILABLE)
             is KeyBundleByIdResult.Found -> when {
                 result.bundle.ownerUserId != senderUserId ->
-                    SenderKeyResolution.Untrusted("bundle owner does not match the claimed sender")
+                    SenderKeyResolution.Untrusted(SenderKeyUntrustedReason.OWNER_MISMATCH)
 
                 result.bundle.status == "REVOKED" ->
-                    SenderKeyResolution.Untrusted("sender bundle is revoked")
+                    SenderKeyResolution.Untrusted(SenderKeyUntrustedReason.REVOKED)
 
                 else -> {
                     val handle = CapsuleRoutingPolicy.senderVerifyingKeysetOrNull(
                         result.bundle.signingPublicKeysetB64Url,
                     )
-                        ?: return SenderKeyResolution.Untrusted("directory signing keyset malformed")
+                        ?: return SenderKeyResolution.Untrusted(SenderKeyUntrustedReason.MALFORMED_KEY)
                     SenderKeyResolution.Trusted(handle)
                 }
             }

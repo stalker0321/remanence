@@ -549,7 +549,9 @@ class ScanViewModel(
                     )
                 ) {
                     is dev.hryshyn.remanence.identity.SenderKeyResolution.Trusted -> lookup.verifyingKeyset
-                    is dev.hryshyn.remanence.identity.SenderKeyResolution.Untrusted -> return false
+                    is dev.hryshyn.remanence.identity.SenderKeyResolution.Untrusted,
+                    is dev.hryshyn.remanence.identity.SenderKeyResolution.Unavailable,
+                    -> return false
                 }
 
             val gateInput = CapsuleAcceptanceInput(

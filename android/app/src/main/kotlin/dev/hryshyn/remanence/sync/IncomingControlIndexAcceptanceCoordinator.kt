@@ -236,6 +236,9 @@ class IncomingControlIndexAcceptanceCoordinator(
                         is SenderKeyResolution.Untrusted -> return rejected(
                             IncomingAcceptanceRejectionReason.SENDER_KEY_REJECTED,
                         )
+                        is SenderKeyResolution.Unavailable -> return retryable(
+                            IncomingAcceptanceRetryReason.SENDER_KEY_UNAVAILABLE,
+                        )
                     }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
@@ -296,8 +299,8 @@ class IncomingControlIndexAcceptanceCoordinator(
     }
 
     private suspend fun readCurrentIdentity(): CurrentIdentityRead = try {
-        currentRecipientIdentity()?.let(CurrentIdentityRead::Available)
-            ?: CurrentIdentityRead.SignedOut
+        val identity = currentRecipientIdentity()
+        if (identity == null) CurrentIdentityRead.SignedOut else CurrentIdentityRead.Available(identity)
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (_: Exception) {

@@ -27,6 +27,7 @@ import dev.hryshyn.remanence.core.crypto.RecipientEnvelopeCryptor
 import dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.network.HistoricalKeyBundle
+import dev.hryshyn.remanence.core.data.network.KeyBundleFailure
 import dev.hryshyn.remanence.core.data.network.KeyBundleByIdResult
 import dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager
 import dev.hryshyn.remanence.core.model.CapsuleId
@@ -298,14 +299,16 @@ class CrossIdentityCapsuleFlowTest {
     }
 
     @Test
-    fun wrongOwnerRevokedAndMissingDirectoryEntriesAllFailClosed() = runBlocking {
+    fun directorySenderResolutionClassifiesTerminalAndUnavailableOutcomes() = runBlocking {
         val attacker = AccountIdentityGenerator().generate()
 
         // Wrong OWNER: the bundle exists but belongs to someone else.
         directory[senderBundleUuid.toString()] = activeEntry(UserId(recipientUuid), Base64.urlSafeEncode(attacker.signingPublicKeyset))
-        assertTrue(
-            trustedStore().senderVerifyingKeyset(UserId(senderUuid), KeyBundleId(senderBundleUuid))
-                is dev.hryshyn.remanence.identity.SenderKeyResolution.Untrusted,
+        assertEquals(
+            dev.hryshyn.remanence.identity.SenderKeyResolution.Untrusted(
+                dev.hryshyn.remanence.identity.SenderKeyUntrustedReason.OWNER_MISMATCH,
+            ),
+            trustedStore().senderVerifyingKeyset(UserId(senderUuid), KeyBundleId(senderBundleUuid)),
         )
 
         // REVOKED: present and well-formed but no longer trustworthy.
@@ -320,26 +323,71 @@ class CrossIdentityCapsuleFlowTest {
                 status = "REVOKED",
             ),
         )
-        assertTrue(
-            trustedStore().senderVerifyingKeyset(UserId(senderUuid), KeyBundleId(senderBundleUuid))
-                is dev.hryshyn.remanence.identity.SenderKeyResolution.Untrusted,
+        assertEquals(
+            dev.hryshyn.remanence.identity.SenderKeyResolution.Untrusted(
+                dev.hryshyn.remanence.identity.SenderKeyUntrustedReason.REVOKED,
+            ),
+            trustedStore().senderVerifyingKeyset(UserId(senderUuid), KeyBundleId(senderBundleUuid)),
         )
 
-        // MISSING: nothing routed under this identity.
-        directory.remove(senderBundleUuid.toString())
-        assertTrue(
-            trustedStore().senderVerifyingKeyset(UserId(senderUuid), KeyBundleId(senderBundleUuid))
-                is dev.hryshyn.remanence.identity.SenderKeyResolution.Untrusted,
+        // UNKNOWN: the directory explicitly proves that this bundle is absent.
+        directory[senderBundleUuid.toString()] = KeyBundleByIdResult.NotFound
+        assertEquals(
+            dev.hryshyn.remanence.identity.SenderKeyResolution.Untrusted(
+                dev.hryshyn.remanence.identity.SenderKeyUntrustedReason.UNKNOWN_BUNDLE,
+            ),
+            trustedStore().senderVerifyingKeyset(UserId(senderUuid), KeyBundleId(senderBundleUuid)),
         )
+
+        // No session/source is operationally unavailable, not an identity rejection.
+        directory.remove(senderBundleUuid.toString())
+        assertEquals(
+            dev.hryshyn.remanence.identity.SenderKeyResolution.Unavailable(
+                dev.hryshyn.remanence.identity.SenderKeyUnavailableReason.NO_SESSION_OR_SOURCE,
+            ),
+            trustedStore().senderVerifyingKeyset(UserId(senderUuid), KeyBundleId(senderBundleUuid)),
+        )
+
+        // Transport/server failures remain operationally unavailable; the
+        // authenticator owns refresh and this boundary never guesses trust.
+        for (failure in listOf(
+            KeyBundleByIdResult.Failure(KeyBundleFailure.NETWORK),
+            KeyBundleByIdResult.Failure(KeyBundleFailure.HTTP, 401),
+            KeyBundleByIdResult.Failure(KeyBundleFailure.INVALID_RESPONSE),
+        )) {
+            directory[senderBundleUuid.toString()] = failure
+            assertEquals(
+                dev.hryshyn.remanence.identity.SenderKeyResolution.Unavailable(
+                    dev.hryshyn.remanence.identity.SenderKeyUnavailableReason.DIRECTORY_UNAVAILABLE,
+                ),
+                trustedStore().senderVerifyingKeyset(UserId(senderUuid), KeyBundleId(senderBundleUuid)),
+            )
+        }
 
         // MALFORMED directory keyset material also refuses.
         directory[senderBundleUuid.toString()] = activeEntry(
             UserId(senderUuid),
             Base64.urlSafeEncode("not-a-keyset".toByteArray()),
         )
-        assertTrue(
-            trustedStore().senderVerifyingKeyset(UserId(senderUuid), KeyBundleId(senderBundleUuid))
-                is dev.hryshyn.remanence.identity.SenderKeyResolution.Untrusted,
+        assertEquals(
+            dev.hryshyn.remanence.identity.SenderKeyResolution.Untrusted(
+                dev.hryshyn.remanence.identity.SenderKeyUntrustedReason.MALFORMED_KEY,
+            ),
+            trustedStore().senderVerifyingKeyset(UserId(senderUuid), KeyBundleId(senderBundleUuid)),
+        )
+
+        val malformedOwn = trustedStore(
+            ownAccount = dev.hryshyn.remanence.identity.DirectorySenderKeyStore.OwnAccount(
+                userId = UserId(senderUuid),
+                activeKeyBundleId = KeyBundleId(senderBundleUuid),
+                publicSigningExportB64Url = Base64.urlSafeEncode("not-a-keyset".toByteArray()),
+            ),
+        )
+        assertEquals(
+            dev.hryshyn.remanence.identity.SenderKeyResolution.Untrusted(
+                dev.hryshyn.remanence.identity.SenderKeyUntrustedReason.MALFORMED_KEY,
+            ),
+            malformedOwn.senderVerifyingKeyset(UserId(senderUuid), KeyBundleId(senderBundleUuid)),
         )
     }
 

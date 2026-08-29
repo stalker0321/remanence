@@ -18,6 +18,7 @@ import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
+import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
@@ -185,6 +186,10 @@ class SenderIndexBundleStager internal constructor(
                         SenderIndexBundleStageFailure.LOCAL_STORAGE,
                         true,
                     )
+                    SemanticInspection.UNAVAILABLE -> return@withLock failure(
+                        SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                        true,
+                    )
                     SemanticInspection.MISMATCH,
                     SemanticInspection.UNSAFE,
                     SemanticInspection.INVALID,
@@ -194,78 +199,24 @@ class SenderIndexBundleStager internal constructor(
                     )
                 }
 
-                when (val staged = inspectSemantic(paths.temporary, plaintext!!, aad!!)) {
+                when (inspectSemantic(paths.temporary, plaintext!!, aad!!)) {
                     SemanticInspection.MATCH -> Unit
-                    SemanticInspection.MISSING -> {
-                        val sealed = try {
-                            sealer.seal(plaintext!!, aad!!)
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (_: Exception) {
-                            return@withLock failure(
-                                SenderIndexBundleStageFailure.SEALING_FAILED,
-                                true,
-                            )
-                        }
-                        try {
-                            if (sealed.isEmpty() || sealed.size > MAX_CIPHERTEXT_BYTES) {
-                                return@withLock failure(
-                                    SenderIndexBundleStageFailure.SEALING_FAILED,
-                                    retryable = false,
-                                )
-                            }
-                            writeFresh(paths.temporary, sealed)
-                            forceFile(paths.temporary)?.let { return@withLock it }
-                            if (!forceDirectoryBestEffort(paths.temporary.parent!!)) {
-                                return@withLock failure(
-                                    SenderIndexBundleStageFailure.LOCAL_STORAGE,
-                                    true,
-                                )
-                            }
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (_: FileAlreadyExistsException) {
-                            when (inspectSemantic(paths.temporary, plaintext!!, aad!!)) {
-                                SemanticInspection.MATCH -> Unit
-                                SemanticInspection.READ_FAILURE -> return@withLock failure(
-                                    SenderIndexBundleStageFailure.LOCAL_STORAGE,
-                                    true,
-                                )
-                                else -> return@withLock failure(
-                                    SenderIndexBundleStageFailure.DESTINATION_CONFLICT,
-                                    false,
-                                )
-                            }
-                        } catch (_: SecurityException) {
-                            return@withLock failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
-                        } catch (_: IOException) {
-                            return@withLock failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
-                        } catch (_: UnsupportedOperationException) {
-                            return@withLock failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
-                        } catch (_: RuntimeException) {
-                            return@withLock failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
-                        } finally {
-                            wipe(sealed)
-                        }
-                        when (inspectSemantic(paths.temporary, plaintext!!, aad!!)) {
-                            SemanticInspection.MATCH -> Unit
-                            SemanticInspection.READ_FAILURE -> return@withLock failure(
-                                SenderIndexBundleStageFailure.LOCAL_STORAGE,
-                                true,
-                            )
-                            else -> return@withLock failure(
-                                SenderIndexBundleStageFailure.DESTINATION_CONFLICT,
-                                false,
-                            )
-                        }
-                    }
+                    SemanticInspection.MISSING -> ensureTemporary(paths, plaintext!!, aad!!)?.let { return@withLock it }
+                    // The canonical TEMP is never written incrementally. Any
+                    // existing unreadable/unavailable TEMP is therefore
+                    // preserved and retried conservatively; only a fresh
+                    // unique .part is disposable by its creating invocation.
+                    SemanticInspection.INVALID,
+                    SemanticInspection.UNAVAILABLE -> return@withLock failure(
+                        SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                        true,
+                    )
                     SemanticInspection.READ_FAILURE -> return@withLock failure(
                         SenderIndexBundleStageFailure.LOCAL_STORAGE,
                         true,
                     )
                     SemanticInspection.MISMATCH,
                     SemanticInspection.UNSAFE,
-                    SemanticInspection.INVALID,
                     -> return@withLock failure(
                         SenderIndexBundleStageFailure.DESTINATION_CONFLICT,
                         false,
@@ -317,11 +268,13 @@ class SenderIndexBundleStager internal constructor(
         val root = roots.child(owner, AccountScopedFileRoots.ChildRoot.FINGERPRINTS)
             .toPath().toAbsolutePath().normalize()
         val parent = root.resolve("capsules").normalize()
+        val baseName = "${capsule.toRestString()}.index.bundle"
         return StagePaths(
             root = root,
             parent = parent,
-            destination = parent.resolve("${capsule.toRestString()}.index.bundle").normalize(),
-            temporary = parent.resolve("${capsule.toRestString()}.index.bundle.tmp").normalize(),
+            destination = parent.resolve(baseName).normalize(),
+            temporary = parent.resolve("$baseName.tmp").normalize(),
+            part = parent.resolve("$baseName.${UUID.randomUUID()}.part").normalize(),
         )
     }
 
@@ -331,6 +284,166 @@ class SenderIndexBundleStager internal constructor(
         }
         fileSystem.makeDirectories(paths.parent)
         if (!isDirectoryChainSafe(paths.root, paths.parent)) throw PathUnsafe()
+    }
+
+    /**
+     * Build the canonical TEMP through a unique same-directory part file.
+     * The deterministic TEMP is never exposed to an incremental write: a
+     * crash can leave only an invocation-specific .part, which a later
+     * invocation ignores while it creates its own fresh part. The fixed
+     * in-process stripe lock serializes same-capsule callers.
+     */
+    private suspend fun ensureTemporary(
+        paths: StagePaths,
+        expectedPlaintext: ByteArray,
+        aad: ByteArray,
+    ): SenderIndexBundleStageResult.Failure? {
+        var partCreated = false
+        var sealed: ByteArray? = null
+        try {
+            sealed = try {
+                sealer.seal(expectedPlaintext, aad)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                return failure(SenderIndexBundleStageFailure.SEALING_FAILED, true)
+            }
+            if (sealed!!.isEmpty() || sealed!!.size > MAX_CIPHERTEXT_BYTES) {
+                return failure(SenderIndexBundleStageFailure.SEALING_FAILED, false)
+            }
+
+            try {
+                fileSystem.openWriteNew(paths.part).use { output ->
+                    // CREATE_NEW ownership is established when the stream is
+                    // returned. The part remains an inert orphan on a
+                    // process-death window can leave it for a later
+                    // invocation; once returned, this invocation owns the
+                    // exact path and cleans it on every handled outcome.
+                    partCreated = true
+                    output.write(sealed!!)
+                    output.flush()
+                }
+                forceFile(paths.part)?.let { return it }
+                if (!forceDirectoryBestEffort(paths.part.parent!!)) {
+                    return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: SecurityException) {
+                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+            } catch (_: IOException) {
+                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+            } catch (_: UnsupportedOperationException) {
+                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+            } catch (_: RuntimeException) {
+                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+            }
+
+            try {
+                fileSystem.atomicNoReplaceLink(paths.part, paths.temporary)
+            } catch (_: FileAlreadyExistsException) {
+                // The target-existing outcome is definitive for createLink;
+                // our part was not adopted. It is left inert and ignored on
+                // later invocations; no broad orphan deletion is attempted.
+                return when (inspectSemantic(paths.temporary, expectedPlaintext, aad)) {
+                    SemanticInspection.MATCH -> null
+                    SemanticInspection.READ_FAILURE,
+                    SemanticInspection.INVALID,
+                    SemanticInspection.UNAVAILABLE,
+                    SemanticInspection.MISSING,
+                    -> failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+                    SemanticInspection.MISMATCH,
+                    SemanticInspection.UNSAFE,
+                    -> failure(SenderIndexBundleStageFailure.DESTINATION_CONFLICT, false)
+                }
+            } catch (_: FileSystemException) {
+                // An unsupported/cross-device hard link cannot be replaced
+                // with copy or rename without weakening no-overwrite safety.
+                return failure(SenderIndexBundleStageFailure.ATOMIC_MOVE_UNAVAILABLE, false)
+            } catch (_: UnsupportedOperationException) {
+                return failure(SenderIndexBundleStageFailure.ATOMIC_MOVE_UNAVAILABLE, false)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: SecurityException) {
+                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+            } catch (_: IOException) {
+                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+            } catch (_: RuntimeException) {
+                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+            }
+
+            forceFile(paths.temporary)?.let { return it }
+            if (!forceDirectoryBestEffort(paths.temporary.parent!!)) {
+                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+            }
+            try {
+                if (!deleteOwnedPart(paths.part)) {
+                    return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+                }
+                partCreated = false
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+            }
+            if (!forceDirectoryBestEffort(paths.part.parent!!)) {
+                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+            }
+            return when (inspectSemantic(paths.temporary, expectedPlaintext, aad)) {
+                SemanticInspection.MATCH -> null
+                SemanticInspection.READ_FAILURE,
+                SemanticInspection.INVALID,
+                SemanticInspection.UNAVAILABLE,
+                SemanticInspection.MISSING,
+                -> failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+                SemanticInspection.MISMATCH,
+                SemanticInspection.UNSAFE,
+                -> failure(SenderIndexBundleStageFailure.DESTINATION_CONFLICT, false)
+            }
+        } finally {
+            sealed?.let(wipe)
+            if (partCreated) cleanupOwnedPartBestEffort(paths.part)
+        }
+    }
+
+    /** Delete only this invocation's no-follow regular part, then persist the unlink. */
+    private fun deleteOwnedPart(path: Path): Boolean {
+        val attributes = try {
+            fileSystem.attributes(path)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return false
+        }
+        if (attributes == null) return forceDirectoryBestEffort(path.parent!!)
+        if (attributes.isSymbolicLink || !attributes.isRegularFile) return false
+        return try {
+            fileSystem.deleteIfExists(path)
+            forceDirectoryBestEffort(path.parent!!)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun cleanupOwnedPartBestEffort(path: Path) {
+        val attributes = try {
+            fileSystem.attributes(path)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return
+        }
+        if (attributes?.isSymbolicLink == true || attributes?.isRegularFile == false) return
+        try {
+            fileSystem.deleteIfExists(path)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return
+        }
+        forceDirectoryBestEffort(path.parent!!)
     }
 
     private fun isDirectoryChainSafe(root: Path, leaf: Path): Boolean {
@@ -394,7 +507,12 @@ class SenderIndexBundleStager internal constructor(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                return SemanticInspection.INVALID
+                // SecretSealer deliberately does not promise an
+                // authenticity-vs-provider exception distinction. Preserve
+                // the file and retry conservatively instead of turning a
+                // possible transient Keystore/provider failure into a
+                // permanent conflict.
+                return SemanticInspection.UNAVAILABLE
             }
             if (opened!!.size > SenderIndexBundleCodec.MAX_PLAINTEXT_BYTES) {
                 return SemanticInspection.INVALID
@@ -493,13 +611,6 @@ class SenderIndexBundleStager internal constructor(
         }
     }
 
-    private fun writeFresh(path: Path, sealed: ByteArray) {
-        fileSystem.openWriteNew(path).use { output ->
-            output.write(sealed)
-            output.flush()
-        }
-    }
-
     private fun forceFile(path: Path): SenderIndexBundleStageResult.Failure? = try {
         fileSystem.forceFile(path)
         null
@@ -548,6 +659,8 @@ class SenderIndexBundleStager internal constructor(
                 }
             }
             SemanticInspection.READ_FAILURE ->
+                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+            SemanticInspection.UNAVAILABLE ->
                 return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
             else -> Unit // keep an unknown orphan; never risk the winner
         }
@@ -611,6 +724,7 @@ class SenderIndexBundleStager internal constructor(
                 replayed = true,
             )
             SemanticInspection.READ_FAILURE -> failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+            SemanticInspection.UNAVAILABLE -> failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
             else -> failure(SenderIndexBundleStageFailure.DESTINATION_CONFLICT, false)
         }
     }
@@ -643,11 +757,13 @@ class SenderIndexBundleStager internal constructor(
         val parent: Path,
         val destination: Path,
         val temporary: Path,
+        val part: Path,
     ) {
         fun areSafe(fileSystem: SenderIndexBundleFileSystem): Boolean =
             isSafe(fileSystem, root) && isSafe(fileSystem, parent) &&
                 isSafe(fileSystem, destination) && isSafe(fileSystem, temporary) &&
-                destination.startsWith(root) && temporary.startsWith(root)
+                isSafe(fileSystem, part) && destination.startsWith(root) &&
+                temporary.startsWith(root) && part.startsWith(root)
 
         private fun isSafe(fileSystem: SenderIndexBundleFileSystem, path: Path): Boolean {
             var current: Path? = path
@@ -678,6 +794,7 @@ class SenderIndexBundleStager internal constructor(
         MATCH,
         MISMATCH,
         INVALID,
+        UNAVAILABLE,
         UNSAFE,
         READ_FAILURE,
     }

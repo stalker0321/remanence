@@ -224,7 +224,14 @@ class SenderIndexBundleStagerTest {
 
     @Test
     fun successfulConcurrentSameCapsuleStageHasOneSafeWinner() = runBlocking {
-        val stager = SenderIndexBundleStager(roots, RandomAuthenticatedSealer())
+        val fs = RecordingFileSystem()
+        val stager = SenderIndexBundleStager(
+            roots = roots,
+            sealer = RandomAuthenticatedSealer(),
+            codec = SenderIndexBundleCodec(),
+            fileSystem = fs,
+            wipe = { it.fill(0) },
+        )
         val results = listOf(
             async(Dispatchers.Default) { stager.stage(request(ownerA)) },
             async(Dispatchers.Default) { stager.stage(request(ownerA)) },
@@ -235,6 +242,7 @@ class SenderIndexBundleStagerTest {
         assertTrue(staged.any { !it.replayed })
         assertTrue(staged.any { it.replayed })
         assertTrue(staged.map { it.durable.asFile().canonicalFile }.distinct().size == 1)
+        assertTrue(fs.createdParts.all { !Files.exists(it, LinkOption.NOFOLLOW_LINKS) })
     }
 
     @Test
@@ -299,6 +307,121 @@ class SenderIndexBundleStagerTest {
         assertEquals(SenderIndexBundleStageFailure.LOCAL_STORAGE, (result as SenderIndexBundleStageResult.Failure).reason)
         assertFalse(fs.events.contains("link"))
         assertFalse(destination(ownerA).exists())
+    }
+
+    @Test
+    fun handledPartialWriteCleansTheCurrentInvocationPart() = runBlocking {
+        val fs = RecordingFileSystem().apply { failAfterWriteBytes = 8 }
+        val result = SenderIndexBundleStager(
+            roots = roots,
+            sealer = RandomAuthenticatedSealer(),
+            codec = SenderIndexBundleCodec(),
+            fileSystem = fs,
+            wipe = { it.fill(0) },
+        ).stage(request(ownerA)) as SenderIndexBundleStageResult.Failure
+
+        assertEquals(SenderIndexBundleStageFailure.LOCAL_STORAGE, result.reason)
+        assertEquals(1, fs.createdParts.size)
+        assertFalse(Files.exists(fs.createdParts.single(), LinkOption.NOFOLLOW_LINKS))
+        assertFalse(temporary(ownerA).exists())
+        assertFalse(destination(ownerA).exists())
+    }
+
+    @Test
+    fun handledTemporaryLinkFailureCleansTheCurrentInvocationPart() = runBlocking {
+        val fs = RecordingFileSystem().apply { failLink = true }
+        val result = SenderIndexBundleStager(
+            roots = roots,
+            sealer = RandomAuthenticatedSealer(),
+            codec = SenderIndexBundleCodec(),
+            fileSystem = fs,
+            wipe = { it.fill(0) },
+        ).stage(request(ownerA)) as SenderIndexBundleStageResult.Failure
+
+        assertEquals(SenderIndexBundleStageFailure.ATOMIC_MOVE_UNAVAILABLE, result.reason)
+        assertEquals(1, fs.createdParts.size)
+        assertFalse(Files.exists(fs.createdParts.single(), LinkOption.NOFOLLOW_LINKS))
+        assertFalse(temporary(ownerA).exists())
+        assertFalse(destination(ownerA).exists())
+    }
+
+    @Test
+    fun partialPartFromSimulatedProcessDeathIsIgnoredByAReconstructedStager() = runBlocking {
+        val fs = RecordingFileSystem().apply { leaveOrphanAfterCreate = true }
+        val sealer = RandomAuthenticatedSealer()
+        val first = SenderIndexBundleStager(
+            roots = roots,
+            sealer = sealer,
+            codec = SenderIndexBundleCodec(),
+            fileSystem = fs,
+            wipe = { it.fill(0) },
+        ).stage(request(ownerA)) as SenderIndexBundleStageResult.Failure
+
+        assertEquals(SenderIndexBundleStageFailure.LOCAL_STORAGE, first.reason)
+        assertFalse(temporary(ownerA).exists())
+        val partialPart = fs.createdParts.single()
+        assertTrue(partialPart.fileName.toString().endsWith(".part"))
+        assertTrue(Files.isRegularFile(partialPart, LinkOption.NOFOLLOW_LINKS))
+        assertFalse(destination(ownerA).exists())
+
+        val second = SenderIndexBundleStager(
+            roots = roots,
+            sealer = sealer,
+            codec = SenderIndexBundleCodec(),
+            fileSystem = fs,
+            wipe = { it.fill(0) },
+        ).stage(request(ownerA))
+
+        assertTrue(second is SenderIndexBundleStageResult.Staged)
+        assertTrue(destination(ownerA).isFile)
+        assertFalse(temporary(ownerA).exists())
+        // The interrupted process's unique part is harmless and cannot block
+        // this invocation's fresh part or canonical destination.
+        assertTrue(Files.isRegularFile(partialPart, LinkOption.NOFOLLOW_LINKS))
+        assertTrue(fs.createdParts.drop(1).all { !Files.exists(it, LinkOption.NOFOLLOW_LINKS) })
+    }
+
+    @Test
+    fun unavailableUnsealPreservesTemporaryAndDestinationForLaterReplay() = runBlocking {
+        val fs = RecordingFileSystem().apply { failDestinationLink = true }
+        val sealer = RandomAuthenticatedSealer()
+        val stager = SenderIndexBundleStager(
+            roots = roots,
+            sealer = sealer,
+            codec = SenderIndexBundleCodec(),
+            fileSystem = fs,
+            wipe = { it.fill(0) },
+        )
+
+        val first = stager.stage(request(ownerA)) as SenderIndexBundleStageResult.Failure
+        assertEquals(SenderIndexBundleStageFailure.ATOMIC_MOVE_UNAVAILABLE, first.reason)
+        assertTrue(temporary(ownerA).isFile)
+        assertTrue(fs.createdParts.all { !Files.exists(it, LinkOption.NOFOLLOW_LINKS) })
+        val sealCallsAfterFirst = sealer.sealCalls
+
+        sealer.unsealUnavailable = true
+        val unavailableTemporary = stager.stage(request(ownerA)) as SenderIndexBundleStageResult.Failure
+        assertEquals(SenderIndexBundleStageFailure.LOCAL_STORAGE, unavailableTemporary.reason)
+        assertTrue(unavailableTemporary.retryable)
+        assertTrue(temporary(ownerA).isFile)
+        assertTrue(fs.createdParts.all { !Files.exists(it, LinkOption.NOFOLLOW_LINKS) })
+
+        fs.failDestinationLink = false
+        sealer.unsealUnavailable = false
+        val recovered = stager.stage(request(ownerA)) as SenderIndexBundleStageResult.Staged
+        assertTrue(recovered.durable.asFile().isFile)
+        assertEquals(sealCallsAfterFirst, sealer.sealCalls)
+        val winner = destination(ownerA).readBytes()
+
+        sealer.unsealUnavailable = true
+        val unavailableDestination = stager.stage(request(ownerA)) as SenderIndexBundleStageResult.Failure
+        assertEquals(SenderIndexBundleStageFailure.LOCAL_STORAGE, unavailableDestination.reason)
+        assertTrue(unavailableDestination.retryable)
+        assertArrayEquals(winner, destination(ownerA).readBytes())
+        assertEquals(sealCallsAfterFirst, sealer.sealCalls)
+
+        sealer.unsealUnavailable = false
+        assertTrue(stager.stage(request(ownerA)) is SenderIndexBundleStageResult.Staged)
     }
 
     @Test
@@ -437,6 +560,11 @@ class SenderIndexBundleStagerTest {
         "capsules/${capsule.toRestString()}.index.bundle",
     )
 
+    private fun temporary(owner: UserId): File = File(
+        roots.child(owner, AccountScopedFileRoots.ChildRoot.FINGERPRINTS),
+        "capsules/${capsule.toRestString()}.index.bundle.tmp",
+    )
+
     private inline fun <reified T : Throwable> assertThrows(block: () -> Unit) {
         try {
             block()
@@ -455,8 +583,11 @@ class SenderIndexBundleStagerTest {
 private class RandomAuthenticatedSealer : SecretSealer {
     private val key = SecretKeySpec(ByteArray(32) { (it + 1).toByte() }, "AES")
     private val random = SecureRandom()
+    var unsealUnavailable = false
+    var sealCalls = 0
 
     override fun seal(plaintext: ByteArray, aad: ByteArray): ByteArray {
+        sealCalls += 1
         val iv = ByteArray(12).also(random::nextBytes)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(128, iv))
@@ -465,12 +596,14 @@ private class RandomAuthenticatedSealer : SecretSealer {
     }
 
     override fun unseal(ciphertext: ByteArray, aad: ByteArray): ByteArray {
+        if (unsealUnavailable) error("injected local sealer unavailable")
         require(ciphertext.size > 12)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, ciphertext.copyOf(12)))
         cipher.updateAAD(aad)
         return cipher.doFinal(ciphertext.copyOfRange(12, ciphertext.size))
     }
+
 }
 
 private class CapturingSealer(private val fail: Boolean) : SecretSealer {
@@ -491,6 +624,11 @@ private class RecordingFileSystem : SenderIndexBundleFileSystem {
     var failNextDestinationForce = false
     var zeroRead = false
     var failWrite = false
+    var failAfterWriteBytes: Int? = null
+    var failLink = false
+    var failDestinationLink = false
+    val createdParts = mutableListOf<Path>()
+    var leaveOrphanAfterCreate = false
 
     override fun attributes(path: Path): SenderIndexBundleFileAttributes? = try {
         val attributes = Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
@@ -525,11 +663,46 @@ private class RecordingFileSystem : SenderIndexBundleFileSystem {
             failWrite = false
             throw IOException("injected write failure")
         }
-        return Files.newOutputStream(path, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
+        val delegate = Files.newOutputStream(path, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
+        createdParts.add(path)
+        if (leaveOrphanAfterCreate) {
+            leaveOrphanAfterCreate = false
+            delegate.write(byteArrayOf(1, 2, 3, 4))
+            delegate.close()
+            throw IOException("simulated process death after part creation")
+        }
+        val limit = failAfterWriteBytes ?: return delegate
+        failAfterWriteBytes = null
+        return object : OutputStream() {
+            private var written = 0
+
+            override fun write(value: Int) {
+                write(byteArrayOf(value.toByte()), 0, 1)
+            }
+
+            override fun write(buffer: ByteArray, offset: Int, length: Int) {
+                val remaining = limit - written
+                if (remaining <= 0) throw IOException("injected mid-write failure")
+                if (length > remaining) {
+                    delegate.write(buffer, offset, remaining)
+                    written += remaining
+                    throw IOException("injected mid-write failure")
+                }
+                delegate.write(buffer, offset, length)
+                written += length
+            }
+
+            override fun flush() = delegate.flush()
+
+            override fun close() = delegate.close()
+        }
     }
 
     override fun atomicNoReplaceLink(source: Path, destination: Path) {
         events += "link"
+        if (failLink || (failDestinationLink && destination.fileName.toString().endsWith(".index.bundle"))) {
+            throw java.nio.file.FileSystemException("injected link failure")
+        }
         Files.createLink(destination, source)
     }
 

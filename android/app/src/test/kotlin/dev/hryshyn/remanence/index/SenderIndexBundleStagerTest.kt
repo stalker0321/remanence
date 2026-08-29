@@ -13,10 +13,10 @@ import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.PostcardFingerprint
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import java.io.File
-import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
-import java.io.OutputStream
+import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
@@ -284,6 +284,83 @@ class SenderIndexBundleStagerTest {
     }
 
     @Test
+    fun regularFileSubstitutionAfterOwnedWriteCannotBeLinkedOrDeleted() = runBlocking {
+        val outside = File(filesDir, "outside").apply { check(mkdirs()) }
+        val sentinelBytes = byteArrayOf(6, 2, 6, 4, 2)
+        val sentinel = File(outside, "sentinel").apply { writeBytes(sentinelBytes) }
+        val fs = RecordingFileSystem().apply { substituteBeforeForceTarget = sentinel.toPath() }
+
+        val result = SenderIndexBundleStager(
+            roots = roots,
+            sealer = RandomAuthenticatedSealer(),
+            codec = SenderIndexBundleCodec(),
+            fileSystem = fs,
+            wipe = { it.fill(0) },
+        ).stage(request(ownerA)) as SenderIndexBundleStageResult.Failure
+
+        val replacedPart = fs.createdParts.single()
+        assertEquals(SenderIndexBundleStageFailure.LOCAL_STORAGE, result.reason)
+        assertTrue(Files.isRegularFile(replacedPart, LinkOption.NOFOLLOW_LINKS))
+        assertArrayEquals(sentinelBytes, Files.readAllBytes(replacedPart))
+        assertArrayEquals(sentinelBytes, sentinel.readBytes())
+        assertTrue(fs.deletedPaths.none { it == replacedPart })
+        assertFalse(temporary(ownerA).exists())
+        assertFalse(destination(ownerA).exists())
+    }
+
+    @Test
+    fun descriptorIdentityMismatchBeforeCapabilityReturnPreservesReplacement() = runBlocking {
+        val outside = File(filesDir, "outside").apply { check(mkdirs()) }
+        val sentinelBytes = byteArrayOf(1, 0, 1, 0, 1)
+        val sentinel = File(outside, "sentinel").apply { writeBytes(sentinelBytes) }
+        val fs = RecordingFileSystem().apply {
+            substituteBeforeCapabilityReturnTarget = sentinel.toPath()
+        }
+
+        val result = SenderIndexBundleStager(
+            roots = roots,
+            sealer = RandomAuthenticatedSealer(),
+            codec = SenderIndexBundleCodec(),
+            fileSystem = fs,
+            wipe = { it.fill(0) },
+        ).stage(request(ownerA)) as SenderIndexBundleStageResult.Failure
+
+        val replacedPart = fs.createdParts.single()
+        assertEquals(SenderIndexBundleStageFailure.LOCAL_STORAGE, result.reason)
+        assertArrayEquals(sentinelBytes, Files.readAllBytes(replacedPart))
+        assertArrayEquals(sentinelBytes, sentinel.readBytes())
+        assertTrue(fs.deletedPaths.isEmpty())
+        assertFalse(temporary(ownerA).exists())
+        assertFalse(destination(ownerA).exists())
+    }
+
+    @Test
+    fun regularFileSubstitutionAtTemporaryLinkBoundaryIsNotDeletedOrPublished() = runBlocking {
+        val outside = File(filesDir, "outside").apply { check(mkdirs()) }
+        val sentinelBytes = byteArrayOf(8, 5, 3, 0, 9)
+        val sentinel = File(outside, "sentinel").apply { writeBytes(sentinelBytes) }
+        val fs = RecordingFileSystem().apply {
+            substitutePartAfterTemporaryLinkTarget = sentinel.toPath()
+        }
+
+        val result = SenderIndexBundleStager(
+            roots = roots,
+            sealer = RandomAuthenticatedSealer(),
+            codec = SenderIndexBundleCodec(),
+            fileSystem = fs,
+            wipe = { it.fill(0) },
+        ).stage(request(ownerA)) as SenderIndexBundleStageResult.Failure
+
+        val replacedPart = fs.createdParts.single()
+        assertEquals(SenderIndexBundleStageFailure.LOCAL_STORAGE, result.reason)
+        assertArrayEquals(sentinelBytes, Files.readAllBytes(replacedPart))
+        assertArrayEquals(sentinelBytes, sentinel.readBytes())
+        assertTrue(temporary(ownerA).isFile)
+        assertTrue(fs.deletedPaths.isEmpty())
+        assertFalse(destination(ownerA).exists())
+    }
+
+    @Test
     fun successfulConcurrentSameCapsuleStageHasOneSafeWinner() = runBlocking {
         val fs = RecordingFileSystem()
         val stager = SenderIndexBundleStager(
@@ -319,7 +396,7 @@ class SenderIndexBundleStagerTest {
         val ownedPart = fs.createdParts.single()
         val parent = ownedPart.parent
         val firstLink = fs.events.indexOf("link")
-        val partForce = fs.events.indexOf("force-file:${ownedPart.fileName}")
+        val partForce = fs.events.indexOf("force-owned:${ownedPart.fileName}")
         val firstParentForce = fs.events.indexOf("force-dir:${parent.fileName}")
         val temporaryForce = fs.events.indexOf("force-file:${temporary(ownerA).toPath().fileName}")
         val partDelete = fs.events.indexOf("delete:${ownedPart.fileName}")
@@ -492,7 +569,7 @@ class SenderIndexBundleStagerTest {
             wipe = { it.fill(0) },
         ).stage(request(ownerA)) as SenderIndexBundleStageResult.Failure
 
-        assertEquals(SenderIndexBundleStageFailure.LOCAL_STORAGE, result.reason)
+        assertEquals(SenderIndexBundleStageFailure.ATOMIC_MOVE_UNAVAILABLE, result.reason)
         assertEquals(1, fs.createdParts.size)
         assertFalse(Files.exists(fs.createdParts.single(), LinkOption.NOFOLLOW_LINKS))
         assertFalse(temporary(ownerA).exists())
@@ -813,7 +890,10 @@ private class RecordingFileSystem : SenderIndexBundleFileSystem {
     var failAfterWriteBytes: Int? = null
     var failFreshPartCreation = false
     var providedFreshPart: Path? = null
+    var substituteBeforeCapabilityReturnTarget: Path? = null
     var substituteBeforeWriteTarget: Path? = null
+    var substituteBeforeForceTarget: Path? = null
+    var substitutePartAfterTemporaryLinkTarget: Path? = null
     var cancelDuringWrite: CancellationException? = null
     var cleanupForceCancellation: CancellationException? = null
     var failLink = false
@@ -832,6 +912,7 @@ private class RecordingFileSystem : SenderIndexBundleFileSystem {
             isRegularFile = attributes.isRegularFile,
             isDirectory = attributes.isDirectory,
             size = attributes.size(),
+            fileIdentity = attributes.fileKey()?.let(::SenderIndexBundleFileIdentity),
         )
     } catch (_: java.nio.file.NoSuchFileException) {
         null
@@ -859,29 +940,42 @@ private class RecordingFileSystem : SenderIndexBundleFileSystem {
             throw IOException("injected fresh part creation failure")
         }
         providedFreshPart?.let { path ->
-            return SenderIndexBundleOwnedPart(path, ByteArrayOutputStream())
+            val identity = Files.readAttributes(
+                path,
+                BasicFileAttributes::class.java,
+                LinkOption.NOFOLLOW_LINKS,
+            ).fileKey()?.let(::SenderIndexBundleFileIdentity)
+                ?: SenderIndexBundleFileIdentity("provided")
+            return SenderIndexBundleOwnedPart(path, identity, NoOpOwnedPartIo)
         }
         val path = parent.resolve("$prefix${UUID.randomUUID()}$suffix")
-        val delegate = Files.newOutputStream(
+        val delegate = FileChannel.open(
             path,
             StandardOpenOption.CREATE_NEW,
             StandardOpenOption.WRITE,
             LinkOption.NOFOLLOW_LINKS,
         )
         createdParts.add(path)
-        return SenderIndexBundleOwnedPart(path, recordingOutput(path, delegate))
+        val identity = Files.readAttributes(
+            path,
+            BasicFileAttributes::class.java,
+            LinkOption.NOFOLLOW_LINKS,
+        ).fileKey()?.let(::SenderIndexBundleFileIdentity)
+            ?: error("test filesystem must provide file identity")
+        substituteBeforeCapabilityReturnTarget?.let { replacement ->
+            substituteBeforeCapabilityReturnTarget = null
+            Files.deleteIfExists(path)
+            Files.copy(replacement, path)
+        }
+        return SenderIndexBundleOwnedPart(path, identity, recordingIo(path, delegate))
     }
 
-    private fun recordingOutput(path: Path, delegate: OutputStream): OutputStream = object : OutputStream() {
+    private fun recordingIo(path: Path, delegate: FileChannel): SenderIndexBundleOwnedPartIo = object : SenderIndexBundleOwnedPartIo {
         private var written = 0
         private var cancellationTriggered = false
         private val writeLimit = failAfterWriteBytes.also { failAfterWriteBytes = null }
 
-        override fun write(value: Int) {
-            write(byteArrayOf(value.toByte()), 0, 1)
-        }
-
-        override fun write(buffer: ByteArray, offset: Int, length: Int) {
+        override fun write(bytes: ByteArray) {
             openedWritePaths.add(path)
             val substitutionTarget = substituteBeforeWriteTarget
             if (substitutionTarget != null) {
@@ -897,39 +991,68 @@ private class RecordingFileSystem : SenderIndexBundleFileSystem {
             if (cancellation != null && !cancellationTriggered) {
                 cancellationTriggered = true
                 cancelDuringWrite = null
-                delegate.write(buffer, offset, minOf(length, 4))
+                delegate.write(ByteBuffer.wrap(bytes, 0, minOf(bytes.size, 4)))
                 throw cancellation
             }
             val limit = writeLimit
             if (limit != null) {
                 val remaining = limit - written
                 if (remaining <= 0) throw IOException("injected mid-write failure")
-                if (length > remaining) {
-                    delegate.write(buffer, offset, remaining)
+                if (bytes.size > remaining) {
+                    delegate.write(ByteBuffer.wrap(bytes, 0, remaining))
                     written += remaining
                     throw IOException("injected mid-write failure")
                 }
-                delegate.write(buffer, offset, length)
-                written += length
+                delegate.write(ByteBuffer.wrap(bytes))
+                written += bytes.size
                 return
             }
-            delegate.write(buffer, offset, length)
+            delegate.write(ByteBuffer.wrap(bytes))
         }
 
-        override fun flush() = delegate.flush()
+        override fun force() {
+            events += "force-owned:${path.fileName}"
+            val substitutionTarget = substituteBeforeForceTarget
+            if (substitutionTarget != null) {
+                substituteBeforeForceTarget = null
+                Files.deleteIfExists(path)
+                Files.copy(substitutionTarget, path)
+            }
+            if (failNextFileForce) {
+                failNextFileForce = false
+                throw IOException("injected force failure")
+            }
+            delegate.force(true)
+        }
 
         override fun close() = delegate.close()
     }
 
+    private object NoOpOwnedPartIo : SenderIndexBundleOwnedPartIo {
+        override fun write(bytes: ByteArray) = Unit
+        override fun force() = Unit
+        override fun close() = Unit
+    }
+
     override fun atomicNoReplaceLink(source: Path, destination: Path) {
         events += "link"
-        if (failLink || (failDestinationLink && destination.fileName.toString().endsWith(".index.bundle"))) {
-            throw java.nio.file.FileSystemException("injected link failure")
+        if (failLink) {
+            throw UnsupportedOperationException("injected unsupported link")
+        }
+        if (failDestinationLink && destination.fileName.toString().endsWith(".index.bundle")) {
+            throw java.nio.file.FileSystemException("injected destination link failure")
         }
         Files.createLink(destination, source)
         if (destination.fileName.toString().endsWith(".index.bundle.tmp") && throwAfterTemporaryLink) {
             throwAfterTemporaryLink = false
             throw java.nio.file.FileSystemException("injected post-link temporary failure")
+        }
+        if (destination.fileName.toString().endsWith(".index.bundle.tmp")) {
+            substitutePartAfterTemporaryLinkTarget?.let { replacement ->
+                substitutePartAfterTemporaryLinkTarget = null
+                Files.deleteIfExists(source)
+                Files.copy(replacement, source)
+            }
         }
         if (destination.fileName.toString().endsWith(".index.bundle") && throwAfterDestinationLink) {
             throwAfterDestinationLink = false

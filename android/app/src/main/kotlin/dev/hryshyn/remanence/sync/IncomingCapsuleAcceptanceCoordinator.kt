@@ -23,6 +23,7 @@ import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.LocalMaterialState
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.index.SenderIndexBundleReader
 import dev.hryshyn.remanence.protocol.v1.PublishStatement
 import java.io.IOException
 import java.nio.file.Files
@@ -207,6 +208,7 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
     private val verifiedControlIndexPersistence: IncomingVerifiedControlIndexPersistencePort,
     private val adoption: IncomingRecognitionAdoptionPort,
     private val commit: IncomingIndexCommitPort,
+    private val senderIndexBundleInspection: IncomingSenderIndexBundleInspectionPort,
 ) {
 
     /** Binds production concrete primitives without adding lifecycle or DI wiring. */
@@ -218,6 +220,7 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
         currentSession: suspend () -> IncomingSyncSession?,
         recipientBlobDownloadRepository: RecipientBlobDownloadRepository,
         controlIndexAcceptanceCoordinator: IncomingControlIndexAcceptanceCoordinator,
+        senderIndexBundleReader: SenderIndexBundleReader,
         verifiedControlIndexPersistence: IncomingVerifiedControlIndexPersistencePort,
         incomingRecognitionCiphertextAdopter: IncomingRecognitionCiphertextAdopter,
         incomingIndexAcceptanceCommitter: IncomingIndexAcceptanceCommitter,
@@ -245,6 +248,7 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
                     IncomingControlIndexAcceptancePortResult.Rejected(result.reason)
             }
         },
+        senderIndexBundleInspection = SenderIndexBundleInspectionAdapter(senderIndexBundleReader),
         verifiedControlIndexPersistence = verifiedControlIndexPersistence,
         adoption = IncomingRecognitionAdoptionPort { request ->
             incomingRecognitionCiphertextAdopter.adopt(request)
@@ -281,7 +285,7 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
                 when (initialDeclaration) {
                     is DeclarationLoad.Rejected -> return@withContext rejected(initialDeclaration.reason)
                     DeclarationLoad.AlreadyAccepted ->
-                        return@withContext IncomingCapsuleAcceptanceResult.IdempotentReplay
+                        return@withContext reconcileAlreadyAccepted(request)
                     is DeclarationLoad.Ready -> {
                         val lockKey = buildString {
                             append(request.ownerUserId.toRestString())
@@ -312,7 +316,7 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
                                 is DeclarationLoad.Rejected ->
                                     return@withContext rejected(declaration.reason)
                                 DeclarationLoad.AlreadyAccepted ->
-                                    return@withContext IncomingCapsuleAcceptanceResult.IdempotentReplay
+                                    return@withContext reconcileAlreadyAccepted(request)
                                 is DeclarationLoad.Ready -> declaration.declaration
                             }
 
@@ -573,6 +577,55 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
                     }
                 }
             }
+    }
+
+    /**
+     * Proves that an already advanced Room pair still has its owner-bound
+     * encrypted index bundle before acknowledging replay. The snapshot is
+     * deliberately close-only at this boundary and is closed on every exit.
+     */
+    private suspend fun reconcileAlreadyAccepted(
+        request: IncomingCapsuleAcceptanceRequest,
+    ): IncomingCapsuleAcceptanceResult {
+        val beforeInspection = when (
+            val checked = sessionFor(request.ownerUserId, initial = false)
+        ) {
+            is SessionCheck.Ready -> checked.session
+            is SessionCheck.Failure -> return checked.result
+        }
+        val inspection = try {
+            senderIndexBundleInspection.inspect(
+                IncomingSenderIndexBundleInspectionRequest(
+                    authenticatedOwnerUserId = beforeInspection.ownerUserId,
+                    ownerUserId = request.ownerUserId,
+                    capsuleId = request.capsuleId,
+                ),
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return retryable(IncomingCapsuleAcceptanceRetryReason.VERIFIED_PAYLOAD_PERSISTENCE)
+        }
+
+        val snapshot = (inspection as? IncomingSenderIndexBundleInspectionResult.Available)
+            ?.snapshot
+        return try {
+            when (val checked = sessionFor(request.ownerUserId, initial = false)) {
+                is SessionCheck.Ready -> Unit
+                is SessionCheck.Failure -> return checked.result
+            }
+            when (inspection) {
+                is IncomingSenderIndexBundleInspectionResult.Available ->
+                    IncomingCapsuleAcceptanceResult.IdempotentReplay
+                IncomingSenderIndexBundleInspectionResult.Missing,
+                IncomingSenderIndexBundleInspectionResult.Invalid,
+                -> rejected(IncomingCapsuleAcceptanceRejectionReason.DURABLE_STATE_INVALID)
+                is IncomingSenderIndexBundleInspectionResult.Unavailable ->
+                    retryable(IncomingCapsuleAcceptanceRetryReason.VERIFIED_PAYLOAD_PERSISTENCE)
+            }
+        } finally {
+            snapshot?.close()
+        }
     }
 
     private suspend fun sessionFor(

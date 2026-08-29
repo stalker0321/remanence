@@ -155,15 +155,182 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
         ).accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
         assertIs<IncomingCapsuleAcceptanceResult.Committed>(first)
 
+        var snapshotClosed = 0
         val replay = coordinator(
             download = IncomingRecipientBlobDownloader { _, _ ->
                 downloads.incrementAndGet()
                 throw AssertionError("idempotent replay must not download")
             },
+            inspection = availableInspection { snapshotClosed += 1 },
         ).accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
 
         assertIs<IncomingCapsuleAcceptanceResult.IdempotentReplay>(replay)
         assertEquals(1, downloads.get())
+        assertEquals(1, snapshotClosed)
+    }
+
+    @Test
+    fun durableReplayRequiresExistingIndexBundleAndNeverRunsAcceptancePipeline() = runBlocking {
+        seed()
+        assertIs<IncomingCapsuleAcceptanceResult.Committed>(
+            coordinator().accept(IncomingCapsuleAcceptanceRequest(owner, capsule)),
+        )
+
+        val calls = AtomicInteger(0)
+        val missing = coordinator(
+            inspection = IncomingSenderIndexBundleInspectionPort {
+                calls.incrementAndGet()
+                IncomingSenderIndexBundleInspectionResult.Missing
+            },
+            download = IncomingRecipientBlobDownloader { _, _ ->
+                throw AssertionError("missing durable index must not download")
+            },
+            control = IncomingControlIndexAcceptancePort {
+                throw AssertionError("missing durable index must not re-run crypto")
+            },
+            adoptionPort = IncomingRecognitionAdoptionPort {
+                throw AssertionError("missing durable index must not adopt")
+            },
+            commitPort = IncomingIndexCommitPort { _, _ ->
+                throw AssertionError("missing durable index must not commit")
+            },
+        ).accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+        assertEquals(
+            IncomingCapsuleAcceptanceRejectionReason.DURABLE_STATE_INVALID,
+            assertIs<IncomingCapsuleAcceptanceResult.Rejected>(missing).reason,
+        )
+        assertEquals(1, calls.get())
+
+        val corrupt = coordinator(
+            inspection = IncomingSenderIndexBundleInspectionPort {
+                IncomingSenderIndexBundleInspectionResult.Invalid
+            },
+        ).accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+        assertEquals(
+            IncomingCapsuleAcceptanceRejectionReason.DURABLE_STATE_INVALID,
+            assertIs<IncomingCapsuleAcceptanceResult.Rejected>(corrupt).reason,
+        )
+    }
+
+    @Test
+    fun durableReplayUnavailableIsRetryableAndSnapshotClosesAfterAccountSwitch() = runBlocking {
+        seed()
+        assertIs<IncomingCapsuleAcceptanceResult.Committed>(
+            coordinator().accept(IncomingCapsuleAcceptanceRequest(owner, capsule)),
+        )
+
+        val unavailable = coordinator(
+            inspection = IncomingSenderIndexBundleInspectionPort {
+                IncomingSenderIndexBundleInspectionResult.Unavailable(
+                    IncomingSenderIndexBundleInspectionUnavailableReason.SEALER_UNAVAILABLE,
+                )
+            },
+        ).accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+        assertEquals(
+            IncomingCapsuleAcceptanceRetryReason.VERIFIED_PAYLOAD_PERSISTENCE,
+            assertIs<IncomingCapsuleAcceptanceResult.Retryable>(unavailable).reason,
+        )
+
+        var snapshotClosed = 0
+        val switched = coordinator(
+            session = sessionSequence(
+                IncomingSyncSession(owner, "token"),
+                IncomingSyncSession(owner, "token"),
+                IncomingSyncSession(otherOwner, "other-token"),
+            ),
+            inspection = availableInspection { snapshotClosed += 1 },
+            download = IncomingRecipientBlobDownloader { _, _ ->
+                throw AssertionError("account switch replay must not download")
+            },
+        ).accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+        assertEquals(
+            IncomingCapsuleAcceptanceRejectionReason.ACCOUNT_CHANGED,
+            assertIs<IncomingCapsuleAcceptanceResult.Rejected>(switched).reason,
+        )
+        assertEquals(1, snapshotClosed)
+    }
+
+    @Test
+    fun durableReplayCloseFailureCannotMaskAccountChange() = runBlocking {
+        seed()
+        assertIs<IncomingCapsuleAcceptanceResult.Committed>(
+            coordinator().accept(IncomingCapsuleAcceptanceRequest(owner, capsule)),
+        )
+
+        var closeCalls = 0
+        val switched = coordinator(
+            session = sessionSequence(
+                IncomingSyncSession(owner, "token"),
+                IncomingSyncSession(owner, "token"),
+                IncomingSyncSession(otherOwner, "other-token"),
+            ),
+            inspection = availableInspection {
+                closeCalls += 1
+                throw IllegalStateException("close failure")
+            },
+        ).accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+
+        assertEquals(
+            IncomingCapsuleAcceptanceRejectionReason.ACCOUNT_CHANGED,
+            assertIs<IncomingCapsuleAcceptanceResult.Rejected>(switched).reason,
+        )
+        assertEquals(1, closeCalls)
+    }
+
+    @Test
+    fun inspectorIsNotCalledForDiscoveredDeclaration() = runBlocking {
+        seed()
+        var inspectionCalls = 0
+        val result = coordinator(
+            inspection = IncomingSenderIndexBundleInspectionPort {
+                inspectionCalls += 1
+                throw AssertionError("DISCOVERED declaration must not inspect durable index")
+            },
+        ).accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+        assertIs<IncomingCapsuleAcceptanceResult.Committed>(result)
+        assertEquals(0, inspectionCalls)
+    }
+
+    @Test
+    fun postLockAlreadyAcceptedUsesTheSameDurableReplayReconciliation() = runBlocking {
+        seed()
+        var sessionCalls = 0
+        var inspectionCalls = 0
+        var snapshotClosed = 0
+        var downloads = 0
+        val result = coordinator(
+            session = {
+                sessionCalls += 1
+                if (sessionCalls == 2) promoteToAlreadyAccepted()
+                IncomingSyncSession(owner, "token")
+            },
+            inspection = IncomingSenderIndexBundleInspectionPort { request ->
+                inspectionCalls += 1
+                assertEquals(owner, request.authenticatedOwnerUserId)
+                assertEquals(owner, request.ownerUserId)
+                assertEquals(capsule, request.capsuleId)
+                availableInspection { snapshotClosed += 1 }
+                    .inspect(request)
+            },
+            download = IncomingRecipientBlobDownloader { _, _ ->
+                downloads += 1
+                throw AssertionError("post-lock replay must not download")
+            },
+            control = IncomingControlIndexAcceptancePort {
+                throw AssertionError("post-lock replay must not re-run crypto")
+            },
+            adoptionPort = IncomingRecognitionAdoptionPort {
+                throw AssertionError("post-lock replay must not adopt")
+            },
+            commitPort = IncomingIndexCommitPort { _, _ ->
+                throw AssertionError("post-lock replay must not commit")
+            },
+        ).accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+
+        assertIs<IncomingCapsuleAcceptanceResult.IdempotentReplay>(result)
+        assertEquals(1, inspectionCalls)
+        assertEquals(1, snapshotClosed)
+        assertEquals(0, downloads)
     }
 
     @Test
@@ -675,6 +842,8 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
             IncomingVerifiedControlIndexPersistencePort { _, _ ->
                 IncomingVerifiedControlIndexPersistenceResult.Durable
             },
+        inspection: IncomingSenderIndexBundleInspectionPort =
+            availableInspection(),
         adoptionPort: IncomingRecognitionAdoptionPort = IncomingRecognitionAdoptionPort {
             adopter.adopt(it)
         },
@@ -692,7 +861,20 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
         verifiedControlIndexPersistence = persistence,
         adoption = adoptionPort,
         commit = commitPort,
+        senderIndexBundleInspection = inspection,
     )
+
+    private fun availableInspection(
+        onClose: () -> Unit = {},
+    ): IncomingSenderIndexBundleInspectionPort =
+        IncomingSenderIndexBundleInspectionPort { request ->
+            assertEquals(owner, request.authenticatedOwnerUserId)
+            assertEquals(owner, request.ownerUserId)
+            assertEquals(capsule, request.capsuleId)
+            IncomingSenderIndexBundleInspectionResult.Available(
+                IncomingSenderIndexBundleInspectionSnapshot(onClose),
+            )
+        }
 
     private fun writingDownloader(onCall: () -> Unit = {}): IncomingRecipientBlobDownloader =
         IncomingRecipientBlobDownloader { request, accessToken ->
@@ -765,6 +947,19 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
             )
         }
         blobs.forEach { database.blobCacheDao().upsertForOwner(ownerText, it) }
+    }
+
+    private fun promoteToAlreadyAccepted() {
+        incomingCiphertextPath().parentFile!!.mkdirs()
+        incomingCiphertextPath().writeBytes(bytes)
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE blob_cache SET cache_state = 'CACHED' " +
+                "WHERE blob_id = '${blob.toRestString()}' AND owner_user_id = '${owner.toRestString()}'",
+        )
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE incoming_capsule SET material_state = 'INDEX_CACHED' " +
+                "WHERE capsule_id = '${capsule.toRestString()}' AND owner_user_id = '${owner.toRestString()}'",
+        )
     }
 
     private fun assertInitialState() = runBlocking {

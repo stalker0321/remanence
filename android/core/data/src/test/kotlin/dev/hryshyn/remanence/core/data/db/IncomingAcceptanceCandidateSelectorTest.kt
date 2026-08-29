@@ -13,6 +13,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -118,7 +119,7 @@ class IncomingAcceptanceCandidateSelectorTest {
     }
 
     @Test
-    fun malformedDurableIdentityIsUnavailableAndCancellationPropagates() {
+    fun malformedDurableIdentityIsUnavailable() {
         insertRaw(
             database.openHelper.writableDatabase,
             entity(ownerA.toRestString(), capsule(1), 10, "READY", LocalMaterialState.DISCOVERED)
@@ -129,10 +130,34 @@ class IncomingAcceptanceCandidateSelectorTest {
             runBlocking { selector.select(ownerA, limit = 1) },
         )
 
-        database.close()
-        assertThrows(CancellationException::class.java) {
-            runBlocking { selector.select(ownerA, limit = 1) }
+    }
+
+    @Test
+    fun exactQueryCancellationInstancePropagates() {
+        val expected = CancellationException("specific cancellation")
+        val cancellingSelector = IncomingAcceptanceCandidateSelector(
+            query = IncomingAcceptanceCandidateQuery { _, _, _, _ -> throw expected },
+            maxPageSize = 3,
+        )
+
+        val actual = assertThrows(CancellationException::class.java) {
+            runBlocking { cancellingSelector.select(ownerA, limit = 1) }
         }
+        assertSame(expected, actual)
+    }
+
+    @Test
+    fun negativeDurableOrderingKeyMakesWholePageUnavailable() = runBlocking {
+        insert(ownerA, capsule(2), 10)
+        insertRaw(
+            database.openHelper.writableDatabase,
+            entity(ownerA.toRestString(), capsule(1), -1, "READY", LocalMaterialState.DISCOVERED),
+        )
+
+        assertEquals(
+            IncomingAcceptanceCandidateSelection.Unavailable,
+            selector.select(ownerA, limit = 3),
+        )
     }
 
     @Test
@@ -150,17 +175,30 @@ class IncomingAcceptanceCandidateSelectorTest {
         assertFalse(candidate.toString().contains(capsule(1).toRestString()))
         assertFalse(IncomingAcceptanceCandidateKey(10, capsule(1)).toString().contains(capsule(1).toRestString()))
         assertFalse(IncomingAcceptanceCandidateSelection.Page(listOf(candidate)).toString().contains(capsule(1).toRestString()))
+        val row = IncomingAcceptanceCandidateRow(capsule(1).toRestString(), 10)
+        assertEquals("IncomingAcceptanceCandidateRow(<redacted>)", row.toString())
+        assertFalse(row.toString().contains(capsule(1).toRestString()))
+        assertFalse(row.toString().contains("10"))
         assertEquals("IncomingAcceptanceCandidateSelector(<redacted>)", selector.toString())
     }
 
     @Test
-    fun cursorRejectsNegativeTimestampAndMaximumMustBePositive() {
+    fun cursorAndConfiguredMaximumValidationEnforceAbsoluteHardBound() = runBlocking {
         assertThrows(IllegalArgumentException::class.java) {
             IncomingAcceptanceCandidateKey(-1, capsule(1))
         }
-        assertThrows(IllegalArgumentException::class.java) {
-            IncomingAcceptanceCandidateSelector(database.incomingCapsuleDao(), 0)
+        for (invalidMaximum in listOf(0, -1, IncomingAcceptanceCandidateSelector.HARD_MAX_PAGE_SIZE + 1, Int.MAX_VALUE)) {
+            assertThrows(IllegalArgumentException::class.java) {
+                IncomingAcceptanceCandidateSelector(database.incomingCapsuleDao(), invalidMaximum)
+            }
         }
+
+        val lowerMaximum = IncomingAcceptanceCandidateSelector(database.incomingCapsuleDao(), 2)
+        assertTrue(lowerMaximum.select(ownerA, limit = 2) is IncomingAcceptanceCandidateSelection.Page)
+        assertEquals(
+            IncomingAcceptanceCandidateSelection.InvalidRequest,
+            lowerMaximum.select(ownerA, limit = 3),
+        )
     }
 
     private suspend fun page(

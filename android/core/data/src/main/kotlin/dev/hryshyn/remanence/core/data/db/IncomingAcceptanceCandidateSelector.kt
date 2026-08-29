@@ -9,7 +9,19 @@ import kotlin.coroutines.cancellation.CancellationException
 internal data class IncomingAcceptanceCandidateRow(
     @ColumnInfo(name = "capsule_id") val capsuleId: String,
     @ColumnInfo(name = "ready_at_epoch_ms") val readyAtEpochMs: Long,
-)
+) {
+    override fun toString(): String = "IncomingAcceptanceCandidateRow(<redacted>)"
+}
+
+/** Internal test seam around the one exact production DAO query. */
+internal fun interface IncomingAcceptanceCandidateQuery {
+    suspend fun select(
+        ownerUserId: String,
+        afterReadyAtEpochMs: Long?,
+        afterCapsuleId: String?,
+        limit: Int,
+    ): List<IncomingAcceptanceCandidateRow>
+}
 
 /** Minimal deterministic identity of one capsule eligible for incoming acceptance. */
 data class IncomingAcceptanceCandidate(
@@ -44,12 +56,28 @@ sealed interface IncomingAcceptanceCandidateSelection {
 }
 
 /** Owner-scoped, bounded candidate selection; it performs no state mutation or acceptance work. */
-class IncomingAcceptanceCandidateSelector(
-    private val dao: IncomingCapsuleDao,
-    val maxPageSize: Int = DEFAULT_MAX_PAGE_SIZE,
+class IncomingAcceptanceCandidateSelector private constructor(
+    private val query: IncomingAcceptanceCandidateQuery,
+    val maxPageSize: Int,
 ) {
+    constructor(
+        dao: IncomingCapsuleDao,
+        maxPageSize: Int = HARD_MAX_PAGE_SIZE,
+    ) : this(
+        query = IncomingAcceptanceCandidateQuery(dao::selectAcceptanceCandidateRows),
+        maxPageSize = maxPageSize,
+    )
+
+    internal constructor(
+        query: IncomingAcceptanceCandidateQuery,
+        maxPageSize: Int = HARD_MAX_PAGE_SIZE,
+        @Suppress("UNUSED_PARAMETER") testSeam: Unit = Unit,
+    ) : this(query = query, maxPageSize = maxPageSize)
+
     init {
-        require(maxPageSize > 0) { "candidate page maximum must be positive" }
+        require(maxPageSize in 1..HARD_MAX_PAGE_SIZE) {
+            "candidate page maximum is invalid"
+        }
     }
 
     suspend fun select(
@@ -60,7 +88,7 @@ class IncomingAcceptanceCandidateSelector(
         if (!isValidLimit(limit)) return IncomingAcceptanceCandidateSelection.InvalidRequest
 
         return try {
-            val rows = dao.selectAcceptanceCandidateRows(
+            val rows = query.select(
                 ownerUserId = ownerUserId.toRestString(),
                 afterReadyAtEpochMs = after?.readyAtEpochMs,
                 afterCapsuleId = after?.capsuleId?.toRestString(),
@@ -68,6 +96,9 @@ class IncomingAcceptanceCandidateSelector(
             )
             IncomingAcceptanceCandidateSelection.Page(
                 rows.map { row ->
+                    require(row.readyAtEpochMs >= 0L) {
+                        "durable candidate ordering key is invalid"
+                    }
                     IncomingAcceptanceCandidate(
                         capsuleId = CapsuleId.parseRest(row.capsuleId),
                         readyAtEpochMs = row.readyAtEpochMs,
@@ -86,6 +117,6 @@ class IncomingAcceptanceCandidateSelector(
     override fun toString(): String = "IncomingAcceptanceCandidateSelector(<redacted>)"
 
     companion object {
-        const val DEFAULT_MAX_PAGE_SIZE: Int = 32
+        const val HARD_MAX_PAGE_SIZE: Int = 32
     }
 }

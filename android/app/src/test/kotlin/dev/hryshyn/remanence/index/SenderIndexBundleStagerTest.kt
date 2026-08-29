@@ -13,6 +13,7 @@ import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.PostcardFingerprint
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import java.io.File
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -261,6 +262,28 @@ class SenderIndexBundleStagerTest {
     }
 
     @Test
+    fun symlinkSubstitutionAfterOwnedCreateCannotRedirectTheWrite() = runBlocking {
+        val outside = File(filesDir, "outside").apply { check(mkdirs()) }
+        val sentinel = File(outside, "sentinel").apply { writeBytes(byteArrayOf(3, 1, 4, 1, 5)) }
+        val fs = RecordingFileSystem().apply { substituteBeforeWriteTarget = sentinel.toPath() }
+
+        val result = SenderIndexBundleStager(
+            roots = roots,
+            sealer = RandomAuthenticatedSealer(),
+            codec = SenderIndexBundleCodec(),
+            fileSystem = fs,
+            wipe = { it.fill(0) },
+        ).stage(request(ownerA)) as SenderIndexBundleStageResult.Failure
+
+        assertEquals(SenderIndexBundleStageFailure.LOCAL_STORAGE, result.reason)
+        assertArrayEquals(byteArrayOf(3, 1, 4, 1, 5), sentinel.readBytes())
+        assertTrue(Files.isSymbolicLink(fs.createdParts.single()))
+        assertTrue(fs.deletedPaths.isEmpty())
+        assertFalse(temporary(ownerA).exists())
+        assertFalse(destination(ownerA).exists())
+    }
+
+    @Test
     fun successfulConcurrentSameCapsuleStageHasOneSafeWinner() = runBlocking {
         val fs = RecordingFileSystem()
         val stager = SenderIndexBundleStager(
@@ -310,6 +333,7 @@ class SenderIndexBundleStagerTest {
         assertEquals(parent, fs.forceDirectoryPaths.first())
         assertTrue(fs.forceDirectoryPaths.all { it == parent })
         assertTrue(fs.deletedPaths.any { it == ownedPart })
+        assertEquals(listOf(ownedPart), fs.openedWritePaths.distinct())
         assertTrue(partForce < firstParentForce)
         assertTrue(firstParentForce < firstLink)
         assertTrue(firstLink < temporaryForce)
@@ -789,6 +813,7 @@ private class RecordingFileSystem : SenderIndexBundleFileSystem {
     var failAfterWriteBytes: Int? = null
     var failFreshPartCreation = false
     var providedFreshPart: Path? = null
+    var substituteBeforeWriteTarget: Path? = null
     var cancelDuringWrite: CancellationException? = null
     var cleanupForceCancellation: CancellationException? = null
     var failLink = false
@@ -828,56 +853,55 @@ private class RecordingFileSystem : SenderIndexBundleFileSystem {
         }
     }
 
-    override fun createFreshPart(parent: Path, prefix: String, suffix: String): Path {
+    override fun createFreshPart(parent: Path, prefix: String, suffix: String): SenderIndexBundleOwnedPart {
         if (failFreshPartCreation) {
             failFreshPartCreation = false
             throw IOException("injected fresh part creation failure")
         }
-        providedFreshPart?.let { return it }
-        return Files.createTempFile(parent, prefix, suffix).also { createdParts.add(it) }
+        providedFreshPart?.let { path ->
+            return SenderIndexBundleOwnedPart(path, ByteArrayOutputStream())
+        }
+        val path = parent.resolve("$prefix${UUID.randomUUID()}$suffix")
+        val delegate = Files.newOutputStream(
+            path,
+            StandardOpenOption.CREATE_NEW,
+            StandardOpenOption.WRITE,
+            LinkOption.NOFOLLOW_LINKS,
+        )
+        createdParts.add(path)
+        return SenderIndexBundleOwnedPart(path, recordingOutput(path, delegate))
     }
 
-    override fun openWrite(path: Path): OutputStream {
-        openedWritePaths.add(path)
-        if (failWrite) {
-            failWrite = false
-            throw IOException("injected write failure")
+    private fun recordingOutput(path: Path, delegate: OutputStream): OutputStream = object : OutputStream() {
+        private var written = 0
+        private var cancellationTriggered = false
+        private val writeLimit = failAfterWriteBytes.also { failAfterWriteBytes = null }
+
+        override fun write(value: Int) {
+            write(byteArrayOf(value.toByte()), 0, 1)
         }
-        val delegate = Files.newOutputStream(path, StandardOpenOption.WRITE)
-        val cancellation = cancelDuringWrite
-        if (cancellation != null) {
-            cancelDuringWrite = null
-            return object : OutputStream() {
-                private var triggered = false
 
-                override fun write(value: Int) {
-                    write(byteArrayOf(value.toByte()), 0, 1)
-                }
-
-                override fun write(buffer: ByteArray, offset: Int, length: Int) {
-                    if (!triggered) {
-                        triggered = true
-                        delegate.write(buffer, offset, minOf(length, 4))
-                        throw cancellation
-                    }
-                    delegate.write(buffer, offset, length)
-                }
-
-                override fun flush() = delegate.flush()
-
-                override fun close() = delegate.close()
+        override fun write(buffer: ByteArray, offset: Int, length: Int) {
+            openedWritePaths.add(path)
+            val substitutionTarget = substituteBeforeWriteTarget
+            if (substitutionTarget != null) {
+                substituteBeforeWriteTarget = null
+                Files.deleteIfExists(path)
+                Files.createSymbolicLink(path, substitutionTarget)
             }
-        }
-        val limit = failAfterWriteBytes ?: return delegate
-        failAfterWriteBytes = null
-        return object : OutputStream() {
-            private var written = 0
-
-            override fun write(value: Int) {
-                write(byteArrayOf(value.toByte()), 0, 1)
+            if (failWrite) {
+                failWrite = false
+                throw IOException("injected write failure")
             }
-
-            override fun write(buffer: ByteArray, offset: Int, length: Int) {
+            val cancellation = cancelDuringWrite
+            if (cancellation != null && !cancellationTriggered) {
+                cancellationTriggered = true
+                cancelDuringWrite = null
+                delegate.write(buffer, offset, minOf(length, 4))
+                throw cancellation
+            }
+            val limit = writeLimit
+            if (limit != null) {
                 val remaining = limit - written
                 if (remaining <= 0) throw IOException("injected mid-write failure")
                 if (length > remaining) {
@@ -887,12 +911,14 @@ private class RecordingFileSystem : SenderIndexBundleFileSystem {
                 }
                 delegate.write(buffer, offset, length)
                 written += length
+                return
             }
-
-            override fun flush() = delegate.flush()
-
-            override fun close() = delegate.close()
+            delegate.write(buffer, offset, length)
         }
+
+        override fun flush() = delegate.flush()
+
+        override fun close() = delegate.close()
     }
 
     override fun atomicNoReplaceLink(source: Path, destination: Path) {
@@ -924,7 +950,11 @@ private class RecordingFileSystem : SenderIndexBundleFileSystem {
             failNextDestinationForce = false
             throw java.io.IOException("injected force failure")
         }
-        java.nio.channels.FileChannel.open(path, StandardOpenOption.WRITE).use { it.force(true) }
+        java.nio.channels.FileChannel.open(
+            path,
+            StandardOpenOption.WRITE,
+            LinkOption.NOFOLLOW_LINKS,
+        ).use { it.force(true) }
     }
 
     override fun forceDirectory(path: Path) {

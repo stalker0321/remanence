@@ -17,6 +17,7 @@ import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
+import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.ensureActive
@@ -82,6 +83,41 @@ class DurableSenderIndexBundle internal constructor(
     internal fun asFile(): File = destinationFile
 
     override fun toString(): String = "DurableSenderIndexBundle(<redacted>)"
+}
+
+/**
+ * The only write capability returned for a newly created staging part. Its
+ * stream is opened by the exclusive create operation and has no path
+ * parameter, so staging cannot open TEMP, destination, or another file.
+ */
+internal class SenderIndexBundleOwnedPart internal constructor(
+    internal val path: Path,
+    private val output: OutputStream,
+) {
+    private var closed = false
+
+    internal fun write(bytes: ByteArray) = output.write(bytes)
+
+    internal fun flush() = output.flush()
+
+    internal fun close() {
+        if (closed) return
+        try {
+            output.close()
+        } finally {
+            closed = true
+        }
+    }
+
+    internal fun closeQuietly() {
+        try {
+            close()
+        } catch (_: Exception) {
+            // Cleanup must not mask the original result or cancellation.
+        }
+    }
+
+    override fun toString(): String = "SenderIndexBundleOwnedPart(<redacted>)"
 }
 
 /**
@@ -294,6 +330,7 @@ class SenderIndexBundleStager internal constructor(
         aad: ByteArray,
     ): SenderIndexBundleStageResult.Failure? {
         var ownedPart: Path? = null
+        var returnedPart: SenderIndexBundleOwnedPart? = null
         var sealed: ByteArray? = null
         try {
             sealed = try {
@@ -307,7 +344,7 @@ class SenderIndexBundleStager internal constructor(
                 return failure(SenderIndexBundleStageFailure.SEALING_FAILED, false)
             }
 
-            val returnedPart = try {
+            returnedPart = try {
                 fileSystem.createFreshPart(
                     parent = paths.parent,
                     prefix = paths.partPrefix,
@@ -318,9 +355,11 @@ class SenderIndexBundleStager internal constructor(
             } catch (_: Exception) {
                 return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
             }
+            val freshPart = returnedPart
+                ?: return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
             val normalizedPart = try {
-                val normalized = returnedPart.toAbsolutePath().normalize()
-                if (returnedPart != normalized ||
+                val normalized = freshPart.path.toAbsolutePath().normalize()
+                if (freshPart.path != normalized ||
                     normalized.parent != paths.parent ||
                     !normalized.startsWith(paths.root) ||
                     normalized.fileName.toString().length <=
@@ -354,10 +393,9 @@ class SenderIndexBundleStager internal constructor(
                 return failure(SenderIndexBundleStageFailure.PATH_UNSAFE, false)
             }
             try {
-                fileSystem.openWrite(normalizedPart).use { output ->
-                    output.write(sealed!!)
-                    output.flush()
-                }
+                freshPart.write(sealed!!)
+                freshPart.flush()
+                freshPart.close()
                 forceFile(normalizedPart)?.let { return it }
                 if (!forceDirectoryBestEffort(normalizedPart.parent!!)) {
                     return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
@@ -406,6 +444,7 @@ class SenderIndexBundleStager internal constructor(
                 ownedPart = null
             }
         } finally {
+            returnedPart?.closeQuietly()
             sealed?.let(wipe)
             ownedPart?.let { part ->
                 withContext(NonCancellable) {
@@ -899,8 +938,7 @@ internal interface SenderIndexBundleFileSystem {
     fun attributes(path: Path): SenderIndexBundleFileAttributes?
     fun makeDirectories(path: Path)
     fun openRead(path: Path): InputStream
-    fun createFreshPart(parent: Path, prefix: String, suffix: String): Path
-    fun openWrite(path: Path): OutputStream
+    fun createFreshPart(parent: Path, prefix: String, suffix: String): SenderIndexBundleOwnedPart
     fun atomicNoReplaceLink(source: Path, destination: Path)
     fun deleteIfExists(path: Path): Boolean
     fun forceFile(path: Path)
@@ -931,11 +969,27 @@ private object RealSenderIndexBundleFileSystem : SenderIndexBundleFileSystem {
     override fun openRead(path: Path): InputStream =
         Files.newInputStream(path, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)
 
-    override fun createFreshPart(parent: Path, prefix: String, suffix: String): Path =
-        Files.createTempFile(parent, prefix, suffix)
-
-    override fun openWrite(path: Path): OutputStream =
-        Files.newOutputStream(path, StandardOpenOption.WRITE)
+    override fun createFreshPart(
+        parent: Path,
+        prefix: String,
+        suffix: String,
+    ): SenderIndexBundleOwnedPart {
+        repeat(MAX_PART_CREATE_ATTEMPTS) {
+            val path = parent.resolve("$prefix${UUID.randomUUID()}$suffix")
+            try {
+                val output = Files.newOutputStream(
+                    path,
+                    StandardOpenOption.CREATE_NEW,
+                    StandardOpenOption.WRITE,
+                    LinkOption.NOFOLLOW_LINKS,
+                )
+                return SenderIndexBundleOwnedPart(path, output)
+            } catch (_: FileAlreadyExistsException) {
+                // This candidate was not owned; choose another fresh name.
+            }
+        }
+        throw IOException("fresh part creation exhausted")
+    }
 
     override fun atomicNoReplaceLink(source: Path, destination: Path) {
         Files.createLink(destination, source)
@@ -944,10 +998,16 @@ private object RealSenderIndexBundleFileSystem : SenderIndexBundleFileSystem {
     override fun deleteIfExists(path: Path): Boolean = Files.deleteIfExists(path)
 
     override fun forceFile(path: Path) {
-        java.nio.channels.FileChannel.open(path, StandardOpenOption.WRITE).use { it.force(true) }
+        java.nio.channels.FileChannel.open(
+            path,
+            StandardOpenOption.WRITE,
+            LinkOption.NOFOLLOW_LINKS,
+        ).use { it.force(true) }
     }
 
     override fun forceDirectory(path: Path) {
         java.nio.channels.FileChannel.open(path, StandardOpenOption.READ).use { it.force(true) }
     }
+
+    private const val MAX_PART_CREATE_ATTEMPTS = 16
 }

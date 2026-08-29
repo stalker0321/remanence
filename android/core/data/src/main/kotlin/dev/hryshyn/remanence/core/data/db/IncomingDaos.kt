@@ -45,6 +45,27 @@ sealed interface LocalMaterialTransitionResult {
 abstract class IncomingCapsuleDao {
 
     /**
+     * Bounded acceptance work projection for one exact owner. The nullable
+     * tuple is invocation-local keyset state; durable material-state changes
+     * make restarting from the beginning safe after process death.
+     */
+    @Query(
+        "SELECT capsule_id, ready_at_epoch_ms FROM incoming_capsule " +
+            "WHERE owner_user_id = :ownerUserId " +
+            "AND server_status = 'READY' AND material_state = 'DISCOVERED' " +
+            "AND (:afterReadyAtEpochMs IS NULL " +
+            "OR ready_at_epoch_ms > :afterReadyAtEpochMs " +
+            "OR (ready_at_epoch_ms = :afterReadyAtEpochMs AND capsule_id > :afterCapsuleId)) " +
+            "ORDER BY ready_at_epoch_ms ASC, capsule_id ASC LIMIT :limit",
+    )
+    internal abstract suspend fun selectAcceptanceCandidateRows(
+        ownerUserId: String,
+        afterReadyAtEpochMs: Long?,
+        afterCapsuleId: String?,
+        limit: Int,
+    ): List<IncomingAcceptanceCandidateRow>
+
+    /**
      * Owner-preserving idempotent page write. [ownerUserId] is authoritative;
      * every entity must carry exactly that owner before any database work.
      * On the same immutable capsule

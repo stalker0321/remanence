@@ -261,6 +261,11 @@ class AppContainer(
         apiStack.recipientUserLookupRepository
     }
 
+    /** A11a opaque recipient ciphertext GET; adoption and acceptance remain A11b. */
+    val recipientBlobDownloadRepository: dev.hryshyn.remanence.core.data.network.RecipientBlobDownloadRepository by lazy {
+        apiStack.recipientBlobDownloadRepository
+    }
+
     /** A09 account-scoped incoming page fetch and atomic Room commit seam. */
     val incomingCapsuleSyncRepository: dev.hryshyn.remanence.core.data.db.IncomingCapsuleSyncRepository by lazy {
         dev.hryshyn.remanence.core.data.db.IncomingCapsuleSyncRepository(

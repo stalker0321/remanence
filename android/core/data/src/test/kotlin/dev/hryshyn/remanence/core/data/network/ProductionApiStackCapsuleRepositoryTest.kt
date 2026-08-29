@@ -1,5 +1,7 @@
 package dev.hryshyn.remanence.core.data.network
 
+import java.io.File
+import java.nio.file.Files
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
@@ -12,6 +14,7 @@ import mockwebserver3.Dispatcher
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import mockwebserver3.RecordedRequest
+import okio.Buffer
 import dev.hryshyn.remanence.core.model.BlobId
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
 import dev.hryshyn.remanence.core.model.CapsuleId
@@ -58,6 +61,42 @@ class ProductionApiStackCapsuleRepositoryTest {
         assertIs<CapsuleBlobUploadResult.Success>(result)
         assertEquals(204, result.httpStatus)
         assertRefreshAndRetry(trace)
+    }
+
+    @Test
+    fun recipientBlobDownloadUsesAuthenticatedStackAndRetriesOnceAfterRefresh() = runTest {
+        val payload = "opaque-recipient-download".toByteArray()
+        val root = Files.createTempDirectory("recipient-blob-stack-").toFile()
+        try {
+            val destination = File(root, "ciphertext.tmp")
+            val (result, trace) = withAuthenticatedStack(
+                path = "/v1/capsules/${capsuleId.toRestString()}/blobs/${blobId.toRestString()}",
+                success = MockResponse.Builder()
+                    .code(200)
+                    .setHeader("Content-Type", "application/octet-stream")
+                    .setHeader("Content-Length", payload.size)
+                    .setHeader("ETag", "\"${sha256(payload).joinToString("") { "%02x".format(it.toInt() and 0xff) }}\"")
+                    .body(Buffer().write(payload))
+                    .build(),
+            ) { stack ->
+                stack.recipientBlobDownloadRepository.downloadBlob(
+                    RecipientBlobDownloadRequest(
+                        capsuleId = capsuleId,
+                        blobId = blobId,
+                        expectedCiphertextSize = payload.size.toLong(),
+                        expectedCiphertextSha256 = sha256(payload),
+                        destination = destination,
+                    ),
+                    OLD_ACCESS,
+                )
+            }
+
+            assertIs<RecipientBlobDownloadResult.Success>(result)
+            assertEquals(payload.toList(), destination.readBytes().toList())
+            assertRefreshAndRetry(trace)
+        } finally {
+            root.deleteRecursively()
+        }
     }
 
     @Test

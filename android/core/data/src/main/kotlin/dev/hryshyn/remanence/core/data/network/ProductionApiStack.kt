@@ -46,6 +46,10 @@ class ProductionApiStack private constructor(
     val recipientUserLookupRepository: RecipientUserLookupRepository =
         RecipientUserLookupRepository(authenticatedClient, baseUrl)
 
+    /** Recipient ciphertext transport shares the authenticated refreshing client. */
+    val recipientBlobDownloadRepository: RecipientBlobDownloadRepository =
+        RecipientBlobDownloadRepository(authenticatedClient, baseUrl)
+
     /** Account-scoped incoming cursor pages use the same authenticated stack. */
     val incomingCapsuleRepository: IncomingCapsuleRepository =
         IncomingCapsuleRepository(authenticatedClient, baseUrl)

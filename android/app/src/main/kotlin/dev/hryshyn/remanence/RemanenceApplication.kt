@@ -13,6 +13,7 @@ import dev.hryshyn.remanence.core.crypto.KeysetKekWrapper
 import dev.hryshyn.remanence.core.crypto.SessionTokenStore
 import dev.hryshyn.remanence.core.crypto.TinkPrimitives
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
+import dev.hryshyn.remanence.core.data.db.IncomingSyncSession
 import dev.hryshyn.remanence.core.data.fingerprints.EncryptedFingerprintStore
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
 import dev.hryshyn.remanence.core.data.network.ApiBaseUrl
@@ -26,6 +27,11 @@ import dev.hryshyn.remanence.core.data.network.AuthResult
 import dev.hryshyn.remanence.core.data.network.HealthRepository
 import dev.hryshyn.remanence.core.data.network.RegistrationUserDto
 import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.core.model.KeyBundleId
+import dev.hryshyn.remanence.core.data.storage.IncomingRecognitionCiphertextAdopter
+import dev.hryshyn.remanence.core.data.db.IncomingIndexAcceptanceCommitter
+import dev.hryshyn.remanence.index.SenderIndexBundleReader
+import dev.hryshyn.remanence.index.SenderIndexBundleStager
 import dev.hryshyn.remanence.wiring.KekBoundSecretSealer
 import dev.hryshyn.remanence.session.IdentityAvailabilityPort
 import dev.hryshyn.remanence.session.SessionBootstrap
@@ -33,6 +39,10 @@ import dev.hryshyn.remanence.session.SessionTokenPort
 import dev.hryshyn.remanence.sync.CapsuleUploadOrchestrator
 import dev.hryshyn.remanence.sync.CapsuleUploadResumer
 import dev.hryshyn.remanence.sync.CapsuleUploadWorker
+import dev.hryshyn.remanence.sync.CurrentRecipientEncryptionIdentity
+import dev.hryshyn.remanence.sync.IncomingCapsuleAcceptanceCoordinator
+import dev.hryshyn.remanence.sync.IncomingControlIndexAcceptanceCoordinator
+import dev.hryshyn.remanence.sync.SenderIndexBundlePersistenceAdapter
 import dev.hryshyn.remanence.wiring.TinkRegistrationIdentityAdapter
 
 /**
@@ -94,6 +104,11 @@ class AppContainer(
     /** Non-exportable Android Keystore KEKs; overridable for JVM tests. */
     val kekBoundary: KekBoundary = kekBoundaryOverride ?: AndroidKeystoreKekBoundary()
 
+    /** One lazy fingerprint/index sealer shared by all local index boundaries. */
+    internal val fingerprintSealer: KekBoundSecretSealer by lazy {
+        KekBoundSecretSealer(kekBoundary, KekBoundSecretSealer.FINGERPRINT_SEALING_ALIAS)
+    }
+
     /**
      * M2-P02/P04: every sealed fingerprint row is attributed to the
      * authenticated local account at write time, and its ciphertext file
@@ -104,7 +119,7 @@ class AppContainer(
     val fingerprintPersistence: SealedFingerprintPersistence by lazy {
         EncryptedFingerprintStore(
             roots = accountScopedFileRoots,
-            sealer = KekBoundSecretSealer(kekBoundary, KekBoundSecretSealer.FINGERPRINT_SEALING_ALIAS),
+            sealer = fingerprintSealer,
             dao = database.recognitionFingerprintDao(),
             ownerUserIdProvider = {
                 val row = currentAccountStore.loadEntity()
@@ -316,6 +331,55 @@ class AppContainer(
         )
     }
 
+    /** A12a sender-index primitives; all share the one fingerprint sealer. */
+    internal val senderIndexBundleStager: SenderIndexBundleStager by lazy {
+        SenderIndexBundleStager(accountScopedFileRoots, fingerprintSealer)
+    }
+
+    internal val senderIndexBundleReader: SenderIndexBundleReader by lazy {
+        SenderIndexBundleReader(accountScopedFileRoots, fingerprintSealer)
+    }
+
+    internal val senderIndexBundlePersistenceAdapter: SenderIndexBundlePersistenceAdapter by lazy {
+        SenderIndexBundlePersistenceAdapter(senderIndexBundleStager)
+    }
+
+    /** A11b acceptance uses the live recipient identity and trusted sender boundary. */
+    internal val incomingControlIndexAcceptanceCoordinator: IncomingControlIndexAcceptanceCoordinator by lazy {
+        IncomingControlIndexAcceptanceCoordinator(
+            incomingCapsuleDao = database.incomingCapsuleDao(),
+            incomingEnvelopeDao = database.incomingEnvelopeDao(),
+            blobCacheDao = database.blobCacheDao(),
+            currentRecipientIdentity = { currentRecipientEncryptionIdentity() },
+            trustedSenderKeys = trustedSenderKeys,
+        )
+    }
+
+    internal val incomingRecognitionCiphertextAdopter: IncomingRecognitionCiphertextAdopter by lazy {
+        IncomingRecognitionCiphertextAdopter(accountScopedFileRoots)
+    }
+
+    internal val incomingIndexAcceptanceCommitter: IncomingIndexAcceptanceCommitter by lazy {
+        IncomingIndexAcceptanceCommitter(database, accountScopedFileRoots)
+    }
+
+    /** A11d1 composition; construction is lazy and no worker/scheduler is invoked here. */
+    val incomingCapsuleAcceptanceCoordinator: IncomingCapsuleAcceptanceCoordinator by lazy {
+        IncomingCapsuleAcceptanceCoordinator(
+            incomingCapsuleDao = database.incomingCapsuleDao(),
+            incomingEnvelopeDao = database.incomingEnvelopeDao(),
+            blobCacheDao = database.blobCacheDao(),
+            roots = accountScopedFileRoots,
+            currentSession = { currentIncomingAcceptanceSession() },
+            recipientBlobDownloadRepository = apiStack.recipientBlobDownloadRepository,
+            controlIndexAcceptanceCoordinator = incomingControlIndexAcceptanceCoordinator,
+            senderIndexBundleReader = senderIndexBundleReader,
+            verifiedControlIndexPersistence = senderIndexBundlePersistenceAdapter,
+            incomingRecognitionCiphertextAdopter = incomingRecognitionCiphertextAdopter,
+            incomingIndexAcceptanceCommitter = incomingIndexAcceptanceCommitter,
+        )
+    }
+
     /**
      * FIX-REVIEW-03: THE single memory-only scan-grant authority
      * (docs/architecture.md section 5). Issued by the scan flow after real
@@ -399,6 +463,92 @@ class AppContainer(
             owner,
         ).await()
     }
+
+    /** Returns a typed snapshot only while the durable current-account row is coherent. */
+    private suspend fun currentAuthenticatedAccount(): AuthenticatedAccountSnapshot? {
+        val row = currentAccountStore.loadEntity() ?: return null
+        val summary = currentAccountStore.load() ?: return null
+        if (row.userId != summary.userId || row.activeKeyBundleId != summary.activeKeyBundleId) {
+            return null
+        }
+        val owner = runCatching { UserId.parseRest(row.userId) }.getOrNull() ?: return null
+        val activeKeyBundleId = runCatching { KeyBundleId.parseRest(row.activeKeyBundleId) }.getOrNull()
+            ?: return null
+        if (owner.toRestString() != row.userId ||
+            activeKeyBundleId.toRestString() != row.activeKeyBundleId
+        ) {
+            return null
+        }
+        return AuthenticatedAccountSnapshot(owner, activeKeyBundleId)
+    }
+
+    private suspend fun currentIncomingAcceptanceSession(): IncomingSyncSession? =
+        currentIncomingAcceptanceSession { }
+
+    private suspend fun currentIncomingAcceptanceSession(
+        beforeCredentialRecheck: suspend () -> Unit,
+    ): IncomingSyncSession? {
+        val account = currentAuthenticatedAccount() ?: return null
+        val token = authTokenHolder.accessToken?.takeIf { it.isNotBlank() } ?: return null
+        val accountStillCurrent = currentAuthenticatedAccount() == account
+        beforeCredentialRecheck()
+        if (!accountStillCurrent || authTokenHolder.accessToken != token) return null
+        return IncomingSyncSession(account.ownerUserId, token)
+    }
+
+    private suspend fun currentRecipientEncryptionIdentity(): CurrentRecipientEncryptionIdentity? =
+        currentRecipientEncryptionIdentity { }
+
+    private suspend fun currentRecipientEncryptionIdentity(
+        beforeCredentialRecheck: suspend () -> Unit,
+    ): CurrentRecipientEncryptionIdentity? {
+        val account = currentAuthenticatedAccount() ?: return null
+        val token = authTokenHolder.accessToken?.takeIf { it.isNotBlank() } ?: return null
+        val loaded = try {
+            identityRepository.load()
+        } catch (_: Exception) {
+            return null
+        }
+        val encryptionHandle = when (loaded) {
+            is IdentityBundleRepository.LoadResult.Available -> loaded.encryptionHandle
+            IdentityBundleRepository.LoadResult.RecoveryRequired -> return null
+        }
+        val publicExport = try {
+            com.google.crypto.tink.TinkProtoKeysetFormat.serializeKeysetWithoutSecret(
+                encryptionHandle.publicKeysetHandle,
+            )
+        } catch (_: Exception) {
+            return null
+        }
+        val exactBundle = try {
+            deriveKeyBundleId(publicExport) == account.activeKeyBundleId.toRestString()
+        } finally {
+            publicExport.fill(0)
+        }
+        val accountStillCurrent = currentAuthenticatedAccount() == account
+        beforeCredentialRecheck()
+        if (!exactBundle || !accountStillCurrent || authTokenHolder.accessToken != token) return null
+        return CurrentRecipientEncryptionIdentity(
+            ownerUserId = account.ownerUserId,
+            activeKeyBundleId = account.activeKeyBundleId,
+            encryptionPrivateKeyset = encryptionHandle,
+        )
+    }
+
+    /** Test-only seam for proving the live session credential recheck. */
+    internal suspend fun hasIncomingAcceptanceSessionForTesting(
+        beforeCredentialRecheck: suspend () -> Unit,
+    ): Boolean = currentIncomingAcceptanceSession(beforeCredentialRecheck) != null
+
+    /** Test-only seam for proving the live recipient credential recheck. */
+    internal suspend fun hasCurrentRecipientEncryptionIdentityForTesting(
+        beforeCredentialRecheck: suspend () -> Unit,
+    ): Boolean = currentRecipientEncryptionIdentity(beforeCredentialRecheck) != null
+
+    private data class AuthenticatedAccountSnapshot(
+        val ownerUserId: UserId,
+        val activeKeyBundleId: KeyBundleId,
+    )
 
     /**
      * FIX-M1-007-07 logout ordering: snapshot the owner, await its

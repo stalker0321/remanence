@@ -1,6 +1,8 @@
 package dev.hryshyn.remanence.sync
 
 import dev.hryshyn.remanence.core.crypto.RecognitionManifestContent
+import dev.hryshyn.remanence.core.data.fingerprints.SecretSealer
+import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.index.DurableSenderIndexBundle
@@ -101,43 +103,54 @@ class SenderIndexBundlePersistenceAdapterTest {
     }
 
     @Test
-    fun everyNonRetryableStageFailureIsAStableTerminalInvariantRejection() = runBlocking {
-        SenderIndexBundleStageFailure.entries.forEach { reason ->
+    fun producibleTerminalStageFailuresKeepTheirExactClassification() = runBlocking {
+        val cases = listOf(
+            SenderIndexBundleStageFailure.NO_AUTHENTICATED_OWNER to
+                IncomingVerifiedControlIndexPersistenceRejectionReason.OWNER_MISMATCH,
+            SenderIndexBundleStageFailure.OWNER_MISMATCH to
+                IncomingVerifiedControlIndexPersistenceRejectionReason.OWNER_MISMATCH,
+            SenderIndexBundleStageFailure.INVALID_VERIFIED_RECOGNITION to
+                IncomingVerifiedControlIndexPersistenceRejectionReason.INVALID_VERIFIED_PAYLOAD,
+            SenderIndexBundleStageFailure.PATH_UNSAFE to
+                IncomingVerifiedControlIndexPersistenceRejectionReason.LOCAL_CAPABILITY_UNAVAILABLE,
+            SenderIndexBundleStageFailure.DESTINATION_CONFLICT to
+                IncomingVerifiedControlIndexPersistenceRejectionReason.LOCAL_CAPABILITY_UNAVAILABLE,
+            SenderIndexBundleStageFailure.SEALING_FAILED to
+                IncomingVerifiedControlIndexPersistenceRejectionReason.LOCAL_CAPABILITY_UNAVAILABLE,
+            SenderIndexBundleStageFailure.ATOMIC_MOVE_UNAVAILABLE to
+                IncomingVerifiedControlIndexPersistenceRejectionReason.LOCAL_CAPABILITY_UNAVAILABLE,
+            SenderIndexBundleStageFailure.DURABILITY_UNAVAILABLE to
+                IncomingVerifiedControlIndexPersistenceRejectionReason.LOCAL_CAPABILITY_UNAVAILABLE,
+        )
+        cases.forEach { (reason, expected) ->
             val result = SenderIndexBundlePersistenceAdapter {
                 SenderIndexBundleStageResult.Failure(reason, retryable = false)
             }.persist(request, owner)
 
             assertEquals(
                 "reason=$reason",
-                IncomingVerifiedControlIndexPersistenceResult.Rejected(
-                    if (reason == SenderIndexBundleStageFailure.NO_AUTHENTICATED_OWNER ||
-                        reason == SenderIndexBundleStageFailure.OWNER_MISMATCH
-                    ) {
-                        IncomingVerifiedControlIndexPersistenceRejectionReason.OWNER_MISMATCH
-                    } else {
-                        IncomingVerifiedControlIndexPersistenceRejectionReason.INVALID_VERIFIED_PAYLOAD
-                    },
-                ),
+                IncomingVerifiedControlIndexPersistenceResult.Rejected(expected),
                 result,
             )
         }
     }
 
     @Test
-    fun canonicalRetryableStageFailuresBecomeLocalStorageRetry() = runBlocking {
-        listOf(
-            SenderIndexBundleStageFailure.SEALING_FAILED,
-            SenderIndexBundleStageFailure.LOCAL_STORAGE,
-        ).forEach { reason ->
+    fun producibleRetryableStageFailuresKeepDependencyAndStorageDistinct() = runBlocking {
+        val cases = listOf(
+            SenderIndexBundleStageFailure.SEALING_FAILED to
+                IncomingVerifiedControlIndexPersistenceRetryReason.DEPENDENCY_UNAVAILABLE,
+            SenderIndexBundleStageFailure.LOCAL_STORAGE to
+                IncomingVerifiedControlIndexPersistenceRetryReason.LOCAL_STORAGE,
+        )
+        cases.forEach { (reason, expected) ->
             val result = SenderIndexBundlePersistenceAdapter {
                 SenderIndexBundleStageResult.Failure(reason, retryable = true)
             }.persist(request, owner)
 
             assertEquals(
                 "reason=$reason",
-                IncomingVerifiedControlIndexPersistenceResult.Retryable(
-                    IncomingVerifiedControlIndexPersistenceRetryReason.LOCAL_STORAGE,
-                ),
+                IncomingVerifiedControlIndexPersistenceResult.Retryable(expected),
                 result,
             )
         }
@@ -151,12 +164,45 @@ class SenderIndexBundlePersistenceAdapterTest {
 
         assertEquals(
             IncomingVerifiedControlIndexPersistenceResult.Retryable(
-                IncomingVerifiedControlIndexPersistenceRetryReason.LOCAL_STORAGE,
+                IncomingVerifiedControlIndexPersistenceRetryReason.DEPENDENCY_UNAVAILABLE,
             ),
             result,
         )
         assertFalse(result.toString().contains("private"))
         assertFalse(result.toString().contains("provider"))
+    }
+
+    @Test
+    fun realStagerInvalidRecognitionIsInvalidPayloadRatherThanLocalCapability() = runBlocking {
+        val filesDir = File(
+            System.getProperty("java.io.tmpdir"),
+            "remanence-a12b-adapter-${System.nanoTime()}",
+        )
+        check(filesDir.mkdirs())
+        try {
+            val neverUsedSealer = object : SecretSealer {
+                override fun seal(plaintext: ByteArray, aad: ByteArray): ByteArray =
+                    throw AssertionError("invalid recognition must fail before sealing")
+
+                override fun unseal(ciphertext: ByteArray, aad: ByteArray): ByteArray =
+                    throw AssertionError("invalid recognition must fail before unsealing")
+            }
+            val result = SenderIndexBundlePersistenceAdapter(
+                dev.hryshyn.remanence.index.SenderIndexBundleStager(
+                    AccountScopedFileRoots(filesDir),
+                    neverUsedSealer,
+                ),
+            ).persist(request, owner)
+
+            assertEquals(
+                IncomingVerifiedControlIndexPersistenceResult.Rejected(
+                    IncomingVerifiedControlIndexPersistenceRejectionReason.INVALID_VERIFIED_PAYLOAD,
+                ),
+                result,
+            )
+        } finally {
+            filesDir.deleteRecursively()
+        }
     }
 
     @Test

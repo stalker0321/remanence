@@ -404,6 +404,36 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
     }
 
     @Test
+    fun unavailableLocalCapabilityIsGenericPersistenceRejectionNotOwnerMismatch() = runBlocking {
+        seed()
+        var adoptionCalls = 0
+        var commitCalls = 0
+        val result = coordinator(
+            persistence = IncomingVerifiedControlIndexPersistencePort { _, _ ->
+                IncomingVerifiedControlIndexPersistenceResult.Rejected(
+                    IncomingVerifiedControlIndexPersistenceRejectionReason.LOCAL_CAPABILITY_UNAVAILABLE,
+                )
+            },
+            adoptionPort = IncomingRecognitionAdoptionPort {
+                adoptionCalls += 1
+                throw AssertionError("rejected persistence must stop adoption")
+            },
+            commitPort = IncomingIndexCommitPort { _, _ ->
+                commitCalls += 1
+                throw AssertionError("rejected persistence must stop commit")
+            },
+        ).accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+
+        assertEquals(
+            IncomingCapsuleAcceptanceRejectionReason.PERSISTENCE_REJECTED,
+            assertIs<IncomingCapsuleAcceptanceResult.Rejected>(result).reason,
+        )
+        assertEquals(0, adoptionCalls)
+        assertEquals(0, commitCalls)
+        assertInitialState()
+    }
+
+    @Test
     fun verifiedPersistenceCancellationStopsBeforeAdoptionAndCommit() = runBlocking {
         seed()
         val cancellation = CancellationException("persistence cancelled")

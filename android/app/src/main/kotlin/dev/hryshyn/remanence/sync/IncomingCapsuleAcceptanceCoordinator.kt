@@ -141,6 +141,7 @@ enum class IncomingVerifiedControlIndexPersistenceRejectionReason {
     OWNER_MISMATCH,
     ACCOUNT_CHANGED,
     INVALID_VERIFIED_PAYLOAD,
+    LOCAL_CAPABILITY_UNAVAILABLE,
 }
 
 /**
@@ -481,6 +482,8 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
                                 IncomingVerifiedControlIndexPersistenceRejectionReason.ACCOUNT_CHANGED ->
                                     rejected(IncomingCapsuleAcceptanceRejectionReason.ACCOUNT_CHANGED)
                                 IncomingVerifiedControlIndexPersistenceRejectionReason.INVALID_VERIFIED_PAYLOAD ->
+                                    rejected(IncomingCapsuleAcceptanceRejectionReason.PERSISTENCE_REJECTED)
+                                IncomingVerifiedControlIndexPersistenceRejectionReason.LOCAL_CAPABILITY_UNAVAILABLE ->
                                     rejected(IncomingCapsuleAcceptanceRejectionReason.PERSISTENCE_REJECTED)
                             }
                         }

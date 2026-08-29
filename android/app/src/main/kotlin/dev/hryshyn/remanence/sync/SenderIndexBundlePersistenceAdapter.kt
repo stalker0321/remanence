@@ -36,7 +36,7 @@ class SenderIndexBundlePersistenceAdapter internal constructor(
             throw cancelled
         } catch (_: Exception) {
             return IncomingVerifiedControlIndexPersistenceResult.Retryable(
-                IncomingVerifiedControlIndexPersistenceRetryReason.LOCAL_STORAGE,
+                IncomingVerifiedControlIndexPersistenceRetryReason.DEPENDENCY_UNAVAILABLE,
             )
         }
 
@@ -58,30 +58,29 @@ class SenderIndexBundlePersistenceAdapter internal constructor(
             SenderIndexBundleStageFailure.OWNER_MISMATCH,
             -> rejected(IncomingVerifiedControlIndexPersistenceRejectionReason.OWNER_MISMATCH)
 
-            SenderIndexBundleStageFailure.INVALID_VERIFIED_RECOGNITION,
+            SenderIndexBundleStageFailure.INVALID_VERIFIED_RECOGNITION ->
+                rejected(IncomingVerifiedControlIndexPersistenceRejectionReason.INVALID_VERIFIED_PAYLOAD)
+
             SenderIndexBundleStageFailure.PATH_UNSAFE,
             SenderIndexBundleStageFailure.DESTINATION_CONFLICT,
             SenderIndexBundleStageFailure.ATOMIC_MOVE_UNAVAILABLE,
             SenderIndexBundleStageFailure.DURABILITY_UNAVAILABLE,
-            -> if (failure.retryable) {
-                retryable()
-            } else {
-                rejected(IncomingVerifiedControlIndexPersistenceRejectionReason.INVALID_VERIFIED_PAYLOAD)
-            }
+            -> rejected(IncomingVerifiedControlIndexPersistenceRejectionReason.LOCAL_CAPABILITY_UNAVAILABLE)
 
             SenderIndexBundleStageFailure.SEALING_FAILED,
-            SenderIndexBundleStageFailure.LOCAL_STORAGE,
             -> if (failure.retryable) {
-                retryable()
+                retryable(IncomingVerifiedControlIndexPersistenceRetryReason.DEPENDENCY_UNAVAILABLE)
             } else {
-                rejected(IncomingVerifiedControlIndexPersistenceRejectionReason.INVALID_VERIFIED_PAYLOAD)
+                rejected(IncomingVerifiedControlIndexPersistenceRejectionReason.LOCAL_CAPABILITY_UNAVAILABLE)
             }
+
+            SenderIndexBundleStageFailure.LOCAL_STORAGE ->
+                retryable(IncomingVerifiedControlIndexPersistenceRetryReason.LOCAL_STORAGE)
         }
     }
 
-    private fun retryable() = IncomingVerifiedControlIndexPersistenceResult.Retryable(
-        IncomingVerifiedControlIndexPersistenceRetryReason.LOCAL_STORAGE,
-    )
+    private fun retryable(reason: IncomingVerifiedControlIndexPersistenceRetryReason) =
+        IncomingVerifiedControlIndexPersistenceResult.Retryable(reason)
 
     private fun rejected(reason: IncomingVerifiedControlIndexPersistenceRejectionReason) =
         IncomingVerifiedControlIndexPersistenceResult.Rejected(reason)

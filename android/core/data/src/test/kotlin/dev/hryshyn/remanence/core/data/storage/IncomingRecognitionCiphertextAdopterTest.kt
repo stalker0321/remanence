@@ -328,6 +328,27 @@ class IncomingRecognitionCiphertextAdopterTest {
     }
 
     @Test
+    fun directoryForcesUseDestinationParentBeforeUnlinkAndSourceParentAfterUnlink() = runBlocking {
+        val bytes = "directory-order".toByteArray()
+        val source = source(ownerA, "nested/recognition.tmp", bytes)
+        val fs = RecordingFileSystem()
+        val destinationParent = destination(ownerA).parentFile!!.toPath()
+        val sourceParent = source.parentFile!!.toPath()
+
+        val result = IncomingRecognitionCiphertextAdopter(roots, fs).adopt(request(source, bytes))
+
+        assertTrue(result is IncomingRecognitionCiphertextAdoptionResult.Adopted)
+        assertTrue(destinationParent != sourceParent)
+        assertEquals(
+            listOf(destinationParent, sourceParent),
+            fs.directoryForcePaths,
+        )
+        assertEquals(listOf(source.toPath()), fs.deletedPaths)
+        assertTrue(fs.directoryForceEvents.indexOf("delete") > fs.directoryForceEvents.indexOf("destination"))
+        assertTrue(fs.directoryForceEvents.indexOf("source") > fs.directoryForceEvents.indexOf("delete"))
+    }
+
+    @Test
     fun mkdirAndReadFailuresAreRetryableWithoutDeletingSource() = runBlocking {
         val bytes = "local-failure".toByteArray()
         val mkdirSource = source(ownerA, "mkdir.tmp", bytes)
@@ -411,6 +432,9 @@ class IncomingRecognitionCiphertextAdopterTest {
         var failDirectoryForce = false
         var failDelete = false
         var forceFileCalls = 0
+        val directoryForcePaths = mutableListOf<Path>()
+        val directoryForceEvents = mutableListOf<String>()
+        val deletedPaths = mutableListOf<Path>()
 
         override fun attributes(path: Path): IncomingFileAttributes? = try {
             val attrs = Files.readAttributes(
@@ -445,6 +469,8 @@ class IncomingRecognitionCiphertextAdopterTest {
 
         override fun deleteIfExists(path: Path): Boolean {
             if (failDelete) throw IOException("injected unlink failure")
+            deletedPaths.add(path)
+            directoryForceEvents.add("delete")
             return Files.deleteIfExists(path)
         }
 
@@ -457,6 +483,12 @@ class IncomingRecognitionCiphertextAdopterTest {
 
         override fun forceDirectory(path: Path) {
             if (failDirectoryForce) throw IOException("injected directory force failure")
+            directoryForcePaths.add(path)
+            directoryForceEvents.add(if (path.toString().contains("incoming-ciphertext")) {
+                "destination"
+            } else {
+                "source"
+            })
             java.nio.channels.FileChannel.open(path, StandardOpenOption.READ).use { it.force(true) }
         }
     }

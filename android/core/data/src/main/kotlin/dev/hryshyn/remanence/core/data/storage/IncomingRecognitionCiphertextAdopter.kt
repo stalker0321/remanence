@@ -470,9 +470,11 @@ class IncomingRecognitionCiphertextAdopter internal constructor(
                 } catch (_: IOException) {
                     return failure(IncomingRecognitionCiphertextAdoptionFailure.LOCAL_STORAGE, retryable = true)
                 }
-                // The destination is already durable. A second directory
-                // force records the source unlink when the platform permits.
-                forceDirectoryBestEffort(paths.destination.parent!!)
+                // The destination is already durable. The source's parent,
+                // not the incoming destination parent, records this unlink.
+                if (!forceDirectoryBestEffort(paths.source.parent!!)) {
+                    return failure(IncomingRecognitionCiphertextAdoptionFailure.LOCAL_STORAGE, retryable = true)
+                }
             }
             FileVerification.MISSING,
             FileVerification.SYMLINK,

@@ -194,6 +194,21 @@ ciphertext and verifies all bindings plus content-manifest AEAD/layout before
 publishing a grant or exposing any note/photo plaintext. Both stages share one
 canonical statement/ID verifier.
 
+### 6.8 Incoming acceptance drain quarantine boundary
+
+An acceptance attempt's account/session result, recipient key-history result,
+local capability or storage result, database/concurrency result, and any
+aggregate download, crypto, persistence, adoption, or commit rejection is not
+proof that the capsule is corrupt. A future drain must retry or stop
+fail-closed for those outcomes and must never quarantine them. In particular,
+recipient-bundle mismatch or unavailable historical key material is not a
+corruption signal.
+
+Quarantine requires a later exact owner-scoped `READY` + `DISCOVERED` Room
+compare-and-set that proves immutable per-capsule invalidity. The A12b4c1a
+classifier defines that boundary without mutating Room or files; the future
+A12b4c3 runner is not enabled by this checkpoint.
+
 ## 7. Canonical encoding and crypto agility
 
 - REST control messages use JSON, but all signed/encrypted logical payloads use deterministic Protocol Buffers (protobuf-lite on Android).

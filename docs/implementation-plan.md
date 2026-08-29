@@ -285,6 +285,7 @@ and authorization matrix before Android upload work consumes the API.
 | M2-A11d1 | A11a,A11b,A11c1,A11c2,A12b | Compose one already-discovered capsule: revalidate the authenticated owner and owner-scoped READY/DISCOVERED declaration, download recognition ciphertext to a deterministic owner TEMP file, require A11b Verified, require A12 durable encrypted fingerprint/hint persistence, then adopt through A11c1 and commit through A11c2; no scheduling, page-loop, content prefetch, or plaintext persistence here. | exact crypto → A12 persistence → adoption → Room order, account-switch, cleanup, retry, cancellation, idempotent replay, redaction, and real-file/Room stitch tests |
 | M2-A12a | A11b | Define the canonical local sender index bundle plaintext/codec and stage one owner/capsule-bound sealed ciphertext file with crash-safe no-replace/idempotent replay semantics; no Room activation or A11d1 wiring. | deterministic codec, limits, AAD, randomized-sealer replay, no-follow storage, durability, concurrency, cleanup, and plaintext-canary tests |
 | M2-A12b | A12a,A11d1 | Implement the mandatory A12 persistence port over A12a, returning durable only after the account-bound encrypted bundle is staged; only then may A11d1 adopt and advance A11c2 state. | exact A11b → A12a → A11c1 → A11c2 order, failure/process-death/account isolation, and no plaintext/index activation before durable staging |
+| M2-A12b4c1a | A12b4b | Define the pure incoming-acceptance drain disposition policy; classify success, account stop, retry, and fail-closed ambiguous outcomes without Room mutation or a runner. | exhaustive result/reason table; account/session/local capability/storage/database/concurrency failures never request quarantine |
 | M2-A13 | P12,S20 | Prefetch/cache every assigned capsule's remaining content/photo ciphertext by default, before scan, and verify transport bindings without decrypting content. Ciphertext download may precede envelope availability. | authorization/hash/restart/no-pre-scan-plaintext tests |
 | M2-A14 | A13,S21 | Mark `CIPHERTEXT_SYNCED` only after all required blobs are durable and hash-checked. | index-only never acknowledges test |
 | M2-A15 | A12,P14 | Feed only account-scoped verified sender candidates into the existing Scan flow. | two-candidate coordinator/no-list test |
@@ -363,6 +364,17 @@ failure is parked as `RecipientKeyStale` and can be rediscovered by the
 owner-scoped activation resumer. The generic `RECIPIENT_KEY_STALE` marker was
 only present in unreleased intermediate commits, is explicitly fail-closed,
 and is not a released database contract.
+
+### M2-A12b4c1a acceptance-drain policy
+
+This checkpoint is policy only. Account/session boundaries, recipient key
+history, local capability/storage failures, database/concurrency outcomes, and
+other aggregate rejection reasons never prove that a capsule is corrupt. The
+policy therefore leaves them retryable or fail-closed; it performs no Room or
+file mutation. Quarantine becomes eligible only after a future A12b4c2
+checkpoint provides an exact owner-scoped `READY` + `DISCOVERED` compare-and-set
+for a direct immutable per-capsule invalidity. A future A12b4c3 runner may
+consume this policy, but this commit cannot enable a drain.
 
 **Checkpoints A:** review after upload A01–A08, incoming index A09–A12,
 presentation A13–A21, and final two-device evidence. Do not review every

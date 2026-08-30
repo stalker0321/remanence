@@ -100,6 +100,19 @@ class ProductionApiStackCapsuleRepositoryTest {
     }
 
     @Test
+    fun recipientMaterialSyncedUsesAuthenticatedStackAndRetriesOnceAfterRefresh() = runTest {
+        val (result, trace) = withAuthenticatedStack(
+            path = "/v1/capsules/${capsuleId.toRestString()}/material-synced",
+            success = MockResponse.Builder().code(204).build(),
+        ) { stack ->
+            stack.recipientMaterialSyncedRepository.markMaterialSynced(capsuleId, OLD_ACCESS)
+        }
+
+        assertEquals(RecipientMaterialSyncedResult.Success(204), result)
+        assertRefreshAndRetry(trace)
+    }
+
+    @Test
     fun finalizeRepositoryUsesAuthenticatedStackAndRetriesOnceAfterRefresh() = runTest {
         val (result, trace) = withAuthenticatedStack(
             path = "/v1/capsules/${capsuleId.toRestString()}/finalize",

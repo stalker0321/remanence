@@ -50,6 +50,10 @@ class ProductionApiStack private constructor(
     val recipientBlobDownloadRepository: RecipientBlobDownloadRepository =
         RecipientBlobDownloadRepository(authenticatedClient, baseUrl)
 
+    /** Material acknowledgement transport shares the authenticated refreshing client. */
+    internal val recipientMaterialSyncedRepository: RecipientMaterialSyncedRepository =
+        RecipientMaterialSyncedRepository(authenticatedClient, baseUrl)
+
     /** Account-scoped incoming cursor pages use the same authenticated stack. */
     val incomingCapsuleRepository: IncomingCapsuleRepository =
         IncomingCapsuleRepository(authenticatedClient, baseUrl)

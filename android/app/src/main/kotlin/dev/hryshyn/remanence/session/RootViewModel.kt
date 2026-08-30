@@ -43,6 +43,8 @@ class RootViewModel internal constructor(
     private val sessionBootstrap: SessionStateResolver,
     /** Full teardown flow (server → session → local → grants); defaults to token-only clearing. */
     private val logoutAction: (suspend () -> Unit)? = null,
+    /** Invalidates any in-flight refresh before logout teardown begins. */
+    private val invalidateSessionRefreshes: () -> Unit = {},
     /** Authoritative memory-only grant lifecycle; injected as the single instance. */
     private val presentationGrants: PresentationGrantAuthority = PresentationGrantAuthority(),
     /**
@@ -133,6 +135,9 @@ class RootViewModel internal constructor(
     }
 
     fun logout() {
+        // A refresh already in flight must not publish the old account after
+        // this account boundary begins; the coordinator fences it atomically.
+        invalidateSessionRefreshes()
         // No pending expiry timer may outlive the account context.
         expiryWatch.cancel()
         // Revoke at initiation, before asynchronous server/session teardown;
@@ -394,8 +399,9 @@ class RootViewModel internal constructor(
 
     /**
      * Runs one full bootstrap resolution and publishes ONLY its terminal
-     * outcome - intermediate failures degrade to RequiresConnectivity rather
-     * than silently presenting a stale authenticated root.
+     * outcome - a connectivity-only failure may retain a locally verified
+     * offline-capable root, while unproven failures degrade to
+     * RequiresConnectivity rather than silently accepting stale credentials.
      */
     suspend fun resolveNow() {
         val waiter = CompletableDeferred<Unit>()
@@ -478,12 +484,22 @@ class RootViewModel internal constructor(
 
     private suspend fun performResolveNow(generation: Long) {
         var activeUserId: String? = null
+        var scheduleNetwork = false
         val next = try {
             when (val resolved = sessionBootstrap.bootstrap()) {
                 SessionState.SignedOut -> AuthUiState.SignedOut
                 SessionState.RecoveryRequired -> AuthUiState.RecoveryRequired
                 SessionState.RequiresConnectivity -> AuthUiState.RequiresConnectivity
                 is SessionState.Active -> {
+                    activeUserId = resolved.userId
+                    scheduleNetwork = true
+                    AuthUiState.Authenticated(
+                        userId = resolved.userId ?: "",
+                        handle = resolved.handle ?: "",
+                        activeKeyBundleId = resolved.activeKeyBundleId,
+                    )
+                }
+                is SessionState.OfflineActive -> {
                     activeUserId = resolved.userId
                     AuthUiState.Authenticated(
                         userId = resolved.userId ?: "",
@@ -500,7 +516,7 @@ class RootViewModel internal constructor(
         if (!publishIfCurrent(generation, next)) return
 
         val rawActiveUserId = activeUserId
-        if (next is AuthUiState.Authenticated && !rawActiveUserId.isNullOrBlank()) {
+        if (scheduleNetwork && next is AuthUiState.Authenticated && !rawActiveUserId.isNullOrBlank()) {
             val owner = runCatching { UserId.parseRest(rawActiveUserId) }.getOrNull() ?: return
             if (!isCurrentRefresh(generation)) return
             try {

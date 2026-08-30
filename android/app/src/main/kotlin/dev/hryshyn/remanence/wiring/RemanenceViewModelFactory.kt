@@ -26,6 +26,7 @@ class RemanenceViewModelFactory(
         RootViewModel::class.java -> RootViewModel(
             sessionBootstrap = container.sessionBootstrap,
             logoutAction = { container.logoutUseCase.logout() },
+            invalidateSessionRefreshes = { container.sessionRefreshCoordinator.invalidate() },
             // FIX-REVIEW-03: THE one authoritative grant lifecycle.
             presentationGrants = container.presentationGrants,
             resumeCapsuleUploads = { owner ->

@@ -1004,6 +1004,7 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
         val apiStack = ProductionApiStack.create(
             baseUrl = ApiBaseUrl.parse("http://localhost/"),
             tokens = AuthTokenHolder(),
+            refreshTokenReader = dev.hryshyn.remanence.core.data.network.RefreshTokenReader { null },
             rotationSink = object : SessionRotationSink {
                 override fun rotate(accessToken: String, refreshToken: String) = Unit
                 override fun clear() = Unit

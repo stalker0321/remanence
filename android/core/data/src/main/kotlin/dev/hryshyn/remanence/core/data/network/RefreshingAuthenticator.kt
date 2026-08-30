@@ -42,6 +42,32 @@ class AuthTokenHolder(
 }
 
 /**
+ * The single persistence boundary for the sealed rotating refresh token.
+ * Refresh coordination owns calls to this boundary; login/logout may still
+ * use their existing account-flow ordering around it.
+ */
+fun interface RefreshTokenReader {
+    fun read(): String?
+}
+
+/** Result of one process-wide refresh-token operation. */
+sealed interface CoordinatedRefreshOutcome {
+    data class Rotated(
+        val accessToken: String,
+        val refreshToken: String,
+    ) : CoordinatedRefreshOutcome
+
+    /** Another caller rotated while this caller waited for the coordinator. */
+    data class Reused(val accessToken: String) : CoordinatedRefreshOutcome
+
+    data object NoToken : CoordinatedRefreshOutcome
+    data object Rejected : CoordinatedRefreshOutcome
+    data object Unreachable : CoordinatedRefreshOutcome
+    data object Unavailable : CoordinatedRefreshOutcome
+    data object Invalidated : CoordinatedRefreshOutcome
+}
+
+/**
  * Atomic rotation boundary invoked by the serialized refresher while still
  * holding its mutex: implementers must publish BOTH credentials to consumers
  * and persist the sealed rotating refresh token as ONE step. A throwing
@@ -51,6 +77,203 @@ interface SessionRotationSink {
     fun rotate(accessToken: String, refreshToken: String)
 
     fun clear()
+}
+
+/**
+ * Process-wide refresh boundary shared by cold-start/foreground bootstrap and
+ * OkHttp 401 authentication. The mutex serializes stored-token read and the
+ * refresh POST. A separate, short publication fence serializes account-boundary
+ * [invalidate] with the final lineage check and sink rotate/clear so a stale
+ * refresh cannot publish after logout or a replacement login. The network POST
+ * is never run under that fence.
+ */
+class SessionRefreshCoordinator internal constructor(
+    private val bareAuthRepository: AuthRepository,
+    private val tokens: AuthTokenHolder,
+    private val refreshTokenReader: RefreshTokenReader,
+    private val rotationSink: SessionRotationSink,
+) {
+
+    private val mutex = Mutex()
+    private val publicationFence = java.util.concurrent.locks.ReentrantLock()
+    private val invalidationEpoch = java.util.concurrent.atomic.AtomicLong(0L)
+    private val rotationGeneration = java.util.concurrent.atomic.AtomicLong(0L)
+
+    /**
+     * Test-only pause inside the publication fence, after the lock is held and
+     * before lineage check plus sink mutate. Production leaves this null.
+     */
+    internal var onPublicationFence: (() -> Unit)? = null
+
+    /**
+     * Account-boundary fence: waits only for in-flight check+sink publication,
+     * never for a network POST, then invalidates any later publication.
+     */
+    fun invalidate() {
+        publicationFence.lock()
+        try {
+            invalidationEpoch.incrementAndGet()
+        } finally {
+            publicationFence.unlock()
+        }
+    }
+
+    /** Reads and validates token presence under the same refresh mutex. */
+    suspend fun hasStoredToken(): Boolean = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            readStoredTokenLocked() != null
+        }
+    }
+
+    /** Refreshes for bootstrap; a rotation that happened while waiting is reused. */
+    suspend fun refreshForBootstrap(): CoordinatedRefreshOutcome = withContext(Dispatchers.IO) {
+        val observedRotation = rotationGeneration.get()
+        mutex.withLock {
+            refreshLocked(
+                staleAccessToken = null,
+                observedRotation = observedRotation,
+            )
+        }
+    }
+
+    /** Refreshes one 401 request; concurrent waiters reuse the rotated access token. */
+    suspend fun refreshForAuthenticator(staleAccessToken: String?): String? =
+        withContext(Dispatchers.IO) {
+            mutex.withLock {
+                when (val outcome = refreshLocked(staleAccessToken, observedRotation = null)) {
+                    is CoordinatedRefreshOutcome.Rotated -> outcome.accessToken
+                    is CoordinatedRefreshOutcome.Reused -> outcome.accessToken
+                    else -> null
+                }
+            }
+        }
+
+    private suspend fun refreshLocked(
+        staleAccessToken: String?,
+        observedRotation: Long?,
+    ): CoordinatedRefreshOutcome {
+        val storedRefreshToken = readStoredTokenLocked()
+            ?: return CoordinatedRefreshOutcome.NoToken
+        val currentAccessToken = tokens.accessToken
+
+        if (staleAccessToken != null &&
+            currentAccessToken != null &&
+            currentAccessToken != staleAccessToken
+        ) {
+            return CoordinatedRefreshOutcome.Reused(currentAccessToken)
+        }
+        if (observedRotation != null &&
+            rotationGeneration.get() != observedRotation &&
+            currentAccessToken != null
+        ) {
+            return CoordinatedRefreshOutcome.Reused(currentAccessToken)
+        }
+
+        // A login or another coordinated rotation may have replaced the
+        // persisted token while this caller was waiting. Never send the older
+        // persisted lineage when a current in-memory pair is available.
+        val currentRefreshToken = tokens.refreshToken
+        if (currentRefreshToken != null &&
+            currentRefreshToken != storedRefreshToken &&
+            currentAccessToken != null
+        ) {
+            return CoordinatedRefreshOutcome.Reused(currentAccessToken)
+        }
+
+        val operationEpoch = invalidationEpoch.get()
+        val result = bareAuthRepository.refresh(RefreshRequestDto(storedRefreshToken))
+        return when (result) {
+            is AuthResult.Success -> publishUnderFence {
+                if (!publicationStillOwnsLineage(operationEpoch, storedRefreshToken)) {
+                    CoordinatedRefreshOutcome.Invalidated
+                } else {
+                    try {
+                        rotationSink.rotate(
+                            result.value.accessToken,
+                            result.value.refreshToken,
+                        )
+                        tokens.updateTokens(
+                            result.value.accessToken,
+                            result.value.refreshToken,
+                        )
+                        rotationGeneration.incrementAndGet()
+                        CoordinatedRefreshOutcome.Rotated(
+                            accessToken = result.value.accessToken,
+                            refreshToken = result.value.refreshToken,
+                        )
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        if (currentStoredTokenOrNull() == storedRefreshToken) {
+                            clearLocked()
+                        }
+                        CoordinatedRefreshOutcome.Unavailable
+                    }
+                }
+            }
+
+            is AuthResult.Failure -> when {
+                result.reason == AuthFailure.NETWORK -> CoordinatedRefreshOutcome.Unreachable
+                result.reason == AuthFailure.HTTP &&
+                    result.httpStatus in setOf(401, 403, 409) -> publishUnderFence {
+                    if (currentStoredTokenOrNull() == storedRefreshToken) {
+                        clearLocked()
+                    }
+                    CoordinatedRefreshOutcome.Rejected
+                }
+                else -> CoordinatedRefreshOutcome.Unavailable
+            }
+        }
+    }
+
+    private fun <T> publishUnderFence(block: () -> T): T {
+        publicationFence.lock()
+        try {
+            onPublicationFence?.invoke()
+            return block()
+        } finally {
+            publicationFence.unlock()
+        }
+    }
+
+    private fun publicationStillOwnsLineage(operationEpoch: Long, storedRefreshToken: String): Boolean =
+        operationEpoch == invalidationEpoch.get() &&
+            currentStoredTokenOrNull() == storedRefreshToken
+
+    private fun currentStoredTokenOrNull(): String? = try {
+        refreshTokenReader.read()?.takeIf { it.isNotBlank() }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun readStoredTokenLocked(): String? = try {
+        refreshTokenReader.read()?.takeIf { it.isNotBlank() }
+            ?: run {
+                if (tokens.refreshToken != null) clearLocked()
+                null
+            }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        clearLocked()
+        null
+    }
+
+    private fun clearLocked() {
+        try {
+            rotationSink.clear()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            tokens.clearSession()
+        }
+        tokens.clearSession()
+        rotationGeneration.incrementAndGet()
+    }
+
+    internal fun tokensForInterceptor(): AuthTokenHolder = tokens
 }
 
 /**
@@ -103,12 +326,8 @@ class BearerAuthInterceptor(
  * storage and the original 401 propagates.
  */
 class RefreshingAuthenticator internal constructor(
-    private val bareAuthRepository: AuthRepository,
-    private val tokens: AuthTokenHolder,
-    private val rotationSink: SessionRotationSink,
+    private val refreshCoordinator: SessionRefreshCoordinator,
 ) : Authenticator {
-
-    private val mutex = Mutex()
 
     override fun authenticate(route: Route?, response: Response): Request? {
         if (responseCount(response) >= 2) return null
@@ -117,7 +336,7 @@ class RefreshingAuthenticator internal constructor(
             ?.substring(BEARER_PREFIX.length)
 
         val freshAccessToken = try {
-            runBlocking { refreshSerialized(staleAccessToken) }
+            runBlocking { refreshCoordinator.refreshForAuthenticator(staleAccessToken) }
         } catch (_: CancellationException) {
             return null
         } ?: return null
@@ -126,40 +345,6 @@ class RefreshingAuthenticator internal constructor(
             .header(AUTHORIZATION_HEADER, BEARER_PREFIX + freshAccessToken)
             .build()
     }
-
-    /**
-     * Only one caller performs the network refresh against the bare client;
-     * concurrent waiters either reuse the rotated token or observe the clear.
-     */
-    private suspend fun refreshSerialized(staleAccessToken: String?): String? =
-        withContext(Dispatchers.IO) {
-            mutex.withLock {
-                val currentAccess = tokens.accessToken
-                if (staleAccessToken != null && currentAccess != null && currentAccess != staleAccessToken) {
-                    return@withContext currentAccess
-                }
-                val refreshToken = tokens.refreshToken ?: return@withContext null
-                when (val result = bareAuthRepository.refresh(RefreshRequestDto(refreshToken))) {
-                    is AuthResult.Success -> {
-                        try {
-                            // One atomic step: memory + sealed persistence.
-                            rotationSink.rotate(result.value.accessToken, result.value.refreshToken)
-                        } catch (_: Exception) {
-                            rotationSink.clear()
-                            tokens.clearSession()
-                            return@withContext null
-                        }
-                        tokens.updateTokens(result.value.accessToken, result.value.refreshToken)
-                        result.value.accessToken
-                    }
-                    is AuthResult.Failure -> {
-                        rotationSink.clear()
-                        tokens.clearSession()
-                        null
-                    }
-                }
-            }
-        }
 
     private fun responseCount(response: Response): Int {
         var count = 1
@@ -177,10 +362,8 @@ class RefreshingAuthenticator internal constructor(
         private const val AUTHORIZATION_HEADER = "Authorization"
 
         internal fun create(
-            bareAuthRepository: AuthRepository,
-            tokens: AuthTokenHolder,
-            rotationSink: SessionRotationSink,
-        ): RefreshingAuthenticator = RefreshingAuthenticator(bareAuthRepository, tokens, rotationSink)
+            refreshCoordinator: SessionRefreshCoordinator,
+        ): RefreshingAuthenticator = RefreshingAuthenticator(refreshCoordinator)
 
         /**
          * Production stack: the returned builder gains the bearer interceptor
@@ -189,12 +372,10 @@ class RefreshingAuthenticator internal constructor(
          */
         fun attach(
             builder: OkHttpClient.Builder,
-            bareAuthRepository: AuthRepository,
-            tokens: AuthTokenHolder,
-            rotationSink: SessionRotationSink,
+            refreshCoordinator: SessionRefreshCoordinator,
         ): OkHttpClient.Builder = builder
-            .addInterceptor(BearerAuthInterceptor(tokens))
-            .authenticator(create(bareAuthRepository, tokens, rotationSink))
+            .addInterceptor(BearerAuthInterceptor(refreshCoordinator.tokensForInterceptor()))
+            .authenticator(create(refreshCoordinator))
 
         /**
          * Convenience production wiring: builds a complete authenticated
@@ -202,9 +383,7 @@ class RefreshingAuthenticator internal constructor(
          */
         fun authenticatedClient(
             base: OkHttpClient,
-            bareAuthRepository: AuthRepository,
-            tokens: AuthTokenHolder,
-            rotationSink: SessionRotationSink,
-        ): OkHttpClient = attach(base.newBuilder(), bareAuthRepository, tokens, rotationSink).build()
+            refreshCoordinator: SessionRefreshCoordinator,
+        ): OkHttpClient = attach(base.newBuilder(), refreshCoordinator).build()
     }
 }

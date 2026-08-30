@@ -70,11 +70,15 @@ class RefreshingAuthenticatorTest {
     private fun wiredClient(server: MockWebServer, tokens: AuthTokenHolder, sink: RecordingSink): OkHttpClient {
         // Bare repository: the refresh round trip never re-enters the stack.
         val bareRepository = AuthRepository.create(ApiBaseUrl.parse(server.url("/").toString()))
+        val coordinator = SessionRefreshCoordinator(
+            bareAuthRepository = bareRepository,
+            tokens = tokens,
+            refreshTokenReader = RefreshTokenReader { tokens.refreshToken },
+            rotationSink = sink,
+        )
         return RefreshingAuthenticator.attach(
             OkHttpClient.Builder(),
-            bareRepository,
-            tokens,
-            sink,
+            coordinator,
         ).build()
     }
 
@@ -167,7 +171,13 @@ class RefreshingAuthenticatorTest {
             val tokens = AuthTokenHolder("pm_at_stale", "pm_rt_replayed")
             val sink = RecordingSink()
             val bareRepository = AuthRepository.create(ApiBaseUrl.parse(server.url("/").toString()))
-            val client = RefreshingAuthenticator.attach(OkHttpClient.Builder(), bareRepository, tokens, sink).build()
+            val coordinator = SessionRefreshCoordinator(
+                bareAuthRepository = bareRepository,
+                tokens = tokens,
+                refreshTokenReader = RefreshTokenReader { tokens.refreshToken },
+                rotationSink = sink,
+            )
+            val client = RefreshingAuthenticator.attach(OkHttpClient.Builder(), coordinator).build()
 
             val response = client.newCall(protectedRequest(server, "pm_at_stale")).executeAsync()
             response.use { assertEquals(401, it.code) }
@@ -206,7 +216,13 @@ class RefreshingAuthenticatorTest {
                 }
             }
             val bareRepository = AuthRepository.create(ApiBaseUrl.parse(server.url("/").toString()))
-            val client = RefreshingAuthenticator.attach(OkHttpClient.Builder(), bareRepository, tokens, throwingSink).build()
+            val coordinator = SessionRefreshCoordinator(
+                bareAuthRepository = bareRepository,
+                tokens = tokens,
+                refreshTokenReader = RefreshTokenReader { tokens.refreshToken },
+                rotationSink = throwingSink,
+            )
+            val client = RefreshingAuthenticator.attach(OkHttpClient.Builder(), coordinator).build()
 
             val response = client.newCall(protectedRequest(server, "pm_at_stale")).executeAsync()
             response.use { assertEquals(401, it.code) }

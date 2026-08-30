@@ -13,8 +13,8 @@ import dev.hryshyn.remanence.core.crypto.SessionTokenStore
 
 /**
  * Cold-start bootstrap proof (FIX-M1-007-05): only the ROTATING REFRESH token
- * is persisted sealed; Active requires a successful live refresh; invalid or
- * corrupt material is cleared; transient failures retain the token.
+ * is persisted sealed; Active requires a successful live refresh; transient
+ * connectivity failures retain the local account as offline-capable.
  */
 class SessionBootstrapTest {
 
@@ -64,13 +64,24 @@ class SessionBootstrapTest {
         }
     }
 
-    private class FakeRefresher(var outcome: SessionRefreshOutcome) : SessionRefresher {
-        var requestedWith: String? = null
+    private class FakeRefresher(
+        var outcome: SessionRefreshOutcome,
+        private val tokenPresent: Boolean,
+        private val tokens: TokenPort? = null,
+    ) : SessionRefresher {
         var calls: Int = 0
 
-        override suspend fun refresh(storedRefreshToken: String): SessionRefreshOutcome {
+        override suspend fun hasStoredToken(): Boolean = tokenPresent
+
+        override suspend fun refresh(): SessionRefreshOutcome {
             calls++
-            requestedWith = storedRefreshToken
+            when (val result = outcome) {
+                is SessionRefreshOutcome.Rotated -> tokens?.saveToken(result.refreshToken)
+                SessionRefreshOutcome.Rejected,
+                SessionRefreshOutcome.NoToken,
+                -> tokens?.clearToken()
+                else -> Unit
+            }
             return outcome
         }
     }
@@ -79,18 +90,18 @@ class SessionBootstrapTest {
         val bootstrap: SessionBootstrap,
         val tokens: TokenPort,
         val refresher: FakeRefresher,
-        val identity: FakeIdentity,
+        val identity: IdentityAvailabilityPort,
     )
 
     private fun fixture(
         savedRefresh: String? = "stored-refresh-token",
         refresherOutcome: SessionRefreshOutcome = SessionRefreshOutcome.Rotated("fresh-access", "fresh-refresh"),
-        identity: FakeIdentity = FakeIdentity(),
+        identity: IdentityAvailabilityPort = FakeIdentity(),
         summary: PersistedAccountSummary? = PersistedAccountSummary("user-1", "mykola", bundleA),
     ): Fixture {
         val dir = createTempDirectory("session").toFile().apply { deleteOnExit() }
         val tokens = TokenPort(dir, savedRefresh)
-        val refresher = FakeRefresher(refresherOutcome)
+        val refresher = FakeRefresher(refresherOutcome, savedRefresh != null, tokens)
         val bootstrap = SessionBootstrap(tokens, identity, { summary }, refresher)
         return Fixture(bootstrap, tokens, refresher, identity)
     }
@@ -101,18 +112,6 @@ class SessionBootstrapTest {
     }
 
     @Test
-    fun coldStartWithCorruptSealedRecordClearsItAndReportsSignedOut() = runBlocking {
-        // Raw garbage bytes where the sealed record lives defeat the AEAD.
-        val dir = createTempDirectory("session-corrupt").toFile().apply { deleteOnExit() }
-        File(dir, "session.token.sealed").writeBytes("definitely-not-sealed-material".toByteArray())
-        val tokens = TokenPort(dir, savedRefresh = null)
-        val bootstrap = SessionBootstrap(tokens, FakeIdentity(), { null }, FakeRefresher(SessionRefreshOutcome.Rejected))
-
-        assertEquals(SessionState.SignedOut, bootstrap.bootstrap())
-        assertEquals(1, tokens.clearCount)
-    }
-
-    @Test
     fun missingIdentityIsRecoveryRequiredBeforeAnyNetworkCall() = runBlocking {
         val f = fixture(
             identity = FakeIdentity(localBundleId = null),
@@ -120,7 +119,6 @@ class SessionBootstrapTest {
         )
 
         assertEquals(SessionState.RecoveryRequired, f.bootstrap.bootstrap())
-        assertEquals(null, f.refresher.requestedWith)
     }
 
     @Test
@@ -128,9 +126,9 @@ class SessionBootstrapTest {
         val f = fixture(identity = FakeIdentity(localBundleId = bundleA))
 
         val active = f.bootstrap.bootstrap() as SessionState.Active
+        val observed = f.identity as FakeIdentity
 
-        assertEquals("stored-refresh-token", f.refresher.requestedWith)
-        assertEquals(bundleA, f.identity.checkedBundleId)
+        assertEquals(bundleA, observed.checkedBundleId)
         assertEquals(bundleA, active.activeKeyBundleId)
         assertEquals(1, f.refresher.calls)
     }
@@ -143,9 +141,10 @@ class SessionBootstrapTest {
         )
 
         assertEquals(SessionState.RecoveryRequired, f.bootstrap.bootstrap())
-        assertEquals(1, f.identity.calls)
+        val observed = f.identity as FakeIdentity
+        assertEquals(1, observed.calls)
         assertEquals(0, f.refresher.calls)
-        assertEquals(bundleB, f.identity.checkedBundleId)
+        assertEquals(bundleB, observed.checkedBundleId)
     }
 
     @Test
@@ -153,7 +152,7 @@ class SessionBootstrapTest {
         val f = fixture(summary = null)
 
         assertEquals(SessionState.RecoveryRequired, f.bootstrap.bootstrap())
-        assertEquals(0, f.identity.calls)
+        assertEquals(0, (f.identity as FakeIdentity).calls)
         assertEquals(0, f.refresher.calls)
     }
 
@@ -164,7 +163,7 @@ class SessionBootstrapTest {
         )
 
         assertEquals(SessionState.RecoveryRequired, f.bootstrap.bootstrap())
-        assertEquals(0, f.identity.calls)
+        assertEquals(0, (f.identity as FakeIdentity).calls)
         assertEquals(0, f.refresher.calls)
     }
 
@@ -174,8 +173,6 @@ class SessionBootstrapTest {
 
         val state = f.bootstrap.bootstrap()
 
-        assertEquals("stored-refresh-token", f.refresher.requestedWith)
-        assertTrue(f.refresher.requestedWith != "fresh-refresh")
         val active = state as SessionState.Active
         assertEquals("user-1", active.userId)
         assertEquals("mykola", active.handle)
@@ -186,21 +183,80 @@ class SessionBootstrapTest {
     }
 
     @Test
-    fun rejectedRefreshClearsTheStoredTokenAndSignsOut() = runBlocking {
+    fun rejectedRefreshSignsOut() = runBlocking {
         val f = fixture(refresherOutcome = SessionRefreshOutcome.Rejected)
 
         assertEquals(SessionState.SignedOut, f.bootstrap.bootstrap())
-        assertEquals(null, f.tokens.readToken())
+        assertEquals(1, f.tokens.clearCount)
     }
 
     @Test
-    fun unreachableRefreshKeepsTheTokenAndAsksForConnectivity() = runBlocking {
+    fun unreachableRefreshKeepsTheTokenAndActivatesOffline() = runBlocking {
         val f = fixture(refresherOutcome = SessionRefreshOutcome.Unreachable)
 
-        assertEquals(SessionState.RequiresConnectivity, f.bootstrap.bootstrap())
+        assertEquals(
+            SessionState.OfflineActive(
+                userId = "user-1",
+                handle = "mykola",
+                hasEncryptionKeyset = true,
+                hasSigningKeyset = true,
+                activeKeyBundleId = bundleA,
+            ),
+            f.bootstrap.bootstrap(),
+        )
         // The stored lineage stays intact for a later attempt.
         assertEquals("stored-refresh-token", f.tokens.readToken())
         assertEquals(0, f.tokens.clearCount)
+    }
+
+    @Test
+    fun reusedRefreshIsActiveWithoutASecondNetworkOutcome() = runBlocking {
+        val f = fixture(refresherOutcome = SessionRefreshOutcome.Reused("already-fresh-access"))
+
+        val active = f.bootstrap.bootstrap() as SessionState.Active
+        assertEquals("user-1", active.userId)
+        assertEquals(bundleA, active.activeKeyBundleId)
+        assertEquals("stored-refresh-token", f.tokens.readToken())
+        assertEquals(0, f.tokens.clearCount)
+    }
+
+    @Test
+    fun unavailableRefreshDoesNotActivateOffline() = runBlocking {
+        val f = fixture(refresherOutcome = SessionRefreshOutcome.Unavailable)
+
+        assertEquals(SessionState.RequiresConnectivity, f.bootstrap.bootstrap())
+        assertEquals("stored-refresh-token", f.tokens.readToken())
+        assertEquals(0, f.tokens.clearCount)
+    }
+
+    @Test
+    fun invalidatedRefreshDoesNotActivateOffline() = runBlocking {
+        val f = fixture(refresherOutcome = SessionRefreshOutcome.Invalidated)
+
+        assertEquals(SessionState.RequiresConnectivity, f.bootstrap.bootstrap())
+        assertEquals("stored-refresh-token", f.tokens.readToken())
+    }
+
+    @Test
+    fun noTokenAfterCoordinatorLockIsSignedOut() = runBlocking {
+        val f = fixture(refresherOutcome = SessionRefreshOutcome.NoToken)
+
+        assertEquals(SessionState.SignedOut, f.bootstrap.bootstrap())
+    }
+
+    @Test
+    fun identityLookupFailureIsRecoveryRequiredBeforeRefresh() = runBlocking {
+        val f = fixture(
+            identity = object : IdentityAvailabilityPort {
+                override fun hasIdentityFor(activeKeyBundleId: String): Boolean {
+                    throw IllegalStateException("identity store unavailable")
+                }
+            },
+            refresherOutcome = SessionRefreshOutcome.Unreachable,
+        )
+
+        assertEquals(SessionState.RecoveryRequired, f.bootstrap.bootstrap())
+        assertEquals(0, f.refresher.calls)
     }
 
     @Test

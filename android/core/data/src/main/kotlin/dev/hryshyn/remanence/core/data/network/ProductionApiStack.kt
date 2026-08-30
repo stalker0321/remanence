@@ -18,6 +18,7 @@ import okhttp3.OkHttpClient
 class ProductionApiStack private constructor(
     baseUrl: ApiBaseUrl,
     tokens: AuthTokenHolder,
+    refreshTokenReader: RefreshTokenReader,
     rotationSink: SessionRotationSink,
 ) {
 
@@ -25,13 +26,20 @@ class ProductionApiStack private constructor(
     val bareAuthRepository: AuthRepository =
         AuthRepository.create(baseUrl)
 
+    /** One refresh boundary shared by bootstrap and authenticated requests. */
+    val sessionRefreshCoordinator: SessionRefreshCoordinator =
+        SessionRefreshCoordinator(
+            bareAuthRepository = bareAuthRepository,
+            tokens = tokens,
+            refreshTokenReader = refreshTokenReader,
+            rotationSink = rotationSink,
+        )
+
     /** Fully wired client for every authenticated API surface. */
     private val authenticatedClient: OkHttpClient =
         RefreshingAuthenticator.attach(
             OkHttpClient.Builder(),
-            bareAuthRepository,
-            tokens,
-            rotationSink,
+            sessionRefreshCoordinator,
         ).build()
 
     /** Capsule clients share the serialized authenticated transport boundary. */
@@ -74,7 +82,13 @@ class ProductionApiStack private constructor(
         fun create(
             baseUrl: ApiBaseUrl,
             tokens: AuthTokenHolder,
+            refreshTokenReader: RefreshTokenReader,
             rotationSink: SessionRotationSink,
-        ): ProductionApiStack = ProductionApiStack(baseUrl, tokens, rotationSink)
+        ): ProductionApiStack = ProductionApiStack(
+            baseUrl = baseUrl,
+            tokens = tokens,
+            refreshTokenReader = refreshTokenReader,
+            rotationSink = rotationSink,
+        )
     }
 }

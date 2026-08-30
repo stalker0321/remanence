@@ -68,12 +68,13 @@ class LocalMatchEngineTest {
         // The scanned card IS candidate A: identical descriptors, grid keypoints.
         val queryFront = fingerprint(11, 64, FingerprintSide.FRONT)
         val queryBack = fingerprint(22, 64, FingerprintSide.BACK)
-        val universe = listOf(candidate("A", preferred = true, seedFront = 11, seedBack = 22))
+        val recipient = candidate("A", preferred = true, seedFront = 11, seedBack = 22)
+        val universe = listOf(recipient, recipient.copy(recipientPreferred = false))
 
         val result = engine.run(queryFront, queryBack, universe)
 
         val granted = result as ScanFlowResult.Granted
-        assertEquals(universe.single().capsuleId, granted.capsuleId)
+        assertEquals(recipient.capsuleId, granted.capsuleId)
         assertEquals(CandidateOrigin.RECIPIENT_PREFERRED, granted.origin)
         assertTrue(granted.grantId.startsWith("grant-"))
         assertEquals(1, issuedGrants.size)
@@ -147,6 +148,38 @@ class LocalMatchEngineTest {
 
         val granted = result as ScanFlowResult.Granted
         assertEquals(UUID.nameUUIDFromBytes("sender-original".toByteArray()), granted.capsuleId)
+        assertEquals(CandidateOrigin.SENDER_FALLBACK, granted.origin)
+        assertEquals(1, issuedGrants.size)
+    }
+
+    @Test
+    fun senderFallbackKeepsRecipientAndSenderPairsForTheSameCapsule() = kotlinx.coroutines.runBlocking {
+        val (engine, _) = engine()
+        val queryFront = fingerprint(11, 64, FingerprintSide.FRONT)
+        val queryBack = fingerprint(22, 64, FingerprintSide.BACK)
+        val capsuleId = UUID.nameUUIDFromBytes("repeat-fallback".toByteArray())
+
+        val result = engine.run(
+            queryFront,
+            queryBack,
+            listOf(
+                IndexedCandidate(
+                    capsuleId = capsuleId,
+                    front = fingerprint(11, 3, FingerprintSide.FRONT),
+                    back = fingerprint(22, 3, FingerprintSide.BACK),
+                    recipientPreferred = true,
+                ),
+                IndexedCandidate(
+                    capsuleId = capsuleId,
+                    front = fingerprint(11, 64, FingerprintSide.FRONT),
+                    back = fingerprint(22, 64, FingerprintSide.BACK),
+                    recipientPreferred = false,
+                ),
+            ),
+        )
+
+        val granted = result as ScanFlowResult.Granted
+        assertEquals(capsuleId, granted.capsuleId)
         assertEquals(CandidateOrigin.SENDER_FALLBACK, granted.origin)
         assertEquals(1, issuedGrants.size)
     }

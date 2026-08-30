@@ -355,32 +355,51 @@ class ScanViewModel internal constructor(
         identity: SenderIdentitySnapshot,
     ): ScanCandidateIndex {
         val rows = database.recognitionFingerprintDao().getAllForOwner(identity.userId)
-        val candidates = rows.groupBy { it.capsuleId }.mapNotNull { (capsuleId, sides) ->
-            val preferredOrigin = sides.any {
-                it.origin == FingerprintOrigin.RECIPIENT && it.preferred
+        val candidates = rows
+            .groupBy { it.capsuleId }
+            .toSortedMap()
+            .flatMap { (capsuleId, capsuleRows) ->
+                listOf(FingerprintOrigin.RECIPIENT, FingerprintOrigin.SENDER).mapNotNull { origin ->
+                    val pair = capsuleRows.filter { it.origin == origin }
+                    val frontRow = pair.singleOrNull { it.side == DbFingerprintSide.FRONT }
+                        ?: return@mapNotNull null
+                    val backRow = pair.singleOrNull { it.side == DbFingerprintSide.BACK }
+                        ?: return@mapNotNull null
+                    val frontBytes = try {
+                        persistence.decrypt(frontRow.fingerprintId)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        return@mapNotNull null
+                    }
+                    val backBytes = try {
+                        persistence.decrypt(backRow.fingerprintId)
+                    } catch (cancelled: CancellationException) {
+                        frontBytes.fill(0)
+                        throw cancelled
+                    } catch (_: Exception) {
+                        frontBytes.fill(0)
+                        return@mapNotNull null
+                    }
+                    try {
+                        IndexedCandidate(
+                            capsuleId = UUID.fromString(capsuleId),
+                            front = FingerprintCodec.parse(frontBytes),
+                            back = FingerprintCodec.parse(backBytes),
+                            // Keep each complete origin pair available to the
+                            // engine; it searches recipient and sender pairs
+                            // as separate universes.
+                            recipientPreferred = origin == FingerprintOrigin.RECIPIENT &&
+                                pair.any { it.preferred },
+                        )
+                    } catch (_: Exception) {
+                        null
+                    } finally {
+                        frontBytes.fill(0)
+                        backBytes.fill(0)
+                    }
+                }
             }
-            fun pick(side: DbFingerprintSide) =
-                sides.firstOrNull { it.side == side && it.origin == FingerprintOrigin.RECIPIENT }
-                    ?: sides.firstOrNull { it.side == side }
-            val frontRow = pick(DbFingerprintSide.FRONT) ?: return@mapNotNull null
-            val backRow = pick(DbFingerprintSide.BACK) ?: return@mapNotNull null
-            val front = try {
-                FingerprintCodec.parse(persistence.decrypt(frontRow.fingerprintId))
-            } catch (_: Exception) {
-                return@mapNotNull null
-            }
-            val back = try {
-                FingerprintCodec.parse(persistence.decrypt(backRow.fingerprintId))
-            } catch (_: Exception) {
-                return@mapNotNull null
-            }
-            IndexedCandidate(
-                capsuleId = UUID.fromString(capsuleId),
-                front = front,
-                back = back,
-                recipientPreferred = preferredOrigin,
-            )
-        }.distinctBy { it.capsuleId }
         return ScanCandidateIndex(candidates)
     }
 
@@ -393,20 +412,24 @@ class ScanViewModel internal constructor(
         }
         val room = buildRoomCandidateIndex(identity)
         val incoming = candidateIndexProvider(owner)
-        val merged = LinkedHashMap<UUID, IndexedCandidate>()
-        incoming.candidates.forEach { candidate -> merged[candidate.capsuleId] = candidate }
-        room.candidates.forEach { candidate ->
-            val current = merged[candidate.capsuleId]
-            if (current == null || candidate.recipientPreferred) {
-                merged[candidate.capsuleId] = candidate
+        val merged = ArrayList<IndexedCandidate>(incoming.candidates.size + room.candidates.size)
+        val mergedReferences = HashSet<Pair<UUID, Boolean>>()
+        fun retain(candidate: IndexedCandidate) {
+            // Incoming and Room sender rows are the same sender reference for
+            // one capsule. Keep the incoming copy when available, while never
+            // collapsing a recipient pair into that sender reference.
+            if (mergedReferences.add(candidate.capsuleId to candidate.recipientPreferred)) {
+                merged += candidate
             }
         }
+        incoming.candidates.forEach(::retain)
+        room.candidates.forEach(::retain)
         // Storage membership is independent of recognition validity. Probe the
         // owner-scoped OUTBOX plane for every merged candidate, including an
         // incoming candidate whose Room recognition rows are absent/corrupt;
         // otherwise that candidate could be rebound to INCOMING silently.
         val outboxSources = LinkedHashMap<UUID, CapsulePresentationSource>()
-        for (candidateId in merged.keys) {
+        for (candidateId in merged.map { it.capsuleId }.distinct()) {
             if (database.outboxCapsuleDao().getByCapsuleIdAndOwner(
                     candidateId.toString(),
                     owner.toRestString(),
@@ -426,17 +449,18 @@ class ScanViewModel internal constructor(
         }
         if (finalOwner != owner) return ScanCandidateIndex.EMPTY
         val hints = incoming.chooserHints.filterKeys { id ->
-            merged[runCatching { UUID.fromString(id) }.getOrNull()]?.recipientPreferred != true
+            val candidateId = runCatching { UUID.fromString(id) }.getOrNull()
+            merged.none { it.capsuleId == candidateId && it.recipientPreferred }
         }
         // Source is a storage-plane fact, not recognition provenance. An
         // incoming row wins this binding even when a recipient-preferred Room
         // baseline wins the recognition duplicate.
         val presentationSources = resolvePresentationSources(
-            candidateIds = merged.keys,
+            candidateIds = merged.map { it.capsuleId }.distinct(),
             incomingSources = incoming.presentationSources,
             roomSources = outboxSources,
         )
-        return ScanCandidateIndex(merged.values.toList(), hints, presentationSources)
+        return ScanCandidateIndex(merged, hints, presentationSources)
     }
 
     /** Test-only view of the same merged, owner-bound scan index. */

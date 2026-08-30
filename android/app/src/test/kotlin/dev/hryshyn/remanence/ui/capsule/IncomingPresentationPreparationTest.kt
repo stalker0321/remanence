@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.ui.capsule
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import androidx.lifecycle.viewModelScope
 import com.google.crypto.tink.InsecureSecretKeyAccess
 import com.google.crypto.tink.KeysetHandle
 import com.google.crypto.tink.TinkProtoKeysetFormat
@@ -23,6 +24,7 @@ import dev.hryshyn.remanence.core.data.db.IncomingCapsuleEntity
 import dev.hryshyn.remanence.core.data.db.IncomingEnvelopeEntity
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.fingerprints.SecretSealer
+import dev.hryshyn.remanence.core.data.fingerprints.EncryptedFingerprintStore
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.model.ArtifactSlot
 import dev.hryshyn.remanence.core.model.BlobId
@@ -37,12 +39,18 @@ import dev.hryshyn.remanence.core.model.PublishStatementBuilder
 import dev.hryshyn.remanence.core.model.PublishStatementInput
 import dev.hryshyn.remanence.core.model.RecipientEnvelopeContextInput
 import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.capture.CaptureAttemptController
+import dev.hryshyn.remanence.capture.CaptureAttemptPhase
+import dev.hryshyn.remanence.capture.CapturePermissionStep
+import dev.hryshyn.remanence.capture.ProcessedStill
+import dev.hryshyn.remanence.capture.StillProcessor
 import dev.hryshyn.remanence.core.recognition.ExtractionQuality
 import dev.hryshyn.remanence.core.recognition.FingerprintCodec
 import dev.hryshyn.remanence.core.recognition.FingerprintKeypoint
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.PostcardFingerprint
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.core.recognition.ScanGrantManager
 import dev.hryshyn.remanence.index.SenderIndexBundleAad
 import dev.hryshyn.remanence.index.SenderIndexBundleCodec
 import dev.hryshyn.remanence.index.SenderIndexBundlePlaintext
@@ -55,6 +63,13 @@ import dev.hryshyn.remanence.index.SenderIndexBundleStageResult
 import dev.hryshyn.remanence.index.SenderIndexBundleStager
 import dev.hryshyn.remanence.protocol.v1.RecipientEnvelopePlaintext
 import dev.hryshyn.remanence.sync.CurrentRecipientEncryptionIdentity
+import dev.hryshyn.remanence.identity.SenderKeyResolution
+import dev.hryshyn.remanence.identity.SenderKeyUnavailableReason
+import dev.hryshyn.remanence.identity.TrustedSenderKeyStore
+import dev.hryshyn.remanence.ui.create.SenderIdentitySnapshot
+import dev.hryshyn.remanence.ui.scan.IncomingSenderIndexCandidateProvider
+import dev.hryshyn.remanence.ui.scan.ScanTerminalState
+import dev.hryshyn.remanence.ui.scan.ScanViewModel
 import java.io.File
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -64,9 +79,16 @@ import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.setMain
 import kotlin.coroutines.cancellation.CancellationException
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
@@ -79,10 +101,12 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
+@OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class IncomingPresentationPreparationTest {
 
+    private val testDispatcher = UnconfinedTestDispatcher()
     private lateinit var database: RemanenceLocalDatabase
     private lateinit var filesDir: File
     private lateinit var roots: AccountScopedFileRoots
@@ -91,6 +115,7 @@ class IncomingPresentationPreparationTest {
     @Before
     fun setUp() {
         TinkPrimitives.ensureRegistered()
+        Dispatchers.setMain(testDispatcher)
         val context = ApplicationProvider.getApplicationContext<Context>()
         filesDir = File(context.cacheDir, "incoming-presentation-${System.nanoTime()}").apply {
             check(mkdirs())
@@ -105,6 +130,7 @@ class IncomingPresentationPreparationTest {
 
     @After
     fun tearDown() {
+        Dispatchers.resetMain()
         database.close()
         filesDir.deleteRecursively()
     }
@@ -130,6 +156,121 @@ class IncomingPresentationPreparationTest {
             closed = true
         }
         assertTrue(closed)
+    }
+
+    @Test
+    fun repeatScanKeepsSenderFallbackPairAndOpensPreparedIncomingMaterialOffline() = runBlocking {
+        val front = scanFingerprint(FingerprintSide.FRONT, count = 64)
+        val back = scanFingerprint(FingerprintSide.BACK, count = 64)
+        val weakFront = scanFingerprint(FingerprintSide.FRONT, count = 3)
+        val weakBack = scanFingerprint(FingerprintSide.BACK, count = 3)
+        val fingerprintStore = EncryptedFingerprintStore(
+            roots,
+            fixture.sealer,
+            database.recognitionFingerprintDao(),
+            ownerUserIdProvider = { OWNER.toRestString() },
+        )
+        fingerprintStore.persist(
+            CAPSULE.toRestString(),
+            dev.hryshyn.remanence.core.data.db.FingerprintSide.FRONT,
+            dev.hryshyn.remanence.core.data.db.FingerprintOrigin.RECIPIENT,
+            RecognitionProfile.mvpOrbV1().profileId,
+            weakFront,
+        )
+        fingerprintStore.persist(
+            CAPSULE.toRestString(),
+            dev.hryshyn.remanence.core.data.db.FingerprintSide.BACK,
+            dev.hryshyn.remanence.core.data.db.FingerprintOrigin.RECIPIENT,
+            RecognitionProfile.mvpOrbV1().profileId,
+            weakBack,
+        )
+        fingerprintStore.setPreferredPair(
+            CAPSULE.toRestString(),
+            dev.hryshyn.remanence.core.data.db.FingerprintOrigin.RECIPIENT,
+        )
+
+        val senderBundle = SenderIndexBundlePlaintext(
+            localFormatVersion = SenderIndexBundleCodec.FORMAT_VERSION,
+            capsuleId = CAPSULE,
+            senderHandleSnapshot = fixture.recognition.senderHandleSnapshot,
+            createdAtEpochSeconds = fixture.recognition.createdAtEpochSeconds,
+            placeLabel = fixture.recognition.placeLabel,
+            frontFingerprint = front,
+            backFingerprint = back,
+            senderVerification = fixture.senderVerification,
+        )
+        val codec = SenderIndexBundleCodec()
+        val encoded = codec.encode(senderBundle)
+        val encrypted = fixture.sealer.seal(
+            encoded,
+            SenderIndexBundleAad.encode(OWNER, CAPSULE, SenderIndexBundleCodec.FORMAT_VERSION),
+        )
+        writeIndex(encrypted)
+        encoded.fill(0)
+        encrypted.fill(0)
+
+        val provider = IncomingSenderIndexCandidateProvider(
+            incomingCapsuleDao = database.incomingCapsuleDao(),
+            senderIndexBundleReader = SenderIndexBundleReader(roots, fixture.sealer),
+            currentOwner = { OWNER },
+        )
+        val grants = PresentationGrantAuthority(ScanGrantManager(clockMillis = { 1_000L }))
+        val scan = ScanViewModel(
+            persistence = fingerprintStore,
+            database = database,
+            profile = RecognitionProfile.mvpOrbV1(),
+            identityProvider = {
+                SenderIdentitySnapshot(
+                    userId = OWNER.toRestString(),
+                    handle = "recipient",
+                    activeKeyBundleId = RECIPIENT_BUNDLE.toRestString(),
+                    encryptionPrivateHandle = fixture.recipientIdentity.encryptionPrivateHandle,
+                    signingPrivateHandle = fixture.recipientIdentity.signingPrivateHandle,
+                )
+            },
+            trustedSenderKeys = object : TrustedSenderKeyStore {
+                override suspend fun senderVerifyingKeyset(
+                    senderUserId: UserId,
+                    senderKeyBundleId: KeyBundleId,
+                ): SenderKeyResolution = SenderKeyResolution.Unavailable(
+                    SenderKeyUnavailableReason.NO_SESSION_OR_SOURCE,
+                )
+            },
+            presentationGrants = grants,
+            frontProcessor = FixedScanProcessor(front),
+            backProcessor = FixedScanProcessor(back),
+            candidateIndexProvider = { provider.load(it) },
+            incomingPresentationPreparation = preparation(),
+            cpuDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher,
+        )
+
+        try {
+            readyCameras(scan)
+            check(scan.beginFrontCapture())
+            scan.deliverFrontJpeg("front".toByteArray())
+            check(scan.beginBackCapture())
+            scan.deliverBackJpeg("back".toByteArray())
+
+            val granted = scan.terminal
+                .filterIsInstance<ScanTerminalState.Granted>()
+                .first()
+            assertTrue(granted.viaSenderFallback)
+            val binding = grants.activeForTests()
+            assertEquals(CapsulePresentationSource.INCOMING, binding?.source)
+            val prepared = requireNotNull(binding?.incomingPresentation)
+            assertEquals(3, prepared.photoCount)
+            assertEquals("offline note", prepared.noteText())
+            val photo = prepared.loadPhoto(2)
+            try {
+                assertArrayEquals(ByteArray(1024) { (74 + it).toByte() }, photo)
+            } finally {
+                photo.fill(0)
+            }
+        } finally {
+            scan.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+            grants.clearAll()
+        }
     }
 
     @Test
@@ -314,6 +455,22 @@ class IncomingPresentationPreparationTest {
         activeKeyBundleId = RECIPIENT_BUNDLE,
         encryptionPrivateKeyset = fixture.recipientIdentity.encryptionPrivateHandle,
     )
+
+    private class FixedScanProcessor(
+        private val serializedBytes: ByteArray,
+    ) : StillProcessor {
+        override fun process(jpegBytes: ByteArray): ProcessedStill =
+            ProcessedStill.Accepted(RecognitionProfile.mvpOrbV1().profileId, serializedBytes)
+    }
+
+    private fun readyCameras(scan: ScanViewModel) {
+        listOf(scan.frontAttempt, scan.backAttempt).forEach { controller: CaptureAttemptController ->
+            controller.onPermissionResult(granted = true, canAskAgain = false)
+            assertEquals(CaptureAttemptPhase.Binding, controller.phase)
+            controller.onPreviewBound()
+            assertEquals(CapturePermissionStep.Granted, controller.permission)
+        }
+    }
 
     private fun installFixture(fixture: Fixture) = runBlocking {
         SenderIndexBundleStager(roots, fixture.sealer).stage(
@@ -535,6 +692,32 @@ class IncomingPresentationPreparationTest {
                 ),
             ),
             descriptors = listOf(ByteArray(FingerprintCodec.DESCRIPTOR_BYTES) { 3 }),
+            quality = ExtractionQuality(1.0, 1.0, 0.1, 0.5),
+        ),
+    )
+
+    private fun scanFingerprint(side: FingerprintSide, count: Int): ByteArray = FingerprintCodec.serialize(
+        PostcardFingerprint(
+            profileId = RecognitionProfile.MVP_ORB_V1_ID,
+            side = side,
+            canonicalWidthPx = 1200,
+            canonicalHeightPx = 800,
+            coarseHash64 = 17L,
+            keypoints = List(count) { index ->
+                FingerprintKeypoint(
+                    xNormalized = (index % 8) / 8.0,
+                    yNormalized = (index / 8) / 8.0,
+                    scaleNormalized = 1.0,
+                    angleCentiDegrees = 0,
+                    responseQuantized = index,
+                    octave = 0,
+                )
+            },
+            descriptors = List(count) { index ->
+                ByteArray(FingerprintCodec.DESCRIPTOR_BYTES) { byteIndex ->
+                    ((byteIndex * 7 + index * 13 + 29) and 0xFF).toByte()
+                }
+            },
             quality = ExtractionQuality(1.0, 1.0, 0.1, 0.5),
         ),
     )

@@ -6,6 +6,13 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 import dev.hryshyn.remanence.core.model.LocalMaterialState
 
+/** Durable local progress for the later recipient material acknowledgement. */
+enum class MaterialAckState {
+    PENDING,
+    ACKED,
+    TERMINAL,
+}
+
 /**
  * Routed metadata of one incoming ciphertext-only capsule. Contains no note,
  * place, thumbnail, chooser label, or any other plaintext content.
@@ -52,6 +59,8 @@ data class IncomingCapsuleEntity(
     val publishSignatureBytes: ByteArray = ByteArray(0),
     @ColumnInfo(name = "material_state")
     val materialState: LocalMaterialState,
+    @ColumnInfo(name = "material_ack_state", defaultValue = "'PENDING'")
+    val materialAckState: MaterialAckState = MaterialAckState.PENDING,
 ) {
     override fun equals(other: Any?): Boolean =
         other is IncomingCapsuleEntity && other.capsuleId == capsuleId

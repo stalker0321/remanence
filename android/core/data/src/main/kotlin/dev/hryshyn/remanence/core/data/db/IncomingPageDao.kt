@@ -11,9 +11,9 @@ import androidx.room.Transaction
  *
  * A page either inserts a missing immutable record, proves that the existing
  * record is byte-for-byte the same, or completes the two empty cryptographic
- * migration markers exactly once. Existing local cache state and timestamps
- * are never replay fields, so a page replay cannot rewind a later A11/A13
- * state.
+ * migration markers exactly once. Existing local cache state, material-ack
+ * progress, and timestamps are never replay fields, so a page replay cannot
+ * rewind later local work.
  */
 @Dao
 abstract class IncomingPageDao {

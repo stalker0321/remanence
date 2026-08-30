@@ -1,13 +1,16 @@
 package dev.hryshyn.remanence.core.data.db
 
 import androidx.room.Dao
+import androidx.room.ColumnInfo
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
+import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.LocalMaterialState
 import dev.hryshyn.remanence.core.model.LocalMaterialTransition
 import dev.hryshyn.remanence.core.model.LocalMaterialTransitionEvaluator
+import kotlin.coroutines.cancellation.CancellationException
 
 /** Outcome of the owner-scoped, canonical local-material transition operation. */
 sealed interface LocalMaterialTransitionResult {
@@ -30,6 +33,43 @@ sealed interface LocalMaterialTransitionResult {
         LocalMaterialTransitionResult
 }
 
+/** Room-only projection for one owner-scoped material-ack candidate. */
+internal data class IncomingMaterialAckCandidateRow(
+    @ColumnInfo(name = "capsule_id") val capsuleId: String,
+    @ColumnInfo(name = "ready_at_epoch_ms") val readyAtEpochMs: Long,
+) {
+    override fun toString(): String = "IncomingMaterialAckCandidateRow(<redacted>)"
+}
+
+/** Minimal identity and ordering key returned by the bounded ack selector. */
+data class IncomingMaterialAckCandidate(
+    val capsuleId: CapsuleId,
+    val readyAtEpochMs: Long,
+) {
+    override fun toString(): String = "IncomingMaterialAckCandidate(<redacted>)"
+}
+
+sealed interface IncomingMaterialAckCandidateSelection {
+    data class Page(val candidates: List<IncomingMaterialAckCandidate>) :
+        IncomingMaterialAckCandidateSelection {
+        override fun toString(): String = "IncomingMaterialAckCandidateSelection.Page(<redacted>)"
+    }
+
+    data object InvalidRequest : IncomingMaterialAckCandidateSelection
+
+    /** Database access or malformed durable candidate identity is retryable. */
+    data object Unavailable : IncomingMaterialAckCandidateSelection
+}
+
+/** Redacted result of one owner-scoped, exact material-ack CAS. */
+sealed interface IncomingMaterialAckResult {
+    data object Marked : IncomingMaterialAckResult
+    data object AlreadyRecorded : IncomingMaterialAckResult
+    data object MissingOrForeign : IncomingMaterialAckResult
+    data object StateChanged : IncomingMaterialAckResult
+    data object Unavailable : IncomingMaterialAckResult
+}
+
 /**
  * DAO over incoming routed metadata. Replaying a synced page must be
  * idempotent. No query here may expose an enumerable inbox/gallery to UI
@@ -43,6 +83,11 @@ sealed interface LocalMaterialTransitionResult {
  */
 @Dao
 abstract class IncomingCapsuleDao {
+
+    companion object {
+        /** Absolute bound for one later material-ack drain invocation. */
+        const val MATERIAL_ACK_HARD_MAX_PAGE_SIZE: Int = 32
+    }
 
     /**
      * Bounded acceptance work projection for one exact owner. The nullable
@@ -66,15 +111,128 @@ abstract class IncomingCapsuleDao {
     ): List<IncomingAcceptanceCandidateRow>
 
     /**
+     * Bounded owner-scoped material-ack projection. Durable PENDING state is
+     * the restart-safe progress boundary; no cursor or full row is exposed.
+     */
+    @Query(
+        "SELECT capsule_id, ready_at_epoch_ms FROM incoming_capsule " +
+            "WHERE owner_user_id = :ownerUserId " +
+            "AND server_status = 'READY' " +
+            "AND material_state IN ('MATERIAL_CACHED', 'FINGERPRINT_ACCEPTED') " +
+            "AND material_ack_state = 'PENDING' " +
+            "ORDER BY ready_at_epoch_ms ASC, capsule_id ASC LIMIT :limit",
+    )
+    internal abstract suspend fun selectMaterialAckCandidateRows(
+        ownerUserId: String,
+        limit: Int,
+    ): List<IncomingMaterialAckCandidateRow>
+
+    /**
+     * Selects only bounded, typed identities. Invalid limits are rejected
+     * before Room is called; cancellation identity is preserved exactly.
+     */
+    open suspend fun selectMaterialAckCandidatesForOwner(
+        ownerUserId: String,
+        limit: Int,
+    ): IncomingMaterialAckCandidateSelection {
+        if (limit !in 1..MATERIAL_ACK_HARD_MAX_PAGE_SIZE) {
+            return IncomingMaterialAckCandidateSelection.InvalidRequest
+        }
+        return try {
+            IncomingMaterialAckCandidateSelection.Page(
+                selectMaterialAckCandidateRows(ownerUserId, limit).map { row ->
+                    require(row.readyAtEpochMs >= 0L) {
+                        "durable material-ack ordering key is invalid"
+                    }
+                    IncomingMaterialAckCandidate(
+                        capsuleId = CapsuleId.parseRest(row.capsuleId),
+                        readyAtEpochMs = row.readyAtEpochMs,
+                    )
+                },
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            IncomingMaterialAckCandidateSelection.Unavailable
+        }
+    }
+
+    /** Marks one eligible owned capsule acknowledged, or reconciles a CAS miss. */
+    @Transaction
+    open suspend fun markMaterialAckedForOwner(
+        ownerUserId: String,
+        capsuleId: String,
+    ): IncomingMaterialAckResult = markMaterialAckForOwner(
+        ownerUserId = ownerUserId,
+        capsuleId = capsuleId,
+        targetState = MaterialAckState.ACKED,
+    )
+
+    /** Marks one eligible owned capsule terminal, or reconciles a CAS miss. */
+    @Transaction
+    open suspend fun markMaterialTerminalForOwner(
+        ownerUserId: String,
+        capsuleId: String,
+    ): IncomingMaterialAckResult = markMaterialAckForOwner(
+        ownerUserId = ownerUserId,
+        capsuleId = capsuleId,
+        targetState = MaterialAckState.TERMINAL,
+    )
+
+    private suspend fun markMaterialAckForOwner(
+        ownerUserId: String,
+        capsuleId: String,
+        targetState: MaterialAckState,
+    ): IncomingMaterialAckResult {
+        return try {
+            if (
+                compareAndSetMaterialAckStateForOwner(
+                    ownerUserId = ownerUserId,
+                    capsuleId = capsuleId,
+                    targetState = targetState,
+                ) == 1
+            ) {
+                IncomingMaterialAckResult.Marked
+            } else {
+                val row = getByCapsuleIdAndOwner(capsuleId, ownerUserId)
+                    ?: return IncomingMaterialAckResult.MissingOrForeign
+                when {
+                    row.materialAckState == targetState -> IncomingMaterialAckResult.AlreadyRecorded
+                    else -> IncomingMaterialAckResult.StateChanged
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            IncomingMaterialAckResult.Unavailable
+        }
+    }
+
+    /** Exact owner/capsule/READY/eligible/PENDING material-ack CAS. */
+    @Query(
+        "UPDATE incoming_capsule SET material_ack_state = :targetState " +
+            "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId " +
+            "AND server_status = 'READY' " +
+            "AND material_state IN ('MATERIAL_CACHED', 'FINGERPRINT_ACCEPTED') " +
+            "AND material_ack_state = 'PENDING'",
+    )
+    protected abstract suspend fun compareAndSetMaterialAckStateForOwner(
+        ownerUserId: String,
+        capsuleId: String,
+        targetState: MaterialAckState,
+    ): Int
+
+    /**
      * Owner-preserving idempotent page write. [ownerUserId] is authoritative;
      * every entity must carry exactly that owner before any database work.
      * On the same immutable capsule
      * ID: a row for another local account aborts the whole write
      * ([IllegalStateException]); otherwise insert-ignore plus an owner-scoped
      * update applies exactly the replay fields - routing identities,
-     * protocol version, and material state stay immutable here. A new row may
-     * enter only as [LocalMaterialState.DISCOVERED]; existing same-owner
-     * replays do not use their candidate material state.
+     * protocol version, material state, and material-ack progress stay
+     * immutable here. A new row may enter only as
+     * [LocalMaterialState.DISCOVERED]; existing same-owner replays do not use
+     * their candidate local states.
      */
     @Transaction
     open suspend fun upsertAllForOwner(

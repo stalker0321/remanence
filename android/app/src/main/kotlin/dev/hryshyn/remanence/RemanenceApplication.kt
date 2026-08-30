@@ -155,6 +155,7 @@ class AppContainer private constructor(
                 RemanenceLocalDatabase.MIGRATION_3_4,
                 RemanenceLocalDatabase.MIGRATION_4_5,
                 RemanenceLocalDatabase.MIGRATION_5_6,
+                RemanenceLocalDatabase.MIGRATION_6_7,
             )
             .build()
     }

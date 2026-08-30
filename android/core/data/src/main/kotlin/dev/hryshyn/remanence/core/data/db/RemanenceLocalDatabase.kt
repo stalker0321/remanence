@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         RecognitionFingerprintEntity::class,
         SyncCursorEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = true,
 )
 abstract class RemanenceLocalDatabase : RoomDatabase() {
@@ -178,6 +178,16 @@ abstract class RemanenceLocalDatabase : RoomDatabase() {
                 db.execSQL(
                     "ALTER TABLE incoming_capsule " +
                         "ADD COLUMN publish_signature_bytes BLOB NOT NULL DEFAULT X''",
+                )
+            }
+        }
+
+        /** v7 adds owner-scoped local progress for the later material acknowledgement. */
+        val MIGRATION_6_7: Migration = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE incoming_capsule " +
+                        "ADD COLUMN material_ack_state TEXT NOT NULL DEFAULT 'PENDING'",
                 )
             }
         }

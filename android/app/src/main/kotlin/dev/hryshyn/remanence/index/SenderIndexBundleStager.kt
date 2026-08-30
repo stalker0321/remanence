@@ -33,6 +33,7 @@ class SenderIndexBundleStageRequest(
     val ownerUserId: UserId,
     val capsuleId: CapsuleId,
     val verifiedRecognition: RecognitionManifestContent,
+    val senderVerification: SenderIndexBundleSenderVerification,
 ) {
     override fun toString(): String = "SenderIndexBundleStageRequest(<redacted>)"
 }
@@ -146,7 +147,7 @@ class SenderIndexBundleStager internal constructor(
     )
 
     /** Stages or semantically replays one immutable owner/capsule bundle. */
-    suspend fun stage(
+    internal suspend fun stage(
         request: SenderIndexBundleStageRequest,
     ): SenderIndexBundleStageResult = withContext(Dispatchers.IO) {
         coroutineContext.ensureActive()
@@ -166,6 +167,7 @@ class SenderIndexBundleStager internal constructor(
                 SenderIndexBundlePlaintext.fromVerifiedRecognition(
                     expectedCapsuleId = request.capsuleId,
                     recognition = request.verifiedRecognition,
+                    senderVerification = request.senderVerification,
                 )
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -178,9 +180,31 @@ class SenderIndexBundleStager internal constructor(
 
             var plaintext: ByteArray? = null
             var aad: ByteArray? = null
+            var legacyPlaintext: ByteArray? = null
+            var legacyAad: ByteArray? = null
+            var legacyBundle: SenderIndexBundlePlaintext? = null
             try {
                 plaintext = codec.encode(bundle)
                 aad = aadFor(request.ownerUserId, request.capsuleId, bundle.localFormatVersion)
+                // A12a v1 destinations may already exist after an app update.
+                // Keep their recognition replayable with the matching AAD;
+                // only newly published bytes use the v2 verification fields.
+                legacyBundle = SenderIndexBundlePlaintext(
+                    localFormatVersion = SenderIndexBundleCodec.LEGACY_FORMAT_VERSION,
+                    capsuleId = bundle.capsuleId,
+                    senderHandleSnapshot = bundle.senderHandleSnapshot,
+                    createdAtEpochSeconds = bundle.createdAtEpochSeconds,
+                    placeLabel = bundle.placeLabel,
+                    frontFingerprint = bundle.frontFingerprint,
+                    backFingerprint = bundle.backFingerprint,
+                    senderVerification = null,
+                )
+                legacyPlaintext = codec.encode(legacyBundle!!)
+                legacyAad = aadFor(
+                    request.ownerUserId,
+                    request.capsuleId,
+                    SenderIndexBundleCodec.LEGACY_FORMAT_VERSION,
+                )
                 val paths = try {
                     resolvePaths(request.ownerUserId, request.capsuleId)
                 } catch (cancelled: CancellationException) {
@@ -207,14 +231,21 @@ class SenderIndexBundleStager internal constructor(
                     return@withLock failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
                 }
 
-                when (val existing = inspectSemantic(paths.destination, plaintext!!, aad!!)) {
+                val existing = inspectCompatible(
+                    paths.destination,
+                    plaintext!!,
+                    aad!!,
+                    legacyPlaintext!!,
+                    legacyAad!!,
+                )
+                when (existing.inspection) {
                     SemanticInspection.MISSING -> Unit
                     SemanticInspection.MATCH -> {
                         return@withLock finishDurableDestination(
                             request = request,
                             paths = paths,
-                            expectedPlaintext = plaintext!!,
-                            aad = aad!!,
+                            expectedPlaintext = existing.expectedPlaintext,
+                            aad = existing.aad,
                             replayed = true,
                         )
                     }
@@ -235,7 +266,16 @@ class SenderIndexBundleStager internal constructor(
                     )
                 }
 
-                when (inspectSemantic(paths.temporary, plaintext!!, aad!!)) {
+                val temporaryInspection = inspectCompatible(
+                    paths.temporary,
+                    plaintext!!,
+                    aad!!,
+                    legacyPlaintext!!,
+                    legacyAad!!,
+                )
+                var publicationPlaintext = plaintext!!
+                var publicationAad = aad!!
+                when (temporaryInspection.inspection) {
                     SemanticInspection.MATCH -> Unit
                     SemanticInspection.MISSING -> ensureTemporary(paths, plaintext!!, aad!!)?.let { return@withLock it }
                     // The canonical TEMP is never written incrementally. Any
@@ -261,11 +301,22 @@ class SenderIndexBundleStager internal constructor(
                         false,
                     )
                 }
+                if (temporaryInspection.inspection == SemanticInspection.MATCH) {
+                    publicationPlaintext = temporaryInspection.expectedPlaintext
+                    publicationAad = temporaryInspection.aad
+                }
 
                 try {
                     fileSystem.atomicNoReplaceLink(paths.temporary, paths.destination)
                 } catch (_: FileAlreadyExistsException) {
-                    return@withLock reconcileExistingDestination(request, paths, plaintext!!, aad!!)
+                    return@withLock reconcileExistingDestination(
+                        request,
+                        paths,
+                        publicationPlaintext,
+                        publicationAad,
+                        legacyPlaintext!!,
+                        legacyAad!!,
+                    )
                 } catch (_: UnsupportedOperationException) {
                     return@withLock failure(
                         SenderIndexBundleStageFailure.ATOMIC_MOVE_UNAVAILABLE,
@@ -274,7 +325,14 @@ class SenderIndexBundleStager internal constructor(
                 } catch (_: SecurityException) {
                     return@withLock failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
                 } catch (_: IOException) {
-                    return@withLock reconcileExistingDestination(request, paths, plaintext!!, aad!!)
+                    return@withLock reconcileExistingDestination(
+                        request,
+                        paths,
+                        publicationPlaintext,
+                        publicationAad,
+                        legacyPlaintext!!,
+                        legacyAad!!,
+                    )
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: RuntimeException) {
@@ -286,13 +344,16 @@ class SenderIndexBundleStager internal constructor(
                 return@withLock finishDurableDestination(
                     request = request,
                     paths = paths,
-                    expectedPlaintext = plaintext!!,
-                    aad = aad!!,
+                    expectedPlaintext = publicationPlaintext,
+                    aad = publicationAad,
                     replayed = false,
                 )
             } finally {
                 plaintext?.let(wipe)
                 aad?.let(wipe)
+                legacyPlaintext?.let(wipe)
+                legacyAad?.let(wipe)
+                legacyBundle?.wipe()
                 bundle.wipe()
             }
         }
@@ -514,6 +575,37 @@ class SenderIndexBundleStager internal constructor(
             SemanticInspection.UNAVAILABLE ->
                 failure(SenderIndexBundleStageFailure.DEPENDENCY_UNAVAILABLE, true)
             else -> failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+        }
+    }
+
+    private data class CompatibleInspection(
+        val inspection: SemanticInspection,
+        val expectedPlaintext: ByteArray,
+        val aad: ByteArray,
+    )
+
+    private suspend fun inspectCompatible(
+        path: Path,
+        expectedPlaintext: ByteArray,
+        aad: ByteArray,
+        legacyPlaintext: ByteArray,
+        legacyAad: ByteArray,
+    ): CompatibleInspection {
+        val current = inspectSemantic(path, expectedPlaintext, aad)
+        if (current != SemanticInspection.UNAVAILABLE) {
+            return CompatibleInspection(current, expectedPlaintext, aad)
+        }
+        val legacy = inspectSemantic(path, legacyPlaintext, legacyAad)
+        return when (legacy) {
+            SemanticInspection.MATCH,
+            SemanticInspection.MISMATCH,
+            SemanticInspection.UNSAFE,
+            SemanticInspection.INVALID,
+            -> CompatibleInspection(legacy, legacyPlaintext, legacyAad)
+            SemanticInspection.MISSING,
+            SemanticInspection.READ_FAILURE,
+            SemanticInspection.UNAVAILABLE,
+            -> CompatibleInspection(current, expectedPlaintext, aad)
         }
     }
 
@@ -845,13 +937,22 @@ class SenderIndexBundleStager internal constructor(
         paths: StagePaths,
         expectedPlaintext: ByteArray,
         aad: ByteArray,
+        legacyPlaintext: ByteArray,
+        legacyAad: ByteArray,
     ): SenderIndexBundleStageResult {
-        return when (inspectSemantic(paths.destination, expectedPlaintext, aad)) {
+        val inspection = inspectCompatible(
+            paths.destination,
+            expectedPlaintext,
+            aad,
+            legacyPlaintext,
+            legacyAad,
+        )
+        return when (inspection.inspection) {
             SemanticInspection.MATCH -> finishDurableDestination(
                 request,
                 paths,
-                expectedPlaintext,
-                aad,
+                inspection.expectedPlaintext,
+                inspection.aad,
                 replayed = true,
             )
             SemanticInspection.MISSING,

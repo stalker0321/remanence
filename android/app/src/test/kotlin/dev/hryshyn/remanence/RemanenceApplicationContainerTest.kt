@@ -329,6 +329,17 @@ class RemanenceApplicationContainerTest {
     }
 
     @Test
+    fun incomingPresentationPreparationIsOneRealLazyLocalComposition() {
+        val appContainer = container()
+        try {
+            val first = appContainer.incomingPresentationPreparation
+            assertSame(first, appContainer.incomingPresentationPreparation)
+        } finally {
+            appContainer.database.close()
+        }
+    }
+
+    @Test
     fun recipientIdentityBindsExactOwnerAndBundleAcrossAccountChanges() = runBlocking {
         val appContainer = container()
         val ownerA = UserId.parseRest("0198f0a0-0000-7000-8000-00000000d431")
@@ -490,6 +501,7 @@ class RemanenceApplicationContainerTest {
                     ownerUserId = owner,
                     capsuleId = capsule,
                     verifiedRecognition = validRecognition(capsule),
+                    senderVerification = TestSenderVerification.forCapsule(capsule),
                 ),
             )
             assertFalse(assertIs<SenderIndexBundleStageResult.Staged>(staged).replayed)

@@ -6,6 +6,7 @@ import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.TestSenderVerification
 import dev.hryshyn.remanence.core.recognition.ExtractionQuality
 import dev.hryshyn.remanence.core.recognition.FingerprintCodec
 import dev.hryshyn.remanence.core.recognition.FingerprintKeypoint
@@ -30,6 +31,7 @@ import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -87,7 +89,13 @@ class SenderIndexBundleReaderTest {
     fun validRealA12aBundleIsReadableAfterProcessReconstructionAndWipesBuffers() = runBlocking {
         val sealer = AesGcmSealer()
         val staged = SenderIndexBundleStager(roots, sealer).stage(
-            SenderIndexBundleStageRequest(owner, owner, capsule, recognition()),
+            SenderIndexBundleStageRequest(
+                owner,
+                owner,
+                capsule,
+                recognition(),
+                TestSenderVerification.forCapsule(capsule),
+            ),
         ) as SenderIndexBundleStageResult.Staged
         val bytesBefore = destination(owner, capsule).readBytes()
         val wiped = mutableListOf<ByteArray>()
@@ -149,6 +157,46 @@ class SenderIndexBundleReaderTest {
     }
 
     @Test
+    fun legacyV1BundleUsesV1AadAndPreservesRecognitionMaterialWithoutOfflineKey() = runBlocking {
+        val sealer = AesGcmSealer()
+        val recognition = recognition()
+        val legacy = SenderIndexBundlePlaintext(
+            localFormatVersion = SenderIndexBundleCodec.LEGACY_FORMAT_VERSION,
+            capsuleId = capsule,
+            senderHandleSnapshot = recognition.senderHandleSnapshot,
+            createdAtEpochSeconds = recognition.createdAtEpochSeconds,
+            placeLabel = recognition.placeLabel,
+            frontFingerprint = recognition.frontFingerprint,
+            backFingerprint = recognition.backFingerprint,
+            senderVerification = null,
+        )
+        val encoded = SenderIndexBundleCodec().encode(legacy)
+        val encrypted = sealer.seal(
+            encoded,
+            SenderIndexBundleAad.encode(
+                owner,
+                capsule,
+                SenderIndexBundleCodec.LEGACY_FORMAT_VERSION,
+            ),
+        )
+        writeDestination(owner, capsule, encrypted)
+        encoded.fill(0)
+        encrypted.fill(0)
+        legacy.wipe()
+
+        val result = SenderIndexBundleReader(roots, sealer).inspect(readRequest(owner, owner, capsule))
+        val snapshot = (result as SenderIndexBundleReadResult.Available).snapshot
+        try {
+            assertEquals(SenderIndexBundleCodec.LEGACY_FORMAT_VERSION, snapshot.localFormatVersion)
+            assertEquals(recognition.senderHandleSnapshot, snapshot.senderHandleSnapshot)
+            assertArrayEquals(recognition.frontFingerprint, snapshot.frontFingerprint)
+            assertNull(snapshot.senderVerification)
+        } finally {
+            snapshot.close()
+        }
+    }
+
+    @Test
     fun missingBundleIsDistinctAndReaderDoesNotCreateAnything() = runBlocking {
         val result = SenderIndexBundleReader(roots, AesGcmSealer())
             .inspect(readRequest(owner, owner, capsule))
@@ -160,7 +208,11 @@ class SenderIndexBundleReaderTest {
     @Test
     fun embeddedCapsuleMismatchIsTerminalAndWrongAadIsConservativeUnavailable() = runBlocking {
         val sealer = AesGcmSealer()
-        val plaintext = SenderIndexBundlePlaintext.fromVerifiedRecognition(capsule, recognition())
+        val plaintext = SenderIndexBundlePlaintext.fromVerifiedRecognition(
+            capsule,
+            recognition(),
+            TestSenderVerification.forCapsule(capsule),
+        )
         val encoded = SenderIndexBundleCodec().encode(plaintext)
         plaintext.wipe()
         val encrypted = sealer.seal(
@@ -179,7 +231,13 @@ class SenderIndexBundleReaderTest {
         )
 
         val valid = SenderIndexBundleStager(roots, sealer).stage(
-            SenderIndexBundleStageRequest(owner, owner, capsule, recognition()),
+            SenderIndexBundleStageRequest(
+                owner,
+                owner,
+                capsule,
+                recognition(),
+                TestSenderVerification.forCapsule(capsule),
+            ),
         ) as SenderIndexBundleStageResult.Staged
         assertTrue(valid.durable.asFile().isFile)
         val validBytes = valid.durable.asFile().readBytes()
@@ -207,7 +265,7 @@ class SenderIndexBundleReaderTest {
             unavailable,
         )
         assertArrayEquals(
-            SenderIndexBundleAad.encode(owner, capsule, SenderIndexBundleCodec.FORMAT_VERSION),
+            SenderIndexBundleAad.encode(owner, capsule, SenderIndexBundleCodec.LEGACY_FORMAT_VERSION),
             refusing.aad,
         )
     }
@@ -297,7 +355,13 @@ class SenderIndexBundleReaderTest {
         destination(owner, capsule).delete()
 
         val staged = SenderIndexBundleStager(roots, sealer).stage(
-            SenderIndexBundleStageRequest(owner, owner, capsule, recognition()),
+            SenderIndexBundleStageRequest(
+                owner,
+                owner,
+                capsule,
+                recognition(),
+                TestSenderVerification.forCapsule(capsule),
+            ),
         ) as SenderIndexBundleStageResult.Staged
         val validBytes = staged.durable.asFile().readBytes()
         writeDestination(owner, capsule, ByteArray(validBytes.size) { 3 })
@@ -321,7 +385,13 @@ class SenderIndexBundleReaderTest {
     fun boundedStreamingRejectsTruncatedZeroReadAndOverflowWithoutMutation() = runBlocking {
         val sealer = AesGcmSealer()
         SenderIndexBundleStager(roots, sealer).stage(
-            SenderIndexBundleStageRequest(owner, owner, capsule, recognition()),
+            SenderIndexBundleStageRequest(
+                owner,
+                owner,
+                capsule,
+                recognition(),
+                TestSenderVerification.forCapsule(capsule),
+            ),
         )
         val original = destination(owner, capsule).readBytes()
         val expectedSize = original.size.toLong()
@@ -401,7 +471,13 @@ class SenderIndexBundleReaderTest {
     fun readFailureIsRetryableAndCancellationIdentityPropagates() = runBlocking {
         val sealer = AesGcmSealer()
         SenderIndexBundleStager(roots, sealer).stage(
-            SenderIndexBundleStageRequest(owner, owner, capsule, recognition()),
+            SenderIndexBundleStageRequest(
+                owner,
+                owner,
+                capsule,
+                recognition(),
+                TestSenderVerification.forCapsule(capsule),
+            ),
         )
         val failingReader = SenderIndexBundleReader(
             roots = roots,

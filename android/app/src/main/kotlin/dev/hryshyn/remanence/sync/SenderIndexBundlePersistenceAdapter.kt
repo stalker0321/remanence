@@ -29,6 +29,7 @@ class SenderIndexBundlePersistenceAdapter internal constructor(
             ownerUserId = request.ownerUserId,
             capsuleId = request.capsuleId,
             verifiedRecognition = request.verified.recognition,
+            senderVerification = request.verified.senderVerification.copyForHandoff(),
         )
         val staged = try {
             stage(stageRequest)

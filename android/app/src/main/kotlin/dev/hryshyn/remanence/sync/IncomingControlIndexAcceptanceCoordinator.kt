@@ -21,6 +21,7 @@ import dev.hryshyn.remanence.core.model.RecipientEnvelopeContextInput
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.identity.SenderKeyResolution
 import dev.hryshyn.remanence.identity.TrustedSenderKeyStore
+import dev.hryshyn.remanence.index.SenderIndexBundleSenderVerification
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
@@ -92,6 +93,7 @@ sealed interface IncomingControlIndexAcceptanceResult {
     class Verified(
         val statement: dev.hryshyn.remanence.protocol.v1.PublishStatement,
         val recognition: RecognitionManifestContent,
+        internal val senderVerification: SenderIndexBundleSenderVerification,
     ) : IncomingControlIndexAcceptanceResult {
         override fun toString(): String = "IncomingControlIndexAcceptanceResult.Verified(<redacted>)"
     }
@@ -202,6 +204,7 @@ class IncomingControlIndexAcceptanceCoordinator(
         }
 
         var envelopePlaintext: ByteArray? = null
+        var senderVerification: SenderIndexBundleSenderVerification? = null
         return try {
             if (!MessageDigest.isEqual(
                     MessageDigest.getInstance(SHA256).digest(parsed.envelope.hpkeCiphertext),
@@ -240,6 +243,17 @@ class IncomingControlIndexAcceptanceCoordinator(
                             IncomingAcceptanceRetryReason.SENDER_KEY_UNAVAILABLE,
                         )
                     }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    return retryable(IncomingAcceptanceRetryReason.SENDER_KEY_UNAVAILABLE)
+                }
+                senderVerification = try {
+                    SenderIndexBundleSenderVerification.fromTrusted(
+                        senderUserId = parsed.senderUserId,
+                        senderKeyBundleId = parsed.senderKeyBundleId,
+                        verifyingKeyset = senderKeyset,
+                    )
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Exception) {
@@ -287,6 +301,7 @@ class IncomingControlIndexAcceptanceCoordinator(
                         IncomingControlIndexAcceptanceResult.Verified(
                             statement = gateResult.statement,
                             recognition = gateResult.recognition,
+                            senderVerification = senderVerification!!.copyForHandoff(),
                         )
                     is ControlIndexAcceptanceResult.Rejected ->
                         rejected(gateResult.reason)
@@ -295,6 +310,7 @@ class IncomingControlIndexAcceptanceCoordinator(
         } finally {
             envelopePlaintext?.fill(0)
             recognitionCiphertext.fill(0)
+            senderVerification?.wipe()
         }
     }
 

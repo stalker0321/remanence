@@ -54,6 +54,7 @@ import dev.hryshyn.remanence.sync.IncomingAcceptanceDrain
 import dev.hryshyn.remanence.sync.IncomingControlIndexAcceptanceCoordinator
 import dev.hryshyn.remanence.sync.SenderIndexBundlePersistenceAdapter
 import dev.hryshyn.remanence.ui.scan.IncomingSenderIndexCandidateProvider
+import dev.hryshyn.remanence.ui.capsule.IncomingPresentationPreparation
 import dev.hryshyn.remanence.wiring.TinkRegistrationIdentityAdapter
 
 /**
@@ -369,8 +370,9 @@ class AppContainer private constructor(
      * FIX-REVIEW2-04: THE trusted sender-key boundary for capsule
      * verification. Other senders resolve only through the authenticated
      * directory; the own export is returned solely for an exact match of the
-     * authenticated account and its active bundle. No local cache, so a later
-     * revocation can never be outrun by a stale copy.
+     * authenticated account and its active bundle. The accepted sender-index
+     * bundle separately retains the verified public key for offline
+     * presentation; its revocation boundary is documented in docs/security.md.
      */
     val trustedSenderKeys: dev.hryshyn.remanence.identity.TrustedSenderKeyStore by lazy {
         dev.hryshyn.remanence.identity.DirectorySenderKeyStore(
@@ -405,6 +407,18 @@ class AppContainer private constructor(
 
     internal val senderIndexBundleReader: SenderIndexBundleReader by lazy {
         SenderIndexBundleReader(accountScopedFileRoots, fingerprintSealer)
+    }
+
+    /** Real lazy offline presentation preparation; no network/session fallback. */
+    internal val incomingPresentationPreparation: IncomingPresentationPreparation by lazy {
+        IncomingPresentationPreparation(
+            incomingCapsuleDao = database.incomingCapsuleDao(),
+            incomingEnvelopeDao = database.incomingEnvelopeDao(),
+            blobCacheDao = database.blobCacheDao(),
+            roots = accountScopedFileRoots,
+            senderIndexBundleReader = senderIndexBundleReader,
+            currentRecipientIdentity = { currentLocalRecipientEncryptionIdentity() },
+        )
     }
 
     /** Real account-scoped bridge from accepted incoming bundles into Scan. */
@@ -646,6 +660,34 @@ class AppContainer private constructor(
         if (!exactBundle || currentAuthenticatedAccount() != account ||
             authTokenHolder.accessToken != token
         ) return null
+        return CurrentRecipientEncryptionIdentity(
+            ownerUserId = account.ownerUserId,
+            activeKeyBundleId = account.activeKeyBundleId,
+            encryptionPrivateKeyset = encryptionHandle,
+        )
+    }
+
+    /**
+     * Offline presentation identity: the private recipient handle is loaded
+     * locally and bound to the current account/key-bundle row, without an
+     * access-token requirement or any network session.
+     */
+    private suspend fun currentLocalRecipientEncryptionIdentity(): CurrentRecipientEncryptionIdentity? {
+        val account = currentAuthenticatedAccount() ?: return null
+        val loaded = incomingAcceptanceIdentityLoader()
+        val encryptionHandle = when (loaded) {
+            is IdentityBundleRepository.LoadResult.Available -> loaded.encryptionHandle
+            IdentityBundleRepository.LoadResult.RecoveryRequired -> return null
+        }
+        val publicExport = com.google.crypto.tink.TinkProtoKeysetFormat.serializeKeysetWithoutSecret(
+            encryptionHandle.publicKeysetHandle,
+        )
+        val exactBundle = try {
+            deriveKeyBundleId(publicExport) == account.activeKeyBundleId.toRestString()
+        } finally {
+            publicExport.fill(0)
+        }
+        if (!exactBundle || currentAuthenticatedAccount() != account) return null
         return CurrentRecipientEncryptionIdentity(
             ownerUserId = account.ownerUserId,
             activeKeyBundleId = account.activeKeyBundleId,

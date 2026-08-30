@@ -13,6 +13,7 @@ import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.LocalMaterialState
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.TestSenderVerification
 import dev.hryshyn.remanence.core.recognition.ExtractionQuality
 import dev.hryshyn.remanence.core.recognition.FingerprintCodec
 import dev.hryshyn.remanence.core.recognition.FingerprintKeypoint
@@ -187,7 +188,13 @@ class IncomingSenderIndexCandidateProviderTest {
     private suspend fun stage(capsuleId: String) {
         val capsule = CapsuleId.parseRest(capsuleId)
         val result = SenderIndexBundleStager(roots, sealer).stage(
-            SenderIndexBundleStageRequest(ownerFor(capsuleId), ownerFor(capsuleId), capsule, recognition(capsule)),
+            SenderIndexBundleStageRequest(
+                ownerFor(capsuleId),
+                ownerFor(capsuleId),
+                capsule,
+                recognition(capsule),
+                TestSenderVerification.forCapsule(capsule),
+            ),
         )
         if (result !is SenderIndexBundleStageResult.Staged) error("test bundle was not staged")
     }

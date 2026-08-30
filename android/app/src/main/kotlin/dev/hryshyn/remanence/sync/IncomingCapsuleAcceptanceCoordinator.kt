@@ -23,6 +23,7 @@ import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.LocalMaterialState
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.index.SenderIndexBundleSenderVerification
 import dev.hryshyn.remanence.index.SenderIndexBundleReader
 import dev.hryshyn.remanence.protocol.v1.PublishStatement
 import java.io.IOException
@@ -120,6 +121,7 @@ sealed interface IncomingControlIndexAcceptancePortResult {
 class IncomingVerifiedControlIndexPayload internal constructor(
     val statement: PublishStatement,
     val recognition: RecognitionManifestContent,
+    internal val senderVerification: SenderIndexBundleSenderVerification,
 ) {
     override fun toString(): String = "IncomingVerifiedControlIndexPayload(<redacted>)"
 }
@@ -240,6 +242,7 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
                         IncomingVerifiedControlIndexPayload(
                             statement = result.statement,
                             recognition = result.recognition,
+                            senderVerification = result.senderVerification.copyForHandoff(),
                         ),
                     )
                 is IncomingControlIndexAcceptanceResult.Retryable ->

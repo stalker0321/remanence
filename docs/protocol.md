@@ -246,7 +246,7 @@ Returns `404 HANDLE_NOT_FOUND` or user summary, active public key bundle, and an
 
 ### `GET /v1/directory/key-bundles/{key_bundle_id}`
 
-Returns the immutable public portion of an `ACTIVE`, `RETIRED`, or `REVOKED` bundle by ID to an authenticated client. Recipients use this endpoint to verify capsules signed before a sender rotated keys. It never resolves routing by handle and never returns email/private material. A revoked response remains available but is marked `REVOKED`; MVP fails closed and does not present a capsule authenticated only by a revoked bundle.
+Returns the immutable public portion of an `ACTIVE`, `RETIRED`, or `REVOKED` bundle by ID to an authenticated client. Recipients use this endpoint to verify capsules signed before a sender rotated keys. It never resolves routing by handle and never returns email/private material. A revoked response remains available but is marked `REVOKED`; a capsule not yet durably accepted fails closed when authenticated only by that bundle. Once the accepted sender-index bundle has durably cached its verified public key, later revocation cannot invalidate that already synchronized material while offline; stronger revocation and key transparency are M4 concerns.
 
 ### Future key lifecycle endpoints
 

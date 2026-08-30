@@ -67,8 +67,10 @@ sealed interface SenderIndexBundleReadResult {
 
 /**
  * Wipeable in-memory view for a later account-scoped candidate reader. It has
- * no file, ciphertext, key, or path capability and never renders payload
- * fields. Callers must close it when candidate loading is complete.
+ * no file, ciphertext, private-key, or path capability and never renders
+ * payload fields. It may carry the v2 public sender verification key; v1
+ * snapshots intentionally carry none. Callers must close it when loading is
+ * complete.
  *
  * Getter results are caller-owned JVM values. An immutable String obtained
  * before close cannot be erased by this class; close wipes the snapshot's
@@ -82,6 +84,7 @@ class SenderIndexBundleInspectionSnapshot internal constructor(
     placeLabel: String?,
     frontFingerprint: ByteArray,
     backFingerprint: ByteArray,
+    senderVerification: SenderIndexBundleSenderVerification?,
     private val wipeBytes: (ByteArray) -> Unit,
     private val wipeChars: (CharArray) -> Unit,
 ) : AutoCloseable {
@@ -92,6 +95,7 @@ class SenderIndexBundleInspectionSnapshot internal constructor(
     private val placeLabelChars = placeLabel?.toCharArray()
     private val frontFingerprintBytes = frontFingerprint.copyOf()
     private val backFingerprintBytes = backFingerprint.copyOf()
+    private val senderVerificationValue = senderVerification?.copyForHandoff()
     private var closed = false
 
     val localFormatVersion: Int
@@ -130,6 +134,13 @@ class SenderIndexBundleInspectionSnapshot internal constructor(
     val backFingerprint: ByteArray
         get() = openCopy(backFingerprintBytes)
 
+    /** Public sender verification material, absent only on legacy v1 bundles. */
+    internal val senderVerification: SenderIndexBundleSenderVerification?
+        get() {
+            checkOpen()
+            return senderVerificationValue?.copyForHandoff()
+        }
+
     override fun close() {
         if (closed) return
         closed = true
@@ -149,6 +160,7 @@ class SenderIndexBundleInspectionSnapshot internal constructor(
                         chars.fill('\u0000')
                         wipeChars(chars)
                     }
+                    senderVerificationValue?.wipe()
                 }
             }
         }
@@ -168,6 +180,9 @@ class SenderIndexBundleInspectionSnapshot internal constructor(
 
 /**
  * Read-only A12b2 inspection of the deterministic A12a destination. The
+ * reader accepts both the current v2 bundle and the canonical v1 recognition
+ * bundle using the matching versioned AAD. v1 remains useful to recognition,
+ * but has no sender verification key for offline presentation.
  * SecretSealer contract does not distinguish authentication failure from
  * provider/Keystore unavailability, so every unseal exception is conservatively
  * reported as [SenderIndexBundleReadResult.Unavailable] and the file is kept.
@@ -279,16 +294,26 @@ class SenderIndexBundleReader internal constructor(
         var opened: ByteArray? = null
         var decoded: SenderIndexBundlePlaintext? = null
         return try {
-            aad = SenderIndexBundleAad.encode(
-                request.ownerUserId,
-                request.capsuleId,
+            for (formatVersion in listOf(
                 SenderIndexBundleCodec.FORMAT_VERSION,
-            )
-            opened = try {
-                sealer.unseal(ciphertext, aad!!)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
+                SenderIndexBundleCodec.LEGACY_FORMAT_VERSION,
+            )) {
+                val candidateAad = SenderIndexBundleAad.encode(
+                    request.ownerUserId,
+                    request.capsuleId,
+                    formatVersion,
+                )
+                try {
+                    opened = sealer.unseal(ciphertext, candidateAad)
+                    aad = candidateAad
+                    break
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    wipe(candidateAad)
+                }
+            }
+            if (opened == null) {
                 // SecretSealer intentionally has no trustworthy corruption-vs-
                 // provider distinction. Preserve the file and retry safely.
                 return unavailable(SenderIndexBundleReadUnavailableReason.SEALER_UNAVAILABLE)
@@ -315,6 +340,7 @@ class SenderIndexBundleReader internal constructor(
                     placeLabel = decoded!!.placeLabel,
                     frontFingerprint = decoded!!.frontFingerprint,
                     backFingerprint = decoded!!.backFingerprint,
+                    senderVerification = decoded!!.senderVerification,
                     wipeBytes = wipe,
                     wipeChars = wipeChars,
                 ),

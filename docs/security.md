@@ -231,13 +231,13 @@ bundle remains acceptable for the draft it signed so rotation during upload
 does not silently destroy authenticated work. Request-adjacent public key
 material is never a trust source.
 
-Directory responses are not cached beyond the current create flow in MVP. This narrows stale-key and wrong-handle risk.
+Directory responses are not cached beyond the current create flow in MVP for prospective routing. The per-capsule accepted sender-index bundle is the deliberate narrow exception: it durably retains the exact verified public key needed for that already synchronized capsule's offline presentation; its revocation boundary is defined below.
 
 ## 9. Key rotation, logout, and account deletion
 
 - Encryption/signing key bundles rotate together in MVP to keep one directory snapshot.
 - `RETIRED` keys remain usable for decrypting/verifying old capsules; they are not returned for new encryption.
-- `REVOKED` denotes suspected compromise. Existing content confidentiality cannot be restored retroactively. MVP fails closed instead of presenting a capsule authenticated only by a revoked bundle, and uses a new bundle for future capsules.
+- `REVOKED` denotes suspected compromise. Existing content confidentiality cannot be restored retroactively. For a capsule not yet durably accepted, MVP fails closed instead of accepting material authenticated only by a revoked bundle, and uses a new bundle for future capsules. The accepted sender-index bundle intentionally durably caches the exact verified public signing key for an already synchronized capsule, so a later directory revocation stops future synchronization/acceptance but cannot invalidate that already accepted offline material; this is analogous to already-held ciphertext and device access. Key transparency and stronger revocation are M4 concerns; no revocation polling or infrastructure is implied here.
 - Logout removes session credentials, unwrapped keysets, plaintext caches, and scan grants from the running account context and cancels its WorkManager tags. Wrapped keys/ciphertext may remain for the same account unless the user chooses device-data removal, but every row/file/query is account-scoped and another login cannot enumerate or resume it.
 - Account deletion is a separate destructive operation. Server rows/blobs can be deleted, but copies already downloaded by recipients cannot be remotely erased. MVP need not ship account deletion UI before M2, but schema ownership must support it.
 

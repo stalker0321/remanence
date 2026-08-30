@@ -22,6 +22,8 @@ import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 /**
  * M2-P12 presentation acceptance: verify that [PresentationAcceptanceGate]
@@ -273,6 +275,25 @@ class PresentationAcceptanceGateTest {
         val result = gate.verify(input(capsule))
         val verified = assertIs<PresentationAcceptanceResult.Verified>(result)
         assertEquals(7, verified.statement.artifactsCount)
+    }
+
+    @Test
+    fun prepareRetainsExactMaterialUntilCloseAndWipesCiphertextSnapshots() {
+        val capsule = buildPresentationCapsule(photoCount = 3)
+        val prepared = assertIs<PresentationAcceptancePreparationResult.Prepared>(
+            gate.prepare(input(capsule)),
+        ).material
+        assertEquals(3, prepared.photoCount)
+        val photo = prepared.loadPhoto(0)
+        try {
+            assertEquals(1024, photo.size)
+            assertEquals(0, photo[0].toInt())
+        } finally {
+            photo.fill(0)
+        }
+        prepared.close()
+        assertTrue(prepared.isClosedForTesting())
+        assertFailsWith<IllegalStateException> { prepared.loadPhoto(0) }
     }
 
     @Test

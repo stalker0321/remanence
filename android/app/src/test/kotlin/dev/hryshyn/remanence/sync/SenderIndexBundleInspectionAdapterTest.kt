@@ -6,6 +6,7 @@ import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.TestSenderVerification
 import dev.hryshyn.remanence.core.recognition.ExtractionQuality
 import dev.hryshyn.remanence.core.recognition.FingerprintCodec
 import dev.hryshyn.remanence.core.recognition.FingerprintKeypoint
@@ -134,7 +135,11 @@ class SenderIndexBundleInspectionAdapterTest {
             frontFingerprint = fingerprint(FingerprintSide.FRONT),
             backFingerprint = fingerprint(FingerprintSide.BACK),
         )
-        val plaintext = SenderIndexBundlePlaintext.fromVerifiedRecognition(capsule, recognition)
+        val plaintext = SenderIndexBundlePlaintext.fromVerifiedRecognition(
+            capsule,
+            recognition,
+            TestSenderVerification.forCapsule(capsule),
+        )
         return try {
             SenderIndexBundleCodec().encode(plaintext)
         } finally {

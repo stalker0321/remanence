@@ -2,6 +2,8 @@ package dev.hryshyn.remanence.core.crypto
 
 import com.google.crypto.tink.KeysetHandle
 import dev.hryshyn.remanence.core.model.BlobId
+import dev.hryshyn.remanence.core.model.ArtifactAadInput
+import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.UserId
@@ -51,6 +53,91 @@ sealed interface PresentationAcceptanceResult {
     data class Rejected(val reason: RejectionReason) : PresentationAcceptanceResult
 }
 
+/** Verified material owned by the next local rendering checkpoint. */
+class PreparedPresentationMaterial internal constructor(
+    val statement: PublishStatement,
+    capsuleKeyset: KeysetHandle,
+    manifest: ContentManifestContent,
+    deliveredCiphertexts: List<DeliveredCiphertext>,
+) : AutoCloseable {
+    private var capsuleKeysetValue: KeysetHandle? = capsuleKeyset
+    private var manifestValue: ContentManifestContent? = manifest
+    private val ciphertexts = LinkedHashMap<BlobId, ByteArray>(deliveredCiphertexts.size)
+    private var closed = false
+
+    init {
+        deliveredCiphertexts.forEach { delivered ->
+            check(ciphertexts.put(delivered.blobId, delivered.ciphertext.copyOf()) == null) {
+                "duplicate prepared ciphertext"
+            }
+        }
+    }
+
+    val photoCount: Int
+        get() = requireOpen().photos.size
+
+    fun noteText(): String? = requireOpen().note
+
+    /** Decrypts one verified photo from the exact snapshot captured at prepare time. */
+    fun loadPhoto(ordinal: Int): ByteArray {
+        val manifest = requireOpen()
+        val photo = manifest.photos.firstOrNull { it.ordinal == ordinal }
+            ?: throw IllegalArgumentException("photo ordinal is not in the verified manifest")
+        val capsuleKeyset = capsuleKeysetValue ?: error("prepared material is closed")
+        val sender = UserId.fromProtoBytes(statement.senderUserId)
+        val recipient = UserId.fromProtoBytes(statement.recipientUserId)
+        val capsuleId = CapsuleId.fromProtoBytes(statement.capsuleId)
+        val blobId = BlobId(photo.blobId)
+        val ciphertext = ciphertexts[blobId]?.copyOf()
+            ?: throw IllegalStateException("verified photo ciphertext is unavailable")
+        return try {
+            CapsuleArtifactCryptor().decrypt(
+                capsuleKeyset,
+                ArtifactAadInput(
+                    capsuleId = capsuleId,
+                    blobId = blobId,
+                    artifactKind = CapsuleArtifactKind.PHOTO,
+                    ordinal = ordinal,
+                    senderUserId = sender,
+                    recipientUserId = recipient,
+                ),
+                ciphertext,
+            )
+        } finally {
+            ciphertext.fill(0)
+        }
+    }
+
+    override fun close() {
+        if (closed) return
+        closed = true
+        ciphertexts.values.forEach { it.fill(0) }
+        ciphertexts.clear()
+        manifestValue = null
+        capsuleKeysetValue = null
+    }
+
+    override fun toString(): String = "PreparedPresentationMaterial(<redacted>)"
+
+    internal fun isClosedForTesting(): Boolean = closed && ciphertexts.isEmpty() &&
+        manifestValue == null && capsuleKeysetValue == null
+
+    private fun requireOpen(): ContentManifestContent {
+        check(!closed) { "prepared presentation material is closed" }
+        return manifestValue ?: error("prepared presentation material is closed")
+    }
+}
+
+sealed interface PresentationAcceptancePreparationResult {
+    class Prepared(val material: PreparedPresentationMaterial) :
+        PresentationAcceptancePreparationResult {
+        override fun toString(): String =
+            "PresentationAcceptancePreparationResult.Prepared(<redacted>)"
+    }
+
+    data class Rejected(val reason: RejectionReason) : PresentationAcceptancePreparationResult
+}
+
 /**
  * M2-P12 presentation gate (docs/security.md section 6.7). Verifies the
  * canonical control plane, then the exact full ciphertext coverage, then
@@ -65,7 +152,8 @@ sealed interface PresentationAcceptanceResult {
  * capsule ids, and descriptor mismatches all reject closed with a
  * reason and perform no cryptographic or storage side effects beyond
  * the [CapsuleArtifactCryptor] and [ContentManifestCodec] calls they
- * are routed through.
+ * are routed through. [prepare] is the private-material handoff for the
+ * later local renderer; [verify] retains its statement-only result surface.
  */
 class PresentationAcceptanceGate(
     signer: PublishStatementSigner = PublishStatementSigner(),
@@ -81,7 +169,19 @@ class PresentationAcceptanceGate(
 
     private val contentManifestCodec: ContentManifestCodec = ContentManifestCodec()
 
-    fun verify(input: PresentationAcceptanceInput): PresentationAcceptanceResult {
+    fun verify(input: PresentationAcceptanceInput): PresentationAcceptanceResult =
+        when (val prepared = prepare(input)) {
+            is PresentationAcceptancePreparationResult.Prepared -> {
+                val statement = prepared.material.statement
+                prepared.material.close()
+                PresentationAcceptanceResult.Verified(statement)
+            }
+            is PresentationAcceptancePreparationResult.Rejected ->
+                PresentationAcceptanceResult.Rejected(prepared.reason)
+        }
+
+    /** Verifies once and retains the exact ciphertext snapshots for local rendering. */
+    fun prepare(input: PresentationAcceptanceInput): PresentationAcceptancePreparationResult {
         val control = controlVerifier.verify(
             CanonicalControlInput(
                 expectedCapsuleId = input.expectedCapsuleId,
@@ -95,7 +195,7 @@ class PresentationAcceptanceGate(
         )
         val verified = when (control) {
             is CanonicalControlResult.Rejected ->
-                return PresentationAcceptanceResult.Rejected(control.reason)
+                return PresentationAcceptancePreparationResult.Rejected(control.reason)
             is CanonicalControlResult.Verified -> control.control
         }
 
@@ -104,25 +204,25 @@ class PresentationAcceptanceGate(
                 delivered = input.deliveredCiphertexts,
             )
         ) {
-            return PresentationAcceptanceResult.Rejected(RejectionReason.BLOB_SUBSTITUTION)
+            return PresentationAcceptancePreparationResult.Rejected(RejectionReason.BLOB_SUBSTITUTION)
         }
 
         val contentBinding = verified.statement.artifactsList.firstOrNull { binding ->
             binding.kind == ArtifactKind.CONTENT_MANIFEST && binding.ordinal == NON_PHOTO_ORDINAL
-        } ?: return PresentationAcceptanceResult.Rejected(RejectionReason.LAYOUT_INVALID)
+        } ?: return PresentationAcceptancePreparationResult.Rejected(RejectionReason.LAYOUT_INVALID)
 
         val keyset = try {
             capsuleKeysetParser.parseExactAes256GcmTink(
                 verified.envelope.capsuleAeadKeyset.toByteArray(),
             )
         } catch (_: GeneralSecurityException) {
-            return PresentationAcceptanceResult.Rejected(RejectionReason.CONTENT_AEAD_INVALID)
+            return PresentationAcceptancePreparationResult.Rejected(RejectionReason.CONTENT_AEAD_INVALID)
         }
 
         val contentCiphertext = input.deliveredCiphertexts
             .firstOrNull { it.blobId.toProtoBytes() == contentBinding.blobId }
             ?.ciphertext
-            ?: return PresentationAcceptanceResult.Rejected(RejectionReason.BLOB_SUBSTITUTION)
+            ?: return PresentationAcceptancePreparationResult.Rejected(RejectionReason.BLOB_SUBSTITUTION)
 
         val routing = try {
             RecognitionManifestCodec.RoutingContext(
@@ -132,42 +232,49 @@ class PresentationAcceptanceGate(
                 recipientUserId = UserId.fromProtoBytes(verified.statement.recipientUserId),
             )
         } catch (_: IllegalArgumentException) {
-            return PresentationAcceptanceResult.Rejected(RejectionReason.ID_MISMATCH)
+            return PresentationAcceptancePreparationResult.Rejected(RejectionReason.ID_MISMATCH)
         }
 
         val manifest = try {
             contentManifestCodec.decryptAndParse(keyset, routing, contentCiphertext)
         } catch (_: GeneralSecurityException) {
-            return PresentationAcceptanceResult.Rejected(RejectionReason.CONTENT_AEAD_INVALID)
+            return PresentationAcceptancePreparationResult.Rejected(RejectionReason.CONTENT_AEAD_INVALID)
         } catch (_: Exception) {
-            return PresentationAcceptanceResult.Rejected(RejectionReason.CONTENT_AEAD_INVALID)
+            return PresentationAcceptancePreparationResult.Rejected(RejectionReason.CONTENT_AEAD_INVALID)
         }
 
         val photoBindings = verified.statement.artifactsList.filter { binding ->
             binding.kind == ArtifactKind.PHOTO
         }
         if (manifest.photos.size != photoBindings.size) {
-            return PresentationAcceptanceResult.Rejected(RejectionReason.CONTENT_DESCRIPTORS_MISMATCH)
+            return PresentationAcceptancePreparationResult.Rejected(RejectionReason.CONTENT_DESCRIPTORS_MISMATCH)
         }
         val manifestByOrdinal = manifest.photos.sortedBy { it.ordinal }
         for ((index, descriptor) in manifestByOrdinal.withIndex()) {
             if (descriptor.ordinal != index) {
-                return PresentationAcceptanceResult.Rejected(RejectionReason.CONTENT_DESCRIPTORS_MISMATCH)
+                return PresentationAcceptancePreparationResult.Rejected(RejectionReason.CONTENT_DESCRIPTORS_MISMATCH)
             }
             val signedBinding = photoBindings[index]
             if (signedBinding.ordinal != index) {
-                return PresentationAcceptanceResult.Rejected(RejectionReason.CONTENT_DESCRIPTORS_MISMATCH)
+                return PresentationAcceptancePreparationResult.Rejected(RejectionReason.CONTENT_DESCRIPTORS_MISMATCH)
             }
             val descriptorBytes = java.nio.ByteBuffer.allocate(16)
                 .putLong(descriptor.blobId.mostSignificantBits)
                 .putLong(descriptor.blobId.leastSignificantBits)
                 .array()
             if (!java.security.MessageDigest.isEqual(signedBinding.blobId.toByteArray(), descriptorBytes)) {
-                return PresentationAcceptanceResult.Rejected(RejectionReason.CONTENT_DESCRIPTORS_MISMATCH)
+                return PresentationAcceptancePreparationResult.Rejected(RejectionReason.CONTENT_DESCRIPTORS_MISMATCH)
             }
         }
 
-        return PresentationAcceptanceResult.Verified(verified.statement)
+        return PresentationAcceptancePreparationResult.Prepared(
+            PreparedPresentationMaterial(
+                statement = verified.statement,
+                capsuleKeyset = keyset,
+                manifest = manifest,
+                deliveredCiphertexts = input.deliveredCiphertexts,
+            ),
+        )
     }
 
     private companion object {

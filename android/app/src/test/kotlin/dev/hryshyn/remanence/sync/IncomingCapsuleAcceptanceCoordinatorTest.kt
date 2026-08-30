@@ -33,6 +33,7 @@ import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.LocalMaterialState
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.TestSenderVerification
 import dev.hryshyn.remanence.core.recognition.ExtractionQuality
 import dev.hryshyn.remanence.core.recognition.FingerprintCodec
 import dev.hryshyn.remanence.core.recognition.FingerprintKeypoint
@@ -268,6 +269,7 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
                 ownerUserId = owner,
                 capsuleId = capsule,
                 verifiedRecognition = indexRecognition(),
+                senderVerification = TestSenderVerification.forCapsule(capsule),
             ),
         )
         assertTrue(staged is SenderIndexBundleStageResult.Staged)
@@ -1212,6 +1214,7 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
             frontFingerprint = byteArrayOf(1),
             backFingerprint = byteArrayOf(2),
         ),
+        senderVerification = TestSenderVerification.forCapsule(capsule),
     )
 
     private inline fun <reified T> assertIs(value: Any?): T {

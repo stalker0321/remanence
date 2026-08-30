@@ -6,6 +6,7 @@ import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.TestSenderVerification
 import dev.hryshyn.remanence.core.recognition.ExtractionQuality
 import dev.hryshyn.remanence.core.recognition.FingerprintCodec
 import dev.hryshyn.remanence.core.recognition.FingerprintKeypoint
@@ -71,7 +72,11 @@ class SenderIndexBundleStagerTest {
     @Test
     fun codecRoundTripIsDeterministicAndRejectsUnknownOrInvalidData() {
         val content = recognition()
-        val plaintext = SenderIndexBundlePlaintext.fromVerifiedRecognition(capsule, content)
+        val plaintext = SenderIndexBundlePlaintext.fromVerifiedRecognition(
+            capsule,
+            content,
+            TestSenderVerification.forCapsule(capsule),
+        )
         val codec = SenderIndexBundleCodec()
         val first = codec.encode(plaintext)
         val second = codec.encode(plaintext)
@@ -91,7 +96,7 @@ class SenderIndexBundleStagerTest {
             codec.decode(first + byteArrayOf(0x08, 0x01))
         }
         assertThrows<IllegalArgumentException> {
-            codec.decode(first.copyOf().also { it[1] = 2 })
+            codec.decode(first.copyOf().also { it[1] = 3 })
         }
         assertThrows<IllegalArgumentException> {
             codec.decode(byteArrayOf(0x0a, 0x01))
@@ -100,36 +105,42 @@ class SenderIndexBundleStagerTest {
             SenderIndexBundlePlaintext.fromVerifiedRecognition(
                 capsule,
                 content.copy(placeLabel = ""),
+                TestSenderVerification.forCapsule(capsule),
             )
         }
         assertThrows<IllegalArgumentException> {
             SenderIndexBundlePlaintext.fromVerifiedRecognition(
                 capsule,
                 content.copy(frontFingerprint = ByteArray(0)),
+                TestSenderVerification.forCapsule(capsule),
             )
         }
         assertThrows<IllegalArgumentException> {
             SenderIndexBundlePlaintext.fromVerifiedRecognition(
                 capsule,
                 content.copy(protocolVersion = ProtocolV1Limits.PROTOCOL_VERSION + 1),
+                TestSenderVerification.forCapsule(capsule),
             )
         }
         assertThrows<IllegalArgumentException> {
             SenderIndexBundlePlaintext.fromVerifiedRecognition(
                 capsule,
                 content.copy(senderHandleSnapshot = "a".repeat(ProtocolV1Limits.HANDLE_MAX_ASCII_CHARS + 1)),
+                TestSenderVerification.forCapsule(capsule),
             )
         }
         assertThrows<IllegalArgumentException> {
             SenderIndexBundlePlaintext.fromVerifiedRecognition(
                 capsule,
                 content.copy(placeLabel = "x".repeat(ProtocolV1Limits.PLACE_LABEL_MAX_UTF8_BYTES + 1)),
+                TestSenderVerification.forCapsule(capsule),
             )
         }
         assertThrows<IllegalArgumentException> {
             SenderIndexBundlePlaintext.fromVerifiedRecognition(
                 capsule,
                 content.copy(frontFingerprint = ByteArray(SenderIndexBundleCodec.MAX_FINGERPRINT_BYTES + 1)),
+                TestSenderVerification.forCapsule(capsule),
             )
         }
     }
@@ -201,6 +212,52 @@ class SenderIndexBundleStagerTest {
             (conflict as SenderIndexBundleStageResult.Failure).reason,
         )
         assertArrayEquals(original, first.durable.asFile().readBytes())
+    }
+
+    @Test
+    fun legacyV1DestinationIsReplayedWithItsVersionedAad() = runBlocking {
+        val sealer = RandomAuthenticatedSealer()
+        val legacy = SenderIndexBundlePlaintext(
+            localFormatVersion = SenderIndexBundleCodec.LEGACY_FORMAT_VERSION,
+            capsuleId = capsule,
+            senderHandleSnapshot = "alice_1",
+            createdAtEpochSeconds = 1_700_000_000L,
+            placeLabel = "Paris",
+            frontFingerprint = contentBytes(FingerprintSide.FRONT),
+            backFingerprint = contentBytes(FingerprintSide.BACK),
+            senderVerification = null,
+        )
+        val codec = SenderIndexBundleCodec()
+        val plaintext = codec.encode(legacy)
+        val aad = SenderIndexBundleAad.encode(
+            ownerA,
+            capsule,
+            SenderIndexBundleCodec.LEGACY_FORMAT_VERSION,
+        )
+        val ciphertext = sealer.seal(plaintext, aad)
+        val destination = destination(ownerA)
+        check(destination.parentFile?.mkdirs() == true)
+        destination.writeBytes(ciphertext)
+        plaintext.fill(0)
+        aad.fill(0)
+        ciphertext.fill(0)
+        legacy.wipe()
+
+        val result = SenderIndexBundleStager(roots, sealer).stage(request(ownerA))
+        assertTrue(result is SenderIndexBundleStageResult.Staged)
+        assertTrue((result as SenderIndexBundleStageResult.Staged).replayed)
+
+        val snapshot = (
+            SenderIndexBundleReader(roots, sealer).inspect(
+                SenderIndexBundleReadRequest(ownerA, ownerA, capsule),
+            ) as SenderIndexBundleReadResult.Available
+            ).snapshot
+        try {
+            assertEquals(SenderIndexBundleCodec.LEGACY_FORMAT_VERSION, snapshot.localFormatVersion)
+            assertTrue(snapshot.senderVerification == null)
+        } finally {
+            snapshot.close()
+        }
     }
 
     @Test
@@ -697,7 +754,13 @@ class SenderIndexBundleStagerTest {
         owner: UserId = ownerA,
         capsuleId: CapsuleId = capsule,
         recognition: RecognitionManifestContent = recognition(capsuleId = capsuleId),
-    ) = SenderIndexBundleStageRequest(authenticatedOwner, owner, capsuleId, recognition)
+    ) = SenderIndexBundleStageRequest(
+        authenticatedOwner,
+        owner,
+        capsuleId,
+        recognition,
+        TestSenderVerification.forCapsule(capsuleId),
+    )
 
     private fun recognition(
         place: String? = "Paris",

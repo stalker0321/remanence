@@ -30,6 +30,7 @@ import dev.hryshyn.remanence.core.model.PublishStatementBuildResult
 import dev.hryshyn.remanence.core.model.PublishStatementBuilder
 import dev.hryshyn.remanence.core.model.PublishStatementInput
 import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.index.SenderIndexBundleSenderVerification
 import dev.hryshyn.remanence.core.model.RecipientEnvelopeContextInput
 import dev.hryshyn.remanence.identity.SenderKeyResolution as TrustedSenderResolution
 import dev.hryshyn.remanence.identity.TrustedSenderKeyStore
@@ -428,6 +429,11 @@ class IncomingControlIndexAcceptanceCoordinatorTest {
             IncomingControlIndexAcceptanceResult.Verified(
                 fixture.statement,
                 fixture.recognition,
+                SenderIndexBundleSenderVerification.fromTrusted(
+                    fixture.senderUserId,
+                    fixture.senderKeyBundleId,
+                    fixture.senderPublicKeyset,
+                ),
             ).toString(),
         )
     }

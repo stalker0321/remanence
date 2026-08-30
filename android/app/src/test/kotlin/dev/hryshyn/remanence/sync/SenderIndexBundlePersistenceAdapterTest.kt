@@ -5,6 +5,7 @@ import dev.hryshyn.remanence.core.data.fingerprints.SecretSealer
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.TestSenderVerification
 import dev.hryshyn.remanence.index.DurableSenderIndexBundle
 import dev.hryshyn.remanence.index.SenderIndexBundleStageFailure
 import dev.hryshyn.remanence.index.SenderIndexBundleStageRequest
@@ -43,6 +44,7 @@ class SenderIndexBundlePersistenceAdapterTest {
     private val verified = IncomingVerifiedControlIndexPayload(
         statement = PublishStatement.getDefaultInstance(),
         recognition = recognition,
+        senderVerification = TestSenderVerification.forCapsule(capsule),
     )
     private val request = IncomingVerifiedControlIndexPersistenceRequest(
         ownerUserId = owner,
@@ -234,6 +236,7 @@ class SenderIndexBundlePersistenceAdapterTest {
                 verified = IncomingVerifiedControlIndexPayload(
                     statement = PublishStatement.getDefaultInstance(),
                     recognition = validRecognition(),
+                    senderVerification = TestSenderVerification.forCapsule(capsule),
                 ),
             )
 

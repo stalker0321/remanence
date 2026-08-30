@@ -31,6 +31,7 @@ import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.coroutineContext
 import kotlin.coroutines.resume
@@ -79,14 +80,10 @@ internal sealed interface IncomingPresentationPreparationResult {
     ) : IncomingPresentationPreparationResult
 }
 
-/** Internal producer-owned result used only across the IO/caller handoff. */
-private class PreparedIncomingPresentationHandoffResult(
-    val ownerUserId: UserId,
-    val capsuleId: CapsuleId,
-    val material: PreparedPresentationMaterial,
-) : IncomingPresentationPreparationResult {
+/** Non-resource marker returned from the IO phase after the outer holder owns the material. */
+private class PreparedIncomingPresentationReady : IncomingPresentationPreparationResult {
     override fun toString(): String =
-        "IncomingPresentationPreparationResult.PreparedHandoff(<redacted>)"
+        "IncomingPresentationPreparationResult.PreparedReady(<redacted>)"
 }
 
 /**
@@ -111,6 +108,56 @@ internal class PreparedIncomingPresentation internal constructor(
     override fun toString(): String = "PreparedIncomingPresentation(<redacted>)"
 }
 
+/** Single-owner holder spanning the IO phase and its dispatch back to the caller. */
+private class PreparedIncomingPresentationHolder(
+    private val onMaterialClosed: () -> Unit,
+) {
+    private sealed interface State {
+        data object Empty : State
+        class Owned(val presentation: PreparedIncomingPresentation) : State
+        data object Transferred : State
+        data object Closed : State
+    }
+
+    private val state = AtomicReference<State>(State.Empty)
+
+    fun store(presentation: PreparedIncomingPresentation): Boolean =
+        state.compareAndSet(State.Empty, State.Owned(presentation))
+
+    fun takeForDelivery(): PreparedIncomingPresentation? {
+        while (true) {
+            when (val current = state.get()) {
+                is State.Owned -> if (state.compareAndSet(current, State.Transferred)) {
+                    return current.presentation
+                }
+                else -> return null
+            }
+        }
+    }
+
+    fun closeOwned() {
+        val previous = state.getAndSet(State.Closed)
+        if (previous is State.Owned) closeValue(previous.presentation)
+    }
+
+    fun closeTransferred(presentation: PreparedIncomingPresentation) = closeValue(presentation)
+
+    fun closeDetached(presentation: PreparedIncomingPresentation) = closeValue(presentation)
+
+    private fun closeValue(presentation: PreparedIncomingPresentation) {
+        try {
+            presentation.close()
+        } catch (_: Exception) {
+            // Cleanup cannot replace cancellation or the producer result.
+        }
+        try {
+            onMaterialClosed()
+        } catch (_: Exception) {
+            // Test/diagnostic callbacks cannot affect the producer outcome.
+        }
+    }
+}
+
 /**
  * Owner-scoped offline presentation preparation. This is deliberately
  * independent from [dev.hryshyn.remanence.core.data.db.IncomingSyncSession]:
@@ -125,6 +172,7 @@ internal class IncomingPresentationPreparation(
     private val currentRecipientIdentity: suspend () -> CurrentRecipientEncryptionIdentity?,
     private val acceptanceGate: PresentationAcceptanceGate = PresentationAcceptanceGate(),
     private val envelopeCryptor: RecipientEnvelopeCryptor = RecipientEnvelopeCryptor(),
+    private val beforePreparedResultDelivery: suspend () -> Unit = {},
     private val beforePreparedDelivery:
         (CancellableContinuation<PreparedIncomingPresentation>) -> Unit = {},
     private val onPreparedMaterialClosed: () -> Unit = {},
@@ -134,7 +182,9 @@ internal class IncomingPresentationPreparation(
         ownerUserId: UserId,
         capsuleId: CapsuleId,
     ): IncomingPresentationPreparationResult {
-        val ioResult = withContext(Dispatchers.IO) {
+        val preparedHolder = PreparedIncomingPresentationHolder(onPreparedMaterialClosed)
+        return try {
+            val ioResult = withContext(Dispatchers.IO) {
         coroutineContext.ensureActive()
         val initialIdentity = try {
             currentRecipientIdentity()
@@ -379,13 +429,20 @@ internal class IncomingPresentationPreparation(
                 return@withContext rejected(IncomingPresentationPreparationRejection.ACCOUNT_CHANGED)
             }
 
-            val handoff = PreparedIncomingPresentationHandoffResult(
+            val presentation = PreparedIncomingPresentation(
                 ownerUserId = ownerUserId,
                 capsuleId = capsuleId,
                 material = accepted,
             )
+            if (!preparedHolder.store(presentation)) {
+                preparedHolder.closeDetached(presentation)
+                retainedMaterial = null
+                return@withContext unavailable(
+                    IncomingPresentationPreparationUnavailable.LOCAL_STORAGE_UNAVAILABLE,
+                )
+            }
             retainedMaterial = null
-            return@withContext handoff
+            return@withContext PreparedIncomingPresentationReady()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: IllegalArgumentException) {
@@ -407,43 +464,39 @@ internal class IncomingPresentationPreparation(
             envelopePlaintext?.fill(0)
             localCiphertexts.forEach { it.fill(0) }
             retainedMaterial?.close()
-        }
-        }
-        return when (ioResult) {
-            is PreparedIncomingPresentationHandoffResult ->
-                IncomingPresentationPreparationResult.Prepared(deliverPrepared(ioResult))
-            else -> ioResult
+            }
+            }
+            return when (ioResult) {
+                is PreparedIncomingPresentationReady -> {
+                    beforePreparedResultDelivery()
+                    IncomingPresentationPreparationResult.Prepared(deliverPrepared(preparedHolder))
+                }
+                else -> ioResult
+            }
+        } finally {
+            preparedHolder.closeOwned()
         }
     }
 
     private suspend fun deliverPrepared(
-        handoff: PreparedIncomingPresentationHandoffResult,
+        preparedHolder: PreparedIncomingPresentationHolder,
     ): PreparedIncomingPresentation = suspendCancellableCoroutine { continuation ->
-        val presentation = PreparedIncomingPresentation(
-            ownerUserId = handoff.ownerUserId,
-            capsuleId = handoff.capsuleId,
-            material = handoff.material,
-        )
+        val presentation = preparedHolder.takeForDelivery()
+        if (presentation == null) {
+            if (continuation.isActive) {
+                continuation.resumeWith(
+                    Result.failure(IllegalStateException("prepared presentation handoff unavailable")),
+                )
+            }
+            return@suspendCancellableCoroutine
+        }
         try {
             beforePreparedDelivery(continuation)
         } catch (failure: Throwable) {
-            closePrepared(presentation)
+            preparedHolder.closeTransferred(presentation)
             throw failure
         }
-        continuation.resume(presentation) { _, value, _ -> closePrepared(value) }
-    }
-
-    private fun closePrepared(presentation: PreparedIncomingPresentation) {
-        try {
-            presentation.close()
-        } catch (_: Exception) {
-            // Cleanup cannot replace cancellation or the producer result.
-        }
-        try {
-            onPreparedMaterialClosed()
-        } catch (_: Exception) {
-            // Test/diagnostic callbacks cannot affect the producer outcome.
-        }
+        continuation.resume(presentation) { _, value, _ -> preparedHolder.closeTransferred(value) }
     }
 
     private suspend fun validateAndReadBlob(

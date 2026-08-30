@@ -64,6 +64,7 @@ import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlin.coroutines.cancellation.CancellationException
@@ -230,6 +231,35 @@ class IncomingPresentationPreparationTest {
     }
 
     @Test
+    fun cancellationWhileCompletedIoResultDispatchesBackClosesHolderExactlyOnce() = runBlocking {
+        val enteredDispatch = CompletableDeferred<Unit>()
+        val closeCount = AtomicInteger(0)
+        val cancellation = CancellationException("dispatch cancelled")
+        var returned = false
+        var cancellationObserved = false
+        val job = launch {
+            try {
+                preparation(
+                    beforePreparedResultDelivery = {
+                        enteredDispatch.complete(Unit)
+                        awaitCancellation()
+                    },
+                    onPreparedMaterialClosed = { closeCount.incrementAndGet() },
+                ).prepare(OWNER, CAPSULE).also { returned = true }
+            } catch (_: CancellationException) {
+                cancellationObserved = true
+            }
+        }
+        enteredDispatch.await()
+        job.cancel(cancellation)
+        job.join()
+
+        assertTrue(cancellationObserved)
+        assertTrue(!returned)
+        assertEquals(1, closeCount.get())
+    }
+
+    @Test
     fun wrongOwnerStopsBeforeOwnerScopedRoomRead() = runBlocking {
         val result = preparation().prepare(OTHER_OWNER, CAPSULE)
         assertEquals(
@@ -240,6 +270,7 @@ class IncomingPresentationPreparationTest {
 
     private fun preparation(
         identity: suspend () -> CurrentRecipientEncryptionIdentity? = { currentIdentity() },
+        beforePreparedResultDelivery: suspend () -> Unit = {},
         beforePreparedDelivery: (kotlinx.coroutines.CancellableContinuation<PreparedIncomingPresentation>) -> Unit = {},
         onPreparedMaterialClosed: () -> Unit = {},
     ) = IncomingPresentationPreparation(
@@ -251,6 +282,7 @@ class IncomingPresentationPreparationTest {
         currentRecipientIdentity = identity,
         acceptanceGate = PresentationAcceptanceGate(),
         envelopeCryptor = RecipientEnvelopeCryptor(),
+        beforePreparedResultDelivery = beforePreparedResultDelivery,
         beforePreparedDelivery = beforePreparedDelivery,
         onPreparedMaterialClosed = onPreparedMaterialClosed,
     )

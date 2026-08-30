@@ -110,7 +110,7 @@ class IncomingCiphertextPrefetchCoordinatorTest {
         )
 
         val first = coordinator.prefetch(owner)
-        assertEquals(IncomingPrefetchResult.Completed(2, 0), first)
+        assertEquals(IncomingPrefetchResult.Completed(2, 0, pageMayHaveMore = true), first)
         assertEquals(listOf(contentBlob, photoBlobs[0]), calls)
         assertEquals(LocalMaterialState.INDEX_CACHED, capsuleState())
         assertEquals(BlobCacheState.CACHED, blobState(contentBlob))
@@ -118,7 +118,7 @@ class IncomingCiphertextPrefetchCoordinatorTest {
         assertEquals(BlobCacheState.DOWNLOADING, blobState(photoBlobs[1]))
 
         val second = coordinator.prefetch(owner)
-        assertEquals(IncomingPrefetchResult.Completed(2, 1), second)
+        assertEquals(IncomingPrefetchResult.Completed(2, 1, pageMayHaveMore = true), second)
         assertEquals(listOf(contentBlob, photoBlobs[0], photoBlobs[1], photoBlobs[2]), calls)
         assertEquals(LocalMaterialState.MATERIAL_CACHED, capsuleState())
         assertTrue(allPhotosCached())
@@ -150,7 +150,7 @@ class IncomingCiphertextPrefetchCoordinatorTest {
             },
         ).prefetch(owner)
 
-        assertEquals(IncomingPrefetchResult.Completed(1, 1, 1), result)
+        assertEquals(IncomingPrefetchResult.Completed(1, 1, 1, pageMayHaveMore = true), result)
         assertEquals(listOf(laterContentBlob), calls)
         assertEquals(LocalMaterialState.CORRUPT, capsuleState(capsule))
         assertEquals(LocalMaterialState.MATERIAL_CACHED, capsuleState(laterCapsule))
@@ -160,7 +160,7 @@ class IncomingCiphertextPrefetchCoordinatorTest {
             maxBlobsPerRun = 5,
             download = { _, _ -> error("quarantined and completed capsules must not be selected") },
         ).prefetch(owner)
-        assertEquals(IncomingPrefetchResult.Completed(0, 0, 0), replay)
+        assertEquals(IncomingPrefetchResult.Completed(0, 0, 0, pageMayHaveMore = false), replay)
         assertEquals(LocalMaterialState.CORRUPT, capsuleState(capsule))
     }
 
@@ -202,7 +202,7 @@ class IncomingCiphertextPrefetchCoordinatorTest {
             },
         ).prefetch(owner)
 
-        assertEquals(IncomingPrefetchResult.Completed(1, 1, 1), result)
+        assertEquals(IncomingPrefetchResult.Completed(1, 1, 1, pageMayHaveMore = true), result)
         assertEquals(listOf(laterContentBlob), calls)
         assertEquals(LocalMaterialState.CORRUPT, capsuleState(capsule))
         assertEquals(LocalMaterialState.MATERIAL_CACHED, capsuleState(laterCapsule))
@@ -270,7 +270,7 @@ class IncomingCiphertextPrefetchCoordinatorTest {
             download = { _, _ -> error("foreign capsule must not reach network") },
         ).prefetch(owner)
 
-        assertEquals(IncomingPrefetchResult.Completed(0, 0, 0), result)
+        assertEquals(IncomingPrefetchResult.Completed(0, 0, 0, pageMayHaveMore = false), result)
         assertEquals(LocalMaterialState.INDEX_CACHED, capsuleState(foreignCapsule, otherOwner))
     }
 
@@ -344,7 +344,7 @@ class IncomingCiphertextPrefetchCoordinatorTest {
             },
         ).prefetch(owner)
 
-        assertEquals(IncomingPrefetchResult.Completed(1, 1), result)
+        assertEquals(IncomingPrefetchResult.Completed(1, 1, pageMayHaveMore = true), result)
         assertEquals(0, downloadCalls)
         assertEquals(LocalMaterialState.MATERIAL_CACHED, capsuleState())
     }
@@ -388,7 +388,7 @@ class IncomingCiphertextPrefetchCoordinatorTest {
             },
         ).prefetch(owner)
 
-        assertEquals(IncomingPrefetchResult.Completed(1, 1), second)
+        assertEquals(IncomingPrefetchResult.Completed(1, 1, pageMayHaveMore = false), second)
         assertEquals(1, downloads.get())
         assertEquals(LocalMaterialState.MATERIAL_CACHED, capsuleState())
     }

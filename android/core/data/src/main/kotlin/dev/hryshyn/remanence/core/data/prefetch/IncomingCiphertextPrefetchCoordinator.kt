@@ -63,6 +63,7 @@ sealed interface IncomingPrefetchResult {
         val processedBlobCount: Int,
         val materialCachedCapsuleCount: Int,
         val quarantinedCapsuleCount: Int = 0,
+        val pageMayHaveMore: Boolean = false,
     ) : IncomingPrefetchResult {
         override fun toString(): String = "IncomingPrefetchResult.Completed(<redacted>)"
     }
@@ -201,6 +202,7 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
             processedBlobCount = processed,
             materialCachedCapsuleCount = materialCached,
             quarantinedCapsuleCount = quarantinedCapsules,
+            pageMayHaveMore = selected.size == maxBlobsPerRun,
         )
     }
 

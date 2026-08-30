@@ -147,6 +147,20 @@ class ScanGrantRoutingTest {
         }
     }
 
+    private class CountingTrustedSenderKeyStore(
+        private val delegate: TrustedSenderKeyStore,
+    ) : TrustedSenderKeyStore {
+        var calls: Int = 0
+
+        override suspend fun senderVerifyingKeyset(
+            senderUserId: UserId,
+            senderKeyBundleId: KeyBundleId,
+        ): SenderKeyResolution {
+            calls++
+            return delegate.senderVerifyingKeyset(senderUserId, senderKeyBundleId)
+        }
+    }
+
     /** Accepts every still with EXACTLY the seeded side fingerprint bytes. */
     private class FixedProcessor(
         private val serializedBytes: ByteArray,
@@ -263,20 +277,13 @@ class ScanGrantRoutingTest {
             },
         ),
         candidateIndexProvider: suspend (UserId) -> ScanCandidateIndex = { ScanCandidateIndex.EMPTY },
+        identityProvider: suspend () -> SenderIdentitySnapshot = { identitySnapshot() },
     ): ScanViewModel =
         ScanViewModel(
             persistence = store(),
             database = database,
             profile = RecognitionProfile.mvpOrbV1(),
-            identityProvider = {
-                SenderIdentitySnapshot(
-                    userId = userUuid.toString(),
-                    handle = "mykola",
-                    activeKeyBundleId = bundleUuid.toString(),
-                    encryptionPrivateHandle = identity.encryptionPrivateHandle,
-                    signingPrivateHandle = identity.signingPrivateHandle,
-                )
-            },
+            identityProvider = identityProvider,
             trustedSenderKeys = trustedSenderKeys,
             grantsClockMillis = { now },
             grants = grantsManager,
@@ -316,6 +323,17 @@ class ScanGrantRoutingTest {
                 ),
             )
         },
+    )
+
+    private fun identitySnapshot(
+        userId: UUID = userUuid,
+        activeKeyBundleId: UUID = bundleUuid,
+    ): SenderIdentitySnapshot = SenderIdentitySnapshot(
+        userId = userId.toString(),
+        handle = "mykola",
+        activeKeyBundleId = activeKeyBundleId.toString(),
+        encryptionPrivateHandle = identity.encryptionPrivateHandle,
+        signingPrivateHandle = identity.signingPrivateHandle,
     )
 
     @Test
@@ -457,6 +475,61 @@ class ScanGrantRoutingTest {
             assertEquals(ScanMatchUiState.AwaitingCapture, scanVm.matchState.value)
             assertEquals(ScanTerminalState.Idle, scanVm.terminal.value)
             assertNull(grantsManager.resolveCapsuleId(issuedGrantId))
+        } finally {
+            scanVm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+        }
+    }
+
+    @Test
+    fun accountSwitchWhileIncomingProviderIsSuspendedDiscardsRoomCandidates() = runBlocking {
+        stagePublishedCapsule()
+        val duplicateCapsule = UUID.fromString("5f999999-aaaa-4bbb-8ccc-dddddddddddd")
+        seedRecipientBaseline(capsuleUuid)
+        seedRecipientBaseline(duplicateCapsule)
+
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val providerFinished = CompletableDeferred<Unit>()
+        var switchedToOtherAccount = false
+        var identityReads = 0
+        val accountB = UUID.fromString("5faaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+        val aIdentity = identitySnapshot()
+        val countingKeys = CountingTrustedSenderKeyStore(ownTrustedSenderKeys())
+        val grantsManager = ScanGrantManager({ now })
+        val scanVm = scanViewModel(
+            grantsManager,
+            trustedSenderKeys = countingKeys,
+            identityProvider = {
+                if (identityReads++ == 0) aIdentity
+                else identitySnapshot(accountB)
+            },
+            candidateIndexProvider = {
+                switchedToOtherAccount = true
+                entered.complete(Unit)
+                try {
+                    release.await()
+                    ScanCandidateIndex.EMPTY
+                } finally {
+                    providerFinished.complete(Unit)
+                }
+            },
+        )
+
+        try {
+            captureMatchingPair(scanVm)
+            withTimeout(10_000) { entered.await() }
+            assertTrue(switchedToOtherAccount)
+
+            release.complete(Unit)
+            withTimeout(10_000) { providerFinished.await() }
+            val settled = withTimeout(10_000) {
+                scanVm.matchState.first { it !is ScanMatchUiState.Matching }
+            }
+
+            assertTrue(settled is ScanMatchUiState.RecaptureGuidance)
+            assertTrue(settled !is ScanMatchUiState.Chooser)
+            assertEquals(0, countingKeys.calls)
+            assertEquals(ScanTerminalState.Idle, scanVm.terminal.value)
         } finally {
             scanVm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
         }

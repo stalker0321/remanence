@@ -395,6 +395,13 @@ class ScanViewModel internal constructor(
                 merged[candidate.capsuleId] = candidate
             }
         }
+        val finalIdentity = identityProvider() ?: return ScanCandidateIndex.EMPTY
+        val finalOwner = try {
+            UserId.parseRest(finalIdentity.userId)
+        } catch (_: Exception) {
+            return ScanCandidateIndex.EMPTY
+        }
+        if (finalOwner != owner) return ScanCandidateIndex.EMPTY
         val hints = incoming.chooserHints.filterKeys { id ->
             merged[runCatching { UUID.fromString(id) }.getOrNull()]?.recipientPreferred != true
         }

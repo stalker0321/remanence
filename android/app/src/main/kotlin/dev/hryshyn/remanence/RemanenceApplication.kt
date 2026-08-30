@@ -55,6 +55,7 @@ import dev.hryshyn.remanence.sync.IncomingControlIndexAcceptanceCoordinator
 import dev.hryshyn.remanence.sync.SenderIndexBundlePersistenceAdapter
 import dev.hryshyn.remanence.ui.scan.IncomingSenderIndexCandidateProvider
 import dev.hryshyn.remanence.ui.capsule.IncomingPresentationPreparation
+import dev.hryshyn.remanence.ui.capsule.PresentationGrantAuthority
 import dev.hryshyn.remanence.wiring.TinkRegistrationIdentityAdapter
 
 /**
@@ -526,8 +527,9 @@ class AppContainer private constructor(
      * crypto verification; resolved/consumed/cleared by root navigation,
      * close, logout, and process death. Nothing else may create access.
      */
-    val scanGrants: dev.hryshyn.remanence.core.recognition.ScanGrantManager by lazy {
-        dev.hryshyn.remanence.core.recognition.ScanGrantManager(clockMillis = System::currentTimeMillis)
+    /** Shared app-scoped source/owner/scan-generation grant binding authority. */
+    internal val presentationGrants: PresentationGrantAuthority by lazy {
+        PresentationGrantAuthority()
     }
 
     /** FIX-M1-007-07: the current account lives in the real local_account table. */

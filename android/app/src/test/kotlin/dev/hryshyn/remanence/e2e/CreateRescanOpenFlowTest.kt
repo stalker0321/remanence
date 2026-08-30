@@ -272,11 +272,14 @@ class CreateRescanOpenFlowTest {
         var now = 1_000L
         val grants = dev.hryshyn.remanence.core.recognition.ScanGrantManager({ now })
         val controller = AppNavigationController(AuthUiState.SignedOut)
-        controller.updateAuth(AuthUiState.Authenticated("u", "mykola"))
+        controller.updateAuth(AuthUiState.Authenticated(userUuid.toString(), "mykola"))
         controller.navigate(AppDestination.Home)
 
         val grant = grants.issue(granted.capsuleId)
-        controller.grantCapsuleAccess(grant.grantId.toString(), granted.capsuleId.toString())
+        controller.grantCapsuleAccess(
+            grant.grantId.toString(), granted.capsuleId.toString(), userUuid.toString(),
+            dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource.OUTBOX, 0,
+        )
         controller.navigate(AppDestination.Capsule(grant.grantId.toString()))
         assertEquals(AppDestination.Capsule(grant.grantId.toString()), controller.current)
 

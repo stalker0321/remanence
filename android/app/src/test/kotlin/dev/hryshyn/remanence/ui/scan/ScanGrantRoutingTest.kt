@@ -59,10 +59,12 @@ import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.core.recognition.ScanGrantManager
 import dev.hryshyn.remanence.core.recognition.FingerprintSide as RecognitionSide
+import dev.hryshyn.remanence.scan.ScanSessionState
 import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 import dev.hryshyn.remanence.core.recognition.CandidateOrigin
 import dev.hryshyn.remanence.identity.TrustedSenderKeyStore
 import dev.hryshyn.remanence.identity.SenderKeyResolution
+import dev.hryshyn.remanence.ui.capsule.PresentationGrantAuthority
 
 /**
  * Physical-device regression for the verified-grant handoff: a REAL verified
@@ -122,7 +124,7 @@ class ScanGrantRoutingTest {
 
     private class NoopResolver : SessionStateResolver {
         override suspend fun bootstrap(): SessionState =
-            SessionState.Active("u", "mykola", true, true)
+            SessionState.Active("5f222222-3333-4444-8555-666666666666", "mykola", true, true)
 
         override suspend fun logout(): SessionState = SessionState.SignedOut
     }
@@ -264,6 +266,7 @@ class ScanGrantRoutingTest {
      */
     private fun scanViewModel(
         grantsManager: ScanGrantManager,
+        presentationGrants: PresentationGrantAuthority = PresentationGrantAuthority(grantsManager),
         trustedSenderKeys: TrustedSenderKeyStore = DirectorySenderKeyStore(
             directoryFetch = { error("self-send must resolve through the own account") },
             ownAccount = {
@@ -285,9 +288,9 @@ class ScanGrantRoutingTest {
             profile = RecognitionProfile.mvpOrbV1(),
             identityProvider = identityProvider,
             trustedSenderKeys = trustedSenderKeys,
-            grantsClockMillis = { now },
-            grants = grantsManager,
+            presentationGrants = presentationGrants,
             candidateIndexProvider = candidateIndexProvider,
+            incomingPresentationPreparation = null,
             frontProcessor = FixedProcessor(syntheticFingerprint(11, RecognitionSide.FRONT)),
             backProcessor = FixedProcessor(syntheticFingerprint(22, RecognitionSide.BACK)),
             cpuDispatcher = testDispatcher,
@@ -297,7 +300,9 @@ class ScanGrantRoutingTest {
     /** Drives THE authoritative capture controllers exactly as the surface does. */
     private fun readyCameras(vm: ScanViewModel) {
         listOf(vm.frontAttempt, vm.backAttempt).forEach { controller: CaptureAttemptController ->
-            controller.onPermissionResult(granted = true, canAskAgain = false)
+            if (controller.permission != CapturePermissionStep.Granted) {
+                controller.onPermissionResult(granted = true, canAskAgain = false)
+            }
             assertEquals(CaptureAttemptPhase.Binding, controller.phase)
             controller.onPreviewBound()
             assertEquals(CapturePermissionStep.Granted, controller.permission)
@@ -337,11 +342,64 @@ class ScanGrantRoutingTest {
     )
 
     @Test
+    fun incomingRepeatBaselineRetainsIncomingPresentationBinding() {
+        val capsule = UUID.fromString("5fb11111-2222-4333-8444-555555555555")
+
+        // A recipient-preferred Room baseline is only recognition provenance;
+        // an exact incoming membership fact keeps the repeat on INCOMING.
+        assertEquals(
+            dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource.INCOMING,
+            resolvePresentationSources(
+                candidateIds = listOf(capsule),
+                incomingSources = mapOf(
+                    capsule to dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource.INCOMING,
+                ),
+                roomSources = emptyMap(),
+            )[capsule],
+        )
+        assertNull(
+            resolvePresentationSources(
+                candidateIds = listOf(capsule),
+                incomingSources = mapOf(
+                    capsule to dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource.INCOMING,
+                ),
+                roomSources = mapOf(
+                    capsule to dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource.OUTBOX,
+                ),
+            )[capsule],
+        )
+        assertNull(
+            "dual membership is ambiguous even when labels match",
+            resolvePresentationSources(
+                candidateIds = listOf(capsule),
+                incomingSources = mapOf(
+                    capsule to dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource.INCOMING,
+                ),
+                roomSources = mapOf(
+                    capsule to dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource.INCOMING,
+                ),
+            )[capsule],
+        )
+        assertTrue(
+            "missing membership must not get an inferred source",
+            resolvePresentationSources(
+                candidateIds = listOf(capsule),
+                incomingSources = emptyMap(),
+                roomSources = emptyMap(),
+            ).isEmpty(),
+        )
+    }
+
+    @Test
     fun verifiedTerminalGrantCarriesTheActiveManagerGrantAndNavigatesToCapsule() = runBlocking {
         // THE single manager instance both production VMs receive.
         val grantsManager = ScanGrantManager({ now })
-        val scanVm = scanViewModel(grantsManager)
-        val rootVm = RootViewModel(NoopResolver(), grants = grantsManager)
+        val presentationGrants = PresentationGrantAuthority(grantsManager)
+        val scanVm = scanViewModel(grantsManager, presentationGrants = presentationGrants)
+        val rootVm = RootViewModel(
+            NoopResolver(),
+            presentationGrants = presentationGrants,
+        )
 
         try {
             stagePublishedCapsule()
@@ -367,18 +425,128 @@ class ScanGrantRoutingTest {
             assertEquals(capsuleUuid, grantsManager.resolveCapsuleId(parsed!!))
 
             // The production navigation effect runs with EXACTLY this value.
-            rootVm.openCapsuleWithGrant(granted.grantId)
+            assertTrue(
+                rootVm.openCapsuleWithGrant(granted.grantId) {
+                    scanVm.resetSession()
+                },
+            )
             assertEquals(AppDestination.Capsule(granted.grantId), rootVm.destination.value)
             assertEquals(capsuleUuid.toString(), rootVm.capsuleIdFor(granted.grantId))
 
             // Fail-closed navigation is unchanged: after close, the same exact
             // string can never reopen anything.
             rootVm.closeCapsule()
+            assertEquals(ScanSessionState.AWAITING_FRONT, scanVm.captureSession.state)
+            assertEquals(ScanTerminalState.Idle, scanVm.terminal.value)
             rootVm.openCapsuleWithGrant(granted.grantId)
             assertEquals(AppDestination.Home, rootVm.destination.value)
         } finally {
             scanVm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
             rootVm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+        }
+    }
+
+    @Test
+    fun selfSendRepeatUsesOutboxBindingAfterRecipientBaselineIsPersisted() = runBlocking {
+        val grantsManager = ScanGrantManager({ now })
+        val presentationGrants = PresentationGrantAuthority(grantsManager)
+        val scanVm = scanViewModel(grantsManager, presentationGrants = presentationGrants)
+
+        try {
+            stagePublishedCapsule()
+            captureMatchingPair(scanVm)
+            val first = withTimeout(10_000) {
+                scanVm.terminal
+                    .filterIsInstance<ScanTerminalState.Granted>()
+                    .first()
+            }
+            assertEquals(capsuleUuid.toString(), first.capsuleId)
+
+            // The first verified scan stores the recipient-preferred
+            // baseline. The second scan must prove OUTBOX storage from its
+            // capsule row; recognition preference is not a source binding.
+            scanVm.resetSession()
+            captureMatchingPair(scanVm)
+            val second = withTimeout(10_000) {
+                scanVm.terminal
+                    .filterIsInstance<ScanTerminalState.Granted>()
+                    .first()
+            }
+            assertEquals(capsuleUuid.toString(), second.capsuleId)
+            assertEquals(
+                dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource.OUTBOX,
+                presentationGrants.activeForTests()?.source,
+            )
+        } finally {
+            val job = scanVm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]
+            job?.cancel()
+            job?.join()
+        }
+    }
+
+    @Test
+    fun outboxMembershipWithoutRoomRecognitionCandidateRejectsIncomingBinding() = runBlocking {
+        val grantsManager = ScanGrantManager({ now })
+        val presentationGrants = PresentationGrantAuthority(grantsManager)
+        val scanVm = scanViewModel(
+            grantsManager,
+            presentationGrants = presentationGrants,
+            candidateIndexProvider = {
+                ScanCandidateIndex(
+                    candidates = listOf(
+                        dev.hryshyn.remanence.core.recognition.IndexedCandidate(
+                            capsuleId = capsuleUuid,
+                            front = dev.hryshyn.remanence.core.recognition.FingerprintCodec.parse(
+                                syntheticFingerprint(11, RecognitionSide.FRONT),
+                            ),
+                            back = dev.hryshyn.remanence.core.recognition.FingerprintCodec.parse(
+                                syntheticFingerprint(22, RecognitionSide.BACK),
+                            ),
+                            recipientPreferred = false,
+                        ),
+                    ),
+                    presentationSources = mapOf(
+                        capsuleUuid to dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource.INCOMING,
+                    ),
+                )
+            },
+        )
+
+        try {
+            // Keep the real owner-scoped OUTBOX row, but remove both Room
+            // recognition rows. The incoming candidate below must therefore
+            // be rejected as a dual storage membership, not rebound to
+            // INCOMING merely because it is the only valid recognition row.
+            stagePublishedCapsule()
+            assertEquals(
+                2,
+                database.recognitionFingerprintDao().deleteByCapsuleIdAndOwner(
+                    capsuleUuid.toString(),
+                    userUuid.toString(),
+                ),
+            )
+            assertNotNull(
+                database.outboxCapsuleDao().getByCapsuleIdAndOwner(
+                    capsuleUuid.toString(),
+                    userUuid.toString(),
+                ),
+            )
+
+            val merged = scanVm.buildCandidateIndexForTests()
+            assertTrue(merged.candidates.any { it.capsuleId == capsuleUuid })
+            assertTrue(
+                "an OUTBOX row without a valid Room candidate must not bind an incoming candidate",
+                merged.presentationSources.isEmpty(),
+            )
+
+            captureMatchingPair(scanVm)
+            withTimeout(10_000) { scanVm.matchState.first { it !is ScanMatchUiState.Matching } }
+            assertNull("ambiguous storage membership must issue no grant", presentationGrants.activeForTests())
+            assertEquals(ScanTerminalState.Idle, scanVm.terminal.value)
+        } finally {
+            val job = scanVm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]
+            job?.cancel()
+            job?.join()
         }
     }
 
@@ -583,7 +751,8 @@ class ScanGrantRoutingTest {
 
     /**
      * Wiring proof at the factory boundary: RootViewModel and ScanViewModel
-     * built by THE production factory share AppContainer.scanGrants - a grant
+     * built by THE production factory share AppContainer's presentation
+     * authority - a grant
      * issued through the root's manager is live for the scan VM.
      */
     @Test
@@ -594,11 +763,19 @@ class ScanGrantRoutingTest {
         val scanVm = factory.create(ScanViewModel::class.java)
 
         try {
-            assertSame(container.scanGrants, rootVm.scanGrants)
             val capsule = UUID.randomUUID()
-            val issued = rootVm.scanGrants.issue(capsule)
-            assertEquals(capsule.toString(), scanVm.liveGrantCapsuleId(issued.grantId.toString()))
-            assertNull(scanVm.liveGrantCapsuleId(UUID.randomUUID().toString()))
+            val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000c701")
+            val issued = container.presentationGrants.issue(
+                ownerUserId = owner,
+                capsuleId = capsule,
+                source = dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource.OUTBOX,
+                scanGeneration = 0,
+            )
+            assertEquals(
+                capsule.toString(),
+                scanVm.liveGrantCapsuleId(issued.grantId.toString(), owner),
+            )
+            assertNull(scanVm.liveGrantCapsuleId(UUID.randomUUID().toString(), owner))
         } finally {
             rootVm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
             scanVm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()

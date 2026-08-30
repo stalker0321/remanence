@@ -41,7 +41,9 @@ import dev.hryshyn.remanence.core.recognition.IndexedCandidate
 import dev.hryshyn.remanence.core.recognition.LocalMatchEngine
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.core.recognition.ScanFlowResult
-import dev.hryshyn.remanence.core.recognition.ScanGrantManager
+import dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource
+import dev.hryshyn.remanence.ui.capsule.IncomingPresentationPreparation
+import dev.hryshyn.remanence.ui.capsule.PresentationGrantAuthority
 
 /**
  * One chooser row carrying ONLY locally decrypted minimal hints plus score
@@ -90,18 +92,19 @@ class ScanViewModel internal constructor(
      * not accidentally grow on storage adjacency.
      */
     private val trustedSenderKeys: dev.hryshyn.remanence.identity.TrustedSenderKeyStore,
-    grantsClockMillis: () -> Long,
     /**
      * FIX-REVIEW-03: THE one authoritative memory-only grant lifecycle, shared
      * with the root navigation. Grants exist only after the full crypto gate
      * passes; resolve/consume/expiry all go through this same instance.
      */
-    private val grants: ScanGrantManager = ScanGrantManager(clockMillis = grantsClockMillis),
+    private val presentationGrants: PresentationGrantAuthority,
     frontProcessor: dev.hryshyn.remanence.capture.StillProcessor =
         RealStillFingerprintProcessor(profile, FingerprintSide.FRONT),
     backProcessor: dev.hryshyn.remanence.capture.StillProcessor =
         RealStillFingerprintProcessor(profile, FingerprintSide.BACK),
     private val candidateIndexProvider: suspend (UserId) -> ScanCandidateIndex,
+    /** The production factory supplies the real local incoming preparation gate. */
+    private val incomingPresentationPreparation: IncomingPresentationPreparation?,
     private val cpuDispatcher: kotlinx.coroutines.CoroutineDispatcher = kotlinx.coroutines.Dispatchers.Default,
     private val ioDispatcher: kotlinx.coroutines.CoroutineDispatcher = kotlinx.coroutines.Dispatchers.IO,
 ) : ViewModel() {
@@ -147,6 +150,7 @@ class ScanViewModel internal constructor(
         val generation: Int,
         val origin: CandidateOrigin,
         val hints: Map<String, ScanChooserHint>,
+        val presentationSources: Map<UUID, CapsulePresentationSource>,
     )
 
     /**
@@ -173,7 +177,7 @@ class ScanViewModel internal constructor(
         chooserContext = null
         deliveryGeneration++
         captureSession.reset()
-        grants.clearAll()
+        presentationGrants.clearAll()
         frontAttempt.reset()
         backAttempt.reset()
         queuedStill.set(null)
@@ -326,6 +330,7 @@ class ScanViewModel internal constructor(
         matchGeneration++
         chooserContext = null
         deliveryGeneration++
+        presentationGrants.clearAll()
         // FIX-STATE-05: an in-flight delivery/match can never write into the
         // fresh flow - active attempts are cancelled cleanly and stale
         // terminal callbacks are structurally inert afterwards.
@@ -334,6 +339,7 @@ class ScanViewModel internal constructor(
         queuedStill.set(null)
         captureSession.reset()
         _matchState.value = ScanMatchUiState.AwaitingCapture
+        _terminal.value = ScanTerminalState.Idle
     }
 
     // ------------------------------------------------------------------
@@ -395,6 +401,23 @@ class ScanViewModel internal constructor(
                 merged[candidate.capsuleId] = candidate
             }
         }
+        // Storage membership is independent of recognition validity. Probe the
+        // owner-scoped OUTBOX plane for every merged candidate, including an
+        // incoming candidate whose Room recognition rows are absent/corrupt;
+        // otherwise that candidate could be rebound to INCOMING silently.
+        val outboxSources = LinkedHashMap<UUID, CapsulePresentationSource>()
+        for (candidateId in merged.keys) {
+            if (database.outboxCapsuleDao().getByCapsuleIdAndOwner(
+                    candidateId.toString(),
+                    owner.toRestString(),
+                ) != null
+            ) {
+                outboxSources[candidateId] = CapsulePresentationSource.OUTBOX
+            }
+        }
+        // The OUTBOX probe is also owner-scoped work. Re-read the authenticated
+        // owner after all Room/provider loads, including that probe, before any
+        // source or candidate data can be returned to the scan engine.
         val finalIdentity = identityProvider() ?: return ScanCandidateIndex.EMPTY
         val finalOwner = try {
             UserId.parseRest(finalIdentity.userId)
@@ -405,8 +428,19 @@ class ScanViewModel internal constructor(
         val hints = incoming.chooserHints.filterKeys { id ->
             merged[runCatching { UUID.fromString(id) }.getOrNull()]?.recipientPreferred != true
         }
-        return ScanCandidateIndex(merged.values.toList(), hints)
+        // Source is a storage-plane fact, not recognition provenance. An
+        // incoming row wins this binding even when a recipient-preferred Room
+        // baseline wins the recognition duplicate.
+        val presentationSources = resolvePresentationSources(
+            candidateIds = merged.keys,
+            incomingSources = incoming.presentationSources,
+            roomSources = outboxSources,
+        )
+        return ScanCandidateIndex(merged.values.toList(), hints, presentationSources)
     }
+
+    /** Test-only view of the same merged, owner-bound scan index. */
+    internal suspend fun buildCandidateIndexForTests(): ScanCandidateIndex = buildCandidateIndex()
 
     private fun evaluateMatch() {
         val sessionFront = captureSession.front ?: return
@@ -415,21 +449,42 @@ class ScanViewModel internal constructor(
         val generation = ++matchGeneration
         viewModelScope.launch {
             try {
+                val candidateIndex = buildCandidateIndex()
                 val engine = LocalMatchEngine(
                     profile = profile,
-                    verifier = { capsuleId -> verifyCapsuleCrypto(capsuleId) },
+                    verifier = { capsuleId ->
+                        when (candidateIndex.presentationSources[capsuleId]) {
+                            CapsulePresentationSource.INCOMING -> true
+                            CapsulePresentationSource.OUTBOX -> verifyCapsuleCrypto(capsuleId)
+                            null -> false
+                        }
+                    },
                     grantIssuer = { capsuleId ->
-                        if (generation == matchGeneration) issueGrant(capsuleId) else null
+                        if (generation == matchGeneration) {
+                            candidateIndex.presentationSources[capsuleId]?.let { source ->
+                                issueVerifiedGrant(
+                                    capsuleId = capsuleId,
+                                    source = source,
+                                    generation = generation,
+                                )
+                            }
+                        } else {
+                            null
+                        }
                     },
                 )
-                val candidateIndex = buildCandidateIndex()
                 val result = engine.run(
                     queryFront = FingerprintCodec.parse(sessionFront.serializedBytes),
                     queryBack = FingerprintCodec.parse(sessionBack.serializedBytes),
                     candidates = candidateIndex.candidates,
                 )
                 if (generation == matchGeneration) {
-                    applyResult(result, candidateIndex.chooserHints, generation)
+                    applyResult(
+                        result = result,
+                        candidateHints = candidateIndex.chooserHints,
+                        presentationSources = candidateIndex.presentationSources,
+                        generation = generation,
+                    )
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -444,13 +499,14 @@ class ScanViewModel internal constructor(
     private suspend fun applyResult(
         result: ScanFlowResult,
         candidateHints: Map<String, ScanChooserHint>,
+        presentationSources: Map<UUID, CapsulePresentationSource>,
         generation: Int,
     ) {
         if (generation != matchGeneration) return
         when (result) {
             is ScanFlowResult.Granted -> {
                 chooserContext = null
-                onVerifiedGrant(result)
+                    onVerifiedGrant(result, generation)
             }
 
             is ScanFlowResult.Ambiguous -> {
@@ -460,7 +516,12 @@ class ScanViewModel internal constructor(
                     hint?.let { candidateId to it }
                 }.toMap()
                 if (generation != matchGeneration) return
-                chooserContext = ChooserContext(generation, result.origin, hints)
+                chooserContext = ChooserContext(
+                    generation = generation,
+                    origin = result.origin,
+                    hints = hints,
+                    presentationSources = presentationSources,
+                )
                 _matchState.value = ScanMatchUiState.Chooser(
                     rows = result.rows.map { (id, score) ->
                         val hint = hints[id.toString()]
@@ -504,14 +565,17 @@ class ScanViewModel internal constructor(
         _matchState.value = ScanMatchUiState.Matching
         viewModelScope.launch {
             val id = UUID.fromString(candidateId)
-            if (!verifyCapsuleCrypto(id)) {
+            val source = context.presentationSources[id] ?: run {
                 if (generation == matchGeneration) {
                     _matchState.value = ScanMatchUiState.RecaptureGuidance(failedAttempts = 2)
                 }
                 return@launch
             }
-            if (generation != matchGeneration) return@launch
-            val grantId = issueGrant(id)
+            val grantId = issueVerifiedGrant(
+                capsuleId = id,
+                source = source,
+                generation = generation,
+            )
             if (grantId == null) {
                 if (generation == matchGeneration) {
                     _matchState.value = ScanMatchUiState.RecaptureGuidance(failedAttempts = 2)
@@ -527,12 +591,34 @@ class ScanViewModel internal constructor(
                     compositeScore = Double.NaN,
                 ),
                 candidateHints = emptyMap(),
+                presentationSources = context.presentationSources,
                 generation = generation,
             )
         }
     }
 
-    private suspend fun onVerifiedGrant(result: ScanFlowResult.Granted) {
+    private suspend fun onVerifiedGrant(result: ScanFlowResult.Granted, generation: Int) {
+        if (generation != matchGeneration) {
+            revokeIssuedGrant(result.grantId)
+            return
+        }
+        if (!grantStillLive(result.grantId)) {
+            revokeIssuedGrant(result.grantId)
+            return
+        }
+        try {
+            persistVerifiedRecipientBaseline(result.capsuleId.toString())
+        } catch (cancelled: CancellationException) {
+            revokeIssuedGrant(result.grantId)
+            throw cancelled
+        } catch (failure: Exception) {
+            revokeIssuedGrant(result.grantId)
+            throw failure
+        }
+        if (generation != matchGeneration || !grantStillLive(result.grantId)) {
+            revokeIssuedGrant(result.grantId)
+            return
+        }
         _terminal.value = ScanTerminalState.Granted(
             grantId = result.grantId,
             capsuleId = result.capsuleId.toString(),
@@ -542,16 +628,97 @@ class ScanViewModel internal constructor(
             candidateId = result.capsuleId.toString(),
             viaSenderFallback = result.origin == CandidateOrigin.SENDER_FALLBACK,
         )
-        persistVerifiedRecipientBaseline(result.capsuleId.toString())
     }
 
-    private fun issueGrant(capsuleId: UUID): String? =
-        grants.issue(capsuleId).grantId.toString()
+    private fun revokeIssuedGrant(grantId: String) {
+        runCatching { UUID.fromString(grantId) }
+            .getOrNull()
+            ?.let(presentationGrants::revoke)
+    }
 
-    /** Module-internal view of the live grant: capsule ID only while valid. */
-    internal fun liveGrantCapsuleId(grantId: String): String? {
+    private suspend fun issueVerifiedGrant(
+        capsuleId: UUID,
+        source: CapsulePresentationSource,
+        generation: Int,
+    ): String? {
+        if (generation != matchGeneration) return null
+        val presentationEpoch = presentationGrants.currentEpoch()
+        val identity = try {
+            identityProvider()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return null
+        } ?: return null
+        val owner = runCatching { UserId.parseRest(identity.userId) }.getOrNull() ?: return null
+
+        var prepared: dev.hryshyn.remanence.ui.capsule.PreparedIncomingPresentation? = null
+        try {
+            if (source == CapsulePresentationSource.INCOMING) {
+                val preparation = incomingPresentationPreparation ?: return null
+                prepared = when (
+                    val result = preparation.prepare(owner, CapsuleId(capsuleId))
+                ) {
+                    is dev.hryshyn.remanence.ui.capsule.IncomingPresentationPreparationResult.Prepared ->
+                        result.presentation
+                    else -> null
+                }
+                if (prepared == null) return null
+            } else if (!verifyCapsuleCrypto(capsuleId)) {
+                return null
+            }
+
+            if (generation != matchGeneration) return null
+            val currentIdentity = try {
+                identityProvider()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                return null
+            } ?: return null
+            val currentOwner = runCatching { UserId.parseRest(currentIdentity.userId) }.getOrNull()
+            if (currentOwner != owner) return null
+
+            val grant = presentationGrants.issue(
+                ownerUserId = owner,
+                capsuleId = capsuleId,
+                source = source,
+                scanGeneration = generation,
+                expectedEpoch = presentationEpoch,
+                incomingPresentation = prepared,
+            )
+            // The authority now owns the exact prepared handle.
+            prepared = null
+            return grant.grantId.toString()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return null
+        } finally {
+            // This covers every failure after preparation, including a
+            // provider exception while the final owner is reread. Once the
+            // authority accepts the binding, ownership is cleared above.
+            runCatching { prepared?.close() }
+        }
+    }
+
+    private suspend fun grantStillLive(grantId: String): Boolean {
+        val identity = try {
+            identityProvider()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return false
+        } ?: return false
+        val owner = runCatching { UserId.parseRest(identity.userId) }.getOrNull() ?: return false
+        val uuid = runCatching { UUID.fromString(grantId) }.getOrNull() ?: return false
+        return presentationGrants.resolve(uuid, owner) != null
+    }
+
+    /** Module-internal test view through the complete owner-bound authority. */
+    internal fun liveGrantCapsuleId(grantId: String, ownerUserId: UserId): String? {
         val uuid = runCatching { UUID.fromString(grantId) }.getOrNull() ?: return null
-        return grants.resolveCapsuleId(uuid)?.toString()
+        return presentationGrants.resolve(uuid, ownerUserId)?.capsuleId?.toString()
     }
 
     // ------------------------------------------------------------------
@@ -635,6 +802,8 @@ class ScanViewModel internal constructor(
                 },
             )
             CapsuleAcceptanceGate().verify(gateInput) is CapsuleAcceptanceResult.Accepted
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (_: Exception) {
             false
         }

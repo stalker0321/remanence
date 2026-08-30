@@ -307,8 +307,11 @@ class CapsuleRoutingCorruptionTest {
                     )
                 },
             ),
-        grantsClockMillis = { 0L },
+        presentationGrants = dev.hryshyn.remanence.ui.capsule.PresentationGrantAuthority(
+            dev.hryshyn.remanence.core.recognition.ScanGrantManager(clockMillis = { 0L }),
+        ),
         candidateIndexProvider = { ScanCandidateIndex.EMPTY },
+        incomingPresentationPreparation = null,
         frontProcessor = MatchingProcessor(syntheticFingerprint(11, FingerprintSide.FRONT)),
         backProcessor = MatchingProcessor(syntheticFingerprint(22, FingerprintSide.BACK)),
         cpuDispatcher = testDispatcher,

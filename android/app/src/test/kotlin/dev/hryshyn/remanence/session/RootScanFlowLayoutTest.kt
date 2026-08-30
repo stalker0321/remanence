@@ -119,10 +119,13 @@ class RootScanFlowLayoutTest {
                 directoryFetch = { error("verification must be unreachable without identity") },
                 ownAccount = { null },
             ),
-            grantsClockMillis = { 0L },
+            presentationGrants = dev.hryshyn.remanence.ui.capsule.PresentationGrantAuthority(
+                dev.hryshyn.remanence.core.recognition.ScanGrantManager(clockMillis = { 0L }),
+            ),
             frontProcessor = RejectingProcessor(),
             backProcessor = RejectingProcessor(),
             candidateIndexProvider = { ScanCandidateIndex.EMPTY },
+            incomingPresentationPreparation = null,
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
         )
@@ -215,4 +218,5 @@ class RootScanFlowLayoutTest {
             .performClick()
         composeRule.runOnIdle { assertTrue("exit must fire", exited) }
     }
+
 }

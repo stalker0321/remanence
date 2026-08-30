@@ -1,9 +1,12 @@
 package dev.hryshyn.remanence.ui.navigation
 
+import dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class AppNavigationTest {
+
+    private val owner = "1f0a1234-5678-4abc-9def-aabbccdd1001"
 
     @Test
     fun signedOutStartsOnAuthenticationSurface() {
@@ -71,6 +74,29 @@ class AppNavigationTest {
         assertEquals(AppDestination.Scan, authenticated.current)
     }
 
+    @Test
+    fun ownerOrKeyBoundaryExitsCreateAndScanToHome() {
+        val boundaries = listOf(
+            AuthUiState.Authenticated(
+                userId = "2f0a1234-5678-4abc-9def-aabbccdd1002",
+                handle = "other",
+            ),
+            AuthUiState.Authenticated(
+                userId = owner,
+                handle = "mykola",
+                activeKeyBundleId = "key-b",
+            ),
+        )
+        for (next in boundaries) {
+            for (flow in listOf(AppDestination.Create, AppDestination.Scan)) {
+                val controller = authenticatedController()
+                controller.navigate(flow)
+                controller.updateAuth(next)
+                assertEquals(AppDestination.Home, controller.current)
+            }
+        }
+    }
+
     private fun authenticatedController() = AppNavigationController(
         AuthUiState.Authenticated(userId = "1f0a1234-5678-4abc-9def-aabbccdd1001", handle = "mykola"),
     )
@@ -96,7 +122,13 @@ class AppNavigationTest {
     @Test
     fun verifiedCapsuleIsReachableByItsExactGrantId() {
         val controller = authenticatedController()
-        controller.grantCapsuleAccess(grantId = "grant-9", capsuleId = "capsule-9")
+        controller.grantCapsuleAccess(
+            grantId = "grant-9",
+            capsuleId = "capsule-9",
+            ownerUserId = owner,
+            source = CapsulePresentationSource.OUTBOX,
+            scanGeneration = 0,
+        )
 
         controller.navigate(AppDestination.Capsule(grantId = "grant-8")) // wrong id
         assertEquals(AppDestination.Home, controller.current)
@@ -111,7 +143,13 @@ class AppNavigationTest {
     @Test
     fun consumingTheGrantEjectsToHomeAndBlocksReentry() {
         val controller = authenticatedController()
-        controller.grantCapsuleAccess("grant-3", "capsule-3")
+        controller.grantCapsuleAccess(
+            "grant-3",
+            "capsule-3",
+            owner,
+            CapsulePresentationSource.OUTBOX,
+            0,
+        )
         controller.navigate(AppDestination.Capsule("grant-3"))
 
         controller.consumeCapsuleAccess()
@@ -123,7 +161,14 @@ class AppNavigationTest {
 
     @Test
     fun signedOutCannotResolveACapsuleEvenWithValidAccess() {
-        val access = CapsuleAccess.Granted("grant-4", "capsule-4", cryptoVerified = true)
+        val access = CapsuleAccess.Granted(
+            "grant-4",
+            "capsule-4",
+            cryptoVerified = true,
+            ownerUserId = owner,
+            source = CapsulePresentationSource.OUTBOX,
+            scanGeneration = 0,
+        )
 
         assertEquals(
             AppDestination.Authentication,
@@ -138,7 +183,13 @@ class AppNavigationTest {
     @Test
     fun logoutWhileViewingCapsuleDropsAccessCompletely() {
         val controller = authenticatedController()
-        controller.grantCapsuleAccess("grant-5", "capsule-5")
+        controller.grantCapsuleAccess(
+            "grant-5",
+            "capsule-5",
+            owner,
+            CapsulePresentationSource.OUTBOX,
+            0,
+        )
         controller.navigate(AppDestination.Capsule("grant-5"))
         assertEquals(AppDestination.Capsule("grant-5"), controller.current)
 
@@ -147,7 +198,7 @@ class AppNavigationTest {
         assertEquals(AppDestination.Authentication, controller.current)
         assertEquals(CapsuleAccess.None, controller.capsuleAccess)
 
-        controller.updateAuth(AuthUiState.Authenticated(userId = "u", handle = "mykola"))
+        controller.updateAuth(AuthUiState.Authenticated(userId = owner, handle = "mykola"))
         controller.navigate(AppDestination.Capsule("grant-5"))
         assertEquals(AppDestination.Home, controller.current)
     }

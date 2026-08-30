@@ -20,6 +20,7 @@ import dev.hryshyn.remanence.core.recognition.FingerprintKeypoint
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.PostcardFingerprint
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource
 import dev.hryshyn.remanence.index.SenderIndexBundleFileAttributes
 import dev.hryshyn.remanence.index.SenderIndexBundleReader
 import dev.hryshyn.remanence.index.SenderIndexBundleReaderFileSystem
@@ -103,6 +104,18 @@ class IncomingSenderIndexCandidateProviderTest {
         assertTrue(index.candidates.single().recipientPreferred.not())
         assertEquals("sender_c011", index.chooserHints[valid.capsuleId]?.senderHandleSnapshot)
         assertEquals("place_c011", index.chooserHints[valid.capsuleId]?.placeLabel)
+        assertEquals(
+            CapsulePresentationSource.INCOMING,
+            index.presentationSources[UUID.fromString(valid.capsuleId)],
+        )
+        assertEquals(
+            CapsulePresentationSource.INCOMING,
+            index.presentationSources[UUID.fromString(missing.capsuleId)],
+        )
+        assertEquals(
+            CapsulePresentationSource.INCOMING,
+            index.presentationSources[UUID.fromString(corrupt.capsuleId)],
+        )
         assertFalse(index.toString().contains("sender_c011"))
         assertFalse(index.toString().contains(filesDir.path))
     }

@@ -71,6 +71,7 @@ import kotlin.coroutines.cancellation.CancellationException
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -129,6 +130,27 @@ class IncomingPresentationPreparationTest {
             closed = true
         }
         assertTrue(closed)
+    }
+
+    @Test
+    fun authorityBindsPreparedIncomingMaterialAndWrongOwnerRevokesIt() = runBlocking {
+        val prepared = requireType<IncomingPresentationPreparationResult.Prepared>(
+            preparation().prepare(OWNER, CAPSULE),
+        ).presentation
+        val authority = PresentationGrantAuthority(
+            dev.hryshyn.remanence.core.recognition.ScanGrantManager(clockMillis = { 1_000L }),
+        )
+        val grant = authority.issue(
+            ownerUserId = OWNER,
+            capsuleId = CAPSULE.value,
+            source = CapsulePresentationSource.INCOMING,
+            scanGeneration = 7,
+            incomingPresentation = prepared,
+        )
+
+        assertEquals(CAPSULE.value, authority.resolve(grant.grantId, OWNER)?.capsuleId)
+        assertNull(authority.resolve(grant.grantId, OTHER_OWNER))
+        assertTrue(runCatching { prepared.loadPhoto(0) }.isFailure)
     }
 
     @Test

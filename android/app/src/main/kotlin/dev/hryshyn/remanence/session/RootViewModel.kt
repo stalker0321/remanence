@@ -19,7 +19,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import dev.hryshyn.remanence.core.recognition.ScanGrantManager
+import dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource
+import dev.hryshyn.remanence.ui.capsule.PresentationGrantAuthority
+import dev.hryshyn.remanence.ui.capsule.PresentationGrantBinding
 
 /**
  * I03/FIX-M1-007-08 root state: the single auth state plus guarded navigation
@@ -31,19 +33,21 @@ import dev.hryshyn.remanence.core.recognition.ScanGrantManager
  * authentication. The scope dies with this ViewModel, so nothing leaks past
  * the screen lifecycle.
  *
- * FIX-REVIEW-03: capsule presentation is gated by THE one [ScanGrantManager]
- * instance shared with the scan flow. This root can never mint verified
- * access out of strings - a grant ID must resolve, unexpired, to its bound
- * capsule ID through the manager before any navigation or access binding.
+ * FIX-REVIEW-03: capsule presentation is gated by THE one
+ * [PresentationGrantAuthority] instance shared with the scan flow. This root
+ * can never mint verified access out of strings - a grant ID must resolve,
+ * unexpired, to its bound capsule ID through the authority before any
+ * navigation or access binding.
  */
-class RootViewModel(
+class RootViewModel internal constructor(
     private val sessionBootstrap: SessionStateResolver,
     /** Full teardown flow (server → session → local → grants); defaults to token-only clearing. */
     private val logoutAction: (suspend () -> Unit)? = null,
     /** Authoritative memory-only grant lifecycle; injected as the single instance. */
-    private val grants: ScanGrantManager = ScanGrantManager(clockMillis = System::currentTimeMillis),
+    private val presentationGrants: PresentationGrantAuthority = PresentationGrantAuthority(),
     /**
-     * FIX-REVIEW2-03: same clock source as [grants]; schedules the exact
+     * FIX-REVIEW2-03: same clock source as the authority's clock primitive;
+     * schedules the exact
      * expiry wake-up for the presented capsule. Injected for determinism.
      */
     private val clockMillis: () -> Long = System::currentTimeMillis,
@@ -68,7 +72,13 @@ class RootViewModel(
      * it with the context; explicit close/exit cancels it.
      */
     private val expiryWatch: CapsuleExpiryWatch by lazy {
-        CapsuleExpiryWatch(viewModelScope, grants, clockMillis, ::revokePresentation)
+        CapsuleExpiryWatch(
+            scope = viewModelScope,
+            grants = presentationGrants,
+            currentOwner = ::currentAuthenticatedOwner,
+            clockMillis = clockMillis,
+            onRevoked = ::revokePresentation,
+        )
     }
 
     /**
@@ -98,7 +108,7 @@ class RootViewModel(
     private val _scanSessionEpoch = MutableStateFlow(0L)
     val scanSessionEpoch: StateFlow<Long> = _scanSessionEpoch.asStateFlow()
 
-    /** Per-flow transient cleanup hooks keyed by the flow destination. */
+    /** Transient cleanup hooks keyed by the flow or presentation destination. */
     private val transientCleanups = mutableMapOf<AppDestination, MutableList<() -> Unit>>()
 
     init {
@@ -125,12 +135,15 @@ class RootViewModel(
     fun logout() {
         // No pending expiry timer may outlive the account context.
         expiryWatch.cancel()
+        // Revoke at initiation, before asynchronous server/session teardown;
+        // the later cleanup remains a defense against a late callback.
+        revokeAllPresentation()
         viewModelScope.launch {
             // Full ordered teardown when wired; otherwise token-only clearing.
             (logoutAction ?: { sessionBootstrap.logout() })()
-            // Any live scan grant dies with the account context.
-            controller.consumeCapsuleAccess()
-            grants.clearAll()
+            // Any live scan grant was already revoked at account teardown
+            // initiation; repeat is intentionally idempotent.
+            revokeAllPresentation()
             // Every flow's transient state dies with the account context.
             AppDestination.Create.let { runTransientCleanups(it) }
             AppDestination.Scan.let { runTransientCleanups(it) }
@@ -140,6 +153,10 @@ class RootViewModel(
 
     /** Home entry point: sender create flow (authenticated accounts only). */
     fun openCreate() {
+        if (controller.current is AppDestination.Capsule) {
+            expiryWatch.cancel()
+            revokeAllPresentation()
+        }
         _createSessionEpoch.value += 1
         controller.navigate(AppDestination.Create)
         _destination.value = controller.current
@@ -147,6 +164,10 @@ class RootViewModel(
 
     /** Home entry point: scan flow (authenticated accounts only). */
     fun openScan() {
+        if (controller.current is AppDestination.Capsule) {
+            expiryWatch.cancel()
+            revokeAllPresentation()
+        }
         _scanSessionEpoch.value += 1
         controller.navigate(AppDestination.Scan)
         _destination.value = controller.current
@@ -156,19 +177,44 @@ class RootViewModel(
      * Opens the capsule presentation behind a memory-only grant
      * (docs/architecture.md section 5). FIX-REVIEW-03: the grant ID is only a
      * routing handle - it must resolve, UNEXPIRED, to its bound capsule ID
-     * through THE shared [ScanGrantManager] before any navigation or access
+     * through THE shared [PresentationGrantAuthority] before any navigation or access
      * binding. Arbitrary strings can never create verified access; the real
      * crypto verification already happened in the scan flow before this grant
      * was issued.
      */
     fun openCapsuleWithGrant(grantId: String) {
-        val uuid = runCatching { UUID.fromString(grantId) }.getOrNull() ?: return
-        val capsuleId = grants.resolveCapsuleId(uuid) ?: return
-        controller.grantCapsuleAccess(grantId, capsuleId.toString())
+        openCapsuleWithGrant(grantId, null)
+    }
+
+    /**
+     * Opens a grant and, when accepted, retains one cleanup for the capture
+     * VM that handed the grant to presentation. The cleanup is keyed by the
+     * opaque grant route and runs only when that presentation is revoked;
+     * rotation and the Scan -> Capsule handoff do not run it.
+     */
+    internal fun openCapsuleWithGrant(
+        grantId: String,
+        onPresentationClosed: (() -> Unit)?,
+    ): Boolean {
+        val uuid = runCatching { UUID.fromString(grantId) }.getOrNull() ?: return false
+        val authenticatedOwner = currentAuthenticatedOwner()
+        val binding = authenticatedOwner?.let { presentationGrants.resolve(uuid, it) }
+        if (binding == null) return false
+        controller.grantCapsuleAccess(
+            grantId = grantId,
+            capsuleId = binding.capsuleId.toString(),
+            ownerUserId = binding.ownerUserId.toRestString(),
+            source = binding.source,
+            scanGeneration = binding.scanGeneration,
+        )
         controller.navigate(AppDestination.Capsule(grantId))
+        onPresentationClosed?.let {
+            registerPresentationCleanup(grantId, it)
+        }
         _destination.value = controller.current
         // FIX-REVIEW2-03: schedule THIS presentation's exact-expiry wake-up.
         expiryWatch.watch(grantId)
+        return true
     }
 
     /**
@@ -180,10 +226,16 @@ class RootViewModel(
         val uuid = runCatching { UUID.fromString(grantId) }.getOrNull()
             ?: throw IllegalStateException("malformed grant id")
         val bound = controller.capsuleAccess as? CapsuleAccess.Granted
+        val owner = currentAuthenticatedOwner()
+        val authorityBinding = owner?.let { presentationGrants.resolve(uuid, it) }
         check(
             controller.current is AppDestination.Capsule &&
                 bound?.grantId == grantId &&
-                grants.resolveCapsuleId(uuid) != null,
+                authorityBinding != null &&
+                bound.ownerUserId == authorityBinding.ownerUserId.toRestString() &&
+                bound.capsuleId == authorityBinding.capsuleId.toString() &&
+                bound.source == authorityBinding.source &&
+                bound.scanGeneration == authorityBinding.scanGeneration,
         ) { "scan grant is no longer live" }
     }
 
@@ -193,12 +245,20 @@ class RootViewModel(
      * so the presentation releases every decrypted reference.
      */
     private fun revokePresentation(grantId: String) {
+        expiryWatch.cancel(grantId)
+        runCatching { UUID.fromString(grantId) }.getOrNull()?.let { presentationGrants.revoke(it) }
         val bound = controller.capsuleAccess as? CapsuleAccess.Granted
         if (controller.current is AppDestination.Capsule && bound?.grantId == grantId) {
+            runTransientCleanups(AppDestination.Capsule(grantId))
             controller.consumeCapsuleAccess()
             _destination.value = controller.current
         }
         _capsuleRevocations.tryEmit(grantId)
+    }
+
+    /** Route construction/initialization failed; revoke without trusting UI state. */
+    internal fun revokePresentationForRouteFailure(grantId: String) {
+        revokePresentation(grantId)
     }
 
     /**
@@ -209,14 +269,22 @@ class RootViewModel(
      */
     fun capsuleIdFor(grantId: String): String? {
         val uuid = runCatching { UUID.fromString(grantId) }.getOrNull() ?: return null
-        val resolvedCapsuleId = grants.resolveCapsuleId(uuid)?.toString()
+        val authorityBinding = currentAuthenticatedOwner()
+            ?.let { presentationGrants.resolve(uuid, it) }
+        val resolvedCapsuleId = authorityBinding?.capsuleId?.toString()
         val bound = controller.capsuleAccess as? dev.hryshyn.remanence.ui.navigation.CapsuleAccess.Granted
-        val trusted = resolvedCapsuleId != null &&
+        val trusted = authorityBinding != null &&
             bound?.grantId == grantId &&
             bound.capsuleId == resolvedCapsuleId &&
+            bound.ownerUserId == authorityBinding.ownerUserId.toRestString() &&
+            bound.source == authorityBinding.source &&
+            bound.scanGeneration == authorityBinding.scanGeneration &&
             controller.current is AppDestination.Capsule
         if (!trusted) {
             if (controller.current is AppDestination.Capsule) {
+                // Resolver-driven removal is a presentation exit too: revoke
+                // the authority binding before dropping the guarded route.
+                revokeAllPresentation()
                 controller.consumeCapsuleAccess()
                 controller.navigate(AppDestination.Home)
                 _destination.value = controller.current
@@ -230,14 +298,17 @@ class RootViewModel(
     internal val liveCapsuleAccess: dev.hryshyn.remanence.ui.navigation.CapsuleAccess
         get() = controller.capsuleAccess
 
-    /** Module-internal handle of THE authoritative grant manager. */
-    internal val scanGrants: ScanGrantManager get() = grants
+    /** Exact in-memory source binding used by the opaque capsule route. */
+    internal fun presentationGrantFor(grantId: String): PresentationGrantBinding? {
+        val uuid = runCatching { UUID.fromString(grantId) }.getOrNull() ?: return null
+        val owner = currentAuthenticatedOwner() ?: return null
+        return presentationGrants.resolve(uuid, owner)
+    }
 
     /** Leaving the presentation consumes THE grant and ejects to Home. */
     fun closeCapsule() {
         expiryWatch.cancel()
-        val bound = controller.capsuleAccess as? dev.hryshyn.remanence.ui.navigation.CapsuleAccess.Granted
-        runCatching { UUID.fromString(bound?.grantId ?: "") }.getOrNull()?.let { grants.consume(it) }
+        revokeAllPresentation()
         controller.consumeCapsuleAccess()
         controller.navigate(AppDestination.Home)
         _destination.value = controller.current
@@ -255,13 +326,12 @@ class RootViewModel(
      */
     fun returnToHome() {
         val previous = controller.current
+        if (previous is AppDestination.Capsule || previous == AppDestination.Scan) {
+            expiryWatch.cancel()
+            revokeAllPresentation()
+        }
         controller.navigate(AppDestination.Home)
-        if (previous != controller.current) {
-            if (previous == AppDestination.Scan) {
-                expiryWatch.cancel()
-                controller.consumeCapsuleAccess()
-                grants.clearAll()
-            }
+        if (previous != controller.current || previous is AppDestination.Create || previous == AppDestination.Scan) {
             runTransientCleanups(previous)
         }
         _destination.value = controller.current
@@ -275,8 +345,45 @@ class RootViewModel(
         transientCleanups.getOrPut(destination) { mutableListOf() }.add(cleanup)
     }
 
+    /** Module-internal cleanup owned by one accepted presentation grant. */
+    internal fun registerPresentationCleanup(grantId: String, cleanup: () -> Unit) {
+        registerTransientCleanup(AppDestination.Capsule(grantId), cleanup)
+    }
+
     private fun runTransientCleanups(destination: AppDestination) {
         transientCleanups.remove(destination)?.forEach { cleanup -> cleanup() }
+    }
+
+    private fun revokeAllPresentation() {
+        expiryWatch.cancel()
+        val grantId = (controller.capsuleAccess as? CapsuleAccess.Granted)?.grantId
+        presentationGrants.clearAll()
+        controller.consumeCapsuleAccess()
+        grantId?.let {
+            runTransientCleanups(AppDestination.Capsule(it))
+            _capsuleRevocations.tryEmit(it)
+        }
+    }
+
+    private fun currentAuthenticatedOwner(): UserId? {
+        val authenticated = _authState.value as? AuthUiState.Authenticated ?: return null
+        return runCatching { UserId.parseRest(authenticated.userId) }.getOrNull()
+    }
+
+    private fun authBoundary(state: AuthUiState): AuthenticatedBoundary? =
+        (state as? AuthUiState.Authenticated)?.let {
+            AuthenticatedBoundary(it.userId, it.activeKeyBundleId)
+        }
+
+    private data class AuthenticatedBoundary(
+        val userId: String,
+        val activeKeyBundleId: String?,
+    )
+
+    override fun onCleared() {
+        expiryWatch.cancel()
+        revokeAllPresentation()
+        super.onCleared()
     }
 
     private fun refreshAsync() {
@@ -419,8 +526,14 @@ class RootViewModel(
 
     private fun publish(next: AuthUiState) {
         val previousAuth = _authState.value
-        _authState.value = next
         val previousDestination = controller.current
+        val ownerOrKeyBoundaryChanged = authBoundary(previousAuth) != authBoundary(next)
+        if (ownerOrKeyBoundaryChanged) {
+            // Account identity changes invalidate the prepared owner-bound
+            // handle before the guarded controller publishes the new state.
+            revokeAllPresentation()
+        }
+        _authState.value = next
         controller.updateAuth(next)
         // Losing authentication ejects from any flow: its transient state dies.
         if (previousDestination != controller.current &&

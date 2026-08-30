@@ -14,6 +14,14 @@ interface CapsuleContentReader {
     suspend fun noteText(capsuleId: String): String?
 }
 
+/** Opaque route-local binding; navigation itself carries only a grant ID. */
+internal class CapsuleContentBinding(
+    val capsuleId: String,
+    val reader: CapsuleContentReader,
+) {
+    override fun toString(): String = "CapsuleContentBinding(<redacted>)"
+}
+
 /**
  * FIX-REVIEW2-03 / FIX-REVIEW3-02: every on-demand decrypt/page load
  * revalidates the SAME grant through THE authoritative manager both BEFORE

@@ -9,6 +9,7 @@ import dev.hryshyn.remanence.index.SenderIndexBundleReadRequest
 import dev.hryshyn.remanence.index.SenderIndexBundleReadResult
 import dev.hryshyn.remanence.index.SenderIndexBundleInspectionSnapshot
 import dev.hryshyn.remanence.index.SenderIndexBundleReader
+import dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource
 import kotlin.coroutines.cancellation.CancellationException
 
 /** The only ephemeral chooser material retained for one scan generation. */
@@ -25,12 +26,37 @@ internal data class ScanChooserHint(
 internal data class ScanCandidateIndex(
     val candidates: List<IndexedCandidate>,
     val chooserHints: Map<String, ScanChooserHint> = emptyMap(),
+    /** Ephemeral presentation-plane binding, independent of CandidateOrigin. */
+    val presentationSources: Map<java.util.UUID, CapsulePresentationSource> = emptyMap(),
 ) {
     override fun toString(): String = "ScanCandidateIndex(<redacted>)"
 
     companion object {
         val EMPTY = ScanCandidateIndex(emptyList())
     }
+}
+
+/**
+ * Binds storage origin only from explicit owner-scoped membership facts. A
+ * dual incoming/outbox identity is intentionally ambiguous and is rejected;
+ * recognition preference never supplies a missing source.
+ */
+internal fun resolvePresentationSources(
+    candidateIds: Iterable<java.util.UUID>,
+    incomingSources: Map<java.util.UUID, CapsulePresentationSource>,
+    roomSources: Map<java.util.UUID, CapsulePresentationSource>,
+): Map<java.util.UUID, CapsulePresentationSource> {
+    val resolved = LinkedHashMap<java.util.UUID, CapsulePresentationSource>()
+    for (candidateId in candidateIds) {
+        val incoming = incomingSources[candidateId]
+        val room = roomSources[candidateId]
+        // Membership is a provenance fact, not an enum value supplied by the
+        // caller. Two non-null planes are ambiguous even if their labels
+        // happen to be equal, so never publish either binding.
+        if (incoming != null && room != null) continue
+        (incoming ?: room)?.let { resolved[candidateId] = it }
+    }
+    return resolved
 }
 
 /**
@@ -50,14 +76,24 @@ internal class IncomingSenderIndexCandidateProvider(
         val selected = incomingCapsuleDao.selectSenderIndexCandidatesForOwner(ownerUserId)
         val candidates = ArrayList<IndexedCandidate>(selected.size)
         val hints = LinkedHashMap<String, ScanChooserHint>(selected.size)
+        val presentationSources = LinkedHashMap<java.util.UUID, CapsulePresentationSource>(selected.size)
         for (candidate in selected) {
+            // The incoming Room row proves the storage plane independently of
+            // whether its encrypted index can be read. A recipient baseline
+            // for the same capsule must still prepare from incoming storage.
+            presentationSources[candidate.capsuleId.value] = CapsulePresentationSource.INCOMING
             if (currentOwner() != ownerUserId) return ScanCandidateIndex.EMPTY
             val loaded = readCandidate(ownerUserId, candidate) ?: continue
             candidates += loaded.first
             hints[loaded.first.capsuleId.toString()] = loaded.second
+            presentationSources[loaded.first.capsuleId] = CapsulePresentationSource.INCOMING
         }
         if (currentOwner() != ownerUserId) return ScanCandidateIndex.EMPTY
-        return ScanCandidateIndex(candidates = candidates, chooserHints = hints)
+        return ScanCandidateIndex(
+            candidates = candidates,
+            chooserHints = hints,
+            presentationSources = presentationSources,
+        )
     }
 
     private suspend fun readCandidate(

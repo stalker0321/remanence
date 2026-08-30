@@ -1,5 +1,6 @@
 package dev.hryshyn.remanence.session
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -36,8 +37,7 @@ fun RootScreen(
     modifier: Modifier = Modifier,
     createContent: @Composable () -> Unit = {},
     scanContent: @Composable () -> Unit = {},
-    capsuleContent: @Composable (grantId: String, capsuleId: String) -> Unit = { _, _ -> },
-    capsuleIdResolver: (String) -> String? = { null },
+    capsuleContent: @Composable (grantId: String) -> Unit = {},
     onExitFlow: () -> Unit = {},
 ) {
     if (authState !is AuthUiState.Authenticated) {
@@ -61,6 +61,11 @@ fun RootScreen(
         return
     }
 
+    BackHandler(
+        enabled = destination == AppDestination.Create || destination == AppDestination.Scan,
+        onBack = onExitFlow,
+    )
+
     when (destination) {
         // FIX-STATE-12: the root owns the FULL available size; the header is
         // laid out first and the flow body receives the REMAINING height via
@@ -81,7 +86,7 @@ fun RootScreen(
         }
 
         is AppDestination.Capsule ->
-            capsuleContent(destination.grantId, capsuleIdResolver(destination.grantId) ?: "")
+            capsuleContent(destination.grantId)
 
         // Until a live grant exists, Home remains the fallback surface.
         else -> homeContent()

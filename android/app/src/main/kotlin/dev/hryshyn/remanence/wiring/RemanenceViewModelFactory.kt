@@ -27,7 +27,7 @@ class RemanenceViewModelFactory(
             sessionBootstrap = container.sessionBootstrap,
             logoutAction = { container.logoutUseCase.logout() },
             // FIX-REVIEW-03: THE one authoritative grant lifecycle.
-            grants = container.scanGrants,
+            presentationGrants = container.presentationGrants,
             resumeCapsuleUploads = { owner ->
                 container.capsuleUploadResumer.resume(owner)
             },
@@ -114,9 +114,9 @@ class RemanenceViewModelFactory(
             // FIX-REVIEW2-04: verification trusts ONLY the directory-backed
             // sender-key boundary - never storage-adjacent key material.
             trustedSenderKeys = container.trustedSenderKeys,
-            grantsClockMillis = { System.currentTimeMillis() },
-            // FIX-REVIEW-03: issue ONLY through THE shared authoritative manager.
-            grants = container.scanGrants,
+            // FIX-REVIEW-03: issue ONLY through THE shared presentation authority.
+            presentationGrants = container.presentationGrants,
+            incomingPresentationPreparation = container.incomingPresentationPreparation,
             candidateIndexProvider = { owner ->
                 container.incomingSenderIndexCandidateProvider.load(owner)
             },

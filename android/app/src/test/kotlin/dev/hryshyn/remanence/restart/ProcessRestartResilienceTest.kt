@@ -42,7 +42,7 @@ import dev.hryshyn.remanence.core.recognition.ScanGrantManager
 class ProcessRestartResilienceTest {
 
     private companion object {
-        const val OWNER_USER_ID = "0198f0a0-0000-7000-8000-00000000ow01"
+        const val OWNER_USER_ID = "0198f0a0-0000-7000-8000-00000000aa11"
     }
 
     private lateinit var context: Context
@@ -88,9 +88,12 @@ class ProcessRestartResilienceTest {
         val grants = ScanGrantManager(clockMillis = { 100L })
         val grant = grants.issue(capsuleId)
         val navigation = AppNavigationController(
-            AuthUiState.Authenticated(userId = "u", handle = "mykola"),
+            AuthUiState.Authenticated(userId = OWNER_USER_ID, handle = "mykola"),
         )
-        navigation.grantCapsuleAccess(grant.grantId.toString(), capsuleId.toString())
+        navigation.grantCapsuleAccess(
+            grant.grantId.toString(), capsuleId.toString(), OWNER_USER_ID,
+            dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource.OUTBOX, 0,
+        )
         navigation.navigate(AppDestination.Capsule(grant.grantId.toString()))
 
         // 2. Persisted outbox: one ENCRYPTED capsule row plus its ciphertext blob.

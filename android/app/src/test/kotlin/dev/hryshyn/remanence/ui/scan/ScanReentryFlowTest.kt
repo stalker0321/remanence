@@ -180,6 +180,8 @@ class ScanReentryFlowTest {
     private fun scanViewModel(
         clock: Long = 0L,
         grants: ScanGrantManager = ScanGrantManager(clockMillis = { clock }),
+        presentationGrants: dev.hryshyn.remanence.ui.capsule.PresentationGrantAuthority =
+            dev.hryshyn.remanence.ui.capsule.PresentationGrantAuthority(grants),
     ): ScanViewModel = ScanViewModel(
         persistence = store(),
         database = database,
@@ -206,9 +208,9 @@ class ScanReentryFlowTest {
                     )
                 },
             ),
-        grantsClockMillis = { clock },
-        grants = grants,
+        presentationGrants = presentationGrants,
         candidateIndexProvider = { ScanCandidateIndex.EMPTY },
+        incomingPresentationPreparation = null,
         frontProcessor = MatchingProcessor(syntheticFingerprint(11, FingerprintSide.FRONT)),
         backProcessor = MatchingProcessor(syntheticFingerprint(22, FingerprintSide.BACK)),
         cpuDispatcher = testDispatcher,
@@ -265,7 +267,7 @@ class ScanReentryFlowTest {
         assertEquals(AppDestination.Home, controller.current)
 
         // And the same manager instance refuses the consumed/unknown grant.
-        assertNull(vm.liveGrantCapsuleId(granted.grantId))
+        assertNull(vm.liveGrantCapsuleId(granted.grantId, UserId(userUuid)))
 
         database.close()
     }
@@ -298,15 +300,17 @@ class ScanReentryFlowTest {
     fun capsuleCloseThenScanDropsLateCallbackFromPreviousBinding() = runBlocking {
         stagePublishedCapsule()
         val grants = ScanGrantManager(clockMillis = { 0L })
-        val vm = scanViewModel(grants = grants)
+        val presentationGrants =
+            dev.hryshyn.remanence.ui.capsule.PresentationGrantAuthority(grants)
+        val vm = scanViewModel(grants = grants, presentationGrants = presentationGrants)
         val root = RootViewModel(
             sessionBootstrap = object : SessionStateResolver {
                 override suspend fun bootstrap() =
-                    SessionState.Active("u", "mykola", true, true)
+                    SessionState.Active(userUuid.toString(), "mykola", true, true)
 
                 override suspend fun logout() = SessionState.SignedOut
             },
-            grants = grants,
+            presentationGrants = presentationGrants,
             clockMillis = { 0L },
         )
 

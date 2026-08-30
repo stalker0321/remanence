@@ -88,6 +88,23 @@ class RootFlowLifecycleTest {
     }
 
     @Test
+    fun authenticatedOwnerBoundaryExitsScanAndRunsItsCleanup() = runTest {
+        val resolver = SwitchingResolver("1f0a1234-5678-4abc-9def-aabbccdd1001")
+        val vm = viewModel(resolver)
+        vm.resolveNow()
+        vm.openScan()
+        var cleanups = 0
+        vm.registerTransientCleanup(AppDestination.Scan) { cleanups += 1 }
+
+        resolver.userId = "2f0a1234-5678-4abc-9def-aabbccdd1002"
+        vm.resolveNow()
+
+        assertEquals(AppDestination.Home, vm.destination.value)
+        assertEquals(1, cleanups)
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+    }
+
+    @Test
     fun cleanupsAreOneShotPerRegistrationAndFreshVisitsRegisterAgain() = runTest {
         val vm = viewModel()
         var runs = 0
@@ -108,5 +125,12 @@ class RootFlowLifecycleTest {
         vm.returnToHome()
         assertEquals(2, runs)
         vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+    }
+
+    private class SwitchingResolver(var userId: String) : SessionStateResolver {
+        override suspend fun bootstrap(): SessionState =
+            SessionState.Active(userId, "mykola", true, true)
+
+        override suspend fun logout(): SessionState = SessionState.SignedOut
     }
 }

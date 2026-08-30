@@ -19,7 +19,7 @@ fun interface CapsuleVerifier {
 /** Grant issuer seam so the engine stays testable without Android state. */
 fun interface ScanGrantIssuer {
     /** Returns the random grant ID for this capsule, or null when refused. */
-    fun issue(capsuleId: UUID): String?
+    suspend fun issue(capsuleId: UUID): String?
 }
 
 /** Final result of running the whole local hierarchy for one scan session. */

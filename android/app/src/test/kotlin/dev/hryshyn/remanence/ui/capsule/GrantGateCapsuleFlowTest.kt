@@ -21,6 +21,7 @@ import dev.hryshyn.remanence.core.recognition.ScanGrantManager
 class GrantGateCapsuleFlowTest {
 
     private val capsuleId = UUID.randomUUID()
+    private val owner = "0198f0a0-0000-7000-8000-00000000aa01"
 
     private fun newState() = CapsulePresentationState(
         photoLoader = { ordinal -> DecryptedPhoto(ordinal, "jpeg-$ordinal".toByteArray()) },
@@ -30,7 +31,7 @@ class GrantGateCapsuleFlowTest {
         newState().also { it.open(count, note) }
 
     private fun authenticatedController() = AppNavigationController(
-        AuthUiState.Authenticated(userId = "u", handle = "mykola"),
+        AuthUiState.Authenticated(userId = owner, handle = "mykola"),
     )
 
     @Test
@@ -47,7 +48,10 @@ class GrantGateCapsuleFlowTest {
         // Issue + verify + bind, then enter.
         val grant = grants.issue(capsuleId)
         assertEquals(capsuleId, grants.resolveCapsuleId(grant.grantId))
-        controller.grantCapsuleAccess(grant.grantId.toString(), capsuleId.toString())
+        controller.grantCapsuleAccess(
+            grant.grantId.toString(), capsuleId.toString(), owner,
+            CapsulePresentationSource.OUTBOX, 0,
+        )
         controller.navigate(AppDestination.Capsule(grant.grantId.toString()))
         assertEquals(AppDestination.Capsule(grant.grantId.toString()), controller.current)
 
@@ -76,7 +80,10 @@ class GrantGateCapsuleFlowTest {
         val firstGrants = ScanGrantManager({ now })
         val firstController = authenticatedController()
         val grant = firstGrants.issue(capsuleId)
-        firstController.grantCapsuleAccess(grant.grantId.toString(), capsuleId.toString())
+        firstController.grantCapsuleAccess(
+            grant.grantId.toString(), capsuleId.toString(), owner,
+            CapsulePresentationSource.OUTBOX, 0,
+        )
 
         // Process death: everything in-memory is rebuilt from scratch.
         val rebornGrants = ScanGrantManager({ 999_999L })
@@ -95,7 +102,10 @@ class GrantGateCapsuleFlowTest {
         val controller = authenticatedController()
         val state = openedState(count = 4, note = "note")
         val grant = grants.issue(capsuleId)
-        controller.grantCapsuleAccess(grant.grantId.toString(), capsuleId.toString())
+        controller.grantCapsuleAccess(
+            grant.grantId.toString(), capsuleId.toString(), owner,
+            CapsulePresentationSource.OUTBOX, 0,
+        )
         controller.navigate(AppDestination.Capsule(grant.grantId.toString()))
 
         now += ScanGrantManager.DEFAULT_GRANT_LIFETIME_MILLIS

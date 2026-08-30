@@ -1,5 +1,7 @@
 package dev.hryshyn.remanence.ui.navigation
 
+import dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource
+
 /**
  * Session-level authentication state driving all route guards.
  * Deliberately separate from crypto-readiness: recovery-required accounts
@@ -35,6 +37,9 @@ sealed interface CapsuleAccess {
         val grantId: String,
         val capsuleId: String,
         val cryptoVerified: Boolean,
+        val ownerUserId: String,
+        val source: CapsulePresentationSource,
+        val scanGeneration: Int,
     ) : CapsuleAccess
 }
 
@@ -83,17 +88,24 @@ object RouteGuard {
         -> AppDestination.Authentication
 
         is AuthUiState.Authenticated ->
-            if (requested is AppDestination.Capsule && !accessAllows(access, requested.grantId)) {
+            if (requested is AppDestination.Capsule &&
+                !accessAllows(authState, access, requested.grantId)
+            ) {
                 AppDestination.Home
             } else {
                 requested
             }
     }
 
-    private fun accessAllows(access: CapsuleAccess, requestedGrantId: String): Boolean =
+    private fun accessAllows(
+        authState: AuthUiState.Authenticated,
+        access: CapsuleAccess,
+        requestedGrantId: String,
+    ): Boolean =
         access is CapsuleAccess.Granted &&
             access.cryptoVerified &&
-            access.grantId == requestedGrantId
+            access.grantId == requestedGrantId &&
+            authState.userId == access.ownerUserId
 
     fun initialDestination(authState: AuthUiState): AppDestination =
         resolve(authState, AppDestination.Home)
@@ -126,8 +138,21 @@ class AppNavigationController(initialAuth: AuthUiState = AuthUiState.SignedOut) 
         private set
 
     /** Called after issue+crypto verification succeeded for one scanned capsule. */
-    fun grantCapsuleAccess(grantId: String, capsuleId: String) {
-        capsuleAccess = CapsuleAccess.Granted(grantId, capsuleId, cryptoVerified = true)
+    internal fun grantCapsuleAccess(
+        grantId: String,
+        capsuleId: String,
+        ownerUserId: String,
+        source: CapsulePresentationSource,
+        scanGeneration: Int,
+    ) {
+        capsuleAccess = CapsuleAccess.Granted(
+            grantId = grantId,
+            capsuleId = capsuleId,
+            cryptoVerified = true,
+            ownerUserId = ownerUserId,
+            source = source,
+            scanGeneration = scanGeneration,
+        )
     }
 
     /** Leaving the capsule screen consumes the grant immediately. */
@@ -139,12 +164,42 @@ class AppNavigationController(initialAuth: AuthUiState = AuthUiState.SignedOut) 
     }
 
     fun updateAuth(next: AuthUiState) {
+        val previousAuth = authState
+        val sameAuthenticatedBoundary = previousAuth is AuthUiState.Authenticated &&
+            next is AuthUiState.Authenticated &&
+            previousAuth.userId == next.userId &&
+            previousAuth.activeKeyBundleId == next.activeKeyBundleId
         authState = next
-        // Re-resolve against the same logical target so a logout mid-app
-        // lands on Authentication instead of leaving stale access, and drop
-        // the grant so nothing survives an account-context change.
-        capsuleAccess = CapsuleAccess.None
-        current = RouteGuard.resolve(next, current)
+        // A refresh for the same authenticated owner preserves the in-memory
+        // presentation session (including rotation/recomposition). Any loss
+        // or owner change drops it before resolving the guarded destination.
+        if (sameAuthenticatedBoundary) {
+            // Keep an already-authorized capsule destination stable across a
+            // normal refresh. Revalidate its full grant id/owner binding, but
+            // do not route through an intermediate destination snapshot.
+            val currentDestination = current
+            if (currentDestination is AppDestination.Capsule &&
+                RouteGuard.resolve(next, currentDestination, capsuleAccess) != currentDestination
+            ) {
+                capsuleAccess = CapsuleAccess.None
+                current = AppDestination.Home
+            } else if (currentDestination !is AppDestination.Capsule) {
+                current = RouteGuard.resolve(next, current, capsuleAccess)
+            }
+        } else {
+            capsuleAccess = CapsuleAccess.None
+            // Create/Scan own transient capture state. An authenticated
+            // owner/key boundary is a real context exit even when both sides
+            // are still Authenticated; do not leave those surfaces mounted
+            // across A -> B or key-bundle changes.
+            current = if (next is AuthUiState.Authenticated &&
+                (current == AppDestination.Create || current == AppDestination.Scan)
+            ) {
+                AppDestination.Home
+            } else {
+                RouteGuard.resolve(next, current)
+            }
+        }
     }
 
     fun navigate(requested: AppDestination) {

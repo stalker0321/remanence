@@ -175,35 +175,48 @@ private fun RootSurface(container: AppContainer) {
                 CreateScreen(viewModel = createViewModel)
             }
         },
-        capsuleContent = { grantId, capsuleId ->
+        capsuleContent = { grantId ->
             dev.hryshyn.remanence.ui.capsule.CapsuleRoute(
                 grantId = grantId,
-                capsuleId = capsuleId,
-                identityLoader = dev.hryshyn.remanence.ui.capsule.CapsuleIdentityLoader {
-                    when (val loaded = container.identityRepository.load()) {
-                        is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available ->
-                            loaded.encryptionHandle
-                        dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.RecoveryRequired -> null
+                contentFactory = {
+                    val binding = rootViewModel.presentationGrantFor(grantId)
+                        ?: error("presentation grant is no longer live")
+                    val capsuleId = binding.capsuleId.toString()
+                    val reader = when (binding.source) {
+                        dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource.INCOMING ->
+                            dev.hryshyn.remanence.ui.capsule.IncomingPresentationContentSource(
+                                requireNotNull(binding.incomingPresentation),
+                            )
+                        dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource.OUTBOX -> {
+                            val handle = when (val loaded = container.identityRepository.load()) {
+                                is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available ->
+                                    loaded.encryptionHandle
+                                dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.RecoveryRequired ->
+                                    error("local keys are unavailable")
+                            }
+                            dev.hryshyn.remanence.ui.capsule.CapsuleContentSource(
+                                database = container.database,
+                                encryptionPrivateHandle = handle,
+                                // M2-P03: presentation material resolves only under the
+                                // owning authenticated account; no active account fails closed.
+                                ownerUserIdProvider = {
+                                    container.currentAccountStore.loadEntity()?.userId
+                                        ?: error("no authenticated local account")
+                                },
+                            )
+                        }
                     }
-                },
-                sourceFactory = { handle ->
-                    dev.hryshyn.remanence.ui.capsule.CapsuleContentSource(
-                        database = container.database,
-                        encryptionPrivateHandle = handle,
-                        // M2-P03: presentation material resolves only under the
-                        // owning authenticated account; no active account fails closed.
-                        ownerUserIdProvider = {
-                            container.currentAccountStore.loadEntity()?.userId
-                                ?: error("no authenticated local account")
-                        },
+                    dev.hryshyn.remanence.ui.capsule.CapsuleContentBinding(
+                        capsuleId = capsuleId,
+                        reader = reader,
                     )
                 },
                 validateLiveGrant = { rootViewModel.requireLivePresentationGrant(grantId) },
                 revocations = rootViewModel.capsuleRevocations,
                 onClose = rootViewModel::closeCapsule,
+                onFailure = { rootViewModel.revokePresentationForRouteFailure(grantId) },
             )
         },
-        capsuleIdResolver = rootViewModel::capsuleIdFor,
         scanContent = {
             val scanViewModel: ScanViewModel = viewModel(factory = factory)
             // FIX-REVIEW-02/ANDROID-HOTFIX-A: every entry is a fresh FRONT-
@@ -237,7 +250,10 @@ private fun ScanFlowSurface(rootViewModel: RootViewModel, scanViewModel: ScanVie
         val granted = terminal as? ScanTerminalState.Granted ?: return@LaunchedEffect
         // FIX-REVIEW-03: only the random grant ID travels; the root resolves
         // the capsule ID through THE authoritative grant manager itself.
-        rootViewModel.openCapsuleWithGrant(grantId = granted.grantId)
+        rootViewModel.openCapsuleWithGrant(
+            grantId = granted.grantId,
+            onPresentationClosed = scanViewModel::resetSession,
+        )
     }
     ScanScreen(
         viewModel = scanViewModel,
@@ -245,8 +261,18 @@ private fun ScanFlowSurface(rootViewModel: RootViewModel, scanViewModel: ScanVie
         // ViewModel and root destination. Only an actual route exit should
         // tear down the scan; this preserves same-epoch rotation state.
         onScreenDispose = {
-            if (rootViewModel.destination.value != AppDestination.Scan) {
-                scanViewModel.resetSession()
+            // Disposal also happens for rotation and the Scan -> Capsule
+            // handoff. Only a stable non-scan destination means the scan flow
+            // was actually left; preserve its generation across rotation and
+            // while the capsule route takes ownership of the grant.
+            when (rootViewModel.destination.value) {
+                AppDestination.Home,
+                AppDestination.Authentication,
+                AppDestination.Create,
+                -> scanViewModel.resetSession()
+                AppDestination.Scan,
+                is AppDestination.Capsule,
+                -> Unit
             }
         },
     )

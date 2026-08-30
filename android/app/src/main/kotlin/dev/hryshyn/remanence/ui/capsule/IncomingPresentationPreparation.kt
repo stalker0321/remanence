@@ -31,6 +31,7 @@ import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.coroutineContext
@@ -96,6 +97,8 @@ internal class PreparedIncomingPresentation internal constructor(
     val capsuleId: CapsuleId,
     private val material: PreparedPresentationMaterial,
 ) : AutoCloseable {
+    private val closed = AtomicBoolean(false)
+
     internal val photoCount: Int
         get() = material.photoCount
 
@@ -103,7 +106,9 @@ internal class PreparedIncomingPresentation internal constructor(
 
     internal fun loadPhoto(ordinal: Int): ByteArray = material.loadPhoto(ordinal)
 
-    override fun close() = material.close()
+    override fun close() {
+        if (closed.compareAndSet(false, true)) material.close()
+    }
 
     override fun toString(): String = "PreparedIncomingPresentation(<redacted>)"
 }

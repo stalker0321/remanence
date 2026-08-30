@@ -150,10 +150,13 @@ class ScanCaptureParityTest {
             directoryFetch = { error("verification must be unreachable in this test") },
             ownAccount = { null },
         ),
-        grantsClockMillis = { 0L },
+        presentationGrants = dev.hryshyn.remanence.ui.capsule.PresentationGrantAuthority(
+            dev.hryshyn.remanence.core.recognition.ScanGrantManager(clockMillis = { 0L }),
+        ),
         frontProcessor = front,
         backProcessor = back,
         candidateIndexProvider = { ScanCandidateIndex.EMPTY },
+        incomingPresentationPreparation = null,
         cpuDispatcher = testDispatcher,
         ioDispatcher = testDispatcher,
     )

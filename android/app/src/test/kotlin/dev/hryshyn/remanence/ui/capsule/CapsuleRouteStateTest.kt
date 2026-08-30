@@ -7,7 +7,6 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.crypto.tink.KeyTemplates
-import com.google.crypto.tink.KeysetHandle
 import kotlinx.coroutines.flow.MutableSharedFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -16,6 +15,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import com.google.crypto.tink.KeysetHandle
 
 /** A genuinely decodable JPEG for the ready path. */
 private fun realJpeg(color: Long): ByteArray {
@@ -65,9 +65,10 @@ class CapsuleRouteStateTest {
             MaterialTheme {
                 CapsuleRoute(
                     grantId = "grant-1",
-                    capsuleId = "capsule-1",
-                    identityLoader = { identityHandle },
-                    sourceFactory = { source },
+                    contentFactory = {
+                        if (identityHandle == null) error("local keys unavailable")
+                        CapsuleContentBinding(capsuleId = "capsule-1", reader = source)
+                    },
                     validateLiveGrant = {},
                     revocations = revocations,
                     onClose = onClose,

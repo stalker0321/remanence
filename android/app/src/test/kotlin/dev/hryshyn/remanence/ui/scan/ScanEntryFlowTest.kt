@@ -111,10 +111,13 @@ class ScanEntryFlowTest {
                 directoryFetch = { error("verification must be unreachable without identity") },
                 ownAccount = { null },
             ),
-            grantsClockMillis = { 0L },
+            presentationGrants = dev.hryshyn.remanence.ui.capsule.PresentationGrantAuthority(
+                dev.hryshyn.remanence.core.recognition.ScanGrantManager(clockMillis = { 0L }),
+            ),
             frontProcessor = AcceptedProcessor(FingerprintSide.FRONT),
             backProcessor = AcceptedProcessor(FingerprintSide.BACK),
             candidateIndexProvider = { ScanCandidateIndex.EMPTY },
+            incomingPresentationPreparation = null,
             // FIX-STATE-01: delivery completes synchronously under the test
             // dispatcher so assertions are deterministic.
             cpuDispatcher = testDispatcher,

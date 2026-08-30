@@ -15,6 +15,10 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
+import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.core.recognition.ScanGrantManager
+import dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource
+import dev.hryshyn.remanence.ui.capsule.PresentationGrantAuthority
 
 /**
  * FIX-REVIEW-02 navigation half: entering Create/Scan bumps that flow's
@@ -23,6 +27,8 @@ import org.junit.Test
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class FlowSessionEpochTest {
+
+    private val owner = UserId(java.util.UUID.fromString("7d111111-2222-4333-8444-555555555555"))
 
     private val testDispatcher = UnconfinedTestDispatcher()
 
@@ -38,7 +44,7 @@ class FlowSessionEpochTest {
 
     private class NoopResolver : SessionStateResolver {
         override suspend fun bootstrap(): SessionState =
-            SessionState.Active("u", "mykola", true, true)
+            SessionState.Active("7d111111-2222-4333-8444-555555555555", "mykola", true, true)
 
         override suspend fun logout(): SessionState = SessionState.SignedOut
     }
@@ -77,10 +83,17 @@ class FlowSessionEpochTest {
 
     @Test
     fun leavingScanDropsAnyLiveCapsuleAccessFromTheMidScanGrant() = runTest {
-        val vm = RootViewModel(NoopResolver())
+        val grants = ScanGrantManager({ 0L })
+        val authority = PresentationGrantAuthority(grants)
+        val vm = RootViewModel(NoopResolver(), presentationGrants = authority)
         // A verified grant was issued by the scan flow while inside Scan
         // (navigation to the capsule route is pending) and the user exits.
-        val grant = vm.scanGrants.issue(java.util.UUID.randomUUID())
+        val grant = authority.issue(
+            ownerUserId = owner,
+            capsuleId = java.util.UUID.randomUUID(),
+            source = CapsulePresentationSource.OUTBOX,
+            scanGeneration = 0,
+        )
         vm.openCapsuleWithGrant(grant.grantId.toString())
         vm.openScan()
         vm.returnToHome()

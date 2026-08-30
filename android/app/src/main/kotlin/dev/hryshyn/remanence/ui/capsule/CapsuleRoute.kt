@@ -1,5 +1,6 @@
 package dev.hryshyn.remanence.ui.capsule
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,6 +15,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -26,6 +28,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.google.crypto.tink.KeysetHandle
 import kotlinx.coroutines.flow.Flow
+import kotlin.coroutines.cancellation.CancellationException
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 
 /**
@@ -60,14 +63,13 @@ fun interface CapsuleIdentityLoader {
  * - an authoritative revocation closes the presentation immediately.
  */
 @Composable
-fun CapsuleRoute(
+internal fun CapsuleRoute(
     grantId: String,
-    capsuleId: String,
-    identityLoader: CapsuleIdentityLoader,
-    sourceFactory: (KeysetHandle) -> CapsuleContentReader,
+    contentFactory: suspend () -> CapsuleContentBinding,
     validateLiveGrant: () -> Unit,
     revocations: Flow<String>,
     onClose: () -> Unit,
+    onFailure: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var state by remember(grantId) {
@@ -75,6 +77,22 @@ fun CapsuleRoute(
     }
     // Retry re-runs the whole load exactly once per tap.
     var loadEpoch by remember(grantId) { mutableIntStateOf(0) }
+
+    // The route owns the presentation state while it is mounted. System Back
+    // must release it before delegating the navigation/authority revocation.
+    BackHandler {
+        (state as? CapsuleRouteState.Ready)?.presentation?.close()
+        onClose()
+    }
+
+    // Grant replacement or route removal must close the prior Ready state;
+    // CapsuleScreen's bitmap-only disposal is not sufficient for plaintext.
+    val stateOwnedByDisposalEffect = state
+    DisposableEffect(grantId, stateOwnedByDisposalEffect) {
+        onDispose {
+            (stateOwnedByDisposalEffect as? CapsuleRouteState.Ready)?.presentation?.close()
+        }
+    }
 
     // Authoritative revocation releases every decrypted reference immediately.
     LaunchedEffect(grantId) {
@@ -86,35 +104,31 @@ fun CapsuleRoute(
         }
     }
 
-    LaunchedEffect(grantId, capsuleId, loadEpoch) {
-        if (capsuleId.isEmpty()) {
-            state = CapsuleRouteState.Failed("No capsule is bound to this view.")
-            return@LaunchedEffect
-        }
+    LaunchedEffect(grantId, loadEpoch) {
         state = CapsuleRouteState.Loading
         try {
-            val encryptionHandle = identityLoader.load()
-                ?: throw IllegalStateException("local keys are unavailable on this device")
+            val binding = contentFactory()
+            if (binding.capsuleId.isEmpty()) throw IllegalStateException("no capsule binding")
             val source = GrantGuardedCapsuleContentSource(
-                delegate = sourceFactory(encryptionHandle),
+                delegate = binding.reader,
                 validateLiveGrant = validateLiveGrant,
             )
-            val declaredCount = source.photoCount(capsuleId)
+            val declaredCount = source.photoCount(binding.capsuleId)
             if (declaredCount !in ProtocolV1Limits.PHOTO_COUNT_MIN..ProtocolV1Limits.PHOTO_COUNT_MAX) {
-                throw IllegalStateException(
-                    "capsule declares $declaredCount photos; refusing to open",
-                )
+                throw IllegalStateException("capsule photo layout is invalid")
             }
-            val note = source.noteText(capsuleId)
+            val note = source.noteText(binding.capsuleId)
             val presentation = CapsulePresentationState(
-                photoLoader = { ordinal -> source.loadPhoto(capsuleId, ordinal) },
+                photoLoader = { ordinal -> source.loadPhoto(binding.capsuleId, ordinal) },
             )
             presentation.open(declaredCount, note)
             state = CapsuleRouteState.Ready(presentation)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (failure: Exception) {
-            state = CapsuleRouteState.Failed(
-                failure.message ?: "the capsule could not be opened",
-            )
+            (state as? CapsuleRouteState.Ready)?.presentation?.close()
+            onFailure()
+            state = CapsuleRouteState.Failed("The capsule could not be opened.")
         }
     }
 

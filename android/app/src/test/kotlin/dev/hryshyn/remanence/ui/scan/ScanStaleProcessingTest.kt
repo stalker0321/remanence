@@ -132,10 +132,13 @@ class ScanStaleProcessingTest {
             directoryFetch = { error("verification unreachable in this test") },
             ownAccount = { null },
         ),
-        grantsClockMillis = { 0L },
+        presentationGrants = dev.hryshyn.remanence.ui.capsule.PresentationGrantAuthority(
+            dev.hryshyn.remanence.core.recognition.ScanGrantManager(clockMillis = { 0L }),
+        ),
         frontProcessor = Accepting(FingerprintSide.FRONT),
         backProcessor = Accepting(FingerprintSide.BACK),
         candidateIndexProvider = { ScanCandidateIndex.EMPTY },
+        incomingPresentationPreparation = null,
         cpuDispatcher = cpuDispatcher,
         ioDispatcher = cpuDispatcher,
     ).also { it.beginSession(1L) }

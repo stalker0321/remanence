@@ -377,7 +377,85 @@ class CreateSessionOwnedStagingTest {
     }
 
     @Test
-    fun beginSessionSweepsOnlyAbandonedUuidDirectories() {
+    fun sameEpochRotationPreservesInProgressSessionStaging() {
+        val vm = newViewModel(
+            GatedNormalizer(CountDownLatch(1), CompletableDeferred(Unit)),
+            CompletableDeferred(),
+            AtomicInteger(0),
+        )
+        val roots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingRoot)
+        vm.beginSession(1L, userUuid.toString())
+        driveToReadyContent(vm, listOf("old-1", "old-2", "old-3"))
+        val capsuleId = vm.capsuleId
+        val liveDir = File(roots.createStagingRoot(UserId(userUuid)), capsuleId)
+        check(liveDir.mkdirs())
+        val livePhoto = File(liveDir, "in-progress.jpg").apply { writeBytes(byteArrayOf(7, 8, 9)) }
+
+        vm.beginSession(1L, userUuid.toString())
+
+        assertEquals(capsuleId, vm.capsuleId)
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        assertTrue(vm.photoSelection.canProceed)
+        assertTrue("same-epoch rotation must keep the live staging directory", liveDir.isDirectory)
+        assertTrue("same-epoch rotation must keep in-progress plaintext", livePhoto.isFile)
+        assertEquals(listOf<Byte>(7, 8, 9), livePhoto.readBytes().toList())
+    }
+
+    @Test
+    fun routeExitCleansOwnedStagingExactlyOnceAndLeavesForeignAccountUntouched() {
+        val vm = newViewModel(
+            GatedNormalizer(CountDownLatch(1), CompletableDeferred(Unit)),
+            CompletableDeferred(),
+            AtomicInteger(0),
+        )
+        val roots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingRoot)
+        vm.beginSession(1L, userUuid.toString())
+        val ownedDir = File(roots.createStagingRoot(UserId(userUuid)), vm.capsuleId).apply { mkdirs() }
+        val ownedPhoto = File(ownedDir, "plain.jpg").apply { writeBytes(byteArrayOf(4)) }
+        val foreignPhoto = File(
+            roots.createStagingRoot(UserId(switchedUserUuid)),
+            "capsule-b/photo-00.jpg",
+        ).apply {
+            parentFile!!.mkdirs()
+            writeText("B must survive")
+        }
+
+        vm.endSession()
+        assertTrue(!ownedDir.exists())
+        assertTrue(!ownedPhoto.exists())
+        assertEquals("B must survive", foreignPhoto.readText())
+
+        vm.endSession()
+        assertTrue(!ownedDir.exists())
+        assertEquals("B must survive", foreignPhoto.readText())
+    }
+
+    @Test
+    fun accountSwitchCleansPreviousOwnerStagingAndStartsAFreshSession() {
+        val vm = newViewModel(
+            GatedNormalizer(CountDownLatch(1), CompletableDeferred(Unit)),
+            CompletableDeferred(),
+            AtomicInteger(0),
+            switchedUserUuid,
+        )
+        val roots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingRoot)
+        vm.beginSession(1L, userUuid.toString())
+        driveToReadyContent(vm, listOf("old-1", "old-2", "old-3"))
+        val previousCapsuleId = vm.capsuleId
+        val previousDir = File(roots.createStagingRoot(UserId(userUuid)), previousCapsuleId).apply { mkdirs() }
+        File(previousDir, "plain.jpg").writeBytes(byteArrayOf(5))
+
+        vm.beginSession(1L, switchedUserUuid.toString())
+
+        assertTrue(vm.capsuleId != previousCapsuleId)
+        assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
+        assertEquals(CreateViewModel.CreateUploadStatus.NotStarted, vm.uploadStatus.value)
+        assertTrue(!previousDir.exists())
+        assertTrue(vm.photoSelection.selectedIds.isEmpty())
+    }
+
+    @Test
+    fun beginSessionRemovesOnlyTheReplacedSessionsOwnDirectory() {
         val identityGate = CompletableDeferred<SenderIdentitySnapshot>()
         val vm = newViewModel(
             GatedNormalizer(CountDownLatch(1), CompletableDeferred(Unit)),
@@ -399,27 +477,31 @@ class CreateSessionOwnedStagingTest {
         val looseFile = File(createRoot, "stray.txt").apply { writeBytes(byteArrayOf(2)) }
 
         vm.beginSession(1L, userUuid.toString())
-        assertTrue(!abandonedA.exists())
-        assertTrue(!abandonedUppercase.exists())
+        assertTrue("process-death leftovers belong to the startup sweep", abandonedA.isDirectory)
+        assertTrue(abandonedUppercase.isDirectory)
         assertTrue(foreignDir.isDirectory)
         assertTrue(looseFile.isFile)
 
-        // The live epoch-1 session stages artifacts into its OWN directory;
-        // another process-death leftover appears alongside it.
         val epochOneDir = File(createRoot, vm.capsuleId).apply { mkdirs() }
         val liveMarker = File(epochOneDir, "live.txt").apply { writeBytes(byteArrayOf(3)) }
         val abandonedB = File(createRoot, "99999999-8888-4777-8666-555555555555").apply { mkdirs() }
 
-        // Rotating to epoch 2 removes the replaced IDLE session's own
-        // directory and the newly abandoned one - and nothing else.
         vm.beginSession(2L, userUuid.toString())
         assertTrue(!epochOneDir.exists())
         assertTrue(!liveMarker.isFile)
-        assertTrue(!abandonedB.exists())
+        assertTrue("unrelated UUID leftovers wait for the owner-scoped startup sweep", abandonedB.isDirectory)
+        assertTrue(abandonedA.isDirectory)
+        assertTrue(abandonedUppercase.isDirectory)
         assertTrue(foreignDir.isDirectory)
         assertTrue(looseFile.isFile)
         assertEquals(
-            setOf(foreignDir.name, looseFile.name),
+            setOf(
+                abandonedA.name,
+                abandonedUppercase.name,
+                foreignDir.name,
+                looseFile.name,
+                abandonedB.name,
+            ),
             createRoot.listFiles()?.map { it.name }?.toSet(),
         )
     }

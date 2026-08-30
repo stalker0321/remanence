@@ -55,6 +55,8 @@ class RootViewModel internal constructor(
     private val resumeCapsuleUploads: suspend (UserId) -> Unit = {},
     /** Authenticated owner-scoped incoming chain enqueue after upload discovery. */
     private val scheduleIncomingSync: suspend (UserId) -> Unit = {},
+    /** Authenticated startup cleanup before the account UI becomes visible. */
+    private val recoverCreateStaging: suspend (UserId) -> Unit = {},
 ) : ViewModel() {
 
     /** Serializes root refresh requests while retaining one trailing request. */
@@ -497,11 +499,30 @@ class RootViewModel internal constructor(
         } catch (_: Exception) {
             AuthUiState.RequiresConnectivity
         }
+        val rawActiveUserId = activeUserId
+        val activeOwner = rawActiveUserId
+            ?.takeIf { it.isNotBlank() }
+            ?.let { runCatching { UserId.parseRest(it) }.getOrNull() }
+        if (next is AuthUiState.Authenticated && !rawActiveUserId.isNullOrBlank() && activeOwner == null) {
+            if (!publishIfCurrent(generation, next)) return
+            return
+        }
+        if (next is AuthUiState.Authenticated && activeOwner != null) {
+            try {
+                recoverCreateStaging(activeOwner)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Do not expose the authenticated account while an in-scope
+                // plaintext recovery sweep could not complete.
+                publishIfCurrent(generation, AuthUiState.RequiresConnectivity)
+                return
+            }
+        }
         if (!publishIfCurrent(generation, next)) return
 
-        val rawActiveUserId = activeUserId
-        if (next is AuthUiState.Authenticated && !rawActiveUserId.isNullOrBlank()) {
-            val owner = runCatching { UserId.parseRest(rawActiveUserId) }.getOrNull() ?: return
+        if (next is AuthUiState.Authenticated && activeOwner != null) {
+            val owner = activeOwner
             if (!isCurrentRefresh(generation)) return
             try {
                 resumeCapsuleUploads(owner)

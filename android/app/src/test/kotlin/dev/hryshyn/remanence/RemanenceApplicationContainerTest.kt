@@ -557,6 +557,83 @@ class RemanenceApplicationContainerTest {
     }
 
     @Test
+    fun sweepCreateStagingOnceIsOwnerScopedOncePerProcessAndNeverTouchesForeignOrDurableFiles() = runBlocking {
+        val container = container()
+        try {
+            val ownerA = UserId.parseRest("9db5c67a-3a4e-45d1-8b0f-2f14a9bb2001")
+            val ownerB = UserId.parseRest("9db5c67a-3a4e-45d1-8b0f-2f14a9bb2002")
+            val roots = container.accountScopedFileRoots
+            val aOrphan = File(
+                roots.createStagingRoot(ownerA),
+                "11111111-2222-4333-8444-555555555555/plain.jpg",
+            ).apply {
+                parentFile!!.mkdirs()
+                writeBytes(byteArrayOf(1))
+            }
+            val aDurable = File(roots.child(ownerA, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots.ChildRoot.FINGERPRINTS), "fp-a.fpw").apply {
+                parentFile!!.mkdirs()
+                writeBytes(byteArrayOf(2))
+            }
+            val aStray = File(roots.createStagingRoot(ownerA), "stray.txt").apply {
+                parentFile!!.mkdirs()
+                writeBytes(byteArrayOf(3))
+            }
+            val bOrphan = File(
+                roots.createStagingRoot(ownerB),
+                "22222222-3333-4444-8555-666666666666/plain.jpg",
+            ).apply {
+                parentFile!!.mkdirs()
+                writeBytes(byteArrayOf(4))
+            }
+
+            container.sweepCreateStagingOnce(ownerA)
+
+            assertFalse("reconstructed A orphan must be removed on first authenticated sweep", aOrphan.exists())
+            assertTrue("current owned durable files must survive", aDurable.isFile)
+            assertTrue("non-UUID create files are not orphans", aStray.isFile)
+            assertTrue("foreign-account Create staging must survive", bOrphan.isFile)
+
+            val laterAOrphan = File(
+                roots.createStagingRoot(ownerA),
+                "99999999-8888-4777-8666-555555555555/plain.jpg",
+            ).apply {
+                parentFile!!.mkdirs()
+                writeBytes(byteArrayOf(5))
+            }
+            container.sweepCreateStagingOnce(ownerA)
+            assertTrue("once-per-process ledger must not sweep the same owner again", laterAOrphan.isFile)
+
+            container.sweepCreateStagingOnce(ownerB)
+            assertFalse("a different owner still gets its first sweep", bOrphan.exists())
+            assertTrue(laterAOrphan.isFile)
+            assertTrue(aDurable.isFile)
+        } finally {
+            container.database.close()
+        }
+    }
+
+    @Test
+    fun failedCreateStagingSweepIsNotRecordedSoALaterBootstrapCanRetry() = runBlocking {
+        val container = container()
+        try {
+            val owner = UserId.parseRest("9db5c67a-3a4e-45d1-8b0f-2f14a9bb2003")
+            val createRoot = container.accountScopedFileRoots.createStagingRoot(owner)
+            check(createRoot.parentFile!!.mkdirs() || createRoot.parentFile!!.isDirectory)
+            check(createRoot.createNewFile()) { "could not plant a blocking file at $createRoot" }
+
+            val first = runCatching { container.sweepCreateStagingOnce(owner) }
+            assertTrue(first.isFailure)
+
+            check(createRoot.delete())
+            val orphan = File(createRoot, "44444444-5555-4666-8777-888888888888").apply { mkdirs() }
+            container.sweepCreateStagingOnce(owner)
+            assertFalse("retry after a failed sweep must remove the reconstructed orphan", orphan.exists())
+        } finally {
+            container.database.close()
+        }
+    }
+
+    @Test
     fun capsuleUploadResumerWiringUsesCurrentOwnerAndUniqueWorkerBoundary() = runBlocking {
         WorkManagerTestInitHelper.initializeTestWorkManager(
             context,

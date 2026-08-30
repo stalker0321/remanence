@@ -34,6 +34,9 @@ class RemanenceViewModelFactory(
             scheduleIncomingSync = { owner ->
                 container.scheduleIncomingSync(owner)
             },
+            recoverCreateStaging = { owner ->
+                container.sweepCreateStagingOnce(owner)
+            },
         ) as T
         LoginViewModel::class.java -> LoginViewModel(container.loginUseCase) as T
         RegistrationViewModel::class.java -> RegistrationViewModel(container.registrationUseCase) as T
@@ -92,6 +95,7 @@ class RemanenceViewModelFactory(
                     capsule,
                 ).await()
             },
+            outboxCapsuleDao = container.database.outboxCapsuleDao(),
         ) as T
         ScanViewModel::class.java -> ScanViewModel(
             persistence = container.fingerprintPersistence,

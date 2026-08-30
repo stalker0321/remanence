@@ -455,6 +455,59 @@ class AccountStorageRetentionTest {
         }
     }
 
+    @Test
+    fun sweepCreateStagingRemovesOnlyOwnerUuidOrphansAndNeverForeignOrDurableFiles() {
+        val aFingerprint = touch(roots.child(ownerA, AccountScopedFileRoots.ChildRoot.FINGERPRINTS), "fp-a.fpw")
+        val aOutbox = touch(roots.child(ownerA, AccountScopedFileRoots.ChildRoot.OUTBOX_CIPHERTEXT), "blob-a.bin")
+        val aRetry = touch(roots.child(ownerA, AccountScopedFileRoots.ChildRoot.RETRY_MATERIAL), "retry-a.bin")
+        val aOrphan = touch(roots.createStagingRoot(ownerA), "11111111-2222-4333-8444-555555555555/plain.jpg")
+        val aUppercase = File(roots.createStagingRoot(ownerA), "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE").apply { mkdirs() }
+        val aNotUuid = File(roots.createStagingRoot(ownerA), "not-a-uuid").apply { mkdirs() }
+        val aStray = touch(roots.createStagingRoot(ownerA), "stray.txt")
+        val bOrphan = touch(roots.createStagingRoot(ownerB), "22222222-3333-4444-8555-666666666666/plain.jpg")
+        val bFingerprint = touch(roots.child(ownerB, AccountScopedFileRoots.ChildRoot.FINGERPRINTS), "fp-b.fpw")
+
+        retention.sweepCreateStaging(ownerA)
+
+        assertFalse("UUID orphan under A create must be removed", aOrphan.exists())
+        assertFalse(aUppercase.exists())
+        assertTrue("non-UUID create entry must survive", aNotUuid.isDirectory)
+        assertTrue("loose create file must survive", aStray.isFile)
+        assertTrue("A fingerprints are not Create staging", aFingerprint.isFile)
+        assertTrue(aOutbox.isFile)
+        assertTrue(aRetry.isFile)
+        assertTrue("foreign-account Create staging must survive", bOrphan.isFile)
+        assertTrue(bFingerprint.isFile)
+    }
+
+    @Test
+    fun sweepCreateStagingNeverFollowsAUuidNamedSymlinkOrRedirectedCreateRoot() {
+        val bFingerprint = touch(roots.child(ownerB, AccountScopedFileRoots.ChildRoot.FINGERPRINTS), "fp-b.fpw")
+        val bBytes = bFingerprint.readBytes()
+        val aCreate = roots.createStagingRoot(ownerA)
+        check(aCreate.mkdirs())
+        val escape = File(aCreate, "33333333-4444-4555-8666-777777777777")
+        java.nio.file.Files.createSymbolicLink(escape.toPath(), bFingerprint.toPath())
+
+        retention.sweepCreateStaging(ownerA)
+
+        assertFalse("in-scope UUID symlink must be unlinked", escape.exists())
+        assertTrue("symlink target in B must survive", bFingerprint.isFile)
+        assertArrayEquals(bBytes, bFingerprint.readBytes())
+
+        val redirected = roots.createStagingRoot(ownerB)
+        check(redirected.mkdirs())
+        val foreignPlain = touch(redirected, "kept.bin")
+        if (aCreate.exists()) aCreate.deleteRecursively()
+        java.nio.file.Files.createSymbolicLink(aCreate.toPath(), redirected.toPath())
+
+        retention.sweepCreateStaging(ownerA)
+
+        assertFalse("redirected A create root symlink must be unlinked", aCreate.exists())
+        assertTrue("B create target of the redirected root must survive", foreignPlain.isFile)
+        assertTrue(redirected.isDirectory)
+    }
+
     private fun assertArrayEquals(expected: ByteArray, actual: ByteArray) {
         if (!expected.contentEquals(actual)) {
             fail("byte arrays differ (expected ${expected.size} bytes, got ${actual.size})")

@@ -57,6 +57,11 @@ import dev.hryshyn.remanence.ui.scan.IncomingSenderIndexCandidateProvider
 import dev.hryshyn.remanence.ui.capsule.IncomingPresentationPreparation
 import dev.hryshyn.remanence.ui.capsule.PresentationGrantAuthority
 import dev.hryshyn.remanence.wiring.TinkRegistrationIdentityAdapter
+import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
  * I01 explicit application container: every long-lived dependency is built
@@ -206,6 +211,26 @@ class AppContainer private constructor(
      */
     val accountStorageRetention: dev.hryshyn.remanence.core.data.storage.AccountStorageRetention by lazy {
         dev.hryshyn.remanence.core.data.storage.AccountStorageRetention(accountScopedFileRoots)
+    }
+
+    /** Per-process, per-owner Create plaintext recovery completion ledger. */
+    private val createStagingSweepOwners = ConcurrentHashMap.newKeySet<String>()
+    private val createStagingSweepMutex = Mutex()
+
+    /**
+     * Runs before authenticated root publication. A failed sweep is not
+     * recorded, so a later bootstrap may retry; concurrent bootstraps for the
+     * same owner serialize and cannot expose the account mid-sweep.
+     */
+    suspend fun sweepCreateStagingOnce(owner: UserId) {
+        withContext(Dispatchers.IO) {
+            createStagingSweepMutex.withLock {
+                val ownerText = owner.toRestString()
+                if (ownerText in createStagingSweepOwners) return@withLock
+                accountStorageRetention.sweepCreateStaging(owner)
+                createStagingSweepOwners += ownerText
+            }
+        }
     }
 
     /**

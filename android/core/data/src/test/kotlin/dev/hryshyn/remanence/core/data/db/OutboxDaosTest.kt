@@ -4,6 +4,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteConstraintException
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -442,6 +443,32 @@ class OutboxDaosTest {
         // The owner's material is untouched and still fully resolvable.
         assertNotNull(capsuleDao.getByCapsuleIdAndOwner(record.capsuleId, OWNER)!!)
         assertEquals(OutboxCapsuleState.PREPARING, capsuleDao.getByCapsuleIdAndOwner(record.capsuleId, OWNER)!!.state)
+    }
+
+    @Test
+    fun observeStatusByCapsuleIdAndOwnerIsExactAndDoesNotSeeForeignRows() = runBlocking {
+        val record = capsule(state = OutboxCapsuleState.RETRYABLE_FAILURE).copy(lastErrorCode = "NET")
+        insertCapsule(record)
+        insertCapsule(
+            capsule(
+                capsuleId = "0198f0a0-0000-7000-8000-00000000ca02",
+                idempotencyKey = "0198f0a0-0000-7000-8000-00000000id02",
+                state = OutboxCapsuleState.PUBLISHED,
+            ).copy(ownerUserId = OTHER_OWNER),
+        )
+
+        val seen = capsuleDao.observeStatusByCapsuleIdAndOwner(record.capsuleId, OWNER).first()
+        assertEquals(OutboxCapsuleState.RETRYABLE_FAILURE, seen!!.state)
+        assertEquals("NET", seen.lastErrorCode)
+        assertNull(capsuleDao.observeStatusByCapsuleIdAndOwner(record.capsuleId, OTHER_OWNER).first())
+        assertNull(
+            capsuleDao.observeStatusByCapsuleIdAndOwner("0198f0a0-0000-7000-8000-00000000ca99", OWNER).first(),
+        )
+        val foreign = capsuleDao.observeStatusByCapsuleIdAndOwner(
+            "0198f0a0-0000-7000-8000-00000000ca02",
+            OTHER_OWNER,
+        ).first()
+        assertEquals(OutboxCapsuleState.PUBLISHED, foreign!!.state)
     }
 
     @Test

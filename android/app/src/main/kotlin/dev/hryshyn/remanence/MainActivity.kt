@@ -172,7 +172,18 @@ private fun RootSurface(container: AppContainer) {
                 createViewModel.beginSession(createEpoch, authenticatedOwner)
             }
             androidx.compose.runtime.key(createEpoch) {
-                CreateScreen(viewModel = createViewModel)
+                CreateScreen(
+                    viewModel = createViewModel,
+                    // Activity recreation disposes Compose while the root
+                    // remains on Create. Only a stable route exit owns the
+                    // Create session teardown; this preserves same-epoch
+                    // rotation and any in-progress publish.
+                    onScreenDispose = {
+                        if (rootViewModel.destination.value != AppDestination.Create) {
+                            createViewModel.endSession()
+                        }
+                    },
+                )
             }
         },
         capsuleContent = { grantId ->

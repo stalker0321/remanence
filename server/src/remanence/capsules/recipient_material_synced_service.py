@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from typing import Final
 
 from sqlalchemy import func, select
-from sqlalchemy.exc import DisconnectionError, OperationalError
+from sqlalchemy.exc import DBAPIError, DisconnectionError
 from sqlalchemy.orm import Session
 
 from remanence.capsules.blob_models import CapsuleBlob, CapsuleBlobKind, CapsuleBlobState
@@ -95,13 +95,13 @@ def is_transient_database_unavailability(error: BaseException) -> bool:
 
     SQLAlchemy marks a lost pooled connection as invalidated.  A PostgreSQL
     connection exception can also arrive with SQLSTATE class 08 before a
-    connection exists to invalidate.  Other OperationalError instances and
+    connection exists to invalidate.  Other DBAPIError instances and
     all other database/programmer errors remain terminal at this boundary.
     """
 
     if isinstance(error, DisconnectionError):
         return True
-    if not isinstance(error, OperationalError):
+    if not isinstance(error, DBAPIError):
         return False
     if error.connection_invalidated:
         return True
@@ -133,7 +133,7 @@ class RecipientMaterialSyncedService:
             )
         except RecipientMaterialSyncedError as exc:
             mapped = exc
-        except (DisconnectionError, OperationalError) as exc:
+        except (DisconnectionError, DBAPIError) as exc:
             mapped = _error(
                 "INTERNAL_UNAVAILABLE"
                 if is_transient_database_unavailability(exc)

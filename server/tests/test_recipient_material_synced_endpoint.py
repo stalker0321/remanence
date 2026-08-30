@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select, update
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import DBAPIError, OperationalError
 
 pytest_plugins = ("test_registration_endpoint",)
 
@@ -276,7 +276,7 @@ def test_transient_database_disconnect_is_retryable_and_rolls_back(
     client_factory, monkeypatch
 ) -> None:
     client, factory = client_factory
-    _sender, recipient, capsule_id = _ready_world(client, factory, "retryable-db")
+    _sender, recipient, capsule_id = _ready_world(client, factory, "retryabledb")
     recipient_id = UUID(recipient["user"]["user_id"])
     secret = "private-db-detail"
 
@@ -324,7 +324,7 @@ def test_transient_database_disconnect_during_commit_is_retryable(monkeypatch) -
 
                 def __exit__(self, exc_type, _exc_value, _traceback):
                     if exc_type is None:
-                        raise OperationalError(
+                        raise DBAPIError(
                             "COMMIT private_statement",
                             {"private": secret},
                             RuntimeError(secret),

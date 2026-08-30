@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import func, select, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.orm import object_session
 
 pytest_plugins = ("test_session_repository_create",)
@@ -171,6 +171,36 @@ def test_only_connection_level_operational_failure_is_retryable(
         secrets=(secret, "private_statement"),
     )
     assert caught.code == expected
+
+
+def test_generic_invalidated_dbapi_failure_is_retryable() -> None:
+    secret = "private-db-detail"
+    error = DBAPIError(
+        "UPDATE private_statement",
+        {"private": secret},
+        RuntimeError(secret),
+        hide_parameters=True,
+        connection_invalidated=True,
+    )
+
+    class _NoAutoflush:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class _Session:
+        no_autoflush = _NoAutoflush()
+
+        def scalar(self, *_args, **_kwargs):
+            raise error
+
+    _assert_error(
+        lambda: _mark(_Session(), uuid4(), uuid4()),
+        "INTERNAL_UNAVAILABLE",
+        secrets=(secret, "private_statement"),
+    )
 
 
 def test_first_transition_and_idempotent_replay_keep_original_timestamp(

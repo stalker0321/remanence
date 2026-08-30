@@ -14,6 +14,8 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -50,12 +52,14 @@ class IncomingMaterialAckDaoTest {
         insertAdvanced(ownerA, capsule(2), 20, LocalMaterialState.FINGERPRINT_ACCEPTED)
         insertAdvanced(ownerA, capsule(3), 10, LocalMaterialState.MATERIAL_CACHED)
         markRaw(capsule(3), ownerA, MaterialAckState.ACKED)
+        insertAdvanced(ownerA, capsule(17), 0, LocalMaterialState.FINGERPRINT_ACCEPTED)
+        markRaw(capsule(17), ownerA, MaterialAckState.TERMINAL)
         insertAdvanced(ownerA, capsule(4), 1, LocalMaterialState.MATERIAL_CACHED, serverStatus = "PENDING")
         insert(ownerA, capsule(5), 2)
         insertAdvanced(ownerB, capsule(6), 0, LocalMaterialState.MATERIAL_CACHED)
 
         val page = dao.selectMaterialAckCandidatesForOwner(
-            ownerUserId = ownerA.toRestString(),
+            ownerUserId = ownerA,
             limit = 2,
         )
 
@@ -65,8 +69,79 @@ class IncomingMaterialAckDaoTest {
         )
         assertEquals(listOf(20L, 20L), page.candidates.map { it.readyAtEpochMs })
 
-        val empty = dao.selectMaterialAckCandidatesForOwner(ownerA.toRestString(), limit = 3)
+        val empty = dao.selectMaterialAckCandidatesForOwner(ownerA, limit = 3)
         assertTrue(empty is IncomingMaterialAckCandidateSelection.Page)
+    }
+
+    @Test
+    fun typedMaterialAckSeamCannotAddressLegacySentinelOwner() = runBlocking {
+        val legacy = capsule(18)
+        insertRaw(entity("", legacy, 1, "READY", LocalMaterialState.MATERIAL_CACHED))
+
+        val selected = dao.selectMaterialAckCandidatesForOwner(ownerA, limit = 1)
+        assertTrue(selected is IncomingMaterialAckCandidateSelection.Page)
+        assertTrue((selected as IncomingMaterialAckCandidateSelection.Page).candidates.isEmpty())
+        assertEquals(
+            IncomingMaterialAckResult.MissingOrForeign,
+            dao.markMaterialAckedForOwner(ownerA, legacy),
+        )
+        database.openHelper.writableDatabase.query(
+            "SELECT material_ack_state FROM incoming_capsule WHERE capsule_id = ? AND owner_user_id = ?",
+            arrayOf(legacy.toRestString(), ""),
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(MaterialAckState.PENDING.name, cursor.getString(0))
+        }
+        assertThrows(IllegalArgumentException::class.java) { UserId.parseRest("") }
+        Unit
+    }
+
+    @Test
+    fun incomingCapsuleUpsertRejectsFreshRecordedAckAtomically() = runBlocking {
+        for ((index, state) in listOf(MaterialAckState.ACKED, MaterialAckState.TERMINAL).withIndex()) {
+            val pending = entity(
+                ownerA.toRestString(),
+                capsule(19 + index * 2),
+                19 + index.toLong(),
+                "READY",
+                LocalMaterialState.DISCOVERED,
+            )
+            val invalid = pending.copy(
+                capsuleId = capsule(20 + index * 2).toRestString(),
+                materialAckState = state,
+            )
+
+            assertThrows(IllegalArgumentException::class.java) {
+                runBlocking {
+                    dao.upsertAllForOwner(ownerA.toRestString(), listOf(pending, invalid))
+                }
+            }
+            assertEquals(0, countRows("incoming_capsule"))
+        }
+    }
+
+    @Test
+    fun incomingPageRejectsFreshRecordedAckAtomically() = runBlocking {
+        for ((index, state) in listOf(MaterialAckState.ACKED, MaterialAckState.TERMINAL).withIndex()) {
+            val pending = pageCapsule(24 + index * 2)
+            val invalid = pageCapsule(25 + index * 2).copy(materialAckState = state)
+
+            assertThrows(IllegalArgumentException::class.java) {
+                runBlocking {
+                    database.incomingPageDao().commitPage(
+                        ownerUserId = ownerA.toRestString(),
+                        expectedCursor = null,
+                        capsules = listOf(pending, invalid),
+                        envelopes = listOf(pageEnvelope(pending), pageEnvelope(invalid)),
+                        blobs = emptyList(),
+                        nextCursor = "must-not-commit-$index",
+                        committedAtEpochMs = 1_755_000_000_000 + index,
+                    )
+                }
+            }
+            assertEquals(0, countRows("incoming_capsule"))
+            assertNull(database.syncCursorDao().get(ownerA.toRestString(), "incoming"))
+        }
     }
 
     @Test
@@ -75,7 +150,7 @@ class IncomingMaterialAckDaoTest {
         for (invalid in listOf(-1, 0, IncomingCapsuleDao.MATERIAL_ACK_HARD_MAX_PAGE_SIZE + 1, Int.MAX_VALUE)) {
             assertEquals(
                 IncomingMaterialAckCandidateSelection.InvalidRequest,
-                dao.selectMaterialAckCandidatesForOwner(ownerA.toRestString(), invalid),
+                dao.selectMaterialAckCandidatesForOwner(ownerA, invalid),
             )
         }
 
@@ -87,7 +162,7 @@ class IncomingMaterialAckDaoTest {
         database.openHelper.writableDatabase.execSQL("DROP TABLE incoming_capsule")
         assertEquals(
             IncomingMaterialAckCandidateSelection.Unavailable,
-            dao.selectMaterialAckCandidatesForOwner(ownerA.toRestString(), 1),
+            dao.selectMaterialAckCandidatesForOwner(ownerA, 1),
         )
     }
 
@@ -97,11 +172,11 @@ class IncomingMaterialAckDaoTest {
         insertAdvanced(ownerA, acked, 7, LocalMaterialState.MATERIAL_CACHED)
         assertEquals(
             IncomingMaterialAckResult.Marked,
-            dao.markMaterialAckedForOwner(ownerA.toRestString(), acked.toRestString()),
+            dao.markMaterialAckedForOwner(ownerA, acked),
         )
         assertEquals(
             IncomingMaterialAckResult.AlreadyRecorded,
-            dao.markMaterialAckedForOwner(ownerA.toRestString(), acked.toRestString()),
+            dao.markMaterialAckedForOwner(ownerA, acked),
         )
         assertEquals(MaterialAckState.ACKED, dao.getByCapsuleIdAndOwner(acked.toRestString(), ownerA.toRestString())!!.materialAckState)
 
@@ -109,11 +184,11 @@ class IncomingMaterialAckDaoTest {
         insertAdvanced(ownerA, terminal, 8, LocalMaterialState.FINGERPRINT_ACCEPTED)
         assertEquals(
             IncomingMaterialAckResult.Marked,
-            dao.markMaterialTerminalForOwner(ownerA.toRestString(), terminal.toRestString()),
+            dao.markMaterialTerminalForOwner(ownerA, terminal),
         )
         assertEquals(
             IncomingMaterialAckResult.AlreadyRecorded,
-            dao.markMaterialTerminalForOwner(ownerA.toRestString(), terminal.toRestString()),
+            dao.markMaterialTerminalForOwner(ownerA, terminal),
         )
         assertFalse(IncomingMaterialAckResult.Marked.toString().contains(acked.toRestString()))
         assertFalse(IncomingMaterialAckResult.AlreadyRecorded.toString().contains(acked.toRestString()))
@@ -125,11 +200,11 @@ class IncomingMaterialAckDaoTest {
         insertAdvanced(ownerA, eligible, 9, LocalMaterialState.MATERIAL_CACHED)
         assertEquals(
             IncomingMaterialAckResult.MissingOrForeign,
-            dao.markMaterialAckedForOwner(ownerB.toRestString(), eligible.toRestString()),
+            dao.markMaterialAckedForOwner(ownerB, eligible),
         )
         assertEquals(
             IncomingMaterialAckResult.MissingOrForeign,
-            dao.markMaterialAckedForOwner(ownerA.toRestString(), capsule(99).toRestString()),
+            dao.markMaterialAckedForOwner(ownerA, capsule(99)),
         )
         assertEquals(MaterialAckState.PENDING, dao.getByCapsuleIdAndOwner(eligible.toRestString(), ownerA.toRestString())!!.materialAckState)
 
@@ -137,22 +212,22 @@ class IncomingMaterialAckDaoTest {
         insertAdvanced(ownerA, wrongStatus, 10, LocalMaterialState.MATERIAL_CACHED, serverStatus = "PENDING")
         assertEquals(
             IncomingMaterialAckResult.StateChanged,
-            dao.markMaterialAckedForOwner(ownerA.toRestString(), wrongStatus.toRestString()),
+            dao.markMaterialAckedForOwner(ownerA, wrongStatus),
         )
 
         val wrongState = capsule(11)
         insert(ownerA, wrongState, 11)
         assertEquals(
             IncomingMaterialAckResult.StateChanged,
-            dao.markMaterialAckedForOwner(ownerA.toRestString(), wrongState.toRestString()),
+            dao.markMaterialAckedForOwner(ownerA, wrongState),
         )
 
         val opposite = capsule(12)
         insertAdvanced(ownerA, opposite, 12, LocalMaterialState.MATERIAL_CACHED)
-        assertEquals(IncomingMaterialAckResult.Marked, dao.markMaterialAckedForOwner(ownerA.toRestString(), opposite.toRestString()))
+        assertEquals(IncomingMaterialAckResult.Marked, dao.markMaterialAckedForOwner(ownerA, opposite))
         assertEquals(
             IncomingMaterialAckResult.StateChanged,
-            dao.markMaterialTerminalForOwner(ownerA.toRestString(), opposite.toRestString()),
+            dao.markMaterialTerminalForOwner(ownerA, opposite),
         )
     }
 
@@ -162,7 +237,7 @@ class IncomingMaterialAckDaoTest {
 
         assertEquals(
             IncomingMaterialAckResult.Unavailable,
-            dao.markMaterialAckedForOwner(ownerA.toRestString(), capsule(16).toRestString()),
+            dao.markMaterialAckedForOwner(ownerA, capsule(16)),
         )
     }
 
@@ -173,8 +248,8 @@ class IncomingMaterialAckDaoTest {
 
         val results = coroutineScope {
             listOf(
-                async { dao.markMaterialAckedForOwner(ownerA.toRestString(), record.toRestString()) },
-                async { dao.markMaterialAckedForOwner(ownerA.toRestString(), record.toRestString()) },
+                async { dao.markMaterialAckedForOwner(ownerA, record) },
+                async { dao.markMaterialAckedForOwner(ownerA, record) },
             ).awaitAll()
         }
 
@@ -204,13 +279,16 @@ class IncomingMaterialAckDaoTest {
         )
         advance(acked, LocalMaterialState.MATERIAL_CACHED)
         advance(terminal, LocalMaterialState.FINGERPRINT_ACCEPTED)
-        assertEquals(IncomingMaterialAckResult.Marked, dao.markMaterialAckedForOwner(ownerA.toRestString(), acked.capsuleId))
-        assertEquals(IncomingMaterialAckResult.Marked, dao.markMaterialTerminalForOwner(ownerA.toRestString(), terminal.capsuleId))
+        assertEquals(IncomingMaterialAckResult.Marked, dao.markMaterialAckedForOwner(ownerA, CapsuleId.parseRest(acked.capsuleId)))
+        assertEquals(IncomingMaterialAckResult.Marked, dao.markMaterialTerminalForOwner(ownerA, CapsuleId.parseRest(terminal.capsuleId)))
 
         database.incomingPageDao().commitPage(
             ownerUserId = ownerA.toRestString(),
             expectedCursor = "page-cursor",
-            capsules = listOf(acked.copy(materialState = LocalMaterialState.DISCOVERED, materialAckState = MaterialAckState.PENDING), terminal.copy(materialState = LocalMaterialState.DISCOVERED, materialAckState = MaterialAckState.PENDING)),
+            capsules = listOf(
+                acked.copy(materialState = LocalMaterialState.DISCOVERED, materialAckState = MaterialAckState.TERMINAL),
+                terminal.copy(materialState = LocalMaterialState.DISCOVERED, materialAckState = MaterialAckState.ACKED),
+            ),
             envelopes = listOf(pageEnvelope(acked), pageEnvelope(terminal)),
             blobs = emptyList(),
             nextCursor = "page-cursor",
@@ -281,6 +359,29 @@ class IncomingMaterialAckDaoTest {
             "UPDATE incoming_capsule SET material_ack_state = ? WHERE capsule_id = ? AND owner_user_id = ?",
             arrayOf(state.name, capsuleId.toRestString(), owner.toRestString()),
         )
+    }
+
+    private fun insertRaw(row: IncomingCapsuleEntity) {
+        database.openHelper.writableDatabase.execSQL(
+            "INSERT INTO incoming_capsule " +
+                "(capsule_id, owner_user_id, sender_user_id, recipient_user_id, " +
+                "sender_signing_key_bundle_id, recipient_encryption_key_bundle_id, protocol_version, " +
+                "server_status, ready_at_epoch_ms, signed_statement_bytes, signed_statement_sha256, " +
+                "publish_signature_bytes, material_state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            arrayOf(
+                row.capsuleId, row.ownerUserId, row.senderUserId, row.recipientUserId,
+                row.senderSigningKeyBundleId, row.recipientEncryptionKeyBundleId, row.protocolVersion,
+                row.serverStatus, row.readyAtEpochMs, row.signedStatementBytes,
+                row.signedStatementSha256, row.publishSignatureBytes, row.materialState.name,
+            ),
+        )
+    }
+
+    private fun countRows(table: String): Int = database.openHelper.writableDatabase.query(
+        "SELECT COUNT(*) FROM $table",
+    ).use { cursor ->
+        cursor.moveToFirst()
+        cursor.getInt(0)
     }
 
     private fun pageCapsule(number: Int) = entity(

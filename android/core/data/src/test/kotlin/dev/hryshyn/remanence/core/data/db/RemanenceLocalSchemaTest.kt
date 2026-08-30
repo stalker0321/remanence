@@ -157,7 +157,20 @@ class RemanenceLocalSchemaTest {
     fun exportedSchemaCreatesAndValidatesAtVersionSeven() {
         helper.createDatabase(DB_V7_NAME, 7).use { created ->
             assertTrue(created.isDatabaseIntegrityOk)
-            created.close()
+            created.execSQL(
+                "INSERT INTO incoming_capsule (" +
+                    "capsule_id, owner_user_id, sender_user_id, recipient_user_id, " +
+                    "sender_signing_key_bundle_id, recipient_encryption_key_bundle_id, " +
+                    "protocol_version, server_status, ready_at_epoch_ms, signed_statement_bytes, " +
+                    "signed_statement_sha256, publish_signature_bytes, material_state" +
+                    ") VALUES ('fresh-ack', 'owner-fresh', 'sender-fresh', 'recipient-fresh', " +
+                    "'sender-key-fresh', 'recipient-key-fresh', 1, 'READY', 456, x'01', " +
+                    "x'02', x'03', 'MATERIAL_CACHED')",
+            )
+            created.query("SELECT material_ack_state FROM incoming_capsule WHERE capsule_id = 'fresh-ack'").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("PENDING", cursor.getString(0))
+            }
         }
         helper.runMigrationsAndValidate(DB_V7_NAME, 7, true)
     }
@@ -291,17 +304,18 @@ class RemanenceLocalSchemaTest {
 
     /**
      * M2-P08 wiring regression: the full production migration chain
-     * (1→2→3→4→5) must produce a v5 schema without destructive fallback.
-     * A v1 database carrying pre-M2 rows is migrated through ALL four
-     * migrations, and the final schema must be valid at version 5 and
-     * must contain the sender_retry_keyset_path column.
+     * (1→2→3→4→5→6→7) must produce a v7 schema without destructive fallback.
+     * A v1 database carrying pre-M2 rows is migrated through ALL six
+     * migrations, and the final schema must be valid at version 7 and
+     * must contain both the sender_retry_keyset_path and material_ack_state
+     * columns.
      *
      * This is NOT a per-migration test; it proves the registration
      * list in production is complete.
      */
     @Test
-    fun fullMigrationChainReachesV5WithoutDestructiveFallback() {
-        val dbName = "remanence-full-chain-v1-to-v5.db"
+    fun fullMigrationChainReachesV7WithoutDestructiveFallback() {
+        val dbName = "remanence-full-chain-v1-to-v7.db"
         helper.createDatabase(dbName, 1).use { v1 ->
             // Insert a minimal pre-M2 row so we can verify it survives
             // the entire chain without being destroyed.
@@ -324,17 +338,19 @@ class RemanenceLocalSchemaTest {
         }
 
         // Run the complete migration chain — exactly the same list that
-        // the production Room.databaseBuilder registers (after the fix
-        // that added MIGRATION_4_5). If any migration is missing or
+        // the production Room.databaseBuilder registers (including the
+        // v7 local material-ack progress migration). If any migration is missing or
         // incorrect, runMigrationsAndValidate will throw.
         val migrated = helper.runMigrationsAndValidate(
             dbName,
-            5,
+            7,
             true,
             RemanenceLocalDatabase.MIGRATION_1_2,
             RemanenceLocalDatabase.MIGRATION_2_3,
             RemanenceLocalDatabase.MIGRATION_3_4,
             RemanenceLocalDatabase.MIGRATION_4_5,
+            RemanenceLocalDatabase.MIGRATION_5_6,
+            RemanenceLocalDatabase.MIGRATION_6_7,
         )
         assertTrue(migrated.isDatabaseIntegrityOk)
 
@@ -355,7 +371,7 @@ class RemanenceLocalSchemaTest {
             assertTrue("publish_statement_path must exist after migration", stmtIdx >= 0)
             // M2-P08: sender_retry_keyset_path is NULL for the legacy row.
             val retryIdx = cursor.getColumnIndexOrThrow("sender_retry_keyset_path")
-            assertTrue("sender_retry_keyset_path must exist at v5", retryIdx >= 0)
+            assertTrue("sender_retry_keyset_path must exist at v7", retryIdx >= 0)
             assertNull(cursor.getString(retryIdx))
         }
 
@@ -364,6 +380,19 @@ class RemanenceLocalSchemaTest {
             assertEquals(1, cursor.count)
             cursor.moveToFirst()
             assertEquals("PENDING", cursor.getString(cursor.getColumnIndexOrThrow("upload_state")))
+        }
+
+        migrated.query("PRAGMA table_info(`incoming_capsule`)").use { cursor ->
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            val defaultIndex = cursor.getColumnIndexOrThrow("dflt_value")
+            var foundAckState = false
+            while (cursor.moveToNext()) {
+                if (cursor.getString(nameIndex) == "material_ack_state") {
+                    foundAckState = true
+                    assertEquals("'PENDING'", cursor.getString(defaultIndex))
+                }
+            }
+            assertTrue("material_ack_state must exist at v7", foundAckState)
         }
     }
 

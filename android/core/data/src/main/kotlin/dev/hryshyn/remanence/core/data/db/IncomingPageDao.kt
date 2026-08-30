@@ -73,6 +73,11 @@ abstract class IncomingPageDao {
                 "incoming capsule is already owned by another local account"
             }
             val existing = findCapsule(capsule.capsuleId)
+            if (existing == null && capsule.materialAckState != MaterialAckState.PENDING) {
+                throw IllegalArgumentException(
+                    "new incoming capsule ${capsule.capsuleId} must start with PENDING material acknowledgement",
+                )
+            }
             if (existing != null && requireSameCapsuleOrMigration(existing, capsule)) {
                 migratedCapsuleIds += capsule.capsuleId
             }

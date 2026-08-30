@@ -10,6 +10,7 @@ import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.LocalMaterialState
 import dev.hryshyn.remanence.core.model.LocalMaterialTransition
 import dev.hryshyn.remanence.core.model.LocalMaterialTransitionEvaluator
+import dev.hryshyn.remanence.core.model.UserId
 import kotlin.coroutines.cancellation.CancellationException
 
 /** Outcome of the owner-scoped, canonical local-material transition operation. */
@@ -132,7 +133,15 @@ abstract class IncomingCapsuleDao {
      * before Room is called; cancellation identity is preserved exactly.
      */
     open suspend fun selectMaterialAckCandidatesForOwner(
-        ownerUserId: String,
+        ownerUserId: UserId,
+        limit: Int,
+    ): IncomingMaterialAckCandidateSelection = selectMaterialAckCandidatesForOwnerInternal(
+        ownerUserId = ownerUserId,
+        limit = limit,
+    )
+
+    private suspend fun selectMaterialAckCandidatesForOwnerInternal(
+        ownerUserId: UserId,
         limit: Int,
     ): IncomingMaterialAckCandidateSelection {
         if (limit !in 1..MATERIAL_ACK_HARD_MAX_PAGE_SIZE) {
@@ -140,7 +149,7 @@ abstract class IncomingCapsuleDao {
         }
         return try {
             IncomingMaterialAckCandidateSelection.Page(
-                selectMaterialAckCandidateRows(ownerUserId, limit).map { row ->
+                selectMaterialAckCandidateRows(ownerUserId.toRestString(), limit).map { row ->
                     require(row.readyAtEpochMs >= 0L) {
                         "durable material-ack ordering key is invalid"
                     }
@@ -160,9 +169,9 @@ abstract class IncomingCapsuleDao {
     /** Marks one eligible owned capsule acknowledged, or reconciles a CAS miss. */
     @Transaction
     open suspend fun markMaterialAckedForOwner(
-        ownerUserId: String,
-        capsuleId: String,
-    ): IncomingMaterialAckResult = markMaterialAckForOwner(
+        ownerUserId: UserId,
+        capsuleId: CapsuleId,
+    ): IncomingMaterialAckResult = markMaterialAckForOwnerInternal(
         ownerUserId = ownerUserId,
         capsuleId = capsuleId,
         targetState = MaterialAckState.ACKED,
@@ -171,30 +180,33 @@ abstract class IncomingCapsuleDao {
     /** Marks one eligible owned capsule terminal, or reconciles a CAS miss. */
     @Transaction
     open suspend fun markMaterialTerminalForOwner(
-        ownerUserId: String,
-        capsuleId: String,
-    ): IncomingMaterialAckResult = markMaterialAckForOwner(
+        ownerUserId: UserId,
+        capsuleId: CapsuleId,
+    ): IncomingMaterialAckResult = markMaterialAckForOwnerInternal(
         ownerUserId = ownerUserId,
         capsuleId = capsuleId,
         targetState = MaterialAckState.TERMINAL,
     )
 
-    private suspend fun markMaterialAckForOwner(
-        ownerUserId: String,
-        capsuleId: String,
+    private suspend fun markMaterialAckForOwnerInternal(
+        ownerUserId: UserId,
+        capsuleId: CapsuleId,
         targetState: MaterialAckState,
     ): IncomingMaterialAckResult {
         return try {
             if (
                 compareAndSetMaterialAckStateForOwner(
-                    ownerUserId = ownerUserId,
-                    capsuleId = capsuleId,
+                    ownerUserId = ownerUserId.toRestString(),
+                    capsuleId = capsuleId.toRestString(),
                     targetState = targetState,
                 ) == 1
             ) {
                 IncomingMaterialAckResult.Marked
             } else {
-                val row = getByCapsuleIdAndOwner(capsuleId, ownerUserId)
+                val row = getMaterialAckCapsuleForOwner(
+                    capsuleId = capsuleId.toRestString(),
+                    ownerUserId = ownerUserId.toRestString(),
+                )
                     ?: return IncomingMaterialAckResult.MissingOrForeign
                 when {
                     row.materialAckState == targetState -> IncomingMaterialAckResult.AlreadyRecorded
@@ -221,6 +233,16 @@ abstract class IncomingCapsuleDao {
         capsuleId: String,
         targetState: MaterialAckState,
     ): Int
+
+    /** Owner-scoped reconciliation read kept behind the typed ack seam. */
+    @Query(
+        "SELECT * FROM incoming_capsule " +
+            "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId",
+    )
+    protected abstract suspend fun getMaterialAckCapsuleForOwner(
+        capsuleId: String,
+        ownerUserId: String,
+    ): IncomingCapsuleEntity?
 
     /**
      * Owner-preserving idempotent page write. [ownerUserId] is authoritative;
@@ -254,6 +276,11 @@ abstract class IncomingCapsuleDao {
             if (existingOwner == null && capsule.materialState != LocalMaterialState.DISCOVERED) {
                 throw IllegalArgumentException(
                     "new incoming capsule ${capsule.capsuleId} must start in DISCOVERED",
+                )
+            }
+            if (existingOwner == null && capsule.materialAckState != MaterialAckState.PENDING) {
+                throw IllegalArgumentException(
+                    "new incoming capsule ${capsule.capsuleId} must start with PENDING material acknowledgement",
                 )
             }
             if (existingOwner != null && existingOwner != ownerUserId) {

@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import dev.hryshyn.remanence.core.model.LocalMaterialState
+import dev.hryshyn.remanence.core.model.UserId
 import java.lang.reflect.Modifier
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -151,6 +152,71 @@ class IncomingDaosTest {
         assertEquals(updated.readyAtEpochMs, loaded.readyAtEpochMs)
         // exactly one row for the capsule id after replay
         assertEquals(1, countRows("incoming_capsule"))
+    }
+
+    @Test
+    fun senderIndexCandidatesAreTypedOwnerScopedAndAcceptOnlyDurableStates() = runBlocking {
+        val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000a001")
+        val otherOwner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000a002")
+        val indexed = capsule(
+            capsuleId = "0198f0a0-0000-7000-8000-00000000a011",
+            readyAt = 20,
+        ).copy(ownerUserId = owner.toRestString())
+        val material = capsule(
+            capsuleId = "0198f0a0-0000-7000-8000-00000000a012",
+            readyAt = 10,
+        ).copy(ownerUserId = owner.toRestString())
+        val accepted = capsule(
+            capsuleId = "0198f0a0-0000-7000-8000-00000000a015",
+            readyAt = 30,
+        ).copy(ownerUserId = owner.toRestString())
+        val wrongStatus = capsule(
+            capsuleId = "0198f0a0-0000-7000-8000-00000000a016",
+            readyAt = 0,
+            state = LocalMaterialState.DISCOVERED,
+        ).copy(ownerUserId = owner.toRestString(), serverStatus = "PENDING")
+        val foreign = capsule(
+            capsuleId = "0198f0a0-0000-7000-8000-00000000a013",
+            readyAt = 1,
+        ).copy(ownerUserId = otherOwner.toRestString())
+
+        capsuleDao.upsertAllForOwner(owner.toRestString(), listOf(indexed, material, accepted, wrongStatus))
+        capsuleDao.transitionMaterialStateForOwner(
+            owner.toRestString(), indexed.capsuleId, LocalMaterialState.INDEX_CACHED,
+        )
+        capsuleDao.transitionMaterialStateForOwner(
+            owner.toRestString(), material.capsuleId, LocalMaterialState.INDEX_CACHED,
+        )
+        capsuleDao.transitionMaterialStateForOwner(
+            owner.toRestString(), material.capsuleId, LocalMaterialState.MATERIAL_CACHED,
+        )
+        capsuleDao.transitionMaterialStateForOwner(
+            owner.toRestString(), accepted.capsuleId, LocalMaterialState.INDEX_CACHED,
+        )
+        capsuleDao.transitionMaterialStateForOwner(
+            owner.toRestString(), accepted.capsuleId, LocalMaterialState.MATERIAL_CACHED,
+        )
+        capsuleDao.transitionMaterialStateForOwner(
+            owner.toRestString(), accepted.capsuleId, LocalMaterialState.FINGERPRINT_ACCEPTED,
+        )
+        capsuleDao.upsertAllForOwner(otherOwner.toRestString(), listOf(foreign))
+
+        val corrupt = capsule(
+            capsuleId = "0198f0a0-0000-7000-8000-00000000a014",
+            readyAt = 0,
+        ).copy(ownerUserId = owner.toRestString())
+        capsuleDao.upsertAllForOwner(owner.toRestString(), listOf(corrupt))
+        capsuleDao.transitionMaterialStateForOwner(
+            owner.toRestString(), corrupt.capsuleId, LocalMaterialState.CORRUPT,
+        )
+
+        val result = capsuleDao.selectSenderIndexCandidatesForOwner(owner)
+
+        assertEquals(
+            listOf(material.capsuleId, indexed.capsuleId, accepted.capsuleId),
+            result.map { it.capsuleId.toRestString() },
+        )
+        assertTrue(result.all { it.ownerUserId == owner })
     }
 
     @Test

@@ -42,6 +42,22 @@ internal data class IncomingMaterialAckCandidateRow(
     override fun toString(): String = "IncomingMaterialAckCandidateRow(<redacted>)"
 }
 
+/** Room-only projection for one accepted incoming sender-index bundle. */
+internal data class IncomingSenderIndexCandidateRow(
+    @ColumnInfo(name = "capsule_id") val capsuleId: String,
+    @ColumnInfo(name = "owner_user_id") val ownerUserId: String,
+) {
+    override fun toString(): String = "IncomingSenderIndexCandidateRow(<redacted>)"
+}
+
+/** Typed owner-scoped identity of one accepted incoming sender index. */
+data class IncomingSenderIndexCandidate(
+    val ownerUserId: UserId,
+    val capsuleId: CapsuleId,
+) {
+    override fun toString(): String = "IncomingSenderIndexCandidate(<redacted>)"
+}
+
 /** Minimal identity and ordering key returned by the bounded ack selector. */
 data class IncomingMaterialAckCandidate(
     val capsuleId: CapsuleId,
@@ -127,6 +143,37 @@ abstract class IncomingCapsuleDao {
         ownerUserId: String,
         limit: Int,
     ): List<IncomingMaterialAckCandidateRow>
+
+    /**
+     * Enumerates only owner-owned, READY capsules whose accepted sender-index
+     * material can exist durably. The projection contains no statement,
+     * envelope, blob, or private/plaintext fields.
+     */
+    @Query(
+        "SELECT capsule_id, owner_user_id FROM incoming_capsule " +
+            "WHERE owner_user_id = :ownerUserId " +
+            "AND server_status = 'READY' " +
+            "AND material_state IN ('INDEX_CACHED', 'MATERIAL_CACHED', 'FINGERPRINT_ACCEPTED') " +
+            "ORDER BY ready_at_epoch_ms ASC, capsule_id ASC",
+    )
+    internal abstract suspend fun selectSenderIndexCandidateRows(
+        ownerUserId: String,
+    ): List<IncomingSenderIndexCandidateRow>
+
+    /** Typed owner-scoped sender-index enumeration; no untyped public path. */
+    open suspend fun selectSenderIndexCandidatesForOwner(
+        ownerUserId: UserId,
+    ): List<IncomingSenderIndexCandidate> = try {
+        selectSenderIndexCandidateRows(ownerUserId.toRestString()).map { row ->
+            require(row.ownerUserId == ownerUserId.toRestString())
+            IncomingSenderIndexCandidate(
+                ownerUserId = UserId.parseRest(row.ownerUserId),
+                capsuleId = CapsuleId.parseRest(row.capsuleId),
+            )
+        }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    }
 
     /**
      * Selects only bounded, typed identities. Invalid limits are rejected

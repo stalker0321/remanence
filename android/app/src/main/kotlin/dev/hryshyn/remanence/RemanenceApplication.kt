@@ -53,6 +53,7 @@ import dev.hryshyn.remanence.sync.IncomingCapsuleAcceptanceCoordinator
 import dev.hryshyn.remanence.sync.IncomingAcceptanceDrain
 import dev.hryshyn.remanence.sync.IncomingControlIndexAcceptanceCoordinator
 import dev.hryshyn.remanence.sync.SenderIndexBundlePersistenceAdapter
+import dev.hryshyn.remanence.ui.scan.IncomingSenderIndexCandidateProvider
 import dev.hryshyn.remanence.wiring.TinkRegistrationIdentityAdapter
 
 /**
@@ -404,6 +405,19 @@ class AppContainer private constructor(
 
     internal val senderIndexBundleReader: SenderIndexBundleReader by lazy {
         SenderIndexBundleReader(accountScopedFileRoots, fingerprintSealer)
+    }
+
+    /** Real account-scoped bridge from accepted incoming bundles into Scan. */
+    internal val incomingSenderIndexCandidateProvider: IncomingSenderIndexCandidateProvider by lazy {
+        IncomingSenderIndexCandidateProvider(
+            incomingCapsuleDao = database.incomingCapsuleDao(),
+            senderIndexBundleReader = senderIndexBundleReader,
+            currentOwner = {
+                currentAccountStore.load()?.userId?.let { raw ->
+                    runCatching { UserId.parseRest(raw) }.getOrNull()
+                }
+            },
+        )
     }
 
     internal val senderIndexBundlePersistenceAdapter: SenderIndexBundlePersistenceAdapter by lazy {

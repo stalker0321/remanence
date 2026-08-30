@@ -117,6 +117,9 @@ class RemanenceViewModelFactory(
             grantsClockMillis = { System.currentTimeMillis() },
             // FIX-REVIEW-03: issue ONLY through THE shared authoritative manager.
             grants = container.scanGrants,
+            candidateIndexProvider = { owner ->
+                container.incomingSenderIndexCandidateProvider.load(owner)
+            },
         ) as T
         else -> throw IllegalArgumentException("unknown ViewModel: ${modelClass.name}")
     }

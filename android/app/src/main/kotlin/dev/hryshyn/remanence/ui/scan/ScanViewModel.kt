@@ -55,14 +55,6 @@ data class ChooserRow(
     val placeLabel: String? = null,
 )
 
-/** A locally decrypted minimal chooser hint for one plausible candidate. */
-data class DecryptedHint(
-    val candidateId: String,
-    val senderHandleSnapshot: String,
-    val createdAtEpochSeconds: Long,
-    val placeLabel: String?,
-)
-
 /** Terminal scan-flow state handed to navigation and presentation. */
 sealed interface ScanTerminalState {
     data object Idle : ScanTerminalState
@@ -80,12 +72,12 @@ sealed interface ScanTerminalState {
  * capture state - FRONT first, then BACK, and only a complete capture pair
  * reaches matching (docs/recognition.md section 3). The candidate index is
  * built from locally sealed fingerprint rows only; stills run through the ORB
- * processors; [LocalMatchEngine] classifies the hierarchy; and EVERY path to
- * a grant - automatic or manually chosen - passes the real envelope/signature/
- * ID/hash/AEAD verification ([CapsuleAcceptanceGate]) first. A verified
- * receipt persists the delivered pair as the preferred RECIPIENT baseline.
+ * processors; [LocalMatchEngine] classifies the hierarchy; and every path to
+ * a grant - automatic or manually chosen - passes the existing verification
+ * boundary first. Incoming sender-index candidates are joined in memory with
+ * the sealed Room recipient baselines; neither decrypted index is persisted.
  */
-class ScanViewModel(
+class ScanViewModel internal constructor(
     private val persistence: SealedFingerprintPersistence,
     private val database: RemanenceLocalDatabase,
     private val profile: RecognitionProfile,
@@ -109,7 +101,7 @@ class ScanViewModel(
         RealStillFingerprintProcessor(profile, FingerprintSide.FRONT),
     backProcessor: dev.hryshyn.remanence.capture.StillProcessor =
         RealStillFingerprintProcessor(profile, FingerprintSide.BACK),
-    candidateIndexProvider: (suspend () -> List<IndexedCandidate>)? = null,
+    private val candidateIndexProvider: suspend (UserId) -> ScanCandidateIndex,
     private val cpuDispatcher: kotlinx.coroutines.CoroutineDispatcher = kotlinx.coroutines.Dispatchers.Default,
     private val ioDispatcher: kotlinx.coroutines.CoroutineDispatcher = kotlinx.coroutines.Dispatchers.IO,
 ) : ViewModel() {
@@ -142,13 +134,20 @@ class ScanViewModel(
     private val queuedStill = AtomicReference<ScannedSide?>()
     private val frontProcessor = frontProcessor
     private val backProcessor = backProcessor
-    private val candidateIndexProvider = candidateIndexProvider
-
     /**
      * FIX-REVIEW-01: generation guard so a stale asynchronous match result can
      * never overwrite a newer capture flow started by reset/re-entry.
      */
     private var matchGeneration: Int = 0
+
+    /** Hints are retained only while the matching generation owns a chooser. */
+    private var chooserContext: ChooserContext? = null
+
+    private data class ChooserContext(
+        val generation: Int,
+        val origin: CandidateOrigin,
+        val hints: Map<String, ScanChooserHint>,
+    )
 
     /**
      * FIX-STATE-10: monotonic guard for DELIVERED-STILL continuations.
@@ -171,6 +170,7 @@ class ScanViewModel(
         if (begunEpoch == epoch) return
         begunEpoch = epoch
         matchGeneration++
+        chooserContext = null
         deliveryGeneration++
         captureSession.reset()
         grants.clearAll()
@@ -324,6 +324,7 @@ class ScanViewModel(
      */
     fun resetSession() {
         matchGeneration++
+        chooserContext = null
         deliveryGeneration++
         // FIX-STATE-05: an in-flight delivery/match can never write into the
         // fresh flow - active attempts are cancelled cleanly and stale
@@ -340,14 +341,15 @@ class ScanViewModel(
     // ------------------------------------------------------------------
 
     /**
-     * M2-P03: THE scan index is the owning account's sealed fingerprint rows
-     * only. Without an authenticated local account (logout A) the index is
-     * empty, so a later login as B exposes zero A recognition candidates.
+     * M2-P03: the Room half of the scan index is the owning account's sealed
+     * fingerprint rows only. Incoming sender-index candidates are joined by
+     * [buildCandidateIndex] for this scan invocation.
      */
-    private suspend fun buildRoomCandidateIndex(): List<IndexedCandidate> {
-        val identity = identityProvider() ?: return emptyList()
+    private suspend fun buildRoomCandidateIndex(
+        identity: SenderIdentitySnapshot,
+    ): ScanCandidateIndex {
         val rows = database.recognitionFingerprintDao().getAllForOwner(identity.userId)
-        return rows.groupBy { it.capsuleId }.mapNotNull { (capsuleId, sides) ->
+        val candidates = rows.groupBy { it.capsuleId }.mapNotNull { (capsuleId, sides) ->
             val preferredOrigin = sides.any {
                 it.origin == FingerprintOrigin.RECIPIENT && it.preferred
             }
@@ -373,6 +375,30 @@ class ScanViewModel(
                 recipientPreferred = preferredOrigin,
             )
         }.distinctBy { it.capsuleId }
+        return ScanCandidateIndex(candidates)
+    }
+
+    private suspend fun buildCandidateIndex(): ScanCandidateIndex {
+        val identity = identityProvider() ?: return ScanCandidateIndex.EMPTY
+        val owner = try {
+            UserId.parseRest(identity.userId)
+        } catch (_: Exception) {
+            return ScanCandidateIndex.EMPTY
+        }
+        val room = buildRoomCandidateIndex(identity)
+        val incoming = candidateIndexProvider(owner)
+        val merged = LinkedHashMap<UUID, IndexedCandidate>()
+        incoming.candidates.forEach { candidate -> merged[candidate.capsuleId] = candidate }
+        room.candidates.forEach { candidate ->
+            val current = merged[candidate.capsuleId]
+            if (current == null || candidate.recipientPreferred) {
+                merged[candidate.capsuleId] = candidate
+            }
+        }
+        val hints = incoming.chooserHints.filterKeys { id ->
+            merged[runCatching { UUID.fromString(id) }.getOrNull()]?.recipientPreferred != true
+        }
+        return ScanCandidateIndex(merged.values.toList(), hints)
     }
 
     private fun evaluateMatch() {
@@ -385,14 +411,19 @@ class ScanViewModel(
                 val engine = LocalMatchEngine(
                     profile = profile,
                     verifier = { capsuleId -> verifyCapsuleCrypto(capsuleId) },
-                    grantIssuer = { capsuleId -> issueGrant(capsuleId) },
+                    grantIssuer = { capsuleId ->
+                        if (generation == matchGeneration) issueGrant(capsuleId) else null
+                    },
                 )
+                val candidateIndex = buildCandidateIndex()
                 val result = engine.run(
                     queryFront = FingerprintCodec.parse(sessionFront.serializedBytes),
                     queryBack = FingerprintCodec.parse(sessionBack.serializedBytes),
-                    candidates = candidateIndexProvider?.invoke() ?: buildRoomCandidateIndex(),
+                    candidates = candidateIndex.candidates,
                 )
-                if (generation == matchGeneration) applyResult(result)
+                if (generation == matchGeneration) {
+                    applyResult(result, candidateIndex.chooserHints, generation)
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -403,33 +434,47 @@ class ScanViewModel(
         }
     }
 
-    private suspend fun applyResult(result: ScanFlowResult): Unit = when (result) {
-        is ScanFlowResult.Granted -> onVerifiedGrant(result)
+    private suspend fun applyResult(
+        result: ScanFlowResult,
+        candidateHints: Map<String, ScanChooserHint>,
+        generation: Int,
+    ) {
+        if (generation != matchGeneration) return
+        when (result) {
+            is ScanFlowResult.Granted -> {
+                chooserContext = null
+                onVerifiedGrant(result)
+            }
 
-        is ScanFlowResult.Ambiguous -> {
-            val hints: Map<String, DecryptedHint> = result.rows.mapNotNull { (id, _) ->
-                try {
-                    decryptHint(id.toString())
-                } catch (_: Exception) {
-                    null
-                }
-            }.associateBy(DecryptedHint::candidateId)
-            _matchState.value = ScanMatchUiState.Chooser(
-                result.rows.map { (id, score) ->
-                    val hint = hints[id.toString()]
-                    ChooserRow(
-                        candidateId = id.toString(),
-                        compositeScore = score,
-                        senderHandleSnapshot = hint?.senderHandleSnapshot,
-                        createdAtEpochSeconds = hint?.createdAtEpochSeconds,
-                        placeLabel = hint?.placeLabel,
-                    )
-                },
-            )
+            is ScanFlowResult.Ambiguous -> {
+                val hints: Map<String, ScanChooserHint> = result.rows.mapNotNull { (id, _) ->
+                    val candidateId = id.toString()
+                    val hint = candidateHints[candidateId] ?: loadLegacyHint(candidateId)
+                    hint?.let { candidateId to it }
+                }.toMap()
+                if (generation != matchGeneration) return
+                chooserContext = ChooserContext(generation, result.origin, hints)
+                _matchState.value = ScanMatchUiState.Chooser(
+                    rows = result.rows.map { (id, score) ->
+                        val hint = hints[id.toString()]
+                        ChooserRow(
+                            candidateId = id.toString(),
+                            compositeScore = score,
+                            senderHandleSnapshot = hint?.senderHandleSnapshot,
+                            createdAtEpochSeconds = hint?.createdAtEpochSeconds,
+                            placeLabel = hint?.placeLabel,
+                        )
+                    },
+                    origin = result.origin,
+                    generation = generation,
+                )
+            }
+
+            ScanFlowResult.RecaptureRequired -> {
+                chooserContext = null
+                _matchState.value = ScanMatchUiState.RecaptureGuidance(failedAttempts = 1)
+            }
         }
-
-        ScanFlowResult.RecaptureRequired ->
-            _matchState.value = ScanMatchUiState.RecaptureGuidance(failedAttempts = 1)
     }
 
     /**
@@ -441,8 +486,15 @@ class ScanViewModel(
      */
     fun onChooserSelected(candidateId: String) {
         val chooser = _matchState.value as? ScanMatchUiState.Chooser ?: return
+        val context = chooserContext ?: return
+        if (chooser.generation != matchGeneration ||
+            context.generation != chooser.generation ||
+            context.origin != chooser.origin
+        ) return
         if (chooser.rows.none { it.candidateId == candidateId }) return
         val generation = ++matchGeneration
+        chooserContext = null
+        _matchState.value = ScanMatchUiState.Matching
         viewModelScope.launch {
             val id = UUID.fromString(candidateId)
             if (!verifyCapsuleCrypto(id)) {
@@ -451,6 +503,7 @@ class ScanViewModel(
                 }
                 return@launch
             }
+            if (generation != matchGeneration) return@launch
             val grantId = issueGrant(id)
             if (grantId == null) {
                 if (generation == matchGeneration) {
@@ -462,10 +515,12 @@ class ScanViewModel(
             applyResult(
                 ScanFlowResult.Granted(
                     capsuleId = id,
-                    origin = CandidateOrigin.RECIPIENT_PREFERRED,
+                    origin = chooser.origin,
                     grantId = grantId,
                     compositeScore = Double.NaN,
                 ),
+                candidateHints = emptyMap(),
+                generation = generation,
             )
         }
     }
@@ -596,7 +651,15 @@ class ScanViewModel(
     // Minimal decrypted hints for the ambiguity chooser.
     // ------------------------------------------------------------------
 
-    private suspend fun decryptHint(candidateId: String): DecryptedHint {
+    private suspend fun loadLegacyHint(candidateId: String): ScanChooserHint? = try {
+        decryptHint(candidateId)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        null
+    }
+
+    private suspend fun decryptHint(candidateId: String): ScanChooserHint {
         val identity = identityProvider() ?: throw IllegalStateException("no identity")
         val capsuleUuid = UUID.fromString(candidateId)
         // M2-P03: account-scoped outbox reads; chooser hints never resolve
@@ -643,7 +706,7 @@ class ScanViewModel(
             ),
             manifestCiphertext,
         )
-        return DecryptedHint(
+        return ScanChooserHint(
             candidateId = candidateId,
             senderHandleSnapshot = content.senderHandleSnapshot,
             createdAtEpochSeconds = content.createdAtEpochSeconds,

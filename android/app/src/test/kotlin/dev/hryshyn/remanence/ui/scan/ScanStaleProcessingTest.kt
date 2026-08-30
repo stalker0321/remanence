@@ -135,7 +135,7 @@ class ScanStaleProcessingTest {
         grantsClockMillis = { 0L },
         frontProcessor = Accepting(FingerprintSide.FRONT),
         backProcessor = Accepting(FingerprintSide.BACK),
-        candidateIndexProvider = { emptyList() },
+        candidateIndexProvider = { ScanCandidateIndex.EMPTY },
         cpuDispatcher = cpuDispatcher,
         ioDispatcher = cpuDispatcher,
     ).also { it.beginSession(1L) }

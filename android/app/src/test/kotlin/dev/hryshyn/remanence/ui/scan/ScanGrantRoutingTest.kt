@@ -25,6 +25,7 @@ import com.google.crypto.tink.TinkProtoKeysetFormat
 import java.io.File
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import java.util.UUID
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.filterIsInstance
@@ -59,6 +60,9 @@ import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.core.recognition.ScanGrantManager
 import dev.hryshyn.remanence.core.recognition.FingerprintSide as RecognitionSide
 import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
+import dev.hryshyn.remanence.core.recognition.CandidateOrigin
+import dev.hryshyn.remanence.identity.TrustedSenderKeyStore
+import dev.hryshyn.remanence.identity.SenderKeyResolution
 
 /**
  * Physical-device regression for the verified-grant handoff: a REAL verified
@@ -121,6 +125,26 @@ class ScanGrantRoutingTest {
             SessionState.Active("u", "mykola", true, true)
 
         override suspend fun logout(): SessionState = SessionState.SignedOut
+    }
+
+    private class PausingTrustedSenderKeyStore(
+        private val delegate: TrustedSenderKeyStore,
+        private val entered: CompletableDeferred<Unit>,
+        private val release: CompletableDeferred<Unit>,
+        val finished: CompletableDeferred<Unit>,
+    ) : TrustedSenderKeyStore {
+        override suspend fun senderVerifyingKeyset(
+            senderUserId: UserId,
+            senderKeyBundleId: KeyBundleId,
+        ): SenderKeyResolution {
+            entered.complete(Unit)
+            release.await()
+            return try {
+                delegate.senderVerifyingKeyset(senderUserId, senderKeyBundleId)
+            } finally {
+                finished.complete(Unit)
+            }
+        }
     }
 
     /** Accepts every still with EXACTLY the seeded side fingerprint bytes. */
@@ -205,12 +229,41 @@ class ScanGrantRoutingTest {
         )
     }
 
+    private suspend fun seedRecipientBaseline(capsuleId: UUID) {
+        store().persist(
+            capsuleId.toString(), FingerprintSide.FRONT, FingerprintOrigin.RECIPIENT,
+            RecognitionProfile.mvpOrbV1().profileId,
+            syntheticFingerprint(11, RecognitionSide.FRONT),
+        )
+        store().persist(
+            capsuleId.toString(), FingerprintSide.BACK, FingerprintOrigin.RECIPIENT,
+            RecognitionProfile.mvpOrbV1().profileId,
+            syntheticFingerprint(22, RecognitionSide.BACK),
+        )
+        store().setPreferredPair(capsuleId.toString(), FingerprintOrigin.RECIPIENT)
+    }
+
     /**
      * Production-shaped ScanViewModel: same construction surface as
      * PostmarkViewModelFactory, with fakes only at the camera/still seam and
      * THE given manager injected exactly once.
      */
-    private fun scanViewModel(grantsManager: ScanGrantManager): ScanViewModel =
+    private fun scanViewModel(
+        grantsManager: ScanGrantManager,
+        trustedSenderKeys: TrustedSenderKeyStore = DirectorySenderKeyStore(
+            directoryFetch = { error("self-send must resolve through the own account") },
+            ownAccount = {
+                DirectorySenderKeyStore.OwnAccount(
+                    userId = UserId(userUuid),
+                    activeKeyBundleId = KeyBundleId(bundleUuid),
+                    publicSigningExportB64Url = com.google.crypto.tink.subtle.Base64.urlSafeEncode(
+                        identity.signingPublicKeyset,
+                    ),
+                )
+            },
+        ),
+        candidateIndexProvider: suspend (UserId) -> ScanCandidateIndex = { ScanCandidateIndex.EMPTY },
+    ): ScanViewModel =
         ScanViewModel(
             persistence = store(),
             database = database,
@@ -224,20 +277,10 @@ class ScanGrantRoutingTest {
                     signingPrivateHandle = identity.signingPrivateHandle,
                 )
             },
-            trustedSenderKeys = DirectorySenderKeyStore(
-                directoryFetch = { error("self-send must resolve through the own account") },
-                ownAccount = {
-                    DirectorySenderKeyStore.OwnAccount(
-                        userId = UserId(userUuid),
-                        activeKeyBundleId = KeyBundleId(bundleUuid),
-                        publicSigningExportB64Url = com.google.crypto.tink.subtle.Base64.urlSafeEncode(
-                            identity.signingPublicKeyset,
-                        ),
-                    )
-                },
-            ),
+            trustedSenderKeys = trustedSenderKeys,
             grantsClockMillis = { now },
             grants = grantsManager,
+            candidateIndexProvider = candidateIndexProvider,
             frontProcessor = FixedProcessor(syntheticFingerprint(11, RecognitionSide.FRONT)),
             backProcessor = FixedProcessor(syntheticFingerprint(22, RecognitionSide.BACK)),
             cpuDispatcher = testDispatcher,
@@ -253,6 +296,27 @@ class ScanGrantRoutingTest {
             assertEquals(CapturePermissionStep.Granted, controller.permission)
         }
     }
+
+    private fun captureMatchingPair(vm: ScanViewModel) {
+        readyCameras(vm)
+        assertTrue(vm.beginFrontCapture())
+        vm.deliverFrontJpeg("jpeg-front".toByteArray())
+        assertTrue(vm.beginBackCapture())
+        vm.deliverBackJpeg("jpeg-back".toByteArray())
+    }
+
+    private fun ownTrustedSenderKeys(): TrustedSenderKeyStore = DirectorySenderKeyStore(
+        directoryFetch = { error("self-send must resolve through the own account") },
+        ownAccount = {
+            DirectorySenderKeyStore.OwnAccount(
+                userId = UserId(userUuid),
+                activeKeyBundleId = KeyBundleId(bundleUuid),
+                publicSigningExportB64Url = com.google.crypto.tink.subtle.Base64.urlSafeEncode(
+                    identity.signingPublicKeyset,
+                ),
+            )
+        },
+    )
 
     @Test
     fun verifiedTerminalGrantCarriesTheActiveManagerGrantAndNavigatesToCapsule() = runBlocking {
@@ -297,6 +361,150 @@ class ScanGrantRoutingTest {
         } finally {
             scanVm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
             rootVm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+        }
+    }
+
+    @Test
+    fun resetDuringAutomaticVerificationCannotLeaveAHiddenGrant() = runBlocking {
+        stagePublishedCapsule()
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val verifier = PausingTrustedSenderKeyStore(
+            delegate = ownTrustedSenderKeys(),
+            entered = entered,
+            release = release,
+            finished = CompletableDeferred(),
+        )
+        val issuedGrantId = UUID.fromString("5f555555-6666-4777-8888-999999999999")
+        val grantsManager = ScanGrantManager({ now }, idGenerator = { issuedGrantId })
+        val scanVm = scanViewModel(grantsManager, trustedSenderKeys = verifier)
+
+        try {
+            captureMatchingPair(scanVm)
+            withTimeout(10_000) { entered.await() }
+
+            scanVm.resetSession()
+            release.complete(Unit)
+            withTimeout(10_000) { verifier.finished.await() }
+
+            assertEquals(ScanMatchUiState.AwaitingCapture, scanVm.matchState.value)
+            assertEquals(ScanTerminalState.Idle, scanVm.terminal.value)
+            assertNull(grantsManager.resolveCapsuleId(issuedGrantId))
+        } finally {
+            scanVm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+        }
+    }
+
+    @Test
+    fun resetDuringIncomingCandidateProviderCannotPublishStaleChooserHints() = runBlocking {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val finished = CompletableDeferred<Unit>()
+        val front = dev.hryshyn.remanence.core.recognition.FingerprintCodec.parse(
+            syntheticFingerprint(11, RecognitionSide.FRONT),
+        )
+        val back = dev.hryshyn.remanence.core.recognition.FingerprintCodec.parse(
+            syntheticFingerprint(22, RecognitionSide.BACK),
+        )
+        val duplicateCapsule = UUID.fromString("5f777777-8888-4999-aaaa-bbbbbbbbbbbb")
+        val index = ScanCandidateIndex(
+            candidates = listOf(
+                dev.hryshyn.remanence.core.recognition.IndexedCandidate(
+                    capsuleId = capsuleUuid,
+                    front = front,
+                    back = back,
+                    recipientPreferred = true,
+                ),
+                dev.hryshyn.remanence.core.recognition.IndexedCandidate(
+                    capsuleId = duplicateCapsule,
+                    front = front,
+                    back = back,
+                    recipientPreferred = true,
+                ),
+            ),
+            chooserHints = mapOf(
+                capsuleUuid.toString() to ScanChooserHint(
+                    candidateId = capsuleUuid.toString(),
+                    senderHandleSnapshot = "stale-hint",
+                    createdAtEpochSeconds = 1_700_000_000L,
+                    placeLabel = "stale-place",
+                ),
+            ),
+        )
+        val issuedGrantId = UUID.fromString("5f888888-9999-4aaa-bbbb-cccccccccccc")
+        val grantsManager = ScanGrantManager({ now }, idGenerator = { issuedGrantId })
+        val scanVm = scanViewModel(
+            grantsManager,
+            candidateIndexProvider = {
+                entered.complete(Unit)
+                try {
+                    release.await()
+                    index
+                } finally {
+                    finished.complete(Unit)
+                }
+            },
+        )
+
+        try {
+            captureMatchingPair(scanVm)
+            withTimeout(10_000) { entered.await() }
+
+            scanVm.resetSession()
+            release.complete(Unit)
+            withTimeout(10_000) { finished.await() }
+
+            assertEquals(ScanMatchUiState.AwaitingCapture, scanVm.matchState.value)
+            assertEquals(ScanTerminalState.Idle, scanVm.terminal.value)
+            assertNull(grantsManager.resolveCapsuleId(issuedGrantId))
+        } finally {
+            scanVm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+        }
+    }
+
+    @Test
+    fun resetDuringManualVerificationCannotLeaveAHiddenGrantOrChooserContext() = runBlocking {
+        stagePublishedCapsule()
+        val duplicateCapsule = UUID.fromString("5f444444-5555-4666-8777-888888888888")
+        seedRecipientBaseline(capsuleUuid)
+        seedRecipientBaseline(duplicateCapsule)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val verifier = PausingTrustedSenderKeyStore(
+            delegate = ownTrustedSenderKeys(),
+            entered = entered,
+            release = release,
+            finished = CompletableDeferred(),
+        )
+        val issuedGrantId = UUID.fromString("5f666666-7777-4888-9999-aaaaaaaaaaaa")
+        val grantsManager = ScanGrantManager({ now }, idGenerator = { issuedGrantId })
+        val scanVm = scanViewModel(
+            grantsManager,
+            trustedSenderKeys = verifier,
+        )
+
+        try {
+            captureMatchingPair(scanVm)
+            val settled = withTimeout(10_000) {
+                scanVm.matchState.first { it !is ScanMatchUiState.Matching }
+            }
+            assertTrue(settled is ScanMatchUiState.Chooser)
+            val chooser = settled as ScanMatchUiState.Chooser
+            assertEquals(CandidateOrigin.RECIPIENT_PREFERRED, chooser.origin)
+            assertEquals("mykola", chooser.rows.first { it.candidateId == capsuleUuid.toString() }.senderHandleSnapshot)
+
+            scanVm.onChooserSelected(capsuleUuid.toString())
+            withTimeout(10_000) { entered.await() }
+
+            scanVm.resetSession()
+            release.complete(Unit)
+            withTimeout(10_000) { verifier.finished.await() }
+
+            assertEquals(ScanMatchUiState.AwaitingCapture, scanVm.matchState.value)
+            assertEquals(ScanTerminalState.Idle, scanVm.terminal.value)
+            assertNull(grantsManager.resolveCapsuleId(issuedGrantId))
+        } finally {
+            scanVm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
         }
     }
 

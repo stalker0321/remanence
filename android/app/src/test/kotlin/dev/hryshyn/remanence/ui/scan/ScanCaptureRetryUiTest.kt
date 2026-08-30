@@ -163,7 +163,7 @@ class ScanCaptureRetryUiTest {
             grantsClockMillis = { 0L },
             frontProcessor = front,
             backProcessor = back,
-            candidateIndexProvider = { emptyList() },
+            candidateIndexProvider = { ScanCandidateIndex.EMPTY },
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
         )

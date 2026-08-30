@@ -208,6 +208,7 @@ class ScanReentryFlowTest {
             ),
         grantsClockMillis = { clock },
         grants = grants,
+        candidateIndexProvider = { ScanCandidateIndex.EMPTY },
         frontProcessor = MatchingProcessor(syntheticFingerprint(11, FingerprintSide.FRONT)),
         backProcessor = MatchingProcessor(syntheticFingerprint(22, FingerprintSide.BACK)),
         cpuDispatcher = testDispatcher,

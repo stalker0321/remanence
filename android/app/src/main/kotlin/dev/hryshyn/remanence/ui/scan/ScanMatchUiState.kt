@@ -1,5 +1,7 @@
 package dev.hryshyn.remanence.ui.scan
 
+import dev.hryshyn.remanence.core.recognition.CandidateOrigin
+
 /**
  * Live retry/matching state of one scan flow (docs/recognition.md sections
  * 9, 12). FIX-STATE-05: the unreachable GuidedRecapture/ConfirmSingle
@@ -25,7 +27,11 @@ sealed interface ScanMatchUiState {
     ) : ScanMatchUiState
 
     /** Two or more plausible candidates; user picks from minimal-hint rows. */
-    data class Chooser(val rows: List<ChooserRow>) : ScanMatchUiState
+    data class Chooser(
+        val rows: List<ChooserRow>,
+        val origin: CandidateOrigin,
+        val generation: Int,
+    ) : ScanMatchUiState
 
     /** Nothing plausible: show recapture guidance; never arbitrary capsules. */
     data class RecaptureGuidance(val failedAttempts: Int) : ScanMatchUiState

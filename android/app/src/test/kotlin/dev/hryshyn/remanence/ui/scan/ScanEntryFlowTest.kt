@@ -114,7 +114,7 @@ class ScanEntryFlowTest {
             grantsClockMillis = { 0L },
             frontProcessor = AcceptedProcessor(FingerprintSide.FRONT),
             backProcessor = AcceptedProcessor(FingerprintSide.BACK),
-            candidateIndexProvider = { emptyList() },
+            candidateIndexProvider = { ScanCandidateIndex.EMPTY },
             // FIX-STATE-01: delivery completes synchronously under the test
             // dispatcher so assertions are deterministic.
             cpuDispatcher = testDispatcher,

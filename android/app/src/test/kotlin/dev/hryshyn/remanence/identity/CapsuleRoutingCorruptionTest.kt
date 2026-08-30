@@ -48,6 +48,7 @@ import dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.ui.scan.ScanCandidateIndex
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
@@ -307,6 +308,7 @@ class CapsuleRoutingCorruptionTest {
                 },
             ),
         grantsClockMillis = { 0L },
+        candidateIndexProvider = { ScanCandidateIndex.EMPTY },
         frontProcessor = MatchingProcessor(syntheticFingerprint(11, FingerprintSide.FRONT)),
         backProcessor = MatchingProcessor(syntheticFingerprint(22, FingerprintSide.BACK)),
         cpuDispatcher = testDispatcher,

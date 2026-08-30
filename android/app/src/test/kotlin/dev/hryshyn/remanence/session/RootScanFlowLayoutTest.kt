@@ -38,6 +38,7 @@ import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
 import dev.hryshyn.remanence.core.recognition.QualityReason
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.ui.scan.ScanCandidateIndex
 
 /**
  * FIX-STATE-14 regression: THE production root hosts the REAL scan surface
@@ -121,7 +122,7 @@ class RootScanFlowLayoutTest {
             grantsClockMillis = { 0L },
             frontProcessor = RejectingProcessor(),
             backProcessor = RejectingProcessor(),
-            candidateIndexProvider = { emptyList() },
+            candidateIndexProvider = { ScanCandidateIndex.EMPTY },
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
         )

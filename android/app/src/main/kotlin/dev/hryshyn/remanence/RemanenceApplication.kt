@@ -15,6 +15,7 @@ import dev.hryshyn.remanence.core.crypto.TinkPrimitives
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.db.BlobCacheDao
 import dev.hryshyn.remanence.core.data.db.IncomingCapsuleDao
+import dev.hryshyn.remanence.core.data.db.IncomingAcceptanceCandidateSelector
 import dev.hryshyn.remanence.core.data.db.IncomingEnvelopeDao
 import dev.hryshyn.remanence.core.data.db.IncomingSyncSession
 import dev.hryshyn.remanence.core.data.fingerprints.EncryptedFingerprintStore
@@ -46,6 +47,7 @@ import dev.hryshyn.remanence.sync.CapsuleUploadResumer
 import dev.hryshyn.remanence.sync.CapsuleUploadWorker
 import dev.hryshyn.remanence.sync.CurrentRecipientEncryptionIdentity
 import dev.hryshyn.remanence.sync.IncomingCapsuleAcceptanceCoordinator
+import dev.hryshyn.remanence.sync.IncomingAcceptanceDrain
 import dev.hryshyn.remanence.sync.IncomingControlIndexAcceptanceCoordinator
 import dev.hryshyn.remanence.sync.SenderIndexBundlePersistenceAdapter
 import dev.hryshyn.remanence.wiring.TinkRegistrationIdentityAdapter
@@ -444,6 +446,21 @@ class AppContainer private constructor(
         incomingCapsuleAcceptanceComposition.create {
             currentIncomingAcceptanceSession()
         }
+    }
+
+    /** One real bounded acceptance drain owned by the incoming worker boundary. */
+    val incomingAcceptanceDrain: IncomingAcceptanceDrain by lazy {
+        val incomingCapsuleDao = database.incomingCapsuleDao()
+        IncomingAcceptanceDrain(
+            selector = IncomingAcceptanceCandidateSelector(incomingCapsuleDao),
+            currentOwner = {
+                currentAccountStore.load()?.userId?.let { raw ->
+                    runCatching { UserId.parseRest(raw) }.getOrNull()
+                }
+            },
+            acceptanceCoordinator = incomingCapsuleAcceptanceCoordinator,
+            quarantineDao = incomingCapsuleDao,
+        )
     }
 
     /**

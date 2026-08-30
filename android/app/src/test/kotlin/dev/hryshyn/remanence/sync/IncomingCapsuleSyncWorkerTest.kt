@@ -202,9 +202,151 @@ class IncomingCapsuleSyncWorkerTest {
         assertEquals(INCOMING_SYNC_BACKOFF_INITIAL_MILLIS, request.workSpec.backoffDelayDuration)
     }
 
+    @Test
+    fun successfulPageRunsAcceptanceExactlyOnce() = runTest {
+        val pages = FakePages(
+            listOf(IncomingSyncResult.Committed(page(nextCursor = null, hasMore = false))),
+        )
+        var acceptanceCalls = 0
+
+        val result = combinedRunner(
+            pages = pages,
+            runAcceptance = { expectedOwner ->
+                assertEquals(OWNER, expectedOwner)
+                acceptanceCalls += 1
+                IncomingAcceptanceDrainResult.Completed(0, 0, false)
+            },
+        ).run(OWNER)
+
+        assertEquals(IncomingSyncAndAcceptanceRunOutcome.Succeeded, result)
+        assertEquals(1, acceptanceCalls)
+    }
+
+    @Test
+    fun nonSuccessfulPageOutcomesBypassAcceptance() = runTest {
+        val cases = listOf(
+            listOf(IncomingSyncResult.Committed(page(nextCursor = "more", hasMore = true))) to
+                MAX_PAGES_PER_RUN.coerceAtMost(1),
+            listOf(IncomingSyncResult.Failure(IncomingSyncFailure.NETWORK, retryable = true)) to
+                MAX_PAGES_PER_RUN,
+            listOf(IncomingSyncResult.Failure(IncomingSyncFailure.INVALID_RESPONSE, retryable = false)) to
+                MAX_PAGES_PER_RUN,
+        )
+        for ((results, maxPages) in cases) {
+            var acceptanceCalls = 0
+            val outcome = combinedRunner(
+                pages = FakePages(results),
+                maxPages = maxPages,
+                runAcceptance = {
+                    acceptanceCalls += 1
+                    IncomingAcceptanceDrainResult.Completed(0, 0, false)
+                },
+            ).run(OWNER)
+
+            assertEquals(
+                if (results.first() is IncomingSyncResult.Failure &&
+                    !(results.first() as IncomingSyncResult.Failure).retryable
+                ) {
+                    IncomingSyncAndAcceptanceRunOutcome.Terminal
+                } else {
+                    IncomingSyncAndAcceptanceRunOutcome.Retryable
+                },
+                outcome,
+            )
+            assertEquals(0, acceptanceCalls)
+        }
+    }
+
+    @Test
+    fun drainOutcomesMapProgressAndNoProgressWithoutPoisonRetry() = runTest {
+        val cases = listOf(
+            IncomingAcceptanceDrainResult.Completed(1, 8, true) to
+                IncomingSyncAndAcceptanceRunOutcome.Retryable,
+            IncomingAcceptanceDrainResult.Completed(0, 8, true) to
+                IncomingSyncAndAcceptanceRunOutcome.Succeeded,
+            IncomingAcceptanceDrainResult.Completed(1, 8, false) to
+                IncomingSyncAndAcceptanceRunOutcome.Succeeded,
+            IncomingAcceptanceDrainResult.Retryable(
+                IncomingAcceptanceDrainRetryReason.ACCEPTANCE_RETRYABLE,
+            ) to IncomingSyncAndAcceptanceRunOutcome.Retryable,
+            IncomingAcceptanceDrainResult.AccountStopped to
+                IncomingSyncAndAcceptanceRunOutcome.Terminal,
+        )
+        for ((drainResult, expected) in cases) {
+            val outcome = combinedRunner(
+                pages = FakePages(
+                    listOf(IncomingSyncResult.Committed(page(nextCursor = null, hasMore = false))),
+                ),
+                runAcceptance = { drainResult },
+            ).run(OWNER)
+
+            assertEquals(expected, outcome)
+            assertEquals(
+                when (expected) {
+                    IncomingSyncAndAcceptanceRunOutcome.Succeeded -> ListenableWorker.Result.success()
+                    IncomingSyncAndAcceptanceRunOutcome.Retryable -> ListenableWorker.Result.retry()
+                    IncomingSyncAndAcceptanceRunOutcome.Terminal -> ListenableWorker.Result.failure()
+                },
+                IncomingCapsuleSyncWorker.mapCombinedOutcome(outcome),
+            )
+        }
+    }
+
+    @Test
+    fun accountSwitchAfterPageCompletionStopsBeforeAcceptance() = runTest {
+        var ownerReads = 0
+        var acceptanceCalls = 0
+        val outcome = combinedRunner(
+            pages = FakePages(
+                listOf(IncomingSyncResult.Committed(page(nextCursor = null, hasMore = false))),
+            ),
+            currentOwner = {
+                ownerReads += 1
+                if (ownerReads == 1) OWNER else OTHER_OWNER
+            },
+            runAcceptance = {
+                acceptanceCalls += 1
+                IncomingAcceptanceDrainResult.Completed(1, 1, false)
+            },
+        ).run(OWNER)
+
+        assertEquals(IncomingSyncAndAcceptanceRunOutcome.Terminal, outcome)
+        assertEquals(0, acceptanceCalls)
+    }
+
+    @Test
+    fun cancellationFromAcceptancePropagatesExactly() = runTest {
+        val expected = CancellationException("acceptance cancellation")
+        val pages = FakePages(
+            listOf(IncomingSyncResult.Committed(page(nextCursor = null, hasMore = false))),
+        )
+
+        try {
+            combinedRunner(
+                pages = pages,
+                runAcceptance = { throw expected },
+            ).run(OWNER)
+            error("expected cancellation")
+        } catch (actual: CancellationException) {
+            assertTrue(actual === expected)
+        }
+    }
+
     private fun loop(pages: FakePages, maxPages: Int = MAX_PAGES_PER_RUN) = IncomingSyncPageLoop(
         currentOwner = { OWNER },
         syncNextPage = pages::next,
+        maxPagesPerRun = maxPages,
+    )
+
+    private fun combinedRunner(
+        pages: FakePages,
+        currentOwner: suspend () -> UserId? = { OWNER },
+        maxPages: Int = MAX_PAGES_PER_RUN,
+        runAcceptance: suspend (UserId) -> IncomingAcceptanceDrainResult,
+    ) = IncomingSyncAndAcceptanceRunner(
+        currentOwner = currentOwner,
+        syncNextPage = pages::next,
+        runAcceptance = runAcceptance,
         maxPagesPerRun = maxPages,
     )
 

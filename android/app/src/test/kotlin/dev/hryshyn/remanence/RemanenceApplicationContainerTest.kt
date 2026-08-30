@@ -300,6 +300,21 @@ class RemanenceApplicationContainerTest {
     }
 
     @Test
+    fun incomingWorkerUsesOneRealLazyContainerDrain() {
+        val appContainer = container()
+        try {
+            val first = appContainer.incomingAcceptanceDrain
+            assertSame(first, appContainer.incomingAcceptanceDrain)
+            assertSame(
+                first,
+                IncomingCapsuleSyncWorker.acceptanceDrainForWorker(appContainer),
+            )
+        } finally {
+            appContainer.database.close()
+        }
+    }
+
+    @Test
     fun recipientIdentityBindsExactOwnerAndBundleAcrossAccountChanges() = runBlocking {
         val appContainer = container()
         val ownerA = UserId.parseRest("0198f0a0-0000-7000-8000-00000000d431")

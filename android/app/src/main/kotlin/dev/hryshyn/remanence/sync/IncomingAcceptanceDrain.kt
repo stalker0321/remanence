@@ -157,7 +157,7 @@ class IncomingAcceptanceDrain internal constructor(
         }
     }
 
-    suspend fun run(): IncomingAcceptanceDrainResult {
+    suspend fun run(expectedOwner: UserId? = null): IncomingAcceptanceDrainResult {
         coroutineContext.ensureActive()
 
         val owner = when (val initial = readOwner()) {
@@ -167,6 +167,9 @@ class IncomingAcceptanceDrain internal constructor(
                 return IncomingAcceptanceDrainResult.Retryable(
                     IncomingAcceptanceDrainRetryReason.SESSION_UNAVAILABLE,
                 )
+        }
+        if (expectedOwner != null && owner != expectedOwner) {
+            return IncomingAcceptanceDrainResult.AccountStopped
         }
         when (verifyOwner(owner)) {
             is OwnerStatus.Ready -> Unit

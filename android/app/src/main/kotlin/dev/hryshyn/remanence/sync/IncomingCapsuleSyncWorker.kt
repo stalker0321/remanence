@@ -13,6 +13,7 @@ import androidx.work.NetworkType
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import dev.hryshyn.remanence.AppContainer
 import dev.hryshyn.remanence.RemanenceApplication
 import dev.hryshyn.remanence.core.data.db.IncomingSyncFailure
 import dev.hryshyn.remanence.core.data.db.IncomingSyncResult
@@ -36,17 +37,21 @@ class IncomingCapsuleSyncWorker(
         val owner = parseOwner(inputData.getString(INPUT_OWNER_USER_ID)) ?: return Result.failure()
         val application = applicationContext as? RemanenceApplication ?: return Result.failure()
         val container = application.container
-        val outcome = IncomingSyncPageLoop(
-            currentOwner = {
-                container.currentAccountStore.load()?.userId?.let { raw ->
-                    runCatching { UserId.parseRest(raw) }.getOrNull()
-                }
-            },
-            syncNextPage = {
-                container.incomingCapsuleSyncRepository.syncNextPage(expectedOwner = owner)
-            },
-        ).run(owner)
-        return mapOutcome(outcome)
+        return mapCombinedOutcome(
+            IncomingSyncAndAcceptanceRunner(
+                currentOwner = {
+                    container.currentAccountStore.load()?.userId?.let { raw ->
+                        runCatching { UserId.parseRest(raw) }.getOrNull()
+                    }
+                },
+                syncNextPage = {
+                    container.incomingCapsuleSyncRepository.syncNextPage(expectedOwner = owner)
+                },
+                runAcceptance = { expectedOwner ->
+                    acceptanceDrainForWorker(container).run(expectedOwner)
+                },
+            ).run(owner),
+        )
     }
 
     companion object {
@@ -88,10 +93,95 @@ class IncomingCapsuleSyncWorker(
                 is IncomingSyncRunOutcome.Terminal -> ListenableWorker.Result.failure()
             }
 
+        internal fun mapCombinedOutcome(
+            outcome: IncomingSyncAndAcceptanceRunOutcome,
+        ): ListenableWorker.Result = when (outcome) {
+            IncomingSyncAndAcceptanceRunOutcome.Succeeded -> ListenableWorker.Result.success()
+            IncomingSyncAndAcceptanceRunOutcome.Retryable -> ListenableWorker.Result.retry()
+            IncomingSyncAndAcceptanceRunOutcome.Terminal -> ListenableWorker.Result.failure()
+        }
+
+        /** The worker's only acceptance dependency: the container's real lazy drain. */
+        internal fun acceptanceDrainForWorker(container: AppContainer): IncomingAcceptanceDrain =
+            container.incomingAcceptanceDrain
+
         private fun parseOwner(raw: String?): UserId? = raw?.let {
             runCatching { UserId.parseRest(it) }.getOrNull()
         }
     }
+}
+
+/** One worker invocation: finish page sync, then make one bounded acceptance attempt. */
+internal class IncomingSyncAndAcceptanceRunner(
+    private val currentOwner: suspend () -> UserId?,
+    private val syncNextPage: suspend () -> IncomingSyncResult,
+    private val runAcceptance: suspend (UserId) -> IncomingAcceptanceDrainResult,
+    private val maxPagesPerRun: Int = MAX_PAGES_PER_RUN,
+) {
+
+    suspend fun run(owner: UserId): IncomingSyncAndAcceptanceRunOutcome {
+        val pageOutcome = IncomingSyncPageLoop(
+            currentOwner = currentOwner,
+            syncNextPage = syncNextPage,
+            maxPagesPerRun = maxPagesPerRun,
+        ).run(owner)
+
+        if (pageOutcome !is IncomingSyncRunOutcome.Succeeded) {
+            return when (pageOutcome) {
+                IncomingSyncRunOutcome.PageCapReached,
+                is IncomingSyncRunOutcome.Retryable,
+                -> IncomingSyncAndAcceptanceRunOutcome.Retryable
+                is IncomingSyncRunOutcome.Terminal -> IncomingSyncAndAcceptanceRunOutcome.Terminal
+                is IncomingSyncRunOutcome.Succeeded -> error("unreachable")
+            }
+        }
+
+        when (readCurrentOwner(owner)) {
+            IncomingSyncAndAcceptanceOwnerStatus.Stopped ->
+                return IncomingSyncAndAcceptanceRunOutcome.Terminal
+            IncomingSyncAndAcceptanceOwnerStatus.Unavailable ->
+                return IncomingSyncAndAcceptanceRunOutcome.Retryable
+            IncomingSyncAndAcceptanceOwnerStatus.Current -> Unit
+        }
+
+        return when (val acceptance = runAcceptance(owner)) {
+            is IncomingAcceptanceDrainResult.Completed -> {
+                if (acceptance.pageMayHaveMore && acceptance.progressCount > 0) {
+                    IncomingSyncAndAcceptanceRunOutcome.Retryable
+                } else {
+                    IncomingSyncAndAcceptanceRunOutcome.Succeeded
+                }
+            }
+            is IncomingAcceptanceDrainResult.Retryable ->
+                IncomingSyncAndAcceptanceRunOutcome.Retryable
+            IncomingAcceptanceDrainResult.AccountStopped ->
+                IncomingSyncAndAcceptanceRunOutcome.Terminal
+        }
+    }
+
+    private suspend fun readCurrentOwner(expected: UserId): IncomingSyncAndAcceptanceOwnerStatus = try {
+        when (currentOwner()) {
+            expected -> IncomingSyncAndAcceptanceOwnerStatus.Current
+            null -> IncomingSyncAndAcceptanceOwnerStatus.Stopped
+            else -> IncomingSyncAndAcceptanceOwnerStatus.Stopped
+        }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        IncomingSyncAndAcceptanceOwnerStatus.Unavailable
+    }
+}
+
+private enum class IncomingSyncAndAcceptanceOwnerStatus {
+    Current,
+    Stopped,
+    Unavailable,
+}
+
+internal enum class IncomingSyncAndAcceptanceRunOutcome {
+    Succeeded,
+    Retryable,
+    Terminal,
 }
 
 /** Explicit result of one bounded incoming page loop, without WorkManager types. */

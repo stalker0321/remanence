@@ -101,3 +101,11 @@ data class OutboxCapsuleEntity(
     @ColumnInfo(name = "last_error_code")
     val lastErrorCode: String?,
 )
+
+/** The owner-scoped current-send projection consumed by the mounted Create flow. */
+data class OutboxCapsuleStatus(
+    @ColumnInfo(name = "state")
+    val state: OutboxCapsuleState,
+    @ColumnInfo(name = "last_error_code")
+    val lastErrorCode: String?,
+)

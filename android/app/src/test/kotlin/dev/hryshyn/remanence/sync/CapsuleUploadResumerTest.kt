@@ -230,6 +230,11 @@ class CapsuleUploadResumerTest {
             ownerUserId: String,
         ): OutboxCapsuleEntity? = null
 
+        override fun observeStatusByCapsuleIdAndOwner(
+            capsuleId: String,
+            ownerUserId: String,
+        ) = kotlinx.coroutines.flow.emptyFlow<dev.hryshyn.remanence.core.data.db.OutboxCapsuleStatus?>()
+
         override suspend fun getCapsuleIdsNeedingUploadForOwner(ownerUserId: String): List<String> {
             throw IllegalStateException("query unavailable")
         }

@@ -230,6 +230,7 @@ class CreatePublishLifetimeTest {
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
             enqueueUpload = enqueueUpload,
+            outboxCapsuleDao = database.outboxCapsuleDao(),
         )
         vm.beginSession(1L, userUuid.toString())
         vm.onResolved(selfSnapshot())
@@ -423,6 +424,81 @@ class CreatePublishLifetimeTest {
             assertEquals(OutboxCapsuleState.ENCRYPTED, row!!.state)
         }
         assertTrue(createStagingRoot().listFiles()?.isEmpty() ?: true)
+    }
+
+    @Test
+    fun mountedCreateObservesPublishedOutboxStateWithoutHistory() {
+        val identityGate = CompletableDeferred<SenderIdentitySnapshot>()
+        val vm = contentStage(identityGate)
+        val capsuleId = vm.capsuleId
+        vm.startPublishing()
+        identityGate.complete(senderIdentity())
+        awaitTerminalPublish(vm)
+        assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
+        awaitCondition("pending encrypted status") {
+            vm.uploadStatus.value == CreateViewModel.CreateUploadStatus.Pending(OutboxCapsuleState.ENCRYPTED)
+        }
+
+        runBlockingNullable {
+            val dao = database.outboxCapsuleDao()
+            assertEquals(1, dao.beginUploadForOwner(capsuleId, userUuid.toString()))
+            assertEquals(1, dao.beginFinalizeForOwner(capsuleId, userUuid.toString()))
+            assertEquals(1, dao.markPublishedForOwner(capsuleId, userUuid.toString()))
+        }
+        awaitCondition("published status") {
+            vm.uploadStatus.value == CreateViewModel.CreateUploadStatus.Published
+        }
+        assertEquals(CreateViewModel.Step.PUBLISHED, vm.step.value)
+        runBlockingNullable {
+            assertEquals(OutboxCapsuleState.PUBLISHED, outboxRow(capsuleId)!!.state)
+        }
+        assertTrue("terminal publication still owns no plaintext staging", createStagingRoot().listFiles()?.isEmpty() ?: true)
+    }
+
+    @Test
+    fun mountedCreateDistinguishesRetryableAndTerminalFailureFromPending() {
+        val identityGate = CompletableDeferred<SenderIdentitySnapshot>()
+        val vm = contentStage(identityGate)
+        val capsuleId = vm.capsuleId
+        vm.startPublishing()
+        identityGate.complete(senderIdentity())
+        awaitTerminalPublish(vm)
+        assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
+
+        runBlockingNullable {
+            database.outboxCapsuleDao().markRetryableFailureForOwner(
+                capsuleId,
+                userUuid.toString(),
+                "BLOB_HASH_MISMATCH",
+            )
+        }
+        awaitCondition("retryable failure") {
+            vm.uploadStatus.value ==
+                CreateViewModel.CreateUploadStatus.RetryableFailure("BLOB_HASH_MISMATCH")
+        }
+        assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
+
+        runBlockingNullable {
+            database.outboxCapsuleDao().markTerminalFailureForOwner(
+                capsuleId,
+                userUuid.toString(),
+                "RECIPIENT_KEY_REVOKED",
+            )
+        }
+        awaitCondition("terminal failure") {
+            vm.uploadStatus.value ==
+                CreateViewModel.CreateUploadStatus.TerminalFailure("RECIPIENT_KEY_REVOKED")
+        }
+        assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
+        assertTrue(createStagingRoot().listFiles()?.isEmpty() ?: true)
+    }
+
+    private fun awaitCondition(what: String, timeoutMs: Long = 10_000, condition: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (!condition()) {
+            if (System.currentTimeMillis() > deadline) error("timed out waiting for $what")
+            Thread.sleep(20)
+        }
     }
 
     private fun runBlockingNullable(block: suspend () -> Unit) {

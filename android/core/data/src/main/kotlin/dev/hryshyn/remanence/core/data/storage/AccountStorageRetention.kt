@@ -5,6 +5,7 @@ import java.io.File
 import java.io.IOException
 import java.nio.file.FileVisitResult
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.SimpleFileVisitor
@@ -62,6 +63,55 @@ class AccountStorageRetention(
     }
 
     /**
+     * Removes abandoned Create plaintext directories for exactly [owner]. Only
+     * UUID-named directory entries beneath that owner's `temp/create` root are
+     * eligible; arbitrary files and names are left untouched.
+     */
+    fun sweepCreateStaging(owner: UserId) {
+        // Resolve TEMP canonically, then name `create` lexically so a
+        // redirected last-segment symlink can be unlinked in-scope instead
+        // of following its foreign target through createStagingRoot().
+        val root = File(roots.child(owner, AccountScopedFileRoots.ChildRoot.TEMP), "create").toPath()
+        if (!Files.exists(root, LinkOption.NOFOLLOW_LINKS)) return
+        if (Files.isSymbolicLink(root)) {
+            // Never enumerate through a redirected create root. Removing the
+            // in-scope link is safe; its target remains untouched.
+            deleteNoFollow(root.toFile())
+            return
+        }
+        try {
+            Files.newDirectoryStream(root).use { entries ->
+                for (entry in entries) {
+                    runCatching { java.util.UUID.fromString(entry.fileName.toString()) }
+                        .getOrNull()
+                        ?: continue
+                    val attributes = try {
+                        Files.readAttributes(
+                            entry,
+                            BasicFileAttributes::class.java,
+                            LinkOption.NOFOLLOW_LINKS,
+                        )
+                    } catch (_: NoSuchFileException) {
+                        continue
+                    }
+                    if (attributes.isDirectory || attributes.isSymbolicLink) {
+                        // deleteNoFollow is bounded to this explicit child and
+                        // never traverses a symbolic-link target.
+                        deleteNoFollow(entry.toFile())
+                    }
+                }
+            }
+        } catch (failure: AccountStorageCleanupException) {
+            throw failure
+        } catch (failure: IOException) {
+            throw AccountStorageCleanupException(
+                "could not enumerate Create staging for ${owner.toRestString()}: ${failure.message}",
+                failure,
+            )
+        }
+    }
+
+    /**
      * Explicit local-account purge: removes the entire account directory of
      * [owner] (all five fixed child roots). Other accounts are never
      * touched and the operation refuses if the resolved account directory
@@ -93,8 +143,19 @@ class AccountStorageRetention(
      *    modified, or deleted.
      */
     private fun deleteNoFollow(root: File) {
-        if (!root.exists()) return
         val rootPath: Path = root.toPath()
+        if (!Files.exists(rootPath, LinkOption.NOFOLLOW_LINKS)) return
+        if (Files.isSymbolicLink(rootPath)) {
+            try {
+                Files.deleteIfExists(rootPath)
+            } catch (failure: IOException) {
+                throw AccountStorageCleanupException(
+                    "could not remove in-scope symlink $root: ${failure.message}",
+                    failure,
+                )
+            }
+            return
+        }
         val visitor = NoFollowSymbolicLinks()
         try {
             Files.walkFileTree(rootPath, visitor)

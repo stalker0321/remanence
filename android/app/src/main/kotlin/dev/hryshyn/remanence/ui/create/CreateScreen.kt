@@ -53,15 +53,18 @@ fun CreateScreen(
      */
     adapterFactory: (() -> dev.hryshyn.remanence.capture.StillCameraAdapter)? = null,
     requestPermissionOnAttach: Boolean = true,
+    onScreenDispose: () -> Unit = {},
 ) {
     val step by viewModel.step.collectAsStateWithLifecycle()
+    val uploadStatus by viewModel.uploadStatus.collectAsStateWithLifecycle()
     val publishError by viewModel.publishError.collectAsStateWithLifecycle()
     val flowError by viewModel.flowError.collectAsStateWithLifecycle()
 
-    // Leaving the create flow (exit, logout, navigation away) tears the
-    // session down: confirmed recipient and staged plaintext never linger.
+    // The caller distinguishes true route exit from activity recreation. This
+    // effect is intentionally not keyed by configuration so rotation does not
+    // tear down an in-progress same-epoch Create session.
     DisposableEffect(Unit) {
-        onDispose { viewModel.endSession() }
+        onDispose(onScreenDispose)
     }
 
     Column(
@@ -127,10 +130,21 @@ fun CreateScreen(
                 Spacer(Modifier.height(8.dp))
                 Text("Encrypting locally...", modifier = Modifier.testTag("create_publishing"))
             }
-            CreateViewModel.Step.UPLOAD_PENDING -> Text(
-                "Encrypted capsule queued. Upload will continue in the background.",
-                modifier = Modifier.testTag("create_upload_pending"),
-            )
+            CreateViewModel.Step.UPLOAD_PENDING -> when (val status = uploadStatus) {
+                is CreateViewModel.CreateUploadStatus.RetryableFailure -> Text(
+                    createUploadPendingCopy(status),
+                    modifier = Modifier.testTag("create_upload_retryable_failure"),
+                )
+                is CreateViewModel.CreateUploadStatus.TerminalFailure -> Text(
+                    createUploadPendingCopy(status),
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.testTag("create_upload_terminal_failure"),
+                )
+                else -> Text(
+                    createUploadPendingCopy(status),
+                    modifier = Modifier.testTag("create_upload_pending"),
+                )
+            }
             CreateViewModel.Step.PUBLISHED -> Text(
                 "Capsule sealed. Send the physical postcard.",
                 modifier = Modifier.testTag("create_published"),
@@ -295,3 +309,15 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
         ) { Text("Encrypt and stage capsule") }
     }
 }
+
+/**
+ * Fixed user-facing copy for the mounted Create send state. Typed
+ * [CreateViewModel.CreateUploadStatus] error codes stay on the status
+ * object for logic and diagnostics and must never be interpolated here.
+ */
+internal fun createUploadPendingCopy(status: CreateViewModel.CreateUploadStatus): String =
+    when (status) {
+        is CreateViewModel.CreateUploadStatus.RetryableFailure -> "Send needs a retry."
+        is CreateViewModel.CreateUploadStatus.TerminalFailure -> "Send failed permanently."
+        else -> "Encrypted capsule queued. Upload will continue in the background."
+    }

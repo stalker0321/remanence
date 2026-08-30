@@ -25,6 +25,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import dev.hryshyn.remanence.core.data.db.OutboxCapsuleDao
+import dev.hryshyn.remanence.core.data.db.OutboxCapsuleState
+import dev.hryshyn.remanence.core.data.db.OutboxCapsuleStatus
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
 import dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot
 import dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager
@@ -115,7 +118,18 @@ class CreateViewModel(
     private val senderRetryKeysetWrapper: dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper,
     private val senderRetryKekAlias: String,
     private val enqueueUpload: suspend (UserId, CapsuleId) -> Unit,
+    /** Exact owner + capsule current-send projection for the mounted flow. */
+    private val outboxCapsuleDao: OutboxCapsuleDao? = null,
 ) : ViewModel() {
+
+    /** Current-send state; deliberately contains no history or inbox projection. */
+    sealed interface CreateUploadStatus {
+        data object NotStarted : CreateUploadStatus
+        data class Pending(val state: OutboxCapsuleState) : CreateUploadStatus
+        data class RetryableFailure(val errorCode: String?) : CreateUploadStatus
+        data class TerminalFailure(val errorCode: String?) : CreateUploadStatus
+        data object Published : CreateUploadStatus
+    }
 
     enum class Step {
         RECIPIENT_LOOKUP,
@@ -201,7 +215,11 @@ class CreateViewModel(
      * outbox nor mutate step/error of any later session.
      */
     private var publishJob: Job? = null
+    private var outboxObservationJob: Job? = null
     private var createSessionGeneration: Long = 0L
+
+    private val _uploadStatus = MutableStateFlow<CreateUploadStatus>(CreateUploadStatus.NotStarted)
+    val uploadStatus: StateFlow<CreateUploadStatus> = _uploadStatus.asStateFlow()
 
     /** Owner captured synchronously at session entry, before publish suspends. */
     private var sessionOwner: UserId? = null
@@ -247,10 +265,9 @@ class CreateViewModel(
      * FIX-STATE-13: staging is session-owned. The replaced session's
      * directory is removed here only when NO publication still owns it; an
      * in-flight (possibly cancellation-delayed) publish keeps exclusive
-     * cleanup rights over its own directory. Afterwards a SCOPED recovery
-     * sweep removes only abandoned
-     * `accounts/<owner>/temp/create/<capsule UUID>` directories left behind by
-     * a process death - never another owner's files or arbitrary entries.
+     * cleanup rights over its own directory. Process-death leftovers under
+     * `accounts/<owner>/temp/create/<capsule UUID>` are recovered by the
+     * authenticated startup sweep, not by this entry path.
      */
     fun beginSession(epoch: Long, ownerUserId: String? = sessionOwner?.toRestString()) {
         val nextOwner = ownerUserId?.let { raw ->
@@ -263,6 +280,8 @@ class CreateViewModel(
         createSessionGeneration += 1
         deliveryGeneration += 1
         cancelPublishingLocked()
+        outboxObservationJob?.cancel()
+        outboxObservationJob = null
         // FIX-STATE-13: ownership is tracked by the in-flight ledger, NOT by
         // the local job handle - endSession()/an earlier beginSession() may
         // already have detached a publication that is still running its
@@ -285,8 +304,63 @@ class CreateViewModel(
         backFingerprintId = null
         _flowError.value = null
         _publishError.value = null
-        sweepAbandonedStagingDirectoriesLocked(sessionOwner)
+        _uploadStatus.value = CreateUploadStatus.NotStarted
+        observeCurrentOutbox(sessionOwner, _capsuleId, createSessionGeneration)
     }
+
+    /**
+     * Observes only the row owned by this session's authenticated owner and
+     * generated capsule. A stale emission is ignored by both owner and
+     * generation checks, so a previous session cannot repaint a later one.
+     */
+    private fun observeCurrentOutbox(owner: UserId?, capsuleId: String, generation: Long) {
+        val dao = outboxCapsuleDao ?: return
+        if (owner == null) return
+        outboxObservationJob = viewModelScope.launch {
+            dao.observeStatusByCapsuleIdAndOwner(capsuleId, owner.toRestString()).collect { status ->
+                applyOutboxStatus(status, generation, owner, capsuleId)
+            }
+        }
+    }
+
+    private fun applyOutboxStatus(
+        status: OutboxCapsuleStatus?,
+        generation: Long,
+        owner: UserId,
+        capsuleId: String,
+    ) {
+        if (!outboxObservationStillCurrent(generation, owner, capsuleId)) return
+        val mapped = when (status?.state) {
+            null -> CreateUploadStatus.NotStarted
+            OutboxCapsuleState.PREPARING,
+            OutboxCapsuleState.ENCRYPTED,
+            OutboxCapsuleState.UPLOADING,
+            OutboxCapsuleState.FINALIZING,
+            -> CreateUploadStatus.Pending(status.state)
+            OutboxCapsuleState.RETRYABLE_FAILURE ->
+                CreateUploadStatus.RetryableFailure(status.lastErrorCode)
+            OutboxCapsuleState.TERMINAL_FAILURE ->
+                CreateUploadStatus.TerminalFailure(status.lastErrorCode)
+            OutboxCapsuleState.PUBLISHED -> CreateUploadStatus.Published
+        }
+        if (!outboxObservationStillCurrent(generation, owner, capsuleId)) return
+        _uploadStatus.value = mapped
+        if (_step.value == Step.UPLOAD_PENDING || _step.value == Step.PUBLISHED) {
+            if (!outboxObservationStillCurrent(generation, owner, capsuleId)) return
+            _step.value = if (mapped is CreateUploadStatus.Published) {
+                Step.PUBLISHED
+            } else {
+                Step.UPLOAD_PENDING
+            }
+        }
+    }
+
+    private fun outboxObservationStillCurrent(
+        generation: Long,
+        owner: UserId,
+        capsuleId: String,
+    ): Boolean =
+        generation == createSessionGeneration && owner == sessionOwner && capsuleId == _capsuleId
 
     // ---------------------------------------------------------------------
     // Recipient steps.
@@ -679,7 +753,11 @@ class CreateViewModel(
                     return
                 }
                 ensureCurrent()
-                _step.value = Step.UPLOAD_PENDING
+                _step.value = if (_uploadStatus.value is CreateUploadStatus.Published) {
+                    Step.PUBLISHED
+                } else {
+                    Step.UPLOAD_PENDING
+                }
             } finally {
                 // Normalized plaintext staging never survives this call.
                 withContext(ioDispatcher) {
@@ -716,26 +794,6 @@ class CreateViewModel(
         if (dir.exists()) dir.deleteRecursively()
     }
 
-    /**
-     * FIX-STATE-13/LUNA-01 scoped recovery after process death (docs/architecture.md:
-     * "discard incomplete plaintext/raw capture state"): removes ONLY
-     * directories beneath THIS OWNER's create root whose name parses as the
-     * capsule UUID of an ABANDONED publication - not the current session's,
-     * not one still owned by a live publish job, and never another owner's
-     * files, arbitrary files, or unknown entries.
-     */
-    private fun sweepAbandonedStagingDirectoriesLocked(owner: UserId?) {
-        if (owner == null) return
-        val children = accountScopedFileRoots.createStagingRoot(owner).listFiles() ?: return
-        for (child in children) {
-            if (!child.isDirectory) continue
-            val capsuleId = runCatching { UUID.fromString(child.name) }.getOrNull() ?: continue
-            if (capsuleId.toString().equals(_capsuleId, ignoreCase = true)) continue
-            if (inFlightPublications.any { it.equals(capsuleId.toString(), ignoreCase = true) }) continue
-            child.deleteRecursively()
-        }
-    }
-
     private fun parsePublicHandle(b64Url: String): KeysetHandle =
         TinkProtoKeysetFormat.parseKeysetWithoutSecret(Base64.urlSafeDecode(b64Url))
 
@@ -758,11 +816,14 @@ class CreateViewModel(
         val owner = sessionOwner
         val capsuleId = _capsuleId
         cancelPublishingLocked()
+        outboxObservationJob?.cancel()
+        outboxObservationJob = null
         recipientFlow.clearTransientMaterial()
         // FIX-STATE-13: only when no live publication still owns THIS session's
         // directory may teardown remove it directly.
         if (capsuleId !in inFlightPublications) deleteSessionStaging(owner, capsuleId)
         sessionOwner = null
+        _uploadStatus.value = CreateUploadStatus.NotStarted
     }
 
     override fun onCleared() {

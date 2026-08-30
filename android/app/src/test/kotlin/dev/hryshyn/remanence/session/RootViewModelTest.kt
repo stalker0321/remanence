@@ -566,4 +566,76 @@ class RootViewModelTest {
         assertEquals(AppDestination.Authentication, vm.destination.value)
         vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
     }
+
+    @Test
+    fun recoverCreateStagingRunsBeforeAuthenticatedPublicationAndResume() = runTest {
+        val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000c601")
+        val resolver = MutableOutcomeResolver(SessionState.SignedOut)
+        val order = mutableListOf<String>()
+        val recovered = mutableListOf<UserId>()
+        lateinit var vm: RootViewModel
+        vm = RootViewModel(
+            resolver,
+            recoverCreateStaging = { activeOwner ->
+                recovered += activeOwner
+                order += "recover"
+                assertEquals(AuthUiState.SignedOut, vm.authState.value)
+            },
+            resumeCapsuleUploads = {
+                order += "resume"
+                assertEquals(
+                    AuthUiState.Authenticated(owner.toRestString(), "mykola"),
+                    vm.authState.value,
+                )
+            },
+        )
+
+        resolver.state = SessionState.Active(owner.toRestString(), "mykola", true, true)
+        vm.resolveNow()
+
+        assertEquals(listOf("recover", "resume"), order)
+        assertEquals(listOf(owner), recovered)
+        assertEquals(AuthUiState.Authenticated(owner.toRestString(), "mykola"), vm.authState.value)
+        assertEquals(AppDestination.Home, vm.destination.value)
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+    }
+
+    @Test
+    fun recoverCreateStagingFailurePublishesConnectivityWithoutExposingTheAccount() = runTest {
+        val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000c602")
+        val resolver = MutableOutcomeResolver(SessionState.SignedOut)
+        var resumeCalls = 0
+        val vm = RootViewModel(
+            resolver,
+            recoverCreateStaging = { error("create staging sweep failed") },
+            resumeCapsuleUploads = { resumeCalls++ },
+            scheduleIncomingSync = { resumeCalls++ },
+        )
+
+        resolver.state = SessionState.Active(owner.toRestString(), "mykola", true, true)
+        vm.resolveNow()
+
+        assertEquals(AuthUiState.RequiresConnectivity, vm.authState.value)
+        assertEquals(AppDestination.Authentication, vm.destination.value)
+        assertEquals(0, resumeCalls)
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+    }
+
+    @Test
+    fun nonActiveStatesNeverRecoverCreateStaging() = runTest {
+        val states = listOf(
+            SessionState.SignedOut,
+            SessionState.RecoveryRequired,
+            SessionState.RequiresConnectivity,
+        )
+        var recoverCalls = 0
+        states.forEach { state ->
+            val vm = RootViewModel(
+                MutableOutcomeResolver(state),
+                recoverCreateStaging = { recoverCalls++ },
+            )
+            vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+        }
+        assertEquals(0, recoverCalls)
+    }
 }

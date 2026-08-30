@@ -88,6 +88,27 @@ class RootFlowLifecycleTest {
     }
 
     @Test
+    fun authenticatedOwnerBoundaryExitsCreateAndRunsItsCleanupExactlyOnce() = runTest {
+        val resolver = SwitchingResolver("1f0a1234-5678-4abc-9def-aabbccdd1001")
+        val vm = viewModel(resolver)
+        vm.resolveNow()
+        vm.openCreate()
+        var cleanups = 0
+        vm.registerTransientCleanup(AppDestination.Create) { cleanups += 1 }
+
+        resolver.userId = "2f0a1234-5678-4abc-9def-aabbccdd1002"
+        vm.resolveNow()
+
+        assertEquals(AppDestination.Home, vm.destination.value)
+        assertEquals(1, cleanups)
+
+        resolver.userId = "3f0a1234-5678-4abc-9def-aabbccdd1003"
+        vm.resolveNow()
+        assertEquals(1, cleanups)
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+    }
+
+    @Test
     fun authenticatedOwnerBoundaryExitsScanAndRunsItsCleanup() = runTest {
         val resolver = SwitchingResolver("1f0a1234-5678-4abc-9def-aabbccdd1001")
         val vm = viewModel(resolver)

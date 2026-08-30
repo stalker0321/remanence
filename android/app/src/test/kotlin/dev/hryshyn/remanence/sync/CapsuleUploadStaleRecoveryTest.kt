@@ -589,6 +589,9 @@ class CapsuleUploadStaleRecoveryTest {
         override suspend fun getByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String) =
             delegate.getByCapsuleIdAndOwner(capsuleId, ownerUserId)
 
+        override fun observeStatusByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String) =
+            delegate.observeStatusByCapsuleIdAndOwner(capsuleId, ownerUserId)
+
         override suspend fun getCapsuleIdsNeedingUploadForOwner(ownerUserId: String) =
             delegate.getCapsuleIdsNeedingUploadForOwner(ownerUserId)
 

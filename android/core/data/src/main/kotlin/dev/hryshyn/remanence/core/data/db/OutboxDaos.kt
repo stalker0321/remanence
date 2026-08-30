@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
+import kotlinx.coroutines.flow.Flow
 
 /**
  * M2-P02/P03: every account-owned lookup, list, and compare-and-set on
@@ -56,6 +57,16 @@ abstract class OutboxCapsuleDao {
             "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId",
     )
     abstract suspend fun getByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String): OutboxCapsuleEntity?
+
+    /** Exact owner + capsule current-send state for the mounted Create flow. */
+    @Query(
+        "SELECT state, last_error_code FROM outbox_capsule " +
+            "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId",
+    )
+    abstract fun observeStatusByCapsuleIdAndOwner(
+        capsuleId: String,
+        ownerUserId: String,
+    ): Flow<OutboxCapsuleStatus?>
 
     /**
      * Returns only owner-scoped capsule IDs whose persisted state can be

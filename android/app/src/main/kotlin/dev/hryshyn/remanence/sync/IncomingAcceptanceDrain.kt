@@ -94,6 +94,19 @@ internal fun interface IncomingAcceptanceCandidateSource {
     ): IncomingAcceptanceCandidateSelection
 }
 
+internal fun effectiveIncomingAcceptanceDrainBound(
+    requested: Int,
+    selectorMaxPageSize: Int,
+): Int {
+    require(requested in 1..IncomingAcceptanceDrain.MAX_CANDIDATES_PER_RUN) {
+        "acceptance drain bound is invalid"
+    }
+    require(selectorMaxPageSize in 1..IncomingAcceptanceDrain.MAX_CANDIDATES_PER_RUN) {
+        "candidate selector bound is invalid"
+    }
+    return minOf(requested, selectorMaxPageSize)
+}
+
 /**
  * One bounded, sequential acceptance-drain invocation. It owns no cursor or
  * durable progress state; Room material states remain the restart source of
@@ -132,7 +145,10 @@ class IncomingAcceptanceDrain internal constructor(
                 )
             }
         },
-        maxCandidatesPerRun = maxCandidatesPerRun,
+        maxCandidatesPerRun = effectiveIncomingAcceptanceDrainBound(
+            requested = maxCandidatesPerRun,
+            selectorMaxPageSize = selector.maxPageSize,
+        ),
     )
 
     init {

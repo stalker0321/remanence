@@ -40,6 +40,34 @@ class IncomingAcceptanceDrainTest {
     }
 
     @Test
+    fun selectorMaximumIsUsedByTheProductionBoundBeforeRunningThePage() = runBlocking {
+        val selectorMaximum = 8
+        val effectiveBound = effectiveIncomingAcceptanceDrainBound(
+            requested = IncomingAcceptanceDrain.MAX_CANDIDATES_PER_RUN,
+            selectorMaxPageSize = selectorMaximum,
+        )
+        val rows = (1..selectorMaximum).map { candidate(it, it.toLong()) }
+        val selected = mutableListOf<SelectionCall>()
+
+        val result = drain(
+            rows = rows,
+            max = effectiveBound,
+            selected = selected,
+            selectionForLimit = { limit ->
+                if (limit > selectorMaximum) {
+                    IncomingAcceptanceCandidateSelection.InvalidRequest
+                } else {
+                    IncomingAcceptanceCandidateSelection.Page(rows)
+                }
+            },
+        ).run()
+
+        assertEquals(selectorMaximum, effectiveBound)
+        assertEquals(listOf(SelectionCall(OWNER, selectorMaximum)), selected)
+        assertEquals(IncomingAcceptanceDrainResult.Completed(8, 8, true), result)
+    }
+
+    @Test
     fun acceptedAndIdempotentResultsCountProgressAndCompletePage() = runBlocking {
         val rows = listOf(candidate(1, 10), candidate(2, 20))
         val result = drain(
@@ -354,13 +382,14 @@ class IncomingAcceptanceDrainTest {
             IncomingCapsuleQuarantineResult.Quarantined,
         selection: IncomingAcceptanceCandidateSelection =
             IncomingAcceptanceCandidateSelection.Page(rows),
+        selectionForLimit: (Int) -> IncomingAcceptanceCandidateSelection = { selection },
         onSelect: () -> Unit = {},
         attemptOverride: (suspend () -> IncomingAcceptanceDrainAttempt)? = null,
     ): IncomingAcceptanceDrain {
         val source = IncomingAcceptanceCandidateSource { owner, limit ->
             onSelect()
             selected += SelectionCall(owner, limit)
-            selection
+            selectionForLimit(limit)
         }
         return IncomingAcceptanceDrain(
             candidates = source,

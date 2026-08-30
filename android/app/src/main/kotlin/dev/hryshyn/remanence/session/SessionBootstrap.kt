@@ -22,6 +22,19 @@ sealed interface SessionState {
      */
     data object RequiresConnectivity : SessionState
 
+    /**
+     * The local account, identity, and refresh-token record are coherent, but
+     * the server could not be reached. Encrypted local material remains
+     * available for offline Home/Scan; network work is not started here.
+     */
+    data class OfflineActive(
+        val userId: String?,
+        val handle: String?,
+        val hasEncryptionKeyset: Boolean,
+        val hasSigningKeyset: Boolean,
+        val activeKeyBundleId: String? = null,
+    ) : SessionState
+
     /** Proved refresh token plus usable HPKE/Ed25519 keysets: fully crypto-ready. */
     data class Active(
         val userId: String?,
@@ -62,16 +75,30 @@ sealed interface SessionRefreshOutcome {
         val refreshToken: String,
     ) : SessionRefreshOutcome
 
+    /** A concurrent caller already rotated the token while this call waited. */
+    data class Reused(val accessToken: String) : SessionRefreshOutcome
+
     /** The server definitively refused the session (401/replayed lineage). */
     data object Rejected : SessionRefreshOutcome
 
     /** Transient failure: the stored token must NOT be discarded. */
     data object Unreachable : SessionRefreshOutcome
+
+    /** The response was not a proven connectivity failure or valid session. */
+    data object Unavailable : SessionRefreshOutcome
+
+    /** No token remained when the coordinated refresh acquired its lock. */
+    data object NoToken : SessionRefreshOutcome
+
+    /** The refresh was invalidated by logout or a replacement login. */
+    data object Invalidated : SessionRefreshOutcome
 }
 
-/** Port performing the cold-start refresh round trip. */
-fun interface SessionRefresher {
-    suspend fun refresh(storedRefreshToken: String): SessionRefreshOutcome
+/** Port performing the coordinated cold-start refresh round trip. */
+interface SessionRefresher {
+    suspend fun hasStoredToken(): Boolean
+
+    suspend fun refresh(): SessionRefreshOutcome
 }
 
 /** What the root surface needs from session resolution. */
@@ -84,8 +111,9 @@ interface SessionStateResolver {
 /**
  * I02 cold-start bootstrap: resolves [SessionState] from the memory-less
  * combination of (sealed rotating refresh token, wrapped identity keysets,
- * account summary) PLUS a live refresh round trip - a cold start never enters
- * Active on persisted bytes alone.
+ * account summary) PLUS a live refresh round trip. A connectivity-only
+ * failure enters [SessionState.OfflineActive] only after the local account
+ * and identity have already been validated.
  *
  * The ACCESS token is deliberately absent from persistence: it lives only in
  * process memory for its short lifetime. Invalid or corrupt sealed material
@@ -101,8 +129,8 @@ class SessionBootstrap(
 ) : SessionStateResolver {
 
     override suspend fun bootstrap(): SessionState {
-        val stored = readSealedToken()
-            ?: return SessionState.SignedOut
+        val refresher = this.refresher ?: return SessionState.RequiresConnectivity
+        if (!refresher.hasStoredToken()) return SessionState.SignedOut
 
         val summary = account.load()
         if (summary == null || !isCanonicalKeyBundleId(summary.activeKeyBundleId)) {
@@ -117,35 +145,32 @@ class SessionBootstrap(
             return SessionState.RecoveryRequired
         }
 
-        val refresher = this.refresher ?: return SessionState.RequiresConnectivity
-        return when (val outcome = refresher.refresh(stored)) {
-            is SessionRefreshOutcome.Rotated -> {
-                // Persist only the rotated REFRESH token; the fresh access
-                // token stays in process memory with its holder. A persistence
-                // failure clears the record rather than half-trusting it.
-                val persisted = try {
-                    tokens.saveToken(outcome.refreshToken)
-                    true
-                } catch (_: Exception) {
-                    tokens.clearToken()
-                    false
-                }
-                if (!persisted) return SessionState.SignedOut
-                SessionState.Active(
-                    userId = summary.userId,
-                    handle = summary.handle,
-                    hasEncryptionKeyset = true,
-                    hasSigningKeyset = true,
-                    activeKeyBundleId = summary.activeKeyBundleId,
-                )
-            }
+        return when (val outcome = refresher.refresh()) {
+            is SessionRefreshOutcome.Rotated,
+            is SessionRefreshOutcome.Reused,
+            -> SessionState.Active(
+                userId = summary.userId,
+                handle = summary.handle,
+                hasEncryptionKeyset = true,
+                hasSigningKeyset = true,
+                activeKeyBundleId = summary.activeKeyBundleId,
+            )
 
-            SessionRefreshOutcome.Rejected -> {
-                tokens.clearToken()
-                SessionState.SignedOut
-            }
+            SessionRefreshOutcome.Rejected,
+            SessionRefreshOutcome.NoToken,
+            -> SessionState.SignedOut
 
-            SessionRefreshOutcome.Unreachable -> SessionState.RequiresConnectivity
+            SessionRefreshOutcome.Unreachable -> SessionState.OfflineActive(
+                userId = summary.userId,
+                handle = summary.handle,
+                hasEncryptionKeyset = true,
+                hasSigningKeyset = true,
+                activeKeyBundleId = summary.activeKeyBundleId,
+            )
+
+            SessionRefreshOutcome.Unavailable,
+            SessionRefreshOutcome.Invalidated,
+            -> SessionState.RequiresConnectivity
         }
     }
 
@@ -154,24 +179,6 @@ class SessionBootstrap(
         runCatching { tokens.clearToken() }
         return SessionState.SignedOut
     }
-
-    /**
-     * Reads the sealed refresh token; corrupt/undecryptable material is
-     * cleared so a tampered record can never linger on disk.
-     */
-    private fun readSealedToken(): String? =
-        try {
-            val token = tokens.readToken()
-            if (token.isNullOrBlank()) {
-                tokens.clearToken()
-                null
-            } else {
-                token
-            }
-        } catch (_: Exception) {
-            tokens.clearToken()
-            null
-        }
 
     private fun isCanonicalKeyBundleId(raw: String): Boolean =
         try {

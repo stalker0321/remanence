@@ -145,6 +145,7 @@ class ProductionApiStackCapsuleRepositoryTest {
             val stack = ProductionApiStack.create(
                 baseUrl = ApiBaseUrl.parse(server.url("/").toString()),
                 tokens = tokens,
+                refreshTokenReader = RefreshTokenReader { tokens.refreshToken },
                 rotationSink = sink,
             )
             val result = call(stack)

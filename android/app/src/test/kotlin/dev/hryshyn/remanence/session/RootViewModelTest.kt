@@ -347,11 +347,61 @@ class RootViewModelTest {
     }
 
     @Test
+    fun offlineActiveReachesHomeWithoutSchedulingNetworkWork() = runTest {
+        val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000b530")
+        var resumeCalls = 0
+        var incomingCalls = 0
+        val vm = RootViewModel(
+            FixedOutcomeResolver(
+                SessionState.OfflineActive(
+                    userId = owner.toRestString(),
+                    handle = "mykola",
+                    hasEncryptionKeyset = true,
+                    hasSigningKeyset = true,
+                    activeKeyBundleId = "00000000-0000-4000-8000-000000000001",
+                ),
+            ),
+            resumeCapsuleUploads = { resumeCalls++ },
+            scheduleIncomingSync = { incomingCalls++ },
+        )
+
+        assertEquals(
+            AuthUiState.Authenticated(
+                userId = owner.toRestString(),
+                handle = "mykola",
+                activeKeyBundleId = "00000000-0000-4000-8000-000000000001",
+            ),
+            vm.authState.value,
+        )
+        assertEquals(AppDestination.Home, vm.destination.value)
+        assertEquals(0, resumeCalls)
+        assertEquals(0, incomingCalls)
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+    }
+
+    @Test
+    fun logoutInvalidatesInFlightRefreshesBeforeTeardown() = runTest {
+        var invalidated = 0
+        val vm = RootViewModel(
+            SignedOutResolver(),
+            invalidateSessionRefreshes = { invalidated++ },
+        )
+
+        vm.logout()
+        advanceUntilIdle()
+
+        assertEquals(1, invalidated)
+        assertEquals(AuthUiState.SignedOut, vm.authState.value)
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+    }
+
+    @Test
     fun nonActiveStatesNeverInvokeResumeHook() = runTest {
         val states = listOf(
             SessionState.SignedOut,
             SessionState.RecoveryRequired,
             SessionState.RequiresConnectivity,
+            SessionState.OfflineActive("user-1", "mykola", true, true),
         )
         var hookCalls = 0
         var incomingHookCalls = 0
@@ -375,6 +425,7 @@ class RootViewModelTest {
             SessionState.SignedOut,
             SessionState.RecoveryRequired,
             SessionState.RequiresConnectivity,
+            SessionState.OfflineActive("user-1", "mykola", true, true),
         )
         var incomingHookCalls = 0
 

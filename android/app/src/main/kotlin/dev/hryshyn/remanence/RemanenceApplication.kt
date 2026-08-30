@@ -277,6 +277,9 @@ class AppContainer private constructor(
         dev.hryshyn.remanence.core.data.network.ProductionApiStack.create(
             baseUrl = apiBaseUrl,
             tokens = authTokenHolder,
+            refreshTokenReader = dev.hryshyn.remanence.core.data.network.RefreshTokenReader {
+                sessionTokenStore.load()
+            },
             rotationSink = sessionRotationSink,
         )
     }
@@ -790,6 +793,10 @@ class AppContainer private constructor(
         if (result is AuthResult.Success) {
             val user = sessionUser(result.value)
             if (user != null) {
+                // Invalidate returns only after any in-flight check+sink
+                // publication finishes, so replacement credentials cannot be
+                // overwritten by a stale rotate that already passed its check.
+                apiStack.sessionRefreshCoordinator.invalidate()
                 recordAuthenticatedSession(
                     user.userId,
                     user.handle,
@@ -870,6 +877,7 @@ class AppContainer private constructor(
     }
 
     val sessionBootstrap: SessionBootstrap by lazy {
+        val refreshCoordinator = apiStack.sessionRefreshCoordinator
         val identityAvailability = this.identityAvailability
         SessionBootstrap(
             tokens = object : SessionTokenPort {
@@ -879,33 +887,37 @@ class AppContainer private constructor(
             },
             identity = identityAvailability,
             account = { currentAccountStore.load() },
-            refresher = { storedRefreshToken ->
-                when (val result = bareAuthRepository.refresh(
-                    dev.hryshyn.remanence.core.data.network.RefreshRequestDto(storedRefreshToken),
-                )) {
-                    is AuthResult.Success -> {
-                        authTokenHolder.updateTokens(
-                            result.value.accessToken,
-                            result.value.refreshToken,
-                        )
-                        dev.hryshyn.remanence.session.SessionRefreshOutcome.Rotated(
-                            accessToken = result.value.accessToken,
-                            refreshToken = result.value.refreshToken,
-                        )
-                    }
-                    is AuthResult.Failure -> when {
-                        result.reason == dev.hryshyn.remanence.core.data.network.AuthFailure.NETWORK ->
-                            dev.hryshyn.remanence.session.SessionRefreshOutcome.Unreachable
-                        // 401/403/409: the server definitively refused the
-                        // lineage; anything else is treated as transient.
-                        result.httpStatus == 401 || result.httpStatus == 403 || result.httpStatus == 409 ->
+            refresher = object : dev.hryshyn.remanence.session.SessionRefresher {
+                override suspend fun hasStoredToken(): Boolean =
+                    refreshCoordinator.hasStoredToken()
+
+                override suspend fun refresh(): dev.hryshyn.remanence.session.SessionRefreshOutcome =
+                    when (val result = refreshCoordinator.refreshForBootstrap()) {
+                        is dev.hryshyn.remanence.core.data.network.CoordinatedRefreshOutcome.Rotated ->
+                            dev.hryshyn.remanence.session.SessionRefreshOutcome.Rotated(
+                                accessToken = result.accessToken,
+                                refreshToken = result.refreshToken,
+                            )
+                        is dev.hryshyn.remanence.core.data.network.CoordinatedRefreshOutcome.Reused ->
+                            dev.hryshyn.remanence.session.SessionRefreshOutcome.Reused(result.accessToken)
+                        dev.hryshyn.remanence.core.data.network.CoordinatedRefreshOutcome.NoToken ->
+                            dev.hryshyn.remanence.session.SessionRefreshOutcome.NoToken
+                        dev.hryshyn.remanence.core.data.network.CoordinatedRefreshOutcome.Rejected ->
                             dev.hryshyn.remanence.session.SessionRefreshOutcome.Rejected
-                        else -> dev.hryshyn.remanence.session.SessionRefreshOutcome.Unreachable
+                        dev.hryshyn.remanence.core.data.network.CoordinatedRefreshOutcome.Unreachable ->
+                            dev.hryshyn.remanence.session.SessionRefreshOutcome.Unreachable
+                        dev.hryshyn.remanence.core.data.network.CoordinatedRefreshOutcome.Unavailable ->
+                            dev.hryshyn.remanence.session.SessionRefreshOutcome.Unavailable
+                        dev.hryshyn.remanence.core.data.network.CoordinatedRefreshOutcome.Invalidated ->
+                            dev.hryshyn.remanence.session.SessionRefreshOutcome.Invalidated
                     }
-                }
             },
         )
     }
+
+    /** Process-wide refresh coordinator shared by bootstrap and OkHttp 401 retries. */
+    val sessionRefreshCoordinator: dev.hryshyn.remanence.core.data.network.SessionRefreshCoordinator
+        get() = apiStack.sessionRefreshCoordinator
 
     /** Deterministic client-generated bundle ID bound to this exact identity. */
     private fun deriveKeyBundleId(encryptionPublicKeyset: ByteArray): String =

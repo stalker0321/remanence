@@ -197,6 +197,65 @@ class SenderIndexBundleReaderTest {
     }
 
     @Test
+    fun crossVersionPlaintextAndAadMismatchIsCorruptInEitherDirection() = runBlocking {
+        val sealer = AesGcmSealer()
+        val codec = SenderIndexBundleCodec()
+
+        val v2 = SenderIndexBundlePlaintext.fromVerifiedRecognition(
+            capsule,
+            recognition(),
+            TestSenderVerification.forCapsule(capsule),
+        )
+        val v2Bytes = codec.encode(v2)
+        val v2UnderV1Aad = sealer.seal(
+            v2Bytes,
+            SenderIndexBundleAad.encode(
+                owner,
+                capsule,
+                SenderIndexBundleCodec.LEGACY_FORMAT_VERSION,
+            ),
+        )
+        writeDestination(owner, capsule, v2UnderV1Aad)
+        v2Bytes.fill(0)
+        v2UnderV1Aad.fill(0)
+        v2.wipe()
+
+        assertEquals(
+            SenderIndexBundleReadResult.Corrupt(
+                SenderIndexBundleReadCorruptReason.FORMAT_VERSION_MISMATCH,
+            ),
+            reader(sealer).inspect(readRequest(owner, owner, capsule)),
+        )
+
+        val v1 = SenderIndexBundlePlaintext(
+            localFormatVersion = SenderIndexBundleCodec.LEGACY_FORMAT_VERSION,
+            capsuleId = capsule,
+            senderHandleSnapshot = "alice_1",
+            createdAtEpochSeconds = 1_700_000_000L,
+            placeLabel = "Paris",
+            frontFingerprint = recognition().frontFingerprint,
+            backFingerprint = recognition().backFingerprint,
+            senderVerification = null,
+        )
+        val v1Bytes = codec.encode(v1)
+        val v1UnderV2Aad = sealer.seal(
+            v1Bytes,
+            SenderIndexBundleAad.encode(owner, capsule, SenderIndexBundleCodec.FORMAT_VERSION),
+        )
+        writeDestination(owner, capsule, v1UnderV2Aad)
+        v1Bytes.fill(0)
+        v1UnderV2Aad.fill(0)
+        v1.wipe()
+
+        assertEquals(
+            SenderIndexBundleReadResult.Corrupt(
+                SenderIndexBundleReadCorruptReason.FORMAT_VERSION_MISMATCH,
+            ),
+            reader(sealer).inspect(readRequest(owner, owner, capsule)),
+        )
+    }
+
+    @Test
     fun missingBundleIsDistinctAndReaderDoesNotCreateAnything() = runBlocking {
         val result = SenderIndexBundleReader(roots, AesGcmSealer())
             .inspect(readRequest(owner, owner, capsule))

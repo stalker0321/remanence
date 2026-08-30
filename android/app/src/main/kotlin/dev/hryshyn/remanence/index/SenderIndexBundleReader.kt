@@ -38,6 +38,7 @@ enum class SenderIndexBundleReadCorruptReason {
     CIPHERTEXT_TRUNCATED,
     PLAINTEXT_TOO_LARGE,
     PLAINTEXT_MALFORMED,
+    FORMAT_VERSION_MISMATCH,
     CAPSULE_MISMATCH,
 }
 
@@ -293,6 +294,7 @@ class SenderIndexBundleReader internal constructor(
         var aad: ByteArray? = null
         var opened: ByteArray? = null
         var decoded: SenderIndexBundlePlaintext? = null
+        var matchedFormatVersion: Int? = null
         return try {
             for (formatVersion in listOf(
                 SenderIndexBundleCodec.FORMAT_VERSION,
@@ -306,6 +308,7 @@ class SenderIndexBundleReader internal constructor(
                 try {
                     opened = sealer.unseal(ciphertext, candidateAad)
                     aad = candidateAad
+                    matchedFormatVersion = formatVersion
                     break
                 } catch (cancelled: CancellationException) {
                     throw cancelled
@@ -327,6 +330,9 @@ class SenderIndexBundleReader internal constructor(
                 throw cancelled
             } catch (_: Exception) {
                 return corrupt(SenderIndexBundleReadCorruptReason.PLAINTEXT_MALFORMED)
+            }
+            if (decoded!!.localFormatVersion != matchedFormatVersion) {
+                return corrupt(SenderIndexBundleReadCorruptReason.FORMAT_VERSION_MISMATCH)
             }
             if (decoded!!.capsuleId != request.capsuleId) {
                 return corrupt(SenderIndexBundleReadCorruptReason.CAPSULE_MISMATCH)

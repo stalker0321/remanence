@@ -59,10 +59,14 @@ import java.io.File
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlin.coroutines.cancellation.CancellationException
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -186,14 +190,43 @@ class IncomingPresentationPreparationTest {
             activeKeyBundleId = RECIPIENT_BUNDLE,
             encryptionPrivateKeyset = fixture.recipientIdentity.encryptionPrivateHandle,
         )
-        val result = preparation {
+        val result = preparation(identity = {
             calls += 1
             if (calls == 1) currentIdentity() else otherIdentity
-        }.prepare(OWNER, CAPSULE)
+        }).prepare(OWNER, CAPSULE)
         assertEquals(
             IncomingPresentationPreparationRejection.ACCOUNT_CHANGED,
             requireType<IncomingPresentationPreparationResult.Rejected>(result).reason,
         )
+        assertEquals(2, calls)
+    }
+
+    @Test
+    fun cancellationAtContinuationDeliveryClosesPreparedMaterialExactlyOnce() = runBlocking {
+        val enteredDelivery = CompletableDeferred<Unit>()
+        val closeCount = AtomicInteger(0)
+        val cancellation = CancellationException("handoff cancelled")
+        var returned = false
+        var cancellationObserved = false
+        val job = launch {
+            try {
+                preparation(
+                    beforePreparedDelivery = { continuation ->
+                        enteredDelivery.complete(Unit)
+                        continuation.cancel(cancellation)
+                    },
+                    onPreparedMaterialClosed = { closeCount.incrementAndGet() },
+                ).prepare(OWNER, CAPSULE).also { returned = true }
+            } catch (_: CancellationException) {
+                cancellationObserved = true
+            }
+        }
+        enteredDelivery.await()
+        job.join()
+
+        assertTrue(cancellationObserved)
+        assertTrue(!returned)
+        assertEquals(1, closeCount.get())
     }
 
     @Test
@@ -207,6 +240,8 @@ class IncomingPresentationPreparationTest {
 
     private fun preparation(
         identity: suspend () -> CurrentRecipientEncryptionIdentity? = { currentIdentity() },
+        beforePreparedDelivery: (kotlinx.coroutines.CancellableContinuation<PreparedIncomingPresentation>) -> Unit = {},
+        onPreparedMaterialClosed: () -> Unit = {},
     ) = IncomingPresentationPreparation(
         incomingCapsuleDao = database.incomingCapsuleDao(),
         incomingEnvelopeDao = database.incomingEnvelopeDao(),
@@ -216,6 +251,8 @@ class IncomingPresentationPreparationTest {
         currentRecipientIdentity = identity,
         acceptanceGate = PresentationAcceptanceGate(),
         envelopeCryptor = RecipientEnvelopeCryptor(),
+        beforePreparedDelivery = beforePreparedDelivery,
+        onPreparedMaterialClosed = onPreparedMaterialClosed,
     )
 
     private fun currentIdentity() = CurrentRecipientEncryptionIdentity(

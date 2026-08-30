@@ -33,8 +33,11 @@ import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.coroutineContext
+import kotlin.coroutines.resume
+import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 
 /** Redacted reasons for refusing one local incoming presentation preparation. */
@@ -76,6 +79,16 @@ internal sealed interface IncomingPresentationPreparationResult {
     ) : IncomingPresentationPreparationResult
 }
 
+/** Internal producer-owned result used only across the IO/caller handoff. */
+private class PreparedIncomingPresentationHandoffResult(
+    val ownerUserId: UserId,
+    val capsuleId: CapsuleId,
+    val material: PreparedPresentationMaterial,
+) : IncomingPresentationPreparationResult {
+    override fun toString(): String =
+        "IncomingPresentationPreparationResult.PreparedHandoff(<redacted>)"
+}
+
 /**
  * Closeable, scan/grant-independent handle for the next rendering checkpoint.
  * It owns the exact verified ciphertext snapshot and never exposes a path,
@@ -112,12 +125,16 @@ internal class IncomingPresentationPreparation(
     private val currentRecipientIdentity: suspend () -> CurrentRecipientEncryptionIdentity?,
     private val acceptanceGate: PresentationAcceptanceGate = PresentationAcceptanceGate(),
     private val envelopeCryptor: RecipientEnvelopeCryptor = RecipientEnvelopeCryptor(),
+    private val beforePreparedDelivery:
+        (CancellableContinuation<PreparedIncomingPresentation>) -> Unit = {},
+    private val onPreparedMaterialClosed: () -> Unit = {},
 ) {
 
     suspend fun prepare(
         ownerUserId: UserId,
         capsuleId: CapsuleId,
-    ): IncomingPresentationPreparationResult = withContext(Dispatchers.IO) {
+    ): IncomingPresentationPreparationResult {
+        val ioResult = withContext(Dispatchers.IO) {
         coroutineContext.ensureActive()
         val initialIdentity = try {
             currentRecipientIdentity()
@@ -362,9 +379,13 @@ internal class IncomingPresentationPreparation(
                 return@withContext rejected(IncomingPresentationPreparationRejection.ACCOUNT_CHANGED)
             }
 
-            val presentation = PreparedIncomingPresentation(ownerUserId, capsuleId, accepted)
+            val handoff = PreparedIncomingPresentationHandoffResult(
+                ownerUserId = ownerUserId,
+                capsuleId = capsuleId,
+                material = accepted,
+            )
             retainedMaterial = null
-            return@withContext IncomingPresentationPreparationResult.Prepared(presentation)
+            return@withContext handoff
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: IllegalArgumentException) {
@@ -386,6 +407,42 @@ internal class IncomingPresentationPreparation(
             envelopePlaintext?.fill(0)
             localCiphertexts.forEach { it.fill(0) }
             retainedMaterial?.close()
+        }
+        }
+        return when (ioResult) {
+            is PreparedIncomingPresentationHandoffResult ->
+                IncomingPresentationPreparationResult.Prepared(deliverPrepared(ioResult))
+            else -> ioResult
+        }
+    }
+
+    private suspend fun deliverPrepared(
+        handoff: PreparedIncomingPresentationHandoffResult,
+    ): PreparedIncomingPresentation = suspendCancellableCoroutine { continuation ->
+        val presentation = PreparedIncomingPresentation(
+            ownerUserId = handoff.ownerUserId,
+            capsuleId = handoff.capsuleId,
+            material = handoff.material,
+        )
+        try {
+            beforePreparedDelivery(continuation)
+        } catch (failure: Throwable) {
+            closePrepared(presentation)
+            throw failure
+        }
+        continuation.resume(presentation) { _, value, _ -> closePrepared(value) }
+    }
+
+    private fun closePrepared(presentation: PreparedIncomingPresentation) {
+        try {
+            presentation.close()
+        } catch (_: Exception) {
+            // Cleanup cannot replace cancellation or the producer result.
+        }
+        try {
+            onPreparedMaterialClosed()
+        } catch (_: Exception) {
+            // Test/diagnostic callbacks cannot affect the producer outcome.
         }
     }
 

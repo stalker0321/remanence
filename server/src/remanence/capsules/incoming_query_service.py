@@ -234,9 +234,9 @@ class IncomingCapsuleQueryService:
                 )
                 for capsule, envelope, delivery in page_rows
             )
-        if has_more is True:
-            if not items:
-                raise _error("INTERNAL_ERROR")
+        if type(has_more) is not bool:
+            raise _error("INTERNAL_ERROR")
+        if items:
             last = items[-1]
             encoded: str | None = None
             encode_mapped: IncomingCapsuleQueryError | None = None
@@ -249,13 +249,16 @@ class IncomingCapsuleQueryService:
             if encode_mapped is not None:
                 raise encode_mapped
             next_cursor = encoded
+        elif after is not None:
+            try:
+                next_cursor = encode_incoming_cursor(
+                    ready_at=after.ready_at, capsule_id=after.capsule_id
+                )
+            except Exception:
+                raise _error("INTERNAL_ERROR") from None
         else:
             next_cursor = None
-        if type(has_more) is not bool:
-            raise _error("INTERNAL_ERROR")
-        if has_more is False and next_cursor is not None:
-            raise _error("INTERNAL_ERROR")
-        if has_more is True and (type(next_cursor) is not str or not next_cursor):
+        if has_more is True and (not items or type(next_cursor) is not str or not next_cursor):
             raise _error("INTERNAL_ERROR")
         return IncomingCapsulePage(
             items=items, has_more=has_more, next_cursor=next_cursor

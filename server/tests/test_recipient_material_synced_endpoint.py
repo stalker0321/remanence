@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select, update
+from sqlalchemy.exc import DBAPIError, OperationalError
 
 pytest_plugins = ("test_registration_endpoint",)
 
@@ -269,6 +270,82 @@ def test_service_failure_rolls_back_endpoint_transaction(client_factory, monkeyp
     delivery = _delivery(factory, recipient_id, capsule_id)
     assert delivery.state is RecipientDeliveryStatus.AVAILABLE
     assert delivery.ciphertext_synced_at is None
+
+
+def test_transient_database_disconnect_is_retryable_and_rolls_back(
+    client_factory, monkeypatch
+) -> None:
+    client, factory = client_factory
+    _sender, recipient, capsule_id = _ready_world(client, factory, "retryabledb")
+    recipient_id = UUID(recipient["user"]["user_id"])
+    secret = "private-db-detail"
+
+    def fail_transiently(self, **_kwargs):
+        raise OperationalError(
+            "UPDATE private_statement",
+            {"private": secret},
+            RuntimeError(secret),
+            hide_parameters=True,
+            connection_invalidated=True,
+        )
+
+    monkeypatch.setattr(RecipientMaterialSyncedService, "mark_material_synced", fail_transiently)
+    response = _sync(client, recipient["access_token"], capsule_id)
+    _assert_problem_contract(response, status=503, code="INTERNAL_UNAVAILABLE")
+    assert secret not in response.text
+    delivery = _delivery(factory, recipient_id, capsule_id)
+    assert delivery.state is RecipientDeliveryStatus.AVAILABLE
+    assert delivery.ciphertext_synced_at is None
+
+
+def test_transient_database_disconnect_during_commit_is_retryable(monkeypatch) -> None:
+    capsule_id = uuid4()
+    recipient_id = uuid4()
+    secret = "private-commit-detail"
+
+    def fake_mark(self, **kwargs):
+        return RecipientMaterialSyncedResult(
+            capsule_id=kwargs["capsule_id"],
+            state=RecipientDeliveryStatus.CIPHERTEXT_SYNCED,
+            ciphertext_synced_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        )
+
+    monkeypatch.setattr(RecipientMaterialSyncedService, "mark_material_synced", fake_mark)
+    app = create_app(settings=Settings(mode=AppMode.TEST))
+    app.dependency_overrides[get_authenticated_principal] = lambda: AuthenticatedPrincipal(
+        user_id=recipient_id, session_id=uuid4()
+    )
+
+    class _Session:
+        def begin(self):
+            class _Transaction:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, _exc_value, _traceback):
+                    if exc_type is None:
+                        raise DBAPIError(
+                            "COMMIT private_statement",
+                            {"private": secret},
+                            RuntimeError(secret),
+                            hide_parameters=True,
+                            connection_invalidated=True,
+                        )
+                    return False
+
+            return _Transaction()
+
+    app.dependency_overrides[get_db_session] = lambda: _Session()
+    response = TestClient(app).post(
+        f"/v1/capsules/{capsule_id}/material-synced",
+        content=b"",
+        headers={
+            "Authorization": "Bearer unused",
+            "Content-Length": "0",
+        },
+    )
+    _assert_problem_contract(response, status=503, code="INTERNAL_UNAVAILABLE")
+    assert secret not in response.text
 
 
 def test_route_has_no_storage_or_idempotency_surface() -> None:

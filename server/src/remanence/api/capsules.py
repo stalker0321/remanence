@@ -13,6 +13,7 @@ from typing import BinaryIO, Literal
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy.exc import DBAPIError, DisconnectionError
 from sqlalchemy.orm import Session
 
 from remanence.api.dependencies import (
@@ -66,6 +67,7 @@ from remanence.capsules.recipient_material_synced_service import (
     RecipientMaterialSyncedError,
     RecipientMaterialSyncedResult,
     RecipientMaterialSyncedService,
+    is_transient_database_unavailability,
 )
 from remanence.capsules.schemas import (
     CapsuleDraftValidationError,
@@ -181,6 +183,7 @@ class IncomingCapsulesResponse(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True, frozen=True)
 
     items: tuple[IncomingCapsuleItemResponse, ...]
+    has_more: bool
     next_cursor: str | None
 
 
@@ -552,6 +555,15 @@ async def mark_capsule_material_synced(
         return _problem_response(request, exc.code)
     except RecipientMaterialSyncedError as exc:
         return _problem_response(request, exc.code)
+    except DisconnectionError:
+        return _problem_response(request, "INTERNAL_UNAVAILABLE")
+    except DBAPIError as exc:
+        return _problem_response(
+            request,
+            "INTERNAL_UNAVAILABLE"
+            if is_transient_database_unavailability(exc)
+            else "INTERNAL_ERROR",
+        )
     except Exception:
         return _problem_response(request, "INTERNAL_ERROR")
 
@@ -1022,7 +1034,7 @@ def _incoming_item_response(
 
 
 def _incoming_page_response(
-    result: object, *, recipient_id: uuid.UUID
+    result: object, *, recipient_id: uuid.UUID, requested_cursor: str | None
 ) -> IncomingCapsulesResponse:
     if not isinstance(result, IncomingCapsulePage):
         raise IncomingCapsuleQueryError("INTERNAL_ERROR")
@@ -1031,9 +1043,21 @@ def _incoming_page_response(
     if not isinstance(result.items, tuple):
         raise IncomingCapsuleQueryError("INTERNAL_ERROR")
     items = tuple(_incoming_item_response(item, recipient_id=recipient_id) for item in result.items)
-    if result.has_more is True:
-        if not items or type(result.next_cursor) is not str or not result.next_cursor:
+    if result.has_more is True and not items:
+        raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+    if result.next_cursor is not None:
+        if type(result.next_cursor) is not str or not result.next_cursor:
             raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+        try:
+            decoded = decode_incoming_cursor(result.next_cursor)
+            canonical = encode_incoming_cursor(
+                ready_at=decoded.ready_at, capsule_id=decoded.capsule_id
+            )
+        except Exception:
+            raise IncomingCapsuleQueryError("INTERNAL_ERROR") from None
+        if canonical != result.next_cursor:
+            raise IncomingCapsuleQueryError("INTERNAL_ERROR")
+    if items:
         last = result.items[-1]
         if not isinstance(last, IncomingCapsuleSnapshot):
             raise IncomingCapsuleQueryError("INTERNAL_ERROR")
@@ -1049,11 +1073,13 @@ def _incoming_page_response(
             raise IncomingCapsuleQueryError("INTERNAL_ERROR")
         next_cursor: str | None = result.next_cursor
     else:
-        if result.next_cursor is not None:
+        if result.next_cursor != requested_cursor:
             raise IncomingCapsuleQueryError("INTERNAL_ERROR")
-        next_cursor = None
+        next_cursor = result.next_cursor
     try:
-        return IncomingCapsulesResponse(items=items, next_cursor=next_cursor)
+        return IncomingCapsulesResponse(
+            items=items, has_more=result.has_more, next_cursor=next_cursor
+        )
     except IncomingCapsuleQueryError:
         raise
     except Exception:
@@ -1078,7 +1104,11 @@ def list_incoming_capsules(
                 cursor=cursor,
                 limit=limit,
             )
-            dto = _incoming_page_response(result, recipient_id=principal.user_id)
+            dto = _incoming_page_response(
+                result,
+                recipient_id=principal.user_id,
+                requested_cursor=cursor,
+            )
             try:
                 payload = dto.model_dump(mode="json")
             except Exception:

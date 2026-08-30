@@ -123,6 +123,12 @@ PROBLEM_CATALOG: Final[dict[str, ProblemSpec]] = {
         "Handle not found",
         "The handle was not found.",
     ),
+    "USER_NOT_FOUND": _spec(
+        "USER_NOT_FOUND",
+        404,
+        "User not found",
+        "The user was not found.",
+    ),
     "RECIPIENT_NOT_CONFIRMED": _spec(
         "RECIPIENT_NOT_CONFIRMED",
         409,

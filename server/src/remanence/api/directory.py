@@ -1,4 +1,4 @@
-"""Handle-directory lookup and public key-bundle endpoints."""
+"""Handle/user-directory lookup and public key-bundle endpoints."""
 
 import hashlib
 import uuid
@@ -84,6 +84,33 @@ def lookup_handle(
         directory_version=_directory_version(key_bundle),
     )
     return body
+
+
+@router.get("/v1/directory/users/{user_id}", response_model=DirectoryLookupResponse)
+def lookup_user(
+    user_id: uuid.UUID,
+    request: Request,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    session: Session = Depends(get_db_session),
+) -> DirectoryLookupResponse | JSONResponse:
+    user = session.scalar(select(User).where(User.id == user_id))
+    if user is None:
+        return problem_response(request, "USER_NOT_FOUND")
+    key_bundle = session.scalar(
+        select(UserKeyBundle).where(
+            UserKeyBundle.user_id == user_id,
+            UserKeyBundle.status == KeyBundleStatus.ACTIVE,
+        )
+    )
+    if key_bundle is None:
+        return problem_response(request, "USER_NOT_FOUND")
+    if user.id != user_id or key_bundle.user_id != user_id:
+        return problem_response(request, "USER_NOT_FOUND")
+    return DirectoryLookupResponse(
+        user=DirectoryUserSummary(user_id=user.id, handle=user.handle_normalized),
+        key_bundle=DirectoryKeyBundleResponse(**_public_bundle_fields(key_bundle)),
+        directory_version=_directory_version(key_bundle),
+    )
 
 
 @router.get("/v1/directory/key-bundles/{key_bundle_id}", response_model=KeyBundleByIdResponse)

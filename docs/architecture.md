@@ -283,6 +283,7 @@ account has no DAO, candidate-index, worker, or presentation path to it.
 `sync_cursor`
 
 - authenticated user ID, stream name, opaque server cursor, last successful sync.
+- Incoming pages carry `has_more` separately from the high-watermark cursor; a terminal non-empty page persists its final-item cursor, and an empty continuation preserves its valid input cursor.
 
 ### Secrets and files
 

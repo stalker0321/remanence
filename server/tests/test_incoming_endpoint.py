@@ -44,7 +44,7 @@ from test_capsule_draft_endpoint import _assert_problem, _register
 from test_incoming_query_service import _add_incoming_ready
 
 
-_PAGE_KEYS = frozenset({"items", "next_cursor"})
+_PAGE_KEYS = frozenset({"items", "has_more", "next_cursor"})
 _ITEM_KEYS = frozenset(
     {
         "capsule_id",
@@ -192,7 +192,19 @@ def test_incoming_route_has_no_storage_dependency() -> None:
     assert "blob_store" not in params
     assert "ciphertext_stager" not in params
     assert "use_cache" in source
-    assert set(IncomingCapsulesResponse.model_fields) == {"items", "next_cursor"}
+    assert set(IncomingCapsulesResponse.model_fields) == {"items", "has_more", "next_cursor"}
+
+
+def test_response_schema_requires_exact_has_more_field() -> None:
+    assert tuple(IncomingCapsulesResponse.model_fields) == ("items", "has_more", "next_cursor")
+    invalid = [
+        {"items": [], "next_cursor": None},
+        {"items": [], "has_more": 1, "next_cursor": None},
+        {"items": [], "has_more": False, "next_cursor": None, "extra": True},
+    ]
+    for payload in invalid:
+        with pytest.raises(ValidationError):
+            IncomingCapsulesResponse.model_validate(payload)
 
 
 def test_auth_and_query_strictness_do_not_need_database() -> None:
@@ -249,6 +261,7 @@ def test_default_max_limit_and_allow_list_from_mocked_service(monkeypatch: pytes
         statement=b"stmt-two",
     )
     next_cursor = encode_incoming_cursor(ready_at=first.ready_at, capsule_id=first.capsule_id)
+    terminal_cursor = encode_incoming_cursor(ready_at=second.ready_at, capsule_id=second.capsule_id)
 
     def fake_list(self, **kwargs):
         captured.append(kwargs)
@@ -257,8 +270,8 @@ def test_default_max_limit_and_allow_list_from_mocked_service(monkeypatch: pytes
         if cursor is None and limit == 1:
             return IncomingCapsulePage(items=(first,), has_more=True, next_cursor=next_cursor)
         if cursor is None:
-            return IncomingCapsulePage(items=(first, second), has_more=False, next_cursor=None)
-        return IncomingCapsulePage(items=(second,), has_more=False, next_cursor=None)
+            return IncomingCapsulePage(items=(first, second), has_more=False, next_cursor=terminal_cursor)
+        return IncomingCapsulePage(items=(second,), has_more=False, next_cursor=terminal_cursor)
 
     client, principal_id, rolled = _mocked_client(monkeypatch, fake_list, user_id=recipient_id)
     default = _get(client, "unused")
@@ -266,8 +279,8 @@ def test_default_max_limit_and_allow_list_from_mocked_service(monkeypatch: pytes
     assert default.headers["content-type"].startswith("application/json")
     body = default.json()
     _assert_page_keys(body)
-    assert body["next_cursor"] is None
-    assert "has_more" not in body
+    assert body["next_cursor"] == terminal_cursor
+    assert body["has_more"] is False
     assert len(body["items"]) == 2
     item = body["items"][0]
     assert item["capsule_id"] == str(first.capsule_id)
@@ -301,14 +314,15 @@ def test_default_max_limit_and_allow_list_from_mocked_service(monkeypatch: pytes
     assert paged.status_code == 200
     page_body = paged.json()
     assert page_body["next_cursor"] == next_cursor
+    assert page_body["has_more"] is True
     replay = _get(client, "unused", f"limit=1&cursor={next_cursor}")
     assert replay.status_code == 200
     replay_again = _get(client, "unused", f"limit=1&cursor={next_cursor}")
     assert replay.json() == replay_again.json()
     assert [row["capsule_id"] for row in replay.json()["items"]] == [str(second.capsule_id)]
-    assert replay.json()["next_cursor"] is None
+    assert replay.json()["next_cursor"] == terminal_cursor
+    assert replay.json()["has_more"] is False
     assert "object_key" not in default.text
-    assert "has_more" not in default.text
     assert rolled["value"] is False
 
 
@@ -335,12 +349,15 @@ def test_malformed_service_result_and_db_error_roll_back(monkeypatch: pytest.Mon
 def test_response_dump_failure_is_redacted_internal(monkeypatch: pytest.MonkeyPatch) -> None:
     recipient_id = uuid4()
     item = _snapshot(recipient_id=recipient_id, ready_at=_NOW)
+    item_cursor = encode_incoming_cursor(ready_at=item.ready_at, capsule_id=item.capsule_id)
 
     def fake_list(self, **kwargs):
-        return IncomingCapsulePage(items=(item,), has_more=False, next_cursor=None)
+        return IncomingCapsulePage(items=(item,), has_more=False, next_cursor=item_cursor)
 
     def boom(self, *args, **kwargs):
-        IncomingCapsulesResponse.model_validate({"items": "secret-wire-leak", "next_cursor": None})
+        IncomingCapsulesResponse.model_validate(
+            {"items": "secret-wire-leak", "has_more": False, "next_cursor": None}
+        )
 
     monkeypatch.setattr(IncomingCapsulesResponse, "model_dump", boom)
     client, _principal_id, rolled = _mocked_client(monkeypatch, fake_list, user_id=recipient_id)
@@ -350,6 +367,61 @@ def test_response_dump_failure_is_redacted_internal(monkeypatch: pytest.MonkeyPa
     assert "secret-wire-leak" not in response.text
     with pytest.raises(ValidationError):
         boom(None)
+
+
+def test_empty_page_with_different_canonical_cursor_is_redacted_and_rolled_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested = encode_incoming_cursor(ready_at=_NOW, capsule_id=uuid4())
+    different = encode_incoming_cursor(
+        ready_at=_NOW + timedelta(seconds=1), capsule_id=uuid4()
+    )
+
+    def fake_list(self, **kwargs):
+        return IncomingCapsulePage(items=(), has_more=False, next_cursor=different)
+
+    client, _principal_id, rolled = _mocked_client(monkeypatch, fake_list)
+    response = _get(client, "unused", f"cursor={requested}")
+
+    _assert_problem(response, status=500, code="INTERNAL_ERROR")
+    assert rolled["value"] is True
+    assert different not in response.text
+
+
+def test_empty_continuation_echoes_exact_requested_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested = encode_incoming_cursor(ready_at=_NOW, capsule_id=uuid4())
+
+    def fake_list(self, **kwargs):
+        return IncomingCapsulePage(items=(), has_more=False, next_cursor=requested)
+
+    client, _principal_id, rolled = _mocked_client(monkeypatch, fake_list)
+    response = _get(client, "unused", f"cursor={requested}")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    _assert_page_keys(body)
+    assert body["items"] == []
+    assert body["has_more"] is False
+    assert body["next_cursor"] == requested
+    assert rolled["value"] is False
+
+
+def test_initial_empty_page_requires_null_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    invented = encode_incoming_cursor(ready_at=_NOW, capsule_id=uuid4())
+
+    def fake_list(self, **kwargs):
+        return IncomingCapsulePage(items=(), has_more=False, next_cursor=invented)
+
+    client, _principal_id, rolled = _mocked_client(monkeypatch, fake_list)
+    response = _get(client, "unused")
+
+    _assert_problem(response, status=500, code="INTERNAL_ERROR")
+    assert rolled["value"] is True
+    assert invented not in response.text
 
 
 def test_live_isolation_ready_only_synced_allow_list_and_bytes(client_factory) -> None:
@@ -433,6 +505,7 @@ def test_live_isolation_ready_only_synced_allow_list_and_bytes(client_factory) -
     empty_body = empty.json()
     _assert_page_keys(empty_body)
     assert empty_body["items"] == []
+    assert empty_body["has_more"] is False
     assert empty_body["next_cursor"] is None
 
     first = _get(client, recipient_reg["access_token"], "limit=1")
@@ -451,14 +524,16 @@ def test_live_isolation_ready_only_synced_allow_list_and_bytes(client_factory) -
     assert continuation.status_code == 200
     cont_body = continuation.json()
     assert [item["capsule_id"] for item in cont_body["items"]] == [str(synced_id)]
-    assert cont_body["next_cursor"] is None
+    assert cont_body["has_more"] is False
+    assert cont_body["next_cursor"] is not None
 
     full = _get(client, recipient_reg["access_token"], "limit=100")
     assert full.status_code == 200
     full_body = full.json()
     _assert_page_keys(full_body)
     assert [item["capsule_id"] for item in full_body["items"]] == [str(available_id), str(synced_id)]
-    assert full_body["next_cursor"] is None
+    assert full_body["has_more"] is False
+    assert full_body["next_cursor"] == cont_body["next_cursor"]
     assert str(draft_id) not in full.text
     assert str(aborted_id) not in full.text
     other_page = _get(client, other_reg["access_token"])
@@ -496,6 +571,5 @@ def test_live_isolation_ready_only_synced_allow_list_and_bytes(client_factory) -
     assert _HANDLE_CANARY[:12] not in leaked
     assert _OBJECT_KEY_CANARY not in leaked
     assert "object_key" not in leaked
-    assert "has_more" not in leaked
     assert "AVAILABLE" not in leaked
     assert "CIPHERTEXT_SYNCED" not in leaked

@@ -244,6 +244,10 @@ Request `{ "handle": "new_handle" }`. Database uniqueness is atomic. Response re
 
 Returns `404 HANDLE_NOT_FOUND` or user summary, active public key bundle, and an opaque `directory_version`. The sender does not cache it beyond the current create flow and stores immutable IDs/key ID after explicit confirmation.
 
+### `GET /v1/directory/users/{user_id}`
+
+Requires authentication and resolves an immutable recipient user ID to the same public-only user summary, current handle, current `ACTIVE` public key bundle, and opaque `directory_version` shape as handle lookup. The response user ID and key-bundle user ID equal the requested UUID; retired and revoked bundles are never returned. An unknown user or user without an active public bundle returns terminal `404 USER_NOT_FOUND` with `retryable: false`; malformed UUID paths return `422 VALIDATION_FAILED`. Email and private key material are never returned.
+
 ### `GET /v1/directory/key-bundles/{key_bundle_id}`
 
 Returns the immutable public portion of an `ACTIVE`, `RETIRED`, or `REVOKED` bundle by ID to an authenticated client. Recipients use this endpoint to verify capsules signed before a sender rotated keys. It never resolves routing by handle and never returns email/private material. A revoked response remains available but is marked `REVOKED`; a capsule not yet durably accepted fails closed when authenticated only by that bundle. Once the accepted sender-index bundle has durably cached its verified public key, later revocation cannot invalidate that already synchronized material while offline; stronger revocation and key transparency are M4 concerns.
@@ -326,7 +330,7 @@ Authenticated sender abort of an owned `DRAFT`, including an expired draft, retu
 
 Returns only `READY` capsules for the authenticated recipient, oldest page first. Each item carries route/key IDs, protocol/ready time, signed statement, recipient envelope, and blob declarations. It contains no note, place, sender handle, thumbnail, recognition result, or open state.
 
-The response is exactly `{items, has_more, next_cursor}`. `has_more` is the authoritative loop signal: a page with items always carries the canonical cursor of its final item, including a terminal page; an empty continuation echoes its requested cursor, while an initial empty page carries `null`. The cursor is an opaque encoding of `(ready_at, capsule_id)` and is safe to replay. Local upsert by IDs makes replay idempotent. `limit` defaults 50 and maxes 100.
+The response is exactly `{items, has_more, next_cursor}`. `has_more` is the authoritative loop signal: a page with items always carries the canonical cursor of its final item, including a terminal page; it never moves backward or advances independently of the final item or valid input cursor. The cursor is an opaque encoding of `(ready_at, capsule_id)` and is safe to replay. When a valid non-null cursor yields an empty page, the server echoes that cursor; an initial empty page carries `null`. Local upsert by IDs makes replay idempotent. `limit` defaults 50 and maxes 100.
 
 ### `GET /v1/capsules/{capsule_id}/blobs/{blob_id}`
 
@@ -370,7 +374,7 @@ Errors contain `type`, `title`, HTTP `status`, stable `code`, redacted `detail`,
 Required stable codes:
 
 - `AUTH_INVALID`, `AUTH_EXPIRED`, `SESSION_REPLAYED`, `RATE_LIMITED`;
-- `EMAIL_UNAVAILABLE`, `HANDLE_INVALID`, `HANDLE_UNAVAILABLE`, `HANDLE_NOT_FOUND`;
+- `EMAIL_UNAVAILABLE`, `HANDLE_INVALID`, `HANDLE_UNAVAILABLE`, `HANDLE_NOT_FOUND`, `USER_NOT_FOUND`;
 - `RECIPIENT_NOT_CONFIRMED`, `RECIPIENT_KEY_STALE`, `KEY_BUNDLE_INVALID`, `KEY_BUNDLE_NOT_FOUND`, `KEY_BUNDLE_REVOKED`;
 - `CAPSULE_NOT_FOUND`, `CAPSULE_STATE_INVALID`, `DRAFT_EXPIRED`;
 - `BLOB_NOT_DECLARED`, `BLOB_SIZE_INVALID`, `BLOB_HASH_MISMATCH`, `BLOB_CONFLICT`;

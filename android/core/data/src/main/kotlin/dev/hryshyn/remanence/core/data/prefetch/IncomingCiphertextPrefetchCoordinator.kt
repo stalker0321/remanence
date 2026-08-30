@@ -158,35 +158,40 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
                 is CandidateOutcome.Stopped -> return@withContext outcome.result
                 is CandidateOutcome.Retry -> return@withContext outcome.result
                 is CandidateOutcome.Terminal -> {
-                    if (!outcome.quarantineCapsule) return@withContext outcome.result
-                    when (val session = checkSession(ownerUserId)) {
-                        is SessionCheck.Ready -> Unit
-                        is SessionCheck.Stopped -> return@withContext session.result
-                        is SessionCheck.Retry -> return@withContext session.result
-                    }
-                    val quarantine = try {
-                        prefetchDao.quarantineReadyIndexCachedForOwner(
-                            ownerUserId.toRestString(),
-                            selectedRow.capsuleId,
-                        )
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (_: Exception) {
-                        IncomingCapsuleQuarantineResult.DatabaseUnavailable
-                    }
-                    when (quarantine) {
-                        IncomingCapsuleQuarantineResult.Quarantined,
-                        IncomingCapsuleQuarantineResult.AlreadyCorrupt,
-                        -> quarantinedCapsules++
-                        IncomingCapsuleQuarantineResult.DatabaseUnavailable,
-                        IncomingCapsuleQuarantineResult.ConcurrentOrStateChanged,
-                        -> return@withContext IncomingPrefetchResult.Retryable(
-                            IncomingPrefetchRetryReason.DATABASE_UNAVAILABLE,
-                        )
-                        IncomingCapsuleQuarantineResult.MissingOrForeignOwner,
-                        -> return@withContext IncomingPrefetchResult.Terminal(
-                            IncomingPrefetchTerminalReason.DATABASE_STATE_INVALID,
-                        )
+                    when (outcome.disposition) {
+                        TerminalDisposition.STOP_WITHOUT_QUARANTINE ->
+                            return@withContext outcome.result
+                        TerminalDisposition.QUARANTINE_CAPSULE -> {
+                            when (val session = checkSession(ownerUserId)) {
+                                is SessionCheck.Ready -> Unit
+                                is SessionCheck.Stopped -> return@withContext session.result
+                                is SessionCheck.Retry -> return@withContext session.result
+                            }
+                            val quarantine = try {
+                                prefetchDao.quarantineReadyIndexCachedForOwner(
+                                    ownerUserId.toRestString(),
+                                    selectedRow.capsuleId,
+                                )
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                IncomingCapsuleQuarantineResult.DatabaseUnavailable
+                            }
+                            when (quarantine) {
+                                IncomingCapsuleQuarantineResult.Quarantined,
+                                IncomingCapsuleQuarantineResult.AlreadyCorrupt,
+                                -> quarantinedCapsules++
+                                IncomingCapsuleQuarantineResult.DatabaseUnavailable,
+                                IncomingCapsuleQuarantineResult.ConcurrentOrStateChanged,
+                                -> return@withContext IncomingPrefetchResult.Retryable(
+                                    IncomingPrefetchRetryReason.DATABASE_UNAVAILABLE,
+                                )
+                                IncomingCapsuleQuarantineResult.MissingOrForeignOwner,
+                                -> return@withContext IncomingPrefetchResult.Terminal(
+                                    IncomingPrefetchTerminalReason.DATABASE_STATE_INVALID,
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -218,18 +223,21 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
             parseCandidate(ownerUserId, current)
         } catch (_: IllegalArgumentException) {
             return CandidateOutcome.Terminal(
-                IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.INVALID_METADATA),
+                result = IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.INVALID_METADATA),
+                disposition = TerminalDisposition.QUARANTINE_CAPSULE,
             )
         }
         val paths = try {
             derivePaths(candidate)
         } catch (_: SecurityException) {
             return CandidateOutcome.Terminal(
-                IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.INVALID_METADATA),
+                result = IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.INVALID_METADATA),
+                disposition = TerminalDisposition.QUARANTINE_CAPSULE,
             )
         } catch (_: IllegalArgumentException) {
             return CandidateOutcome.Terminal(
-                IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.INVALID_METADATA),
+                result = IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.INVALID_METADATA),
+                disposition = TerminalDisposition.QUARANTINE_CAPSULE,
             )
         } catch (_: IOException) {
             return CandidateOutcome.Retry(
@@ -249,7 +257,10 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
                         IncomingPrefetchResult.Retryable(IncomingPrefetchRetryReason.LOCAL_STORAGE),
                     )
                     CachedFilesVerification.Invalid -> CandidateOutcome.Terminal(
-                        IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.CACHED_FILE_INVALID),
+                        result = IncomingPrefetchResult.Terminal(
+                            IncomingPrefetchTerminalReason.CACHED_FILE_INVALID,
+                        ),
+                        disposition = TerminalDisposition.QUARANTINE_CAPSULE,
                     )
                 }
                 FileVerification.MISSING,
@@ -261,7 +272,10 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
                 FileVerification.NOT_REGULAR,
                 FileVerification.MISMATCH,
                 -> CandidateOutcome.Terminal(
-                    IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.CACHED_FILE_INVALID),
+                    result = IncomingPrefetchResult.Terminal(
+                        IncomingPrefetchTerminalReason.CACHED_FILE_INVALID,
+                    ),
+                    disposition = TerminalDisposition.QUARANTINE_CAPSULE,
                 )
             }
         }
@@ -270,7 +284,8 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
             is TempPreparation.Ready -> prepared
             is TempPreparation.Download -> prepared
             TempPreparation.Unsafe -> return CandidateOutcome.Terminal(
-                IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.INVALID_METADATA),
+                result = IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.INVALID_METADATA),
+                disposition = TerminalDisposition.QUARANTINE_CAPSULE,
             )
             TempPreparation.Unavailable -> return CandidateOutcome.Retry(
                 IncomingPrefetchResult.Retryable(IncomingPrefetchRetryReason.LOCAL_STORAGE),
@@ -317,7 +332,10 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
                 ) {
                     cleanupTemp(temp.path)
                     return CandidateOutcome.Terminal(
-                        IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.DOWNLOAD_REJECTED),
+                        result = IncomingPrefetchResult.Terminal(
+                            IncomingPrefetchTerminalReason.DOWNLOAD_REJECTED,
+                        ),
+                        disposition = TerminalDisposition.QUARANTINE_CAPSULE,
                     )
                 }
                 when (verifyExactFile(temp.path, candidate.expectedSizeBytes, candidate.expectedSha256)) {
@@ -333,13 +351,15 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
                     -> {
                         cleanupTemp(temp.path)
                         return CandidateOutcome.Terminal(
-                            IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.DOWNLOAD_REJECTED),
+                            result = IncomingPrefetchResult.Terminal(
+                                IncomingPrefetchTerminalReason.DOWNLOAD_REJECTED,
+                            ),
+                            disposition = TerminalDisposition.QUARANTINE_CAPSULE,
                         )
                     }
                 }
             }
             is RecipientBlobDownloadResult.Failure -> {
-                if (!downloaded.retryable) cleanupTemp(temp.path)
                 return mapDownloadFailure(downloaded)
             }
         }
@@ -372,32 +392,7 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
         }
         when (adopted) {
             is IncomingCiphertextAdoptionResult.Failure -> {
-                if (!adopted.retryable) cleanupTemp(temp.path)
-                return if (adopted.retryable) {
-                    CandidateOutcome.Retry(
-                        IncomingPrefetchResult.Retryable(IncomingPrefetchRetryReason.ADOPTION),
-                    )
-                } else {
-                    CandidateOutcome.Terminal(
-                        IncomingPrefetchResult.Terminal(
-                            when (adopted.reason) {
-                                IncomingCiphertextAdoptionFailure.DESTINATION_CONFLICT ->
-                                    IncomingPrefetchTerminalReason.DESTINATION_CONFLICT
-                                IncomingCiphertextAdoptionFailure.SOURCE_OUTSIDE_OWNER_TEMP,
-                                IncomingCiphertextAdoptionFailure.SOURCE_PATH_UNSAFE,
-                                IncomingCiphertextAdoptionFailure.DESTINATION_PATH_UNSAFE,
-                                -> IncomingPrefetchTerminalReason.INVALID_METADATA
-                                IncomingCiphertextAdoptionFailure.SOURCE_MISSING,
-                                IncomingCiphertextAdoptionFailure.SOURCE_NOT_REGULAR,
-                                IncomingCiphertextAdoptionFailure.SOURCE_INTEGRITY_FAILED,
-                                IncomingCiphertextAdoptionFailure.ATOMIC_MOVE_UNAVAILABLE,
-                                IncomingCiphertextAdoptionFailure.DURABILITY_UNAVAILABLE,
-                                IncomingCiphertextAdoptionFailure.LOCAL_STORAGE,
-                                -> IncomingPrefetchTerminalReason.ADOPTION_REJECTED
-                            },
-                        ),
-                    )
-                }
+                return mapAdoptionFailure(adopted)
             }
             is IncomingCiphertextAdoptionResult.Adopted -> {
                 val destination = adopted.destination
@@ -407,7 +402,10 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
                     !sameNormalizedPath(destination.asFile().toPath(), paths.destination)
                 ) {
                     return CandidateOutcome.Terminal(
-                        IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.ADOPTION_REJECTED),
+                        result = IncomingPrefetchResult.Terminal(
+                            IncomingPrefetchTerminalReason.ADOPTION_REJECTED,
+                        ),
+                        disposition = TerminalDisposition.QUARANTINE_CAPSULE,
                     )
                 }
             }
@@ -425,7 +423,10 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
                 IncomingPrefetchResult.Retryable(IncomingPrefetchRetryReason.LOCAL_STORAGE),
             )
             CachedFilesVerification.Invalid -> CandidateOutcome.Terminal(
-                IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.CACHED_FILE_INVALID),
+                result = IncomingPrefetchResult.Terminal(
+                    IncomingPrefetchTerminalReason.CACHED_FILE_INVALID,
+                ),
+                disposition = TerminalDisposition.QUARANTINE_CAPSULE,
             )
         }
     }
@@ -470,12 +471,18 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
                 IncomingPrefetchResult.Retryable(IncomingPrefetchRetryReason.DATABASE_UNAVAILABLE),
             )
             IncomingPrefetchCommitResult.MissingOrForeignOwner -> CandidateOutcome.Terminal(
-                IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.DATABASE_STATE_INVALID),
+                result = IncomingPrefetchResult.Terminal(
+                    IncomingPrefetchTerminalReason.DATABASE_STATE_INVALID,
+                ),
+                disposition = TerminalDisposition.QUARANTINE_CAPSULE,
             )
             IncomingPrefetchCommitResult.InvalidBinding,
             IncomingPrefetchCommitResult.IllegalState,
             -> CandidateOutcome.Terminal(
-                IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.DATABASE_STATE_INVALID),
+                result = IncomingPrefetchResult.Terminal(
+                    IncomingPrefetchTerminalReason.DATABASE_STATE_INVALID,
+                ),
+                disposition = TerminalDisposition.QUARANTINE_CAPSULE,
             )
         }
     }
@@ -833,36 +840,67 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
 
     private fun mapDownloadFailure(
         failure: RecipientBlobDownloadResult.Failure,
-    ): CandidateOutcome = if (failure.retryable) {
-        CandidateOutcome.Retry(
-            IncomingPrefetchResult.Retryable(
-                if (failure.reason == RecipientBlobDownloadFailure.LOCAL_STORAGE) {
-                    IncomingPrefetchRetryReason.LOCAL_STORAGE
-                } else {
-                    IncomingPrefetchRetryReason.DOWNLOAD
-                },
-            ),
+    ): CandidateOutcome = when (failure.reason) {
+        RecipientBlobDownloadFailure.AUTH_INVALID -> CandidateOutcome.Terminal(
+            result = IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.AUTH_INVALID),
+            disposition = TerminalDisposition.STOP_WITHOUT_QUARANTINE,
         )
-    } else {
-        CandidateOutcome.Terminal(
-            result = IncomingPrefetchResult.Terminal(
-                when (failure.reason) {
-                    RecipientBlobDownloadFailure.AUTH_INVALID -> IncomingPrefetchTerminalReason.AUTH_INVALID
-                    RecipientBlobDownloadFailure.NOT_FOUND -> IncomingPrefetchTerminalReason.DOWNLOAD_NOT_FOUND
-                    RecipientBlobDownloadFailure.INTEGRITY_FAILED,
-                    RecipientBlobDownloadFailure.DESTINATION_NOT_FRESH,
-                    RecipientBlobDownloadFailure.INVALID_RESPONSE,
-                    RecipientBlobDownloadFailure.HTTP,
-                    RecipientBlobDownloadFailure.VALIDATION_FAILED,
-                    RecipientBlobDownloadFailure.RATE_LIMITED,
-                    RecipientBlobDownloadFailure.NETWORK,
-                    RecipientBlobDownloadFailure.LOCAL_STORAGE,
-                    RecipientBlobDownloadFailure.INTERNAL_ERROR,
-                    -> IncomingPrefetchTerminalReason.DOWNLOAD_REJECTED
-                },
-            ),
-            quarantineCapsule = failure.reason != RecipientBlobDownloadFailure.AUTH_INVALID,
+        RecipientBlobDownloadFailure.NOT_FOUND -> CandidateOutcome.Terminal(
+            result = IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.DOWNLOAD_NOT_FOUND),
+            disposition = TerminalDisposition.QUARANTINE_CAPSULE,
         )
+        RecipientBlobDownloadFailure.INTEGRITY_FAILED -> CandidateOutcome.Terminal(
+            result = IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.DOWNLOAD_REJECTED),
+            disposition = TerminalDisposition.QUARANTINE_CAPSULE,
+        )
+        RecipientBlobDownloadFailure.DESTINATION_NOT_FRESH,
+        RecipientBlobDownloadFailure.LOCAL_STORAGE,
+        -> CandidateOutcome.Retry(
+            IncomingPrefetchResult.Retryable(IncomingPrefetchRetryReason.LOCAL_STORAGE),
+        )
+        RecipientBlobDownloadFailure.INVALID_RESPONSE,
+        RecipientBlobDownloadFailure.HTTP,
+        RecipientBlobDownloadFailure.VALIDATION_FAILED,
+        RecipientBlobDownloadFailure.RATE_LIMITED,
+        RecipientBlobDownloadFailure.NETWORK,
+        RecipientBlobDownloadFailure.INTERNAL_ERROR,
+        -> CandidateOutcome.Retry(
+            IncomingPrefetchResult.Retryable(IncomingPrefetchRetryReason.DOWNLOAD),
+        )
+    }
+
+    private fun mapAdoptionFailure(
+        failure: IncomingCiphertextAdoptionResult.Failure,
+    ): CandidateOutcome = when (failure.reason) {
+        IncomingCiphertextAdoptionFailure.DESTINATION_CONFLICT -> CandidateOutcome.Terminal(
+            result = IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.DESTINATION_CONFLICT),
+            disposition = TerminalDisposition.QUARANTINE_CAPSULE,
+        )
+        IncomingCiphertextAdoptionFailure.SOURCE_OUTSIDE_OWNER_TEMP,
+        IncomingCiphertextAdoptionFailure.SOURCE_PATH_UNSAFE,
+        IncomingCiphertextAdoptionFailure.DESTINATION_PATH_UNSAFE,
+        -> CandidateOutcome.Terminal(
+            result = IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.INVALID_METADATA),
+            disposition = TerminalDisposition.QUARANTINE_CAPSULE,
+        )
+        IncomingCiphertextAdoptionFailure.SOURCE_NOT_REGULAR,
+        IncomingCiphertextAdoptionFailure.SOURCE_INTEGRITY_FAILED,
+        -> CandidateOutcome.Terminal(
+            result = IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.ADOPTION_REJECTED),
+            disposition = TerminalDisposition.QUARANTINE_CAPSULE,
+        )
+        IncomingCiphertextAdoptionFailure.SOURCE_MISSING,
+        IncomingCiphertextAdoptionFailure.ATOMIC_MOVE_UNAVAILABLE,
+        IncomingCiphertextAdoptionFailure.DURABILITY_UNAVAILABLE,
+        IncomingCiphertextAdoptionFailure.LOCAL_STORAGE,
+        -> CandidateOutcome.Retry(
+            IncomingPrefetchResult.Retryable(IncomingPrefetchRetryReason.LOCAL_STORAGE),
+        )
+    }
+
+    private enum class TerminalDisposition {
+        QUARANTINE_CAPSULE,
+        STOP_WITHOUT_QUARANTINE,
     }
 
     private sealed interface CandidateOutcome {
@@ -872,7 +910,7 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
         data class Stopped(val result: IncomingPrefetchResult.AccountStopped) : CandidateOutcome
         data class Terminal(
             val result: IncomingPrefetchResult.Terminal,
-            val quarantineCapsule: Boolean = true,
+            val disposition: TerminalDisposition,
         ) : CandidateOutcome
     }
 

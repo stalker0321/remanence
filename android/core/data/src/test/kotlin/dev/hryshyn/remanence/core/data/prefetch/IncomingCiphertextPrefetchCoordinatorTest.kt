@@ -10,8 +10,10 @@ import dev.hryshyn.remanence.core.data.db.IncomingPrefetchBlobRow
 import dev.hryshyn.remanence.core.data.db.IncomingSyncSession
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
+import dev.hryshyn.remanence.core.data.storage.IncomingCiphertextAdoptionFailure
 import dev.hryshyn.remanence.core.data.storage.IncomingCiphertextAdoptionResult
 import dev.hryshyn.remanence.core.data.storage.IncomingCiphertextAdopter
+import dev.hryshyn.remanence.core.data.network.RecipientBlobDownloadFailure
 import dev.hryshyn.remanence.core.data.network.RecipientBlobDownloadRequest
 import dev.hryshyn.remanence.core.data.network.RecipientBlobDownloadResult
 import dev.hryshyn.remanence.core.model.BlobId
@@ -160,6 +162,50 @@ class IncomingCiphertextPrefetchCoordinatorTest {
         ).prefetch(owner)
         assertEquals(IncomingPrefetchResult.Completed(0, 0, 0), replay)
         assertEquals(LocalMaterialState.CORRUPT, capsuleState(capsule))
+    }
+
+    @Test
+    fun provenIntegrityFailureQuarantinesAndLaterCapsuleProgresses() = runBlocking {
+        seedCapsule(
+            recognitionState = BlobCacheState.CACHED,
+            contentState = BlobCacheState.DOWNLOADING,
+            photoStates = List(photoBlobs.size) { BlobCacheState.DOWNLOADING },
+        )
+        writeCached(recognitionBlob, CapsuleArtifactKind.RECOGNITION_MANIFEST, -1)
+        seedCapsule(
+            capsuleId = laterCapsule,
+            recognitionBlobId = laterRecognitionBlob,
+            contentBlobId = laterContentBlob,
+            photoBlobIds = laterPhotoBlobs,
+            recognitionState = BlobCacheState.CACHED,
+            contentState = BlobCacheState.DOWNLOADING,
+            photoStates = List(laterPhotoBlobs.size) { BlobCacheState.CACHED },
+        )
+        writeCached(laterRecognitionBlob, CapsuleArtifactKind.RECOGNITION_MANIFEST, -1, laterCapsule)
+        laterPhotoBlobs.forEachIndexed { index, blob ->
+            writeCached(blob, CapsuleArtifactKind.PHOTO, index, laterCapsule)
+        }
+        val calls = mutableListOf<BlobId>()
+        val result = coordinator(
+            maxBlobsPerRun = 5,
+            download = { request, _ ->
+                if (request.capsuleId == capsule) {
+                    RecipientBlobDownloadResult.Failure(
+                        reason = RecipientBlobDownloadFailure.INTEGRITY_FAILED,
+                        retryable = false,
+                    )
+                } else {
+                    calls += request.blobId
+                    writeTemp(request)
+                    RecipientBlobDownloadResult.Success(request.destination, request.expectedCiphertextSize)
+                }
+            },
+        ).prefetch(owner)
+
+        assertEquals(IncomingPrefetchResult.Completed(1, 1, 1), result)
+        assertEquals(listOf(laterContentBlob), calls)
+        assertEquals(LocalMaterialState.CORRUPT, capsuleState(capsule))
+        assertEquals(LocalMaterialState.MATERIAL_CACHED, capsuleState(laterCapsule))
     }
 
     @Test
@@ -409,6 +455,118 @@ class IncomingCiphertextPrefetchCoordinatorTest {
         )
         assertEquals(BlobCacheState.DOWNLOADING, blobState(contentBlob))
         assertEquals(LocalMaterialState.INDEX_CACHED, capsuleState())
+    }
+
+    @Test
+    fun ambiguousDownloadFailuresRetryWithoutQuarantiningCapsule() = runBlocking {
+        seedCapsule(
+            recognitionState = BlobCacheState.CACHED,
+            contentState = BlobCacheState.DOWNLOADING,
+            photoStates = List(photoBlobs.size) { BlobCacheState.CACHED },
+        )
+        writeCached(recognitionBlob, CapsuleArtifactKind.RECOGNITION_MANIFEST, -1)
+        photoBlobs.forEachIndexed { index, blob ->
+            writeCached(blob, CapsuleArtifactKind.PHOTO, index)
+        }
+        val cases = listOf(
+            RecipientBlobDownloadFailure.INTERNAL_ERROR to IncomingPrefetchRetryReason.DOWNLOAD,
+            RecipientBlobDownloadFailure.INVALID_RESPONSE to IncomingPrefetchRetryReason.DOWNLOAD,
+            RecipientBlobDownloadFailure.HTTP to IncomingPrefetchRetryReason.DOWNLOAD,
+            RecipientBlobDownloadFailure.VALIDATION_FAILED to IncomingPrefetchRetryReason.DOWNLOAD,
+            RecipientBlobDownloadFailure.RATE_LIMITED to IncomingPrefetchRetryReason.DOWNLOAD,
+            RecipientBlobDownloadFailure.NETWORK to IncomingPrefetchRetryReason.DOWNLOAD,
+            RecipientBlobDownloadFailure.DESTINATION_NOT_FRESH to IncomingPrefetchRetryReason.LOCAL_STORAGE,
+            RecipientBlobDownloadFailure.LOCAL_STORAGE to IncomingPrefetchRetryReason.LOCAL_STORAGE,
+        )
+
+        cases.forEach { (failure, retryReason) ->
+            val result = coordinator(
+                download = { _, _ ->
+                    RecipientBlobDownloadResult.Failure(reason = failure, retryable = false)
+                },
+            ).prefetch(owner)
+
+            assertEquals(IncomingPrefetchResult.Retryable(retryReason), result)
+            assertEquals(LocalMaterialState.INDEX_CACHED, capsuleState())
+            assertEquals(BlobCacheState.DOWNLOADING, blobState(contentBlob))
+        }
+    }
+
+    @Test
+    fun authInvalidStopsImmediatelyWithoutQuarantiningCapsule() = runBlocking {
+        seedCapsule(
+            recognitionState = BlobCacheState.CACHED,
+            contentState = BlobCacheState.DOWNLOADING,
+            photoStates = List(photoBlobs.size) { BlobCacheState.CACHED },
+        )
+        writeCached(recognitionBlob, CapsuleArtifactKind.RECOGNITION_MANIFEST, -1)
+        photoBlobs.forEachIndexed { index, blob ->
+            writeCached(blob, CapsuleArtifactKind.PHOTO, index)
+        }
+        var adoptionCalls = 0
+        val result = coordinator(
+            download = { _, _ ->
+                RecipientBlobDownloadResult.Failure(
+                    reason = RecipientBlobDownloadFailure.AUTH_INVALID,
+                    retryable = false,
+                )
+            },
+            adopt = {
+                adoptionCalls++
+                error("AUTH_INVALID must stop before adoption")
+            },
+        ).prefetch(owner)
+
+        assertEquals(
+            IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.AUTH_INVALID),
+            result,
+        )
+        assertEquals(0, adoptionCalls)
+        assertEquals(LocalMaterialState.INDEX_CACHED, capsuleState())
+        assertEquals(BlobCacheState.DOWNLOADING, blobState(contentBlob))
+    }
+
+    @Test
+    fun durabilityFailurePreservesTempAndLinkedDestinationWithoutQuarantine() = runBlocking {
+        seedCapsule(
+            recognitionState = BlobCacheState.CACHED,
+            contentState = BlobCacheState.DOWNLOADING,
+            photoStates = List(photoBlobs.size) { BlobCacheState.CACHED },
+        )
+        writeCached(recognitionBlob, CapsuleArtifactKind.RECOGNITION_MANIFEST, -1)
+        photoBlobs.forEachIndexed { index, blob ->
+            writeCached(blob, CapsuleArtifactKind.PHOTO, index)
+        }
+        lateinit var tempFile: File
+        lateinit var linkedDestination: File
+        val result = coordinator(
+            download = { request, _ ->
+                tempFile = request.destination
+                writeTemp(request)
+                RecipientBlobDownloadResult.Success(request.destination, request.expectedCiphertextSize)
+            },
+            adopt = { request ->
+                linkedDestination = destination(request.blobId, request.capsuleId, request.ownerUserId)
+                linkedDestination.apply {
+                    parentFile!!.mkdirs()
+                    writeBytes(expectedBytes(request.blobId))
+                }
+                IncomingCiphertextAdoptionResult.Failure(
+                    reason = IncomingCiphertextAdoptionFailure.DURABILITY_UNAVAILABLE,
+                    retryable = false,
+                )
+            },
+        ).prefetch(owner)
+
+        assertEquals(
+            IncomingPrefetchResult.Retryable(IncomingPrefetchRetryReason.LOCAL_STORAGE),
+            result,
+        )
+        assertTrue(tempFile.isFile)
+        assertTrue(linkedDestination.isFile)
+        assertArrayEquals(expectedBytes(contentBlob), linkedDestination.readBytes())
+        assertEquals(LocalMaterialState.INDEX_CACHED, capsuleState())
+        assertEquals(BlobCacheState.DOWNLOADING, blobState(contentBlob))
     }
 
     @Test

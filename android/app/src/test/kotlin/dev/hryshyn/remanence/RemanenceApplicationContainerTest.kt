@@ -300,7 +300,7 @@ class RemanenceApplicationContainerTest {
     }
 
     @Test
-    fun incomingWorkerUsesOneRealLazyContainerDrain() {
+    fun incomingWorkerUsesOneRealLazyContainerComposition() {
         val appContainer = container()
         try {
             val first = appContainer.incomingAcceptanceDrain
@@ -308,6 +308,20 @@ class RemanenceApplicationContainerTest {
             assertSame(
                 first,
                 IncomingCapsuleSyncWorker.acceptanceDrainForWorker(appContainer),
+            )
+
+            val prefetch = appContainer.incomingCiphertextPrefetchCoordinator
+            assertSame(prefetch, appContainer.incomingCiphertextPrefetchCoordinator)
+            assertSame(
+                prefetch,
+                IncomingCapsuleSyncWorker.prefetchCoordinatorForWorker(appContainer),
+            )
+
+            val materialAck = appContainer.incomingMaterialAckDrain
+            assertSame(materialAck, appContainer.incomingMaterialAckDrain)
+            assertSame(
+                materialAck,
+                IncomingCapsuleSyncWorker.materialAckDrainForWorker(appContainer),
             )
         } finally {
             appContainer.database.close()

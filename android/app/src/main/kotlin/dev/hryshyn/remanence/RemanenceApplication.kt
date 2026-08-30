@@ -24,6 +24,7 @@ import dev.hryshyn.remanence.core.data.network.ApiBaseUrl
 import dev.hryshyn.remanence.core.data.network.CapsuleBlobUploadRepository
 import dev.hryshyn.remanence.core.data.network.CapsuleDraftRepository
 import dev.hryshyn.remanence.core.data.network.CapsuleFinalizeRepository
+import dev.hryshyn.remanence.core.data.network.IncomingMaterialAckDrain
 import dev.hryshyn.remanence.core.data.network.RecipientBlobDownloadRepository
 import dev.hryshyn.remanence.core.data.network.RegisterRequestDto
 import dev.hryshyn.remanence.core.data.network.RegisterResponseDto
@@ -33,6 +34,8 @@ import dev.hryshyn.remanence.core.data.network.HealthRepository
 import dev.hryshyn.remanence.core.data.network.RegistrationUserDto
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.model.KeyBundleId
+import dev.hryshyn.remanence.core.data.prefetch.IncomingCiphertextPrefetchCoordinator
+import dev.hryshyn.remanence.core.data.storage.IncomingCiphertextAdopter
 import dev.hryshyn.remanence.core.data.storage.IncomingRecognitionCiphertextAdopter
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.data.db.IncomingIndexAcceptanceCommitter
@@ -461,6 +464,31 @@ class AppContainer private constructor(
             },
             acceptanceCoordinator = incomingCapsuleAcceptanceCoordinator,
             quarantineDao = incomingCapsuleDao,
+        )
+    }
+
+    /** A12 prefetch adapter: real filesystem adoption under the account roots. */
+    internal val incomingCiphertextAdopter: IncomingCiphertextAdopter by lazy {
+        IncomingCiphertextAdopter(accountScopedFileRoots)
+    }
+
+    /** One lazy, account-rechecking bounded ciphertext prefetch coordinator. */
+    val incomingCiphertextPrefetchCoordinator: IncomingCiphertextPrefetchCoordinator by lazy {
+        IncomingCiphertextPrefetchCoordinator(
+            prefetchDao = database.incomingPrefetchDao(),
+            blobCacheDao = database.blobCacheDao(),
+            roots = accountScopedFileRoots,
+            currentSession = { currentIncomingAcceptanceSession() },
+            repository = recipientBlobDownloadRepository,
+            adopter = incomingCiphertextAdopter,
+        )
+    }
+
+    /** One lazy material-ack drain bound to the authenticated production API. */
+    val incomingMaterialAckDrain: IncomingMaterialAckDrain by lazy {
+        apiStack.createIncomingMaterialAckDrain(
+            incomingCapsuleDao = database.incomingCapsuleDao(),
+            currentSession = { currentIncomingAcceptanceSession() },
         )
     }
 

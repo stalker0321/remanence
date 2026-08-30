@@ -4,12 +4,13 @@ import dev.hryshyn.remanence.core.data.db.IncomingCapsuleDao
 import dev.hryshyn.remanence.core.data.db.IncomingMaterialAckCandidateSelection
 import dev.hryshyn.remanence.core.data.db.IncomingMaterialAckResult
 import dev.hryshyn.remanence.core.data.db.IncomingSyncSession
+import dev.hryshyn.remanence.core.model.UserId
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.ensureActive
 
 /** Redacted outcomes of one bounded material-synced acknowledgement drain. */
-internal sealed interface IncomingMaterialAckDrainResult {
+sealed interface IncomingMaterialAckDrainResult {
 
     data class Completed(
         val recordedCount: Int,
@@ -35,7 +36,7 @@ internal sealed interface IncomingMaterialAckDrainResult {
     data object InvalidRequest : IncomingMaterialAckDrainResult
 }
 
-internal enum class IncomingMaterialAckDrainRetryReason {
+enum class IncomingMaterialAckDrainRetryReason {
     SESSION_UNAVAILABLE,
     SELECTOR_UNAVAILABLE,
     MATERIAL_SYNC_RETRYABLE,
@@ -51,13 +52,16 @@ internal enum class IncomingMaterialAckDrainRetryReason {
  * The repository's Success is also the server's idempotent replay success;
  * the current wire contract has no separate AlreadySynced response.
  */
-internal class IncomingMaterialAckDrain internal constructor(
+class IncomingMaterialAckDrain internal constructor(
     private val incomingCapsuleDao: IncomingCapsuleDao,
     private val currentSession: suspend () -> IncomingSyncSession?,
     private val recipientMaterialSyncedRepository: RecipientMaterialSyncedRepository,
 ) {
 
-    suspend fun run(limit: Int): IncomingMaterialAckDrainResult {
+    suspend fun run(
+        limit: Int,
+        expectedOwner: UserId? = null,
+    ): IncomingMaterialAckDrainResult {
         if (limit !in 1..MAX_CANDIDATES_PER_RUN) {
             return IncomingMaterialAckDrainResult.InvalidRequest
         }
@@ -69,6 +73,9 @@ internal class IncomingMaterialAckDrain internal constructor(
             SessionStatus.Unavailable -> return retry(
                 IncomingMaterialAckDrainRetryReason.SESSION_UNAVAILABLE,
             )
+        }
+        if (expectedOwner != null && initialSession.ownerUserId != expectedOwner) {
+            return IncomingMaterialAckDrainResult.AccountStopped
         }
 
         val selection = try {

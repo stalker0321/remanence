@@ -5,9 +5,13 @@ import androidx.work.BackoffPolicy
 import androidx.work.NetworkType
 import dev.hryshyn.remanence.core.data.db.IncomingSyncFailure
 import dev.hryshyn.remanence.core.data.db.IncomingSyncResult
+import dev.hryshyn.remanence.core.data.network.IncomingMaterialAckDrainResult
 import dev.hryshyn.remanence.core.data.network.IncomingCapsule
 import dev.hryshyn.remanence.core.data.network.IncomingEnvelope
 import dev.hryshyn.remanence.core.data.network.IncomingCapsulePage
+import dev.hryshyn.remanence.core.data.prefetch.IncomingPrefetchRetryReason
+import dev.hryshyn.remanence.core.data.prefetch.IncomingPrefetchResult
+import dev.hryshyn.remanence.core.data.prefetch.IncomingPrefetchTerminalReason
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.UserId
 import java.util.ArrayDeque
@@ -223,6 +227,37 @@ class IncomingCapsuleSyncWorkerTest {
     }
 
     @Test
+    fun successfulPageRunsAllSafeStagesOnceInOrder() = runTest {
+        val pages = FakePages(
+            listOf(IncomingSyncResult.Committed(page(nextCursor = null, hasMore = false))),
+        )
+        val events = mutableListOf<String>()
+
+        val result = combinedRunner(
+            pages = pages,
+            syncNextPage = {
+                events += "page"
+                pages.next()
+            },
+            runAcceptance = {
+                events += "acceptance"
+                IncomingAcceptanceDrainResult.Completed(0, 0, false)
+            },
+            runPrefetch = {
+                events += "prefetch"
+                IncomingPrefetchResult.Completed(0, 0)
+            },
+            runMaterialAck = {
+                events += "ack"
+                IncomingMaterialAckDrainResult.Completed(0, 0, false)
+            },
+        ).run(OWNER)
+
+        assertEquals(IncomingSyncAndAcceptanceRunOutcome.Succeeded, result)
+        assertEquals(listOf("page", "acceptance", "prefetch", "ack"), events)
+    }
+
+    @Test
     fun nonSuccessfulPageOutcomesBypassAcceptance() = runTest {
         val cases = listOf(
             listOf(IncomingSyncResult.Committed(page(nextCursor = "more", hasMore = true))) to
@@ -234,12 +269,22 @@ class IncomingCapsuleSyncWorkerTest {
         )
         for ((results, maxPages) in cases) {
             var acceptanceCalls = 0
+            var prefetchCalls = 0
+            var ackCalls = 0
             val outcome = combinedRunner(
                 pages = FakePages(results),
                 maxPages = maxPages,
                 runAcceptance = {
                     acceptanceCalls += 1
                     IncomingAcceptanceDrainResult.Completed(0, 0, false)
+                },
+                runPrefetch = {
+                    prefetchCalls += 1
+                    IncomingPrefetchResult.Completed(0, 0)
+                },
+                runMaterialAck = {
+                    ackCalls += 1
+                    IncomingMaterialAckDrainResult.Completed(0, 0, false)
                 },
             ).run(OWNER)
 
@@ -254,17 +299,21 @@ class IncomingCapsuleSyncWorkerTest {
                 outcome,
             )
             assertEquals(0, acceptanceCalls)
+            assertEquals(0, prefetchCalls)
+            assertEquals(0, ackCalls)
         }
     }
 
     @Test
-    fun drainOutcomesMapProgressAndNoProgressWithoutPoisonRetry() = runTest {
+    fun drainOutcomesUseContinuationBitEvenWithoutProgress() = runTest {
         val cases = listOf(
             IncomingAcceptanceDrainResult.Completed(1, 8, true) to
                 IncomingSyncAndAcceptanceRunOutcome.Retryable,
             IncomingAcceptanceDrainResult.Completed(0, 8, true) to
-                IncomingSyncAndAcceptanceRunOutcome.Succeeded,
+                IncomingSyncAndAcceptanceRunOutcome.Retryable,
             IncomingAcceptanceDrainResult.Completed(1, 8, false) to
+                IncomingSyncAndAcceptanceRunOutcome.Succeeded,
+            IncomingAcceptanceDrainResult.Completed(0, 8, false) to
                 IncomingSyncAndAcceptanceRunOutcome.Succeeded,
             IncomingAcceptanceDrainResult.Retryable(
                 IncomingAcceptanceDrainRetryReason.ACCEPTANCE_RETRYABLE,
@@ -289,6 +338,226 @@ class IncomingCapsuleSyncWorkerTest {
                 },
                 IncomingCapsuleSyncWorker.mapCombinedOutcome(outcome),
             )
+        }
+    }
+
+    @Test
+    fun fullZeroProgressPagesRetryAfterLaterStagesRun() = runTest {
+        val cases = listOf(
+            Triple(
+                IncomingAcceptanceDrainResult.Completed(0, 8, true),
+                IncomingPrefetchResult.Completed(0, 0),
+                IncomingMaterialAckDrainResult.Completed(0, 0, false),
+            ),
+            Triple(
+                IncomingAcceptanceDrainResult.Completed(0, 0, false),
+                IncomingPrefetchResult.Completed(0, 0, pageMayHaveMore = true),
+                IncomingMaterialAckDrainResult.Completed(0, 0, false),
+            ),
+            Triple(
+                IncomingAcceptanceDrainResult.Completed(0, 0, false),
+                IncomingPrefetchResult.Completed(0, 0),
+                IncomingMaterialAckDrainResult.Completed(0, 0, true),
+            ),
+        )
+
+        for ((acceptance, prefetch, acknowledgement) in cases) {
+            val events = mutableListOf<String>()
+            val result = combinedRunner(
+                pages = FakePages(
+                    listOf(IncomingSyncResult.Committed(page(nextCursor = null, hasMore = false))),
+                ),
+                runAcceptance = {
+                    events += "acceptance"
+                    acceptance
+                },
+                runPrefetch = {
+                    events += "prefetch"
+                    prefetch
+                },
+                runMaterialAck = {
+                    events += "ack"
+                    acknowledgement
+                },
+            ).run(OWNER)
+
+            assertEquals(IncomingSyncAndAcceptanceRunOutcome.Retryable, result)
+            assertEquals(listOf("acceptance", "prefetch", "ack"), events)
+        }
+    }
+
+    @Test
+    fun nonFullZeroProgressPagesComplete() = runTest {
+        val events = mutableListOf<String>()
+        val result = combinedRunner(
+            pages = FakePages(
+                listOf(IncomingSyncResult.Committed(page(nextCursor = null, hasMore = false))),
+            ),
+            runAcceptance = {
+                events += "acceptance"
+                IncomingAcceptanceDrainResult.Completed(0, 7, false)
+            },
+            runPrefetch = {
+                events += "prefetch"
+                IncomingPrefetchResult.Completed(0, 0, pageMayHaveMore = false)
+            },
+            runMaterialAck = {
+                events += "ack"
+                IncomingMaterialAckDrainResult.Completed(0, 0, false)
+            },
+        ).run(OWNER)
+
+        assertEquals(IncomingSyncAndAcceptanceRunOutcome.Succeeded, result)
+        assertEquals(listOf("acceptance", "prefetch", "ack"), events)
+    }
+
+    @Test
+    fun fullPagesRetryOnlyAfterEverySafeStageHasOneBoundedTurn() = runTest {
+        val events = mutableListOf<String>()
+        val result = combinedRunner(
+            pages = FakePages(
+                listOf(IncomingSyncResult.Committed(page(nextCursor = null, hasMore = false))),
+            ),
+            runAcceptance = {
+                events += "acceptance"
+                IncomingAcceptanceDrainResult.Completed(1, 8, true)
+            },
+            runPrefetch = {
+                events += "prefetch"
+                IncomingPrefetchResult.Completed(
+                    processedBlobCount = 1,
+                    materialCachedCapsuleCount = 1,
+                    pageMayHaveMore = true,
+                )
+            },
+            runMaterialAck = {
+                events += "ack"
+                IncomingMaterialAckDrainResult.Completed(1, 8, true)
+            },
+        ).run(OWNER)
+
+        assertEquals(IncomingSyncAndAcceptanceRunOutcome.Retryable, result)
+        assertEquals(listOf("acceptance", "prefetch", "ack"), events)
+    }
+
+    @Test
+    fun retryablePrefetchStopsBeforeAcknowledgement() = runTest {
+        var ackCalls = 0
+        val result = combinedRunner(
+            pages = FakePages(
+                listOf(IncomingSyncResult.Committed(page(nextCursor = null, hasMore = false))),
+            ),
+            runAcceptance = { IncomingAcceptanceDrainResult.Completed(0, 0, false) },
+            runPrefetch = {
+                IncomingPrefetchResult.Retryable(
+                    IncomingPrefetchRetryReason.DOWNLOAD,
+                )
+            },
+            runMaterialAck = {
+                ackCalls += 1
+                IncomingMaterialAckDrainResult.Completed(0, 0, false)
+            },
+        ).run(OWNER)
+
+        assertEquals(IncomingSyncAndAcceptanceRunOutcome.Retryable, result)
+        assertEquals(0, ackCalls)
+    }
+
+    @Test
+    fun accountSwitchBetweenAcceptanceAndPrefetchStopsBothLaterStages() = runTest {
+        var ownerReads = 0
+        var prefetchCalls = 0
+        var ackCalls = 0
+        val result = combinedRunner(
+            pages = FakePages(
+                listOf(IncomingSyncResult.Committed(page(nextCursor = null, hasMore = false))),
+            ),
+            currentOwner = {
+                ownerReads += 1
+                if (ownerReads <= 2) OWNER else OTHER_OWNER
+            },
+            runAcceptance = { IncomingAcceptanceDrainResult.Completed(0, 0, false) },
+            runPrefetch = {
+                prefetchCalls += 1
+                IncomingPrefetchResult.Completed(0, 0)
+            },
+            runMaterialAck = {
+                ackCalls += 1
+                IncomingMaterialAckDrainResult.Completed(0, 0, false)
+            },
+        ).run(OWNER)
+
+        assertEquals(IncomingSyncAndAcceptanceRunOutcome.Terminal, result)
+        assertEquals(0, prefetchCalls)
+        assertEquals(0, ackCalls)
+    }
+
+    @Test
+    fun terminalPrefetchStopsBeforeAcknowledgement() = runTest {
+        var ackCalls = 0
+        val result = combinedRunner(
+            pages = FakePages(
+                listOf(IncomingSyncResult.Committed(page(nextCursor = null, hasMore = false))),
+            ),
+            runAcceptance = { IncomingAcceptanceDrainResult.Completed(0, 0, false) },
+            runPrefetch = {
+                IncomingPrefetchResult.Terminal(
+                    IncomingPrefetchTerminalReason.INVALID_METADATA,
+                )
+            },
+            runMaterialAck = {
+                ackCalls += 1
+                IncomingMaterialAckDrainResult.Completed(0, 0, false)
+            },
+        ).run(OWNER)
+
+        assertEquals(IncomingSyncAndAcceptanceRunOutcome.Terminal, result)
+        assertEquals(0, ackCalls)
+    }
+
+    @Test
+    fun accountSwitchBetweenPrefetchAndAcknowledgementStopsAcknowledgement() = runTest {
+        var ownerReads = 0
+        var prefetchCalls = 0
+        var ackCalls = 0
+        val result = combinedRunner(
+            pages = FakePages(
+                listOf(IncomingSyncResult.Committed(page(nextCursor = null, hasMore = false))),
+            ),
+            currentOwner = {
+                ownerReads += 1
+                if (ownerReads <= 3) OWNER else OTHER_OWNER
+            },
+            runAcceptance = { IncomingAcceptanceDrainResult.Completed(0, 0, false) },
+            runPrefetch = {
+                prefetchCalls += 1
+                IncomingPrefetchResult.Completed(0, 0)
+            },
+            runMaterialAck = {
+                ackCalls += 1
+                IncomingMaterialAckDrainResult.Completed(0, 0, false)
+            },
+        ).run(OWNER)
+
+        assertEquals(IncomingSyncAndAcceptanceRunOutcome.Terminal, result)
+        assertEquals(1, prefetchCalls)
+        assertEquals(0, ackCalls)
+    }
+
+    @Test
+    fun cancellationFromPrefetchPropagatesExactly() = runTest {
+        val expected = CancellationException("prefetch cancellation")
+        try {
+            combinedRunner(
+                pages = FakePages(
+                    listOf(IncomingSyncResult.Committed(page(nextCursor = null, hasMore = false))),
+                ),
+                runAcceptance = { IncomingAcceptanceDrainResult.Completed(0, 0, false) },
+                runPrefetch = { throw expected },
+            ).run(OWNER)
+            error("expected cancellation")
+        } catch (actual: CancellationException) {
+            assertTrue(actual === expected)
         }
     }
 
@@ -340,13 +609,22 @@ class IncomingCapsuleSyncWorkerTest {
 
     private fun combinedRunner(
         pages: FakePages,
+        syncNextPage: suspend () -> IncomingSyncResult = pages::next,
         currentOwner: suspend () -> UserId? = { OWNER },
         maxPages: Int = MAX_PAGES_PER_RUN,
         runAcceptance: suspend (UserId) -> IncomingAcceptanceDrainResult,
+        runPrefetch: suspend (UserId) -> IncomingPrefetchResult = {
+            IncomingPrefetchResult.Completed(0, 0)
+        },
+        runMaterialAck: suspend (UserId) -> IncomingMaterialAckDrainResult = {
+            IncomingMaterialAckDrainResult.Completed(0, 0, false)
+        },
     ) = IncomingSyncAndAcceptanceRunner(
         currentOwner = currentOwner,
-        syncNextPage = pages::next,
+        syncNextPage = syncNextPage,
         runAcceptance = runAcceptance,
+        runPrefetch = runPrefetch,
+        runMaterialAck = runMaterialAck,
         maxPagesPerRun = maxPages,
     )
 

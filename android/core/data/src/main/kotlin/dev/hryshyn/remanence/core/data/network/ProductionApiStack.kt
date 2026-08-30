@@ -1,5 +1,7 @@
 package dev.hryshyn.remanence.core.data.network
 
+import dev.hryshyn.remanence.core.data.db.IncomingCapsuleDao
+import dev.hryshyn.remanence.core.data.db.IncomingSyncSession
 import okhttp3.OkHttpClient
 
 /**
@@ -53,6 +55,16 @@ class ProductionApiStack private constructor(
     /** Material acknowledgement transport shares the authenticated refreshing client. */
     internal val recipientMaterialSyncedRepository: RecipientMaterialSyncedRepository =
         RecipientMaterialSyncedRepository(authenticatedClient, baseUrl)
+
+    /** Creates the public drain surface while retaining the repository internally. */
+    fun createIncomingMaterialAckDrain(
+        incomingCapsuleDao: IncomingCapsuleDao,
+        currentSession: suspend () -> IncomingSyncSession?,
+    ): IncomingMaterialAckDrain = IncomingMaterialAckDrain(
+        incomingCapsuleDao = incomingCapsuleDao,
+        currentSession = currentSession,
+        recipientMaterialSyncedRepository = recipientMaterialSyncedRepository,
+    )
 
     /** Account-scoped incoming cursor pages use the same authenticated stack. */
     val incomingCapsuleRepository: IncomingCapsuleRepository =

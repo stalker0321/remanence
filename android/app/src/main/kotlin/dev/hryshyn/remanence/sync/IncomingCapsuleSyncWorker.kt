@@ -15,8 +15,13 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import dev.hryshyn.remanence.AppContainer
 import dev.hryshyn.remanence.RemanenceApplication
+import dev.hryshyn.remanence.core.data.db.IncomingCapsuleDao
 import dev.hryshyn.remanence.core.data.db.IncomingSyncFailure
 import dev.hryshyn.remanence.core.data.db.IncomingSyncResult
+import dev.hryshyn.remanence.core.data.network.IncomingMaterialAckDrain
+import dev.hryshyn.remanence.core.data.network.IncomingMaterialAckDrainResult
+import dev.hryshyn.remanence.core.data.prefetch.IncomingCiphertextPrefetchCoordinator
+import dev.hryshyn.remanence.core.data.prefetch.IncomingPrefetchResult
 import dev.hryshyn.remanence.core.model.UserId
 import kotlin.coroutines.cancellation.CancellationException
 import java.util.concurrent.TimeUnit
@@ -49,6 +54,15 @@ class IncomingCapsuleSyncWorker(
                 },
                 runAcceptance = { expectedOwner ->
                     acceptanceDrainForWorker(container).run(expectedOwner)
+                },
+                runPrefetch = { expectedOwner ->
+                    prefetchCoordinatorForWorker(container).prefetch(expectedOwner)
+                },
+                runMaterialAck = { expectedOwner ->
+                    materialAckDrainForWorker(container).run(
+                        limit = IncomingCapsuleDao.MATERIAL_ACK_HARD_MAX_PAGE_SIZE,
+                        expectedOwner = expectedOwner,
+                    )
                 },
             ).run(owner),
         )
@@ -105,17 +119,28 @@ class IncomingCapsuleSyncWorker(
         internal fun acceptanceDrainForWorker(container: AppContainer): IncomingAcceptanceDrain =
             container.incomingAcceptanceDrain
 
+        /** The worker's only prefetch dependency: the container's real lazy coordinator. */
+        internal fun prefetchCoordinatorForWorker(
+            container: AppContainer,
+        ): IncomingCiphertextPrefetchCoordinator = container.incomingCiphertextPrefetchCoordinator
+
+        /** The worker's only ACK dependency: the container's real lazy drain. */
+        internal fun materialAckDrainForWorker(container: AppContainer): IncomingMaterialAckDrain =
+            container.incomingMaterialAckDrain
+
         private fun parseOwner(raw: String?): UserId? = raw?.let {
             runCatching { UserId.parseRest(it) }.getOrNull()
         }
     }
 }
 
-/** One worker invocation: finish page sync, then make one bounded acceptance attempt. */
+/** One worker invocation: page sync, acceptance, prefetch, then one ACK page. */
 internal class IncomingSyncAndAcceptanceRunner(
     private val currentOwner: suspend () -> UserId?,
     private val syncNextPage: suspend () -> IncomingSyncResult,
     private val runAcceptance: suspend (UserId) -> IncomingAcceptanceDrainResult,
+    private val runPrefetch: suspend (UserId) -> IncomingPrefetchResult,
+    private val runMaterialAck: suspend (UserId) -> IncomingMaterialAckDrainResult,
     private val maxPagesPerRun: Int = MAX_PAGES_PER_RUN,
 ) {
 
@@ -144,18 +169,53 @@ internal class IncomingSyncAndAcceptanceRunner(
             IncomingSyncAndAcceptanceOwnerStatus.Current -> Unit
         }
 
-        return when (val acceptance = runAcceptance(owner)) {
-            is IncomingAcceptanceDrainResult.Completed -> {
-                if (acceptance.pageMayHaveMore && acceptance.progressCount > 0) {
-                    IncomingSyncAndAcceptanceRunOutcome.Retryable
-                } else {
-                    IncomingSyncAndAcceptanceRunOutcome.Succeeded
-                }
-            }
+        val acceptanceNeedsRetry = when (val acceptance = runAcceptance(owner)) {
+            is IncomingAcceptanceDrainResult.Completed ->
+                acceptance.pageMayHaveMore
             is IncomingAcceptanceDrainResult.Retryable ->
-                IncomingSyncAndAcceptanceRunOutcome.Retryable
+                return IncomingSyncAndAcceptanceRunOutcome.Retryable
             IncomingAcceptanceDrainResult.AccountStopped ->
-                IncomingSyncAndAcceptanceRunOutcome.Terminal
+                return IncomingSyncAndAcceptanceRunOutcome.Terminal
+        }
+
+        when (readCurrentOwner(owner)) {
+            IncomingSyncAndAcceptanceOwnerStatus.Stopped ->
+                return IncomingSyncAndAcceptanceRunOutcome.Terminal
+            IncomingSyncAndAcceptanceOwnerStatus.Unavailable ->
+                return IncomingSyncAndAcceptanceRunOutcome.Retryable
+            IncomingSyncAndAcceptanceOwnerStatus.Current -> Unit
+        }
+
+        val prefetchNeedsRetry = when (val prefetch = runPrefetch(owner)) {
+            is IncomingPrefetchResult.Completed -> prefetch.pageMayHaveMore
+            is IncomingPrefetchResult.Retryable ->
+                return IncomingSyncAndAcceptanceRunOutcome.Retryable
+            is IncomingPrefetchResult.AccountStopped,
+            is IncomingPrefetchResult.Terminal,
+            -> return IncomingSyncAndAcceptanceRunOutcome.Terminal
+        }
+
+        when (readCurrentOwner(owner)) {
+            IncomingSyncAndAcceptanceOwnerStatus.Stopped ->
+                return IncomingSyncAndAcceptanceRunOutcome.Terminal
+            IncomingSyncAndAcceptanceOwnerStatus.Unavailable ->
+                return IncomingSyncAndAcceptanceRunOutcome.Retryable
+            IncomingSyncAndAcceptanceOwnerStatus.Current -> Unit
+        }
+
+        val ackNeedsRetry = when (val acknowledgement = runMaterialAck(owner)) {
+            is IncomingMaterialAckDrainResult.Completed -> acknowledgement.pageMayHaveMore
+            is IncomingMaterialAckDrainResult.Retryable ->
+                return IncomingSyncAndAcceptanceRunOutcome.Retryable
+            IncomingMaterialAckDrainResult.AccountStopped,
+            IncomingMaterialAckDrainResult.InvalidRequest,
+            -> return IncomingSyncAndAcceptanceRunOutcome.Terminal
+        }
+
+        return if (acceptanceNeedsRetry || prefetchNeedsRetry || ackNeedsRetry) {
+            IncomingSyncAndAcceptanceRunOutcome.Retryable
+        } else {
+            IncomingSyncAndAcceptanceRunOutcome.Succeeded
         }
     }
 

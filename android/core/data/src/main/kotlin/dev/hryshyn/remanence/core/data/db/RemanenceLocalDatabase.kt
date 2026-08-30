@@ -44,6 +44,8 @@ abstract class RemanenceLocalDatabase : RoomDatabase() {
 
     abstract fun incomingIndexAcceptanceDao(): IncomingIndexAcceptanceDao
 
+    abstract fun incomingPrefetchDao(): IncomingPrefetchDao
+
     companion object {
         const val DATABASE_NAME: String = "remanence-local.db"
 

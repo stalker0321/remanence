@@ -13,6 +13,7 @@ from typing import BinaryIO, Literal
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy.exc import DBAPIError, DisconnectionError
 from sqlalchemy.orm import Session
 
 from remanence.api.dependencies import (
@@ -66,6 +67,7 @@ from remanence.capsules.recipient_material_synced_service import (
     RecipientMaterialSyncedError,
     RecipientMaterialSyncedResult,
     RecipientMaterialSyncedService,
+    is_transient_database_unavailability,
 )
 from remanence.capsules.schemas import (
     CapsuleDraftValidationError,
@@ -553,6 +555,15 @@ async def mark_capsule_material_synced(
         return _problem_response(request, exc.code)
     except RecipientMaterialSyncedError as exc:
         return _problem_response(request, exc.code)
+    except DisconnectionError:
+        return _problem_response(request, "INTERNAL_UNAVAILABLE")
+    except DBAPIError as exc:
+        return _problem_response(
+            request,
+            "INTERNAL_UNAVAILABLE"
+            if is_transient_database_unavailability(exc)
+            else "INTERNAL_ERROR",
+        )
     except Exception:
         return _problem_response(request, "INTERNAL_ERROR")
 

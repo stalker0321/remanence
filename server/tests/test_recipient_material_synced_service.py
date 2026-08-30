@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import func, select, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import object_session
 
 pytest_plugins = ("test_session_repository_create",)
@@ -74,6 +75,7 @@ def test_invalid_uuid_and_naive_now_fail_closed_without_database() -> None:
         ),
         "VALIDATION_FAILED",
     )
+
     _assert_error(
         lambda: service.mark_material_synced(
             authenticated_recipient_user_id=recipient_id,
@@ -123,6 +125,52 @@ def test_invalid_uuid_and_naive_now_fail_closed_without_database() -> None:
         "state",
         "ciphertext_synced_at",
     }
+
+
+@pytest.mark.parametrize(
+    ("connection_invalidated", "sqlstate", "expected"),
+    [
+        (True, None, "INTERNAL_UNAVAILABLE"),
+        (False, "08006", "INTERNAL_UNAVAILABLE"),
+        (False, None, "INTERNAL_ERROR"),
+    ],
+)
+def test_only_connection_level_operational_failure_is_retryable(
+    connection_invalidated: bool,
+    sqlstate: str | None,
+    expected: str,
+) -> None:
+    secret = "private-db-detail"
+    original = RuntimeError(secret)
+    if sqlstate is not None:
+        original.sqlstate = sqlstate  # type: ignore[attr-defined]
+    error = OperationalError(
+        "SELECT private_statement",
+        {"private": secret},
+        original,
+        hide_parameters=True,
+        connection_invalidated=connection_invalidated,
+    )
+
+    class _NoAutoflush:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class _Session:
+        no_autoflush = _NoAutoflush()
+
+        def scalar(self, *_args, **_kwargs):
+            raise error
+
+    caught = _assert_error(
+        lambda: _mark(_Session(), uuid4(), uuid4()),
+        expected,
+        secrets=(secret, "private_statement"),
+    )
+    assert caught.code == expected
 
 
 def test_first_transition_and_idempotent_replay_keep_original_timestamp(

@@ -1,6 +1,7 @@
 package dev.hryshyn.remanence.core.data.storage
 
 import dev.hryshyn.remanence.core.model.BlobId
+import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.UserId
@@ -21,14 +22,23 @@ import kotlinx.coroutines.withContext
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.coroutineContext
 
-/** The one account/capsule/blob file adoption request accepted by A11c1. */
-class IncomingRecognitionCiphertextAdoptionRequest(
+/**
+ * The account/capsule/blob file adoption request shared by recognition,
+ * content-manifest, and photo ciphertext.
+ *
+ * Recognition remains the compatibility default so existing A11 callers keep
+ * the exact request shape and validation. Callers for the other artifact kinds
+ * must provide the kind and, for photos, the canonical ordinal.
+ */
+class IncomingCiphertextAdoptionRequest(
     val ownerUserId: UserId,
     val capsuleId: CapsuleId,
     val blobId: BlobId,
     val expectedSizeBytes: Long,
     expectedSha256: ByteArray,
     sourceTempFile: File,
+    val artifactKind: CapsuleArtifactKind = CapsuleArtifactKind.RECOGNITION_MANIFEST,
+    val ordinal: Int = ProtocolV1Limits.NON_PHOTO_ORDINAL,
 ) {
     private val expectedSha256Snapshot = expectedSha256.copyOf()
 
@@ -39,10 +49,18 @@ class IncomingRecognitionCiphertextAdoptionRequest(
         get() = expectedSha256Snapshot.copyOf()
 
     init {
-        require(expectedSizeBytes > 0L) { "ciphertext size must be positive" }
-        require(expectedSizeBytes <= ProtocolV1Limits.RECOGNITION_MANIFEST_MAX_CIPHERTEXT_BYTES) {
-            "recognition ciphertext exceeds protocol limit"
+        require(expectedSizeBytes in 1L..maxCiphertextBytes(artifactKind)) {
+            "ciphertext size exceeds the artifact-kind protocol limit"
         }
+        require(
+            when (artifactKind) {
+                CapsuleArtifactKind.PHOTO ->
+                    ordinal in ProtocolV1Limits.PHOTO_ORDINAL_MIN..ProtocolV1Limits.PHOTO_ORDINAL_MAX
+                CapsuleArtifactKind.RECOGNITION_MANIFEST,
+                CapsuleArtifactKind.CONTENT_MANIFEST,
+                -> ordinal == ProtocolV1Limits.NON_PHOTO_ORDINAL
+            },
+        ) { "artifact ordinal is invalid" }
         require(expectedSha256Snapshot.size == SHA256_BYTES) {
             "ciphertext hash must be SHA-256"
         }
@@ -51,14 +69,26 @@ class IncomingRecognitionCiphertextAdoptionRequest(
     }
 
     override fun toString(): String =
-        "IncomingRecognitionCiphertextAdoptionRequest(<redacted>)"
+        "IncomingCiphertextAdoptionRequest(<redacted>)"
 
     private companion object {
         const val SHA256_BYTES = 32
+
+        fun maxCiphertextBytes(
+            artifactKind: CapsuleArtifactKind,
+        ): Long = when (artifactKind) {
+            CapsuleArtifactKind.RECOGNITION_MANIFEST ->
+                ProtocolV1Limits.RECOGNITION_MANIFEST_MAX_CIPHERTEXT_BYTES
+            CapsuleArtifactKind.CONTENT_MANIFEST ->
+                ProtocolV1Limits.CONTENT_MANIFEST_MAX_CIPHERTEXT_BYTES
+            CapsuleArtifactKind.PHOTO ->
+                ProtocolV1Limits.ENCRYPTED_PHOTO_MAX_CIPHERTEXT_BYTES
+        }
     }
 }
 
-enum class IncomingRecognitionCiphertextAdoptionFailure {
+/** Generic failure vocabulary shared by every incoming ciphertext kind. */
+enum class IncomingCiphertextAdoptionFailure {
     SOURCE_OUTSIDE_OWNER_TEMP,
     SOURCE_PATH_UNSAFE,
     SOURCE_MISSING,
@@ -71,6 +101,7 @@ enum class IncomingRecognitionCiphertextAdoptionFailure {
     LOCAL_STORAGE,
 }
 
+/** Compatibility result retained by the accepted A11 API. */
 sealed interface IncomingRecognitionCiphertextAdoptionResult {
     /** The verified durable destination capability to be consumed by A11c2. */
     class Adopted internal constructor(
@@ -81,9 +112,28 @@ sealed interface IncomingRecognitionCiphertextAdoptionResult {
     }
 
     data class Failure(
-        val reason: IncomingRecognitionCiphertextAdoptionFailure,
+        val reason: IncomingCiphertextAdoptionFailure,
         val retryable: Boolean,
     ) : IncomingRecognitionCiphertextAdoptionResult
+}
+
+/** Source-compatible names for the accepted A11 recognition API. */
+typealias IncomingRecognitionCiphertextAdoptionRequest = IncomingCiphertextAdoptionRequest
+typealias IncomingRecognitionCiphertextAdoptionFailure = IncomingCiphertextAdoptionFailure
+
+/** Redacted generic result for every incoming ciphertext artifact kind. */
+sealed interface IncomingCiphertextAdoptionResult {
+    class Adopted internal constructor(
+        val destination: DurableIncomingCiphertextFile,
+    ) : IncomingCiphertextAdoptionResult {
+        override fun toString(): String =
+            "IncomingCiphertextAdoptionResult.Adopted(<redacted>)"
+    }
+
+    data class Failure(
+        val reason: IncomingCiphertextAdoptionFailure,
+        val retryable: Boolean,
+    ) : IncomingCiphertextAdoptionResult
 }
 
 /**
@@ -104,7 +154,7 @@ class DurableIncomingCiphertextFile internal constructor(
 }
 
 /**
- * Crash-safe adoption of one already verified recognition ciphertext.
+ * Crash-safe adoption of one already verified incoming ciphertext.
  *
  * The boundary deliberately has no Room or material-state dependency. It
  * verifies the source immediately before adoption, installs only the fixed
@@ -609,6 +659,33 @@ class IncomingRecognitionCiphertextAdopter internal constructor(
 
         fun destinationLock(destination: Path): Any =
             destinationLocks[(destination.toString().hashCode() and Int.MAX_VALUE) % DESTINATION_LOCK_STRIPES]
+    }
+}
+
+/**
+ * Thin generic adapter over the accepted A11 filesystem algorithm. It maps
+ * only the typed result vocabulary; recognition, content, and photo adoption
+ * all execute the same implementation.
+ */
+class IncomingCiphertextAdopter internal constructor(
+    roots: AccountScopedFileRoots,
+    fileSystem: IncomingCiphertextFileSystem,
+) {
+    constructor(roots: AccountScopedFileRoots) :
+        this(roots, RealIncomingCiphertextFileSystem)
+
+    private val delegate = IncomingRecognitionCiphertextAdopter(roots, fileSystem)
+
+    suspend fun adopt(
+        request: IncomingCiphertextAdoptionRequest,
+    ): IncomingCiphertextAdoptionResult = when (val result = delegate.adopt(request)) {
+        is IncomingRecognitionCiphertextAdoptionResult.Adopted ->
+            IncomingCiphertextAdoptionResult.Adopted(result.destination)
+        is IncomingRecognitionCiphertextAdoptionResult.Failure ->
+            IncomingCiphertextAdoptionResult.Failure(
+                reason = result.reason,
+                retryable = result.retryable,
+            )
     }
 }
 

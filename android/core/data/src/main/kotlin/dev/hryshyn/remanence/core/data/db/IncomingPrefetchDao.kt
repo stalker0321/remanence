@@ -105,6 +105,33 @@ abstract class IncomingPrefetchDao {
         blobId: String,
     ): IncomingPrefetchBlobRow?
 
+    /** Exact owner-scoped quarantine CAS for a selected prefetch capsule. */
+    open suspend fun quarantineReadyIndexCachedForOwner(
+        ownerUserId: String,
+        capsuleId: String,
+    ): IncomingCapsuleQuarantineResult = resolveIncomingCapsuleQuarantine(
+        compareAndSet = {
+            quarantineReadyIndexCachedCas(
+                ownerUserId = ownerUserId,
+                capsuleId = capsuleId,
+            )
+        },
+        rereadOwnedCapsule = {
+            findCapsule(ownerUserId, capsuleId)
+        },
+    )
+
+    /** Dedicated exact CAS; it never changes blob or filesystem state. */
+    @Query(
+        "UPDATE incoming_capsule SET material_state = 'CORRUPT' " +
+            "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId " +
+            "AND server_status = 'READY' AND material_state = 'INDEX_CACHED'",
+    )
+    protected abstract suspend fun quarantineReadyIndexCachedCas(
+        ownerUserId: String,
+        capsuleId: String,
+    ): Int
+
     /**
      * Marks exactly one owner/capsule/blob row cached and, in the same Room
      * transaction, promotes the capsule only when the complete artifact layout

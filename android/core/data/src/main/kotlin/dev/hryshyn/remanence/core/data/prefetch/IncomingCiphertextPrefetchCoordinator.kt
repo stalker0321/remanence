@@ -6,6 +6,7 @@ import dev.hryshyn.remanence.core.data.db.IncomingSyncSession
 import dev.hryshyn.remanence.core.data.db.IncomingPrefetchBlobRow
 import dev.hryshyn.remanence.core.data.db.IncomingPrefetchCommitResult
 import dev.hryshyn.remanence.core.data.db.IncomingPrefetchDao
+import dev.hryshyn.remanence.core.data.db.IncomingCapsuleQuarantineResult
 import dev.hryshyn.remanence.core.data.network.RecipientBlobDownloadFailure
 import dev.hryshyn.remanence.core.data.network.RecipientBlobDownloadRequest
 import dev.hryshyn.remanence.core.data.network.RecipientBlobDownloadRepository
@@ -61,6 +62,7 @@ sealed interface IncomingPrefetchResult {
     data class Completed(
         val processedBlobCount: Int,
         val materialCachedCapsuleCount: Int,
+        val quarantinedCapsuleCount: Int = 0,
     ) : IncomingPrefetchResult {
         override fun toString(): String = "IncomingPrefetchResult.Completed(<redacted>)"
     }
@@ -135,6 +137,7 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
 
         var processed = 0
         var materialCached = 0
+        var quarantinedCapsules = 0
         for (selectedRow in selected) {
             when (val session = checkSession(ownerUserId)) {
                 is SessionCheck.Ready -> Unit
@@ -154,13 +157,45 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
                 CandidateOutcome.Skipped -> Unit
                 is CandidateOutcome.Stopped -> return@withContext outcome.result
                 is CandidateOutcome.Retry -> return@withContext outcome.result
-                is CandidateOutcome.Terminal -> return@withContext outcome.result
+                is CandidateOutcome.Terminal -> {
+                    if (!outcome.quarantineCapsule) return@withContext outcome.result
+                    when (val session = checkSession(ownerUserId)) {
+                        is SessionCheck.Ready -> Unit
+                        is SessionCheck.Stopped -> return@withContext session.result
+                        is SessionCheck.Retry -> return@withContext session.result
+                    }
+                    val quarantine = try {
+                        prefetchDao.quarantineReadyIndexCachedForOwner(
+                            ownerUserId.toRestString(),
+                            selectedRow.capsuleId,
+                        )
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        IncomingCapsuleQuarantineResult.DatabaseUnavailable
+                    }
+                    when (quarantine) {
+                        IncomingCapsuleQuarantineResult.Quarantined,
+                        IncomingCapsuleQuarantineResult.AlreadyCorrupt,
+                        -> quarantinedCapsules++
+                        IncomingCapsuleQuarantineResult.DatabaseUnavailable,
+                        IncomingCapsuleQuarantineResult.ConcurrentOrStateChanged,
+                        -> return@withContext IncomingPrefetchResult.Retryable(
+                            IncomingPrefetchRetryReason.DATABASE_UNAVAILABLE,
+                        )
+                        IncomingCapsuleQuarantineResult.MissingOrForeignOwner,
+                        -> return@withContext IncomingPrefetchResult.Terminal(
+                            IncomingPrefetchTerminalReason.DATABASE_STATE_INVALID,
+                        )
+                    }
+                }
             }
         }
 
         IncomingPrefetchResult.Completed(
             processedBlobCount = processed,
             materialCachedCapsuleCount = materialCached,
+            quarantinedCapsuleCount = quarantinedCapsules,
         )
     }
 
@@ -810,7 +845,7 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
         )
     } else {
         CandidateOutcome.Terminal(
-            IncomingPrefetchResult.Terminal(
+            result = IncomingPrefetchResult.Terminal(
                 when (failure.reason) {
                     RecipientBlobDownloadFailure.AUTH_INVALID -> IncomingPrefetchTerminalReason.AUTH_INVALID
                     RecipientBlobDownloadFailure.NOT_FOUND -> IncomingPrefetchTerminalReason.DOWNLOAD_NOT_FOUND
@@ -826,6 +861,7 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
                     -> IncomingPrefetchTerminalReason.DOWNLOAD_REJECTED
                 },
             ),
+            quarantineCapsule = failure.reason != RecipientBlobDownloadFailure.AUTH_INVALID,
         )
     }
 
@@ -834,7 +870,10 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
         data class Progress(val materialCached: Boolean) : CandidateOutcome
         data class Retry(val result: IncomingPrefetchResult.Retryable) : CandidateOutcome
         data class Stopped(val result: IncomingPrefetchResult.AccountStopped) : CandidateOutcome
-        data class Terminal(val result: IncomingPrefetchResult.Terminal) : CandidateOutcome
+        data class Terminal(
+            val result: IncomingPrefetchResult.Terminal,
+            val quarantineCapsule: Boolean = true,
+        ) : CandidateOutcome
     }
 
     private sealed interface SessionCheck {

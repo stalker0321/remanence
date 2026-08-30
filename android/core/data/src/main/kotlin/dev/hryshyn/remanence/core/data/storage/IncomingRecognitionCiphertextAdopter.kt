@@ -26,9 +26,9 @@ import kotlin.coroutines.coroutineContext
  * The account/capsule/blob file adoption request shared by recognition,
  * content-manifest, and photo ciphertext.
  *
- * Recognition remains the compatibility default so existing A11 callers keep
- * the exact request shape and validation. Callers for the other artifact kinds
- * must provide the kind and, for photos, the canonical ordinal.
+ * Callers must provide the artifact kind and, for photos, the canonical
+ * ordinal. Recognition callers use [IncomingRecognitionCiphertextAdoptionRequest]
+ * so that the legacy entry point cannot be widened to another artifact kind.
  */
 class IncomingCiphertextAdoptionRequest(
     val ownerUserId: UserId,
@@ -37,8 +37,8 @@ class IncomingCiphertextAdoptionRequest(
     val expectedSizeBytes: Long,
     expectedSha256: ByteArray,
     sourceTempFile: File,
-    val artifactKind: CapsuleArtifactKind = CapsuleArtifactKind.RECOGNITION_MANIFEST,
-    val ordinal: Int = ProtocolV1Limits.NON_PHOTO_ORDINAL,
+    val artifactKind: CapsuleArtifactKind,
+    val ordinal: Int,
 ) {
     private val expectedSha256Snapshot = expectedSha256.copyOf()
 
@@ -117,8 +117,58 @@ sealed interface IncomingRecognitionCiphertextAdoptionResult {
     ) : IncomingRecognitionCiphertextAdoptionResult
 }
 
-/** Source-compatible names for the accepted A11 recognition API. */
-typealias IncomingRecognitionCiphertextAdoptionRequest = IncomingCiphertextAdoptionRequest
+/**
+ * The fixed-shape A11 recognition request. It intentionally has no artifact
+ * kind or ordinal input: the legacy entry point always adopts the
+ * RECOGNITION_MANIFEST blob at the non-photo ordinal and enforces its smaller
+ * protocol limit before reaching the shared filesystem algorithm.
+ */
+class IncomingRecognitionCiphertextAdoptionRequest(
+    val ownerUserId: UserId,
+    val capsuleId: CapsuleId,
+    val blobId: BlobId,
+    val expectedSizeBytes: Long,
+    expectedSha256: ByteArray,
+    sourceTempFile: File,
+) {
+    private val expectedSha256Snapshot = expectedSha256.copyOf()
+
+    val sourceTempFile: File = sourceTempFile
+
+    val expectedSha256: ByteArray
+        get() = expectedSha256Snapshot.copyOf()
+
+    init {
+        require(expectedSizeBytes in 1L..ProtocolV1Limits.RECOGNITION_MANIFEST_MAX_CIPHERTEXT_BYTES) {
+            "recognition ciphertext size exceeds the protocol limit"
+        }
+        require(expectedSha256Snapshot.size == SHA256_BYTES) {
+            "ciphertext hash must be SHA-256"
+        }
+        require(sourceTempFile.path.isNotEmpty()) { "source file must be resolvable" }
+        require(sourceTempFile.isAbsolute) { "source file must be absolute" }
+    }
+
+    internal fun asGeneric(): IncomingCiphertextAdoptionRequest = IncomingCiphertextAdoptionRequest(
+        ownerUserId = ownerUserId,
+        capsuleId = capsuleId,
+        blobId = blobId,
+        expectedSizeBytes = expectedSizeBytes,
+        expectedSha256 = expectedSha256Snapshot,
+        sourceTempFile = sourceTempFile,
+        artifactKind = CapsuleArtifactKind.RECOGNITION_MANIFEST,
+        ordinal = ProtocolV1Limits.NON_PHOTO_ORDINAL,
+    )
+
+    override fun toString(): String =
+        "IncomingRecognitionCiphertextAdoptionRequest(<redacted>)"
+
+    private companion object {
+        const val SHA256_BYTES = 32
+    }
+}
+
+/** Source-compatible name for the accepted A11 recognition failure enum. */
 typealias IncomingRecognitionCiphertextAdoptionFailure = IncomingCiphertextAdoptionFailure
 
 /** Redacted generic result for every incoming ciphertext artifact kind. */
@@ -175,6 +225,10 @@ class IncomingRecognitionCiphertextAdopter internal constructor(
      */
     suspend fun adopt(
         request: IncomingRecognitionCiphertextAdoptionRequest,
+    ): IncomingRecognitionCiphertextAdoptionResult = adopt(request.asGeneric())
+
+    suspend fun adopt(
+        request: IncomingCiphertextAdoptionRequest,
     ): IncomingRecognitionCiphertextAdoptionResult = withContext(Dispatchers.IO) {
         coroutineContext.ensureActive()
 
@@ -350,7 +404,7 @@ class IncomingRecognitionCiphertextAdopter internal constructor(
     }
 
     private fun resolvePaths(
-        request: IncomingRecognitionCiphertextAdoptionRequest,
+        request: IncomingCiphertextAdoptionRequest,
     ): AdoptionPaths {
         val tempRoot = roots.child(
             request.ownerUserId,
@@ -410,7 +464,7 @@ class IncomingRecognitionCiphertextAdopter internal constructor(
 
     private fun verifyFile(
         path: Path,
-        request: IncomingRecognitionCiphertextAdoptionRequest,
+        request: IncomingCiphertextAdoptionRequest,
         checkCancellation: () -> Unit,
     ): FileVerification {
         checkCancellation()
@@ -458,14 +512,14 @@ class IncomingRecognitionCiphertextAdopter internal constructor(
     }
 
     private fun finishExistingDestination(
-        request: IncomingRecognitionCiphertextAdoptionRequest,
+        request: IncomingCiphertextAdoptionRequest,
         paths: AdoptionPaths,
         checkCancellation: () -> Unit,
     ): IncomingRecognitionCiphertextAdoptionResult =
         finishDurableDestination(request, paths, checkCancellation)
 
     private fun finishInstalledDestination(
-        request: IncomingRecognitionCiphertextAdoptionRequest,
+        request: IncomingCiphertextAdoptionRequest,
         paths: AdoptionPaths,
         checkCancellation: () -> Unit,
     ): IncomingRecognitionCiphertextAdoptionResult {
@@ -485,7 +539,7 @@ class IncomingRecognitionCiphertextAdopter internal constructor(
     }
 
     private fun finishDurableDestination(
-        request: IncomingRecognitionCiphertextAdoptionRequest,
+        request: IncomingCiphertextAdoptionRequest,
         paths: AdoptionPaths,
         checkCancellation: () -> Unit,
     ): IncomingRecognitionCiphertextAdoptionResult {
@@ -560,7 +614,7 @@ class IncomingRecognitionCiphertextAdopter internal constructor(
     }
 
     private fun reconcileConcurrentWinner(
-        request: IncomingRecognitionCiphertextAdoptionRequest,
+        request: IncomingCiphertextAdoptionRequest,
         paths: AdoptionPaths,
         destination: Path,
         checkCancellation: () -> Unit,
@@ -580,7 +634,7 @@ class IncomingRecognitionCiphertextAdopter internal constructor(
         }
 
     private fun reconcileConcurrentWinnerOrStorageFailure(
-        request: IncomingRecognitionCiphertextAdoptionRequest,
+        request: IncomingCiphertextAdoptionRequest,
         paths: AdoptionPaths,
         destination: Path,
         checkCancellation: () -> Unit,
@@ -594,7 +648,7 @@ class IncomingRecognitionCiphertextAdopter internal constructor(
     }
 
     private fun destinationCapability(
-        request: IncomingRecognitionCiphertextAdoptionRequest,
+        request: IncomingCiphertextAdoptionRequest,
         destination: Path,
     ): DurableIncomingCiphertextFile = DurableIncomingCiphertextFile(
         ownerUserId = request.ownerUserId,

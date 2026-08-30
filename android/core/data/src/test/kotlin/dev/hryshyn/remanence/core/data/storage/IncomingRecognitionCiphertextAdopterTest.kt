@@ -206,6 +206,20 @@ class IncomingRecognitionCiphertextAdopterTest {
         } catch (_: IllegalArgumentException) {
             assertTrue(true)
         }
+
+        try {
+            IncomingRecognitionCiphertextAdoptionRequest(
+                ownerA,
+                capsule,
+                blob,
+                ProtocolV1Limits.ENCRYPTED_PHOTO_MAX_CIPHERTEXT_BYTES,
+                ByteArray(32),
+                source,
+            )
+            assertTrue("legacy recognition API must reject photo-sized input", false)
+        } catch (_: IllegalArgumentException) {
+            assertTrue(true)
+        }
     }
 
     @Test

@@ -6,12 +6,20 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
-import kotlin.test.assertSame
+import kotlin.test.assertTrue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
+import mockwebserver3.SocketEffect
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
+import java.util.concurrent.TimeUnit
 import dev.hryshyn.remanence.core.model.CapsuleId
 
 class RecipientMaterialSyncedRepositoryTest {
@@ -35,7 +43,7 @@ class RecipientMaterialSyncedRepositoryTest {
             assertEquals("Bearer $ACCESS_TOKEN", request.headers["Authorization"])
             assertEquals("0", request.headers["Content-Length"])
             assertNull(request.headers["Idempotency-Key"])
-            assertEquals(0L, request.body?.size ?: 0L)
+            assertEquals(0, request.body?.size ?: 0)
         }
     }
 
@@ -57,17 +65,29 @@ class RecipientMaterialSyncedRepositoryTest {
 
     @Test
     fun nonempty204IsRejected() = runTest {
-        withServer { server ->
-            server.enqueue(MockResponse.Builder().code(204).body("unexpected").build())
+        val client = OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                Response.Builder()
+                    .request(chain.request())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(204)
+                    .message("No Content")
+                    .header("Content-Length", "10")
+                    .body("unexpected".toResponseBody(null))
+                    .build()
+            }
+            .build()
 
-            val failure = assertIs<RecipientMaterialSyncedResult.Failure>(
-                repository(server).markMaterialSynced(capsuleId, ACCESS_TOKEN),
-            )
+        val failure = assertIs<RecipientMaterialSyncedResult.Failure>(
+            RecipientMaterialSyncedRepository(
+                client,
+                ApiBaseUrl.parse("http://localhost/"),
+            ).markMaterialSynced(capsuleId, ACCESS_TOKEN),
+        )
 
-            assertEquals(RecipientMaterialSyncedFailure.INVALID_RESPONSE, failure.reason)
-            assertEquals(204, failure.httpStatus)
-            assertFalse(failure.retryable)
-        }
+        assertEquals(RecipientMaterialSyncedFailure.INVALID_RESPONSE, failure.reason)
+        assertEquals(204, failure.httpStatus)
+        assertFalse(failure.retryable)
     }
 
     @Test
@@ -201,22 +221,22 @@ class RecipientMaterialSyncedRepositoryTest {
     }
 
     @Test
-    fun cancellationIsRethrownExactly() = runTest {
-        val expected = CancellationException("caller cancelled")
-        val client = OkHttpClient.Builder()
-            .addInterceptor {
-                throw expected
+    fun callerCancellationCancelsInFlightExchange() = runTest {
+        withServer { server ->
+            server.enqueue(
+                MockResponse.Builder()
+                    .onResponseStart(SocketEffect.Stall)
+                    .build(),
+            )
+            val operation = async(Dispatchers.IO) {
+                repository(server).markMaterialSynced(capsuleId, ACCESS_TOKEN)
             }
-            .build()
 
-        val actual = assertFailsWith<CancellationException> {
-            RecipientMaterialSyncedRepository(
-                client,
-                ApiBaseUrl.parse("http://localhost/"),
-            ).markMaterialSynced(capsuleId, ACCESS_TOKEN)
+            assertNotNull(server.takeRequest(5, TimeUnit.SECONDS))
+            operation.cancel()
+            assertFailsWith<CancellationException> { operation.await() }
+            assertTrue(operation.isCancelled)
         }
-
-        assertSame(expected, actual)
     }
 
     @Test

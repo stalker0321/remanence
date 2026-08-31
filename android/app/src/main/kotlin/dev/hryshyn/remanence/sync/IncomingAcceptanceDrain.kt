@@ -159,6 +159,7 @@ class IncomingAcceptanceDrain internal constructor(
 
     suspend fun run(expectedOwner: UserId? = null): IncomingAcceptanceDrainResult {
         coroutineContext.ensureActive()
+        IncomingAcceptanceDiagnostics.report("acceptance started")
 
         val owner = when (val initial = readOwner()) {
             is OwnerStatus.Ready -> initial.owner
@@ -185,6 +186,7 @@ class IncomingAcceptanceDrain internal constructor(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
+            IncomingAcceptanceDiagnostics.report("acceptance selector exception")
             return IncomingAcceptanceDrainResult.Retryable(
                 IncomingAcceptanceDrainRetryReason.SELECTOR_UNAVAILABLE,
             )
@@ -196,10 +198,16 @@ class IncomingAcceptanceDrain internal constructor(
             // retry conservatively without mutating or quarantining anything.
             IncomingAcceptanceCandidateSelection.InvalidRequest,
             IncomingAcceptanceCandidateSelection.Unavailable,
-            -> return IncomingAcceptanceDrainResult.Retryable(
-                IncomingAcceptanceDrainRetryReason.SELECTOR_UNAVAILABLE,
-            )
+            -> {
+                IncomingAcceptanceDiagnostics.report("acceptance selector unavailable")
+                return IncomingAcceptanceDrainResult.Retryable(
+                    IncomingAcceptanceDrainRetryReason.SELECTOR_UNAVAILABLE,
+                )
+            }
         }
+        IncomingAcceptanceDiagnostics.report(
+            if (page.candidates.isEmpty()) "no acceptance candidate" else "acceptance candidate found",
+        )
 
         // A correct Room selector is already bounded. Keeping this defensive
         // cap makes the runner bounded even when an injected source misbehaves.
@@ -228,6 +236,7 @@ class IncomingAcceptanceDrain internal constructor(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
+                IncomingAcceptanceDiagnostics.report("acceptance exception")
                 return IncomingAcceptanceDrainResult.Retryable(
                     IncomingAcceptanceDrainRetryReason.ACCEPTANCE_UNAVAILABLE,
                 )
@@ -235,6 +244,16 @@ class IncomingAcceptanceDrain internal constructor(
 
             when (candidateAttempt) {
                 is IncomingAcceptanceDrainAttempt.Acceptance -> {
+                    IncomingAcceptanceDiagnostics.report(
+                        when (val result = candidateAttempt.result) {
+                            IncomingCapsuleAcceptanceResult.Committed -> "acceptance committed"
+                            IncomingCapsuleAcceptanceResult.IdempotentReplay -> "acceptance replayed"
+                            is IncomingCapsuleAcceptanceResult.Retryable ->
+                                "acceptance retry: ${result.reason.name}"
+                            is IncomingCapsuleAcceptanceResult.Rejected ->
+                                "acceptance rejected: ${result.reason.name}"
+                        },
+                    )
                     when (IncomingAcceptanceDrainClassifier.classify(candidateAttempt.result)) {
                         IncomingAcceptanceDrainDisposition.ACCEPTED -> progressCount += 1
                         IncomingAcceptanceDrainDisposition.RETRY ->

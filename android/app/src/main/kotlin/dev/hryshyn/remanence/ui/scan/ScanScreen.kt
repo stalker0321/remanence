@@ -20,7 +20,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.hryshyn.remanence.capture.CaptureAttemptSurface
+import dev.hryshyn.remanence.BuildConfig
 import dev.hryshyn.remanence.scan.ScanSessionState
+import dev.hryshyn.remanence.sync.IncomingAcceptanceDiagnostics
 
 /**
  * FIX-M1-007-12 / FIX-REVIEW-01: the production Scan surface. Entry renders
@@ -46,6 +48,7 @@ fun ScanScreen(
     onScreenDispose: () -> Unit = viewModel::resetSession,
 ) {
     val matchState by viewModel.matchState.collectAsStateWithLifecycle()
+    val acceptanceDiagnostic by IncomingAcceptanceDiagnostics.state.collectAsStateWithLifecycle()
 
     DisposableEffect(Unit) {
         onDispose(onScreenDispose)
@@ -61,6 +64,13 @@ fun ScanScreen(
             .padding(16.dp),
     ) {
         Text("Scan a postcard", style = MaterialTheme.typography.titleLarge)
+        if (BuildConfig.DEBUG) {
+            Text(
+                text = "Sync: $acceptanceDiagnostic",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.testTag("scan_sync_diagnostic"),
+            )
+        }
         Spacer(Modifier.height(8.dp))
 
         when (val current = matchState) {

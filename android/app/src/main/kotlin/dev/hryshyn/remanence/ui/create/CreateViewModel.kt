@@ -32,6 +32,7 @@ import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
 import dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot
 import dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
+import dev.hryshyn.remanence.core.data.storage.AccountStorageRetention
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.UserId
@@ -787,11 +788,15 @@ class CreateViewModel(
     private fun stagingDirectoryFor(owner: UserId, capsuleId: String): File =
         File(accountScopedFileRoots.createStagingRoot(owner), capsuleId)
 
-    /** Removes ONE session's own staging directory; absent means already clean. */
+    /**
+     * Removes ONE session's own staging directory without following symbolic
+     * links. A missing directory is already clean. A leaf symlink is unlinked
+     * and its target is left untouched.
+     */
     private fun deleteSessionStaging(owner: UserId?, capsuleId: String) {
         if (owner == null) return
-        val dir = stagingDirectoryFor(owner, capsuleId)
-        if (dir.exists()) dir.deleteRecursively()
+        AccountStorageRetention(accountScopedFileRoots)
+            .deleteNoFollow(stagingDirectoryFor(owner, capsuleId))
     }
 
     private fun parsePublicHandle(b64Url: String): KeysetHandle =
@@ -800,7 +805,10 @@ class CreateViewModel(
     /**
      * Leaving the create surface drops its transient session immediately.
      * Cleanup stays synchronous ON PURPOSE: it runs during teardown
-     * (onDispose/onCleared). FIX-STATE-13: the session's OWN staging
+     * (onDispose/onCleared). In-memory picker/photos/note/checklist/capture
+     * fields, step, errors, and session-owned identity are reset here;
+     * beginSession of the same epoch remains a rotation-safe no-op because
+     * rotation never calls this. FIX-STATE-13: the session's OWN staging
      * directory is removed here only when no publication still owns it - an
      * in-flight publish keeps the exclusive right (and the NonCancellable
      * obligation) to remove its own directory, so a stale coroutine can never
@@ -819,9 +827,21 @@ class CreateViewModel(
         outboxObservationJob?.cancel()
         outboxObservationJob = null
         recipientFlow.clearTransientMaterial()
+        pickerVm.reset()
+        photoSelection.clear()
+        noteEditor.reset()
+        backGate.reset()
+        frontAttempt.reset()
+        backAttempt.reset()
+        frontFingerprintId = null
+        backFingerprintId = null
+        _step.value = Step.RECIPIENT_LOOKUP
+        _flowError.value = null
+        _publishError.value = null
         // FIX-STATE-13: only when no live publication still owns THIS session's
         // directory may teardown remove it directly.
         if (capsuleId !in inFlightPublications) deleteSessionStaging(owner, capsuleId)
+        begunEpoch = null
         sessionOwner = null
         _uploadStatus.value = CreateUploadStatus.NotStarted
     }

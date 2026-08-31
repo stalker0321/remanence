@@ -508,6 +508,62 @@ class AccountStorageRetentionTest {
         assertTrue(redirected.isDirectory)
     }
 
+    @Test
+    fun sweepCreateStagingRejectsOwnerDirectorySymlinkOrNonDirectoryBeforeEnumeration() {
+        val bOrphan = touch(
+            roots.createStagingRoot(ownerB),
+            "22222222-3333-4444-8555-666666666666/plain.jpg",
+        )
+        val bBytes = bOrphan.readBytes()
+        val aAccount = roots.accountDirectory(ownerA)
+        val bAccount = roots.accountDirectory(ownerB)
+        java.nio.file.Files.createSymbolicLink(aAccount.toPath(), bAccount.toPath())
+
+        retention.sweepCreateStaging(ownerA)
+
+        assertTrue("owner symlink must not be unlinked", java.nio.file.Files.isSymbolicLink(aAccount.toPath()))
+        assertTrue("B create must survive an A owner-directory symlink", bOrphan.isFile)
+        assertArrayEquals(bBytes, bOrphan.readBytes())
+
+        java.nio.file.Files.delete(aAccount.toPath())
+        aAccount.writeBytes(byteArrayOf(7))
+
+        retention.sweepCreateStaging(ownerA)
+
+        assertTrue("owner non-directory must remain", aAccount.isFile)
+        assertTrue(bOrphan.isFile)
+        assertArrayEquals(bBytes, bOrphan.readBytes())
+    }
+
+    @Test
+    fun sweepCreateStagingRejectsTempAncestorSymlinkOrNonDirectoryBeforeEnumeration() {
+        seedOwnerMaterial(ownerA) { _ -> }
+        val bOrphan = touch(
+            roots.createStagingRoot(ownerB),
+            "33333333-4444-4555-8666-777777777777/plain.jpg",
+        )
+        val bBytes = bOrphan.readBytes()
+        val aTemp = roots.child(ownerA, AccountScopedFileRoots.ChildRoot.TEMP)
+        val bTemp = roots.child(ownerB, AccountScopedFileRoots.ChildRoot.TEMP)
+        aTemp.deleteRecursively()
+        java.nio.file.Files.createSymbolicLink(aTemp.toPath(), bTemp.toPath())
+
+        retention.sweepCreateStaging(ownerA)
+
+        assertTrue("TEMP symlink must not be unlinked", java.nio.file.Files.isSymbolicLink(aTemp.toPath()))
+        assertTrue("B create must survive an A TEMP ancestor symlink", bOrphan.isFile)
+        assertArrayEquals(bBytes, bOrphan.readBytes())
+
+        java.nio.file.Files.delete(aTemp.toPath())
+        aTemp.writeBytes(byteArrayOf(8))
+
+        retention.sweepCreateStaging(ownerA)
+
+        assertTrue("TEMP non-directory must remain", aTemp.isFile)
+        assertTrue(bOrphan.isFile)
+        assertArrayEquals(bBytes, bOrphan.readBytes())
+    }
+
     private fun assertArrayEquals(expected: ByteArray, actual: ByteArray) {
         if (!expected.contentEquals(actual)) {
             fail("byte arrays differ (expected ${expected.size} bytes, got ${actual.size})")

@@ -1006,7 +1006,11 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
             tokens = AuthTokenHolder(),
             refreshTokenReader = dev.hryshyn.remanence.core.data.network.RefreshTokenReader { null },
             rotationSink = object : SessionRotationSink {
-                override fun rotate(accessToken: String, refreshToken: String) = Unit
+                override fun rotate(
+                    accessToken: String,
+                    refreshToken: String,
+                    ownerUserId: dev.hryshyn.remanence.core.model.UserId,
+                ) = Unit
                 override fun clear() = Unit
             },
         )

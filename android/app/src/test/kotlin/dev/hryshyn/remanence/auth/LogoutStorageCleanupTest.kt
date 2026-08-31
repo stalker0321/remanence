@@ -98,7 +98,9 @@ class LogoutStorageCleanupTest {
             accessToken = CurrentAccessTokenPort { "bearer" },
             tokens = object : dev.hryshyn.remanence.session.SessionTokenPort {
                 override fun readToken(): String? = null
+                override fun readRecord() = null
                 override fun saveToken(refreshToken: String) = Unit
+                override fun saveRecord(record: dev.hryshyn.remanence.core.crypto.SessionRefreshRecord) = Unit
                 override fun clearToken() {
                     sortedTrace += "tokens"
                 }

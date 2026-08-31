@@ -59,7 +59,8 @@ class LoginUseCaseTest {
         val identity = FakeIdentity(has = true)
         val api = FakeApi(AuthResult.Success(successResponse(), 200))
         val accounts = RecordingAccounts()
-        val outcome = LoginUseCase(identity, api, accounts).login("private@example.com", "secret-password")
+        val outcome = LoginUseCase(identity, api, accounts, NoOpSessionReplacement)
+            .login("private@example.com", "secret-password")
 
         assertEquals(
             LoginUseCase.Outcome.LoggedIn(user.userId, user.handle, bundle.keyBundleId),
@@ -74,7 +75,8 @@ class LoginUseCaseTest {
         val identity = FakeIdentity(has = false)
         val api = FakeApi(AuthResult.Success(successResponse(), 200))
         val accounts = RecordingAccounts()
-        val outcome = LoginUseCase(identity, api, accounts).login("private@example.com", "secret-password")
+        val outcome = LoginUseCase(identity, api, accounts, NoOpSessionReplacement)
+            .login("private@example.com", "secret-password")
 
         assertEquals(
             LoginUseCase.Outcome.RecoveryRequired(user.userId, user.handle, bundle.keyBundleId),
@@ -88,7 +90,8 @@ class LoginUseCaseTest {
     fun wrongPasswordRejectedAndNothingRecorded() = runTest {
         val api = FakeApi(AuthResult.Failure(dev.hryshyn.remanence.core.data.network.AuthFailure.HTTP, 401))
         val accounts = RecordingAccounts()
-        val outcome = LoginUseCase(FakeIdentity(has = true), api, accounts).login("private@example.com", "bad")
+        val outcome = LoginUseCase(FakeIdentity(has = true), api, accounts, NoOpSessionReplacement)
+            .login("private@example.com", "bad")
 
         assertEquals(LoginUseCase.Outcome.Rejected(401), outcome)
         assertEquals(0, accounts.calls)
@@ -97,7 +100,8 @@ class LoginUseCaseTest {
     @Test
     fun offlineIsNetworkUnreachable() = runTest {
         val api = FakeApi(AuthResult.Failure(dev.hryshyn.remanence.core.data.network.AuthFailure.NETWORK))
-        val outcome = LoginUseCase(FakeIdentity(true), api, RecordingAccounts()).login("e", "p")
+        val outcome = LoginUseCase(FakeIdentity(true), api, RecordingAccounts(), NoOpSessionReplacement)
+            .login("e", "p")
         assertEquals(LoginUseCase.Outcome.NetworkUnreachable, outcome)
     }
 

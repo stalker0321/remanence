@@ -42,7 +42,9 @@ class RemanenceViewModelFactory(
             HomeCapabilityViewModel(container.identityAvailability) as T
         CreateViewModel::class.java -> CreateViewModel(
             directory = container.directoryRepository::lookup,
-            accessTokenProvider = { container.authTokenHolder.accessToken },
+            accessTokenProvider = {
+                container.apiStack.sessionRefreshCoordinator.openDomainAccessToken()
+            },
             identityProvider = {
                 val row = container.currentAccountStore.loadEntity() ?: return@CreateViewModel null
                 when (val loaded = container.identityRepository.load()) {

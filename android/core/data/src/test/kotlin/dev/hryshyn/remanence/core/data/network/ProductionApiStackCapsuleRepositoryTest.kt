@@ -9,6 +9,8 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 import mockwebserver3.Dispatcher
 import mockwebserver3.MockResponse
@@ -130,6 +132,62 @@ class ProductionApiStackCapsuleRepositoryTest {
         assertRefreshAndRetry(trace)
     }
 
+    @Test
+    fun closedDomainStripsExplicitOrdinaryAuthorizationAndBareLogoutKeepsToken() = runTest {
+        val server = MockWebServer()
+        val seen = CopyOnWriteArrayList<Pair<String, String?>>()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                seen += request.url.encodedPath to request.headers["Authorization"]
+                return if (request.url.encodedPath.endsWith("v1/auth/logout")) {
+                    MockResponse.Builder().code(204).build()
+                } else {
+                    MockResponse.Builder().code(401).build()
+                }
+            }
+        }
+        server.start()
+        try {
+            val tokens = AuthTokenHolder(OLD_ACCESS, OLD_REFRESH)
+            val stack = ProductionApiStack.create(
+                baseUrl = ApiBaseUrl.parse(server.url("/").toString()),
+                tokens = tokens,
+                refreshTokenReader = RefreshTokenReader {
+                    tokens.refreshToken?.let {
+                        BoundRefreshCredential(
+                            UserId.parseRest("0198f0a0-0000-7000-8000-00000000a001"),
+                            it,
+                        )
+                    }
+                },
+                rotationSink = RecordingRotationSink(),
+            )
+            stack.sessionRefreshCoordinator.invalidate()
+            assertEquals(OLD_ACCESS, stack.sessionRefreshCoordinator.rawAccessToken())
+            assertNull(stack.sessionRefreshCoordinator.openDomainAccessToken())
+
+            stack.capsuleDraftRepository.createDraft(draftRequest(), OLD_ACCESS)
+            stack.recipientUserLookupRepository.lookup(recipientId, OLD_ACCESS)
+            stack.incomingCapsuleRepository.fetchPage(
+                ownerUserId = recipientId,
+                cursor = null,
+                accessToken = OLD_ACCESS,
+            )
+            val logout = stack.bareAuthRepository.logout(OLD_ACCESS)
+            assertIs<AuthResult.Success<Unit>>(logout)
+
+            val ordinary = seen.filterNot { it.first.endsWith("v1/auth/logout") }
+            assertTrue(ordinary.isNotEmpty())
+            ordinary.forEach { (_, authorization) ->
+                assertEquals(null, authorization)
+            }
+            val logoutCall = seen.single { it.first.endsWith("v1/auth/logout") }
+            assertEquals("Bearer $OLD_ACCESS", logoutCall.second)
+        } finally {
+            server.close()
+        }
+    }
+
     private suspend fun <T> withAuthenticatedStack(
         path: String,
         success: MockResponse,
@@ -145,7 +203,14 @@ class ProductionApiStackCapsuleRepositoryTest {
             val stack = ProductionApiStack.create(
                 baseUrl = ApiBaseUrl.parse(server.url("/").toString()),
                 tokens = tokens,
-                refreshTokenReader = RefreshTokenReader { tokens.refreshToken },
+                refreshTokenReader = RefreshTokenReader {
+                    tokens.refreshToken?.let {
+                        BoundRefreshCredential(
+                            dev.hryshyn.remanence.core.model.UserId.parseRest("0198f0a0-0000-7000-8000-00000000a001"),
+                            it,
+                        )
+                    }
+                },
                 rotationSink = sink,
             )
             val result = call(stack)
@@ -210,7 +275,11 @@ class ProductionApiStackCapsuleRepositoryTest {
     private class RecordingRotationSink : SessionRotationSink {
         val rotations = mutableListOf<Pair<String, String>>()
 
-        override fun rotate(accessToken: String, refreshToken: String) {
+        override fun rotate(
+            accessToken: String,
+            refreshToken: String,
+            ownerUserId: dev.hryshyn.remanence.core.model.UserId,
+        ) {
             rotations += accessToken to refreshToken
         }
 

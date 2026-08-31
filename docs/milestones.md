@@ -179,6 +179,8 @@ Scope:
 - concise onboarding and device-loss warning;
 - recipient confirmation clarity;
 - front/prepared-back capture guidance and quality errors;
+- orientation-aware postcard framing so portrait capture can use the available
+  screen area instead of forcing a distant landscape guide;
 - upload/resume status for the current creation only;
 - scan progress, retry, ambiguity choice, useful crypto/network errors;
 - capsule presentation and accessibility;

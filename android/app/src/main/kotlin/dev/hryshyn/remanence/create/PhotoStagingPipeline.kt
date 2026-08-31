@@ -31,7 +31,9 @@ data class NormalizedPhotoDto(
 /**
  * Lazy handle to one picked photo (file/content-URI backed). Opening must be
  * cheap and deferred: [PhotoStagingPipeline] holds at most one open source at
- * any moment and closes it before advancing to the next photo.
+ * any moment and closes it before advancing to the next photo. The selected
+ * source may be larger than the protocol limit because it has not been
+ * resized or recompressed yet.
  */
 fun interface PhotoSource {
     fun openInputStream(): InputStream
@@ -40,8 +42,9 @@ fun interface PhotoSource {
 /**
  * Bounded sequential staging of picked photos (docs/architecture.md section 9
  * step 8): every photo is read from its lazy source one at a time (never two
- * sources open at once) through a bounded read capped at the protocol photo
- * plaintext budget ([PhotoArtifactEncryptor.MAX_PLAINTEXT_BYTES]), normalized,
+ * sources open at once) through a bounded read capped at [MAX_SOURCE_BYTES],
+ * normalized to the smaller protocol photo plaintext budget
+ * ([PhotoArtifactEncryptor.MAX_PLAINTEXT_BYTES]),
  * written atomically to the session staging directory, and released before the
  * next source is touched. Staging refuses to start while the staging directory
  * holds any pre-existing artifact, so leftovers from an earlier session can
@@ -74,9 +77,13 @@ class PhotoStagingPipeline(
         try {
             return sourcePhotos.mapIndexed { index, source ->
                 val jpeg = source.openInputStream().use {
-                    it.readBoundedBytes(PhotoArtifactEncryptor.MAX_PLAINTEXT_BYTES)
+                    it.readBoundedBytes(MAX_SOURCE_BYTES)
                 }
                 val normalized = normalizer.normalize(jpeg)
+                require(normalized.jpegBytes.isNotEmpty()) { "normalized photo is empty" }
+                require(normalized.jpegBytes.size <= PhotoArtifactEncryptor.MAX_PLAINTEXT_BYTES) {
+                    "normalized photo exceeds plaintext budget"
+                }
                 val target = File(stagingDirectory, "photo-%02d.jpg".format(index))
                 atomicWrite(target, normalized.jpegBytes)
                 created += target
@@ -114,5 +121,6 @@ class PhotoStagingPipeline(
     companion object {
         const val MIN_PHOTOS: Int = 3
         const val MAX_PHOTOS: Int = 5
+        const val MAX_SOURCE_BYTES: Int = 32 * 1024 * 1024
     }
 }

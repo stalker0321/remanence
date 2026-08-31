@@ -195,7 +195,32 @@ class PhotoStagingPipelineTest {
     }
 
     @Test
-    fun sourceOneByteOverPlaintextBudgetRejectedWithCleanupAndClosedStreams() {
+    fun sourceLargerThanProtocolBudgetIsNormalizedBeforeStaging() {
+        val dir = Files.createTempDirectory("staging-large-camera-source").toFile()
+        val sourceSize = dev.hryshyn.remanence.core.crypto.PhotoArtifactEncryptor.MAX_PLAINTEXT_BYTES + 1
+        val pipeline = PhotoStagingPipeline(
+            stagingDirectory = dir,
+            normalizer = { input ->
+                if (input.size == sourceSize) {
+                    NormalizedPhotoDto("normalized-jpeg".toByteArray(), 2560, 1920)
+                } else {
+                    NormalizedPhotoDto(input.copyOf(), 800, 600)
+                }
+            },
+        )
+
+        val staged = kotlinx.coroutines.runBlocking {
+            pipeline.stageAll(
+                listOf(PhotoSource { ByteArrayInputStream(ByteArray(sourceSize)) }) + sources(2),
+            )
+        }
+
+        assertEquals("normalized-jpeg", staged[0].file.readText())
+        assertEquals(3, dir.listFiles()?.size)
+    }
+
+    @Test
+    fun sourceOneByteOverInputBudgetRejectedWithCleanupAndClosedStreams() {
         val dir = Files.createTempDirectory("staging-over-budget").toFile()
         val counting = CountingSources(3)
         val pipeline = PhotoStagingPipeline(
@@ -209,7 +234,7 @@ class PhotoStagingPipelineTest {
                 PhotoSource {
                     object : InputStream() {
                         private val delegate =
-                            java.io.ByteArrayInputStream(ByteArray(dev.hryshyn.remanence.core.crypto.PhotoArtifactEncryptor.MAX_PLAINTEXT_BYTES + 1))
+                            java.io.ByteArrayInputStream(ByteArray(PhotoStagingPipeline.MAX_SOURCE_BYTES + 1))
                         override fun read(): Int = delegate.read()
                         override fun read(b: ByteArray, off: Int, len: Int): Int = delegate.read(b, off, len)
                         override fun close() {
@@ -231,6 +256,29 @@ class PhotoStagingPipelineTest {
         assertEquals(0, dir.listFiles()?.size ?: 0)
         assertTrue("rejection must happen while reading the second photo", counting.totalOpens == 1)
         assertTrue("the rejected source must be closed", rejectedStreamClosed)
+    }
+
+    @Test
+    fun normalizerCannotReturnPhotoOverProtocolBudget() {
+        val dir = Files.createTempDirectory("staging-normalized-over-budget").toFile()
+        val pipeline = PhotoStagingPipeline(
+            stagingDirectory = dir,
+            normalizer = {
+                NormalizedPhotoDto(
+                    ByteArray(dev.hryshyn.remanence.core.crypto.PhotoArtifactEncryptor.MAX_PLAINTEXT_BYTES + 1),
+                    2560,
+                    1920,
+                )
+            },
+        )
+
+        try {
+            kotlinx.coroutines.runBlocking { pipeline.stageAll(sources(3)) }
+            throw AssertionError("expected failure")
+        } catch (expected: IllegalArgumentException) {
+            assertTrue(expected.message!!.contains("normalized photo exceeds plaintext budget"))
+        }
+        assertEquals(0, dir.listFiles()?.size ?: 0)
     }
 
     @Test

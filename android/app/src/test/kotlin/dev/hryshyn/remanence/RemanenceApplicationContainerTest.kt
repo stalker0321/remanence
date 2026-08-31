@@ -39,10 +39,16 @@ import dev.hryshyn.remanence.sync.IncomingControlIndexAcceptanceResult
 import java.io.File
 import java.security.MessageDigest
 import java.util.UUID
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
+import dev.hryshyn.remanence.session.SessionState
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -126,11 +132,151 @@ class RemanenceApplicationContainerTest {
         )
         assertTrue(container.fingerprintPersistence.hasBaseline("capsule-1", StoredFingerprintSide.FRONT, FingerprintOrigin.SENDER))
 
-        container.sessionTokenStore.save("token-value")
-        assertEquals("token-value", container.sessionTokenStore.load())
+        container.sessionTokenStore.save(
+            dev.hryshyn.remanence.core.crypto.SessionRefreshRecord(
+                UserId.parseRest(authenticatedOwner),
+                "token-value",
+            ),
+        )
+        val loaded = container.sessionTokenStore.load()
+        assertEquals("token-value", loaded?.refreshToken)
+        assertEquals(authenticatedOwner, loaded?.ownerUserId?.toRestString())
         assertFalse(container.identityRepository.exists())
 
         container.database.close()
+    }
+
+    @Test
+    fun productionReplacementClearsBearerAndSealedRecordWhileClosed() = runBlocking {
+        val appContainer = container()
+        val ownerA = UserId.parseRest("0198f0a0-0000-7000-8000-00000000a001")
+        val ownerB = UserId.parseRest("0198f0a0-0000-7000-8000-00000000a002")
+        try {
+            appContainer.currentAccountStore.record(
+                ownerA.toRestString(),
+                "alice",
+                "0198f0a0-0000-7000-8000-00000000b001",
+            )
+            appContainer.sessionTokenStore.save(
+                dev.hryshyn.remanence.core.crypto.SessionRefreshRecord(ownerA, "pm_rt_a"),
+            )
+            appContainer.authTokenHolder.updateTokens("pm_at_a", "pm_rt_a")
+
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val lease = appContainer.sessionReplacement.acquireLease()
+            val replacement = async(Dispatchers.Default) {
+                runCatching {
+                    appContainer.sessionReplacement.replace(
+                        lease,
+                        ownerB,
+                        "pm_at_b",
+                        "pm_rt_b",
+                    ) {
+                        entered.complete(Unit)
+                        release.await()
+                        error("account write failed")
+                    }
+                }
+            }
+            entered.await()
+            assertNull(appContainer.apiStack.sessionRefreshCoordinator.openDomainAccessToken())
+            assertEquals("pm_at_a", appContainer.apiStack.sessionRefreshCoordinator.rawAccessToken())
+            assertEquals("pm_rt_a", appContainer.sessionTokenStore.load()?.refreshToken)
+            assertEquals(
+                ownerA.toRestString(),
+                appContainer.currentAccountStore.load()?.userId,
+            )
+
+            release.complete(Unit)
+            assertTrue(replacement.await().isFailure)
+            assertNull(appContainer.authTokenHolder.accessToken)
+            assertNull(appContainer.authTokenHolder.refreshToken)
+            assertNull(appContainer.sessionTokenStore.load())
+            assertNull(appContainer.apiStack.sessionRefreshCoordinator.openDomainAccessToken())
+            assertEquals(
+                ownerA.toRestString(),
+                appContainer.currentAccountStore.load()?.userId,
+            )
+        } finally {
+            appContainer.authTokenHolder.clearSession()
+            appContainer.sessionTokenStore.clear()
+            appContainer.currentAccountStore.clear()
+            appContainer.database.close()
+        }
+    }
+
+    @Test
+    fun productionBootstrapExactClearCannotErasePublishedB() = runBlocking {
+        val appContainer = container()
+        val ownerA = UserId.parseRest("0198f0a0-0000-7000-8000-00000000a001")
+        val ownerB = UserId.parseRest("0198f0a0-0000-7000-8000-00000000a002")
+        try {
+            appContainer.sessionTokenStore.save(
+                dev.hryshyn.remanence.core.crypto.SessionRefreshRecord(ownerA, "pm_rt_a"),
+            )
+            appContainer.authTokenHolder.updateTokens("pm_at_a", "pm_rt_a")
+            appContainer.currentAccountStore.record(
+                ownerB.toRestString(),
+                "bob",
+                "0198f0a0-0000-7000-8000-00000000b002",
+            )
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            appContainer.sessionRefreshCoordinator.onAfterExactBoundClearMatch = {
+                entered.complete(Unit)
+                runBlocking { release.await() }
+            }
+            val bootstrap = async(Dispatchers.IO) { appContainer.sessionBootstrap.bootstrap() }
+            entered.await()
+            val publish = async(Dispatchers.IO) {
+                appContainer.sessionRefreshCoordinator.publishBoundSession(
+                    lease = appContainer.sessionRefreshCoordinator.acquireAccountLease(),
+                    expectedOwner = ownerB,
+                    accessToken = "pm_at_b",
+                    refreshToken = "pm_rt_b",
+                    currentAccountOwner = ownerB,
+                )
+            }
+            repeat(40) { yield() }
+            assertEquals(ownerA, appContainer.sessionTokenStore.load()?.ownerUserId)
+            assertEquals("pm_rt_a", appContainer.sessionTokenStore.load()?.refreshToken)
+            release.complete(Unit)
+            assertEquals(SessionState.SignedOut, bootstrap.await())
+            assertTrue(publish.await())
+            assertEquals(ownerB, appContainer.sessionTokenStore.load()?.ownerUserId)
+            assertEquals("pm_rt_b", appContainer.sessionTokenStore.load()?.refreshToken)
+            assertEquals("pm_at_b", appContainer.authTokenHolder.accessToken)
+        } finally {
+            appContainer.sessionRefreshCoordinator.onAfterExactBoundClearMatch = null
+            appContainer.authTokenHolder.clearSession()
+            appContainer.sessionTokenStore.clear()
+            appContainer.currentAccountStore.clear()
+            appContainer.database.close()
+        }
+    }
+
+    @Test
+    fun closedDomainBlocksOrdinaryIncomingSessionWhileRawBearerRemains() = runBlocking {
+        val appContainer = container()
+        val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000a001")
+        try {
+            appContainer.currentAccountStore.record(
+                owner.toRestString(),
+                "alice",
+                "0198f0a0-0000-7000-8000-00000000b001",
+            )
+            appContainer.authTokenHolder.updateTokens("pm_at_a", "pm_rt_a")
+            assertTrue(appContainer.hasIncomingAcceptanceSessionForTesting { })
+            appContainer.apiStack.sessionRefreshCoordinator.invalidate()
+            assertFalse(appContainer.hasIncomingAcceptanceSessionForTesting { })
+            assertEquals("pm_at_a", appContainer.apiStack.sessionRefreshCoordinator.rawAccessToken())
+            assertNull(appContainer.apiStack.sessionRefreshCoordinator.openDomainAccessToken())
+        } finally {
+            appContainer.authTokenHolder.clearSession()
+            appContainer.currentAccountStore.clear()
+            appContainer.database.close()
+        }
     }
 
     @Test

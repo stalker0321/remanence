@@ -45,7 +45,9 @@ private class RecordingSink(private val trace: MutableList<String>? = null) : Lo
 
 private class RecordingTokenPort(private val trace: MutableList<String>? = null) : SessionTokenPort {
     override fun readToken(): String? = null
+    override fun readRecord() = null
     override fun saveToken(refreshToken: String) = Unit
+    override fun saveRecord(record: dev.hryshyn.remanence.core.crypto.SessionRefreshRecord) = Unit
     override fun clearToken() {
         trace?.add("tokens")
     }
@@ -486,6 +488,7 @@ class LogoutWorkCancellationTest {
             "00000000-0000-4000-8000-000000000002",
         )
         container.authTokenHolder.updateTokens("b-access-token", "b-refresh-token")
+        container.apiStack.sessionRefreshCoordinator.install(ownerB)
         container.scheduleIncomingSync(ownerB)
         val bIncoming = wm.getWorkInfosForUniqueWork(
             AccountWorkIdentity.incomingSync(ownerB).uniqueName,

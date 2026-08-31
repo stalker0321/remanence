@@ -71,7 +71,9 @@ class LogoutUseCaseTest {
         accessToken = { bearerAtCallTime.poll() },
         tokens = object : SessionTokenPort {
             override fun readToken(): String? = "sealed-refresh"
+            override fun readRecord() = null
             override fun saveToken(refreshToken: String) = Unit
+            override fun saveRecord(record: dev.hryshyn.remanence.core.crypto.SessionRefreshRecord) = Unit
             override fun clearToken() = refreshTokenBehavior()
         },
         credentialSink = LogoutCredentialSink { credentialBehavior() },

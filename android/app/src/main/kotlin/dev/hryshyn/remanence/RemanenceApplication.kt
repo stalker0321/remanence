@@ -10,6 +10,7 @@ import dev.hryshyn.remanence.core.crypto.AndroidKeystoreKekBoundary
 import dev.hryshyn.remanence.core.crypto.IdentityBundleRepository
 import dev.hryshyn.remanence.core.crypto.KekBoundary
 import dev.hryshyn.remanence.core.crypto.KeysetKekWrapper
+import dev.hryshyn.remanence.core.crypto.SessionRefreshRecord
 import dev.hryshyn.remanence.core.crypto.SessionTokenStore
 import dev.hryshyn.remanence.core.crypto.TinkPrimitives
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
@@ -256,8 +257,12 @@ class AppContainer private constructor(
      */
     private val sessionRotationSink: dev.hryshyn.remanence.core.data.network.SessionRotationSink by lazy {
         object : dev.hryshyn.remanence.core.data.network.SessionRotationSink {
-            override fun rotate(accessToken: String, refreshToken: String) {
-                sessionTokenStore.save(refreshToken)
+            override fun rotate(
+                accessToken: String,
+                refreshToken: String,
+                ownerUserId: UserId,
+            ) {
+                sessionTokenStore.save(SessionRefreshRecord(ownerUserId, refreshToken))
                 authTokenHolder.updateTokens(accessToken, refreshToken)
             }
 
@@ -278,7 +283,12 @@ class AppContainer private constructor(
             baseUrl = apiBaseUrl,
             tokens = authTokenHolder,
             refreshTokenReader = dev.hryshyn.remanence.core.data.network.RefreshTokenReader {
-                sessionTokenStore.load()
+                sessionTokenStore.load()?.let { record ->
+                    dev.hryshyn.remanence.core.data.network.BoundRefreshCredential(
+                        record.ownerUserId,
+                        record.refreshToken,
+                    )
+                }
             },
             rotationSink = sessionRotationSink,
         )
@@ -292,6 +302,10 @@ class AppContainer private constructor(
     val authTokenHolder: dev.hryshyn.remanence.core.data.network.AuthTokenHolder by lazy {
         dev.hryshyn.remanence.core.data.network.AuthTokenHolder()
     }
+
+    /** Ordinary requests: bearer only while the refresh domain is open. */
+    private fun ordinaryAccessToken(): String? =
+        apiStack.sessionRefreshCoordinator.openDomainAccessToken()?.takeIf { it.isNotBlank() }
 
     /** Identity KEK alias used for wrapping the HPKE/Ed25519 private keysets. */
     val identityKekAlias: String = IDENTITY_KEK_ALIAS
@@ -361,7 +375,7 @@ class AppContainer private constructor(
             roots = accountScopedFileRoots,
             currentSession = {
                 val account = currentAccountStore.load() ?: return@IncomingCapsuleSyncRepository null
-                val token = authTokenHolder.accessToken ?: return@IncomingCapsuleSyncRepository null
+                val token = ordinaryAccessToken() ?: return@IncomingCapsuleSyncRepository null
                 val owner = runCatching {
                     dev.hryshyn.remanence.core.model.UserId.parseRest(account.userId)
                 }.getOrNull() ?: return@IncomingCapsuleSyncRepository null
@@ -381,7 +395,7 @@ class AppContainer private constructor(
     val trustedSenderKeys: dev.hryshyn.remanence.identity.TrustedSenderKeyStore by lazy {
         dev.hryshyn.remanence.identity.DirectorySenderKeyStore(
             directoryFetch = { bundleId ->
-                val token = authTokenHolder.accessToken ?: return@DirectorySenderKeyStore null
+                val token = ordinaryAccessToken() ?: return@DirectorySenderKeyStore null
                 keyBundleByIdRepository.fetch(bundleId, token)
             },
             ownAccount = {
@@ -553,7 +567,7 @@ class AppContainer private constructor(
             capsuleDao = database.outboxCapsuleDao(),
             blobDao = database.outboxBlobDao(),
             currentAccountUserId = { currentAccountStore.load()?.userId },
-            accessToken = { authTokenHolder.accessToken },
+            accessToken = { ordinaryAccessToken() },
             createDraft = { request, token -> capsuleDraftRepository.createDraft(request, token) },
             uploadBlob = { request, token -> capsuleBlobUploadRepository.uploadBlob(request, token) },
             finalizeCapsule = { request, token -> capsuleFinalizeRepository.finalize(request, token) },
@@ -602,7 +616,7 @@ class AppContainer private constructor(
         val liveOwner = currentAccountStore.load()?.userId?.let { raw ->
             runCatching { UserId.parseRest(raw) }.getOrNull()
         } ?: return
-        if (liveOwner != owner || authTokenHolder.accessToken == null) return
+        if (liveOwner != owner || ordinaryAccessToken() == null) return
         dev.hryshyn.remanence.sync.IncomingCapsuleSyncWorker.enqueue(
             WorkManager.getInstance(appContext),
             owner,
@@ -634,9 +648,9 @@ class AppContainer private constructor(
         beforeCredentialRecheck: suspend () -> Unit,
     ): IncomingSyncSession? {
         val account = currentAuthenticatedAccount() ?: return null
-        val token = authTokenHolder.accessToken?.takeIf { it.isNotBlank() } ?: return null
+        val token = ordinaryAccessToken() ?: return null
         beforeCredentialRecheck()
-        if (currentAuthenticatedAccount() != account || authTokenHolder.accessToken != token) return null
+        if (currentAuthenticatedAccount() != account || ordinaryAccessToken() != token) return null
         return IncomingSyncSession(account.ownerUserId, token)
     }
 
@@ -647,7 +661,7 @@ class AppContainer private constructor(
         beforeCredentialRecheck: suspend () -> Unit,
     ): CurrentRecipientEncryptionIdentity? {
         val account = currentAuthenticatedAccount() ?: return null
-        val token = authTokenHolder.accessToken?.takeIf { it.isNotBlank() } ?: return null
+        val token = ordinaryAccessToken() ?: return null
         val loaded = incomingAcceptanceIdentityLoader()
         val encryptionHandle = when (loaded) {
             is IdentityBundleRepository.LoadResult.Available -> loaded.encryptionHandle
@@ -663,7 +677,7 @@ class AppContainer private constructor(
         }
         beforeCredentialRecheck()
         if (!exactBundle || currentAuthenticatedAccount() != account ||
-            authTokenHolder.accessToken != token
+            ordinaryAccessToken() != token
         ) return null
         return CurrentRecipientEncryptionIdentity(
             ownerUserId = account.ownerUserId,
@@ -727,12 +741,8 @@ class AppContainer private constructor(
     val logoutUseCase: dev.hryshyn.remanence.auth.LogoutUseCase by lazy {
         dev.hryshyn.remanence.auth.LogoutUseCase(
             serverLogout = { accessToken -> bareAuthRepository.logout(accessToken) },
-            accessToken = { authTokenHolder.accessToken },
-            tokens = object : dev.hryshyn.remanence.session.SessionTokenPort {
-                override fun readToken(): String? = sessionTokenStore.load()
-                override fun saveToken(refreshToken: String) = sessionTokenStore.save(refreshToken)
-                override fun clearToken() = sessionTokenStore.clear()
-            },
+            accessToken = { apiStack.sessionRefreshCoordinator.rawAccessToken() },
+            tokens = sessionTokenPort(),
             credentialSink = dev.hryshyn.remanence.auth.LogoutCredentialSink {
                 authTokenHolder.clearSession()
             },
@@ -759,6 +769,7 @@ class AppContainer private constructor(
             workCancellation = { owner ->
                 accountWorkCancellation.cancelForAccount(owner)
             },
+            invalidateSessionLease = { apiStack.sessionRefreshCoordinator.invalidate() },
         )
     }
 
@@ -769,49 +780,40 @@ class AppContainer private constructor(
         appLevelGrantCleanup += cleanup
     }
 
-    /**
-     * Persists ONLY the rotating refresh token (sealed); the access token
-     * lives exclusively in [authTokenHolder]. The `local_account` row is
-     * written by each auth use case through its suspended port.
-     */
-    private fun recordAuthenticatedSession(
-        userId: String,
-        handle: String,
-        accessToken: String,
-        refreshToken: String,
-    ) {
-        sessionTokenStore.save(refreshToken)
-        authTokenHolder.updateTokens(accessToken, refreshToken)
+    internal val sessionReplacement: dev.hryshyn.remanence.auth.SessionReplacementPort by lazy {
+        dev.hryshyn.remanence.auth.BoundSessionReplacement(
+            coordinator = apiStack.sessionRefreshCoordinator,
+            currentAccountOwner = {
+                currentAccountStore.load()?.userId?.let { raw ->
+                    runCatching { UserId.parseRest(raw) }.getOrNull()
+                }
+            },
+        )
     }
 
-    /** Seals the refresh token from a successful auth call, then delegates. */
-    private fun <T> captureAuthSession(
-        result: AuthResult<T>,
-        accessTokenOf: (T) -> String,
-        refreshTokenOf: (T) -> String,
-    ): AuthResult<T> {
-        if (result is AuthResult.Success) {
-            val user = sessionUser(result.value)
-            if (user != null) {
-                // Invalidate returns only after any in-flight check+sink
-                // publication finishes, so replacement credentials cannot be
-                // overwritten by a stale rotate that already passed its check.
-                apiStack.sessionRefreshCoordinator.invalidate()
-                recordAuthenticatedSession(
-                    user.userId,
-                    user.handle,
-                    accessTokenOf(result.value),
-                    refreshTokenOf(result.value),
-                )
-            }
+    private fun sessionTokenPort(): SessionTokenPort = object : SessionTokenPort {
+        override fun readToken(): String? = sessionTokenStore.load()?.refreshToken
+
+        override fun readRecord(): SessionRefreshRecord? = sessionTokenStore.load()
+
+        override fun saveToken(refreshToken: String) {
+            val existing = sessionTokenStore.load()
+                ?: throw java.security.GeneralSecurityException("no bound session record")
+            sessionTokenStore.save(SessionRefreshRecord(existing.ownerUserId, refreshToken))
         }
-        return result
-    }
 
-    private fun sessionUser(value: Any?): RegistrationUserDto? = when (value) {
-        is dev.hryshyn.remanence.core.data.network.LoginResponseDto -> value.user
-        is RegisterResponseDto -> value.user
-        else -> null
+        override fun saveRecord(record: SessionRefreshRecord) {
+            sessionTokenStore.save(record)
+        }
+
+        override fun clearToken() = sessionTokenStore.clear()
+
+        override fun clearExactRecord(snapshot: SessionRefreshRecord) {
+            apiStack.sessionRefreshCoordinator.clearExactBoundRecord(
+                snapshot.ownerUserId,
+                snapshot.refreshToken,
+            )
+        }
     }
 
     val loginUseCase: dev.hryshyn.remanence.auth.LoginUseCase by lazy {
@@ -821,13 +823,7 @@ class AppContainer private constructor(
                 exports is IdentityBundleRepository.PublicExportsResult.Available &&
                     deriveKeyBundleId(exports.encryptionPublicKeyset) == activeKeyBundleId
             },
-            authApi = { request ->
-                captureAuthSession(
-                    bareAuthRepository.login(request),
-                    accessTokenOf = { it.accessToken },
-                    refreshTokenOf = { it.refreshToken },
-                )
-            },
+            authApi = { request -> bareAuthRepository.login(request) },
             accounts = object : dev.hryshyn.remanence.auth.CurrentAccountPort {
                 override suspend fun recordCurrentAccount(
                     user: dev.hryshyn.remanence.core.data.network.RegistrationUserDto,
@@ -836,6 +832,7 @@ class AppContainer private constructor(
                     currentAccountStore.record(user.userId, user.handle, activeKeyBundleId)
                 }
             },
+            sessionReplacement = sessionReplacement,
         )
     }
 
@@ -844,11 +841,7 @@ class AppContainer private constructor(
             identity = registrationIdentityAdapter,
             authApi = object : dev.hryshyn.remanence.auth.RegistrationAuthApiPort {
                 override suspend fun register(request: RegisterRequestDto): AuthResult<RegisterResponseDto> =
-                    captureAuthSession(
-                        bareAuthRepository.register(request),
-                        accessTokenOf = { it.accessToken },
-                        refreshTokenOf = { it.refreshToken },
-                    )
+                    bareAuthRepository.register(request)
             },
             accounts = object : dev.hryshyn.remanence.auth.CurrentAccountPort {
                 override suspend fun recordCurrentAccount(
@@ -858,6 +851,7 @@ class AppContainer private constructor(
                     currentAccountStore.record(user.userId, user.handle, activeKeyBundleId)
                 }
             },
+            sessionReplacement = sessionReplacement,
         )
     }
 
@@ -880,19 +874,17 @@ class AppContainer private constructor(
         val refreshCoordinator = apiStack.sessionRefreshCoordinator
         val identityAvailability = this.identityAvailability
         SessionBootstrap(
-            tokens = object : SessionTokenPort {
-                override fun readToken(): String? = sessionTokenStore.load()
-                override fun saveToken(refreshToken: String) = sessionTokenStore.save(refreshToken)
-                override fun clearToken() = sessionTokenStore.clear()
-            },
+            tokens = sessionTokenPort(),
             identity = identityAvailability,
             account = { currentAccountStore.load() },
             refresher = object : dev.hryshyn.remanence.session.SessionRefresher {
                 override suspend fun hasStoredToken(): Boolean =
                     refreshCoordinator.hasStoredToken()
 
-                override suspend fun refresh(): dev.hryshyn.remanence.session.SessionRefreshOutcome =
-                    when (val result = refreshCoordinator.refreshForBootstrap()) {
+                override suspend fun refresh(
+                    expectedOwner: UserId,
+                ): dev.hryshyn.remanence.session.SessionRefreshOutcome =
+                    when (val result = refreshCoordinator.refreshForBootstrap(expectedOwner)) {
                         is dev.hryshyn.remanence.core.data.network.CoordinatedRefreshOutcome.Rotated ->
                             dev.hryshyn.remanence.session.SessionRefreshOutcome.Rotated(
                                 accessToken = result.accessToken,

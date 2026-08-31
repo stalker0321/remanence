@@ -4,6 +4,8 @@ import dev.hryshyn.remanence.wiring.PreparedIdentity
 import dev.hryshyn.remanence.core.data.network.AuthResult
 import dev.hryshyn.remanence.core.data.network.RegisterRequestDto
 import dev.hryshyn.remanence.core.data.network.RegistrationUserDto
+import dev.hryshyn.remanence.core.model.UserId
+import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * Port over the local identity bundle. Implementations must durably wrap the
@@ -37,6 +39,7 @@ class RegistrationUseCase(
     private val identity: RegistrationIdentityPort,
     private val authApi: RegistrationAuthApiPort,
     private val accounts: CurrentAccountPort,
+    private val sessionReplacement: SessionReplacementPort,
 ) {
 
     sealed interface Outcome {
@@ -75,10 +78,20 @@ class RegistrationUseCase(
                 signingPublicKeyset = prepared.signingPublicKeysetB64Url,
             ),
         )
+        val lease = sessionReplacement.acquireLease()
         return when (val result = authApi.register(request)) {
             is AuthResult.Success -> {
                 val response = result.value
-                accounts.recordCurrentAccount(response.user, response.activeKeyBundleId)
+                if (!commitReplacement(
+                        lease = lease,
+                        user = response.user,
+                        activeKeyBundleId = response.activeKeyBundleId,
+                        accessToken = response.accessToken,
+                        refreshToken = response.refreshToken,
+                    )
+                ) {
+                    return Outcome.InvalidResponse
+                }
                 Outcome.Registered(
                     userId = response.user.userId,
                     handle = response.user.handle,
@@ -90,6 +103,30 @@ class RegistrationUseCase(
                 dev.hryshyn.remanence.core.data.network.AuthFailure.NETWORK -> Outcome.NetworkUnreachable
                 dev.hryshyn.remanence.core.data.network.AuthFailure.INVALID_RESPONSE -> Outcome.InvalidResponse
             }
+        }
+    }
+
+    private suspend fun commitReplacement(
+        lease: Long,
+        user: RegistrationUserDto,
+        activeKeyBundleId: String,
+        accessToken: String,
+        refreshToken: String,
+    ): Boolean {
+        val owner = try {
+            UserId.parseRest(user.userId)
+        } catch (_: IllegalArgumentException) {
+            return false
+        }
+        return try {
+            sessionReplacement.replace(lease, owner, accessToken, refreshToken) {
+                accounts.recordCurrentAccount(user, activeKeyBundleId)
+            }
+            true
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
         }
     }
 }

@@ -1,6 +1,8 @@
 package dev.hryshyn.remanence.session
 
+import dev.hryshyn.remanence.core.crypto.SessionRefreshRecord
 import dev.hryshyn.remanence.core.model.KeyBundleId
+import dev.hryshyn.remanence.core.model.UserId
 
 /**
  * M1-I02 cold-start session state (docs/security.md section 8): the single
@@ -50,11 +52,30 @@ interface SessionTokenPort {
     /** Returns the stored refresh token or `null` when absent/corrupt-cleared. */
     fun readToken(): String?
 
-    /** Atomically replaces the sealed refresh token after a rotation. */
+    /** Returns the versioned owner-bound record, or `null` when absent. */
+    fun readRecord(): SessionRefreshRecord?
+
+    /** Atomically replaces the sealed refresh token after a rotation, preserving owner. */
     fun saveToken(refreshToken: String)
+
+    /** Writes a bound owner+token record (login/register install). */
+    fun saveRecord(record: SessionRefreshRecord)
 
     /** Removes the sealed token record (logout or invalid material). */
     fun clearToken()
+
+    /**
+     * Removes the sealed record only when it is still exactly [snapshot].
+     * Production runs this under the coordinator publication fence.
+     */
+    fun clearExactRecord(snapshot: SessionRefreshRecord) {
+        val current = readRecord() ?: return
+        if (current.ownerUserId == snapshot.ownerUserId &&
+            current.refreshToken == snapshot.refreshToken
+        ) {
+            clearToken()
+        }
+    }
 }
 
 /** Port over the wrapped identity keysets on disk. */
@@ -98,7 +119,7 @@ sealed interface SessionRefreshOutcome {
 interface SessionRefresher {
     suspend fun hasStoredToken(): Boolean
 
-    suspend fun refresh(): SessionRefreshOutcome
+    suspend fun refresh(expectedOwner: UserId): SessionRefreshOutcome
 }
 
 /** What the root surface needs from session resolution. */
@@ -113,7 +134,8 @@ interface SessionStateResolver {
  * combination of (sealed rotating refresh token, wrapped identity keysets,
  * account summary) PLUS a live refresh round trip. A connectivity-only
  * failure enters [SessionState.OfflineActive] only after the local account
- * and identity have already been validated.
+ * and identity have already been validated, and only when the sealed
+ * refresh record is bound to that same canonical owner.
  *
  * The ACCESS token is deliberately absent from persistence: it lives only in
  * process memory for its short lifetime. Invalid or corrupt sealed material
@@ -128,12 +150,33 @@ class SessionBootstrap(
     private val refresher: SessionRefresher? = null,
 ) : SessionStateResolver {
 
+    /**
+     * Test-only pause after the sealed record snapshot is taken and before
+     * the account row is loaded. Production leaves this null.
+     */
+    internal var onAfterRecordRead: (() -> Unit)? = null
+
     override suspend fun bootstrap(): SessionState {
         val refresher = this.refresher ?: return SessionState.RequiresConnectivity
         if (!refresher.hasStoredToken()) return SessionState.SignedOut
 
+        val record = try {
+            tokens.readRecord()
+        } catch (_: Exception) {
+            runCatching { tokens.clearToken() }
+            return SessionState.SignedOut
+        } ?: return SessionState.SignedOut
+        onAfterRecordRead?.invoke()
+
         val summary = account.load()
-        if (summary == null || !isCanonicalKeyBundleId(summary.activeKeyBundleId)) {
+        val accountOwner = summary?.userId
+            ?.takeIf { it.isNotBlank() }
+            ?.let { raw -> runCatching { UserId.parseRest(raw) }.getOrNull() }
+        if (summary == null || accountOwner == null || accountOwner != record.ownerUserId) {
+            runCatching { tokens.clearExactRecord(record) }
+            return SessionState.SignedOut
+        }
+        if (!isCanonicalKeyBundleId(summary.activeKeyBundleId)) {
             return SessionState.RecoveryRequired
         }
         val identityMatches = try {
@@ -145,7 +188,7 @@ class SessionBootstrap(
             return SessionState.RecoveryRequired
         }
 
-        return when (val outcome = refresher.refresh()) {
+        return when (val outcome = refresher.refresh(accountOwner)) {
             is SessionRefreshOutcome.Rotated,
             is SessionRefreshOutcome.Reused,
             -> SessionState.Active(

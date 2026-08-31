@@ -11,6 +11,7 @@ import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hryshyn.remanence.auth.CurrentAccountPort
 import dev.hryshyn.remanence.auth.RegistrationAuthApiPort
+import dev.hryshyn.remanence.auth.NoOpSessionReplacement
 import dev.hryshyn.remanence.auth.RegistrationUseCase
 import dev.hryshyn.remanence.wiring.PreparedIdentity
 import kotlinx.coroutines.CompletableDeferred
@@ -104,7 +105,9 @@ class RegistrationSubmitLifecycleTest {
     }
 
     private fun validViewModel(api: RegistrationAuthApiPort): RegistrationViewModel {
-        val viewModel = RegistrationViewModel(RegistrationUseCase(FixedIdentity, api, NoAccounts))
+        val viewModel = RegistrationViewModel(
+            RegistrationUseCase(FixedIdentity, api, NoAccounts, NoOpSessionReplacement),
+        )
         viewModel.onFieldChange(RegistrationField.EMAIL, "mykola@example.com")
         viewModel.onFieldChange(RegistrationField.PASSWORD, "correct horse battery")
         viewModel.onFieldChange(RegistrationField.HANDLE, "mykola")

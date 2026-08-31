@@ -74,4 +74,42 @@ class BearerAuthInterceptorTest {
         get("/v1/capsules/incoming")
         assertNull(lastAuthorization)
     }
+
+    @Test
+    fun closedDomainStripsExplicitOrdinaryAuthorization() {
+        val closed = OkHttpClient.Builder()
+            .addInterceptor(BearerAuthInterceptor { null })
+            .build()
+        listOf(
+            "/v1/capsules/incoming",
+            "/v1/capsules",
+            "/v1/directory/users/0198f0a0-0000-7000-8000-00000000a001",
+        ).forEach { path ->
+            lastAuthorization = "sentinel"
+            closed.newCall(
+                Request.Builder()
+                    .url(server.url(path))
+                    .header("Authorization", RefreshingAuthenticator.BEARER_PREFIX + "pm_at_explicit")
+                    .get()
+                    .build(),
+            ).execute().use { assertEquals(200, it.code) }
+            assertNull("ordinary $path must not keep Authorization while closed", lastAuthorization)
+        }
+    }
+
+    @Test
+    fun closedDomainPreservesNoHeaderOnBareLogoutPathWithoutInjecting() {
+        val closed = OkHttpClient.Builder()
+            .addInterceptor(BearerAuthInterceptor { null })
+            .build()
+        lastAuthorization = "sentinel"
+        closed.newCall(
+            Request.Builder()
+                .url(server.url("/v1/auth/logout"))
+                .header("Authorization", RefreshingAuthenticator.BEARER_PREFIX + "pm_at_explicit")
+                .get()
+                .build(),
+        ).execute().use { assertEquals(200, it.code) }
+        assertNull(lastAuthorization)
+    }
 }

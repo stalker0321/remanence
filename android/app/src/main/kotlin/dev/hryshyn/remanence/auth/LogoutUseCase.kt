@@ -127,6 +127,7 @@ class LogoutUseCase(
     private val logoutOwnerSnapshot: LogoutOwnerSnapshotPort? = null,
     private val tempStorageCleanup: LogoutTempCleanupPort? = null,
     private val workCancellation: LogoutWorkCancellationPort? = null,
+    private val invalidateSessionLease: () -> Unit = {},
 ) {
 
     /** Runs the bounded sequence once, preserving cancellation after cleanup. */
@@ -139,6 +140,15 @@ class LogoutUseCase(
         }
 
         val outcome = withContext(NonCancellable) {
+            // Retire in-flight replacement leases before any later step so a
+            // stale install cannot reopen the refresh domain after logout.
+            try {
+                invalidateSessionLease()
+            } catch (cancelled: CancellationException) {
+                rememberCancellation(cancelled)
+            } catch (_: Exception) {
+            }
+
             // 0. Immutable owner snapshot - before any identity context changes.
             var owner: UserId? = null
             var ownerSnapshotFailure: Exception? = null

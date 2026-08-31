@@ -3,13 +3,17 @@ package dev.hryshyn.remanence.session
 import java.io.File
 import javax.crypto.KeyGenerator
 import kotlin.io.path.createTempDirectory
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import dev.hryshyn.remanence.core.crypto.KekBoundary
+import dev.hryshyn.remanence.core.crypto.SessionRefreshRecord
 import dev.hryshyn.remanence.core.crypto.SessionTokenStore
+import dev.hryshyn.remanence.core.model.UserId
 
 /**
  * Cold-start bootstrap proof (FIX-M1-007-05): only the ROTATING REFRESH token
@@ -20,6 +24,8 @@ class SessionBootstrapTest {
 
     private val bundleA = "00000000-0000-4000-8000-000000000001"
     private val bundleB = "00000000-0000-4000-8000-000000000002"
+    private val ownerA = "0198f0a0-0000-7000-8000-00000000a001"
+    private val ownerB = "0198f0a0-0000-7000-8000-00000000a002"
 
     private class FakeIdentity(private val localBundleId: String? = "00000000-0000-4000-8000-000000000001") :
         IdentityAvailabilityPort {
@@ -44,18 +50,26 @@ class SessionBootstrapTest {
     }
 
     /** Real sealed-token behavior over a software KEK, adapted to the port. */
-    private class TokenPort(directory: File, savedRefresh: String?) : SessionTokenPort {
+    private class TokenPort(directory: File, saved: SessionRefreshRecord?) : SessionTokenPort {
         val store = SessionTokenStore(directory, SoftwareBoundary(), "session-test")
         var clearCount: Int = 0
             private set
 
         init {
-            if (savedRefresh != null) store.save(savedRefresh)
+            if (saved != null) store.save(saved)
         }
 
-        override fun readToken(): String? = store.load()
+        override fun readToken(): String? = store.load()?.refreshToken
+
+        override fun readRecord(): SessionRefreshRecord? = store.load()
+
         override fun saveToken(refreshToken: String) {
-            store.save(refreshToken)
+            val existing = store.load() ?: return
+            store.save(SessionRefreshRecord(existing.ownerUserId, refreshToken))
+        }
+
+        override fun saveRecord(record: SessionRefreshRecord) {
+            store.save(record)
         }
 
         override fun clearToken() {
@@ -70,11 +84,17 @@ class SessionBootstrapTest {
         private val tokens: TokenPort? = null,
     ) : SessionRefresher {
         var calls: Int = 0
+        var onRefreshEntry: (suspend () -> Unit)? = null
 
         override suspend fun hasStoredToken(): Boolean = tokenPresent
 
-        override suspend fun refresh(): SessionRefreshOutcome {
+        override suspend fun refresh(expectedOwner: UserId): SessionRefreshOutcome {
             calls++
+            onRefreshEntry?.invoke()
+            val record = tokens?.readRecord()
+            if (record == null || record.ownerUserId != expectedOwner) {
+                return SessionRefreshOutcome.Invalidated
+            }
             when (val result = outcome) {
                 is SessionRefreshOutcome.Rotated -> tokens?.saveToken(result.refreshToken)
                 SessionRefreshOutcome.Rejected,
@@ -95,13 +115,22 @@ class SessionBootstrapTest {
 
     private fun fixture(
         savedRefresh: String? = "stored-refresh-token",
+        recordOwner: String = ownerA,
         refresherOutcome: SessionRefreshOutcome = SessionRefreshOutcome.Rotated("fresh-access", "fresh-refresh"),
         identity: IdentityAvailabilityPort = FakeIdentity(),
-        summary: PersistedAccountSummary? = PersistedAccountSummary("user-1", "mykola", bundleA),
+        summary: PersistedAccountSummary? = PersistedAccountSummary(ownerA, "mykola", bundleA),
+        tokenPresent: Boolean? = null,
     ): Fixture {
         val dir = createTempDirectory("session").toFile().apply { deleteOnExit() }
-        val tokens = TokenPort(dir, savedRefresh)
-        val refresher = FakeRefresher(refresherOutcome, savedRefresh != null, tokens)
+        val saved = savedRefresh?.let {
+            SessionRefreshRecord(UserId.parseRest(recordOwner), it)
+        }
+        val tokens = TokenPort(dir, saved)
+        val refresher = FakeRefresher(
+            refresherOutcome,
+            tokenPresent ?: (savedRefresh != null),
+            tokens,
+        )
         val bootstrap = SessionBootstrap(tokens, identity, { summary }, refresher)
         return Fixture(bootstrap, tokens, refresher, identity)
     }
@@ -136,8 +165,9 @@ class SessionBootstrapTest {
     @Test
     fun differentPersistedBundleCannotUseAnotherAccountsLocalIdentity() = runBlocking {
         val f = fixture(
+            recordOwner = ownerB,
             identity = FakeIdentity(localBundleId = bundleA),
-            summary = PersistedAccountSummary("user-b", "other", bundleB),
+            summary = PersistedAccountSummary(ownerB, "other", bundleB),
         )
 
         assertEquals(SessionState.RecoveryRequired, f.bootstrap.bootstrap())
@@ -148,18 +178,90 @@ class SessionBootstrapTest {
     }
 
     @Test
-    fun missingPersistedSummaryIsRecoveryRequiredBeforeRefresh() = runBlocking {
+    fun missingPersistedSummaryFailsClosedBeforeRefresh() = runBlocking {
         val f = fixture(summary = null)
 
-        assertEquals(SessionState.RecoveryRequired, f.bootstrap.bootstrap())
+        assertEquals(SessionState.SignedOut, f.bootstrap.bootstrap())
         assertEquals(0, (f.identity as FakeIdentity).calls)
         assertEquals(0, f.refresher.calls)
+        assertEquals(1, f.tokens.clearCount)
+    }
+
+    @Test
+    fun pauseAfterReadThenPublishedBMismatchDoesNotClearB() = runBlocking {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val f = fixture(
+            recordOwner = ownerA,
+            summary = PersistedAccountSummary(ownerB, "other", bundleB),
+        )
+        f.bootstrap.onAfterRecordRead = {
+            entered.complete(Unit)
+            runBlocking { release.await() }
+        }
+        val job = async { f.bootstrap.bootstrap() }
+        entered.await()
+        assertEquals(ownerA, f.tokens.readRecord()?.ownerUserId?.toRestString())
+        f.tokens.saveRecord(
+            SessionRefreshRecord(UserId.parseRest(ownerB), "pm_rt_published-b"),
+        )
+        release.complete(Unit)
+        assertEquals(SessionState.SignedOut, job.await())
+        assertEquals(0, f.refresher.calls)
+        assertEquals(0, f.tokens.clearCount)
+        assertEquals(ownerB, f.tokens.readRecord()?.ownerUserId?.toRestString())
+        assertEquals("pm_rt_published-b", f.tokens.readToken())
+    }
+
+    @Test
+    fun crashWindowRecordBWithAccountANeverActivatesOnSuccessOrNetwork() = runBlocking {
+        for (outcome in listOf(
+            SessionRefreshOutcome.Rotated("fresh-access", "fresh-refresh"),
+            SessionRefreshOutcome.Unreachable,
+        )) {
+            val f = fixture(
+                recordOwner = ownerB,
+                refresherOutcome = outcome,
+                summary = PersistedAccountSummary(ownerA, "mykola", bundleA),
+            )
+            assertEquals(SessionState.SignedOut, f.bootstrap.bootstrap())
+            assertEquals(0, f.refresher.calls)
+            assertEquals(1, f.tokens.clearCount)
+            assertEquals(null, f.tokens.readToken())
+        }
+    }
+
+    @Test
+    fun validatedOwnerAThenReplacementBBeforeRefreshDoesNotActivateAOnSuccessOrNetwork() = runBlocking {
+        for (outcome in listOf(
+            SessionRefreshOutcome.Rotated("fresh-access", "fresh-refresh"),
+            SessionRefreshOutcome.Unreachable,
+        )) {
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val f = fixture(refresherOutcome = outcome)
+            f.refresher.onRefreshEntry = {
+                entered.complete(Unit)
+                release.await()
+            }
+            val job = async { f.bootstrap.bootstrap() }
+            entered.await()
+            f.tokens.saveRecord(
+                SessionRefreshRecord(UserId.parseRest(ownerB), "pm_rt_replacement-b"),
+            )
+            release.complete(Unit)
+            val state = job.await()
+            assertEquals(SessionState.RequiresConnectivity, state)
+            assertEquals(1, f.refresher.calls)
+            assertEquals(ownerB, f.tokens.readRecord()?.ownerUserId?.toRestString())
+            assertEquals("pm_rt_replacement-b", f.tokens.readToken())
+        }
     }
 
     @Test
     fun unusablePersistedBundleIsRecoveryRequiredBeforeRefresh() = runBlocking {
         val f = fixture(
-            summary = PersistedAccountSummary("user-1", "mykola", "not-a-bundle"),
+            summary = PersistedAccountSummary(ownerA, "mykola", "not-a-bundle"),
         )
 
         assertEquals(SessionState.RecoveryRequired, f.bootstrap.bootstrap())
@@ -174,7 +276,7 @@ class SessionBootstrapTest {
         val state = f.bootstrap.bootstrap()
 
         val active = state as SessionState.Active
-        assertEquals("user-1", active.userId)
+        assertEquals(ownerA, active.userId)
         assertEquals("mykola", active.handle)
         assertEquals(bundleA, active.activeKeyBundleId)
         assertFalse(!active.hasEncryptionKeyset || !active.hasSigningKeyset)
@@ -196,7 +298,7 @@ class SessionBootstrapTest {
 
         assertEquals(
             SessionState.OfflineActive(
-                userId = "user-1",
+                userId = ownerA,
                 handle = "mykola",
                 hasEncryptionKeyset = true,
                 hasSigningKeyset = true,
@@ -214,7 +316,7 @@ class SessionBootstrapTest {
         val f = fixture(refresherOutcome = SessionRefreshOutcome.Reused("already-fresh-access"))
 
         val active = f.bootstrap.bootstrap() as SessionState.Active
-        assertEquals("user-1", active.userId)
+        assertEquals(ownerA, active.userId)
         assertEquals(bundleA, active.activeKeyBundleId)
         assertEquals("stored-refresh-token", f.tokens.readToken())
         assertEquals(0, f.tokens.clearCount)

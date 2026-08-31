@@ -34,7 +34,7 @@ class RefreshingAuthenticatorTest {
         val rotations = mutableListOf<Pair<String, String>>()
         var clearCount = 0
 
-        override fun rotate(accessToken: String, refreshToken: String) {
+        override fun rotate(accessToken: String, refreshToken: String, ownerUserId: dev.hryshyn.remanence.core.model.UserId) {
             rotations += accessToken to refreshToken
         }
 
@@ -73,7 +73,14 @@ class RefreshingAuthenticatorTest {
         val coordinator = SessionRefreshCoordinator(
             bareAuthRepository = bareRepository,
             tokens = tokens,
-            refreshTokenReader = RefreshTokenReader { tokens.refreshToken },
+            refreshTokenReader = RefreshTokenReader {
+                tokens.refreshToken?.let {
+                    BoundRefreshCredential(
+                        dev.hryshyn.remanence.core.model.UserId.parseRest("0198f0a0-0000-7000-8000-00000000a001"),
+                        it,
+                    )
+                }
+            },
             rotationSink = sink,
         )
         return RefreshingAuthenticator.attach(
@@ -174,7 +181,14 @@ class RefreshingAuthenticatorTest {
             val coordinator = SessionRefreshCoordinator(
                 bareAuthRepository = bareRepository,
                 tokens = tokens,
-                refreshTokenReader = RefreshTokenReader { tokens.refreshToken },
+                refreshTokenReader = RefreshTokenReader {
+                tokens.refreshToken?.let {
+                    BoundRefreshCredential(
+                        dev.hryshyn.remanence.core.model.UserId.parseRest("0198f0a0-0000-7000-8000-00000000a001"),
+                        it,
+                    )
+                }
+            },
                 rotationSink = sink,
             )
             val client = RefreshingAuthenticator.attach(OkHttpClient.Builder(), coordinator).build()
@@ -207,7 +221,11 @@ class RefreshingAuthenticatorTest {
         try {
             val tokens = AuthTokenHolder("pm_at_stale", "pm_rt_live")
             val throwingSink = object : SessionRotationSink {
-                override fun rotate(accessToken: String, refreshToken: String) {
+                override fun rotate(
+                    accessToken: String,
+                    refreshToken: String,
+                    ownerUserId: dev.hryshyn.remanence.core.model.UserId,
+                ) {
                     throw IllegalStateException("sealed persistence unavailable")
                 }
 
@@ -219,7 +237,14 @@ class RefreshingAuthenticatorTest {
             val coordinator = SessionRefreshCoordinator(
                 bareAuthRepository = bareRepository,
                 tokens = tokens,
-                refreshTokenReader = RefreshTokenReader { tokens.refreshToken },
+                refreshTokenReader = RefreshTokenReader {
+                tokens.refreshToken?.let {
+                    BoundRefreshCredential(
+                        dev.hryshyn.remanence.core.model.UserId.parseRest("0198f0a0-0000-7000-8000-00000000a001"),
+                        it,
+                    )
+                }
+            },
                 rotationSink = throwingSink,
             )
             val client = RefreshingAuthenticator.attach(OkHttpClient.Builder(), coordinator).build()

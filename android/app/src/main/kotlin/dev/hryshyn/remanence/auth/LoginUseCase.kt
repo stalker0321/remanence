@@ -5,6 +5,8 @@ import dev.hryshyn.remanence.core.data.network.AuthResult
 import dev.hryshyn.remanence.core.data.network.LoginRequestDto
 import dev.hryshyn.remanence.core.data.network.LoginResponseDto
 import dev.hryshyn.remanence.core.data.network.RegistrationUserDto
+import dev.hryshyn.remanence.core.model.UserId
+import kotlin.coroutines.cancellation.CancellationException
 
 /** Port answering whether the local wrapped identity covers [bundleId][dev.hryshyn.remanence.core.model.KeyBundleId]. */
 fun interface LoginIdentityPort {
@@ -33,6 +35,7 @@ class LoginUseCase(
     private val identity: LoginIdentityPort,
     private val authApi: LoginAuthApiPort,
     private val accounts: CurrentAccountPort,
+    private val sessionReplacement: SessionReplacementPort,
 ) {
 
     sealed interface Outcome {
@@ -56,31 +59,67 @@ class LoginUseCase(
         data object InvalidResponse : Outcome
     }
 
-    suspend fun login(email: String, password: String): Outcome = when (
-        val result = authApi.login(LoginRequestDto(email = email, password = password))
-    ) {
-        is AuthResult.Success -> {
-            val response = result.value
-            accounts.recordCurrentAccount(response.user, response.activeKeyBundle.keyBundleId)
-            val loggedInLocally = identity.hasIdentityFor(response.activeKeyBundle.keyBundleId)
-            if (loggedInLocally) {
-                Outcome.LoggedIn(
-                    userId = response.user.userId,
-                    handle = response.user.handle,
-                    activeKeyBundleId = response.activeKeyBundle.keyBundleId,
-                )
-            } else {
-                Outcome.RecoveryRequired(
-                    userId = response.user.userId,
-                    handle = response.user.handle,
-                    activeKeyBundleId = response.activeKeyBundle.keyBundleId,
-                )
+    suspend fun login(email: String, password: String): Outcome {
+        val lease = sessionReplacement.acquireLease()
+        return when (
+            val result = authApi.login(LoginRequestDto(email = email, password = password))
+        ) {
+            is AuthResult.Success -> {
+                val response = result.value
+                if (!commitReplacement(
+                        lease = lease,
+                        user = response.user,
+                        activeKeyBundleId = response.activeKeyBundle.keyBundleId,
+                        accessToken = response.accessToken,
+                        refreshToken = response.refreshToken,
+                    )
+                ) {
+                    return Outcome.InvalidResponse
+                }
+                val loggedInLocally = identity.hasIdentityFor(response.activeKeyBundle.keyBundleId)
+                if (loggedInLocally) {
+                    Outcome.LoggedIn(
+                        userId = response.user.userId,
+                        handle = response.user.handle,
+                        activeKeyBundleId = response.activeKeyBundle.keyBundleId,
+                    )
+                } else {
+                    Outcome.RecoveryRequired(
+                        userId = response.user.userId,
+                        handle = response.user.handle,
+                        activeKeyBundleId = response.activeKeyBundle.keyBundleId,
+                    )
+                }
+            }
+            is AuthResult.Failure -> when (result.reason) {
+                AuthFailure.HTTP -> Outcome.Rejected(result.httpStatus ?: 0)
+                AuthFailure.NETWORK -> Outcome.NetworkUnreachable
+                AuthFailure.INVALID_RESPONSE -> Outcome.InvalidResponse
             }
         }
-        is AuthResult.Failure -> when (result.reason) {
-            AuthFailure.HTTP -> Outcome.Rejected(result.httpStatus ?: 0)
-            AuthFailure.NETWORK -> Outcome.NetworkUnreachable
-            AuthFailure.INVALID_RESPONSE -> Outcome.InvalidResponse
+    }
+
+    private suspend fun commitReplacement(
+        lease: Long,
+        user: RegistrationUserDto,
+        activeKeyBundleId: String,
+        accessToken: String,
+        refreshToken: String,
+    ): Boolean {
+        val owner = try {
+            UserId.parseRest(user.userId)
+        } catch (_: IllegalArgumentException) {
+            return false
+        }
+        return try {
+            sessionReplacement.replace(lease, owner, accessToken, refreshToken) {
+                accounts.recordCurrentAccount(user, activeKeyBundleId)
+            }
+            true
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
         }
     }
 }

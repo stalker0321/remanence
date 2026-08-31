@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.ui.auth
 import dev.hryshyn.remanence.auth.CurrentAccountPort
 import dev.hryshyn.remanence.auth.LoginIdentityPort
 import dev.hryshyn.remanence.auth.LoginUseCase
+import dev.hryshyn.remanence.auth.NoOpSessionReplacement
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -71,6 +72,7 @@ class LoginViewModelTest {
             identity = identity,
             authApi = { apiResult },
             accounts = RecordingAccounts(),
+            sessionReplacement = NoOpSessionReplacement,
         )
         return LoginViewModel(useCase, CoroutineScope(UnconfinedTestDispatcher(testScheduler))) to identity
     }

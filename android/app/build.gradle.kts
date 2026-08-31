@@ -74,6 +74,7 @@ dependencies {
     testImplementation(libs.junit4)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.androidx.work.testing)
+    testImplementation(libs.okhttp)
     debugImplementation(libs.compose.ui.test.manifest)
 }
 

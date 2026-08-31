@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.ui.auth
 import dev.hryshyn.remanence.auth.CurrentAccountPort
 import dev.hryshyn.remanence.auth.RegistrationAuthApiPort
 import dev.hryshyn.remanence.auth.RegistrationIdentityPort
+import dev.hryshyn.remanence.auth.NoOpSessionReplacement
 import dev.hryshyn.remanence.auth.RegistrationUseCase
 import dev.hryshyn.remanence.wiring.PreparedIdentity
 import kotlinx.coroutines.CompletableDeferred
@@ -56,7 +57,7 @@ class RegistrationViewModelTest {
             }
         }
         val vm = RegistrationViewModel(
-            useCase = RegistrationUseCase(identityPort(), api, FakeAccounts()),
+            useCase = RegistrationUseCase(identityPort(), api, FakeAccounts(), NoOpSessionReplacement),
             scope = kotlinx.coroutines.CoroutineScope(UnconfinedTestDispatcher(testScheduler)),
         )
         vm.onFieldChange(RegistrationField.EMAIL, validForm().email)
@@ -83,7 +84,7 @@ class RegistrationViewModelTest {
                 }
         }
         val vm = RegistrationViewModel(
-            useCase = RegistrationUseCase(identityPort(), api, FakeAccounts()),
+            useCase = RegistrationUseCase(identityPort(), api, FakeAccounts(), NoOpSessionReplacement),
             scope = kotlinx.coroutines.CoroutineScope(UnconfinedTestDispatcher(testScheduler)),
         )
         applyValidForm(vm)
@@ -112,7 +113,7 @@ class RegistrationViewModelTest {
             }
         }
         val vm = RegistrationViewModel(
-            useCase = RegistrationUseCase(identityPort(), api, FakeAccounts()),
+            useCase = RegistrationUseCase(identityPort(), api, FakeAccounts(), NoOpSessionReplacement),
             scope = kotlinx.coroutines.CoroutineScope(UnconfinedTestDispatcher(testScheduler)),
         )
         applyValidForm(vm)

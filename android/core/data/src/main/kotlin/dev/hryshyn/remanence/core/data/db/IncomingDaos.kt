@@ -11,6 +11,7 @@ import dev.hryshyn.remanence.core.model.LocalMaterialState
 import dev.hryshyn.remanence.core.model.LocalMaterialTransition
 import dev.hryshyn.remanence.core.model.LocalMaterialTransitionEvaluator
 import dev.hryshyn.remanence.core.model.UserId
+import kotlinx.coroutines.flow.Flow
 import kotlin.coroutines.cancellation.CancellationException
 
 /** Outcome of the owner-scoped, canonical local-material transition operation. */
@@ -385,6 +386,16 @@ abstract class IncomingCapsuleDao {
             "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId",
     )
     abstract suspend fun getByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String): IncomingCapsuleEntity?
+
+    /** Owner-scoped material-state observation for Scan pending-grant retry. */
+    @Query(
+        "SELECT material_state FROM incoming_capsule " +
+            "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId",
+    )
+    abstract fun observeMaterialStateByCapsuleIdAndOwner(
+        capsuleId: String,
+        ownerUserId: String,
+    ): Flow<LocalMaterialState?>
 
     /**
      * Exact owner-scoped quarantine CAS. Only a READY capsule still in

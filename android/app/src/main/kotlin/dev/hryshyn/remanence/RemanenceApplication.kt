@@ -158,6 +158,10 @@ class AppContainer private constructor(
 
     val appContext: Context = context.applicationContext
 
+    /** Immediate account-boundary fence for live Scan scheduling/watchers. */
+    internal val sessionBoundary: dev.hryshyn.remanence.session.SessionBoundary =
+        dev.hryshyn.remanence.session.SessionBoundary()
+
     val database: RemanenceLocalDatabase by lazy {
         Room.databaseBuilder(appContext, RemanenceLocalDatabase::class.java, DATABASE_NAME)
             // Versioned local schema evolution; no silent destructive resets.

@@ -33,6 +33,7 @@ import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
 import dev.hryshyn.remanence.core.data.outbox.OutboxArtifactKind
 import dev.hryshyn.remanence.core.model.BlobId
 import dev.hryshyn.remanence.core.model.CapsuleId
+import dev.hryshyn.remanence.core.model.LocalMaterialState
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.CandidateOrigin
 import dev.hryshyn.remanence.core.recognition.FingerprintCodec
@@ -43,7 +44,11 @@ import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.core.recognition.ScanFlowResult
 import dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource
 import dev.hryshyn.remanence.ui.capsule.IncomingPresentationPreparation
+import dev.hryshyn.remanence.ui.capsule.IncomingPresentationPreparationRejection
+import dev.hryshyn.remanence.ui.capsule.IncomingPresentationPreparationResult
 import dev.hryshyn.remanence.ui.capsule.PresentationGrantAuthority
+import dev.hryshyn.remanence.session.SessionBoundary
+import kotlinx.coroutines.Job
 
 /**
  * One chooser row carrying ONLY locally decrypted minimal hints plus score
@@ -105,6 +110,17 @@ class ScanViewModel internal constructor(
     private val candidateIndexProvider: suspend (UserId) -> ScanCandidateIndex,
     /** The production factory supplies the real local incoming preparation gate. */
     private val incomingPresentationPreparation: IncomingPresentationPreparation?,
+    private val incomingPrepareOverride:
+        (suspend (UserId, CapsuleId) -> IncomingPresentationPreparationResult)? = null,
+    /**
+     * Existing owner-scoped incoming KEEP chain (sync + prefetch + ack).
+     * Scan never enqueues a second worker type.
+     */
+    private val scheduleIncomingSync: suspend (UserId) -> Unit = {},
+    /** Live connectivity for pending-material copy; WorkManager still owns backoff. */
+    private val networkConnected: () -> Boolean = { true },
+    /** Immediate account-boundary fence shared with RootViewModel. */
+    private val sessionBoundary: SessionBoundary? = null,
     private val cpuDispatcher: kotlinx.coroutines.CoroutineDispatcher = kotlinx.coroutines.Dispatchers.Default,
     private val ioDispatcher: kotlinx.coroutines.CoroutineDispatcher = kotlinx.coroutines.Dispatchers.IO,
 ) : ViewModel() {
@@ -170,11 +186,42 @@ class ScanViewModel internal constructor(
      */
     private var begunEpoch: Long? = null
 
+    /**
+     * Recognized incoming capsule waiting on MATERIAL_CACHED. Cleared by
+     * beginSession/reset and by a successful grant. Generation-fenced.
+     */
+    private var pendingIncoming: PendingIncoming? = null
+
+    private var pendingWatcherJob: Job? = null
+    private var watchedPending: PendingIncoming? = null
+    private var incomingSyncScheduleJob: Job? = null
+    private var sessionBoundaryEpoch: Long = sessionBoundary?.currentEpoch() ?: 0L
+    private val unregisterSessionBoundary: (() -> Unit)? = sessionBoundary?.register {
+        invalidateForAccountBoundary()
+    }
+
+    private data class PendingIncoming(
+        val owner: UserId,
+        val capsuleId: UUID,
+        val origin: CandidateOrigin,
+        val generation: Int,
+        val sessionBoundaryEpoch: Long,
+    )
+
+    /**
+     * Authenticated Scan entry starts a fresh FRONT-first session and
+     * schedules the existing owner-scoped KEEP incoming chain. Same-epoch
+     * rotation is a no-op and does not re-enqueue.
+     */
     fun beginSession(epoch: Long) {
         if (begunEpoch == epoch) return
         begunEpoch = epoch
+        cancelPendingWatcher()
+        cancelIncomingSyncSchedule()
+        sessionBoundaryEpoch = sessionBoundary?.currentEpoch() ?: sessionBoundaryEpoch
         matchGeneration++
         chooserContext = null
+        pendingIncoming = null
         deliveryGeneration++
         captureSession.reset()
         presentationGrants.clearAll()
@@ -184,6 +231,7 @@ class ScanViewModel internal constructor(
         _matchState.value = ScanMatchUiState.AwaitingCapture
         _terminal.value = ScanTerminalState.Idle
         _initializedEpoch.value = epoch
+        scheduleOwnerIncomingSync(matchGeneration)
     }
 
     // ------------------------------------------------------------------
@@ -327,8 +375,11 @@ class ScanViewModel internal constructor(
      * result can never overwrite the fresh capture sequence.
      */
     fun resetSession() {
+        cancelPendingWatcher()
+        cancelIncomingSyncSchedule()
         matchGeneration++
         chooserContext = null
+        pendingIncoming = null
         deliveryGeneration++
         presentationGrants.clearAll()
         // FIX-STATE-05: an in-flight delivery/match can never write into the
@@ -490,6 +541,7 @@ class ScanViewModel internal constructor(
                                     capsuleId = capsuleId,
                                     source = source,
                                     generation = generation,
+                                    originHint = null,
                                 )
                             }
                         } else {
@@ -564,7 +616,9 @@ class ScanViewModel internal constructor(
 
             ScanFlowResult.RecaptureRequired -> {
                 chooserContext = null
-                _matchState.value = ScanMatchUiState.RecaptureGuidance(failedAttempts = 1)
+                if (!publishPendingIfRecognized(generation, origin = null)) {
+                    _matchState.value = ScanMatchUiState.RecaptureGuidance(failedAttempts = 1)
+                }
             }
         }
     }
@@ -599,10 +653,13 @@ class ScanViewModel internal constructor(
                 capsuleId = id,
                 source = source,
                 generation = generation,
+                originHint = chooser.origin,
             )
             if (grantId == null) {
                 if (generation == matchGeneration) {
-                    _matchState.value = ScanMatchUiState.RecaptureGuidance(failedAttempts = 2)
+                    if (!publishPendingIfRecognized(generation, chooser.origin)) {
+                        _matchState.value = ScanMatchUiState.RecaptureGuidance(failedAttempts = 2)
+                    }
                 }
                 return@launch
             }
@@ -643,6 +700,8 @@ class ScanViewModel internal constructor(
             revokeIssuedGrant(result.grantId)
             return
         }
+        pendingIncoming = null
+        cancelPendingWatcher()
         _terminal.value = ScanTerminalState.Granted(
             grantId = result.grantId,
             capsuleId = result.capsuleId.toString(),
@@ -664,8 +723,10 @@ class ScanViewModel internal constructor(
         capsuleId: UUID,
         source: CapsulePresentationSource,
         generation: Int,
+        originHint: CandidateOrigin?,
     ): String? {
-        if (generation != matchGeneration) return null
+        val boundary = sessionBoundaryEpoch
+        if (generation != matchGeneration || !sessionBoundaryIsCurrent(boundary)) return null
         val presentationEpoch = presentationGrants.currentEpoch()
         val identity = try {
             identityProvider()
@@ -679,20 +740,26 @@ class ScanViewModel internal constructor(
         var prepared: dev.hryshyn.remanence.ui.capsule.PreparedIncomingPresentation? = null
         try {
             if (source == CapsulePresentationSource.INCOMING) {
-                val preparation = incomingPresentationPreparation ?: return null
-                prepared = when (
-                    val result = preparation.prepare(owner, CapsuleId(capsuleId))
-                ) {
-                    is dev.hryshyn.remanence.ui.capsule.IncomingPresentationPreparationResult.Prepared ->
-                        result.presentation
-                    else -> null
+                val result = incomingPrepareOverride?.invoke(owner, CapsuleId(capsuleId))
+                    ?: incomingPresentationPreparation?.prepare(owner, CapsuleId(capsuleId))
+                    ?: return null
+                when (result) {
+                    is IncomingPresentationPreparationResult.Prepared ->
+                        prepared = result.presentation
+                    is IncomingPresentationPreparationResult.Rejected -> {
+                        if (shouldHoldForIncomingMaterial(owner, capsuleId, result.reason)) {
+                            rememberPendingIncoming(owner, capsuleId, generation, originHint)
+                        }
+                        return null
+                    }
+                    is IncomingPresentationPreparationResult.Unavailable -> return null
+                    else -> return null
                 }
-                if (prepared == null) return null
             } else if (!verifyCapsuleCrypto(capsuleId)) {
                 return null
             }
 
-            if (generation != matchGeneration) return null
+            if (generation != matchGeneration || !sessionBoundaryIsCurrent(boundary)) return null
             val currentIdentity = try {
                 identityProvider()
             } catch (cancelled: CancellationException) {
@@ -701,7 +768,7 @@ class ScanViewModel internal constructor(
                 return null
             } ?: return null
             val currentOwner = runCatching { UserId.parseRest(currentIdentity.userId) }.getOrNull()
-            if (currentOwner != owner) return null
+            if (currentOwner != owner || !sessionBoundaryIsCurrent(boundary)) return null
 
             val grant = presentationGrants.issue(
                 ownerUserId = owner,
@@ -922,8 +989,173 @@ class ScanViewModel internal constructor(
     }
 
     override fun onCleared() {
+        cancelPendingWatcher()
+        cancelIncomingSyncSchedule()
+        unregisterSessionBoundary?.invoke()
         captureSession.consume()
         super.onCleared()
+    }
+
+    private fun scheduleOwnerIncomingSync(generation: Int) {
+        cancelIncomingSyncSchedule()
+        val boundary = sessionBoundaryEpoch
+        incomingSyncScheduleJob = viewModelScope.launch {
+            val identity = try {
+                identityProvider()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                return@launch
+            } ?: return@launch
+            if (generation != matchGeneration || !sessionBoundaryIsCurrent(boundary)) return@launch
+            val owner = runCatching { UserId.parseRest(identity.userId) }.getOrNull() ?: return@launch
+            if (!sessionBoundaryIsCurrent(boundary)) return@launch
+            try {
+                scheduleIncomingSync(owner)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Existing KEEP enqueue remains best-effort; pending UI still stands.
+            }
+        }
+    }
+
+    private suspend fun shouldHoldForIncomingMaterial(
+        owner: UserId,
+        capsuleId: UUID,
+        reason: IncomingPresentationPreparationRejection,
+    ): Boolean {
+        if (reason != IncomingPresentationPreparationRejection.CAPSULE_STATE_INVALID &&
+            reason != IncomingPresentationPreparationRejection.MATERIAL_MISSING
+        ) {
+            return false
+        }
+        val row = try {
+            database.incomingCapsuleDao().getByCapsuleIdAndOwner(
+                capsuleId.toString(),
+                owner.toRestString(),
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return false
+        } ?: return false
+        return dev.hryshyn.remanence.ui.capsule.isMaterialPendingEligible(
+            capsule = row,
+            ownerUserId = owner,
+            capsuleId = CapsuleId(capsuleId),
+        )
+    }
+
+    private fun rememberPendingIncoming(
+        owner: UserId,
+        capsuleId: UUID,
+        generation: Int,
+        originHint: CandidateOrigin?,
+    ) {
+        if (generation != matchGeneration) return
+        pendingIncoming = PendingIncoming(
+            owner = owner,
+            capsuleId = capsuleId,
+            origin = originHint ?: CandidateOrigin.SENDER_FALLBACK,
+            generation = generation,
+            sessionBoundaryEpoch = sessionBoundaryEpoch,
+        )
+    }
+
+    private fun publishPendingIfRecognized(
+        generation: Int,
+        origin: CandidateOrigin?,
+    ): Boolean {
+        val pending = pendingIncoming ?: return false
+        if (pending.generation != generation ||
+            pending.sessionBoundaryEpoch != sessionBoundaryEpoch ||
+            !sessionBoundaryIsCurrent()
+        ) return false
+        if (origin != null && pending.origin != origin) {
+            pendingIncoming = pending.copy(origin = origin)
+        }
+        val published = pendingIncoming ?: return false
+        _matchState.value = ScanMatchUiState.MaterialPending(
+            capsuleId = published.capsuleId.toString(),
+            connected = networkConnected(),
+        )
+        scheduleOwnerIncomingSync(generation)
+        watchPendingIncoming(published)
+        return true
+    }
+
+    private fun watchPendingIncoming(pending: PendingIncoming) {
+        if (pendingWatcherJob?.isActive == true && watchedPending == pending) return
+        cancelPendingWatcher()
+        watchedPending = pending
+        val boundary = pending.sessionBoundaryEpoch
+        pendingWatcherJob = viewModelScope.launch {
+            database.incomingCapsuleDao().observeMaterialStateByCapsuleIdAndOwner(
+                pending.capsuleId.toString(),
+                pending.owner.toRestString(),
+            ).collect { state ->
+                if (pending.generation != matchGeneration ||
+                    boundary != sessionBoundaryEpoch ||
+                    !sessionBoundaryIsCurrent(boundary)
+                ) return@collect
+                if (_matchState.value !is ScanMatchUiState.MaterialPending) return@collect
+                if (state != LocalMaterialState.MATERIAL_CACHED &&
+                    state != LocalMaterialState.FINGERPRINT_ACCEPTED
+                ) {
+                    return@collect
+                }
+                val identity = try {
+                    identityProvider()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    return@collect
+                } ?: return@collect
+                val currentOwner = runCatching { UserId.parseRest(identity.userId) }.getOrNull()
+                if (currentOwner != pending.owner || !sessionBoundaryIsCurrent(boundary)) return@collect
+                val grantId = issueVerifiedGrant(
+                    capsuleId = pending.capsuleId,
+                    source = CapsulePresentationSource.INCOMING,
+                    generation = pending.generation,
+                    originHint = pending.origin,
+                ) ?: return@collect
+                applyResult(
+                    result = ScanFlowResult.Granted(
+                        capsuleId = pending.capsuleId,
+                        origin = pending.origin,
+                        grantId = grantId,
+                        compositeScore = Double.NaN,
+                    ),
+                    candidateHints = emptyMap(),
+                    presentationSources = mapOf(
+                        pending.capsuleId to CapsulePresentationSource.INCOMING,
+                    ),
+                    generation = pending.generation,
+                )
+            }
+        }
+    }
+
+    private fun cancelPendingWatcher() {
+        pendingWatcherJob?.cancel()
+        pendingWatcherJob = null
+        watchedPending = null
+    }
+
+    private fun cancelIncomingSyncSchedule() {
+        incomingSyncScheduleJob?.cancel()
+        incomingSyncScheduleJob = null
+    }
+
+    private fun sessionBoundaryIsCurrent(
+        expected: Long = sessionBoundaryEpoch,
+    ): Boolean = sessionBoundary?.currentEpoch()?.let { it == expected } ?: true
+
+    private fun invalidateForAccountBoundary() {
+        sessionBoundaryEpoch = sessionBoundary?.currentEpoch() ?: (sessionBoundaryEpoch + 1L)
+        resetSession()
+        begunEpoch = null
     }
 
     companion object {

@@ -27,6 +27,7 @@ class RemanenceViewModelFactory(
             sessionBootstrap = container.sessionBootstrap,
             logoutAction = { container.logoutUseCase.logout() },
             invalidateSessionRefreshes = { container.sessionRefreshCoordinator.invalidate() },
+            invalidateSessionBoundary = { container.sessionBoundary.invalidate() },
             // FIX-REVIEW-03: THE one authoritative grant lifecycle.
             presentationGrants = container.presentationGrants,
             resumeCapsuleUploads = { owner ->
@@ -127,6 +128,20 @@ class RemanenceViewModelFactory(
             candidateIndexProvider = { owner ->
                 container.incomingSenderIndexCandidateProvider.load(owner)
             },
+            scheduleIncomingSync = { owner ->
+                container.scheduleIncomingSync(owner)
+            },
+            networkConnected = {
+                val manager = container.appContext.getSystemService(
+                    android.net.ConnectivityManager::class.java,
+                )
+                val network = manager?.activeNetwork
+                val capabilities = network?.let { manager.getNetworkCapabilities(it) }
+                capabilities?.hasCapability(
+                    android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET,
+                ) == true
+            },
+            sessionBoundary = container.sessionBoundary,
         ) as T
         else -> throw IllegalArgumentException("unknown ViewModel: ${modelClass.name}")
     }

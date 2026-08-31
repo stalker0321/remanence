@@ -7,7 +7,8 @@ import dev.hryshyn.remanence.core.recognition.CandidateOrigin
  * 9, 12). FIX-STATE-05: the unreachable GuidedRecapture/ConfirmSingle
  * variants were removed from the production state surface - the production
  * matcher only ever produces AwaitingCapture, Matching, Accepted, Chooser,
- * and RecaptureGuidance, and every remaining state renders a working action.
+ * RecaptureGuidance, and MaterialPending, and every remaining state renders a
+ * working action.
  */
 sealed interface ScanMatchUiState {
 
@@ -35,4 +36,18 @@ sealed interface ScanMatchUiState {
 
     /** Nothing plausible: show recapture guidance; never arbitrary capsules. */
     data class RecaptureGuidance(val failedAttempts: Int) : ScanMatchUiState
+
+    /**
+     * The scan recognized an owner-scoped incoming capsule whose sender index
+     * is local ([dev.hryshyn.remanence.core.model.LocalMaterialState.INDEX_CACHED])
+     * but encrypted body material is not yet
+     * [dev.hryshyn.remanence.core.model.LocalMaterialState.MATERIAL_CACHED].
+     * This is not a recognition failure: existing owner-scoped KEEP sync /
+     * prefetch continues, and the ordinary offline grant path resumes once
+     * material is cached. [connected] selects the online vs offline copy.
+     */
+    data class MaterialPending(
+        val capsuleId: String,
+        val connected: Boolean,
+    ) : ScanMatchUiState
 }

@@ -45,6 +45,8 @@ class RootViewModel internal constructor(
     private val logoutAction: (suspend () -> Unit)? = null,
     /** Invalidates any in-flight refresh before logout teardown begins. */
     private val invalidateSessionRefreshes: () -> Unit = {},
+    /** Fences account-bound Scan scheduling/watchers before logout teardown. */
+    private val invalidateSessionBoundary: () -> Unit = {},
     /** Authoritative memory-only grant lifecycle; injected as the single instance. */
     private val presentationGrants: PresentationGrantAuthority = PresentationGrantAuthority(),
     /**
@@ -140,6 +142,7 @@ class RootViewModel internal constructor(
         // A refresh already in flight must not publish the old account after
         // this account boundary begins; the coordinator fences it atomically.
         invalidateSessionRefreshes()
+        invalidateSessionBoundary()
         // No pending expiry timer may outlive the account context.
         expiryWatch.cancel()
         // Revoke at initiation, before asynchronous server/session teardown;

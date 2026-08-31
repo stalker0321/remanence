@@ -10,6 +10,7 @@ import dev.hryshyn.remanence.core.data.db.BlobCacheDao
 import dev.hryshyn.remanence.core.data.db.BlobCacheEntity
 import dev.hryshyn.remanence.core.data.db.BlobCacheState
 import dev.hryshyn.remanence.core.data.db.IncomingCapsuleDao
+import dev.hryshyn.remanence.core.data.db.IncomingCapsuleEntity
 import dev.hryshyn.remanence.core.data.db.IncomingEnvelopeDao
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
@@ -227,10 +228,9 @@ internal class IncomingPresentationPreparation(
         ) {
             return@withContext rejected(IncomingPresentationPreparationRejection.OWNER_MISMATCH)
         }
-        if (capsule.serverStatus != READY_STATUS ||
+        if (!hasPresentationBinding(capsule, ownerUserId, capsuleId) ||
             capsule.materialState != LocalMaterialState.MATERIAL_CACHED &&
-            capsule.materialState != LocalMaterialState.FINGERPRINT_ACCEPTED ||
-            capsule.protocolVersion != ProtocolV1Limits.PROTOCOL_VERSION
+            capsule.materialState != LocalMaterialState.FINGERPRINT_ACCEPTED
         ) {
             return@withContext rejected(IncomingPresentationPreparationRejection.CAPSULE_STATE_INVALID)
         }
@@ -660,8 +660,25 @@ internal class IncomingPresentationPreparation(
     }
 
     private companion object {
-        const val READY_STATUS = "READY"
         const val MAX_STATEMENT_BYTES = 4096
         const val SHA256_BYTES = 32
     }
 }
+
+/** Shared durable boundary for claiming an INDEX_CACHED incoming capsule. */
+internal fun isMaterialPendingEligible(
+    capsule: IncomingCapsuleEntity,
+    ownerUserId: UserId,
+    capsuleId: CapsuleId,
+): Boolean = hasPresentationBinding(capsule, ownerUserId, capsuleId) &&
+    capsule.materialState == LocalMaterialState.INDEX_CACHED
+
+private fun hasPresentationBinding(
+    capsule: IncomingCapsuleEntity,
+    ownerUserId: UserId,
+    capsuleId: CapsuleId,
+): Boolean = capsule.ownerUserId == ownerUserId.toRestString() &&
+    capsule.capsuleId == capsuleId.toRestString() &&
+    capsule.recipientUserId == ownerUserId.toRestString() &&
+    capsule.serverStatus == "READY" &&
+    capsule.protocolVersion == ProtocolV1Limits.PROTOCOL_VERSION

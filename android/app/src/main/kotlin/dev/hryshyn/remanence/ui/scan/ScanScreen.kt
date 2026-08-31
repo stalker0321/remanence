@@ -96,6 +96,16 @@ fun ScanScreen(
                 Spacer(Modifier.height(8.dp))
                 CapturePair(viewModel, Modifier.fillMaxWidth(), adapterFactory, requestPermissionOnAttach)
             }
+            is ScanMatchUiState.MaterialPending -> Text(
+                text = if (current.connected) {
+                    "Postcard recognized. Downloading it now…"
+                } else {
+                    "Postcard recognized. Connect to the internet to download it."
+                },
+                modifier = Modifier.testTag(
+                    if (current.connected) "scan_material_pending_online" else "scan_material_pending_offline",
+                ),
+            )
         }
     }
 }

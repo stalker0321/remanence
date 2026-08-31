@@ -370,19 +370,32 @@ def test_wrong_and_short_statement_ids_fail(fixture: dict, field: str) -> None:
     _assert_invalid(lambda: verify_publish_statement(statement.SerializeToString(deterministic=True), capsule, declarations))
 
 
-def test_wrong_version_time_and_nonrepresentable_authoritative_time_fail(fixture: dict) -> None:
+def test_wrong_version_and_invalid_signed_time_fail_but_sender_time_is_independent(fixture: dict) -> None:
     raw, capsule, declarations = _valid(fixture)
     statement = _statement_from_fixture(fixture)
     statement.protocol_version = 2
     _assert_invalid(lambda: verify_publish_statement(statement.SerializeToString(deterministic=True), capsule, declarations))
+
     statement = _statement_from_fixture(fixture)
     statement.created_at_epoch_seconds += 1
-    _assert_invalid(lambda: verify_publish_statement(statement.SerializeToString(deterministic=True), capsule, declarations))
+    verified = verify_publish_statement(
+        statement.SerializeToString(deterministic=True),
+        capsule,
+        declarations,
+    )
+    assert verified.created_at == datetime.fromtimestamp(
+        statement.created_at_epoch_seconds,
+        timezone.utc,
+    )
 
-    capsule.created_at = capsule.created_at.replace(microsecond=1)
-    _assert_invalid(lambda: verify_publish_statement(raw, capsule, declarations))
-    capsule.created_at = capsule.created_at.replace(microsecond=0, tzinfo=None)
-    _assert_invalid(lambda: verify_publish_statement(raw, capsule, declarations))
+    statement.created_at_epoch_seconds = -1
+    _assert_invalid(
+        lambda: verify_publish_statement(
+            statement.SerializeToString(deterministic=True),
+            capsule,
+            declarations,
+        )
+    )
 
 
 def test_artifact_order_duplicate_missing_extra_kind_ordinal_size_and_hash_fail(

@@ -6,7 +6,7 @@ import calendar
 import hashlib
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Final, Iterable
 
 from remanence.capsules.blob_models import CapsuleBlob, CapsuleBlobKind, CapsuleBlobState
@@ -99,7 +99,6 @@ def verify_publish_statement(
         canonical_capsule = _capsule_identity(capsule)
         if capsule.protocol_version != LIMITS_V1.protocol_version:
             raise PublishStatementInvalidError
-        created_at = _canonical_created_at(capsule.created_at)
         statement, canonical_bytes = _parse_canonical(raw)
 
         if statement.protocol_version != LIMITS_V1.protocol_version:
@@ -107,8 +106,7 @@ def verify_publish_statement(
         statement_ids = _statement_ids(statement)
         if statement_ids != canonical_capsule:
             raise PublishStatementInvalidError
-        if statement.created_at_epoch_seconds != _epoch_seconds(created_at):
-            raise PublishStatementInvalidError
+        created_at = _signed_created_at(statement.created_at_epoch_seconds)
 
         by_id = _declarations_by_id(declarations, capsule.id)
         expected_ids = _canonical_declaration_blob_ids(by_id)
@@ -218,14 +216,13 @@ def _statement_ids(statement: PublishStatement) -> tuple[uuid.UUID, ...]:
         raise PublishStatementInvalidError from None
 
 
-def _canonical_created_at(value: object) -> datetime:
-    if not isinstance(value, datetime) or value.tzinfo is None:
-        raise PublishStatementInvalidError
-    if value.utcoffset() != timedelta(0) or value.microsecond != 0:
+def _signed_created_at(value: object) -> datetime:
+    if type(value) is not int or value < 0:
         raise PublishStatementInvalidError
     try:
-        normalized = value.astimezone(timezone.utc)
-        _epoch_seconds(normalized)
+        normalized = datetime.fromtimestamp(value, timezone.utc)
+        if _epoch_seconds(normalized) != value:
+            raise PublishStatementInvalidError
     except (OverflowError, OSError, ValueError):
         raise PublishStatementInvalidError from None
     return normalized

@@ -138,6 +138,12 @@ message ContentManifest {
 }
 ```
 
+`PublishStatement.created_at_epoch_seconds` is sender-authored, signed content
+metadata. It is not the server's operational `capsules.created_at` timestamp;
+the latter records draft receipt and is used for draft expiry. Finalization
+validates the signed timestamp as a representable non-negative UTC instant but
+does not require it to equal the independently assigned receipt time.
+
 Canonical artifact AAD bytes are the UTF-8/ASCII prefix `postmark/artifact/v1`, one `0x00` delimiter, then deterministic protobuf bytes of `ArtifactAadContext`. Canonical HPKE context info is the UTF-8/ASCII prefix `postmark/envelope/v1`, one `0x00` delimiter, then deterministic protobuf bytes of `RecipientEnvelopeContext`. The domain prefix is not a protobuf field; the `0x00` delimiter is mandatory. Context messages must be fully populated with protocol version 1 and 16-byte typed IDs. `artifact_kind` cannot be `ARTIFACT_KIND_UNSPECIFIED`. Ordinal is `-1` for non-photo artifacts and `0..4` for `PHOTO`. Unknown version/kind or malformed IDs fail closed before AEAD or HPKE. No JSON, string UUID, locale, or varint hand-concatenation is used outside protobuf. Publish signature input remains `"postmark/publish/v1" || deterministic_statement_bytes` as documented in `security.md` and is outside this context encoding.
 
 The signed publish object transported by REST is:

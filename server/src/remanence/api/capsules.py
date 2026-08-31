@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import hmac
+import logging
 import re
 import uuid
 from collections.abc import Iterable, Iterator
@@ -23,7 +24,7 @@ from remanence.api.dependencies import (
     get_authenticated_principal,
     get_db_session,
 )
-from remanence.api.problems import PROBLEM_CATALOG, problem_response
+from remanence.api.problems import PROBLEM_CATALOG, problem_response, request_id_of
 from remanence.capsules.abort_service import CapsuleAbortError, CapsuleAbortService
 from remanence.capsules.blob_models import CapsuleBlobKind
 from remanence.capsules.delivery_models import RecipientDeliveryStatus
@@ -89,6 +90,8 @@ from remanence.storage import (
     StagingSizeExceededError,
     StagingSizeTruncatedError,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 router = APIRouter()
@@ -358,6 +361,11 @@ def _map_capsule_problem_code(code: str) -> str:
 
 def _problem_response(request: Request, code: str) -> JSONResponse:
     mapped = _map_capsule_problem_code(code)
+    _LOGGER.info(
+        "capsule request rejected code=%s request_id=%s",
+        mapped,
+        request_id_of(request),
+    )
     return problem_response(
         request,
         mapped,

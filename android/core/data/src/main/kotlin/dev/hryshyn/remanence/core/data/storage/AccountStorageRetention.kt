@@ -66,12 +66,21 @@ class AccountStorageRetention(
      * Removes abandoned Create plaintext directories for exactly [owner]. Only
      * UUID-named directory entries beneath that owner's `temp/create` root are
      * eligible; arbitrary files and names are left untouched.
+     *
+     * Owner-account and TEMP ancestors are inspected with [LinkOption.NOFOLLOW_LINKS]
+     * before any child is enumerated. A symlink or non-directory at either
+     * ancestor is rejected so a redirected A path cannot traverse into B.
+     * Same-UID TOCTOU beyond these checks is M4-deferred.
      */
     fun sweepCreateStaging(owner: UserId) {
-        // Resolve TEMP canonically, then name `create` lexically so a
-        // redirected last-segment symlink can be unlinked in-scope instead
-        // of following its foreign target through createStagingRoot().
-        val root = File(roots.child(owner, AccountScopedFileRoots.ChildRoot.TEMP), "create").toPath()
+        val accountDir = roots.accountDirectory(owner).toPath()
+        if (!Files.isDirectory(accountDir, LinkOption.NOFOLLOW_LINKS)) return
+        val tempDir = File(accountDir.toFile(), AccountScopedFileRoots.ChildRoot.TEMP.directoryName).toPath()
+        if (!Files.isDirectory(tempDir, LinkOption.NOFOLLOW_LINKS)) return
+        // Name `create` lexically so a redirected last-segment symlink can be
+        // unlinked in-scope instead of following its foreign target through
+        // createStagingRoot().
+        val root = File(tempDir.toFile(), "create").toPath()
         if (!Files.exists(root, LinkOption.NOFOLLOW_LINKS)) return
         if (Files.isSymbolicLink(root)) {
             // Never enumerate through a redirected create root. Removing the
@@ -142,7 +151,7 @@ class AccountStorageRetention(
      *    that lives outside the targeted account root cannot be observed,
      *    modified, or deleted.
      */
-    private fun deleteNoFollow(root: File) {
+    fun deleteNoFollow(root: File) {
         val rootPath: Path = root.toPath()
         if (!Files.exists(rootPath, LinkOption.NOFOLLOW_LINKS)) return
         if (Files.isSymbolicLink(rootPath)) {

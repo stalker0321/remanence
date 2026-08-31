@@ -19,6 +19,8 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -307,7 +309,13 @@ class CreateSessionOwnedStagingTest {
 
         // --- Teardown while the stale job is blocked mid-normalization.
         vm.endSession()
-        assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value) // dead surface
+        assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
+        assertNull(vm.confirmedRecipient.value)
+        assertTrue(vm.photoSelection.selectedIds.isEmpty())
+        assertTrue(vm.noteEditor.isEmpty)
+        assertFalse(vm.backGate.ready)
+        assertNull(vm.frontAttempt.phase)
+        assertNull(vm.backAttempt.phase)
         // The directory belongs to the still-running publication: untouched.
         assertTrue(oldDir.isDirectory)
 
@@ -504,6 +512,99 @@ class CreateSessionOwnedStagingTest {
             ),
             createRoot.listFiles()?.map { it.name }?.toSet(),
         )
+    }
+
+    @Test
+    fun endSessionTearsDownTransientFieldsAndSameEpochBeginAfterEndStartsFresh() {
+        val vm = newViewModel(
+            GatedNormalizer(CountDownLatch(1), CompletableDeferred(Unit)),
+            CompletableDeferred(),
+            AtomicInteger(0),
+        )
+        vm.beginSession(1L, userUuid.toString())
+        vm.pickerVm.onHandleChange("mykola")
+        driveToReadyContent(vm, listOf("old-1", "old-2", "old-3"))
+        val liveCapsuleId = vm.capsuleId
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        assertNotNull(vm.confirmedRecipient.value)
+        assertTrue(vm.photoSelection.canProceed)
+        assertEquals("owned staging note", vm.noteEditor.text)
+        assertTrue(vm.backGate.ready)
+        assertNotNull(vm.frontAttempt.phase)
+        assertNotNull(vm.backAttempt.phase)
+
+        vm.endSession()
+
+        assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
+        assertEquals("", vm.pickerVm.handle.value)
+        assertEquals(RecipientLookupUiState.Idle, vm.pickerVm.state.value)
+        assertNull(vm.pendingRecipient.value)
+        assertNull(vm.confirmedRecipient.value)
+        assertTrue(vm.photoSelection.selectedIds.isEmpty())
+        assertFalse(vm.photoSelection.canProceed)
+        assertTrue(vm.noteEditor.isEmpty)
+        assertFalse(vm.noteEditor.limitReached)
+        assertFalse(vm.backGate.ready)
+        assertNull(vm.frontAttempt.phase)
+        assertNull(vm.backAttempt.phase)
+        assertNull(vm.flowError.value)
+        assertNull(vm.publishError.value)
+        assertEquals(CreateViewModel.CreateUploadStatus.NotStarted, vm.uploadStatus.value)
+
+        vm.endSession()
+        assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
+        assertTrue(vm.photoSelection.selectedIds.isEmpty())
+        assertNull(vm.confirmedRecipient.value)
+
+        vm.beginSession(1L, userUuid.toString())
+        assertNotEquals(liveCapsuleId, vm.capsuleId)
+        assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
+        assertTrue(vm.photoSelection.selectedIds.isEmpty())
+        assertTrue(vm.noteEditor.isEmpty)
+        assertFalse(vm.backGate.ready)
+    }
+
+    @Test
+    fun endSessionUnlinksLeafSymlinkAndLeavesTheTargetUntouched() {
+        val vm = newViewModel(
+            GatedNormalizer(CountDownLatch(1), CompletableDeferred(Unit)),
+            CompletableDeferred(),
+            AtomicInteger(0),
+        )
+        val roots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingRoot)
+        vm.beginSession(1L, userUuid.toString())
+        val sessionDir = File(roots.createStagingRoot(UserId(userUuid)), vm.capsuleId)
+        check(sessionDir.mkdirs())
+        File(sessionDir, "plain.jpg").writeBytes(byteArrayOf(4))
+        val foreignTarget = File(
+            roots.child(UserId(switchedUserUuid), dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots.ChildRoot.FINGERPRINTS),
+            "fp-b.fpw",
+        ).apply {
+            parentFile!!.mkdirs()
+            writeBytes(byteArrayOf(9, 8, 7))
+        }
+        val leaf = File(sessionDir, "escape.jpg")
+        java.nio.file.Files.createSymbolicLink(leaf.toPath(), foreignTarget.toPath())
+        val sessionAsLinkTarget = File(
+            roots.createStagingRoot(UserId(switchedUserUuid)),
+            "capsule-b",
+        ).apply {
+            mkdirs()
+            File(this, "kept.bin").writeBytes(byteArrayOf(1, 2))
+        }
+
+        vm.endSession()
+        assertTrue(!sessionDir.exists())
+        assertTrue("leaf symlink target must survive session cleanup", foreignTarget.isFile)
+        assertEquals(listOf<Byte>(9, 8, 7), foreignTarget.readBytes().toList())
+
+        vm.beginSession(2L, userUuid.toString())
+        val linkedSession = File(roots.createStagingRoot(UserId(userUuid)), vm.capsuleId)
+        java.nio.file.Files.createSymbolicLink(linkedSession.toPath(), sessionAsLinkTarget.toPath())
+        vm.endSession()
+        assertTrue(!java.nio.file.Files.exists(linkedSession.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS))
+        assertTrue("session-directory symlink target must survive", sessionAsLinkTarget.isDirectory)
+        assertEquals(listOf<Byte>(1, 2), File(sessionAsLinkTarget, "kept.bin").readBytes().toList())
     }
 
     @Test

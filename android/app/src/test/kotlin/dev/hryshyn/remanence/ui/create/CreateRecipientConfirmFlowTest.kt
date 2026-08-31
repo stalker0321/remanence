@@ -237,22 +237,21 @@ class CreateRecipientConfirmFlowTest {
     }
 
     @Test
-    fun recipientConfirmWithoutPendingFailsClosedInsteadOfABlankScreen() {
+    fun endSessionFromConfirmReturnsToLookupInsteadOfABlankScreen() {
         val vm = viewModel(ScriptedDirectory(mapOf("vodkolyan" to selfSnapshot)))
         vm.beginSession(1L)
         setContent(vm)
         resolveThroughUi("vodkolyan")
 
-        // endSession clears the transient material while navigation stays -
-        // the impossible invariant must show an explicit error + way back.
+        // endSession tears pending material AND the confirm step down, so the
+        // surface returns to lookup instead of a blank confirmation screen.
         vm.endSession()
 
         composeRule.waitUntil(timeoutMillis = 10_000) {
-            composeRule.onAllNodesWithTag("create_confirm_missing_pending")
+            composeRule.onAllNodesWithTag("create_handle_input")
                 .fetchSemanticsNodes().isNotEmpty()
         }
-        composeRule.onNodeWithTag("create_confirm_missing_pending").assertIsDisplayed()
-        composeRule.onNodeWithTag("create_confirm_back_to_lookup").performClick()
+        composeRule.onNodeWithTag("create_handle_input").assertIsDisplayed()
 
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
         assertNull(vm.pendingRecipient.value)
@@ -282,6 +281,7 @@ class CreateRecipientConfirmFlowTest {
         // And leaving mid-confirm tears both down immediately.
         vm.onResolved(selfSnapshot)
         vm.endSession()
+        assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
         assertNull(vm.pendingRecipient.value)
         assertNull(vm.confirmedRecipient.value)
     }

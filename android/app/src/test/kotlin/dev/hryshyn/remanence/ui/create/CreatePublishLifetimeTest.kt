@@ -339,7 +339,7 @@ class CreatePublishLifetimeTest {
         normalizerGate.complete(Unit)
         identityGate.complete(senderIdentity())
 
-        assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value) // dead surface
+        assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
         assertNull(vm.publishError.value)
         assertTrue(enqueued.isEmpty())
         assertTrue(createStagingRoot().listFiles()?.isEmpty() ?: true)

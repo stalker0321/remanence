@@ -329,33 +329,31 @@ class CreateRecipientBindingFailClosedTest {
     fun unconfirmedRecipientCannotStartPublishing() {
         val vm = viewModel()
         // Drive a normal session so the VM reaches CONTENT with a bound
-        // snapshot, then simulate the surface teardown that wipes the
-        // confirmed binding while leaving the step untouched (matches
-        // the production endSession() contract).
+        // snapshot, then simulate the surface teardown that wipes transient
+        // in-memory state including step and the confirmed binding.
         driveToContent(vm, selfSnapshot())
         assertNotNull(vm.confirmedRecipient.value)
         vm.endSession()
         assertNull("endSession() must drop the confirmed binding", vm.confirmedRecipient.value)
         assertEquals(
-            "endSession() must not reset the step (it's an ownership teardown, not a navigation reset)",
-            CreateViewModel.Step.CONTENT,
+            "endSession() must reset the step with the rest of the session",
+            CreateViewModel.Step.RECIPIENT_LOOKUP,
             vm.step.value,
         )
 
         val capsuleId = vm.capsuleId
         vm.startPublishing()
 
-        // M2-P07 fail-closed guard: no publish is launched, the recovery
-        // banner explains the missing recipient, and no outbox row or
-        // plaintext file ever lands.
+        // Fail-closed: teardown left the flow off CONTENT with no recipient,
+        // so no publish is launched and no outbox row or plaintext file lands.
         assertNotNull("a recovery message must be set", vm.flowError.value)
         assertTrue(
-            "recovery message must explain the missing recipient",
-            vm.flowError.value!!.contains("recipient", ignoreCase = true),
+            "recovery message must explain the illegal publish",
+            vm.flowError.value!!.contains("publishing", ignoreCase = true),
         )
         assertEquals(
-            "step must stay on CONTENT - no publication was attempted",
-            CreateViewModel.Step.CONTENT,
+            "step must stay on RECIPIENT_LOOKUP - no publication was attempted",
+            CreateViewModel.Step.RECIPIENT_LOOKUP,
             vm.step.value,
         )
         assertNull(vm.publishError.value)

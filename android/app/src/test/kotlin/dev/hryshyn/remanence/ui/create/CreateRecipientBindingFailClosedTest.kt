@@ -172,7 +172,6 @@ class CreateRecipientBindingFailClosedTest {
         }
         override suspend fun lookup(
             rawHandle: String,
-            accessToken: String,
         ): DirectoryLookupResult =
             ref.get()[rawHandle]?.let { DirectoryLookupResult.Found(it) }
                 ?: DirectoryLookupResult.NotFound

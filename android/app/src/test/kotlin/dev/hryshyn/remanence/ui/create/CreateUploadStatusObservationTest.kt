@@ -102,7 +102,6 @@ class CreateUploadStatusObservationTest {
     private class ClosedDirectory : RecipientDirectoryPort {
         override suspend fun lookup(
             rawHandle: String,
-            accessToken: String,
         ): DirectoryLookupResult = DirectoryLookupResult.NotFound
     }
 

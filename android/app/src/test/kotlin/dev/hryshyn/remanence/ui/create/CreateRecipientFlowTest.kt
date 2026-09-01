@@ -28,7 +28,7 @@ class CreateRecipientFlowTest {
 
     private fun flow() = CreateRecipientFlow(
         picker = RecipientPickerViewModel(
-            directory = { _, _ -> DirectoryLookupResult.NotFound },
+            directory = { _ -> DirectoryLookupResult.NotFound },
             accessTokenProvider = { "token" },
             scope = CoroutineScope(UnconfinedTestDispatcher()),
         ),

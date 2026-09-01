@@ -45,8 +45,19 @@ class DirectoryRepositoryTest {
         }
     }
 
-    private fun repository(server: MockWebServer): DirectoryRepository =
-        DirectoryRepository.create(ApiBaseUrl.parse(server.url("/").toString()))
+    private fun repository(server: MockWebServer, token: String = "pm_at_live"): DirectoryRepository =
+        DirectoryRepository(
+            client = HttpClientFactory.create().newBuilder()
+                .addInterceptor { chain ->
+                    chain.proceed(
+                        chain.request().newBuilder()
+                            .header("Authorization", "Bearer $token")
+                            .build(),
+                    )
+                }
+                .build(),
+            baseUrl = ApiBaseUrl.parse(server.url("/").toString()),
+        )
 
     @Test
     fun foundMapsToDomainIdsAndKeyBundle() = runTest {
@@ -54,7 +65,7 @@ class DirectoryRepositoryTest {
             server.enqueue(
                 MockResponse.Builder().code(200).setHeader("Content-Type", "application/json").body(responseJson).build(),
             )
-            val result = repository(server).lookup("mykola", accessToken = "pm_at_live")
+            val result = repository(server).lookup("mykola")
 
             val found = assertIs<DirectoryLookupResult.Found>(result)
             assertEquals(userId, found.snapshot.userId.toRestString())
@@ -82,7 +93,7 @@ class DirectoryRepositoryTest {
             server.enqueue(
                 MockResponse.Builder().code(200).setHeader("Content-Type", "application/json").body(leaked).build(),
             )
-            val result = repository(server).lookup("mykola", accessToken = "pm_at_live")
+            val result = repository(server).lookup("mykola")
             assertIs<DirectoryLookupResult.Failure>(result)
             assertFalse(result.toString().contains("secret@example.com"))
         }
@@ -98,7 +109,7 @@ class DirectoryRepositoryTest {
                     .body("""{"code":"HANDLE_NOT_FOUND"}""")
                     .build(),
             )
-            assertEquals(DirectoryLookupResult.NotFound, repository(server).lookup("nobody", accessToken = "pm_at_live"))
+            assertEquals(DirectoryLookupResult.NotFound, repository(server).lookup("nobody"))
         }
     }
 
@@ -112,7 +123,7 @@ class DirectoryRepositoryTest {
                     .body("""{"code":"AUTHENTICATION_REQUIRED"}""")
                     .build(),
             )
-            val failure = assertIs<DirectoryLookupResult.Failure>(repository(server).lookup("mykola", accessToken = "pm_at_dead"))
+            val failure = assertIs<DirectoryLookupResult.Failure>(repository(server, token = "pm_at_dead").lookup("mykola"))
             assertEquals(DirectoryFailure.HTTP, failure.reason)
             assertEquals(401, failure.httpStatus)
         }
@@ -130,7 +141,7 @@ class DirectoryRepositoryTest {
             server.enqueue(
                 MockResponse.Builder().code(200).setHeader("Content-Type", "application/json").body(tampered).build(),
             )
-            val failure = assertIs<DirectoryLookupResult.Failure>(repository(server).lookup("mykola", accessToken = "pm_at_live"))
+            val failure = assertIs<DirectoryLookupResult.Failure>(repository(server).lookup("mykola"))
             assertEquals(DirectoryFailure.INVALID_RESPONSE, failure.reason)
         }
     }
@@ -141,7 +152,7 @@ class DirectoryRepositoryTest {
             server.enqueue(
                 MockResponse.Builder().code(404).setHeader("Content-Type", "application/json").body("{}").build(),
             )
-            repository(server).lookup("weird name", accessToken = "pm_at_live")
+            repository(server).lookup("weird name")
             assertEquals("/v1/directory/handles/weird%20name", server.takeRequest().url.encodedPath)
         }
     }

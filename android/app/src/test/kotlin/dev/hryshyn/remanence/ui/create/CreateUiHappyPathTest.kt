@@ -142,7 +142,7 @@ class CreateUiHappyPathTest {
     )
 
     private inner class SelfDirectory : RecipientDirectoryPort {
-        override suspend fun lookup(rawHandle: String, accessToken: String): DirectoryLookupResult =
+        override suspend fun lookup(rawHandle: String): DirectoryLookupResult =
             DirectoryLookupResult.Found(selfSnapshot())
     }
 

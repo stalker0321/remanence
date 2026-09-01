@@ -102,7 +102,6 @@ class CreateRecipientConfirmFlowTest {
     ) : RecipientDirectoryPort {
         override suspend fun lookup(
             rawHandle: String,
-            accessToken: String,
         ): DirectoryLookupResult =
             byHandle[rawHandle]?.let { DirectoryLookupResult.Found(it) }
                 ?: DirectoryLookupResult.NotFound

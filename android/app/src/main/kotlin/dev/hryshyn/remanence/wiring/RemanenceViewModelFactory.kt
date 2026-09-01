@@ -45,10 +45,17 @@ class RemanenceViewModelFactory(
         HomeCapabilityViewModel::class.java ->
             HomeCapabilityViewModel(container.identityAvailability) as T
         CreateViewModel::class.java -> CreateViewModel(
-            directory = container.directoryRepository::lookup,
+            // Admission is checked separately for friendly UI. The request itself
+            // must let the shared interceptor source the current open-domain bearer.
+            directory = { rawHandle -> container.directoryRepository.lookup(rawHandle) },
             accessTokenProvider = {
                 container.apiStack.sessionRefreshCoordinator.openDomainAccessToken()
             },
+            recipientLookupOwnerProvider = {
+                container.currentAccountStore.load()?.userId
+            },
+            recipientLookupBoundaryEpoch = container.sessionBoundary::currentEpoch,
+            registerRecipientLookupBoundary = container.sessionBoundary::register,
             identityProvider = {
                 val row = container.currentAccountStore.loadEntity() ?: return@CreateViewModel null
                 when (val loaded = container.identityRepository.load()) {

@@ -365,7 +365,7 @@ class AppContainer private constructor(
 
     /** Handle resolution for the create flow (docs/security.md section 8). */
     val directoryRepository: dev.hryshyn.remanence.core.data.network.DirectoryRepository by lazy {
-        dev.hryshyn.remanence.core.data.network.DirectoryRepository.create(apiBaseUrl)
+        apiStack.directoryRepository
     }
 
     /** FIX-REVIEW2-04: immutable public key-bundle lookup for verification. */

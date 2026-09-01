@@ -121,6 +121,10 @@ class CreateViewModel(
     private val enqueueUpload: suspend (UserId, CapsuleId) -> Unit,
     /** Exact owner + capsule current-send projection for the mounted flow. */
     private val outboxCapsuleDao: OutboxCapsuleDao? = null,
+    /** Stable account fence for asynchronous recipient-directory completion. */
+    recipientLookupOwnerProvider: suspend () -> String? = { accessTokenProvider() },
+    recipientLookupBoundaryEpoch: () -> Long = { 0L },
+    registerRecipientLookupBoundary: (((() -> Unit)) -> (() -> Unit))? = null,
 ) : ViewModel() {
 
     /** Current-send state; deliberately contains no history or inbox projection. */
@@ -144,7 +148,14 @@ class CreateViewModel(
         PUBLISHED,
     }
 
-    val pickerVm = RecipientPickerViewModel(directory, accessTokenProvider, viewModelScope)
+    val pickerVm = RecipientPickerViewModel(
+        directory = directory,
+        accessTokenProvider = accessTokenProvider,
+        sessionOwnerProvider = recipientLookupOwnerProvider,
+        sessionBoundaryEpoch = recipientLookupBoundaryEpoch,
+        registerSessionBoundary = registerRecipientLookupBoundary,
+        scope = viewModelScope,
+    )
 
     private val sessionStore = CreateSessionStore()
     private val recipientFlow = CreateRecipientFlow(pickerVm, sessionStore)
@@ -848,6 +859,7 @@ class CreateViewModel(
 
     override fun onCleared() {
         // Cancellation cleanup: transient session state never outlives the VM.
+        pickerVm.close()
         endSession()
         super.onCleared()
     }

@@ -136,7 +136,7 @@ class CreateSessionOwnedStagingTest {
     }
 
     private class StaticDirectory : RecipientDirectoryPort {
-        override suspend fun lookup(rawHandle: String, accessToken: String): DirectoryLookupResult =
+        override suspend fun lookup(rawHandle: String): DirectoryLookupResult =
             DirectoryLookupResult.NotFound
     }
 

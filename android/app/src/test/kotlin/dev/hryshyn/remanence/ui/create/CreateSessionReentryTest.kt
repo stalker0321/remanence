@@ -103,7 +103,6 @@ class CreateSessionReentryTest {
     private class SelfDirectory : RecipientDirectoryPort {
         override suspend fun lookup(
             rawHandle: String,
-            accessToken: String,
         ): DirectoryLookupResult = DirectoryLookupResult.NotFound
     }
 

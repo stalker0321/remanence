@@ -44,13 +44,12 @@ class DirectoryRepository internal constructor(
     private val baseUrl: ApiBaseUrl,
 ) {
     /** Looks up [rawHandle]; the wire handle is percent-encoded and never cached here. */
-    suspend fun lookup(rawHandle: String, accessToken: String): DirectoryLookupResult {
+    suspend fun lookup(rawHandle: String): DirectoryLookupResult {
         val encodedPath = "v1/directory/handles/" + java.net.URLEncoder.encode(rawHandle, "UTF-8")
             .replace("+", "%20")
         val request = okhttp3.Request.Builder()
             .url(baseUrl.resolve(encodedPath))
             .header("Accept", "application/json")
-            .header(AUTHORIZATION_HEADER, BEARER_PREFIX + accessToken)
             .get()
             .build()
         return try {
@@ -96,13 +95,6 @@ class DirectoryRepository internal constructor(
     internal fun mapToSnapshot(dto: DirectoryLookupResponseDto): ResolvedHandleSnapshot =
         mapDirectoryLookupToSnapshot(dto)
 
-    companion object {
-        fun create(baseUrl: ApiBaseUrl): DirectoryRepository =
-            DirectoryRepository(HttpClientFactory.create(), baseUrl)
-
-        const val AUTHORIZATION_HEADER: String = "Authorization"
-        const val BEARER_PREFIX: String = RefreshingAuthenticator.BEARER_PREFIX
-    }
 }
 
 /** Shared structural mapping for the two public-shape directory lookups. */

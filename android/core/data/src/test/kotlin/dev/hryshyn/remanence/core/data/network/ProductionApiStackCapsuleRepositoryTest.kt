@@ -11,6 +11,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.test.runTest
 import mockwebserver3.Dispatcher
 import mockwebserver3.MockResponse
@@ -32,6 +34,67 @@ class ProductionApiStackCapsuleRepositoryTest {
     private val recipientId = UserId.parseRest("0198f0a0-0000-7000-8000-00000000a502")
     private val recipientBundleId = KeyBundleId.parseRest("0198f0a0-0000-7000-8000-00000000ba02")
     private val idempotencyKey = UUID.fromString("0198f0a0-0000-7000-8000-00000000ad01")
+
+    @Test
+    fun handleDirectoryUsesAuthenticatedStackAndRetriesOnceAfterRefresh() = runTest {
+        val (result, trace) = withAuthenticatedStack(
+            path = "/v1/directory/handles/mykola",
+            success = MockResponse.Builder()
+                .code(200)
+                .setHeader("Content-Type", "application/json")
+                .body(directorySuccessJson())
+                .build(),
+        ) { stack ->
+            stack.directoryRepository.lookup("mykola")
+        }
+
+        assertIs<DirectoryLookupResult.Found>(result)
+        assertRefreshAndRetry(trace)
+    }
+
+    @Test
+    fun concurrentHandleLookupsShareOneRefresh() = runTest {
+        val server = MockWebServer()
+        val trace = AuthTrace(
+            protectedPath = "/v1/directory/handles/mykola",
+            success = MockResponse.Builder()
+                .code(200)
+                .setHeader("Content-Type", "application/json")
+                .body(directorySuccessJson())
+                .build(),
+        )
+        server.dispatcher = trace
+        server.start()
+        try {
+            val tokens = AuthTokenHolder(OLD_ACCESS, OLD_REFRESH)
+            val sink = RecordingRotationSink()
+            val stack = ProductionApiStack.create(
+                baseUrl = ApiBaseUrl.parse(server.url("/").toString()),
+                tokens = tokens,
+                refreshTokenReader = RefreshTokenReader {
+                    tokens.refreshToken?.let {
+                        BoundRefreshCredential(
+                            UserId.parseRest("0198f0a0-0000-7000-8000-00000000a001"),
+                            it,
+                        )
+                    }
+                },
+                rotationSink = sink,
+            )
+
+            val results = listOf(
+                async { stack.directoryRepository.lookup("mykola") },
+                async { stack.directoryRepository.lookup("mykola") },
+            ).awaitAll()
+
+            results.forEach { assertIs<DirectoryLookupResult.Found>(it) }
+            assertEquals(1, trace.refreshCount.get())
+            assertEquals(NEW_ACCESS, tokens.accessToken)
+            assertEquals(listOf(NEW_ACCESS to NEW_REFRESH), sink.rotations)
+        } finally {
+            server.close()
+        }
+    }
 
     @Test
     fun draftRepositoryUsesAuthenticatedStackAndRetriesOnceAfterRefresh() = runTest {
@@ -167,6 +230,7 @@ class ProductionApiStackCapsuleRepositoryTest {
             assertNull(stack.sessionRefreshCoordinator.openDomainAccessToken())
 
             stack.capsuleDraftRepository.createDraft(draftRequest(), OLD_ACCESS)
+            val closedDirectory = stack.directoryRepository.lookup("mykola")
             stack.recipientUserLookupRepository.lookup(recipientId, OLD_ACCESS)
             stack.incomingCapsuleRepository.fetchPage(
                 ownerUserId = recipientId,
@@ -178,6 +242,8 @@ class ProductionApiStackCapsuleRepositoryTest {
 
             val ordinary = seen.filterNot { it.first.endsWith("v1/auth/logout") }
             assertTrue(ordinary.isNotEmpty())
+            assertIs<DirectoryLookupResult.Failure>(closedDirectory)
+            assertTrue(seen.none { it.first.endsWith("v1/auth/refresh") })
             ordinary.forEach { (_, authorization) ->
                 assertEquals(null, authorization)
             }
@@ -339,6 +405,27 @@ class ProductionApiStackCapsuleRepositoryTest {
           "capsule_id": "${capsuleId.toRestString()}",
           "state": "READY",
           "ready_at": "2026-08-30T03:00:00Z"
+        }
+        """.trimIndent()
+
+    private fun directorySuccessJson(): String =
+        """
+        {
+          "user": {
+            "user_id": "${recipientId.toRestString()}",
+            "handle": "mykola"
+          },
+          "key_bundle": {
+            "key_bundle_id": "${recipientBundleId.toRestString()}",
+            "user_id": "${recipientId.toRestString()}",
+            "suite": "HPKE_X25519_HKDF_SHA256_AES256GCM__ED25519",
+            "protocol_version": 1,
+            "encryption_public_keyset": "ZW5jcnlwdGlvbg",
+            "signing_public_keyset": "c2lnbmluZw",
+            "status": "ACTIVE",
+            "created_at": "2026-08-30T03:00:00Z"
+          },
+          "directory_version": "v1"
         }
         """.trimIndent()
 

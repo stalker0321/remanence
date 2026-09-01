@@ -2,6 +2,9 @@ package dev.hryshyn.remanence.ui.create
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -35,7 +38,7 @@ class RecipientPickerViewModelTest {
     ) : RecipientDirectoryPort {
         val handles = mutableListOf<String>()
 
-        override suspend fun lookup(rawHandle: String, accessToken: String): DirectoryLookupResult {
+        override suspend fun lookup(rawHandle: String): DirectoryLookupResult {
             handles += rawHandle
             return result
         }
@@ -102,6 +105,90 @@ class RecipientPickerViewModelTest {
         vm.lookup()
         assertTrue(vm.state.value is RecipientLookupUiState.Resolved)
         vm.onHandleChange("mykol")
+        assertEquals(RecipientLookupUiState.Idle, vm.state.value)
+    }
+
+    @Test
+    fun accountReplacementWhileLookupIsSuspendedCannotPublishOldResult() = runTest {
+        val result = CompletableDeferred<DirectoryLookupResult>()
+        var owner: String? = "owner-a"
+        val vm = RecipientPickerViewModel(
+            directory = { _ -> result.await() },
+            accessTokenProvider = { "admission-token" },
+            scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)),
+            sessionOwnerProvider = { owner },
+        )
+        vm.onHandleChange("mykola")
+        vm.lookup()
+
+        owner = "owner-b"
+        result.complete(DirectoryLookupResult.Found(snapshot))
+
+        assertEquals(RecipientLookupUiState.Failed("Sign in first."), vm.state.value)
+    }
+
+    @Test
+    fun resetCancelsLookupAndLateNonCancellableCompletionCannotRepublish() = runTest {
+        val result = CompletableDeferred<DirectoryLookupResult>()
+        val vm = RecipientPickerViewModel(
+            directory = { _ -> withContext(NonCancellable) { result.await() } },
+            accessTokenProvider = { "admission-token" },
+            scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)),
+            sessionOwnerProvider = { "owner-a" },
+        )
+        vm.onHandleChange("mykola")
+        vm.lookup()
+
+        vm.reset()
+        result.complete(DirectoryLookupResult.Found(snapshot))
+
+        assertEquals("", vm.handle.value)
+        assertEquals(RecipientLookupUiState.Idle, vm.state.value)
+    }
+
+    @Test
+    fun editingHandleCancelsLookupAndLateCompletionCannotRepublish() = runTest {
+        val result = CompletableDeferred<DirectoryLookupResult>()
+        val vm = RecipientPickerViewModel(
+            directory = { _ -> withContext(NonCancellable) { result.await() } },
+            accessTokenProvider = { "admission-token" },
+            scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)),
+            sessionOwnerProvider = { "owner-a" },
+        )
+        vm.onHandleChange("mykola")
+        vm.lookup()
+
+        vm.onHandleChange("someoneelse")
+        result.complete(DirectoryLookupResult.Found(snapshot))
+
+        assertEquals("someoneelse", vm.handle.value)
+        assertEquals(RecipientLookupUiState.Idle, vm.state.value)
+    }
+
+    @Test
+    fun sessionBoundaryInvalidationCancelsSameOwnerLookupAndClearsState() = runTest {
+        val result = CompletableDeferred<DirectoryLookupResult>()
+        var epoch = 0L
+        var listener: (() -> Unit)? = null
+        val vm = RecipientPickerViewModel(
+            directory = { _ -> withContext(NonCancellable) { result.await() } },
+            accessTokenProvider = { "admission-token" },
+            scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)),
+            sessionOwnerProvider = { "same-owner" },
+            sessionBoundaryEpoch = { epoch },
+            registerSessionBoundary = { callback ->
+                listener = callback
+                { listener = null }
+            },
+        )
+        vm.onHandleChange("mykola")
+        vm.lookup()
+
+        epoch++
+        listener?.invoke()
+        result.complete(DirectoryLookupResult.Found(snapshot))
+
+        assertEquals("", vm.handle.value)
         assertEquals(RecipientLookupUiState.Idle, vm.state.value)
     }
 }

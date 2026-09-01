@@ -37,8 +37,24 @@ class PerspectiveWarper(private val profile: RecognitionProfile) {
             throw IllegalStateException("OpenCV native library not initialized")
         }
 
-        val longEdgePx = maxEdgeLength(orderedCorners)
-        val shortEdgePx = minEdgeLength(orderedCorners)
+        val edgesPx = orderedCorners.mapIndexed { index, corner ->
+            edgeLength(corner, orderedCorners[(index + 1) % orderedCorners.size])
+        }
+        // Use the same opposite-edge averages as PostcardCropSelector so a
+        // perspective-skewed quad cannot change orientation based on one edge.
+        val horizontalEdgePx = (edgesPx[0] + edgesPx[2]) / 2.0
+        val verticalEdgePx = (edgesPx[1] + edgesPx[3]) / 2.0
+        val landscape = horizontalEdgePx >= verticalEdgePx
+        val canonicalCorners = if (landscape) {
+            orderedCorners
+        } else {
+            // A portrait quad is rotated into the canonical landscape frame.
+            // This preserves clockwise winding and restores the source's
+            // right edge as the canonical top edge deterministically.
+            listOf(orderedCorners[1], orderedCorners[2], orderedCorners[3], orderedCorners[0])
+        }
+        val longEdgePx = maxOf(horizontalEdgePx, verticalEdgePx)
+        val shortEdgePx = minOf(horizontalEdgePx, verticalEdgePx)
         val scale = profile.capture.canonicalLongEdgePx.toDouble() / longEdgePx
         val targetLong = profile.capture.canonicalLongEdgePx
         val targetShort = kotlin.math.round(shortEdgePx * scale).toInt().coerceIn(1, MAX_SHORT_EDGE_PX)
@@ -47,16 +63,18 @@ class PerspectiveWarper(private val profile: RecognitionProfile) {
         }
 
         val src = MatOfPoint2f(
-            Point(orderedCorners[0].x, orderedCorners[0].y),
-            Point(orderedCorners[1].x, orderedCorners[1].y),
-            Point(orderedCorners[2].x, orderedCorners[2].y),
-            Point(orderedCorners[3].x, orderedCorners[3].y),
+            Point(canonicalCorners[0].x, canonicalCorners[0].y),
+            Point(canonicalCorners[1].x, canonicalCorners[1].y),
+            Point(canonicalCorners[2].x, canonicalCorners[2].y),
+            Point(canonicalCorners[3].x, canonicalCorners[3].y),
         )
+        val targetWidth = targetLong
+        val targetHeight = targetShort
         val dst = MatOfPoint2f(
             Point(0.0, 0.0),
-            Point((targetLong - 1).toDouble(), 0.0),
-            Point((targetLong - 1).toDouble(), (targetShort - 1).toDouble()),
-            Point(0.0, (targetShort - 1).toDouble()),
+            Point((targetWidth - 1).toDouble(), 0.0),
+            Point((targetWidth - 1).toDouble(), (targetHeight - 1).toDouble()),
+            Point(0.0, (targetHeight - 1).toDouble()),
         )
         val transform = Imgproc.getPerspectiveTransform(src, dst)
 
@@ -65,8 +83,8 @@ class PerspectiveWarper(private val profile: RecognitionProfile) {
             fillMat(source, argbPixels, width)
             val output = Mat()
             try {
-                Imgproc.warpPerspective(source, output, transform, org.opencv.core.Size(targetLong.toDouble(), targetShort.toDouble()))
-                return WarpedCapture(readPixels(output), targetLong, targetShort)
+                Imgproc.warpPerspective(source, output, transform, org.opencv.core.Size(targetWidth.toDouble(), targetHeight.toDouble()))
+                return WarpedCapture(readPixels(output), targetWidth, targetHeight)
             } finally {
                 output.release()
             }
@@ -78,19 +96,8 @@ class PerspectiveWarper(private val profile: RecognitionProfile) {
         }
     }
 
-    private fun maxEdgeLength(corners: List<PointD>): Double =
-        edges(corners).max()
-
-    private fun minEdgeLength(corners: List<PointD>): Double =
-        edges(corners).min()
-
-    private fun edges(corners: List<PointD>): List<Double> = buildList {
-        for (i in 0 until 4) {
-            val a = corners[i]
-            val b = corners[(i + 1) % 4]
-            add(kotlin.math.hypot(b.x - a.x, b.y - a.y))
-        }
-    }
+    private fun edgeLength(a: PointD, b: PointD): Double =
+        kotlin.math.hypot(b.x - a.x, b.y - a.y)
 
     private fun fillMat(target: Mat, pixels: IntArray, width: Int) {
         val row = ByteArray(width * 4)

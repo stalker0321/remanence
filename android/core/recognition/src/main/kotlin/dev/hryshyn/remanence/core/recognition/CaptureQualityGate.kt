@@ -41,7 +41,8 @@ class CaptureQualityGate(private val profile: RecognitionProfile) {
         if (input.detectedAreaRatio < gates.minCardAreaRatio) reasons += QualityReason.CARD_TOO_SMALL
         if (input.rectangularity < gates.minRectangularity) reasons += QualityReason.CROP_UNCERTAIN
         input.cropAspectRatio?.let { ratio ->
-            if (ratio !in gates.aspectRatioMin..gates.aspectRatioMax) {
+            val orientationNormalizedRatio = if (ratio < 1.0) 1.0 / ratio else ratio
+            if (orientationNormalizedRatio !in gates.aspectRatioMin..gates.aspectRatioMax) {
                 reasons += QualityReason.CROP_UNCERTAIN
             }
         }

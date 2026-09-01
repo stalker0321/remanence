@@ -261,7 +261,7 @@ private fun LivePreviewContent(
                 adapter.preview(Modifier.matchParentSize())
                 PostcardGuideOverlay(modifier = Modifier.matchParentSize())
                 Text(
-                    "Keep all four postcard edges inside the landscape outline.",
+                    "Keep all four postcard edges inside the outline.",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.White,
                     modifier = Modifier

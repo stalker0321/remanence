@@ -41,6 +41,13 @@ class RealStillFingerprintProcessorTest {
     }
 
     @Test
+    fun portraitGuideFallbackProducesUsableOrbThroughProductionPipeline() {
+        val result = processor(::emptyContours).process(patternJpeg(width = 600, height = 900))
+
+        assertTrue("expected accepted portrait fallback capture, got $result", result is ProcessedStill.Accepted)
+    }
+
+    @Test
     fun fallbackStillRejectsBlurDarkAndGlare() {
         val blurry = processor(::emptyContours).process(patternJpeg(blur = true))
         val dark = processor(::emptyContours).process(patternJpeg(dark = true))
@@ -73,9 +80,9 @@ class RealStillFingerprintProcessorTest {
         blur: Boolean = false,
         dark: Boolean = false,
         glare: Boolean = false,
+        width: Int = 900,
+        height: Int = 600,
     ): ByteArray {
-        val width = 900
-        val height = 600
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val pixels = IntArray(width * height)
         for (y in 0 until height) {

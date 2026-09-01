@@ -39,25 +39,31 @@ data class NormalizedGuideRect(
 
 /**
  * The single postcard guide definition shared by Compose and still crops.
- * It deliberately describes a landscape card even when the camera preview is
- * portrait: the available frame is padded, then the guide is centered and
- * fit to the same 3:2 card shape at every resolution/aspect ratio.
+ * A landscape frame gets a 3:2 guide and a portrait frame gets a 2:3 guide;
+ * both are centered and fit to the same bounded fractions at every resolution
+ * and supported camera aspect ratio.
  */
 object PostcardGuideGeometry {
 
     const val LANDSCAPE_ASPECT_RATIO: Double = 1.5
+    const val PORTRAIT_ASPECT_RATIO: Double = 2.0 / 3.0
     const val MAX_WIDTH_FRACTION: Double = 0.86
     const val MAX_HEIGHT_FRACTION: Double = 0.78
 
     fun normalizedFor(frameWidth: Double, frameHeight: Double): NormalizedGuideRect {
         require(frameWidth > 0.0 && frameHeight > 0.0)
+        val guideAspectRatio = if (frameWidth >= frameHeight) {
+            LANDSCAPE_ASPECT_RATIO
+        } else {
+            PORTRAIT_ASPECT_RATIO
+        }
         val maxWidth = frameWidth * MAX_WIDTH_FRACTION
         val maxHeight = frameHeight * MAX_HEIGHT_FRACTION
         var width = maxWidth
-        var height = width / LANDSCAPE_ASPECT_RATIO
+        var height = width / guideAspectRatio
         if (height > maxHeight) {
             height = maxHeight
-            width = height * LANDSCAPE_ASPECT_RATIO
+            width = height * guideAspectRatio
         }
         return NormalizedGuideRect(
             left = (frameWidth - width) / 2.0 / frameWidth,

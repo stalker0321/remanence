@@ -10,11 +10,12 @@ class PostcardGuideGeometryTest {
     private val profile = RecognitionProfile.mvpOrbV1()
 
     @Test
-    fun guideCropUsesTheSameLandscapeGeometryAcrossPreviewAndCaptureAspects() {
+    fun guideCropUsesAdaptiveGeometryAcrossPreviewAndCaptureAspects() {
         val frames = listOf(
-            320 to 427, // portrait preview
-            1600 to 1200, // common landscape still
-            1920 to 1080, // another still aspect
+            9 to 20,
+            3 to 4,
+            4 to 3,
+            16 to 9,
         )
 
         for ((width, height) in frames) {
@@ -22,11 +23,34 @@ class PostcardGuideGeometryTest {
             val corners = guide.toPixels(width, height)
             val cropWidth = corners[1].x - corners[0].x
             val cropHeight = corners[3].y - corners[0].y
+            val expectedAspect = if (width >= height) {
+                PostcardGuideGeometry.LANDSCAPE_ASPECT_RATIO
+            } else {
+                PostcardGuideGeometry.PORTRAIT_ASPECT_RATIO
+            }
 
-            assertEquals(PostcardGuideGeometry.LANDSCAPE_ASPECT_RATIO, cropWidth / cropHeight, 1e-9)
+            assertEquals(expectedAspect, cropWidth / cropHeight, 1e-9)
+            assertTrue(
+                guide.width * guide.height >= profile.capture.minCardAreaRatio,
+                "guide area must meet the capture minimum for ${width}:${height}",
+            )
             assertEquals(guide, PostcardGuideGeometry.normalizedFor(width.toDouble(), height.toDouble()))
+            assertEquals(guide.toOverlay(width, height), PostcardGuideGeometry.overlayFor(width, height))
             assertTrue(corners.all { it.x in 0.0..width.toDouble() && it.y in 0.0..height.toDouble() })
         }
+    }
+
+    @Test
+    fun productionPortraitPostcardFallbackKeepsPortraitShapeAndMinimumArea() {
+        val selected = PostcardCropSelector(profile).select(emptyList(), 1080, 2400)
+
+        assertTrue(selected.usedGuideFallback)
+        assertEquals(PostcardGuideGeometry.PORTRAIT_ASPECT_RATIO, edgeRatio(selected.candidate.corners), 1e-9)
+        assertTrue(selected.candidate.areaRatio >= profile.capture.minCardAreaRatio)
+        assertEquals(
+            PostcardGuideGeometry.normalizedFor(1080, 2400).toPixels(1080, 2400),
+            selected.candidate.corners,
+        )
     }
 
     @Test
@@ -35,7 +59,7 @@ class PostcardGuideGeometryTest {
 
         assertTrue(selected.usedGuideFallback)
         assertTrue(selected.candidate.areaRatio >= profile.capture.minCardAreaRatio)
-        assertEquals(1.5, edgeRatio(selected.candidate.corners), 1e-9)
+        assertEquals(PostcardGuideGeometry.LANDSCAPE_ASPECT_RATIO, edgeRatio(selected.candidate.corners), 1e-9)
         assertEquals(
             PostcardGuideGeometry.normalizedFor(1600, 1200).toPixels(1600, 1200),
             selected.candidate.corners,

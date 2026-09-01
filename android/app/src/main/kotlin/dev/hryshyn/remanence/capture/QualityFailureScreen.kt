@@ -19,7 +19,7 @@ fun guidanceFor(reason: QualityReason): String = when (reason) {
     QualityReason.CARD_TOO_SMALL ->
         "Move closer so the postcard fills more of the frame."
     QualityReason.CROP_UNCERTAIN ->
-        "Keep all four postcard edges inside the on-screen landscape outline."
+        "Keep all four postcard edges inside the on-screen outline."
     QualityReason.TOO_BLURRY ->
         "Hold still and let the camera focus before capturing."
     QualityReason.TOO_DARK ->

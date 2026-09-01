@@ -79,6 +79,27 @@ class CaptureQualityGateTest {
     }
 
     @Test
+    fun portraitCropAspectIsAcceptedUsingTheSameLandscapeThresholds() {
+        val portrait = passingInput().copy(cropAspectRatio = 2.0 / 3.0)
+
+        assertTrue(gate.evaluate(portrait).isEmpty())
+    }
+
+    @Test
+    fun reciprocalOutOfRangeAspectIsRejectedTheSameAsLandscapeValue() {
+        val outOfRangeLandscape = 2.20 + 1e-6
+
+        assertEquals(
+            setOf(QualityReason.CROP_UNCERTAIN),
+            gate.evaluate(passingInput().copy(cropAspectRatio = outOfRangeLandscape)),
+        )
+        assertEquals(
+            setOf(QualityReason.CROP_UNCERTAIN),
+            gate.evaluate(passingInput().copy(cropAspectRatio = 1.0 / outOfRangeLandscape)),
+        )
+    }
+
+    @Test
     fun multipleReasonsReportedTogether() {
         val bad = passingInput().copy(
             signals = CaptureQualitySignals(

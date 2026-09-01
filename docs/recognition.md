@@ -27,9 +27,10 @@ An unknown postcard that has no capsule in the local index must produce `NO_MATC
 
 Both sender and recipient use the same still-capture component and profile:
 
-1. Show a fixed landscape postcard guide and short instruction. The guide is
-   the shared normalized geometry used by the preview overlay and the still
-   crop at every preview/capture aspect ratio.
+1. Show an adaptive postcard guide and short instruction: 3:2 in landscape
+   frames and 2:3 in portrait frames. The guide is the shared normalized
+   geometry used by the preview overlay and the still crop at every
+   preview/capture aspect ratio.
 2. Capture JPEG still with CameraX `ImageCapture`; no continuous `ImageAnalysis`.
 3. Apply EXIF orientation, decode a bounded-resolution working bitmap, and strip metadata.
 4. Detect the postcard quadrilateral and show the proposed crop briefly. If no

@@ -252,6 +252,18 @@ internal interface FocusTimeoutScheduler {
     fun schedule(delayMillis: Long, task: () -> Unit): FocusCancellation
 }
 
+/** Internal seams for stitching the production binding callbacks in JVM tests. */
+internal fun interface CameraXFocusStarter {
+    fun start(onFocused: () -> Unit, onError: (String) -> Unit): FocusCancellation
+}
+
+internal fun interface StillCaptureInvoker {
+    fun takePicture(
+        executor: Executor,
+        callback: ImageCapture.OnImageCapturedCallback,
+    )
+}
+
 internal class HandlerFocusTimeoutScheduler(
     private val handler: Handler,
 ) : FocusTimeoutScheduler {
@@ -379,6 +391,9 @@ class CameraXBinding internal constructor(
     private val imageCapture: ImageCapture,
     onBound: () -> Unit,
     private val onError: (String) -> Unit,
+    private val focusStarter: CameraXFocusStarter? = null,
+    private val stillCaptureInvoker: StillCaptureInvoker? = null,
+    private val onCaptureFinishedForTest: () -> Unit = {},
 ) {
     private val released = AtomicBoolean(false)
     private val mainExecutor = ContextCompat.getMainExecutor(context)
@@ -477,36 +492,58 @@ class CameraXBinding internal constructor(
         onError: (String) -> Unit,
     ) {
         val focusFinished = AtomicBoolean(false)
-        val request = controller.startCenterFocus(
-            onFocused = {
-                focusFinished.set(true)
-                // The successful metering request must remain in effect while
-                // the still is exposed; clearing the lifecycle handle must
-                // not cancel AF/AE immediately before takePicture().
-                activeFocusRequest.getAndSet(null)
-                if (released.get()) {
-                    controller.captureFinished()
-                } else {
-                    try {
+        val onFocused = {
+            focusFinished.set(true)
+            // The successful metering request must remain in effect while
+            // the still is exposed; clearing the lifecycle handle must
+            // not cancel AF/AE immediately before takePicture().
+            activeFocusRequest.getAndSet(null)
+            if (released.get()) {
+                controller.captureFinished()
+            } else {
+                try {
+                    val capture = stillCaptureInvoker
+                    if (capture == null) {
                         CameraXPreviewBinder.captureOneStill(
                             context = context,
                             imageCapture = imageCapture,
                             onDelivered = onDelivered,
                             onError = onError,
-                            onFinished = controller::captureFinished,
+                            onFinished = {
+                                controller.captureFinished()
+                                onCaptureFinishedForTest()
+                            },
                         )
-                    } catch (failure: Exception) {
-                        onError(failure.message ?: "Capture failed")
-                        controller.captureFinished()
+                    } else {
+                        CameraXPreviewBinder.captureOneStill(
+                            context = context,
+                            stillCapture = capture,
+                            onDelivered = onDelivered,
+                            onError = onError,
+                            onFinished = {
+                                controller.captureFinished()
+                                onCaptureFinishedForTest()
+                            },
+                        )
                     }
+                } catch (failure: Exception) {
+                    onError(failure.message ?: "Capture failed")
+                    controller.captureFinished()
                 }
-            },
-            onError = { reason ->
-                focusFinished.set(true)
-                activeFocusRequest.getAndSet(null)
-                if (!released.get()) onError(reason)
-                controller.captureFinished()
-            },
+            }
+        }
+        val onFocusError = { reason: String ->
+            focusFinished.set(true)
+            activeFocusRequest.getAndSet(null)
+            if (!released.get()) onError(reason)
+            controller.captureFinished()
+        }
+        val request = focusStarter?.start(
+            onFocused = onFocused,
+            onError = onFocusError,
+        ) ?: controller.startCenterFocus(
+            onFocused = onFocused,
+            onError = onFocusError,
         )
         if (focusFinished.get()) {
             request.cancel()
@@ -614,7 +651,25 @@ object CameraXPreviewBinder {
         onError: (String) -> Unit,
         onFinished: () -> Unit = {},
     ) {
-        imageCapture.takePicture(
+        captureOneStill(
+            context = context,
+            stillCapture = StillCaptureInvoker { executor, callback ->
+                imageCapture.takePicture(executor, callback)
+            },
+            onDelivered = onDelivered,
+            onError = onError,
+            onFinished = onFinished,
+        )
+    }
+
+    internal fun captureOneStill(
+        context: Context,
+        stillCapture: StillCaptureInvoker,
+        onDelivered: (ByteArray) -> Unit,
+        onError: (String) -> Unit,
+        onFinished: () -> Unit = {},
+    ) {
+        stillCapture.takePicture(
             ContextCompat.getMainExecutor(context),
             object : ImageCapture.OnImageCapturedCallback() {
                 override fun onCaptureSuccess(image: ImageProxy) {

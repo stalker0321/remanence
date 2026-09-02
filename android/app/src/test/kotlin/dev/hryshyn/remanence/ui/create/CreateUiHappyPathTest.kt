@@ -259,6 +259,7 @@ class CreateUiHappyPathTest {
             vm.frontAttempt.onPermissionResolved(CapturePermissionStep.Granted)
         }
         readyCamera()
+        scroll("capture_shutter_front")
         composeRule.onNodeWithTag("capture_shutter_front").performClick()
         composeRule.runOnIdle { live.get()!!.deliverFrame("front-frame".toByteArray()) }
         composeRule.waitForIdle()
@@ -276,6 +277,7 @@ class CreateUiHappyPathTest {
             vm.backAttempt.onPermissionResolved(CapturePermissionStep.Granted)
         }
         readyCamera()
+        scroll("capture_shutter_back")
         composeRule.onNodeWithTag("capture_shutter_back").performClick()
         composeRule.runOnIdle { live.get()!!.deliverFrame("back-frame".toByteArray()) }
         composeRule.waitForIdle()

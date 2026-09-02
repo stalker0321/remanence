@@ -1,10 +1,11 @@
 {
   "schema_version": 1,
-  "current_milestone": "M2_TWO_USER_TRANSFER",
-  "current_task": "M2_ANDROID_A01",
-  "last_completed_implementation_commit": "22c46e1",
-  "last_reviewed_commit": "22c46e1",
+  "current_milestone": "M2_FRONT_ONLY_ARCHITECTURE_CHECKPOINT",
+  "current_task": "M2_FRONT_ONLY_IMPLEMENTATION_NOT_STARTED",
+  "last_completed_implementation_commit": "c2fd947",
+  "last_reviewed_commit": "f721d1a",
   "known_blockers": [
+    "FRONT_ONLY is a documentation contract only; implementation must follow ADR-012 and the bounded queue before it is claimed.",
     "P14 physical Android hardware evidence remains unrun; CameraX/OpenCV and two-device evidence cannot be claimed until exercised on hardware."
   ],
   "implementation_tmux_target": "main:0",

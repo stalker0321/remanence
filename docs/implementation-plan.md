@@ -1,6 +1,6 @@
 # Atomic implementation plan
 
-Status: **APPROVED; Architecture Gate passed and Grok may receive one listed task at a time.**
+Status: **APPROVED architecture checkpoint via ADR-012; implementation queue is pending the FRONT_ONLY contract migration.**
 
 This queue maps approved architecture to implementation-sized commits. It is intentionally more granular than milestones. The supervisor gives only one task at a time and may split any task further if repository state makes ten minutes unrealistic.
 
@@ -158,9 +158,9 @@ Operational completion checks between tasks confirm commit/status/declared comma
 | M1-R14 | Add still capture result into bounded normalization pipeline. | fake capture test |
 | M1-R15 | Add crop-confirm/manual-corner Compose surface. | Compose test |
 | M1-R16 | Add quality failure guidance surface by reason code. | Compose parameterized test |
-| M1-R17 | Add create-session front capture/persist encrypted fingerprint. | repository integration test |
-| M1-R18 | Add prepared-back checklist gate. | state/Compose test |
-| M1-R19 | Add create-session back capture/persist encrypted fingerprint. | ordering/cleanup test |
+| M1-R17 | Add create-session FRONT capture/persist encrypted fingerprint. | repository integration test |
+| M1-R18 | Add an optional BACK capture/checklist seam for legacy two-sided v1; it must not gate FRONT_ONLY. | state/Compose test |
+| M1-R19 | Persist an explicitly selected legacy two-sided BACK fingerprint without synthesizing one for FRONT_ONLY. | ordering/cleanup test |
 
 ## 8. M1 queue — capsule content and cryptography
 
@@ -172,7 +172,7 @@ Operational completion checks between tasks confirm commit/status/declared comma
 | M1-C04 | Add optional note editor with UTF-8 byte limit. | multibyte boundary tests |
 | M1-C05 | Add fresh Tink AES256_GCM capsule keyset generator. | uniqueness/roundtrip test |
 | M1-C06 | Add one-artifact AEAD encrypt/decrypt using canonical AAD. | wrong-field rejection tests |
-| M1-C07 | Build/encrypt recognition manifest from staged fingerprints/hint. | decrypt/field test |
+| M1-C07 | Build/encrypt a mode-aware recognition manifest while preserving legacy v1 and reserving explicit inner v2. | decrypt/field/version test |
 | M1-C08 | Build/encrypt content manifest from note/photo entries; track absent. | decrypt/cardinality test |
 | M1-C09 | Encrypt one normalized photo and calculate ciphertext binding. | roundtrip/hash test |
 | M1-C10 | Add bounded loop that encrypts 3–5 photos one at a time. | memory/order/cleanup test |
@@ -190,17 +190,17 @@ Operational completion checks between tasks confirm commit/status/declared comma
 | M1-M03 | Add spatial hull/grid coverage calculation. | clustered/distributed tests |
 | M1-M04 | Add homography plausibility gates. | reflection/skew/degenerate tests |
 | M1-M05 | Add weak/strong side score from profile. | exact report-to-score tests |
-| M1-M06 | Add front top-five and duplicate-group ranking. | ranking/margin tests |
-| M1-M07 | Add back/composite automatic acceptance. | threshold/margin tests |
+| M1-M06 | Add FRONT design candidate ranking and bounded owner-scoped grouping. | ranking/margin tests |
+| M1-M07 | Add mode-aware acceptance: retain legacy v1 BACK/composite rules and do not require BACK for explicit FRONT_ONLY. | threshold/mode tests |
 | M1-M08 | Add no-match/retry/plausible-chooser classification. | fail-safe test matrix |
 | M1-M09 | Add recipient-first then sender-fallback coordinator. | ordering tests |
 | M1-M10 | Add process-memory `ScanGrantManager` with expiry/consume. | fake-clock tests |
-| M1-M11 | Add Scan front/back capture session reusing capture components. | state tests |
+| M1-M11 | Add Scan required FRONT capture with optional explicit BACK, retaining strict legacy v1 two-sided capture. | state/mode tests |
 | M1-M12 | Wire local candidate matching and retry state. | ViewModel tests |
 | M1-M13 | Add scan-scoped ambiguity chooser with minimal hints only. | Compose/no-gallery tests |
 | M1-M14 | Gate capsule route by grant ID and verified crypto result. | navigation bypass tests |
 | M1-M15 | Add bounded fullscreen 3–5 photo/note presentation and cleanup. | Compose/state cleanup test |
-| M1-M16 | Create preferred recipient fingerprint after verified self receipt. | origin/preferred persistence test |
+| M1-M16 | Create preferred recipient FRONT fingerprint after verified receipt, retaining any explicitly captured BACK as optional evidence. | origin/preferred persistence test |
 | M1-M17 | Prove process restart requires rescan while ciphertext/key records survive. | instrumentation/manual evidence |
 
 ## 10. M2 rebaseline gates and prerequisite queue
@@ -233,6 +233,30 @@ layer implicitly.
 | M2-P14 | P01 | Record M1 physical CameraX/OpenCV smoke result and required corrections. | device/APK/commit evidence or explicit pending integration gate |
 
 **Checkpoint P:** review P01–P13 together before server/Android integration.
+
+## 10a. M2-F0 queue — FRONT_ONLY contract migration
+
+This is the bounded implementation sequence approved by ADR-012. It is
+documentation-only until these tasks are assigned and reviewed. Each task must
+retain the legacy two-sided v1 regression path and must not introduce a server
+visual index, a global uniqueness check, or a Room migration without proof
+that Room v7 is insufficient.
+
+| ID | Depends on | Single outcome | Minimum verification |
+| --- | --- | --- | --- |
+| M2-F0-01 | P10 | Add typed `RecognitionIdentityMode`/inner-manifest-version seams; distinguish legacy two-sided v1 from explicit v2 `FRONT_ONLY`. | exhaustive enum/version and unsupported-mode tests |
+| M2-F0-02 | M2-F0-01 | Add dual readers for legacy inner recognition v1 and v2 `FRONT_ONLY`; FRONT is required, strict v2 BACK is absent, and mode is never inferred. | v1/v2 round-trip, malformed, absent-BACK, and old-client-reject tests |
+| M2-F0-03 | M2-F0-01 | Version `SenderIndexBundle` and add a dual reader; prove existing owner-scoped Room v7 rows represent `design -> 0..N` before any migration is considered. | Room v7 compatibility/design-to-many fixture and no-migration evidence |
+| M2-F0-04 | M2-F0-02,M2-F0-03 | Wire outgoing v2 encryption while retaining outer REST/protocol/AAD v1, one recognition blob, and existing blob cardinality. | ciphertext/binding/cardinality and legacy publish regressions |
+| M2-F0-05 | M2-F0-02,M2-F0-03 | Wire incoming acceptance and local index persistence for v1/v2, owner-scoped design-to-many mapping, and fail-closed unsupported versions. | incoming dual-read, account isolation, and no-global-index tests |
+| M2-F0-06 | M2-F0-04 | Add FRONT_ONLY Create with required FRONT, no synthesized BACK, and optional BACK excluded in strict mode. | Create state, encrypted-manifest, legacy-create, and cleanup tests |
+| M2-F0-07 | M2-F0-05,M2-F0-06 | Add FRONT_ONLY Scan classification for zero/one/many local candidates; one still requires full E2EE verification and many never auto-opens. | no-match, single-verify, ambiguity, crypto-failure, and legacy-scan tests |
+| M2-F0-08 | M2-F0-07 | Add the scan-scoped recipient ambiguity picker with bounded local hints and full verification after selection. | multi-match picker/no-enumeration/legacy regression tests |
+
+`M2-F0-08` is intentionally last: the matching/index seam and the safe
+single-candidate behavior must exist before UI selection is added. Duplicate
+prevention and a 24-hour cancellation/tombstone window are separate future
+milestones, not hidden subtasks in this queue.
 
 ## 11. M2 queue — server capsule routing
 
@@ -279,23 +303,23 @@ and authorization matrix before Android upload work consumes the API.
 | M2-A10 | A09,P05 | Complete: bounded authenticated account-scoped incoming page worker, authenticated `KEEP` scheduling, and foreground/resume/restart/logout lifecycle boundaries. | page-loop, high-watermark, unique-work, foreground, logout/account-switch tests |
 | M2-A11a | A09,S20 | Add authenticated recipient ciphertext blob GET with exact transport headers, bounded streaming, and fresh temporary-file cleanup. | MockWebServer header/stream/hash/cleanup matrix |
 | M2-A11 | A11a,A09,S20 | Download and perform control/index acceptance on envelope + recognition blob. | wrong bundle/signature/hash/context matrix |
-| M2-A11b | A11a,A09,M2-P11 | Accept one owner/capsule-scoped incoming control/index record through the existing P11 gate, including envelope HPKE open and one transport-verified recognition ciphertext. | real Room/crypto owner, context, sender-trust, hash, recognition, cancellation, and redaction matrix |
+| M2-A11b | A11a,A09,M2-P11 | Accept one owner/capsule-scoped incoming control/index record through the existing P11 gate, including envelope HPKE open and one transport-verified legacy-v1 or explicit-v2 recognition ciphertext. | real Room/crypto owner, context, sender-trust, hash, mode, and redaction matrix |
 | M2-A11c1 | A11b | Add the reusable owner/capsule/blob-scoped, crash-safe atomic adoption primitive for one verified recognition ciphertext temp file. | bounded re-read/hash, no-follow roots, atomic no-overwrite adoption, retry/concurrency/redaction matrix |
 | M2-A11c2 | A11c1 | Adopt the A11b verified control/index result and recognition ciphertext into account-scoped Room state; verify the A11c1 file as a preflight, then use one owner-scoped Room transaction for blob CACHED plus capsule INDEX_CACHED (filesystem and Room are not one atomic domain). | durable file adoption followed by owner/CAS blob CACHED and capsule INDEX_CACHED tests |
 | M2-A11d1 | A11a,A11b,A11c1,A11c2,A12b | Compose one already-discovered capsule: revalidate the authenticated owner and owner-scoped READY/DISCOVERED declaration, download recognition ciphertext to a deterministic owner TEMP file, require A11b Verified, require A12 durable encrypted fingerprint/hint persistence, then adopt through A11c1 and commit through A11c2; no scheduling, page-loop, content prefetch, or plaintext persistence here. | exact crypto → A12 persistence → adoption → Room order, account-switch, cleanup, retry, cancellation, idempotent replay, redaction, and real-file/Room stitch tests |
-| M2-A12a | A11b | Define the canonical local sender index bundle plaintext/codec and stage one owner/capsule-bound sealed ciphertext file with crash-safe no-replace/idempotent replay semantics; no Room activation or A11d1 wiring. | deterministic codec, limits, AAD, randomized-sealer replay, no-follow storage, durability, concurrency, cleanup, and plaintext-canary tests |
+| M2-A12a | A11b | Define the versioned local sender index bundle plaintext/codec and dual-reader compatibility for one owner/capsule-bound sealed ciphertext file with crash-safe no-replace/idempotent replay semantics; no Room migration or A11d1 wiring. | deterministic codec, v1/v2 limits, AAD, randomized-sealer replay, no-follow storage, durability, concurrency, cleanup, and plaintext-canary tests |
 | M2-A12b | A12a,A11d1 | Implement the mandatory A12 persistence port over A12a, returning durable only after the account-bound encrypted bundle is staged; only then may A11d1 adopt and advance A11c2 state. | exact A11b → A12a → A11c1 → A11c2 order, failure/process-death/account isolation, and no plaintext/index activation before durable staging |
 | M2-A12b4c1a | A12b4b | Define the pure incoming-acceptance drain disposition policy; classify success, account stop, retry, and fail-closed ambiguous outcomes without Room mutation or a runner. | exhaustive result/reason table; account/session/local capability/storage/database/concurrency failures never request quarantine |
 | M2-A13 | P12,S20 | Prefetch/cache every assigned capsule's remaining content/photo ciphertext by default, before scan, and verify transport bindings without decrypting content. Ciphertext download may precede envelope availability. | authorization/hash/restart/no-pre-scan-plaintext tests |
 | M2-A14 | A13,S21 | Mark `CIPHERTEXT_SYNCED` only after all required blobs are durable and hash-checked. | index-only never acknowledges test |
-| M2-A15 | A12,P14 | Feed only account-scoped verified sender candidates into the existing Scan flow. | two-candidate coordinator/no-list test |
-| M2-A16 | A15 | Persist recipient pair after verified automatic result. | generation/order test |
-| M2-A17 | A15 | Require explicit physical-card confirmation after a plausible manual chooser result. | state/confirmation test |
-| M2-A18 | A16,A17 | Prefer recipient pair later and retain sender fallback only under documented weak-evidence rule. | ordering regression test |
+| M2-A15 | A12,P14 | Feed only account-owner-scoped verified FRONT design candidates into the existing Scan flow, preserving 0/1/many classification. | no-global-index and candidate-cardinality test |
+| M2-A16 | A15 | Persist a recipient FRONT baseline after verified single-candidate result; retain optional explicit BACK evidence and legacy pair semantics. | generation/order/mode test |
+| M2-A17 | A15 | Keep multiple plausible candidates blocked from auto-open pending the explicit recipient picker. | ambiguity-state/crypto-gate test |
+| M2-A18 | A16,A17 | Prefer recipient FRONT baseline later and retain sender FRONT fallback under documented mode-aware weak-evidence rules. | ordering/legacy regression test |
 | M2-A19 | A13,A15 | After current scan, run full presentation acceptance and only then issue the presentation grant. | bypass/partial-material/content-AEAD tests |
 | M2-A20 | A19 | Open on the first or any later successful scan entirely from prefetched ciphertext; network fetch is fallback only when prefetch is incomplete. | first-scan and repeat-scan network-disabled/process-restart tests |
 | M2-A21 | A19 | Show connectivity-required state when matched content is absent, with zero partial plaintext. | Compose/state test |
-| M2-A22 | A15 | Add duplicate-front/different-back end-to-end fixture. | automatic-or-plausible-chooser test |
+| M2-A22 | A15 | Add design-to-many 0/1/many fixtures, retaining duplicate-front/different-back only as a legacy v1 or optional-BACK regression. | no-auto-open/chooser-candidate and legacy test |
 | M2-A23 | A15 | Add unknown-postcard fixture. | no-random-candidate test |
 | M2-A24 | all automated | Run PostgreSQL, BlobStore, Android, crypto, replay, account-switch, and plaintext-canary verification. | evidence record |
 | M2-A25 | A24,P14 | Run two-device existing-account physical transfer and later offline scan. | signed APK/commit/device checklist |

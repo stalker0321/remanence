@@ -1,27 +1,60 @@
 # Local postcard recognition
 
-Status: **APPROVED initial `mvp-orb-v1` design; seed thresholds remain uncalibrated until M3.**
+Status: **APPROVED architecture checkpoint via ADR-012; `mvp-orb-v1` remains the profile and seed thresholds remain uncalibrated until M3.**
 
-Recognition runs entirely on Android from two deliberate still captures. It identifies a postcard only among capsules routed to the authenticated recipient. It is not global image search, object recognition, OCR, AR, or a cryptographic authentication mechanism.
+Recognition runs entirely on Android from a required FRONT still capture and,
+when explicitly selected by the identity mode, an optional BACK still capture.
+It identifies a design only among capsules routed to the authenticated
+recipient. A design can map locally to zero, one, or many capsules. It is not
+global image search, object recognition, OCR, AR, or a cryptographic
+authentication mechanism. ADR-012 is the current contract; this document does
+not claim that its FRONT_ONLY implementation exists at `f721d1a`.
+
+Legacy Test8/Test9 two-sided v1 capsules remain strict and readable: their
+FRONT and BACK fingerprints are interpreted under v1, and are never rewritten,
+upgraded in place, or given a synthesized BACK.
 
 ## 1. Design goals
 
 - Prefer false negatives/explicit choice over false positives.
-- Use the printed front to find likely design candidates.
-- Use instance-specific local features on the prepared/delivered back to disambiguate duplicate fronts.
+- Use the printed FRONT as the design identity and candidate entry point.
+- Treat BACK as optional future disambiguation, never as a prerequisite for a
+  new FRONT_ONLY capsule.
 - Tolerate angle, scale, rotation, lighting change, crop, added postal marks, dirt, and partial damage.
-- Never compare backs through whole-image pixel similarity.
+- Never compare backs through whole-image pixel similarity; if a BACK is
+  present, it uses the same versioned local-feature pipeline.
 - Keep raw front/back images local and short-lived.
 - Make every capture, feature, score, and acceptance parameter versioned/configurable.
-- Replace sender-before-mail fingerprints with recipient-after-delivery fingerprints as the preferred long-term reference without deleting the sender fallback.
+- Keep fingerprint algorithm/profile versioning separate from the explicit
+  identity mode. `mvp-orb-v1` remains unchanged unless a later ADR changes the
+  algorithm/profile.
+- Replace sender-before-mail fingerprints with recipient-after-delivery
+  fingerprints as the preferred long-term reference without deleting the
+  sender fallback.
 
 ## 2. Candidate universe
 
-The authenticated device receives encrypted recognition manifests only for capsules routed to that user. It locally decrypts and indexes their sender fingerprints without exposing an inbox UI.
+The authenticated device receives encrypted recognition manifests only for
+capsules routed to that user. It locally decrypts and indexes their sender
+fingerprints under an account-owner-scoped design key without exposing a global
+or server visual index.
 
-For first receipt, candidates are pending/known sender fingerprint pairs. For later use, accepted recipient fingerprint pairs are searched first. If none passes weak evidence, sender pairs are searched as fallback.
+The local relation is `design -> 0..N capsules`. Zero candidates returns
+`NO_MATCH`; one plausible candidate may proceed to full E2EE verification; more
+than one is ambiguity and must never auto-open. A recipient picker is a later
+UI milestone, not permission to guess. For first receipt, candidates are
+pending/known sender fingerprints. For later use, accepted recipient
+fingerprints are searched first, with sender fingerprints as fallback when
+allowed by the mode-aware rules.
 
 An unknown postcard that has no capsule in the local index must produce `NO_MATCH`, not a network/global image-search attempt.
+
+The local encrypted `SenderIndexBundle` has its own explicit bundle version and
+dual reader. It can read the retained two-sided v1 entries and the v2
+`FRONT_ONLY` entries without changing their identity mode. The design relation
+and all candidate queries are scoped to the authenticated owner. The current
+Room v7 schema must be tested against the `design -> 0..N` relation before any
+schema migration is proposed; this checkpoint prescribes no migration.
 
 ## 3. Capture sequence
 
@@ -42,7 +75,11 @@ Both sender and recipient use the same still-capture component and profile:
 7. Perspective-normalize and extract a fingerprint.
 8. Release/delete the raw capture after the fingerprint has been encrypted/durably staged.
 
-The back-side sender capture is enabled only after an explicit checklist confirms message, address, signature, stamp/postage code, and other preparation are complete.
+For new `FRONT_ONLY` creation and scan, FRONT is required and BACK capture is
+not required. If a BACK is captured under an explicitly supported optional
+mode, it is encrypted locally and may be used only by that mode; it is never
+manufactured from a missing capture. Legacy two-sided v1 creation/scan keeps
+the existing prepared-BACK checklist and strict two-sided acceptance.
 
 ## 4. Quality gates and normalization
 
@@ -128,6 +165,11 @@ PostcardFingerprintV1 {
   }
 }
 ```
+
+The fingerprint format/profile is independent of identity mode. A v1
+two-sided manifest remains a paired FRONT/BACK record. A v2 `FRONT_ONLY`
+manifest carries a required FRONT record and no BACK record in strict mode;
+presence or absence of BACK never selects the mode.
 
 `coarse_hash64` is a DCT perceptual hash used only for cheap front diagnostics/tie context, never as an acceptance decision or secret. All numeric fields use a fixed binary encoding defined by the normative recognition protobuf/schema. Counts and lengths are bounded before allocation.
 
@@ -219,38 +261,49 @@ All constants above are fields of `RecognitionProfile`, not scattered code liter
 
 ## 9. Hierarchical candidate ranking
 
-### Stage 1: front
+### Stage 1: FRONT design candidates
 
-Compute the front `side_score` against the active candidate universe. Retain up to five candidates that pass weak evidence, ordered by score. If none passes, return `NO_MATCH_FRONT` and request recapture. A unique/strong front never skips back capture.
+Compute the FRONT `side_score` against the active owner-scoped candidate
+universe. Retain the bounded plausible set, ordered by score, and resolve each
+match to its local design relation and capsule IDs. If none passes, return
+`NO_MATCH_FRONT` and request recapture. A strong or single FRONT still requires
+the applicable identity-mode and E2EE gates; it is not a reason to infer a
+missing BACK or a unique physical instance.
 
-Define a duplicate-front group when the two leading front scores differ by less than `0.08`. Identical mass-produced designs are expected to form such a group.
+### Stage 2: optional BACK evidence
 
-### Stage 2: back
-
-Compute back matches only for retained front candidates. New postal marks create unmatched query features and do not penalize preserved consistent features except through occlusion/coverage.
-
-```text
-composite_score = 0.40 * front_score + 0.60 * back_score
-```
-
-Back receives more weight because it distinguishes physical instances.
+For legacy two-sided v1, compute BACK matches for retained candidates and keep
+the existing composite/strong-BACK rules. For a v2 `FRONT_ONLY` candidate,
+there is no BACK requirement and no back-weighted composite. A future explicit
+mode may use an optional BACK to narrow a candidate set, but its semantics and
+acceptance thresholds must be versioned; a missing BACK never changes the
+identity mode.
 
 ### Automatic acceptance
 
-The leading candidate opens automatically only if all applicable rules pass:
+The candidate may proceed only if all applicable rules pass:
 
-1. both sides pass weak evidence;
-2. composite score is at least `0.70`;
-3. margin over runner-up is at least `0.12` (or no runner-up exists);
-4. at least one side passes strong evidence;
-5. if the front is a duplicate group, the back itself passes strong evidence, has score at least `0.65`, and leads the next back score by at least `0.12`.
+1. the explicit identity mode is supported;
+2. the required FRONT passes the applicable weak/strong gates;
+3. exactly one capsule candidate remains, or the user explicitly selects one
+   in the future ambiguity picker;
+4. full E2EE verification succeeds for the selected capsule.
 
-There is no “best candidate wins” fallback below these gates.
+For legacy two-sided v1, the existing composite score (`0.40 * FRONT + 0.60 *
+BACK`) and strong-BACK duplicate rules remain applicable. For v2
+`FRONT_ONLY`, those rules do not create a BACK requirement.
+
+There is no “best candidate wins” fallback and no automatic opening for an
+ambiguous design-to-many result.
 
 ### Ambiguity and retry
 
-- If 2–5 candidates have plausible evidence (at least one side weak and composite at least `0.40`) but automatic rules fail, show the scan-scoped chooser sorted by score.
-- If exactly one plausible candidate is below automatic thresholds, request one guided recapture first. After another quality-passing scan, the user may explicitly confirm that single candidate rather than loop forever.
+- If multiple capsule candidates remain for one design, return an explicit
+  ambiguity result. The future scan-scoped chooser presents only the bounded
+  plausible set sorted by score; until that UI exists, do not open any result.
+- If exactly one plausible candidate is below automatic thresholds, request one
+  guided recapture first. After another quality-passing scan, the user may
+  explicitly confirm that single candidate rather than loop forever.
 - If no plausible candidate exists, show recapture guidance; do not show arbitrary known capsules.
 - Chooser rows reveal only locally decrypted sender handle snapshot, year/date, and optional place label. No thumbnails, notes, photo counts, or browsing after leaving the scan flow.
 
@@ -260,21 +313,32 @@ Manual selection is not treated as stronger vision evidence. It still must pass 
 
 After a first-receipt candidate is accepted and crypto verification succeeds:
 
-1. Build fingerprints from the current delivered front/back normalized captures.
-2. For an automatic match, store immediately as one paired `RECIPIENT` baseline.
-3. For a manually selected candidate, store only after the user explicitly confirms the shown capsule corresponds to the physical postcard.
-4. Mark the recipient pair preferred and retain sender pair as fallback.
-5. Never upload the recipient pair plaintext.
+1. Build a FRONT fingerprint from the current delivered normalized capture and
+   retain an optional BACK fingerprint only when it was explicitly captured and
+   accepted by the current identity mode.
+2. For a single-candidate result, store the FRONT `RECIPIENT` baseline after
+   crypto verification. A selected ambiguous candidate is stored only after
+   the user explicitly confirms the shown capsule corresponds to the physical
+   postcard.
+3. Mark the recipient FRONT baseline preferred and retain the sender baseline
+   as fallback. Optional BACK material never replaces the FRONT design
+   identity.
+4. Never upload the recipient fingerprint plaintext.
 
 The initial delivered baseline is immutable. Later scans do not silently overwrite it, avoiding gradual drift or false-match poisoning. A future explicit improvement flow may add another version after high-confidence comparison; it must retain prior versions and bound their count.
 
 ## 11. Later-scan strategy
 
-1. Search preferred recipient pairs first.
-2. If one passes automatic rules, stop and verify crypto.
-3. If recipient matches are plausible/ambiguous, use the same chooser rules.
-4. Only when no recipient candidate passes weak evidence, repeat hierarchy with retained sender pairs.
-5. On successful sender fallback, do not silently replace the recipient baseline; record a redacted diagnostic suggesting an explicit improvement scan in future UX.
+1. Search the preferred recipient FRONT baseline first; retain any optional
+   BACK evidence only under its explicit mode.
+2. If exactly one candidate passes the mode-aware rules, stop and verify crypto.
+3. If multiple candidates are plausible, never auto-open; use the future
+   explicit chooser.
+4. Only when no recipient candidate passes weak evidence, repeat the mode-aware
+   hierarchy with retained sender fingerprints.
+5. On successful sender fallback, do not silently replace the recipient
+   baseline; record a redacted diagnostic suggesting an explicit improvement
+   scan in future UX.
 
 This compares an aged card primarily with its post-delivery identity, so original postal changes are already part of the baseline.
 
@@ -282,12 +346,12 @@ This compares an aged card primarily with its post-delivery identity, so origina
 
 | Condition | Detection | Response |
 | --- | --- | --- |
-| Low-texture front/back | too few features/matches | Improve light/angle; manual candidate only after plausible opposite-side evidence. |
+| Low-texture FRONT/BACK | too few features/matches | Improve light/angle; FRONT is required, while BACK is optional unless legacy v1 applies. |
 | Glare/blur/shadow | capture quality gates | Immediate targeted recapture instruction. |
 | Border not visible | quad confidence/manual corners | Move farther away or adjust four corners. |
 | Severe crop/occlusion/damage | weak coverage/inliers | Retry; chooser if a small plausible set remains. |
-| Identical printed fronts | duplicate-front group | Require strong back separation or chooser. |
-| Similar handwritten layouts | insufficient back margin | Chooser; never microscopic defect guessing. |
+| One design with multiple capsules | more than one owner-scoped candidate | Never auto-open; use the explicit chooser when available. |
+| Optional BACK evidence | insufficient back margin or unsupported mode | Keep the FRONT candidate set; chooser or retry, never infer identity mode. |
 | Added stamps/marks | unmatched new features | Ignore as outliers; RANSAC preserved local features. |
 | Wrong physical postcard | no plausible routed candidate | No match; no global lookup. |
 | Profile version unsupported | format gate | Rebuild compatible fingerprint if local raw input exists; otherwise explicit unsupported state. |
@@ -299,21 +363,30 @@ M3 creates a consented, non-production dataset stored outside normal user object
 
 Minimum initial composition:
 
-- 30 distinct physical postcard instances;
-- at least 10 printed designs;
-- at least five groups containing 2–3 physically different copies with identical fronts;
-- sender-before-mail front/back reference captures;
-- recipient-after-delivery or controlled postal-modification captures;
+- 30 physical postcard instances mapped across at least 10 designs;
+- design-to-capsule groups covering zero, one, and multiple owner-scoped
+  capsules, including repeated capsules for one printed design;
+- sender-before-mail FRONT references, with legacy two-sided v1 pairs retained
+  where they already exist;
+- recipient-after-delivery or controlled postal-modification FRONT captures;
+- optional synthetic/consented BACK captures for future disambiguation, never a
+  required input for FRONT_ONLY;
 - multiple query captures covering rotation, perspective, low light, shadow, glare, crop, partial occlusion, added stamps/labels, dirt, and wear;
 - unknown negative postcards and cross-instance negative pair comparisons.
 
-Dataset split is by physical postcard instance/design group, never random frames of the same card across train and evaluation. Threshold tuning uses the development split only; the evaluation split remains locked until a profile candidate is frozen.
+Dataset split is by physical instance and design-to-capsule group, never random
+frames of the same card across train and evaluation. Threshold tuning uses the
+development split only; the evaluation split remains locked until a profile
+candidate is frozen. Identical FRONT designs must remain represented as
+multiple plausible capsule candidates rather than being collapsed into a
+single top-1 truth.
 
 Report:
 
 - capture-quality rejection rate by condition/device;
-- automatic top-1 recall;
-- chooser recall (correct candidate present);
+- design candidate recall and zero-match rejection;
+- single-candidate verify/open recall;
+- multi-candidate candidate-set/chooser recall (once the picker exists);
 - false automatic acceptance count/rate across all negative comparisons;
 - ambiguity/retry rate;
 - p50/p95 extraction and match latency versus candidate count;
@@ -322,10 +395,12 @@ Report:
 Initial M3 targets on quality-passing captures:
 
 - zero false automatic accepts in the locked evaluation set, with sample size and statistical upper bound reported rather than claiming impossible zero risk;
-- first-receipt automatic recall at least 85%; correct candidate in automatic-or-chooser result at least 95%;
-- later-scan automatic recall at least 95%; correct candidate in result at least 98%;
+- first-receipt FRONT design candidate recall at least 85%; correct capsule
+  present in the single-candidate or chooser result at least 95%;
+- later-scan FRONT design candidate recall at least 95%; correct capsule
+  present in the result at least 98%;
 - p95 end-to-end matching after capture under 2 seconds for 100 candidates on the documented reference device;
-- median encrypted fingerprint pair under 256 KiB and hard maximum under 1 MiB.
+- median encrypted fingerprint baseline under 256 KiB and hard maximum under 1 MiB.
 
 Failure to hit false-accept behavior blocks automatic opening. Failure only in auto recall may ship with more chooser/retry use if the physical two-user acceptance scenario remains usable.
 
@@ -337,14 +412,18 @@ Failure to hit false-accept behavior blocks automatic opening. Failure only in a
 - fingerprint serialization bounds and malformed payload rejection;
 - ratio/mutual matching, RANSAC inlier classification, coverage, homography gates;
 - exact score/gate calculations from fixed synthetic reports;
-- ranking, duplicate-front grouping, margins, retry/chooser/auto classification;
-- recipient-first fallback ordering and baseline persistence rules.
+- ranking, design-to-many grouping, margins, retry/chooser/auto classification;
+- explicit identity-mode/version parsing and unsupported-mode rejection;
+- recipient-first fallback ordering and FRONT-baseline persistence rules;
+- legacy two-sided v1 and v2 `FRONT_ONLY` dual-read regressions, including
+  absent-BACK and no-inference cases.
 
 ### Golden/image tests
 
 - fixture images transformed deterministically for rotation, perspective, exposure, blur, crop, occlusion, and added marks;
 - same-instance positive and different-instance negative matrices;
-- identical-front/different-back groups;
+- legacy identical-front/different-back groups plus future optional-BACK
+  disambiguation cases;
 - OpenCV instrumentation tests on at least one emulator ABI and real ARM64 device.
 
 ### Privacy/diagnostics

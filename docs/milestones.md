@@ -1,6 +1,6 @@
 # Milestones
 
-Status: **APPROVED.**
+Status: **APPROVED architecture checkpoint via ADR-012; implementation remains pending.**
 
 Milestones are vertical gates, not calendars. Grok receives only one atomic implementation task at a time; no task may mean “implement a milestone/module/feature.” A milestone advances only when its acceptance criteria pass and the supervisor records the reviewed commit.
 
@@ -19,6 +19,25 @@ Deliverables:
 - atomic implementation queue and supervisor state format.
 
 No application source, build dependency, migration, or API implementation starts before this gate.
+
+## Architecture checkpoint — FRONT_ONLY identity contract
+
+ADR-012 is the current contract for new recognition material. The postcard
+FRONT is the design identity and the local owner-scoped relation is
+`design -> 0..N capsules`: zero is `NO_MATCH`, one proceeds only through full
+E2EE verification, and many is explicit ambiguity with no automatic opening.
+The BACK is not mandatory for new capsules. A strict `FRONT_ONLY` inner
+recognition manifest v2 carries an explicit identity mode and required FRONT;
+its BACK is absent. A future explicitly named mode may permit optional BACK.
+
+Legacy Test8/Test9 two-sided inner manifests remain strict/readable under v1.
+They are never rewritten or given a synthesized BACK. The fingerprint
+algorithm/profile remains `mvp-orb-v1` unless separately changed by ADR; it is
+not an identity-mode signal. Outer REST/protocol/AAD/blob cardinality remains
+v1 because the server treats the encrypted recognition artifact as opaque.
+There is no global/server visual index or uniqueness leakage. This checkpoint
+changes the approved documentation contract only; it does not claim source
+implementation at `f721d1a`.
 
 ## M0 — Reproducible foundation
 
@@ -50,7 +69,8 @@ Scope:
 - Android Room schema and secure session/key storage;
 - self-recipient handle resolution through the real directory;
 - explicit confirmation bound to immutable user/key IDs;
-- CameraX front/back still capture and manual crop fallback;
+- CameraX FRONT still capture and manual crop fallback; legacy two-sided v1
+  back capture remains readable, while BACK is not a new-capsule prerequisite;
 - capture normalization, ORB fingerprint extraction, encrypted local fingerprint storage;
 - Android Photo Picker for exactly 3–5 normalized photos and optional note;
 - real capsule keyset, AEAD artifacts, publish statement/signature, self envelope;
@@ -62,7 +82,7 @@ M1 may route ciphertext through the real local backend, but it is intentionally 
 
 ## M2 — Two-user physical transfer
 
-Goal: demonstrate the product north star end to end with two real accounts/installations and one physical postcard.
+Goal: demonstrate the product north star end to end with two real accounts/installations and one physical postcard while preserving the design-to-many identity contract.
 
 Entry conditions and sequencing:
 
@@ -84,11 +104,14 @@ Scope:
 - sender resolves/explicitly confirms another user;
 - capsule draft/blob/finalize API and storage authorization;
 - incoming cursor sync and encrypted recognition-index bootstrap;
-- recipient first-receipt local matching against sender fingerprints;
-- ambiguity chooser for plausible candidates only;
+- recipient first-receipt local FRONT matching against owner-scoped sender
+  fingerprints;
+- no auto-open for multiple capsule candidates; the explicit ambiguity picker
+  is a later M2 follow-up;
 - recipient envelope open, signature/AEAD verification, content download/cache;
 - fullscreen capsule and recipient delivered fingerprint creation;
-- later scan prefers recipient fingerprint and falls back to sender fingerprint;
+- later scan prefers the recipient FRONT fingerprint and falls back to the
+  sender FRONT fingerprint;
 - default ciphertext-only prefetch for every assigned capsule, with offline first and later open after a fresh scan;
 - no gallery/inbox/history/deep-link path.
 
@@ -98,6 +121,29 @@ Email-addressed pre-registration invitations are reserved for M2.x and must
 not appear as tables, endpoint stubs, or incomplete UI in M2.
 
 M2 is the first complete product proof. It is not a claim of public-release recognition/security hardening.
+
+## M2-F0 — FRONT_ONLY contract migration (near term)
+
+Goal: introduce the revised identity contract without changing the outer v1
+transport, server behavior, or Room schema.
+
+Bounded checkpoints, in order:
+
+1. Define typed `FRONT_ONLY` identity-mode/version seams and explicitly mark
+   legacy two-sided v1.
+2. Add dual readers for the encrypted inner recognition manifest and the
+   versioned local `SenderIndexBundle`; prove Room v7 represents owner-scoped
+   `design -> 0..N` without a migration before proposing one.
+3. Exercise outgoing and incoming encryption/acceptance with one opaque
+   recognition blob and unchanged v1 outer declaration/AAD/cardinality.
+4. Add FRONT_ONLY Create, then FRONT_ONLY Scan with `NO_MATCH`, single
+   candidate, and ambiguous candidate classifications.
+5. Preserve legacy v1 create/scan, upgrade, malformed-version, and absent-BACK
+   rejection regressions. No ambiguous candidate may auto-open.
+
+FRONT_ONLY is not considered implemented until these checkpoints have source,
+test, and review evidence. The bounded task sequence is listed in
+`docs/implementation-plan.md`.
 
 ## M2.x — Email-addressed invitation (deferred)
 
@@ -116,20 +162,56 @@ controls, optional-handle onboarding, a locally authenticated pending-target
 commitment, a persistent sender key-delivery queue, polling-based eventual
 delivery, and push only as an accelerator.
 
-## M3 — Recognition hardening
+## M2-F1 — Recipient multi-match picker (future)
+
+Goal: let a recipient resolve several plausible capsules belonging to one
+FRONT design without exposing an inbox or global count.
+
+Scope: scan-scoped, bounded candidate rows with minimal locally decrypted
+chooser hints; explicit user selection; complete E2EE verification for the
+selected capsule; no “best score wins” ambiguity behavior; retain zero/one and
+legacy two-sided regressions.
+
+## M2-F2 — Conservative duplicate policy (future)
+
+Goal: prevent accidental sender+recipient duplicates without treating a design
+as globally unique or blocking legitimate multiple capsules for that design.
+
+Scope: a separately approved privacy-preserving policy and protocol/DB
+decision, with sender+recipient scope, idempotency/retry semantics, and no
+server-visible visual equality or global index. This is not part of FRONT_ONLY
+migration.
+
+## M2-F3 — Optional 24-hour cancellation (future)
+
+Goal: optionally allow a short sender cancellation window after publication.
+
+Scope: a durable revoke/tombstone state and authenticated sender operation;
+define recipient behavior and replay prevention. Revocation cannot erase
+recipient copies already downloaded or decrypted, and it must not be confused
+with current v1 `READY` immutability.
+
+## M3 — Recognition hardening and design-to-many benchmark
 
 Goal: tune the fail-safe vision system against reproducible data rather than intuition.
 
 Scope:
 
 - consented/synthetic physical-postcard dataset;
-- duplicate printed fronts with distinct backs;
+- design-to-many groups covering zero, one, and multiple capsules;
+- optional physical BACK captures as a future disambiguation signal, not a
+  FRONT_ONLY prerequisite;
 - real or controlled postal modifications;
 - low light, perspective, rotation, crop, shadow, glare, blur, occlusion, dirt, wear;
 - locked instance/design-separated evaluation split;
 - threshold/profile tuning and performance measurements;
 - optional ORB-versus-SIFT experiment only if ORB misses the agreed gate;
 - captured match reports and regression fixtures without private user data.
+
+The benchmark measures design candidate recall, zero-match rejection,
+single-candidate verify/open safety, multi-candidate candidate-set/chooser
+recall, false automatic acceptance, and latency versus candidate count. It does
+not collapse identical FRONT designs into a single top-1 truth.
 
 ## M4 — Durable E2EE identity and account recovery
 
@@ -178,7 +260,8 @@ Scope:
 
 - concise onboarding and device-loss warning;
 - recipient confirmation clarity;
-- front/prepared-back capture guidance and quality errors;
+- FRONT capture guidance and quality errors, with BACK clearly optional for
+  FRONT_ONLY and legacy prepared-BACK guidance retained only for v1;
 - orientation-aware postcard framing so portrait capture can use the available
   screen area instead of forcing a distant landscape guide;
 - upload/resume status for the current creation only;

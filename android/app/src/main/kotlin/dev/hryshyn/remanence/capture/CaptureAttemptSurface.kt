@@ -206,6 +206,7 @@ private fun GrantedAttemptContent(
     when (val phase = controller.phase) {
         is CaptureAttemptPhase.Rejected -> TerminalPanel(
             reasons = phase.reasons,
+            diagnostic = phase.diagnostic,
             failedMessage = null,
             retakeTag = retakeTag,
             onRetake = onRetake,
@@ -213,6 +214,7 @@ private fun GrantedAttemptContent(
 
         is CaptureAttemptPhase.Failed -> TerminalPanel(
             reasons = emptySet(),
+            diagnostic = null,
             failedMessage = phase.message,
             retakeTag = retakeTag,
             onRetake = onRetake,
@@ -416,6 +418,7 @@ private fun ProcessingStatus(shutterTag: String) {
 @Composable
 private fun TerminalPanel(
     reasons: Set<QualityReason>,
+    diagnostic: CaptureDiagnostic?,
     failedMessage: String?,
     retakeTag: String,
     onRetake: () -> Unit,
@@ -425,6 +428,7 @@ private fun TerminalPanel(
             // The panel owns the single real Retake action.
             QualityRejectionPanel(
                 reasons = reasons,
+                diagnostic = diagnostic,
                 onRecapture = onRetake,
                 recaptureTag = retakeTag,
             )

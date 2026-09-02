@@ -324,7 +324,7 @@ class ScanViewModel internal constructor(
 
             when (processed) {
                 is ProcessedStill.Rejected -> {
-                    attempt.reject(processed.reasons)
+                    attempt.reject(processed.reasons, processed.diagnostic)
                     false
                 }
                 is ProcessedStill.Accepted -> {

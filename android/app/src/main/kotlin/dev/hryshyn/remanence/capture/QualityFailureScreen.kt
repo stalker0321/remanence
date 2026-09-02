@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import dev.hryshyn.remanence.BuildConfig
 import dev.hryshyn.remanence.core.recognition.QualityReason
 
 /** One actionable recapture instruction per documented failure reason. */
@@ -44,6 +45,7 @@ fun guidanceFor(reason: QualityReason): String = when (reason) {
 @Composable
 fun QualityRejectionPanel(
     reasons: Set<QualityReason>,
+    diagnostic: CaptureDiagnostic? = null,
     onRecapture: () -> Unit,
     modifier: Modifier = Modifier,
     recaptureTag: String = "quality_recapture_action",
@@ -64,6 +66,17 @@ fun QualityRejectionPanel(
                     .fillMaxWidth()
                     .testTag("quality_reason_${reason.name}"),
             )
+        }
+        if (BuildConfig.DEBUG) {
+            diagnostic?.let {
+                Text(
+                    text = it.summary(),
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("capture_debug_diagnostic"),
+                )
+            }
         }
         OutlinedButton(
             onClick = onRecapture,

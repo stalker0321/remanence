@@ -1,6 +1,9 @@
 package dev.hryshyn.remanence.create
 
+import dev.hryshyn.remanence.BuildConfig
 import dev.hryshyn.remanence.capture.FrontCaptureFlow
+import dev.hryshyn.remanence.capture.CaptureDiagnostic
+import dev.hryshyn.remanence.capture.CaptureDiagnosticStage
 import dev.hryshyn.remanence.capture.ProcessedStill
 import dev.hryshyn.remanence.capture.StillProcessor
 
@@ -51,21 +54,35 @@ class RealStillFingerprintProcessor(
         } catch (_: IllegalArgumentException) {
             return ProcessedStill.Rejected(
                 setOf(dev.hryshyn.remanence.core.recognition.QualityReason.CROP_UNCERTAIN),
+                diagnostic = diagnostic(CaptureDiagnosticStage.DECODE),
             )
         }
         working.use {
             val pixels = it.copyArgbPixels()
 
-            val selection = cropSelector.select(
-                candidates = detectContours(pixels, it.width, it.height),
-                frameWidth = it.width,
-                frameHeight = it.height,
-            )
+            val selection = try {
+                cropSelector.select(
+                    candidates = detectContours(pixels, it.width, it.height),
+                    frameWidth = it.width,
+                    frameHeight = it.height,
+                )
+            } catch (_: IllegalArgumentException) {
+                return rejected(
+                    setOf(dev.hryshyn.remanence.core.recognition.QualityReason.CROP_UNCERTAIN),
+                    diagnostic(CaptureDiagnosticStage.CROP),
+                )
+            }
             val candidate = selection.candidate
             val warped = try {
                 warper.warp(pixels, it.width, it.height, candidate.corners)
             } catch (_: IllegalArgumentException) {
-                return rejected(setOf(dev.hryshyn.remanence.core.recognition.QualityReason.CROP_UNCERTAIN))
+                return rejected(
+                    setOf(dev.hryshyn.remanence.core.recognition.QualityReason.CROP_UNCERTAIN),
+                    diagnostic(
+                        stage = CaptureDiagnosticStage.WARP,
+                        usedGuideFallback = selection.usedGuideFallback,
+                    ),
+                )
             }
             val signals = meter.measure(warped.pixels, warped.width, warped.height)
             val reasons = gate.evaluate(
@@ -78,7 +95,18 @@ class RealStillFingerprintProcessor(
                 ),
                 side,
             )
-            if (reasons.isNotEmpty()) return rejected(reasons)
+            if (reasons.isNotEmpty()) {
+                return rejected(
+                    reasons,
+                    diagnostic(
+                        stage = CaptureDiagnosticStage.QUALITY,
+                        signals = signals,
+                        usedGuideFallback = selection.usedGuideFallback,
+                        warpedWidth = warped.width,
+                        warpedHeight = warped.height,
+                    ),
+                )
+            }
 
             val fingerprint = extractor.extract(
                 warpedArgb = warped.pixels,
@@ -90,7 +118,18 @@ class RealStillFingerprintProcessor(
             if (fingerprint.keypoints.isEmpty() ||
                 fingerprint.descriptors.size != fingerprint.keypoints.size
             ) {
-                return rejected(setOf(dev.hryshyn.remanence.core.recognition.QualityReason.FEATURES_INSUFFICIENT))
+                return rejected(
+                    setOf(dev.hryshyn.remanence.core.recognition.QualityReason.FEATURES_INSUFFICIENT),
+                    diagnostic(
+                        stage = CaptureDiagnosticStage.ORB,
+                        signals = signals,
+                        usedGuideFallback = selection.usedGuideFallback,
+                        warpedWidth = warped.width,
+                        warpedHeight = warped.height,
+                        orbKeypoints = fingerprint.keypoints.size,
+                        orbDescriptors = fingerprint.descriptors.size,
+                    ),
+                )
             }
 
             return ProcessedStill.Accepted(
@@ -100,7 +139,36 @@ class RealStillFingerprintProcessor(
         }
     }
 
-    private fun rejected(reasons: Set<dev.hryshyn.remanence.core.recognition.QualityReason>): ProcessedStill =
-        ProcessedStill.Rejected(reasons)
+    private fun rejected(
+        reasons: Set<dev.hryshyn.remanence.core.recognition.QualityReason>,
+        diagnostic: CaptureDiagnostic? = null,
+    ): ProcessedStill = ProcessedStill.Rejected(reasons, diagnostic)
+
+    private fun diagnostic(
+        stage: CaptureDiagnosticStage,
+        signals: dev.hryshyn.remanence.core.recognition.CaptureQualitySignals? = null,
+        usedGuideFallback: Boolean? = null,
+        warpedWidth: Int? = null,
+        warpedHeight: Int? = null,
+        orbKeypoints: Int? = null,
+        orbDescriptors: Int? = null,
+    ): CaptureDiagnostic? = if (BuildConfig.DEBUG) {
+        CaptureDiagnostic(
+            side = side,
+            stage = stage,
+            laplacianThreshold = admissionProfile.minLaplacianVariance(side),
+            laplacianVariance = signals?.laplacianVariance,
+            nearBlackFraction = signals?.nearBlackFraction,
+            clippedWhiteFraction = signals?.clippedWhiteFraction,
+            largestGlareFraction = signals?.largestGlareFraction,
+            usedGuideFallback = usedGuideFallback,
+            warpedWidth = warpedWidth,
+            warpedHeight = warpedHeight,
+            orbKeypoints = orbKeypoints,
+            orbDescriptors = orbDescriptors,
+        )
+    } else {
+        null
+    }
 
 }

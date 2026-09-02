@@ -469,6 +469,7 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
     @Test
     fun retryableAdoptionPreservesDeterministicSourceForReconstructedCoordinator() = runBlocking {
         seed()
+        assertFalse(roots.child(owner, AccountScopedFileRoots.ChildRoot.TEMP).exists())
         var firstAdoption = true
         val first = coordinator(
             adoptionPort = IncomingRecognitionAdoptionPort {
@@ -502,6 +503,83 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
         assertEquals(0, downloads.get())
         assertFalse(recoveryTempPath().exists())
         assertEquals(BlobCacheState.CACHED, cachedBlobState())
+    }
+
+    @Test
+    fun existingTempRootSymlinkIsRejectedWithoutFollowingIt() = runBlocking {
+        seed()
+        val outside = File(testRoot.parentFile, "a11d1-outside-${System.nanoTime()}").apply { mkdirs() }
+        try {
+            val ownerDirectory = roots.accountDirectory(owner).toPath()
+            Files.createDirectories(ownerDirectory)
+            val tempRoot = ownerDirectory.resolve(AccountScopedFileRoots.ChildRoot.TEMP.directoryName)
+            Files.createSymbolicLink(
+                tempRoot,
+                outside.toPath(),
+            )
+
+            var downloads = 0
+            val result = coordinator(
+                download = IncomingRecipientBlobDownloader { _, _ ->
+                    downloads += 1
+                    throw AssertionError("unsafe TEMP must not download")
+                },
+            ).accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+
+            assertEquals(
+                IncomingCapsuleAcceptanceRejectionReason.TEMP_PATH_UNSAFE,
+                assertIs<IncomingCapsuleAcceptanceResult.Rejected>(result).reason,
+            )
+            assertEquals(0, downloads)
+            assertTrue(outside.isDirectory)
+            assertFalse(
+                tempRoot.resolve(
+                    "incoming-recognition/${capsule.toRestString()}/blobs/" +
+                        "${blob.toRestString()}.ciphertext.tmp",
+                ).toFile().isFile,
+            )
+        } finally {
+            outside.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun existingTempNonDirectoryComponentIsRejectedWithoutReplacingIt() = runBlocking {
+        seed()
+        val tempRoot = roots.child(owner, AccountScopedFileRoots.ChildRoot.TEMP).toPath()
+        Files.createDirectories(tempRoot)
+        val component = tempRoot.resolve("incoming-recognition").toFile().apply {
+            writeBytes(byteArrayOf(1, 2, 3))
+        }
+
+        val result = coordinator().accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+
+        assertEquals(
+            IncomingCapsuleAcceptanceRejectionReason.TEMP_PATH_UNSAFE,
+            assertIs<IncomingCapsuleAcceptanceResult.Rejected>(result).reason,
+        )
+        assertArrayEquals(byteArrayOf(1, 2, 3), component.readBytes())
+    }
+
+    @Test
+    fun existingTempDescendantSymlinkIsRejectedWithoutFollowingIt() = runBlocking {
+        seed()
+        val tempRoot = roots.child(owner, AccountScopedFileRoots.ChildRoot.TEMP).toPath()
+        val outside = File(testRoot.parentFile, "a11d1-outside-descendant-${System.nanoTime()}").apply { mkdirs() }
+        try {
+            Files.createDirectories(tempRoot)
+            Files.createSymbolicLink(tempRoot.resolve("incoming-recognition"), outside.toPath())
+
+            val result = coordinator().accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+
+            assertEquals(
+                IncomingCapsuleAcceptanceRejectionReason.TEMP_PATH_UNSAFE,
+                assertIs<IncomingCapsuleAcceptanceResult.Rejected>(result).reason,
+            )
+            assertFalse(outside.resolve(capsule.toRestString()).exists())
+        } finally {
+            outside.deleteRecursively()
+        }
     }
 
     @Test

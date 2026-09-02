@@ -28,6 +28,7 @@ import dev.hryshyn.remanence.index.SenderIndexBundleReader
 import dev.hryshyn.remanence.protocol.v1.PublishStatement
 import java.io.IOException
 import java.nio.file.Files
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
@@ -748,31 +749,77 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
         expectedSize: Long,
         expectedSha256: ByteArray,
     ): TempPreparation {
-        val tempRoot = roots.child(owner, AccountScopedFileRoots.ChildRoot.TEMP)
-            .toPath().toAbsolutePath().normalize()
+        val tempRoot = try {
+            roots.child(owner, AccountScopedFileRoots.ChildRoot.TEMP)
+                .toPath().toAbsolutePath().normalize()
+        } catch (_: IllegalStateException) {
+            // AccountScopedFileRoots rejects an escaping canonical child
+            // (including an existing redirected TEMP root). Keep that
+            // containment failure in the coordinator's typed safe-rejection
+            // contract instead of allowing it to escape as a crash.
+            throw UnsafeTempPath()
+        }
         val parent = tempRoot.resolve("incoming-recognition")
             .resolve(capsule.toRestString())
             .resolve("blobs")
             .normalize()
         val path = parent.resolve("${blob.toRestString()}.ciphertext.tmp").normalize()
-        if (!isContained(parent, tempRoot) || !isContained(path, tempRoot) ||
-            !isNoSymlinkPath(tempRoot) || !isNoSymlinkPath(parent)
-        ) {
-            throw UnsafeTempPath()
-        }
-        Files.createDirectories(parent)
-        if (!isDirectoryNoSymlink(tempRoot) || !isDirectoryNoSymlink(parent) ||
-            !isNoSymlinkPath(path)
-        ) {
+        if (!isContained(parent, tempRoot) || !isContained(path, tempRoot)) {
             throw UnsafeTempPath()
         }
 
-        return when (inspectFile(path, expectedSize, expectedSha256)) {
+        // Materialise the fixed root before its owned descendants. Each
+        // component is created independently after a NOFOLLOW inspection, so
+        // a missing descendant is recoverable while an existing symlink or
+        // non-directory remains unsafe. Some Android providers report a
+        // missing component as a generic IOException from readAttributes;
+        // ensureNoSymlinkDirectory treats that as a create candidate and lets
+        // the exact create/recheck decide whether it is available.
+        ensureNoSymlinkDirectory(tempRoot)
+        ensureNoSymlinkDirectory(parent)
+
+        return when (inspectFile(path, expectedSize, expectedSha256, parentPrepared = true)) {
             TempInspection.MISSING -> TempPreparation.Ready(path, existingVerified = false)
             TempInspection.MATCH -> TempPreparation.Ready(path, existingVerified = true)
             TempInspection.MISMATCH -> TempPreparation.Invalid(path)
             TempInspection.UNAVAILABLE -> TempPreparation.Unavailable(path)
             TempInspection.UNSAFE -> throw UnsafeTempPath()
+        }
+    }
+
+    private fun ensureNoSymlinkDirectory(path: Path) {
+        when (inspectDirectory(path)) {
+            DirectoryInspection.SAFE -> return
+            DirectoryInspection.UNSAFE -> throw UnsafeTempPath()
+            DirectoryInspection.MISSING,
+            DirectoryInspection.UNAVAILABLE,
+            -> Unit
+        }
+
+        val parent = path.parent ?: throw UnsafeTempPath()
+        if (parent == path) throw UnsafeTempPath()
+        ensureNoSymlinkDirectory(parent)
+
+        try {
+            Files.createDirectory(path)
+        } catch (_: FileAlreadyExistsException) {
+            // Re-read below. A concurrent replacement by a symlink or a file
+            // must be treated as unsafe, never as a successful mkdir.
+        } catch (failure: IOException) {
+            when (inspectDirectory(path)) {
+                DirectoryInspection.SAFE -> return
+                DirectoryInspection.UNSAFE -> throw UnsafeTempPath()
+                DirectoryInspection.MISSING,
+                DirectoryInspection.UNAVAILABLE,
+                -> throw failure
+            }
+        }
+
+        when (inspectDirectory(path)) {
+            DirectoryInspection.SAFE -> Unit
+            DirectoryInspection.UNSAFE -> throw UnsafeTempPath()
+            DirectoryInspection.MISSING -> throw IOException("owned directory was not created")
+            DirectoryInspection.UNAVAILABLE -> throw IOException("owned directory is unavailable")
         }
     }
 
@@ -808,13 +855,27 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
         path: Path,
         expectedSize: Long,
         expectedSha256: ByteArray,
+        parentPrepared: Boolean = false,
     ): TempInspection {
-        if (!isNoSymlinkPath(path)) return TempInspection.UNSAFE
+        // When the exact parent was just created/revalidated above, inspect
+        // the leaf directly. This permits a genuinely missing temp file even
+        // on providers that report that missing leaf as generic IOException;
+        // the NOFOLLOW leaf read below still rejects a symlink/non-regular
+        // path. Existing callers retain the full ancestor check.
+        if (!parentPrepared && !isNoSymlinkPath(path)) return TempInspection.UNSAFE
         val attributes = try {
             Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
         } catch (_: java.nio.file.NoSuchFileException) {
             return TempInspection.MISSING
         } catch (_: IOException) {
+            if (parentPrepared && !Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+                // Android providers may report an absent leaf with plain
+                // IOException rather than NoSuchFileException. The parent
+                // was just verified as a real directory, so this exact
+                // no-follow existence check safely distinguishes that case
+                // from an unavailable existing entry.
+                return TempInspection.MISSING
+            }
             return TempInspection.UNAVAILABLE
         } catch (_: SecurityException) {
             return TempInspection.UNAVAILABLE
@@ -849,13 +910,23 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
         }
     }
 
-    private fun isDirectoryNoSymlink(path: Path): Boolean = try {
-        val attributes = Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
-        attributes.isDirectory && !attributes.isSymbolicLink
+    private fun inspectDirectory(path: Path): DirectoryInspection = try {
+        val attributes = Files.readAttributes(
+            path,
+            BasicFileAttributes::class.java,
+            LinkOption.NOFOLLOW_LINKS,
+        )
+        if (attributes.isSymbolicLink || !attributes.isDirectory) {
+            DirectoryInspection.UNSAFE
+        } else {
+            DirectoryInspection.SAFE
+        }
+    } catch (_: java.nio.file.NoSuchFileException) {
+        DirectoryInspection.MISSING
     } catch (_: IOException) {
-        false
+        DirectoryInspection.UNAVAILABLE
     } catch (_: SecurityException) {
-        false
+        DirectoryInspection.UNAVAILABLE
     }
 
     private fun isNoSymlinkPath(path: Path): Boolean {
@@ -920,6 +991,13 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
         MISSING,
         MATCH,
         MISMATCH,
+        UNSAFE,
+        UNAVAILABLE,
+    }
+
+    private enum class DirectoryInspection {
+        SAFE,
+        MISSING,
         UNSAFE,
         UNAVAILABLE,
     }

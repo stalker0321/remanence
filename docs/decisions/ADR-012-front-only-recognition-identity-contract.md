@@ -18,6 +18,11 @@ reinterpret an old profile as a new identity mode. The transport and server
 must not learn a visual identity or a uniqueness relation merely to support
 the new client contract.
 
+Existing files under `docs/evidence/` and `.agent/reviews/` are historical
+records of earlier contracts and observations. Their two-sided wording is not
+current normative guidance and must not be rewritten; new evidence must cite
+this ADR when describing the active contract.
+
 ## Decision
 
 ### Compatibility boundary
@@ -77,11 +82,12 @@ Implementation follows the queue in `docs/implementation-plan.md`:
 3. wire outgoing and incoming encrypted artifact handling while outer v1
    declarations remain unchanged;
 4. add FRONT_ONLY Create;
-5. add FRONT_ONLY Scan with zero/one/many fail-safe classification;
-6. add the recipient ambiguity picker.
+5. add FRONT_ONLY Scan with zero/one/many fail-safe classification and no
+   automatic opening for many.
 
 The legacy two-sided Create/Scan and upgrade regressions remain required at
-each applicable gate.
+each applicable gate. The recipient ambiguity picker is the separate future
+M2-F1 milestone and is not part of this migration.
 
 ## Deferred decisions
 

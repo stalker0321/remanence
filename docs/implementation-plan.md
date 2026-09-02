@@ -197,7 +197,7 @@ Operational completion checks between tasks confirm commit/status/declared comma
 | M1-M10 | Add process-memory `ScanGrantManager` with expiry/consume. | fake-clock tests |
 | M1-M11 | Add Scan required FRONT capture with optional explicit BACK, retaining strict legacy v1 two-sided capture. | state/mode tests |
 | M1-M12 | Wire local candidate matching and retry state. | ViewModel tests |
-| M1-M13 | Add scan-scoped ambiguity chooser with minimal hints only. | Compose/no-gallery tests |
+| M1-M13 | Define scan-scoped ambiguity classification and no-auto-open behavior; defer picker UI to future M2-F1. | state/no-gallery tests |
 | M1-M14 | Gate capsule route by grant ID and verified crypto result. | navigation bypass tests |
 | M1-M15 | Add bounded fullscreen 3–5 photo/note presentation and cleanup. | Compose/state cleanup test |
 | M1-M16 | Create preferred recipient FRONT fingerprint after verified receipt, retaining any explicitly captured BACK as optional evidence. | origin/preferred persistence test |
@@ -251,12 +251,23 @@ that Room v7 is insufficient.
 | M2-F0-05 | M2-F0-02,M2-F0-03 | Wire incoming acceptance and local index persistence for v1/v2, owner-scoped design-to-many mapping, and fail-closed unsupported versions. | incoming dual-read, account isolation, and no-global-index tests |
 | M2-F0-06 | M2-F0-04 | Add FRONT_ONLY Create with required FRONT, no synthesized BACK, and optional BACK excluded in strict mode. | Create state, encrypted-manifest, legacy-create, and cleanup tests |
 | M2-F0-07 | M2-F0-05,M2-F0-06 | Add FRONT_ONLY Scan classification for zero/one/many local candidates; one still requires full E2EE verification and many never auto-opens. | no-match, single-verify, ambiguity, crypto-failure, and legacy-scan tests |
-| M2-F0-08 | M2-F0-07 | Add the scan-scoped recipient ambiguity picker with bounded local hints and full verification after selection. | multi-match picker/no-enumeration/legacy regression tests |
 
-`M2-F0-08` is intentionally last: the matching/index seam and the safe
-single-candidate behavior must exist before UI selection is added. Duplicate
-prevention and a 24-hour cancellation/tombstone window are separate future
-milestones, not hidden subtasks in this queue.
+`M2-F0-07` ends the current migration: the matching/index seam, safe
+single-candidate behavior, and no-auto-open ambiguity result must exist before
+any UI selection is added. The recipient picker is the separately named future
+milestone `M2-F1`, below. Duplicate prevention and a 24-hour
+cancellation/tombstone window are separate future milestones, not hidden
+subtasks in this queue.
+
+## 10b. M2-F1 future queue — recipient multi-match picker
+
+This queue is intentionally not part of the current FRONT_ONLY migration. It
+may start only after M2-F0 has evidence for owner-scoped design-to-many
+classification and no-auto-open behavior.
+
+| ID | Depends on | Single outcome | Minimum verification |
+| --- | --- | --- | --- |
+| M2-F1-01 | M2-F0-07 | Add a scan-scoped bounded picker for multiple plausible capsules of one FRONT design, with minimal local hints and full E2EE verification after explicit selection. | multi-match picker, no-enumeration, no-auto-open, crypto-gate, and legacy regression tests |
 
 ## 11. M2 queue — server capsule routing
 

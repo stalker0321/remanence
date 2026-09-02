@@ -1,8 +1,13 @@
 # Security architecture
 
-Status: **APPROVED for implementation; M1 must produce golden vectors before crypto is considered verified.**
+Status: **APPROVED security contract; recognition identity follows ADR-012 and FRONT_ONLY implementation remains pending.**
 
-This document defines what the MVP protects, what it intentionally does not protect, and the exact cryptographic/key-lifecycle design. Cryptographic operations use established library primitives; application code must not implement curves, KDFs, ciphers, padding, or signature algorithms.
+This document defines what the MVP protects, what it intentionally does not
+protect, and the exact cryptographic/key-lifecycle design. Cryptographic
+operations use established library primitives; application code must not
+implement curves, KDFs, ciphers, padding, or signature algorithms. Recognition
+identity is governed by ADR-012: new capsules are FRONT_ONLY, while legacy
+two-sided v1 remains strict/readable.
 
 ## 1. Primary security objective
 
@@ -115,7 +120,14 @@ Each capsule has:
 
 Only the recognition manifest, content manifest, and each photo blob use the capsule AES-GCM artifact framing. Ciphertext wire bytes are `5-byte Tink prefix || 12-byte IV || plaintext-length ciphertext || 16-byte tag` (exactly 33 bytes of AEAD overhead). The prefix is a Tink routing/key-ID hint, not an authentication substitute; the AEAD tag and AAD provide integrity. There is no `RAW` fallback and no heuristic alternate decoding. The signed publish statement is signed plaintext bytes transported in the control record. The recipient envelope is independently HPKE-encrypted. Android Keystore KEK wrapping is a different construction and is not this artifact framing.
 
-The recognition manifest contains sender front/back fingerprints and minimal chooser hints. It does not contain note text or photo bytes. The content manifest contains note, photo ordering/media metadata, and nullable provider-neutral `TrackAttachment`. Separating them lets background sync prepare matching without handing content to UI code.
+The recognition manifest contains the sender FRONT fingerprint, explicit inner
+identity mode/version, and minimal chooser hints. Legacy two-sided v1 also
+contains its required BACK fingerprint; a new strict FRONT_ONLY v2 manifest
+does not. An optional BACK is accepted only by an explicitly versioned future
+mode, never inferred from absence or profile. The content manifest contains
+note, photo ordering/media metadata, and nullable provider-neutral
+`TrackAttachment`. Separating them lets background sync prepare matching
+without handing content to UI code.
 
 ### 6.3 Associated data
 
@@ -286,6 +298,11 @@ dedicated recovery milestone passes, device loss remains honestly unrecoverable.
 - The sender uploads only a recognition manifest encrypted under the capsule AEAD keyset.
 - ORB descriptors, keypoint positions, coarse image hashes, and chooser hints are sensitive derived data. They may reveal visual structure and must not be described as anonymized.
 - Recipient fingerprints are stored locally encrypted with a separate Keystore-protected fingerprint-storage AEAD key.
+- The local visual relation is owner-scoped `design -> 0..N`; there is no
+  global/server visual index, server-side matching, or design uniqueness signal.
+- Legacy two-sided v1 material remains readable and is never rewritten or
+  given a synthesized BACK. New FRONT_ONLY v2 material must carry its explicit
+  mode/version and required FRONT.
 - A future cross-device fingerprint sync must encrypt recipient fingerprints to the account identity/recovery context before upload; plaintext descriptor upload is forbidden.
 - EXIF/location metadata is removed before photo encryption unless explicitly represented as encrypted capsule metadata. Raw capture EXIF is discarded.
 

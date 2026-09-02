@@ -1,8 +1,12 @@
 # Architecture
 
-Status: **APPROVED for implementation.**
+Status: **APPROVED architecture checkpoint via ADR-012; FRONT_ONLY implementation remains pending.**
 
-This document defines the system shape and lifecycle boundaries for the production-shaped MVP. Cryptographic wire details live in `security.md` and `protocol.md`; computer-vision details live in `recognition.md`.
+This document defines the system shape and lifecycle boundaries for the
+production-shaped MVP. Cryptographic wire details live in `security.md` and
+`protocol.md`; computer-vision details live in `recognition.md`. ADR-012 is
+current for recognition identity: new capsules are FRONT_ONLY, while legacy
+two-sided v1 remains strict/readable.
 
 ## 1. Architectural decisions
 
@@ -13,7 +17,9 @@ The MVP uses the following constraints as architectural invariants:
 3. Raw postcard scans, plaintext capsule content, plaintext recognition descriptors, capsule keys, and private identity keys never leave the client.
 4. The backend authenticates accounts, resolves handles, routes capsules, validates opaque upload structure, and stores ciphertext.
 5. The backend cannot enforce possession of a postcard. The honest client enforces the physical-first product rule with a short-lived in-memory scan grant.
-6. Incoming recognition indexes may exist locally as infrastructure, but no query or screen exposes them as an inbox or gallery.
+6. Incoming recognition indexes may exist locally as account-owner-scoped
+   `design -> 0..N` infrastructure, but no query or screen exposes them as a
+   global visual index, inbox, or gallery.
 7. A capsule is published atomically only after every declared ciphertext blob and the recipient envelope have been uploaded and verified.
 8. Upload retry is blob-granular. Byte-range multipart upload is unnecessary for the deliberately size-limited MVP payload.
 9. The server never records a semantic `OPENED` state. At most it knows that encrypted material was synchronized.
@@ -204,8 +210,11 @@ These are responsibility boundaries, not prescribed source signatures:
 
 A grant is issued after:
 
-1. both front and back were captured in the current scan session;
-2. automatic recognition produced a unique accepted candidate, or the user selected a plausible ambiguous candidate;
+1. the required FRONT was captured in the current scan session; BACK is
+   captured only when the explicit identity mode requires or permits it;
+2. exactly one candidate was accepted by the mode-aware local rules. Multiple
+   candidates never auto-open and remain blocked until the future recipient
+   picker; any selected candidate must pass full E2EE verification;
 3. control/index acceptance already passed during sync, and full presentation acceptance now passes: every declared content/photo ciphertext is present and hash-verified against the signed statement, the content manifest AEAD/layout is verified, and the recipient envelope opened successfully.
 
 Recognition may create candidates from index material alone, but the grant itself never precedes the physical scan plus complete crypto verification and material availability.
@@ -217,6 +226,12 @@ This gate prevents accidental gallery-like navigation in the honest application.
 ## 6. Local persistence model
 
 Room contains infrastructure records only. No DAO may expose a query named or shaped as “all memories” to UI code.
+
+The encrypted local `SenderIndexBundle` has an explicit version and dual
+reader for legacy two-sided v1 and v2 `FRONT_ONLY` entries. Its
+`design -> 0..N capsules` relation is owner-scoped. The
+current Room v7 representation must be proven insufficient before a schema
+migration is proposed; this checkpoint prescribes no migration.
 
 From M2 onward every capsule/index/outbox/blob/cursor record and app-private
 file root is scoped to the authenticated local account ID. A worker carries
@@ -258,7 +273,8 @@ account has no DAO, candidate-index, worker, or presentation path to it.
 
 `recognition_fingerprint`
 
-- fingerprint ID, capsule ID, side (`FRONT`/`BACK`), origin (`SENDER`/`RECIPIENT`);
+- fingerprint ID, capsule ID, side (`FRONT`/`BACK`), origin (`SENDER`/`RECIPIENT`),
+  and explicit identity-mode context;
 - fingerprint format/profile version;
 - path to locally encrypted fingerprint bytes;
 - created timestamp and preferred flag;
@@ -415,7 +431,9 @@ stateDiagram-v2
 ### Sender publish
 
 1. Resolve the handle immediately before encryption and display the current handle plus stable account information for explicit confirmation.
-2. Capture/normalize both sides and derive fingerprints locally.
+2. Capture/normalize the required FRONT and derive its fingerprint locally. A
+   BACK is captured only for an explicit legacy/optional mode; it is never
+   synthesized.
 3. Select and locally normalize 3–5 photos; create optional note and optional encrypted chooser hint.
 4. Generate a fresh capsule AEAD keyset.
 5. Encrypt recognition manifest, content manifest, and each photo locally.
@@ -444,8 +462,9 @@ Recognition before download is a bootstrap problem. The solution is routing, not
    authoritative sender signing bundle, routed/envelope IDs, and the downloaded
    recognition declaration/hash. It opens the envelope and verifies the
    recognition AEAD; undownloaded content/photo bindings remain declarations.
-4. It persists sender fingerprints and chooser hints re-encrypted under the
-   account-scoped local fingerprint-storage key, then drops temporary plaintext.
+4. It persists sender FRONT fingerprints, explicit identity mode, optional
+   BACK evidence, and chooser hints re-encrypted under the account-scoped local
+   fingerprint-storage key, then drops temporary plaintext.
 5. The UI receives no enumerable capsule list, counts, thumbnails, notes, or places.
 
 The server can serve recipient-authorized ciphertext before a scan because ciphertext possession does not grant presentation access. M2 therefore prefetches every assigned recipient capsule by default: signed control material, envelope, recognition material, content manifest, and all 3--5 encrypted photos are hash-checked and stored in account-scoped app-private storage as soon as sync discovers them. There is no inbox, thumbnail, preview, count, or other UI over this cache. Plaintext content is never materialized without a current physical-scan grant.
@@ -465,20 +484,27 @@ Chooser hints remain inside the encrypted recognition manifest or are re-encrypt
 
 ### First receipt
 
-- Candidate source: pending sender fingerprints from incoming sync.
-- Both sides are captured and normalized.
+- Candidate source: pending sender FRONT fingerprints from incoming sync,
+  grouped by owner-scoped design relation.
+- FRONT is captured and normalized; BACK is optional only under its explicit
+  identity mode, with legacy v1 retaining strict two-sided behavior.
 - Matching is local and fail-safe.
-- Automatic unique match or explicit plausible-candidate selection identifies a capsule.
+- Zero candidates returns no match; one candidate may proceed only after full
+  verification; multiple candidates never auto-open and await the future
+  recipient picker.
 - The two-stage pipeline from incoming sync applies: index acceptance prepared candidates; before any plaintext, presentation acceptance verifies every required ciphertext binding plus content-manifest AEAD/layout.
 - Envelope, signed statement, and AEAD artifacts are verified before presentation.
-- The normalized delivered postcard produces a new immutable `RECIPIENT` front/back fingerprint pair.
-- The recipient pair becomes preferred for future scans; sender fingerprints remain as fallback.
+- The normalized delivered postcard produces a new immutable `RECIPIENT` FRONT
+  fingerprint and retains BACK only when explicitly captured.
+- The recipient FRONT baseline becomes preferred for future scans; sender FRONT
+  fingerprints remain as fallback.
 
 ### Later scan
 
 - Candidate source first: accepted recipient fingerprints.
 - If no recipient candidate passes weak evidence gates, retry against sender fingerprints.
-- The same two-side, ambiguity, signature, AEAD, and scan-grant rules apply.
+- The same FRONT, explicit-mode, signature, AEAD, and scan-grant rules apply;
+  legacy v1 remains two-sided.
 - The original recipient fingerprint is not silently replaced on every scan, preventing gradual drift or poisoning. A future explicit “improve recognition” operation may add a new version after a high-confidence match.
 
 ## 11. Sync and retry strategy
@@ -504,7 +530,7 @@ Chooser hints remain inside the encrypted recognition manifest or are re-encrypt
 | Missing/corrupt envelope | Mark local capsule corrupt, show no content, allow re-sync. |
 | AEAD/signature failure | Show no plaintext; record a redacted diagnostic code. |
 | No visual candidate | Ask for recapture with quality guidance. |
-| Multiple plausible candidates | Show only the scan-scoped ambiguity chooser. |
+| Multiple plausible candidates | Never auto-open; remain blocked until the future scan-scoped ambiguity chooser. |
 | Network unavailable on first receipt | Match may succeed from cached index; content opens only if ciphertext is cached. |
 | Database/object storage restart | Migrations and durable blob state allow retry without duplicate capsule creation. |
 | Device lost before recovery exists | Auth account may be recovered; old E2EE content is unavailable. Future capsules use a new key bundle. |
@@ -528,6 +554,11 @@ The architecture leaves extension points but does not implement them now:
 - `TrackAttachment` remains a nullable, provider-neutral encrypted field;
 - S3 is an adapter behind `BlobStore`; no Kubernetes, queue broker, cache cluster, CDN, or microservices;
 - iOS can implement the documented protocol later; no shared UI or multiplatform abstraction is introduced now.
+- conservative sender+recipient+FRONT duplicate prevention is a separate
+  future decision and must not create visual uniqueness leakage;
+- an optional 24-hour post-publication cancellation window is a separate future
+  decision requiring a durable revoke/tombstone and cannot erase recipient
+  copies.
 
 ## 15. Architecture gate checklist
 

@@ -6,12 +6,19 @@ Every item is pass/fail. A screenshot, agent statement, or successful command fr
 
 ## Architecture Gate
 
-- [ ] All required docs exist and are marked `APPROVED` with the same protocol/recognition versions.
+- [ ] All required docs exist and are marked `APPROVED` with the outer v1
+  protocol/AAD contract and the explicitly versioned inner recognition
+  contract in ADR-012.
 - [ ] `rg` finds no unresolved `TODO`, `TBD`, placeholder algorithm, or contradictory state/identifier name in normative sections.
-- [ ] Database, REST, protobuf, Room, security, and recognition docs agree on cardinality: one recognition manifest, one content manifest, 3–5 photos, one recipient envelope.
+- [ ] Database, REST, protobuf, Room, security, and recognition docs agree on
+  per-capsule cardinality: one recognition manifest, one content manifest,
+  3–5 photos, one recipient envelope; the local owner-scoped FRONT design may
+  map to 0..N capsules.
 - [ ] First-receipt bootstrap can be traced without server CV or plaintext descriptors.
 - [ ] No documented navigation/API requires a gallery, inbox, history, feed, public profile, or capsule count.
 - [ ] Device loss, stale key, key substitution limitation, metadata leakage, and raw-back privacy are explicit.
+- [ ] No global/server visual index or sender+recipient+FRONT uniqueness signal
+  is introduced; duplicate prevention remains a separate future policy.
 - [ ] Initial M0 implementation tasks each have one narrow artifact, verification command, and expected duration at most ten minutes.
 - [ ] Architecture changes after gate require `docs/decisions/ADR-XXX.md`.
 
@@ -56,7 +63,9 @@ Every item is pass/fail. A screenshot, agent statement, or successful command fr
 ### Creation and crypto
 
 - [ ] Sender cannot continue with an unresolved/unconfirmed handle.
-- [ ] Front and fully prepared back are separate CameraX still captures with quality/crop handling.
+- [ ] New FRONT_ONLY creation requires a FRONT CameraX still with quality/crop
+  handling; BACK is not required and is never synthesized. Legacy two-sided v1
+  creation remains strict/readable.
 - [ ] Exactly 3–5 Photo Picker images are accepted; EXIF is removed and size limits enforced.
 - [ ] Note is optional and UTF-8 size limit is enforced.
 - [ ] Capsule produces one recognition ciphertext, one content ciphertext, 3–5 photo ciphertexts, signed statement, and HPKE envelope.
@@ -65,17 +74,22 @@ Every item is pass/fail. A screenshot, agent statement, or successful command fr
 
 ### Scan gate and persistence
 
-- [ ] Local ORB matching uses both sides and emits raw match evidence/classification.
+- [ ] Local `mvp-orb-v1` matching uses the required FRONT and explicit identity
+  mode; optional BACK is not inferred from profile or field absence and raw
+  match evidence/classification is emitted.
 - [ ] Capsule presentation cannot be navigated/deep-linked by capsule ID.
 - [ ] Successful scan plus verified crypto issues a memory-only ten-minute grant.
 - [ ] Leaving the flow, logout, expiry, or process death invalidates the grant.
-- [ ] Closing/restarting the app requires a new two-side scan to present the capsule again.
+- [ ] Closing/restarting the app requires a new FRONT_ONLY FRONT scan, or a
+  strict two-sided v1 scan for a legacy capsule, to present the capsule again.
 - [ ] Raw scans and persistent plaintext thumbnails do not remain after staging/presentation cleanup.
 
 ### Physical evidence
 
 - [ ] `assembleDebug` APK installs and launches on one documented physical Android device.
-- [ ] That device completes create → close/process restart → scan both sides → decrypt/display with one physical postcard.
+- [ ] That device completes FRONT_ONLY create → close/process restart → FRONT
+  scan → decrypt/display with one physical postcard; legacy two-sided v1
+  regressions retain the two-side path.
 
 ## M2 — Two-user transfer
 
@@ -111,21 +125,29 @@ Every item is pass/fail. A screenshot, agent statement, or successful command fr
 - [ ] Control/index acceptance verifies canonical statement/layout, authoritative sender signature, all routed/envelope IDs, and the recognition blob hash/AEAD before any fingerprint or hint enters the local index.
 - [ ] Undownloaded content/photo bindings remain unverified declarations; index acceptance never labels them delivered or material-cached.
 - [ ] No incoming list/count/thumbnail/sender identity appears before a plausible scan.
-- [ ] B scans front/back and matches locally against pending sender fingerprints.
-- [ ] Duplicate-front test produces back disambiguation or explicit plausible chooser; it never silently guesses.
+- [ ] B scans the FRONT and matches locally against pending owner-scoped sender
+  design fingerprints; BACK is used only by an explicit supported mode.
+- [ ] A design with zero candidates returns no match; one candidate proceeds
+  only after full E2EE verification; multiple candidates never auto-open and
+  remain blocked until future M2-F1 picker support. Legacy v1 duplicate-front
+  regressions retain strict two-sided behavior.
 - [ ] Wrong postcard produces no match/retry, not a random capsule.
 - [ ] B verifies envelope, IDs, signed statement, hashes, and AEAD before plaintext.
 - [ ] Background full-cache verifies transport bindings but never decrypts the content manifest; after a current physical match, presentation acceptance requires every ciphertext and verifies content-manifest AEAD/layout before publishing the grant or note/photo plaintext.
 - [ ] If a physical match occurs before content is cached, UI shows connectivity-required state and exposes zero partial plaintext.
 - [ ] B sees the correct 3–5 photos and note fullscreen.
-- [ ] Successful receipt stores a preferred encrypted recipient front/back fingerprint pair and retains sender fallback.
+- [ ] Successful receipt stores a preferred encrypted recipient FRONT baseline,
+  retains explicitly captured optional BACK evidence, and retains sender
+  fallback without rewriting legacy v1 pairs.
 - [ ] Server state reveals at most `CIPHERTEXT_SYNCED`, never opened/recognized timestamps.
 - [ ] `INDEX_CACHED` is local-only; server reaches `CIPHERTEXT_SYNCED` only after every required ciphertext is durably cached and hash-checked.
 
 ### Recipient B later use
 
 - [ ] After leaving and force-stopping/restarting the app, no capsule presentation route is available.
-- [ ] Rescanning the delivered postcard prefers recipient fingerprint and opens the same capsule.
+- [ ] Rescanning the delivered postcard uses the recipient FRONT baseline first,
+  falls back to sender FRONT, and opens the same capsule only after full
+  verification.
 - [ ] Recipient sync prefetches every assigned capsule's complete ciphertext set by default; no scan, inbox, or UI visit is required to trigger it.
 - [ ] With prefetched ciphertext and valid local keys, both the first successful physical scan and every later fresh scan open offline.
 - [ ] If ciphertext is incomplete, post-match network sync is an explicit recovery fallback and exposes no partial plaintext.
@@ -144,14 +166,19 @@ Every item is pass/fail. A screenshot, agent statement, or successful command fr
 
 ## M3 — Recognition hardening
 
-- [ ] Dataset satisfies the instance/design/duplicate-front/transformation composition in `recognition.md`.
+- [ ] Dataset satisfies the design-to-many/zero-one-many, transformation, and
+  retained legacy two-sided composition in `recognition.md`.
 - [ ] Train/evaluation split is by physical instance/design and evaluation remains locked during tuning.
 - [ ] Recognition profile is one versioned asset; no threshold is duplicated as a magic number.
 - [ ] Locked evaluation reports zero false automatic accepts with comparison count/statistical bound.
-- [ ] First receipt reaches at least 85% automatic recall and 95% automatic-or-chooser recall on quality-passing captures.
-- [ ] Later scan reaches at least 95% automatic recall and 98% automatic-or-chooser recall.
+- [ ] First receipt reaches at least 85% FRONT design candidate recall and 95%
+  correct-capsule-in-result recall on quality-passing captures, with
+  multi-match chooser recall measured after M2-F1 exists.
+- [ ] Later scan reaches at least 95% FRONT design candidate recall and 98%
+  correct-capsule-in-result recall.
 - [ ] P95 post-capture matching is under 2 seconds for 100 candidates on documented reference hardware.
-- [ ] Encrypted fingerprint pair median is under 256 KiB and hard max under 1 MiB.
+- [ ] Encrypted fingerprint baseline median is under 256 KiB and hard max under
+  1 MiB.
 - [ ] Any SIFT adoption has an approved ADR and measured advantage; otherwise ORB remains sole v1 algorithm.
 
 ## M4 — Security/failure hardening

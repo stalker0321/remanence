@@ -8,10 +8,11 @@ docs-only checkpoint does not claim FRONT_ONLY production or test
 implementation. Legacy two-sided v1 capsules remain strict/readable and must
 not be rewritten or given a synthesized BACK.
 
-The next approved implementation contract is the bounded sequence in
+The next approved implementation contract is the bounded M2-F0 sequence in
 `docs/implementation-plan.md`: typed mode/version seam, inner-manifest and
 `SenderIndexBundle` dual readers, outgoing/incoming wiring, FRONT_ONLY Create,
-FRONT_ONLY Scan, then the explicit recipient chooser. Room v7 must be proven
-insufficient before any schema migration is proposed. The P14 physical hardware
-blocker remains: CameraX/OpenCV and two-device evidence cannot be claimed until
-exercised on hardware.
+and FRONT_ONLY Scan with owner-scoped 0/1/many classification and no auto-open
+for N. The recipient picker is the separate future M2-F1 milestone. Room v7
+must be proven insufficient before any schema migration is proposed. The P14
+physical hardware blocker remains: CameraX/OpenCV and two-device evidence
+cannot be claimed until exercised on hardware.

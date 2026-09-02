@@ -65,7 +65,7 @@ class CaptureDecoder(
                 )
             }
             // Undefined (0) or out-of-range markers mean "no rotation recorded".
-            if (raw >= ExifInterface.ORIENTATION_NORMAL && raw <= ExifInterface.ORIENTATION_TRANSVERSE) {
+            if (raw >= ExifInterface.ORIENTATION_NORMAL && raw <= ExifInterface.ORIENTATION_ROTATE_270) {
                 raw
             } else {
                 ExifInterface.ORIENTATION_NORMAL

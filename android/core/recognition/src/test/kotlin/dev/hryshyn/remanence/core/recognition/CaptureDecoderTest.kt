@@ -2,7 +2,6 @@ package dev.hryshyn.remanence.core.recognition
 
 import android.graphics.Bitmap
 import androidx.exifinterface.media.ExifInterface
-import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -52,16 +51,33 @@ class CaptureDecoderTest {
     private fun jpegWithOrientation(bitmap: Bitmap, orientation: Int?): ByteArray {
         val jpeg = CaptureDecoder.encodeFixtureJpeg(bitmap)
         if (orientation == null) return jpeg
-        val temp = File.createTempFile("remanence-exif", ".jpg")
-        try {
-            temp.writeBytes(jpeg)
-            val exif = ExifInterface(temp.absolutePath)
-            exif.setAttribute(ExifInterface.TAG_ORIENTATION, orientation.toString())
-            exif.saveAttributes()
-            return temp.readBytes()
-        } finally {
-            temp.delete()
-        }
+        require(orientation in setOf(
+            ExifInterface.ORIENTATION_NORMAL,
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL,
+            ExifInterface.ORIENTATION_ROTATE_180,
+            ExifInterface.ORIENTATION_FLIP_VERTICAL,
+            ExifInterface.ORIENTATION_TRANSPOSE,
+            ExifInterface.ORIENTATION_ROTATE_90,
+            ExifInterface.ORIENTATION_TRANSVERSE,
+            ExifInterface.ORIENTATION_ROTATE_270,
+        ))
+        // Minimal little-endian EXIF APP1 with one SHORT orientation tag.
+        // Keeping this in memory makes all eight orientation cases deterministic
+        // across Robolectric and device ExifInterface implementations.
+        val exif = byteArrayOf(
+            0x45, 0x78, 0x69, 0x66, 0x00, 0x00, // Exif\0\0
+            0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00, // TIFF header
+            0x01, 0x00, // one IFD entry
+            0x12, 0x01, 0x03, 0x00, // orientation, SHORT
+            0x01, 0x00, 0x00, 0x00, // one value
+            orientation.toByte(), 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, // no next IFD
+        )
+        val app1 = byteArrayOf(
+            0xFF.toByte(), 0xE1.toByte(),
+            0x00, (exif.size + 2).toByte(),
+        ) + exif
+        return jpeg.copyOfRange(0, 2) + app1 + jpeg.copyOfRange(2, jpeg.size)
     }
 
     @org.junit.Test
@@ -93,6 +109,55 @@ class CaptureDecoderTest {
     }
 
     @org.junit.Test
+    fun nonSymmetricExifOrientationsAreAppliedExactlyOnce() {
+        val orientations = listOf(
+            ExifInterface.ORIENTATION_NORMAL,
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL,
+            ExifInterface.ORIENTATION_ROTATE_180,
+            ExifInterface.ORIENTATION_FLIP_VERTICAL,
+            ExifInterface.ORIENTATION_TRANSPOSE,
+            ExifInterface.ORIENTATION_ROTATE_90,
+            ExifInterface.ORIENTATION_TRANSVERSE,
+            ExifInterface.ORIENTATION_ROTATE_270,
+        )
+        orientations.forEach { orientation ->
+            val source = asymmetricBitmap()
+            try {
+                val decoded = decoder.decode(jpegWithOrientation(source, orientation))
+                org.junit.Assert.assertEquals(
+                    "metadata for orientation=$orientation",
+                    orientation,
+                    decoded.exifOrientation,
+                )
+                val expectedWidth = if (orientation == ExifInterface.ORIENTATION_TRANSPOSE ||
+                    orientation == ExifInterface.ORIENTATION_ROTATE_90 ||
+                    orientation == ExifInterface.ORIENTATION_TRANSVERSE ||
+                    orientation == ExifInterface.ORIENTATION_ROTATE_270
+                ) {
+                    source.height
+                } else {
+                    source.width
+                }
+                val expectedHeight = if (expectedWidth == source.width) source.height else source.width
+                org.junit.Assert.assertEquals("width for orientation=$orientation", expectedWidth, decoded.bitmap.width)
+                org.junit.Assert.assertEquals("height for orientation=$orientation", expectedHeight, decoded.bitmap.height)
+
+                val samples = listOf(
+                    decoded.bitmap.getPixel(decoded.bitmap.width / 4, decoded.bitmap.height / 4),
+                    decoded.bitmap.getPixel(decoded.bitmap.width * 3 / 4, decoded.bitmap.height / 4),
+                    decoded.bitmap.getPixel(decoded.bitmap.width / 4, decoded.bitmap.height * 3 / 4),
+                    decoded.bitmap.getPixel(decoded.bitmap.width * 3 / 4, decoded.bitmap.height * 3 / 4),
+                )
+                expectedQuarterColors(orientation).zip(samples).forEach { (expected, actual) ->
+                    assertColorNear("orientation=$orientation", expected, actual)
+                }
+            } finally {
+                source.recycle()
+            }
+        }
+    }
+
+    @org.junit.Test
     fun oversizedCaptureIsDownsampledTowardWorkingBound() {
         val bounded = CaptureDecoder(maxWorkingEdgePx = 500)
         val decoded = bounded.decode(jpegWithOrientation(solidBitmap(2000, 1000), null))
@@ -113,5 +178,56 @@ class CaptureDecoderTest {
         assertTrue(bytes.size > 100)
         val decoded = decoder.decode(bytes)
         assertEquals(48, decoded.bitmap.width)
+    }
+
+    private fun asymmetricBitmap(): Bitmap = Bitmap.createBitmap(120, 80, Bitmap.Config.ARGB_8888).also { bitmap ->
+        val colors = listOf(
+            0xFFFF0000.toInt(),
+            0xFF00FF00.toInt(),
+            0xFF0000FF.toInt(),
+            0xFFFFFF00.toInt(),
+        )
+        for (y in 0 until bitmap.height) {
+            for (x in 0 until bitmap.width) {
+                val quadrant = (if (x >= bitmap.width / 2) 1 else 0) +
+                    (if (y >= bitmap.height / 2) 2 else 0)
+                bitmap.setPixel(x, y, colors[quadrant])
+            }
+        }
+    }
+
+    private fun expectedQuarterColors(orientation: Int): List<Int> = when (orientation) {
+        ExifInterface.ORIENTATION_NORMAL -> listOf(
+            0xFFFF0000.toInt(), 0xFF00FF00.toInt(), 0xFF0000FF.toInt(), 0xFFFFFF00.toInt(),
+        )
+        ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> listOf(
+            0xFF00FF00.toInt(), 0xFFFF0000.toInt(), 0xFFFFFF00.toInt(), 0xFF0000FF.toInt(),
+        )
+        ExifInterface.ORIENTATION_ROTATE_180 -> listOf(
+            0xFFFFFF00.toInt(), 0xFF0000FF.toInt(), 0xFF00FF00.toInt(), 0xFFFF0000.toInt(),
+        )
+        ExifInterface.ORIENTATION_FLIP_VERTICAL -> listOf(
+            0xFF0000FF.toInt(), 0xFFFFFF00.toInt(), 0xFFFF0000.toInt(), 0xFF00FF00.toInt(),
+        )
+        ExifInterface.ORIENTATION_TRANSPOSE -> listOf(
+            0xFFFF0000.toInt(), 0xFF0000FF.toInt(), 0xFF00FF00.toInt(), 0xFFFFFF00.toInt(),
+        )
+        ExifInterface.ORIENTATION_ROTATE_90 -> listOf(
+            0xFF0000FF.toInt(), 0xFFFF0000.toInt(), 0xFFFFFF00.toInt(), 0xFF00FF00.toInt(),
+        )
+        ExifInterface.ORIENTATION_TRANSVERSE -> listOf(
+            0xFFFFFF00.toInt(), 0xFF00FF00.toInt(), 0xFF0000FF.toInt(), 0xFFFF0000.toInt(),
+        )
+        ExifInterface.ORIENTATION_ROTATE_270 -> listOf(
+            0xFF00FF00.toInt(), 0xFFFFFF00.toInt(), 0xFFFF0000.toInt(), 0xFF0000FF.toInt(),
+        )
+        else -> error("unsupported test orientation")
+    }
+
+    private fun assertColorNear(label: String, expected: Int, actual: Int) {
+        val distance = kotlin.math.abs(((expected shr 16) and 0xFF) - ((actual shr 16) and 0xFF)) +
+            kotlin.math.abs(((expected shr 8) and 0xFF) - ((actual shr 8) and 0xFF)) +
+            kotlin.math.abs((expected and 0xFF) - (actual and 0xFF))
+        assertTrue(distance < 120, "$label expected=$expected actual=$actual")
     }
 }

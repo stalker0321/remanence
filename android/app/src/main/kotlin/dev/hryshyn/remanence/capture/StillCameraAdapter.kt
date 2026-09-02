@@ -84,12 +84,20 @@ class CameraXStillCameraAdapter(
 
     override fun captureStill(onDelivered: (ByteArray) -> Unit, onError: (String) -> Unit) {
         if (released) return
-        CameraXPreviewBinder.captureOneStill(
-            context,
-            imageCapture,
-            onDelivered = { bytes -> if (!released) onDelivered(bytes) },
-            onError = { reason -> if (!released) onError(reason) },
-        )
+        val activeBinding = binding ?: return
+        if (!activeBinding.beginCapture()) return
+        try {
+            CameraXPreviewBinder.captureOneStill(
+                context,
+                imageCapture,
+                onDelivered = { bytes -> if (!released) onDelivered(bytes) },
+                onError = { reason -> if (!released) onError(reason) },
+                onFinished = activeBinding::finishCapture,
+            )
+        } catch (failure: Throwable) {
+            activeBinding.finishCapture()
+            throw failure
+        }
     }
 
     override fun release() {

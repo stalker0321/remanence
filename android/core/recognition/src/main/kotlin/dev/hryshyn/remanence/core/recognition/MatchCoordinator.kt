@@ -88,7 +88,13 @@ class MatchCoordinator(
             "fallback universe must be the sender index"
         }
         val senderDecision = classifier.classify(sender.frontRanking, sender.acceptance)
-        val accepted = senderDecision.accepted ?: return CoordinatorDecision.NoMatchEverywhere
-        return CoordinatorDecision.SenderFallbackAccepted(accepted.candidateId)
+        return when {
+            senderDecision.accepted != null ->
+                CoordinatorDecision.SenderFallbackAccepted(senderDecision.accepted.candidateId)
+            senderDecision.outcome == ScanOutcome.PLAUSIBLE_CHOOSER ||
+                senderDecision.outcome == ScanOutcome.SINGLE_CANDIDATE_RECAPTURE ->
+                CoordinatorDecision.Ambiguous(CandidateOrigin.SENDER_FALLBACK, senderDecision)
+            else -> CoordinatorDecision.NoMatchEverywhere
+        }
     }
 }

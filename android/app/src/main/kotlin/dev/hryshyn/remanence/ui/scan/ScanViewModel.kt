@@ -414,8 +414,7 @@ class ScanViewModel internal constructor(
                     val pair = capsuleRows.filter { it.origin == origin }
                     val frontRow = pair.singleOrNull { it.side == DbFingerprintSide.FRONT }
                         ?: return@mapNotNull null
-                    val backRow = pair.singleOrNull { it.side == DbFingerprintSide.BACK }
-                        ?: return@mapNotNull null
+                    // FRONT-only: BACK rows are ignored (legacy rows remain in DB but are not part of the index).
                     val frontBytes = try {
                         persistence.decrypt(frontRow.fingerprintId)
                     } catch (cancelled: CancellationException) {
@@ -423,23 +422,13 @@ class ScanViewModel internal constructor(
                     } catch (_: Exception) {
                         return@mapNotNull null
                     }
-                    val backBytes = try {
-                        persistence.decrypt(backRow.fingerprintId)
-                    } catch (cancelled: CancellationException) {
-                        frontBytes.fill(0)
-                        throw cancelled
-                    } catch (_: Exception) {
-                        frontBytes.fill(0)
-                        return@mapNotNull null
-                    }
                     try {
                         IndexedCandidate(
                             capsuleId = UUID.fromString(capsuleId),
                             front = FingerprintCodec.parse(frontBytes),
-                            back = FingerprintCodec.parse(backBytes),
-                            // Keep each complete origin pair available to the
-                            // engine; it searches recipient and sender pairs
-                            // as separate universes.
+                            // Keep each complete origin available to the
+                            // engine; it searches recipient and sender
+                            // FRONTs as separate universes.
                             recipientPreferred = origin == FingerprintOrigin.RECIPIENT &&
                                 pair.any { it.preferred },
                         )
@@ -447,7 +436,6 @@ class ScanViewModel internal constructor(
                         null
                     } finally {
                         frontBytes.fill(0)
-                        backBytes.fill(0)
                     }
                 }
             }
@@ -519,6 +507,8 @@ class ScanViewModel internal constructor(
 
     private fun evaluateMatch() {
         val sessionFront = captureSession.front ?: return
+        // FRONT-only: captureSession.back is still required by legacy capture state
+        // (subsequent slice will make it FRONT-only), but matching is FRONT-only.
         val sessionBack = captureSession.back ?: return
         _matchState.value = ScanMatchUiState.Matching
         val generation = ++matchGeneration
@@ -551,7 +541,6 @@ class ScanViewModel internal constructor(
                 )
                 val result = engine.run(
                     queryFront = FingerprintCodec.parse(sessionFront.serializedBytes),
-                    queryBack = FingerprintCodec.parse(sessionBack.serializedBytes),
                     candidates = candidateIndex.candidates,
                 )
                 if (generation == matchGeneration) {

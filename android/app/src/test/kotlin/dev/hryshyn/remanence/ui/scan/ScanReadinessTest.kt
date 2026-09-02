@@ -300,7 +300,6 @@ class ScanReadinessTest {
                         IndexedCandidate(
                             capsuleId = capsuleUuid,
                             front = FingerprintCodec.parse(frontBytes),
-                            back = FingerprintCodec.parse(backBytes),
                             recipientPreferred = false,
                         ),
                     ),

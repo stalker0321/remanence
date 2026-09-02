@@ -5,13 +5,10 @@ import java.util.UUID
 /**
  * One locally indexed candidate capsule with its stored FRONT fingerprint.
  * ADR-012 FRONT-only contract: exactly one required FRONT per capsule.
- * The `back` parameter is retained only for compile compatibility and is
- * always null in production; any non-null legacy back is ignored fail-closed.
  */
 data class IndexedCandidate(
     val capsuleId: UUID,
     val front: PostcardFingerprint,
-    val back: PostcardFingerprint? = null,
     /** True when this FRONT comes from the preferred recipient baseline. */
     val recipientPreferred: Boolean = false,
 )
@@ -54,9 +51,8 @@ sealed interface ScanFlowResult {
  * memory-only scan grant ONLY after the injected crypto verifier accepts the
  * winning capsule. A refused verification never produces a grant.
  *
- * The engine operates on exactly one required FRONT per candidate. Any legacy
- * `back` field is ignored. The `queryBack` overload is retained only for
- * compile compatibility and delegates to FRONT-only logic.
+ * The engine operates on exactly one required FRONT per candidate. Multiple
+ * plausible candidates never invoke verifier/grant and return Ambiguous.
  */
 class LocalMatchEngine(
     private val profile: RecognitionProfile,
@@ -120,26 +116,6 @@ class LocalMatchEngine(
             CoordinatorDecision.NoMatchEverywhere -> ScanFlowResult.RecaptureRequired
         }
     }
-
-    /** Legacy overload retained for compile compatibility; BACK is ignored. */
-    @Deprecated("FRONT-only contract: queryBack is ignored", ReplaceWith("run(queryFront, candidates)"))
-    suspend fun run(
-        queryFront: PostcardFingerprint,
-        queryBack: PostcardFingerprint,
-        candidates: List<IndexedCandidate>,
-    ): ScanFlowResult {
-        require(queryFront.side == FingerprintSide.FRONT) { "queryFront must be FRONT" }
-        // queryBack is intentionally ignored in FRONT-only contract; fail closed
-        // if it is not a FRONT (legacy two-sided callers passed BACK here).
-        // We do not use its bytes for scoring.
-        return run(queryFront, candidates)
-    }
-
-    private data class UniverseResult(
-        val origin: CandidateOrigin,
-        val frontRanking: FrontRanking,
-        val acceptance: CompositeAcceptanceReport?,
-    )
 
     private fun evaluateUniverse(
         universe: List<IndexedCandidate>,

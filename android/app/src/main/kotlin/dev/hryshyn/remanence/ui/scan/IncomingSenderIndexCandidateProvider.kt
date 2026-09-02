@@ -119,14 +119,19 @@ internal class IncomingSenderIndexCandidateProvider(
             if (snapshot.capsuleId != candidate.capsuleId) return null
 
             frontBytes = snapshot.frontFingerprint
+            // FRONT-only: backFingerprint is ignored (legacy bundle still carries it, but production index is FRONT-only)
             backBytes = snapshot.backFingerprint
             val front = FingerprintCodec.parse(frontBytes!!)
-            val back = FingerprintCodec.parse(backBytes!!)
+            // Validate back parses for fail-closed on corrupt legacy bundles, but do not use it for candidate identity.
+            try {
+                FingerprintCodec.parse(backBytes!!)
+            } catch (_: Exception) {
+                return null
+            }
             val capsuleId = candidate.capsuleId.toString()
             return IndexedCandidate(
                 capsuleId = candidate.capsuleId.value,
                 front = front,
-                back = back,
                 // These are the sender's fingerprints, not a recipient baseline.
                 recipientPreferred = false,
             ) to ScanChooserHint(

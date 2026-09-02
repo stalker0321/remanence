@@ -175,21 +175,20 @@ class PerspectiveWarperTest {
         assertEquals(landscapeWarped.height, portraitWarped.height)
 
         val extractor = FingerprintExtractor(profile)
-        fun fingerprints(warped: WarpedCapture): Pair<PostcardFingerprint, PostcardFingerprint> =
-            extractor.extract(warped.pixels, warped.width, warped.height, FingerprintSide.FRONT) to
-                extractor.extract(warped.pixels, warped.width, warped.height, FingerprintSide.BACK)
+        fun fingerprint(warped: WarpedCapture): PostcardFingerprint =
+            extractor.extract(warped.pixels, warped.width, warped.height, FingerprintSide.FRONT)
 
-        val landscapeFingerprints = fingerprints(landscapeWarped)
-        val portraitFingerprints = fingerprints(portraitWarped)
+        val landscapeFingerprint = fingerprint(landscapeWarped)
+        val portraitFingerprint = fingerprint(portraitWarped)
         val matcher = DescriptorMatcher()
-        val landscapeToPortrait = matcher.match(landscapeFingerprints.first, portraitFingerprints.first)
-        val portraitToLandscape = matcher.match(portraitFingerprints.first, landscapeFingerprints.first)
+        val landscapeToPortrait = matcher.match(landscapeFingerprint, portraitFingerprint)
+        val portraitToLandscape = matcher.match(portraitFingerprint, landscapeFingerprint)
         assertTrue(landscapeToPortrait.size >= profile.match.weakMinRatioMatches)
         assertTrue(portraitToLandscape.size >= profile.match.weakMinRatioMatches)
 
         suspend fun accept(
-            query: Pair<PostcardFingerprint, PostcardFingerprint>,
-            reference: Pair<PostcardFingerprint, PostcardFingerprint>,
+            query: PostcardFingerprint,
+            reference: PostcardFingerprint,
         ): ScanFlowResult {
             val capsuleId = UUID.nameUUIDFromBytes("textured-postcard".toByteArray())
             return LocalMatchEngine(
@@ -197,20 +196,18 @@ class PerspectiveWarperTest {
                 verifier = { true },
                 grantIssuer = { "grant-$capsuleId" },
             ).run(
-                queryFront = query.first,
-                queryBack = query.second,
+                queryFront = query,
                 candidates = listOf(
                     IndexedCandidate(
                         capsuleId = capsuleId,
-                        front = reference.first,
-                        back = reference.second,
+                        front = reference,
                     ),
                 ),
             )
         }
 
-        assertIs<ScanFlowResult.Granted>(accept(landscapeFingerprints, portraitFingerprints))
-        assertIs<ScanFlowResult.Granted>(accept(portraitFingerprints, landscapeFingerprints))
+        assertIs<ScanFlowResult.Granted>(accept(landscapeFingerprint, portraitFingerprint))
+        assertIs<ScanFlowResult.Granted>(accept(portraitFingerprint, landscapeFingerprint))
     }
 
     @Test

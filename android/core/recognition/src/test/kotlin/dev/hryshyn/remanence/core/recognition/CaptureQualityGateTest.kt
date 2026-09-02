@@ -82,9 +82,8 @@ class CaptureQualityGateTest {
         assertFailsWith<IllegalArgumentException> {
             CaptureAdmissionProfile(frontMinLaplacianVariance = 10_000.1)
         }
-        // BACK threshold no longer exists in FRONT-only contract.
         assertFailsWith<IllegalArgumentException> {
-            CaptureAdmissionProfile(frontMinLaplacianVariance = Double.NaN)
+            CaptureAdmissionProfile(frontMinLaplacianVariance = Double.NEGATIVE_INFINITY)
         }
     }
 

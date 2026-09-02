@@ -105,13 +105,9 @@ object FingerprintCodec {
         }
         val side = when (wire.side) {
             FingerprintWire.Side.FRONT -> FingerprintSide.FRONT
-            FingerprintWire.Side.BACK ->
-                throw IllegalArgumentException("BACK fingerprint is not supported in FRONT-only contract")
+            FingerprintWire.Side.BACK -> FingerprintSide.BACK
             FingerprintWire.Side.SIDE_UNSPECIFIED, FingerprintWire.Side.UNRECOGNIZED ->
                 throw IllegalArgumentException("fingerprint side is unspecified")
-        }
-        if (side != FingerprintSide.FRONT) {
-            throw IllegalArgumentException("only FRONT fingerprint is supported")
         }
         if (wire.canonicalWidthPx !in 1..MAX_CANONICAL_DIMENSION_PX ||
             wire.canonicalHeightPx !in 1..MAX_CANONICAL_DIMENSION_PX
@@ -165,9 +161,6 @@ object FingerprintCodec {
     }
 
     private fun validate(fingerprint: PostcardFingerprint) {
-        if (fingerprint.side != FingerprintSide.FRONT) {
-            throw IllegalArgumentException("only FRONT fingerprint is supported in FRONT-only contract")
-        }
         if (fingerprint.profileId.isEmpty() ||
             fingerprint.profileId.length > MAX_PROFILE_ID_CHARS ||
             !PROFILE_ID.matches(fingerprint.profileId)
@@ -208,8 +201,7 @@ object FingerprintCodec {
 
     private fun toWireSide(side: FingerprintSide): FingerprintWire.Side = when (side) {
         FingerprintSide.FRONT -> FingerprintWire.Side.FRONT
-        FingerprintSide.BACK ->
-            throw IllegalArgumentException("BACK fingerprint cannot be serialized in FRONT-only contract")
+        FingerprintSide.BACK -> FingerprintWire.Side.BACK
     }
 
     private fun toMicro(value: Double): Int {

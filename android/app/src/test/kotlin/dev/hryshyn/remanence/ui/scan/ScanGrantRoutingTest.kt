@@ -499,9 +499,6 @@ class ScanGrantRoutingTest {
                             front = dev.hryshyn.remanence.core.recognition.FingerprintCodec.parse(
                                 syntheticFingerprint(11, RecognitionSide.FRONT),
                             ),
-                            back = dev.hryshyn.remanence.core.recognition.FingerprintCodec.parse(
-                                syntheticFingerprint(22, RecognitionSide.BACK),
-                            ),
                             recipientPreferred = false,
                         ),
                     ),
@@ -598,13 +595,11 @@ class ScanGrantRoutingTest {
                 dev.hryshyn.remanence.core.recognition.IndexedCandidate(
                     capsuleId = capsuleUuid,
                     front = front,
-                    back = back,
                     recipientPreferred = true,
                 ),
                 dev.hryshyn.remanence.core.recognition.IndexedCandidate(
                     capsuleId = duplicateCapsule,
                     front = front,
-                    back = back,
                     recipientPreferred = true,
                 ),
             ),

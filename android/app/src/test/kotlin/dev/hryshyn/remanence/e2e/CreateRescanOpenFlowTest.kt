@@ -254,12 +254,10 @@ class CreateRescanOpenFlowTest {
         )
         val result = engine.run(
             dev.hryshyn.remanence.core.recognition.FingerprintCodec.parse(decryptedFront),
-            dev.hryshyn.remanence.core.recognition.FingerprintCodec.parse(decryptedBack),
             listOf(
                 IndexedCandidate(
                     capsuleId = capsuleUuid,
                     front = dev.hryshyn.remanence.core.recognition.FingerprintCodec.parse(decryptedFront),
-                    back = dev.hryshyn.remanence.core.recognition.FingerprintCodec.parse(decryptedBack),
                     recipientPreferred = backRow.origin == FingerprintOrigin.RECIPIENT &&
                         backRow.preferred,
                 ),
@@ -332,7 +330,7 @@ class CreateRescanOpenFlowTest {
         val fp = dev.hryshyn.remanence.core.recognition.FingerprintCodec.parse(syntheticFingerprint(11, RecognitionSide.FRONT))
         val bp = dev.hryshyn.remanence.core.recognition.FingerprintCodec.parse(syntheticFingerprint(22, RecognitionSide.BACK))
 
-        val result = engine.run(fp, bp, listOf(IndexedCandidate(capsuleUuid, fp, bp, false)))
+        val result = engine.run(fp, listOf(IndexedCandidate(capsuleUuid, fp, false)))
 
         assertEquals(ScanFlowResult.RecaptureRequired, result)
         assertTrue(issued.isEmpty())

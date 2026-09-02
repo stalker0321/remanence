@@ -71,7 +71,7 @@ class MatchCoordinatorTest {
         val single = listOf(
             ScoredComposite("only", 0.50, 0.50, true, false),
         )
-        val report = CompositeAcceptanceReport(single, null, RejectionRule.COMPOSITE_BELOW_MINIMUM)
+        val report = CompositeAcceptanceReport(single, null, RejectionRule.FRONT_BELOW_AUTO_MIN)
         val decision = coordinator.coordinate(
             universe(CandidateOrigin.RECIPIENT_PREFERRED, 1, report),
             universe(CandidateOrigin.SENDER_FALLBACK, 2),

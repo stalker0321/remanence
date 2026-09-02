@@ -61,12 +61,10 @@ class RecognitionProfileTest {
         }
         with(seed.ranking) {
             assertEquals(0.08, duplicateFrontMargin)
-            assertEquals(0.40, compositeFrontWeight)
-            assertEquals(0.60, compositeBackWeight)
-            assertEquals(0.70, autoCompositeMin)
+            assertEquals(0.70, autoFrontMin)
             assertEquals(0.12, autoMarginOverRunnerUp)
-            assertEquals(0.65, duplicateFrontBackMinScore)
-            assertEquals(0.40, chooserCompositeMin)
+            assertEquals(0.65, duplicateFrontMinScore)
+            assertEquals(0.40, chooserFrontMin)
             assertEquals(0.70, minContourConfidence)
         }
     }
@@ -116,9 +114,15 @@ class RecognitionProfileTest {
     fun outOfRangeThresholdsFailClosed() {
         val bad = RecognitionProfileJson.encode(
             seed.copy(
-                ranking = seed.ranking.copy(compositeBackWeight = 0.50),
+                ranking = seed.ranking.copy(autoFrontMin = 1.5),
             ),
         )
         assertFailsWith<IllegalArgumentException> { RecognitionProfile.fromJson(bad) }
+        val badChooser = RecognitionProfileJson.encode(
+            seed.copy(
+                ranking = seed.ranking.copy(chooserFrontMin = 0.80),
+            ),
+        )
+        assertFailsWith<IllegalArgumentException> { RecognitionProfile.fromJson(badChooser) }
     }
 }

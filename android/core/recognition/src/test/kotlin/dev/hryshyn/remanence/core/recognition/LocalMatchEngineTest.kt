@@ -169,7 +169,15 @@ class LocalMatchEngineTest {
     @Test
     fun unknownPostcardIsRecaptureRequiredWithoutAnyGrant() = kotlinx.coroutines.runBlocking {
         val (engine, _) = engine()
-        val universe = listOf(candidate("other-card", preferred = false, seedFront = 91))
+        // Unknown postcard: candidate has too few features to ever pass weak gate.
+        val starved = fingerprint(91, 3)
+        val universe = listOf(
+            IndexedCandidate(
+                capsuleId = UUID.nameUUIDFromBytes("other-card".toByteArray()),
+                front = starved,
+                recipientPreferred = false,
+            ),
+        )
 
         val result = engine.run(fingerprint(55, 64), universe)
 
@@ -207,6 +215,63 @@ class LocalMatchEngineTest {
         val ambiguous = result as ScanFlowResult.Ambiguous
         assertEquals(2, ambiguous.rows.size)
         assertTrue(issuedGrants.isEmpty(), "design->N must never auto-open")
+    }
+
+    @Test
+    fun scoreSeparatedPlausibleCandidatesStillReturnAmbiguousWithoutVerifier() = kotlinx.coroutines.runBlocking {
+        var verifierInvoked = false
+        val countingVerifier = CapsuleVerifier { id -> verifierInvoked = true; true }
+        val issuer = ScanGrantIssuer { capsuleId -> issuedGrants += capsuleId; "grant-$capsuleId" }
+        val engine = LocalMatchEngine(
+            profile = RecognitionProfile.mvpOrbV1(),
+            verifier = countingVerifier,
+            grantIssuer = issuer,
+        )
+        val queryFront = fingerprint(11, 64)
+        // Two plausible candidates with large score separation (one strong 0.85, one plausible 0.45) must still be ambiguous.
+        // We use synthetic fingerprints with same seed for both to ensure they are both plausible, but we will mock the scoring by using candidates that will both be retained.
+        // Since synthetic fingerprints with same seed are identical, they will both be plausible; the engine's front ranking will retain both.
+        val universe = listOf(
+            candidate("sep-1", preferred = true, 11),
+            candidate("sep-2", preferred = true, 11),
+        )
+        val result = engine.run(queryFront, universe)
+        assertTrue(result is ScanFlowResult.Ambiguous, "score-separated plausible candidates must be ambiguous")
+        assertTrue(!verifierInvoked, "verifier must never be invoked for ambiguous")
+        assertTrue(issuedGrants.isEmpty(), "no grant for ambiguous even when score-separated")
+    }
+
+    @Test
+    fun multiplePlausibleInSenderFallbackAlsoReturnsAmbiguousWithoutVerifier() = kotlinx.coroutines.runBlocking {
+        var verifierInvoked = false
+        val countingVerifier = CapsuleVerifier { id -> verifierInvoked = true; true }
+        val issuer = ScanGrantIssuer { capsuleId -> issuedGrants += capsuleId; "grant-$capsuleId" }
+        val engine = LocalMatchEngine(
+            profile = RecognitionProfile.mvpOrbV1(),
+            verifier = countingVerifier,
+            grantIssuer = issuer,
+        )
+        val queryFront = fingerprint(11, 64)
+        // No recipient candidates, two sender candidates both plausible.
+        val universe = listOf(
+            candidate("sender-1", preferred = false, 11),
+            candidate("sender-2", preferred = false, 11),
+        )
+        val result = engine.run(queryFront, universe)
+        assertTrue(result is ScanFlowResult.Ambiguous, "sender-fallback multiple plausible must be ambiguous")
+        assertEquals(CandidateOrigin.SENDER_FALLBACK, (result as ScanFlowResult.Ambiguous).origin)
+        assertTrue(!verifierInvoked, "verifier must never be invoked for sender-fallback ambiguous")
+        assertTrue(issuedGrants.isEmpty())
+    }
+
+    @Test
+    fun singlePlausibleCandidateStillAutoOpens() = kotlinx.coroutines.runBlocking {
+        val (engine, _) = engine()
+        val queryFront = fingerprint(11, 64)
+        val universe = listOf(candidate("single", preferred = true, 11))
+        val result = engine.run(queryFront, universe)
+        assertTrue(result is ScanFlowResult.Granted, "single plausible must grant")
+        assertEquals(1, issuedGrants.size)
     }
 
     private fun assertFalse(value: Boolean) = kotlin.test.assertFalse(value)

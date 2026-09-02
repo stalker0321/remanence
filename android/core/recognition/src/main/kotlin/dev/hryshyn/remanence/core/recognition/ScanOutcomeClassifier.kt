@@ -53,7 +53,7 @@ class ScanOutcomeClassifier(
         }
 
         val scored = acceptance?.scored.orEmpty()
-        val chooserMin = profile.ranking.chooserCompositeMin
+        val chooserMin = profile.ranking.chooserFrontMin
         val plausible = scored.filter { candidate ->
             candidate.frontWeakPassed &&
                 candidate.compositeScore >= chooserMin

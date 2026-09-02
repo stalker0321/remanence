@@ -8,6 +8,10 @@ import kotlinx.serialization.json.Json
  * Immutable, versioned recognition profile carrying every documented
  * threshold (docs/recognition.md). No threshold may exist as a code literal;
  * database/fingerprint records reference [profileId].
+ *
+ * FRONT-only production contract (ADR-012, M2-F0-01): composite weights and
+ * back-specific thresholds are deleted; ranking is FRONT-only with explicitly
+ * named FRONT thresholds preserving numeric values pending M3 calibration.
  */
 data class RecognitionProfile(
     val formatVersion: Int,
@@ -72,12 +76,10 @@ data class RecognitionProfile(
     @Serializable
     data class RankingThresholds(
         val duplicateFrontMargin: Double,
-        val compositeFrontWeight: Double,
-        val compositeBackWeight: Double,
-        val autoCompositeMin: Double,
+        val autoFrontMin: Double,
         val autoMarginOverRunnerUp: Double,
-        val duplicateFrontBackMinScore: Double,
-        val chooserCompositeMin: Double,
+        val duplicateFrontMinScore: Double,
+        val chooserFrontMin: Double,
         val confidenceAreaWeight: Double = 0.40,
         val confidenceRectangularityWeight: Double = 0.30,
         val confidenceEdgeSupportWeight: Double = 0.20,
@@ -148,12 +150,10 @@ data class RecognitionProfile(
             ),
             ranking = RankingThresholds(
                 duplicateFrontMargin = 0.08,
-                compositeFrontWeight = 0.40,
-                compositeBackWeight = 0.60,
-                autoCompositeMin = 0.70,
+                autoFrontMin = 0.70,
                 autoMarginOverRunnerUp = 0.12,
-                duplicateFrontBackMinScore = 0.65,
-                chooserCompositeMin = 0.40,
+                duplicateFrontMinScore = 0.65,
+                chooserFrontMin = 0.40,
                 confidenceAreaWeight = 0.40,
                 confidenceRectangularityWeight = 0.30,
                 confidenceEdgeSupportWeight = 0.20,
@@ -237,12 +237,10 @@ internal data class ProfileDto(
         ),
         ranking = RecognitionProfile.RankingThresholds(
             ranking.duplicateFrontMargin,
-            ranking.compositeFrontWeight,
-            ranking.compositeBackWeight,
-            ranking.autoCompositeMin,
+            ranking.autoFrontMin,
             ranking.autoMarginOverRunnerUp,
-            ranking.duplicateFrontBackMinScore,
-            ranking.chooserCompositeMin,
+            ranking.duplicateFrontMinScore,
+            ranking.chooserFrontMin,
             ranking.confidenceAreaWeight,
             ranking.confidenceRectangularityWeight,
             ranking.confidenceEdgeSupportWeight,
@@ -306,12 +304,10 @@ internal data class ProfileDto(
     @Serializable
     internal data class RankingDto(
         val duplicateFrontMargin: Double,
-        val compositeFrontWeight: Double,
-        val compositeBackWeight: Double,
-        val autoCompositeMin: Double,
+        val autoFrontMin: Double,
         val autoMarginOverRunnerUp: Double,
-        val duplicateFrontBackMinScore: Double,
-        val chooserCompositeMin: Double,
+        val duplicateFrontMinScore: Double,
+        val chooserFrontMin: Double,
         val confidenceAreaWeight: Double = 0.40,
         val confidenceRectangularityWeight: Double = 0.30,
         val confidenceEdgeSupportWeight: Double = 0.20,
@@ -357,14 +353,10 @@ private fun RecognitionProfile.validate() {
     }
     with(ranking) {
         require(duplicateFrontMargin in 0.0..1.0)
-        // Front and back weights must form a convex combination.
-        require(kotlin.math.abs(compositeFrontWeight + compositeBackWeight - 1.0) < 1e-9) {
-            "composite weights must sum to 1"
-        }
-        require(autoCompositeMin in 0.0..1.0)
+        require(autoFrontMin in 0.0..1.0)
         require(autoMarginOverRunnerUp in 0.0..1.0)
-        require(duplicateFrontBackMinScore in 0.0..1.0)
-        require(chooserCompositeMin in 0.0..autoCompositeMin) { "chooser floor must not exceed automatic floor" }
+        require(duplicateFrontMinScore in 0.0..1.0)
+        require(chooserFrontMin in 0.0..autoFrontMin) { "chooser floor must not exceed automatic floor" }
         require(minContourConfidence in 0.0..1.0)
         // Confidence weights must form a convex combination (epsilon-tolerant).
         val weightSum = confidenceAreaWeight + confidenceRectangularityWeight +
@@ -425,12 +417,10 @@ internal fun RecognitionProfile.toDto() = ProfileDto(
     ),
     ranking = ProfileDto.RankingDto(
         ranking.duplicateFrontMargin,
-        ranking.compositeFrontWeight,
-        ranking.compositeBackWeight,
-        ranking.autoCompositeMin,
+        ranking.autoFrontMin,
         ranking.autoMarginOverRunnerUp,
-        ranking.duplicateFrontBackMinScore,
-        ranking.chooserCompositeMin,
+        ranking.duplicateFrontMinScore,
+        ranking.chooserFrontMin,
         ranking.confidenceAreaWeight,
         ranking.confidenceRectangularityWeight,
         ranking.confidenceEdgeSupportWeight,

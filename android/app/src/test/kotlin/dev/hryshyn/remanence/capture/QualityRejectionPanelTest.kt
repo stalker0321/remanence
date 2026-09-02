@@ -56,14 +56,43 @@ class QualityRejectionPanelTest {
         composeRule.setContent {
             MaterialTheme {
                 QualityRejectionPanel(
-                    reasons = setOf(QualityReason.TOO_DARK, QualityReason.GLARE_EXCESSIVE),
+                    reasons = setOf(
+                        QualityReason.ANGLE_UNCERTAIN,
+                        QualityReason.RESOLUTION_INSUFFICIENT,
+                        QualityReason.TOO_DARK,
+                        QualityReason.GLARE_EXCESSIVE,
+                    ),
                     onRecapture = {},
                 )
             }
         }
 
+        composeRule.onNodeWithTag("quality_reason_ANGLE_UNCERTAIN").assertIsDisplayed()
+        composeRule.onNodeWithTag("quality_reason_RESOLUTION_INSUFFICIENT").assertIsDisplayed()
         composeRule.onNodeWithTag("quality_reason_TOO_DARK").assertIsDisplayed()
         composeRule.onNodeWithTag("quality_reason_GLARE_EXCESSIVE").assertIsDisplayed()
+    }
+
+    @Test
+    fun guidanceUsesTheDocumentedActionableCopy() {
+        assertEquals(
+            mapOf(
+                QualityReason.CARD_TOO_SMALL to
+                    "Move closer while keeping all four postcard edges visible.",
+                QualityReason.CROP_UNCERTAIN to
+                    "Show all four postcard corners and edges; remove any occlusion.",
+                QualityReason.ANGLE_UNCERTAIN to
+                    "Hold the phone parallel to the postcard and align its edges.",
+                QualityReason.RESOLUTION_INSUFFICIENT to
+                    "Move closer, use the highest still resolution, and keep the full card visible.",
+                QualityReason.TOO_BLURRY to "Hold still and tap to focus.",
+                QualityReason.TOO_DARK to "Use brighter, even light and remove shadows.",
+                QualityReason.GLARE_EXCESSIVE to "Tilt the postcard or move the light to remove glare.",
+                QualityReason.FEATURES_INSUFFICIENT to
+                    "Use printed detail, focus, good light, and keep the full card inside the outline.",
+            ),
+            QualityReason.entries.associateWith(::guidanceFor),
+        )
     }
 
     /** Capture surfaces pass their own retake tag through to the panel. */

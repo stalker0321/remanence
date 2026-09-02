@@ -4,6 +4,8 @@ package dev.hryshyn.remanence.core.recognition
 enum class QualityReason {
     CARD_TOO_SMALL,
     CROP_UNCERTAIN,
+    ANGLE_UNCERTAIN,
+    RESOLUTION_INSUFFICIENT,
     TOO_BLURRY,
     TOO_DARK,
     GLARE_EXCESSIVE,
@@ -38,16 +40,34 @@ class CaptureQualityGate(private val profile: RecognitionProfile) {
                 reasons += QualityReason.GLARE_EXCESSIVE
             }
         }
-        if (input.detectedAreaRatio < gates.minCardAreaRatio) reasons += QualityReason.CARD_TOO_SMALL
-        if (input.rectangularity < gates.minRectangularity) reasons += QualityReason.CROP_UNCERTAIN
+        if (!input.detectedAreaRatio.isFinite() || input.detectedAreaRatio < 0.0) {
+            reasons += QualityReason.CROP_UNCERTAIN
+        } else if (input.detectedAreaRatio < gates.minCardAreaRatio) {
+            reasons += QualityReason.CARD_TOO_SMALL
+        }
+        if (!input.rectangularity.isFinite() || input.rectangularity < 0.0) {
+            reasons += QualityReason.CROP_UNCERTAIN
+        } else if (input.rectangularity < gates.minRectangularity) {
+            reasons += QualityReason.ANGLE_UNCERTAIN
+        }
         input.cropAspectRatio?.let { ratio ->
-            val orientationNormalizedRatio = if (ratio < 1.0) 1.0 / ratio else ratio
-            if (orientationNormalizedRatio !in gates.aspectRatioMin..gates.aspectRatioMax) {
+            if (!ratio.isFinite() || ratio <= 0.0) {
                 reasons += QualityReason.CROP_UNCERTAIN
+            } else {
+                val orientationNormalizedRatio = if (ratio < 1.0) 1.0 / ratio else ratio
+                if (!orientationNormalizedRatio.isFinite()) {
+                    reasons += QualityReason.CROP_UNCERTAIN
+                } else if (orientationNormalizedRatio !in gates.aspectRatioMin..gates.aspectRatioMax) {
+                    reasons += QualityReason.ANGLE_UNCERTAIN
+                }
             }
         }
         input.croppedShortEdgePx?.let { shortEdge ->
-            if (shortEdge < gates.minShortEdgeAfterWarpPx) reasons += QualityReason.CROP_UNCERTAIN
+            if (shortEdge <= 0) {
+                reasons += QualityReason.CROP_UNCERTAIN
+            } else if (shortEdge < gates.minShortEdgeAfterWarpPx) {
+                reasons += QualityReason.RESOLUTION_INSUFFICIENT
+            }
         }
         return reasons
     }

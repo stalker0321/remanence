@@ -73,9 +73,9 @@ class CaptureQualityGateTest {
     }
 
     @Test
-    fun lowRectangularityFlagsCropUncertain() {
+    fun lowRectangularityFlagsAngleUncertain() {
         val below = passingInput().copy(rectangularity = 0.80 - 1e-6)
-        assertEquals(setOf(QualityReason.CROP_UNCERTAIN), gate.evaluate(below))
+        assertEquals(setOf(QualityReason.ANGLE_UNCERTAIN), gate.evaluate(below))
     }
 
     @Test
@@ -90,12 +90,44 @@ class CaptureQualityGateTest {
         val outOfRangeLandscape = 2.20 + 1e-6
 
         assertEquals(
-            setOf(QualityReason.CROP_UNCERTAIN),
+            setOf(QualityReason.ANGLE_UNCERTAIN),
             gate.evaluate(passingInput().copy(cropAspectRatio = outOfRangeLandscape)),
         )
         assertEquals(
-            setOf(QualityReason.CROP_UNCERTAIN),
+            setOf(QualityReason.ANGLE_UNCERTAIN),
             gate.evaluate(passingInput().copy(cropAspectRatio = 1.0 / outOfRangeLandscape)),
+        )
+    }
+
+    @Test
+    fun shortEdgeAfterWarpFlagsResolutionInsufficient() {
+        assertEquals(
+            setOf(QualityReason.RESOLUTION_INSUFFICIENT),
+            gate.evaluate(passingInput().copy(croppedShortEdgePx = 600 - 1)),
+        )
+    }
+
+    @Test
+    fun invalidCropMeasurementsRemainCropUncertain() {
+        assertEquals(
+            setOf(QualityReason.CROP_UNCERTAIN),
+            gate.evaluate(passingInput().copy(detectedAreaRatio = Double.NaN)),
+        )
+        assertEquals(
+            setOf(QualityReason.CROP_UNCERTAIN),
+            gate.evaluate(passingInput().copy(rectangularity = Double.POSITIVE_INFINITY)),
+        )
+        assertEquals(
+            setOf(QualityReason.CROP_UNCERTAIN),
+            gate.evaluate(passingInput().copy(rectangularity = -0.01)),
+        )
+        assertEquals(
+            setOf(QualityReason.CROP_UNCERTAIN),
+            gate.evaluate(passingInput().copy(cropAspectRatio = 0.0)),
+        )
+        assertEquals(
+            setOf(QualityReason.CROP_UNCERTAIN),
+            gate.evaluate(passingInput().copy(croppedShortEdgePx = 0)),
         )
     }
 
@@ -110,6 +142,8 @@ class CaptureQualityGateTest {
             ),
             detectedAreaRatio = 0.05,
             rectangularity = 0.3,
+            cropAspectRatio = 3.0,
+            croppedShortEdgePx = 599,
         )
         assertEquals(
             setOf(
@@ -117,7 +151,8 @@ class CaptureQualityGateTest {
                 QualityReason.TOO_DARK,
                 QualityReason.GLARE_EXCESSIVE,
                 QualityReason.CARD_TOO_SMALL,
-                QualityReason.CROP_UNCERTAIN,
+                QualityReason.ANGLE_UNCERTAIN,
+                QualityReason.RESOLUTION_INSUFFICIENT,
             ),
             gate.evaluate(bad),
         )

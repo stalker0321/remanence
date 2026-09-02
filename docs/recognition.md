@@ -74,7 +74,7 @@ Initial capture gates for `mvp-orb-v1`:
 | Maximum clipped-white pixel fraction | 0.20 |
 | Maximum contiguous glare-region fraction | 0.12 |
 
-These are initial device-independent approximations, not product truth. The quality evaluator returns measured signals and reason codes such as `CARD_TOO_SMALL`, `CROP_UNCERTAIN`, `TOO_BLURRY`, `TOO_DARK`, or `GLARE_EXCESSIVE`.
+These are initial device-independent approximations, not product truth. The quality evaluator returns measured signals and reason codes such as `CARD_TOO_SMALL`, `CROP_UNCERTAIN`, `ANGLE_UNCERTAIN`, `RESOLUTION_INSUFFICIENT`, `TOO_BLURRY`, `TOO_DARK`, or `GLARE_EXCESSIVE`.
 
 ### Canonical image
 

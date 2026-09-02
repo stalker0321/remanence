@@ -17,17 +17,21 @@ import dev.hryshyn.remanence.core.recognition.QualityReason
 /** One actionable recapture instruction per documented failure reason. */
 fun guidanceFor(reason: QualityReason): String = when (reason) {
     QualityReason.CARD_TOO_SMALL ->
-        "Move closer so the postcard fills more of the frame."
+        "Move closer while keeping all four postcard edges visible."
     QualityReason.CROP_UNCERTAIN ->
-        "Keep all four postcard edges inside the on-screen outline."
+        "Show all four postcard corners and edges; remove any occlusion."
+    QualityReason.ANGLE_UNCERTAIN ->
+        "Hold the phone parallel to the postcard and align its edges."
+    QualityReason.RESOLUTION_INSUFFICIENT ->
+        "Move closer, use the highest still resolution, and keep the full card visible."
     QualityReason.TOO_BLURRY ->
-        "Hold still and let the camera focus before capturing."
+        "Hold still and tap to focus."
     QualityReason.TOO_DARK ->
-        "Add light or move out of the shadow over the postcard."
+        "Use brighter, even light and remove shadows."
     QualityReason.GLARE_EXCESSIVE ->
-        "Tilt the postcard away from direct light to remove glare."
+        "Tilt the postcard or move the light to remove glare."
     QualityReason.FEATURES_INSUFFICIENT ->
-        "Use a well-lit postcard with visible print and keep the whole card inside the outline."
+        "Use printed detail, focus, good light, and keep the full card inside the outline."
 }
 
 /**

@@ -1,12 +1,13 @@
 package dev.hryshyn.remanence.core.data.db
 
-import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
 import dev.hryshyn.remanence.core.data.network.IncomingCapsule
 import dev.hryshyn.remanence.core.data.network.IncomingCapsulePage
 import dev.hryshyn.remanence.core.data.network.IncomingCapsuleRepository
 import dev.hryshyn.remanence.core.data.network.IncomingCapsuleResult
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
+import dev.hryshyn.remanence.core.model.BlobId
+import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.UserId
 
 /** The minimum live credential snapshot needed by one incoming page request. */
@@ -207,7 +208,7 @@ class IncomingCapsuleSyncRepository(
                     ordinal = blob.ordinal,
                     expectedSizeBytes = blob.ciphertextSize,
                     expectedSha256 = blob.ciphertextSha256.copyOf(),
-                    localPath = deterministicBlobPath(owner, capsule, blob.blobId.toRestString()),
+                    localPath = deterministicBlobPath(owner, capsule.capsuleId, blob.blobId),
                     cacheState = BlobCacheState.DOWNLOADING,
                 )
             }
@@ -217,22 +218,12 @@ class IncomingCapsuleSyncRepository(
 
     private fun deterministicBlobPath(
         owner: UserId,
-        capsule: IncomingCapsule,
-        blobId: String,
-    ): String {
-        try {
-            val root = roots.child(owner, AccountScopedFileRoots.ChildRoot.INCOMING_CIPHERTEXT)
-            val path = File(
-                root,
-                "capsules/${capsule.capsuleId.toRestString()}/blobs/$blobId.ciphertext",
-            ).canonicalFile
-            val rootPath = root.canonicalFile.path
-            val prefix = if (rootPath.endsWith(File.separator)) rootPath else "$rootPath${File.separator}"
-            require(path.path.startsWith(prefix)) { "incoming blob path escapes account root" }
-            return path.path
-        } catch (_: Exception) {
-            throw IncomingStoragePathFailure()
-        }
+        capsule: CapsuleId,
+        blob: BlobId,
+    ): String = try {
+        roots.incomingCiphertextPath(owner, capsule, blob).toString()
+    } catch (_: Exception) {
+        throw IncomingStoragePathFailure()
     }
 
     private fun remoteFailure(result: IncomingCapsuleResult): IncomingSyncResult.Failure {

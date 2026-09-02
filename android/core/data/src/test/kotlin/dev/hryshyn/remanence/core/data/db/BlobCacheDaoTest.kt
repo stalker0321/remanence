@@ -114,6 +114,139 @@ class BlobCacheDaoTest {
     }
 
     @Test
+    fun repairsOnlyTheExactDownloadingRecognitionBinding() = runBlocking {
+        val record = blob(
+            blobId = "0198f0a0-0000-7000-8000-00000000bl05",
+        ).copy(
+            kind = "RECOGNITION_MANIFEST",
+            ordinal = null,
+        )
+        dao.upsertForOwner(OWNER, record)
+
+        assertEquals(
+            1,
+            dao.repairDownloadingRecognitionPathForOwner(
+                ownerUserId = OWNER,
+                capsuleId = record.capsuleId,
+                blobId = record.blobId,
+                expectedSizeBytes = record.expectedSizeBytes,
+                expectedSha256 = record.expectedSha256,
+                oldLocalPath = record.localPath,
+                newLocalPath = "current/incoming/${record.blobId}.ciphertext",
+            ),
+        )
+
+        val repaired = dao.getByBlobIdAndOwner(record.blobId, OWNER)!!
+        assertEquals("current/incoming/${record.blobId}.ciphertext", repaired.localPath)
+        assertEquals(BlobCacheState.DOWNLOADING, repaired.cacheState)
+        assertEquals(record.capsuleId, repaired.capsuleId)
+        assertEquals(record.kind, repaired.kind)
+        assertEquals(record.ordinal, repaired.ordinal)
+        assertEquals(record.expectedSizeBytes, repaired.expectedSizeBytes)
+        assertTrue(record.expectedSha256.contentEquals(repaired.expectedSha256))
+    }
+
+    @Test
+    fun repairCasLossDoesNotRewriteTheWinningPath() = runBlocking {
+        val record = blob(
+            blobId = "0198f0a0-0000-7000-8000-00000000bl06",
+        ).copy(kind = "RECOGNITION_MANIFEST", ordinal = null)
+        dao.upsertForOwner(OWNER, record)
+        val winningPath = "winner/${record.blobId}.ciphertext"
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE blob_cache SET local_path = ? WHERE blob_id = ? AND owner_user_id = ?",
+            arrayOf(winningPath, record.blobId, OWNER),
+        )
+
+        assertEquals(
+            0,
+            dao.repairDownloadingRecognitionPathForOwner(
+                ownerUserId = OWNER,
+                capsuleId = record.capsuleId,
+                blobId = record.blobId,
+                expectedSizeBytes = record.expectedSizeBytes,
+                expectedSha256 = record.expectedSha256,
+                oldLocalPath = record.localPath,
+                newLocalPath = "loser/${record.blobId}.ciphertext",
+            ),
+        )
+        assertEquals(winningPath, dao.getByBlobIdAndOwner(record.blobId, OWNER)!!.localPath)
+    }
+
+    @Test
+    fun repairRefusesForeignOrImmutableMismatchedRows() = runBlocking {
+        val record = blob(
+            blobId = "0198f0a0-0000-7000-8000-00000000bl07",
+        ).copy(kind = "RECOGNITION_MANIFEST", ordinal = null)
+        dao.upsertForOwner(OWNER, record)
+        val otherOwner = "0198f0a0-0000-7000-8000-00000000ow02"
+
+        val attempts = listOf(
+            Triple(otherOwner, record.capsuleId, record.expectedSizeBytes),
+            Triple(OWNER, "0198f0a0-0000-7000-8000-00000000ca02", record.expectedSizeBytes),
+            Triple(OWNER, record.capsuleId, record.expectedSizeBytes + 1),
+        )
+        for ((attemptOwner, attemptCapsule, attemptSize) in attempts) {
+            assertEquals(
+                0,
+                dao.repairDownloadingRecognitionPathForOwner(
+                    ownerUserId = attemptOwner,
+                    capsuleId = attemptCapsule,
+                    blobId = record.blobId,
+                    expectedSizeBytes = attemptSize,
+                    expectedSha256 = record.expectedSha256,
+                    oldLocalPath = record.localPath,
+                    newLocalPath = "must-not-write/${record.blobId}.ciphertext",
+                ),
+            )
+        }
+        assertEquals(
+            0,
+            dao.repairDownloadingRecognitionPathForOwner(
+                ownerUserId = OWNER,
+                capsuleId = record.capsuleId,
+                blobId = record.blobId,
+                expectedSizeBytes = record.expectedSizeBytes,
+                expectedSha256 = ByteArray(32) { 99 },
+                oldLocalPath = record.localPath,
+                newLocalPath = "must-not-write/${record.blobId}.ciphertext",
+            ),
+        )
+        assertEquals(record.localPath, dao.getByBlobIdAndOwner(record.blobId, OWNER)!!.localPath)
+    }
+
+    @Test
+    fun repairRefusesCachedAndCorruptRows() = runBlocking {
+        val ids = listOf(
+            "0198f0a0-0000-7000-8000-00000000bl08",
+            "0198f0a0-0000-7000-8000-00000000bl09",
+        )
+        for ((index, state) in listOf(BlobCacheState.CACHED, BlobCacheState.CORRUPT).withIndex()) {
+            val record = blob(
+                blobId = ids[index],
+                state = state,
+            ).copy(kind = "RECOGNITION_MANIFEST", ordinal = null)
+            dao.upsertForOwner(OWNER, record)
+
+            assertEquals(
+                0,
+                dao.repairDownloadingRecognitionPathForOwner(
+                    ownerUserId = OWNER,
+                    capsuleId = record.capsuleId,
+                    blobId = record.blobId,
+                    expectedSizeBytes = record.expectedSizeBytes,
+                    expectedSha256 = record.expectedSha256,
+                    oldLocalPath = record.localPath,
+                    newLocalPath = "must-not-write/${record.blobId}.ciphertext",
+                ),
+            )
+            val unchanged = dao.getByBlobIdAndOwner(record.blobId, OWNER)!!
+            assertEquals(record.localPath, unchanged.localPath)
+            assertEquals(state, unchanged.cacheState)
+        }
+    }
+
+    @Test
     fun deleteByCapsuleRemovesAllCapsuleBlobsOnly() = runBlocking {
         val other = blob(blobId = "0198f0a0-0000-7000-8000-00000000bl02")
             .copy(capsuleId = "0198f0a0-0000-7000-8000-00000000ca02", ordinal = null, kind = "CONTENT_MANIFEST")

@@ -90,6 +90,32 @@ abstract class BlobCacheDao {
     )
     abstract suspend fun getAllByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String): List<BlobCacheEntity>
 
+    /**
+     * Repairs only a retained recognition declaration from the old path
+     * layout. Every immutable binding and the DOWNLOADING lifecycle state are
+     * part of this compare-and-set; 0 rows means the caller lost the race or
+     * the row is foreign, changed, or no longer repairable.
+     */
+    @Query(
+        "UPDATE blob_cache SET local_path = :newLocalPath " +
+            "WHERE blob_id = :blobId AND owner_user_id = :ownerUserId " +
+            "AND capsule_id = :capsuleId " +
+            "AND kind = 'RECOGNITION_MANIFEST' AND ordinal IS NULL " +
+            "AND expected_size_bytes = :expectedSizeBytes " +
+            "AND expected_sha256 = :expectedSha256 " +
+            "AND local_path = :oldLocalPath " +
+            "AND cache_state = 'DOWNLOADING'",
+    )
+    abstract suspend fun repairDownloadingRecognitionPathForOwner(
+        ownerUserId: String,
+        capsuleId: String,
+        blobId: String,
+        expectedSizeBytes: Long,
+        expectedSha256: ByteArray,
+        oldLocalPath: String,
+        newLocalPath: String,
+    ): Int
+
     /** Owner-guarded DOWNLOADING -> CACHED CAS; 0 rows means refused. */
     @Query(
         "UPDATE blob_cache SET cache_state = 'CACHED' " +

@@ -21,6 +21,8 @@ import mockwebserver3.RecordedRequest
 import dev.hryshyn.remanence.core.data.network.ApiBaseUrl
 import dev.hryshyn.remanence.core.data.network.IncomingCapsuleRepository
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
+import dev.hryshyn.remanence.core.model.BlobId
+import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.LocalMaterialState
 import dev.hryshyn.remanence.core.model.UserId
 import org.junit.After
@@ -73,7 +75,15 @@ class IncomingCapsuleSyncRepositoryTest {
         assertEquals(TERMINAL_CURSOR, database.syncCursorDao().get(OWNER, INCOMING_STREAM)!!.serverCursor)
         val storedBlob = database.blobCacheDao().getByBlobIdAndOwner(BLOB_IDS.first(), OWNER)!!
         assertEquals(BlobCacheState.DOWNLOADING, storedBlob.cacheState)
-        assertTrue(storedBlob.localPath.contains("/accounts/$OWNER/incoming-ciphertext/"))
+        assertEquals(
+            AccountScopedFileRoots(ApplicationProvider.getApplicationContext<Context>().cacheDir)
+                .incomingCiphertextPath(
+                    owner = UserId.parseRest(OWNER),
+                    capsule = CapsuleId.parseRest(CAPSULE_ID),
+                    blob = BlobId.parseRest(BLOB_IDS.first()),
+                ).toString(),
+            storedBlob.localPath,
+        )
         assertFalse(storedBlob.localPath.contains("email"))
     }
 

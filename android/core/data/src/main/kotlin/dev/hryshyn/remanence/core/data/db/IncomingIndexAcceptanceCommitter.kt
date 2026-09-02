@@ -207,17 +207,7 @@ class IncomingIndexAcceptanceCommitter(
         capsule: CapsuleId,
         blob: BlobId,
     ): Path {
-        val root = roots.child(owner, AccountScopedFileRoots.ChildRoot.INCOMING_CIPHERTEXT)
-            .toPath()
-            .toAbsolutePath()
-            .normalize()
-        val destination = root.resolve(
-            "capsules/${capsule.toRestString()}/blobs/${blob.toRestString()}.ciphertext",
-        ).normalize()
-        require(isContained(destination, root)) {
-            "incoming ciphertext destination escaped owner root"
-        }
-        return destination
+        return roots.incomingCiphertextPath(owner, capsule, blob)
     }
 
     private suspend fun verifyDestination(

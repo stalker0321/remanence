@@ -20,24 +20,22 @@ Deliverables:
 
 No application source, build dependency, migration, or API implementation starts before this gate.
 
-## Architecture checkpoint — FRONT_ONLY identity contract
+## Architecture checkpoint — FRONT-only reset
 
-ADR-012 is the current contract for new recognition material. The postcard
-FRONT is the design identity and the local owner-scoped relation is
-`design -> 0..N capsules`: zero is `NO_MATCH`, one proceeds only through full
-E2EE verification, and many is explicit ambiguity with no automatic opening.
-The BACK is not mandatory for new capsules. A strict `FRONT_ONLY` inner
-recognition manifest v2 carries an explicit identity mode and required FRONT;
-its BACK is absent. A future explicitly named mode may permit optional BACK.
+ADR-012 is the single production contract. The postcard FRONT is the design
+identity and the local owner-scoped relation is `design -> 0..N capsules`:
+zero is `NO_MATCH`, one proceeds only through full E2EE verification, and many
+is explicit ambiguity with no automatic opening. The production recognition
+manifest and local index contain one required FRONT and no BACK. Its explicit
+format/version exists solely for fail-closed parsing.
 
-Legacy Test8/Test9 two-sided inner manifests remain strict/readable under v1.
-They are never rewritten or given a synthesized BACK. The fingerprint
-algorithm/profile remains `mvp-orb-v1` unless separately changed by ADR; it is
-not an identity-mode signal. Outer REST/protocol/AAD/blob cardinality remains
-v1 because the server treats the encrypted recognition artifact as opaque.
-There is no global/server visual index or uniqueness leakage. This checkpoint
-changes the approved documentation contract only; it does not claim source
-implementation at `f721d1a`.
+Test8/Test9 local/server recognition state is disposable. Deployment of this
+breaking reset starts with a clean app database and clean server recognition
+state; no migration, compatibility reader, or data repair is required. The
+fingerprint algorithm/profile remains `mvp-orb-v1` unless separately changed
+by ADR. Outer transport, statement, envelope, and blob cardinality remain
+unchanged. This checkpoint changes the approved documentation contract only;
+it does not claim source implementation at `f01c379`.
 
 ## M0 — Reproducible foundation
 
@@ -69,8 +67,7 @@ Scope:
 - Android Room schema and secure session/key storage;
 - self-recipient handle resolution through the real directory;
 - explicit confirmation bound to immutable user/key IDs;
-- CameraX FRONT still capture and manual crop fallback; legacy two-sided v1
-  back capture remains readable, while BACK is not a new-capsule prerequisite;
+- CameraX FRONT still capture and manual crop fallback;
 - capture normalization, ORB fingerprint extraction, encrypted local fingerprint storage;
 - Android Photo Picker for exactly 3–5 normalized photos and optional note;
 - real capsule keyset, AEAD artifacts, publish statement/signature, self envelope;
@@ -122,27 +119,27 @@ not appear as tables, endpoint stubs, or incomplete UI in M2.
 
 M2 is the first complete product proof. It is not a claim of public-release recognition/security hardening.
 
-## M2-F0 — FRONT_ONLY contract migration (near term)
+## M2-F0 — FRONT-only reset (near term)
 
-Goal: introduce the revised identity contract without changing the outer v1
-transport, server behavior, or Room schema.
+Goal: replace the recognition contract with one required FRONT, one explicit
+manifest format/version, and an owner-scoped `design -> 0..N` relation. A clean
+app/database/server reset is part of deployment; no legacy support or data
+migration is required.
 
-Bounded checkpoints, in order:
+Bounded slices, in order:
 
-1. Define typed `FRONT_ONLY` identity-mode/version seams and explicitly mark
-   legacy two-sided v1.
-2. Add dual readers for the encrypted inner recognition manifest and the
-   versioned local `SenderIndexBundle`; prove Room v7 represents owner-scoped
-   `design -> 0..N` without a migration before proposing one.
-3. Exercise outgoing and incoming encryption/acceptance with one opaque
-   recognition blob and unchanged v1 outer declaration/AAD/cardinality.
-4. Add FRONT_ONLY Create, then FRONT_ONLY Scan with `NO_MATCH`, single
-   candidate, and ambiguous candidate classifications.
-5. Preserve legacy v1 create/scan, upgrade, malformed-version, and absent-BACK
-   rejection regressions. No ambiguous candidate may auto-open.
+1. Replace the recognition schema/domain/index with required FRONT and
+   design-to-many capsule identity; reject unsupported manifest versions.
+2. Implement outgoing front-only manifest encryption and incoming acceptance
+   while preserving statement, envelope, AEAD, owner, and blob-binding checks.
+3. Implement clean-schema Room/index persistence and offline candidate loading.
+4. Implement Create as recipient confirmation → FRONT capture → content
+   selection → encryption → outgoing staging/upload.
+5. Implement Scan as FRONT capture → 0/1/N local classification → crypto
+   verification → grant or no-match/ambiguity result.
 
-FRONT_ONLY is not considered implemented until these checkpoints have source,
-test, and review evidence. The bounded task sequence is listed in
+M2-F0 is complete only with source, focused tests, and review evidence for all
+five slices. The bounded task sequence is listed in
 `docs/implementation-plan.md`.
 
 ## M2.x — Email-addressed invitation (deferred)
@@ -169,8 +166,7 @@ FRONT design without exposing an inbox or global count.
 
 Scope: scan-scoped, bounded candidate rows with minimal locally decrypted
 chooser hints; explicit user selection; complete E2EE verification for the
-selected capsule; no “best score wins” ambiguity behavior; retain zero/one and
-legacy two-sided regressions.
+selected capsule; no “best score wins” ambiguity behavior.
 
 ## M2-F2 — Conservative duplicate policy (future)
 
@@ -179,8 +175,7 @@ as globally unique or blocking legitimate multiple capsules for that design.
 
 Scope: a separately approved privacy-preserving policy and protocol/DB
 decision, with sender+recipient scope, idempotency/retry semantics, and no
-server-visible visual equality or global index. This is not part of FRONT_ONLY
-migration.
+server-visible visual equality or global index. This is not part of M2-F0.
 
 ## M2-F3 — Optional 24-hour cancellation (future)
 
@@ -199,8 +194,8 @@ Scope:
 
 - consented/synthetic physical-postcard dataset;
 - design-to-many groups covering zero, one, and multiple capsules;
-- optional physical BACK captures as a future disambiguation signal, not a
-  FRONT_ONLY prerequisite;
+- captured BACK images, if retained in research, are ancillary data and are
+  excluded from the production benchmark;
 - real or controlled postal modifications;
 - low light, perspective, rotation, crop, shadow, glare, blur, occlusion, dirt, wear;
 - locked instance/design-separated evaluation split;
@@ -260,8 +255,7 @@ Scope:
 
 - concise onboarding and device-loss warning;
 - recipient confirmation clarity;
-- FRONT capture guidance and quality errors, with BACK clearly optional for
-  FRONT_ONLY and legacy prepared-BACK guidance retained only for v1;
+- FRONT capture guidance and quality errors;
 - orientation-aware postcard framing so portrait capture can use the available
   screen area instead of forcing a distant landscape guide;
 - upload/resume status for the current creation only;

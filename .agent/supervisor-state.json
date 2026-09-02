@@ -1,15 +1,21 @@
 {
   "schema_version": 1,
-  "current_milestone": "M2_FRONT_ONLY_ARCHITECTURE_CHECKPOINT",
-  "current_task": "M2_FRONT_ONLY_IMPLEMENTATION_NOT_STARTED",
+  "active_branch": "integration/m2-front-only-reset",
+  "current_milestone": "M2_FRONT_ONLY_RESET",
+  "current_task": "M2_F0_IMPLEMENTATION_NOT_STARTED",
   "last_completed_implementation_commit": null,
   "last_reviewed_commit": null,
   "known_blockers": [
-    "FRONT_ONLY is a documentation contract only; implementation must follow ADR-012 and the bounded queue before it is claimed.",
+    "FRONT-only is a documentation contract only; implementation must follow ADR-012 and the bounded queue before it is claimed.",
+    "Deployment of the breaking reset requires clean app/database/server recognition state; Test8/Test9 recognition state is disposable.",
     "P14 physical Android hardware evidence remains unrun; CameraX/OpenCV and two-device evidence cannot be claimed until exercised on hardware."
   ],
   "implementation_tmux_target": "main:1-3",
   "codex_tmux_target": "main:0",
+  "role_map": {
+    "main:0": "codex supervisor, architecture, and review",
+    "main:1-3": "implementation workers"
+  },
   "task_max_expected_minutes": 10,
   "review_interval_minutes": 15
 }

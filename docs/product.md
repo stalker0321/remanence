@@ -4,8 +4,9 @@ Status: **APPROVED product scope; recognition identity contract follows ADR-012.
 
 This document is normative for product scope and physical-first user flows. It
 does not define architecture, APIs, cryptographic algorithms, or
-implementation. For recognition identity, ADR-012 is current: new capsules
-are FRONT_ONLY, while existing two-sided v1 capsules remain strict/readable.
+implementation. For recognition identity, ADR-012 is current: production is
+one breaking FRONT-only contract. Test8/Test9 recognition state is disposable
+and is not a supported upgrade input.
 
 ## 1. Purpose
 
@@ -25,8 +26,7 @@ The MVP is production-shaped, not a throwaway prototype. In scope:
 - Real accounts and normalized unique handles backed by an immutable UUID `user_id`
 - Explicit recipient resolution
 - Capsule content: 3–5 photos plus an optional note
-- Sender capture of the postcard FRONT; BACK is optional for new FRONT_ONLY
-  capsules and remains strict only for legacy two-sided v1
+- Sender capture of the postcard FRONT only
 - Local hierarchical recognition
 - Real end-to-end encryption (E2EE)
 - Dumb backend for routing and ciphertext storage only
@@ -87,13 +87,11 @@ The sender flow MUST follow this order:
 2. Resolve the recipient handle to an immutable `user_id` plus the recipient’s active public key.
 3. Explicitly confirm the resolved recipient.
 4. Capture the postcard FRONT.
-5. For a legacy two-sided v1 capsule only, fully prepare and capture the BACK.
-   New FRONT_ONLY creation does not require or synthesize BACK.
-6. Select 3–5 photos.
-7. Optionally add a note.
-8. Encrypt and sign locally.
-9. Upload ciphertext with resumable upload and finalize.
-10. Physically send the postcard.
+5. Select 3–5 photos.
+6. Optionally add a note.
+7. Encrypt and sign locally.
+8. Upload ciphertext with resumable upload and finalize.
+9. Physically send the postcard.
 
 “Resumable” means that already uploaded encrypted blobs are not uploaded again after interruption. The MVP does not require byte-range multipart upload.
 
@@ -104,37 +102,34 @@ After publication, the sender may see only the operational result of the current
 First receipt MUST proceed as follows:
 
 1. Authenticated silent sync of encrypted pending recognition material.
-2. Capture the postcard FRONT. Capture BACK only when the explicit identity
-   mode requires or permits it.
+2. Capture the postcard FRONT.
 3. Match locally against the owner-scoped design-to-capsule candidates.
 4. Zero candidates require retry; one candidate proceeds only after full E2EE
    verification; multiple candidates never auto-open and await the future
    ambiguity picker.
 5. Locally decrypt the verified envelope and content.
 6. Open the capsule fullscreen.
-7. Generate and persist the recipient FRONT fingerprint, retaining optional
-   explicitly captured BACK evidence without changing identity mode.
+7. Generate and persist the recipient FRONT fingerprint.
 
 ## 10. Later scan
 
 Later reopening MUST proceed as follows:
 
-1. Scan the FRONT of the physical postcard; use BACK only under its explicit
-   identity mode.
+1. Scan the FRONT of the physical postcard.
 2. Prefer the recipient FRONT fingerprint; fall back to the sender FRONT
    fingerprint.
 3. Apply the same safe design-to-many rules as first receipt: no guessing or
    auto-open for multiple candidates; retry or use the future explicit picker.
 4. Issue an in-memory scan grant and open the capsule.
 
-App restart, process death, expired grant, or normal navigation back MUST require a new scan.
+App restart, process death, expired grant, or normal navigation back MUST require a new FRONT scan.
 
 The product MUST NOT provide a capsule deep link or history route.
 
 ## 11. Ambiguity chooser (future M2-F1)
 
-The ambiguity chooser is a future milestone, not part of the current FRONT_ONLY
-migration. Until M2-F1 is shipped, multiple plausible capsules MUST remain
+The ambiguity chooser is a future milestone, not part of the current FRONT-only
+implementation. Until M2-F1 is shipped, multiple plausible capsules MUST remain
 blocked rather than guessed. Once shipped, the chooser MUST appear only after
 a plausible scan.
 

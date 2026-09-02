@@ -16,7 +16,7 @@ Every item is pass/fail. A screenshot, agent statement, or successful command fr
   map to 0..N capsules.
 - [ ] First-receipt bootstrap can be traced without server CV or plaintext descriptors.
 - [ ] No documented navigation/API requires a gallery, inbox, history, feed, public profile, or capsule count.
-- [ ] Device loss, stale key, key substitution limitation, metadata leakage, and raw-back privacy are explicit.
+- [ ] Device loss, stale key, key substitution limitation, metadata leakage, and ancillary research-data privacy are explicit.
 - [ ] No global/server visual index or sender+recipient+FRONT uniqueness signal
   is introduced; duplicate prevention remains a separate future policy.
 - [ ] Initial M0 implementation tasks each have one narrow artifact, verification command, and expected duration at most ten minutes.
@@ -63,9 +63,8 @@ Every item is pass/fail. A screenshot, agent statement, or successful command fr
 ### Creation and crypto
 
 - [ ] Sender cannot continue with an unresolved/unconfirmed handle.
-- [ ] New FRONT_ONLY creation requires a FRONT CameraX still with quality/crop
-  handling; BACK is not required and is never synthesized. Legacy two-sided v1
-  creation remains strict/readable.
+- [ ] New creation requires exactly one FRONT CameraX still with quality/crop
+  handling. No second-side capture exists in the production flow.
 - [ ] Exactly 3–5 Photo Picker images are accepted; EXIF is removed and size limits enforced.
 - [ ] Note is optional and UTF-8 size limit is enforced.
 - [ ] Capsule produces one recognition ciphertext, one content ciphertext, 3–5 photo ciphertexts, signed statement, and HPKE envelope.
@@ -74,22 +73,21 @@ Every item is pass/fail. A screenshot, agent statement, or successful command fr
 
 ### Scan gate and persistence
 
-- [ ] Local `mvp-orb-v1` matching uses the required FRONT and explicit identity
-  mode; optional BACK is not inferred from profile or field absence and raw
-  match evidence/classification is emitted.
+- [ ] Local `mvp-orb-v1` matching uses exactly one required FRONT and explicit
+  manifest-format parsing; unsupported versions fail closed and raw match
+  evidence/classification is emitted.
 - [ ] Capsule presentation cannot be navigated/deep-linked by capsule ID.
 - [ ] Successful scan plus verified crypto issues a memory-only ten-minute grant.
 - [ ] Leaving the flow, logout, expiry, or process death invalidates the grant.
-- [ ] Closing/restarting the app requires a new FRONT_ONLY FRONT scan, or a
-  strict two-sided v1 scan for a legacy capsule, to present the capsule again.
+- [ ] Closing/restarting the app requires a new FRONT scan to present the
+  capsule again.
 - [ ] Raw scans and persistent plaintext thumbnails do not remain after staging/presentation cleanup.
 
 ### Physical evidence
 
 - [ ] `assembleDebug` APK installs and launches on one documented physical Android device.
-- [ ] That device completes FRONT_ONLY create → close/process restart → FRONT
-  scan → decrypt/display with one physical postcard; legacy two-sided v1
-  regressions retain the two-side path.
+- [ ] That device completes FRONT-only create → close/process restart → FRONT
+  scan → decrypt/display with one physical postcard.
 
 ## M2 — Two-user transfer
 
@@ -126,19 +124,17 @@ Every item is pass/fail. A screenshot, agent statement, or successful command fr
 - [ ] Undownloaded content/photo bindings remain unverified declarations; index acceptance never labels them delivered or material-cached.
 - [ ] No incoming list/count/thumbnail/sender identity appears before a plausible scan.
 - [ ] B scans the FRONT and matches locally against pending owner-scoped sender
-  design fingerprints; BACK is used only by an explicit supported mode.
+  design fingerprints.
 - [ ] A design with zero candidates returns no match; one candidate proceeds
   only after full E2EE verification; multiple candidates never auto-open and
-  remain blocked until future M2-F1 picker support. Legacy v1 duplicate-front
-  regressions retain strict two-sided behavior.
+  remain blocked until future M2-F1 picker support.
 - [ ] Wrong postcard produces no match/retry, not a random capsule.
 - [ ] B verifies envelope, IDs, signed statement, hashes, and AEAD before plaintext.
 - [ ] Background full-cache verifies transport bindings but never decrypts the content manifest; after a current physical match, presentation acceptance requires every ciphertext and verifies content-manifest AEAD/layout before publishing the grant or note/photo plaintext.
 - [ ] If a physical match occurs before content is cached, UI shows connectivity-required state and exposes zero partial plaintext.
 - [ ] B sees the correct 3–5 photos and note fullscreen.
-- [ ] Successful receipt stores a preferred encrypted recipient FRONT baseline,
-  retains explicitly captured optional BACK evidence, and retains sender
-  fallback without rewriting legacy v1 pairs.
+- [ ] Successful receipt stores a preferred encrypted recipient FRONT baseline
+  and retains sender FRONT fallback.
 - [ ] Server state reveals at most `CIPHERTEXT_SYNCED`, never opened/recognized timestamps.
 - [ ] `INDEX_CACHED` is local-only; server reaches `CIPHERTEXT_SYNCED` only after every required ciphertext is durably cached and hash-checked.
 
@@ -157,7 +153,8 @@ Every item is pass/fail. A screenshot, agent statement, or successful command fr
 
 - [ ] Two physical Android installations run the reviewed APK and distinct accounts.
 - [ ] One real physical postcard completes A create/publish → physical handoff/mail simulation → B first receipt → restart → B later scan.
-- [ ] API/DB/object/log inspection for that run finds no plaintext photo/note/back/descriptors/private/capsule keys.
+- [ ] API/DB/object/log inspection for that run finds no plaintext photo/note/
+  descriptor/private/capsule keys.
 
 ### Deferred email-invite seam
 
@@ -166,8 +163,8 @@ Every item is pass/fail. A screenshot, agent statement, or successful command fr
 
 ## M3 — Recognition hardening
 
-- [ ] Dataset satisfies the design-to-many/zero-one-many, transformation, and
-  retained legacy two-sided composition in `recognition.md`.
+- [ ] Dataset satisfies the design-to-many/zero-one-many and transformation
+  composition in `recognition.md`; any captured BACK is ancillary research data.
 - [ ] Train/evaluation split is by physical instance/design and evaluation remains locked during tuning.
 - [ ] Recognition profile is one versioned asset; no threshold is duplicated as a magic number.
 - [ ] Locked evaluation reports zero false automatic accepts with comparison count/statistical bound.

@@ -9,16 +9,16 @@
 ## Current development status / Quick verification
 
 Architecture gate passed. The current architecture checkpoint is ADR-012:
-new capsules use explicit FRONT_ONLY recognition identity while legacy
-two-sided v1 capsules remain strict/readable. This is a documentation contract
-only; the code at `f721d1a` does not claim FRONT_ONLY implementation. Toolchain,
-Compose, and optional device steps are in [`docs/development.md`](docs/development.md).
+the production contract is FRONT-only. The code at `f01c379` does not claim
+FRONT-only implementation yet. Toolchain, Compose, and optional device steps
+are in [`docs/development.md`](docs/development.md).
 
-The bounded next contract is the staged migration in
-[`docs/implementation-plan.md`](docs/implementation-plan.md), beginning with
-typed mode/version seams and dual readers. It preserves outer protocol/AAD and
-blob cardinality v1, keeps the local index owner-scoped, and does not prescribe
-a Room migration before proving Room v7 insufficient.
+The bounded next contract is the clean-reset implementation queue in
+[`docs/implementation-plan.md`](docs/implementation-plan.md): one explicit
+front-only manifest format, front-only local indexes, outgoing/incoming
+wiring, Create, and Scan. Existing Test8/Test9 recognition state is disposable
+development data; deployment starts with a clean app database and server
+recognition state. No compatibility reader or data migration is required.
 
 Canonical verification:
 

@@ -1,14 +1,15 @@
 # Test strategy
 
-Status: **APPROVED test contract; recognition identity follows ADR-012 and FRONT_ONLY implementation remains pending.**
+Status: **APPROVED test contract; recognition identity follows ADR-012 and FRONT-only implementation remains pending.**
 
 Tests prove mechanisms and boundaries, not screen count. A green mocked demo
 cannot satisfy M1/M2. The minimum evidence pyramid combines fast deterministic
 tests, real PostgreSQL/storage integration, Android instrumentation,
 recognition datasets, adversarial crypto fixtures, and a two-device physical
-flow. Recognition tests follow ADR-012: new capsules require FRONT_ONLY,
-legacy two-sided v1 remains strict/readable, and owner-scoped design identity
-may map to 0..N capsules without automatic opening of N.
+flow. Recognition tests follow ADR-012: production requires one FRONT, and
+owner-scoped design identity may map to 0..N capsules without automatic
+opening of N. Test8/Test9 recognition state is disposable and is reset before
+the new implementation is exercised.
 
 M2 server work may run before the M1 hardware smoke, but automated or
 Robolectric results never substitute for that CameraX/OpenCV evidence. The M2
@@ -22,10 +23,9 @@ Run on every Android change where applicable:
 
 - typed IDs, handle normalization, limits, lifecycle transitions;
 - deterministic protobuf ordering/encoding and AAD/context bytes;
-- recognition score/ranking, explicit inner mode/version, and design-to-many
+- recognition score/ranking, explicit manifest-format parsing, and design-to-many
   classification from fixed match reports;
-- legacy v1/v2 dual readers, required FRONT, strict absent-BACK, and old-client
-  rejection;
+- required FRONT and unsupported-version rejection;
 - repository/use-case ordering with fakes at I/O boundaries;
 - scan-grant lifetime/consumption with a fake clock;
 - navigation guards and ViewModel state.
@@ -34,8 +34,7 @@ These tests do not claim to validate Android Keystore, CameraX, OpenCV native be
 
 ### Android local/instrumentation tests
 
-- Room schemas, DAO constraints, and migration paths; prove current Room v7
-  represents owner-scoped design-to-many before proposing a migration;
+- clean Room schema, DAO constraints, and owner-scoped design-to-many rows;
 - Keystore KEK creation and wrapped keyset survival across process/component recreation;
 - Tink AEAD/HPKE/signature behavior on Android runtime;
 - OpenCV extraction/matching on ARM64 and at least one CI-supported emulator ABI;
@@ -69,9 +68,9 @@ Checked-in non-production fixtures are consumed by Android and backend where rel
 - deterministic protobuf and AAD/context bytes;
 - public statement and signature;
 - artifact encryption/decryption and HPKE envelopes (Android only for secrets);
-- malformed, truncated, reordered, duplicate, oversized, unknown-version, and
-  unsupported-identity-mode inputs;
-- opaque outer-v1 transport carrying inner recognition v2 without changed blob
+- malformed, truncated, reordered, duplicate, oversized, and
+  unsupported-manifest-version inputs;
+- opaque outer-v1 transport carrying the front-only recognition manifest without changed blob
   cardinality or AAD.
 
 A golden fixture changes only with explicit protocol review. Regenerating expected output inside the same test is forbidden.
@@ -86,8 +85,7 @@ candidates and must not collapse identical FRONT designs into one top-1 truth.
 
 ### Physical end-to-end
 
-- M1: one physical Android device and one physical postcard using FRONT_ONLY;
-  retain a legacy two-sided v1 regression where applicable.
+- M1: one physical Android device and one physical postcard using FRONT-only.
 - M2: two physical Android installations/accounts and one transferred postcard;
   prove zero/one/many candidate handling and no auto-open for ambiguity.
 - Record APK hash, Git commit, device models/API levels, backend commit/config, commands, and observed pass/fail.
@@ -104,8 +102,7 @@ Every crypto artifact is tested against:
 - bit flip, truncation, extension, swapped blobs, reordered statement entries;
 - wrong ciphertext size/hash and repeated nonce-format/parser edge cases;
 - unknown protocol/key/profile version;
-- unknown inner recognition version/identity mode and missing/forbidden BACK
-  combinations;
+- unknown inner recognition version and malformed/missing FRONT combinations;
 - revoked/retired/stale key state;
 - unrelated authenticated user access;
 - process death before/after encrypted staging and after scan grant.
@@ -159,9 +156,8 @@ Instrumentation/physical suites are separate labeled evidence because the VPS ma
 ## 6. Test data and privacy
 
 - No real user database/object dump enters fixtures.
-- BACK-side images are optional future disambiguation fixtures and use synthetic
-  personal details unless documented consent exists; legacy v1 fixtures retain
-  their strict two-sided inputs.
+- Captured BACK images are ancillary research fixtures only, stored separately
+  from production inputs and excluded from acceptance metrics.
 - Test private keys are clearly named, scoped to fixtures, and rejected by production-mode configuration.
 - Logs/evidence redact email, handles where unnecessary, tokens, key bytes, envelopes, descriptors, note/photo data, and physical addresses.
 - Account-isolation probes assert B cannot query or resume A's incoming,

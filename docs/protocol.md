@@ -1,14 +1,14 @@
 # Protocol and API contracts
 
-Status: **APPROVED outer logical v1 contract plus ADR-012 inner recognition v2 checkpoint; normative generated schemas/field fixtures remain implementation-gated.**
+Status: **APPROVED outer logical v1 contract plus ADR-012 front-only recognition reset; normative generated schemas/field fixtures remain implementation-gated.**
 
 This document defines identifiers, canonical encrypted/signed payloads, REST
 contracts, state transitions, idempotency, limits, and error behavior. The
 backend treats encrypted artifacts as opaque bytes even when it validates their
-declared structure and signed publish statement. ADR-012 adds a versioned
-inner recognition-manifest contract without changing the outer v1 transport.
-This documentation checkpoint does not claim that v2 is implemented at
-`f721d1a`.
+declared structure and signed publish statement. ADR-012 defines one explicit
+front-only inner recognition-manifest format without changing the outer v1
+transport. This documentation checkpoint does not claim that the reset is
+implemented at `f01c379`.
 
 ## 1. Conventions
 
@@ -46,7 +46,7 @@ REST JSON is never signed directly. Encrypted and signed data use Protocol Buffe
 
 The normative `.proto` file created during implementation must express these
 outer v1 logical messages exactly, plus the explicitly versioned inner
-`RecognitionManifestV2` rules below; field numbers are frozen with the first
+`RecognitionManifest` rules below; field numbers are frozen with the first
 golden-vector commit.
 
 ```proto
@@ -115,25 +115,10 @@ message ChooserHint {
 }
 
 message RecognitionManifest {
-  uint32 protocol_version = 1;    // exactly 1: legacy two-sided manifest
-  bytes capsule_id = 2;
-  ChooserHint chooser_hint = 3;
-  bytes front_fingerprint = 4;    // versioned recognition payload
-  bytes back_fingerprint = 5;     // required for legacy v1
-}
-
-enum RecognitionIdentityMode {
-  RECOGNITION_IDENTITY_MODE_UNSPECIFIED = 0;
-  FRONT_ONLY = 1;
-}
-
-message RecognitionManifestV2 {
-  uint32 manifest_version = 1;    // exactly 2; independent of outer v1
+  uint32 manifest_version = 1;    // exactly 2: front-only manifest
   bytes capsule_id = 2;
   ChooserHint chooser_hint = 3;
   bytes front_fingerprint = 4;    // required
-  optional bytes back_fingerprint = 5;
-  RecognitionIdentityMode identity_mode = 6; // explicitly required
 }
 
 message PhotoEntry {
@@ -161,14 +146,11 @@ message ContentManifest {
 }
 ```
 
-`RecognitionManifest` is the legacy inner v1 form: both fingerprint fields are
-required and it is readable by existing Test8/Test9 clients. New
-`FRONT_ONLY` creation encrypts `RecognitionManifestV2` with
-`manifest_version = 2` and the explicit identityMode
-`identity_mode = FRONT_ONLY`; FRONT is required and
-BACK must be absent in strict mode. The optional v2 BACK field is reserved for
-a separately named mode whose semantics are explicitly versioned. No client
-infers identity mode from BACK presence/absence or from `mvp-orb-v1`.
+`RecognitionManifest` is the single production inner format. Its
+`manifest_version = 2` is a parser/version guard only; it is not an identity
+mode and there is no BACK field. FRONT is required. Unsupported versions and
+malformed fields fail closed. Test8/Test9 recognition state is disposable and
+is not a supported input to this reset.
 
 The inner manifest version is deliberately separate from the outer contract:
 REST remains `/v1`, `PublishStatement.protocol_version` remains 1,
@@ -176,9 +158,8 @@ REST remains `/v1`, `PublishStatement.protocol_version` remains 1,
 exactly one recognition artifact, one content artifact, and 3–5 photo
 artifacts. The server validates only the opaque transport declaration and
 published bindings; it does not parse a visual index or enforce design
-uniqueness. An old client that sees an inner version it does not support must
-fail closed with a local unsupported-version result rather than parse v2 as
-legacy two-sided v1.
+uniqueness. An implementation that sees an inner version it does not support
+must fail closed with a local unsupported-version result rather than parse it.
 
 `PublishStatement.created_at_epoch_seconds` is sender-authored, signed content
 metadata. It is not the server's operational `capsules.created_at` timestamp;
@@ -329,9 +310,8 @@ Creates an idempotent `DRAFT`. The authenticated user is always the sender.
 Validation requires sender ownership, current recipient bundle, exactly one
 recognition manifest, one content manifest, and 3–5 sequential photo ordinals,
 unique IDs, size limits, and an identical request hash on replay. The one
-recognition blob may contain either a legacy v1 two-sided inner manifest or a
-v2 explicit `FRONT_ONLY` inner manifest; the server does not need to
-distinguish those opaque payloads. Response `201` or idempotent `200` returns
+recognition blob contains the explicit front-only inner manifest; the server
+does not inspect its encrypted contents. Response `201` or idempotent `200` returns
 capsule state and per-blob `DECLARED`/`STORED` state.
 
 ### `PUT /v1/capsules/{capsule_id}/blobs/{blob_id}`

@@ -1,4 +1,4 @@
-# ADR-012: FRONT_ONLY recognition identity and v1 transport compatibility
+# ADR-012: FRONT-only recognition identity
 
 Status: Accepted architecture checkpoint; implementation pending
 
@@ -6,105 +6,99 @@ Date: 2026-09-02
 
 ## Context
 
-The original M1/M2 recognition contract required a prepared postcard back and
-treated a physical card as if it identified one capsule. That is too strict
-for the revised product. The postcard front is the design identity; a design
-may have no capsule, one capsule, or several capsules owned by the recipient.
-The back is not mandatory and may become a later disambiguator.
+The postcard FRONT identifies a visual design. A design can map locally to zero,
+one, or many decryptable capsules available to the authenticated recipient.
+The BACK is not part of production recognition, enrollment, matching, or
+presentation authorization.
 
-Test8/Test9 already-produced two-sided capsules must remain readable. A client
-upgrade must not rewrite their manifests, synthesize a missing back, or
-reinterpret an old profile as a new identity mode. The transport and server
-must not learn a visual identity or a uniqueness relation merely to support
-the new client contract.
-
-Existing files under `docs/evidence/` and `.agent/reviews/` are historical
-records of earlier contracts and observations. Their two-sided wording is not
-current normative guidance and must not be rewritten; new evidence must cite
-this ADR when describing the active contract.
+The Test8/Test9 recognition state is disposable development state. A clean app
+database and clean server recognition state are accepted deployment
+prerequisites for this breaking reset. Historical evidence under
+`docs/evidence/` and `.agent/reviews/` remains untouched and is historical
+record only; its old BACK wording is not normative.
 
 ## Decision
 
-### Compatibility boundary
+### Single production contract
 
-- Existing two-sided capsules use the strict inner recognition manifest v1:
-  FRONT and BACK are both required, and the existing `mvp-orb-v1` fingerprint
-  profile remains applicable.
-- New `FRONT_ONLY` capsules use an explicitly versioned encrypted inner
-  recognition manifest v2 with an explicit identityMode (`identity_mode` on
-  the wire). FRONT is
-  required. In strict `FRONT_ONLY`, BACK is absent; the wire field may be
-  optional only for a separately named future mode that explicitly permits it.
-- Identity mode is never inferred from BACK presence/absence, profile ID, or a
-  missing field. Unsupported inner versions/modes fail closed, so an old
-  client safely rejects v2 rather than treating it as v1.
-- The encrypted recognition artifact remains exactly one artifact per capsule.
-  Its outer server transport, REST/protocol version, publish statement,
-  artifact AAD, and blob cardinality remain v1 initially. The server treats
-  the inner recognition bytes as opaque and performs no visual indexing or
-  design uniqueness check.
+- Create captures and persists exactly one required FRONT fingerprint.
+- Scan captures exactly one FRONT fingerprint.
+- The local owner-scoped relation is `design -> 0..N capsules`.
+- Zero candidates produce `NO_MATCH`.
+- One candidate may proceed to complete E2EE verification and presentation.
+- Multiple candidates are an explicit ambiguity result. The picker is deferred
+  to M2-F1; until then none may auto-open.
+- BACK is absent from the production recognition model, encrypted manifest,
+  Create/Scan state, local index, acceptance path, and grant preconditions.
+- A front match is never cryptographic authorization. Envelope, statement,
+  artifact binding, AEAD, and recipient-account checks remain mandatory before
+  any presentation grant or plaintext.
 
-### Recognition identity
+### Manifest format
 
-- `mvp-orb-v1` remains the fingerprint algorithm/profile unless a later ADR
-  changes the algorithm. Profile/version and identity mode are separate
-  fields and compatibility decisions.
-- On the recipient, the local, account-owner-scoped index maps one recognized
-  FRONT design to zero or more local capsule candidates. Zero means
-  `NO_MATCH`; one candidate may proceed to full verification and opening; more
-  than one is ambiguity and must never auto-open. A future recipient picker
-  presents the plausible candidates explicitly.
-- Every selected candidate still passes complete E2EE verification: immutable
-  bindings, envelope, signature, ciphertext hashes, AAD, and artifact AEAD
-  before any presentation grant or plaintext.
-- There is no global/server visual index, cross-owner candidate search, or
-  server-visible uniqueness leakage.
+The encrypted recognition artifact uses one explicit front-only manifest
+format/version. The version exists only to reject unsupported or malformed
+payloads fail-closed; it is not an identity-mode selector. The manifest
+contains a required FRONT fingerprint, capsule binding, and minimal encrypted
+chooser hint. It contains no BACK field.
 
-### Local compatibility and storage
+The outer REST/protocol, signed statement, envelope, artifact AAD, and
+recognition-blob cardinality remain unchanged unless a separate protocol ADR
+requires otherwise. The backend treats the encrypted recognition bytes as
+opaque and does not build a visual index or uniqueness relation.
 
-- `SenderIndexBundle` gets an explicit version. The reader is dual-mode: it
-  reads the existing two-sided v1 representation and the v2 representation
-  carrying explicit identity mode, with fail-closed unknown-version handling.
-- Prove that the current Room v7 schema and existing owner-scoped rows can
-  represent the design-to-many relation before considering a migration. This
-  checkpoint prescribes no Room schema change.
-- Incoming acceptance, local persistence, and scan matching retain legacy v1
-  regressions. A v1 row is not upgraded by manufacturing BACK or changing its
-  identity mode.
+`mvp-orb-v1` remains the fingerprint extraction/profile identity. Its profile
+ID is independent of manifest parsing and must not be overloaded to represent
+the front-only product contract.
 
-### Bounded rollout
+### Local storage and ownership
 
-Implementation follows the queue in `docs/implementation-plan.md`:
+The local index is account-owner scoped and stores a required FRONT fingerprint
+per capsule. The same design may have many capsule IDs. Recipient FRONT
+baselines may be preferred over sender-derived FRONT references, while all
+candidate sources remain scoped to the authenticated owner.
 
-1. add a typed FRONT_ONLY seam and explicit mode/version types;
-2. add dual readers for the inner manifest and `SenderIndexBundle`, proving
-   Room v7 suffices;
-3. wire outgoing and incoming encrypted artifact handling while outer v1
-   declarations remain unchanged;
-4. add FRONT_ONLY Create;
-5. add FRONT_ONLY Scan with zero/one/many fail-safe classification and no
-   automatic opening for many.
+Room/data migration is not part of this reset. Test8/Test9 local and server
+recognition state may be discarded and recreated from the new schema. No
+production path is required to read or repair old two-sided rows or files.
 
-The legacy two-sided Create/Scan and upgrade regressions remain required at
-each applicable gate. The recipient ambiguity picker is the separate future
-M2-F1 milestone and is not part of this migration.
+### Security and lifecycle
 
-## Deferred decisions
+The scan grant remains short-lived, in-memory, capsule-scoped, and issued only
+after a current FRONT scan, an unambiguous accepted result, and complete crypto
+verification. Logout, process death, expiry, and leaving presentation revoke
+the grant. The grant contains no visual bytes or BACK material.
 
-- Conservative sender+recipient duplicate prevention is a separate future
-  milestone. It must not block legitimate multiple capsules for one design or
-  expose a visual equality signal to the server.
-- A short, optional 24-hour cancellation window is a separate future
-  milestone. Revoke requires a durable server tombstone that prevents
-  resurrection; it cannot erase recipient copies already downloaded or
-  decrypted.
-- M3 benchmarks design-to-many behavior. A physical BACK is an optional
-  future disambiguator, not a prerequisite for FRONT_ONLY acceptance.
+## Bounded implementation slices
+
+1. Replace the recognition domain and local index contract with required FRONT
+   and design-to-many candidate identity; keep the explicit manifest format
+   version and reject unsupported versions.
+2. Implement the front-only recognition manifest, crypto acceptance, and
+   outgoing artifact construction without changing statement/envelope
+   security bindings.
+3. Implement front-only incoming acceptance, Room/index persistence, and
+   owner-scoped offline candidate loading on the clean schema.
+4. Implement Create as recipient confirmation → FRONT capture → content/photo
+   selection → encryption → outgoing staging/upload.
+5. Implement Scan as FRONT capture → local 0/1/N classification → crypto
+   verification → grant or no-match/ambiguity result. Defer picker UI.
+
+Each slice is independently tested before the next slice. No legacy path,
+dual reader, optional BACK production mode, or migration is a completion
+criterion.
+
+## Deferred milestones
+
+- M2-F1: recipient-facing picker for multiple FRONT candidates.
+- M2-F2: conservative sender+recipient duplicate prevention using FRONT
+  similarity; no global uniqueness rule.
+- M2-F3: optional short cancellation window with durable revoke semantics.
 
 ## Consequences
 
-New clients can read legacy two-sided v1 and can introduce v2 without a server
-transport migration. Old clients reject v2 safely. The local index and UI must
-handle a design with zero, one, or many capsule candidates, and the absence of
-a BACK no longer carries implicit semantics. No source implementation or Room
-migration is claimed by this architecture checkpoint.
+The reset intentionally breaks recognition compatibility with Test8/Test9
+two-sided local/server state. A clean app/DB reset is required for deployment
+of the new implementation; no data deletion is performed by this ADR. Captured
+BACK images in the research dataset remain ancillary calibration material and
+are excluded from production contracts and benchmarks.

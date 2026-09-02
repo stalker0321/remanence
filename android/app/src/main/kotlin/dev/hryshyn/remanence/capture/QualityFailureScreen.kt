@@ -25,7 +25,7 @@ fun guidanceFor(reason: QualityReason): String = when (reason) {
     QualityReason.RESOLUTION_INSUFFICIENT ->
         "Move closer, use the highest still resolution, and keep the full card visible."
     QualityReason.TOO_BLURRY ->
-        "Hold still and tap to focus."
+        "Hold the phone steady while the camera focuses."
     QualityReason.TOO_DARK ->
         "Use brighter, even light and remove shadows."
     QualityReason.GLARE_EXCESSIVE ->

@@ -138,7 +138,7 @@ class CreateSmallViewportTest {
     }
 
     @Test
-    fun rejectionPanelAndRetakeAreVisibleWithoutScrollingOnTinyScreens() {
+    fun rejectionPanelAndRetakeAreReachableByScrollingOnTinyScreens() {
         val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(context().filesDir, "small-vp")))
         val vm = CreateViewModel(
             directory = StaticDirectory(),
@@ -193,6 +193,7 @@ class CreateSmallViewportTest {
             dbg,
             composeRule.onAllNodesWithTag("capture_shutter_front").fetchSemanticsNodes().isNotEmpty(),
         )
+        composeRule.scrollToTag("capture_shutter_front")
         composeRule.onNodeWithTag("capture_shutter_front").performClick()
         composeRule.runOnIdle { live.get()!!.deliverFrame("frame".toByteArray()) }
         composeRule.waitForIdle()
@@ -215,6 +216,7 @@ class CreateSmallViewportTest {
         // A second identical rejection is equally visible and actionable.
         composeRule.waitForIdle()
         composeRule.runOnIdle { live.get()?.emitReady() }
+        composeRule.scrollToTag("capture_shutter_front")
         composeRule.onNodeWithTag("capture_shutter_front").performClick()
         composeRule.runOnIdle { live.get()!!.deliverFrame("frame-2".toByteArray()) }
         composeRule.waitForIdle()
@@ -345,20 +347,22 @@ class CreateSmallViewportTest {
             previewBounds.height >= dev.hryshyn.remanence.capture.CAPTURE_PREVIEW_MIN_HEIGHT.value,
         )
 
-        // Shutter sits directly BELOW the nonzero preview area.
+        // Shutter sits directly BELOW the nonzero preview area after the
+        // existing flow scroll brings it into view.
+        composeRule.scrollToTag("capture_shutter_front")
+        val scrolledPreviewBounds = composeRule.onNodeWithTag("capture_preview")
+            .fetchSemanticsNode().boundsInRoot
         val shutterBounds = composeRule.onNodeWithTag("capture_shutter_front")
+            .assertIsDisplayed()
             .fetchSemanticsNode().boundsInRoot
         assertTrue(
-            "shutter must be below the preview, shutter=$shutterBounds preview=$previewBounds",
-            shutterBounds.top >= previewBounds.bottom - 1f,
+            "shutter must be below the preview, shutter=$shutterBounds preview=$scrolledPreviewBounds",
+            shutterBounds.top >= scrolledPreviewBounds.bottom - 1f,
         )
 
         // Rejection replaces the preview; reasons + Retake stay reachable and
         // inside the viewport.
-        composeRule.scrollToTag("capture_shutter_front")
-        composeRule.onNodeWithTag("capture_shutter_front")
-            .assertIsDisplayed()
-            .performClick()
+        composeRule.onNodeWithTag("capture_shutter_front").performClick()
         composeRule.runOnIdle { live.get()!!.deliverFrame("frame".toByteArray()) }
         composeRule.waitForIdle()
 

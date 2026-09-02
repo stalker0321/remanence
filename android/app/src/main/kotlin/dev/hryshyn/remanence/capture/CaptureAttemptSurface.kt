@@ -40,17 +40,18 @@ import dev.hryshyn.remanence.core.recognition.PostcardGuideGeometry
 import dev.hryshyn.remanence.core.recognition.QualityReason
 
 /**
- * Preview height budget for one capture attempt. FIX-STATE-04: the preview is
- * capped so rejection/failure panels, guidance text, and actions stay visible
- * and reachable on small phones instead of being pushed under the camera.
+ * Preview height budget for one capture attempt. The surface uses the largest
+ * practical portrait frame (about 65--68% of the display height) and leaves
+ * the existing scrollable flow layouts responsible for reaching the status,
+ * shutter, and recovery actions on short phones.
  */
-val CAPTURE_PREVIEW_MAX_HEIGHT = 320.dp
+val CAPTURE_PREVIEW_MAX_HEIGHT = 520.dp
 
 /**
  * FIX-STATE-09: THE deterministic nonzero floor of the camera area. A bare
  * `heightIn(max)` lets the hosted PreviewView measure to zero height; the
  * floor guarantees an always-visible viewfinder on every screen size while
- * the cap keeps recovery panels reachable below it.
+ * the scrollable flow layouts keep recovery panels reachable below it.
  */
 val CAPTURE_PREVIEW_MIN_HEIGHT = 180.dp
 
@@ -60,10 +61,17 @@ private const val PORTRAIT_PREVIEW_ASPECT_RATIO = 3f / 4f
 /** Width/height used by the responsive capture frame on landscape displays. */
 private const val LANDSCAPE_PREVIEW_ASPECT_RATIO = 4f / 3f
 
+private const val PORTRAIT_PREVIEW_HEIGHT_FRACTION = 0.68f
+
 internal data class CapturePreviewSize(
     val width: Dp,
     val height: Dp,
 )
+
+internal fun capturePreviewMaxHeight(screenHeight: Dp): Dp {
+    require(screenHeight > 0.dp)
+    return minOf(CAPTURE_PREVIEW_MAX_HEIGHT, screenHeight * PORTRAIT_PREVIEW_HEIGHT_FRACTION)
+}
 
 /**
  * Chooses the largest frame that fits the available width/height budget while
@@ -278,7 +286,7 @@ private fun LivePreviewContent(
         // short phones.
         val configuration = LocalConfiguration.current
         val screenHeight = configuration.screenHeightDp.dp
-        val effectiveMax = minOf(CAPTURE_PREVIEW_MAX_HEIGHT, screenHeight * 0.45f)
+        val effectiveMax = capturePreviewMaxHeight(screenHeight)
         BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
             val targetAspectRatio = if (configuration.screenWidthDp < configuration.screenHeightDp) {
                 PORTRAIT_PREVIEW_ASPECT_RATIO

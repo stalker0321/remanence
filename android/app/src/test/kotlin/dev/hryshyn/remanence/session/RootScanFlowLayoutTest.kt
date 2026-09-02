@@ -183,16 +183,21 @@ class RootScanFlowLayoutTest {
             "body must start below the header; headerBottom=$headerBottom previewTop=${previewBounds.top}",
             previewBounds.top >= headerBottom - 1f,
         )
+        // The larger portrait frame may put the shutter below the initial
+        // root viewport; the production ScanScreen already owns this scroll.
+        composeRule.onNodeWithTag("scan_screen_scroll")
+            .performScrollToNode(hasTestTag("capture_shutter_front"))
+        val scrolledPreviewBounds = composeRule.onNodeWithTag("capture_preview")
+            .fetchSemanticsNode().boundsInRoot
         val shutterBounds = composeRule.onNodeWithTag("capture_shutter_front")
+            .assertIsDisplayed()
             .fetchSemanticsNode().boundsInRoot
         assertTrue(
             "shutter must sit below the nonzero preview",
-            shutterBounds.top >= previewBounds.bottom - 1f,
+            shutterBounds.top >= scrolledPreviewBounds.bottom - 1f,
         )
 
         // 2) Drive one capture attempt into rejection through the camera seam.
-        composeRule.onNodeWithTag("scan_screen_scroll")
-            .performScrollToNode(hasTestTag("capture_shutter_front"))
         composeRule.onNodeWithTag("capture_shutter_front").performClick()
         composeRule.runOnIdle { live.get()!!.deliverFrame("frame".toByteArray()) }
         composeRule.waitForIdle()

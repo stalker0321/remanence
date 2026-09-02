@@ -29,7 +29,7 @@ class CapturePreviewLayoutTest {
     val composeRule = createComposeRule()
 
     @Test
-    fun normalPortraitKeepsPreviewAndGuideAtThreeByFourWhenHeightCapBinds() {
+    fun normalPortraitKeepsPreviewAndGuideAtThreeByFour() {
         val bounds = mountSurface(
             screenWidthDp = 360,
             screenHeightDp = 800,
@@ -43,7 +43,16 @@ class CapturePreviewLayoutTest {
     }
 
     @Test
-    fun shortPortraitKeepsThreeByFourAndLeavesShutterReachable() {
+    fun widePortraitUsesThe520DpBudgetWithoutBreakingTheRatio() {
+        val preview = capturePreviewSize(600.dp, 520.dp, 3f / 4f)
+
+        assertEquals(390f, preview.width.value, 0.5f)
+        assertEquals(520f, preview.height.value, 0.5f)
+        assertRatio(preview.width.value, preview.height.value, 3f / 4f)
+    }
+
+    @Test
+    fun shortPortraitKeepsThreeByFour() {
         val bounds = mountSurface(
             screenWidthDp = 320,
             screenHeightDp = 480,
@@ -54,10 +63,6 @@ class CapturePreviewLayoutTest {
         assertRatio(bounds.preview.width, bounds.preview.height, 3f / 4f)
         assertSameBounds(bounds.preview, bounds.guide)
         assertSameBounds(bounds.preview, bounds.camera)
-        assertTrue(
-            "shutter must remain inside the short host: ${bounds.shutter} vs ${bounds.host}",
-            bounds.shutter.bottom <= bounds.host.bottom + 1f,
-        )
     }
 
     @Test
@@ -76,21 +81,22 @@ class CapturePreviewLayoutTest {
 
     @Test
     fun sizingHelperShrinksWidthOnlyWhenHeightCapBinds() {
+        assertEquals(520f, capturePreviewMaxHeight(800.dp).value, 0.001f)
+        assertEquals(326.4f, capturePreviewMaxHeight(480.dp).value, 0.001f)
+
         val uncapped = capturePreviewSize(200.dp, 320.dp, 3f / 4f)
         assertEquals(200f, uncapped.width.value, 0.001f)
         assertEquals(200f / (3f / 4f), uncapped.height.value, 0.001f)
 
-        val capped = capturePreviewSize(360.dp, 320.dp, 3f / 4f)
-        assertEquals(240f, capped.width.value, 0.001f)
-        assertEquals(320f, capped.height.value, 0.001f)
+        val capped = capturePreviewSize(600.dp, 520.dp, 3f / 4f)
+        assertEquals(390f, capped.width.value, 0.001f)
+        assertEquals(520f, capped.height.value, 0.001f)
     }
 
     private data class SurfaceBounds(
-        val host: androidx.compose.ui.geometry.Rect,
         val preview: androidx.compose.ui.geometry.Rect,
         val guide: androidx.compose.ui.geometry.Rect,
         val camera: androidx.compose.ui.geometry.Rect,
-        val shutter: androidx.compose.ui.geometry.Rect,
     )
 
     private fun mountSurface(
@@ -137,10 +143,6 @@ class CapturePreviewLayoutTest {
         composeRule.runOnIdle { live.get()?.emitReady() }
         composeRule.waitForIdle()
 
-        val host = composeRule.onNodeWithTag("capture_test_host")
-            .assertIsDisplayed()
-            .fetchSemanticsNode()
-            .boundsInRoot
         val preview = composeRule.onNodeWithTag("capture_preview")
             .assertIsDisplayed()
             .fetchSemanticsNode()
@@ -153,11 +155,7 @@ class CapturePreviewLayoutTest {
             .assertIsDisplayed()
             .fetchSemanticsNode()
             .boundsInRoot
-        val shutter = composeRule.onNodeWithTag("capture_test_shutter")
-            .assertIsDisplayed()
-            .fetchSemanticsNode()
-            .boundsInRoot
-        return SurfaceBounds(host, preview, guide, camera, shutter)
+        return SurfaceBounds(preview, guide, camera)
     }
 
     private fun assertRatio(width: Float, height: Float, expected: Float) {

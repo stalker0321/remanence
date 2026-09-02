@@ -7,6 +7,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -85,7 +86,7 @@ class QualityRejectionPanelTest {
                     "Hold the phone parallel to the postcard and align its edges.",
                 QualityReason.RESOLUTION_INSUFFICIENT to
                     "Move closer, use the highest still resolution, and keep the full card visible.",
-                QualityReason.TOO_BLURRY to "Hold still and tap to focus.",
+                QualityReason.TOO_BLURRY to "Hold the phone steady while the camera focuses.",
                 QualityReason.TOO_DARK to "Use brighter, even light and remove shadows.",
                 QualityReason.GLARE_EXCESSIVE to "Tilt the postcard or move the light to remove glare.",
                 QualityReason.FEATURES_INSUFFICIENT to
@@ -93,6 +94,14 @@ class QualityRejectionPanelTest {
             ),
             QualityReason.entries.associateWith(::guidanceFor),
         )
+    }
+
+    @Test
+    fun blurryGuidanceDoesNotPromiseAnUnavailableTapToFocusAction() {
+        val guidance = guidanceFor(QualityReason.TOO_BLURRY)
+
+        assertEquals("Hold the phone steady while the camera focuses.", guidance)
+        assertFalse(guidance.contains("tap", ignoreCase = true))
     }
 
     /** Capture surfaces pass their own retake tag through to the panel. */

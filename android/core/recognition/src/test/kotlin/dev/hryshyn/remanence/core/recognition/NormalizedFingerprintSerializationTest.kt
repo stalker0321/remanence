@@ -42,12 +42,11 @@ class NormalizedFingerprintSerializationTest {
 
     @Test
     fun frontAndBackSerializeCompactAndParseBackExactly() {
+        // FRONT-only contract (ADR-012): only FRONT is a production fingerprint.
         val frontBytes = FingerprintCodec.serialize(extractor.extract(texturedFrame(), w, h, FingerprintSide.FRONT))
-        val backBytes = FingerprintCodec.serialize(extractor.extract(texturedFrame(), w, h, FingerprintSide.BACK))
 
-        // Raw serialized fingerprints must sit far below the encrypted-manifest budget (1 MiB).
+        // Raw serialized FRONT must sit far below the encrypted-manifest budget (1 MiB).
         assertTrue(frontBytes.size < 256 * 1024, "front=${frontBytes.size}")
-        assertTrue(backBytes.size < 256 * 1024, "back=${backBytes.size}")
 
         val parsedFront = FingerprintCodec.parse(frontBytes)
         assertEquals(FingerprintSide.FRONT, parsedFront.side)
@@ -69,13 +68,29 @@ class NormalizedFingerprintSerializationTest {
         originalFront.descriptors.forEachIndexed { i, d ->
             assertTrue(d.contentEquals(parsedFront.descriptors[i]))
         }
+        // BACK attempt must fail closed in FRONT-only contract.
+        val backFingerprint = extractor.extract(texturedFrame(), w, h, FingerprintSide.BACK)
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            FingerprintCodec.serialize(backFingerprint)
+        }
     }
 
     @Test
     fun sideDistinctionSurvivesRoundTrip() {
         val front = FingerprintCodec.serialize(extractor.extract(texturedFrame(), w, h, FingerprintSide.FRONT))
-        val back = FingerprintCodec.serialize(extractor.extract(texturedFrame(), w, h, FingerprintSide.BACK))
         assertEquals(FingerprintSide.FRONT, FingerprintCodec.parse(front).side)
-        assertEquals(FingerprintSide.BACK, FingerprintCodec.parse(back).side)
+        // BACK round-trip no longer exists; verify that BACK wire is rejected.
+        val backWire = dev.hryshyn.remanence.recognition.v1.PostcardFingerprint.newBuilder()
+            .setFormatVersion(FingerprintCodec.FORMAT_VERSION)
+            .setRecognitionProfileId(RecognitionProfile.MVP_ORB_V1_ID)
+            .setSide(dev.hryshyn.remanence.recognition.v1.PostcardFingerprint.Side.BACK)
+            .setCanonicalWidthPx(1600)
+            .setCanonicalHeightPx(1000)
+            .setCoarseHash64(1L)
+            .setExtractionQuality(dev.hryshyn.remanence.recognition.v1.PostcardFingerprint.ExtractionQuality.getDefaultInstance())
+            .build().toByteArray()
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            FingerprintCodec.parse(backWire)
+        }
     }
 }

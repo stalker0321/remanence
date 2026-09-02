@@ -6,7 +6,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-/** Ordering proof for M1-M09 recipient-first / sender-fallback coordination. */
+/** Ordering proof for FRONT-only recipient-first / sender-fallback coordination (ADR-012). */
 class MatchCoordinatorTest {
 
     private val coordinator = MatchCoordinator(RecognitionProfile.mvpOrbV1())
@@ -16,11 +16,8 @@ class MatchCoordinatorTest {
             candidateId = candidateId,
             compositeScore = score,
             frontScore = score,
-            backScore = score,
             frontWeakPassed = true,
             frontStrongPassed = true,
-            backWeakPassed = true,
-            backStrongPassed = true,
         )
         CompositeAcceptanceReport(listOf(leader), leader, null)
     }
@@ -54,12 +51,8 @@ class MatchCoordinatorTest {
     @Test
     fun recipientAmbiguityNeverFallsBackToSender() {
         val rows = listOf(
-            ScoredComposite(
-                "r1", 0.55, 0.55, 0.55, true, false, true, false,
-            ),
-            ScoredComposite(
-                "r2", 0.45, 0.45, 0.45, true, false, true, false,
-            ),
+            ScoredComposite("r1", 0.55, 0.55, true, false),
+            ScoredComposite("r2", 0.45, 0.45, true, false),
         )
         val chooserReport = CompositeAcceptanceReport(rows, null, RejectionRule.MARGIN_OVER_RUNNER_UP_TOO_SMALL)
         val decision = coordinator.coordinate(
@@ -76,7 +69,7 @@ class MatchCoordinatorTest {
     @Test
     fun recipientSingleRecaptureAlsoStaysPut() {
         val single = listOf(
-            ScoredComposite("only", 0.50, 0.50, 0.50, true, false, true, false),
+            ScoredComposite("only", 0.50, 0.50, true, false),
         )
         val report = CompositeAcceptanceReport(single, null, RejectionRule.COMPOSITE_BELOW_MINIMUM)
         val decision = coordinator.coordinate(
@@ -112,11 +105,9 @@ class MatchCoordinatorTest {
 
     @Test
     fun weakButImplausibleRecipientsDoNotTriggerSilentFallback() {
-        // Two retained fronts (weak passed) whose composites never became
-        // plausible: the aged-card identity still exists; no silent re-search.
         val implausible = listOf(
-            ScoredComposite("aged-1", 0.30, 0.30, 0.30, true, false, true, false),
-            ScoredComposite("aged-2", 0.20, 0.20, 0.20, true, false, false, false),
+            ScoredComposite("aged-1", 0.30, 0.30, true, false),
+            ScoredComposite("aged-2", 0.20, 0.20, true, false),
         )
         val report = CompositeAcceptanceReport(implausible, null, null)
         val decision = coordinator.coordinate(

@@ -40,7 +40,7 @@ class CaptureQualityGateTest {
     }
 
     @Test
-    fun calibratedCaptureAdmissionUsesIndependentSideBlurBoundaries() {
+    fun calibratedCaptureAdmissionUsesFrontOnlyBlurBoundary() {
         val sideGate = CaptureQualityGate(
             RecognitionProfile.mvpOrbV1(),
             CaptureAdmissionProfile.calibratedM2(),
@@ -49,21 +49,16 @@ class CaptureQualityGateTest {
         val frontBelow = passingInput().copy(
             signals = passingSignals().copy(laplacianVariance = 110.0 - 1e-6),
         )
-        val backAtBoundary = passingInput().copy(
-            signals = passingSignals().copy(laplacianVariance = 55.0),
+        val frontAtBoundary = passingInput().copy(
+            signals = passingSignals().copy(laplacianVariance = 110.0),
         )
 
         assertEquals(setOf(QualityReason.TOO_BLURRY), sideGate.evaluate(frontBelow, FingerprintSide.FRONT))
-        assertTrue(sideGate.evaluate(backAtBoundary, FingerprintSide.BACK).isEmpty())
-        assertEquals(
-            setOf(QualityReason.TOO_BLURRY),
-            sideGate.evaluate(
-                backAtBoundary.copy(
-                    signals = passingSignals().copy(laplacianVariance = 55.0 - 1e-6),
-                ),
-                FingerprintSide.BACK,
-            ),
-        )
+        assertTrue(sideGate.evaluate(frontAtBoundary, FingerprintSide.FRONT).isEmpty())
+        // BACK is not a production capture in FRONT-only contract (ADR-012).
+        assertFailsWith<IllegalArgumentException> {
+            sideGate.evaluate(frontAtBoundary, FingerprintSide.BACK)
+        }
     }
 
     @Test
@@ -82,10 +77,14 @@ class CaptureQualityGateTest {
     @Test
     fun admissionProfileRejectsNonFiniteOrUnboundedThresholds() {
         assertFailsWith<IllegalArgumentException> {
-            CaptureAdmissionProfile(frontMinLaplacianVariance = Double.NaN, backMinLaplacianVariance = 55.0)
+            CaptureAdmissionProfile(frontMinLaplacianVariance = Double.NaN)
         }
         assertFailsWith<IllegalArgumentException> {
-            CaptureAdmissionProfile(frontMinLaplacianVariance = 10_000.1, backMinLaplacianVariance = 55.0)
+            CaptureAdmissionProfile(frontMinLaplacianVariance = 10_000.1)
+        }
+        // BACK threshold no longer exists in FRONT-only contract.
+        assertFailsWith<IllegalArgumentException> {
+            CaptureAdmissionProfile(frontMinLaplacianVariance = Double.NaN)
         }
     }
 

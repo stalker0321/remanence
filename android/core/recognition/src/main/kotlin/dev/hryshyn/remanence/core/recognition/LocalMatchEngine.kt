@@ -2,12 +2,17 @@ package dev.hryshyn.remanence.core.recognition
 
 import java.util.UUID
 
-/** One locally indexed candidate capsule with its stored fingerprints. */
+/**
+ * One locally indexed candidate capsule with its stored FRONT fingerprint.
+ * ADR-012 FRONT-only contract: exactly one required FRONT per capsule.
+ * The `back` parameter is retained only for compile compatibility and is
+ * always null in production; any non-null legacy back is ignored fail-closed.
+ */
 data class IndexedCandidate(
     val capsuleId: UUID,
     val front: PostcardFingerprint,
-    val back: PostcardFingerprint?,
-    /** True when this pair comes from the preferred recipient baseline. */
+    val back: PostcardFingerprint? = null,
+    /** True when this FRONT comes from the preferred recipient baseline. */
     val recipientPreferred: Boolean = false,
 )
 
@@ -42,12 +47,16 @@ sealed interface ScanFlowResult {
 }
 
 /**
- * I09: runs the complete documented hierarchy - descriptor matching, RANSAC
- * geometry, coverage, plausibility gates, side scoring, front ranking with
- * duplicate grouping, composite acceptance, outcome classification, and
- * recipient-first coordination - then issues a ONE-TIME memory-only scan
- * grant ONLY after the injected crypto verifier accepts the winning capsule.
- * A refused verification never produces a grant.
+ * M2-F0-01 FRONT-only: runs the complete documented hierarchy — descriptor
+ * matching, RANSAC geometry, coverage, plausibility gates, FRONT scoring,
+ * front ranking with duplicate grouping, FRONT-only acceptance, outcome
+ * classification, and recipient-first coordination — then issues a ONE-TIME
+ * memory-only scan grant ONLY after the injected crypto verifier accepts the
+ * winning capsule. A refused verification never produces a grant.
+ *
+ * The engine operates on exactly one required FRONT per candidate. Any legacy
+ * `back` field is ignored. The `queryBack` overload is retained only for
+ * compile compatibility and delegates to FRONT-only logic.
  */
 class LocalMatchEngine(
     private val profile: RecognitionProfile,
@@ -64,28 +73,24 @@ class LocalMatchEngine(
     private val outcomeClassifier = ScanOutcomeClassifier(profile)
     private val coordinator = MatchCoordinator(profile)
 
+    /** FRONT-only entry point. */
     suspend fun run(
         queryFront: PostcardFingerprint,
-        queryBack: PostcardFingerprint,
         candidates: List<IndexedCandidate>,
     ): ScanFlowResult {
-        // An empty index is a NO-MATCH outcome, never an error or a grant.
+        require(queryFront.side == FingerprintSide.FRONT) { "query must be FRONT" }
         if (candidates.isEmpty()) {
             return ScanFlowResult.RecaptureRequired
         }
 
-        val recipientList = candidates.filter { it.recipientPreferred && it.back != null }
-        val senderList = candidates.filterNot { it.recipientPreferred }.filter { it.back != null }
+        val recipientList = candidates.filter { it.recipientPreferred }
+        val senderList = candidates.filterNot { it.recipientPreferred }
 
-        val recipientUniverse = evaluateUniverse(recipientList, queryFront, queryBack)
-        // The sender universe is consulted only when the recipient universe
-        // produced NO weak evidence at all - recipient rows existing without
-        // weak-evidence retention does not block the documented fallback
-        // (docs/recognition.md section 11).
+        val recipientUniverse = evaluateUniverse(recipientList, queryFront)
         val senderUniverse = if (recipientUniverse.frontRanking.retained.isEmpty() && senderList.isNotEmpty()) {
-            evaluateUniverse(senderList, queryFront, queryBack)
+            evaluateUniverse(senderList, queryFront)
         } else {
-            null // recipient evidence decided the scan; sender pairs not searched
+            null
         }
 
         return when (val decision = coordinator.coordinate(recipientUniverse, senderUniverse)) {
@@ -116,6 +121,20 @@ class LocalMatchEngine(
         }
     }
 
+    /** Legacy overload retained for compile compatibility; BACK is ignored. */
+    @Deprecated("FRONT-only contract: queryBack is ignored", ReplaceWith("run(queryFront, candidates)"))
+    suspend fun run(
+        queryFront: PostcardFingerprint,
+        queryBack: PostcardFingerprint,
+        candidates: List<IndexedCandidate>,
+    ): ScanFlowResult {
+        require(queryFront.side == FingerprintSide.FRONT) { "queryFront must be FRONT" }
+        // queryBack is intentionally ignored in FRONT-only contract; fail closed
+        // if it is not a FRONT (legacy two-sided callers passed BACK here).
+        // We do not use its bytes for scoring.
+        return run(queryFront, candidates)
+    }
+
     private data class UniverseResult(
         val origin: CandidateOrigin,
         val frontRanking: FrontRanking,
@@ -125,7 +144,6 @@ class LocalMatchEngine(
     private fun evaluateUniverse(
         universe: List<IndexedCandidate>,
         queryFront: PostcardFingerprint,
-        queryBack: PostcardFingerprint,
     ): UniverseScanResult {
         val origin = if (universe.firstOrNull()?.recipientPreferred == true || universe.isEmpty()) {
             CandidateOrigin.RECIPIENT_PREFERRED
@@ -136,6 +154,7 @@ class LocalMatchEngine(
         val frontOutcomes = HashMap<String, FrontCandidate>(universe.size)
         val frontStrengths = HashMap<String, Boolean>(universe.size)
         universe.forEach { candidate ->
+            require(candidate.front.side == FingerprintSide.FRONT) { "candidate front must be FRONT" }
             val outcome = evaluateSide(queryFront, candidate.front)
             val front = FrontCandidate(candidate.capsuleId.toString(), outcome.report.sideScore, outcome.report.weakGatePassed)
             frontOutcomes[candidate.capsuleId.toString()] = front
@@ -143,22 +162,15 @@ class LocalMatchEngine(
         }
         val frontRanking = frontRanker.rank(frontOutcomes.values.toList())
 
-        val composites = frontRanking.retained.mapNotNull { retained ->
-            val candidate = universe.single { it.capsuleId.toString() == retained.candidateId }
-            // A candidate without a stored back fingerprint can never present
-            // honest two-side evidence: it is dropped instead of scoring the
-            // query back against the front (docs/product.md: never guess).
-            val backReference = candidate.back ?: return@mapNotNull null
-            val backOutcome = evaluateSide(queryBack, backReference)
+        val composites = frontRanking.retained.map { retained ->
             CompositeCandidate(
                 candidateId = retained.candidateId,
                 frontScore = retained.sideScore,
                 frontWeakPassed = retained.weakGatePassed,
                 frontStrongPassed = frontStrengths.getValue(retained.candidateId),
-                back = BackMatchResult(backOutcome.report.sideScore, backOutcome.report.weakGatePassed, backOutcome.report.strongGatePassed),
             )
         }
-        val acceptance = if (composites.isEmpty()) null else acceptanceEvaluator.evaluate(composites)
+        val acceptance = if (composites.isEmpty()) null else acceptanceEvaluator.evaluate(composites, frontRanking.duplicateFrontGroup)
         return UniverseScanResult(origin, frontRanking, acceptance)
     }
 

@@ -2,7 +2,12 @@ package dev.hryshyn.remanence.core.recognition
 
 import dev.hryshyn.remanence.recognition.v1.PostcardFingerprint as FingerprintWire
 
-/** Local side of a postcard fingerprint. */
+/**
+ * Local side of a postcard fingerprint — FRONT-only production contract
+ * (ADR-012). BACK is retained only as a legacy wire symbol that the parser
+ * rejects fail-closed; it is not a production input (docs/recognition.md
+ * section 6). The codec below enforces exactly one required FRONT record.
+ */
 enum class FingerprintSide { FRONT, BACK }
 
 /** One ORB keypoint in normalized coordinates with quantized extras. */
@@ -100,9 +105,13 @@ object FingerprintCodec {
         }
         val side = when (wire.side) {
             FingerprintWire.Side.FRONT -> FingerprintSide.FRONT
-            FingerprintWire.Side.BACK -> FingerprintSide.BACK
+            FingerprintWire.Side.BACK ->
+                throw IllegalArgumentException("BACK fingerprint is not supported in FRONT-only contract")
             FingerprintWire.Side.SIDE_UNSPECIFIED, FingerprintWire.Side.UNRECOGNIZED ->
                 throw IllegalArgumentException("fingerprint side is unspecified")
+        }
+        if (side != FingerprintSide.FRONT) {
+            throw IllegalArgumentException("only FRONT fingerprint is supported")
         }
         if (wire.canonicalWidthPx !in 1..MAX_CANONICAL_DIMENSION_PX ||
             wire.canonicalHeightPx !in 1..MAX_CANONICAL_DIMENSION_PX
@@ -156,6 +165,9 @@ object FingerprintCodec {
     }
 
     private fun validate(fingerprint: PostcardFingerprint) {
+        if (fingerprint.side != FingerprintSide.FRONT) {
+            throw IllegalArgumentException("only FRONT fingerprint is supported in FRONT-only contract")
+        }
         if (fingerprint.profileId.isEmpty() ||
             fingerprint.profileId.length > MAX_PROFILE_ID_CHARS ||
             !PROFILE_ID.matches(fingerprint.profileId)
@@ -196,7 +208,8 @@ object FingerprintCodec {
 
     private fun toWireSide(side: FingerprintSide): FingerprintWire.Side = when (side) {
         FingerprintSide.FRONT -> FingerprintWire.Side.FRONT
-        FingerprintSide.BACK -> FingerprintWire.Side.BACK
+        FingerprintSide.BACK ->
+            throw IllegalArgumentException("BACK fingerprint cannot be serialized in FRONT-only contract")
     }
 
     private fun toMicro(value: Double): Int {

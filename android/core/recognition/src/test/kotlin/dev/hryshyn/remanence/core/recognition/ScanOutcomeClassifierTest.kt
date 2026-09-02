@@ -4,7 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-/** Fail-safe matrix proof for M1-M08 scan outcome classification. */
+/** Fail-safe matrix proof for FRONT-only scan outcome classification (ADR-012, M2-F0-01). */
 class ScanOutcomeClassifierTest {
 
     private val classifier = ScanOutcomeClassifier(RecognitionProfile.mvpOrbV1())
@@ -15,16 +15,12 @@ class ScanOutcomeClassifierTest {
         id: String,
         score: Double,
         frontWeak: Boolean = true,
-        backWeak: Boolean = true,
     ) = ScoredComposite(
         candidateId = id,
         compositeScore = score,
         frontScore = score,
-        backScore = score,
         frontWeakPassed = frontWeak,
         frontStrongPassed = false,
-        backWeakPassed = backWeak,
-        backStrongPassed = false,
     )
 
     private fun report(candidates: List<ScoredComposite>, accepted: ScoredComposite? = null) =
@@ -90,7 +86,7 @@ class ScanOutcomeClassifierTest {
     fun implausibleCandidatesNeverEnterTheChooser() {
         val plausible = composite("plausible", 0.45)
         val belowCompositeFloor = composite("floor", 0.39) // under chooserCompositeMin 0.40
-        val noSideWeak = composite("blind", 0.90, backWeak = false, frontWeak = false)
+        val noSideWeak = composite("blind", 0.90, frontWeak = false)
 
         val classification = classifier.classify(
             FrontRanking(
@@ -112,7 +108,7 @@ class ScanOutcomeClassifierTest {
             report(
                 listOf(
                     composite("single", 0.5),
-                    composite("dud", 0.20, frontWeak = false, backWeak = false),
+                    composite("dud", 0.20, frontWeak = false),
                 ),
             ),
         )
@@ -126,8 +122,8 @@ class ScanOutcomeClassifierTest {
             FrontRanking(listOf(FrontCandidate("weak-only", 0.3, weakGatePassed = true), FrontCandidate("also-weak", 0.25, weakGatePassed = true)), false),
             report(
                 listOf(
-                    composite("weak-only", 0.30, backWeak = false),
-                    composite("also-weak", 0.25, backWeak = false),
+                    composite("weak-only", 0.30, frontWeak = false),
+                    composite("also-weak", 0.25, frontWeak = false),
                 ),
             ),
         )

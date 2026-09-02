@@ -7,9 +7,11 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * I09 integration proof: the whole hierarchy over synthetic fingerprints -
- * unique strong acceptance issues exactly one grant after crypto verification,
- * verification refusal never issues, and identical designs fall to the chooser.
+ * FRONT-only integration proof (ADR-012, M2-F0-01): the hierarchy over synthetic
+ * FRONT fingerprints — unique strong acceptance issues exactly one grant after
+ * crypto verification, verification refusal never issues, and identical FRONT
+ * designs fall to the chooser (design->0..N). Old two-sided payloads fail closed
+ * at the codec before reaching the engine.
  */
 class LocalMatchEngineTest {
 
@@ -31,9 +33,9 @@ class LocalMatchEngineTest {
         octave = 0,
     )
 
-    private fun fingerprint(seed: Int, count: Int, side: FingerprintSide) = PostcardFingerprint(
+    private fun fingerprint(seed: Int, count: Int) = PostcardFingerprint(
         profileId = RecognitionProfile.MVP_ORB_V1_ID,
-        side = side,
+        side = FingerprintSide.FRONT,
         canonicalWidthPx = 1600,
         canonicalHeightPx = 1000,
         coarseHash64 = seed.toLong(),
@@ -42,10 +44,9 @@ class LocalMatchEngineTest {
         quality = ExtractionQuality(200.0, 90.0, 0.01, 0.85),
     )
 
-    private fun candidate(id: String, preferred: Boolean, seedFront: Int, seedBack: Int) = IndexedCandidate(
+    private fun candidate(id: String, preferred: Boolean, seedFront: Int) = IndexedCandidate(
         capsuleId = UUID.nameUUIDFromBytes(id.toByteArray()),
-        front = fingerprint(seedFront, 64, FingerprintSide.FRONT),
-        back = fingerprint(seedBack, 64, FingerprintSide.BACK),
+        front = fingerprint(seedFront, 64),
         recipientPreferred = preferred,
     )
 
@@ -63,15 +64,12 @@ class LocalMatchEngineTest {
 
     @Test
     fun uniqueStrongRecipientMatchIssuesExactlyOneGrantAfterVerification() = kotlinx.coroutines.runBlocking {
-        // suspend engine.run proof
         val (engine, _) = engine()
-        // The scanned card IS candidate A: identical descriptors, grid keypoints.
-        val queryFront = fingerprint(11, 64, FingerprintSide.FRONT)
-        val queryBack = fingerprint(22, 64, FingerprintSide.BACK)
-        val recipient = candidate("A", preferred = true, seedFront = 11, seedBack = 22)
+        val queryFront = fingerprint(11, 64)
+        val recipient = candidate("A", preferred = true, seedFront = 11)
         val universe = listOf(recipient, recipient.copy(recipientPreferred = false))
 
-        val result = engine.run(queryFront, queryBack, universe)
+        val result = engine.run(queryFront, universe)
 
         val granted = result as ScanFlowResult.Granted
         assertEquals(recipient.capsuleId, granted.capsuleId)
@@ -82,14 +80,12 @@ class LocalMatchEngineTest {
 
     @Test
     fun refusedCryptoVerificationNeverIssuesAGrant() = kotlinx.coroutines.runBlocking {
-        // suspend engine.run proof
         verifierResult = false
         val (engine, _) = engine()
-        val queryFront = fingerprint(11, 64, FingerprintSide.FRONT)
-        val queryBack = fingerprint(22, 64, FingerprintSide.BACK)
-        val universe = listOf(candidate("A", preferred = true, 11, 22))
+        val queryFront = fingerprint(11, 64)
+        val universe = listOf(candidate("A", preferred = true, 11))
 
-        val result = engine.run(queryFront, queryBack, universe)
+        val result = engine.run(queryFront, universe)
 
         assertEquals(ScanFlowResult.RecaptureRequired, result)
         assertEquals(0, issuedGrants.size)
@@ -97,17 +93,14 @@ class LocalMatchEngineTest {
 
     @Test
     fun identicalMassProducedDesignsFallToTheChooserInsteadOfAutoOpen() = kotlinx.coroutines.runBlocking {
-        // suspend engine.run proof
         val (engine, _) = engine()
-        val queryFront = fingerprint(11, 64, FingerprintSide.FRONT)
-        val queryBack = fingerprint(22, 64, FingerprintSide.BACK)
-        // Two recipients of the SAME printed design: indistinguishable fronts.
+        val queryFront = fingerprint(11, 64)
         val universe = listOf(
-            candidate("dup-1", preferred = true, 11, 22),
-            candidate("dup-2", preferred = true, 11, 22),
+            candidate("dup-1", preferred = true, 11),
+            candidate("dup-2", preferred = true, 11),
         )
 
-        val result = engine.run(queryFront, queryBack, universe)
+        val result = engine.run(queryFront, universe)
 
         val ambiguous = result as ScanFlowResult.Ambiguous
         assertEquals(CandidateOrigin.RECIPIENT_PREFERRED, ambiguous.origin)
@@ -118,33 +111,26 @@ class LocalMatchEngineTest {
 
     @Test
     fun senderFallbackRunsWhenRecipientRowsLackWeakEvidence() = kotlinx.coroutines.runBlocking {
-        // suspend engine.run proof
         val (engine, _) = engine()
-        val queryFront = fingerprint(11, 64, FingerprintSide.FRONT)
-        val queryBack = fingerprint(22, 64, FingerprintSide.BACK)
+        val queryFront = fingerprint(11, 64)
         // Recipient baselines EXIST but each holds so few features that no
-        // side can ever clear the weak-evidence gate (which requires at least
-        // the configured minimum ratio/mutual matches); the scanned card must
-        // therefore fall back to its sender-era identity.
-        val starvedFront = fingerprint(11, 3, FingerprintSide.FRONT)
-        val starvedBack = fingerprint(22, 3, FingerprintSide.BACK)
+        // FRONT can ever clear the weak-evidence gate.
+        val starvedFront = fingerprint(11, 3)
         val universe = listOf(
             IndexedCandidate(
                 capsuleId = UUID.nameUUIDFromBytes("rec-starved-1".toByteArray()),
                 front = starvedFront,
-                back = starvedBack,
                 recipientPreferred = true,
             ),
             IndexedCandidate(
                 capsuleId = UUID.nameUUIDFromBytes("rec-starved-2".toByteArray()),
-                front = fingerprint(31, 5, FingerprintSide.FRONT),
-                back = fingerprint(32, 5, FingerprintSide.BACK),
+                front = fingerprint(31, 5),
                 recipientPreferred = true,
             ),
-            candidate("sender-original", preferred = false, seedFront = 11, seedBack = 22),
+            candidate("sender-original", preferred = false, seedFront = 11),
         )
 
-        val result = engine.run(queryFront, queryBack, universe)
+        val result = engine.run(queryFront, universe)
 
         val granted = result as ScanFlowResult.Granted
         assertEquals(UUID.nameUUIDFromBytes("sender-original".toByteArray()), granted.capsuleId)
@@ -155,24 +141,20 @@ class LocalMatchEngineTest {
     @Test
     fun senderFallbackKeepsRecipientAndSenderPairsForTheSameCapsule() = kotlinx.coroutines.runBlocking {
         val (engine, _) = engine()
-        val queryFront = fingerprint(11, 64, FingerprintSide.FRONT)
-        val queryBack = fingerprint(22, 64, FingerprintSide.BACK)
+        val queryFront = fingerprint(11, 64)
         val capsuleId = UUID.nameUUIDFromBytes("repeat-fallback".toByteArray())
 
         val result = engine.run(
             queryFront,
-            queryBack,
             listOf(
                 IndexedCandidate(
                     capsuleId = capsuleId,
-                    front = fingerprint(11, 3, FingerprintSide.FRONT),
-                    back = fingerprint(22, 3, FingerprintSide.BACK),
+                    front = fingerprint(11, 3),
                     recipientPreferred = true,
                 ),
                 IndexedCandidate(
                     capsuleId = capsuleId,
-                    front = fingerprint(11, 64, FingerprintSide.FRONT),
-                    back = fingerprint(22, 64, FingerprintSide.BACK),
+                    front = fingerprint(11, 64),
                     recipientPreferred = false,
                 ),
             ),
@@ -186,12 +168,10 @@ class LocalMatchEngineTest {
 
     @Test
     fun unknownPostcardIsRecaptureRequiredWithoutAnyGrant() = kotlinx.coroutines.runBlocking {
-        // suspend engine.run proof
         val (engine, _) = engine()
-        // Query matches nothing in the index.
-        val universe = listOf(candidate("other-card", preferred = false, seedFront = 91, seedBack = 92))
+        val universe = listOf(candidate("other-card", preferred = false, seedFront = 91))
 
-        val result = engine.run(fingerprint(55, 64, FingerprintSide.FRONT), fingerprint(66, 64, FingerprintSide.BACK), universe)
+        val result = engine.run(fingerprint(55, 64), universe)
 
         assertEquals(ScanFlowResult.RecaptureRequired, result)
         assertEquals(0, issuedGrants.size)
@@ -199,47 +179,34 @@ class LocalMatchEngineTest {
 
     @Test
     fun emptyCandidateIndexIsNoMatchNotAnError() = kotlinx.coroutines.runBlocking {
-        // suspend engine.run proof
         val (engine, _) = engine()
 
-        val result = engine.run(fingerprint(1, 64, FingerprintSide.FRONT), fingerprint(2, 64, FingerprintSide.BACK), emptyList())
+        val result = engine.run(fingerprint(1, 64), emptyList())
 
         assertEquals(ScanFlowResult.RecaptureRequired, result)
         assertEquals(0, issuedGrants.size)
     }
 
     @Test
-    fun candidateWithoutStoredBackNeverBorrowsTheFrontAsItsBack() = kotlinx.coroutines.runBlocking {
-        // suspend engine.run proof
+    fun designToManyRequiresExplicitChoiceNeverAutoOpens() = kotlinx.coroutines.runBlocking {
         val (engine, _) = engine()
-        // Perfect front match but NO stored back fingerprint. If the engine
-        // substituted the front as the missing back, this scan would wrongly
-        // self-accept; instead the incomplete pair must be unusable evidence.
-        val front = fingerprint(11, 64, FingerprintSide.FRONT)
-        val brokenCandidate = IndexedCandidate(
-            capsuleId = UUID.nameUUIDFromBytes("broken-pair".toByteArray()),
-            front = front,
-            back = null,
-            recipientPreferred = true,
+        // Same printed FRONT design mapped to two capsules (design->N).
+        val queryFront = fingerprint(11, 64)
+        // other-design is starved so it cannot pass weak gate and is excluded.
+        val universe = listOf(
+            candidate("design-capsule-1", preferred = true, 11),
+            candidate("design-capsule-2", preferred = true, 11),
+            IndexedCandidate(
+                capsuleId = UUID.nameUUIDFromBytes("other-design".toByteArray()),
+                front = fingerprint(99, 3),
+                recipientPreferred = true,
+            ),
         )
-
-        // The query back carries the FRONT's descriptors: exactly the forgery
-        // the front-as-back substitution would have accepted.
-        val queryBack = PostcardFingerprint(
-            profileId = front.profileId,
-            side = FingerprintSide.BACK,
-            canonicalWidthPx = front.canonicalWidthPx,
-            canonicalHeightPx = front.canonicalHeightPx,
-            coarseHash64 = front.coarseHash64,
-            keypoints = front.keypoints,
-            descriptors = front.descriptors,
-            quality = front.quality,
-        )
-
-        val result = engine.run(front, queryBack, listOf(brokenCandidate))
-
-        assertEquals(ScanFlowResult.RecaptureRequired, result)
-        assertTrue(issuedGrants.isEmpty(), "an incomplete pair must never issue a grant")
+        // Both design capsules are plausible; must not auto-open.
+        val result = engine.run(queryFront, universe)
+        val ambiguous = result as ScanFlowResult.Ambiguous
+        assertEquals(2, ambiguous.rows.size)
+        assertTrue(issuedGrants.isEmpty(), "design->N must never auto-open")
     }
 
     private fun assertFalse(value: Boolean) = kotlin.test.assertFalse(value)

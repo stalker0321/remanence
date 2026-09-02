@@ -41,6 +41,18 @@ interface StillCameraAdapter {
     fun release()
 }
 
+/** Internal factory used only to stitch the adapter to a real binding in JVM tests. */
+internal fun interface CameraXBindingFactory {
+    fun create(
+        context: Context,
+        lifecycleOwner: LifecycleOwner,
+        previewView: PreviewView,
+        imageCapture: ImageCapture,
+        onBound: () -> Unit,
+        onError: (String) -> Unit,
+    ): CameraXBinding
+}
+
 /**
  * Production adapter over [CameraXPreviewBinder]. The host composes [preview]
  * FIRST (which creates the PreviewView), then calls [bind]. One instance
@@ -53,6 +65,32 @@ class CameraXStillCameraAdapter(
 ) : StillCameraAdapter {
 
     private val imageCapture: ImageCapture = CameraXPreviewBinder.createImageCapture()
+
+    private var bindingFactory: CameraXBindingFactory = CameraXBindingFactory {
+        factoryContext,
+        factoryLifecycleOwner,
+        factoryPreviewView,
+        factoryImageCapture,
+        factoryOnBound,
+        factoryOnError,
+        ->
+        CameraXPreviewBinder.bind(
+            context = factoryContext,
+            lifecycleOwner = factoryLifecycleOwner,
+            previewView = factoryPreviewView,
+            imageCapture = factoryImageCapture,
+            onBound = factoryOnBound,
+            onError = factoryOnError,
+        )
+    }
+
+    internal constructor(
+        context: Context,
+        lifecycleOwner: LifecycleOwner,
+        bindingFactory: CameraXBindingFactory,
+    ) : this(context, lifecycleOwner) {
+        this.bindingFactory = bindingFactory
+    }
 
     @Volatile
     private var released = false
@@ -72,7 +110,7 @@ class CameraXStillCameraAdapter(
     override fun bind(onReady: () -> Unit, onError: (String) -> Unit) {
         if (released) return
         val view = requireNotNull(previewView) { "preview must be composed before bind()" }
-        binding = CameraXPreviewBinder.bind(
+        binding = bindingFactory.create(
             context = context,
             lifecycleOwner = lifecycleOwner,
             previewView = view,

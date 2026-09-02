@@ -82,7 +82,7 @@ The server necessarily sees metadata required for accounts and routing: normaliz
 | Area | Choice | Concrete problem solved now |
 | --- | --- | --- |
 | Android | Kotlin, Gradle, Jetpack Compose | Native camera/security integration and a reproducible CLI build. |
-| Capture | CameraX still capture | Two deliberate captures; no realtime frame pipeline is required. |
+| Capture | CameraX still capture | One deliberate required FRONT still; optional/legacy BACK only under an explicit identity mode; no realtime frame pipeline is required. |
 | Recognition | OpenCV Android | On-device rectangle normalization, ORB features, matching, homography, and RANSAC. |
 | Local data | Room plus app-private files | Transactional metadata plus efficient ciphertext/descriptor file storage. |
 | Background work | WorkManager | Resume ciphertext upload and incoming index sync after process/network interruption. |

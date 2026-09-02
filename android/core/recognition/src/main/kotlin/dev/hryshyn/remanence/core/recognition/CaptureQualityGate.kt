@@ -26,13 +26,28 @@ data class CaptureQualityInput(
  * Classifies measured capture signals into reason codes using ONLY profile
  * thresholds; an empty set means the capture passes all quality gates.
  */
-class CaptureQualityGate(private val profile: RecognitionProfile) {
+class CaptureQualityGate(
+    private val profile: RecognitionProfile,
+    private val admissionProfile: CaptureAdmissionProfile? = null,
+) {
 
+    /** Legacy profile-only evaluation; an admission profile requires an explicit side. */
     fun evaluate(input: CaptureQualityInput): Set<QualityReason> {
+        check(admissionProfile == null) { "capture admission side is required" }
+        return evaluate(input, FingerprintSide.FRONT)
+    }
+
+    /** Evaluates the side-bound local admission profile when one is supplied. */
+    fun evaluate(input: CaptureQualityInput, side: FingerprintSide): Set<QualityReason> {
         val reasons = sortedSetOf<QualityReason>()
         val gates = profile.capture
+        val minLaplacianVariance = if (admissionProfile != null) {
+            admissionProfile.minLaplacianVariance(side)
+        } else {
+            gates.minLaplacianVariance
+        }
         with(input.signals) {
-            if (laplacianVariance < gates.minLaplacianVariance) reasons += QualityReason.TOO_BLURRY
+            if (laplacianVariance < minLaplacianVariance) reasons += QualityReason.TOO_BLURRY
             if (nearBlackFraction > gates.maxNearBlackFraction) reasons += QualityReason.TOO_DARK
             if (clippedWhiteFraction > gates.maxClippedWhiteFraction ||
                 largestGlareFraction > gates.maxGlareRegionFraction

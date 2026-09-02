@@ -11,6 +11,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import dev.hryshyn.remanence.capture.ProcessedStill
 import dev.hryshyn.remanence.core.recognition.CaptureDecoder
+import dev.hryshyn.remanence.core.recognition.FingerprintCodec
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.QualityReason
 import dev.hryshyn.remanence.core.recognition.QuadCandidate
@@ -38,6 +39,18 @@ class RealStillFingerprintProcessorTest {
         val result = processor(::emptyContours).process(patternJpeg())
 
         assertTrue("expected accepted fallback capture, got $result", result is ProcessedStill.Accepted)
+        val accepted = result as ProcessedStill.Accepted
+        try {
+            val fingerprint = FingerprintCodec.parse(accepted.serializedBytes)
+            assertTrue(fingerprint.keypoints.isNotEmpty())
+            assertTrue(fingerprint.descriptors.isNotEmpty())
+            assertTrue(fingerprint.descriptors.all { it.size == FingerprintCodec.DESCRIPTOR_BYTES })
+            assertTrue(fingerprint.descriptors.size == fingerprint.keypoints.size)
+            assertTrue(fingerprint.side == FingerprintSide.FRONT)
+            assertTrue(fingerprint.profileId == RecognitionProfile.MVP_ORB_V1_ID)
+        } finally {
+            accepted.serializedBytes.fill(0)
+        }
     }
 
     @Test

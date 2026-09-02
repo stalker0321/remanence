@@ -21,6 +21,7 @@ import org.robolectric.annotation.GraphicsMode
 import dev.hryshyn.remanence.capture.ProcessedStill
 import dev.hryshyn.remanence.create.RealStillFingerprintProcessor
 import dev.hryshyn.remanence.core.recognition.CaptureQualityGate
+import dev.hryshyn.remanence.core.recognition.CaptureAdmissionProfile
 import dev.hryshyn.remanence.core.recognition.CaptureQualityInput
 import dev.hryshyn.remanence.core.recognition.CaptureQualityMeter
 import dev.hryshyn.remanence.core.recognition.FingerprintCodec
@@ -128,6 +129,84 @@ class CaptureDatasetHarnessTest {
             cases.size,
             output.toFile().readLines(Charsets.UTF_8).size,
         )
+    }
+
+    @Test
+    fun calibratedSharpBackRescuesCompleteProductionOrbExtraction() {
+        val rootRaw = System.getProperty(DATASET_ROOT_PROPERTY)
+        val repositoryRaw = System.getProperty(REPOSITORY_ROOT_PROPERTY)
+        assumeTrue(
+            "rescued-back proof requires explicit dataset and repository-root properties",
+            !rootRaw.isNullOrBlank() && !repositoryRaw.isNullOrBlank(),
+        )
+        loadNative()
+        val repositoryRoot = actualWorktree(Paths.get(requireNotNull(repositoryRaw)))
+        val root = existingDirectory(Paths.get(requireNotNull(rootRaw)), repositoryRoot)
+        val cases = datasetCases(root).associateBy { it.redactedId }
+        val processor = RealStillFingerprintProcessor(profile, FingerprintSide.BACK)
+
+        RESCUED_SHARP_BACK_CASES.forEach { caseId ->
+            val testCase = requireNotNull(cases[caseId]) { "missing locked rescue case $caseId" }
+            val bytes = Files.readAllBytes(testCase.path)
+            try {
+                val result = processor.process(bytes)
+                assertTrue("$caseId must pass the complete production pipeline: $result", result is ProcessedStill.Accepted)
+                val accepted = result as ProcessedStill.Accepted
+                try {
+                    val fingerprint = FingerprintCodec.parse(accepted.serializedBytes)
+                    assertEquals("$caseId side", FingerprintSide.BACK, fingerprint.side)
+                    assertEquals("$caseId profile", RecognitionProfile.MVP_ORB_V1_ID, fingerprint.profileId)
+                    assertTrue("$caseId must have ORB keypoints", fingerprint.keypoints.isNotEmpty())
+                    assertEquals(
+                        "$caseId descriptors align with keypoints",
+                        fingerprint.keypoints.size,
+                        fingerprint.descriptors.size,
+                    )
+                    assertTrue(
+                        "$caseId descriptors must be aligned 32-byte ORB rows",
+                        fingerprint.descriptors.all { it.size == FingerprintCodec.DESCRIPTOR_BYTES },
+                    )
+                    fingerprint.descriptors.forEach { it.fill(0) }
+                } finally {
+                    accepted.serializedBytes.fill(0)
+                }
+            } finally {
+                bytes.fill(0)
+            }
+        }
+    }
+
+    @Test
+    fun calibratedFocusNegativesRemainRejectedOnBothSides() {
+        val rootRaw = System.getProperty(DATASET_ROOT_PROPERTY)
+        val repositoryRaw = System.getProperty(REPOSITORY_ROOT_PROPERTY)
+        assumeTrue(
+            "focus-negative proof requires explicit dataset and repository-root properties",
+            !rootRaw.isNullOrBlank() && !repositoryRaw.isNullOrBlank(),
+        )
+        loadNative()
+        val repositoryRoot = actualWorktree(Paths.get(requireNotNull(repositoryRaw)))
+        val root = existingDirectory(Paths.get(requireNotNull(rootRaw)), repositoryRoot)
+        val cases = datasetCases(root).associateBy { it.redactedId }
+        val processors = mapOf(
+            FingerprintSide.FRONT to RealStillFingerprintProcessor(profile, FingerprintSide.FRONT),
+            FingerprintSide.BACK to RealStillFingerprintProcessor(profile, FingerprintSide.BACK),
+        )
+
+        FOCUS_NEGATIVE_CASES.forEach { caseId ->
+            val testCase = requireNotNull(cases[caseId]) { "missing focus-negative case $caseId" }
+            val bytes = Files.readAllBytes(testCase.path)
+            try {
+                val result = processors.getValue(testCase.side).process(bytes)
+                assertTrue("$caseId must remain rejected: $result", result is ProcessedStill.Rejected)
+                assertTrue(
+                    "$caseId must be rejected as blurry: $result",
+                    QualityReason.TOO_BLURRY in (result as ProcessedStill.Rejected).reasons,
+                )
+            } finally {
+                bytes.fill(0)
+            }
+        }
     }
 
     @Test
@@ -838,7 +917,7 @@ class CaptureDatasetHarnessTest {
         val cropSelector = PostcardCropSelector(profile)
         val warper = PerspectiveWarper(profile)
         val meter = CaptureQualityMeter()
-        val gate = CaptureQualityGate(profile)
+        val gate = CaptureQualityGate(profile, CaptureAdmissionProfile.calibratedM2())
         val extractor = FingerprintExtractor(profile)
         val working = try {
             pipeline.process(bytes)
@@ -871,7 +950,7 @@ class CaptureDatasetHarnessTest {
                         cropAspectRatio = warped.width.toDouble() / warped.height.toDouble(),
                         croppedShortEdgePx = minOf(warped.width, warped.height),
                     )
-                    val reasons = gate.evaluate(qualityInput)
+                    val reasons = gate.evaluate(qualityInput, side)
                     if (reasons.isNotEmpty()) {
                         return TraceResult(
                             accepted = false,
@@ -1004,6 +1083,22 @@ class CaptureDatasetHarnessTest {
         const val REPOSITORY_ROOT_PROPERTY = "remanence.repo.root"
         const val EXPECTED_SUMMARY_PROPERTY = "remanence.dataset.expected-summary"
         const val EXPECTED_CASES_PROPERTY = "remanence.dataset.expected-cases"
+        private val RESCUED_SHARP_BACK_CASES = setOf(
+            "021/T05/back",
+            "022/T04/back",
+            "025/T01/back",
+            "025/T08/back",
+            "027/T03/back",
+            "027/T08/back",
+        )
+        private val FOCUS_NEGATIVE_CASES = setOf(
+            "021/T07/front", "021/T07/back",
+            "022/T07/front", "022/T07/back",
+            "024/T07/front", "024/T07/back",
+            "025/T07/front", "025/T07/back",
+            "026/T07/front", "026/T07/back",
+            "027/T07/front", "027/T07/back",
+        )
         const val OUTPUT_FILE_NAME = "capture-diagnostics.jsonl"
         val CARD_ID_PATTERN = Regex("\\d{3}")
         val TASK_ID_PATTERN = Regex("T\\d{2}")

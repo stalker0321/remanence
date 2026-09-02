@@ -2,6 +2,7 @@ package dev.hryshyn.remanence.core.recognition
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class CaptureQualityGateTest {
@@ -36,6 +37,56 @@ class CaptureQualityGateTest {
         )
         assertEquals(setOf(QualityReason.TOO_BLURRY), gate.evaluate(below))
         assertTrue(gate.evaluate(atOrAbove).isEmpty())
+    }
+
+    @Test
+    fun calibratedCaptureAdmissionUsesIndependentSideBlurBoundaries() {
+        val sideGate = CaptureQualityGate(
+            RecognitionProfile.mvpOrbV1(),
+            CaptureAdmissionProfile.calibratedM2(),
+        )
+
+        val frontBelow = passingInput().copy(
+            signals = passingSignals().copy(laplacianVariance = 110.0 - 1e-6),
+        )
+        val backAtBoundary = passingInput().copy(
+            signals = passingSignals().copy(laplacianVariance = 55.0),
+        )
+
+        assertEquals(setOf(QualityReason.TOO_BLURRY), sideGate.evaluate(frontBelow, FingerprintSide.FRONT))
+        assertTrue(sideGate.evaluate(backAtBoundary, FingerprintSide.BACK).isEmpty())
+        assertEquals(
+            setOf(QualityReason.TOO_BLURRY),
+            sideGate.evaluate(
+                backAtBoundary.copy(
+                    signals = passingSignals().copy(laplacianVariance = 55.0 - 1e-6),
+                ),
+                FingerprintSide.BACK,
+            ),
+        )
+    }
+
+    @Test
+    fun recognitionProfileIdentityAndGenericGateRemainUnchanged() {
+        val profile = RecognitionProfile.mvpOrbV1()
+        val sideGate = CaptureQualityGate(profile, CaptureAdmissionProfile.calibratedM2())
+        val legacyBoundary = passingInput().copy(
+            signals = passingSignals().copy(laplacianVariance = 80.0),
+        )
+
+        assertEquals(RecognitionProfile.MVP_ORB_V1_ID, profile.profileId)
+        assertTrue(CaptureQualityGate(profile).evaluate(legacyBoundary).isEmpty())
+        assertFailsWith<IllegalStateException> { sideGate.evaluate(legacyBoundary) }
+    }
+
+    @Test
+    fun admissionProfileRejectsNonFiniteOrUnboundedThresholds() {
+        assertFailsWith<IllegalArgumentException> {
+            CaptureAdmissionProfile(frontMinLaplacianVariance = Double.NaN, backMinLaplacianVariance = 55.0)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            CaptureAdmissionProfile(frontMinLaplacianVariance = 10_000.1, backMinLaplacianVariance = 55.0)
+        }
     }
 
     @Test

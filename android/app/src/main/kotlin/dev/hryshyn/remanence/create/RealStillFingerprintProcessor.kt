@@ -7,6 +7,7 @@ import dev.hryshyn.remanence.capture.StillProcessor
 import dev.hryshyn.remanence.core.recognition.CaptureQualityGate
 import dev.hryshyn.remanence.core.recognition.CaptureQualityInput
 import dev.hryshyn.remanence.core.recognition.CaptureQualityMeter
+import dev.hryshyn.remanence.core.recognition.CaptureAdmissionProfile
 import dev.hryshyn.remanence.core.recognition.FingerprintCodec
 import dev.hryshyn.remanence.core.recognition.FingerprintExtractor
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
@@ -28,7 +29,8 @@ import dev.hryshyn.remanence.core.recognition.StillCapturePipeline
  */
 class RealStillFingerprintProcessor(
     private val profile: RecognitionProfile,
-    private val side: FingerprintSide = FingerprintSide.FRONT,
+    private val side: FingerprintSide,
+    private val admissionProfile: CaptureAdmissionProfile = CaptureAdmissionProfile.calibratedM2(),
     contourDetector: ((IntArray, Int, Int) -> List<QuadCandidate>)? = null,
 ) : StillProcessor {
 
@@ -40,7 +42,7 @@ class RealStillFingerprintProcessor(
     }
     private val warper = PerspectiveWarper(profile)
     private val meter = CaptureQualityMeter()
-    private val gate = CaptureQualityGate(profile)
+    private val gate = CaptureQualityGate(profile, admissionProfile)
     private val extractor = FingerprintExtractor(profile)
 
     override fun process(jpegBytes: ByteArray): ProcessedStill {
@@ -74,6 +76,7 @@ class RealStillFingerprintProcessor(
                     cropAspectRatio = warped.width.toDouble() / warped.height.toDouble(),
                     croppedShortEdgePx = minOf(warped.width, warped.height),
                 ),
+                side,
             )
             if (reasons.isNotEmpty()) return rejected(reasons)
 

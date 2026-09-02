@@ -217,6 +217,28 @@ class CaptureDatasetHarnessTest {
     }
 
     @Test
+    fun omittedOptionalCatalogFieldsStillAcceptCanonicalReference() = withFixture { root ->
+        val manifest = JSONObject(
+            root.resolve("cards/001_sample/manifest.json").toFile().readText(Charsets.UTF_8),
+        )
+        manifest.getJSONObject("source").remove("reference_image")
+        manifest.remove("split")
+        root.resolve("cards/001_sample/manifest.json").toFile().writeText(manifest.toString())
+        root.resolve("cards/001_sample/reference.jpg").toFile().writeText("reference")
+
+        val cases = datasetCases(root)
+        assertEquals(setOf("001/T01/front", "001/T01/back"), cases.map { it.redactedId }.toSet())
+    }
+
+    @Test
+    fun escapedCaptureImageBindingIsRejectedByManifestDrivenInventory() = withFixture { root ->
+        root.resolve("cards/001_sample/images/../T02_front.jpg").normalize()
+            .toFile().writeText("not a capture")
+
+        assertThrows(IllegalArgumentException::class.java) { datasetCases(root) }
+    }
+
+    @Test
     fun missingExpectedSideIsRejectedByManifestDrivenInventory() = withFixture { root ->
         Files.delete(root.resolve("cards/001_sample/images/T01_back.jpg"))
 
@@ -436,10 +458,11 @@ class CaptureDatasetHarnessTest {
         val referenceImage = json.optJSONObject("source")
             ?.optString("reference_image")
             ?.takeIf { it.isNotBlank() }
-            ?: failInventory("manifest has no reference image")
-        val referencePath = Paths.get(referenceImage)
-        if (referencePath.nameCount != 1 || referencePath.fileName.toString() != referenceImage) {
-            failInventory("manifest reference image is not a leaf name")
+        referenceImage?.let { imageName ->
+            val referencePath = Paths.get(imageName)
+            if (referencePath.nameCount != 1 || referencePath.fileName.toString() != imageName) {
+                failInventory("manifest reference image is not a leaf name")
+            }
         }
         return ManifestSpec(folder, cardId, cardNumber, tasks, referenceImage)
     }
@@ -502,7 +525,12 @@ class CaptureDatasetHarnessTest {
 
     private fun actualCaptureFiles(root: Path, manifests: List<ManifestSpec>): Map<String, Path> {
         val actual = linkedMapOf<String, Path>()
-        val allowedReferences = manifests.map { "cards/${it.folder}/${it.referenceImage}" }.toSet()
+        val allowedReferences = manifests.flatMap { manifest ->
+            listOfNotNull(
+                "cards/${manifest.folder}/reference.jpg",
+                manifest.referenceImage?.let { "cards/${manifest.folder}/$it" },
+            )
+        }.toSet()
         Files.walk(root).use { paths ->
             paths.iterator().asSequence().forEach { path ->
                 val relative = relativePath(root, path)
@@ -872,7 +900,7 @@ class CaptureDatasetHarnessTest {
         val cardId: String,
         val cardNumber: Int,
         val tasks: Map<String, Set<FingerprintSide>>,
-        val referenceImage: String,
+        val referenceImage: String?,
     )
 
     private fun withFixture(block: (Path) -> Unit) = withTemporaryDirectory { root ->

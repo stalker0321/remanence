@@ -29,8 +29,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -51,6 +53,38 @@ val CAPTURE_PREVIEW_MAX_HEIGHT = 320.dp
  * the cap keeps recovery panels reachable below it.
  */
 val CAPTURE_PREVIEW_MIN_HEIGHT = 180.dp
+
+/** Width/height used by the responsive capture frame on portrait displays. */
+private const val PORTRAIT_PREVIEW_ASPECT_RATIO = 3f / 4f
+
+/** Width/height used by the responsive capture frame on landscape displays. */
+private const val LANDSCAPE_PREVIEW_ASPECT_RATIO = 4f / 3f
+
+internal data class CapturePreviewSize(
+    val width: Dp,
+    val height: Dp,
+)
+
+/**
+ * Chooses the largest frame that fits the available width/height budget while
+ * preserving the display-oriented camera frame ratio. The width is reduced
+ * when the height cap binds; otherwise a full-width frame is retained.
+ */
+internal fun capturePreviewSize(
+    maxWidth: Dp,
+    effectiveMaxHeight: Dp,
+    targetAspectRatio: Float,
+): CapturePreviewSize {
+    require(maxWidth > 0.dp)
+    require(effectiveMaxHeight > 0.dp)
+    require(targetAspectRatio > 0f)
+
+    val lowerBound = minOf(CAPTURE_PREVIEW_MIN_HEIGHT, effectiveMaxHeight)
+    val desiredHeight = maxWidth / targetAspectRatio
+    val height = desiredHeight.coerceIn(lowerBound, effectiveMaxHeight)
+    val width = minOf(maxWidth, height * targetAspectRatio)
+    return CapturePreviewSize(width = width, height = height)
+}
 
 /**
  * FIX-STATE-01/04: THE shared production rendering of one capture attempt.
@@ -238,38 +272,50 @@ private fun LivePreviewContent(
     }
 
     Column {
-        // FIX-STATE-09: the viewfinder area is DETERMINISTIC - a 3:4 portrait
-        // fraction of the available width, clamped to [MIN, MAX], and further
-        // capped by a fraction of the SCREEN height so on short phones the
-        // shutter stays visible without scrolling.
-        val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+        // FIX-STATE-09: the viewfinder area is DETERMINISTIC - it follows the
+        // display orientation, preserves its 3:4 portrait (or 4:3 landscape)
+        // shape when the height cap binds, and keeps the shutter reachable on
+        // short phones.
+        val configuration = LocalConfiguration.current
         val screenHeight = configuration.screenHeightDp.dp
         val effectiveMax = minOf(CAPTURE_PREVIEW_MAX_HEIGHT, screenHeight * 0.45f)
-        androidx.compose.foundation.layout.BoxWithConstraints {
-            val desired = maxWidth * 4f / 3f
-            val lowerBound = minOf(CAPTURE_PREVIEW_MIN_HEIGHT, effectiveMax)
-            val previewHeight = desired.coerceIn(lowerBound, effectiveMax)
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            val targetAspectRatio = if (configuration.screenWidthDp < configuration.screenHeightDp) {
+                PORTRAIT_PREVIEW_ASPECT_RATIO
+            } else {
+                LANDSCAPE_PREVIEW_ASPECT_RATIO
+            }
+            val preview = capturePreviewSize(
+                maxWidth = maxWidth,
+                effectiveMaxHeight = effectiveMax,
+                targetAspectRatio = targetAspectRatio,
+            )
             Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(previewHeight)
-                    .testTag("capture_preview"),
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.TopCenter,
             ) {
-                // Fills the guaranteed area exactly; the hosted surface can
-                // never measure to zero height. Composed in the SAME commit
-                // that created the adapter, before the bind effect runs.
-                adapter.preview(Modifier.matchParentSize())
-                PostcardGuideOverlay(modifier = Modifier.matchParentSize())
-                Text(
-                    "Keep all four postcard edges inside the outline.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.White,
+                Box(
                     modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .background(Color.Black.copy(alpha = 0.70f))
-                        .padding(horizontal = 4.dp, vertical = 2.dp)
-                        .testTag("postcard_guide_instruction"),
-                )
+                        .width(preview.width)
+                        .height(preview.height)
+                        .testTag("capture_preview"),
+                ) {
+                    // Fills the guaranteed area exactly; the hosted surface can
+                    // never measure to zero height. Composed in the SAME commit
+                    // that created the adapter, before the bind effect runs.
+                    adapter.preview(Modifier.matchParentSize())
+                    PostcardGuideOverlay(modifier = Modifier.matchParentSize())
+                    Text(
+                        "Keep all four postcard edges inside the outline.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .background(Color.Black.copy(alpha = 0.70f))
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                            .testTag("postcard_guide_instruction"),
+                    )
+                }
             }
         }
         Spacer(Modifier.height(8.dp))

@@ -123,8 +123,9 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
     }
 
     @Test
-    fun happyPathUsesExactOrderAndRealAdoptionAndRoomCommit() = runBlocking {
+    fun freshAbsentIncomingRootUsesExactOrderAndRealAdoptionAndRoomCommit() = runBlocking {
         seed()
+        assertFalse(roots.child(owner, AccountScopedFileRoots.ChildRoot.INCOMING_CIPHERTEXT).exists())
         val events = mutableListOf<String>()
         var requested: IncomingControlIndexAcceptanceRequest? = null
         val verifiedPayload = verifiedPayload()
@@ -577,6 +578,82 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
                 assertIs<IncomingCapsuleAcceptanceResult.Rejected>(result).reason,
             )
             assertFalse(outside.resolve(capsule.toRestString()).exists())
+        } finally {
+            outside.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun existingIncomingRootSymlinkIsRejectedWithoutFollowingIt() = runBlocking {
+        seed()
+        val ownerDirectory = roots.accountDirectory(owner).toPath()
+        Files.createDirectories(ownerDirectory)
+        val redirected = ownerDirectory.resolve("incoming-target").toFile().apply { mkdirs() }
+        val incomingRoot = ownerDirectory.resolve(
+            AccountScopedFileRoots.ChildRoot.INCOMING_CIPHERTEXT.directoryName,
+        )
+        Files.createSymbolicLink(incomingRoot, redirected.toPath())
+
+        var downloads = 0
+        val result = coordinator(
+            download = IncomingRecipientBlobDownloader { _, _ ->
+                downloads += 1
+                throw AssertionError("unsafe incoming root must not download")
+            },
+        ).accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+
+        assertEquals(
+            IncomingCapsuleAcceptanceRejectionReason.TEMP_PATH_UNSAFE,
+            assertIs<IncomingCapsuleAcceptanceResult.Rejected>(result).reason,
+        )
+        assertEquals(0, downloads)
+        assertFalse(redirected.resolve("capsules").exists())
+    }
+
+    @Test
+    fun existingIncomingRootNonDirectoryIsRejectedWithoutReplacingIt() = runBlocking {
+        seed()
+        val ownerDirectory = roots.accountDirectory(owner).toPath()
+        Files.createDirectories(ownerDirectory)
+        val incomingRoot = ownerDirectory.resolve(
+            AccountScopedFileRoots.ChildRoot.INCOMING_CIPHERTEXT.directoryName,
+        ).toFile().apply { writeBytes(byteArrayOf(1, 2, 3)) }
+
+        val result = coordinator().accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+
+        assertEquals(
+            IncomingCapsuleAcceptanceRejectionReason.TEMP_PATH_UNSAFE,
+            assertIs<IncomingCapsuleAcceptanceResult.Rejected>(result).reason,
+        )
+        assertArrayEquals(byteArrayOf(1, 2, 3), incomingRoot.readBytes())
+    }
+
+    @Test
+    fun escapingIncomingRootIsRejectedWithoutFollowingIt() = runBlocking {
+        seed()
+        val outside = File(testRoot.parentFile, "a11d1-incoming-outside-${System.nanoTime()}").apply { mkdirs() }
+        try {
+            val ownerDirectory = roots.accountDirectory(owner).toPath()
+            Files.createDirectories(ownerDirectory)
+            Files.createSymbolicLink(
+                ownerDirectory.resolve(AccountScopedFileRoots.ChildRoot.INCOMING_CIPHERTEXT.directoryName),
+                outside.toPath(),
+            )
+
+            var downloads = 0
+            val result = coordinator(
+                download = IncomingRecipientBlobDownloader { _, _ ->
+                    downloads += 1
+                    throw AssertionError("escaping incoming root must not download")
+                },
+            ).accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+
+            assertEquals(
+                IncomingCapsuleAcceptanceRejectionReason.TEMP_PATH_UNSAFE,
+                assertIs<IncomingCapsuleAcceptanceResult.Rejected>(result).reason,
+            )
+            assertEquals(0, downloads)
+            assertFalse(outside.resolve("capsules").exists())
         } finally {
             outside.deleteRecursively()
         }

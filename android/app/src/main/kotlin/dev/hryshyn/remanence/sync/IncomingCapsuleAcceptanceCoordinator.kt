@@ -709,7 +709,7 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
         }
         val destination = try {
             derivedIncomingDestination(request.ownerUserId, request.capsuleId, recognitionBlobId)
-        } catch (_: Exception) {
+        } catch (_: UnsafeIncomingPath) {
             return DeclarationLoad.Rejected(IncomingCapsuleAcceptanceRejectionReason.TEMP_PATH_UNSAFE)
         }
         if (recognition.localPath != destination.toString()) {
@@ -837,13 +837,24 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
         capsule: CapsuleId,
         blob: BlobId,
     ): Path {
-        val root = roots.child(owner, AccountScopedFileRoots.ChildRoot.INCOMING_CIPHERTEXT)
-            .toPath().toAbsolutePath().normalize()
+        val root = try {
+            roots.child(owner, AccountScopedFileRoots.ChildRoot.INCOMING_CIPHERTEXT)
+                .toPath().toAbsolutePath().normalize()
+        } catch (_: IllegalStateException) {
+            throw UnsafeIncomingPath()
+        }
         val destination = root.resolve(
             "capsules/${capsule.toRestString()}/blobs/${blob.toRestString()}.ciphertext",
         ).normalize()
-        require(isContained(destination, root))
-        require(isNoSymlinkPath(root))
+        if (!isContained(destination, root)) throw UnsafeIncomingPath()
+        try {
+            // Keep the root check ordered and NOFOLLOW: an absent incoming
+            // root is materialised for the next recovery step, while an
+            // existing symlink/non-directory is rejected before any write.
+            ensureNoSymlinkDirectory(root)
+        } catch (_: UnsafeTempPath) {
+            throw UnsafeIncomingPath()
+        }
         return destination
     }
 
@@ -1009,6 +1020,8 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
     )
 
     private class UnsafeTempPath : IllegalStateException()
+
+    private class UnsafeIncomingPath : IllegalStateException()
 
     private companion object {
         const val READY_STATUS = "READY"

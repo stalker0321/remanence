@@ -177,6 +177,50 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
     }
 
     @Test
+    fun reconstructedTest7UpgradeRepairsStaleSafePathBeforeDownloadAdoptionAndCommit() = runBlocking {
+        seed()
+        val oldPath = File(testRoot, "legacy-test7/capsules/${capsule.toRestString()}/${blob.toRestString()}.bin")
+            .apply {
+                parentFile!!.mkdirs()
+                writeBytes("old-test7-ciphertext".toByteArray())
+            }
+        rewriteRecognitionPath(oldPath.path)
+
+        val result = coordinator().accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+
+        assertIs<IncomingCapsuleAcceptanceResult.Committed>(result)
+        assertArrayEquals("old-test7-ciphertext".toByteArray(), oldPath.readBytes())
+        assertArrayEquals(bytes, incomingCiphertextPath().readBytes())
+        assertEquals(incomingCiphertextPath().path, recognitionRow().localPath)
+        assertEquals(BlobCacheState.CACHED, recognitionRow().cacheState)
+    }
+
+    @Test
+    fun reconstructedTest7UpgradeRepairsStaleUnsafePathWithoutTouchingIt() = runBlocking {
+        seed()
+        val outside = File(testRoot.parentFile, "a11d1-legacy-outside-${System.nanoTime()}").apply {
+            mkdirs()
+        }
+        try {
+            val oldPath = roots.accountDirectory(owner).toPath().resolve("legacy-test7-link.ciphertext")
+            Files.createDirectories(oldPath.parent)
+            Files.createSymbolicLink(oldPath, outside.toPath())
+            rewriteRecognitionPath(oldPath.toString())
+
+            val result = coordinator().accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+
+            assertIs<IncomingCapsuleAcceptanceResult.Committed>(result)
+            assertTrue(Files.isSymbolicLink(oldPath))
+            assertTrue(outside.isDirectory)
+            assertArrayEquals(bytes, incomingCiphertextPath().readBytes())
+            assertEquals(incomingCiphertextPath().path, recognitionRow().localPath)
+            assertEquals(BlobCacheState.CACHED, recognitionRow().cacheState)
+        } finally {
+            outside.deleteRecursively()
+        }
+    }
+
+    @Test
     fun exactIdempotentReplaySkipsNetworkAndReturnsSuccess() = runBlocking {
         seed()
         val downloads = AtomicInteger(0)
@@ -1308,6 +1352,16 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
     private suspend fun cachedBlobState(): BlobCacheState = database.blobCacheDao()
         .getByBlobIdAndOwner(blob.toRestString(), owner.toRestString())!!.cacheState
 
+    private fun rewriteRecognitionPath(path: String) {
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE blob_cache SET local_path = ? WHERE blob_id = ? AND owner_user_id = ?",
+            arrayOf(path, blob.toRestString(), owner.toRestString()),
+        )
+    }
+
+    private suspend fun recognitionRow(): BlobCacheEntity =
+        database.blobCacheDao().getByBlobIdAndOwner(blob.toRestString(), owner.toRestString())!!
+
     private fun recoveryTempPath(): File = roots.child(
         owner,
         AccountScopedFileRoots.ChildRoot.TEMP,
@@ -1315,11 +1369,8 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
         .resolve("incoming-recognition/${capsule.toRestString()}/blobs/${blob.toRestString()}.ciphertext.tmp")
         .toFile()
 
-    private fun incomingCiphertextPath(id: BlobId = blob): File = roots.child(
-        owner,
-        AccountScopedFileRoots.ChildRoot.INCOMING_CIPHERTEXT,
-    ).toPath()
-        .resolve("capsules/${capsule.toRestString()}/blobs/${id.toRestString()}.ciphertext")
+    private fun incomingCiphertextPath(id: BlobId = blob): File = roots
+        .incomingCiphertextPath(owner, capsule, id)
         .toFile()
 
     private fun incomingIndexBundlePath(): File = File(

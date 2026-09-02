@@ -415,12 +415,11 @@ class IncomingRecognitionCiphertextAdopter internal constructor(
             AccountScopedFileRoots.ChildRoot.INCOMING_CIPHERTEXT,
         ).toPath().toAbsolutePath().normalize()
         val source = request.sourceTempFile.toPath().toAbsolutePath().normalize()
-        val destination = incomingRoot
-            .resolve("capsules")
-            .resolve(request.capsuleId.toRestString())
-            .resolve("blobs")
-            .resolve("${request.blobId.toRestString()}.ciphertext")
-            .normalize()
+        val destination = roots.incomingCiphertextPath(
+            owner = request.ownerUserId,
+            capsule = request.capsuleId,
+            blob = request.blobId,
+        )
         return AdoptionPaths(tempRoot, incomingRoot, source, destination)
     }
 

@@ -1,6 +1,7 @@
 package dev.hryshyn.remanence.sync
 
 import dev.hryshyn.remanence.core.data.db.BlobCacheDao
+import dev.hryshyn.remanence.core.data.db.BlobCacheEntity
 import dev.hryshyn.remanence.core.data.db.BlobCacheState
 import dev.hryshyn.remanence.core.data.db.IncomingCapsuleDao
 import dev.hryshyn.remanence.core.data.db.IncomingEnvelopeDao
@@ -712,7 +713,50 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
         } catch (_: UnsafeIncomingPath) {
             return DeclarationLoad.Rejected(IncomingCapsuleAcceptanceRejectionReason.TEMP_PATH_UNSAFE)
         }
-        if (recognition.localPath != destination.toString()) {
+
+        val repairedRecognition = if (recognition.localPath != destination.toString()) {
+            if (recognition.cacheState != BlobCacheState.DOWNLOADING) {
+                return DeclarationLoad.Rejected(
+                    IncomingCapsuleAcceptanceRejectionReason.RECOGNITION_METADATA_INVALID,
+                )
+            }
+            val repaired = blobCacheDao.repairDownloadingRecognitionPathForOwner(
+                ownerUserId = owner,
+                capsuleId = capsuleId,
+                blobId = recognition.blobId,
+                expectedSizeBytes = recognition.expectedSizeBytes,
+                expectedSha256 = recognition.expectedSha256,
+                oldLocalPath = recognition.localPath,
+                newLocalPath = destination.toString(),
+            )
+            if (repaired == 1) {
+                recognition.copy(localPath = destination.toString())
+            } else {
+                // A concurrent repair may have won the exact CAS. Re-read
+                // only the owner/capsule scope and accept it only if every
+                // immutable binding still matches. The old path is never
+                // opened, verified, deleted, or passed to another layer.
+                val latestRows = blobCacheDao.getAllByCapsuleIdAndOwner(capsuleId, owner)
+                    .filter { it.kind == CapsuleArtifactKind.RECOGNITION_MANIFEST.name }
+                if (latestRows.size != 1) {
+                    return DeclarationLoad.Rejected(
+                        IncomingCapsuleAcceptanceRejectionReason.RECOGNITION_METADATA_INVALID,
+                    )
+                }
+                latestRows.single()
+            }
+        } else {
+            recognition
+        }
+        if (!isExactRecognitionBinding(
+                repairedRecognition,
+                owner = owner,
+                capsuleId = capsuleId,
+                blobId = recognitionBlobId,
+                expectedSizeBytes = recognition.expectedSizeBytes,
+                expectedSha256 = recognition.expectedSha256,
+            ) || repairedRecognition.localPath != destination.toString()
+        ) {
             return DeclarationLoad.Rejected(
                 IncomingCapsuleAcceptanceRejectionReason.RECOGNITION_METADATA_INVALID,
             )
@@ -720,17 +764,22 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
 
         return when {
             capsule.materialState == LocalMaterialState.DISCOVERED &&
-                recognition.cacheState == BlobCacheState.DOWNLOADING ->
+                repairedRecognition.cacheState == BlobCacheState.DOWNLOADING ->
                 DeclarationLoad.Ready(
                     RecognitionDeclaration(
                         recognitionBlobId = recognitionBlobId,
-                        expectedSizeBytes = recognition.expectedSizeBytes,
-                        expectedSha256 = recognition.expectedSha256.copyOf(),
+                        expectedSizeBytes = repairedRecognition.expectedSizeBytes,
+                        expectedSha256 = repairedRecognition.expectedSha256.copyOf(),
                     ),
                 )
             capsule.materialState == LocalMaterialState.INDEX_CACHED &&
-                recognition.cacheState == BlobCacheState.CACHED -> {
-                if (verifyExactFile(destination, recognition.expectedSizeBytes, recognition.expectedSha256)) {
+                repairedRecognition.cacheState == BlobCacheState.CACHED -> {
+                if (verifyExactFile(
+                        destination,
+                        repairedRecognition.expectedSizeBytes,
+                        repairedRecognition.expectedSha256,
+                    )
+                ) {
                     DeclarationLoad.AlreadyAccepted
                 } else {
                     DeclarationLoad.Rejected(
@@ -837,16 +886,17 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
         capsule: CapsuleId,
         blob: BlobId,
     ): Path {
+        val destination = try {
+            roots.incomingCiphertextPath(owner, capsule, blob)
+        } catch (_: IllegalStateException) {
+            throw UnsafeIncomingPath()
+        }
         val root = try {
             roots.child(owner, AccountScopedFileRoots.ChildRoot.INCOMING_CIPHERTEXT)
                 .toPath().toAbsolutePath().normalize()
         } catch (_: IllegalStateException) {
             throw UnsafeIncomingPath()
         }
-        val destination = root.resolve(
-            "capsules/${capsule.toRestString()}/blobs/${blob.toRestString()}.ciphertext",
-        ).normalize()
-        if (!isContained(destination, root)) throw UnsafeIncomingPath()
         try {
             // Keep the root check ordered and NOFOLLOW: an absent incoming
             // root is materialised for the next recovery step, while an
@@ -857,6 +907,23 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
         }
         return destination
     }
+
+    private fun isExactRecognitionBinding(
+        row: BlobCacheEntity,
+        owner: String,
+        capsuleId: String,
+        blobId: BlobId,
+        expectedSizeBytes: Long,
+        expectedSha256: ByteArray,
+    ): Boolean = row.ownerUserId == owner &&
+        row.capsuleId == capsuleId &&
+        row.blobId == blobId.toRestString() &&
+        row.kind == CapsuleArtifactKind.RECOGNITION_MANIFEST.name &&
+        row.ordinal == null &&
+        row.expectedSizeBytes == expectedSizeBytes &&
+        row.expectedSizeBytes in 1L..ProtocolV1Limits.RECOGNITION_MANIFEST_MAX_CIPHERTEXT_BYTES &&
+        row.expectedSha256.contentEquals(expectedSha256) &&
+        row.expectedSha256.size == SHA256_BYTES
 
     private fun verifyExactFile(path: Path, expectedSize: Long, expectedSha256: ByteArray): Boolean {
         return inspectFile(path, expectedSize, expectedSha256) == TempInspection.MATCH

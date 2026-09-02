@@ -631,15 +631,16 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
         val incomingRoot = roots.child(
             candidate.ownerUserId,
             AccountScopedFileRoots.ChildRoot.INCOMING_CIPHERTEXT,
-        ).canonicalFile.toPath().toAbsolutePath().normalize()
+        ).toPath().toAbsolutePath().normalize()
         val tempRoot = roots.child(
             candidate.ownerUserId,
             AccountScopedFileRoots.ChildRoot.TEMP,
         ).canonicalFile.toPath().toAbsolutePath().normalize()
-        val destination = incomingRoot.resolve(
-            "capsules/${candidate.capsuleId.toRestString()}/blobs/" +
-                "${candidate.blobId.toRestString()}.ciphertext",
-        ).normalize()
+        val destination = roots.incomingCiphertextPath(
+            owner = candidate.ownerUserId,
+            capsule = candidate.capsuleId,
+            blob = candidate.blobId,
+        )
         val temp = tempRoot.resolve(
             "incoming-prefetch/${candidate.capsuleId.toRestString()}/" +
                 "${candidate.blobId.toRestString()}.ciphertext.tmp",

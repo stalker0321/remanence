@@ -1,7 +1,10 @@
 package dev.hryshyn.remanence.core.data.storage
 
+import dev.hryshyn.remanence.core.model.BlobId
+import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.UserId
 import java.io.File
+import java.nio.file.Path
 
 /**
  * M2-P04: account-scoped capsule file root resolver.
@@ -55,6 +58,28 @@ class AccountScopedFileRoots(
         val child = File(ownerPath, root.directoryName)
         requireContained(child, ownerPath, owner, root)
         return child
+    }
+
+    /**
+     * Resolves the deterministic incoming ciphertext destination used by
+     * both sync and acceptance. This is path derivation only; it never
+     * materialises or inspects the destination.
+     */
+    fun incomingCiphertextPath(owner: UserId, capsule: CapsuleId, blob: BlobId): Path {
+        val root = child(owner, ChildRoot.INCOMING_CIPHERTEXT)
+            .toPath()
+            .toAbsolutePath()
+            .normalize()
+        val destination = root
+            .resolve("capsules")
+            .resolve(capsule.toRestString())
+            .resolve("blobs")
+            .resolve("${blob.toRestString()}.ciphertext")
+            .normalize()
+        require(destination != root && destination.startsWith(root)) {
+            "incoming ciphertext destination escaped owner root"
+        }
+        return destination
     }
 
     /**

@@ -1,11 +1,15 @@
 package dev.hryshyn.remanence.capture
 
 import android.content.Context
+import android.graphics.ImageFormat
 import android.hardware.display.DisplayManager
 import android.os.Handler
 import android.os.Looper
 import android.view.View
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.CameraControl
+import androidx.camera.core.FocusMeteringAction
+import androidx.camera.core.FocusMeteringResult
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
@@ -21,6 +25,8 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.Executor
+import java.util.concurrent.TimeUnit
 import com.google.common.util.concurrent.ListenableFuture
 
 /**
@@ -37,6 +43,9 @@ internal data class CameraXUseCaseSet(
 internal interface CameraProviderPort {
     fun bindToLifecycle(lifecycleOwner: LifecycleOwner, group: UseCaseGroup)
 
+    /** Camera control for the most recently bound use-case group, if present. */
+    fun cameraControl(): CameraControl? = null
+
     fun unbind(vararg useCases: UseCase)
 
     fun unbindAll()
@@ -45,9 +54,13 @@ internal interface CameraProviderPort {
 private class RealCameraProviderPort(
     private val provider: ProcessCameraProvider,
 ) : CameraProviderPort {
+    private var camera: androidx.camera.core.Camera? = null
+
     override fun bindToLifecycle(lifecycleOwner: LifecycleOwner, group: UseCaseGroup) {
-        provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, group)
+        camera = provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, group)
     }
+
+    override fun cameraControl(): CameraControl? = camera?.cameraControl
 
     override fun unbind(vararg useCases: UseCase) {
         provider.unbind(*useCases)
@@ -71,6 +84,9 @@ internal class CameraXBindingController(
     private val onError: (String) -> Unit,
     private val rotationProvider: () -> Int? = { previewView.display?.rotation },
     private val viewPortProvider: () -> ViewPort? = { previewView.viewPort },
+    private val focusTimeoutScheduler: FocusTimeoutScheduler =
+        HandlerFocusTimeoutScheduler(Handler(Looper.getMainLooper())),
+    private val focusCallbackExecutor: Executor = Executor { it.run() },
 ) {
     private data class BindingKey(
         val width: Int,
@@ -81,6 +97,7 @@ internal class CameraXBindingController(
     )
 
     private var provider: CameraProviderPort? = null
+    private var activeCameraControl: CameraControl? = null
     private var active: CameraXUseCaseSet? = null
     private var activeKey: BindingKey? = null
     private var released = false
@@ -145,6 +162,7 @@ internal class CameraXBindingController(
                 viewPort = viewPort,
             )
             provider.bindToLifecycle(lifecycleOwner, useCases.group)
+            activeCameraControl = provider.cameraControl()
             active = useCases
             activeKey = key
             if (!reportedBound) {
@@ -152,6 +170,7 @@ internal class CameraXBindingController(
                 onBound()
             }
         } catch (_: Exception) {
+            activeCameraControl = null
             active = null
             activeKey = null
             onError("Camera unavailable")
@@ -188,11 +207,167 @@ internal class CameraXBindingController(
         }
     }
 
+    /** Starts bounded center AF/AE for the current bound camera. */
+    internal fun startCenterFocus(
+        onFocused: () -> Unit,
+        onError: (String) -> Unit,
+    ): FocusCancellation {
+        val cameraControl = activeCameraControl
+        if (cameraControl == null) {
+            onError("Camera focus is unavailable; capture was not taken.")
+            return FocusCancellation {}
+        }
+        val driver = CameraXCenterFocusDriver(
+            cameraControl = cameraControl,
+            meteringPointFactory = previewView.meteringPointFactory,
+            width = previewView.width,
+            height = previewView.height,
+            callbackExecutor = focusCallbackExecutor,
+        )
+        return BoundedCenterFocus(
+            driver = driver,
+            timeoutScheduler = focusTimeoutScheduler,
+        ).start(onFocused, onError)
+    }
+
     private fun unbindActive() {
         val current = active ?: return
         active = null
         activeKey = null
+        activeCameraControl = null
         runCatching { provider?.unbind(current.preview, imageCapture) }
+    }
+}
+
+/** Cancellation handle for one focus request or one scheduled timeout. */
+internal fun interface FocusCancellation {
+    fun cancel()
+}
+
+internal interface CenterFocusDriver {
+    fun start(onResult: (Boolean) -> Unit, onFailure: () -> Unit): FocusCancellation
+}
+
+internal interface FocusTimeoutScheduler {
+    fun schedule(delayMillis: Long, task: () -> Unit): FocusCancellation
+}
+
+internal class HandlerFocusTimeoutScheduler(
+    private val handler: Handler,
+) : FocusTimeoutScheduler {
+    override fun schedule(delayMillis: Long, task: () -> Unit): FocusCancellation {
+        val runnable = Runnable(task)
+        handler.postDelayed(runnable, delayMillis)
+        return FocusCancellation { handler.removeCallbacks(runnable) }
+    }
+}
+
+/**
+ * Waits for center focus with a finite bound. A focus failure or timeout is
+ * reported honestly and does not take a still; cancellation is silent.
+ */
+internal class BoundedCenterFocus(
+    private val driver: CenterFocusDriver,
+    private val timeoutScheduler: FocusTimeoutScheduler,
+    private val timeoutMillis: Long = CENTER_FOCUS_TIMEOUT_MILLIS,
+) {
+    init {
+        require(timeoutMillis > 0L)
+    }
+
+    fun start(onFocused: () -> Unit, onError: (String) -> Unit): FocusCancellation {
+        val finished = AtomicBoolean(false)
+        val focusRequest = java.util.concurrent.atomic.AtomicReference<FocusCancellation?>()
+        val timeoutRequest = java.util.concurrent.atomic.AtomicReference<FocusCancellation?>()
+
+        fun finish(action: () -> Unit) {
+            if (!finished.compareAndSet(false, true)) return
+            timeoutRequest.getAndSet(null)?.cancel()
+            action()
+        }
+
+        val request = try {
+            driver.start(
+                onResult = { successful ->
+                    finish {
+                        if (successful) {
+                            onFocused()
+                        } else {
+                            onError("Camera focus did not settle; hold steady and try again.")
+                        }
+                    }
+                },
+                onFailure = {
+                    finish { onError("Camera focus is unavailable; capture was not taken.") }
+                },
+            )
+        } catch (_: Exception) {
+            finish { onError("Camera focus is unavailable; capture was not taken.") }
+            return FocusCancellation {}
+        }
+
+        focusRequest.set(request)
+        if (finished.get()) {
+            // The driver may complete synchronously. In the successful case
+            // onFocused() has already started takePicture(); cancelling the
+            // now-completed AF/AE request here would undo that lock.
+            return FocusCancellation {}
+        }
+
+        val timeout = timeoutScheduler.schedule(timeoutMillis) {
+            finish { onError("Camera focus timed out; hold steady and try again.") }
+            focusRequest.getAndSet(null)?.cancel()
+        }
+        timeoutRequest.set(timeout)
+        if (finished.get()) timeout.cancel()
+
+        return FocusCancellation {
+            if (finished.compareAndSet(false, true)) {
+                timeoutRequest.getAndSet(null)?.cancel()
+                focusRequest.getAndSet(null)?.cancel()
+            }
+        }
+    }
+
+    private companion object {
+        const val CENTER_FOCUS_TIMEOUT_MILLIS = 1_500L
+    }
+}
+
+internal class CameraXCenterFocusDriver(
+    private val cameraControl: CameraControl,
+    private val meteringPointFactory: androidx.camera.core.MeteringPointFactory,
+    private val width: Int,
+    private val height: Int,
+    private val callbackExecutor: Executor,
+) : CenterFocusDriver {
+    override fun start(onResult: (Boolean) -> Unit, onFailure: () -> Unit): FocusCancellation {
+        if (width <= 0 || height <= 0) {
+            onFailure()
+            return FocusCancellation {}
+        }
+        val point = meteringPointFactory.createPoint(width / 2f, height / 2f)
+        val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF)
+            .addPoint(point, FocusMeteringAction.FLAG_AE)
+            .setAutoCancelDuration(5L, TimeUnit.SECONDS)
+            .build()
+        val future: ListenableFuture<FocusMeteringResult> = try {
+            cameraControl.startFocusAndMetering(action)
+        } catch (_: Exception) {
+            onFailure()
+            return FocusCancellation {}
+        }
+        future.addListener(
+            {
+                try {
+                    onResult(future.get().isFocusSuccessful)
+                } catch (_: Exception) {
+                    onFailure()
+                }
+            },
+            callbackExecutor,
+        )
+        return FocusCancellation { runCatching { cameraControl.cancelFocusAndMetering() } }
     }
 }
 
@@ -213,10 +388,12 @@ class CameraXBinding internal constructor(
         imageCapture = imageCapture,
         onBound = onBound,
         onError = onError,
+        focusCallbackExecutor = mainExecutor,
     )
 
     @Volatile
     private var providerRef: ProcessCameraProvider? = null
+    private val activeFocusRequest = java.util.concurrent.atomic.AtomicReference<FocusCancellation?>()
 
     private val layoutListener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
         previewView.post { controller.refresh() }
@@ -294,12 +471,64 @@ class CameraXBinding internal constructor(
         controller.captureFinished()
     }
 
+    /** Runs bounded center AF/AE, then takes exactly one JPEG still. */
+    internal fun captureOneStill(
+        onDelivered: (ByteArray) -> Unit,
+        onError: (String) -> Unit,
+    ) {
+        val focusFinished = AtomicBoolean(false)
+        val request = controller.startCenterFocus(
+            onFocused = {
+                focusFinished.set(true)
+                // The successful metering request must remain in effect while
+                // the still is exposed; clearing the lifecycle handle must
+                // not cancel AF/AE immediately before takePicture().
+                activeFocusRequest.getAndSet(null)
+                if (released.get()) {
+                    controller.captureFinished()
+                } else {
+                    try {
+                        CameraXPreviewBinder.captureOneStill(
+                            context = context,
+                            imageCapture = imageCapture,
+                            onDelivered = onDelivered,
+                            onError = onError,
+                            onFinished = controller::captureFinished,
+                        )
+                    } catch (failure: Exception) {
+                        onError(failure.message ?: "Capture failed")
+                        controller.captureFinished()
+                    }
+                }
+            },
+            onError = { reason ->
+                focusFinished.set(true)
+                activeFocusRequest.getAndSet(null)
+                if (!released.get()) onError(reason)
+                controller.captureFinished()
+            },
+        )
+        if (focusFinished.get()) {
+            request.cancel()
+        } else {
+            activeFocusRequest.set(request)
+            if (released.get()) {
+                activeFocusRequest.getAndSet(null)?.cancel()
+                controller.captureFinished()
+            }
+        }
+    }
+
     /** Idempotently unbinds every use case of this binding. */
     fun release() {
         if (!released.compareAndSet(false, true)) return
         previewView.removeOnLayoutChangeListener(layoutListener)
         lifecycleOwner.lifecycle.removeObserver(lifecycleObserver)
         displayManager?.unregisterDisplayListener(displayListener)
+        activeFocusRequest.getAndSet(null)?.let { focusRequest ->
+            focusRequest.cancel()
+            controller.captureFinished()
+        }
         if (controller.release()) providerRef?.unbindAll()
     }
 }
@@ -321,6 +550,7 @@ object CameraXPreviewBinder {
     fun createImageCapture(): ImageCapture =
         ImageCapture.Builder()
             .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+            .setOutputFormat(ImageCapture.OUTPUT_FORMAT_JPEG)
             .build()
 
     internal fun createUseCaseSet(
@@ -389,9 +619,12 @@ object CameraXPreviewBinder {
             object : ImageCapture.OnImageCapturedCallback() {
                 override fun onCaptureSuccess(image: ImageProxy) {
                     try {
-                        val buffer = image.planes[0].buffer
-                        val bytes = ByteArray(buffer.remaining())
-                        buffer.get(bytes)
+                        val bytes = try {
+                            copyValidatedJpegBytes(image)
+                        } catch (_: IllegalArgumentException) {
+                            onError("Camera delivered an invalid JPEG still")
+                            return
+                        }
                         onDelivered(bytes)
                     } finally {
                         try {
@@ -412,5 +645,18 @@ object CameraXPreviewBinder {
                 }
             },
         )
+    }
+
+    internal fun copyValidatedJpegBytes(image: ImageProxy): ByteArray {
+        require(image.format == ImageFormat.JPEG) { "ImageProxy format is not JPEG" }
+        require(image.planes.size == 1) { "JPEG ImageProxy must have one plane" }
+        val buffer = image.planes.single().buffer.duplicate()
+        require(buffer.remaining() >= 2) { "JPEG ImageProxy is empty" }
+        val bytes = ByteArray(buffer.remaining())
+        buffer.get(bytes)
+        require(bytes[0].toInt() and 0xFF == 0xFF && bytes[1].toInt() and 0xFF == 0xD8) {
+            "JPEG ImageProxy does not start with SOI"
+        }
+        return bytes
     }
 }

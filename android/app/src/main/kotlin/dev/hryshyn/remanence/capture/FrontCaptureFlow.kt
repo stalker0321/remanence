@@ -10,6 +10,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import dev.hryshyn.remanence.core.data.db.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.QualityReason
+import dev.hryshyn.remanence.core.recognition.FingerprintSide as RecognitionFingerprintSide
+import java.util.Locale
 
 /** Port over the OpenCV-backed still pipeline: decode→crop→warp→quality→ORB. */
 fun interface StillProcessor {
@@ -23,7 +25,62 @@ fun interface StillProcessor {
 sealed interface ProcessedStill {
     data class Accepted(val profileId: String, val serializedBytes: ByteArray) : ProcessedStill
 
-    data class Rejected(val reasons: Set<QualityReason>) : ProcessedStill
+    data class Rejected(
+        val reasons: Set<QualityReason>,
+        val diagnostic: CaptureDiagnostic? = null,
+    ) : ProcessedStill
+}
+
+/**
+ * Redacted, transient capture diagnostics. This is deliberately not part of
+ * the fingerprint payload or any persistence contract; it exists only to
+ * explain a DEBUG build's latest local rejection.
+ */
+data class CaptureDiagnostic(
+    val side: RecognitionFingerprintSide,
+    val stage: CaptureDiagnosticStage,
+    val laplacianThreshold: Double? = null,
+    val laplacianVariance: Double? = null,
+    val nearBlackFraction: Double? = null,
+    val clippedWhiteFraction: Double? = null,
+    val largestGlareFraction: Double? = null,
+    val usedGuideFallback: Boolean? = null,
+    val warpedWidth: Int? = null,
+    val warpedHeight: Int? = null,
+    val orbKeypoints: Int? = null,
+    val orbDescriptors: Int? = null,
+) {
+    /** Stable, redacted one-line form used by the DEBUG rejection panel. */
+    fun summary(): String = buildString {
+        append("DEBUG capture: side=").append(side.name)
+        append(" stage=").append(stage.name)
+        append(" laplacian=").append(decimal(laplacianVariance))
+        append(" threshold=").append(decimal(laplacianThreshold))
+        append(" darkness=").append(decimal(nearBlackFraction))
+        append(" clippedWhite=").append(decimal(clippedWhiteFraction))
+        append(" glare=").append(decimal(largestGlareFraction))
+        append(" cropFallback=").append(usedGuideFallback?.toString() ?: "n/a")
+        append(" warp=").append(
+            if (warpedWidth != null && warpedHeight != null) {
+                "${warpedWidth}x$warpedHeight"
+            } else {
+                "n/a"
+            },
+        )
+        append(" orb=").append(orbKeypoints?.toString() ?: "n/a")
+        append(" descriptors=").append(orbDescriptors?.toString() ?: "n/a")
+    }
+
+    private fun decimal(value: Double?): String =
+        value?.let { String.format(Locale.US, "%.4f", it) } ?: "n/a"
+}
+
+enum class CaptureDiagnosticStage {
+    DECODE,
+    CROP,
+    WARP,
+    QUALITY,
+    ORB,
 }
 
 /**
@@ -90,7 +147,7 @@ class FrontCaptureFlow(
             ) {
                 is ProcessedStill.Rejected -> {
                     // Quality failure: no persistence, controller shows Rejected.
-                    attempt.reject(processed.reasons)
+                    attempt.reject(processed.reasons, processed.diagnostic)
                     FrontCaptureOutcome.QualityRejected(processed.reasons)
                 }
                 is ProcessedStill.Accepted -> {

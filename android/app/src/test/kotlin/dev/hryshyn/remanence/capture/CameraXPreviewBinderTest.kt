@@ -2,7 +2,11 @@ package dev.hryshyn.remanence.capture
 
 import android.view.Surface
 import android.view.View
+import android.graphics.Rect
+import android.media.Image
 import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageInfo
+import androidx.camera.core.ImageProxy
 import androidx.camera.core.UseCase
 import androidx.camera.core.UseCaseGroup
 import androidx.camera.core.ViewPort
@@ -12,6 +16,8 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.fail
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -23,6 +29,27 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class CameraXPreviewBinderTest {
+
+    private class TestImageProxy(
+        private val imageFormat: Int,
+        private val payload: ByteArray,
+    ) : ImageProxy {
+        private val plane = object : ImageProxy.PlaneProxy {
+            override fun getRowStride(): Int = payload.size
+            override fun getPixelStride(): Int = 1
+            override fun getBuffer(): java.nio.ByteBuffer = java.nio.ByteBuffer.wrap(payload)
+        }
+
+        override fun getCropRect(): Rect = Rect(0, 0, 2, 2)
+        override fun setCropRect(rect: Rect?) = Unit
+        override fun getFormat(): Int = imageFormat
+        override fun getHeight(): Int = 2
+        override fun getWidth(): Int = 2
+        override fun getPlanes(): Array<ImageProxy.PlaneProxy> = arrayOf(plane)
+        override fun getImageInfo(): ImageInfo = error("unused in JPEG validation")
+        override fun getImage(): Image? = null
+        override fun close() = Unit
+    }
 
     private class TestLifecycleOwner : LifecycleOwner {
         val registry = LifecycleRegistry(this)
@@ -72,6 +99,32 @@ class CameraXPreviewBinderTest {
         assertEquals(rotation, useCases.preview.targetRotation)
         assertEquals(rotation, capture.targetRotation)
         assertEquals(listOf(useCases.preview, capture), useCases.group.useCases)
+    }
+
+    @Test
+    fun imageCaptureRequestsJpegAndImageProxyValidationRejectsNonJpegPayloads() {
+        assertEquals(ImageCapture.OUTPUT_FORMAT_JPEG, CameraXPreviewBinder.createImageCapture().outputFormat)
+
+        val jpeg = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0x01)
+        assertArrayEquals(
+            jpeg,
+            CameraXPreviewBinder.copyValidatedJpegBytes(TestImageProxy(android.graphics.ImageFormat.JPEG, jpeg)),
+        )
+        expectIllegalArgument {
+            CameraXPreviewBinder.copyValidatedJpegBytes(TestImageProxy(android.graphics.ImageFormat.YUV_420_888, jpeg))
+        }
+        expectIllegalArgument {
+            CameraXPreviewBinder.copyValidatedJpegBytes(TestImageProxy(android.graphics.ImageFormat.JPEG, byteArrayOf(1, 2)))
+        }
+    }
+
+    private fun expectIllegalArgument(block: () -> Unit) {
+        try {
+            block()
+            fail("expected IllegalArgumentException")
+        } catch (_: IllegalArgumentException) {
+            // Expected.
+        }
     }
 
     @Test

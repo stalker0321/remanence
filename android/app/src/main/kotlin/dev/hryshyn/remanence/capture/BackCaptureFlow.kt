@@ -63,7 +63,7 @@ class BackCaptureFlow(
                 val processed = withContext(cpuDispatcher) { processor.process(jpegBytes) }
             ) {
                 is ProcessedStill.Rejected -> {
-                    attempt.reject(processed.reasons)
+                    attempt.reject(processed.reasons, processed.diagnostic)
                     FrontCaptureOutcome.QualityRejected(processed.reasons)
                 }
                 is ProcessedStill.Accepted -> {

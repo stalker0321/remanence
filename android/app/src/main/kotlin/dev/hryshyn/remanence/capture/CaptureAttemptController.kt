@@ -63,7 +63,7 @@ sealed interface CaptureAttemptPhase {
     /** Preview live; the one-shot shutter action may begin an attempt. */
     data object Ready : CaptureAttemptPhase
 
-    /** takePicture in flight; the shutter must stay disabled. */
+    /** Focus metering or takePicture is in flight; the shutter stays disabled. */
     data object Capturing : CaptureAttemptPhase
 
     /** Bytes delivered; the CPU pipeline is running. */
@@ -73,6 +73,7 @@ sealed interface CaptureAttemptPhase {
     data class Rejected(
         val attemptId: Long,
         val reasons: Set<QualityReason>,
+        val diagnostic: CaptureDiagnostic? = null,
     ) : CaptureAttemptPhase
 
     /** Attempt failed before producing anything usable; message is display-safe. */
@@ -212,8 +213,8 @@ class CaptureAttemptController {
     fun accept(): Boolean = terminate { CaptureAttemptPhase.Accepted }
 
     /** Terminal rejection with reasons; inert unless the current attempt is active. */
-    fun reject(reasons: Set<QualityReason>): Boolean =
-        terminate { CaptureAttemptPhase.Rejected(attemptId, reasons) }
+    fun reject(reasons: Set<QualityReason>, diagnostic: CaptureDiagnostic? = null): Boolean =
+        terminate { CaptureAttemptPhase.Rejected(attemptId, reasons, diagnostic) }
 
     /** Terminal failure with a display-safe message; inert unless active. */
     fun fail(message: String): Boolean =

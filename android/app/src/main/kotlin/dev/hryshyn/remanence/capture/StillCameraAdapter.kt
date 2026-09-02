@@ -29,8 +29,8 @@ interface StillCameraAdapter {
     fun bind(onReady: () -> Unit, onError: (String) -> Unit)
 
     /**
-     * Takes exactly one still. Raw JPEG bytes travel only through
-     * [onDelivered]; nothing is stored by the adapter.
+     * Focuses/meters once, then takes exactly one still. Raw JPEG bytes travel
+     * only through [onDelivered]; nothing is stored by the adapter.
      */
     fun captureStill(onDelivered: (ByteArray) -> Unit, onError: (String) -> Unit)
 
@@ -87,12 +87,9 @@ class CameraXStillCameraAdapter(
         val activeBinding = binding ?: return
         if (!activeBinding.beginCapture()) return
         try {
-            CameraXPreviewBinder.captureOneStill(
-                context,
-                imageCapture,
+            activeBinding.captureOneStill(
                 onDelivered = { bytes -> if (!released) onDelivered(bytes) },
                 onError = { reason -> if (!released) onError(reason) },
-                onFinished = activeBinding::finishCapture,
             )
         } catch (failure: Throwable) {
             activeBinding.finishCapture()

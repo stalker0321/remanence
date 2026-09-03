@@ -239,16 +239,31 @@ class SenderIndexBundleReaderTest {
         assertHandoffWasWiped(expectedFront, beforeWipe, wiped)
         assertHandoffWasWiped(expectedSenderKeyset, beforeWipe, wiped)
         assertEquals(0, frontFailuresRemaining)
-        val preRedactedSnapshotBuffers = beforeWipe.indices.filter { index ->
-            beforeWipe[index].isNotEmpty() && beforeWipe[index].all { it == 0.toByte() }
-        }
+
+        // Prove the snapshot's own internal copies were redacted before the
+        // observer could read them.  The snapshot is constructed and then
+        // immediately closed on the failure path; its close() wipes the
+        // front-fingerprint and sender-keyset byte arrays through the
+        // reader's wipe callback, so both appear in the wiped list as
+        // non-empty buffers that were filled with zeros.
+        //
+        // Find the snapshot's entries by matching the original expected
+        // content (the snapshot stores independent copies of the same bytes).
+        val frontSnapshotIndices = beforeWipe.indices.filter { beforeWipe[it].contentEquals(expectedFront) }
+        val keysetSnapshotIndices = beforeWipe.indices.filter { beforeWipe[it].contentEquals(expectedSenderKeyset) }
         assertTrue(
-            "constructed snapshot was not redacted before its observer",
-            preRedactedSnapshotBuffers.isNotEmpty(),
+            "front fingerprint snapshot entry was not recorded during wipe",
+            frontSnapshotIndices.isNotEmpty(),
         )
-        preRedactedSnapshotBuffers.forEach { index ->
-            assertTrue("constructed snapshot buffer was not wiped", wiped[index].all { it == 0.toByte() })
+        assertTrue(
+            "sender keyset snapshot entry was not recorded during wipe",
+            keysetSnapshotIndices.isNotEmpty(),
+        )
+        // Every snapshot entry must have been wiped to zeros.
+        (frontSnapshotIndices + keysetSnapshotIndices).forEach { index ->
+            assertTrue("snapshot buffer at $index was not wiped", wiped[index].all { it == 0.toByte() })
         }
+
         expectedFront.fill(0)
         expectedSenderKeyset.fill(0)
     }

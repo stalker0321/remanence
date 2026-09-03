@@ -148,7 +148,7 @@ class CreateRecipientPublicationBindingTest {
             plaintextBytes: ByteArray,
         ): String {
             val id = "fp-${++counter}"
-            stored[id] = plaintextBytes
+            stored[id] = plaintextBytes.copyOf()
             return id
         }
 
@@ -158,7 +158,7 @@ class CreateRecipientPublicationBindingTest {
         ): Boolean = stored.isNotEmpty()
 
         override suspend fun decrypt(fingerprintId: String): ByteArray =
-            requireNotNull(stored[fingerprintId])
+            requireNotNull(stored[fingerprintId]).copyOf()
 
         override suspend fun setPreferredOrigin(
             capsuleId: String,

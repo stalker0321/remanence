@@ -142,7 +142,7 @@ class CreatePublishLifetimeTest {
             plaintextBytes: ByteArray,
         ): String {
             val id = "fp-${++counter}"
-            stored[id] = plaintextBytes
+            stored[id] = plaintextBytes.copyOf()
             return id
         }
 
@@ -152,7 +152,7 @@ class CreatePublishLifetimeTest {
         ): Boolean = stored.isNotEmpty()
 
         override suspend fun decrypt(fingerprintId: String): ByteArray =
-            requireNotNull(stored[fingerprintId])
+            requireNotNull(stored[fingerprintId]).copyOf()
 
         override suspend fun setPreferredOrigin(capsuleId: String, origin: dev.hryshyn.remanence.core.data.db.FingerprintOrigin) = Unit
 

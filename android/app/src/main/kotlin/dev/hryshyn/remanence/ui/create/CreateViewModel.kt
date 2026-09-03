@@ -8,6 +8,7 @@ import dev.hryshyn.remanence.capture.FrontCaptureFlow
 import dev.hryshyn.remanence.capture.FrontCaptureOutcome
 import dev.hryshyn.remanence.capture.PreparedBackGate
 import dev.hryshyn.remanence.create.RealStillFingerprintProcessor
+import dev.hryshyn.remanence.create.CreateCaptureSessionStore
 import dev.hryshyn.remanence.create.CapsulePublisher
 import dev.hryshyn.remanence.create.CapsulePublishRequest
 import com.google.crypto.tink.KeysetHandle
@@ -93,6 +94,8 @@ class CreateViewModel(
         RealStillFingerprintProcessor(profile, FingerprintSide.FRONT),
     backProcessor: dev.hryshyn.remanence.capture.StillProcessor =
         RealStillFingerprintProcessor(profile, FingerprintSide.BACK),
+    /** Session-memory-only BACK handoff; injectable only for lifecycle tests. */
+    captureStore: CreateCaptureSessionStore = CreateCaptureSessionStore(),
     private val cpuDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     /**
@@ -207,7 +210,13 @@ class CreateViewModel(
     val backAttempt = CaptureAttemptController()
 
     private val frontFlow = FrontCaptureFlow(frontProcessor, cpuDispatcher, ioDispatcher)
-    private val backFlow = BackCaptureFlow(backGate, backProcessor, cpuDispatcher, ioDispatcher)
+    private val backFlow = BackCaptureFlow(
+        checklistGate = backGate,
+        processor = backProcessor,
+        cpuDispatcher = cpuDispatcher,
+        ioDispatcher = ioDispatcher,
+        captureStore = captureStore,
+    )
 
     private var frontFingerprintId: String? = null
     private var backFingerprintId: String? = null
@@ -437,8 +446,14 @@ class CreateViewModel(
      * timing, not a user action, so it must not raise the recovery banner.
      */
     fun deliverFrontJpeg(jpegBytes: ByteArray) {
-        if (!frontAttempt.hasActiveAttempt) return
-        if (!requireStep(Step.FRONT, "front delivery")) return
+        if (!frontAttempt.hasActiveAttempt) {
+            jpegBytes.fill(0)
+            return
+        }
+        if (!requireStep(Step.FRONT, "front delivery")) {
+            jpegBytes.fill(0)
+            return
+        }
         val generation = deliveryGeneration
         viewModelScope.launch {
             val outcome = frontFlow.onJpegDelivered(jpegBytes, capsuleId, persistence, frontAttempt)
@@ -450,12 +465,23 @@ class CreateViewModel(
 
     /** Camera bytes for the BACK; late callbacks without an attempt are inert. */
     fun deliverBackJpeg(jpegBytes: ByteArray) {
-        if (!backAttempt.hasActiveAttempt) return
-        if (!requireStep(Step.BACK, "back delivery")) return
+        if (!backAttempt.hasActiveAttempt) {
+            jpegBytes.fill(0)
+            return
+        }
+        if (!requireStep(Step.BACK, "back delivery")) {
+            jpegBytes.fill(0)
+            return
+        }
         val generation = deliveryGeneration
         viewModelScope.launch {
             val outcome = backFlow.onJpegDelivered(jpegBytes, capsuleId, persistence, backAttempt)
-            if (generation != deliveryGeneration) return@launch
+            if (generation != deliveryGeneration) {
+                if (outcome is FrontCaptureOutcome.Captured) {
+                    backFlow.takeStagedBack(outcome.fingerprintId)?.fill(0)
+                }
+                return@launch
+            }
             applyBackOutcome(outcome)
         }
     }
@@ -498,7 +524,10 @@ class CreateViewModel(
     private suspend fun applyBackOutcome(outcome: FrontCaptureOutcome) {
         when (outcome) {
             is FrontCaptureOutcome.Captured -> {
-                if (_step.value != Step.BACK) return
+                if (_step.value != Step.BACK) {
+                    backFlow.takeStagedBack(outcome.fingerprintId)?.fill(0)
+                    return
+                }
                 backFingerprintId = outcome.fingerprintId
                 clearGuardError()
                 _step.value = Step.CONTENT
@@ -678,23 +707,29 @@ class CreateViewModel(
             failPublishing("authenticated owner changed; publishing cancelled", generation)
             return
         }
-        val frontBytes = try {
-            withContext(ioDispatcher) { persistence.decrypt(inputs.frontFingerprintId) }
-        } catch (_: Exception) {
-            null
-        }
-        ensureCurrent()
-        val backBytes = try {
-            backFlow.readStagedBack(inputs.backFingerprintId)
-                ?: withContext(ioDispatcher) { persistence.decrypt(inputs.backFingerprintId) }
-        } catch (_: Exception) {
-            null
-        }
-        ensureCurrent()
-        if (frontBytes == null || backBytes == null) {
-            failPublishing("sealed captures are unreadable; recapture required", generation, Step.FRONT)
-            return
-        }
+        var frontBytes: ByteArray? = null
+        var backBytes: ByteArray? = null
+        try {
+            frontBytes = try {
+                withContext(ioDispatcher) { persistence.decrypt(inputs.frontFingerprintId) }
+            } catch (_: Exception) {
+                null
+            }
+            ensureCurrent()
+            // BACK is a session-memory-only handoff. Taking it removes the
+            // store copy; there is intentionally no persistence fallback.
+            backBytes = try {
+                backFlow.takeStagedBack(inputs.backFingerprintId)
+            } catch (_: Exception) {
+                null
+            }
+            ensureCurrent()
+            val frontForPublish = frontBytes
+            val backForPublish = backBytes
+            if (frontForPublish == null || backForPublish == null) {
+                failPublishing("sealed captures are unreadable; recapture required", generation, Step.FRONT)
+                return
+            }
 
             // FIX-STATE-13/LUNA-01: normalized plaintext photos live ONLY
             // inside this call and ONLY inside THIS publication's own
@@ -738,8 +773,8 @@ class CreateViewModel(
                         photoWidthsPx = staged.map { it.width },
                         photoHeightsPx = staged.map { it.height },
                         noteUtf8 = inputs.noteText,
-                        frontFingerprintBytes = frontBytes,
-                        backFingerprintBytes = backBytes,
+                        frontFingerprintBytes = frontForPublish,
+                        backFingerprintBytes = backForPublish,
                         signingKeyset = sender.signingPrivateHandle,
                         recipientEncryptionPublicKeyset =
                             parsePublicHandle(snapshot.encryptionPublicKeysetB64Url),
@@ -778,6 +813,16 @@ class CreateViewModel(
                     deleteSessionStaging(inputs.owner, inputs.capsuleId)
                 }
             }
+        } finally {
+            // The decrypt/take results are caller-owned handoff buffers. The
+            // publisher consumes them synchronously; every return, failure,
+            // cancellation, or stale-session path wipes them here.
+            frontBytes?.fill(0)
+            backBytes?.fill(0)
+            // If the attempt returned before taking BACK (for example an
+            // unavailable sender identity), discard that session handoff too.
+            backFlow.takeStagedBack(inputs.backFingerprintId)?.fill(0)
+        }
     }
 
     private fun failPublishing(

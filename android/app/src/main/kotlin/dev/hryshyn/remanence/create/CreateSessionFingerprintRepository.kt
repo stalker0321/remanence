@@ -12,6 +12,7 @@ enum class CaptureFingerprintSide { FRONT, BACK }
 class StagedSideFingerprint(
     val profileId: String,
     val side: CaptureFingerprintSide,
+    /** Caller hands this buffer to the repository, which wipes it on return. */
     val serializedBytes: ByteArray,
 )
 
@@ -29,9 +30,27 @@ fun interface SideFingerprintExtractor {
  * is deliberately never represented by a Room row; it remains in memory until
  * the current session consumes or clears it.
  */
-class CreateCaptureSessionStore {
+class CreateCaptureSessionStore internal constructor(
+    /** Internal test observer; zeroization below is always authoritative. */
+    private val wipeObserver: ((ByteArray) -> Unit)? = null,
+    /** Internal test observer for the copy transferred by [take]. */
+    private val takeObserver: ((ByteArray) -> Unit)? = null,
+) {
     private val values = LinkedHashMap<String, ByteArray>()
 
+    private fun wipe(bytes: ByteArray) {
+        bytes.fill(0)
+        runCatching { wipeObserver?.invoke(bytes) }
+    }
+
+    private fun observeTaken(bytes: ByteArray) {
+        runCatching { takeObserver?.invoke(bytes) }
+    }
+
+    /**
+     * Stores a private copy. The caller retains ownership of [bytes] and must
+     * wipe that handoff after this call.
+     */
     @Synchronized
     fun stage(bytes: ByteArray): String {
         require(bytes.isNotEmpty()) { "fingerprint bytes are empty" }
@@ -40,18 +59,27 @@ class CreateCaptureSessionStore {
         return id
     }
 
-    @Synchronized
-    fun read(id: String): ByteArray? = values[id]?.copyOf()
-
+    /**
+     * Removes one staged value and transfers a private copy to the caller.
+     * The caller owns the returned copy and must wipe it after use; the
+     * store's internal copy is wiped before this method returns.
+     */
     @Synchronized
     fun take(id: String): ByteArray? {
         val stored = values.remove(id) ?: return null
-        return stored.copyOf().also { stored.fill(0) }
+        val transferred = try {
+            stored.copyOf()
+        } finally {
+            // Even an exceptional copy must not leave the removed value live.
+            wipe(stored)
+        }
+        observeTaken(transferred)
+        return transferred
     }
 
     @Synchronized
     fun clear() {
-        values.values.forEach { it.fill(0) }
+        values.values.forEach(::wipe)
         values.clear()
     }
 }
@@ -75,8 +103,8 @@ class CreateSessionFingerprintRepository(
     suspend fun captureFront(capsuleId: String): String {
         requireValidCapsuleId(capsuleId)
         val staged = extractor.extract(CaptureFingerprintSide.FRONT)
-        require(staged.side == CaptureFingerprintSide.FRONT) { "extractor returned wrong side" }
         return try {
+            require(staged.side == CaptureFingerprintSide.FRONT) { "extractor returned wrong side" }
             persistence.persist(
                 capsuleId = capsuleId,
                 origin = FingerprintOrigin.SENDER,
@@ -85,6 +113,8 @@ class CreateSessionFingerprintRepository(
             )
         } catch (duplicate: DuplicateFingerprintException) {
             throw IllegalStateException("front baseline already captured for this capsule", duplicate)
+        } finally {
+            staged.serializedBytes.fill(0)
         }
     }
 
@@ -95,8 +125,12 @@ class CreateSessionFingerprintRepository(
             throw IllegalStateException("front must be captured before the back")
         }
         val staged = extractor.extract(CaptureFingerprintSide.BACK)
-        require(staged.side == CaptureFingerprintSide.BACK) { "extractor returned wrong side" }
-        return captureStore.stage(staged.serializedBytes)
+        return try {
+            require(staged.side == CaptureFingerprintSide.BACK) { "extractor returned wrong side" }
+            captureStore.stage(staged.serializedBytes)
+        } finally {
+            staged.serializedBytes.fill(0)
+        }
     }
 
     private fun requireValidCapsuleId(capsuleId: String) {

@@ -1,6 +1,9 @@
 package dev.hryshyn.remanence.capture
 
 import java.util.UUID
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -84,7 +87,8 @@ class BackCaptureFlowTest {
     @Test
     fun confirmedChecklistStagesBackWithoutRoomPersistence() = runBlocking {
         val gate = PreparedBackGate()
-        val backFlow = BackCaptureFlow(gate, acceptingProcessor)
+        val processed = ByteArrayCaptureProcessor("orb-back")
+        val backFlow = BackCaptureFlow(gate, processed)
         val persistence = FakePersistence()
         // Front-first ordering: seed the front baseline.
         persistence.persist(capsuleId, FingerprintOrigin.SENDER, "mvp-orb-v1", "orb-front".toByteArray())
@@ -96,7 +100,11 @@ class BackCaptureFlowTest {
         assertTrue(outcome is FrontCaptureOutcome.Captured)
         val captured = outcome as FrontCaptureOutcome.Captured
         assertTrue(captured.fingerprintId.startsWith("capture-"))
-        assertEquals("orb-back", String(backFlow.readStagedBack(captured.fingerprintId)!!))
+        val taken = backFlow.takeStagedBack(captured.fingerprintId)
+        assertEquals("orb-back", String(taken!!))
+        assertTrue(processed.bytes!!.all { it == 0.toByte() })
+        taken.fill(0)
+        assertEquals(null, backFlow.takeStagedBack(captured.fingerprintId))
         assertEquals(
             listOf("orb-front"),
             persistence.persisted,
@@ -139,5 +147,70 @@ class BackCaptureFlowTest {
         assertEquals(FrontCaptureOutcome.Failed("processor failed"), outcome)
         assertEquals(CaptureAttemptPhase.Failed(1L, "processor failed"), controller.phase)
         Unit
+    }
+
+    @Test
+    fun missingFrontWipesQueuedProcessorBytesAndFailsClosed() = runBlocking {
+        val gate = PreparedBackGate().also(::fullyConfirmed)
+        val processed = ByteArrayCaptureProcessor("queued-back")
+        val backFlow = BackCaptureFlow(gate, processed)
+        val controller = capturingController()
+
+        val outcome = backFlow.onJpegDelivered("jpeg".toByteArray(), capsuleId, FakePersistence(), controller)
+
+        assertEquals(FrontCaptureOutcome.Failed("front must be captured before the back"), outcome)
+        assertTrue(processed.bytes!!.all { it == 0.toByte() })
+    }
+
+    @Test
+    fun cancellationWipesQueuedProcessorBytes() = runBlocking {
+        val gate = PreparedBackGate().also(::fullyConfirmed)
+        val processed = ByteArrayCaptureProcessor("cancel-back")
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val persistence = BlockingBaselinePersistence(entered, release)
+        val backFlow = BackCaptureFlow(gate, processed)
+        val controller = capturingController()
+
+        val job = launch {
+            backFlow.onJpegDelivered("jpeg".toByteArray(), capsuleId, persistence, controller)
+        }
+        entered.await()
+        assertTrue(processed.bytes!!.any { it != 0.toByte() })
+        job.cancelAndJoin()
+        assertTrue(processed.bytes!!.all { it == 0.toByte() })
+    }
+
+    private class ByteArrayCaptureProcessor(private val marker: String) : StillProcessor {
+        var bytes: ByteArray? = null
+
+        override fun process(jpegBytes: ByteArray): ProcessedStill {
+            val result = marker.toByteArray()
+            bytes = result
+            return ProcessedStill.Accepted("mvp-orb-v1", result)
+        }
+    }
+
+    private class BlockingBaselinePersistence(
+        private val entered: CompletableDeferred<Unit>,
+        private val release: CompletableDeferred<Unit>,
+    ) : dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence {
+        override suspend fun decrypt(fingerprintId: String): ByteArray = ByteArray(0)
+
+        override suspend fun persist(
+            capsuleId: String,
+            origin: FingerprintOrigin,
+            profileId: String,
+            plaintextBytes: ByteArray,
+        ): String = "unused"
+
+        override suspend fun hasBaseline(capsuleId: String, origin: FingerprintOrigin): Boolean {
+            entered.complete(Unit)
+            release.await()
+            return true
+        }
+
+        override suspend fun setPreferredOrigin(capsuleId: String, origin: FingerprintOrigin) = Unit
+        override suspend fun deleteBaseline(capsuleId: String, origin: FingerprintOrigin) = Unit
     }
 }

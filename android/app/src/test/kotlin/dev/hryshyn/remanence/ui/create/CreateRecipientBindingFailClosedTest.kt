@@ -192,7 +192,7 @@ class CreateRecipientBindingFailClosedTest {
             plaintextBytes: ByteArray,
         ): String {
             val id = "fp-${++counter}"
-            stored[id] = plaintextBytes
+            stored[id] = plaintextBytes.copyOf()
             return id
         }
 
@@ -202,7 +202,7 @@ class CreateRecipientBindingFailClosedTest {
         ): Boolean = stored.isNotEmpty()
 
         override suspend fun decrypt(fingerprintId: String): ByteArray =
-            requireNotNull(stored[fingerprintId])
+            requireNotNull(stored[fingerprintId]).copyOf()
 
         override suspend fun setPreferredOrigin(
             capsuleId: String,

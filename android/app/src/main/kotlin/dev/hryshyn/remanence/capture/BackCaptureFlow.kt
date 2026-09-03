@@ -29,22 +29,35 @@ class BackCaptureFlow(
     private val captureStore: CreateCaptureSessionStore = CreateCaptureSessionStore(),
 ) {
 
+    /** One-shot processor handoff; the flow/repository own and wipe its bytes. */
     private val queued = AtomicReference<StagedSideFingerprint?>()
+
+    /** Drop the queued handoff and wipe the processor-owned bytes. */
+    private fun clearQueuedMaterial(expected: StagedSideFingerprint? = null) {
+        if (expected == null) {
+            queued.getAndSet(null)?.serializedBytes?.fill(0)
+        } else if (queued.compareAndSet(expected, null)) {
+            expected.serializedBytes.fill(0)
+        }
+    }
 
     private val extractor = SideFingerprintExtractor { side ->
         val staged = queued.getAndSet(null)
             ?: throw IllegalStateException("no processed still queued for $side")
-        if (staged.side != side) throw IllegalStateException("queued side ${staged.side} does not match $side")
+        if (staged.side != side) {
+            staged.serializedBytes.fill(0)
+            throw IllegalStateException("queued side ${staged.side} does not match $side")
+        }
         staged
     }
 
     fun createRepository(persistence: dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence) =
         CreateSessionFingerprintRepository(persistence, extractor, captureStore)
 
-    /** Retrieves a copy of deferred BACK material for the current Create session. */
-    fun readStagedBack(fingerprintId: String): ByteArray? = captureStore.read(fingerprintId)
-
-    /** Consumes deferred BACK material after the session has finished with it. */
+    /**
+     * Consumes deferred BACK material, transferring a private copy to the
+     * caller. The caller owns and must wipe that returned copy.
+     */
     fun takeStagedBack(fingerprintId: String): ByteArray? = captureStore.take(fingerprintId)
 
     /** Clears any deferred BACK material when the Create session is reset/closed. */
@@ -59,7 +72,12 @@ class BackCaptureFlow(
         persistence: dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence,
         attempt: CaptureAttemptController,
     ): FrontCaptureOutcome {
-        if (!attempt.markProcessing()) return FrontCaptureOutcome.Superseded
+        if (!attempt.markProcessing()) {
+            clearQueuedMaterial()
+            jpegBytes.fill(0)
+            return FrontCaptureOutcome.Superseded
+        }
+        var handoff: StagedSideFingerprint? = null
         try {
             if (!readyToCapture()) {
                 val message = "back capture is locked until the preparation checklist completes"
@@ -78,9 +96,14 @@ class BackCaptureFlow(
                     FrontCaptureOutcome.QualityRejected(processed.reasons)
                 }
                 is ProcessedStill.Accepted -> {
-                    queued.set(
-                        StagedSideFingerprint(processed.profileId, CaptureFingerprintSide.BACK, processed.serializedBytes),
+                    val staged = StagedSideFingerprint(
+                        processed.profileId,
+                        CaptureFingerprintSide.BACK,
+                        processed.serializedBytes,
                     )
+                    handoff = staged
+                    val previous = queued.getAndSet(staged)
+                    previous?.serializedBytes?.fill(0)
                     val id = withContext(ioDispatcher) {
                         createRepository(persistence).captureBack(capsuleId)
                     }
@@ -89,14 +112,18 @@ class BackCaptureFlow(
                 }
             }
         } catch (cancelled: CancellationException) {
-            queued.set(null)
+            clearQueuedMaterial(handoff)
             attempt.cancelActiveAttempt()
             throw cancelled
         } catch (failure: Exception) {
-            queued.set(null)
+            clearQueuedMaterial(handoff)
             val message = failure.message ?: "capture failed"
             attempt.fail(message)
             return FrontCaptureOutcome.Failed(message)
+        } finally {
+            // Delivery transfers the temporary JPEG to this flow; it never
+            // survives the processor/capture-session handoff.
+            jpegBytes.fill(0)
         }
     }
 }

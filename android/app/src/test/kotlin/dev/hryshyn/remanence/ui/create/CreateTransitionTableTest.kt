@@ -132,7 +132,7 @@ class CreateTransitionTableTest {
             plaintextBytes: ByteArray,
         ): String {
             val id = "fp-${++counter}"
-            stored[id] = plaintextBytes
+            stored[id] = plaintextBytes.copyOf()
             return id
         }
 
@@ -142,7 +142,7 @@ class CreateTransitionTableTest {
         ): Boolean = stored.isNotEmpty()
 
         override suspend fun decrypt(fingerprintId: String): ByteArray =
-            requireNotNull(stored[fingerprintId]) { "unknown fingerprint" }
+            requireNotNull(stored[fingerprintId]) { "unknown fingerprint" }.copyOf()
 
         override suspend fun setPreferredOrigin(capsuleId: String, origin: dev.hryshyn.remanence.core.data.db.FingerprintOrigin) = Unit
 

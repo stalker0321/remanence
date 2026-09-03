@@ -18,11 +18,17 @@ fun interface StillProcessor {
     /**
      * Returns the extracted fingerprint bytes, or the set of quality reasons
      * that reject this still before any extraction result is trusted.
+     * The caller transfers the temporary JPEG to the flow; it is wiped after
+     * processing, including rejection and exception paths.
      */
     fun process(jpegBytes: ByteArray): ProcessedStill
 }
 
 sealed interface ProcessedStill {
+    /**
+     * The flow takes ownership of [serializedBytes] for the remainder of the
+     * delivery and wipes it after persistence or any failure.
+     */
     data class Accepted(val profileId: String, val serializedBytes: ByteArray) : ProcessedStill
 
     data class Rejected(
@@ -116,13 +122,26 @@ class FrontCaptureFlow(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
 
+    /** One-shot processor handoff; the flow/repository own and wipe its bytes. */
     private val queued = AtomicReference<StagedSideFingerprint?>()
+
+    /** Drop the queued handoff and wipe the processor-owned bytes. */
+    private fun clearQueuedMaterial(expected: StagedSideFingerprint? = null) {
+        if (expected == null) {
+            queued.getAndSet(null)?.serializedBytes?.fill(0)
+        } else if (queued.compareAndSet(expected, null)) {
+            expected.serializedBytes.fill(0)
+        }
+    }
 
     /** Extractor view handed to the repository; serves the queued still once. */
     private val extractor = SideFingerprintExtractor { side ->
         val staged = queued.getAndSet(null)
             ?: throw IllegalStateException("no processed still queued for $side")
-        if (staged.side != side) throw IllegalStateException("queued side ${staged.side} does not match $side")
+        if (staged.side != side) {
+            staged.serializedBytes.fill(0)
+            throw IllegalStateException("queued side ${staged.side} does not match $side")
+        }
         staged
     }
 
@@ -136,7 +155,12 @@ class FrontCaptureFlow(
         attempt: CaptureAttemptController,
     ): FrontCaptureOutcome {
         // A stale or non-capturing delivery is structurally inert.
-        if (!attempt.markProcessing()) return FrontCaptureOutcome.Superseded
+        if (!attempt.markProcessing()) {
+            clearQueuedMaterial()
+            jpegBytes.fill(0)
+            return FrontCaptureOutcome.Superseded
+        }
+        var handoff: StagedSideFingerprint? = null
         try {
             if (jpegBytes.isEmpty()) {
                 attempt.fail("empty still")
@@ -151,9 +175,14 @@ class FrontCaptureFlow(
                     FrontCaptureOutcome.QualityRejected(processed.reasons)
                 }
                 is ProcessedStill.Accepted -> {
-                    queued.set(
-                        StagedSideFingerprint(processed.profileId, CaptureFingerprintSide.FRONT, processed.serializedBytes),
+                    val staged = StagedSideFingerprint(
+                        processed.profileId,
+                        CaptureFingerprintSide.FRONT,
+                        processed.serializedBytes,
                     )
+                    handoff = staged
+                    val previous = queued.getAndSet(staged)
+                    previous?.serializedBytes?.fill(0)
                     val id = withContext(ioDispatcher) {
                         createRepository(persistence).captureFront(capsuleId)
                     }
@@ -164,14 +193,18 @@ class FrontCaptureFlow(
         } catch (cancelled: CancellationException) {
             // Clean lifecycle completion: no terminal result is published for
             // this attempt, and nothing stays queued.
-            queued.set(null)
+            clearQueuedMaterial(handoff)
             attempt.cancelActiveAttempt()
             throw cancelled
         } catch (failure: Exception) {
-            queued.set(null)
+            clearQueuedMaterial(handoff)
             val message = failure.message ?: "capture failed"
             attempt.fail(message)
             return FrontCaptureOutcome.Failed(message)
+        } finally {
+            // Delivery transfers the temporary JPEG to this flow; it never
+            // survives the processor/persistence handoff.
+            jpegBytes.fill(0)
         }
     }
 }

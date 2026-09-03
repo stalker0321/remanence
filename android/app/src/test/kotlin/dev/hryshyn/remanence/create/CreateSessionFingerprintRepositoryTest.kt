@@ -30,7 +30,8 @@ private class RecordingPersistence : SealedFingerprintPersistence {
             duplicateNext = false
             throw DuplicateFingerprintException(capsuleId, origin)
         }
-        persisted += Triple(capsuleId, origin, plaintextBytes)
+        // Persistence owns its sealed copy; the repository wipes its handoff.
+        persisted += Triple(capsuleId, origin, plaintextBytes.copyOf())
         profiles += profileId
         return "fp-${persisted.size}"
     }
@@ -48,18 +49,25 @@ private class RecordingPersistence : SealedFingerprintPersistence {
 private class StubExtractor : SideFingerprintExtractor {
     val extractions = AtomicInteger()
     val requested = mutableListOf<CaptureFingerprintSide>()
+    var lastBytes: ByteArray? = null
 
     override fun extract(side: CaptureFingerprintSide): StagedSideFingerprint {
         extractions.incrementAndGet()
         requested += side
-        return StagedSideFingerprint("mvp-orb-v1", side, "serialized-fingerprint".toByteArray())
+        return StagedSideFingerprint("mvp-orb-v1", side, "serialized-fingerprint".toByteArray()).also {
+            lastBytes = it.serializedBytes
+        }
     }
 }
 
 /** Misbehaving adapter that always reports the wrong side back to the repo. */
 private class LyingExtractor(private val reported: CaptureFingerprintSide) : SideFingerprintExtractor {
+    var bytes: ByteArray? = null
+
     override fun extract(side: CaptureFingerprintSide): StagedSideFingerprint =
-        StagedSideFingerprint("mvp-orb-v1", reported, "serialized-fingerprint".toByteArray())
+        StagedSideFingerprint("mvp-orb-v1", reported, "serialized-fingerprint".toByteArray()).also {
+            bytes = it.serializedBytes
+        }
 }
 
 class CreateSessionFingerprintRepositoryTest {
@@ -82,6 +90,7 @@ class CreateSessionFingerprintRepositoryTest {
         assertEquals(FingerprintOrigin.SENDER, origin)
         assertTrue(bytes.isNotEmpty())
         assertEquals("mvp-orb-v1", persistence.profiles.single())
+        assertTrue(extractor.lastBytes!!.all { it == 0.toByte() })
     }
 
     @Test
@@ -133,7 +142,8 @@ class CreateSessionFingerprintRepositoryTest {
     fun backCaptureRequiresFrontThenStagesCaptureLocalBack() = runBlocking {
         val persistence = RecordingPersistence()
         val extractor = StubExtractor()
-        val captureStore = CreateCaptureSessionStore()
+        val wipedStored = mutableListOf<ByteArray>()
+        val captureStore = CreateCaptureSessionStore(wipeObserver = { wipedStored += it })
         val sut = CreateSessionFingerprintRepository(persistence, extractor, captureStore)
 
         sut.captureFront(capsuleId)
@@ -150,9 +160,19 @@ class CreateSessionFingerprintRepositoryTest {
             persistence.persisted.map { it.first },
         )
         assertTrue(persistence.persisted.all { it.second == FingerprintOrigin.SENDER })
-        assertArrayEquals("serialized-fingerprint".toByteArray(), captureStore.read(backId))
+        val taken = captureStore.take(backId)
+        assertArrayEquals("serialized-fingerprint".toByteArray(), taken)
+        assertTrue(extractor.lastBytes!!.all { it == 0.toByte() })
+        assertEquals(1, wipedStored.size)
+        assertTrue(wipedStored.single().all { it == 0.toByte() })
+        assertTrue(wipedStored.single() !== taken)
+        taken!!.fill(0)
+        val staleId = captureStore.stage("stale-back".toByteArray())
         captureStore.clear()
-        assertNull(captureStore.read(backId))
+        assertNull(captureStore.take(backId))
+        assertNull(captureStore.take(staleId))
+        assertEquals(2, wipedStored.size)
+        assertTrue(wipedStored.last().all { it == 0.toByte() })
     }
 
     @Test
@@ -165,5 +185,6 @@ class CreateSessionFingerprintRepositoryTest {
             runBlocking { sut.captureBack(capsuleId) }
         }
         assertEquals(0, persistence.persisted.size)
+        assertTrue(extractor.bytes!!.all { it == 0.toByte() })
     }
 }

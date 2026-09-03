@@ -36,7 +36,8 @@ class FrontCaptureFlowTest {
                 failNext = false
                 throw IllegalStateException("disk full")
             }
-            persisted += plaintextBytes
+            // Persistence owns its sealed copy; the flow wipes its handoff.
+            persisted += plaintextBytes.copyOf()
             return "fp-${persisted.size}"
         }
 
@@ -66,8 +67,12 @@ class FrontCaptureFlowTest {
 
     @Test
     fun deliveredStillFlowsThroughToSealedPersistenceAndAccepts() = runBlocking {
+        var processorBytes: ByteArray? = null
         val flow = FrontCaptureFlow(
-            StillProcessor { ProcessedStill.Accepted("mvp-orb-v1", "serialized-orb".toByteArray()) },
+            StillProcessor {
+                "serialized-orb".toByteArray().also { processorBytes = it }
+                    .let { ProcessedStill.Accepted("mvp-orb-v1", it) }
+            },
         )
         val controller = capturingController()
 
@@ -79,6 +84,7 @@ class FrontCaptureFlowTest {
             persistence.persisted.map { String(it) },
         )
         assertEquals(CaptureAttemptPhase.Accepted, controller.phase)
+        assertTrue(processorBytes!!.all { it == 0.toByte() })
     }
 
     @Test
@@ -121,8 +127,12 @@ class FrontCaptureFlowTest {
     @Test
     fun persistenceFailureSurfacesAsFailedTerminalNotSilentProgress() = runBlocking {
         persistence.failNext = true
+        var processorBytes: ByteArray? = null
         val flow = FrontCaptureFlow(
-            StillProcessor { ProcessedStill.Accepted("mvp-orb-v1", "bytes".toByteArray()) },
+            StillProcessor {
+                "bytes".toByteArray().also { processorBytes = it }
+                    .let { ProcessedStill.Accepted("mvp-orb-v1", it) }
+            },
         )
         val controller = capturingController()
 
@@ -131,6 +141,7 @@ class FrontCaptureFlowTest {
         assertEquals(FrontCaptureOutcome.Failed("disk full"), outcome)
         assertEquals(0, persistence.persisted.size)
         assertEquals(CaptureAttemptPhase.Failed(1L, "disk full"), controller.phase)
+        assertTrue(processorBytes!!.all { it == 0.toByte() })
     }
 
     @Test
@@ -159,12 +170,14 @@ class FrontCaptureFlowTest {
             ProcessedStill.Accepted("p", ByteArray(1))
         })
         val controller = capturingController().apply { cancelActiveAttempt() }
+        val jpeg = "jpeg".toByteArray()
 
-        val outcome = flow.onJpegDelivered("jpeg".toByteArray(), CAPSULE_ID, persistence, controller)
+        val outcome = flow.onJpegDelivered(jpeg, CAPSULE_ID, persistence, controller)
 
         assertTrue(outcome is FrontCaptureOutcome.Superseded)
         assertEquals(0, processorCalls)
         assertEquals(0, persistence.persisted.size)
+        assertTrue(jpeg.all { it == 0.toByte() })
     }
 
     /**

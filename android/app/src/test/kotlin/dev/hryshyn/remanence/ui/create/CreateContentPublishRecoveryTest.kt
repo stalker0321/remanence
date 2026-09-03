@@ -22,6 +22,7 @@ import dev.hryshyn.remanence.capture.CaptureAttemptPhase
 import dev.hryshyn.remanence.capture.PreparedBackItem
 import dev.hryshyn.remanence.capture.ProcessedStill
 import dev.hryshyn.remanence.capture.StillProcessor
+import dev.hryshyn.remanence.create.CreateCaptureSessionStore
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -48,6 +49,7 @@ import dev.hryshyn.remanence.core.data.network.DirectoryLookupResult
 import dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.NormalizedHandle
+import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
@@ -105,6 +107,8 @@ class CreateContentPublishRecoveryTest {
 
     private class RecordingPersistence : SealedFingerprintPersistence {
         val stored = mutableMapOf<String, ByteArray>()
+        val decryptIds = mutableListOf<String>()
+        val decryptedBuffers = mutableListOf<ByteArray>()
         var counter = 0
 
         override suspend fun persist(
@@ -114,7 +118,7 @@ class CreateContentPublishRecoveryTest {
             plaintextBytes: ByteArray,
         ): String {
             val id = "fp-${++counter}"
-            stored[id] = plaintextBytes
+            stored[id] = plaintextBytes.copyOf()
             return id
         }
 
@@ -123,8 +127,10 @@ class CreateContentPublishRecoveryTest {
             origin: dev.hryshyn.remanence.core.data.db.FingerprintOrigin,
         ): Boolean = stored.isNotEmpty()
 
-        override suspend fun decrypt(fingerprintId: String): ByteArray =
-            requireNotNull(stored[fingerprintId])
+        override suspend fun decrypt(fingerprintId: String): ByteArray {
+            decryptIds += fingerprintId
+            return requireNotNull(stored[fingerprintId]).copyOf().also { decryptedBuffers += it }
+        }
 
         override suspend fun setPreferredOrigin(capsuleId: String, origin: dev.hryshyn.remanence.core.data.db.FingerprintOrigin) = Unit
 
@@ -141,6 +147,14 @@ class CreateContentPublishRecoveryTest {
 
     private fun b64Url(bytes: ByteArray): String =
         com.google.crypto.tink.subtle.Base64.urlSafeEncode(bytes)
+
+    private fun senderIdentity() = SenderIdentitySnapshot(
+        userId = userUuid.toString(),
+        handle = "mykola",
+        activeKeyBundleId = bundleUuid.toString(),
+        encryptionPrivateHandle = identity.encryptionPrivateHandle,
+        signingPrivateHandle = identity.signingPrivateHandle,
+    )
 
     private fun synthetic(side: FingerprintSide): ProcessedStill.Accepted {
         val profile = RecognitionProfile.mvpOrbV1()
@@ -175,6 +189,8 @@ class CreateContentPublishRecoveryTest {
     /** Builds the production surface at the CONTENT step with real crypto. */
     private fun contentStage(
         identityGate: CompletableDeferred<SenderIdentitySnapshot>? = null,
+        enqueueUpload: suspend (UserId, CapsuleId) -> Unit = { _, _ -> },
+        captureStore: CreateCaptureSessionStore = CreateCaptureSessionStore(),
     ): Triple<CreateViewModel, RecordingPersistence, androidx.compose.ui.test.junit4.ComposeTestRule> {
         val persistence = RecordingPersistence()
         val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir()))
@@ -191,12 +207,13 @@ class CreateContentPublishRecoveryTest {
             openPhotoSource = { error("picker streams not used here") },
             frontProcessor = ScriptedProcessor(synthetic(FingerprintSide.FRONT)),
             backProcessor = ScriptedProcessor(synthetic(FingerprintSide.BACK)),
+            captureStore = captureStore,
             photoNormalizer = { input -> dev.hryshyn.remanence.create.NormalizedPhotoDto(input.copyOf(), 800, 600) },
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
-            enqueueUpload = { _, _ -> },
+            enqueueUpload = enqueueUpload,
         )
         vm.beginSession(1L, userUuid.toString())
 
@@ -378,6 +395,53 @@ class CreateContentPublishRecoveryTest {
             assertTrue(database.outboxCapsuleDao().getByCapsuleIdAndOwner(vm.capsuleId, userUuid.toString()) == null)
         }
         Unit
+    }
+
+    @Test
+    fun publishingConsumesBackAndNeverFallsBackToPersistenceDecrypt() = runBlocking {
+        val gate = CompletableDeferred<SenderIdentitySnapshot>().apply { complete(senderIdentity()) }
+        val taken = mutableListOf<ByteArray>()
+        val wipedStored = mutableListOf<ByteArray>()
+        val store = CreateCaptureSessionStore(
+            wipeObserver = { wipedStored += it },
+            takeObserver = { taken += it },
+        )
+        val (vm, persistence, _) = contentStage(
+            identityGate = gate,
+            enqueueUpload = { _, _ -> throw IllegalStateException("queue unavailable") },
+            captureStore = store,
+        )
+        vm.onPhotosPicked(listOf("p1", "p2", "p3"))
+        assertTrue(vm.noteEditor.onChange("strict back"))
+
+        // The first attempt consumes the in-memory BACK and then fails only
+        // while queueing the already-encrypted outbox row.
+        vm.startPublishing()
+        awaitTerminal(vm)
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        assertEquals(listOf("fp-1"), persistence.decryptIds)
+        assertEquals(1, taken.size)
+        assertTrue(taken.single().all { it == 0.toByte() })
+        assertEquals(1, wipedStored.size)
+        assertTrue(wipedStored.single().all { it == 0.toByte() })
+        assertTrue(persistence.decryptedBuffers.single().all { it == 0.toByte() })
+
+        // A retry has no staged BACK. It fails closed and does not ask Room
+        // for that id (only the FRONT is decrypted again).
+        vm.startPublishing()
+        awaitTerminal(vm)
+        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        assertEquals(listOf("fp-1", "fp-1"), persistence.decryptIds)
+        assertTrue(persistence.decryptIds.none { it.startsWith("capture-") })
+        assertTrue(persistence.decryptedBuffers.all { it.all { byte -> byte == 0.toByte() } })
+    }
+
+    private fun awaitTerminal(vm: CreateViewModel) {
+        val deadline = System.currentTimeMillis() + 10_000
+        while (vm.step.value == CreateViewModel.Step.PUBLISHING) {
+            if (System.currentTimeMillis() > deadline) error("publish did not terminate")
+            Thread.sleep(10)
+        }
     }
 
 }

@@ -161,7 +161,7 @@ class CreateUiHappyPathTest {
             plaintextBytes: ByteArray,
         ): String {
             val id = "fp-${++counter}"
-            stored[id] = plaintextBytes
+            stored[id] = plaintextBytes.copyOf()
             return id
         }
 
@@ -171,7 +171,7 @@ class CreateUiHappyPathTest {
         ): Boolean = stored.isNotEmpty()
 
         override suspend fun decrypt(fingerprintId: String): ByteArray =
-            requireNotNull(stored[fingerprintId])
+            requireNotNull(stored[fingerprintId]).copyOf()
 
         override suspend fun setPreferredOrigin(capsuleId: String, origin: dev.hryshyn.remanence.core.data.db.FingerprintOrigin) = Unit
 
@@ -311,7 +311,8 @@ class CreateUiHappyPathTest {
         val row = database.outboxCapsuleDao().getByCapsuleIdAndOwner(vm.capsuleId, userUuid.toString())
         assertTrue(row != null)
         assertEquals(OutboxCapsuleState.ENCRYPTED, row!!.state)
-        assertEquals(2, persistence.stored.size)
+        // FRONT is the only Room baseline; BACK remains session-memory-only.
+        assertEquals(1, persistence.stored.size)
         Unit
     }
 

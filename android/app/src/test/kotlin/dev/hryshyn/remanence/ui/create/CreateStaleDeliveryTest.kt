@@ -81,8 +81,13 @@ class CreateStaleDeliveryTest {
     }
 
     private class Accepting : StillProcessor {
-        override fun process(jpegBytes: ByteArray): ProcessedStill =
-            ProcessedStill.Accepted("mvp-orb-v1", "late-orb".toByteArray())
+        var bytes: ByteArray? = null
+
+        override fun process(jpegBytes: ByteArray): ProcessedStill {
+            val result = "late-orb".toByteArray()
+            bytes = result
+            return ProcessedStill.Accepted("mvp-orb-v1", result)
+        }
     }
 
     private class NoPersistence : SealedFingerprintPersistence {
@@ -116,6 +121,7 @@ class CreateStaleDeliveryTest {
     @Test
     fun exitDuringProcessingLeavesTheFreshSessionUntouched() {
         val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir))
+        val processor = Accepting()
         val vm = CreateViewModel(
             directory = StaticDirectory(),
             accessTokenProvider = { null },
@@ -125,7 +131,7 @@ class CreateStaleDeliveryTest {
             profile = RecognitionProfile.mvpOrbV1(),
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir),
             openPhotoSource = { error("unused") },
-            frontProcessor = Accepting(),
+            frontProcessor = processor,
             backProcessor = Accepting(),
             cpuDispatcher = cpuDispatcher,
             ioDispatcher = cpuDispatcher,
@@ -157,6 +163,7 @@ class CreateStaleDeliveryTest {
 
         // NOW the abandoned pipeline finishes with ACCEPTANCE...
         cpuDispatcher.scheduler.advanceUntilIdle()
+        assertTrue(processor.bytes!!.all { it == 0.toByte() })
 
         // ...and changes NOTHING in the fresh session: the terminal publication
         // for the dead attempt is structurally inert.

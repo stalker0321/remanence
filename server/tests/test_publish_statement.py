@@ -220,6 +220,18 @@ def test_generated_descriptor_matches_canonical_publish_schema() -> None:
         "ciphertext_size": 4,
         "ciphertext_sha256": 5,
     }
+    recognition = protocol_pb2.DESCRIPTOR.message_types_by_name["RecognitionManifest"]
+    assert {
+        field.name: field.number
+        for field in recognition.fields
+    } == {
+        "manifest_version": 1,
+        "capsule_id": 2,
+        "chooser_hint": 3,
+        "front_fingerprint": 4,
+    }
+    assert "back_fingerprint" not in recognition.fields_by_name
+    assert recognition.fields_by_name["front_fingerprint"].number != 5
 
 
 def test_generation_is_reproducible_and_golden_is_byte_exact(fixture: dict) -> None:

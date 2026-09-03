@@ -119,6 +119,7 @@ message RecognitionManifest {
   bytes capsule_id = 2;
   ChooserHint chooser_hint = 3;
   bytes front_fingerprint = 4;    // required
+  reserved 5;
 }
 
 message PhotoEntry {

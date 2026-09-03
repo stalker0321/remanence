@@ -134,8 +134,8 @@ SIFT may be more robust on some low-texture/scale cases, but its 128-float descr
 A fingerprint contains no pixels but remains sensitive derived visual data.
 
 ```text
-PostcardFingerprintV1 {
-  format_version = 1
+PostcardFingerprintV2 {
+  format_version = 2
   recognition_profile_id
   canonical_width
   canonical_height

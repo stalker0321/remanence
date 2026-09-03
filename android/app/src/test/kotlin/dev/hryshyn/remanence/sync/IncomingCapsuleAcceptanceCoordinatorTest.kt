@@ -1416,7 +1416,7 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
     private fun verifiedPayload() = IncomingVerifiedControlIndexPayload(
         statement = PublishStatement.getDefaultInstance(),
         recognition = RecognitionManifestContent(
-            protocolVersion = RecognitionManifestCodec.FORMAT_VERSION,
+            manifestVersion = RecognitionManifestCodec.FORMAT_VERSION,
             capsuleIdRaw = ByteArray(0),
             senderHandleSnapshot = "sender",
             createdAtEpochSeconds = 1,

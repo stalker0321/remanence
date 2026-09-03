@@ -13,6 +13,7 @@ import dev.hryshyn.remanence.core.model.BlobId
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
 import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.protocol.v1.ChooserHint
 import dev.hryshyn.remanence.protocol.v1.RecognitionManifest
 
 class RecognitionManifestCodecTest {
@@ -50,7 +51,7 @@ class RecognitionManifestCodecTest {
 
         val content = codec.decryptAndParse(keyset, routing, ciphertext)
 
-        assertEquals(2, content.protocolVersion)
+        assertEquals(2, content.manifestVersion)
         assertContentEquals(routing.capsuleId.toProtoBytes().toByteArray(), content.capsuleIdRaw)
         assertEquals("mykola", content.senderHandleSnapshot)
         assertEquals(1_755_000_000L, content.createdAtEpochSeconds)
@@ -111,6 +112,21 @@ class RecognitionManifestCodecTest {
     }
 
     @Test
+    fun unknownChooserHintFieldFailsClosedAfterValidReencryption() {
+        val original = decryptedManifest()
+        val chooserWithUnknownField = ChooserHint.parseFrom(
+            original.chooserHint.toByteArray() + byteArrayOf(0x20, 0x01),
+        )
+        val manifest = original.toBuilder()
+            .setChooserHint(chooserWithUnknownField)
+            .build()
+
+        assertFailsWith<GeneralSecurityException> {
+            codec.decryptAndParse(keyset, routing, encryptManifest(manifest))
+        }
+    }
+
+    @Test
     fun oversizedUtf8PlaceLabelFailsClosedAfterValidReencryption() {
         val original = decryptedManifest()
         val manifest = original.toBuilder()
@@ -134,7 +150,7 @@ class RecognitionManifestCodecTest {
     @Test
     fun oldManifestFormatFailsClosedAfterValidReencryption() {
         val manifest = decryptedManifest().toBuilder()
-            .setProtocolVersion(1)
+            .setManifestVersion(1)
             .build()
 
         assertFailsWith<GeneralSecurityException> {

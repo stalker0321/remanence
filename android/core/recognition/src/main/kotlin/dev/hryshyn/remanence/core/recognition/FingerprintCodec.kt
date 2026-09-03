@@ -31,7 +31,12 @@ class PostcardFingerprint(
     val keypoints: List<FingerprintKeypoint>,
     val descriptors: List<ByteArray>,
     val quality: ExtractionQuality,
-)
+) {
+    /** Clears descriptor bytes owned by this disposable decoded value. */
+    fun wipe() {
+        descriptors.forEach { it.fill(0) }
+    }
+}
 
 /**
  * Strict binary codec over the normative recognition protobuf schema
@@ -129,29 +134,40 @@ object FingerprintCodec {
         } finally {
             rawDescriptors.fill(0)
         }
-        val q = wire.extractionQuality
-            ?: throw IllegalArgumentException("extraction quality missing")
-        val parsed = PostcardFingerprint(
-            profileId = profileId,
-            canonicalWidthPx = wire.canonicalWidthPx,
-            canonicalHeightPx = wire.canonicalHeightPx,
-            coarseHash64 = wire.coarseHash64,
-            keypoints = keypoints,
-            descriptors = descriptors,
-            quality = ExtractionQuality(
-                blurScore = fromMicroUnchecked(q.blurScoreMicro),
-                exposureScore = fromMicroUnchecked(q.exposureScoreMicro),
-                glareFraction = fromMicroChecked(q.glareFractionMicro),
-                detectedAreaRatio = fromMicroChecked(q.detectedAreaRatioMicro),
-            ),
-        )
-        // Protobuf parsers retain unknown fields. Re-encoding the domain value
-        // makes the front-only format reject removed BACK/tag-3 fields,
-        // duplicate/non-canonical encodings, and any future unknown fields.
-        require(serialize(parsed).contentEquals(bytes)) {
-            "fingerprint encoding is not canonical"
+        var returned = false
+        try {
+            val q = wire.extractionQuality
+                ?: throw IllegalArgumentException("extraction quality missing")
+            val parsed = PostcardFingerprint(
+                profileId = profileId,
+                canonicalWidthPx = wire.canonicalWidthPx,
+                canonicalHeightPx = wire.canonicalHeightPx,
+                coarseHash64 = wire.coarseHash64,
+                keypoints = keypoints,
+                descriptors = descriptors,
+                quality = ExtractionQuality(
+                    blurScore = fromMicroUnchecked(q.blurScoreMicro),
+                    exposureScore = fromMicroUnchecked(q.exposureScoreMicro),
+                    glareFraction = fromMicroChecked(q.glareFractionMicro),
+                    detectedAreaRatio = fromMicroChecked(q.detectedAreaRatioMicro),
+                ),
+            )
+            // Protobuf parsers retain unknown fields. Re-encoding the domain value
+            // makes the front-only format reject removed BACK/tag-3 fields,
+            // duplicate/non-canonical encodings, and any future unknown fields.
+            val canonicalBytes = serialize(parsed)
+            try {
+                require(canonicalBytes.contentEquals(bytes)) {
+                    "fingerprint encoding is not canonical"
+                }
+            } finally {
+                canonicalBytes.fill(0)
+            }
+            returned = true
+            return parsed
+        } finally {
+            if (!returned) descriptors.forEach { it.fill(0) }
         }
-        return parsed
     }
 
     private fun validate(fingerprint: PostcardFingerprint) {

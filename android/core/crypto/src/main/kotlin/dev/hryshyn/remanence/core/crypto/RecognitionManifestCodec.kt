@@ -18,7 +18,7 @@ internal class RecognitionManifestPayloadException : GeneralSecurityException {
 
 /** Locally decrypted view of one recognition manifest. */
 data class RecognitionManifestContent(
-    val protocolVersion: Int,
+    val manifestVersion: Int,
     val capsuleIdRaw: ByteArray,
     val senderHandleSnapshot: String,
     val createdAtEpochSeconds: Long,
@@ -58,7 +58,7 @@ class RecognitionManifestCodec {
             .apply { placeLabel?.let(::setPlaceLabel) }
             .build()
         val manifest = RecognitionManifest.newBuilder()
-            .setProtocolVersion(RecognitionManifestFormat.VERSION)
+            .setManifestVersion(RecognitionManifestFormat.VERSION)
             .setCapsuleId(routingContext.capsuleIdProto())
             .setChooserHint(hint)
             .setFrontFingerprint(com.google.protobuf.ByteString.copyFrom(frontFingerprint))
@@ -91,6 +91,8 @@ class RecognitionManifestCodec {
         } catch (failure: GeneralSecurityException) {
             throw GeneralSecurityException("recognition manifest failed integrity verification", failure)
         }
+        var returnedFrontFingerprint = false
+        var frontFingerprint: ByteArray? = null
         try {
             if (bytes.isEmpty() || bytes.size + ProtocolV1Limits.ARTIFACT_AEAD_OVERHEAD_BYTES >
                 ProtocolV1Limits.RECOGNITION_MANIFEST_MAX_CIPHERTEXT_BYTES
@@ -98,7 +100,7 @@ class RecognitionManifestCodec {
                 throw RecognitionManifestPayloadException("recognition manifest plaintext is outside bounds")
             }
             val manifest = RecognitionManifest.parseFrom(bytes)
-            if (manifest.protocolVersion != RecognitionManifestFormat.VERSION) {
+            if (manifest.manifestVersion != RecognitionManifestFormat.VERSION) {
                 throw RecognitionManifestPayloadException("unsupported manifest format version")
             }
 
@@ -129,30 +131,45 @@ class RecognitionManifestCodec {
                 }
             }
 
-            val frontFingerprint = manifest.frontFingerprint.toByteArray()
-            if (frontFingerprint.isEmpty() || frontFingerprint.size > MAX_FINGERPRINT_BYTES) {
+            val decodedFrontFingerprint = manifest.frontFingerprint.toByteArray()
+            frontFingerprint = decodedFrontFingerprint
+            if (decodedFrontFingerprint.isEmpty() || decodedFrontFingerprint.size > MAX_FINGERPRINT_BYTES) {
                 throw RecognitionManifestPayloadException("recognition manifest front fingerprint is invalid")
             }
+            val canonicalChooserHint = ChooserHint.newBuilder()
+                .setSenderHandleSnapshot(senderHandleSnapshot)
+                .setCreatedAtEpochSeconds(chooserHint.createdAtEpochSeconds)
+                .apply { placeLabel?.let(::setPlaceLabel) }
+                .build()
             val canonical = RecognitionManifest.newBuilder()
-                .setProtocolVersion(RecognitionManifestFormat.VERSION)
+                .setManifestVersion(RecognitionManifestFormat.VERSION)
                 .setCapsuleId(manifest.capsuleId)
-                .setChooserHint(manifest.chooserHint)
+                .setChooserHint(canonicalChooserHint)
                 .setFrontFingerprint(manifest.frontFingerprint)
                 .build()
-            if (!canonical.toByteArray().contentEquals(bytes)) {
+            val canonicalBytes = canonical.toByteArray()
+            val canonicalMatches = try {
+                canonicalBytes.contentEquals(bytes)
+            } finally {
+                canonicalBytes.fill(0)
+            }
+            if (!canonicalMatches) {
                 throw RecognitionManifestPayloadException("recognition manifest encoding is not canonical")
             }
 
-            return RecognitionManifestContent(
-                protocolVersion = manifest.protocolVersion,
+            val content = RecognitionManifestContent(
+                manifestVersion = manifest.manifestVersion,
                 capsuleIdRaw = actualCapsuleId,
                 senderHandleSnapshot = senderHandleSnapshot,
                 createdAtEpochSeconds = chooserHint.createdAtEpochSeconds,
                 placeLabel = placeLabel,
-                frontFingerprint = frontFingerprint,
+                frontFingerprint = decodedFrontFingerprint,
             )
+            returnedFrontFingerprint = true
+            return content
         } finally {
             bytes.fill(0)
+            if (!returnedFrontFingerprint) frontFingerprint?.fill(0)
         }
     } catch (failure: RecognitionManifestPayloadException) {
         throw failure

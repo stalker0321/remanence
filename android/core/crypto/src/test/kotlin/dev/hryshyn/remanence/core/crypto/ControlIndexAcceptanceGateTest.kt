@@ -196,7 +196,7 @@ class ControlIndexAcceptanceGateTest {
 
         val verified = assertIs<ControlIndexAcceptanceResult.Verified>(result)
         assertEquals(5, verified.statement.artifactsCount)
-        assertEquals(2, verified.recognition.protocolVersion)
+        assertEquals(2, verified.recognition.manifestVersion)
         assertContentEquals(capsuleId.toProtoBytes().toByteArray(), verified.recognition.capsuleIdRaw)
         assertContentEquals(front, verified.recognition.frontFingerprint)
         assertEquals("mykola", verified.recognition.senderHandleSnapshot)
@@ -355,7 +355,7 @@ class ControlIndexAcceptanceGateTest {
             .setCreatedAtEpochSeconds(1_700_000_000L)
             .build()
         val manifest = dev.hryshyn.remanence.protocol.v1.RecognitionManifest.newBuilder()
-            .setProtocolVersion(2)
+            .setManifestVersion(2)
             .setCapsuleId(routing.capsuleIdProto())
             .setChooserHint(hint)
             .setFrontFingerprint(ByteString.copyFrom(frontFingerprint))
@@ -408,7 +408,7 @@ class ControlIndexAcceptanceGateTest {
             .build()
         val otherCapsuleId = CapsuleId(UUID.fromString("9a999999-9999-4999-8999-999999999999"))
         val manifest = dev.hryshyn.remanence.protocol.v1.RecognitionManifest.newBuilder()
-            .setProtocolVersion(2)
+            .setManifestVersion(2)
             .setCapsuleId(otherCapsuleId.toProtoBytes())
             .setChooserHint(hint)
             .setFrontFingerprint(ByteString.copyFrom(front))
@@ -574,7 +574,7 @@ class ControlIndexAcceptanceGateTest {
     fun aeadValidAltCiphertextWithDifferentPlaintextRejectsBinding() {
         val capsule = buildIndexCapsule()
         val altManifest = dev.hryshyn.remanence.protocol.v1.RecognitionManifest.newBuilder()
-            .setProtocolVersion(2)
+            .setManifestVersion(2)
             .setCapsuleId(capsuleId.toProtoBytes())
             .setChooserHint(
                 dev.hryshyn.remanence.protocol.v1.ChooserHint.newBuilder()

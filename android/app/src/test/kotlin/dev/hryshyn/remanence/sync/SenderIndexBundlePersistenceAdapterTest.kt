@@ -34,7 +34,7 @@ class SenderIndexBundlePersistenceAdapterTest {
     private val otherOwner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000a202")
     private val capsule = CapsuleId.parseRest("0198f0a0-0000-7000-8000-00000000a211")
     private val recognition = RecognitionManifestContent(
-        protocolVersion = RecognitionManifestCodec.FORMAT_VERSION,
+        manifestVersion = RecognitionManifestCodec.FORMAT_VERSION,
         capsuleIdRaw = capsule.toProtoBytes().toByteArray(),
         senderHandleSnapshot = "sender_1",
         createdAtEpochSeconds = 1_700_000_000L,

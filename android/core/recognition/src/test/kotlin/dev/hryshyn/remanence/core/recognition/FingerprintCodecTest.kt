@@ -57,6 +57,14 @@ class FingerprintCodecTest {
     }
 
     @Test
+    fun wipeClearsDecodedDescriptorRows() {
+        val parsed = FingerprintCodec.parse(FingerprintCodec.serialize(fingerprint()))
+        parsed.wipe()
+
+        assertTrue(parsed.descriptors.all { descriptor -> descriptor.all { it == 0.toByte() } })
+    }
+
+    @Test
     fun serializedSizeIsBoundedAndCompact() {
         val bytes = FingerprintCodec.serialize(fingerprint(150))
         // ~1500 max keypoints must stay well under the 1 MiB manifest bound.
@@ -103,6 +111,16 @@ class FingerprintCodecTest {
         for (cut in intArrayOf(0, 1, bytes.size / 2)) {
             assertFailsWith<Exception>("cut=$cut") { FingerprintCodec.parse(bytes.copyOf(cut)) }
         }
+    }
+
+    @Test
+    fun missingExtractionQualityFailsClosedAfterDescriptorDecode() {
+        val wire = FingerprintWire.parseFrom(FingerprintCodec.serialize(fingerprint()))
+            .toBuilder()
+            .clearExtractionQuality()
+            .build()
+
+        assertFailsWith<IllegalArgumentException> { FingerprintCodec.parse(wire.toByteArray()) }
     }
 
     @Test

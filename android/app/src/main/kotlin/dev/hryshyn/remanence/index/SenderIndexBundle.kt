@@ -45,9 +45,14 @@ class SenderIndexBundleSenderVerification internal constructor(
         val parsed = CapsuleRoutingPolicy.senderVerifyingKeysetOrNull(
             Base64.urlSafeEncode(publicKeysetBytesSnapshot),
         ) ?: throw IllegalArgumentException("sender verification keyset is invalid")
-        require(TinkProtoKeysetFormat.serializeKeysetWithoutSecret(parsed)
-            .contentEquals(publicKeysetBytesSnapshot)
-        ) { "sender verification keyset is not canonical" }
+        val canonicalBytes = TinkProtoKeysetFormat.serializeKeysetWithoutSecret(parsed)
+        try {
+            require(canonicalBytes.contentEquals(publicKeysetBytesSnapshot)) {
+                "sender verification keyset is not canonical"
+            }
+        } finally {
+            canonicalBytes.fill(0)
+        }
         return parsed
     }
 
@@ -114,11 +119,18 @@ class SenderIndexBundlePlaintext internal constructor(
         val left = senderVerificationSnapshot
         val right = other.senderVerificationSnapshot
         if (left == null || right == null) return left == null && right == null
-        return left.senderUserId == right.senderUserId &&
-            left.senderKeyBundleId == right.senderKeyBundleId &&
-            left.protocolVersion == right.protocolVersion &&
-            left.suite == right.suite &&
-            MessageDigest.isEqual(left.publicKeysetBytes, right.publicKeysetBytes)
+        val leftBytes = left.publicKeysetBytes
+        val rightBytes = right.publicKeysetBytes
+        return try {
+            left.senderUserId == right.senderUserId &&
+                left.senderKeyBundleId == right.senderKeyBundleId &&
+                left.protocolVersion == right.protocolVersion &&
+                left.suite == right.suite &&
+                MessageDigest.isEqual(leftBytes, rightBytes)
+        } finally {
+            leftBytes.fill(0)
+            rightBytes.fill(0)
+        }
     }
 
     internal fun encodeBytes(codec: SenderIndexBundleCodec): ByteArray = codec.encode(this)
@@ -130,7 +142,7 @@ class SenderIndexBundlePlaintext internal constructor(
             recognition: RecognitionManifestContent,
             senderVerification: SenderIndexBundleSenderVerification,
         ): SenderIndexBundlePlaintext {
-            require(recognition.protocolVersion == RecognitionManifestCodec.FORMAT_VERSION) {
+            require(recognition.manifestVersion == RecognitionManifestCodec.FORMAT_VERSION) {
                 "unsupported recognition manifest format"
             }
             require(recognition.capsuleIdRaw.size == UUID_BYTES) {
@@ -174,13 +186,22 @@ class SenderIndexBundlePlaintext internal constructor(
                 "fingerprint exceeds bounded recognition payload size"
             }
             val parsed = FingerprintCodec.parse(bytes)
-            require(parsed.profileId == RecognitionProfile.MVP_ORB_V1_ID) {
-                "unsupported recognition profile"
-            }
-            // Unknown protobuf fields are not part of the canonical local
-            // representation and must not survive into the sealed bundle.
-            require(FingerprintCodec.serialize(parsed).contentEquals(bytes)) {
-                "fingerprint encoding is not canonical"
+            try {
+                require(parsed.profileId == RecognitionProfile.MVP_ORB_V1_ID) {
+                    "unsupported recognition profile"
+                }
+                // Unknown protobuf fields are not part of the canonical local
+                // representation and must not survive into the sealed bundle.
+                val canonicalBytes = FingerprintCodec.serialize(parsed)
+                try {
+                    require(canonicalBytes.contentEquals(bytes)) {
+                        "fingerprint encoding is not canonical"
+                    }
+                } finally {
+                    canonicalBytes.fill(0)
+                }
+            } finally {
+                parsed.wipe()
             }
         }
 
@@ -205,6 +226,7 @@ class SenderIndexBundleCodec {
         val placeBytes = bundle.placeLabel?.toByteArray(Charsets.UTF_8)
         val front = bundle.frontFingerprint
         val senderVerification = bundle.senderVerification
+        val senderPublicKeyset = senderVerification?.publicKeysetBytes
         try {
             require(handleBytes.isNotEmpty()) { "sender handle is empty" }
             require(handleBytes.size <= ProtocolV1Limits.HANDLE_MAX_ASCII_CHARS) {
@@ -220,6 +242,7 @@ class SenderIndexBundleCodec {
                 "fingerprint exceeds local bundle limit"
             }
             require(senderVerification != null) { "sender verification material is missing" }
+            val publicKeyset = senderPublicKeyset ?: error("sender verification material is missing")
             require(senderVerification.protocolVersion == PreparedIdentity.PROTOCOL_VERSION)
             require(senderVerification.suite == PreparedIdentity.SUITE)
             senderVerification.parsePublicKeyset()
@@ -238,7 +261,7 @@ class SenderIndexBundleCodec {
                         com.google.protobuf.CodedOutputStream.computeBytesSize(8, it.senderKeyBundleId.toProtoBytes()) +
                         com.google.protobuf.CodedOutputStream.computeUInt32Size(9, it.protocolVersion) +
                         com.google.protobuf.CodedOutputStream.computeStringSize(10, it.suite) +
-                        com.google.protobuf.CodedOutputStream.computeByteArraySize(11, it.publicKeysetBytes)
+                        com.google.protobuf.CodedOutputStream.computeByteArraySize(11, publicKeyset)
                 } ?: 0)
             require(size <= MAX_PLAINTEXT_BYTES) { "local bundle exceeds bounded size" }
 
@@ -255,7 +278,7 @@ class SenderIndexBundleCodec {
                 coded.writeBytes(8, it.senderKeyBundleId.toProtoBytes())
                 coded.writeUInt32(9, it.protocolVersion)
                 coded.writeString(10, it.suite)
-                coded.writeByteArray(11, it.publicKeysetBytes)
+                coded.writeByteArray(11, publicKeyset)
             }
             coded.flush()
             return output
@@ -263,6 +286,7 @@ class SenderIndexBundleCodec {
             front.fill(0)
             handleBytes.fill(0)
             placeBytes?.fill(0)
+            senderPublicKeyset?.fill(0)
             senderVerification?.wipe()
         }
     }
@@ -354,33 +378,42 @@ class SenderIndexBundleCodec {
                 senderProtocol,
                 senderSuite,
                 senderPublicKeyset,
-            ).also { it.parsePublicKeyset() }
-            val decoded = SenderIndexBundlePlaintext(
-                localFormatVersion = version!!,
-                capsuleId = capsule!!,
-                senderHandleSnapshot = handle!!,
-                createdAtEpochSeconds = createdAt!!,
-                placeLabel = place,
-                frontFingerprint = front!!,
-                senderVerification = senderVerification,
             )
             try {
-                require(NormalizedHandle.parse(decoded.senderHandleSnapshot).value == decoded.senderHandleSnapshot) {
-                    "local bundle handle is not canonical"
-                }
-                require(decoded.createdAtEpochSeconds >= 0L) { "local bundle timestamp is invalid" }
-                decoded.placeLabel?.let { label ->
-                    require(label.isNotEmpty() && label.toByteArray(Charsets.UTF_8).size <= ProtocolV1Limits.PLACE_LABEL_MAX_UTF8_BYTES) {
-                        "local bundle place is invalid"
+                senderVerification.parsePublicKeyset()
+                val decoded = SenderIndexBundlePlaintext(
+                    localFormatVersion = version!!,
+                    capsuleId = capsule!!,
+                    senderHandleSnapshot = handle!!,
+                    createdAtEpochSeconds = createdAt!!,
+                    placeLabel = place,
+                    frontFingerprint = front!!,
+                    senderVerification = senderVerification,
+                )
+                try {
+                    require(NormalizedHandle.parse(decoded.senderHandleSnapshot).value == decoded.senderHandleSnapshot) {
+                        "local bundle handle is not canonical"
                     }
+                    require(decoded.createdAtEpochSeconds >= 0L) { "local bundle timestamp is invalid" }
+                    decoded.placeLabel?.let { label ->
+                        require(label.isNotEmpty() && label.toByteArray(Charsets.UTF_8).size <= ProtocolV1Limits.PLACE_LABEL_MAX_UTF8_BYTES) {
+                            "local bundle place is invalid"
+                        }
+                    }
+                    SenderIndexBundlePlaintext.validateFingerprint(decoded.frontFingerprint)
+                    val canonicalBytes = encode(decoded)
+                    try {
+                        require(canonicalBytes.contentEquals(bytes)) { "local bundle encoding is not canonical" }
+                    } finally {
+                        canonicalBytes.fill(0)
+                    }
+                    return decoded
+                } catch (failure: Exception) {
+                    decoded.wipe()
+                    throw failure
                 }
-                SenderIndexBundlePlaintext.validateFingerprint(decoded.frontFingerprint)
-                require(encode(decoded).contentEquals(bytes)) { "local bundle encoding is not canonical" }
-                return decoded
-            } catch (failure: Exception) {
-                decoded.wipe()
-                throw failure
             } finally {
+                senderVerification.wipe()
                 front?.fill(0)
             }
         } catch (failure: Exception) {

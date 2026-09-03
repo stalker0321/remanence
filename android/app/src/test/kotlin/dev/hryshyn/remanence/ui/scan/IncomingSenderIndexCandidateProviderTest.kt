@@ -232,7 +232,7 @@ class IncomingSenderIndexCandidateProviderTest {
 
     private fun recognition(capsule: CapsuleId): RecognitionManifestContent =
         RecognitionManifestContent(
-        protocolVersion = RecognitionManifestCodec.FORMAT_VERSION,
+        manifestVersion = RecognitionManifestCodec.FORMAT_VERSION,
             capsuleIdRaw = capsule.toProtoBytes().toByteArray(),
             senderHandleSnapshot = "sender_${capsule.toRestString().takeLast(4)}",
             createdAtEpochSeconds = 1_700_000_001L,

@@ -508,7 +508,7 @@ class IncomingPresentationPreparationTest {
         val recipientIdentity = AccountIdentityGenerator().generate()
         val capsuleKeyset = CapsuleKeysetGenerator().generate()
         val recognition = RecognitionManifestContent(
-            protocolVersion = RecognitionManifestCodec.FORMAT_VERSION,
+            manifestVersion = RecognitionManifestCodec.FORMAT_VERSION,
             capsuleIdRaw = CAPSULE.toProtoBytes().toByteArray(),
             senderHandleSnapshot = "sender_1",
             createdAtEpochSeconds = 1_700_000_000L,

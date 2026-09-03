@@ -123,7 +123,7 @@ class SenderIndexBundleStagerTest {
         assertThrows<IllegalArgumentException> {
             SenderIndexBundlePlaintext.fromVerifiedRecognition(
                 capsule,
-                content.copy(protocolVersion = RecognitionManifestCodec.FORMAT_VERSION + 1),
+                content.copy(manifestVersion = RecognitionManifestCodec.FORMAT_VERSION + 1),
                 TestSenderVerification.forCapsule(capsule),
             )
         }
@@ -741,7 +741,7 @@ class SenderIndexBundleStagerTest {
         capsuleId: CapsuleId = capsule,
         frontFingerprint: ByteArray = contentBytes(FingerprintSide.FRONT),
     ) = RecognitionManifestContent(
-        protocolVersion = RecognitionManifestCodec.FORMAT_VERSION,
+        manifestVersion = RecognitionManifestCodec.FORMAT_VERSION,
         capsuleIdRaw = capsuleId.toProtoBytes().toByteArray(),
         senderHandleSnapshot = "alice_1",
         createdAtEpochSeconds = 1_700_000_000L,

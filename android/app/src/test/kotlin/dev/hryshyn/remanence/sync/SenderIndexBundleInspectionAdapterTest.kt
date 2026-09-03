@@ -128,7 +128,7 @@ class SenderIndexBundleInspectionAdapterTest {
 
     private fun validEncoded(): ByteArray {
         val recognition = RecognitionManifestContent(
-            protocolVersion = RecognitionManifestCodec.FORMAT_VERSION,
+            manifestVersion = RecognitionManifestCodec.FORMAT_VERSION,
             capsuleIdRaw = capsule.toProtoBytes().toByteArray(),
             senderHandleSnapshot = "adapter_sender",
             createdAtEpochSeconds = 1_700_000_001L,

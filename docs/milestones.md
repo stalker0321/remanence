@@ -1,6 +1,6 @@
 # Milestones
 
-Status: **APPROVED architecture checkpoint via ADR-012; implementation remains pending.**
+Status: **APPROVED architecture checkpoint via ADR-012; M2-F0 implementation complete and reviewed through `88fb80d` (closure record in implementation-plan §10a); physical-device and dataset acceptance remain open.**
 
 Milestones are vertical gates, not calendars. Grok receives only one atomic implementation task at a time; no task may mean “implement a milestone/module/feature.” A milestone advances only when its acceptance criteria pass and the supervisor records the reviewed commit.
 

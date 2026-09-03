@@ -1,6 +1,6 @@
 # Security architecture
 
-Status: **APPROVED security contract; recognition identity follows ADR-012 and FRONT-only implementation remains pending.**
+Status: **APPROVED security contract; recognition identity follows ADR-012 and the M2-F0-01..07 FRONT-only reset is implemented and reviewed through `88fb80d` (closure record in implementation-plan §10a); physical-device and dataset acceptance remain open.**
 
 This document defines what the MVP protects, what it intentionally does not
 protect, and the exact cryptographic/key-lifecycle design. Cryptographic

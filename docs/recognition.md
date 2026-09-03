@@ -7,7 +7,7 @@ capture. It identifies a design only among capsules routed to the
 authenticated recipient. A design can map locally to zero, one, or many
 capsules. It is not global image search, object recognition, OCR, AR, or a
 cryptographic authentication mechanism. ADR-012 is the current contract; this
-document does not claim that its FRONT-only implementation exists at `f01c379`.
+document records its FRONT-only implementation at `88fb80d` (M2-F0 closure, see implementation-plan §10a). Physical-device and dataset acceptance remain open.
 
 Test8/Test9 recognition state is disposable development data. A clean app
 database and server recognition state are accepted for the breaking reset.

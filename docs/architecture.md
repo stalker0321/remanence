@@ -1,6 +1,6 @@
 # Architecture
 
-Status: **APPROVED architecture checkpoint via ADR-012; FRONT-only implementation remains pending.**
+Status: **APPROVED architecture checkpoint via ADR-012; M2-F0-01..07 FRONT-only reset implemented and reviewed through `88fb80d` (closure record in implementation-plan §10a); physical-device and dataset acceptance remain open.**
 
 This document defines the system shape and lifecycle boundaries for the
 production-shaped MVP. Cryptographic wire details live in `security.md` and

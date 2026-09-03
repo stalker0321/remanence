@@ -1,14 +1,13 @@
 # Protocol and API contracts
 
-Status: **APPROVED outer logical v1 contract plus ADR-012 front-only recognition reset; normative generated schemas/field fixtures remain implementation-gated.**
+Status: **APPROVED outer logical v1 contract plus ADR-012 front-only recognition reset, implemented and reviewed through `88fb80d` (closure record in implementation-plan §10a).**
 
 This document defines identifiers, canonical encrypted/signed payloads, REST
 contracts, state transitions, idempotency, limits, and error behavior. The
 backend treats encrypted artifacts as opaque bytes even when it validates their
 declared structure and signed publish statement. ADR-012 defines one explicit
 front-only inner recognition-manifest format without changing the outer v1
-transport. This documentation checkpoint does not claim that the reset is
-implemented at `f01c379`.
+transport. The reset is implemented at `88fb80d` (M2-F0 closure, see implementation-plan §10a).
 
 ## 1. Conventions
 

@@ -1,6 +1,6 @@
 # Atomic implementation plan
 
-Status: **APPROVED architecture checkpoint via ADR-012; implementation queue is pending the breaking FRONT-only reset.**
+Status: **APPROVED architecture checkpoint via ADR-012; M2-F0 queue implemented and reviewed through `88fb80d` (closure record in §10a).**
 
 This queue maps approved architecture to implementation-sized commits. It is intentionally more granular than milestones. The supervisor gives only one task at a time and may split any task further if repository state makes ten minutes unrealistic.
 
@@ -256,6 +256,30 @@ any UI selection is added. The recipient picker is the separately named future
 milestone `M2-F1`, below. Duplicate prevention and a 24-hour
 cancellation/tombstone window are separate future milestones, not hidden
 subtasks in this queue.
+
+### M2-F0 closure record (recorded at `88fb80d`)
+
+Implementation of M2-F0-01..07 is recorded complete and independently
+reviewed through `88fb80d` on branch `integration/m2-front-only-reset`.
+The breaking-reset contract from §10a stands: clean app/database/server
+recognition state, no migration, no compatibility reader, no BACK
+production mode. Production behavior is FRONT-only Create (recipient
+confirmation → FRONT → content → encryption → staging/upload) and
+FRONT-only Scan (one FRONT → 0/1/N owner-scoped classification, full E2EE
+verification for one, never auto-open for many pending the M2-F1 picker).
+Slice commits: F0-01/02 recognition wire/domain/index and manifest
+acceptance (`218e322`, `eaba57d`, `6214929`, `ee02860`); F0-03 clean Room
+(`7a14770`, plus `325c3ed`, `a453d2a`); F0-04 outgoing (`bc54684`); F0-05
+incoming (`2a4a6f6`); F0-06 Create (`adf353a`, plus `d021994`); F0-07 Scan
+(`9f5c5bf`, plus `03fdde1`, `cb86d72`, `f888c17`, `88fb80d`).
+Evidence verified 2026-09-03 at `88fb80d`: `:app:compileDebugKotlin` and
+`:app:compileDebugUnitTestKotlin` BUILD SUCCESSFUL (Java 17);
+`:app:testDebugUnitTest` 104 classes, 704 tests, 0 failures, 0 errors,
+3 skipped; Room schema export v8 present; no BACK capture state remains
+in `app/src/main`. Explicitly still open as the next validation
+checkpoint: physical-device evidence (acceptance-criteria M1 physical
+evidence, M2 end-to-end physical) and the dataset checkpoint
+(acceptance-criteria M3); neither is marked passed here.
 
 ## 10b. M2-F1 future queue — recipient multi-match picker
 

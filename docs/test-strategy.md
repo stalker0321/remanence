@@ -1,6 +1,6 @@
 # Test strategy
 
-Status: **APPROVED test contract; recognition identity follows ADR-012 and FRONT-only implementation remains pending.**
+Status: **APPROVED test contract; recognition identity follows ADR-012 and the M2-F0-01..07 FRONT-only reset is implemented and reviewed through `88fb80d` (closure record in implementation-plan §10a); physical-device and dataset acceptance remain open.**
 
 Tests prove mechanisms and boundaries, not screen count. A green mocked demo
 cannot satisfy M1/M2. The minimum evidence pyramid combines fast deterministic

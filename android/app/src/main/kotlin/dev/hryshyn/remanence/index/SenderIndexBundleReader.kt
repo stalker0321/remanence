@@ -47,6 +47,14 @@ enum class SenderIndexBundleReadUnavailableReason {
     SEALER_UNAVAILABLE,
 }
 
+/** Internal role labels for tests observing post-wipe ownership boundaries. */
+internal enum class SenderIndexBundleWipeRole {
+    HANDOFF_FRONT_FINGERPRINT,
+    HANDOFF_SENDER_VERIFICATION,
+    SNAPSHOT_FRONT_FINGERPRINT,
+    SNAPSHOT_SENDER_VERIFICATION,
+}
+
 /** Redacted result of inspecting one owner/capsule sender-index bundle. */
 sealed interface SenderIndexBundleReadResult {
     class Available(
@@ -87,6 +95,7 @@ class SenderIndexBundleInspectionSnapshot internal constructor(
     senderVerification: SenderIndexBundleSenderVerification?,
     private val wipeBytes: (ByteArray) -> Unit,
     private val wipeChars: (CharArray) -> Unit,
+    private val wipeObserver: ((SenderIndexBundleWipeRole, ByteArray) -> Unit)? = null,
 ) : AutoCloseable {
     private val localFormatVersionValue = localFormatVersion
     private val capsuleIdValue = capsuleId
@@ -141,8 +150,7 @@ class SenderIndexBundleInspectionSnapshot internal constructor(
         if (closed) return
         closed = true
         try {
-            frontFingerprintBytes.fill(0)
-            wipeBytes(frontFingerprintBytes)
+            wipeOwnedBytes(SenderIndexBundleWipeRole.SNAPSHOT_FRONT_FINGERPRINT, frontFingerprintBytes)
         } finally {
             try {
                 senderHandleChars.fill('\u0000')
@@ -152,7 +160,9 @@ class SenderIndexBundleInspectionSnapshot internal constructor(
                     chars.fill('\u0000')
                     wipeChars(chars)
                 }
-                senderVerificationValue?.wipe()
+                senderVerificationValue?.wipe { bytes ->
+                    wipeOwnedBytes(SenderIndexBundleWipeRole.SNAPSHOT_SENDER_VERIFICATION, bytes)
+                }
             }
         }
     }
@@ -166,6 +176,20 @@ class SenderIndexBundleInspectionSnapshot internal constructor(
 
     private fun checkOpen() {
         check(!closed) { "sender index snapshot is closed" }
+    }
+
+    private fun wipeOwnedBytes(role: SenderIndexBundleWipeRole, bytes: ByteArray) {
+        bytes.fill(0)
+        try {
+            wipeBytes(bytes)
+        } finally {
+            bytes.fill(0)
+            try {
+                wipeObserver?.invoke(role, bytes)
+            } finally {
+                bytes.fill(0)
+            }
+        }
     }
 }
 
@@ -185,6 +209,7 @@ class SenderIndexBundleReader internal constructor(
     private val fileSystem: SenderIndexBundleReaderFileSystem,
     private val wipe: (ByteArray) -> Unit,
     private val wipeChars: (CharArray) -> Unit = { it.fill('\u0000') },
+    private val wipeObserver: ((SenderIndexBundleWipeRole, ByteArray) -> Unit)? = null,
 ) {
 
     constructor(
@@ -342,23 +367,39 @@ class SenderIndexBundleReader internal constructor(
                     senderVerification = senderVerification,
                     wipeBytes = wipe,
                     wipeChars = wipeChars,
+                    wipeObserver = wipeObserver,
                 )
                 snapshot = inspectionSnapshot
                 val available = SenderIndexBundleReadResult.Available(inspectionSnapshot)
                 handoffCleanupStarted = true
                 try {
-                    wipeHandoffBytes(frontFingerprint)
+                    wipeHandoffBytes(
+                        SenderIndexBundleWipeRole.HANDOFF_FRONT_FINGERPRINT,
+                        frontFingerprint,
+                    )
                 } finally {
-                    senderVerification?.wipe(::wipeHandoffBytes)
+                    senderVerification?.wipe { bytes ->
+                        wipeHandoffBytes(SenderIndexBundleWipeRole.HANDOFF_SENDER_VERIFICATION, bytes)
+                    }
                 }
                 handoffCompleted = true
                 return available
             } finally {
                 if (!handoffCleanupStarted) {
                     try {
-                        snapshotFrontFingerprint?.let(::wipeHandoffBytes)
+                        snapshotFrontFingerprint?.let { bytes ->
+                            wipeHandoffBytes(
+                                SenderIndexBundleWipeRole.HANDOFF_FRONT_FINGERPRINT,
+                                bytes,
+                            )
+                        }
                     } finally {
-                        snapshotSenderVerification?.wipe(::wipeHandoffBytes)
+                        snapshotSenderVerification?.wipe { bytes ->
+                            wipeHandoffBytes(
+                                SenderIndexBundleWipeRole.HANDOFF_SENDER_VERIFICATION,
+                                bytes,
+                            )
+                        }
                     }
                 }
                 if (!handoffCompleted) {
@@ -374,11 +415,16 @@ class SenderIndexBundleReader internal constructor(
     }
 
     /** The observer is diagnostic/test-only; production clearing is unconditional. */
-    private fun wipeHandoffBytes(bytes: ByteArray) {
+    private fun wipeHandoffBytes(role: SenderIndexBundleWipeRole, bytes: ByteArray) {
         try {
             wipe(bytes)
         } finally {
             bytes.fill(0)
+            try {
+                wipeObserver?.invoke(role, bytes)
+            } finally {
+                bytes.fill(0)
+            }
         }
     }
 

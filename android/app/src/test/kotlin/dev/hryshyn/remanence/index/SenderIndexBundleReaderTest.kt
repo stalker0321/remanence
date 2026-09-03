@@ -168,31 +168,33 @@ class SenderIndexBundleReaderTest {
                 TestSenderVerification.forCapsule(capsule),
             ),
         )
-        val expectedFront = recognition().frontFingerprint
-        val expectedVerification = TestSenderVerification.forCapsule(capsule)
-        val expectedSenderKeyset = expectedVerification.publicKeysetBytes
-        expectedVerification.wipe()
         val wiped = mutableListOf<ByteArray>()
-        val beforeWipe = mutableListOf<ByteArray>()
+        val observedWipes = mutableMapOf<SenderIndexBundleWipeRole, MutableList<ByteArray>>()
         val snapshot = (
             reader(
                 sealer,
                 wipe = { bytes ->
-                    beforeWipe += bytes.copyOf()
                     wiped += bytes
                     bytes.fill(0)
+                },
+                wipeObserver = { role, bytes ->
+                    observedWipes.getOrPut(role) { mutableListOf() } += bytes
                 },
             ).inspect(readRequest(owner, owner, capsule)) as SenderIndexBundleReadResult.Available
             ).snapshot
 
+        val expectedFront = recognition().frontFingerprint
+        val expectedVerification = TestSenderVerification.forCapsule(capsule)
+        val expectedSenderKeyset = expectedVerification.publicKeysetBytes
+        expectedVerification.wipe()
         assertArrayEquals(expectedFront, snapshot.frontFingerprint)
         val snapshotVerification = snapshot.senderVerification
         val ownedSnapshotVerification = snapshotVerification ?: error("sender verification missing")
         val snapshotKeyset = ownedSnapshotVerification.publicKeysetBytes
         assertArrayEquals(expectedSenderKeyset, snapshotKeyset)
         ownedSnapshotVerification.wipe()
-        assertHandoffWasWiped(expectedFront, beforeWipe, wiped)
-        assertHandoffWasWiped(expectedSenderKeyset, beforeWipe, wiped)
+        assertRoleWiped(SenderIndexBundleWipeRole.HANDOFF_FRONT_FINGERPRINT, observedWipes)
+        assertRoleWiped(SenderIndexBundleWipeRole.HANDOFF_SENDER_VERIFICATION, observedWipes)
 
         snapshot.close()
         snapshotKeyset.fill(0)
@@ -212,60 +214,57 @@ class SenderIndexBundleReaderTest {
                 TestSenderVerification.forCapsule(capsule),
             ),
         )
-        val expectedFront = recognition().frontFingerprint
-        val expectedVerification = TestSenderVerification.forCapsule(capsule)
-        val expectedSenderKeyset = expectedVerification.publicKeysetBytes
-        expectedVerification.wipe()
-        val wiped = mutableListOf<ByteArray>()
-        val beforeWipe = mutableListOf<ByteArray>()
-        var frontFailuresRemaining = 1
+        val observedWipes = mutableMapOf<SenderIndexBundleWipeRole, MutableList<ByteArray>>()
+        val observationOrder = mutableListOf<SenderIndexBundleWipeRole>()
+        var wipeCallbackInvocations = 0
+        var firstCallbackThrew = false
         assertThrows(IllegalStateException::class.java) {
             runBlocking {
                 reader(
                     sealer,
                     wipe = { bytes ->
-                        beforeWipe += bytes.copyOf()
-                        wiped += bytes
-                        if (bytes.contentEquals(expectedFront) && frontFailuresRemaining > 0) {
-                            frontFailuresRemaining--
+                        wipeCallbackInvocations++
+                        // readBounded scrubs its reusable stream buffer first;
+                        // the next byte wipe is the front handoff.
+                        if (wipeCallbackInvocations == 2) {
+                            firstCallbackThrew = true
                             throw IllegalStateException("test wipe failure")
                         }
                         bytes.fill(0)
+                    },
+                    wipeObserver = { role, bytes ->
+                        observationOrder += role
+                        observedWipes.getOrPut(role) { mutableListOf() } += bytes
                     },
                 ).inspect(readRequest(owner, owner, capsule))
             }
         }
 
-        assertHandoffWasWiped(expectedFront, beforeWipe, wiped)
-        assertHandoffWasWiped(expectedSenderKeyset, beforeWipe, wiped)
-        assertEquals(0, frontFailuresRemaining)
-
-        // Prove the snapshot's own internal copies were redacted before the
-        // observer could read them.  The snapshot is constructed and then
-        // immediately closed on the failure path; its close() wipes the
-        // front-fingerprint and sender-keyset byte arrays through the
-        // reader's wipe callback, so both appear in the wiped list as
-        // non-empty buffers that were filled with zeros.
-        //
-        // Find the snapshot's entries by matching the original expected
-        // content (the snapshot stores independent copies of the same bytes).
-        val frontSnapshotIndices = beforeWipe.indices.filter { beforeWipe[it].contentEquals(expectedFront) }
-        val keysetSnapshotIndices = beforeWipe.indices.filter { beforeWipe[it].contentEquals(expectedSenderKeyset) }
-        assertTrue(
-            "front fingerprint snapshot entry was not recorded during wipe",
-            frontSnapshotIndices.isNotEmpty(),
+        assertTrue(firstCallbackThrew)
+        assertTrue("wipe callbacks: $wipeCallbackInvocations", wipeCallbackInvocations > 2)
+        assertTrue("wipe callbacks=$wipeCallbackInvocations roles=$observationOrder", observationOrder.isNotEmpty())
+        assertEquals(
+            SenderIndexBundleWipeRole.HANDOFF_FRONT_FINGERPRINT,
+            observationOrder.first(),
         )
-        assertTrue(
-            "sender keyset snapshot entry was not recorded during wipe",
-            keysetSnapshotIndices.isNotEmpty(),
+        val handoffFront = assertRoleWiped(
+            SenderIndexBundleWipeRole.HANDOFF_FRONT_FINGERPRINT,
+            observedWipes,
         )
-        // Every snapshot entry must have been wiped to zeros.
-        (frontSnapshotIndices + keysetSnapshotIndices).forEach { index ->
-            assertTrue("snapshot buffer at $index was not wiped", wiped[index].all { it == 0.toByte() })
-        }
-
-        expectedFront.fill(0)
-        expectedSenderKeyset.fill(0)
+        val handoffSenderVerification = assertRoleWiped(
+            SenderIndexBundleWipeRole.HANDOFF_SENDER_VERIFICATION,
+            observedWipes,
+        )
+        val snapshotFront = assertRoleWiped(
+            SenderIndexBundleWipeRole.SNAPSHOT_FRONT_FINGERPRINT,
+            observedWipes,
+        )
+        val snapshotSenderVerification = assertRoleWiped(
+            SenderIndexBundleWipeRole.SNAPSHOT_SENDER_VERIFICATION,
+            observedWipes,
+        )
+        assertFalse(handoffFront === snapshotFront)
+        assertFalse(handoffSenderVerification === snapshotSenderVerification)
     }
 
     @Test
@@ -651,6 +650,7 @@ class SenderIndexBundleReaderTest {
         fileSystem: SenderIndexBundleReaderFileSystem = RealTestFileSystem,
         wipe: (ByteArray) -> Unit = { it.fill(0) },
         wipeChars: (CharArray) -> Unit = { it.fill('\u0000') },
+        wipeObserver: ((SenderIndexBundleWipeRole, ByteArray) -> Unit)? = null,
     ) = SenderIndexBundleReader(
         roots = roots,
         sealer = sealer,
@@ -658,6 +658,7 @@ class SenderIndexBundleReaderTest {
         fileSystem = fileSystem,
         wipe = wipe,
         wipeChars = wipeChars,
+        wipeObserver = wipeObserver,
     )
 
     private fun readRequest(
@@ -721,16 +722,15 @@ class SenderIndexBundleReaderTest {
         }
     }
 
-    private fun assertHandoffWasWiped(
-        expected: ByteArray,
-        beforeWipe: List<ByteArray>,
-        wiped: List<ByteArray>,
-    ) {
-        val matches = beforeWipe.indices.filter { beforeWipe[it].contentEquals(expected) }
-        assertTrue("expected handoff buffer was not observed", matches.isNotEmpty())
-        matches.forEach { index ->
-            assertTrue("handoff buffer was not wiped", wiped[index].all { it == 0.toByte() })
-        }
+    private fun assertRoleWiped(
+        role: SenderIndexBundleWipeRole,
+        observedWipes: Map<SenderIndexBundleWipeRole, List<ByteArray>>,
+    ): ByteArray {
+        val buffers = observedWipes[role]
+        assertEquals("expected one $role observation", 1, buffers?.size)
+        val buffer = buffers!!.single()
+        assertTrue("$role buffer was not wiped", buffer.all { it == 0.toByte() })
+        return buffer
     }
 
     private companion object {

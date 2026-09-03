@@ -161,7 +161,6 @@ class ScanReentryFlowTest {
                 photoHeightsPx = listOf(600, 600, 600),
                 noteUtf8 = null,
                 frontFingerprintBytes = syntheticFingerprint(11, FingerprintSide.FRONT),
-                backFingerprintBytes = syntheticFingerprint(22, FingerprintSide.BACK),
                 signingKeyset = identity.signingPrivateHandle,
                 recipientEncryptionPublicKeyset =
                     TinkProtoKeysetFormat.parseKeysetWithoutSecret(identity.encryptionPublicKeyset),

@@ -113,7 +113,6 @@ class CapsuleUploadStaleRecoveryTest {
                 photoHeightsPx = listOf(600, 600, 600),
                 noteUtf8 = "a06-test",
                 frontFingerprintBytes = "front".toByteArray(),
-                backFingerprintBytes = "back".toByteArray(),
                 signingKeyset = senderIdentity.signingPrivateHandle,
                 recipientEncryptionPublicKeyset = TinkProtoKeysetFormat.parseKeysetWithoutSecret(
                     oldRecipientIdentity.encryptionPublicKeyset,

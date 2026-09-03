@@ -209,7 +209,6 @@ class ScanGrantRoutingTest {
     /** Publishes one real self-send capsule whose fingerprints match the scan. */
     private suspend fun stagePublishedCapsule() {
         val front = syntheticFingerprint(11, RecognitionSide.FRONT)
-        val back = syntheticFingerprint(22, RecognitionSide.BACK)
         store().persist(
             capsuleUuid.toString(), FingerprintOrigin.SENDER,
             RecognitionProfile.mvpOrbV1().profileId, front,
@@ -231,7 +230,6 @@ class ScanGrantRoutingTest {
                     photoHeightsPx = listOf(600, 600, 600),
                     noteUtf8 = null,
                     frontFingerprintBytes = front,
-                    backFingerprintBytes = back,
                     signingKeyset = identity.signingPrivateHandle,
                     recipientEncryptionPublicKeyset =
                         TinkProtoKeysetFormat.parseKeysetWithoutSecret(identity.encryptionPublicKeyset),

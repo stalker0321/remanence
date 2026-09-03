@@ -263,7 +263,6 @@ class CreateViewModel(
         val recipient: ResolvedHandleSnapshot,
         val noteText: String?,
         val frontFingerprintId: String,
-        val backFingerprintId: String,
         val photoIds: List<String>,
     )
 
@@ -622,7 +621,6 @@ class CreateViewModel(
             recipient = boundRecipient,
             noteText = if (noteEditor.isEmpty) null else noteEditor.text,
             frontFingerprintId = requireNotNull(frontFingerprintId),
-            backFingerprintId = requireNotNull(backFingerprintId),
             photoIds = photoSelection.selectedIds.toList(),
         )
         _step.value = Step.PUBLISHING
@@ -708,7 +706,6 @@ class CreateViewModel(
             return
         }
         var frontBytes: ByteArray? = null
-        var backBytes: ByteArray? = null
         try {
             try {
                 // Capture the decrypt result while still inside the suspend
@@ -723,17 +720,8 @@ class CreateViewModel(
                 // Leave the owned handoff null and fail closed below.
             }
             ensureCurrent()
-            // BACK is a session-memory-only handoff. Taking it removes the
-            // store copy; there is intentionally no persistence fallback.
-            backBytes = try {
-                backFlow.takeStagedBack(inputs.backFingerprintId)
-            } catch (_: Exception) {
-                null
-            }
-            ensureCurrent()
             val frontForPublish = frontBytes
-            val backForPublish = backBytes
-            if (frontForPublish == null || backForPublish == null) {
+            if (frontForPublish == null) {
                 failPublishing("sealed captures are unreadable; recapture required", generation, Step.FRONT)
                 return
             }
@@ -781,7 +769,6 @@ class CreateViewModel(
                         photoHeightsPx = staged.map { it.height },
                         noteUtf8 = inputs.noteText,
                         frontFingerprintBytes = frontForPublish,
-                        backFingerprintBytes = backForPublish,
                         signingKeyset = sender.signingPrivateHandle,
                         recipientEncryptionPublicKeyset =
                             parsePublicHandle(snapshot.encryptionPublicKeysetB64Url),
@@ -821,14 +808,12 @@ class CreateViewModel(
                 }
             }
         } finally {
-            // The decrypt/take results are caller-owned handoff buffers. The
-            // publisher consumes them synchronously; every return, failure,
-            // cancellation, or stale-session path wipes them here.
+            // The FRONT decrypt result is a caller-owned handoff buffer. The
+            // publisher consumes it synchronously; every return, failure,
+            // cancellation, or stale-session path wipes it here. Captured
+            // session BACK is never read for publication; beginSession and
+            // endSession wipe that session-memory store.
             frontBytes?.fill(0)
-            backBytes?.fill(0)
-            // If the attempt returned before taking BACK (for example an
-            // unavailable sender identity), discard that session handoff too.
-            backFlow.takeStagedBack(inputs.backFingerprintId)?.fill(0)
         }
     }
 

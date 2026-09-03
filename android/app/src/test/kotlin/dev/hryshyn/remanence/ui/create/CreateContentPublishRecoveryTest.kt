@@ -432,7 +432,7 @@ class CreateContentPublishRecoveryTest {
     }
 
     @Test
-    fun publishingConsumesBackAndNeverFallsBackToPersistenceDecrypt() = runBlocking {
+    fun publishingDoesNotConsumeBackAndNeverFallsBackToPersistenceDecrypt() = runBlocking {
         val gate = CompletableDeferred<SenderIdentitySnapshot>().apply { complete(senderIdentity()) }
         val taken = mutableListOf<ByteArray>()
         val wipedStored = mutableListOf<ByteArray>()
@@ -448,26 +448,30 @@ class CreateContentPublishRecoveryTest {
         vm.onPhotosPicked(listOf("p1", "p2", "p3"))
         assertTrue(vm.noteEditor.onChange("strict back"))
 
-        // The first attempt consumes the in-memory BACK and then fails only
-        // while queueing the already-encrypted outbox row.
+        // Publication reads only the Room FRONT baseline. Session BACK stays
+        // untouched and is never asked of persistence.
         vm.startPublishing()
         awaitTerminal(vm)
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         assertEquals(listOf("fp-1"), persistence.decryptIds)
-        assertEquals(1, taken.size)
-        assertTrue(taken.single().all { it == 0.toByte() })
-        assertEquals(1, wipedStored.size)
-        assertTrue(wipedStored.single().all { it == 0.toByte() })
+        assertTrue(taken.isEmpty())
+        assertTrue(wipedStored.isEmpty())
         assertTrue(persistence.decryptedBuffers.single().all { it == 0.toByte() })
 
-        // A retry has no staged BACK. It fails closed and does not ask Room
-        // for that id (only the FRONT is decrypted again).
+        // Retry still has the session BACK and decrypts FRONT again. It must
+        // not ask Room for a capture-* BACK id.
         vm.startPublishing()
         awaitTerminal(vm)
-        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         assertEquals(listOf("fp-1", "fp-1"), persistence.decryptIds)
         assertTrue(persistence.decryptIds.none { it.startsWith("capture-") })
+        assertTrue(taken.isEmpty())
         assertTrue(persistence.decryptedBuffers.all { it.all { byte -> byte == 0.toByte() } })
+
+        vm.endSession()
+        assertEquals(1, wipedStored.size)
+        assertTrue(wipedStored.single().all { it == 0.toByte() })
+        assertTrue(taken.isEmpty())
     }
 
     @Test

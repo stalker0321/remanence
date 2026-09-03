@@ -161,7 +161,6 @@ class CreateRescanOpenFlowTest {
                 photoHeightsPx = listOf(600, 600, 600),
                 noteUtf8 = noteMarker,
                 frontFingerprintBytes = syntheticFingerprint(11, RecognitionSide.FRONT),
-                backFingerprintBytes = syntheticFingerprint(22, RecognitionSide.BACK),
                 signingKeyset = identity.signingPrivateHandle,
                 recipientEncryptionPublicKeyset =
                     TinkProtoKeysetFormat.parseKeysetWithoutSecret(identity.encryptionPublicKeyset),

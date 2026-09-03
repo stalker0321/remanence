@@ -149,7 +149,6 @@ class CrossIdentityCapsuleFlowTest {
                 photoHeightsPx = listOf(600, 600, 600),
                 noteUtf8 = null,
                 frontFingerprintBytes = syntheticFingerprint(11, FingerprintSide.FRONT),
-                backFingerprintBytes = syntheticFingerprint(22, FingerprintSide.BACK),
                 signingKeyset = senderIdentity.signingPrivateHandle,
                 recipientEncryptionPublicKeyset = TinkProtoKeysetFormat.parseKeysetWithoutSecret(
                     recipientIdentity.encryptionPublicKeyset,
@@ -503,7 +502,6 @@ class CrossIdentityCapsuleFlowTest {
                 photoHeightsPx = listOf(600, 600, 600),
                 noteUtf8 = null,
                 frontFingerprintBytes = syntheticFingerprint(11, FingerprintSide.FRONT),
-                backFingerprintBytes = syntheticFingerprint(22, FingerprintSide.BACK),
                 signingKeyset = senderIdentity.signingPrivateHandle,
                 recipientEncryptionPublicKeyset = TinkProtoKeysetFormat.parseKeysetWithoutSecret(
                     senderIdentity.encryptionPublicKeyset,

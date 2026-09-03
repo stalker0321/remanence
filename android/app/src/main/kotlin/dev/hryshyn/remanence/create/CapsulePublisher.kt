@@ -71,8 +71,8 @@ data class CapsulePublishRequest(
     val photoWidthsPx: List<Int>,
     val photoHeightsPx: List<Int>,
     val noteUtf8: String?,
+    /** Required FRONT recognition fingerprint; BACK is not a publication input. */
     val frontFingerprintBytes: ByteArray,
-    val backFingerprintBytes: ByteArray,
     /** Sender's own Ed25519 signing keyset (same account = also the recipient). */
     val signingKeyset: KeysetHandle,
     /** Recipient HPKE public keyset; same account means our own public half. */
@@ -102,10 +102,11 @@ internal data class RewrappedRecipientMaterial(
 
 /**
  * I08: produces the complete ciphertext-only capsule for the given sender
- * AND recipient identities - recognition manifest, content manifest, 3-5
- * encrypted photos, the recipient envelope sealing the capsule keyset to the
- * recipient, and the signed publish statement - in exactly the shape
- * CapsuleOutboxStager persists. Every artifact uses the canonical
+ * AND recipient identities - inner-v2 FRONT-only recognition manifest,
+ * content manifest, 3-5 encrypted photos, the recipient envelope sealing the
+ * capsule keyset to the recipient, and the signed publish statement - in
+ * exactly the shape CapsuleOutboxStager persists. Outer REST/statement/
+ * envelope/AAD remain protocol v1. Every artifact uses the canonical
  * AAD/context encodings; no plaintext leaves this class.
  *
  * M2-P06: the recipient identity is now passed in the request itself, not
@@ -130,6 +131,7 @@ class CapsulePublisher(
                 request.photoHeightsPx.size == request.photoJpegs.size,
         ) { "photo metadata cardinality must match photoJpegs" }
         require(request.photoJpegs.size in 3..5) { "3..5 photos required" }
+        require(request.frontFingerprintBytes.isNotEmpty()) { "front fingerprint is required" }
         // M2-P08: the current sender owns the retry key; ownerUserId
         // must equal senderUserId before any crypto work begins.
         require(request.ownerUserId == request.senderUserId.value.toString()) {
@@ -158,7 +160,7 @@ class CapsulePublisher(
         fun routing(capsuleId: CapsuleId, blobId: BlobId) =
             RecognitionManifestCodec.RoutingContext(capsuleId, blobId, senderUser, recipientUser)
 
-        // 1. Recognition manifest (fingerprints + minimal chooser hint only).
+        // 1. Recognition manifest (required FRONT + minimal chooser hint only).
         val recognitionBlob = blob(RECOGNITION_BLOB_BYTE)
         val recognitionCiphertext = RecognitionManifestCodec().buildAndEncrypt(
             capsuleKeyset,

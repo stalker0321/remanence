@@ -9,6 +9,7 @@ import java.security.MessageDigest
 import java.util.UUID
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertThrows
@@ -26,6 +27,8 @@ import dev.hryshyn.remanence.core.crypto.CapsuleAcceptanceResult
 import dev.hryshyn.remanence.auth.SoftwareKekBoundary
 import dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper
 import dev.hryshyn.remanence.core.crypto.CapsuleArtifactCryptor
+import dev.hryshyn.remanence.core.crypto.RecognitionManifestCodec
+import dev.hryshyn.remanence.protocol.v1.RecognitionManifest
 import dev.hryshyn.remanence.core.crypto.DeliveredBlob
 import dev.hryshyn.remanence.core.crypto.KekBoundary
 import dev.hryshyn.remanence.core.crypto.RecipientEnvelopeCryptor
@@ -98,7 +101,6 @@ class CapsulePublisherTest {
         photoHeightsPx = listOf(600, 600, 600),
         noteUtf8 = "hello self",
         frontFingerprintBytes = "front-fp".toByteArray(),
-        backFingerprintBytes = "back-fp".toByteArray(),
         signingKeyset = identity.signingPrivateHandle,
         recipientEncryptionPublicKeyset = TinkProtoKeysetFormat.parseKeysetWithoutSecret(
             identity.encryptionPublicKeyset,
@@ -118,6 +120,96 @@ class CapsulePublisherTest {
         assertTrue(prepared.envelopeCiphertext.size > 60)
         assertTrue(prepared.publishStatementBytes.isNotEmpty())
         assertEquals(69, prepared.publishStatementSignature.size)
+    }
+
+    @Test
+    fun recognitionManifestIsInnerV2FrontOnlyWithProtocolV1Bindings() {
+        val request = selfSendRequest()
+        val prepared = publisher.publish(request)
+        val opened = RecipientEnvelopeCryptor().open(
+            identity.encryptionPrivateHandle,
+            dev.hryshyn.remanence.core.model.RecipientEnvelopeContextInput(
+                CapsuleId(capsuleId), UserId(userId), UserId(userId), KeyBundleId(bundleId),
+            ),
+            prepared.envelopeCiphertext,
+        )
+        val envelope = RecipientEnvelopePlaintext.parseFrom(opened)
+        assertEquals(1, envelope.protocolVersion)
+
+        val capsuleKeyset = TinkProtoKeysetFormat.parseKeyset(
+            envelope.capsuleAeadKeyset.toByteArray(),
+            InsecureSecretKeyAccess.get(),
+        )
+        val recognition = prepared.artifacts.single { it.kind == OutboxArtifactKind.RECOGNITION_MANIFEST }
+        val content = RecognitionManifestCodec().decryptAndParse(
+            capsuleKeyset,
+            RecognitionManifestCodec.RoutingContext(
+                CapsuleId(capsuleId),
+                BlobId(recognition.blobId),
+                UserId(userId),
+                UserId(userId),
+            ),
+            recognition.ciphertext,
+        )
+        assertEquals(RecognitionManifestCodec.FORMAT_VERSION, content.manifestVersion)
+        assertEquals(2, content.manifestVersion)
+        assertArrayEquals(request.frontFingerprintBytes, content.frontFingerprint)
+
+        val plaintext = CapsuleArtifactCryptor().decrypt(
+            capsuleKeyset,
+            ArtifactAadInput(
+                CapsuleId(capsuleId),
+                BlobId(recognition.blobId),
+                CapsuleArtifactKind.RECOGNITION_MANIFEST,
+                ordinal = -1,
+                senderUserId = UserId(userId),
+                recipientUserId = UserId(userId),
+            ),
+            recognition.ciphertext,
+        )
+        val manifest = RecognitionManifest.parseFrom(plaintext)
+        assertEquals(2, manifest.manifestVersion)
+        assertTrue(manifest.hasChooserHint())
+        assertFalse(manifest.frontFingerprint.isEmpty)
+        assertEquals(4, RecognitionManifest.FRONT_FINGERPRINT_FIELD_NUMBER)
+        assertFalse(
+            "reserved BACK field 5 must be absent from the recognition wire",
+            containsProtoField(plaintext, fieldNumber = 5),
+        )
+    }
+
+    private fun containsProtoField(bytes: ByteArray, fieldNumber: Int): Boolean {
+        var index = 0
+        while (index < bytes.size) {
+            val key = readVarint(bytes, index)
+            index += varintSize(bytes, index)
+            val tag = key ushr 3
+            if (tag == fieldNumber) return true
+            when (key and 7) {
+                0 -> index += varintSize(bytes, index)
+                1 -> index += 8
+                2 -> {
+                    val length = readVarint(bytes, index)
+                    index += varintSize(bytes, index) + length
+                }
+                5 -> index += 4
+                else -> return false
+            }
+        }
+        return false
+    }
+
+    @Test
+    fun emptyFrontFingerprintIsRejectedBeforeRetryWrapping() {
+        val boundary = CountingKekBoundary()
+        val alias = "test-empty-front-${UUID.randomUUID()}"
+        boundary.createAes256GcmKey(alias)
+        val guardedPublisher = CapsulePublisher(SenderRetryKeysetWrapper(boundary), alias)
+        val failure = assertThrows(IllegalArgumentException::class.java) {
+            guardedPublisher.publish(selfSendRequest().copy(frontFingerprintBytes = ByteArray(0)))
+        }
+        assertEquals("front fingerprint is required", failure.message)
+        assertEquals(0, boundary.loadCalls)
     }
 
     @Test
@@ -732,6 +824,14 @@ class CapsulePublisherTest {
         assertTrue(
             "CapsulePublishRequest.toString must surface ownerUserId as a named property",
             "ownerUserId=" in asString,
+        )
+        assertTrue(
+            "CapsulePublishRequest.toString must surface frontFingerprintBytes as a named property",
+            "frontFingerprintBytes=" in asString,
+        )
+        assertFalse(
+            "CapsulePublishRequest must not carry a back fingerprint field",
+            "backFingerprint" in asString,
         )
         // Sanity: the request was actually constructed with explicit values.
         assertEquals(UserId(userId), selfSendRequest().recipientUserId)

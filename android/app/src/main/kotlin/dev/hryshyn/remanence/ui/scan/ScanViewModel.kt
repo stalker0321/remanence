@@ -74,11 +74,12 @@ sealed interface ScanTerminalState {
 }
 
 /**
- * FIX-M1-007-12 / FIX-REVIEW-01: the production Scan flow. Entry is an honest
- * capture state - FRONT first, then BACK, and only a complete capture pair
- * reaches matching (docs/recognition.md section 3). The candidate index is
+ * FIX-M1-007-12 / FIX-REVIEW-01 / M2-F0-07: the production Scan flow.
+ * Entry is an honest FRONT-only capture state - one FRONT still through the
+ * real ORB pipeline, then matching runs immediately against the encrypted
+ * local index (docs/recognition.md section 3). The candidate index is
  * built from locally sealed fingerprint rows only; stills run through the ORB
- * processors; [LocalMatchEngine] classifies the hierarchy; and every path to
+ * processor; [LocalMatchEngine] classifies the hierarchy; and every path to
  * a grant - automatic or manually chosen - passes the existing verification
  * boundary first. Incoming sender-index candidates are joined in memory with
  * the sealed Room recipient baselines; neither decrypted index is persisted.
@@ -104,8 +105,6 @@ class ScanViewModel internal constructor(
     private val presentationGrants: PresentationGrantAuthority,
     frontProcessor: dev.hryshyn.remanence.capture.StillProcessor =
         RealStillFingerprintProcessor(profile, FingerprintSide.FRONT),
-    backProcessor: dev.hryshyn.remanence.capture.StillProcessor =
-        RealStillFingerprintProcessor(profile, FingerprintSide.BACK),
     private val candidateIndexProvider: suspend (UserId) -> ScanCandidateIndex,
     /** The production factory supplies the real local incoming preparation gate. */
     private val incomingPresentationPreparation: IncomingPresentationPreparation?,
@@ -124,16 +123,15 @@ class ScanViewModel internal constructor(
     private val ioDispatcher: kotlinx.coroutines.CoroutineDispatcher = kotlinx.coroutines.Dispatchers.IO,
 ) : ViewModel() {
 
-    val captureSession = ScanCaptureSession(ScanSideExtractor { side ->
-        requireNotNull(queuedStill.getAndSet(null)) { "no processed still queued for $side" }
+    val captureSession = ScanCaptureSession(ScanSideExtractor {
+        requireNotNull(queuedStill.getAndSet(null)) { "no processed still queued for FRONT" }
     })
 
     /**
-     * FIX-STATE-01: THE authoritative per-side capture attempts. Rejections,
-     * failures, processing, and retakes all render from these controllers.
+     * FIX-STATE-01: THE authoritative capture attempt. Rejections,
+     * failures, processing, and retakes all render from this controller.
      */
     val frontAttempt = CaptureAttemptController()
-    val backAttempt = CaptureAttemptController()
 
     private val _matchState = MutableStateFlow<ScanMatchUiState>(ScanMatchUiState.AwaitingCapture)
     val matchState: StateFlow<ScanMatchUiState> = _matchState.asStateFlow()
@@ -151,7 +149,6 @@ class ScanViewModel internal constructor(
 
     private val queuedStill = AtomicReference<ScannedSide?>()
     private val frontProcessor = frontProcessor
-    private val backProcessor = backProcessor
     /**
      * FIX-REVIEW-01: generation guard so a stale asynchronous match result can
      * never overwrite a newer capture flow started by reset/re-entry.
@@ -208,7 +205,7 @@ class ScanViewModel internal constructor(
     )
 
     /**
-     * Authenticated Scan entry starts a fresh FRONT-first session and
+     * Authenticated Scan entry starts a fresh FRONT-only session and
      * schedules the existing owner-scoped KEEP incoming chain. Same-epoch
      * rotation is a no-op and does not re-enqueue.
      */
@@ -225,7 +222,6 @@ class ScanViewModel internal constructor(
         captureSession.reset()
         presentationGrants.clearAll()
         frontAttempt.reset()
-        backAttempt.reset()
         queuedStill.set(null)
         _matchState.value = ScanMatchUiState.AwaitingCapture
         _terminal.value = ScanTerminalState.Idle
@@ -238,44 +234,22 @@ class ScanViewModel internal constructor(
     // ------------------------------------------------------------------
 
     /** Shutter press for the FRONT; legal only while the session awaits FRONT. */
-    fun beginFrontCapture(): Boolean = beginCapture(FingerprintSide.FRONT)
-
-    /** Shutter press for the BACK; legal only while the session awaits BACK. */
-    fun beginBackCapture(): Boolean = beginCapture(FingerprintSide.BACK)
-
-    private fun beginCapture(side: FingerprintSide): Boolean {
-        val expected = if (side == FingerprintSide.FRONT) {
-            dev.hryshyn.remanence.scan.ScanSessionState.AWAITING_FRONT
-        } else {
-            dev.hryshyn.remanence.scan.ScanSessionState.AWAITING_BACK
-        }
-        if (captureSession.state != expected) return false
+    fun beginFrontCapture(): Boolean {
+        if (captureSession.state != dev.hryshyn.remanence.scan.ScanSessionState.AWAITING_FRONT) return false
         return try {
-            attemptFor(side).beginAttempt()
+            frontAttempt.beginAttempt()
             true
         } catch (_: IllegalStateException) {
             false
         }
     }
 
-    private fun attemptFor(side: FingerprintSide): CaptureAttemptController =
-        if (side == FingerprintSide.FRONT) frontAttempt else backAttempt
-
     /** Camera bytes for the FRONT; stale deliveries are structurally inert. */
     fun deliverFrontJpeg(jpegBytes: ByteArray) {
         if (captureSession.state != dev.hryshyn.remanence.scan.ScanSessionState.AWAITING_FRONT) return
         val generation = deliveryGeneration
         viewModelScope.launch {
-            acceptProcessed(jpegBytes, frontProcessor, FingerprintSide.FRONT, generation)
-        }
-    }
-
-    /** Camera bytes for the BACK; stale deliveries are structurally inert. */
-    fun deliverBackJpeg(jpegBytes: ByteArray) {
-        if (captureSession.state != dev.hryshyn.remanence.scan.ScanSessionState.AWAITING_BACK) return
-        val generation = deliveryGeneration
-        viewModelScope.launch {
-            val accepted = acceptProcessed(jpegBytes, backProcessor, FingerprintSide.BACK, generation)
+            val accepted = acceptProcessed(jpegBytes, frontProcessor, generation)
             if (accepted && captureSession.readyForMatching) evaluateMatch()
         }
     }
@@ -284,20 +258,14 @@ class ScanViewModel internal constructor(
      * FIX-STATE-10: the ONLY authority for whether a resumed pipeline result
      * may mutate anything. Checked BEFORE every mutation - a stale outcome is
      * dropped on the floor without touching queuedStill, the session, the
-     * attempt controllers, or match state.
+     * attempt controller, or match state.
      */
     private fun deliveryIsCurrent(
         generation: Long,
-        side: FingerprintSide,
     ): Boolean {
         if (generation != deliveryGeneration) return false
-        val expected = if (side == FingerprintSide.FRONT) {
-            dev.hryshyn.remanence.scan.ScanSessionState.AWAITING_FRONT
-        } else {
-            dev.hryshyn.remanence.scan.ScanSessionState.AWAITING_BACK
-        }
-        if (captureSession.state != expected) return false
-        return attemptFor(side).hasActiveAttempt
+        if (captureSession.state != dev.hryshyn.remanence.scan.ScanSessionState.AWAITING_FRONT) return false
+        return frontAttempt.hasActiveAttempt
     }
 
     /**
@@ -308,10 +276,9 @@ class ScanViewModel internal constructor(
     private suspend fun acceptProcessed(
         jpegBytes: ByteArray,
         processor: dev.hryshyn.remanence.capture.StillProcessor,
-        side: FingerprintSide,
         generation: Long,
     ): Boolean {
-        val attempt = attemptFor(side)
+        val attempt = frontAttempt
         if (!attempt.markProcessing()) return false
         return try {
             val processed =
@@ -319,7 +286,7 @@ class ScanViewModel internal constructor(
 
             // FIX-STATE-10: BEFORE ANY MUTATION - a reset/new session during
             // processing makes this whole outcome disappear without a trace.
-            if (!deliveryIsCurrent(generation, side)) return false
+            if (!deliveryIsCurrent(generation)) return false
 
             when (processed) {
                 is ProcessedStill.Rejected -> {
@@ -328,23 +295,22 @@ class ScanViewModel internal constructor(
                 }
                 is ProcessedStill.Accepted -> {
                     queuedStill.set(
-                        ScannedSide(processed.profileId, side, processed.serializedBytes),
+                        ScannedSide(processed.profileId, processed.serializedBytes),
                     )
-                    if (side == FingerprintSide.FRONT) captureSession.captureFront()
-                    else captureSession.captureBack()
+                    captureSession.captureFront()
                     attempt.accept()
                     true
                 }
             }
         } catch (cancelled: CancellationException) {
             // Teardown touches state only while this delivery still owns it.
-            if (deliveryIsCurrent(generation, side)) {
+            if (deliveryIsCurrent(generation)) {
                 queuedStill.set(null)
                 attempt.cancelActiveAttempt()
             }
             throw cancelled
         } catch (failure: Exception) {
-            if (deliveryIsCurrent(generation, side)) {
+            if (deliveryIsCurrent(generation)) {
                 queuedStill.set(null)
                 attempt.fail(failure.message ?: "capture failed")
             }
@@ -355,13 +321,9 @@ class ScanViewModel internal constructor(
     /** Module-internal view of THE delivery generation (tests only). */
     internal fun deliveryGenerationForDiagnostics(): Long = deliveryGeneration
 
-    /** Explicit Retake after Rejected/Failed on either side. */
+    /** Explicit Retake after Rejected/Failed on the FRONT. */
     fun retakeFront() {
         runCatchingRetake(frontAttempt)
-    }
-
-    fun retakeBack() {
-        runCatchingRetake(backAttempt)
     }
 
     private fun runCatchingRetake(attempt: CaptureAttemptController) {
@@ -385,7 +347,6 @@ class ScanViewModel internal constructor(
         // fresh flow - active attempts are cancelled cleanly and stale
         // terminal callbacks are structurally inert afterwards.
         frontAttempt.restartCapture()
-        backAttempt.restartCapture()
         queuedStill.set(null)
         captureSession.reset()
         _matchState.value = ScanMatchUiState.AwaitingCapture
@@ -504,9 +465,8 @@ class ScanViewModel internal constructor(
 
     private fun evaluateMatch() {
         val sessionFront = captureSession.front ?: return
-        // FRONT-only: captureSession.back is still required by legacy capture state
-        // (subsequent slice will make it FRONT-only), but matching is FRONT-only.
-        val sessionBack = captureSession.back ?: return
+        // M2-F0-07 FRONT-only: one FRONT fingerprint drives candidate
+        // matching immediately; missing/multiple matches stay fail-closed.
         _matchState.value = ScanMatchUiState.Matching
         val generation = ++matchGeneration
         viewModelScope.launch {

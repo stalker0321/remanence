@@ -8,7 +8,6 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import dev.hryshyn.remanence.capture.CaptureAttemptController
 import dev.hryshyn.remanence.capture.CaptureAttemptPhase
 import dev.hryshyn.remanence.capture.CapturePermissionStep
 import dev.hryshyn.remanence.capture.ProcessedStill
@@ -290,9 +289,6 @@ class ScanReadinessTest {
                 ScanGrantManager(clockMillis = { 1_000L }),
             ),
             frontProcessor = FixedProcessor(frontBytes),
-            // BACK remains a deferred capture state transition; no second
-            // fingerprint is part of this incoming-readiness fixture.
-            backProcessor = CaptureOnlyBackProcessor(),
             candidateIndexProvider = { owner ->
                 if (!includeCandidate || owner != ownerA) return@ScanViewModel ScanCandidateIndex.EMPTY
                 ScanCandidateIndex(
@@ -361,16 +357,12 @@ class ScanReadinessTest {
     }
 
     private fun captureMatchingPair(vm: ScanViewModel) {
-        listOf(vm.frontAttempt, vm.backAttempt).forEach { controller: CaptureAttemptController ->
-            controller.onPermissionResult(granted = true, canAskAgain = false)
-            assertEquals(CaptureAttemptPhase.Binding, controller.phase)
-            controller.onPreviewBound()
-            assertEquals(CapturePermissionStep.Granted, controller.permission)
-        }
+        vm.frontAttempt.onPermissionResult(granted = true, canAskAgain = false)
+        assertEquals(CaptureAttemptPhase.Binding, vm.frontAttempt.phase)
+        vm.frontAttempt.onPreviewBound()
+        assertEquals(CapturePermissionStep.Granted, vm.frontAttempt.permission)
         assertTrue(vm.beginFrontCapture())
         vm.deliverFrontJpeg("front".toByteArray())
-        assertTrue(vm.beginBackCapture())
-        vm.deliverBackJpeg("back".toByteArray())
         awaitCondition("match left Matching") { vm.matchState.value !is ScanMatchUiState.Matching }
     }
 
@@ -385,12 +377,6 @@ class ScanReadinessTest {
     private class FixedProcessor(private val serializedBytes: ByteArray) : StillProcessor {
         override fun process(jpegBytes: ByteArray): ProcessedStill =
             ProcessedStill.Accepted(RecognitionProfile.mvpOrbV1().profileId, serializedBytes)
-    }
-
-    /** Deferred BACK capture marker; incoming matching consumes FRONT only. */
-    private class CaptureOnlyBackProcessor : StillProcessor {
-        override fun process(jpegBytes: ByteArray): ProcessedStill =
-            ProcessedStill.Accepted(RecognitionProfile.mvpOrbV1().profileId, byteArrayOf(1))
     }
 
     private class NoPersistence : SealedFingerprintPersistence {

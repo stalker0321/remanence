@@ -318,7 +318,6 @@ class CreateRescanOpenFlowTest {
             grantIssuer = { id -> issued += id; "grant-for-$id" },
         )
         val fp = dev.hryshyn.remanence.core.recognition.FingerprintCodec.parse(syntheticFingerprint(11, RecognitionSide.FRONT))
-        val bp = dev.hryshyn.remanence.core.recognition.FingerprintCodec.parse(syntheticFingerprint(22, RecognitionSide.BACK))
 
         val result = engine.run(fp, listOf(IndexedCandidate(capsuleUuid, fp, false)))
 

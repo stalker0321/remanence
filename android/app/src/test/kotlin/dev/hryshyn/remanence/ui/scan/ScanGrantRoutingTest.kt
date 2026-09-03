@@ -6,7 +6,6 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import dev.hryshyn.remanence.AppContainer
 import dev.hryshyn.remanence.auth.SoftwareKekBoundary
-import dev.hryshyn.remanence.capture.CaptureAttemptController
 import dev.hryshyn.remanence.capture.CaptureAttemptPhase
 import dev.hryshyn.remanence.capture.CapturePermissionStep
 import dev.hryshyn.remanence.capture.ProcessedStill
@@ -161,19 +160,13 @@ class ScanGrantRoutingTest {
         }
     }
 
-    /** Accepts the seeded FRONT fingerprint; capture BACK is state-only. */
+    /** Accepts the seeded FRONT fingerprint. */
     private class FixedProcessor(
         private val serializedBytes: ByteArray,
     ) : StillProcessor {
         private val profile = RecognitionProfile.mvpOrbV1()
         override fun process(jpegBytes: ByteArray): ProcessedStill =
             ProcessedStill.Accepted(profile.profileId, serializedBytes)
-    }
-
-    /** Deferred BACK capture marker; grants match exactly one FRONT payload. */
-    private class CaptureOnlyBackProcessor : StillProcessor {
-        override fun process(jpegBytes: ByteArray): ProcessedStill =
-            ProcessedStill.Accepted(RecognitionProfile.mvpOrbV1().profileId, byteArrayOf(1))
     }
 
     private fun store() = EncryptedFingerprintStore(
@@ -284,29 +277,25 @@ class ScanGrantRoutingTest {
             candidateIndexProvider = candidateIndexProvider,
             incomingPresentationPreparation = null,
             frontProcessor = FixedProcessor(syntheticFingerprint(11)),
-            backProcessor = CaptureOnlyBackProcessor(),
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
         )
 
-    /** Drives THE authoritative capture controllers exactly as the surface does. */
+    /** Drives THE authoritative capture controller exactly as the surface does. */
     private fun readyCameras(vm: ScanViewModel) {
-        listOf(vm.frontAttempt, vm.backAttempt).forEach { controller: CaptureAttemptController ->
-            if (controller.permission != CapturePermissionStep.Granted) {
-                controller.onPermissionResult(granted = true, canAskAgain = false)
-            }
-            assertEquals(CaptureAttemptPhase.Binding, controller.phase)
-            controller.onPreviewBound()
-            assertEquals(CapturePermissionStep.Granted, controller.permission)
+        val controller = vm.frontAttempt
+        if (controller.permission != CapturePermissionStep.Granted) {
+            controller.onPermissionResult(granted = true, canAskAgain = false)
         }
+        assertEquals(CaptureAttemptPhase.Binding, controller.phase)
+        controller.onPreviewBound()
+        assertEquals(CapturePermissionStep.Granted, controller.permission)
     }
 
     private fun captureMatchingPair(vm: ScanViewModel) {
         readyCameras(vm)
         assertTrue(vm.beginFrontCapture())
         vm.deliverFrontJpeg("jpeg-front".toByteArray())
-        assertTrue(vm.beginBackCapture())
-        vm.deliverBackJpeg("jpeg-back".toByteArray())
     }
 
     private fun ownTrustedSenderKeys(): TrustedSenderKeyStore = DirectorySenderKeyStore(
@@ -398,8 +387,6 @@ class ScanGrantRoutingTest {
             readyCameras(scanVm)
             assertTrue(scanVm.beginFrontCapture())
             scanVm.deliverFrontJpeg("jpeg-front".toByteArray())
-            assertTrue(scanVm.beginBackCapture())
-            scanVm.deliverBackJpeg("jpeg-back".toByteArray())
 
             // Matching hops through the real index/DAO executors; await THE
             // verified terminal outcome instead of racing it.

@@ -9,7 +9,6 @@ import dev.hryshyn.remanence.capture.CapturePermissionStep
 import dev.hryshyn.remanence.capture.ProcessedStill
 import dev.hryshyn.remanence.capture.StillProcessor
 import dev.hryshyn.remanence.scan.ScanSessionState
-import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.runBlocking
@@ -20,7 +19,6 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -30,15 +28,14 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
-import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.QualityReason
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 
 /**
- * FIX-STATE-05 parity regression: the scan flow satisfies the SAME capture
- * contract as create - exceptions never hang, repeated rejections are
- * retriable, matching runs only after an accepted pair, and reset wipes the
- * pair AND invalidates in-flight work so stale callbacks are inert.
+ * M2-F0-07 parity regression: the FRONT-only scan flow satisfies the SAME
+ * capture contract as create - exceptions never hang, repeated rejections are
+ * retriable, matching runs only after one accepted FRONT, and reset wipes the
+ * FRONT AND invalidates in-flight work so stale callbacks are inert.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -64,7 +61,7 @@ class ScanCaptureParityTest {
         if (::database.isInitialized) database.close()
     }
 
-    /** Scripted per-side outcomes; one entry consumes one delivered still. */
+    /** Scripted outcomes; one entry consumes one delivered still. */
     private class ScriptedProcessor(
         vararg script: Any,
     ) : StillProcessor {
@@ -84,7 +81,7 @@ class ScanCaptureParityTest {
         }
     }
 
-    private fun synthetic(side: FingerprintSide, seed: Long = 7L): ProcessedStill.Accepted {
+    private fun synthetic(seed: Long = 7L): ProcessedStill.Accepted {
         val profile = RecognitionProfile.mvpOrbV1()
         val keypoints = List(64) {
             dev.hryshyn.remanence.core.recognition.FingerprintKeypoint(
@@ -137,7 +134,7 @@ class ScanCaptureParityTest {
         ) = Unit
     }
 
-    private fun viewModel(front: StillProcessor, back: StillProcessor): ScanViewModel = ScanViewModel(
+    private fun viewModel(front: StillProcessor): ScanViewModel = ScanViewModel(
         persistence = NoPersistence(),
         database = database,
         profile = RecognitionProfile.mvpOrbV1(),
@@ -150,7 +147,6 @@ class ScanCaptureParityTest {
             dev.hryshyn.remanence.core.recognition.ScanGrantManager(clockMillis = { 0L }),
         ),
         frontProcessor = front,
-        backProcessor = back,
         candidateIndexProvider = { ScanCandidateIndex.EMPTY },
         incomingPresentationPreparation = null,
         cpuDispatcher = testDispatcher,
@@ -174,10 +170,9 @@ class ScanCaptureParityTest {
         val front = ScriptedProcessor(
             ProcessedStill.Rejected(rejection),
             ProcessedStill.Rejected(rejection),
-            synthetic(FingerprintSide.FRONT),
+            synthetic(),
         )
-        val back = ScriptedProcessor(synthetic(FingerprintSide.BACK))
-        val vm = viewModel(front, back)
+        val vm = viewModel(front)
 
         bind(vm.frontAttempt)
 
@@ -203,7 +198,8 @@ class ScanCaptureParityTest {
         vm.deliverFrontJpeg("c".toByteArray())
 
         assertEquals(CaptureAttemptPhase.Accepted, vm.frontAttempt.phase)
-        assertEquals(ScanSessionState.AWAITING_BACK, vm.captureSession.state)
+        assertEquals(ScanSessionState.READY_FOR_MATCHING, vm.captureSession.state)
+        assertEquals(ScanMatchUiState.RecaptureGuidance(failedAttempts = 1), vm.matchState.value)
         assertEquals(3, front.calls.size)
         Unit
     }
@@ -213,12 +209,10 @@ class ScanCaptureParityTest {
     // ------------------------------------------------------------------
 
     @Test
-    fun processorExceptionShowsFailedThenRetryAcceptsIntoBackThenMatching() = runBlocking {
-        val front = ScriptedProcessor("orb exploded", synthetic(FingerprintSide.FRONT))
-        val back = ScriptedProcessor(synthetic(FingerprintSide.BACK))
-        val vm = viewModel(front, back)
+    fun processorExceptionShowsFailedThenRetryAcceptsIntoMatching() = runBlocking {
+        val front = ScriptedProcessor("orb exploded", synthetic())
+        val vm = viewModel(front)
         bind(vm.frontAttempt)
-        bind(vm.backAttempt)
 
         assertTrue(vm.beginFrontCapture())
         vm.deliverFrontJpeg("boom".toByteArray())
@@ -232,86 +226,58 @@ class ScanCaptureParityTest {
         assertTrue(vm.beginFrontCapture())
         vm.deliverFrontJpeg("good".toByteArray())
         assertEquals(CaptureAttemptPhase.Accepted, vm.frontAttempt.phase)
-        assertEquals(ScanSessionState.AWAITING_BACK, vm.captureSession.state)
 
-        assertTrue(vm.beginBackCapture())
-        vm.deliverBackJpeg("back".toByteArray())
-
-        // Accepted pair => matching actually ran (empty index => guidance).
+        // Accepted FRONT => matching actually ran (empty index => guidance).
         assertEquals(ScanSessionState.READY_FOR_MATCHING, vm.captureSession.state)
         assertEquals(ScanMatchUiState.RecaptureGuidance(failedAttempts = 1), vm.matchState.value)
         Unit
     }
 
     // ------------------------------------------------------------------
-    // Ordering guards: wrong-side deliveries are inert.
+    // Reset wipes the FRONT and invalidates in-flight work.
     // ------------------------------------------------------------------
 
     @Test
-    fun backDeliveryBeforeAnAcceptedFrontIsInert() = runBlocking {
-        val front = ScriptedProcessor(synthetic(FingerprintSide.FRONT))
-        val back = ScriptedProcessor(synthetic(FingerprintSide.BACK))
-        val vm = viewModel(front, back)
+    fun resetWipesFrontCancelsActiveAttemptsAndStaleDeliveryIsInert() = runBlocking {
+        val front = ScriptedProcessor(synthetic())
+        val vm = viewModel(front)
         bind(vm.frontAttempt)
-        bind(vm.backAttempt)
-
-        vm.deliverBackJpeg("stray-back".toByteArray())
-
-        assertEquals(ScanSessionState.AWAITING_FRONT, vm.captureSession.state)
-        assertEquals(0, back.calls.size)
-        // The BACK controller was bound but never left Ready.
-        assertEquals(dev.hryshyn.remanence.capture.CaptureAttemptPhase.Ready, vm.backAttempt.phase)
-        Unit
-    }
-
-    // ------------------------------------------------------------------
-    // Reset wipes the pair and invalidates in-flight work.
-    // ------------------------------------------------------------------
-
-    @Test
-    fun resetWipesPairCancelsActiveAttemptsAndStaleDeliveryIsInert() = runBlocking {
-        val front = ScriptedProcessor(synthetic(FingerprintSide.FRONT))
-        val back = ScriptedProcessor(synthetic(FingerprintSide.BACK))
-        val vm = viewModel(front, back)
-        bind(vm.frontAttempt)
-        bind(vm.backAttempt)
 
         assertTrue(vm.beginFrontCapture())
         vm.deliverFrontJpeg("front".toByteArray())
-        assertTrue(vm.beginBackCapture())
-        vm.deliverBackJpeg("back".toByteArray())
         assertEquals(ScanMatchUiState.RecaptureGuidance(failedAttempts = 1), vm.matchState.value)
 
         // "Start over": whole flow returns to FRONT.
         vm.resetSession()
         assertEquals(ScanSessionState.AWAITING_FRONT, vm.captureSession.state)
         assertNull(vm.captureSession.front)
-        assertNull(vm.captureSession.back)
         assertEquals(ScanMatchUiState.AwaitingCapture, vm.matchState.value)
 
-        // A stale BACK delivery for the wiped session must do nothing at all.
-        vm.deliverBackJpeg("stale".toByteArray())
+        // A stale FRONT delivery for the wiped session must do nothing at all.
+        // No active attempt exists, so the processor is never consulted again.
+        vm.deliverFrontJpeg("stale".toByteArray())
         assertEquals(ScanSessionState.AWAITING_FRONT, vm.captureSession.state)
         assertEquals(ScanMatchUiState.AwaitingCapture, vm.matchState.value)
-        assertEquals(1, back.calls.size)
-        assertFalse(vm.beginBackCapture())
+        assertEquals(1, front.calls.size)
+        // After reset without rebind, a new shutter cannot begin until the
+        // surface rebinds: restartCapture left the controller in Binding.
+        assertFalse(vm.beginFrontCapture())
+        assertEquals(dev.hryshyn.remanence.capture.CaptureAttemptPhase.Binding, vm.frontAttempt.phase)
         Unit
     }
 
     @Test
     fun beginSessionAlsoResetsAuthoritativeAttempts() = runBlocking {
-        val front = ScriptedProcessor(synthetic(FingerprintSide.FRONT))
-        val back = ScriptedProcessor(synthetic(FingerprintSide.BACK))
-        val vm = viewModel(front, back)
+        val front = ScriptedProcessor(synthetic())
+        val vm = viewModel(front)
         vm.beginSession(epoch = 1L)
         bind(vm.frontAttempt)
         assertTrue(vm.beginFrontCapture())
-        assertNotNull(vm.frontAttempt.phase)
+        assertTrue(vm.frontAttempt.phase != null)
 
         vm.beginSession(epoch = 2L)
 
         assertNull(vm.frontAttempt.phase)
-        assertNull(vm.backAttempt.phase)
         assertEquals(ScanSessionState.AWAITING_FRONT, vm.captureSession.state)
         Unit
     }

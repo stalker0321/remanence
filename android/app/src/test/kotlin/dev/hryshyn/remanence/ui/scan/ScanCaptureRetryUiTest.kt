@@ -34,7 +34,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
-import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.QualityReason
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 
@@ -108,7 +107,7 @@ class ScanCaptureRetryUiTest {
     }
 
     /** Real serialized fingerprint so an accepted still advances the session. */
-    private fun synthetic(side: FingerprintSide): ProcessedStill.Accepted {
+    private fun synthetic(): ProcessedStill.Accepted {
         val profile = RecognitionProfile.mvpOrbV1()
         val keypoints = List(64) {
             dev.hryshyn.remanence.core.recognition.FingerprintKeypoint(
@@ -144,9 +143,8 @@ class ScanCaptureRetryUiTest {
             ProcessedStill.Rejected(setOf(QualityReason.TOO_BLURRY)),
             ProcessedStill.Rejected(setOf(QualityReason.TOO_BLURRY)),
             "orb exploded",
-            synthetic(FingerprintSide.FRONT),
+            synthetic(),
         )
-        val back = ScriptedProcessor(synthetic(FingerprintSide.BACK))
         val vm = ScanViewModel(
             persistence = NoPersistence(),
             database = database,
@@ -160,7 +158,6 @@ class ScanCaptureRetryUiTest {
                 dev.hryshyn.remanence.core.recognition.ScanGrantManager(clockMillis = { 0L }),
             ),
             frontProcessor = front,
-            backProcessor = back,
             candidateIndexProvider = { ScanCandidateIndex.EMPTY },
             incomingPresentationPreparation = null,
             cpuDispatcher = testDispatcher,
@@ -246,7 +243,7 @@ class ScanCaptureRetryUiTest {
         composeRule.onNodeWithTag("capture_failed_message").assertIsDisplayed()
         assertTrue(vm.frontAttempt.phase is CaptureAttemptPhase.Failed)
 
-        // Retry after failure is accepted: the BACK surface mounts.
+        // Retry after failure is accepted: one FRONT runs matching immediately.
         composeRule.onNodeWithTag("capture_retake_front").performClick()
         composeRule.waitForIdle()
         readyCamera()
@@ -257,7 +254,8 @@ class ScanCaptureRetryUiTest {
         val dbg = "phase=" + vm.frontAttempt.phase +
             " session=" + vm.captureSession.state +
             " binds=" + bindCount
-        assertEquals(dbg, dev.hryshyn.remanence.scan.ScanSessionState.AWAITING_BACK, vm.captureSession.state)
+        assertEquals(dbg, dev.hryshyn.remanence.scan.ScanSessionState.READY_FOR_MATCHING, vm.captureSession.state)
+        assertEquals(dbg, ScanMatchUiState.RecaptureGuidance(failedAttempts = 1), vm.matchState.value)
         assertTrue(bindCount >= 4)
     }
 }

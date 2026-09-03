@@ -10,7 +10,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import dev.hryshyn.remanence.capture.ProcessedStill
-import dev.hryshyn.remanence.capture.CaptureDiagnosticStage
 import dev.hryshyn.remanence.core.recognition.CaptureDecoder
 import dev.hryshyn.remanence.core.recognition.FingerprintCodec
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
@@ -69,32 +68,6 @@ class RealStillFingerprintProcessorTest {
         assertRejectedWith(blurry, QualityReason.TOO_BLURRY)
         assertRejectedWith(dark, QualityReason.TOO_DARK)
         assertRejectedWith(glare, QualityReason.GLARE_EXCESSIVE)
-    }
-
-    @Test
-    fun debugBackRejectionCarriesOnlyRedactedQualityDiagnostic() {
-        val result = RealStillFingerprintProcessor(
-            profile = profile,
-            side = FingerprintSide.BACK,
-            contourDetector = ::emptyContours,
-        ).process(patternJpeg(blur = true))
-
-        assertTrue(result is ProcessedStill.Rejected)
-        val rejection = result as ProcessedStill.Rejected
-        val diagnostic = rejection.diagnostic
-        assertTrue(diagnostic != null)
-        assertTrue(QualityReason.TOO_BLURRY in rejection.reasons)
-        assertTrue(diagnostic!!.side == FingerprintSide.BACK)
-        assertTrue(diagnostic.stage == CaptureDiagnosticStage.QUALITY)
-        assertTrue(diagnostic.laplacianThreshold == 55.0)
-        assertTrue(diagnostic.laplacianVariance != null)
-        assertTrue(diagnostic.usedGuideFallback == true)
-        assertTrue(diagnostic.warpedWidth == 1600)
-        assertTrue(diagnostic.warpedHeight != null)
-        assertTrue(diagnostic.orbKeypoints == null)
-        assertTrue(diagnostic.summary().contains("side=BACK"))
-        assertTrue(diagnostic.summary().contains("threshold=55.0000"))
-        assertTrue(!diagnostic.summary().contains("jpeg"))
     }
 
     private fun processor(detector: (IntArray, Int, Int) -> List<QuadCandidate>) =

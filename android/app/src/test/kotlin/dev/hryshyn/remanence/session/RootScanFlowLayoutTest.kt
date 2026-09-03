@@ -120,7 +120,6 @@ class RootScanFlowLayoutTest {
                 dev.hryshyn.remanence.core.recognition.ScanGrantManager(clockMillis = { 0L }),
             ),
             frontProcessor = RejectingProcessor(),
-            backProcessor = RejectingProcessor(),
             candidateIndexProvider = { ScanCandidateIndex.EMPTY },
             incomingPresentationPreparation = null,
             cpuDispatcher = testDispatcher,

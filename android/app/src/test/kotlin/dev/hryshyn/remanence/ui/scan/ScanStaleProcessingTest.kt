@@ -25,17 +25,16 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
-import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 
 /**
- * FIX-STATE-10 regression: a processing result that resumes AFTER
+ * FIX-STATE-10 regression: a FRONT processing result that resumes AFTER
  * resetSession()/beginSession() is fully inert - it can neither write the
  * queued still, nor advance captureSession out of AWAITING_FRONT, nor start
  * matching or grants. Deterministic via a paused StandardTestDispatcher: the
  * pipeline is literally QUEUED work until the test advances it.
  */
-private fun scanSynthetic(side: FingerprintSide): ProcessedStill.Accepted {
+private fun scanSynthetic(): ProcessedStill.Accepted {
     val profile = RecognitionProfile.mvpOrbV1()
     val keypoints = List(64) {
         dev.hryshyn.remanence.core.recognition.FingerprintKeypoint(
@@ -91,8 +90,8 @@ class ScanStaleProcessingTest {
         if (::database.isInitialized) database.close()
     }
 
-    private class Accepting(private val side: FingerprintSide) : StillProcessor {
-        override fun process(jpegBytes: ByteArray): ProcessedStill = scanSynthetic(side)
+    private class Accepting : StillProcessor {
+        override fun process(jpegBytes: ByteArray): ProcessedStill = scanSynthetic()
     }
 
 
@@ -131,8 +130,7 @@ class ScanStaleProcessingTest {
         presentationGrants = dev.hryshyn.remanence.ui.capsule.PresentationGrantAuthority(
             dev.hryshyn.remanence.core.recognition.ScanGrantManager(clockMillis = { 0L }),
         ),
-        frontProcessor = Accepting(FingerprintSide.FRONT),
-        backProcessor = Accepting(FingerprintSide.BACK),
+        frontProcessor = Accepting(),
         candidateIndexProvider = { ScanCandidateIndex.EMPTY },
         incomingPresentationPreparation = null,
         cpuDispatcher = cpuDispatcher,
@@ -151,37 +149,23 @@ class ScanStaleProcessingTest {
     }
 
     /**
-     * THE shared contract for both sides: begin a capture, park its pipeline
+     * THE FRONT-only contract: begin a FRONT capture, park its pipeline
      * mid-processing, reset/re-enter the flow, finish the OLD work - and the
      * fresh session proves untouched.
      */
-    private fun staleOutcomeIsInert(side: FingerprintSide, invalidate: (ScanViewModel) -> Unit) {
+    private fun staleOutcomeIsInert(invalidate: (ScanViewModel) -> Unit) {
         val vm = newViewModel()
         bind(vm.frontAttempt)
-        bind(vm.backAttempt)
 
-        // Reach the awaited state for this side legally.
-        if (side == FingerprintSide.BACK) {
-            assertTrue(vm.beginFrontCapture())
-            vm.deliverFrontJpeg("front".toByteArray())
-            cpuDispatcher.scheduler.advanceUntilIdle() // completes within THIS generation
-            assertEquals(ScanSessionState.AWAITING_BACK, vm.captureSession.state)
-        }
-
-        // Begin the capture whose processing will be parked.
-        val began = if (side == FingerprintSide.FRONT) vm.beginFrontCapture() else vm.beginBackCapture()
-        assertTrue(began)
+        // Begin the FRONT capture whose processing will be parked.
+        assertTrue(vm.beginFrontCapture())
         val deliveryGenerationBeforeReset = vm.deliveryGenerationForDiagnostics()
 
-        if (side == FingerprintSide.FRONT) {
-            vm.deliverFrontJpeg("stale-front".toByteArray())
-        } else {
-            vm.deliverBackJpeg("stale-back".toByteArray())
-        }
+        vm.deliverFrontJpeg("stale-front".toByteArray())
         assertEquals(
             "processing must be parked mid-flight",
             CaptureAttemptPhase.Processing,
-            (if (side == FingerprintSide.FRONT) vm.frontAttempt else vm.backAttempt).phase,
+            vm.frontAttempt.phase,
         )
 
         // The user resets / re-enters while processing is still parked.
@@ -196,7 +180,6 @@ class ScanStaleProcessingTest {
         // ...and the fresh session is completely untouched.
         assertEquals(ScanSessionState.AWAITING_FRONT, vm.captureSession.state)
         assertNull(vm.captureSession.front)
-        assertNull(vm.captureSession.back)
         assertEquals(ScanMatchUiState.AwaitingCapture, vm.matchState.value)
         assertEquals(ScanTerminalState.Idle, vm.terminal.value)
 
@@ -206,19 +189,15 @@ class ScanStaleProcessingTest {
         assertTrue(vm.beginFrontCapture())
         vm.deliverFrontJpeg("fresh-front".toByteArray())
         cpuDispatcher.scheduler.advanceUntilIdle()
-        assertEquals(ScanSessionState.AWAITING_BACK, vm.captureSession.state)
+        assertEquals(ScanSessionState.READY_FOR_MATCHING, vm.captureSession.state)
         assertEquals(CaptureAttemptPhase.Accepted, vm.frontAttempt.phase)
     }
 
     @Test
     fun staleFrontProcessingAfterResetIsInert() =
-        staleOutcomeIsInert(FingerprintSide.FRONT) { it.resetSession() }
+        staleOutcomeIsInert { it.resetSession() }
 
     @Test
     fun staleFrontProcessingAfterNewEpochBeginSessionIsInert() =
-        staleOutcomeIsInert(FingerprintSide.FRONT) { it.beginSession(epoch = 2L) }
-
-    @Test
-    fun staleBackProcessingAfterResetIsInertAndNeverStartsMatching() =
-        staleOutcomeIsInert(FingerprintSide.BACK) { it.resetSession() }
+        staleOutcomeIsInert { it.beginSession(epoch = 2L) }
 }

@@ -226,9 +226,6 @@ class IncomingPresentationPreparationTest {
             },
             presentationGrants = grants,
             frontProcessor = FixedScanProcessor(front),
-            // BACK remains a deferred camera-session state transition; this
-            // fixture intentionally carries no second fingerprint payload.
-            backProcessor = CaptureOnlyBackProcessor(),
             candidateIndexProvider = { provider.load(it) },
             incomingPresentationPreparation = preparation(),
             cpuDispatcher = testDispatcher,
@@ -239,8 +236,6 @@ class IncomingPresentationPreparationTest {
             readyCameras(scan)
             check(scan.beginFrontCapture())
             scan.deliverFrontJpeg("front".toByteArray())
-            check(scan.beginBackCapture())
-            scan.deliverBackJpeg("back".toByteArray())
 
             val granted = scan.terminal
                 .filterIsInstance<ScanTerminalState.Granted>()
@@ -412,19 +407,11 @@ class IncomingPresentationPreparationTest {
             ProcessedStill.Accepted(RecognitionProfile.mvpOrbV1().profileId, serializedBytes)
     }
 
-    /** Deferred BACK capture marker; no incoming fingerprint is produced. */
-    private class CaptureOnlyBackProcessor : StillProcessor {
-        override fun process(jpegBytes: ByteArray): ProcessedStill =
-            ProcessedStill.Accepted(RecognitionProfile.mvpOrbV1().profileId, byteArrayOf(1))
-    }
-
     private fun readyCameras(scan: ScanViewModel) {
-        listOf(scan.frontAttempt, scan.backAttempt).forEach { controller: CaptureAttemptController ->
-            controller.onPermissionResult(granted = true, canAskAgain = false)
-            assertEquals(CaptureAttemptPhase.Binding, controller.phase)
-            controller.onPreviewBound()
-            assertEquals(CapturePermissionStep.Granted, controller.permission)
-        }
+        scan.frontAttempt.onPermissionResult(granted = true, canAskAgain = false)
+        assertEquals(CaptureAttemptPhase.Binding, scan.frontAttempt.phase)
+        scan.frontAttempt.onPreviewBound()
+        assertEquals(CapturePermissionStep.Granted, scan.frontAttempt.permission)
     }
 
     private fun installFixture(fixture: Fixture) = runBlocking {

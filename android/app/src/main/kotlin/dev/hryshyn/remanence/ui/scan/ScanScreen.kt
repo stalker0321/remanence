@@ -25,14 +25,14 @@ import dev.hryshyn.remanence.scan.ScanSessionState
 import dev.hryshyn.remanence.sync.IncomingAcceptanceDiagnostics
 
 /**
- * FIX-M1-007-12 / FIX-REVIEW-01: the production Scan surface. Entry renders
- * the honest capture flow - FRONT then BACK stills through the real ORB
- * pipeline - before any matching runs against the encrypted local index; the
- * ambiguity chooser shows only decrypted minimal hints; and a grant exists
- * only after the full crypto gate passes - manual selection included.
+ * M2-F0-07: the production Scan surface. Entry renders the honest FRONT-only
+ * capture flow - one FRONT still through the real ORB pipeline - before any
+ * matching runs against the encrypted local index; the ambiguity chooser
+ * shows only decrypted minimal hints; and a grant exists only after the full
+ * crypto gate passes - manual selection included.
  *
  * FIX-STATE-01/04: capture attempts render exclusively from the authoritative
- * controllers with visible Processing and real Retake recovery; the step
+ * controller with visible Processing and real Retake recovery; the step
  * content scrolls so errors and actions stay reachable on small phones.
  */
 @Composable
@@ -75,7 +75,7 @@ fun ScanScreen(
 
         when (val current = matchState) {
             is ScanMatchUiState.AwaitingCapture ->
-                CapturePair(viewModel, Modifier.fillMaxWidth(), adapterFactory, requestPermissionOnAttach)
+                FrontCapture(viewModel, Modifier.fillMaxWidth(), adapterFactory, requestPermissionOnAttach)
             is ScanMatchUiState.Matching -> Text("Matching...", modifier = Modifier.testTag("scan_matching"))
             is ScanMatchUiState.Accepted -> Text(
                 "Verified. Opening the capsule...",
@@ -101,10 +101,10 @@ fun ScanScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
             is ScanMatchUiState.RecaptureGuidance -> Column {
-                Text("No confident match. Recapture the front and back.", modifier = Modifier.testTag("scan_recapture"))
+                Text("No confident match. Recapture the front.", modifier = Modifier.testTag("scan_recapture"))
                 OutlinedButton(onClick = viewModel::resetSession) { Text("Start over") }
                 Spacer(Modifier.height(8.dp))
-                CapturePair(viewModel, Modifier.fillMaxWidth(), adapterFactory, requestPermissionOnAttach)
+                FrontCapture(viewModel, Modifier.fillMaxWidth(), adapterFactory, requestPermissionOnAttach)
             }
             is ScanMatchUiState.MaterialPending -> Text(
                 text = if (current.connected) {
@@ -120,9 +120,9 @@ fun ScanScreen(
     }
 }
 
-/** The side currently awaiting capture, rendered from its own controller. */
+/** The FRONT capture, rendered from its authoritative controller. */
 @Composable
-private fun CapturePair(
+private fun FrontCapture(
     viewModel: ScanViewModel,
     modifier: Modifier = Modifier,
     adapterFactory: (() -> dev.hryshyn.remanence.capture.StillCameraAdapter)? = null,
@@ -137,19 +137,6 @@ private fun CapturePair(
             onBeginAttempt = viewModel::beginFrontCapture,
             onDelivered = viewModel::deliverFrontJpeg,
             onRetake = viewModel::retakeFront,
-            modifier = modifier,
-            adapterFactory = adapterFactory,
-            requestPermissionOnAttach = requestPermissionOnAttach,
-        )
-
-        ScanSessionState.AWAITING_BACK -> CaptureAttemptSurface(
-            title = "prepared back",
-            controller = viewModel.backAttempt,
-            shutterTag = "capture_shutter_back",
-            retakeTag = "capture_retake_back",
-            onBeginAttempt = viewModel::beginBackCapture,
-            onDelivered = viewModel::deliverBackJpeg,
-            onRetake = viewModel::retakeBack,
             modifier = modifier,
             adapterFactory = adapterFactory,
             requestPermissionOnAttach = requestPermissionOnAttach,

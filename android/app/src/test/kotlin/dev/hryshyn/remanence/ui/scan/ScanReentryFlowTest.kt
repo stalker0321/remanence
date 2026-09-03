@@ -45,7 +45,6 @@ import dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.UserId
-import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 import dev.hryshyn.remanence.core.recognition.ScanGrantManager
@@ -107,7 +106,7 @@ class ScanReentryFlowTest {
         ownerUserIdProvider = { userUuid.toString() },
     )
 
-    private fun syntheticFingerprint(seed: Int, side: FingerprintSide): ByteArray {
+    private fun syntheticFingerprint(seed: Int): ByteArray {
         val profile = RecognitionProfile.mvpOrbV1()
         val keypoints = List(64) {
             dev.hryshyn.remanence.core.recognition.FingerprintKeypoint(
@@ -144,7 +143,7 @@ class ScanReentryFlowTest {
         store().persist(
             capsuleUuid.toString(), FingerprintOrigin.SENDER,
             RecognitionProfile.mvpOrbV1().profileId,
-            syntheticFingerprint(11, FingerprintSide.FRONT),
+            syntheticFingerprint(11),
         )
         val prepared = CapsulePublisher(testWrapper, testAlias).publish(
             CapsulePublishRequest(
@@ -160,7 +159,7 @@ class ScanReentryFlowTest {
                 photoWidthsPx = listOf(800, 800, 800),
                 photoHeightsPx = listOf(600, 600, 600),
                 noteUtf8 = null,
-                frontFingerprintBytes = syntheticFingerprint(11, FingerprintSide.FRONT),
+                frontFingerprintBytes = syntheticFingerprint(11),
                 signingKeyset = identity.signingPrivateHandle,
                 recipientEncryptionPublicKeyset =
                     TinkProtoKeysetFormat.parseKeysetWithoutSecret(identity.encryptionPublicKeyset),
@@ -203,23 +202,17 @@ class ScanReentryFlowTest {
         presentationGrants = presentationGrants,
         candidateIndexProvider = { ScanCandidateIndex.EMPTY },
         incomingPresentationPreparation = null,
-        frontProcessor = MatchingProcessor(syntheticFingerprint(11, FingerprintSide.FRONT)),
-        backProcessor = MatchingProcessor(syntheticFingerprint(22, FingerprintSide.BACK)),
+        frontProcessor = MatchingProcessor(syntheticFingerprint(11)),
         cpuDispatcher = testDispatcher,
         ioDispatcher = testDispatcher,
     )
 
-    /** FIX-STATE-01: production-shaped delivery through the authoritative controllers. */
+    /** FIX-STATE-01: production-shaped FRONT-only delivery through the authoritative controller. */
     private fun capturePairThroughRealDelivery(vm: ScanViewModel) {
-        listOf(vm.frontAttempt, vm.backAttempt).forEach {
-            it.onPermissionResult(granted = true, canAskAgain = false)
-            it.onPreviewBound()
-        }
+        vm.frontAttempt.onPermissionResult(granted = true, canAskAgain = false)
+        vm.frontAttempt.onPreviewBound()
         assertTrue(vm.beginFrontCapture())
         vm.deliverFrontJpeg("front".toByteArray())
-        awaitCondition { vm.captureSession.state == dev.hryshyn.remanence.scan.ScanSessionState.AWAITING_BACK }
-        assertTrue(vm.beginBackCapture())
-        vm.deliverBackJpeg("back".toByteArray())
     }
 
     /** The Room-backed match+verify chain completes off-thread; await it. */
@@ -236,7 +229,7 @@ class ScanReentryFlowTest {
         stagePublishedCapsule()
         val vm = scanViewModel()
 
-        // First session: FRONT then BACK, real matching over the real index.
+        // First session: FRONT once, real matching over the real index.
         assertEquals(ScanMatchUiState.AwaitingCapture, vm.matchState.value)
         capturePairThroughRealDelivery(vm)
         awaitCondition { vm.terminal.value is ScanTerminalState.Granted }
@@ -250,7 +243,6 @@ class ScanReentryFlowTest {
         assertEquals(ScanMatchUiState.AwaitingCapture, vm.matchState.value)
         assertEquals(dev.hryshyn.remanence.scan.ScanSessionState.AWAITING_FRONT, vm.captureSession.state)
         assertNull(vm.captureSession.front)
-        assertNull(vm.captureSession.back)
 
         // The old Granted can never reopen without a new scan: navigation to
         // its route lands on Home because no live access exists anymore.
@@ -278,7 +270,7 @@ class ScanReentryFlowTest {
 
         vm.beginSession(epoch = 1L)
 
-        assertEquals(dev.hryshyn.remanence.scan.ScanSessionState.AWAITING_BACK, vm.captureSession.state)
+        assertEquals(dev.hryshyn.remanence.scan.ScanSessionState.READY_FOR_MATCHING, vm.captureSession.state)
         database.close()
     }
 

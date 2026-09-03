@@ -13,9 +13,9 @@ import dev.hryshyn.remanence.core.recognition.CandidateOrigin
 sealed interface ScanMatchUiState {
 
     /**
-     * FIX-REVIEW-01: entry state of every fresh scan session - the FRONT
-     * camera is reachable BEFORE any matching exists, then BACK, and only a
-     * complete capture pair may advance to [Matching].
+     * M2-F0-07: entry state of every fresh scan session - the FRONT
+     * camera is reachable BEFORE any matching exists, and one accepted
+     * FRONT advances to [Matching].
      */
     data object AwaitingCapture : ScanMatchUiState
 

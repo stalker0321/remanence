@@ -498,13 +498,13 @@ class ScanGrantRoutingTest {
         )
 
         try {
-            // Keep the real owner-scoped OUTBOX row, but remove both Room
-            // recognition rows. The incoming candidate below must therefore
+            // Keep the real owner-scoped OUTBOX row, but remove the Room
+            // recognition row. The incoming candidate below must therefore
             // be rejected as a dual storage membership, not rebound to
             // INCOMING merely because it is the only valid recognition row.
             stagePublishedCapsule()
             assertEquals(
-                2,
+                1,
                 database.recognitionFingerprintDao().deleteByCapsuleIdAndOwner(
                     capsuleUuid.toString(),
                     userUuid.toString(),

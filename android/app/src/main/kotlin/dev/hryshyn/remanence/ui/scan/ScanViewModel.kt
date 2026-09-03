@@ -222,7 +222,7 @@ class ScanViewModel internal constructor(
         captureSession.reset()
         presentationGrants.clearAll()
         frontAttempt.reset()
-        queuedStill.set(null)
+        clearQueuedStill()
         _matchState.value = ScanMatchUiState.AwaitingCapture
         _terminal.value = ScanTerminalState.Idle
         _initializedEpoch.value = epoch
@@ -244,9 +244,12 @@ class ScanViewModel internal constructor(
         }
     }
 
-    /** Camera bytes for the FRONT; stale deliveries are structurally inert. */
+    /** Camera bytes for the FRONT; stale deliveries are wiped and inert. */
     fun deliverFrontJpeg(jpegBytes: ByteArray) {
-        if (captureSession.state != dev.hryshyn.remanence.scan.ScanSessionState.AWAITING_FRONT) return
+        if (captureSession.state != dev.hryshyn.remanence.scan.ScanSessionState.AWAITING_FRONT) {
+            jpegBytes.fill(0)
+            return
+        }
         val generation = deliveryGeneration
         viewModelScope.launch {
             val accepted = acceptProcessed(jpegBytes, frontProcessor, generation)
@@ -272,6 +275,10 @@ class ScanViewModel internal constructor(
      * FIX-STATE-01: a delivered still ALWAYS terminates its attempt -
      * Accepted, Rejected, or Failed - even when the ORB processor throws;
      * cancellation completes the lifecycle without publishing any result.
+     * M2-F0-07: delivery transfers the temporary JPEG to this flow; it is
+     * zeroized on every path (stale, rejected, success, exception,
+     * cancellation). A stale accepted fingerprint is zeroized instead of
+     * leaking; a current one is owned by the session handoff afterwards.
      */
     private suspend fun acceptProcessed(
         jpegBytes: ByteArray,
@@ -279,14 +286,20 @@ class ScanViewModel internal constructor(
         generation: Long,
     ): Boolean {
         val attempt = frontAttempt
-        if (!attempt.markProcessing()) return false
+        if (!attempt.markProcessing()) {
+            jpegBytes.fill(0)
+            return false
+        }
         return try {
             val processed =
                 withContext(cpuDispatcher) { processor.process(jpegBytes) }
 
             // FIX-STATE-10: BEFORE ANY MUTATION - a reset/new session during
             // processing makes this whole outcome disappear without a trace.
-            if (!deliveryIsCurrent(generation)) return false
+            if (!deliveryIsCurrent(generation)) {
+                (processed as? ProcessedStill.Accepted)?.serializedBytes?.fill(0)
+                return false
+            }
 
             when (processed) {
                 is ProcessedStill.Rejected -> {
@@ -297,7 +310,17 @@ class ScanViewModel internal constructor(
                     queuedStill.set(
                         ScannedSide(processed.profileId, processed.serializedBytes),
                     )
-                    captureSession.captureFront()
+                    try {
+                        captureSession.captureFront()
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        // The handoff already drained queuedStill on validation
+                        // failure (the session zeroized the same buffer); an
+                        // order violation leaves it staged, so drain-and-wipe.
+                        clearQueuedStill()
+                        throw failure
+                    }
                     attempt.accept()
                     true
                 }
@@ -305,17 +328,24 @@ class ScanViewModel internal constructor(
         } catch (cancelled: CancellationException) {
             // Teardown touches state only while this delivery still owns it.
             if (deliveryIsCurrent(generation)) {
-                queuedStill.set(null)
+                clearQueuedStill()
                 attempt.cancelActiveAttempt()
             }
             throw cancelled
         } catch (failure: Exception) {
             if (deliveryIsCurrent(generation)) {
-                queuedStill.set(null)
+                clearQueuedStill()
                 attempt.fail(failure.message ?: "capture failed")
             }
             false
+        } finally {
+            jpegBytes.fill(0)
         }
+    }
+
+    /** Zeroizes and releases any staged FRONT fingerprint (tests/teardown). */
+    private fun clearQueuedStill() {
+        queuedStill.getAndSet(null)?.serializedBytes?.fill(0)
     }
 
     /** Module-internal view of THE delivery generation (tests only). */
@@ -347,7 +377,7 @@ class ScanViewModel internal constructor(
         // fresh flow - active attempts are cancelled cleanly and stale
         // terminal callbacks are structurally inert afterwards.
         frontAttempt.restartCapture()
-        queuedStill.set(null)
+        clearQueuedStill()
         captureSession.reset()
         _matchState.value = ScanMatchUiState.AwaitingCapture
         _terminal.value = ScanTerminalState.Idle
@@ -936,6 +966,7 @@ class ScanViewModel internal constructor(
         cancelPendingWatcher()
         cancelIncomingSyncSchedule()
         unregisterSessionBoundary?.invoke()
+        clearQueuedStill()
         captureSession.consume()
         super.onCleared()
     }

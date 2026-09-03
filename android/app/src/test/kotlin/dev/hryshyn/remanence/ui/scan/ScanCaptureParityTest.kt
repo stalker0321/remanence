@@ -281,4 +281,112 @@ class ScanCaptureParityTest {
         assertEquals(ScanSessionState.AWAITING_FRONT, vm.captureSession.state)
         Unit
     }
+
+    // ------------------------------------------------------------------
+    // M2-F0-07: delivered JPEG bytes are zeroized on every path.
+    // ------------------------------------------------------------------
+
+    @Test
+    fun deliveredJpegIsZeroizedOnSuccessRejectionAndFailure() = runBlocking {
+        val rejection = setOf(QualityReason.TOO_BLURRY)
+        val accepted = synthetic()
+        val front = ScriptedProcessor(
+            ProcessedStill.Rejected(rejection),
+            "orb exploded",
+            accepted,
+        )
+        val vm = viewModel(front)
+        bind(vm.frontAttempt)
+
+        assertTrue(vm.beginFrontCapture())
+        val rejectedJpeg = ByteArray(8) { (it + 1).toByte() }
+        vm.deliverFrontJpeg(rejectedJpeg)
+        assertTrue(rejectedJpeg.all { it == 0.toByte() })
+        assertTrue(vm.frontAttempt.phase is CaptureAttemptPhase.Rejected)
+
+        vm.retakeFront()
+        vm.frontAttempt.onPreviewBound()
+        assertTrue(vm.beginFrontCapture())
+        val failedJpeg = ByteArray(8) { (it + 1).toByte() }
+        vm.deliverFrontJpeg(failedJpeg)
+        assertTrue(failedJpeg.all { it == 0.toByte() })
+        assertTrue(vm.frontAttempt.phase is CaptureAttemptPhase.Failed)
+
+        vm.retakeFront()
+        vm.frontAttempt.onPreviewBound()
+        assertTrue(vm.beginFrontCapture())
+        val successJpeg = ByteArray(8) { (it + 1).toByte() }
+        vm.deliverFrontJpeg(successJpeg)
+        assertTrue(successJpeg.all { it == 0.toByte() })
+        assertEquals(CaptureAttemptPhase.Accepted, vm.frontAttempt.phase)
+        assertEquals(ScanSessionState.READY_FOR_MATCHING, vm.captureSession.state)
+        Unit
+    }
+
+    @Test
+    fun staleAndUnadmittedDeliveriesZeroizeJpegWithoutConsultingProcessor() = runBlocking {
+        val accepted = synthetic()
+        val front = ScriptedProcessor(accepted)
+        val vm = viewModel(front)
+        bind(vm.frontAttempt)
+
+        // No active attempt: admission rejects, JPEG still wiped.
+        val unadmitted = ByteArray(8) { (it + 1).toByte() }
+        vm.deliverFrontJpeg(unadmitted)
+        assertTrue(unadmitted.all { it == 0.toByte() })
+        assertEquals(0, front.calls.size)
+
+        // Success moves the session out of AWAITING_FRONT.
+        assertTrue(vm.beginFrontCapture())
+        val successJpeg = ByteArray(8) { (it + 1).toByte() }
+        vm.deliverFrontJpeg(successJpeg)
+        assertTrue(successJpeg.all { it == 0.toByte() })
+        assertEquals(ScanSessionState.READY_FOR_MATCHING, vm.captureSession.state)
+
+        // Stale delivery for the finished session: wiped, processor untouched.
+        val stale = byteArrayOf(1, 2, 3, 4, 5, 6, 7, 8)
+        vm.deliverFrontJpeg(stale)
+        assertTrue(stale.all { it == 0.toByte() })
+        assertEquals(1, front.calls.size)
+        assertEquals(ScanSessionState.READY_FOR_MATCHING, vm.captureSession.state)
+        Unit
+    }
+
+    @Test
+    fun resetZeroizesAcceptedFingerprintAndStaleOutcomeWipesItsBytes() = runBlocking {
+        // Success path: reset wipes the session-owned FRONT buffer.
+        val accepted = synthetic()
+        val staged = accepted.serializedBytes
+        assertTrue(staged.isNotEmpty())
+        val vm = viewModel(ScriptedProcessor(accepted))
+        bind(vm.frontAttempt)
+        assertTrue(vm.beginFrontCapture())
+        vm.deliverFrontJpeg(ByteArray(8) { (it + 1).toByte() })
+        assertEquals(ScanSessionState.READY_FOR_MATCHING, vm.captureSession.state)
+
+        vm.resetSession()
+        assertTrue(staged.all { it == 0.toByte() })
+        assertNull(vm.captureSession.front)
+
+        // Reset during processing: the stale accepted outcome wipes its bytes
+        // instead of leaking, and the JPEG is wiped too.
+        val staleAccepted = synthetic()
+        val staleStaged = staleAccepted.serializedBytes
+        lateinit var racing: ScanViewModel
+        val racingProcessor = StillProcessor { _ ->
+            racing.resetSession()
+            staleAccepted
+        }
+        racing = viewModel(racingProcessor)
+        bind(racing.frontAttempt)
+        assertTrue(racing.beginFrontCapture())
+        val racingJpeg = ByteArray(8) { (it + 1).toByte() }
+        racing.deliverFrontJpeg(racingJpeg)
+        assertTrue(racingJpeg.all { it == 0.toByte() })
+        assertTrue(staleStaged.all { it == 0.toByte() })
+        assertEquals(ScanSessionState.AWAITING_FRONT, racing.captureSession.state)
+        assertNull(racing.captureSession.front)
+        assertEquals(ScanMatchUiState.AwaitingCapture, racing.matchState.value)
+        Unit
+    }
 }

@@ -160,13 +160,17 @@ class ScanGrantRoutingTest {
         }
     }
 
-    /** Accepts the seeded FRONT fingerprint. */
+    /**
+     * Accepts the seeded FRONT fingerprint. Each delivery transfers a fresh
+     * copy: the scan flow takes ownership of accepted bytes and zeroizes
+     * them on reset/consume, so a shared buffer could never serve two scans.
+     */
     private class FixedProcessor(
         private val serializedBytes: ByteArray,
     ) : StillProcessor {
         private val profile = RecognitionProfile.mvpOrbV1()
         override fun process(jpegBytes: ByteArray): ProcessedStill =
-            ProcessedStill.Accepted(profile.profileId, serializedBytes)
+            ProcessedStill.Accepted(profile.profileId, serializedBytes.copyOf())
     }
 
     private fun store() = EncryptedFingerprintStore(

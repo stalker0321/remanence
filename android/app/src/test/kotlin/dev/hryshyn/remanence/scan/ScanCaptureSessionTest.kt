@@ -79,4 +79,42 @@ class ScanCaptureSessionTest {
             ScanCaptureSession(emptyExtractor).captureFront()
         }
     }
+
+    @Test
+    fun resetZeroizesCapturedFrontBytes() {
+        val scan = session()
+        val captured = scan.captureFront()
+        val staged = captured.serializedBytes
+        assertTrue(staged.isNotEmpty())
+
+        scan.reset()
+
+        assertNull(scan.front)
+        assertTrue(staged.all { it == 0.toByte() })
+    }
+
+    @Test
+    fun consumeZeroizesCapturedFrontBytes() {
+        val scan = session()
+        val captured = scan.captureFront()
+        val staged = captured.serializedBytes
+        assertTrue(staged.isNotEmpty())
+
+        scan.consume()
+
+        assertNull(scan.front)
+        assertTrue(staged.all { it == 0.toByte() })
+    }
+
+    @Test
+    fun failedValidationZeroizesStagedBytes() {
+        val staged = ByteArray(0)
+        val emptyExtractor = ScanSideExtractor {
+            ScannedSide("mvp-orb-v1", staged)
+        }
+        val scan = ScanCaptureSession(emptyExtractor)
+        assertThrows<IllegalArgumentException> { scan.captureFront() }
+        assertTrue(staged.all { it == 0.toByte() })
+        assertNull(scan.front)
+    }
 }

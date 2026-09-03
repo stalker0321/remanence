@@ -44,7 +44,13 @@ class ScanCaptureSession(
         check(state == ScanSessionState.AWAITING_FRONT) {
             "front capture requires state AWAITING_FRONT but was $state"
         }
-        val side = extractor.extract().validated()
+        val side = extractor.extract()
+        try {
+            side.validated()
+        } catch (failure: Exception) {
+            side.serializedBytes.fill(0)
+            throw failure
+        }
         front = side
         state = ScanSessionState.READY_FOR_MATCHING
         return side
@@ -52,15 +58,17 @@ class ScanCaptureSession(
 
     /** Explicit user-driven restart (quality retry); wipes the captured FRONT. */
     fun reset() {
+        front?.serializedBytes?.fill(0)
         front = null
         state = ScanSessionState.AWAITING_FRONT
     }
 
     /**
      * Ends the session (match finished or flow abandoned): state becomes
-     * CONSUMED and every fingerprint reference is released.
+     * CONSUMED and every fingerprint buffer is zeroized before release.
      */
     fun consume() {
+        front?.serializedBytes?.fill(0)
         front = null
         state = ScanSessionState.CONSUMED
     }

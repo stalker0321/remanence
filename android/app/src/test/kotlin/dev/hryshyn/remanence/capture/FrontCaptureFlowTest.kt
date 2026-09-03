@@ -2,6 +2,10 @@ package dev.hryshyn.remanence.capture
 
 import java.util.concurrent.Executors
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -11,6 +15,7 @@ import org.junit.Test
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
 import dev.hryshyn.remanence.core.recognition.QualityReason
+import dev.hryshyn.remanence.create.StagedSideFingerprint
 
 /**
  * FIX-STATE-01/03 regression proof for the front still delivery: the attempt
@@ -141,6 +146,63 @@ class FrontCaptureFlowTest {
         assertEquals(FrontCaptureOutcome.Failed("disk full"), outcome)
         assertEquals(0, persistence.persisted.size)
         assertEquals(CaptureAttemptPhase.Failed(1L, "disk full"), controller.phase)
+        assertTrue(processorBytes!!.all { it == 0.toByte() })
+    }
+
+    @Test
+    fun oldFailureCleanupCannotRemoveNewerQueuedHandoff() = runBlocking {
+        lateinit var queue: CaptureHandoffQueue
+        val newerBytes = "newer-front".toByteArray()
+        queue = CaptureHandoffQueue { owner ->
+            if (owner == 1L) {
+                queue.offer(
+                    owner + 1,
+                    StagedSideFingerprint("mvp-orb-v1", dev.hryshyn.remanence.create.CaptureFingerprintSide.FRONT, newerBytes),
+                )
+            }
+        }
+        var oldBytes: ByteArray? = null
+        val flow = FrontCaptureFlow(
+            StillProcessor {
+                "old-front".toByteArray().also { oldBytes = it }
+                    .let { ProcessedStill.Accepted("mvp-orb-v1", it) }
+            },
+            Dispatchers.Unconfined,
+            Dispatchers.Unconfined,
+            queue,
+        )
+        val controller = capturingController()
+
+        // Invalid identity fails before extraction, leaving the old handoff
+        // present while the test seam inserts the newer owner's value.
+        val outcome = flow.onJpegDelivered("jpeg".toByteArray(), "not-a-uuid", persistence, controller)
+
+        assertEquals(FrontCaptureOutcome.Failed("capsule id must be a canonical UUID string"), outcome)
+        assertTrue(oldBytes!!.all { it == 0.toByte() })
+        val surviving = requireNotNull(queue.take(2))
+        assertEquals("newer-front", String(surviving.serializedBytes))
+        assertTrue(surviving.serializedBytes.any { it != 0.toByte() })
+        surviving.serializedBytes.fill(0)
+    }
+
+    @Test
+    fun cancellationImmediatelyAfterAcceptedProcessorReturnWipesHandoff() = runBlocking {
+        val parent = Job()
+        var processorBytes: ByteArray? = null
+        val flow = FrontCaptureFlow(StillProcessor {
+            val bytes = "cancel-at-return".toByteArray().also { processorBytes = it }
+            // Cancellation is requested at the Accepted return handoff, not
+            // later during persistence.
+            parent.cancel()
+            ProcessedStill.Accepted("mvp-orb-v1", bytes)
+        })
+        val controller = capturingController()
+        val child = CoroutineScope(parent + Dispatchers.Default).launch {
+            flow.onJpegDelivered("jpeg".toByteArray(), CAPSULE_ID, persistence, controller)
+        }
+
+        child.join()
+        assertTrue(child.isCancelled)
         assertTrue(processorBytes!!.all { it == 0.toByte() })
     }
 

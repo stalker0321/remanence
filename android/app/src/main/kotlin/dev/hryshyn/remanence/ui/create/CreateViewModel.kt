@@ -710,10 +710,17 @@ class CreateViewModel(
         var frontBytes: ByteArray? = null
         var backBytes: ByteArray? = null
         try {
-            frontBytes = try {
-                withContext(ioDispatcher) { persistence.decrypt(inputs.frontFingerprintId) }
+            try {
+                // Capture the decrypt result while still inside the suspend
+                // boundary. If cancellation is observed while resuming from
+                // decrypt, the outer finally still owns and wipes this array.
+                withContext(ioDispatcher) {
+                    frontBytes = persistence.decrypt(inputs.frontFingerprintId)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (_: Exception) {
-                null
+                // Leave the owned handoff null and fail closed below.
             }
             ensureCurrent()
             // BACK is a session-memory-only handoff. Taking it removes the

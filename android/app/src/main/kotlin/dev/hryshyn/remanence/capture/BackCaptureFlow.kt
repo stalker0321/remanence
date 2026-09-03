@@ -5,7 +5,7 @@ import dev.hryshyn.remanence.create.CreateCaptureSessionStore
 import dev.hryshyn.remanence.create.CaptureFingerprintSide
 import dev.hryshyn.remanence.create.SideFingerprintExtractor
 import dev.hryshyn.remanence.create.StagedSideFingerprint
-import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -30,29 +30,33 @@ class BackCaptureFlow(
 ) {
 
     /** One-shot processor handoff; the flow/repository own and wipe its bytes. */
-    private val queued = AtomicReference<StagedSideFingerprint?>()
+    private var handoffQueue = CaptureHandoffQueue()
+    private val ownerCounter = AtomicLong()
 
-    /** Drop the queued handoff and wipe the processor-owned bytes. */
-    private fun clearQueuedMaterial(expected: StagedSideFingerprint? = null) {
-        if (expected == null) {
-            queued.getAndSet(null)?.serializedBytes?.fill(0)
-        } else if (queued.compareAndSet(expected, null)) {
-            expected.serializedBytes.fill(0)
-        }
+    /** Internal-only queue injection keeps race tests deterministic. */
+    internal constructor(
+        checklistGate: PreparedBackGate,
+        processor: StillProcessor,
+        cpuDispatcher: CoroutineDispatcher,
+        ioDispatcher: CoroutineDispatcher,
+        captureStore: CreateCaptureSessionStore,
+        handoffQueue: CaptureHandoffQueue,
+    ) : this(checklistGate, processor, cpuDispatcher, ioDispatcher, captureStore) {
+        this.handoffQueue = handoffQueue
     }
 
-    private val extractor = SideFingerprintExtractor { side ->
-        val staged = queued.getAndSet(null)
+    private fun createRepository(
+        persistence: dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence,
+        owner: Long,
+    ) = CreateSessionFingerprintRepository(persistence, SideFingerprintExtractor { side ->
+        val staged = handoffQueue.take(owner)
             ?: throw IllegalStateException("no processed still queued for $side")
         if (staged.side != side) {
             staged.serializedBytes.fill(0)
             throw IllegalStateException("queued side ${staged.side} does not match $side")
         }
         staged
-    }
-
-    fun createRepository(persistence: dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence) =
-        CreateSessionFingerprintRepository(persistence, extractor, captureStore)
+    }, captureStore)
 
     /**
      * Consumes deferred BACK material, transferring a private copy to the
@@ -72,12 +76,12 @@ class BackCaptureFlow(
         persistence: dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence,
         attempt: CaptureAttemptController,
     ): FrontCaptureOutcome {
+        val owner = ownerCounter.incrementAndGet()
         if (!attempt.markProcessing()) {
-            clearQueuedMaterial()
+            handoffQueue.clear(owner)
             jpegBytes.fill(0)
             return FrontCaptureOutcome.Superseded
         }
-        var handoff: StagedSideFingerprint? = null
         try {
             if (!readyToCapture()) {
                 val message = "back capture is locked until the preparation checklist completes"
@@ -88,35 +92,39 @@ class BackCaptureFlow(
                 attempt.fail("empty still")
                 return FrontCaptureOutcome.Failed("empty still")
             }
-            return when (
-                val processed = withContext(cpuDispatcher) { processor.process(jpegBytes) }
-            ) {
+            val processed = withContext(cpuDispatcher) {
+                // Capture Accepted ownership before this dispatcher boundary
+                // can resume/cancel and lose the returned byte array.
+                val result = processor.process(jpegBytes)
+                if (result is ProcessedStill.Accepted) {
+                    val staged = StagedSideFingerprint(
+                        result.profileId,
+                        CaptureFingerprintSide.BACK,
+                        result.serializedBytes,
+                    )
+                    check(handoffQueue.offer(owner, staged)) { "capture superseded" }
+                }
+                result
+            }
+            return when (processed) {
                 is ProcessedStill.Rejected -> {
                     attempt.reject(processed.reasons, processed.diagnostic)
                     FrontCaptureOutcome.QualityRejected(processed.reasons)
                 }
                 is ProcessedStill.Accepted -> {
-                    val staged = StagedSideFingerprint(
-                        processed.profileId,
-                        CaptureFingerprintSide.BACK,
-                        processed.serializedBytes,
-                    )
-                    handoff = staged
-                    val previous = queued.getAndSet(staged)
-                    previous?.serializedBytes?.fill(0)
                     val id = withContext(ioDispatcher) {
-                        createRepository(persistence).captureBack(capsuleId)
+                        createRepository(persistence, owner).captureBack(capsuleId)
                     }
                     attempt.accept()
                     FrontCaptureOutcome.Captured(id)
                 }
             }
         } catch (cancelled: CancellationException) {
-            clearQueuedMaterial(handoff)
+            handoffQueue.clear(owner)
             attempt.cancelActiveAttempt()
             throw cancelled
         } catch (failure: Exception) {
-            clearQueuedMaterial(handoff)
+            handoffQueue.clear(owner)
             val message = failure.message ?: "capture failed"
             attempt.fail(message)
             return FrontCaptureOutcome.Failed(message)

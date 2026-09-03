@@ -4,6 +4,7 @@ import dev.hryshyn.remanence.create.CreateSessionFingerprintRepository
 import dev.hryshyn.remanence.create.CaptureFingerprintSide
 import dev.hryshyn.remanence.create.SideFingerprintExtractor
 import dev.hryshyn.remanence.create.StagedSideFingerprint
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -35,6 +36,56 @@ sealed interface ProcessedStill {
         val reasons: Set<QualityReason>,
         val diagnostic: CaptureDiagnostic? = null,
     ) : ProcessedStill
+}
+
+/**
+ * One-slot capture handoff keyed by the monotonically increasing attempt
+ * owner. A newer owner may replace an older value, but an older cleanup can
+ * never remove a newer value. The optional hook is internal-test-only and is
+ * never authoritative for zeroization.
+ */
+internal class CaptureHandoffQueue(
+    private val beforeClear: ((Long) -> Unit)? = null,
+) {
+    private data class Entry(val owner: Long, val staged: StagedSideFingerprint)
+
+    private val current = AtomicReference<Entry?>()
+
+    /** Offers one owner-scoped value; rejected incoming bytes are wiped. */
+    fun offer(owner: Long, staged: StagedSideFingerprint): Boolean {
+        while (true) {
+            val previous = current.get()
+            if (previous != null && previous.owner > owner) {
+                staged.serializedBytes.fill(0)
+                return false
+            }
+            if (current.compareAndSet(previous, Entry(owner, staged))) {
+                previous?.staged?.serializedBytes?.fill(0)
+                return true
+            }
+        }
+    }
+
+    /** Takes only the exact owner; another owner's value is untouched. */
+    fun take(owner: Long): StagedSideFingerprint? {
+        val snapshot = current.get() ?: return null
+        if (snapshot.owner != owner || !current.compareAndSet(snapshot, null)) return null
+        return snapshot.staged
+    }
+
+    /**
+     * Clears only [owner]. The hook runs between snapshot and CAS so tests can
+     * insert a newer owner; a thrown hook cannot prevent the authoritative
+     * compare-and-set and wipe.
+     */
+    fun clear(owner: Long) {
+        val snapshot = current.get() ?: return
+        if (snapshot.owner != owner) return
+        runCatching { beforeClear?.invoke(owner) }
+        val latest = current.get() ?: return
+        if (latest.owner != owner) return
+        if (current.compareAndSet(latest, null)) latest.staged.serializedBytes.fill(0)
+    }
 }
 
 /**
@@ -123,30 +174,31 @@ class FrontCaptureFlow(
 ) {
 
     /** One-shot processor handoff; the flow/repository own and wipe its bytes. */
-    private val queued = AtomicReference<StagedSideFingerprint?>()
+    private var handoffQueue = CaptureHandoffQueue()
+    private val ownerCounter = AtomicLong()
 
-    /** Drop the queued handoff and wipe the processor-owned bytes. */
-    private fun clearQueuedMaterial(expected: StagedSideFingerprint? = null) {
-        if (expected == null) {
-            queued.getAndSet(null)?.serializedBytes?.fill(0)
-        } else if (queued.compareAndSet(expected, null)) {
-            expected.serializedBytes.fill(0)
-        }
+    /** Internal-only queue injection keeps race tests deterministic. */
+    internal constructor(
+        processor: StillProcessor,
+        cpuDispatcher: CoroutineDispatcher,
+        ioDispatcher: CoroutineDispatcher,
+        handoffQueue: CaptureHandoffQueue,
+    ) : this(processor, cpuDispatcher, ioDispatcher) {
+        this.handoffQueue = handoffQueue
     }
 
-    /** Extractor view handed to the repository; serves the queued still once. */
-    private val extractor = SideFingerprintExtractor { side ->
-        val staged = queued.getAndSet(null)
+    private fun createRepository(
+        persistence: dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence,
+        owner: Long,
+    ) = CreateSessionFingerprintRepository(persistence, SideFingerprintExtractor { side ->
+        val staged = handoffQueue.take(owner)
             ?: throw IllegalStateException("no processed still queued for $side")
         if (staged.side != side) {
             staged.serializedBytes.fill(0)
             throw IllegalStateException("queued side ${staged.side} does not match $side")
         }
         staged
-    }
-
-    fun createRepository(persistence: dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence) =
-        CreateSessionFingerprintRepository(persistence, extractor)
+    })
 
     suspend fun onJpegDelivered(
         jpegBytes: ByteArray,
@@ -154,37 +206,41 @@ class FrontCaptureFlow(
         persistence: dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence,
         attempt: CaptureAttemptController,
     ): FrontCaptureOutcome {
+        val owner = ownerCounter.incrementAndGet()
         // A stale or non-capturing delivery is structurally inert.
         if (!attempt.markProcessing()) {
-            clearQueuedMaterial()
+            handoffQueue.clear(owner)
             jpegBytes.fill(0)
             return FrontCaptureOutcome.Superseded
         }
-        var handoff: StagedSideFingerprint? = null
         try {
             if (jpegBytes.isEmpty()) {
                 attempt.fail("empty still")
                 return FrontCaptureOutcome.Failed("empty still")
             }
-            return when (
-                val processed = withContext(cpuDispatcher) { processor.process(jpegBytes) }
-            ) {
+            val processed = withContext(cpuDispatcher) {
+                // Capture the accepted result into the owner-scoped queue
+                // before this dispatcher boundary can resume/cancel.
+                val result = processor.process(jpegBytes)
+                if (result is ProcessedStill.Accepted) {
+                    val staged = StagedSideFingerprint(
+                        result.profileId,
+                        CaptureFingerprintSide.FRONT,
+                        result.serializedBytes,
+                    )
+                    check(handoffQueue.offer(owner, staged)) { "capture superseded" }
+                }
+                result
+            }
+            return when (processed) {
                 is ProcessedStill.Rejected -> {
                     // Quality failure: no persistence, controller shows Rejected.
                     attempt.reject(processed.reasons, processed.diagnostic)
                     FrontCaptureOutcome.QualityRejected(processed.reasons)
                 }
                 is ProcessedStill.Accepted -> {
-                    val staged = StagedSideFingerprint(
-                        processed.profileId,
-                        CaptureFingerprintSide.FRONT,
-                        processed.serializedBytes,
-                    )
-                    handoff = staged
-                    val previous = queued.getAndSet(staged)
-                    previous?.serializedBytes?.fill(0)
                     val id = withContext(ioDispatcher) {
-                        createRepository(persistence).captureFront(capsuleId)
+                        createRepository(persistence, owner).captureFront(capsuleId)
                     }
                     attempt.accept()
                     FrontCaptureOutcome.Captured(id)
@@ -193,11 +249,11 @@ class FrontCaptureFlow(
         } catch (cancelled: CancellationException) {
             // Clean lifecycle completion: no terminal result is published for
             // this attempt, and nothing stays queued.
-            clearQueuedMaterial(handoff)
+            handoffQueue.clear(owner)
             attempt.cancelActiveAttempt()
             throw cancelled
         } catch (failure: Exception) {
-            clearQueuedMaterial(handoff)
+            handoffQueue.clear(owner)
             val message = failure.message ?: "capture failed"
             attempt.fail(message)
             return FrontCaptureOutcome.Failed(message)

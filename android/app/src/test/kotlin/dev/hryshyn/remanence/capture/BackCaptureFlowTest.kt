@@ -3,6 +3,9 @@ package dev.hryshyn.remanence.capture
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -11,6 +14,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
 import dev.hryshyn.remanence.core.recognition.QualityReason
+import dev.hryshyn.remanence.create.StagedSideFingerprint
 
 /**
  * FIX-STATE-01/02 regression proof for the checklist-gated back capture:
@@ -25,6 +29,7 @@ class BackCaptureFlowTest {
 
         val persisted = mutableListOf<String>()
         var frontExists = false
+        var failBaseline = false
 
         override suspend fun persist(
             capsuleId: String,
@@ -37,7 +42,10 @@ class BackCaptureFlowTest {
             return "fp-${persisted.size}"
         }
 
-        override suspend fun hasBaseline(capsuleId: String, origin: FingerprintOrigin): Boolean = frontExists
+        override suspend fun hasBaseline(capsuleId: String, origin: FingerprintOrigin): Boolean {
+            if (failBaseline) throw IllegalStateException("baseline lookup failed")
+            return frontExists
+        }
 
         override suspend fun setPreferredOrigin(capsuleId: String, origin: FingerprintOrigin) = Unit
         override suspend fun deleteBaseline(capsuleId: String, origin: FingerprintOrigin) = Unit
@@ -179,6 +187,70 @@ class BackCaptureFlowTest {
         assertTrue(processed.bytes!!.any { it != 0.toByte() })
         job.cancelAndJoin()
         assertTrue(processed.bytes!!.all { it == 0.toByte() })
+    }
+
+    @Test
+    fun oldFailureCleanupCannotRemoveNewerQueuedHandoff() = runBlocking {
+        lateinit var queue: CaptureHandoffQueue
+        val newerBytes = "newer-back".toByteArray()
+        queue = CaptureHandoffQueue { owner ->
+            if (owner == 1L) {
+                queue.offer(
+                    owner + 1,
+                    StagedSideFingerprint("mvp-orb-v1", dev.hryshyn.remanence.create.CaptureFingerprintSide.BACK, newerBytes),
+                )
+            }
+        }
+        val gate = PreparedBackGate().also(::fullyConfirmed)
+        val persistence = FakePersistence().apply {
+            frontExists = true
+            failBaseline = true
+        }
+        var oldBytes: ByteArray? = null
+        val flow = BackCaptureFlow(
+            gate,
+            StillProcessor {
+                "old-back".toByteArray().also { oldBytes = it }
+                    .let { ProcessedStill.Accepted("mvp-orb-v1", it) }
+            },
+            Dispatchers.Unconfined,
+            Dispatchers.Unconfined,
+            dev.hryshyn.remanence.create.CreateCaptureSessionStore(),
+            queue,
+        )
+        val controller = capturingController()
+
+        val outcome = flow.onJpegDelivered("jpeg".toByteArray(), capsuleId, persistence, controller)
+
+        assertEquals(FrontCaptureOutcome.Failed("baseline lookup failed"), outcome)
+        assertTrue(oldBytes!!.all { it == 0.toByte() })
+        val surviving = requireNotNull(queue.take(2))
+        assertEquals("newer-back", String(surviving.serializedBytes))
+        assertTrue(surviving.serializedBytes.any { it != 0.toByte() })
+        surviving.serializedBytes.fill(0)
+    }
+
+    @Test
+    fun cancellationImmediatelyAfterAcceptedProcessorReturnWipesHandoff() = runBlocking {
+        val parent = Job()
+        val gate = PreparedBackGate().also(::fullyConfirmed)
+        val persistence = FakePersistence().apply { frontExists = true }
+        var processorBytes: ByteArray? = null
+        val flow = BackCaptureFlow(gate, StillProcessor {
+            val bytes = "cancel-at-return".toByteArray().also { processorBytes = it }
+            // Cancellation is requested at the Accepted return handoff, not
+            // later during baseline lookup.
+            parent.cancel()
+            ProcessedStill.Accepted("mvp-orb-v1", bytes)
+        })
+        val controller = capturingController()
+        val child = CoroutineScope(parent + Dispatchers.Default).launch {
+            flow.onJpegDelivered("jpeg".toByteArray(), capsuleId, persistence, controller)
+        }
+
+        child.join()
+        assertTrue(child.isCancelled)
+        assertTrue(processorBytes!!.all { it == 0.toByte() })
     }
 
     private class ByteArrayCaptureProcessor(private val marker: String) : StillProcessor {

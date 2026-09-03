@@ -25,6 +25,7 @@ import dev.hryshyn.remanence.capture.StillProcessor
 import dev.hryshyn.remanence.create.CreateCaptureSessionStore
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.runBlocking
@@ -68,6 +69,27 @@ import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35])
 class CreateContentPublishRecoveryTest {
+
+    /** Internal test dispatcher that cancels after a block returns. */
+    private class CancelAfterRunDispatcher : CoroutineDispatcher() {
+        private val delegate = Dispatchers.Default
+        @Volatile var armed = false
+        @Volatile var cancellationRequested = false
+        @Volatile var jobSeen = false
+
+        override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) {
+            delegate.dispatch(context) {
+                block.run()
+                if (armed) {
+                    cancellationRequested = true
+                    context[kotlinx.coroutines.Job]?.let {
+                        jobSeen = true
+                        it.cancel()
+                    }
+                }
+            }
+        }
+    }
 
     @get:Rule
     val composeRule = createComposeRule()
@@ -191,6 +213,7 @@ class CreateContentPublishRecoveryTest {
         identityGate: CompletableDeferred<SenderIdentitySnapshot>? = null,
         enqueueUpload: suspend (UserId, CapsuleId) -> Unit = { _, _ -> },
         captureStore: CreateCaptureSessionStore = CreateCaptureSessionStore(),
+        ioDispatcher: CoroutineDispatcher = testDispatcher,
     ): Triple<CreateViewModel, RecordingPersistence, androidx.compose.ui.test.junit4.ComposeTestRule> {
         val persistence = RecordingPersistence()
         val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir()))
@@ -210,7 +233,7 @@ class CreateContentPublishRecoveryTest {
             captureStore = captureStore,
             photoNormalizer = { input -> dev.hryshyn.remanence.create.NormalizedPhotoDto(input.copyOf(), 800, 600) },
             cpuDispatcher = testDispatcher,
-            ioDispatcher = testDispatcher,
+            ioDispatcher = ioDispatcher,
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
             enqueueUpload = enqueueUpload,
@@ -224,14 +247,25 @@ class CreateContentPublishRecoveryTest {
         vm.frontAttempt.onPreviewBound()
         assertTrue(vm.beginFrontCapture())
         vm.deliverFrontJpeg("f".toByteArray())
+        awaitStep(vm, CreateViewModel.Step.BACK_CHECKLIST)
         PreparedBackItem.entries.forEach { item -> vm.backGate.setChecked(item, true) }
         vm.proceedToBackChecklist()
         vm.backAttempt.onPermissionResult(true, false)
         vm.backAttempt.onPreviewBound()
         assertTrue(vm.beginBackCapture())
         vm.deliverBackJpeg("b".toByteArray())
-        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        awaitStep(vm, CreateViewModel.Step.CONTENT)
         return Triple(vm, persistence, composeRule)
+    }
+
+    private fun awaitStep(vm: CreateViewModel, expected: CreateViewModel.Step) {
+        val deadline = System.currentTimeMillis() + 10_000
+        while (vm.step.value != expected) {
+            if (System.currentTimeMillis() > deadline) {
+                error("expected $expected, got ${vm.step.value}")
+            }
+            Thread.sleep(5)
+        }
     }
 
     private fun androidx.compose.ui.test.junit4.ComposeTestRule.scrollToTag(tag: String) {
@@ -434,6 +468,32 @@ class CreateContentPublishRecoveryTest {
         assertEquals(listOf("fp-1", "fp-1"), persistence.decryptIds)
         assertTrue(persistence.decryptIds.none { it.startsWith("capture-") })
         assertTrue(persistence.decryptedBuffers.all { it.all { byte -> byte == 0.toByte() } })
+    }
+
+    @Test
+    fun cancellationAtFrontDecryptReturnWipesOwnedBuffer() = runBlocking {
+        val gate = CompletableDeferred<SenderIdentitySnapshot>().apply { complete(senderIdentity()) }
+        val ioDispatcher = CancelAfterRunDispatcher()
+        val (vm, persistence, _) = contentStage(
+            identityGate = gate,
+            ioDispatcher = ioDispatcher,
+        )
+        vm.onPhotosPicked(listOf("p1", "p2", "p3"))
+
+        ioDispatcher.armed = true
+        vm.startPublishing()
+        val deadline = System.currentTimeMillis() + 10_000
+        while (persistence.decryptedBuffers.isEmpty() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(5)
+        }
+        assertTrue("decrypt must return before cancellation", persistence.decryptedBuffers.isNotEmpty())
+        assertTrue(ioDispatcher.cancellationRequested)
+        assertTrue(ioDispatcher.jobSeen)
+        while (persistence.decryptedBuffers.any { bytes -> bytes.any { it != 0.toByte() } } &&
+            System.currentTimeMillis() < deadline) {
+            Thread.sleep(5)
+        }
+        assertTrue(persistence.decryptedBuffers.all { bytes -> bytes.all { it == 0.toByte() } })
     }
 
     private fun awaitTerminal(vm: CreateViewModel) {

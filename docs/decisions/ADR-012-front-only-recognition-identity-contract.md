@@ -1,6 +1,6 @@
 # ADR-012: FRONT-only recognition identity
 
-Status: Accepted architecture checkpoint; implementation pending
+Status: Accepted architecture checkpoint; M2-F0-01..07 FRONT-only reset implemented and reviewed through `88fb80d` (closure record in implementation-plan §10a); physical-device, camera-quality, and dataset acceptance remain open
 
 Date: 2026-09-02
 

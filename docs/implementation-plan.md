@@ -234,8 +234,10 @@ layer implicitly.
 
 ## 10a. M2-F0 queue — FRONT-only reset
 
-This is the bounded implementation sequence approved by ADR-012. It is
-documentation-only until these tasks are assigned and reviewed. The reset is
+This is the bounded implementation sequence approved by ADR-012. At the
+`f01c379` architecture checkpoint it was documentation-only until these
+tasks were assigned and reviewed; that gate is now satisfied - M2-F0-01..07
+is implemented and reviewed through `88fb80d` (closure record below). The reset is
 breaking: Test8/Test9 recognition state is disposable, and a clean app/DB/
 server recognition reset is accepted. No legacy path, dual reader, optional
 BACK production mode, or Room/data migration is required.

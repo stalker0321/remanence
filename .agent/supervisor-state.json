@@ -2,11 +2,11 @@
   "schema_version": 1,
   "active_branch": "integration/m2-front-only-reset",
   "current_milestone": "M2_FRONT_ONLY_RESET",
-  "current_task": "M2_F0_IMPLEMENTATION_NOT_STARTED",
-  "last_completed_implementation_commit": null,
-  "last_reviewed_commit": null,
+  "current_task": "M2_F0_IMPLEMENTATION_COMPLETE_REVIEWED",
+  "last_completed_implementation_commit": "88fb80d",
+  "last_reviewed_commit": "88fb80d",
   "known_blockers": [
-    "FRONT-only is a documentation contract only; implementation must follow ADR-012 and the bounded queue before it is claimed.",
+    "M2-F0-01..07 FRONT-only implementation is complete and independently reviewed through 88fb80d (closure record in docs/implementation-plan.md section 10a); physical-device evidence, camera-quality acceptance, and dataset acceptance remain open.",
     "Deployment of the breaking reset requires clean app/database/server recognition state; Test8/Test9 recognition state is disposable.",
     "P14 physical Android hardware evidence remains unrun; CameraX/OpenCV and two-device evidence cannot be claimed until exercised on hardware."
   ],

@@ -321,19 +321,31 @@ class SenderIndexBundleReader internal constructor(
             if (decoded!!.capsuleId != request.capsuleId) {
                 return corrupt(SenderIndexBundleReadCorruptReason.CAPSULE_MISMATCH)
             }
-            SenderIndexBundleReadResult.Available(
-                SenderIndexBundleInspectionSnapshot(
-                    localFormatVersion = decoded!!.localFormatVersion,
-                    capsuleId = decoded!!.capsuleId,
-                    senderHandleSnapshot = decoded!!.senderHandleSnapshot,
-                    createdAtEpochSeconds = decoded!!.createdAtEpochSeconds,
-                    placeLabel = decoded!!.placeLabel,
-                    frontFingerprint = decoded!!.frontFingerprint,
-                    senderVerification = decoded!!.senderVerification,
-                    wipeBytes = wipe,
-                    wipeChars = wipeChars,
-                ),
-            )
+            var snapshotFrontFingerprint: ByteArray? = null
+            var snapshotSenderVerification: SenderIndexBundleSenderVerification? = null
+            try {
+                snapshotFrontFingerprint = decoded!!.frontFingerprint
+                snapshotSenderVerification = decoded!!.senderVerification
+                SenderIndexBundleReadResult.Available(
+                    SenderIndexBundleInspectionSnapshot(
+                        localFormatVersion = decoded!!.localFormatVersion,
+                        capsuleId = decoded!!.capsuleId,
+                        senderHandleSnapshot = decoded!!.senderHandleSnapshot,
+                        createdAtEpochSeconds = decoded!!.createdAtEpochSeconds,
+                        placeLabel = decoded!!.placeLabel,
+                        frontFingerprint = snapshotFrontFingerprint!!,
+                        senderVerification = snapshotSenderVerification,
+                        wipeBytes = wipe,
+                        wipeChars = wipeChars,
+                    ),
+                )
+            } finally {
+                try {
+                    snapshotFrontFingerprint?.let(wipe)
+                } finally {
+                    snapshotSenderVerification?.wipe(wipe)
+                }
+            }
         } finally {
             wipe(ciphertext)
             aad?.let(wipe)

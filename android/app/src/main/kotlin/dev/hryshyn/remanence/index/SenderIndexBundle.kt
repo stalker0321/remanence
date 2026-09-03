@@ -56,7 +56,13 @@ class SenderIndexBundleSenderVerification internal constructor(
         return parsed
     }
 
-    internal fun wipe() = publicKeysetBytesSnapshot.fill(0)
+    internal fun wipe(wipeBytes: (ByteArray) -> Unit = { it.fill(0) }) {
+        try {
+            wipeBytes(publicKeysetBytesSnapshot)
+        } finally {
+            publicKeysetBytesSnapshot.fill(0)
+        }
+    }
 
     override fun toString(): String = "SenderIndexBundleSenderVerification(<redacted>)"
 
@@ -65,13 +71,25 @@ class SenderIndexBundleSenderVerification internal constructor(
             senderUserId: UserId,
             senderKeyBundleId: KeyBundleId,
             verifyingKeyset: KeysetHandle,
-        ): SenderIndexBundleSenderVerification = SenderIndexBundleSenderVerification(
-            senderUserId = senderUserId,
-            senderKeyBundleId = senderKeyBundleId,
-            protocolVersion = PreparedIdentity.PROTOCOL_VERSION,
-            suite = PreparedIdentity.SUITE,
-            publicKeysetBytes = TinkProtoKeysetFormat.serializeKeysetWithoutSecret(verifyingKeyset),
-        )
+            wipeBytes: (ByteArray) -> Unit = { it.fill(0) },
+        ): SenderIndexBundleSenderVerification {
+            val publicKeysetBytes = TinkProtoKeysetFormat.serializeKeysetWithoutSecret(verifyingKeyset)
+            return try {
+                SenderIndexBundleSenderVerification(
+                    senderUserId = senderUserId,
+                    senderKeyBundleId = senderKeyBundleId,
+                    protocolVersion = PreparedIdentity.PROTOCOL_VERSION,
+                    suite = PreparedIdentity.SUITE,
+                    publicKeysetBytes = publicKeysetBytes,
+                )
+            } finally {
+                try {
+                    wipeBytes(publicKeysetBytes)
+                } finally {
+                    publicKeysetBytes.fill(0)
+                }
+            }
+        }
     }
 }
 

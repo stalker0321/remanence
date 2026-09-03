@@ -33,6 +33,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -153,6 +154,107 @@ class SenderIndexBundleReaderTest {
         assertArrayEquals(bytesBefore, destination(owner, capsule).readBytes())
         assertTrue(wiped.isNotEmpty())
         assertTrue(wiped.all { bytes -> bytes.all { it == 0.toByte() } })
+    }
+
+    @Test
+    fun inspectionHandoffCopiesAreWipedWhileSnapshotCopiesRemainOwned() = runBlocking {
+        val sealer = AesGcmSealer()
+        SenderIndexBundleStager(roots, sealer).stage(
+            SenderIndexBundleStageRequest(
+                owner,
+                owner,
+                capsule,
+                recognition(),
+                TestSenderVerification.forCapsule(capsule),
+            ),
+        )
+        val expectedFront = recognition().frontFingerprint
+        val expectedVerification = TestSenderVerification.forCapsule(capsule)
+        val expectedSenderKeyset = expectedVerification.publicKeysetBytes
+        expectedVerification.wipe()
+        val wiped = mutableListOf<ByteArray>()
+        val beforeWipe = mutableListOf<ByteArray>()
+        val snapshot = (
+            reader(
+                sealer,
+                wipe = { bytes ->
+                    beforeWipe += bytes.copyOf()
+                    wiped += bytes
+                    bytes.fill(0)
+                },
+            ).inspect(readRequest(owner, owner, capsule)) as SenderIndexBundleReadResult.Available
+            ).snapshot
+
+        assertArrayEquals(expectedFront, snapshot.frontFingerprint)
+        val snapshotVerification = snapshot.senderVerification
+        val ownedSnapshotVerification = snapshotVerification ?: error("sender verification missing")
+        val snapshotKeyset = ownedSnapshotVerification.publicKeysetBytes
+        assertArrayEquals(expectedSenderKeyset, snapshotKeyset)
+        ownedSnapshotVerification.wipe()
+        assertHandoffWasWiped(expectedFront, beforeWipe, wiped)
+        assertHandoffWasWiped(expectedSenderKeyset, beforeWipe, wiped)
+
+        snapshot.close()
+        snapshotKeyset.fill(0)
+        expectedFront.fill(0)
+        expectedSenderKeyset.fill(0)
+    }
+
+    @Test
+    fun inspectionFailureStillWipesBothHandoffCopies() = runBlocking {
+        val sealer = AesGcmSealer()
+        SenderIndexBundleStager(roots, sealer).stage(
+            SenderIndexBundleStageRequest(
+                owner,
+                owner,
+                capsule,
+                recognition(),
+                TestSenderVerification.forCapsule(capsule),
+            ),
+        )
+        val expectedFront = recognition().frontFingerprint
+        val expectedVerification = TestSenderVerification.forCapsule(capsule)
+        val expectedSenderKeyset = expectedVerification.publicKeysetBytes
+        expectedVerification.wipe()
+        val wiped = mutableListOf<ByteArray>()
+        val beforeWipe = mutableListOf<ByteArray>()
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking {
+                reader(
+                    sealer,
+                    wipe = { bytes ->
+                        beforeWipe += bytes.copyOf()
+                        wiped += bytes
+                        bytes.fill(0)
+                        if (beforeWipe.last().contentEquals(expectedFront)) {
+                            throw IllegalStateException("test wipe failure")
+                        }
+                    },
+                ).inspect(readRequest(owner, owner, capsule))
+            }
+        }
+
+        assertHandoffWasWiped(expectedFront, beforeWipe, wiped)
+        assertHandoffWasWiped(expectedSenderKeyset, beforeWipe, wiped)
+        expectedFront.fill(0)
+        expectedSenderKeyset.fill(0)
+    }
+
+    @Test
+    fun trustedVerificationConstructionWipesSerializedInputButKeepsSnapshotCopy() {
+        val wiped = mutableListOf<ByteArray>()
+        val verification = TestSenderVerification.forCapsule(capsule) { bytes ->
+            wiped += bytes
+            bytes.fill(0)
+        }
+        val ownedCopy = verification.publicKeysetBytes
+
+        assertTrue(wiped.isNotEmpty())
+        assertTrue(wiped.all { bytes -> bytes.all { it == 0.toByte() } })
+        assertTrue(ownedCopy.any { it != 0.toByte() })
+
+        ownedCopy.fill(0)
+        verification.wipe()
     }
 
     @Test
@@ -588,6 +690,18 @@ class SenderIndexBundleReaderTest {
             throw AssertionError("expected failure")
         } catch (failure: Throwable) {
             if (failure !is IllegalStateException) throw failure
+        }
+    }
+
+    private fun assertHandoffWasWiped(
+        expected: ByteArray,
+        beforeWipe: List<ByteArray>,
+        wiped: List<ByteArray>,
+    ) {
+        val matches = beforeWipe.indices.filter { beforeWipe[it].contentEquals(expected) }
+        assertTrue("expected handoff buffer was not observed", matches.isNotEmpty())
+        matches.forEach { index ->
+            assertTrue("handoff buffer was not wiped", wiped[index].all { it == 0.toByte() })
         }
     }
 

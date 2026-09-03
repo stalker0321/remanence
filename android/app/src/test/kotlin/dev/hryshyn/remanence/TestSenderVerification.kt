@@ -19,6 +19,9 @@ object TestSenderVerification {
         TinkProtoKeysetFormat.parseKeysetWithoutSecret(identity.signingPublicKeyset)
     }
 
-    fun forCapsule(capsuleId: CapsuleId): SenderIndexBundleSenderVerification =
-        SenderIndexBundleSenderVerification.fromTrusted(sender, bundle, publicKeyset)
+    fun forCapsule(
+        capsuleId: CapsuleId,
+        wipeBytes: (ByteArray) -> Unit = { it.fill(0) },
+    ): SenderIndexBundleSenderVerification =
+        SenderIndexBundleSenderVerification.fromTrusted(sender, bundle, publicKeyset, wipeBytes)
 }

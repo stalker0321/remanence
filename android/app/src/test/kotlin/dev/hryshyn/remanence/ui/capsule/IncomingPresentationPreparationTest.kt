@@ -172,19 +172,11 @@ class IncomingPresentationPreparationTest {
         )
         fingerprintStore.persist(
             CAPSULE.toRestString(),
-            dev.hryshyn.remanence.core.data.db.FingerprintSide.FRONT,
             dev.hryshyn.remanence.core.data.db.FingerprintOrigin.RECIPIENT,
             RecognitionProfile.mvpOrbV1().profileId,
             weakFront,
         )
-        fingerprintStore.persist(
-            CAPSULE.toRestString(),
-            dev.hryshyn.remanence.core.data.db.FingerprintSide.BACK,
-            dev.hryshyn.remanence.core.data.db.FingerprintOrigin.RECIPIENT,
-            RecognitionProfile.mvpOrbV1().profileId,
-            weakBack,
-        )
-        fingerprintStore.setPreferredPair(
+        fingerprintStore.setPreferredOrigin(
             CAPSULE.toRestString(),
             dev.hryshyn.remanence.core.data.db.FingerprintOrigin.RECIPIENT,
         )

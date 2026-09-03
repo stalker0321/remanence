@@ -43,14 +43,12 @@ class RecognitionFingerprintDaoTest {
 
     private fun fingerprint(
         id: String,
-        side: FingerprintSide,
         origin: FingerprintOrigin,
         preferred: Boolean = false,
     ) = RecognitionFingerprintEntity(
         fingerprintId = id,
         ownerUserId = "0198f0a0-0000-7000-8000-00000000ow01",
         capsuleId = "0198f0a0-0000-7000-8000-00000000ca01",
-        side = side,
         origin = origin,
         fingerprintProfileId = "mvp-orb-v1",
         encryptedPath = "files/fingerprints/$id.bin",
@@ -63,12 +61,24 @@ class RecognitionFingerprintDaoTest {
     }
 
     @Test
+    fun schemaStoresIntrinsicFrontRowsWithoutSideColumn() {
+        val cursor = database.openHelper.writableDatabase.query("PRAGMA table_info(`recognition_fingerprint`)")
+        cursor.use {
+            val columns = buildList {
+                while (it.moveToNext()) add(it.getString(it.getColumnIndexOrThrow("name")))
+            }
+            assertFalse(columns.contains("side"))
+            assertTrue(columns.containsAll(listOf("capsule_id", "origin")))
+        }
+    }
+
+    @Test
     fun insertAndReadByOriginKeepsOriginsDistinct() = runBlocking {
         val senderFront = listOf(
-            fingerprint("fp-sf", FingerprintSide.FRONT, FingerprintOrigin.SENDER),
+            fingerprint("fp-sf", FingerprintOrigin.SENDER),
         )
         val recipientFront = listOf(
-            fingerprint("fp-rf", FingerprintSide.FRONT, FingerprintOrigin.RECIPIENT),
+            fingerprint("fp-rf", FingerprintOrigin.RECIPIENT),
         )
         insertAll(senderFront + recipientFront)
 
@@ -80,18 +90,18 @@ class RecognitionFingerprintDaoTest {
     }
 
     @Test
-    fun duplicateSideOriginBaselineIsRejected(): Unit = runBlocking {
+    fun duplicateOriginBaselineIsRejected(): Unit = runBlocking {
         insertAll(
             listOf(
-                fingerprint("fp-first", FingerprintSide.FRONT, FingerprintOrigin.RECIPIENT),
-                fingerprint("fp-second", FingerprintSide.FRONT, FingerprintOrigin.SENDER),
+                fingerprint("fp-first", FingerprintOrigin.RECIPIENT),
+                fingerprint("fp-second", FingerprintOrigin.SENDER),
             ),
         )
         try {
             insertAll(
-                listOf(fingerprint("fp-duplicate", FingerprintSide.FRONT, FingerprintOrigin.RECIPIENT)),
+                listOf(fingerprint("fp-duplicate", FingerprintOrigin.RECIPIENT)),
             )
-            throw AssertionError("expected unique (capsule,side,origin) violation")
+            throw AssertionError("expected unique (capsule, origin) violation")
         } catch (expected: Exception) {
             val constraint = expected is android.database.sqlite.SQLiteConstraintException ||
                 expected.cause is android.database.sqlite.SQLiteConstraintException
@@ -101,8 +111,8 @@ class RecognitionFingerprintDaoTest {
 
     @Test
     fun authoritativeOwnerMismatchIsRejectedBeforeAnyInsert() = runBlocking {
-        val first = fingerprint("fp-first", FingerprintSide.FRONT, FingerprintOrigin.SENDER)
-        val foreign = fingerprint("fp-foreign", FingerprintSide.FRONT, FingerprintOrigin.RECIPIENT)
+        val first = fingerprint("fp-first", FingerprintOrigin.SENDER)
+        val foreign = fingerprint("fp-foreign", FingerprintOrigin.RECIPIENT)
             .copy(ownerUserId = OTHER_OWNER)
 
         assertThrows(IllegalArgumentException::class.java) {
@@ -114,11 +124,11 @@ class RecognitionFingerprintDaoTest {
 
     @Test
     fun foreignFingerprintIdCollisionAbortsWholeBatchBeforeInsert() = runBlocking {
-        val foreign = fingerprint("fp-foreign", FingerprintSide.FRONT, FingerprintOrigin.SENDER)
+        val foreign = fingerprint("fp-foreign", FingerprintOrigin.SENDER)
             .copy(ownerUserId = OTHER_OWNER)
         dao.insertAll(OTHER_OWNER, listOf(foreign))
 
-        val newForOwner = fingerprint("fp-new", FingerprintSide.FRONT, FingerprintOrigin.RECIPIENT)
+        val newForOwner = fingerprint("fp-new", FingerprintOrigin.RECIPIENT)
         val attemptedForeignReuse = foreign.copy(ownerUserId = OWNER)
         assertThrows(IllegalStateException::class.java) {
             runBlocking { dao.insertAll(OWNER, listOf(newForOwner, attemptedForeignReuse)) }
@@ -129,15 +139,15 @@ class RecognitionFingerprintDaoTest {
     }
 
     @Test
-    fun setPreferredPairMarksExactlyOneOriginRow() = runBlocking {
+    fun setPreferredOriginMarksExactlyOneRow() = runBlocking {
         insertAll(
             listOf(
-                fingerprint("fp-sf", FingerprintSide.FRONT, FingerprintOrigin.SENDER),
-                fingerprint("fp-rf", FingerprintSide.FRONT, FingerprintOrigin.RECIPIENT),
+                fingerprint("fp-sf", FingerprintOrigin.SENDER),
+                fingerprint("fp-rf", FingerprintOrigin.RECIPIENT),
             ),
         )
 
-        dao.setPreferredPairForOwner("0198f0a0-0000-7000-8000-00000000ca01", FingerprintOrigin.RECIPIENT, OWNER)
+        dao.setPreferredOriginForOwner("0198f0a0-0000-7000-8000-00000000ca01", FingerprintOrigin.RECIPIENT, OWNER)
 
         val rows = dao.getAllByCapsuleIdAndOwner("0198f0a0-0000-7000-8000-00000000ca01", OWNER)
         assertFalse(rows.first { it.fingerprintId == "fp-sf" }.preferred)
@@ -149,19 +159,19 @@ class RecognitionFingerprintDaoTest {
     fun switchingPreferredOriginClearsPreviousFlag() = runBlocking {
         insertAll(
             listOf(
-                fingerprint("fp-rf", FingerprintSide.FRONT, FingerprintOrigin.RECIPIENT, preferred = true),
+                fingerprint("fp-rf", FingerprintOrigin.RECIPIENT, preferred = true),
             ),
         )
-        dao.setPreferredPairForOwner("0198f0a0-0000-7000-8000-00000000ca01", FingerprintOrigin.SENDER, OWNER)
+        dao.setPreferredOriginForOwner("0198f0a0-0000-7000-8000-00000000ca01", FingerprintOrigin.SENDER, OWNER)
         // SENDER row does not exist yet; nothing may remain preferred.
         assertEquals(0, dao.getAllByCapsuleIdAndOwner("0198f0a0-0000-7000-8000-00000000ca01", OWNER).count { it.preferred })
 
         insertAll(
             listOf(
-                fingerprint("fp-sf", FingerprintSide.FRONT, FingerprintOrigin.SENDER),
+                fingerprint("fp-sf", FingerprintOrigin.SENDER),
             ),
         )
-        dao.setPreferredPairForOwner("0198f0a0-0000-7000-8000-00000000ca01", FingerprintOrigin.SENDER, OWNER)
+        dao.setPreferredOriginForOwner("0198f0a0-0000-7000-8000-00000000ca01", FingerprintOrigin.SENDER, OWNER)
         val rows = dao.getAllByCapsuleIdAndOwner("0198f0a0-0000-7000-8000-00000000ca01", OWNER)
         assertFalse(rows.first { it.fingerprintId == "fp-rf" }.preferred)
         assertTrue(rows.first { it.fingerprintId == "fp-sf" }.preferred)

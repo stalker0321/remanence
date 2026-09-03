@@ -33,10 +33,8 @@ enum class OutboxCapsuleState {
  * owns this row (docs/architecture.md section 6). Capsule IDs stay globally
  * unique client-generated UUIDs - uniqueness constraints deliberately remain
  * capsule-scoped, NOT owner-composed, so a second account can never join its
- * blobs onto another account's capsule. Only the canonical migration policy
- * may write the empty sentinel: legacy v3 rows upgraded without exactly one
- * `local_account` row stay unattributed ('') and are unreachable through
- * every owner-scoped DAO primitive (fail-safe isolation, never guessed).
+ * blobs onto another account's capsule. An empty owner is unattributed and
+ * unreachable through every owner-scoped DAO primitive.
  *
  * M2-P08 schema-only continuation: [senderRetryKeysetPath] is an optional
  * app-private pointer to the on-disk account-scoped retry-material file
@@ -59,7 +57,7 @@ data class OutboxCapsuleEntity(
     val capsuleId: String,
     @ColumnInfo(name = "idempotency_key")
     val idempotencyKey: String,
-    /** Immutable owning local account UUID string; '' only for legacy rows migrated without an attributable account. */
+    /** Immutable owning local account UUID string; empty means unattributed. */
     @ColumnInfo(name = "owner_user_id", defaultValue = "")
     val ownerUserId: String,
     @ColumnInfo(name = "sender_user_id")

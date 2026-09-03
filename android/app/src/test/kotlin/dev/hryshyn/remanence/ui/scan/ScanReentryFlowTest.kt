@@ -39,7 +39,6 @@ import dev.hryshyn.remanence.core.crypto.AccountIdentityGenerator
 import dev.hryshyn.remanence.auth.SoftwareKekBoundary
 import dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
-import dev.hryshyn.remanence.core.data.db.FingerprintSide as DbFingerprintSide
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.fingerprints.EncryptedFingerprintStore
 import dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager
@@ -143,14 +142,9 @@ class ScanReentryFlowTest {
 
     private suspend fun stagePublishedCapsule() {
         store().persist(
-            capsuleUuid.toString(), DbFingerprintSide.FRONT, FingerprintOrigin.SENDER,
+            capsuleUuid.toString(), FingerprintOrigin.SENDER,
             RecognitionProfile.mvpOrbV1().profileId,
             syntheticFingerprint(11, FingerprintSide.FRONT),
-        )
-        store().persist(
-            capsuleUuid.toString(), DbFingerprintSide.BACK, FingerprintOrigin.SENDER,
-            RecognitionProfile.mvpOrbV1().profileId,
-            syntheticFingerprint(22, FingerprintSide.BACK),
         )
         val prepared = CapsulePublisher(testWrapper, testAlias).publish(
             CapsulePublishRequest(

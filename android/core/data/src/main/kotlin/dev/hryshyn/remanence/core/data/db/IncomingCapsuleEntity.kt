@@ -19,10 +19,8 @@ enum class MaterialAckState {
  *
  * M2-P02 account scoping: [ownerUserId] is the immutable local account this
  * delivery belongs to; owner-scoped DAO primitives are the only sanctioned
- * access path from M2 onward. The '' sentinel exists solely for legacy rows
- * the canonical v3→v4 migration could not attribute (see
- * [RemanenceLocalDatabase.MIGRATION_3_4]) and is invisible to every
- * owner-scoped query.
+ * access path. The empty owner value is an unattributed row and is invisible
+ * to every owner-scoped query.
  */
 @Entity(
     tableName = "incoming_capsule",

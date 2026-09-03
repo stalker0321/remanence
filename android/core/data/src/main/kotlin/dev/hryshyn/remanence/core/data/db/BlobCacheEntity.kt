@@ -17,8 +17,8 @@ enum class BlobCacheState {
  * app-private file path, never a content URI shareable with other apps.
  *
  * M2-P02 account scoping: [ownerUserId] binds the cache entry to its
- * immutable local account ('' only for legacy rows the v3→v4 migration could
- * not attribute).
+ * immutable local account; an empty owner is unattributed and inaccessible
+ * through the owner-scoped DAO surface.
  */
 @Entity(
     tableName = "blob_cache",

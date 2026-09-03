@@ -156,7 +156,6 @@ class CreateUiHappyPathTest {
 
         override suspend fun persist(
             capsuleId: String,
-            side: dev.hryshyn.remanence.core.data.db.FingerprintSide,
             origin: dev.hryshyn.remanence.core.data.db.FingerprintOrigin,
             profileId: String,
             plaintextBytes: ByteArray,
@@ -168,18 +167,16 @@ class CreateUiHappyPathTest {
 
         override suspend fun hasBaseline(
             capsuleId: String,
-            side: dev.hryshyn.remanence.core.data.db.FingerprintSide,
             origin: dev.hryshyn.remanence.core.data.db.FingerprintOrigin,
         ): Boolean = stored.isNotEmpty()
 
         override suspend fun decrypt(fingerprintId: String): ByteArray =
             requireNotNull(stored[fingerprintId])
 
-        override suspend fun setPreferredPair(capsuleId: String, origin: dev.hryshyn.remanence.core.data.db.FingerprintOrigin) = Unit
+        override suspend fun setPreferredOrigin(capsuleId: String, origin: dev.hryshyn.remanence.core.data.db.FingerprintOrigin) = Unit
 
         override suspend fun deleteBaseline(
             capsuleId: String,
-            side: dev.hryshyn.remanence.core.data.db.FingerprintSide,
             origin: dev.hryshyn.remanence.core.data.db.FingerprintOrigin,
         ) = Unit
     }

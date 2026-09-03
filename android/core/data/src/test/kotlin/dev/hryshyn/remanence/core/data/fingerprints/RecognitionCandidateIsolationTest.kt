@@ -20,7 +20,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
-import dev.hryshyn.remanence.core.data.db.FingerprintSide
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 
@@ -86,7 +85,7 @@ class RecognitionCandidateIsolationTest {
         // --- logged in as A: sender baseline is sealed and indexed ---
         val storeA = store(ownerA)
         val frontId = storeA.persist(
-            capsuleId, FingerprintSide.FRONT, FingerprintOrigin.SENDER, profileId, bytesOf(1),
+            capsuleId, FingerprintOrigin.SENDER, profileId, bytesOf(1),
         )
         // The index source itself has A's candidates before logout:
         assertEquals(1, database.recognitionFingerprintDao().getAllForOwner(ownerA).size)
@@ -101,9 +100,9 @@ class RecognitionCandidateIsolationTest {
         assertNull(database.recognitionFingerprintDao().getByFingerprintIdAndOwner(frontId, ownerB))
         assertThrows(IllegalStateException::class.java) { runBlocking { storeB.decrypt(frontId) } }
 
-        // No baseline visibility and no preferred-pair influence on A's rows.
-        assertFalse(storeB.hasBaseline(capsuleId, FingerprintSide.FRONT, FingerprintOrigin.SENDER))
-        storeB.setPreferredPair(capsuleId, FingerprintOrigin.SENDER)
+        // No baseline visibility and no preferred-origin influence on A's rows.
+        assertFalse(storeB.hasBaseline(capsuleId, FingerprintOrigin.SENDER))
+        storeB.setPreferredOrigin(capsuleId, FingerprintOrigin.SENDER)
         assertEquals(
             0,
             database.recognitionFingerprintDao().getAllByCapsuleIdAndOwner(capsuleId, ownerA)
@@ -123,7 +122,7 @@ class RecognitionCandidateIsolationTest {
         assertThrows(SQLiteConstraintException::class.java) {
             runBlocking {
                 storeB.persist(
-                    capsuleId, FingerprintSide.FRONT, FingerprintOrigin.SENDER, profileId, bytesOf(9),
+                    capsuleId, FingerprintOrigin.SENDER, profileId, bytesOf(9),
                 )
             }
         }

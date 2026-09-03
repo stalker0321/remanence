@@ -10,8 +10,8 @@ import androidx.room.PrimaryKey
  * opaque ciphertext bytes plus the transport hash. One envelope per capsule.
  *
  * M2-P02 account scoping: [ownerUserId] binds this envelope to its immutable
- * local account ('' only for legacy rows the v3→v4 migration could not
- * attribute).
+ * local account; an empty owner is unattributed and inaccessible through the
+ * owner-scoped DAO surface.
  */
 @Entity(
     tableName = "incoming_envelope",

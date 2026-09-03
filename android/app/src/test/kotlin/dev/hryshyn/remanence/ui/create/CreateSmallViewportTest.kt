@@ -111,28 +111,25 @@ class CreateSmallViewportTest {
 
         override suspend fun persist(
             capsuleId: String,
-            side: dev.hryshyn.remanence.core.data.db.FingerprintSide,
             origin: dev.hryshyn.remanence.core.data.db.FingerprintOrigin,
             profileId: String,
             plaintextBytes: ByteArray,
         ): String {
-            if (side == dev.hryshyn.remanence.core.data.db.FingerprintSide.FRONT) frontStored = true
+            frontStored = true
             return "fp"
         }
 
         override suspend fun hasBaseline(
             capsuleId: String,
-            side: dev.hryshyn.remanence.core.data.db.FingerprintSide,
             origin: dev.hryshyn.remanence.core.data.db.FingerprintOrigin,
-        ): Boolean = side == dev.hryshyn.remanence.core.data.db.FingerprintSide.FRONT && frontStored
+        ): Boolean = frontStored
 
         override suspend fun decrypt(fingerprintId: String): ByteArray = ByteArray(0)
 
-        override suspend fun setPreferredPair(capsuleId: String, origin: dev.hryshyn.remanence.core.data.db.FingerprintOrigin) = Unit
+        override suspend fun setPreferredOrigin(capsuleId: String, origin: dev.hryshyn.remanence.core.data.db.FingerprintOrigin) = Unit
 
         override suspend fun deleteBaseline(
             capsuleId: String,
-            side: dev.hryshyn.remanence.core.data.db.FingerprintSide,
             origin: dev.hryshyn.remanence.core.data.db.FingerprintOrigin,
         ) = Unit
     }

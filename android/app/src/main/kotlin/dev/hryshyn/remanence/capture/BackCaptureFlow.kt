@@ -1,6 +1,8 @@
 package dev.hryshyn.remanence.capture
 
 import dev.hryshyn.remanence.create.CreateSessionFingerprintRepository
+import dev.hryshyn.remanence.create.CreateCaptureSessionStore
+import dev.hryshyn.remanence.create.CaptureFingerprintSide
 import dev.hryshyn.remanence.create.SideFingerprintExtractor
 import dev.hryshyn.remanence.create.StagedSideFingerprint
 import java.util.concurrent.atomic.AtomicReference
@@ -8,23 +10,23 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import dev.hryshyn.remanence.core.data.db.FingerprintSide
 
 /**
  * I06: the prepared-back checklist gates the back capture, and the back can
- * only be persisted after the front baseline exists (docs/product.md sender
+ * only be staged after the front baseline exists (docs/product.md sender
  * flow step 6, recognition.md section 3). The flow mirrors [FrontCaptureFlow]
  * with two extra guards: checklist readiness and front-first ordering.
  *
  * FIX-STATE-01: a begun attempt ALWAYS terminates; FIX-STATE-03: CPU work on
- * [cpuDispatcher], sealed persistence on [ioDispatcher]. A locked checklist
- * is reported as Failed instead of crashing.
+ * [cpuDispatcher], capture-session handoff on [ioDispatcher]. A locked
+ * checklist is reported as Failed instead of crashing.
  */
 class BackCaptureFlow(
     private val checklistGate: PreparedBackGate,
     private val processor: StillProcessor,
     private val cpuDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val captureStore: CreateCaptureSessionStore = CreateCaptureSessionStore(),
 ) {
 
     private val queued = AtomicReference<StagedSideFingerprint?>()
@@ -37,7 +39,16 @@ class BackCaptureFlow(
     }
 
     fun createRepository(persistence: dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence) =
-        CreateSessionFingerprintRepository(persistence, extractor)
+        CreateSessionFingerprintRepository(persistence, extractor, captureStore)
+
+    /** Retrieves a copy of deferred BACK material for the current Create session. */
+    fun readStagedBack(fingerprintId: String): ByteArray? = captureStore.read(fingerprintId)
+
+    /** Consumes deferred BACK material after the session has finished with it. */
+    fun takeStagedBack(fingerprintId: String): ByteArray? = captureStore.take(fingerprintId)
+
+    /** Clears any deferred BACK material when the Create session is reset/closed. */
+    fun clearStagedMaterial() = captureStore.clear()
 
     /** True when every checklist item is explicitly confirmed. */
     fun readyToCapture(): Boolean = checklistGate.ready
@@ -68,7 +79,7 @@ class BackCaptureFlow(
                 }
                 is ProcessedStill.Accepted -> {
                     queued.set(
-                        StagedSideFingerprint(processed.profileId, FingerprintSide.FRONT, processed.serializedBytes),
+                        StagedSideFingerprint(processed.profileId, CaptureFingerprintSide.BACK, processed.serializedBytes),
                     )
                     val id = withContext(ioDispatcher) {
                         createRepository(persistence).captureBack(capsuleId)

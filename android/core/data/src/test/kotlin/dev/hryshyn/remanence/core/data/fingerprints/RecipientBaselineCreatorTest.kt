@@ -16,7 +16,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
-import dev.hryshyn.remanence.core.data.db.FingerprintSide
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 
@@ -45,9 +44,8 @@ class RecipientBaselineCreatorTest {
 
     private val capsuleId = "3c111111-2222-4333-8444-555555555555"
 
-    private fun front() = ReceivedSideCapture(
+    private fun front() = ReceivedFrontCapture(
         profileId = "mvp-orb-v1",
-        side = FingerprintSide.FRONT,
         serializedBytes = "fp-FRONT".toByteArray(),
     )
 
@@ -73,9 +71,9 @@ class RecipientBaselineCreatorTest {
 
     private suspend fun seedSenderFront(preferred: Boolean) {
         val store = EncryptedFingerprintStore(roots, XorSealerForRecipient(), database.recognitionFingerprintDao(), ownerUserIdProvider = { "5108f0a0-0000-7000-8000-00000000aa01" })
-        store.persist(capsuleId, FingerprintSide.FRONT, FingerprintOrigin.SENDER, "mvp-orb-v1", "sender-front".toByteArray())
+        store.persist(capsuleId, FingerprintOrigin.SENDER, "mvp-orb-v1", "sender-front".toByteArray())
         if (preferred) {
-            store.setPreferredPair(capsuleId, FingerprintOrigin.SENDER)
+            store.setPreferredOrigin(capsuleId, FingerprintOrigin.SENDER)
         }
     }
 
@@ -88,14 +86,13 @@ class RecipientBaselineCreatorTest {
         val rows = database.recognitionFingerprintDao().getAllByCapsuleIdAndOwner(capsuleId, OWNER)
         assertEquals(2, rows.size)
         val recipientRows = rows.filter { it.origin == FingerprintOrigin.RECIPIENT }
-        assertEquals(setOf(FingerprintSide.FRONT), recipientRows.map { it.side }.toSet())
         assertTrue(recipientRows.all { it.preferred })
         // Sender row survives untouched as the fallback, no longer preferred.
         val senderRows = rows.filter { it.origin == FingerprintOrigin.SENDER }
         assertTrue(senderRows.all { !it.preferred })
 
         // The recipient baseline is sealed and round-trips.
-        val frontRow = recipientRows.single { it.side == FingerprintSide.FRONT }
+        val frontRow = recipientRows.single()
         val store = EncryptedFingerprintStore(roots, XorSealerForRecipient(), database.recognitionFingerprintDao(), ownerUserIdProvider = { "5108f0a0-0000-7000-8000-00000000aa01" })
         assertEquals("fp-FRONT", String(store.decrypt(frontRow.fingerprintId)))
     }

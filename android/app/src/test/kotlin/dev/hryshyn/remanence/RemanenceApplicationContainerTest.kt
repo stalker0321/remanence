@@ -59,7 +59,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import dev.hryshyn.remanence.core.crypto.IdentityBundleRepository
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
-import dev.hryshyn.remanence.core.data.db.FingerprintSide as StoredFingerprintSide
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.sync.CapsuleUploadWorker
@@ -126,12 +125,11 @@ class RemanenceApplicationContainerTest {
         )
         container.fingerprintPersistence.persist(
             capsuleId = "capsule-1",
-            side = StoredFingerprintSide.FRONT,
             origin = FingerprintOrigin.SENDER,
             profileId = "mvp-orb-v1",
             plaintextBytes = "fp".toByteArray(),
         )
-        assertTrue(container.fingerprintPersistence.hasBaseline("capsule-1", StoredFingerprintSide.FRONT, FingerprintOrigin.SENDER))
+        assertTrue(container.fingerprintPersistence.hasBaseline("capsule-1", FingerprintOrigin.SENDER))
 
         container.sessionTokenStore.save(
             dev.hryshyn.remanence.core.crypto.SessionRefreshRecord(

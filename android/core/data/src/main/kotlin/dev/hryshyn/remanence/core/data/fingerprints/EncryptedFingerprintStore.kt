@@ -3,15 +3,14 @@ package dev.hryshyn.remanence.core.data.fingerprints
 import java.io.File
 import java.util.UUID
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
-import dev.hryshyn.remanence.core.data.db.FingerprintSide
 import dev.hryshyn.remanence.core.data.db.RecognitionFingerprintDao
 import dev.hryshyn.remanence.core.data.db.RecognitionFingerprintEntity
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.model.UserId
 
-/** Raised when the same (capsule, side, origin) baseline already exists. */
-class DuplicateFingerprintException(capsuleId: String, side: FingerprintSide) :
-    IllegalStateException("fingerprint baseline already captured for $capsuleId/$side")
+/** Raised when the same (capsule, origin) FRONT baseline already exists. */
+class DuplicateFingerprintException(capsuleId: String, origin: FingerprintOrigin) :
+    IllegalStateException("fingerprint FRONT baseline already captured for $capsuleId/$origin")
 
 /**
  * Persists postcard fingerprints only as sealed bytes in app-private files
@@ -69,7 +68,6 @@ class EncryptedFingerprintStore(
      */
     override suspend fun persist(
         capsuleId: String,
-        side: FingerprintSide,
         origin: FingerprintOrigin,
         profileId: String,
         plaintextBytes: ByteArray,
@@ -78,8 +76,8 @@ class EncryptedFingerprintStore(
         ensureOwnerRoot(owner.fingerprintsRoot)
         val existing =
             dao.getByCapsuleIdAndOriginAndOwner(capsuleId, origin, owner.ownerId.toRestString())
-        if (existing.any { it.side == side }) {
-            throw DuplicateFingerprintException(capsuleId, side)
+        if (existing.isNotEmpty()) {
+            throw DuplicateFingerprintException(capsuleId, origin)
         }
         require(plaintextBytes.isNotEmpty()) { "fingerprint bytes are empty" }
 
@@ -97,7 +95,6 @@ class EncryptedFingerprintStore(
                         fingerprintId = fingerprintId,
                         ownerUserId = owner.ownerId.toRestString(),
                         capsuleId = capsuleId,
-                        side = side,
                         origin = origin,
                         fingerprintProfileId = profileId,
                         encryptedPath = target.relativeTo(owner.fingerprintsRoot).path,
@@ -115,27 +112,25 @@ class EncryptedFingerprintStore(
 
     override suspend fun hasBaseline(
         capsuleId: String,
-        side: FingerprintSide,
         origin: FingerprintOrigin,
     ): Boolean {
         val owner = snapshotOwner()
         return dao.getByCapsuleIdAndOriginAndOwner(capsuleId, origin, owner.ownerId.toRestString())
-            .any { it.side == side }
+            .isNotEmpty()
     }
 
-    override suspend fun setPreferredPair(capsuleId: String, origin: FingerprintOrigin) {
+    override suspend fun setPreferredOrigin(capsuleId: String, origin: FingerprintOrigin) {
         val owner = snapshotOwner()
-        dao.setPreferredPairForOwner(capsuleId, origin, owner.ownerId.toRestString())
+        dao.setPreferredOriginForOwner(capsuleId, origin, owner.ownerId.toRestString())
     }
 
     override suspend fun deleteBaseline(
         capsuleId: String,
-        side: FingerprintSide,
         origin: FingerprintOrigin,
     ) {
         val owner = snapshotOwner()
         val entity = dao.getByCapsuleIdAndOriginAndOwner(capsuleId, origin, owner.ownerId.toRestString())
-            .firstOrNull { it.side == side } ?: return
+            .firstOrNull() ?: return
         owner.resolve(entity.encryptedPath).delete()
         check(dao.deleteByFingerprintIdAndOwner(entity.fingerprintId, owner.ownerId.toRestString()) == 1) {
             "owned baseline row vanished mid-delete"

@@ -39,7 +39,6 @@ import dev.hryshyn.remanence.core.crypto.RecipientEnvelopeCryptor
 import dev.hryshyn.remanence.core.recognition.CapsuleVerifier
 import dev.hryshyn.remanence.protocol.v1.RecipientEnvelopePlaintext
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
-import dev.hryshyn.remanence.core.data.db.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.FingerprintSide as RecognitionSide
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.fingerprints.EncryptedFingerprintStore
@@ -143,14 +142,9 @@ class CreateRescanOpenFlowTest {
 
     private suspend fun stagePublishedCapsule(): File {
         store().persist(
-            capsuleUuid.toString(), FingerprintSide.FRONT, FingerprintOrigin.SENDER,
+            capsuleUuid.toString(), FingerprintOrigin.SENDER,
             RecognitionProfile.mvpOrbV1().profileId,
             syntheticFingerprint(11, RecognitionSide.FRONT),
-        )
-        store().persist(
-            capsuleUuid.toString(), FingerprintSide.BACK, FingerprintOrigin.SENDER,
-            RecognitionProfile.mvpOrbV1().profileId,
-            syntheticFingerprint(22, RecognitionSide.BACK),
         )
         val prepared = CapsulePublisher(testWrapper, testAlias).publish(
             CapsulePublishRequest(
@@ -238,10 +232,8 @@ class CreateRescanOpenFlowTest {
 
         // ---------- SCAN through the REAL hierarchy and REAL verifier ----------
         val reopenedStore = store()
-        val frontRow = reopenedDbFingerprint(FingerprintSide.FRONT)
-        val backRow = reopenedDbFingerprint(FingerprintSide.BACK)
+        val frontRow = reopenedDbFingerprint()
         val decryptedFront = reopenedStore.decrypt(frontRow.fingerprintId)
-        val decryptedBack = reopenedStore.decrypt(backRow.fingerprintId)
 
         val engine = LocalMatchEngine(
             profile = RecognitionProfile.mvpOrbV1(),
@@ -257,8 +249,8 @@ class CreateRescanOpenFlowTest {
                 IndexedCandidate(
                     capsuleId = capsuleUuid,
                     front = dev.hryshyn.remanence.core.recognition.FingerprintCodec.parse(decryptedFront),
-                    recipientPreferred = backRow.origin == FingerprintOrigin.RECIPIENT &&
-                        backRow.preferred,
+                    recipientPreferred = frontRow.origin == FingerprintOrigin.RECIPIENT &&
+                        frontRow.preferred,
                 ),
             ),
         )
@@ -360,10 +352,10 @@ class CreateRescanOpenFlowTest {
 
     private fun dbDirFiles(dbDir: File): List<File> = dbDir.listFiles()?.toList() ?: emptyList()
 
-    private suspend fun reopenedDbFingerprint(side: FingerprintSide) =
+    private suspend fun reopenedDbFingerprint() =
         database.recognitionFingerprintDao()
             .getByCapsuleIdAndOriginAndOwner(capsuleUuid.toString(), FingerprintOrigin.SENDER, userUuid.toString())
-            .single { it.side == side }
+            .single()
 
     private fun indexOf(haystack: ByteArray, needle: ByteArray): Boolean {
         outer@ for (i in 0..haystack.size - needle.size) {

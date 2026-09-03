@@ -49,7 +49,7 @@ import org.robolectric.annotation.Config
 import dev.hryshyn.remanence.core.crypto.AccountIdentityGenerator
 import dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
-import dev.hryshyn.remanence.core.data.db.FingerprintSide
+import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.fingerprints.EncryptedFingerprintStore
 import dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager
@@ -211,12 +211,8 @@ class ScanGrantRoutingTest {
         val front = syntheticFingerprint(11, RecognitionSide.FRONT)
         val back = syntheticFingerprint(22, RecognitionSide.BACK)
         store().persist(
-            capsuleUuid.toString(), FingerprintSide.FRONT, FingerprintOrigin.SENDER,
+            capsuleUuid.toString(), FingerprintOrigin.SENDER,
             RecognitionProfile.mvpOrbV1().profileId, front,
-        )
-        store().persist(
-            capsuleUuid.toString(), FingerprintSide.BACK, FingerprintOrigin.SENDER,
-            RecognitionProfile.mvpOrbV1().profileId, back,
         )
         val retryStore = SenderRetryMaterialStore(roots)
         CapsuleOutboxStager(database, roots, retryStore).stage(
@@ -246,16 +242,11 @@ class ScanGrantRoutingTest {
 
     private suspend fun seedRecipientBaseline(capsuleId: UUID) {
         store().persist(
-            capsuleId.toString(), FingerprintSide.FRONT, FingerprintOrigin.RECIPIENT,
+            capsuleId.toString(), FingerprintOrigin.RECIPIENT,
             RecognitionProfile.mvpOrbV1().profileId,
             syntheticFingerprint(11, RecognitionSide.FRONT),
         )
-        store().persist(
-            capsuleId.toString(), FingerprintSide.BACK, FingerprintOrigin.RECIPIENT,
-            RecognitionProfile.mvpOrbV1().profileId,
-            syntheticFingerprint(22, RecognitionSide.BACK),
-        )
-        store().setPreferredPair(capsuleId.toString(), FingerprintOrigin.RECIPIENT)
+        store().setPreferredOrigin(capsuleId.toString(), FingerprintOrigin.RECIPIENT)
     }
 
     /**

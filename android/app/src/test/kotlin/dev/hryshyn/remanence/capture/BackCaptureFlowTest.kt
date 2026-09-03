@@ -7,45 +7,37 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
-import dev.hryshyn.remanence.core.data.db.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.QualityReason
 
 /**
  * FIX-STATE-01/02 regression proof for the checklist-gated back capture:
- * a locked checklist is a VISIBLE Failed attempt (never a crash), ordering is
- * enforced through sealed persistence failures, and every delivery terminates
- * its authoritative attempt.
+ * a locked checklist is a VISIBLE Failed attempt (never a crash), front-first
+ * ordering and session-local BACK staging are enforced, and every delivery
+ * terminates its authoritative attempt.
  */
 class BackCaptureFlowTest {
 
     private class FakePersistence : dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence {
         override suspend fun decrypt(fingerprintId: String): ByteArray = ByteArray(0)
 
-        val persisted = mutableListOf<Pair<FingerprintSide, String>>()
+        val persisted = mutableListOf<String>()
         var frontExists = false
-        var failBackNext = false
 
         override suspend fun persist(
             capsuleId: String,
-            side: FingerprintSide,
             origin: FingerprintOrigin,
             profileId: String,
             plaintextBytes: ByteArray,
         ): String {
-            if (failBackNext && side == FingerprintSide.BACK) {
-                failBackNext = false
-                throw IllegalStateException("disk full")
-            }
-            persisted += side to String(plaintextBytes)
-            if (side == FingerprintSide.FRONT) frontExists = true
+            persisted += String(plaintextBytes)
+            frontExists = true
             return "fp-${persisted.size}"
         }
 
-        override suspend fun hasBaseline(capsuleId: String, side: FingerprintSide, origin: FingerprintOrigin): Boolean =
-            side == FingerprintSide.FRONT && frontExists
+        override suspend fun hasBaseline(capsuleId: String, origin: FingerprintOrigin): Boolean = frontExists
 
-        override suspend fun setPreferredPair(capsuleId: String, origin: FingerprintOrigin) = Unit
-        override suspend fun deleteBaseline(capsuleId: String, side: FingerprintSide, origin: FingerprintOrigin) = Unit
+        override suspend fun setPreferredOrigin(capsuleId: String, origin: FingerprintOrigin) = Unit
+        override suspend fun deleteBaseline(capsuleId: String, origin: FingerprintOrigin) = Unit
     }
 
     private val capsuleId = UUID.randomUUID().toString()
@@ -90,20 +82,23 @@ class BackCaptureFlowTest {
     }
 
     @Test
-    fun confirmedChecklistFlowsBackThroughProcessorIntoPersistence() = runBlocking {
+    fun confirmedChecklistStagesBackWithoutRoomPersistence() = runBlocking {
         val gate = PreparedBackGate()
         val backFlow = BackCaptureFlow(gate, acceptingProcessor)
         val persistence = FakePersistence()
         // Front-first ordering: seed the front baseline.
-        persistence.persist(capsuleId, FingerprintSide.FRONT, FingerprintOrigin.SENDER, "mvp-orb-v1", "orb-front".toByteArray())
+        persistence.persist(capsuleId, FingerprintOrigin.SENDER, "mvp-orb-v1", "orb-front".toByteArray())
         fullyConfirmed(gate)
         val controller = capturingController()
 
         val outcome = backFlow.onJpegDelivered("jpeg".toByteArray(), capsuleId, persistence, controller)
 
-        assertEquals(FrontCaptureOutcome.Captured("fp-2"), outcome)
+        assertTrue(outcome is FrontCaptureOutcome.Captured)
+        val captured = outcome as FrontCaptureOutcome.Captured
+        assertTrue(captured.fingerprintId.startsWith("capture-"))
+        assertEquals("orb-back", String(backFlow.readStagedBack(captured.fingerprintId)!!))
         assertEquals(
-            listOf(FingerprintSide.FRONT to "orb-front", FingerprintSide.BACK to "orb-back"),
+            listOf("orb-front"),
             persistence.persisted,
         )
         assertEquals(CaptureAttemptPhase.Accepted, controller.phase)
@@ -116,7 +111,7 @@ class BackCaptureFlowTest {
         val rejecting = BackCaptureFlow(gate, rejectingProcessor)
         fullyConfirmed(gate)
         val persistence = FakePersistence()
-        persistence.persist(capsuleId, FingerprintSide.FRONT, FingerprintOrigin.SENDER, "mvp-orb-v1", ByteArray(1))
+        persistence.persist(capsuleId, FingerprintOrigin.SENDER, "mvp-orb-v1", ByteArray(1))
         val controller = capturingController()
 
         val outcome = rejecting.onJpegDelivered("jpeg".toByteArray(), capsuleId, persistence, controller)
@@ -129,21 +124,20 @@ class BackCaptureFlowTest {
         Unit
     }
 
-    /** FIX-STATE-01: even the persistence layer failing ends the attempt visibly. */
+    /** FIX-STATE-01: an unexpected capture failure still ends the attempt visibly. */
     @Test
-    fun persistenceFailureTerminatesTheAttemptAsFailed() = runBlocking {
+    fun processingFailureTerminatesTheAttemptAsFailed() = runBlocking {
         val gate = PreparedBackGate()
-        val backFlow = BackCaptureFlow(gate, acceptingProcessor)
+        val backFlow = BackCaptureFlow(gate, StillProcessor { throw IllegalStateException("processor failed") })
         val persistence = FakePersistence()
-        persistence.persist(capsuleId, FingerprintSide.FRONT, FingerprintOrigin.SENDER, "mvp-orb-v1", ByteArray(1))
-        persistence.failBackNext = true
+        persistence.persist(capsuleId, FingerprintOrigin.SENDER, "mvp-orb-v1", ByteArray(1))
         fullyConfirmed(gate)
         val controller = capturingController()
 
         val outcome = backFlow.onJpegDelivered("jpeg".toByteArray(), capsuleId, persistence, controller)
 
-        assertEquals(FrontCaptureOutcome.Failed("disk full"), outcome)
-        assertEquals(CaptureAttemptPhase.Failed(1L, "disk full"), controller.phase)
+        assertEquals(FrontCaptureOutcome.Failed("processor failed"), outcome)
+        assertEquals(CaptureAttemptPhase.Failed(1L, "processor failed"), controller.phase)
         Unit
     }
 }

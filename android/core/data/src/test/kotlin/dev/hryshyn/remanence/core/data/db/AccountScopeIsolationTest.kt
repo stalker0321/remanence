@@ -129,7 +129,6 @@ class AccountScopeIsolationTest {
             fingerprintId = id,
             ownerUserId = ownerUserId,
             capsuleId = capsuleId,
-            side = FingerprintSide.FRONT,
             origin = FingerprintOrigin.SENDER,
             fingerprintProfileId = "mvp-orb-v1",
             encryptedPath = "files/fingerprints/$id.bin",
@@ -245,7 +244,7 @@ class AccountScopeIsolationTest {
         }
         assertTrue(blobViolation.message!!.contains("another local account"))
 
-        // B cannot claim the same (capsule, side, origin) baseline either.
+        // B cannot claim the same (capsule, origin) baseline either.
         val fingerprintViolation = assertThrows(SQLiteConstraintException::class.java) {
             kotlinx.coroutines.runBlocking {
                 database.recognitionFingerprintDao()

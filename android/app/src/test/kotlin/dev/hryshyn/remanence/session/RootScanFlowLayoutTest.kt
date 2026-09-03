@@ -83,7 +83,6 @@ class RootScanFlowLayoutTest {
     private class NoPersistence : SealedFingerprintPersistence {
         override suspend fun persist(
             capsuleId: String,
-            side: dev.hryshyn.remanence.core.data.db.FingerprintSide,
             origin: dev.hryshyn.remanence.core.data.db.FingerprintOrigin,
             profileId: String,
             plaintextBytes: ByteArray,
@@ -91,17 +90,15 @@ class RootScanFlowLayoutTest {
 
         override suspend fun hasBaseline(
             capsuleId: String,
-            side: dev.hryshyn.remanence.core.data.db.FingerprintSide,
             origin: dev.hryshyn.remanence.core.data.db.FingerprintOrigin,
         ): Boolean = false
 
         override suspend fun decrypt(fingerprintId: String): ByteArray = ByteArray(0)
 
-        override suspend fun setPreferredPair(capsuleId: String, origin: dev.hryshyn.remanence.core.data.db.FingerprintOrigin) = Unit
+        override suspend fun setPreferredOrigin(capsuleId: String, origin: dev.hryshyn.remanence.core.data.db.FingerprintOrigin) = Unit
 
         override suspend fun deleteBaseline(
             capsuleId: String,
-            side: dev.hryshyn.remanence.core.data.db.FingerprintSide,
             origin: dev.hryshyn.remanence.core.data.db.FingerprintOrigin,
         ) = Unit
     }

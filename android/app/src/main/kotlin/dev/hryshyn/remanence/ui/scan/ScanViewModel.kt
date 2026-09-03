@@ -24,10 +24,9 @@ import dev.hryshyn.remanence.core.crypto.CapsuleAcceptanceInput
 import dev.hryshyn.remanence.core.crypto.CapsuleAcceptanceResult
 import dev.hryshyn.remanence.core.crypto.CapsuleKeysetParser
 import dev.hryshyn.remanence.core.crypto.RecipientEnvelopeCryptor
-import dev.hryshyn.remanence.core.data.db.FingerprintSide as DbFingerprintSide
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
-import dev.hryshyn.remanence.core.data.fingerprints.ReceivedSideCapture
+import dev.hryshyn.remanence.core.data.fingerprints.ReceivedFrontCapture
 import dev.hryshyn.remanence.core.data.fingerprints.RecipientBaselineCreator
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
 import dev.hryshyn.remanence.core.data.outbox.OutboxArtifactKind
@@ -411,10 +410,8 @@ class ScanViewModel internal constructor(
             .toSortedMap()
             .flatMap { (capsuleId, capsuleRows) ->
                 listOf(FingerprintOrigin.RECIPIENT, FingerprintOrigin.SENDER).mapNotNull { origin ->
-                    val pair = capsuleRows.filter { it.origin == origin }
-                    val frontRow = pair.singleOrNull { it.side == DbFingerprintSide.FRONT }
-                        ?: return@mapNotNull null
-                    // FRONT-only: BACK rows are ignored (legacy rows remain in DB but are not part of the index).
+                    val originRows = capsuleRows.filter { it.origin == origin }
+                    val frontRow = originRows.singleOrNull() ?: return@mapNotNull null
                     val frontBytes = try {
                         persistence.decrypt(frontRow.fingerprintId)
                     } catch (cancelled: CancellationException) {
@@ -430,7 +427,7 @@ class ScanViewModel internal constructor(
                             // engine; it searches recipient and sender
                             // FRONTs as separate universes.
                             recipientPreferred = origin == FingerprintOrigin.RECIPIENT &&
-                                pair.any { it.preferred },
+                                originRows.any { it.preferred },
                         )
                     } catch (_: Exception) {
                         null
@@ -456,7 +453,7 @@ class ScanViewModel internal constructor(
         fun retain(candidate: IndexedCandidate) {
             // Incoming and Room sender rows are the same sender reference for
             // one capsule. Keep the incoming copy when available, while never
-            // collapsing a recipient pair into that sender reference.
+            // collapsing a recipient candidate into that sender reference.
             if (mergedReferences.add(candidate.capsuleId to candidate.recipientPreferred)) {
                 merged += candidate
             }
@@ -894,7 +891,7 @@ class ScanViewModel internal constructor(
         try {
             RecipientBaselineCreator(persistence).createAfterVerifiedReceipt(
                 capsuleId = capsuleId,
-                front = ReceivedSideCapture(front.profileId, DbFingerprintSide.FRONT, front.serializedBytes),
+                front = ReceivedFrontCapture(front.profileId, front.serializedBytes),
             )
         } catch (_: dev.hryshyn.remanence.core.data.fingerprints.ImmutableBaselineException) {
             // The initial recipient baseline is immutable; later scans keep it.

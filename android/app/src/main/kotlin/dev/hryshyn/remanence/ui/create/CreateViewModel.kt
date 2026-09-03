@@ -310,6 +310,7 @@ class CreateViewModel(
         photoSelection.clear()
         noteEditor.reset()
         backGate.reset()
+        backFlow.clearStagedMaterial()
         frontAttempt.reset()
         backAttempt.reset()
         frontFingerprintId = null
@@ -684,7 +685,8 @@ class CreateViewModel(
         }
         ensureCurrent()
         val backBytes = try {
-            withContext(ioDispatcher) { persistence.decrypt(inputs.backFingerprintId) }
+            backFlow.readStagedBack(inputs.backFingerprintId)
+                ?: withContext(ioDispatcher) { persistence.decrypt(inputs.backFingerprintId) }
         } catch (_: Exception) {
             null
         }
@@ -842,6 +844,7 @@ class CreateViewModel(
         photoSelection.clear()
         noteEditor.reset()
         backGate.reset()
+        backFlow.clearStagedMaterial()
         frontAttempt.reset()
         backAttempt.reset()
         frontFingerprintId = null

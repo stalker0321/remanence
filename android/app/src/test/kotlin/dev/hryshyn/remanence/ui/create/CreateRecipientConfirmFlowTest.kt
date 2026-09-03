@@ -33,7 +33,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
-import dev.hryshyn.remanence.core.data.db.FingerprintSide
+import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
@@ -110,7 +110,6 @@ class CreateRecipientConfirmFlowTest {
     private class NoPersistence : SealedFingerprintPersistence {
         override suspend fun persist(
             capsuleId: String,
-            side: FingerprintSide,
             origin: FingerprintOrigin,
             profileId: String,
             plaintextBytes: ByteArray,
@@ -118,17 +117,15 @@ class CreateRecipientConfirmFlowTest {
 
         override suspend fun hasBaseline(
             capsuleId: String,
-            side: FingerprintSide,
             origin: FingerprintOrigin,
         ): Boolean = false
 
         override suspend fun decrypt(fingerprintId: String): ByteArray = ByteArray(0)
 
-        override suspend fun setPreferredPair(capsuleId: String, origin: FingerprintOrigin) = Unit
+        override suspend fun setPreferredOrigin(capsuleId: String, origin: FingerprintOrigin) = Unit
 
         override suspend fun deleteBaseline(
             capsuleId: String,
-            side: FingerprintSide,
             origin: FingerprintOrigin,
         ) = Unit
     }

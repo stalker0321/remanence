@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 8,
-    "identityHash": "f72888b255a4e72507be0c03ff291f59",
+    "identityHash": "8cb2a6a743dda7fd7b99f4fc600745b3",
     "entities": [
       {
         "tableName": "local_account",
@@ -528,7 +528,7 @@
       },
       {
         "tableName": "recognition_fingerprint",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`fingerprint_id` TEXT NOT NULL, `owner_user_id` TEXT NOT NULL DEFAULT '', `capsule_id` TEXT NOT NULL, `side` TEXT NOT NULL, `origin` TEXT NOT NULL, `fingerprint_profile_id` TEXT NOT NULL, `encrypted_path` TEXT NOT NULL, `created_at_epoch_ms` INTEGER NOT NULL, `preferred` INTEGER NOT NULL, PRIMARY KEY(`fingerprint_id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`fingerprint_id` TEXT NOT NULL, `owner_user_id` TEXT NOT NULL DEFAULT '', `capsule_id` TEXT NOT NULL, `origin` TEXT NOT NULL, `fingerprint_profile_id` TEXT NOT NULL, `encrypted_path` TEXT NOT NULL, `created_at_epoch_ms` INTEGER NOT NULL, `preferred` INTEGER NOT NULL, PRIMARY KEY(`fingerprint_id`))",
         "fields": [
           {
             "fieldPath": "fingerprintId",
@@ -546,12 +546,6 @@
           {
             "fieldPath": "capsuleId",
             "columnName": "capsule_id",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "side",
-            "columnName": "side",
             "affinity": "TEXT",
             "notNull": true
           },
@@ -594,15 +588,14 @@
         },
         "indices": [
           {
-            "name": "index_recognition_fingerprint_capsule_id_side_origin",
+            "name": "index_recognition_fingerprint_capsule_id_origin",
             "unique": true,
             "columnNames": [
               "capsule_id",
-              "side",
               "origin"
             ],
             "orders": [],
-            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_recognition_fingerprint_capsule_id_side_origin` ON `${TABLE_NAME}` (`capsule_id`, `side`, `origin`)"
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_recognition_fingerprint_capsule_id_origin` ON `${TABLE_NAME}` (`capsule_id`, `origin`)"
           },
           {
             "name": "index_recognition_fingerprint_owner_user_id",
@@ -665,7 +658,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'f72888b255a4e72507be0c03ff291f59')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '8cb2a6a743dda7fd7b99f4fc600745b3')"
     ]
   }
 }

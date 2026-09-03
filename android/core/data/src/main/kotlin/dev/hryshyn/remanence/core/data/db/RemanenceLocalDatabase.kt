@@ -5,7 +5,8 @@ import androidx.room.RoomDatabase
 
 /**
  * Local infrastructure database. Contains no content plaintext, no gallery or
- * inbox projection, and grows only through explicit versioned migrations.
+ * inbox projection. Version 8 is a clean-reset schema; old local rows are
+ * intentionally disposable and no legacy migration path is registered.
  */
 @Database(
     entities = [

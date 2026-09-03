@@ -17,7 +17,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
-import dev.hryshyn.remanence.core.data.db.FingerprintSide
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.db.RecognitionFingerprintDao
 import dev.hryshyn.remanence.core.data.db.RecognitionFingerprintEntity
@@ -128,7 +127,7 @@ class EncryptedFingerprintStoreTest {
         val sut = store()
         val plaintext = "fingerprint-bytes-π".toByteArray()
 
-        val id = sut.persist("capsule-a", FingerprintSide.FRONT, FingerprintOrigin.SENDER, "mvp-orb-v1", plaintext)
+        val id = sut.persist("capsule-a", FingerprintOrigin.SENDER, "mvp-orb-v1", plaintext)
 
         val entity = database.recognitionFingerprintDao().getByFingerprintIdAndOwner(id, OWNER_ID.toRestString())!!
         val onDisk = File(ownerFingerprintRoot, entity.encryptedPath).readBytes()
@@ -142,10 +141,10 @@ class EncryptedFingerprintStoreTest {
     @Test
     fun duplicateBaselineIsRejectedBeforeAnyWrite() = runBlocking {
         val sut = store()
-        val firstId = sut.persist("capsule-a", FingerprintSide.FRONT, FingerprintOrigin.SENDER, "mvp-orb-v1", byteArrayOf(1))
+        val firstId = sut.persist("capsule-a", FingerprintOrigin.SENDER, "mvp-orb-v1", byteArrayOf(1))
 
         try {
-            sut.persist("capsule-a", FingerprintSide.FRONT, FingerprintOrigin.SENDER, "mvp-orb-v1", byteArrayOf(2))
+            sut.persist("capsule-a", FingerprintOrigin.SENDER, "mvp-orb-v1", byteArrayOf(2))
             throw AssertionError("expected duplicate rejection")
         } catch (expected: DuplicateFingerprintException) {
             // correct
@@ -169,7 +168,7 @@ class EncryptedFingerprintStoreTest {
         )
 
         try {
-            sut.persist("capsule-a", FingerprintSide.FRONT, FingerprintOrigin.SENDER, "mvp-orb-v1", byteArrayOf(9))
+            sut.persist("capsule-a", FingerprintOrigin.SENDER, "mvp-orb-v1", byteArrayOf(9))
             throw AssertionError("expected insert failure")
         } catch (expected: IllegalStateException) {
             assertEquals("database exploded", expected.message)
@@ -180,12 +179,12 @@ class EncryptedFingerprintStoreTest {
     @Test
     fun hasBaselineReflectsPersistedState() = runBlocking {
         val sut = store()
-        assertFalse(sut.hasBaseline("capsule-c", FingerprintSide.FRONT, FingerprintOrigin.SENDER))
+        assertFalse(sut.hasBaseline("capsule-c", FingerprintOrigin.SENDER))
 
-        sut.persist("capsule-c", FingerprintSide.FRONT, FingerprintOrigin.SENDER, "mvp-orb-v1", byteArrayOf(1))
+        sut.persist("capsule-c", FingerprintOrigin.SENDER, "mvp-orb-v1", byteArrayOf(1))
 
-        assertTrue(sut.hasBaseline("capsule-c", FingerprintSide.FRONT, FingerprintOrigin.SENDER))
-        assertFalse(sut.hasBaseline("capsule-other", FingerprintSide.FRONT, FingerprintOrigin.SENDER))
+        assertTrue(sut.hasBaseline("capsule-c", FingerprintOrigin.SENDER))
+        assertFalse(sut.hasBaseline("capsule-other", FingerprintOrigin.SENDER))
     }
 
     @Test
@@ -198,7 +197,7 @@ class EncryptedFingerprintStoreTest {
             // correct
         }
 
-        val id = sut.persist("capsule-b", FingerprintSide.FRONT, FingerprintOrigin.SENDER, "mvp-orb-v1", byteArrayOf(3))
+        val id = sut.persist("capsule-b", FingerprintOrigin.SENDER, "mvp-orb-v1", byteArrayOf(3))
         database.recognitionFingerprintDao().deleteByCapsuleIdAndOwner("capsule-b", OWNER_ID.toRestString())
         try {
             sut.decrypt(id)
@@ -228,7 +227,7 @@ class EncryptedFingerprintStoreTest {
         )
 
         val id = swappingStore.persist(
-            "capsule-swap", FingerprintSide.FRONT, FingerprintOrigin.SENDER, "mvp-orb-v1", byteArrayOf(7),
+            "capsule-swap", FingerprintOrigin.SENDER, "mvp-orb-v1", byteArrayOf(7),
         )
 
         // Everything landed under the ORIGINAL owner only.

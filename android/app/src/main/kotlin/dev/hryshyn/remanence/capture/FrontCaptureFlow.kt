@@ -1,6 +1,7 @@
 package dev.hryshyn.remanence.capture
 
 import dev.hryshyn.remanence.create.CreateSessionFingerprintRepository
+import dev.hryshyn.remanence.create.CaptureFingerprintSide
 import dev.hryshyn.remanence.create.SideFingerprintExtractor
 import dev.hryshyn.remanence.create.StagedSideFingerprint
 import java.util.concurrent.atomic.AtomicReference
@@ -8,7 +9,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import dev.hryshyn.remanence.core.data.db.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.QualityReason
 import dev.hryshyn.remanence.core.recognition.FingerprintSide as RecognitionFingerprintSide
 import java.util.Locale
@@ -152,7 +152,7 @@ class FrontCaptureFlow(
                 }
                 is ProcessedStill.Accepted -> {
                     queued.set(
-                        StagedSideFingerprint(processed.profileId, FingerprintSide.FRONT, processed.serializedBytes),
+                        StagedSideFingerprint(processed.profileId, CaptureFingerprintSide.FRONT, processed.serializedBytes),
                     )
                     val id = withContext(ioDispatcher) {
                         createRepository(persistence).captureFront(capsuleId)

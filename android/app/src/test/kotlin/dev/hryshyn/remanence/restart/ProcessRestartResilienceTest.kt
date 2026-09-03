@@ -20,7 +20,7 @@ import dev.hryshyn.remanence.ui.navigation.AppNavigationController
 import dev.hryshyn.remanence.ui.navigation.AuthUiState
 import dev.hryshyn.remanence.ui.navigation.CapsuleAccess
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
-import dev.hryshyn.remanence.core.data.db.FingerprintSide
+import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.data.db.OutboxBlobUploadState
 import dev.hryshyn.remanence.core.data.db.OutboxCapsuleState
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
@@ -146,7 +146,6 @@ class ProcessRestartResilienceTest {
                     fingerprintId = "fp-1",
                     ownerUserId = OWNER_USER_ID,
                     capsuleId = capsuleId.toString(),
-                    side = FingerprintSide.FRONT,
                     origin = FingerprintOrigin.RECIPIENT,
                     fingerprintProfileId = "mvp-orb-v1",
                     encryptedPath = sealedFp.relativeTo(filesRoot).path,

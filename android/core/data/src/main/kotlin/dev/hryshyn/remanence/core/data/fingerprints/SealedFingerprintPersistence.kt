@@ -1,7 +1,6 @@
 package dev.hryshyn.remanence.core.data.fingerprints
 
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
-import dev.hryshyn.remanence.core.data.db.FingerprintSide
 
 /**
  * Persistence boundary for sealed local fingerprints; implemented by
@@ -12,16 +11,14 @@ interface SealedFingerprintPersistence {
 
     suspend fun persist(
         capsuleId: String,
-        side: FingerprintSide,
         origin: FingerprintOrigin,
         profileId: String,
         plaintextBytes: ByteArray,
     ): String
 
-    /** True when this capsule already holds a sealed [side]/[origin] baseline. */
+    /** True when this capsule already holds its sealed FRONT [origin] baseline. */
     suspend fun hasBaseline(
         capsuleId: String,
-        side: FingerprintSide,
         origin: FingerprintOrigin,
     ): Boolean
 
@@ -29,11 +26,10 @@ interface SealedFingerprintPersistence {
     suspend fun decrypt(fingerprintId: String): ByteArray
 
     /**
-     * Marks exactly the [origin] front/back pair of [capsuleId] as preferred
-     * and clears the flag from every other row of that capsule, demoting any
-     * previous pair (e.g. sender fallback) in one transaction.
+     * Marks the [origin] FRONT baseline of [capsuleId] as preferred and clears
+     * the flag from every other row of that capsule.
      */
-    suspend fun setPreferredPair(
+    suspend fun setPreferredOrigin(
         capsuleId: String,
         origin: FingerprintOrigin,
     )
@@ -41,7 +37,6 @@ interface SealedFingerprintPersistence {
     /** Best-effort removal of one sealed baseline row plus its ciphertext. */
     suspend fun deleteBaseline(
         capsuleId: String,
-        side: FingerprintSide,
         origin: FingerprintOrigin,
     )
 }

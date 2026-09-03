@@ -10,7 +10,7 @@ import androidx.room.Transaction
  * DAO over encrypted fingerprint records. Queries are scoped to one capsule;
  * no method projects an enumerable list of all memories to UI code.
  *
- * M2-P02/P03: every account-owned read, preferred-pair transition, and delete
+ * M2-P02/P03: every account-owned read, preferred-origin transition, and delete
  * REQUIRES the row's immutable owner_user_id; no unscoped account-owned query
  * exists. Writes insert only through [insertAll] with the authoritative owner.
  */
@@ -19,7 +19,7 @@ abstract class RecognitionFingerprintDao {
 
     /**
      * Strict owner-authorized insert. The complete batch is validated before
-     * the first Room write; duplicate (capsule, side, origin) baselines are
+     * the first Room write; duplicate (capsule, origin) baselines are
      * still rejected by the existing uniqueness constraint.
      */
     @Transaction
@@ -86,12 +86,12 @@ abstract class RecognitionFingerprintDao {
     ): List<RecognitionFingerprintEntity>
 
     /**
-     * Owner-guarded preferred-pair transition: marks exactly the two rows of
+     * Owner-guarded preferred-origin transition: marks the FRONT row of
      * [origin] for [capsuleId] of THIS account and clears the flag from every
      * other row of the same owned capsule.
      */
     @Transaction
-    open suspend fun setPreferredPairForOwner(capsuleId: String, origin: FingerprintOrigin, ownerUserId: String) {
+    open suspend fun setPreferredOriginForOwner(capsuleId: String, origin: FingerprintOrigin, ownerUserId: String) {
         clearPreferredForOwner(capsuleId, ownerUserId)
         markPreferredForOwner(capsuleId, origin, ownerUserId)
     }
@@ -104,8 +104,7 @@ abstract class RecognitionFingerprintDao {
 
     @Query(
         "UPDATE recognition_fingerprint SET preferred = 1 " +
-            "WHERE capsule_id = :capsuleId AND origin = :origin AND owner_user_id = :ownerUserId " +
-            "AND side = 'FRONT'",
+            "WHERE capsule_id = :capsuleId AND origin = :origin AND owner_user_id = :ownerUserId",
     )
     protected abstract suspend fun markPreferredForOwner(capsuleId: String, origin: FingerprintOrigin, ownerUserId: String)
 

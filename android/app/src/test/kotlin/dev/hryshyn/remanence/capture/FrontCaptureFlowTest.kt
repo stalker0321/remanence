@@ -9,7 +9,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
-import dev.hryshyn.remanence.core.data.db.FingerprintSide
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
 import dev.hryshyn.remanence.core.recognition.QualityReason
 
@@ -24,12 +23,11 @@ class FrontCaptureFlowTest {
     private class FakePersistence : SealedFingerprintPersistence {
         override suspend fun decrypt(fingerprintId: String): ByteArray = ByteArray(0)
 
-        val persisted = mutableListOf<Pair<FingerprintSide, ByteArray>>()
+        val persisted = mutableListOf<ByteArray>()
         var failNext = false
 
         override suspend fun persist(
             capsuleId: String,
-            side: FingerprintSide,
             origin: FingerprintOrigin,
             profileId: String,
             plaintextBytes: ByteArray,
@@ -38,16 +36,15 @@ class FrontCaptureFlowTest {
                 failNext = false
                 throw IllegalStateException("disk full")
             }
-            persisted += side to plaintextBytes
+            persisted += plaintextBytes
             return "fp-${persisted.size}"
         }
 
-        override suspend fun hasBaseline(capsuleId: String, side: FingerprintSide, origin: FingerprintOrigin): Boolean =
-            persisted.any { it.first == side }
+        override suspend fun hasBaseline(capsuleId: String, origin: FingerprintOrigin): Boolean = persisted.isNotEmpty()
 
-        override suspend fun setPreferredPair(capsuleId: String, origin: FingerprintOrigin) = Unit
+        override suspend fun setPreferredOrigin(capsuleId: String, origin: FingerprintOrigin) = Unit
 
-        override suspend fun deleteBaseline(capsuleId: String, side: FingerprintSide, origin: FingerprintOrigin) = Unit
+        override suspend fun deleteBaseline(capsuleId: String, origin: FingerprintOrigin) = Unit
     }
 
     private val CAPSULE_ID = java.util.UUID.randomUUID().toString()
@@ -78,8 +75,8 @@ class FrontCaptureFlowTest {
 
         assertTrue(outcome is FrontCaptureOutcome.Captured)
         assertEquals(
-            listOf(FingerprintSide.FRONT to "serialized-orb"),
-            persistence.persisted.map { it.first to String(it.second) },
+            listOf("serialized-orb"),
+            persistence.persisted.map { String(it) },
         )
         assertEquals(CaptureAttemptPhase.Accepted, controller.phase)
     }
@@ -183,7 +180,6 @@ class FrontCaptureFlowTest {
             var persistThread: String? = null
             override suspend fun persist(
                 capsuleId: String,
-                side: FingerprintSide,
                 origin: FingerprintOrigin,
                 profileId: String,
                 plaintextBytes: ByteArray,

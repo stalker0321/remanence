@@ -18,7 +18,6 @@ import dev.hryshyn.remanence.TestSenderVerification
 import dev.hryshyn.remanence.core.recognition.ExtractionQuality
 import dev.hryshyn.remanence.core.recognition.FingerprintCodec
 import dev.hryshyn.remanence.core.recognition.FingerprintKeypoint
-import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.PostcardFingerprint
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource
@@ -237,10 +236,10 @@ class IncomingSenderIndexCandidateProviderTest {
             senderHandleSnapshot = "sender_${capsule.toRestString().takeLast(4)}",
             createdAtEpochSeconds = 1_700_000_001L,
             placeLabel = "place_${capsule.toRestString().takeLast(4)}",
-            frontFingerprint = fingerprint(FingerprintSide.FRONT, 11),
+            frontFingerprint = fingerprint(11),
         )
 
-    private fun fingerprint(side: FingerprintSide, seed: Int): ByteArray = FingerprintCodec.serialize(
+    private fun fingerprint(seed: Int): ByteArray = FingerprintCodec.serialize(
         PostcardFingerprint(
             profileId = RecognitionProfile.MVP_ORB_V1_ID,
             canonicalWidthPx = 1200,

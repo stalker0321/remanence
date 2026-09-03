@@ -38,7 +38,6 @@ import dev.hryshyn.remanence.TestSenderVerification
 import dev.hryshyn.remanence.core.recognition.ExtractionQuality
 import dev.hryshyn.remanence.core.recognition.FingerprintCodec
 import dev.hryshyn.remanence.core.recognition.FingerprintKeypoint
-import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.PostcardFingerprint
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.identity.TrustedSenderKeyStore
@@ -1381,10 +1380,10 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
 
     private fun indexRecognition(): RecognitionManifestContent = verifiedPayload().recognition.copy(
         capsuleIdRaw = capsule.toProtoBytes().toByteArray(),
-        frontFingerprint = indexFingerprint(FingerprintSide.FRONT),
+        frontFingerprint = indexFingerprint(),
     )
 
-    private fun indexFingerprint(side: FingerprintSide): ByteArray = FingerprintCodec.serialize(
+    private fun indexFingerprint(): ByteArray = FingerprintCodec.serialize(
         PostcardFingerprint(
             profileId = RecognitionProfile.MVP_ORB_V1_ID,
             canonicalWidthPx = 1200,

@@ -47,7 +47,6 @@ import dev.hryshyn.remanence.capture.StillProcessor
 import dev.hryshyn.remanence.core.recognition.ExtractionQuality
 import dev.hryshyn.remanence.core.recognition.FingerprintCodec
 import dev.hryshyn.remanence.core.recognition.FingerprintKeypoint
-import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.PostcardFingerprint
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.core.recognition.ScanGrantManager
@@ -159,11 +158,9 @@ class IncomingPresentationPreparationTest {
     }
 
     @Test
-    fun repeatScanKeepsSenderFallbackPairAndOpensPreparedIncomingMaterialOffline() = runBlocking {
-        val front = scanFingerprint(FingerprintSide.FRONT, count = 64)
-        val back = scanFingerprint(FingerprintSide.BACK, count = 64)
-        val weakFront = scanFingerprint(FingerprintSide.FRONT, count = 3)
-        val weakBack = scanFingerprint(FingerprintSide.BACK, count = 3)
+    fun repeatScanUsesSenderFallbackAndOpensPreparedIncomingMaterialOffline() = runBlocking {
+        val front = scanFingerprint(count = 64)
+        val weakFront = scanFingerprint(count = 3)
         val fingerprintStore = EncryptedFingerprintStore(
             roots,
             fixture.sealer,
@@ -229,7 +226,9 @@ class IncomingPresentationPreparationTest {
             },
             presentationGrants = grants,
             frontProcessor = FixedScanProcessor(front),
-            backProcessor = FixedScanProcessor(back),
+            // BACK remains a deferred camera-session state transition; this
+            // fixture intentionally carries no second fingerprint payload.
+            backProcessor = CaptureOnlyBackProcessor(),
             candidateIndexProvider = { provider.load(it) },
             incomingPresentationPreparation = preparation(),
             cpuDispatcher = testDispatcher,
@@ -413,6 +412,12 @@ class IncomingPresentationPreparationTest {
             ProcessedStill.Accepted(RecognitionProfile.mvpOrbV1().profileId, serializedBytes)
     }
 
+    /** Deferred BACK capture marker; no incoming fingerprint is produced. */
+    private class CaptureOnlyBackProcessor : StillProcessor {
+        override fun process(jpegBytes: ByteArray): ProcessedStill =
+            ProcessedStill.Accepted(RecognitionProfile.mvpOrbV1().profileId, byteArrayOf(1))
+    }
+
     private fun readyCameras(scan: ScanViewModel) {
         listOf(scan.frontAttempt, scan.backAttempt).forEach { controller: CaptureAttemptController ->
             controller.onPermissionResult(granted = true, canAskAgain = false)
@@ -505,7 +510,7 @@ class IncomingPresentationPreparationTest {
             senderHandleSnapshot = "sender_1",
             createdAtEpochSeconds = 1_700_000_000L,
             placeLabel = "Paris",
-            frontFingerprint = fingerprint(FingerprintSide.FRONT),
+            frontFingerprint = fingerprint(),
         )
         val recognitionCiphertext = RecognitionManifestCodec().buildAndEncrypt(
             capsuleKeyset = capsuleKeyset,
@@ -622,7 +627,7 @@ class IncomingPresentationPreparationTest {
         path.writeBytes(bytes)
     }
 
-    private fun fingerprint(side: FingerprintSide): ByteArray = FingerprintCodec.serialize(
+    private fun fingerprint(): ByteArray = FingerprintCodec.serialize(
         PostcardFingerprint(
             profileId = RecognitionProfile.MVP_ORB_V1_ID,
             canonicalWidthPx = 1200,
@@ -643,7 +648,7 @@ class IncomingPresentationPreparationTest {
         ),
     )
 
-    private fun scanFingerprint(side: FingerprintSide, count: Int): ByteArray = FingerprintCodec.serialize(
+    private fun scanFingerprint(count: Int): ByteArray = FingerprintCodec.serialize(
         PostcardFingerprint(
             profileId = RecognitionProfile.MVP_ORB_V1_ID,
             canonicalWidthPx = 1200,

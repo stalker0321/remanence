@@ -49,7 +49,6 @@ import org.robolectric.annotation.Config
 import dev.hryshyn.remanence.core.crypto.AccountIdentityGenerator
 import dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
-import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.fingerprints.EncryptedFingerprintStore
 import dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager
@@ -58,7 +57,6 @@ import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.core.recognition.ScanGrantManager
-import dev.hryshyn.remanence.core.recognition.FingerprintSide as RecognitionSide
 import dev.hryshyn.remanence.scan.ScanSessionState
 import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 import dev.hryshyn.remanence.core.recognition.CandidateOrigin
@@ -163,13 +161,19 @@ class ScanGrantRoutingTest {
         }
     }
 
-    /** Accepts every still with EXACTLY the seeded side fingerprint bytes. */
+    /** Accepts the seeded FRONT fingerprint; capture BACK is state-only. */
     private class FixedProcessor(
         private val serializedBytes: ByteArray,
     ) : StillProcessor {
         private val profile = RecognitionProfile.mvpOrbV1()
         override fun process(jpegBytes: ByteArray): ProcessedStill =
             ProcessedStill.Accepted(profile.profileId, serializedBytes)
+    }
+
+    /** Deferred BACK capture marker; grants match exactly one FRONT payload. */
+    private class CaptureOnlyBackProcessor : StillProcessor {
+        override fun process(jpegBytes: ByteArray): ProcessedStill =
+            ProcessedStill.Accepted(RecognitionProfile.mvpOrbV1().profileId, byteArrayOf(1))
     }
 
     private fun store() = EncryptedFingerprintStore(
@@ -182,7 +186,7 @@ class ScanGrantRoutingTest {
         ownerUserIdProvider = { userUuid.toString() },
     )
 
-    private fun syntheticFingerprint(seed: Int, side: RecognitionSide): ByteArray {
+    private fun syntheticFingerprint(seed: Int): ByteArray {
         val profile = RecognitionProfile.mvpOrbV1()
         val keypoints = List(64) {
             dev.hryshyn.remanence.core.recognition.FingerprintKeypoint(
@@ -208,7 +212,7 @@ class ScanGrantRoutingTest {
 
     /** Publishes one real self-send capsule whose fingerprints match the scan. */
     private suspend fun stagePublishedCapsule() {
-        val front = syntheticFingerprint(11, RecognitionSide.FRONT)
+        val front = syntheticFingerprint(11)
         store().persist(
             capsuleUuid.toString(), FingerprintOrigin.SENDER,
             RecognitionProfile.mvpOrbV1().profileId, front,
@@ -242,7 +246,7 @@ class ScanGrantRoutingTest {
         store().persist(
             capsuleId.toString(), FingerprintOrigin.RECIPIENT,
             RecognitionProfile.mvpOrbV1().profileId,
-            syntheticFingerprint(11, RecognitionSide.FRONT),
+            syntheticFingerprint(11),
         )
         store().setPreferredOrigin(capsuleId.toString(), FingerprintOrigin.RECIPIENT)
     }
@@ -279,8 +283,8 @@ class ScanGrantRoutingTest {
             presentationGrants = presentationGrants,
             candidateIndexProvider = candidateIndexProvider,
             incomingPresentationPreparation = null,
-            frontProcessor = FixedProcessor(syntheticFingerprint(11, RecognitionSide.FRONT)),
-            backProcessor = FixedProcessor(syntheticFingerprint(22, RecognitionSide.BACK)),
+            frontProcessor = FixedProcessor(syntheticFingerprint(11)),
+            backProcessor = CaptureOnlyBackProcessor(),
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
         )
@@ -485,7 +489,7 @@ class ScanGrantRoutingTest {
                         dev.hryshyn.remanence.core.recognition.IndexedCandidate(
                             capsuleId = capsuleUuid,
                             front = dev.hryshyn.remanence.core.recognition.FingerprintCodec.parse(
-                                syntheticFingerprint(11, RecognitionSide.FRONT),
+                                syntheticFingerprint(11),
                             ),
                             recipientPreferred = false,
                         ),
@@ -572,10 +576,7 @@ class ScanGrantRoutingTest {
         val release = CompletableDeferred<Unit>()
         val finished = CompletableDeferred<Unit>()
         val front = dev.hryshyn.remanence.core.recognition.FingerprintCodec.parse(
-            syntheticFingerprint(11, RecognitionSide.FRONT),
-        )
-        val back = dev.hryshyn.remanence.core.recognition.FingerprintCodec.parse(
-            syntheticFingerprint(22, RecognitionSide.BACK),
+            syntheticFingerprint(11),
         )
         val duplicateCapsule = UUID.fromString("5f777777-8888-4999-aaaa-bbbbbbbbbbbb")
         val index = ScanCandidateIndex(

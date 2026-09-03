@@ -14,7 +14,6 @@ import dev.hryshyn.remanence.index.SenderIndexBundleStageResult
 import dev.hryshyn.remanence.core.recognition.ExtractionQuality
 import dev.hryshyn.remanence.core.recognition.FingerprintCodec
 import dev.hryshyn.remanence.core.recognition.FingerprintKeypoint
-import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.PostcardFingerprint
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import java.io.File
@@ -301,10 +300,10 @@ class SenderIndexBundlePersistenceAdapterTest {
     )
 
     private fun validRecognition() = recognition.copy(
-        frontFingerprint = fingerprint(FingerprintSide.FRONT),
+        frontFingerprint = fingerprint(),
     )
 
-    private fun fingerprint(side: FingerprintSide): ByteArray = FingerprintCodec.serialize(
+    private fun fingerprint(): ByteArray = FingerprintCodec.serialize(
         PostcardFingerprint(
             profileId = RecognitionProfile.MVP_ORB_V1_ID,
             canonicalWidthPx = 1200,

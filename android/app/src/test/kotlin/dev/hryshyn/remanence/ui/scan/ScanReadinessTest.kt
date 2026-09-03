@@ -24,7 +24,6 @@ import dev.hryshyn.remanence.core.model.LocalMaterialState
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.FingerprintCodec
-import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.IndexedCandidate
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.protocol.v1.PublishStatement
@@ -268,8 +267,7 @@ class ScanReadinessTest {
         includeCandidate: Boolean = true,
         scheduleGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null,
     ): ScanViewModel {
-        val frontBytes = serializedSynthetic(FingerprintSide.FRONT)
-        val backBytes = serializedSynthetic(FingerprintSide.BACK)
+        val frontBytes = serializedSynthetic()
         val vm = ScanViewModel(
             persistence = NoPersistence(),
             database = database,
@@ -292,7 +290,9 @@ class ScanReadinessTest {
                 ScanGrantManager(clockMillis = { 1_000L }),
             ),
             frontProcessor = FixedProcessor(frontBytes),
-            backProcessor = FixedProcessor(backBytes),
+            // BACK remains a deferred capture state transition; no second
+            // fingerprint is part of this incoming-readiness fixture.
+            backProcessor = CaptureOnlyBackProcessor(),
             candidateIndexProvider = { owner ->
                 if (!includeCandidate || owner != ownerA) return@ScanViewModel ScanCandidateIndex.EMPTY
                 ScanCandidateIndex(
@@ -387,6 +387,12 @@ class ScanReadinessTest {
             ProcessedStill.Accepted(RecognitionProfile.mvpOrbV1().profileId, serializedBytes)
     }
 
+    /** Deferred BACK capture marker; incoming matching consumes FRONT only. */
+    private class CaptureOnlyBackProcessor : StillProcessor {
+        override fun process(jpegBytes: ByteArray): ProcessedStill =
+            ProcessedStill.Accepted(RecognitionProfile.mvpOrbV1().profileId, byteArrayOf(1))
+    }
+
     private class NoPersistence : SealedFingerprintPersistence {
         override suspend fun persist(
             capsuleId: String,
@@ -413,7 +419,7 @@ class ScanReadinessTest {
         ) = Unit
     }
 
-    private fun serializedSynthetic(side: FingerprintSide): ByteArray {
+    private fun serializedSynthetic(): ByteArray {
         val keypoints = List(64) {
             dev.hryshyn.remanence.core.recognition.FingerprintKeypoint(
                 xNormalized = (it % 8) / 8.0,
@@ -429,10 +435,10 @@ class ScanReadinessTest {
                 profileId = profile.profileId,
                 canonicalWidthPx = profile.capture.canonicalLongEdgePx,
                 canonicalHeightPx = 1000,
-                coarseHash64 = if (side == FingerprintSide.FRONT) 11L else 22L,
+                coarseHash64 = 11L,
                 keypoints = keypoints,
                 descriptors = List(64) { i ->
-                    ByteArray(32) { ((i * 13 + it + side.ordinal) and 0xFF).toByte() }
+                    ByteArray(32) { ((i * 13 + it) and 0xFF).toByte() }
                 },
                 quality = dev.hryshyn.remanence.core.recognition.ExtractionQuality(200.0, 90.0, 0.01, 0.85),
             ),

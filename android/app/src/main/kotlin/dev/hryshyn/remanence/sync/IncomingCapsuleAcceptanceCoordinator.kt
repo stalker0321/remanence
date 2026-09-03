@@ -151,7 +151,8 @@ enum class IncomingVerifiedControlIndexPersistenceRejectionReason {
 
 /**
  * Mandatory A12 boundary. Implementations must return [Durable] only after
- * the verified fingerprints/hints are durably encrypted under this account;
+ * the verified FRONT fingerprint and chooser hints are durably encrypted under
+ * this account;
  * there is intentionally no no-op production implementation.
  */
 fun interface IncomingVerifiedControlIndexPersistencePort {
@@ -585,7 +586,7 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
     }
 
     /**
-     * Proves that an already advanced Room pair still has its owner-bound
+     * Proves that an already advanced Room state still has its owner-bound
      * encrypted index bundle before acknowledging replay. The snapshot is
      * deliberately close-only at this boundary and is closed on every exit.
      */

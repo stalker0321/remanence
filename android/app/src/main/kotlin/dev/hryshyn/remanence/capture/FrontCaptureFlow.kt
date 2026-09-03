@@ -1,7 +1,6 @@
 package dev.hryshyn.remanence.capture
 
 import dev.hryshyn.remanence.create.CreateSessionFingerprintRepository
-import dev.hryshyn.remanence.create.CaptureFingerprintSide
 import dev.hryshyn.remanence.create.SideFingerprintExtractor
 import dev.hryshyn.remanence.create.StagedSideFingerprint
 import java.util.concurrent.atomic.AtomicLong
@@ -190,14 +189,9 @@ class FrontCaptureFlow(
     private fun createRepository(
         persistence: dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence,
         owner: Long,
-    ) = CreateSessionFingerprintRepository(persistence, SideFingerprintExtractor { side ->
-        val staged = handoffQueue.take(owner)
-            ?: throw IllegalStateException("no processed still queued for $side")
-        if (staged.side != side) {
-            staged.serializedBytes.fill(0)
-            throw IllegalStateException("queued side ${staged.side} does not match $side")
-        }
-        staged
+    ) = CreateSessionFingerprintRepository(persistence, SideFingerprintExtractor {
+        handoffQueue.take(owner)
+            ?: throw IllegalStateException("no processed still queued")
     })
 
     suspend fun onJpegDelivered(
@@ -225,7 +219,6 @@ class FrontCaptureFlow(
                 if (result is ProcessedStill.Accepted) {
                     val staged = StagedSideFingerprint(
                         result.profileId,
-                        CaptureFingerprintSide.FRONT,
                         result.serializedBytes,
                     )
                     check(handoffQueue.offer(owner, staged)) { "capture superseded" }

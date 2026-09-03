@@ -2,13 +2,10 @@ package dev.hryshyn.remanence.ui.create
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import dev.hryshyn.remanence.capture.BackCaptureFlow
 import dev.hryshyn.remanence.capture.CaptureAttemptController
 import dev.hryshyn.remanence.capture.FrontCaptureFlow
 import dev.hryshyn.remanence.capture.FrontCaptureOutcome
-import dev.hryshyn.remanence.capture.PreparedBackGate
 import dev.hryshyn.remanence.create.RealStillFingerprintProcessor
-import dev.hryshyn.remanence.create.CreateCaptureSessionStore
 import dev.hryshyn.remanence.create.CapsulePublisher
 import dev.hryshyn.remanence.create.CapsulePublishRequest
 import com.google.crypto.tink.KeysetHandle
@@ -52,8 +49,8 @@ data class SenderIdentitySnapshot(
 /**
  * FIX-M1-007-11: the production Create flow over real components only -
  * directory resolve + explicit confirmation, front capture through the ORB
- * processor into sealed persistence, checklist-gated prepared back, Photo
- * Picker 3-5 plus bounded note, and ONE sealing path: the ciphertext-only
+ * processor into sealed persistence, Photo Picker 3-5 plus bounded note,
+ * and ONE sealing path: the ciphertext-only
  * publisher feeding the durable outbox and account-scoped upload work. There is no second, all-plaintext
  * route. Plaintext staging lives only inside [publish] and is cleared in a
  * finally-equivalent path; cancellation tears the session down.
@@ -92,10 +89,6 @@ class CreateViewModel(
      */
     frontProcessor: dev.hryshyn.remanence.capture.StillProcessor =
         RealStillFingerprintProcessor(profile, FingerprintSide.FRONT),
-    backProcessor: dev.hryshyn.remanence.capture.StillProcessor =
-        RealStillFingerprintProcessor(profile, FingerprintSide.BACK),
-    /** Session-memory-only BACK handoff; injectable only for lifecycle tests. */
-    captureStore: CreateCaptureSessionStore = CreateCaptureSessionStore(),
     private val cpuDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     /**
@@ -143,8 +136,6 @@ class CreateViewModel(
         RECIPIENT_LOOKUP,
         RECIPIENT_CONFIRM,
         FRONT,
-        BACK_CHECKLIST,
-        BACK,
         CONTENT,
         PUBLISHING,
         UPLOAD_PENDING,
@@ -200,26 +191,16 @@ class CreateViewModel(
     // Content state.
     val photoSelection = PhotoSelectionState()
     val noteEditor = NoteEditorState()
-    val backGate = PreparedBackGate()
 
     // ---------------------------------------------------------------------
-    // Authoritative capture attempts (FIX-STATE-01).
+    // Authoritative capture attempt (FIX-STATE-01).
     // ---------------------------------------------------------------------
 
     val frontAttempt = CaptureAttemptController()
-    val backAttempt = CaptureAttemptController()
 
     private val frontFlow = FrontCaptureFlow(frontProcessor, cpuDispatcher, ioDispatcher)
-    private val backFlow = BackCaptureFlow(
-        checklistGate = backGate,
-        processor = backProcessor,
-        cpuDispatcher = cpuDispatcher,
-        ioDispatcher = ioDispatcher,
-        captureStore = captureStore,
-    )
 
     private var frontFingerprintId: String? = null
-    private var backFingerprintId: String? = null
 
     /**
      * FIX-STATE-01: monotonic guard for delivered-still continuations. A new
@@ -317,12 +298,8 @@ class CreateViewModel(
         pickerVm.reset()
         photoSelection.clear()
         noteEditor.reset()
-        backGate.reset()
-        backFlow.clearStagedMaterial()
         frontAttempt.reset()
-        backAttempt.reset()
         frontFingerprintId = null
-        backFingerprintId = null
         _flowError.value = null
         _publishError.value = null
         _uploadStatus.value = CreateUploadStatus.NotStarted
@@ -425,9 +402,6 @@ class CreateViewModel(
     /** Shutter press for the FRONT; legal only from FRONT with a Ready camera. */
     fun beginFrontCapture(): Boolean = beginCapture(Step.FRONT, frontAttempt)
 
-    /** Shutter press for the prepared BACK; legal only from BACK with a Ready camera. */
-    fun beginBackCapture(): Boolean = beginCapture(Step.BACK, backAttempt)
-
     private fun beginCapture(expected: Step, attempt: CaptureAttemptController): Boolean {
         if (!requireStep(expected, "capture")) return false
         return try {
@@ -462,39 +436,10 @@ class CreateViewModel(
         }
     }
 
-    /** Camera bytes for the BACK; late callbacks without an attempt are inert. */
-    fun deliverBackJpeg(jpegBytes: ByteArray) {
-        if (!backAttempt.hasActiveAttempt) {
-            jpegBytes.fill(0)
-            return
-        }
-        if (!requireStep(Step.BACK, "back delivery")) {
-            jpegBytes.fill(0)
-            return
-        }
-        val generation = deliveryGeneration
-        viewModelScope.launch {
-            val outcome = backFlow.onJpegDelivered(jpegBytes, capsuleId, persistence, backAttempt)
-            if (generation != deliveryGeneration) {
-                if (outcome is FrontCaptureOutcome.Captured) {
-                    backFlow.takeStagedBack(outcome.fingerprintId)?.fill(0)
-                }
-                return@launch
-            }
-            applyBackOutcome(outcome)
-        }
-    }
-
     /** Explicit Retake after Rejected/Failed on the FRONT. */
     fun retakeFront() {
         if (!requireStep(Step.FRONT, "front retake")) return
         runCatchingRetake(frontAttempt)
-    }
-
-    /** Explicit Retake after Rejected/Failed on the BACK. */
-    fun retakeBack() {
-        if (!requireStep(Step.BACK, "back retake")) return
-        runCatchingRetake(backAttempt)
     }
 
     private fun runCatchingRetake(attempt: CaptureAttemptController) {
@@ -512,41 +457,12 @@ class CreateViewModel(
                 if (_step.value != Step.FRONT) return
                 frontFingerprintId = outcome.fingerprintId
                 clearGuardError()
-                _step.value = Step.BACK_CHECKLIST
+                _step.value = Step.CONTENT
             }
             // Rejected/Failed/Superseded stay on FRONT; reasons and failure
             // messages live on the authoritative controller.
             else -> Unit
         }
-    }
-
-    private suspend fun applyBackOutcome(outcome: FrontCaptureOutcome) {
-        when (outcome) {
-            is FrontCaptureOutcome.Captured -> {
-                if (_step.value != Step.BACK) {
-                    backFlow.takeStagedBack(outcome.fingerprintId)?.fill(0)
-                    return
-                }
-                backFingerprintId = outcome.fingerprintId
-                clearGuardError()
-                _step.value = Step.CONTENT
-            }
-            else -> Unit
-        }
-    }
-
-    /**
-     * Checklist confirmation. FIX-STATE-02 regression: this MUST advance to
-     * BACK once the readiness gate passed - never stay on BACK_CHECKLIST.
-     */
-    fun proceedToBackChecklist() {
-        if (!requireStep(Step.BACK_CHECKLIST, "checklist continue")) return
-        if (!backGate.ready) {
-            failGuard("every preparation item must be confirmed first")
-            return
-        }
-        clearGuardError()
-        _step.value = Step.BACK
     }
 
     // ---------------------------------------------------------------------
@@ -585,8 +501,8 @@ class CreateViewModel(
 
     fun startPublishing() {
         if (!requireStep(Step.CONTENT, "publishing")) return
-        if (!hasBothCaptures()) {
-            failGuard("both sides must be captured before publishing")
+        if (frontFingerprintId == null) {
+            failGuard("front must be captured before publishing")
             return
         }
         if (!photoSelection.canProceed) {
@@ -639,9 +555,6 @@ class CreateViewModel(
         job.cancel()
         return true
     }
-
-    private fun hasBothCaptures(): Boolean =
-        frontFingerprintId != null && backFingerprintId != null
 
     /**
      * FIX-STATE-06: EVERY publish failure - including identity resolution or
@@ -810,9 +723,7 @@ class CreateViewModel(
         } finally {
             // The FRONT decrypt result is a caller-owned handoff buffer. The
             // publisher consumes it synchronously; every return, failure,
-            // cancellation, or stale-session path wipes it here. Captured
-            // session BACK is never read for publication; beginSession and
-            // endSession wipe that session-memory store.
+            // cancellation, or stale-session path wipes it here.
             frontBytes?.fill(0)
         }
     }
@@ -880,12 +791,8 @@ class CreateViewModel(
         pickerVm.reset()
         photoSelection.clear()
         noteEditor.reset()
-        backGate.reset()
-        backFlow.clearStagedMaterial()
         frontAttempt.reset()
-        backAttempt.reset()
         frontFingerprintId = null
-        backFingerprintId = null
         _step.value = Step.RECIPIENT_LOOKUP
         _flowError.value = null
         _publishError.value = null

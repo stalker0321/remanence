@@ -5,7 +5,6 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import dev.hryshyn.remanence.capture.CaptureAttemptController
 import dev.hryshyn.remanence.capture.CaptureAttemptPhase
-import dev.hryshyn.remanence.capture.PreparedBackItem
 import dev.hryshyn.remanence.capture.ProcessedStill
 import dev.hryshyn.remanence.capture.StillProcessor
 import java.io.File
@@ -33,7 +32,6 @@ import dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.core.model.UserId
-import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.auth.SoftwareKekBoundary
 import dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper
@@ -57,8 +55,6 @@ class CreateGoldenTransitionTableTest {
     private val RECIPIENT_LOOKUP = CreateViewModel.Step.RECIPIENT_LOOKUP
     private val RECIPIENT_CONFIRM = CreateViewModel.Step.RECIPIENT_CONFIRM
     private val FRONT = CreateViewModel.Step.FRONT
-    private val BACK_CHECKLIST = CreateViewModel.Step.BACK_CHECKLIST
-    private val BACK = CreateViewModel.Step.BACK
     private val CONTENT = CreateViewModel.Step.CONTENT
     private val PUBLISHING = CreateViewModel.Step.PUBLISHING
 
@@ -94,7 +90,7 @@ class CreateGoldenTransitionTableTest {
         override fun process(jpegBytes: ByteArray): ProcessedStill = result
     }
 
-    private fun goldenSynthetic(side: FingerprintSide): ProcessedStill.Accepted {
+    private fun goldenSynthetic(): ProcessedStill.Accepted {
         val profile = RecognitionProfile.mvpOrbV1()
         val keypoints = List(64) {
             dev.hryshyn.remanence.core.recognition.FingerprintKeypoint(
@@ -172,8 +168,7 @@ class CreateGoldenTransitionTableTest {
             profile = RecognitionProfile.mvpOrbV1(),
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir),
             openPhotoSource = { error("unused") },
-            frontProcessor = Accepting(goldenSynthetic(FingerprintSide.FRONT)),
-            backProcessor = Accepting(goldenSynthetic(FingerprintSide.BACK)),
+            frontProcessor = Accepting(goldenSynthetic()),
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
             senderRetryKeysetWrapper = testWrapper,
@@ -205,37 +200,12 @@ class CreateGoldenTransitionTableTest {
                 vm.confirmRecipient()
                 bind(vm.frontAttempt)
             }
-            CreateViewModel.Step.BACK_CHECKLIST -> {
-                vm.onResolved(selfSnapshot())
-                vm.confirmRecipient()
-                bind(vm.frontAttempt)
-                assertTrue(vm.beginFrontCapture())
-                vm.deliverFrontJpeg("f".toByteArray())
-                // The readiness gate is part of reaching this state legally.
-                PreparedBackItem.entries.forEach { item -> vm.backGate.setChecked(item, true) }
-            }
-            CreateViewModel.Step.BACK -> {
-                // Full legal walk: lookup -> confirm -> front -> checklist -> BACK.
-                vm.onResolved(selfSnapshot())
-                vm.confirmRecipient()
-                bind(vm.frontAttempt)
-                assertTrue(vm.beginFrontCapture())
-                vm.deliverFrontJpeg("f".toByteArray())
-                PreparedBackItem.entries.forEach { item -> vm.backGate.setChecked(item, true) }
-                vm.proceedToBackChecklist()
-                bind(vm.backAttempt)
-            }
             CreateViewModel.Step.CONTENT -> {
                 vm.onResolved(selfSnapshot())
                 vm.confirmRecipient()
                 bind(vm.frontAttempt)
                 assertTrue(vm.beginFrontCapture())
                 vm.deliverFrontJpeg("f".toByteArray())
-                PreparedBackItem.entries.forEach { item -> vm.backGate.setChecked(item, true) }
-                vm.proceedToBackChecklist()
-                bind(vm.backAttempt)
-                assertTrue(vm.beginBackCapture())
-                vm.deliverBackJpeg("b".toByteArray())
                 // Content readiness belongs to reaching CONTENT legally.
                 repeat(3) { vm.photoSelection.toggle("content://$it") }
             }
@@ -268,7 +238,6 @@ class CreateGoldenTransitionTableTest {
         Row(RECIPIENT_LOOKUP, "confirm", Outcome.UNCHANGED_VISIBLE_ERROR),
         Row(RECIPIENT_LOOKUP, "restartLookup", Outcome.UNCHANGED_OK),
         Row(RECIPIENT_LOOKUP, "beginFront", Outcome.UNCHANGED_VISIBLE_ERROR),
-        Row(RECIPIENT_LOOKUP, "checklistContinue", Outcome.UNCHANGED_VISIBLE_ERROR),
         Row(RECIPIENT_LOOKUP, "publish", Outcome.UNCHANGED_VISIBLE_ERROR),
         // RECIPIENT_CONFIRM
         Row(RECIPIENT_CONFIRM, "resolve", Outcome.UNCHANGED_VISIBLE_ERROR),
@@ -279,26 +248,10 @@ class CreateGoldenTransitionTableTest {
         Row(FRONT, "resolve", Outcome.UNCHANGED_VISIBLE_ERROR),
         Row(FRONT, "confirm", Outcome.UNCHANGED_VISIBLE_ERROR),
         Row(FRONT, "beginFront", Outcome.UNCHANGED_OK), // attempt begins (phase-level)
-        Row(FRONT, "beginBack", Outcome.UNCHANGED_VISIBLE_ERROR),
-        Row(FRONT, "checklistContinue", Outcome.UNCHANGED_VISIBLE_ERROR),
         Row(FRONT, "publish", Outcome.UNCHANGED_VISIBLE_ERROR),
-        // BACK_CHECKLIST
-        Row(BACK_CHECKLIST, "checklistContinue", Outcome.TRANSITION_TO_TARGET, BACK),
-        Row(BACK_CHECKLIST, "beginFront", Outcome.UNCHANGED_VISIBLE_ERROR),
-        Row(BACK_CHECKLIST, "beginBack", Outcome.UNCHANGED_VISIBLE_ERROR),
-        Row(BACK_CHECKLIST, "publish", Outcome.UNCHANGED_VISIBLE_ERROR),
-        Row(BACK_CHECKLIST, "confirm", Outcome.UNCHANGED_VISIBLE_ERROR),
-        // BACK
-        Row(BACK, "beginBack", Outcome.UNCHANGED_OK),
-        Row(BACK, "beginFront", Outcome.UNCHANGED_VISIBLE_ERROR),
-        Row(BACK, "checklistContinue", Outcome.UNCHANGED_VISIBLE_ERROR),
-        Row(BACK, "publish", Outcome.UNCHANGED_VISIBLE_ERROR),
-        Row(BACK, "resolve", Outcome.UNCHANGED_VISIBLE_ERROR),
         // CONTENT
         Row(CONTENT, "publish", Outcome.TRANSITION_TO_TARGET, PUBLISHING),
         Row(CONTENT, "beginFront", Outcome.UNCHANGED_VISIBLE_ERROR),
-        Row(CONTENT, "beginBack", Outcome.UNCHANGED_VISIBLE_ERROR),
-        Row(CONTENT, "checklistContinue", Outcome.UNCHANGED_VISIBLE_ERROR),
         Row(CONTENT, "confirm", Outcome.UNCHANGED_VISIBLE_ERROR),
         Row(CONTENT, "resolve", Outcome.UNCHANGED_VISIBLE_ERROR),
     )
@@ -316,8 +269,6 @@ class CreateGoldenTransitionTableTest {
                 "confirm" -> vm.confirmRecipient()
                 "restartLookup" -> vm.restartLookup()
                 "beginFront" -> vm.beginFrontCapture()
-                "beginBack" -> vm.beginBackCapture()
-                "checklistContinue" -> vm.proceedToBackChecklist()
                 "publish" -> vm.startPublishing()
                 else -> error("unknown event ${row.event}")
             }

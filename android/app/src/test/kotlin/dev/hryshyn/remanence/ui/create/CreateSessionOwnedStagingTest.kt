@@ -3,7 +3,6 @@ package dev.hryshyn.remanence.ui.create
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
-import dev.hryshyn.remanence.capture.PreparedBackItem
 import dev.hryshyn.remanence.capture.ProcessedStill
 import dev.hryshyn.remanence.capture.StillProcessor
 import java.io.File
@@ -226,7 +225,6 @@ class CreateSessionOwnedStagingTest {
                 }
             },
             frontProcessor = Accepting(FingerprintSide.FRONT),
-            backProcessor = Accepting(FingerprintSide.BACK),
             cpuDispatcher = Dispatchers.Default,
             ioDispatcher = Dispatchers.IO,
             photoNormalizer = normalizer,
@@ -245,13 +243,6 @@ class CreateSessionOwnedStagingTest {
         vm.frontAttempt.onPreviewBound()
         assertTrue(vm.beginFrontCapture())
         vm.deliverFrontJpeg("front".toByteArray())
-        awaitStep(vm, CreateViewModel.Step.BACK_CHECKLIST)
-        PreparedBackItem.entries.forEach { item -> vm.backGate.setChecked(item, true) }
-        vm.proceedToBackChecklist()
-        vm.backAttempt.onPermissionResult(true, false)
-        vm.backAttempt.onPreviewBound()
-        assertTrue(vm.beginBackCapture())
-        vm.deliverBackJpeg("back".toByteArray())
         awaitStep(vm, CreateViewModel.Step.CONTENT)
         vm.onPhotosPicked(photoIds)
         assertTrue(vm.noteEditor.onChange("owned staging note"))
@@ -310,9 +301,7 @@ class CreateSessionOwnedStagingTest {
         assertNull(vm.confirmedRecipient.value)
         assertTrue(vm.photoSelection.selectedIds.isEmpty())
         assertTrue(vm.noteEditor.isEmpty)
-        assertFalse(vm.backGate.ready)
         assertNull(vm.frontAttempt.phase)
-        assertNull(vm.backAttempt.phase)
         // The directory belongs to the still-running publication: untouched.
         assertTrue(oldDir.isDirectory)
 
@@ -526,9 +515,7 @@ class CreateSessionOwnedStagingTest {
         assertNotNull(vm.confirmedRecipient.value)
         assertTrue(vm.photoSelection.canProceed)
         assertEquals("owned staging note", vm.noteEditor.text)
-        assertTrue(vm.backGate.ready)
         assertNotNull(vm.frontAttempt.phase)
-        assertNotNull(vm.backAttempt.phase)
 
         vm.endSession()
 
@@ -541,9 +528,7 @@ class CreateSessionOwnedStagingTest {
         assertFalse(vm.photoSelection.canProceed)
         assertTrue(vm.noteEditor.isEmpty)
         assertFalse(vm.noteEditor.limitReached)
-        assertFalse(vm.backGate.ready)
         assertNull(vm.frontAttempt.phase)
-        assertNull(vm.backAttempt.phase)
         assertNull(vm.flowError.value)
         assertNull(vm.publishError.value)
         assertEquals(CreateViewModel.CreateUploadStatus.NotStarted, vm.uploadStatus.value)
@@ -558,7 +543,6 @@ class CreateSessionOwnedStagingTest {
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
         assertTrue(vm.photoSelection.selectedIds.isEmpty())
         assertTrue(vm.noteEditor.isEmpty)
-        assertFalse(vm.backGate.ready)
     }
 
     @Test

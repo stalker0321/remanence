@@ -15,7 +15,6 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import dev.hryshyn.remanence.capture.CapturePermissionStep
 import dev.hryshyn.remanence.capture.FakeStillCameraAdapter
-import dev.hryshyn.remanence.capture.PreparedBackItem
 import dev.hryshyn.remanence.capture.ProcessedStill
 import dev.hryshyn.remanence.capture.StillCameraAdapter
 import dev.hryshyn.remanence.capture.StillProcessor
@@ -54,10 +53,10 @@ import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 /**
  * FIX-STATE-08 (A): the create happy path driven through the REAL production
  * UI - typed handle lookup, explicit confirmation, FRONT capture through the
- * camera adapter seam, checklist boxes + Continue, BACK capture, three photos
- * via the production picker sink, note input, publish - ending UPLOAD_PENDING with
- * the capsule staged in the durable outbox. No ViewModel method is called
- * that the UI itself would not call.
+ * camera adapter seam, three photos via the production picker sink, note
+ * input, publish - ending UPLOAD_PENDING with the capsule staged in the
+ * durable outbox. No ViewModel method is called that the UI itself would not
+ * call.
  */
 private fun synthetic(side: FingerprintSide): ProcessedStill.Accepted {
     val profile = RecognitionProfile.mvpOrbV1()
@@ -145,8 +144,8 @@ class CreateUiHappyPathTest {
             DirectoryLookupResult.Found(selfSnapshot())
     }
 
-    private class AcceptingProcessor(private val side: FingerprintSide) : StillProcessor {
-        override fun process(jpegBytes: ByteArray): ProcessedStill = synthetic(side)
+    private class AcceptingProcessor : StillProcessor {
+        override fun process(jpegBytes: ByteArray): ProcessedStill = synthetic(FingerprintSide.FRONT)
     }
 
 
@@ -206,8 +205,7 @@ class CreateUiHappyPathTest {
                     java.io.ByteArrayInputStream("photo-$id".toByteArray())
                 }
             },
-            frontProcessor = AcceptingProcessor(FingerprintSide.FRONT),
-            backProcessor = AcceptingProcessor(FingerprintSide.BACK),
+            frontProcessor = AcceptingProcessor(),
             photoNormalizer = { input -> dev.hryshyn.remanence.create.NormalizedPhotoDto(input.copyOf(), 800, 600) },
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
@@ -260,30 +258,12 @@ class CreateUiHappyPathTest {
         composeRule.runOnIdle { live.get()!!.deliverFrame("front-frame".toByteArray()) }
         composeRule.waitForIdle()
 
-        // 4) Checklist boxes + Continue REALLY reach BACK.
-        PreparedBackItem.entries.forEach { item ->
-            scroll("checklist_${item.name}")
-            composeRule.onNodeWithTag("checklist_${item.name}").performClick()
-        }
-        scroll("create_back_ready")
-        composeRule.onNodeWithTag("create_back_ready").performClick()
-
-        // 5) BACK capture.
-        composeRule.runOnIdle {
-            vm.backAttempt.onPermissionResolved(CapturePermissionStep.Granted)
-        }
-        readyCamera()
-        scroll("capture_shutter_back")
-        composeRule.onNodeWithTag("capture_shutter_back").performClick()
-        composeRule.runOnIdle { live.get()!!.deliverFrame("back-frame".toByteArray()) }
-        composeRule.waitForIdle()
-
-        // 6) Content: three photos via THE production sink + note input.
+        // 4) Content: three photos via THE production sink + note input.
         scroll("create_pick_photos")
         composeRule.runOnIdle { vm.onPhotosPicked(listOf("u1", "u2", "u3")) }
         composeRule.onNodeWithTag("create_note_input").performTextInput("dear mama")
 
-        // 7) Publish.
+        // 5) Publish.
         scroll("create_publish")
         composeRule.onNodeWithTag("create_publish")
             .assertIsDisplayed()
@@ -311,7 +291,7 @@ class CreateUiHappyPathTest {
         val row = database.outboxCapsuleDao().getByCapsuleIdAndOwner(vm.capsuleId, userUuid.toString())
         assertTrue(row != null)
         assertEquals(OutboxCapsuleState.ENCRYPTED, row!!.state)
-        // FRONT is the only Room baseline; BACK remains session-memory-only.
+        // FRONT is the only baseline.
         assertEquals(1, persistence.stored.size)
         Unit
     }

@@ -19,10 +19,8 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hryshyn.remanence.capture.CaptureAttemptPhase
-import dev.hryshyn.remanence.capture.PreparedBackItem
 import dev.hryshyn.remanence.capture.ProcessedStill
 import dev.hryshyn.remanence.capture.StillProcessor
-import dev.hryshyn.remanence.create.CreateCaptureSessionStore
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
@@ -212,7 +210,6 @@ class CreateContentPublishRecoveryTest {
     private fun contentStage(
         identityGate: CompletableDeferred<SenderIdentitySnapshot>? = null,
         enqueueUpload: suspend (UserId, CapsuleId) -> Unit = { _, _ -> },
-        captureStore: CreateCaptureSessionStore = CreateCaptureSessionStore(),
         ioDispatcher: CoroutineDispatcher = testDispatcher,
     ): Triple<CreateViewModel, RecordingPersistence, androidx.compose.ui.test.junit4.ComposeTestRule> {
         val persistence = RecordingPersistence()
@@ -229,8 +226,6 @@ class CreateContentPublishRecoveryTest {
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir()),
             openPhotoSource = { error("picker streams not used here") },
             frontProcessor = ScriptedProcessor(synthetic(FingerprintSide.FRONT)),
-            backProcessor = ScriptedProcessor(synthetic(FingerprintSide.BACK)),
-            captureStore = captureStore,
             photoNormalizer = { input -> dev.hryshyn.remanence.create.NormalizedPhotoDto(input.copyOf(), 800, 600) },
             cpuDispatcher = testDispatcher,
             ioDispatcher = ioDispatcher,
@@ -247,13 +242,6 @@ class CreateContentPublishRecoveryTest {
         vm.frontAttempt.onPreviewBound()
         assertTrue(vm.beginFrontCapture())
         vm.deliverFrontJpeg("f".toByteArray())
-        awaitStep(vm, CreateViewModel.Step.BACK_CHECKLIST)
-        PreparedBackItem.entries.forEach { item -> vm.backGate.setChecked(item, true) }
-        vm.proceedToBackChecklist()
-        vm.backAttempt.onPermissionResult(true, false)
-        vm.backAttempt.onPreviewBound()
-        assertTrue(vm.beginBackCapture())
-        vm.deliverBackJpeg("b".toByteArray())
         awaitStep(vm, CreateViewModel.Step.CONTENT)
         return Triple(vm, persistence, composeRule)
     }
@@ -429,49 +417,6 @@ class CreateContentPublishRecoveryTest {
             assertTrue(database.outboxCapsuleDao().getByCapsuleIdAndOwner(vm.capsuleId, userUuid.toString()) == null)
         }
         Unit
-    }
-
-    @Test
-    fun publishingDoesNotConsumeBackAndNeverFallsBackToPersistenceDecrypt() = runBlocking {
-        val gate = CompletableDeferred<SenderIdentitySnapshot>().apply { complete(senderIdentity()) }
-        val taken = mutableListOf<ByteArray>()
-        val wipedStored = mutableListOf<ByteArray>()
-        val store = CreateCaptureSessionStore(
-            wipeObserver = { wipedStored += it },
-            takeObserver = { taken += it },
-        )
-        val (vm, persistence, _) = contentStage(
-            identityGate = gate,
-            enqueueUpload = { _, _ -> throw IllegalStateException("queue unavailable") },
-            captureStore = store,
-        )
-        vm.onPhotosPicked(listOf("p1", "p2", "p3"))
-        assertTrue(vm.noteEditor.onChange("strict back"))
-
-        // Publication reads only the Room FRONT baseline. Session BACK stays
-        // untouched and is never asked of persistence.
-        vm.startPublishing()
-        awaitTerminal(vm)
-        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
-        assertEquals(listOf("fp-1"), persistence.decryptIds)
-        assertTrue(taken.isEmpty())
-        assertTrue(wipedStored.isEmpty())
-        assertTrue(persistence.decryptedBuffers.single().all { it == 0.toByte() })
-
-        // Retry still has the session BACK and decrypts FRONT again. It must
-        // not ask Room for a capture-* BACK id.
-        vm.startPublishing()
-        awaitTerminal(vm)
-        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
-        assertEquals(listOf("fp-1", "fp-1"), persistence.decryptIds)
-        assertTrue(persistence.decryptIds.none { it.startsWith("capture-") })
-        assertTrue(taken.isEmpty())
-        assertTrue(persistence.decryptedBuffers.all { it.all { byte -> byte == 0.toByte() } })
-
-        vm.endSession()
-        assertEquals(1, wipedStored.size)
-        assertTrue(wipedStored.single().all { it == 0.toByte() })
-        assertTrue(taken.isEmpty())
     }
 
     @Test

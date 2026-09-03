@@ -6,7 +6,6 @@ import androidx.test.core.app.ApplicationProvider
 import com.google.crypto.tink.TinkProtoKeysetFormat
 import com.google.crypto.tink.subtle.Base64
 import dev.hryshyn.remanence.capture.CaptureAttemptController
-import dev.hryshyn.remanence.capture.PreparedBackItem
 import dev.hryshyn.remanence.capture.ProcessedStill
 import dev.hryshyn.remanence.capture.StillProcessor
 import dev.hryshyn.remanence.core.crypto.AccountIdentityGenerator
@@ -172,7 +171,7 @@ class CreateRecipientPublicationBindingTest {
     }
 
     /**
-     * Drives one create session through FRONT + BACK + CONTENT and lands the
+     * Drives one create session through FRONT + CONTENT and lands the
      * VM at CONTENT with the given [snapshot] bound into the confirmed
      * recipient store. The sender identity is the local account under test.
      */
@@ -207,7 +206,6 @@ class CreateRecipientPublicationBindingTest {
                 }
             },
             frontProcessor = Accepting(FingerprintSide.FRONT),
-            backProcessor = Accepting(FingerprintSide.BACK),
             photoNormalizer = { input ->
                 dev.hryshyn.remanence.create.NormalizedPhotoDto(input.copyOf(), 800, 600)
             },
@@ -224,12 +222,6 @@ class CreateRecipientPublicationBindingTest {
         vm.frontAttempt.onPreviewBound()
         assertTrue(vm.beginFrontCapture())
         vm.deliverFrontJpeg("f".toByteArray())
-        PreparedBackItem.entries.forEach { item -> vm.backGate.setChecked(item, true) }
-        vm.proceedToBackChecklist()
-        vm.backAttempt.onPermissionResult(true, false)
-        vm.backAttempt.onPreviewBound()
-        assertTrue(vm.beginBackCapture())
-        vm.deliverBackJpeg("b".toByteArray())
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         vm.onPhotosPicked(listOf("p1", "p2", "p3"))
         assertTrue(vm.noteEditor.onChange("binding note"))

@@ -157,7 +157,7 @@ class FrontCaptureFlowTest {
             if (owner == 1L) {
                 queue.offer(
                     owner + 1,
-                    StagedSideFingerprint("mvp-orb-v1", dev.hryshyn.remanence.create.CaptureFingerprintSide.FRONT, newerBytes),
+                    StagedSideFingerprint("mvp-orb-v1", newerBytes),
                 )
             }
         }

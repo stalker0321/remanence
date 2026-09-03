@@ -5,7 +5,6 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import dev.hryshyn.remanence.capture.CaptureAttemptPhase
 import dev.hryshyn.remanence.capture.FrontCaptureOutcome
-import dev.hryshyn.remanence.capture.PreparedBackItem
 import dev.hryshyn.remanence.capture.ProcessedStill
 import dev.hryshyn.remanence.capture.StillProcessor
 import com.google.crypto.tink.TinkProtoKeysetFormat
@@ -47,9 +46,7 @@ import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 
 /**
  * FIX-STATE-02 regression proof: THE create transition table. Every event is
- * legal only from its own step; accepted FRONT reaches BACK_CHECKLIST, the
- * checklist Continue REALLY reaches BACK (the old code looped
- * BACK_CHECKLIST->BACK_CHECKLIST), accepted BACK reaches CONTENT, and publish
+ * legal only from its own step; accepted FRONT reaches CONTENT, and publish
  * success/failure terminates visibly. Out-of-order events fail closed with a
  * visible recovery message - never a crash.
  */
@@ -205,7 +202,6 @@ class CreateTransitionTableTest {
 
     private fun viewModel(
         frontProcessor: StillProcessor,
-        backProcessor: StillProcessor,
         identityProvider: suspend () -> SenderIdentitySnapshot? = {
             SenderIdentitySnapshot(
                 userId = userUuid.toString(),
@@ -235,7 +231,6 @@ class CreateTransitionTableTest {
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir),
             openPhotoSource = openPhotoSource,
             frontProcessor = frontProcessor,
-            backProcessor = backProcessor,
             // FIX-STATE-08: deterministic normalization keeps publishing
             // exercisable without native image decoding in JVM tests.
             photoNormalizer = { input -> dev.hryshyn.remanence.create.NormalizedPhotoDto(input.copyOf(), 800, 600) },
@@ -275,45 +270,15 @@ class CreateTransitionTableTest {
         vm.deliverFrontJpeg(bytes.toByteArray())
     }
 
-    private fun deliverBack(vm: CreateViewModel, bytes: String = "jpeg-back") {
-        assertTrue(vm.beginBackCapture())
-        vm.deliverBackJpeg(bytes.toByteArray())
-    }
-
-    private fun confirmChecklist(vm: CreateViewModel) {
-        PreparedBackItem.entries.forEach { item -> vm.backGate.setChecked(item, true) }
-        vm.proceedToBackChecklist()
-    }
-
     // ------------------------------------------------------------------
     // The transition table.
     // ------------------------------------------------------------------
 
     @Test
-    fun checklistContinueAdvancesToFrontlessBackCapture_regression() {
-        val front = ScriptedProcessor(ScriptedProcessor.Scripted.Accept(syntheticFingerprint(11, FingerprintSide.FRONT)))
-        val back = ScriptedProcessor(ScriptedProcessor.Scripted.Accept(syntheticFingerprint(22, FingerprintSide.BACK)))
-        val (vm, _) = viewModel(front, back)
-
-        confirmRecipient(vm)
-        deliverFront(vm)
-
-        assertEquals(CreateViewModel.Step.BACK_CHECKLIST, vm.step.value)
-        confirmChecklist(vm)
-
-        // FIX-STATE-02 core regression: Continue MUST reach BACK; the old
-        // production code stayed on BACK_CHECKLIST forever.
-        assertEquals(CreateViewModel.Step.BACK, vm.step.value)
-        assertNull(vm.flowError.value)
-    }
-
-    @Test
     fun goldenHappyPathFromLookupThroughUploadPending() = runBlocking {
         val front = ScriptedProcessor(ScriptedProcessor.Scripted.Accept(syntheticFingerprint(11, FingerprintSide.FRONT)))
-        val back = ScriptedProcessor(ScriptedProcessor.Scripted.Accept(syntheticFingerprint(22, FingerprintSide.BACK)))
         val (vm, persistence) = viewModel(
             front,
-            back,
             openPhotoSource = { id ->
                 dev.hryshyn.remanence.create.PhotoSource {
                     java.io.ByteArrayInputStream("jpeg-payload-$id".toByteArray())
@@ -324,13 +289,6 @@ class CreateTransitionTableTest {
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
         confirmRecipient(vm)
         deliverFront(vm)
-        assertEquals(CreateViewModel.Step.BACK_CHECKLIST, vm.step.value)
-
-        // Content selection before the back capture must not leak forward.
-        confirmChecklist(vm)
-        assertEquals(CreateViewModel.Step.BACK, vm.step.value)
-        bindReady(vm.backAttempt)
-        deliverBack(vm)
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
 
         repeat(3) { index -> assertTrue(vm.photoSelection.toggle("content://photo/$index").let { true }) }
@@ -360,8 +318,7 @@ class CreateTransitionTableTest {
             ScriptedProcessor.Scripted.Reject(rejection),
             ScriptedProcessor.Scripted.Accept(syntheticFingerprint(11, FingerprintSide.FRONT)),
         )
-        val back = ScriptedProcessor(ScriptedProcessor.Scripted.Accept(syntheticFingerprint(22, FingerprintSide.BACK)))
-        val (vm, _) = viewModel(front, back)
+        val (vm, _) = viewModel(front)
         confirmRecipient(vm)
 
         // First TOO_BLURRY.
@@ -385,7 +342,7 @@ class CreateTransitionTableTest {
         bindReady(vm.frontAttempt)
         deliverFront(vm)
         assertEquals(CaptureAttemptPhase.Accepted, vm.frontAttempt.phase)
-        assertEquals(CreateViewModel.Step.BACK_CHECKLIST, vm.step.value)
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         assertNull(vm.flowError.value)
         assertEquals(3, front.calls)
     }
@@ -396,8 +353,7 @@ class CreateTransitionTableTest {
             ScriptedProcessor.Scripted.ThrowIllegalState,
             ScriptedProcessor.Scripted.Accept(syntheticFingerprint(11, FingerprintSide.FRONT)),
         )
-        val back = ScriptedProcessor(ScriptedProcessor.Scripted.Accept(syntheticFingerprint(22, FingerprintSide.BACK)))
-        val (vm, _) = viewModel(front, back)
+        val (vm, _) = viewModel(front)
         confirmRecipient(vm)
 
         deliverFront(vm)
@@ -409,38 +365,6 @@ class CreateTransitionTableTest {
         bindReady(vm.frontAttempt)
         deliverFront(vm)
         assertEquals(CaptureAttemptPhase.Accepted, vm.frontAttempt.phase)
-        assertEquals(CreateViewModel.Step.BACK_CHECKLIST, vm.step.value)
-    }
-
-    @Test
-    fun backSideMirrorsRejectionRetakeAndAcceptanceIntoContent() {
-        val front = ScriptedProcessor(ScriptedProcessor.Scripted.Accept(syntheticFingerprint(11, FingerprintSide.FRONT)))
-        val back = ScriptedProcessor(
-            ScriptedProcessor.Scripted.Reject(setOf(QualityReason.GLARE_EXCESSIVE)),
-            ScriptedProcessor.Scripted.ThrowIllegalState,
-            ScriptedProcessor.Scripted.Accept(syntheticFingerprint(22, FingerprintSide.BACK)),
-        )
-        val (vm, _) = viewModel(front, back)
-        confirmRecipient(vm)
-        deliverFront(vm)
-        confirmChecklist(vm)
-        assertEquals(CreateViewModel.Step.BACK, vm.step.value)
-        bindReady(vm.backAttempt)
-
-        deliverBack(vm)
-        assertEquals(CreateViewModel.Step.BACK, vm.step.value)
-        assertTrue(vm.backAttempt.phase is CaptureAttemptPhase.Rejected)
-
-        vm.retakeBack()
-        bindReady(vm.backAttempt)
-        deliverBack(vm)
-        assertTrue(vm.backAttempt.phase is CaptureAttemptPhase.Failed)
-        assertEquals(CreateViewModel.Step.BACK, vm.step.value)
-
-        vm.retakeBack()
-        bindReady(vm.backAttempt)
-        deliverBack(vm)
-        assertEquals(CaptureAttemptPhase.Accepted, vm.backAttempt.phase)
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
     }
 
@@ -454,8 +378,7 @@ class CreateTransitionTableTest {
             ScriptedProcessor.Scripted.Accept(syntheticFingerprint(11, FingerprintSide.FRONT)),
             ScriptedProcessor.Scripted.Accept(syntheticFingerprint(12, FingerprintSide.FRONT)),
         )
-        val back = ScriptedProcessor(ScriptedProcessor.Scripted.Accept(syntheticFingerprint(22, FingerprintSide.BACK)))
-        val (vm, _) = viewModel(front, back)
+        val (vm, _) = viewModel(front)
 
         // FRONT-step events during RECIPIENT_LOOKUP.
         assertFalse(vm.beginFrontCapture())
@@ -467,22 +390,14 @@ class CreateTransitionTableTest {
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
         assertNotNull(vm.flowError.value)
 
-        // Checklist continue requires BACK_CHECKLIST + readiness.
-        vm.proceedToBackChecklist()
-        assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
-
         // Publishing requires CONTENT.
         vm.startPublishing()
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
         assertTrue(vm.flowError.value!!.contains("CONTENT"))
 
-        // Walk to FRONT; wrong-side delivery is inert and visible.
+        // Walk to FRONT; stray capture calls are refused visibly.
         confirmRecipient(vm)
-        assertFalse(vm.beginBackCapture())
         assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
-        vm.deliverBackJpeg("stray".toByteArray())
-        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
-        assertEquals(0, back.calls)
 
         // Retake without a terminal attempt is refused.
         vm.retakeFront()
@@ -501,34 +416,29 @@ class CreateTransitionTableTest {
             ScriptedProcessor.Scripted.Reject(setOf(QualityReason.CARD_TOO_SMALL)),
             ScriptedProcessor.Scripted.Accept(syntheticFingerprint(11, FingerprintSide.FRONT)),
         )
-        val back = ScriptedProcessor(ScriptedProcessor.Scripted.Accept(syntheticFingerprint(22, FingerprintSide.BACK)))
-        val (vm, _) = viewModel(front, back)
+        val (vm, _) = viewModel(front)
         confirmRecipient(vm)
 
         deliverFront(vm)
         assertNotNull(vm.frontAttempt.phase as CaptureAttemptPhase.Rejected)
 
         // A guard violation leaves a message; the successful retry clears it.
-        vm.proceedToBackChecklist()
+        vm.startPublishing()
         assertNotNull(vm.flowError.value)
         vm.retakeFront()
         bindReady(vm.frontAttempt)
         deliverFront(vm)
-        assertEquals(CreateViewModel.Step.BACK_CHECKLIST, vm.step.value)
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         assertNull(vm.flowError.value)
     }
 
     @Test
     fun publishingFailureReturnsToContentPreservingInputsAndClearingStaging() = runBlocking {
         val front = ScriptedProcessor(ScriptedProcessor.Scripted.Accept(syntheticFingerprint(11, FingerprintSide.FRONT)))
-        val back = ScriptedProcessor(ScriptedProcessor.Scripted.Accept(syntheticFingerprint(22, FingerprintSide.BACK)))
-        val (vm, persistence) = viewModel(front, back, identityProvider = { null })
+        val (vm, persistence) = viewModel(front, identityProvider = { null })
 
         confirmRecipient(vm)
         deliverFront(vm)
-        confirmChecklist(vm)
-        bindReady(vm.backAttempt)
-        deliverBack(vm)
         repeat(3) { vm.photoSelection.toggle("content://keep/$it") }
         assertTrue(vm.noteEditor.onChange("still here"))
 
@@ -538,7 +448,7 @@ class CreateTransitionTableTest {
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         assertNotNull(vm.publishError.value)
         assertNull(vm.flowError.value)
-        // Selection, note, and both captured sides survive for the retry.
+        // Selection, note, and the captured front survive for the retry.
         assertTrue(vm.photoSelection.canProceed)
         assertEquals("still here", vm.noteEditor.text)
         assertTrue(persistence.stored.isNotEmpty())

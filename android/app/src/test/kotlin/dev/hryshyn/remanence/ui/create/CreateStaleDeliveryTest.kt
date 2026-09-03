@@ -132,7 +132,6 @@ class CreateStaleDeliveryTest {
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir),
             openPhotoSource = { error("unused") },
             frontProcessor = processor,
-            backProcessor = Accepting(),
             cpuDispatcher = cpuDispatcher,
             ioDispatcher = cpuDispatcher,
             senderRetryKeysetWrapper = testWrapper,
@@ -159,7 +158,6 @@ class CreateStaleDeliveryTest {
         vm.beginSession(2L)
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
         assertNull(vm.frontAttempt.phase)
-        assertNull(vm.backAttempt.phase)
 
         // NOW the abandoned pipeline finishes with ACCEPTANCE...
         cpuDispatcher.scheduler.advanceUntilIdle()

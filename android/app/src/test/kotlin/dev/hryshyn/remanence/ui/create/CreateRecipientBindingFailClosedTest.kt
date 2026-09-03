@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.google.crypto.tink.subtle.Base64
-import dev.hryshyn.remanence.capture.PreparedBackItem
 import dev.hryshyn.remanence.capture.ProcessedStill
 import dev.hryshyn.remanence.capture.StillProcessor
 import dev.hryshyn.remanence.core.crypto.AccountIdentityGenerator
@@ -241,7 +240,6 @@ class CreateRecipientBindingFailClosedTest {
             }
         },
         frontProcessor = Accepting(FingerprintSide.FRONT),
-        backProcessor = Accepting(FingerprintSide.BACK),
         photoNormalizer = { input ->
             normalizerGate?.await()
             dev.hryshyn.remanence.create.NormalizedPhotoDto(input.copyOf(), 800, 600)
@@ -262,7 +260,7 @@ class CreateRecipientBindingFailClosedTest {
         signingPrivateHandle = senderIdentity.signingPrivateHandle,
     )
 
-    /** Drives a create session through FRONT + BACK + CONTENT for the
+    /** Drives a create session through FRONT + CONTENT for the
      * given [snapshot], leaving the VM parked at CONTENT. */
     private fun driveToContent(vm: CreateViewModel, snapshot: ResolvedHandleSnapshot) {
         vm.beginSession(1L, senderUserUuid.toString())
@@ -272,12 +270,6 @@ class CreateRecipientBindingFailClosedTest {
         vm.frontAttempt.onPreviewBound()
         assertTrue(vm.beginFrontCapture())
         vm.deliverFrontJpeg("f".toByteArray())
-        PreparedBackItem.entries.forEach { item -> vm.backGate.setChecked(item, true) }
-        vm.proceedToBackChecklist()
-        vm.backAttempt.onPermissionResult(true, false)
-        vm.backAttempt.onPreviewBound()
-        assertTrue(vm.beginBackCapture())
-        vm.deliverBackJpeg("b".toByteArray())
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         vm.onPhotosPicked(listOf("p1", "p2", "p3"))
         assertTrue(vm.noteEditor.onChange("lifecycle note"))

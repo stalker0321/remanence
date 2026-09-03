@@ -37,7 +37,7 @@ import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
  * FIX-REVIEW-02 regression: the production CreateViewModel is Activity-scoped
  * and survives conditional navigation, so EVERY re-entry must begin a NEW
  * session - new capsule ID, RECIPIENT_LOOKUP, and empty recipient/photos/
- * note/checklist/errors/capture refs - while persisted sender fingerprints
+ * note/errors/capture refs - while persisted sender fingerprints
  * and outbox rows stay untouched (nothing here deletes them).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -139,10 +139,6 @@ class CreateSessionReentryTest {
         repeat(3) { vm.photoSelection.toggle("photo-$it") }
         assertTrue(vm.photoSelection.canProceed)
         assertTrue(vm.noteEditor.onChange("dear mama"))
-        dev.hryshyn.remanence.capture.PreparedBackItem.entries.forEach { item ->
-            vm.backGate.setChecked(item, true)
-        }
-        assertTrue(vm.backGate.ready)
         return vm.capsuleId
     }
 
@@ -161,11 +157,9 @@ class CreateSessionReentryTest {
         assertFalse(vm.photoSelection.canProceed)
         assertTrue(vm.photoSelection.selectedIds.isEmpty())
         assertTrue(vm.noteEditor.isEmpty)
-        assertFalse(vm.backGate.ready)
         assertNull(vm.publishError.value)
-        // FIX-STATE-01: authoritative attempts are reset with the session.
+        // FIX-STATE-01: the authoritative attempt is reset with the session.
         assertNull(vm.frontAttempt.phase)
-        assertNull(vm.backAttempt.phase)
         assertEquals("", vm.pickerVm.handle.value)
 
         // Persisted material is untouched: no outbox rows were ever removed.
@@ -186,6 +180,5 @@ class CreateSessionReentryTest {
         assertEquals(capsuleId, vm.capsuleId)
         assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
         assertTrue(vm.photoSelection.canProceed)
-        assertTrue(vm.backGate.ready)
     }
 }

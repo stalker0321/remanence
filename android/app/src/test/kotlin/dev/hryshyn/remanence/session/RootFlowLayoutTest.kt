@@ -141,7 +141,6 @@ class RootFlowLayoutTest {
         ),
         openPhotoSource = { error("unused") },
         frontProcessor = RejectingProcessor(),
-        backProcessor = RejectingProcessor(),
         cpuDispatcher = testDispatcher,
         ioDispatcher = testDispatcher,
         senderRetryKeysetWrapper = testWrapper,

@@ -16,7 +16,6 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import dev.hryshyn.remanence.capture.CapturePermissionStep
 import dev.hryshyn.remanence.capture.CaptureAttemptPhase
-import dev.hryshyn.remanence.capture.PreparedBackItem
 import dev.hryshyn.remanence.capture.FakeStillCameraAdapter
 import dev.hryshyn.remanence.capture.ProcessedStill
 import dev.hryshyn.remanence.capture.StillProcessor
@@ -44,7 +43,6 @@ import dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.core.model.UserId
-import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.QualityReason
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.auth.SoftwareKekBoundary
@@ -153,7 +151,6 @@ class CreateSmallViewportTest {
             ),
             openPhotoSource = { error("unused") },
             frontProcessor = RejectingThenAccepting(),
-            backProcessor = RejectingThenAccepting(),
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
             senderRetryKeysetWrapper = testWrapper,
@@ -243,7 +240,6 @@ class CreateSmallViewportTest {
             ),
             openPhotoSource = { error("unused") },
             frontProcessor = StillProcessor { ProcessedStill.Accepted("p", ByteArray(1)) },
-            backProcessor = StillProcessor { ProcessedStill.Accepted("p", ByteArray(1)) },
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
             senderRetryKeysetWrapper = testWrapper,
@@ -259,12 +255,6 @@ class CreateSmallViewportTest {
         vm.frontAttempt.onPreviewBound()
         assertTrue(vm.beginFrontCapture())
         vm.deliverFrontJpeg("f".toByteArray())
-        PreparedBackItem.entries.forEach { item -> vm.backGate.setChecked(item, true) }
-        vm.proceedToBackChecklist()
-        vm.backAttempt.onPermissionResult(true, false)
-        vm.backAttempt.onPreviewBound()
-        assertTrue(vm.beginBackCapture())
-        vm.deliverBackJpeg("b".toByteArray())
         vm.onPhotosPicked(listOf("a", "b", "c"))
         vm.noteEditor.onChange("x".repeat(NoteEditorState.MAX_NOTE_BYTES + 1))
 
@@ -305,7 +295,6 @@ class CreateSmallViewportTest {
             ),
             openPhotoSource = { error("unused") },
             frontProcessor = RejectingThenAccepting(),
-            backProcessor = RejectingThenAccepting(),
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
             senderRetryKeysetWrapper = testWrapper,

@@ -4,7 +4,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -13,7 +12,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -22,21 +20,18 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.hryshyn.remanence.capture.CaptureAttemptSurface
-import dev.hryshyn.remanence.capture.PreparedBackItem
 
 /**
  * FIX-M1-007-11: the production Create surface. Every control is bound to the
  * real [CreateViewModel] - directory resolve and explicit confirmation,
  * CameraX stills through the ORB processor into sealed persistence, the
- * prepared-back checklist, the Photo Picker (exactly 3-5), the bounded note,
- * and the single sealing path into the ciphertext outbox. No step advances
- * without its real gate.
+ * Photo Picker (exactly 3-5), the bounded note, and the single sealing path
+ * into the ciphertext outbox. No step advances without its real gate.
  *
  * FIX-STATE-01/04: capture attempts render exclusively from the authoritative
  * controllers (Processing shown; Rejected/Failed replace the camera with
@@ -81,11 +76,9 @@ fun CreateScreen(
                 CreateViewModel.Step.RECIPIENT_LOOKUP -> "1 - Resolve the recipient handle"
                 CreateViewModel.Step.RECIPIENT_CONFIRM -> "2 - Confirm the resolved recipient"
                 CreateViewModel.Step.FRONT -> "3 - Capture the postcard FRONT"
-                CreateViewModel.Step.BACK_CHECKLIST -> "4 - Prepare the back completely"
-                CreateViewModel.Step.BACK -> "5 - Capture the prepared BACK"
-                CreateViewModel.Step.CONTENT -> "6 - Choose 3-5 photos and an optional note"
-                CreateViewModel.Step.PUBLISHING -> "7 - Encrypting and staging"
-                CreateViewModel.Step.UPLOAD_PENDING -> "7 - Encrypted capsule queued for upload"
+                CreateViewModel.Step.CONTENT -> "4 - Choose 3-5 photos and an optional note"
+                CreateViewModel.Step.PUBLISHING -> "5 - Encrypting and staging"
+                CreateViewModel.Step.UPLOAD_PENDING -> "5 - Encrypted capsule queued for upload"
                 CreateViewModel.Step.PUBLISHED -> "Done - Capsule published and ready"
             },
             style = MaterialTheme.typography.labelLarge,
@@ -104,19 +97,6 @@ fun CreateScreen(
                 onBeginAttempt = viewModel::beginFrontCapture,
                 onDelivered = viewModel::deliverFrontJpeg,
                 onRetake = viewModel::retakeFront,
-                adapterFactory = adapterFactory,
-                requestPermissionOnAttach = requestPermissionOnAttach,
-            )
-
-            CreateViewModel.Step.BACK_CHECKLIST -> PreparedBackChecklist(viewModel)
-            CreateViewModel.Step.BACK -> CaptureAttemptSurface(
-                title = "prepared back",
-                controller = viewModel.backAttempt,
-                shutterTag = "capture_shutter_back",
-                retakeTag = "capture_retake_back",
-                onBeginAttempt = viewModel::beginBackCapture,
-                onDelivered = viewModel::deliverBackJpeg,
-                onRetake = viewModel::retakeBack,
                 adapterFactory = adapterFactory,
                 requestPermissionOnAttach = requestPermissionOnAttach,
             )
@@ -225,33 +205,6 @@ private fun RecipientConfirmContent(viewModel: CreateViewModel) {
         onConfirm = viewModel::confirmRecipient,
         onCancel = viewModel::restartLookup,
     )
-}
-
-@Composable
-private fun PreparedBackChecklist(viewModel: CreateViewModel) {
-    Column {
-        Text(
-            "Prepare the back completely before capturing it",
-            style = MaterialTheme.typography.titleMedium,
-        )
-        Spacer(Modifier.height(8.dp))
-        PreparedBackItem.entries.forEach { item ->
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(
-                    checked = viewModel.backGate.checked[item] == true,
-                    onCheckedChange = { checked -> viewModel.backGate.setChecked(item, checked) },
-                    modifier = Modifier.testTag("checklist_${item.name}"),
-                )
-                Text(item.name.lowercase().replace('_', ' '))
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-        Button(
-            onClick = viewModel::proceedToBackChecklist,
-            enabled = viewModel.backGate.ready,
-            modifier = Modifier.testTag("create_back_ready"),
-        ) { Text("Continue to back capture") }
-    }
 }
 
 @Composable

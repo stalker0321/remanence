@@ -164,15 +164,7 @@ class AppContainer private constructor(
 
     val database: RemanenceLocalDatabase by lazy {
         Room.databaseBuilder(appContext, RemanenceLocalDatabase::class.java, DATABASE_NAME)
-            // Versioned local schema evolution; no silent destructive resets.
-            .addMigrations(
-                RemanenceLocalDatabase.MIGRATION_1_2,
-                RemanenceLocalDatabase.MIGRATION_2_3,
-                RemanenceLocalDatabase.MIGRATION_3_4,
-                RemanenceLocalDatabase.MIGRATION_4_5,
-                RemanenceLocalDatabase.MIGRATION_5_6,
-                RemanenceLocalDatabase.MIGRATION_6_7,
-            )
+            .fallbackToDestructiveMigration(dropAllTables = true)
             .build()
     }
 

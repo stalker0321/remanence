@@ -45,10 +45,10 @@ class RecipientBaselineCreatorTest {
 
     private val capsuleId = "3c111111-2222-4333-8444-555555555555"
 
-    private fun side(side: FingerprintSide) = ReceivedSideCapture(
+    private fun front() = ReceivedSideCapture(
         profileId = "mvp-orb-v1",
-        side = side,
-        serializedBytes = "fp-${side.name}".toByteArray(),
+        side = FingerprintSide.FRONT,
+        serializedBytes = "fp-FRONT".toByteArray(),
     )
 
     @Before
@@ -71,27 +71,26 @@ class RecipientBaselineCreatorTest {
         filesRoot.deleteRecursively()
     }
 
-    private suspend fun seedSenderPair(preferred: Boolean) {
+    private suspend fun seedSenderFront(preferred: Boolean) {
         val store = EncryptedFingerprintStore(roots, XorSealerForRecipient(), database.recognitionFingerprintDao(), ownerUserIdProvider = { "5108f0a0-0000-7000-8000-00000000aa01" })
         store.persist(capsuleId, FingerprintSide.FRONT, FingerprintOrigin.SENDER, "mvp-orb-v1", "sender-front".toByteArray())
-        store.persist(capsuleId, FingerprintSide.BACK, FingerprintOrigin.SENDER, "mvp-orb-v1", "sender-back".toByteArray())
         if (preferred) {
             store.setPreferredPair(capsuleId, FingerprintOrigin.SENDER)
         }
     }
 
     @Test
-    fun verifiedReceiptCreatesPreferredRecipientPairAndDemotesSenderFallback() = runBlocking {
-        seedSenderPair(preferred = true)
+    fun verifiedReceiptCreatesPreferredRecipientFrontAndDemotesSenderFallback() = runBlocking {
+        seedSenderFront(preferred = true)
 
-        creator.createAfterVerifiedReceipt(capsuleId, side(FingerprintSide.FRONT), side(FingerprintSide.BACK))
+        creator.createAfterVerifiedReceipt(capsuleId, front())
 
         val rows = database.recognitionFingerprintDao().getAllByCapsuleIdAndOwner(capsuleId, OWNER)
-        assertEquals(4, rows.size)
+        assertEquals(2, rows.size)
         val recipientRows = rows.filter { it.origin == FingerprintOrigin.RECIPIENT }
-        assertEquals(setOf(FingerprintSide.FRONT, FingerprintSide.BACK), recipientRows.map { it.side }.toSet())
+        assertEquals(setOf(FingerprintSide.FRONT), recipientRows.map { it.side }.toSet())
         assertTrue(recipientRows.all { it.preferred })
-        // Sender pair survives untouched as the fallback, no longer preferred.
+        // Sender row survives untouched as the fallback, no longer preferred.
         val senderRows = rows.filter { it.origin == FingerprintOrigin.SENDER }
         assertTrue(senderRows.all { !it.preferred })
 
@@ -103,10 +102,10 @@ class RecipientBaselineCreatorTest {
 
     @Test
     fun initialRecipientBaselineIsImmutable() = runBlocking {
-        creator.createAfterVerifiedReceipt(capsuleId, side(FingerprintSide.FRONT), side(FingerprintSide.BACK))
+        creator.createAfterVerifiedReceipt(capsuleId, front())
 
         try {
-            creator.createAfterVerifiedReceipt(capsuleId, side(FingerprintSide.FRONT), side(FingerprintSide.BACK))
+            creator.createAfterVerifiedReceipt(capsuleId, front())
             throw AssertionError("expected immutability rejection")
         } catch (expected: ImmutableBaselineException) {
             assertEquals(
@@ -115,43 +114,9 @@ class RecipientBaselineCreatorTest {
             )
         }
 
-        // Still exactly one pair after the refused attempt.
+        // Still exactly one row after the refused attempt.
         val rows = database.recognitionFingerprintDao().getAllByCapsuleIdAndOwner(capsuleId, OWNER)
             .filter { it.origin == FingerprintOrigin.RECIPIENT }
-        assertEquals(2, rows.size)
-    }
-
-    @Test
-    fun failedBackPersistenceRollsThePairBackInsteadOfLeavingHalfABaseline() = runBlocking {
-        val failingStore = EncryptedFingerprintStore(
-            AccountScopedFileRoots(File(filesRoot, "unwritable-root")),
-            object : SecretSealer {
-                override fun seal(plaintext: ByteArray, aad: ByteArray): ByteArray =
-                    ByteArray(plaintext.size)
-                override fun unseal(ciphertext: ByteArray, aad: ByteArray): ByteArray =
-                    ByteArray(ciphertext.size)
-            },
-            database.recognitionFingerprintDao(),
-            ownerUserIdProvider = { "5108f0a0-0000-7000-8000-00000000aa01" },
-        )
-        var attempts = 0
-        val flakyCreator = RecipientBaselineCreator(failingStore)
-        // Force the BACK persist to fail by pre-seeding a RECIPIENT back row
-        // that bypasses hasBaseline's FRONT check ordering.
-        failingStore.persist(capsuleId, FingerprintSide.BACK, FingerprintOrigin.RECIPIENT, "mvp-orb-v1", "preexisting-back".toByteArray())
-        attempts += 1
-
-        assertThrows(IllegalStateException::class.java) {
-            runBlocking {
-                flakyCreator.createAfterVerifiedReceipt(capsuleId, side(FingerprintSide.FRONT), side(FingerprintSide.BACK))
-            }
-        }
-
-        val recipientRows = database.recognitionFingerprintDao().getAllByCapsuleIdAndOwner(capsuleId, OWNER)
-            .filter { it.origin == FingerprintOrigin.RECIPIENT }
-        // Only the pre-existing BACK remains; the rolled-back FRONT is gone.
-        assertEquals(listOf(FingerprintSide.BACK), recipientRows.map { it.side })
-        assertFalse(recipientRows.any { it.preferred })
-        assertTrue(attempts >= 1)
+        assertEquals(1, rows.size)
     }
 }

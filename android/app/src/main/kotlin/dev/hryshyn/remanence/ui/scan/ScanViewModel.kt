@@ -891,12 +891,10 @@ class ScanViewModel internal constructor(
 
     private suspend fun persistVerifiedRecipientBaseline(capsuleId: String) {
         val front = captureSession.front ?: return
-        val back = captureSession.back ?: return
         try {
             RecipientBaselineCreator(persistence).createAfterVerifiedReceipt(
                 capsuleId = capsuleId,
                 front = ReceivedSideCapture(front.profileId, DbFingerprintSide.FRONT, front.serializedBytes),
-                back = ReceivedSideCapture(back.profileId, DbFingerprintSide.BACK, back.serializedBytes),
             )
         } catch (_: dev.hryshyn.remanence.core.data.fingerprints.ImmutableBaselineException) {
             // The initial recipient baseline is immutable; later scans keep it.

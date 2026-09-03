@@ -83,16 +83,13 @@ class RecognitionCandidateIsolationTest {
 
     @Test
     fun logoutAThenLoginBExposesZeroACandidatesAndNothingOfAIsMutable() = runBlocking {
-        // --- logged in as A: sender baselines are sealed and indexed ---
+        // --- logged in as A: sender baseline is sealed and indexed ---
         val storeA = store(ownerA)
         val frontId = storeA.persist(
             capsuleId, FingerprintSide.FRONT, FingerprintOrigin.SENDER, profileId, bytesOf(1),
         )
-        val backId = storeA.persist(
-            capsuleId, FingerprintSide.BACK, FingerprintOrigin.SENDER, profileId, bytesOf(2),
-        )
         // The index source itself has A's candidates before logout:
-        assertEquals(2, database.recognitionFingerprintDao().getAllForOwner(ownerA).size)
+        assertEquals(1, database.recognitionFingerprintDao().getAllForOwner(ownerA).size)
 
         // --- LOGOUT A (rows/files retained for same account), LOGIN B ---
         val storeB = store(ownerB)
@@ -113,14 +110,14 @@ class RecognitionCandidateIsolationTest {
                 .count { it.preferred },
         )
 
-        // Deletion is owner-guarded: B cannot remove A's baselines or files.
+        // Deletion is owner-guarded: B cannot remove A's baseline or file.
         assertEquals(
             0,
             database.recognitionFingerprintDao().deleteByFingerprintIdAndOwner(frontId, ownerB),
         )
-        storeB.deleteFileOf(backId) // silently inert: record not owned by B
+        storeB.deleteFileOf(frontId) // silently inert: record not owned by B
         assertTrue(roots.child(ownerAId, AccountScopedFileRoots.ChildRoot.FINGERPRINTS)
-            .resolve(storeARelativePathOrThrow(backId)).exists())
+            .resolve(storeARelativePathOrThrow(frontId)).exists())
 
         // A's capsule identity stays globally unique - B cannot claim it either.
         assertThrows(SQLiteConstraintException::class.java) {
@@ -134,7 +131,7 @@ class RecognitionCandidateIsolationTest {
         // --- re-login as A: everything still resolves exactly ---
         assertArrayEquals(bytesOf(1), storeA.decrypt(frontId))
         assertEquals(
-            2,
+            1,
             database.recognitionFingerprintDao().getAllForOwner(ownerA).size,
         )
     }

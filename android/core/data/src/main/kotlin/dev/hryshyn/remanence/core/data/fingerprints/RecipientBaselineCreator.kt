@@ -16,11 +16,11 @@ class ImmutableBaselineException(capsuleId: String) :
 
 /**
  * M1-M16 (docs/recognition.md section 10): after a verified first receipt -
- * automatic or explicitly confirmed - builds the recipient fingerprint pair
- * from the delivered front/back captures, seals it locally as RECIPIENT
- * origin, marks that pair preferred, and leaves any SENDER pair untouched as
- * fallback. The initial recipient baseline is immutable: later scans never
- * silently overwrite it.
+ * automatic or explicitly confirmed - builds the recipient fingerprint from
+ * the delivered front capture, seals it locally as RECIPIENT origin, marks
+ * it preferred, and leaves any SENDER pair untouched as fallback. The
+ * initial recipient baseline is immutable: later scans never silently
+ * overwrite it.
  */
 class RecipientBaselineCreator(
     private val persistence: SealedFingerprintPersistence,
@@ -29,17 +29,14 @@ class RecipientBaselineCreator(
     suspend fun createAfterVerifiedReceipt(
         capsuleId: String,
         front: ReceivedSideCapture,
-        back: ReceivedSideCapture,
     ) {
-        require(front.side == FingerprintSide.FRONT && back.side == FingerprintSide.BACK) {
-            "captures must arrive as FRONT then BACK"
+        require(front.side == FingerprintSide.FRONT) {
+            "capture must arrive as FRONT"
         }
-        require(front.serializedBytes.isNotEmpty() && back.serializedBytes.isNotEmpty()) {
-            "captured fingerprints must not be empty"
+        require(front.serializedBytes.isNotEmpty()) {
+            "captured fingerprint must not be empty"
         }
-        if (persistence.hasBaseline(capsuleId, FingerprintSide.FRONT, FingerprintOrigin.RECIPIENT) ||
-            persistence.hasBaseline(capsuleId, FingerprintSide.BACK, FingerprintOrigin.RECIPIENT)
-        ) {
+        if (persistence.hasBaseline(capsuleId, FingerprintSide.FRONT, FingerprintOrigin.RECIPIENT)) {
             throw ImmutableBaselineException(capsuleId)
         }
 
@@ -50,19 +47,6 @@ class RecipientBaselineCreator(
             profileId = front.profileId,
             plaintextBytes = front.serializedBytes,
         )
-        try {
-            persistence.persist(
-                capsuleId = capsuleId,
-                side = FingerprintSide.BACK,
-                origin = FingerprintOrigin.RECIPIENT,
-                profileId = back.profileId,
-                plaintextBytes = back.serializedBytes,
-            )
-        } catch (failure: Exception) {
-            // Never leave a half-paired baseline behind.
-            persistence.deleteBaseline(capsuleId, FingerprintSide.FRONT, FingerprintOrigin.RECIPIENT)
-            throw failure
-        }
         // Demotes the sender pair to fallback in the same operation.
         persistence.setPreferredPair(capsuleId, FingerprintOrigin.RECIPIENT)
     }

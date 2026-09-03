@@ -55,28 +55,11 @@ class CreateSessionFingerprintRepository(
     }
 
     /**
-     * Extracts and persists the sender BACK baseline. Enforced ordering
-     * (docs/product.md sender flow): the FRONT baseline must already exist;
-     * a failed back attempt never disturbs the stored front.
+     * BACK fingerprint is no longer supported (M2-F0-03 FRONT-only recognition).
+     * Preserved as dead code; callers must not invoke this method.
      */
-    suspend fun captureBack(capsuleId: String): String {
-        requireValidCapsuleId(capsuleId)
-        if (!persistence.hasBaseline(capsuleId, FingerprintSide.FRONT, FingerprintOrigin.SENDER)) {
-            throw IllegalStateException("front must be captured before the back")
-        }
-        val staged = extractor.extract(FingerprintSide.BACK)
-        require(staged.side == FingerprintSide.BACK) { "extractor returned wrong side" }
-        return try {
-            persistence.persist(
-                capsuleId = capsuleId,
-                side = FingerprintSide.BACK,
-                origin = FingerprintOrigin.SENDER,
-                profileId = staged.profileId,
-                plaintextBytes = staged.serializedBytes,
-            )
-        } catch (duplicate: DuplicateFingerprintException) {
-            throw IllegalStateException("back baseline already captured for this capsule", duplicate)
-        }
+    suspend fun captureBack(@Suppress("UNUSED_PARAMETER") capsuleId: String): String {
+        throw UnsupportedOperationException("BACK fingerprint recognition is no longer supported")
     }
 
     private fun requireValidCapsuleId(capsuleId: String) {

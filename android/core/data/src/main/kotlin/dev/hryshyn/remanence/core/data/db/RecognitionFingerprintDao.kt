@@ -105,7 +105,7 @@ abstract class RecognitionFingerprintDao {
     @Query(
         "UPDATE recognition_fingerprint SET preferred = 1 " +
             "WHERE capsule_id = :capsuleId AND origin = :origin AND owner_user_id = :ownerUserId " +
-            "AND side IN ('FRONT', 'BACK')",
+            "AND side = 'FRONT'",
     )
     protected abstract suspend fun markPreferredForOwner(capsuleId: String, origin: FingerprintOrigin, ownerUserId: String)
 

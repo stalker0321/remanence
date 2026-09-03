@@ -68,7 +68,7 @@ class BackCaptureFlow(
                 }
                 is ProcessedStill.Accepted -> {
                     queued.set(
-                        StagedSideFingerprint(processed.profileId, FingerprintSide.BACK, processed.serializedBytes),
+                        StagedSideFingerprint(processed.profileId, FingerprintSide.FRONT, processed.serializedBytes),
                     )
                     val id = withContext(ioDispatcher) {
                         createRepository(persistence).captureBack(capsuleId)

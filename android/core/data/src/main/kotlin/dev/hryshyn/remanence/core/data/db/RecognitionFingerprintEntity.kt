@@ -7,7 +7,6 @@ import androidx.room.PrimaryKey
 
 enum class FingerprintSide {
     FRONT,
-    BACK,
 }
 
 enum class FingerprintOrigin {

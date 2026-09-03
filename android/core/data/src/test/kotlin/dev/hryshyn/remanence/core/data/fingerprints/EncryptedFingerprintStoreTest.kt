@@ -169,7 +169,7 @@ class EncryptedFingerprintStoreTest {
         )
 
         try {
-            sut.persist("capsule-a", FingerprintSide.BACK, FingerprintOrigin.SENDER, "mvp-orb-v1", byteArrayOf(9))
+            sut.persist("capsule-a", FingerprintSide.FRONT, FingerprintOrigin.SENDER, "mvp-orb-v1", byteArrayOf(9))
             throw AssertionError("expected insert failure")
         } catch (expected: IllegalStateException) {
             assertEquals("database exploded", expected.message)
@@ -178,14 +178,13 @@ class EncryptedFingerprintStoreTest {
     }
 
     @Test
-    fun hasBaselineReflectsOnlyPersistedSides() = runBlocking {
+    fun hasBaselineReflectsPersistedState() = runBlocking {
         val sut = store()
         assertFalse(sut.hasBaseline("capsule-c", FingerprintSide.FRONT, FingerprintOrigin.SENDER))
 
         sut.persist("capsule-c", FingerprintSide.FRONT, FingerprintOrigin.SENDER, "mvp-orb-v1", byteArrayOf(1))
 
         assertTrue(sut.hasBaseline("capsule-c", FingerprintSide.FRONT, FingerprintOrigin.SENDER))
-        assertFalse(sut.hasBaseline("capsule-c", FingerprintSide.BACK, FingerprintOrigin.SENDER))
         assertFalse(sut.hasBaseline("capsule-other", FingerprintSide.FRONT, FingerprintOrigin.SENDER))
     }
 
@@ -199,7 +198,7 @@ class EncryptedFingerprintStoreTest {
             // correct
         }
 
-        val id = sut.persist("capsule-b", FingerprintSide.BACK, FingerprintOrigin.SENDER, "mvp-orb-v1", byteArrayOf(3))
+        val id = sut.persist("capsule-b", FingerprintSide.FRONT, FingerprintOrigin.SENDER, "mvp-orb-v1", byteArrayOf(3))
         database.recognitionFingerprintDao().deleteByCapsuleIdAndOwner("capsule-b", OWNER_ID.toRestString())
         try {
             sut.decrypt(id)

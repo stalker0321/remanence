@@ -51,8 +51,10 @@ sealed interface ScanFlowResult {
  * memory-only scan grant ONLY after the injected crypto verifier accepts the
  * winning capsule. A refused verification never produces a grant.
  *
- * The engine operates on exactly one required FRONT per candidate. Multiple
- * plausible candidates never invoke verifier/grant and return Ambiguous.
+ * The engine operates on exactly one required FRONT per candidate. Recipient
+ * and sender indexes are scored, deduplicated by capsule id (recipient
+ * baseline wins), then classified once: N distinct plausibles never invoke
+ * verifier/grant and return Ambiguous.
  */
 class LocalMatchEngine(
     private val profile: RecognitionProfile,
@@ -66,7 +68,6 @@ class LocalMatchEngine(
     private val sideScorer = SideScorer(profile)
     private val frontRanker = FrontCandidateRanker(profile)
     private val acceptanceEvaluator = CompositeAcceptanceEvaluator(profile)
-    private val outcomeClassifier = ScanOutcomeClassifier(profile)
     private val coordinator = MatchCoordinator(profile)
 
     /** FRONT-only entry point. */
@@ -83,43 +84,13 @@ class LocalMatchEngine(
         val senderList = candidates.filterNot { it.recipientPreferred }
 
         val recipientUniverse = evaluateUniverse(recipientList, queryFront)
-        val senderUniverse = if (senderList.isNotEmpty()) evaluateUniverse(senderList, queryFront) else null
-
-        // Luna BLOCK: cross-origin union by distinct capsuleId, prefer recipient baseline.
-        // If 2+ distinct capsules are plausible across origins, return Ambiguous without verifier/grant.
-        if (senderUniverse != null) {
-            val chooserMin = profile.ranking.chooserFrontMin
-            val plausibleRecipient = recipientUniverse.acceptance?.scored?.filter { it.frontWeakPassed && it.compositeScore >= chooserMin } ?: emptyList()
-            val plausibleSender = senderUniverse.acceptance?.scored?.filter { it.frontWeakPassed && it.compositeScore >= chooserMin } ?: emptyList()
-
-            // If recipient has no plausible evidence, preserve sender fallback (do not force cross-origin ambiguous).
-            val recipientHasPlausible = plausibleRecipient.isNotEmpty()
-            if (recipientHasPlausible) {
-                val distinct = LinkedHashMap<String, ScoredComposite>()
-                for (c in plausibleRecipient) distinct[c.candidateId] = c
-                for (c in plausibleSender) {
-                    if (!distinct.containsKey(c.candidateId)) distinct[c.candidateId] = c
-                }
-                if (distinct.size >= 2) {
-                    // Build chooser rows from distinct plausible, sorted by compositeScore descending, capped at 5.
-                    val rows = distinct.values.sortedByDescending { it.compositeScore }.take(5)
-                        .map { UUID.fromString(it.candidateId) to it.compositeScore }
-                    // Origin is recipient if any recipient plausible, else sender.
-                    val origin = if (plausibleRecipient.isNotEmpty()) CandidateOrigin.RECIPIENT_PREFERRED else CandidateOrigin.SENDER_FALLBACK
-                    return ScanFlowResult.Ambiguous(origin, rows, singleRecaptureFirst = false)
-                }
-                // Same capsule in both origins: distinct size ==1, prefer recipient, allow single-verify to proceed.
-                // No cross-origin ambiguous, fall through to coordinator (which will handle recipient single).
-            }
+        val senderUniverse = if (senderList.isNotEmpty()) {
+            evaluateUniverse(senderList, queryFront)
+        } else {
+            null
         }
 
-        // Preserve sender fallback only when recipient has no plausible evidence (not just no retained).
-        val recipientHasPlausible = recipientUniverse.acceptance?.scored?.any { it.frontWeakPassed && it.compositeScore >= profile.ranking.chooserFrontMin } ?: false
-        val effectiveSenderUniverse = if (!recipientHasPlausible && senderUniverse != null) senderUniverse else null
-        // If recipient has plausible, sender is ignored for the coordinator decision (already handled cross-origin above).
-        val senderForCoordinator = if (recipientHasPlausible) null else effectiveSenderUniverse
-
-        return when (val decision = coordinator.coordinate(recipientUniverse, senderForCoordinator)) {
+        return when (val decision = coordinator.coordinate(recipientUniverse, senderUniverse)) {
             is CoordinatorDecision.AutoAccepted -> {
                 val capsuleId = UUID.fromString(decision.candidateId)
                 if (!verifier.verify(capsuleId)) return ScanFlowResult.RecaptureRequired

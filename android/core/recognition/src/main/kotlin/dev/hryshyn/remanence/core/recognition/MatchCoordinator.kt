@@ -12,10 +12,12 @@ data class UniverseScanResult(
 
 /**
  * M1-M09 decision over both universes (docs/recognition.md section 11):
- * recipient pairs are searched first; automatic acceptance there stops the
- * scan; plausible or ambiguous recipient results use the normal chooser rules;
- * ONLY an empty weak-evidence universe falls back to sender pairs. A sender
- * fallback never replaces the recipient baseline - it reports
+ * FRONT candidates are scored in the recipient-preferred and sender-fallback
+ * indexes, then deduplicated by capsule id (recipient baseline wins) and
+ * classified once. N distinct plausibles are always Ambiguous; a unique
+ * plausible may auto-accept through existing strong rules; zero recipient
+ * plausibles may fall back to sender. A sender fallback never replaces the
+ * recipient baseline for the same capsule — it reports
  * [SenderFallbackAccepted.suggestsBaselineImprovement] instead.
  */
 sealed interface CoordinatorDecision {
@@ -25,13 +27,13 @@ sealed interface CoordinatorDecision {
         val candidateId: String,
     ) : CoordinatorDecision
 
-    /** Chooser or guided-recapture surfaces, scoped to one universe. */
+    /** Chooser or guided-recapture surfaces over the origin-deduped union. */
     data class Ambiguous(
         val origin: CandidateOrigin,
         val classification: ScanClassification,
     ) : CoordinatorDecision
 
-    /** Recipient had nothing weak; sender index decided the scan instead. */
+    /** Recipient had no plausible candidate; sender index decided the scan instead. */
     data class SenderFallbackAccepted(
         val candidateId: String,
         val suggestsBaselineImprovement: Boolean = true,
@@ -42,16 +44,17 @@ sealed interface CoordinatorDecision {
 }
 
 /**
- * Coordinates the recipient-first then sender-fallback strategy using the
- * M1-M08 classifier per universe. The sender universe is consulted ONLY when
- * the recipient universe retained no weak-evidence candidates at all; every
- * other recipient outcome terminates the scan.
+ * Coordinates recipient-preferred and sender-fallback FRONT indexes by
+ * merging scored candidates (same capsule keeps the recipient baseline) and
+ * running one [ScanOutcomeClassifier] pass over the union.
  */
 class MatchCoordinator(
     private val profile: RecognitionProfile,
 ) {
 
     private val classifier = ScanOutcomeClassifier(profile)
+    private val ranker = FrontCandidateRanker(profile)
+    private val acceptanceEvaluator = CompositeAcceptanceEvaluator(profile)
 
     fun coordinate(
         recipient: UniverseScanResult,
@@ -60,41 +63,106 @@ class MatchCoordinator(
         require(recipient.origin == CandidateOrigin.RECIPIENT_PREFERRED) {
             "first universe must be the recipient-preferred index"
         }
-        val recipientDecision = classifier.classify(recipient.frontRanking, recipient.acceptance)
+        if (sender != null) {
+            require(sender.origin == CandidateOrigin.SENDER_FALLBACK) {
+                "fallback universe must be the sender index"
+            }
+        }
 
-        return when {
-            recipientDecision.accepted != null ->
-                CoordinatorDecision.AutoAccepted(
-                    CandidateOrigin.RECIPIENT_PREFERRED,
-                    recipientDecision.accepted.candidateId,
-                )
-            recipientDecision.outcome == ScanOutcome.PLAUSIBLE_CHOOSER ||
-                recipientDecision.outcome == ScanOutcome.SINGLE_CANDIDATE_RECAPTURE ->
-                CoordinatorDecision.Ambiguous(CandidateOrigin.RECIPIENT_PREFERRED, recipientDecision)
-            recipient.frontRanking.retained.isNotEmpty() ->
-                // Weak evidence existed but nothing reached plausibility; the
-                // aged-card identity still beat the fallback threshold, so we
-                // do not silently re-search against sender baselines.
-                CoordinatorDecision.NoMatchEverywhere
-            else -> fallbackToSender(sender)
+        val union = unionPreferringRecipient(recipient, sender)
+        val classification = classifier.classify(union.ranking, union.acceptance)
+        return decisionFrom(classification, union)
+    }
+
+    private fun unionPreferringRecipient(
+        recipient: UniverseScanResult,
+        sender: UniverseScanResult?,
+    ): UnionUniverse {
+        val rows = LinkedHashMap<String, UnionRow>()
+        absorb(rows, recipient)
+        if (sender != null) absorb(rows, sender)
+
+        val ranking = ranker.rank(rows.values.map { it.front })
+        val composites = ranking.retained.map { retained ->
+            val existing = rows[retained.candidateId]
+            CompositeCandidate(
+                candidateId = retained.candidateId,
+                frontScore = existing?.scored?.frontScore ?: retained.sideScore,
+                frontWeakPassed = existing?.scored?.frontWeakPassed ?: retained.weakGatePassed,
+                frontStrongPassed = existing?.scored?.frontStrongPassed ?: false,
+            )
+        }
+        val acceptance = if (composites.isEmpty()) {
+            null
+        } else {
+            acceptanceEvaluator.evaluate(composites, ranking.duplicateFrontGroup)
+        }
+        val originById = rows.mapValues { it.value.origin }
+        return UnionUniverse(ranking, acceptance, originById)
+    }
+
+    private fun absorb(rows: LinkedHashMap<String, UnionRow>, universe: UniverseScanResult) {
+        val scoredById = universe.acceptance?.scored.orEmpty().associateBy { it.candidateId }
+        for (front in universe.frontRanking.retained) {
+            rows.putIfAbsent(
+                front.candidateId,
+                UnionRow(front, scoredById[front.candidateId], universe.origin),
+            )
+        }
+        for (scored in universe.acceptance?.scored.orEmpty()) {
+            rows.putIfAbsent(
+                scored.candidateId,
+                UnionRow(
+                    FrontCandidate(scored.candidateId, scored.frontScore, scored.frontWeakPassed),
+                    scored,
+                    universe.origin,
+                ),
+            )
         }
     }
 
-    private fun fallbackToSender(sender: UniverseScanResult?): CoordinatorDecision {
-        if (sender == null || sender.frontRanking.retained.isEmpty()) {
-            return CoordinatorDecision.NoMatchEverywhere
+    private fun decisionFrom(
+        classification: ScanClassification,
+        union: UnionUniverse,
+    ): CoordinatorDecision {
+        val involvedIds = when {
+            classification.accepted != null -> listOf(classification.accepted.candidateId)
+            classification.chooserRows.isNotEmpty() -> classification.chooserRows.map { it.candidateId }
+            else -> plausibleFrontCandidates(
+                union.acceptance?.scored.orEmpty(),
+                profile.ranking.chooserFrontMin,
+            ).map { it.candidateId }
         }
-        require(sender.origin == CandidateOrigin.SENDER_FALLBACK) {
-            "fallback universe must be the sender index"
+        val origin = if (involvedIds.any { union.originById[it] == CandidateOrigin.RECIPIENT_PREFERRED }) {
+            CandidateOrigin.RECIPIENT_PREFERRED
+        } else {
+            CandidateOrigin.SENDER_FALLBACK
         }
-        val senderDecision = classifier.classify(sender.frontRanking, sender.acceptance)
-        return when {
-            senderDecision.accepted != null ->
-                CoordinatorDecision.SenderFallbackAccepted(senderDecision.accepted.candidateId)
-            senderDecision.outcome == ScanOutcome.PLAUSIBLE_CHOOSER ||
-                senderDecision.outcome == ScanOutcome.SINGLE_CANDIDATE_RECAPTURE ->
-                CoordinatorDecision.Ambiguous(CandidateOrigin.SENDER_FALLBACK, senderDecision)
-            else -> CoordinatorDecision.NoMatchEverywhere
+        return when (classification.outcome) {
+            ScanOutcome.AUTO_ACCEPTED -> {
+                val candidateId = classification.accepted!!.candidateId
+                if (origin == CandidateOrigin.RECIPIENT_PREFERRED) {
+                    CoordinatorDecision.AutoAccepted(origin, candidateId)
+                } else {
+                    CoordinatorDecision.SenderFallbackAccepted(candidateId)
+                }
+            }
+            ScanOutcome.PLAUSIBLE_CHOOSER,
+            ScanOutcome.SINGLE_CANDIDATE_RECAPTURE,
+            -> CoordinatorDecision.Ambiguous(origin, classification)
+            ScanOutcome.NO_MATCH -> CoordinatorDecision.NoMatchEverywhere
         }
     }
+
+    private data class UnionRow(
+        val front: FrontCandidate,
+        val scored: ScoredComposite?,
+        val origin: CandidateOrigin,
+    )
+
+    private data class UnionUniverse(
+        val ranking: FrontRanking,
+        val acceptance: CompositeAcceptanceReport?,
+        val originById: Map<String, CandidateOrigin>,
+    )
 }

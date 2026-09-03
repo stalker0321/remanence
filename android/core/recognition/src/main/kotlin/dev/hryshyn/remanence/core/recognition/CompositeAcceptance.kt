@@ -84,8 +84,7 @@ class CompositeAcceptanceEvaluator(
 
         // FRONT-only: multiple plausible candidates never auto-open, even if
         // score-separated. This enforces design->N without verifier/grant.
-        val chooserMin = profile.ranking.chooserFrontMin
-        val plausibleCount = scored.count { it.frontWeakPassed && it.compositeScore >= chooserMin }
+        val plausibleCount = plausibleFrontCandidates(scored, profile.ranking.chooserFrontMin).size
         if (plausibleCount >= 2) {
             return CompositeAcceptanceReport(scored, null, RejectionRule.MULTIPLE_PLAUSIBLE_CANDIDATES)
         }

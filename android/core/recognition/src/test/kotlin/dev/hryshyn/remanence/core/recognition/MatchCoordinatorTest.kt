@@ -6,40 +6,63 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-/** Ordering proof for FRONT-only recipient-first / sender-fallback coordination (ADR-012). */
+/** Union-level 0/1/N proof for FRONT-only recipient-first / sender-fallback coordination (ADR-012). */
 class MatchCoordinatorTest {
 
     private val coordinator = MatchCoordinator(RecognitionProfile.mvpOrbV1())
 
-    private fun acceptedReport(candidateId: String, score: Double = 0.85) = run {
-        val leader = ScoredComposite(
-            candidateId = candidateId,
-            compositeScore = score,
-            frontScore = score,
-            frontWeakPassed = true,
-            frontStrongPassed = true,
-        )
-        CompositeAcceptanceReport(listOf(leader), leader, null)
-    }
-
-    private fun rankingWithRetained(count: Int) = FrontRanking(
-        retained = (0 until count).map { index ->
-            FrontCandidate("front-$index", 0.5 - index * 0.01, weakGatePassed = true)
-        },
-        duplicateFrontGroup = false,
+    private fun scored(
+        candidateId: String,
+        score: Double,
+        frontWeak: Boolean = true,
+        frontStrong: Boolean = true,
+    ) = ScoredComposite(
+        candidateId = candidateId,
+        compositeScore = score,
+        frontScore = score,
+        frontWeakPassed = frontWeak,
+        frontStrongPassed = frontStrong,
     )
 
     private fun universe(
         origin: CandidateOrigin,
-        retained: Int,
-        acceptance: CompositeAcceptanceReport? = null,
-    ) = UniverseScanResult(origin, rankingWithRetained(retained), acceptance)
+        rows: List<ScoredComposite>,
+        autoAccepted: ScoredComposite? = null,
+        rejection: RejectionRule? = null,
+    ): UniverseScanResult {
+        val ranking = FrontRanking(
+            retained = rows.filter { it.frontWeakPassed }.map {
+                FrontCandidate(it.candidateId, it.frontScore, it.frontWeakPassed)
+            },
+            duplicateFrontGroup = false,
+        )
+        val acceptance = if (rows.isEmpty()) {
+            null
+        } else {
+            CompositeAcceptanceReport(rows, autoAccepted, rejection)
+        }
+        return UniverseScanResult(origin, ranking, acceptance)
+    }
+
+    private fun emptyRecipient() = UniverseScanResult(
+        CandidateOrigin.RECIPIENT_PREFERRED,
+        FrontCandidateRanker(RecognitionProfile.mvpOrbV1()).rank(emptyList()),
+        null,
+    )
 
     @Test
-    fun recipientAutoAcceptanceStopsBeforeSenderIsConsulted() {
+    fun uniqueRecipientAcceptanceProceedsWhenSenderIsNotPlausible() {
+        val leader = scored("rec-1", 0.85)
         val decision = coordinator.coordinate(
-            universe(CandidateOrigin.RECIPIENT_PREFERRED, 1, acceptedReport("rec-1")),
-            universe(CandidateOrigin.SENDER_FALLBACK, 3, acceptedReport("snd-1", 0.95)),
+            universe(
+                CandidateOrigin.RECIPIENT_PREFERRED,
+                listOf(leader),
+                autoAccepted = leader,
+            ),
+            universe(
+                CandidateOrigin.SENDER_FALLBACK,
+                listOf(scored("snd-1", 0.20, frontWeak = false, frontStrong = false)),
+            ),
         )
 
         assertEquals(
@@ -49,15 +72,41 @@ class MatchCoordinatorTest {
     }
 
     @Test
-    fun recipientAmbiguityNeverFallsBackToSender() {
-        val rows = listOf(
-            ScoredComposite("r1", 0.55, 0.55, true, false),
-            ScoredComposite("r2", 0.45, 0.45, true, false),
-        )
-        val chooserReport = CompositeAcceptanceReport(rows, null, RejectionRule.MARGIN_OVER_RUNNER_UP_TOO_SMALL)
+    fun recipientAutoAcceptanceWithDistinctSenderPlausibleIsAmbiguous() {
+        val recipientLeader = scored("rec-1", 0.85)
+        val senderLeader = scored("snd-1", 0.95)
         val decision = coordinator.coordinate(
-            universe(CandidateOrigin.RECIPIENT_PREFERRED, 2, chooserReport),
-            universe(CandidateOrigin.SENDER_FALLBACK, 3, acceptedReport("snd-1")),
+            universe(
+                CandidateOrigin.RECIPIENT_PREFERRED,
+                listOf(recipientLeader),
+                autoAccepted = recipientLeader,
+            ),
+            universe(
+                CandidateOrigin.SENDER_FALLBACK,
+                listOf(senderLeader),
+                autoAccepted = senderLeader,
+            ),
+        )
+
+        val ambiguous = decision as CoordinatorDecision.Ambiguous
+        assertEquals(CandidateOrigin.RECIPIENT_PREFERRED, ambiguous.origin)
+        assertEquals(ScanOutcome.PLAUSIBLE_CHOOSER, ambiguous.classification.outcome)
+        assertEquals(listOf("snd-1", "rec-1"), ambiguous.classification.chooserRows.map { it.candidateId })
+    }
+
+    @Test
+    fun recipientAmbiguityNeverFallsBackToSenderGrant() {
+        val rows = listOf(scored("r1", 0.55, frontStrong = false), scored("r2", 0.45, frontStrong = false))
+        val decision = coordinator.coordinate(
+            universe(
+                CandidateOrigin.RECIPIENT_PREFERRED,
+                rows,
+                rejection = RejectionRule.MARGIN_OVER_RUNNER_UP_TOO_SMALL,
+            ),
+            universe(
+                CandidateOrigin.SENDER_FALLBACK,
+                listOf(scored("snd-1", 0.20, frontWeak = false, frontStrong = false)),
+            ),
         )
 
         val ambiguous = decision as CoordinatorDecision.Ambiguous
@@ -67,14 +116,18 @@ class MatchCoordinatorTest {
     }
 
     @Test
-    fun recipientSingleRecaptureAlsoStaysPut() {
-        val single = listOf(
-            ScoredComposite("only", 0.50, 0.50, true, false),
-        )
-        val report = CompositeAcceptanceReport(single, null, RejectionRule.FRONT_BELOW_AUTO_MIN)
+    fun recipientSingleRecaptureStaysWhenSenderIsNotPlausible() {
+        val only = scored("only", 0.50, frontStrong = false)
         val decision = coordinator.coordinate(
-            universe(CandidateOrigin.RECIPIENT_PREFERRED, 1, report),
-            universe(CandidateOrigin.SENDER_FALLBACK, 2),
+            universe(
+                CandidateOrigin.RECIPIENT_PREFERRED,
+                listOf(only),
+                rejection = RejectionRule.FRONT_BELOW_AUTO_MIN,
+            ),
+            universe(
+                CandidateOrigin.SENDER_FALLBACK,
+                listOf(scored("snd", 0.20, frontWeak = false, frontStrong = false)),
+            ),
         )
 
         assertEquals(
@@ -87,15 +140,15 @@ class MatchCoordinatorTest {
     }
 
     @Test
-    fun senderFallbackOnlyWhenRecipientHasNoWeakEvidence() {
-        val emptyRecipient = UniverseScanResult(
-            CandidateOrigin.RECIPIENT_PREFERRED,
-            FrontCandidateRanker(RecognitionProfile.mvpOrbV1()).rank(emptyList()),
-            null,
-        )
+    fun senderFallbackOnlyWhenRecipientHasNoPlausible() {
+        val senderLeader = scored("snd-old", 0.85)
         val decision = coordinator.coordinate(
-            emptyRecipient,
-            universe(CandidateOrigin.SENDER_FALLBACK, 1, acceptedReport("snd-old")),
+            emptyRecipient(),
+            universe(
+                CandidateOrigin.SENDER_FALLBACK,
+                listOf(senderLeader),
+                autoAccepted = senderLeader,
+            ),
         )
 
         val fallback = decision as CoordinatorDecision.SenderFallbackAccepted
@@ -104,36 +157,39 @@ class MatchCoordinatorTest {
     }
 
     @Test
-    fun weakButImplausibleRecipientsDoNotTriggerSilentFallback() {
+    fun zeroRecipientPlausiblePermitsSenderFallback() {
         val implausible = listOf(
-            ScoredComposite("aged-1", 0.30, 0.30, true, false),
-            ScoredComposite("aged-2", 0.20, 0.20, true, false),
+            scored("aged-1", 0.30, frontStrong = false),
+            scored("aged-2", 0.20, frontStrong = false),
         )
-        val report = CompositeAcceptanceReport(implausible, null, null)
+        val senderLeader = scored("snd", 0.9)
         val decision = coordinator.coordinate(
-            universe(CandidateOrigin.RECIPIENT_PREFERRED, 2, report),
-            universe(CandidateOrigin.SENDER_FALLBACK, 4, acceptedReport("snd", 0.9)),
+            universe(
+                CandidateOrigin.RECIPIENT_PREFERRED,
+                implausible,
+            ),
+            universe(
+                CandidateOrigin.SENDER_FALLBACK,
+                listOf(senderLeader),
+                autoAccepted = senderLeader,
+            ),
         )
 
-        assertEquals(CoordinatorDecision.NoMatchEverywhere, decision)
+        val fallback = decision as CoordinatorDecision.SenderFallbackAccepted
+        assertEquals("snd", fallback.candidateId)
     }
 
     @Test
     fun nothingAnywhereYieldsNoMatch() {
-        val emptyRecipient = UniverseScanResult(
-            CandidateOrigin.RECIPIENT_PREFERRED,
-            FrontCandidateRanker(RecognitionProfile.mvpOrbV1()).rank(emptyList()),
-            null,
-        )
         assertEquals(
             CoordinatorDecision.NoMatchEverywhere,
-            coordinator.coordinate(emptyRecipient, null),
+            coordinator.coordinate(emptyRecipient(), null),
         )
         assertEquals(
             CoordinatorDecision.NoMatchEverywhere,
             coordinator.coordinate(
-                emptyRecipient,
-                universe(CandidateOrigin.SENDER_FALLBACK, 0),
+                emptyRecipient(),
+                universe(CandidateOrigin.SENDER_FALLBACK, emptyList()),
             ),
         )
     }
@@ -142,16 +198,83 @@ class MatchCoordinatorTest {
     fun universeOrderingAndOriginsAreEnforced() {
         assertFailsWith<IllegalArgumentException> {
             coordinator.coordinate(
-                universe(CandidateOrigin.SENDER_FALLBACK, 1),
+                universe(CandidateOrigin.SENDER_FALLBACK, listOf(scored("x", 0.8))),
                 null,
             )
         }
         assertFailsWith<IllegalArgumentException> {
             coordinator.coordinate(
-                universe(CandidateOrigin.RECIPIENT_PREFERRED, 0),
-                universe(CandidateOrigin.RECIPIENT_PREFERRED, 1),
+                emptyRecipient(),
+                universe(CandidateOrigin.RECIPIENT_PREFERRED, listOf(scored("x", 0.8))),
             )
         }
         assertFalse(false)
+    }
+
+    @Test
+    fun sameCapsuleCrossOriginDedupsAndPrefersRecipientBaseline() {
+        val recipient = scored("same", 0.80)
+        val senderHigher = scored("same", 0.95)
+        val decision = coordinator.coordinate(
+            universe(
+                CandidateOrigin.RECIPIENT_PREFERRED,
+                listOf(recipient),
+                autoAccepted = recipient,
+            ),
+            universe(
+                CandidateOrigin.SENDER_FALLBACK,
+                listOf(senderHigher),
+                autoAccepted = senderHigher,
+            ),
+        )
+
+        assertEquals(
+            CoordinatorDecision.AutoAccepted(CandidateOrigin.RECIPIENT_PREFERRED, "same"),
+            decision,
+        )
+    }
+
+    @Test
+    fun genuinelyScoreSeparatedDistinctPlausiblesStillAmbiguous() {
+        val high = scored("high", 0.85)
+        val low = scored("low", 0.45)
+        assertTrue(high.compositeScore != low.compositeScore)
+
+        val sameOrigin = coordinator.coordinate(
+            universe(
+                CandidateOrigin.RECIPIENT_PREFERRED,
+                listOf(high, low),
+                autoAccepted = high,
+            ),
+            null,
+        )
+        val sameAmbiguous = sameOrigin as CoordinatorDecision.Ambiguous
+        assertEquals(ScanOutcome.PLAUSIBLE_CHOOSER, sameAmbiguous.classification.outcome)
+        val sameScores = sameAmbiguous.classification.chooserRows.map { it.compositeScore }
+        assertEquals(2, sameScores.size)
+        assertTrue(sameScores[0] != sameScores[1], "same-origin plausible scores must differ")
+        assertEquals(0.85, sameScores[0], 1e-12)
+        assertEquals(0.45, sameScores[1], 1e-12)
+
+        val crossOrigin = coordinator.coordinate(
+            universe(
+                CandidateOrigin.RECIPIENT_PREFERRED,
+                listOf(high),
+                autoAccepted = high,
+            ),
+            universe(
+                CandidateOrigin.SENDER_FALLBACK,
+                listOf(low),
+            ),
+        )
+        val crossAmbiguous = crossOrigin as CoordinatorDecision.Ambiguous
+        assertEquals(CandidateOrigin.RECIPIENT_PREFERRED, crossAmbiguous.origin)
+        assertEquals(ScanOutcome.PLAUSIBLE_CHOOSER, crossAmbiguous.classification.outcome)
+        val crossScores = crossAmbiguous.classification.chooserRows.map { it.compositeScore }
+        assertEquals(2, crossScores.size)
+        assertTrue(crossScores[0] != crossScores[1], "cross-origin plausible scores must differ")
+        assertEquals(0.85, crossScores[0], 1e-12)
+        assertEquals(0.45, crossScores[1], 1e-12)
+        assertEquals(null, crossAmbiguous.classification.accepted)
     }
 }

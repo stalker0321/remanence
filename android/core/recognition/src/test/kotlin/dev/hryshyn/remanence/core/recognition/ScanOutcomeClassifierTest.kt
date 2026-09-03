@@ -27,7 +27,21 @@ class ScanOutcomeClassifierTest {
         CompositeAcceptanceReport(candidates, accepted, null)
 
     @Test
-    fun autoAcceptedWinsOverEverythingElse() {
+    fun uniqueAutoAcceptedStillWins() {
+        val leader = composite("leader", 0.85)
+
+        val classification = classifier.classify(
+            FrontRanking(listOf(FrontCandidate("leader", 0.85, weakGatePassed = true)), false),
+            report(listOf(leader), accepted = leader),
+        )
+
+        assertEquals(ScanOutcome.AUTO_ACCEPTED, classification.outcome)
+        assertEquals("leader", classification.accepted?.candidateId)
+        assertTrue(classification.chooserRows.isEmpty())
+    }
+
+    @Test
+    fun multiplePlausibleAlwaysChooserEvenIfAutoAcceptedIsSet() {
         val leader = composite("leader", 0.85)
         val others = listOf(composite("p2", 0.55), composite("p3", 0.45))
 
@@ -36,9 +50,9 @@ class ScanOutcomeClassifierTest {
             report(listOf(leader) + others, accepted = leader),
         )
 
-        assertEquals(ScanOutcome.AUTO_ACCEPTED, classification.outcome)
-        assertEquals("leader", classification.accepted?.candidateId)
-        assertTrue(classification.chooserRows.isEmpty())
+        assertEquals(ScanOutcome.PLAUSIBLE_CHOOSER, classification.outcome)
+        assertEquals(null, classification.accepted)
+        assertEquals(listOf("leader", "p2", "p3"), classification.chooserRows.map { it.candidateId })
     }
 
     @Test

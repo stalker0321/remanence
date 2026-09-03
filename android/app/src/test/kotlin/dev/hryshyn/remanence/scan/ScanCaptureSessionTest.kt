@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.scan
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -106,15 +107,29 @@ class ScanCaptureSessionTest {
         assertTrue(staged.all { it == 0.toByte() })
     }
 
+    /**
+     * A failed recapture never wipes the live FRONT: the order violation
+     * throws before extraction, so the same non-empty buffer stays live
+     * until an explicit reset zeroizes it.
+     */
     @Test
-    fun failedValidationZeroizesStagedBytes() {
-        val staged = ByteArray(0)
-        val emptyExtractor = ScanSideExtractor {
-            ScannedSide("mvp-orb-v1", staged)
+    fun failedRecapturePreservesLiveFrontUntilResetWipesIt() {
+        val live = ByteArray(32) { (it + 1).toByte() }
+        assertTrue(live.any { it != 0.toByte() })
+        var extractions = 0
+        val scan = ScanCaptureSession {
+            extractions++
+            ScannedSide("mvp-orb-v1", live)
         }
-        val scan = ScanCaptureSession(emptyExtractor)
-        assertThrows<IllegalArgumentException> { scan.captureFront() }
-        assertTrue(staged.all { it == 0.toByte() })
+        scan.captureFront()
+        assertThrows<IllegalStateException> { scan.captureFront() }
+        assertEquals("order violation must throw before extraction", 1, extractions)
+        assertSame(live, scan.front?.serializedBytes)
+        assertTrue(live.any { it != 0.toByte() })
+
+        scan.reset()
+
         assertNull(scan.front)
+        assertTrue(live.all { it == 0.toByte() })
     }
 }

@@ -1,6 +1,7 @@
 package dev.hryshyn.remanence.ui.scan
 
 import android.content.Context
+import androidx.lifecycle.viewModelScope
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import dev.hryshyn.remanence.capture.CaptureAttemptPhase
@@ -10,6 +11,7 @@ import dev.hryshyn.remanence.capture.StillProcessor
 import dev.hryshyn.remanence.scan.ScanSessionState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -118,7 +120,9 @@ class ScanStaleProcessingTest {
         ) = Unit
     }
 
-    private fun newViewModel(): ScanViewModel = ScanViewModel(
+    private fun newViewModel(
+        processor: StillProcessor = Accepting(),
+    ): ScanViewModel = ScanViewModel(
         persistence = NoPersistence(),
         database = database,
         profile = RecognitionProfile.mvpOrbV1(),
@@ -130,7 +134,7 @@ class ScanStaleProcessingTest {
         presentationGrants = dev.hryshyn.remanence.ui.capsule.PresentationGrantAuthority(
             dev.hryshyn.remanence.core.recognition.ScanGrantManager(clockMillis = { 0L }),
         ),
-        frontProcessor = Accepting(),
+        frontProcessor = processor,
         candidateIndexProvider = { ScanCandidateIndex.EMPTY },
         incomingPresentationPreparation = null,
         cpuDispatcher = cpuDispatcher,
@@ -200,4 +204,66 @@ class ScanStaleProcessingTest {
     @Test
     fun staleFrontProcessingAfterNewEpochBeginSessionIsInert() =
         staleOutcomeIsInert { it.beginSession(epoch = 2L) }
+
+    /**
+     * M2-F0-07 cancellation boundary: the worker RETURNS Accepted, but the
+     * delivery is cancelled before the continuation resumes for handoff, so
+     * the accepted buffer never reaches queuedStill/captureSession. It is
+     * still owned by the abandoned delivery and must be zeroized.
+     * Deterministic: the parked cpu dispatcher runs the worker only after
+     * the test arms it, and the worker itself cancels the delivery job
+     * before returning - so the cancel lands exactly on the resume.
+     */
+    private class CancelAfterReturn(
+        val accepted: ProcessedStill.Accepted,
+    ) : StillProcessor {
+        var target: Job? = null
+        override fun process(jpegBytes: ByteArray): ProcessedStill {
+            (target ?: error("delivery job not armed")).cancel()
+            return accepted
+        }
+    }
+
+    @Test
+    fun cancelAfterProcessorReturnWipesAcceptedBytesBeforeHandoff() {
+        val staged = scanSynthetic()
+        assertTrue("synthetic fingerprint must be non-empty", staged.serializedBytes.isNotEmpty())
+        assertTrue(
+            "precondition: staged bytes are live",
+            staged.serializedBytes.any { it != 0.toByte() },
+        )
+        val processor = CancelAfterReturn(staged)
+        val vm = newViewModel(processor)
+        bind(vm.frontAttempt)
+
+        assertTrue(vm.beginFrontCapture())
+        val jpeg = ByteArray(8) { (it + 1).toByte() }
+        val scopeJob = vm.viewModelScope.coroutineContext[Job] ?: error("no scope job")
+        val before = scopeJob.children.toList()
+        vm.deliverFrontJpeg(jpeg)
+        assertEquals(
+            "processing must be parked mid-flight",
+            CaptureAttemptPhase.Processing,
+            vm.frontAttempt.phase,
+        )
+        val delivery = (scopeJob.children.toList() - before.toSet()).single()
+        processor.target = delivery
+
+        // Run the parked worker: it returns Accepted, then the armed cancel
+        // aborts the resume before any handoff can run.
+        cpuDispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(
+            "cancelled accepted bytes must be zeroized",
+            staged.serializedBytes.all { it == 0.toByte() },
+        )
+        assertTrue(
+            "delivered jpeg must be zeroized",
+            jpeg.all { it == 0.toByte() },
+        )
+        assertNull(vm.captureSession.front)
+        assertEquals(ScanSessionState.AWAITING_FRONT, vm.captureSession.state)
+        assertEquals(CaptureAttemptPhase.Binding, vm.frontAttempt.phase)
+        assertEquals(ScanMatchUiState.AwaitingCapture, vm.matchState.value)
+    }
 }

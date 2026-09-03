@@ -290,14 +290,30 @@ class ScanViewModel internal constructor(
             jpegBytes.fill(0)
             return false
         }
+        // M2-F0-07: ownership of an accepted fingerprint between the worker
+        // producing it and this delivery handing it to the session. Published
+        // INSIDE the cancellable boundary: a cancel landing on the resume
+        // discards the worker result before the caller sees it, so without
+        // this holder those bytes would leak. Cleared (never wiped) the
+        // moment the session handoff owns the buffer.
+        var untransferredAccepted: ByteArray? = null
         return try {
             val processed =
-                withContext(cpuDispatcher) { processor.process(jpegBytes) }
+                withContext(cpuDispatcher) {
+                    when (val result = processor.process(jpegBytes)) {
+                        is ProcessedStill.Rejected -> result
+                        is ProcessedStill.Accepted -> {
+                            untransferredAccepted = result.serializedBytes
+                            result
+                        }
+                    }
+                }
 
             // FIX-STATE-10: BEFORE ANY MUTATION - a reset/new session during
             // processing makes this whole outcome disappear without a trace.
             if (!deliveryIsCurrent(generation)) {
-                (processed as? ProcessedStill.Accepted)?.serializedBytes?.fill(0)
+                untransferredAccepted?.fill(0)
+                untransferredAccepted = null
                 return false
             }
 
@@ -310,6 +326,8 @@ class ScanViewModel internal constructor(
                     queuedStill.set(
                         ScannedSide(processed.profileId, processed.serializedBytes),
                     )
+                    // Ownership now with the session handoff: never wipe after this.
+                    untransferredAccepted = null
                     try {
                         captureSession.captureFront()
                     } catch (cancelled: CancellationException) {
@@ -326,6 +344,11 @@ class ScanViewModel internal constructor(
                 }
             }
         } catch (cancelled: CancellationException) {
+            // Cancellation boundary: the worker may have returned Accepted
+            // without the continuation ever resuming, so wipe whatever this
+            // delivery still owns. A transferred buffer is already null here.
+            untransferredAccepted?.fill(0)
+            untransferredAccepted = null
             // Teardown touches state only while this delivery still owns it.
             if (deliveryIsCurrent(generation)) {
                 clearQueuedStill()

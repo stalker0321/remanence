@@ -37,7 +37,7 @@ sealed interface ControlIndexAcceptanceResult {
      * recognition identity (size and SHA-256 of the actual ciphertext),
      * the capsule keyset was parsed, the recognition ciphertext was
      * decrypted and parsed, and the inner manifest agreed with the
-     * signed capsule on identity and on the front/back fingerprints. The
+     * signed capsule on identity and on the required FRONT fingerprint. The
      * verified statement and decrypted [RecognitionManifestContent] are
      * the only outputs; content/photo plaintext is never returned.
      */
@@ -130,7 +130,7 @@ class ControlIndexAcceptanceGate(
         if (!content.capsuleIdRaw.contentEquals(verified.statement.capsuleId.toByteArray())) {
             return ControlIndexAcceptanceResult.Rejected(RejectionReason.RECOGNITION_PAYLOAD_INVALID)
         }
-        if (content.frontFingerprint.isEmpty() || content.backFingerprint.isEmpty()) {
+        if (content.frontFingerprint.isEmpty()) {
             return ControlIndexAcceptanceResult.Rejected(RejectionReason.RECOGNITION_PAYLOAD_INVALID)
         }
 

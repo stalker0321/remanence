@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import dev.hryshyn.remanence.core.crypto.RecognitionManifestContent
+import dev.hryshyn.remanence.core.crypto.RecognitionManifestCodec
 import dev.hryshyn.remanence.core.data.fingerprints.SecretSealer
 import dev.hryshyn.remanence.core.data.db.BlobCacheEntity
 import dev.hryshyn.remanence.core.data.db.BlobCacheState
@@ -1381,13 +1382,11 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
     private fun indexRecognition(): RecognitionManifestContent = verifiedPayload().recognition.copy(
         capsuleIdRaw = capsule.toProtoBytes().toByteArray(),
         frontFingerprint = indexFingerprint(FingerprintSide.FRONT),
-        backFingerprint = indexFingerprint(FingerprintSide.BACK),
     )
 
     private fun indexFingerprint(side: FingerprintSide): ByteArray = FingerprintCodec.serialize(
         PostcardFingerprint(
             profileId = RecognitionProfile.MVP_ORB_V1_ID,
-            side = side,
             canonicalWidthPx = 1200,
             canonicalHeightPx = 800,
             coarseHash64 = 17L,
@@ -1417,13 +1416,12 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
     private fun verifiedPayload() = IncomingVerifiedControlIndexPayload(
         statement = PublishStatement.getDefaultInstance(),
         recognition = RecognitionManifestContent(
-            protocolVersion = ProtocolV1Limits.PROTOCOL_VERSION,
+            protocolVersion = RecognitionManifestCodec.FORMAT_VERSION,
             capsuleIdRaw = ByteArray(0),
             senderHandleSnapshot = "sender",
             createdAtEpochSeconds = 1,
             placeLabel = null,
             frontFingerprint = byteArrayOf(1),
-            backFingerprint = byteArrayOf(2),
         ),
         senderVerification = TestSenderVerification.forCapsule(capsule),
     )

@@ -104,7 +104,6 @@ internal class IncomingSenderIndexCandidateProvider(
 
         var snapshot: SenderIndexBundleInspectionSnapshot? = null
         var frontBytes: ByteArray? = null
-        var backBytes: ByteArray? = null
         var primaryFailure: Throwable? = null
         try {
             val result = senderIndexBundleReader.inspect(
@@ -119,15 +118,7 @@ internal class IncomingSenderIndexCandidateProvider(
             if (snapshot.capsuleId != candidate.capsuleId) return null
 
             frontBytes = snapshot.frontFingerprint
-            // FRONT-only: backFingerprint is ignored (legacy bundle still carries it, but production index is FRONT-only)
-            backBytes = snapshot.backFingerprint
             val front = FingerprintCodec.parse(frontBytes!!)
-            // Validate back parses for fail-closed on corrupt legacy bundles, but do not use it for candidate identity.
-            try {
-                FingerprintCodec.parse(backBytes!!)
-            } catch (_: Exception) {
-                return null
-            }
             val capsuleId = candidate.capsuleId.toString()
             return IndexedCandidate(
                 capsuleId = candidate.capsuleId.value,
@@ -146,7 +137,6 @@ internal class IncomingSenderIndexCandidateProvider(
             return null
         } finally {
             frontBytes?.fill(0)
-            backBytes?.fill(0)
             snapshot?.let { closeSnapshot(it, primaryFailure) }
         }
     }

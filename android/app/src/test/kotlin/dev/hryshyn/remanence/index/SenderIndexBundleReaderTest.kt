@@ -1,6 +1,7 @@
 package dev.hryshyn.remanence.index
 
 import dev.hryshyn.remanence.core.crypto.RecognitionManifestContent
+import dev.hryshyn.remanence.core.crypto.RecognitionManifestCodec
 import dev.hryshyn.remanence.core.data.fingerprints.SecretSealer
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.model.CapsuleId
@@ -10,7 +11,6 @@ import dev.hryshyn.remanence.TestSenderVerification
 import dev.hryshyn.remanence.core.recognition.ExtractionQuality
 import dev.hryshyn.remanence.core.recognition.FingerprintCodec
 import dev.hryshyn.remanence.core.recognition.FingerprintKeypoint
-import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.PostcardFingerprint
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import java.io.File
@@ -138,7 +138,6 @@ class SenderIndexBundleReaderTest {
             { snapshot.createdAtEpochSeconds },
             { snapshot.placeLabel },
             { snapshot.frontFingerprint },
-            { snapshot.backFingerprint },
         ).forEach(::assertThrowsIllegalState)
         assertTrue(wipedChars.isNotEmpty())
         assertTrue(wipedChars.all { chars -> chars.all { it == '\u0000' } })
@@ -157,99 +156,32 @@ class SenderIndexBundleReaderTest {
     }
 
     @Test
-    fun legacyV1BundleUsesV1AadAndPreservesRecognitionMaterialWithoutOfflineKey() = runBlocking {
-        val sealer = AesGcmSealer()
-        val recognition = recognition()
-        val legacy = SenderIndexBundlePlaintext(
-            localFormatVersion = SenderIndexBundleCodec.LEGACY_FORMAT_VERSION,
-            capsuleId = capsule,
-            senderHandleSnapshot = recognition.senderHandleSnapshot,
-            createdAtEpochSeconds = recognition.createdAtEpochSeconds,
-            placeLabel = recognition.placeLabel,
-            frontFingerprint = recognition.frontFingerprint,
-            backFingerprint = recognition.backFingerprint,
-            senderVerification = null,
-        )
-        val encoded = SenderIndexBundleCodec().encode(legacy)
-        val encrypted = sealer.seal(
-            encoded,
-            SenderIndexBundleAad.encode(
-                owner,
-                capsule,
-                SenderIndexBundleCodec.LEGACY_FORMAT_VERSION,
-            ),
-        )
-        writeDestination(owner, capsule, encrypted)
-        encoded.fill(0)
-        encrypted.fill(0)
-        legacy.wipe()
-
-        val result = SenderIndexBundleReader(roots, sealer).inspect(readRequest(owner, owner, capsule))
-        val snapshot = (result as SenderIndexBundleReadResult.Available).snapshot
-        try {
-            assertEquals(SenderIndexBundleCodec.LEGACY_FORMAT_VERSION, snapshot.localFormatVersion)
-            assertEquals(recognition.senderHandleSnapshot, snapshot.senderHandleSnapshot)
-            assertArrayEquals(recognition.frontFingerprint, snapshot.frontFingerprint)
-            assertNull(snapshot.senderVerification)
-        } finally {
-            snapshot.close()
-        }
-    }
-
-    @Test
-    fun crossVersionPlaintextAndAadMismatchIsCorruptInEitherDirection() = runBlocking {
+    fun oldAadIsNotAttemptedAfterTheBreakingReset() = runBlocking {
         val sealer = AesGcmSealer()
         val codec = SenderIndexBundleCodec()
 
-        val v2 = SenderIndexBundlePlaintext.fromVerifiedRecognition(
+        val current = SenderIndexBundlePlaintext.fromVerifiedRecognition(
             capsule,
             recognition(),
             TestSenderVerification.forCapsule(capsule),
         )
-        val v2Bytes = codec.encode(v2)
-        val v2UnderV1Aad = sealer.seal(
-            v2Bytes,
+        val currentBytes = codec.encode(current)
+        val oldAadCiphertext = sealer.seal(
+            currentBytes,
             SenderIndexBundleAad.encode(
                 owner,
                 capsule,
-                SenderIndexBundleCodec.LEGACY_FORMAT_VERSION,
+                SenderIndexBundleCodec.FORMAT_VERSION - 1,
             ),
         )
-        writeDestination(owner, capsule, v2UnderV1Aad)
-        v2Bytes.fill(0)
-        v2UnderV1Aad.fill(0)
-        v2.wipe()
+        writeDestination(owner, capsule, oldAadCiphertext)
+        currentBytes.fill(0)
+        oldAadCiphertext.fill(0)
+        current.wipe()
 
         assertEquals(
-            SenderIndexBundleReadResult.Corrupt(
-                SenderIndexBundleReadCorruptReason.FORMAT_VERSION_MISMATCH,
-            ),
-            reader(sealer).inspect(readRequest(owner, owner, capsule)),
-        )
-
-        val v1 = SenderIndexBundlePlaintext(
-            localFormatVersion = SenderIndexBundleCodec.LEGACY_FORMAT_VERSION,
-            capsuleId = capsule,
-            senderHandleSnapshot = "alice_1",
-            createdAtEpochSeconds = 1_700_000_000L,
-            placeLabel = "Paris",
-            frontFingerprint = recognition().frontFingerprint,
-            backFingerprint = recognition().backFingerprint,
-            senderVerification = null,
-        )
-        val v1Bytes = codec.encode(v1)
-        val v1UnderV2Aad = sealer.seal(
-            v1Bytes,
-            SenderIndexBundleAad.encode(owner, capsule, SenderIndexBundleCodec.FORMAT_VERSION),
-        )
-        writeDestination(owner, capsule, v1UnderV2Aad)
-        v1Bytes.fill(0)
-        v1UnderV2Aad.fill(0)
-        v1.wipe()
-
-        assertEquals(
-            SenderIndexBundleReadResult.Corrupt(
-                SenderIndexBundleReadCorruptReason.FORMAT_VERSION_MISMATCH,
+            SenderIndexBundleReadResult.Unavailable(
+                SenderIndexBundleReadUnavailableReason.SEALER_UNAVAILABLE,
             ),
             reader(sealer).inspect(readRequest(owner, owner, capsule)),
         )
@@ -324,7 +256,7 @@ class SenderIndexBundleReaderTest {
             unavailable,
         )
         assertArrayEquals(
-            SenderIndexBundleAad.encode(owner, capsule, SenderIndexBundleCodec.LEGACY_FORMAT_VERSION),
+            SenderIndexBundleAad.encode(owner, capsule, SenderIndexBundleCodec.FORMAT_VERSION),
             refusing.aad,
         )
     }
@@ -616,19 +548,17 @@ class SenderIndexBundleReaderTest {
     }
 
     private fun recognition(capsuleId: CapsuleId = capsule) = RecognitionManifestContent(
-        protocolVersion = ProtocolV1Limits.PROTOCOL_VERSION,
+        protocolVersion = RecognitionManifestCodec.FORMAT_VERSION,
         capsuleIdRaw = capsuleId.toProtoBytes().toByteArray(),
         senderHandleSnapshot = "alice_1",
         createdAtEpochSeconds = 1_700_000_000L,
         placeLabel = "Paris",
-        frontFingerprint = fingerprint(FingerprintSide.FRONT),
-        backFingerprint = fingerprint(FingerprintSide.BACK),
+        frontFingerprint = fingerprint(),
     )
 
-    private fun fingerprint(side: FingerprintSide): ByteArray = FingerprintCodec.serialize(
+    private fun fingerprint(): ByteArray = FingerprintCodec.serialize(
         PostcardFingerprint(
             profileId = RecognitionProfile.MVP_ORB_V1_ID,
-            side = side,
             canonicalWidthPx = 1200,
             canonicalHeightPx = 800,
             coarseHash64 = 17L,

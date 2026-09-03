@@ -47,7 +47,6 @@ class RealStillFingerprintProcessorTest {
             assertTrue(fingerprint.descriptors.isNotEmpty())
             assertTrue(fingerprint.descriptors.all { it.size == FingerprintCodec.DESCRIPTOR_BYTES })
             assertTrue(fingerprint.descriptors.size == fingerprint.keypoints.size)
-            assertTrue(fingerprint.side == FingerprintSide.FRONT)
             assertTrue(fingerprint.profileId == RecognitionProfile.MVP_ORB_V1_ID)
         } finally {
             accepted.serializedBytes.fill(0)

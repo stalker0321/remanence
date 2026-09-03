@@ -12,21 +12,15 @@ option optimize_for = LITE_RUNTIME;
 // signals use fixed-point micro units (value * 1e6), angles use hundredths
 // of a degree. No floats, maps, or locale-dependent values.
 message PostcardFingerprint {
-  uint32 format_version = 1; // exactly 1
+  uint32 format_version = 1; // exactly 2 (FRONT-only)
   string recognition_profile_id = 2;
-  Side side = 3;
+  reserved 3;
   uint32 canonical_width_px = 4;
   uint32 canonical_height_px = 5;
   fixed64 coarse_hash64 = 6;
   repeated Keypoint keypoints = 7; // bounded to profile nfeatures cap
   bytes orb_descriptors = 8; // 32 bytes per keypoint, row-major
   ExtractionQuality extraction_quality = 9;
-
-  enum Side {
-    SIDE_UNSPECIFIED = 0;
-    FRONT = 1;
-    BACK = 2;
-  }
 
   message Keypoint {
     uint32 x_micro = 1; // x / canonical_width * 1e6, <= 1_000_000

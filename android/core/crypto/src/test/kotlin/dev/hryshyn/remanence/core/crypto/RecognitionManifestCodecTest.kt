@@ -29,7 +29,6 @@ class RecognitionManifestCodecTest {
     )
 
     private val front = ByteArray(96) { (it * 3).toByte() }
-    private val back = ByteArray(96) { (it * 7 + 1).toByte() }
 
     @BeforeTest
     fun setUp() {
@@ -47,18 +46,16 @@ class RecognitionManifestCodecTest {
             createdAtEpochSeconds = 1_755_000_000L,
             placeLabel = "Львів",
             frontFingerprint = front,
-            backFingerprint = back,
         )
 
         val content = codec.decryptAndParse(keyset, routing, ciphertext)
 
-        assertEquals(1, content.protocolVersion)
+        assertEquals(2, content.protocolVersion)
         assertContentEquals(routing.capsuleId.toProtoBytes().toByteArray(), content.capsuleIdRaw)
         assertEquals("mykola", content.senderHandleSnapshot)
         assertEquals(1_755_000_000L, content.createdAtEpochSeconds)
         assertEquals("Львів", content.placeLabel)
         assertContentEquals(front, content.frontFingerprint)
-        assertContentEquals(back, content.backFingerprint)
     }
 
     @Test
@@ -70,7 +67,6 @@ class RecognitionManifestCodecTest {
             createdAtEpochSeconds = 5L,
             placeLabel = null,
             frontFingerprint = front,
-            backFingerprint = back,
         )
         assertEquals(null, codec.decryptAndParse(keyset, routing, ciphertext).placeLabel)
     }
@@ -136,11 +132,23 @@ class RecognitionManifestCodecTest {
     }
 
     @Test
-    fun emptyBackFingerprintFailsClosedAfterValidReencryption() {
-        val manifest = decryptedManifest().toBuilder().clearBackFingerprint().build()
+    fun oldManifestFormatFailsClosedAfterValidReencryption() {
+        val manifest = decryptedManifest().toBuilder()
+            .setProtocolVersion(1)
+            .build()
 
         assertFailsWith<GeneralSecurityException> {
             codec.decryptAndParse(keyset, routing, encryptManifest(manifest))
+        }
+    }
+
+    @Test
+    fun removedBackFingerprintFieldFailsClosedWithCurrentManifestVersion() {
+        val current = decryptedManifest().toByteArray()
+        val withRemovedBack = current + byteArrayOf(0x2a, 0x01, 0x01)
+
+        assertFailsWith<GeneralSecurityException> {
+            codec.decryptAndParse(keyset, routing, encryptPlaintext(withRemovedBack))
         }
     }
 
@@ -164,7 +172,6 @@ class RecognitionManifestCodecTest {
             createdAtEpochSeconds = 1L,
             placeLabel = null,
             frontFingerprint = front,
-            backFingerprint = back,
         )
         assertFailsWith<GeneralSecurityException> {
             codec.decryptAndParse(otherKeyset, routing, ciphertext)
@@ -180,7 +187,6 @@ class RecognitionManifestCodecTest {
             createdAtEpochSeconds = 1L,
             placeLabel = null,
             frontFingerprint = front,
-            backFingerprint = back,
         )
         ciphertext[ciphertext.size / 2] = (ciphertext[ciphertext.size / 2].toInt() xor 1).toByte()
         assertFailsWith<GeneralSecurityException> {
@@ -198,7 +204,6 @@ class RecognitionManifestCodecTest {
                 createdAtEpochSeconds = 1L,
                 placeLabel = "м".repeat(61), // 61 * 2 UTF-8 bytes = 122 > 120
                 frontFingerprint = front,
-                backFingerprint = back,
             )
         }
     }
@@ -214,7 +219,6 @@ class RecognitionManifestCodecTest {
                     createdAtEpochSeconds = 1L,
                     placeLabel = null,
                     frontFingerprint = front,
-                    backFingerprint = back,
                 )
             }
         }
@@ -230,22 +234,6 @@ class RecognitionManifestCodecTest {
                 createdAtEpochSeconds = 1L,
                 placeLabel = null,
                 frontFingerprint = ByteArray(0),
-                backFingerprint = back,
-            )
-        }
-    }
-
-    @Test
-    fun missingBackFingerprintRejected() {
-        assertFailsWith<IllegalArgumentException> {
-            codec.buildAndEncrypt(
-                capsuleKeyset = keyset,
-                routingContext = routing,
-                senderHandleSnapshot = "mykola",
-                createdAtEpochSeconds = 1L,
-                placeLabel = null,
-                frontFingerprint = front,
-                backFingerprint = ByteArray(0),
             )
         }
     }
@@ -261,7 +249,6 @@ class RecognitionManifestCodecTest {
         createdAtEpochSeconds = 1L,
         placeLabel = null,
         frontFingerprint = front,
-        backFingerprint = back,
     )
 
     private fun encryptManifest(manifest: RecognitionManifest): ByteArray =

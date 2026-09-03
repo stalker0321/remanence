@@ -176,7 +176,7 @@ class PerspectiveWarperTest {
 
         val extractor = FingerprintExtractor(profile)
         fun fingerprint(warped: WarpedCapture): PostcardFingerprint =
-            extractor.extract(warped.pixels, warped.width, warped.height, FingerprintSide.FRONT)
+            extractor.extract(warped.pixels, warped.width, warped.height)
 
         val landscapeFingerprint = fingerprint(landscapeWarped)
         val portraitFingerprint = fingerprint(portraitWarped)

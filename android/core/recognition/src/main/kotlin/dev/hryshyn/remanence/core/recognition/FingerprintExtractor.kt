@@ -20,7 +20,6 @@ class FingerprintExtractor(private val profile: RecognitionProfile) {
         warpedArgb: IntArray,
         width: Int,
         height: Int,
-        side: FingerprintSide,
     ): PostcardFingerprint {
         require(width > 0 && height > 0 && warpedArgb.size == width * height)
         if (Core.getVersionMajor() <= 0) throw IllegalStateException("OpenCV native library not initialized")
@@ -51,7 +50,6 @@ class FingerprintExtractor(private val profile: RecognitionProfile) {
 
             return PostcardFingerprint(
                 profileId = profile.profileId,
-                side = side,
                 canonicalWidthPx = width,
                 canonicalHeightPx = height,
                 coarseHash64 = coarseHash(gray),

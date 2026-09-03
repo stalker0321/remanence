@@ -35,7 +35,6 @@ class LocalMatchEngineTest {
 
     private fun fingerprint(seed: Int, count: Int) = PostcardFingerprint(
         profileId = RecognitionProfile.MVP_ORB_V1_ID,
-        side = FingerprintSide.FRONT,
         canonicalWidthPx = 1600,
         canonicalHeightPx = 1000,
         coarseHash64 = seed.toLong(),

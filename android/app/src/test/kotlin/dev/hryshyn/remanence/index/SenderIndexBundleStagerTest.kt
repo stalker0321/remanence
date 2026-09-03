@@ -1,6 +1,7 @@
 package dev.hryshyn.remanence.index
 
 import dev.hryshyn.remanence.core.crypto.RecognitionManifestContent
+import dev.hryshyn.remanence.core.crypto.RecognitionManifestCodec
 import dev.hryshyn.remanence.core.data.fingerprints.SecretSealer
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.model.CapsuleId
@@ -87,7 +88,6 @@ class SenderIndexBundleStagerTest {
         assertEquals(plaintext.senderHandleSnapshot, decoded.senderHandleSnapshot)
         assertEquals(plaintext.placeLabel, decoded.placeLabel)
         assertArrayEquals(plaintext.frontFingerprint, decoded.frontFingerprint)
-        assertArrayEquals(plaintext.backFingerprint, decoded.backFingerprint)
         assertTrue(decoded.semanticallyEquals(plaintext))
         assertThrows<IllegalArgumentException> {
             codec.decode(first + byteArrayOf(0x48, 0x01))
@@ -96,7 +96,12 @@ class SenderIndexBundleStagerTest {
             codec.decode(first + byteArrayOf(0x08, 0x01))
         }
         assertThrows<IllegalArgumentException> {
-            codec.decode(first.copyOf().also { it[1] = 3 })
+            codec.decode(first.copyOf().also { it[1] = 2 })
+        }
+        assertThrows<IllegalArgumentException> {
+            // Old local format tag 7 was BACK; it is sender_user_id now and
+            // this malformed value must not be admitted as either shape.
+            codec.decode(first + byteArrayOf(0x3a, 0x01, 0x01))
         }
         assertThrows<IllegalArgumentException> {
             codec.decode(byteArrayOf(0x0a, 0x01))
@@ -118,7 +123,7 @@ class SenderIndexBundleStagerTest {
         assertThrows<IllegalArgumentException> {
             SenderIndexBundlePlaintext.fromVerifiedRecognition(
                 capsule,
-                content.copy(protocolVersion = ProtocolV1Limits.PROTOCOL_VERSION + 1),
+                content.copy(protocolVersion = RecognitionManifestCodec.FORMAT_VERSION + 1),
                 TestSenderVerification.forCapsule(capsule),
             )
         }
@@ -215,48 +220,17 @@ class SenderIndexBundleStagerTest {
     }
 
     @Test
-    fun legacyV1DestinationIsReplayedWithItsVersionedAad() = runBlocking {
-        val sealer = RandomAuthenticatedSealer()
-        val legacy = SenderIndexBundlePlaintext(
-            localFormatVersion = SenderIndexBundleCodec.LEGACY_FORMAT_VERSION,
-            capsuleId = capsule,
-            senderHandleSnapshot = "alice_1",
-            createdAtEpochSeconds = 1_700_000_000L,
-            placeLabel = "Paris",
-            frontFingerprint = contentBytes(FingerprintSide.FRONT),
-            backFingerprint = contentBytes(FingerprintSide.BACK),
-            senderVerification = null,
-        )
-        val codec = SenderIndexBundleCodec()
-        val plaintext = codec.encode(legacy)
-        val aad = SenderIndexBundleAad.encode(
-            ownerA,
-            capsule,
-            SenderIndexBundleCodec.LEGACY_FORMAT_VERSION,
-        )
-        val ciphertext = sealer.seal(plaintext, aad)
-        val destination = destination(ownerA)
-        check(destination.parentFile?.mkdirs() == true)
-        destination.writeBytes(ciphertext)
-        plaintext.fill(0)
-        aad.fill(0)
-        ciphertext.fill(0)
-        legacy.wipe()
-
-        val result = SenderIndexBundleStager(roots, sealer).stage(request(ownerA))
-        assertTrue(result is SenderIndexBundleStageResult.Staged)
-        assertTrue((result as SenderIndexBundleStageResult.Staged).replayed)
-
-        val snapshot = (
-            SenderIndexBundleReader(roots, sealer).inspect(
-                SenderIndexBundleReadRequest(ownerA, ownerA, capsule),
-            ) as SenderIndexBundleReadResult.Available
-            ).snapshot
-        try {
-            assertEquals(SenderIndexBundleCodec.LEGACY_FORMAT_VERSION, snapshot.localFormatVersion)
-            assertTrue(snapshot.senderVerification == null)
-        } finally {
-            snapshot.close()
+    fun unsupportedOldLocalFormatIsRejectedBeforeSealing() {
+        assertThrows<IllegalArgumentException> {
+            SenderIndexBundlePlaintext(
+                localFormatVersion = SenderIndexBundleCodec.FORMAT_VERSION - 1,
+                capsuleId = capsule,
+                senderHandleSnapshot = "alice_1",
+                createdAtEpochSeconds = 1_700_000_000L,
+                placeLabel = "Paris",
+                frontFingerprint = contentBytes(FingerprintSide.FRONT),
+                senderVerification = TestSenderVerification.forCapsule(capsule),
+            ).let(SenderIndexBundleCodec()::encode)
         }
     }
 
@@ -766,21 +740,18 @@ class SenderIndexBundleStagerTest {
         place: String? = "Paris",
         capsuleId: CapsuleId = capsule,
         frontFingerprint: ByteArray = contentBytes(FingerprintSide.FRONT),
-        backFingerprint: ByteArray = contentBytes(FingerprintSide.BACK),
     ) = RecognitionManifestContent(
-        protocolVersion = ProtocolV1Limits.PROTOCOL_VERSION,
+        protocolVersion = RecognitionManifestCodec.FORMAT_VERSION,
         capsuleIdRaw = capsuleId.toProtoBytes().toByteArray(),
         senderHandleSnapshot = "alice_1",
         createdAtEpochSeconds = 1_700_000_000L,
         placeLabel = place,
         frontFingerprint = frontFingerprint,
-        backFingerprint = backFingerprint,
     )
 
-    private fun contentBytes(side: FingerprintSide): ByteArray = FingerprintCodec.serialize(
+    private fun contentBytes(@Suppress("UNUSED_PARAMETER") side: FingerprintSide): ByteArray = FingerprintCodec.serialize(
         PostcardFingerprint(
             profileId = RecognitionProfile.MVP_ORB_V1_ID,
-            side = side,
             canonicalWidthPx = 1200,
             canonicalHeightPx = 800,
             coarseHash64 = 17L,

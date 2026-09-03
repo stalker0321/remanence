@@ -1,6 +1,7 @@
 package dev.hryshyn.remanence.sync
 
 import dev.hryshyn.remanence.core.crypto.RecognitionManifestContent
+import dev.hryshyn.remanence.core.crypto.RecognitionManifestCodec
 import dev.hryshyn.remanence.core.data.fingerprints.SecretSealer
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.model.CapsuleId
@@ -33,13 +34,12 @@ class SenderIndexBundlePersistenceAdapterTest {
     private val otherOwner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000a202")
     private val capsule = CapsuleId.parseRest("0198f0a0-0000-7000-8000-00000000a211")
     private val recognition = RecognitionManifestContent(
-        protocolVersion = 1,
+        protocolVersion = RecognitionManifestCodec.FORMAT_VERSION,
         capsuleIdRaw = capsule.toProtoBytes().toByteArray(),
         senderHandleSnapshot = "sender_1",
         createdAtEpochSeconds = 1_700_000_000L,
         placeLabel = "private place",
         frontFingerprint = byteArrayOf(1, 2, 3),
-        backFingerprint = byteArrayOf(4, 5, 6),
     )
     private val verified = IncomingVerifiedControlIndexPayload(
         statement = PublishStatement.getDefaultInstance(),
@@ -302,13 +302,11 @@ class SenderIndexBundlePersistenceAdapterTest {
 
     private fun validRecognition() = recognition.copy(
         frontFingerprint = fingerprint(FingerprintSide.FRONT),
-        backFingerprint = fingerprint(FingerprintSide.BACK),
     )
 
     private fun fingerprint(side: FingerprintSide): ByteArray = FingerprintCodec.serialize(
         PostcardFingerprint(
             profileId = RecognitionProfile.MVP_ORB_V1_ID,
-            side = side,
             canonicalWidthPx = 1200,
             canonicalHeightPx = 800,
             coarseHash64 = 17L,

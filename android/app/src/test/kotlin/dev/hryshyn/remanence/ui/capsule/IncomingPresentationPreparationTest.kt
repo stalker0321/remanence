@@ -196,7 +196,6 @@ class IncomingPresentationPreparationTest {
             createdAtEpochSeconds = fixture.recognition.createdAtEpochSeconds,
             placeLabel = fixture.recognition.placeLabel,
             frontFingerprint = front,
-            backFingerprint = back,
             senderVerification = fixture.senderVerification,
         )
         val codec = SenderIndexBundleCodec()
@@ -292,47 +291,6 @@ class IncomingPresentationPreparationTest {
         assertEquals(CAPSULE.value, authority.resolve(grant.grantId, OWNER)?.capsuleId)
         assertNull(authority.resolve(grant.grantId, OTHER_OWNER))
         assertTrue(runCatching { prepared.loadPhoto(0) }.isFailure)
-    }
-
-    @Test
-    fun legacyV1BundleRemainsReadableForRecognitionButFailsPresentationClosed() = runBlocking {
-        val recognition = fixture.recognition
-        val legacy = SenderIndexBundlePlaintext(
-            localFormatVersion = SenderIndexBundleCodec.LEGACY_FORMAT_VERSION,
-            capsuleId = CAPSULE,
-            senderHandleSnapshot = recognition.senderHandleSnapshot,
-            createdAtEpochSeconds = recognition.createdAtEpochSeconds,
-            placeLabel = recognition.placeLabel,
-            frontFingerprint = recognition.frontFingerprint,
-            backFingerprint = recognition.backFingerprint,
-            senderVerification = null,
-        )
-        val codec = SenderIndexBundleCodec()
-        val encoded = codec.encode(legacy)
-        val encrypted = fixture.sealer.seal(
-            encoded,
-            SenderIndexBundleAad.encode(
-                OWNER,
-                CAPSULE,
-                SenderIndexBundleCodec.LEGACY_FORMAT_VERSION,
-            ),
-        )
-        writeIndex(encrypted)
-        val recognitionRead = SenderIndexBundleReader(roots, fixture.sealer).inspect(
-            SenderIndexBundleReadRequest(OWNER, OWNER, CAPSULE),
-        )
-        val snapshot = requireType<SenderIndexBundleReadResult.Available>(recognitionRead).snapshot
-        assertEquals(SenderIndexBundleCodec.LEGACY_FORMAT_VERSION, snapshot.localFormatVersion)
-        snapshot.close()
-
-        val result = preparation().prepare(OWNER, CAPSULE)
-        assertEquals(
-            IncomingPresentationPreparationRejection.SENDER_INDEX_INVALID,
-            requireType<IncomingPresentationPreparationResult.Rejected>(result).reason,
-        )
-        encoded.fill(0)
-        encrypted.fill(0)
-        legacy.wipe()
     }
 
     @Test
@@ -550,13 +508,12 @@ class IncomingPresentationPreparationTest {
         val recipientIdentity = AccountIdentityGenerator().generate()
         val capsuleKeyset = CapsuleKeysetGenerator().generate()
         val recognition = RecognitionManifestContent(
-            protocolVersion = ProtocolV1Limits.PROTOCOL_VERSION,
+            protocolVersion = RecognitionManifestCodec.FORMAT_VERSION,
             capsuleIdRaw = CAPSULE.toProtoBytes().toByteArray(),
             senderHandleSnapshot = "sender_1",
             createdAtEpochSeconds = 1_700_000_000L,
             placeLabel = "Paris",
             frontFingerprint = fingerprint(FingerprintSide.FRONT),
-            backFingerprint = fingerprint(FingerprintSide.BACK),
         )
         val recognitionCiphertext = RecognitionManifestCodec().buildAndEncrypt(
             capsuleKeyset = capsuleKeyset,
@@ -570,7 +527,6 @@ class IncomingPresentationPreparationTest {
             createdAtEpochSeconds = recognition.createdAtEpochSeconds,
             placeLabel = recognition.placeLabel,
             frontFingerprint = recognition.frontFingerprint,
-            backFingerprint = recognition.backFingerprint,
         )
         val photoIds = listOf(PHOTO_0, PHOTO_1, PHOTO_2)
         val encryptedPhotos = photoIds.mapIndexed { ordinal, blobId ->
@@ -677,7 +633,6 @@ class IncomingPresentationPreparationTest {
     private fun fingerprint(side: FingerprintSide): ByteArray = FingerprintCodec.serialize(
         PostcardFingerprint(
             profileId = RecognitionProfile.MVP_ORB_V1_ID,
-            side = side,
             canonicalWidthPx = 1200,
             canonicalHeightPx = 800,
             coarseHash64 = 17L,
@@ -699,7 +654,6 @@ class IncomingPresentationPreparationTest {
     private fun scanFingerprint(side: FingerprintSide, count: Int): ByteArray = FingerprintCodec.serialize(
         PostcardFingerprint(
             profileId = RecognitionProfile.MVP_ORB_V1_ID,
-            side = side,
             canonicalWidthPx = 1200,
             canonicalHeightPx = 800,
             coarseHash64 = 17L,

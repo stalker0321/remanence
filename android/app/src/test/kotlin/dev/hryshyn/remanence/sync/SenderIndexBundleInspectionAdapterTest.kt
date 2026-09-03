@@ -1,6 +1,7 @@
 package dev.hryshyn.remanence.sync
 
 import dev.hryshyn.remanence.core.crypto.RecognitionManifestContent
+import dev.hryshyn.remanence.core.crypto.RecognitionManifestCodec
 import dev.hryshyn.remanence.core.data.fingerprints.SecretSealer
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.model.CapsuleId
@@ -127,13 +128,12 @@ class SenderIndexBundleInspectionAdapterTest {
 
     private fun validEncoded(): ByteArray {
         val recognition = RecognitionManifestContent(
-            protocolVersion = ProtocolV1Limits.PROTOCOL_VERSION,
+            protocolVersion = RecognitionManifestCodec.FORMAT_VERSION,
             capsuleIdRaw = capsule.toProtoBytes().toByteArray(),
             senderHandleSnapshot = "adapter_sender",
             createdAtEpochSeconds = 1_700_000_001L,
             placeLabel = "adapter_place",
             frontFingerprint = fingerprint(FingerprintSide.FRONT),
-            backFingerprint = fingerprint(FingerprintSide.BACK),
         )
         val plaintext = SenderIndexBundlePlaintext.fromVerifiedRecognition(
             capsule,
@@ -150,7 +150,6 @@ class SenderIndexBundleInspectionAdapterTest {
     private fun fingerprint(side: FingerprintSide): ByteArray = FingerprintCodec.serialize(
         PostcardFingerprint(
             profileId = RecognitionProfile.MVP_ORB_V1_ID,
-            side = side,
             canonicalWidthPx = 1200,
             canonicalHeightPx = 800,
             coarseHash64 = 17L,

@@ -12,9 +12,8 @@ import org.junit.Assume.assumeTrue
  * serialize compactly and parse back with EXACT quantized coordinates and
  * descriptors (docs/recognition.md sections 6 and 14).
  *
- * FRONT-only production contract (ADR-012): codec still supports BACK wire
- * for legacy bundle compatibility (M2-F0-01 shim), but production index is
- * FRONT-only and BACK is never used for matching.
+ * FRONT-only production contract (ADR-012): the fingerprint has no side
+ * discriminator and exactly one required format is accepted.
  */
 class NormalizedFingerprintSerializationTest {
 
@@ -45,18 +44,14 @@ class NormalizedFingerprintSerializationTest {
     }
 
     @Test
-    fun frontAndBackSerializeCompactAndParseBackExactly() {
-        val frontBytes = FingerprintCodec.serialize(extractor.extract(texturedFrame(), w, h, FingerprintSide.FRONT))
-        val backBytes = FingerprintCodec.serialize(extractor.extract(texturedFrame(), w, h, FingerprintSide.BACK))
+    fun frontSerializeCompactAndParseBackExactly() {
+        val frontBytes = FingerprintCodec.serialize(extractor.extract(texturedFrame(), w, h))
 
         // Raw serialized fingerprints must sit far below the encrypted-manifest budget (1 MiB).
         assertTrue(frontBytes.size < 256 * 1024, "front=${frontBytes.size}")
-        assertTrue(backBytes.size < 256 * 1024, "back=${backBytes.size}")
-
         val parsedFront = FingerprintCodec.parse(frontBytes)
-        assertEquals(FingerprintSide.FRONT, parsedFront.side)
 
-        val originalFront = extractor.extract(texturedFrame(), w, h, FingerprintSide.FRONT)
+        val originalFront = extractor.extract(texturedFrame(), w, h)
         assertEquals(originalFront.keypoints.size, parsedFront.keypoints.size)
         originalFront.keypoints.zip(parsedFront.keypoints).forEach { (a, b) ->
             // Micro-quantized coordinates survive exactly.
@@ -75,11 +70,4 @@ class NormalizedFingerprintSerializationTest {
         }
     }
 
-    @Test
-    fun sideDistinctionSurvivesRoundTrip() {
-        val front = FingerprintCodec.serialize(extractor.extract(texturedFrame(), w, h, FingerprintSide.FRONT))
-        val back = FingerprintCodec.serialize(extractor.extract(texturedFrame(), w, h, FingerprintSide.BACK))
-        assertEquals(FingerprintSide.FRONT, FingerprintCodec.parse(front).side)
-        assertEquals(FingerprintSide.BACK, FingerprintCodec.parse(back).side)
-    }
 }

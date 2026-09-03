@@ -154,7 +154,6 @@ class CaptureDatasetHarnessTest {
                 val accepted = result as ProcessedStill.Accepted
                 try {
                     val fingerprint = FingerprintCodec.parse(accepted.serializedBytes)
-                    assertEquals("$caseId side", FingerprintSide.BACK, fingerprint.side)
                     assertEquals("$caseId profile", RecognitionProfile.MVP_ORB_V1_ID, fingerprint.profileId)
                     assertTrue("$caseId must have ORB keypoints", fingerprint.keypoints.isNotEmpty())
                     assertEquals(
@@ -998,7 +997,6 @@ class CaptureDatasetHarnessTest {
                         warpedArgb = warped.pixels,
                         width = warped.width,
                         height = warped.height,
-                        side = side,
                     )
                     try {
                         if (fingerprint.keypoints.isEmpty() ||

@@ -56,7 +56,6 @@ class ControlIndexAcceptanceGateTest {
     private val photo3BlobId = BlobId(UUID.fromString("a1000000-0000-4000-8000-000000000005"))
 
     private val front = ByteArray(96) { (it * 3).toByte() }
-    private val back = ByteArray(96) { (it * 7 + 1).toByte() }
 
     private data class IndexCapsule(
         val keyset: KeysetHandle,
@@ -123,7 +122,6 @@ class ControlIndexAcceptanceGateTest {
     private fun buildIndexCapsule(
         keyset: KeysetHandle = CapsuleKeysetGenerator().generate(),
         frontFingerprint: ByteArray = front,
-        backFingerprint: ByteArray = back,
         handleSnapshot: String = "mykola",
         createdAtEpochSeconds: Long = 1_700_000_000L,
         placeLabel: String? = null,
@@ -141,7 +139,6 @@ class ControlIndexAcceptanceGateTest {
             createdAtEpochSeconds = createdAtEpochSeconds,
             placeLabel = placeLabel,
             frontFingerprint = frontFingerprint,
-            backFingerprint = backFingerprint,
         )
         val recognitionSize = recognitionCiphertext.size.toLong()
         val recognitionSha = sha256(recognitionCiphertext)
@@ -199,10 +196,9 @@ class ControlIndexAcceptanceGateTest {
 
         val verified = assertIs<ControlIndexAcceptanceResult.Verified>(result)
         assertEquals(5, verified.statement.artifactsCount)
-        assertEquals(1, verified.recognition.protocolVersion)
+        assertEquals(2, verified.recognition.protocolVersion)
         assertContentEquals(capsuleId.toProtoBytes().toByteArray(), verified.recognition.capsuleIdRaw)
         assertContentEquals(front, verified.recognition.frontFingerprint)
-        assertContentEquals(back, verified.recognition.backFingerprint)
         assertEquals("mykola", verified.recognition.senderHandleSnapshot)
     }
 
@@ -339,17 +335,6 @@ class ControlIndexAcceptanceGateTest {
     fun emptyFrontFingerprintFailsPayload() {
         val capsule = buildIndexCapsuleWithForgedManifest(
             frontFingerprint = ByteArray(0),
-            backFingerprint = back,
-        )
-        val result = indexGate.verify(indexInput(capsule))
-        assertEquals(RejectionReason.RECOGNITION_PAYLOAD_INVALID, rejected(result))
-    }
-
-    @Test
-    fun emptyBackFingerprintFailsPayload() {
-        val capsule = buildIndexCapsuleWithForgedManifest(
-            frontFingerprint = front,
-            backFingerprint = ByteArray(0),
         )
         val result = indexGate.verify(indexInput(capsule))
         assertEquals(RejectionReason.RECOGNITION_PAYLOAD_INVALID, rejected(result))
@@ -358,7 +343,6 @@ class ControlIndexAcceptanceGateTest {
     private fun buildIndexCapsuleWithForgedManifest(
         keyset: KeysetHandle = CapsuleKeysetGenerator().generate(),
         frontFingerprint: ByteArray = front,
-        backFingerprint: ByteArray = back,
     ): IndexCapsule {
         val routing = RecognitionManifestCodec.RoutingContext(
             capsuleId = capsuleId,
@@ -371,11 +355,10 @@ class ControlIndexAcceptanceGateTest {
             .setCreatedAtEpochSeconds(1_700_000_000L)
             .build()
         val manifest = dev.hryshyn.remanence.protocol.v1.RecognitionManifest.newBuilder()
-            .setProtocolVersion(1)
+            .setProtocolVersion(2)
             .setCapsuleId(routing.capsuleIdProto())
             .setChooserHint(hint)
             .setFrontFingerprint(ByteString.copyFrom(frontFingerprint))
-            .setBackFingerprint(ByteString.copyFrom(backFingerprint))
             .build()
         val recognitionCiphertext = CapsuleArtifactCryptor().encrypt(
             capsuleKeyset = keyset,
@@ -425,11 +408,10 @@ class ControlIndexAcceptanceGateTest {
             .build()
         val otherCapsuleId = CapsuleId(UUID.fromString("9a999999-9999-4999-8999-999999999999"))
         val manifest = dev.hryshyn.remanence.protocol.v1.RecognitionManifest.newBuilder()
-            .setProtocolVersion(1)
+            .setProtocolVersion(2)
             .setCapsuleId(otherCapsuleId.toProtoBytes())
             .setChooserHint(hint)
             .setFrontFingerprint(ByteString.copyFrom(front))
-            .setBackFingerprint(ByteString.copyFrom(back))
             .build()
         val forgedCiphertext = CapsuleArtifactCryptor().encrypt(
             capsuleKeyset = forgedKeyset,
@@ -592,7 +574,7 @@ class ControlIndexAcceptanceGateTest {
     fun aeadValidAltCiphertextWithDifferentPlaintextRejectsBinding() {
         val capsule = buildIndexCapsule()
         val altManifest = dev.hryshyn.remanence.protocol.v1.RecognitionManifest.newBuilder()
-            .setProtocolVersion(1)
+            .setProtocolVersion(2)
             .setCapsuleId(capsuleId.toProtoBytes())
             .setChooserHint(
                 dev.hryshyn.remanence.protocol.v1.ChooserHint.newBuilder()
@@ -601,7 +583,6 @@ class ControlIndexAcceptanceGateTest {
                     .build(),
             )
             .setFrontFingerprint(ByteString.copyFrom(ByteArray(64) { 0x42 }))
-            .setBackFingerprint(ByteString.copyFrom(ByteArray(64) { 0x43 }))
             .build()
         val altCiphertext = CapsuleArtifactCryptor().encrypt(
             capsuleKeyset = capsule.keyset,

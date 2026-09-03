@@ -69,11 +69,11 @@ message ChooserHint {
 }
 
 message RecognitionManifest {
-  uint32 protocol_version = 1; // exactly 1
+  uint32 protocol_version = 1; // exactly 2 for the FRONT-only recognition format
   bytes capsule_id = 2; // UUID bytes exactly 16
   ChooserHint chooser_hint = 3;
   bytes front_fingerprint = 4;
-  bytes back_fingerprint = 5;
+  reserved 5;
 }
 
 message PhotoEntry {

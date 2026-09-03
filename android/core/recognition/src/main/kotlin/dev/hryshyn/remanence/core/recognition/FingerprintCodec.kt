@@ -2,14 +2,6 @@ package dev.hryshyn.remanence.core.recognition
 
 import dev.hryshyn.remanence.recognition.v1.PostcardFingerprint as FingerprintWire
 
-/**
- * Local side of a postcard fingerprint — FRONT-only production contract
- * (ADR-012). BACK is retained only as a legacy wire symbol that the parser
- * rejects fail-closed; it is not a production input (docs/recognition.md
- * section 6). The codec below enforces exactly one required FRONT record.
- */
-enum class FingerprintSide { FRONT, BACK }
-
 /** One ORB keypoint in normalized coordinates with quantized extras. */
 data class FingerprintKeypoint(
     val xNormalized: Double,
@@ -33,7 +25,6 @@ data class ExtractionQuality(
  */
 class PostcardFingerprint(
     val profileId: String,
-    val side: FingerprintSide,
     val canonicalWidthPx: Int,
     val canonicalHeightPx: Int,
     val coarseHash64: Long,
@@ -49,7 +40,7 @@ class PostcardFingerprint(
  */
 object FingerprintCodec {
 
-    const val FORMAT_VERSION: Int = 1
+    const val FORMAT_VERSION: Int = 2
     const val DESCRIPTOR_BYTES: Int = 32
     const val MAX_KEYPOINTS: Int = 1500
     const val MAX_CANONICAL_DIMENSION_PX: Int = 100_000
@@ -66,7 +57,6 @@ object FingerprintCodec {
         val wire = FingerprintWire.newBuilder()
             .setFormatVersion(FORMAT_VERSION)
             .setRecognitionProfileId(fingerprint.profileId)
-            .setSide(toWireSide(fingerprint.side))
             .setCanonicalWidthPx(fingerprint.canonicalWidthPx)
             .setCanonicalHeightPx(fingerprint.canonicalHeightPx)
             .setCoarseHash64(fingerprint.coarseHash64)
@@ -103,12 +93,6 @@ object FingerprintCodec {
         if (profileId.isEmpty() || profileId.length > MAX_PROFILE_ID_CHARS || !PROFILE_ID.matches(profileId)) {
             throw IllegalArgumentException("invalid fingerprint profile id")
         }
-        val side = when (wire.side) {
-            FingerprintWire.Side.FRONT -> FingerprintSide.FRONT
-            FingerprintWire.Side.BACK -> FingerprintSide.BACK
-            FingerprintWire.Side.SIDE_UNSPECIFIED, FingerprintWire.Side.UNRECOGNIZED ->
-                throw IllegalArgumentException("fingerprint side is unspecified")
-        }
         if (wire.canonicalWidthPx !in 1..MAX_CANONICAL_DIMENSION_PX ||
             wire.canonicalHeightPx !in 1..MAX_CANONICAL_DIMENSION_PX
         ) {
@@ -138,14 +122,17 @@ object FingerprintCodec {
             )
         }
         val rawDescriptors = wire.orbDescriptors.toByteArray()
-        val descriptors = List(wire.keypointsCount) { row ->
-            rawDescriptors.copyOfRange(row * DESCRIPTOR_BYTES, (row + 1) * DESCRIPTOR_BYTES)
+        val descriptors = try {
+            List(wire.keypointsCount) { row ->
+                rawDescriptors.copyOfRange(row * DESCRIPTOR_BYTES, (row + 1) * DESCRIPTOR_BYTES)
+            }
+        } finally {
+            rawDescriptors.fill(0)
         }
         val q = wire.extractionQuality
             ?: throw IllegalArgumentException("extraction quality missing")
-        return PostcardFingerprint(
+        val parsed = PostcardFingerprint(
             profileId = profileId,
-            side = side,
             canonicalWidthPx = wire.canonicalWidthPx,
             canonicalHeightPx = wire.canonicalHeightPx,
             coarseHash64 = wire.coarseHash64,
@@ -158,6 +145,13 @@ object FingerprintCodec {
                 detectedAreaRatio = fromMicroChecked(q.detectedAreaRatioMicro),
             ),
         )
+        // Protobuf parsers retain unknown fields. Re-encoding the domain value
+        // makes the front-only format reject removed BACK/tag-3 fields,
+        // duplicate/non-canonical encodings, and any future unknown fields.
+        require(serialize(parsed).contentEquals(bytes)) {
+            "fingerprint encoding is not canonical"
+        }
+        return parsed
     }
 
     private fun validate(fingerprint: PostcardFingerprint) {
@@ -198,11 +192,6 @@ object FingerprintCodec {
             .setGlareFractionMicro(toMicro(quality.glareFraction))
             .setDetectedAreaRatioMicro(toMicro(quality.detectedAreaRatio))
             .build()
-
-    private fun toWireSide(side: FingerprintSide): FingerprintWire.Side = when (side) {
-        FingerprintSide.FRONT -> FingerprintWire.Side.FRONT
-        FingerprintSide.BACK -> FingerprintWire.Side.BACK
-    }
 
     private fun toMicro(value: Double): Int {
         require(value >= 0.0) { "negative value cannot be quantized" }

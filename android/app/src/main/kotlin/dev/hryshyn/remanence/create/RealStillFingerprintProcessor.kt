@@ -112,7 +112,6 @@ class RealStillFingerprintProcessor(
                 warpedArgb = warped.pixels,
                 width = warped.width,
                 height = warped.height,
-                side = side,
             )
 
             if (fingerprint.keypoints.isEmpty() ||

@@ -121,7 +121,6 @@ class CrossIdentityCapsuleFlowTest {
         return dev.hryshyn.remanence.core.recognition.FingerprintCodec.serialize(
             dev.hryshyn.remanence.core.recognition.PostcardFingerprint(
                 profileId = profile.profileId,
-                side = side,
                 canonicalWidthPx = profile.capture.canonicalLongEdgePx,
                 canonicalHeightPx = 1000,
                 coarseHash64 = seed.toLong(),

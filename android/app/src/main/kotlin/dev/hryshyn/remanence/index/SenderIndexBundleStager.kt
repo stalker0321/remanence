@@ -180,31 +180,9 @@ class SenderIndexBundleStager internal constructor(
 
             var plaintext: ByteArray? = null
             var aad: ByteArray? = null
-            var legacyPlaintext: ByteArray? = null
-            var legacyAad: ByteArray? = null
-            var legacyBundle: SenderIndexBundlePlaintext? = null
             try {
                 plaintext = codec.encode(bundle)
                 aad = aadFor(request.ownerUserId, request.capsuleId, bundle.localFormatVersion)
-                // A12a v1 destinations may already exist after an app update.
-                // Keep their recognition replayable with the matching AAD;
-                // only newly published bytes use the v2 verification fields.
-                legacyBundle = SenderIndexBundlePlaintext(
-                    localFormatVersion = SenderIndexBundleCodec.LEGACY_FORMAT_VERSION,
-                    capsuleId = bundle.capsuleId,
-                    senderHandleSnapshot = bundle.senderHandleSnapshot,
-                    createdAtEpochSeconds = bundle.createdAtEpochSeconds,
-                    placeLabel = bundle.placeLabel,
-                    frontFingerprint = bundle.frontFingerprint,
-                    backFingerprint = bundle.backFingerprint,
-                    senderVerification = null,
-                )
-                legacyPlaintext = codec.encode(legacyBundle!!)
-                legacyAad = aadFor(
-                    request.ownerUserId,
-                    request.capsuleId,
-                    SenderIndexBundleCodec.LEGACY_FORMAT_VERSION,
-                )
                 val paths = try {
                     resolvePaths(request.ownerUserId, request.capsuleId)
                 } catch (cancelled: CancellationException) {
@@ -231,21 +209,19 @@ class SenderIndexBundleStager internal constructor(
                     return@withLock failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
                 }
 
-                val existing = inspectCompatible(
+                val existing = inspectSemantic(
                     paths.destination,
                     plaintext!!,
                     aad!!,
-                    legacyPlaintext!!,
-                    legacyAad!!,
                 )
-                when (existing.inspection) {
+                when (existing) {
                     SemanticInspection.MISSING -> Unit
                     SemanticInspection.MATCH -> {
                         return@withLock finishDurableDestination(
                             request = request,
                             paths = paths,
-                            expectedPlaintext = existing.expectedPlaintext,
-                            aad = existing.aad,
+                            expectedPlaintext = plaintext!!,
+                            aad = aad!!,
                             replayed = true,
                         )
                     }
@@ -266,16 +242,14 @@ class SenderIndexBundleStager internal constructor(
                     )
                 }
 
-                val temporaryInspection = inspectCompatible(
+                val temporaryInspection = inspectSemantic(
                     paths.temporary,
                     plaintext!!,
                     aad!!,
-                    legacyPlaintext!!,
-                    legacyAad!!,
                 )
                 var publicationPlaintext = plaintext!!
                 var publicationAad = aad!!
-                when (temporaryInspection.inspection) {
+                when (temporaryInspection) {
                     SemanticInspection.MATCH -> Unit
                     SemanticInspection.MISSING -> ensureTemporary(paths, plaintext!!, aad!!)?.let { return@withLock it }
                     // The canonical TEMP is never written incrementally. Any
@@ -301,11 +275,6 @@ class SenderIndexBundleStager internal constructor(
                         false,
                     )
                 }
-                if (temporaryInspection.inspection == SemanticInspection.MATCH) {
-                    publicationPlaintext = temporaryInspection.expectedPlaintext
-                    publicationAad = temporaryInspection.aad
-                }
-
                 try {
                     fileSystem.atomicNoReplaceLink(paths.temporary, paths.destination)
                 } catch (_: FileAlreadyExistsException) {
@@ -314,8 +283,6 @@ class SenderIndexBundleStager internal constructor(
                         paths,
                         publicationPlaintext,
                         publicationAad,
-                        legacyPlaintext!!,
-                        legacyAad!!,
                     )
                 } catch (_: UnsupportedOperationException) {
                     return@withLock failure(
@@ -330,8 +297,6 @@ class SenderIndexBundleStager internal constructor(
                         paths,
                         publicationPlaintext,
                         publicationAad,
-                        legacyPlaintext!!,
-                        legacyAad!!,
                     )
                 } catch (cancelled: CancellationException) {
                     throw cancelled
@@ -351,9 +316,6 @@ class SenderIndexBundleStager internal constructor(
             } finally {
                 plaintext?.let(wipe)
                 aad?.let(wipe)
-                legacyPlaintext?.let(wipe)
-                legacyAad?.let(wipe)
-                legacyBundle?.wipe()
                 bundle.wipe()
             }
         }
@@ -575,37 +537,6 @@ class SenderIndexBundleStager internal constructor(
             SemanticInspection.UNAVAILABLE ->
                 failure(SenderIndexBundleStageFailure.DEPENDENCY_UNAVAILABLE, true)
             else -> failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
-        }
-    }
-
-    private data class CompatibleInspection(
-        val inspection: SemanticInspection,
-        val expectedPlaintext: ByteArray,
-        val aad: ByteArray,
-    )
-
-    private suspend fun inspectCompatible(
-        path: Path,
-        expectedPlaintext: ByteArray,
-        aad: ByteArray,
-        legacyPlaintext: ByteArray,
-        legacyAad: ByteArray,
-    ): CompatibleInspection {
-        val current = inspectSemantic(path, expectedPlaintext, aad)
-        if (current != SemanticInspection.UNAVAILABLE) {
-            return CompatibleInspection(current, expectedPlaintext, aad)
-        }
-        val legacy = inspectSemantic(path, legacyPlaintext, legacyAad)
-        return when (legacy) {
-            SemanticInspection.MATCH,
-            SemanticInspection.MISMATCH,
-            SemanticInspection.UNSAFE,
-            SemanticInspection.INVALID,
-            -> CompatibleInspection(legacy, legacyPlaintext, legacyAad)
-            SemanticInspection.MISSING,
-            SemanticInspection.READ_FAILURE,
-            SemanticInspection.UNAVAILABLE,
-            -> CompatibleInspection(current, expectedPlaintext, aad)
         }
     }
 
@@ -937,22 +868,18 @@ class SenderIndexBundleStager internal constructor(
         paths: StagePaths,
         expectedPlaintext: ByteArray,
         aad: ByteArray,
-        legacyPlaintext: ByteArray,
-        legacyAad: ByteArray,
     ): SenderIndexBundleStageResult {
-        val inspection = inspectCompatible(
+        val inspection = inspectSemantic(
             paths.destination,
             expectedPlaintext,
             aad,
-            legacyPlaintext,
-            legacyAad,
         )
-        return when (inspection.inspection) {
+        return when (inspection) {
             SemanticInspection.MATCH -> finishDurableDestination(
                 request,
                 paths,
-                inspection.expectedPlaintext,
-                inspection.aad,
+                expectedPlaintext,
+                aad,
                 replayed = true,
             )
             SemanticInspection.MISSING,

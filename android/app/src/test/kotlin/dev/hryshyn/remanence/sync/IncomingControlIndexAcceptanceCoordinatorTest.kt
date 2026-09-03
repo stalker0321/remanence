@@ -88,7 +88,6 @@ class IncomingControlIndexAcceptanceCoordinatorTest {
             ?: error("expected verified result, got $result")
         assertEquals(fixture.capsuleId.toProtoBytes(), verified.statement.capsuleId)
         assertArrayEquals(fixture.frontFingerprint, verified.recognition.frontFingerprint)
-        assertArrayEquals(fixture.backFingerprint, verified.recognition.backFingerprint)
     }
 
     @Test
@@ -544,7 +543,6 @@ class IncomingControlIndexAcceptanceCoordinatorTest {
             BlobIdValue(UUID.fromString("a1000000-0000-4000-8000-000000000005")),
         )
         val front = ByteArray(96) { (it * 3).toByte() }
-        val back = ByteArray(96) { (it * 7 + 1).toByte() }
         val codec = RecognitionManifestCodec()
         val recognitionCiphertext = codec.buildAndEncrypt(
             capsuleKeyset = capsuleKeyset,
@@ -558,7 +556,6 @@ class IncomingControlIndexAcceptanceCoordinatorTest {
             createdAtEpochSeconds = 1_700_000_000L,
             placeLabel = null,
             frontFingerprint = front,
-            backFingerprint = back,
         )
         val artifacts = listOf(
             PublishArtifact(
@@ -639,7 +636,6 @@ class IncomingControlIndexAcceptanceCoordinatorTest {
                 recognitionCiphertext,
             ),
             frontFingerprint = front,
-            backFingerprint = back,
         )
     }
 
@@ -661,7 +657,6 @@ class IncomingControlIndexAcceptanceCoordinatorTest {
         val recognitionFile: File,
         val recognition: dev.hryshyn.remanence.core.crypto.RecognitionManifestContent,
         val frontFingerprint: ByteArray,
-        val backFingerprint: ByteArray,
     )
 
     private typealias BlobIdValue = dev.hryshyn.remanence.core.model.BlobId

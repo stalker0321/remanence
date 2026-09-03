@@ -75,7 +75,6 @@ class LocalMatchEngine(
         queryFront: PostcardFingerprint,
         candidates: List<IndexedCandidate>,
     ): ScanFlowResult {
-        require(queryFront.side == FingerprintSide.FRONT) { "query must be FRONT" }
         if (candidates.isEmpty()) {
             return ScanFlowResult.RecaptureRequired
         }
@@ -131,7 +130,6 @@ class LocalMatchEngine(
         val frontOutcomes = HashMap<String, FrontCandidate>(universe.size)
         val frontStrengths = HashMap<String, Boolean>(universe.size)
         universe.forEach { candidate ->
-            require(candidate.front.side == FingerprintSide.FRONT) { "candidate front must be FRONT" }
             val outcome = evaluateSide(queryFront, candidate.front)
             val front = FrontCandidate(candidate.capsuleId.toString(), outcome.report.sideScore, outcome.report.weakGatePassed)
             frontOutcomes[candidate.capsuleId.toString()] = front

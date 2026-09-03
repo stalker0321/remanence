@@ -9,6 +9,7 @@ import dev.hryshyn.remanence.core.model.ArtifactAadInput
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
 import dev.hryshyn.remanence.core.model.CryptoContextEncoder
 import dev.hryshyn.remanence.core.model.NormalizedHandle
+import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 
 internal class RecognitionManifestPayloadException : GeneralSecurityException {
     constructor(message: String) : super(message)
@@ -23,7 +24,6 @@ data class RecognitionManifestContent(
     val createdAtEpochSeconds: Long,
     val placeLabel: String?,
     val frontFingerprint: ByteArray,
-    val backFingerprint: ByteArray,
 )
 
 /**
@@ -40,15 +40,17 @@ class RecognitionManifestCodec {
         createdAtEpochSeconds: Long,
         placeLabel: String?,
         frontFingerprint: ByteArray,
-        backFingerprint: ByteArray,
     ): ByteArray {
         require(NormalizedHandle.parse(senderHandleSnapshot).value == senderHandleSnapshot) {
             "invalid sender handle snapshot"
         }
         placeLabel?.let {
+            require(it.isNotEmpty()) { "place label is empty" }
             require(it.toByteArray(Charsets.UTF_8).size <= PLACE_LABEL_MAX_BYTES) { "place label too long" }
         }
-        require(frontFingerprint.isNotEmpty() && backFingerprint.isNotEmpty()) { "both side fingerprints required" }
+        require(createdAtEpochSeconds >= 0L) { "created timestamp is invalid" }
+        require(frontFingerprint.isNotEmpty()) { "front fingerprint is required" }
+        require(frontFingerprint.size <= MAX_FINGERPRINT_BYTES) { "front fingerprint is too large" }
 
         val hint = ChooserHint.newBuilder()
             .setSenderHandleSnapshot(senderHandleSnapshot)
@@ -56,18 +58,24 @@ class RecognitionManifestCodec {
             .apply { placeLabel?.let(::setPlaceLabel) }
             .build()
         val manifest = RecognitionManifest.newBuilder()
-            .setProtocolVersion(ProtocolV1.PROTOCOL_VERSION)
+            .setProtocolVersion(RecognitionManifestFormat.VERSION)
             .setCapsuleId(routingContext.capsuleIdProto())
             .setChooserHint(hint)
             .setFrontFingerprint(com.google.protobuf.ByteString.copyFrom(frontFingerprint))
-            .setBackFingerprint(com.google.protobuf.ByteString.copyFrom(backFingerprint))
             .build()
-
-        return CapsuleArtifactCryptor().encrypt(
-            capsuleKeyset = capsuleKeyset,
-            context = manifestContext(routingContext),
-            plaintext = manifest.toByteArray(),
-        )
+        val plaintext = manifest.toByteArray()
+        require(plaintext.size + ProtocolV1Limits.ARTIFACT_AEAD_OVERHEAD_BYTES <=
+            ProtocolV1Limits.RECOGNITION_MANIFEST_MAX_CIPHERTEXT_BYTES
+        ) { "recognition manifest is too large" }
+        return try {
+            CapsuleArtifactCryptor().encrypt(
+                capsuleKeyset = capsuleKeyset,
+                context = manifestContext(routingContext),
+                plaintext = plaintext,
+            )
+        } finally {
+            plaintext.fill(0)
+        }
     }
 
     fun decryptAndParse(
@@ -76,49 +84,76 @@ class RecognitionManifestCodec {
         ciphertext: ByteArray,
     ): RecognitionManifestContent = try {
         val bytes = try {
+            require(ciphertext.isNotEmpty() &&
+                ciphertext.size <= ProtocolV1Limits.RECOGNITION_MANIFEST_MAX_CIPHERTEXT_BYTES
+            ) { "recognition manifest ciphertext is outside bounds" }
             CapsuleArtifactCryptor().decrypt(capsuleKeyset, manifestContext(routingContext), ciphertext)
         } catch (failure: GeneralSecurityException) {
             throw GeneralSecurityException("recognition manifest failed integrity verification", failure)
         }
-        val manifest = RecognitionManifest.parseFrom(bytes)
-        if (manifest.protocolVersion != ProtocolV1.PROTOCOL_VERSION) {
-            throw RecognitionManifestPayloadException("unsupported manifest protocol version")
-        }
+        try {
+            if (bytes.isEmpty() || bytes.size + ProtocolV1Limits.ARTIFACT_AEAD_OVERHEAD_BYTES >
+                ProtocolV1Limits.RECOGNITION_MANIFEST_MAX_CIPHERTEXT_BYTES
+            ) {
+                throw RecognitionManifestPayloadException("recognition manifest plaintext is outside bounds")
+            }
+            val manifest = RecognitionManifest.parseFrom(bytes)
+            if (manifest.protocolVersion != RecognitionManifestFormat.VERSION) {
+                throw RecognitionManifestPayloadException("unsupported manifest format version")
+            }
 
-        val expectedCapsuleId = routingContext.capsuleId.toProtoBytes().toByteArray()
-        val actualCapsuleId = manifest.capsuleId.toByteArray()
-        if (actualCapsuleId.size != expectedCapsuleId.size ||
-            !MessageDigest.isEqual(actualCapsuleId, expectedCapsuleId)
-        ) {
-            throw RecognitionManifestPayloadException("recognition manifest capsule id does not match routing")
-        }
+            val expectedCapsuleId = routingContext.capsuleId.toProtoBytes().toByteArray()
+            val actualCapsuleId = manifest.capsuleId.toByteArray()
+            if (actualCapsuleId.size != expectedCapsuleId.size ||
+                !MessageDigest.isEqual(actualCapsuleId, expectedCapsuleId)
+            ) {
+                throw RecognitionManifestPayloadException("recognition manifest capsule id does not match routing")
+            }
 
-        if (!manifest.hasChooserHint()) throw RecognitionManifestPayloadException("manifest missing chooser hint")
-        val chooserHint = manifest.chooserHint
-        val senderHandleSnapshot = chooserHint.senderHandleSnapshot
-        if (NormalizedHandle.parse(senderHandleSnapshot).value != senderHandleSnapshot) {
-            throw RecognitionManifestPayloadException("recognition manifest sender handle is not canonical")
-        }
-        val placeLabel = if (chooserHint.hasPlaceLabel()) chooserHint.placeLabel else null
-        if (placeLabel != null && placeLabel.toByteArray(Charsets.UTF_8).size > PLACE_LABEL_MAX_BYTES) {
-            throw RecognitionManifestPayloadException("recognition manifest place label exceeds byte limit")
-        }
+            if (!manifest.hasChooserHint()) throw RecognitionManifestPayloadException("manifest missing chooser hint")
+            val chooserHint = manifest.chooserHint
+            val senderHandleSnapshot = chooserHint.senderHandleSnapshot
+            if (NormalizedHandle.parse(senderHandleSnapshot).value != senderHandleSnapshot) {
+                throw RecognitionManifestPayloadException("recognition manifest sender handle is not canonical")
+            }
+            if (chooserHint.createdAtEpochSeconds < 0L) {
+                throw RecognitionManifestPayloadException("recognition manifest timestamp is invalid")
+            }
+            val placeLabel = if (chooserHint.hasPlaceLabel()) chooserHint.placeLabel else null
+            if (placeLabel != null) {
+                if (placeLabel.isEmpty()) {
+                    throw RecognitionManifestPayloadException("recognition manifest place label is empty")
+                }
+                if (placeLabel.toByteArray(Charsets.UTF_8).size > PLACE_LABEL_MAX_BYTES) {
+                    throw RecognitionManifestPayloadException("recognition manifest place label exceeds byte limit")
+                }
+            }
 
-        val frontFingerprint = manifest.frontFingerprint.toByteArray()
-        val backFingerprint = manifest.backFingerprint.toByteArray()
-        if (frontFingerprint.isEmpty() || backFingerprint.isEmpty()) {
-            throw RecognitionManifestPayloadException("recognition manifest fingerprints are incomplete")
-        }
+            val frontFingerprint = manifest.frontFingerprint.toByteArray()
+            if (frontFingerprint.isEmpty() || frontFingerprint.size > MAX_FINGERPRINT_BYTES) {
+                throw RecognitionManifestPayloadException("recognition manifest front fingerprint is invalid")
+            }
+            val canonical = RecognitionManifest.newBuilder()
+                .setProtocolVersion(RecognitionManifestFormat.VERSION)
+                .setCapsuleId(manifest.capsuleId)
+                .setChooserHint(manifest.chooserHint)
+                .setFrontFingerprint(manifest.frontFingerprint)
+                .build()
+            if (!canonical.toByteArray().contentEquals(bytes)) {
+                throw RecognitionManifestPayloadException("recognition manifest encoding is not canonical")
+            }
 
-        RecognitionManifestContent(
-            protocolVersion = manifest.protocolVersion,
-            capsuleIdRaw = actualCapsuleId,
-            senderHandleSnapshot = senderHandleSnapshot,
-            createdAtEpochSeconds = chooserHint.createdAtEpochSeconds,
-            placeLabel = placeLabel,
-            frontFingerprint = frontFingerprint,
-            backFingerprint = backFingerprint,
-        )
+            return RecognitionManifestContent(
+                protocolVersion = manifest.protocolVersion,
+                capsuleIdRaw = actualCapsuleId,
+                senderHandleSnapshot = senderHandleSnapshot,
+                createdAtEpochSeconds = chooserHint.createdAtEpochSeconds,
+                placeLabel = placeLabel,
+                frontFingerprint = frontFingerprint,
+            )
+        } finally {
+            bytes.fill(0)
+        }
     } catch (failure: RecognitionManifestPayloadException) {
         throw failure
     } catch (failure: GeneralSecurityException) {
@@ -132,7 +167,7 @@ class RecognitionManifestCodec {
             capsuleId = routing.capsuleId,
             blobId = routing.blobId,
             artifactKind = CapsuleArtifactKind.RECOGNITION_MANIFEST,
-            ordinal = ProtocolV1.NON_PHOTO_ORDINAL,
+            ordinal = RecognitionManifestFormat.NON_PHOTO_ORDINAL,
             senderUserId = routing.senderUserId,
             recipientUserId = routing.recipientUserId,
         )
@@ -147,12 +182,14 @@ class RecognitionManifestCodec {
         internal fun capsuleIdProto() = capsuleId.toProtoBytes()
     }
 
-    private object ProtocolV1 {
-        const val PROTOCOL_VERSION = 1
+    private object RecognitionManifestFormat {
+        const val VERSION = 2
         const val NON_PHOTO_ORDINAL = -1
     }
 
-    private companion object {
+    companion object {
+        const val FORMAT_VERSION = RecognitionManifestFormat.VERSION
         const val PLACE_LABEL_MAX_BYTES = 120
+        const val MAX_FINGERPRINT_BYTES = 1_024 * 1_024
     }
 }

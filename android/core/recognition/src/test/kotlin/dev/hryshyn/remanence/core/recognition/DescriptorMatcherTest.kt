@@ -24,11 +24,9 @@ class DescriptorMatcherTest {
 
     private fun fingerprint(
         descriptors: List<ByteArray>,
-        side: FingerprintSide = FingerprintSide.FRONT,
         profileId: String = "mvp-orb-v1",
     ) = PostcardFingerprint(
         profileId = profileId,
-        side = side,
         canonicalWidthPx = 1600,
         canonicalHeightPx = 1000,
         coarseHash64 = UUID.nameUUIDFromBytes(descriptors.firstOrNull() ?: ByteArray(1)).mostSignificantBits,
@@ -47,7 +45,7 @@ class DescriptorMatcherTest {
     fun identicalSetsMatchThemselvesFullyWithZeroDistance() {
         val descriptors = (0 until 12).map { descriptor(it * 17) }
         val query = fingerprint(descriptors)
-        val reference = fingerprint(descriptors, FingerprintSide.BACK)
+        val reference = fingerprint(descriptors)
 
         val matches = DescriptorMatcher().match(query, reference)
 

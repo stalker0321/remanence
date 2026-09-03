@@ -38,16 +38,15 @@ class FingerprintExtractorTest {
     @Test
     fun extractionIsDeterministicForIdenticalInput() {
         val frame = texturedFrame()
-        val first = FingerprintCodec.serialize(extractor.extract(frame, w, h, FingerprintSide.FRONT))
-        val second = FingerprintCodec.serialize(extractor.extract(frame.copyOf(), w, h, FingerprintSide.FRONT))
+        val first = FingerprintCodec.serialize(extractor.extract(frame, w, h))
+        val second = FingerprintCodec.serialize(extractor.extract(frame.copyOf(), w, h))
         assertTrue(first.contentEquals(second), "same input must serialize identically")
     }
 
     @Test
     fun fingerprintHonorsBoundsAndAlignment() {
-        val fingerprint = extractor.extract(texturedFrame(), w, h, FingerprintSide.BACK)
+        val fingerprint = extractor.extract(texturedFrame(), w, h)
         assertEquals("mvp-orb-v1", fingerprint.profileId)
-        assertEquals(FingerprintSide.BACK, fingerprint.side)
         assertTrue(fingerprint.keypoints.isNotEmpty())
         assertTrue(fingerprint.keypoints.size <= profile.orb.nfeatures)
         assertEquals(fingerprint.keypoints.size, fingerprint.descriptors.size)

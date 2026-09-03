@@ -534,7 +534,6 @@ class CreateRecipientBindingFailClosedTest {
                 serializedBytes = FingerprintCodec.serialize(
                     PostcardFingerprint(
                         profileId = profile.profileId,
-                        side = side,
                         canonicalWidthPx = profile.capture.canonicalLongEdgePx,
                         canonicalHeightPx = 1000,
                         coarseHash64 = 6L,

@@ -167,7 +167,6 @@ class CapsulePublisher(
             request.createdAtEpochSeconds,
             null,
             request.frontFingerprintBytes,
-            request.backFingerprintBytes,
         )
         artifacts += PreparedOutboxArtifact(
             recognitionBlob.value, OutboxArtifactKind.RECOGNITION_MANIFEST, NON_PHOTO_ORDINAL, recognitionCiphertext,

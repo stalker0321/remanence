@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import dev.hryshyn.remanence.auth.SoftwareKekBoundary
 import dev.hryshyn.remanence.core.crypto.RecognitionManifestContent
+import dev.hryshyn.remanence.core.crypto.RecognitionManifestCodec
 import dev.hryshyn.remanence.core.data.db.IncomingCapsuleEntity
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.fingerprints.SecretSealer
@@ -231,19 +232,17 @@ class IncomingSenderIndexCandidateProviderTest {
 
     private fun recognition(capsule: CapsuleId): RecognitionManifestContent =
         RecognitionManifestContent(
-            protocolVersion = ProtocolV1Limits.PROTOCOL_VERSION,
+        protocolVersion = RecognitionManifestCodec.FORMAT_VERSION,
             capsuleIdRaw = capsule.toProtoBytes().toByteArray(),
             senderHandleSnapshot = "sender_${capsule.toRestString().takeLast(4)}",
             createdAtEpochSeconds = 1_700_000_001L,
             placeLabel = "place_${capsule.toRestString().takeLast(4)}",
             frontFingerprint = fingerprint(FingerprintSide.FRONT, 11),
-            backFingerprint = fingerprint(FingerprintSide.BACK, 22),
         )
 
     private fun fingerprint(side: FingerprintSide, seed: Int): ByteArray = FingerprintCodec.serialize(
         PostcardFingerprint(
             profileId = RecognitionProfile.MVP_ORB_V1_ID,
-            side = side,
             canonicalWidthPx = 1200,
             canonicalHeightPx = 800,
             coarseHash64 = seed.toLong(),

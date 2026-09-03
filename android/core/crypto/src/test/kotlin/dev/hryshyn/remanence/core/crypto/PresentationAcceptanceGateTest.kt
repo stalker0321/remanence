@@ -141,7 +141,6 @@ class PresentationAcceptanceGateTest {
             createdAtEpochSeconds = 1_700_000_000L,
             placeLabel = null,
             frontFingerprint = ByteArray(96) { (it * 3).toByte() },
-            backFingerprint = ByteArray(96) { (it * 7 + 1).toByte() },
         )
 
         // 2. Build photo ciphertexts.

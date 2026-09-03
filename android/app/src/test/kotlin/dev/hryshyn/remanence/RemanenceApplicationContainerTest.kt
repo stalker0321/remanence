@@ -10,6 +10,7 @@ import androidx.work.WorkerFactory
 import androidx.work.testing.WorkManagerTestInitHelper
 import dev.hryshyn.remanence.auth.SoftwareKekBoundary
 import dev.hryshyn.remanence.core.crypto.RecognitionManifestContent
+import dev.hryshyn.remanence.core.crypto.RecognitionManifestCodec
 import dev.hryshyn.remanence.core.data.db.BlobCacheEntity
 import dev.hryshyn.remanence.core.data.db.BlobCacheState
 import dev.hryshyn.remanence.core.data.db.IncomingCapsuleEntity
@@ -664,7 +665,6 @@ class RemanenceApplicationContainerTest {
                 assertEquals(capsule, available.snapshot.capsuleId)
                 assertEquals("alice_1", available.snapshot.senderHandleSnapshot)
                 assertTrue(available.snapshot.frontFingerprint.isNotEmpty())
-                assertTrue(available.snapshot.backFingerprint.isNotEmpty())
             } finally {
                 available.snapshot.close()
             }
@@ -972,19 +972,17 @@ class RemanenceApplicationContainerTest {
     }
 
     private fun validRecognition(capsule: CapsuleId) = RecognitionManifestContent(
-        protocolVersion = ProtocolV1Limits.PROTOCOL_VERSION,
+        protocolVersion = RecognitionManifestCodec.FORMAT_VERSION,
         capsuleIdRaw = capsule.toProtoBytes().toByteArray(),
         senderHandleSnapshot = "alice_1",
         createdAtEpochSeconds = 1_700_000_000L,
         placeLabel = "Paris",
         frontFingerprint = fingerprint(RecognitionFingerprintSide.FRONT),
-        backFingerprint = fingerprint(RecognitionFingerprintSide.BACK),
     )
 
     private fun fingerprint(side: RecognitionFingerprintSide): ByteArray = FingerprintCodec.serialize(
         PostcardFingerprint(
             profileId = RecognitionProfile.MVP_ORB_V1_ID,
-            side = side,
             canonicalWidthPx = 1200,
             canonicalHeightPx = 800,
             coarseHash64 = 17L,

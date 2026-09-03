@@ -19,10 +19,9 @@ class FingerprintCodecTest {
 
     private fun descriptor(i: Int): ByteArray = ByteArray(32) { ((it + i) and 0xFF).toByte() }
 
-    private fun fingerprint(keypoints: Int = 5, side: FingerprintSide = FingerprintSide.FRONT) =
+    private fun fingerprint(keypoints: Int = 5) =
         PostcardFingerprint(
             profileId = "mvp-orb-v1",
-            side = side,
             canonicalWidthPx = 1600,
             canonicalHeightPx = 1000,
             coarseHash64 = 0x1122334455667788L,
@@ -42,7 +41,6 @@ class FingerprintCodecTest {
         val parsed = FingerprintCodec.parse(FingerprintCodec.serialize(original))
 
         assertEquals(original.profileId, parsed.profileId)
-        assertEquals(original.side, parsed.side)
         assertEquals(original.canonicalWidthPx, parsed.canonicalWidthPx)
         assertEquals(original.coarseHash64, parsed.coarseHash64)
         assertEquals(original.keypoints.size, parsed.keypoints.size)
@@ -70,7 +68,6 @@ class FingerprintCodecTest {
         val base = fingerprint()
         val bad = PostcardFingerprint(
             base.profileId,
-            base.side,
             base.canonicalWidthPx,
             base.canonicalHeightPx,
             base.coarseHash64,
@@ -85,7 +82,7 @@ class FingerprintCodecTest {
     fun shortDescriptorRowFailsClosed() {
         val base = fingerprint()
         val bad = PostcardFingerprint(
-            base.profileId, base.side, base.canonicalWidthPx, base.canonicalHeightPx,
+            base.profileId, base.canonicalWidthPx, base.canonicalHeightPx,
             base.coarseHash64,
             base.keypoints,
             base.descriptors.mapIndexed { i, d -> if (i == 2) d.copyOf(31) else d },
@@ -115,11 +112,10 @@ class FingerprintCodecTest {
     }
 
     @Test
-    fun wireWithUnknownVersionOrUnspecifiedSideFailsClosed() {
+    fun wireWithUnknownOrOldVersionFailsClosed() {
         val wire = FingerprintWire.newBuilder()
             .setFormatVersion(99)
             .setRecognitionProfileId("mvp-orb-v1")
-            .setSide(FingerprintWire.Side.FRONT)
             .setCanonicalWidthPx(1600)
             .setCanonicalHeightPx(1000)
             .setCoarseHash64(1L)
@@ -134,5 +130,14 @@ class FingerprintCodecTest {
             .setCanonicalHeightPx(1000)
             .build()
         assertFailsWith<IllegalArgumentException> { FingerprintCodec.parse(noSide.toByteArray()) }
+    }
+
+    @Test
+    fun removedBackFieldFailsClosedEvenWithCurrentVersion() {
+        val current = FingerprintCodec.serialize(fingerprint())
+        // The old schema used field 3 for Side; BACK was enum value 2.
+        assertFailsWith<IllegalArgumentException> {
+            FingerprintCodec.parse(current + byteArrayOf(0x18, 0x02))
+        }
     }
 }

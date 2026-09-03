@@ -5,13 +5,13 @@ import com.google.crypto.tink.TinkProtoKeysetFormat
 import com.google.crypto.tink.subtle.Base64
 import com.google.protobuf.ByteString
 import dev.hryshyn.remanence.core.crypto.RecognitionManifestContent
+import dev.hryshyn.remanence.core.crypto.RecognitionManifestCodec
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.FingerprintCodec
-import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.identity.CapsuleRoutingPolicy
 import dev.hryshyn.remanence.wiring.PreparedIdentity
@@ -82,11 +82,9 @@ class SenderIndexBundlePlaintext internal constructor(
     val createdAtEpochSeconds: Long,
     val placeLabel: String?,
     frontFingerprint: ByteArray,
-    backFingerprint: ByteArray,
     senderVerification: SenderIndexBundleSenderVerification?,
 ) {
     private val frontFingerprintSnapshot = frontFingerprint.copyOf()
-    private val backFingerprintSnapshot = backFingerprint.copyOf()
     private val senderVerificationSnapshot = senderVerification?.copyForHandoff()
 
     internal val senderVerification: SenderIndexBundleSenderVerification?
@@ -95,13 +93,9 @@ class SenderIndexBundlePlaintext internal constructor(
     val frontFingerprint: ByteArray
         get() = frontFingerprintSnapshot.copyOf()
 
-    val backFingerprint: ByteArray
-        get() = backFingerprintSnapshot.copyOf()
-
     /** Clears only the private mutable byte material owned by this value. */
     internal fun wipe() {
         frontFingerprintSnapshot.fill(0)
-        backFingerprintSnapshot.fill(0)
         senderVerificationSnapshot?.wipe()
     }
 
@@ -114,7 +108,6 @@ class SenderIndexBundlePlaintext internal constructor(
             createdAtEpochSeconds == other.createdAtEpochSeconds &&
             placeLabel == other.placeLabel &&
             MessageDigest.isEqual(frontFingerprintSnapshot, other.frontFingerprintSnapshot) &&
-            MessageDigest.isEqual(backFingerprintSnapshot, other.backFingerprintSnapshot) &&
             verificationEquals(other)
 
     private fun verificationEquals(other: SenderIndexBundlePlaintext): Boolean {
@@ -137,8 +130,8 @@ class SenderIndexBundlePlaintext internal constructor(
             recognition: RecognitionManifestContent,
             senderVerification: SenderIndexBundleSenderVerification,
         ): SenderIndexBundlePlaintext {
-            require(recognition.protocolVersion == ProtocolV1Limits.PROTOCOL_VERSION) {
-                "unsupported recognition protocol"
+            require(recognition.protocolVersion == RecognitionManifestCodec.FORMAT_VERSION) {
+                "unsupported recognition manifest format"
             }
             require(recognition.capsuleIdRaw.size == UUID_BYTES) {
                 "recognition capsule id is malformed"
@@ -162,8 +155,7 @@ class SenderIndexBundlePlaintext internal constructor(
                 }
             }
 
-            validateFingerprint(recognition.frontFingerprint, FingerprintSide.FRONT)
-            validateFingerprint(recognition.backFingerprint, FingerprintSide.BACK)
+            validateFingerprint(recognition.frontFingerprint)
 
             return SenderIndexBundlePlaintext(
                 localFormatVersion = SenderIndexBundleCodec.FORMAT_VERSION,
@@ -172,18 +164,16 @@ class SenderIndexBundlePlaintext internal constructor(
                 createdAtEpochSeconds = recognition.createdAtEpochSeconds,
                 placeLabel = recognition.placeLabel,
                 frontFingerprint = recognition.frontFingerprint,
-                backFingerprint = recognition.backFingerprint,
                 senderVerification = senderVerification,
             )
         }
 
-        internal fun validateFingerprint(bytes: ByteArray, expectedSide: FingerprintSide) {
+        internal fun validateFingerprint(bytes: ByteArray) {
             require(bytes.isNotEmpty()) { "fingerprint is empty" }
             require(bytes.size <= ProtocolV1Limits.RECOGNITION_MANIFEST_MAX_CIPHERTEXT_BYTES) {
                 "fingerprint exceeds bounded recognition payload size"
             }
             val parsed = FingerprintCodec.parse(bytes)
-            require(parsed.side == expectedSide) { "fingerprint side does not match" }
             require(parsed.profileId == RecognitionProfile.MVP_ORB_V1_ID) {
                 "unsupported recognition profile"
             }
@@ -201,8 +191,8 @@ class SenderIndexBundlePlaintext internal constructor(
 /**
  * Deterministic manual protobuf wire encoding for the local bundle. It is a
  * private, versioned schema rather than a new wire-protocol message or Room
- * serialization. Tags 1..7 are the legacy recognition fields; v2 appends
- * tags 8..12 for the directory-verified public sender key and its immutable
+ * serialization. Tags 1..6 are the required front-only recognition fields;
+ * tags 7..11 carry the directory-verified public sender key and its immutable
  * binding metadata. Their wire types, fixed order, required fields, and
  * bounded values are the canonical contract; unknown, duplicate, wrong
  * wire-type, and non-canonical/trailing fields are rejected on decode.
@@ -210,13 +200,10 @@ class SenderIndexBundlePlaintext internal constructor(
 class SenderIndexBundleCodec {
 
     fun encode(bundle: SenderIndexBundlePlaintext): ByteArray {
-        require(bundle.localFormatVersion == FORMAT_VERSION ||
-            bundle.localFormatVersion == LEGACY_FORMAT_VERSION
-        ) { "unsupported local bundle version" }
+        require(bundle.localFormatVersion == FORMAT_VERSION) { "unsupported local bundle version" }
         val handleBytes = bundle.senderHandleSnapshot.toByteArray(Charsets.UTF_8)
         val placeBytes = bundle.placeLabel?.toByteArray(Charsets.UTF_8)
         val front = bundle.frontFingerprint
-        val back = bundle.backFingerprint
         val senderVerification = bundle.senderVerification
         try {
             require(handleBytes.isNotEmpty()) { "sender handle is empty" }
@@ -228,18 +215,14 @@ class SenderIndexBundleCodec {
                 "place label exceeds protocol limit"
             }
             require(bundle.createdAtEpochSeconds >= 0L) { "timestamp is invalid" }
-            require(front.isNotEmpty() && back.isNotEmpty()) { "fingerprints are incomplete" }
-            require(front.size <= MAX_FINGERPRINT_BYTES && back.size <= MAX_FINGERPRINT_BYTES) {
+            require(front.isNotEmpty()) { "front fingerprint is incomplete" }
+            require(front.size <= MAX_FINGERPRINT_BYTES) {
                 "fingerprint exceeds local bundle limit"
             }
-            if (bundle.localFormatVersion == FORMAT_VERSION) {
-                require(senderVerification != null) { "sender verification material is missing" }
-                require(senderVerification.protocolVersion == PreparedIdentity.PROTOCOL_VERSION)
-                require(senderVerification.suite == PreparedIdentity.SUITE)
-                senderVerification.parsePublicKeyset()
-            } else {
-                require(senderVerification == null) { "legacy bundle contains sender verification material" }
-            }
+            require(senderVerification != null) { "sender verification material is missing" }
+            require(senderVerification.protocolVersion == PreparedIdentity.PROTOCOL_VERSION)
+            require(senderVerification.suite == PreparedIdentity.SUITE)
+            senderVerification.parsePublicKeyset()
 
             val size = com.google.protobuf.CodedOutputStream.computeUInt32Size(
                 1,
@@ -250,13 +233,12 @@ class SenderIndexBundleCodec {
                 com.google.protobuf.CodedOutputStream.computeInt64Size(4, bundle.createdAtEpochSeconds) +
                 (placeBytes?.let { com.google.protobuf.CodedOutputStream.computeStringSize(5, bundle.placeLabel!!) } ?: 0) +
                 com.google.protobuf.CodedOutputStream.computeByteArraySize(6, front) +
-                com.google.protobuf.CodedOutputStream.computeByteArraySize(7, back) +
                 (senderVerification?.let {
-                    com.google.protobuf.CodedOutputStream.computeBytesSize(8, it.senderUserId.toProtoBytes()) +
-                        com.google.protobuf.CodedOutputStream.computeBytesSize(9, it.senderKeyBundleId.toProtoBytes()) +
-                        com.google.protobuf.CodedOutputStream.computeUInt32Size(10, it.protocolVersion) +
-                        com.google.protobuf.CodedOutputStream.computeStringSize(11, it.suite) +
-                        com.google.protobuf.CodedOutputStream.computeByteArraySize(12, it.publicKeysetBytes)
+                    com.google.protobuf.CodedOutputStream.computeBytesSize(7, it.senderUserId.toProtoBytes()) +
+                        com.google.protobuf.CodedOutputStream.computeBytesSize(8, it.senderKeyBundleId.toProtoBytes()) +
+                        com.google.protobuf.CodedOutputStream.computeUInt32Size(9, it.protocolVersion) +
+                        com.google.protobuf.CodedOutputStream.computeStringSize(10, it.suite) +
+                        com.google.protobuf.CodedOutputStream.computeByteArraySize(11, it.publicKeysetBytes)
                 } ?: 0)
             require(size <= MAX_PLAINTEXT_BYTES) { "local bundle exceeds bounded size" }
 
@@ -268,19 +250,17 @@ class SenderIndexBundleCodec {
             coded.writeInt64(4, bundle.createdAtEpochSeconds)
             if (placeBytes != null) coded.writeString(5, bundle.placeLabel!!)
             coded.writeByteArray(6, front)
-            coded.writeByteArray(7, back)
             senderVerification?.let {
-                coded.writeBytes(8, it.senderUserId.toProtoBytes())
-                coded.writeBytes(9, it.senderKeyBundleId.toProtoBytes())
-                coded.writeUInt32(10, it.protocolVersion)
-                coded.writeString(11, it.suite)
-                coded.writeByteArray(12, it.publicKeysetBytes)
+                coded.writeBytes(7, it.senderUserId.toProtoBytes())
+                coded.writeBytes(8, it.senderKeyBundleId.toProtoBytes())
+                coded.writeUInt32(9, it.protocolVersion)
+                coded.writeString(10, it.suite)
+                coded.writeByteArray(11, it.publicKeysetBytes)
             }
             coded.flush()
             return output
         } finally {
             front.fill(0)
-            back.fill(0)
             handleBytes.fill(0)
             placeBytes?.fill(0)
             senderVerification?.wipe()
@@ -297,7 +277,6 @@ class SenderIndexBundleCodec {
         var createdAt: Long? = null
         var place: String? = null
         var front: ByteArray? = null
-        var back: ByteArray? = null
         var senderUser: UserId? = null
         var senderBundle: KeyBundleId? = null
         var senderProtocol: Int? = null
@@ -337,32 +316,26 @@ class SenderIndexBundleCodec {
                     front = value
                 }
                 58 -> {
-                    require(back == null) { "duplicate local bundle back fingerprint" }
-                    val value = input.readByteArray()
-                    require(value.size <= MAX_FINGERPRINT_BYTES) { "back fingerprint is too large" }
-                    back = value
-                }
-                66 -> {
                     require(senderUser == null) { "duplicate sender user" }
                     val raw = input.readBytes()
                     require(raw.size() == UUID_BYTES) { "malformed sender user" }
                     senderUser = UserId.fromProtoBytes(raw)
                 }
-                74 -> {
+                66 -> {
                     require(senderBundle == null) { "duplicate sender bundle" }
                     val raw = input.readBytes()
                     require(raw.size() == UUID_BYTES) { "malformed sender bundle" }
                     senderBundle = KeyBundleId.fromProtoBytes(raw)
                 }
-                80 -> {
+                72 -> {
                     require(senderProtocol == null) { "duplicate sender protocol" }
                     senderProtocol = input.readUInt32()
                 }
-                90 -> {
+                82 -> {
                     require(senderSuite == null) { "duplicate sender suite" }
                     senderSuite = input.readStringRequireUtf8()
                 }
-                98 -> {
+                90 -> {
                     require(senderPublicKeyset == null) { "duplicate sender public keyset" }
                     val value = input.readByteArray()
                     require(value.isNotEmpty() && value.size <= MAX_PUBLIC_KEYSET_BYTES)
@@ -371,26 +344,17 @@ class SenderIndexBundleCodec {
                 else -> throw IllegalArgumentException("unknown local bundle field $tag")
                 }
             }
-            require((version == FORMAT_VERSION || version == LEGACY_FORMAT_VERSION) &&
+            require(version == FORMAT_VERSION &&
                 capsule != null && handle != null && createdAt != null &&
-                front != null && back != null) { "local bundle is incomplete" }
-            val senderVerification = if (version == FORMAT_VERSION) {
-                require(senderUser != null && senderBundle != null && senderProtocol != null &&
-                    senderSuite != null && senderPublicKeyset != null
-                ) { "sender verification material is incomplete" }
-                SenderIndexBundleSenderVerification(
-                    senderUser,
-                    senderBundle,
-                    senderProtocol,
-                    senderSuite,
-                    senderPublicKeyset,
-                ).also { it.parsePublicKeyset() }
-            } else {
-                require(senderUser == null && senderBundle == null && senderProtocol == null &&
-                    senderSuite == null && senderPublicKeyset == null
-                ) { "legacy bundle has sender verification material" }
-                null
-            }
+                front != null && senderUser != null && senderBundle != null && senderProtocol != null &&
+                senderSuite != null && senderPublicKeyset != null) { "local bundle is incomplete" }
+            val senderVerification = SenderIndexBundleSenderVerification(
+                senderUser,
+                senderBundle,
+                senderProtocol,
+                senderSuite,
+                senderPublicKeyset,
+            ).also { it.parsePublicKeyset() }
             val decoded = SenderIndexBundlePlaintext(
                 localFormatVersion = version!!,
                 capsuleId = capsule!!,
@@ -398,7 +362,6 @@ class SenderIndexBundleCodec {
                 createdAtEpochSeconds = createdAt!!,
                 placeLabel = place,
                 frontFingerprint = front!!,
-                backFingerprint = back!!,
                 senderVerification = senderVerification,
             )
             try {
@@ -411,8 +374,7 @@ class SenderIndexBundleCodec {
                         "local bundle place is invalid"
                     }
                 }
-                SenderIndexBundlePlaintext.validateFingerprint(decoded.frontFingerprint, FingerprintSide.FRONT)
-                SenderIndexBundlePlaintext.validateFingerprint(decoded.backFingerprint, FingerprintSide.BACK)
+                SenderIndexBundlePlaintext.validateFingerprint(decoded.frontFingerprint)
                 require(encode(decoded).contentEquals(bytes)) { "local bundle encoding is not canonical" }
                 return decoded
             } catch (failure: Exception) {
@@ -420,13 +382,11 @@ class SenderIndexBundleCodec {
                 throw failure
             } finally {
                 front?.fill(0)
-                back?.fill(0)
             }
         } catch (failure: Exception) {
             // A malformed bundle can fail before the decoded holder exists;
             // still clear any raw fingerprint buffers already extracted.
             front?.fill(0)
-            back?.fill(0)
             throw failure
         } finally {
             senderPublicKeyset?.fill(0)
@@ -434,12 +394,11 @@ class SenderIndexBundleCodec {
     }
 
     companion object {
-        const val FORMAT_VERSION: Int = 2
-        const val LEGACY_FORMAT_VERSION: Int = 1
+        const val FORMAT_VERSION: Int = 3
         const val MAX_FINGERPRINT_BYTES: Int =
             ProtocolV1Limits.RECOGNITION_MANIFEST_MAX_CIPHERTEXT_BYTES.toInt()
         const val MAX_PUBLIC_KEYSET_BYTES: Int = 16 * 1024
-        const val MAX_PLAINTEXT_BYTES: Int = 2 * MAX_FINGERPRINT_BYTES + 32 * 1024
+        const val MAX_PLAINTEXT_BYTES: Int = MAX_FINGERPRINT_BYTES + 32 * 1024
         private const val UUID_BYTES = 16
     }
 }

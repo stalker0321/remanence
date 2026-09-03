@@ -70,8 +70,8 @@ enum class RejectionReason {
     RECOGNITION_AEAD_INVALID,
     /**
      * Control/index acceptance only: the decrypted recognition manifest
-     * did not agree with the signed capsule on identity or had empty
-     * front/back fingerprints. The full [CapsuleAcceptanceGate] does not
+     * did not agree with the signed capsule on identity or had an empty
+     * FRONT fingerprint. The full [CapsuleAcceptanceGate] does not
      * emit this reason.
      */
     RECOGNITION_PAYLOAD_INVALID,

@@ -1,5 +1,8 @@
 package dev.hryshyn.remanence.core.recognition
 
+/** Capture-flow side used only by local admission, never by fingerprint wire data. */
+enum class FingerprintSide { FRONT, BACK }
+
 /**
  * Local capture-only admission thresholds — FRONT-only production contract
  * (ADR-012). These values deliberately do not belong to [RecognitionProfile]:

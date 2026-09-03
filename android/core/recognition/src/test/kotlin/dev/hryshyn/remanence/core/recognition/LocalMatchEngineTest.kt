@@ -218,7 +218,7 @@ class LocalMatchEngineTest {
     }
 
     @Test
-    fun scoreSeparatedPlausibleCandidatesStillReturnAmbiguousWithoutVerifier() = kotlinx.coroutines.runBlocking {
+    fun identicalScoreDistinctPlausibleCandidatesReturnAmbiguousWithoutVerifier() = kotlinx.coroutines.runBlocking {
         var verifierInvoked = false
         val countingVerifier = CapsuleVerifier { id -> verifierInvoked = true; true }
         val issuer = ScanGrantIssuer { capsuleId -> issuedGrants += capsuleId; "grant-$capsuleId" }
@@ -228,17 +228,18 @@ class LocalMatchEngineTest {
             grantIssuer = issuer,
         )
         val queryFront = fingerprint(11, 64)
-        // Two plausible candidates with large score separation (one strong 0.85, one plausible 0.45) must still be ambiguous.
-        // We use synthetic fingerprints with same seed for both to ensure they are both plausible, but we will mock the scoring by using candidates that will both be retained.
-        // Since synthetic fingerprints with same seed are identical, they will both be plausible; the engine's front ranking will retain both.
+        // Both candidates share the same seed (11) so their synthetic fingerprints are
+        // identical; the engine sees identical scores and must not auto-open.  Real
+        // score-separated cases (e.g. 0.85 vs 0.45) are exercised in
+        // MatchCoordinatorTest; this test specifically proves the identical-score path.
         val universe = listOf(
-            candidate("sep-1", preferred = true, 11),
-            candidate("sep-2", preferred = true, 11),
+            candidate("dup-a", preferred = true, 11),
+            candidate("dup-b", preferred = true, 11),
         )
         val result = engine.run(queryFront, universe)
-        assertTrue(result is ScanFlowResult.Ambiguous, "score-separated plausible candidates must be ambiguous")
+        assertTrue(result is ScanFlowResult.Ambiguous, "identical-score plausible candidates must be ambiguous")
         assertTrue(!verifierInvoked, "verifier must never be invoked for ambiguous")
-        assertTrue(issuedGrants.isEmpty(), "no grant for ambiguous even when score-separated")
+        assertTrue(issuedGrants.isEmpty(), "no grant for ambiguous even with identical scores")
     }
 
     @Test

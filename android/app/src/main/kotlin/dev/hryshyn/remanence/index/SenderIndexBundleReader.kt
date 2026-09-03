@@ -323,27 +323,46 @@ class SenderIndexBundleReader internal constructor(
             }
             var snapshotFrontFingerprint: ByteArray? = null
             var snapshotSenderVerification: SenderIndexBundleSenderVerification? = null
+            var snapshot: SenderIndexBundleInspectionSnapshot? = null
+            var handoffCleanupStarted = false
+            var handoffCompleted = false
             try {
-                snapshotFrontFingerprint = decoded!!.frontFingerprint
-                snapshotSenderVerification = decoded!!.senderVerification
-                SenderIndexBundleReadResult.Available(
-                    SenderIndexBundleInspectionSnapshot(
-                        localFormatVersion = decoded!!.localFormatVersion,
-                        capsuleId = decoded!!.capsuleId,
-                        senderHandleSnapshot = decoded!!.senderHandleSnapshot,
-                        createdAtEpochSeconds = decoded!!.createdAtEpochSeconds,
-                        placeLabel = decoded!!.placeLabel,
-                        frontFingerprint = snapshotFrontFingerprint!!,
-                        senderVerification = snapshotSenderVerification,
-                        wipeBytes = wipe,
-                        wipeChars = wipeChars,
-                    ),
+                val plaintext = decoded!!
+                val frontFingerprint = plaintext.frontFingerprint
+                val senderVerification = plaintext.senderVerification
+                snapshotFrontFingerprint = frontFingerprint
+                snapshotSenderVerification = senderVerification
+                val inspectionSnapshot = SenderIndexBundleInspectionSnapshot(
+                    localFormatVersion = plaintext.localFormatVersion,
+                    capsuleId = plaintext.capsuleId,
+                    senderHandleSnapshot = plaintext.senderHandleSnapshot,
+                    createdAtEpochSeconds = plaintext.createdAtEpochSeconds,
+                    placeLabel = plaintext.placeLabel,
+                    frontFingerprint = frontFingerprint,
+                    senderVerification = senderVerification,
+                    wipeBytes = wipe,
+                    wipeChars = wipeChars,
                 )
-            } finally {
+                snapshot = inspectionSnapshot
+                val available = SenderIndexBundleReadResult.Available(inspectionSnapshot)
+                handoffCleanupStarted = true
                 try {
-                    snapshotFrontFingerprint?.let(wipe)
+                    wipeHandoffBytes(frontFingerprint)
                 } finally {
-                    snapshotSenderVerification?.wipe(wipe)
+                    senderVerification?.wipe(::wipeHandoffBytes)
+                }
+                handoffCompleted = true
+                return available
+            } finally {
+                if (!handoffCleanupStarted) {
+                    try {
+                        snapshotFrontFingerprint?.let(::wipeHandoffBytes)
+                    } finally {
+                        snapshotSenderVerification?.wipe(::wipeHandoffBytes)
+                    }
+                }
+                if (!handoffCompleted) {
+                    snapshot?.close()
                 }
             }
         } finally {
@@ -351,6 +370,15 @@ class SenderIndexBundleReader internal constructor(
             aad?.let(wipe)
             opened?.let(wipe)
             decoded?.wipe()
+        }
+    }
+
+    /** The observer is diagnostic/test-only; production clearing is unconditional. */
+    private fun wipeHandoffBytes(bytes: ByteArray) {
+        try {
+            wipe(bytes)
+        } finally {
+            bytes.fill(0)
         }
     }
 

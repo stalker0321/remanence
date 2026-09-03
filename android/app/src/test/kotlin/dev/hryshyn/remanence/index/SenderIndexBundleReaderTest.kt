@@ -218,6 +218,7 @@ class SenderIndexBundleReaderTest {
         expectedVerification.wipe()
         val wiped = mutableListOf<ByteArray>()
         val beforeWipe = mutableListOf<ByteArray>()
+        var frontFailuresRemaining = 1
         assertThrows(IllegalStateException::class.java) {
             runBlocking {
                 reader(
@@ -225,10 +226,11 @@ class SenderIndexBundleReaderTest {
                     wipe = { bytes ->
                         beforeWipe += bytes.copyOf()
                         wiped += bytes
-                        bytes.fill(0)
-                        if (beforeWipe.last().contentEquals(expectedFront)) {
+                        if (bytes.contentEquals(expectedFront) && frontFailuresRemaining > 0) {
+                            frontFailuresRemaining--
                             throw IllegalStateException("test wipe failure")
                         }
+                        bytes.fill(0)
                     },
                 ).inspect(readRequest(owner, owner, capsule))
             }
@@ -236,6 +238,17 @@ class SenderIndexBundleReaderTest {
 
         assertHandoffWasWiped(expectedFront, beforeWipe, wiped)
         assertHandoffWasWiped(expectedSenderKeyset, beforeWipe, wiped)
+        assertEquals(0, frontFailuresRemaining)
+        val preRedactedSnapshotBuffers = beforeWipe.indices.filter { index ->
+            beforeWipe[index].isNotEmpty() && beforeWipe[index].all { it == 0.toByte() }
+        }
+        assertTrue(
+            "constructed snapshot was not redacted before its observer",
+            preRedactedSnapshotBuffers.isNotEmpty(),
+        )
+        preRedactedSnapshotBuffers.forEach { index ->
+            assertTrue("constructed snapshot buffer was not wiped", wiped[index].all { it == 0.toByte() })
+        }
         expectedFront.fill(0)
         expectedSenderKeyset.fill(0)
     }

@@ -9,15 +9,18 @@ import dev.hryshyn.remanence.capture.CapturePermissionStep
 import dev.hryshyn.remanence.capture.ProcessedStill
 import dev.hryshyn.remanence.capture.StillProcessor
 import dev.hryshyn.remanence.scan.ScanSessionState
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -71,7 +74,15 @@ private fun scanSynthetic(): ProcessedStill.Accepted {
 @Config(sdk = [34])
 class ScanStaleProcessingTest {
 
-    private val mainDispatcher = UnconfinedTestDispatcher()
+    private val boundary = CancelBoundary()
+    /**
+     * Recording Main: unconfined immediacy (executes inline) with an
+     * OBSERVABLE dispatch boundary, so the withContext resume hop can be
+     * intercepted deterministically. UnconfinedTestDispatcher cannot be
+     * wrapped by delegation (its dispatch is yield-internal), hence inline
+     * execution here instead of delegate.dispatch.
+     */
+    private val mainDispatcher = RecordingMain(boundary)
     /** Paused executor: pipeline work runs only on advanceUntilIdle(). */
     private val cpuDispatcher = StandardTestDispatcher()
 
@@ -206,21 +217,60 @@ class ScanStaleProcessingTest {
         staleOutcomeIsInert { it.beginSession(epoch = 2L) }
 
     /**
-     * M2-F0-07 cancellation boundary: the worker RETURNS Accepted, but the
-     * delivery is cancelled before the continuation resumes for handoff, so
-     * the accepted buffer never reaches queuedStill/captureSession. It is
-     * still owned by the abandoned delivery and must be zeroized.
-     * Deterministic: the parked cpu dispatcher runs the worker only after
-     * the test arms it, and the worker itself cancels the delivery job
-     * before returning - so the cancel lands exactly on the resume.
+     * M2-F0-07 cancellation boundary proof: the worker RETURNS Accepted, and
+     * the delivery job is cancelled only when the withContext resume
+     * continuation is dispatched - demonstrably after the return, and before
+     * the resume executes any handoff. The abandoned accepted buffer never
+     * reaches queuedStill/captureSession yet must still be zeroized.
+     *
+     * The [RecordingMain] wrapper below observes the dispatcher boundary
+     * itself (not worker internals): the hook fires on the resume dispatch
+     * if and only if the worker already logged its return, then cancels
+     * before delegating to the real dispatcher. The ordered [CancelBoundary]
+     * event log makes the causality auditable instead of hand-waved.
      */
-    private class CancelAfterReturn(
+    private class CancelBoundary {
+        val events = mutableListOf<String>()
+        var workerReturned = false
+        var deliveryJob: Job? = null
+        var hookArmed = false
+    }
+
+    /**
+     * Main dispatcher wrapper: forces every Main hop through an OBSERVABLE
+     * dispatch boundary while executing inline (unconfined immediacy), and
+     * fires the cancellation hook exactly when the resume continuation is
+     * dispatched after the worker return - before the resume itself executes.
+     */
+    private class RecordingMain(
+        private val boundary: CancelBoundary,
+    ) : CoroutineDispatcher() {
+        override fun isDispatchNeeded(context: CoroutineContext): Boolean = true
+
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            if (boundary.hookArmed && boundary.workerReturned) {
+                boundary.hookArmed = false
+                boundary.events += "resume-dispatched(workerReturned=true)"
+                (boundary.deliveryJob ?: error("delivery job not armed")).cancel()
+                boundary.events += "delivery-cancelled-before-resume-executes"
+            } else {
+                boundary.events += "main-dispatch(workerReturned=${boundary.workerReturned})"
+            }
+            block.run()
+        }
+    }
+
+    /** Returns the held Accepted and logs return completion before returning. */
+    private class BoundaryAccepting(
         val accepted: ProcessedStill.Accepted,
+        private val boundary: CancelBoundary,
     ) : StillProcessor {
-        var target: Job? = null
         override fun process(jpegBytes: ByteArray): ProcessedStill {
-            (target ?: error("delivery job not armed")).cancel()
-            return accepted
+            boundary.events += "process-enter"
+            val result = accepted
+            boundary.workerReturned = true
+            boundary.events += "process-return"
+            return result
         }
     }
 
@@ -232,12 +282,13 @@ class ScanStaleProcessingTest {
             "precondition: staged bytes are live",
             staged.serializedBytes.any { it != 0.toByte() },
         )
-        val processor = CancelAfterReturn(staged)
-        val vm = newViewModel(processor)
+        val vm = newViewModel(BoundaryAccepting(staged, boundary))
         bind(vm.frontAttempt)
 
         assertTrue(vm.beginFrontCapture())
         val jpeg = ByteArray(8) { (it + 1).toByte() }
+        boundary.events.clear()
+        boundary.hookArmed = true
         val scopeJob = vm.viewModelScope.coroutineContext[Job] ?: error("no scope job")
         val before = scopeJob.children.toList()
         vm.deliverFrontJpeg(jpeg)
@@ -246,13 +297,28 @@ class ScanStaleProcessingTest {
             CaptureAttemptPhase.Processing,
             vm.frontAttempt.phase,
         )
-        val delivery = (scopeJob.children.toList() - before.toSet()).single()
-        processor.target = delivery
+        boundary.deliveryJob = (scopeJob.children.toList() - before.toSet()).single()
 
-        // Run the parked worker: it returns Accepted, then the armed cancel
-        // aborts the resume before any handoff can run.
+        // Run the parked worker to completion. withContext can only resume
+        // afterwards, and the armed hook cancels the delivery exactly on
+        // that resume dispatch - before the resume executes any handoff.
         cpuDispatcher.scheduler.advanceUntilIdle()
 
+        // Causality proof: strictly ordered markers. The resume dispatch is
+        // observed only after the worker return, and the cancel strictly
+        // before the resume body runs.
+        assertEquals(
+            listOf(
+                "main-dispatch(workerReturned=false)",
+                "process-enter",
+                "process-return",
+                "resume-dispatched(workerReturned=true)",
+                "delivery-cancelled-before-resume-executes",
+            ),
+            boundary.events.toList(),
+        )
+        assertTrue("worker return was observed before the cancel", boundary.workerReturned)
+        assertFalse("resume hook fired exactly once", boundary.hookArmed)
         assertTrue(
             "cancelled accepted bytes must be zeroized",
             staged.serializedBytes.all { it == 0.toByte() },

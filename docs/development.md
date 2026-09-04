@@ -201,7 +201,7 @@ A current PASS surface is:
 - `alembic_version` exactly `0003_m2_capsule_routing`
 - blob volume create/stat/remove probe at mode `0600`
 - `uv lock --check`, `uv sync --locked`, `uv run --locked pytest -q -W error`
-- `./gradlew clean testDebugUnitTest assembleDebug --console=plain` with `REMANENCE_TEST_API_BASE_URL=http://127.0.0.1:$REMANENCE_API_PORT/`
+- `./gradlew clean testDebugUnitTest assembleDebug --console=plain --no-daemon --max-workers=1` with `REMANENCE_TEST_API_BASE_URL=http://127.0.0.1:$REMANENCE_API_PORT/`, Gradle heap `REMANENCE_GRADLE_JVM_HEAP` (default `1024m`), and in-process Kotlin compilation (no Kotlin daemon JVM)
 - non-empty `android/app/build/outputs/apk/debug/app-debug.apk` (size printed; this host last printed `12287755` bytes)
 - `git diff --check` clean
 - explicit note that device/camera/CV were not validated
@@ -246,8 +246,14 @@ REMANENCE_TEST_DATABASE_URL=postgresql+psycopg://remanence:remanence-dev-only@12
 ```sh
 cd /home/vodkolyan/projects/Remanence/android
 REMANENCE_TEST_API_BASE_URL=http://127.0.0.1:8000/ \
-  ./gradlew clean testDebugUnitTest assembleDebug --console=plain
+  REMANENCE_GRADLE_JVM_HEAP=1024m \
+  ./gradlew clean testDebugUnitTest assembleDebug --console=plain \
+    --no-daemon --max-workers=1 \
+    "-Dorg.gradle.jvmargs=-Xmx${REMANENCE_GRADLE_JVM_HEAP} -Dfile.encoding=UTF-8" \
+    "-Dkotlin.compiler.execution.strategy=in-process"
 ```
+
+The serialized flags plus the heap cap keep the gate inside a 7.6 GiB host: one single-use Gradle JVM (Kotlin compiles in-process, so no second Kotlin JVM exists) plus Gradle's default-capped test workers. The variable accepts values like `1024m` or `2g` and fails closed otherwise; `verify-m0.sh` applies the same invocation and logs the effective cap.
 
 ```sh
 stat -c '%s %n' /home/vodkolyan/projects/Remanence/android/app/build/outputs/apk/debug/app-debug.apk

@@ -112,6 +112,16 @@ REMANENCE_DB_PORT="${REMANENCE_DB_PORT:-55432}"
 REMANENCE_API_PORT="${REMANENCE_API_PORT:-8000}"
 export REMANENCE_DEV_DB_PASSWORD REMANENCE_DB_PORT REMANENCE_API_PORT
 
+# Serialized VPS-safe Gradle heap cap: Kotlin compiles in-process, so the
+# single-use build JVM is the only Kotlin/Gradle JVM this gate permits
+# (plus Gradle's default-capped test workers). The value looks like 1024m
+# or 2g; anything else fails closed before Gradle starts.
+REMANENCE_GRADLE_JVM_HEAP="${REMANENCE_GRADLE_JVM_HEAP:-1024m}"
+if [[ ! "${REMANENCE_GRADLE_JVM_HEAP}" =~ ^[0-9]+[mMgG]$ ]]; then
+  die "REMANENCE_GRADLE_JVM_HEAP must look like 1024m or 2g, got '${REMANENCE_GRADLE_JVM_HEAP}'."
+fi
+export REMANENCE_GRADLE_JVM_HEAP
+
 if [[ -z "${REMANENCE_TEST_DATABASE_URL:-}" ]]; then
   if [[ ! "${REMANENCE_DEV_DB_PASSWORD}" =~ ^[A-Za-z0-9._~-]+$ ]]; then
     die "REMANENCE_DEV_DB_PASSWORD contains URL-significant characters; set REMANENCE_TEST_DATABASE_URL explicitly instead of constructing a URL."
@@ -199,10 +209,13 @@ log "server lock, sync, and pytest"
   uv run --locked pytest -q -W error
 )
 
-log "android unit tests and assembleDebug"
+log "android unit tests and assembleDebug (gradle heap ${REMANENCE_GRADLE_JVM_HEAP}, kotlin in-process)"
 (
   cd "${REPO_ROOT}/android"
-  ./gradlew clean testDebugUnitTest assembleDebug --console=plain
+  ./gradlew clean testDebugUnitTest assembleDebug --console=plain \
+    --no-daemon --max-workers=1 \
+    "-Dorg.gradle.jvmargs=-Xmx${REMANENCE_GRADLE_JVM_HEAP} -Dfile.encoding=UTF-8" \
+    "-Dkotlin.compiler.execution.strategy=in-process"
 )
 
 apk_path="${REPO_ROOT}/android/app/build/outputs/apk/debug/app-debug.apk"

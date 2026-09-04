@@ -8,17 +8,21 @@
 
 ## Current development status / Quick verification
 
-Architecture gate passed. The current architecture checkpoint is ADR-012:
-the production contract is FRONT-only. The code at `f01c379` does not claim
-FRONT-only implementation yet. Toolchain, Compose, and optional device steps
-are in [`docs/development.md`](docs/development.md).
+M2-F0 FRONT-only reset is implemented and reviewed through `88fb80d`
+(closure record in [`docs/implementation-plan.md`](docs/implementation-plan.md)
+§10a; docs/status closure through `58362f5`). The production contract is
+FRONT-only under ADR-012: one explicit front-only manifest format, front-only
+local indexes, outgoing/incoming wiring, Create, and Scan with owner-scoped
+design-to-0..N classification and no auto-open for N>1 pending the M2-F1
+picker. Toolchain, Compose, and optional device steps are in
+[`docs/development.md`](docs/development.md).
 
-The bounded next contract is the clean-reset implementation queue in
-[`docs/implementation-plan.md`](docs/implementation-plan.md): one explicit
-front-only manifest format, front-only local indexes, outgoing/incoming
-wiring, Create, and Scan. Existing Test8/Test9 recognition state is disposable
-development data; deployment starts with a clean app database and server
-recognition state. No compatibility reader or data migration is required.
+Existing Test8/Test9 recognition state is disposable development data;
+deployment starts with a clean app database and server recognition state.
+No compatibility reader or data migration is required. Explicitly still open:
+physical-device evidence, camera-quality acceptance, and approximately
+300-image dataset validation; the recipient picker remains the later M2-F1
+milestone.
 
 Canonical verification:
 

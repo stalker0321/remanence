@@ -585,6 +585,15 @@ class ScanViewModel internal constructor(
             }
 
             is ScanFlowResult.Ambiguous -> {
+                if (result.rows.size < 2) {
+                    // SINGLE_CANDIDATE_RECAPTURE (or any degenerate row set)
+                    // is guided recapture, never a picker: only true N>1
+                    // ambiguity may reach the chooser.
+                    chooserContext = null
+                    if (generation != matchGeneration) return
+                    _matchState.value = ScanMatchUiState.RecaptureGuidance(failedAttempts = 1)
+                    return
+                }
                 val hints: Map<String, ScanChooserHint> = result.rows.mapNotNull { (id, _) ->
                     val candidateId = id.toString()
                     val hint = candidateHints[candidateId] ?: loadLegacyHint(candidateId)

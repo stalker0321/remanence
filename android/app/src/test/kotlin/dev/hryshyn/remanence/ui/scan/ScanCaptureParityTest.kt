@@ -11,8 +11,10 @@ import dev.hryshyn.remanence.capture.StillProcessor
 import dev.hryshyn.remanence.scan.ScanSessionState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import org.junit.After
@@ -26,10 +28,17 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import dev.hryshyn.remanence.core.crypto.AccountIdentityGenerator
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
+import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.ui.create.SenderIdentitySnapshot
+import dev.hryshyn.remanence.core.recognition.FingerprintCodec
+import dev.hryshyn.remanence.core.recognition.IndexedCandidate
+import dev.hryshyn.remanence.core.recognition.LocalMatchEngine
 import dev.hryshyn.remanence.core.recognition.QualityReason
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.core.recognition.ScanFlowResult
 
 /**
  * M2-F0-07 parity regression: the FRONT-only scan flow satisfies the SAME
@@ -134,11 +143,15 @@ class ScanCaptureParityTest {
         ) = Unit
     }
 
-    private fun viewModel(front: StillProcessor): ScanViewModel = ScanViewModel(
+    private fun viewModel(
+        front: StillProcessor,
+        candidateIndexProvider: suspend (UserId) -> ScanCandidateIndex = { ScanCandidateIndex.EMPTY },
+        identityProvider: suspend () -> SenderIdentitySnapshot? = { null },
+    ): ScanViewModel = ScanViewModel(
         persistence = NoPersistence(),
         database = database,
         profile = RecognitionProfile.mvpOrbV1(),
-        identityProvider = { null },
+        identityProvider = identityProvider,
         trustedSenderKeys = dev.hryshyn.remanence.identity.DirectorySenderKeyStore(
             directoryFetch = { error("verification must be unreachable in this test") },
             ownAccount = { null },
@@ -147,7 +160,7 @@ class ScanCaptureParityTest {
             dev.hryshyn.remanence.core.recognition.ScanGrantManager(clockMillis = { 0L }),
         ),
         frontProcessor = front,
-        candidateIndexProvider = { ScanCandidateIndex.EMPTY },
+        candidateIndexProvider = candidateIndexProvider,
         incomingPresentationPreparation = null,
         cpuDispatcher = testDispatcher,
         ioDispatcher = testDispatcher,
@@ -387,6 +400,92 @@ class ScanCaptureParityTest {
         assertEquals(ScanSessionState.AWAITING_FRONT, racing.captureSession.state)
         assertNull(racing.captureSession.front)
         assertEquals(ScanMatchUiState.AwaitingCapture, racing.matchState.value)
+        Unit
+    }
+
+    // ------------------------------------------------------------------
+    // M2-F1 routing: one weak candidate is guided recapture, never a picker.
+    // ------------------------------------------------------------------
+
+    /**
+     * Stored FRONT with only the first [intact] descriptors intact; the rest
+     * read as noise, so the candidate lands weak-plausible below auto rules.
+     */
+    private fun weakenedFront(fullBytes: ByteArray, intact: Int): ByteArray {
+        val full = FingerprintCodec.parse(fullBytes)
+        val weakened = dev.hryshyn.remanence.core.recognition.PostcardFingerprint(
+            profileId = full.profileId,
+            canonicalWidthPx = full.canonicalWidthPx,
+            canonicalHeightPx = full.canonicalHeightPx,
+            coarseHash64 = full.coarseHash64,
+            keypoints = full.keypoints,
+            descriptors = full.descriptors.mapIndexed { index, bytes ->
+                if (index < intact) bytes.copyOf() else ByteArray(bytes.size)
+            },
+            quality = full.quality,
+        )
+        return FingerprintCodec.serialize(weakened)
+    }
+
+    @Test
+    fun singleWeakCandidateRendersGuidanceNeverChooserAndIssuesNoGrant() = runBlocking {
+        val capsuleId = java.util.UUID.randomUUID()
+        val fullBytes = synthetic().serializedBytes
+        // Probed weak band: 18 intact descriptors classify exactly one
+        // plausible below auto rules (16 and below do not match; 24 and
+        // above verify). RANSAC is fixed-seed, so this pin is deterministic.
+        val candidate = IndexedCandidate(
+            capsuleId = capsuleId,
+            front = FingerprintCodec.parse(weakenedFront(fullBytes, intact = 18)),
+            recipientPreferred = false,
+        )
+
+        // Phase 1: pin the fixture through the REAL engine — exactly one
+        // plausible below auto rules, so verifier/issuer must never run.
+        val engine = LocalMatchEngine(
+            RecognitionProfile.mvpOrbV1(),
+            verifier = { error("single weak candidate must never verify") },
+            grantIssuer = { error("single weak candidate must never mint a grant") },
+        )
+        val decision = engine.run(FingerprintCodec.parse(fullBytes), listOf(candidate))
+        assertTrue("fixture must classify SINGLE_CANDIDATE_RECAPTURE, got $decision", decision is ScanFlowResult.Ambiguous)
+        val ambiguous = decision as ScanFlowResult.Ambiguous
+        assertTrue(ambiguous.singleRecaptureFirst)
+        assertTrue(ambiguous.rows.isEmpty())
+
+        // Phase 2: the production ScanViewModel renders guided recapture for
+        // that same single weak candidate — never a picker, never a grant.
+        // A real authenticated identity is required: with a null identity
+        // the candidate index is empty and the test would pass vacuously.
+        val identity = AccountIdentityGenerator().generate()
+        val userUuid = java.util.UUID.randomUUID()
+        val vm = viewModel(
+            StillProcessor { ProcessedStill.Accepted("mvp-orb-v1", fullBytes.copyOf()) },
+            candidateIndexProvider = {
+                ScanCandidateIndex(
+                    candidates = listOf(candidate),
+                    presentationSources = emptyMap(),
+                )
+            },
+            identityProvider = {
+                SenderIdentitySnapshot(
+                    userId = userUuid.toString(),
+                    handle = "mykola",
+                    activeKeyBundleId = java.util.UUID.randomUUID().toString(),
+                    encryptionPrivateHandle = identity.encryptionPrivateHandle,
+                    signingPrivateHandle = identity.signingPrivateHandle,
+                )
+            },
+        )
+        bind(vm.frontAttempt)
+        assertTrue(vm.beginFrontCapture())
+        vm.deliverFrontJpeg("front".toByteArray())
+        withTimeout(10_000) { vm.matchState.first { it !is ScanMatchUiState.Matching } }
+
+        assertEquals(ScanSessionState.READY_FOR_MATCHING, vm.captureSession.state)
+        assertTrue("single weak candidate must guide recapture, got ${vm.matchState.value}", vm.matchState.value is ScanMatchUiState.RecaptureGuidance)
+        assertFalse("single weak candidate must never reach the picker", vm.matchState.value is ScanMatchUiState.Chooser)
+        assertEquals(ScanTerminalState.Idle, vm.terminal.value)
         Unit
     }
 }

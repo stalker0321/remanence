@@ -198,7 +198,7 @@ A current PASS surface is:
 - `docker compose config --quiet`
 - postgres healthy; migrate exited `0`; api healthy as uid/gid `10001`
 - `GET /healthz` exactly `{"status":"ok"}`
-- `alembic_version` exactly `0001_m0_baseline`
+- `alembic_version` exactly `0003_m2_capsule_routing`
 - blob volume create/stat/remove probe at mode `0600`
 - `uv lock --check`, `uv sync --locked`, `uv run --locked pytest -q -W error`
 - `./gradlew clean testDebugUnitTest assembleDebug --console=plain` with `REMANENCE_TEST_API_BASE_URL=http://127.0.0.1:$REMANENCE_API_PORT/`

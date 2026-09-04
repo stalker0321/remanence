@@ -61,7 +61,7 @@ sealed interface AppDestination {
     /** Sender flow entry: resolve recipient, capture, encrypt, publish. */
     data object Create : AppDestination
 
-    /** Scan flow entry: front/back capture, local match, grant gate. */
+    /** Scan flow entry: FRONT-only capture, local match, grant gate. */
     data object Scan : AppDestination
 
     /**

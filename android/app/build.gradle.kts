@@ -12,8 +12,8 @@ android {
         applicationId = "dev.hryshyn.remanence"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 1
-        versionName = "0.1.0-m0"
+        versionCode = 10
+        versionName = "0.1.0-m2-f0-front-only"
     }
 
     buildTypes {

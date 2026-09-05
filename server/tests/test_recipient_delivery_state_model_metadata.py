@@ -2,7 +2,8 @@
 
 import uuid
 
-from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKeyConstraint, UUID
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, Enum, ForeignKeyConstraint, UUID
+from sqlalchemy import UniqueConstraint
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.schema import CreateTable
 
@@ -13,6 +14,7 @@ EXPECTED_COLUMNS = (
     "recipient_user_id",
     "capsule_id",
     "state",
+    "publication_sequence",
     "available_at",
     "ciphertext_synced_at",
 )
@@ -47,7 +49,7 @@ def test_recipient_delivery_status_members_and_native_enum_exact() -> None:
 def test_table_name_and_exact_field_allow_list() -> None:
     assert RecipientDeliveryState.__tablename__ == "recipient_delivery_state"
     assert tuple(_table().columns.keys()) == EXPECTED_COLUMNS
-    assert len(_table().columns) == 5
+    assert len(_table().columns) == 6
 
 
 def test_composite_primary_key_order_and_column_types() -> None:
@@ -60,6 +62,9 @@ def test_composite_primary_key_order_and_column_types() -> None:
         assert isinstance(column.type, UUID), name
         assert column.type.python_type is uuid.UUID, name
     assert _column("state").nullable is False
+    assert isinstance(_column("publication_sequence").type, BigInteger)
+    assert _column("publication_sequence").type.python_type is int
+    assert _column("publication_sequence").nullable is False
     for name in ("available_at", "ciphertext_synced_at"):
         column = _column(name)
         assert isinstance(column.type, DateTime), name
@@ -108,12 +113,21 @@ def test_named_state_timestamp_coherence_check() -> None:
         "ck_recipient_delivery_state_state_timestamp_coherence": (
             "((state = 'AVAILABLE' AND ciphertext_synced_at IS NULL) OR "
             "(state = 'CIPHERTEXT_SYNCED' AND ciphertext_synced_at IS NOT NULL))"
-        )
+        ),
+        "ck_recipient_delivery_state_publication_sequence_positive": (
+            "publication_sequence > 0"
+        ),
     }
 
 
 def test_only_available_at_has_server_now_default() -> None:
-    for name in ("recipient_user_id", "capsule_id", "state", "ciphertext_synced_at"):
+    for name in (
+        "recipient_user_id",
+        "capsule_id",
+        "state",
+        "publication_sequence",
+        "ciphertext_synced_at",
+    ):
         column = _column(name)
         assert column.default is None, name
         assert column.server_default is None, name
@@ -134,6 +148,19 @@ def test_compiled_postgresql_ddl_has_native_state_and_no_secondary_indexes() -> 
     assert "ON DELETE RESTRICT" in ddl
     assert "ON DELETE CASCADE" in ddl
     assert list(_table().indexes) == []
+    uniques = {
+        constraint.name: constraint
+        for constraint in _table().constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+    assert set(uniques) == {
+        "uq_recipient_delivery_state_recipient_publication_sequence"
+    }
+    assert [column.name for column in uniques[next(iter(uniques))].columns] == [
+        "recipient_user_id",
+        "publication_sequence",
+    ]
+    assert "publication_sequence BIGINT NOT NULL" in ddl
 
 
 def test_no_privacy_forbidden_fields_or_orm_relationships() -> None:

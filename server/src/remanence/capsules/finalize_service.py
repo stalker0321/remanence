@@ -27,10 +27,12 @@ from remanence.capsules.signature_service import (
     PublishSignatureVerificationService,
 )
 from remanence.storage import BlobNotFoundError, BlobStore, BlobStoreError
+from remanence.users.models import User
 
 
 _GENERIC_SERVICE_MESSAGE: Final = "capsule finalize failed"
 _SIGNATURE_LENGTH: Final = 69
+_PUBLICATION_SEQUENCE_MAX: Final = (1 << 63) - 1
 
 
 class CapsuleFinalizeError(Exception):
@@ -246,12 +248,33 @@ class CapsuleFinalizeService:
             self._validate_envelope(verified, authorization, envelope)
             for blob in blobs:
                 self._stat_stored(blob)
+            publication_sequence = self._next_publication_sequence(
+                capsule.recipient_user_id
+            )
             return self._persist_ready(
                 capsule,
                 authorization=authorization,
                 envelope=envelope,
                 now=now,
+                publication_sequence=publication_sequence,
             )
+
+    def _next_publication_sequence(self, recipient_user_id: uuid.UUID) -> int:
+        """Reserve the recipient's next stream position until this transaction commits."""
+        recipient_id = self._session.scalar(
+            select(User.id)
+            .where(User.id == recipient_user_id)
+            .with_for_update()
+        )
+        if recipient_id != recipient_user_id:
+            raise _error("INTERNAL_ERROR")
+        current = self._session.scalar(
+            select(func.coalesce(func.max(RecipientDeliveryState.publication_sequence), 0))
+            .where(RecipientDeliveryState.recipient_user_id == recipient_user_id)
+        )
+        if type(current) is not int or not 0 <= current < _PUBLICATION_SEQUENCE_MAX:
+            raise _error("INTERNAL_ERROR")
+        return current + 1
 
     def _stat_stored(self, blob: CapsuleBlob) -> None:
         try:
@@ -372,6 +395,7 @@ class CapsuleFinalizeService:
         authorization,
         envelope: CapsuleFinalizeEnvelope,
         now: datetime,
+        publication_sequence: int,
     ) -> CapsuleFinalizeResult:
         signature = authorization.signature
         if type(signature) is not bytes or len(signature) != _SIGNATURE_LENGTH:
@@ -396,6 +420,7 @@ class CapsuleFinalizeService:
             recipient_user_id=capsule.recipient_user_id,
             capsule_id=capsule.id,
             state=RecipientDeliveryStatus.AVAILABLE,
+            publication_sequence=publication_sequence,
             available_at=now,
             ciphertext_synced_at=None,
         )

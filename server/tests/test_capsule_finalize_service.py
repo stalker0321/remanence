@@ -1018,6 +1018,7 @@ def test_ready_replay_preserves_ciphertext_synced_and_rejects_corrupt_stored_sha
                 recipient_user_id=world["recipient"].id,
                 capsule_id=world["capsule"].id,
                 state=RecipientDeliveryStatus.AVAILABLE,
+                publication_sequence=1,
                 available_at=_NOW,
                 ciphertext_synced_at=None,
             )

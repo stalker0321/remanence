@@ -11,7 +11,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import event, select
+from sqlalchemy import event, func, select
 
 pytest_plugins = ("test_session_repository_create",)
 
@@ -101,7 +101,16 @@ def _add_incoming_ready(
     object_key_prefix: str = "capsules",
     envelope_recipient_id: UUID | None = None,
     envelope_key_bundle_id: UUID | None = None,
+    publication_sequence: int | None = None,
 ) -> Capsule:
+    if publication_sequence is None:
+        publication_sequence = (
+            session.scalar(
+                select(func.coalesce(func.max(RecipientDeliveryState.publication_sequence), 0))
+                .where(RecipientDeliveryState.recipient_user_id == recipient.id)
+            )
+            + 1
+        )
     capsule = Capsule(
         id=uuid4(),
         sender_user_id=sender.id,
@@ -157,6 +166,7 @@ def _add_incoming_ready(
                 recipient_user_id=recipient.id,
                 capsule_id=capsule.id,
                 state=delivery_status,
+                publication_sequence=publication_sequence,
                 available_at=ready_at,
                 ciphertext_synced_at=(
                     ready_at
@@ -272,7 +282,9 @@ def test_malformed_noncanonical_cursor_limit_and_uuid_fail_closed_without_databa
     assert INCOMING_CURSOR_B64_LENGTH == 34
 
 
-def test_oldest_order_tied_timestamp_uuid_order_and_replay(session_factory, monkeypatch):
+def test_publication_order_replay_is_stable_for_tied_ready_timestamps(
+    session_factory, monkeypatch
+):
     with session_factory() as session:
         sender, sender_bundle = _seed_user(session, "sender")
         recipient, recipient_bundle = _seed_user(session, "recipient")
@@ -301,12 +313,7 @@ def test_oldest_order_tied_timestamp_uuid_order_and_replay(session_factory, monk
             ready_at=_NOW,
         )
         session.commit()
-        expected_ids = tuple(
-            capsule.id
-            for capsule in sorted(
-                (tied_a, tied_b, later), key=lambda item: (item.ready_at, item.id)
-            )
-        )
+        expected_ids = (later.id, tied_b.id, tied_a.id)
         _forbid_commit_rollback(session, monkeypatch)
         first = _query(session, recipient.id, limit=2)
         replay = _query(session, recipient.id, limit=2)
@@ -315,8 +322,7 @@ def test_oldest_order_tied_timestamp_uuid_order_and_replay(session_factory, monk
         assert type(first.next_cursor) is str
         assert len(first.next_cursor) == 34
         assert [item.capsule_id for item in first.items] == list(expected_ids[:2])
-        assert first.items[0].ready_at == first.items[1].ready_at == _NOW
-        assert first.items[0].capsule_id < first.items[1].capsule_id
+        assert first.items[0].ready_at == _NOW + timedelta(seconds=5)
         second = _query(session, recipient.id, cursor=first.next_cursor, limit=2)
         second_replay = _query(session, recipient.id, cursor=first.next_cursor, limit=2)
         assert second == second_replay
@@ -423,7 +429,7 @@ def test_insertion_after_cursor_is_visible_on_continuation(session_factory):
         assert [item.capsule_id for item in replay.items] == [first.id, second.id]
         assert replay.next_cursor == page.next_cursor
         continuation = _query(session, recipient.id, cursor=page.next_cursor, limit=2)
-        assert [item.capsule_id for item in continuation.items] == [inserted.id, third.id]
+        assert [item.capsule_id for item in continuation.items] == [third.id, inserted.id]
         assert continuation.has_more is False
         assert continuation.next_cursor == encode_incoming_cursor(
             ready_at=continuation.items[-1].ready_at,

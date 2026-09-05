@@ -11,7 +11,7 @@ from sqlalchemy.engine import make_url
 
 _ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 _BASELINE = "0001_m0_baseline"
-_HEAD = "0003_m2_capsule_routing"
+_HEAD = "0004_r1_publication_order"
 _HEAD_TABLES = {
     "alembic_version",
     "users",
@@ -81,6 +81,7 @@ _REQUIRED_NAMED_CONSTRAINTS = {
     "ck_capsules_signed_statement_sha256_32",
     "ck_capsules_publish_signature_69",
     "ck_capsules_state_finalization_shape",
+    "ck_recipient_delivery_state_publication_sequence_positive",
     "ck_capsule_blobs_expected_ciphertext_size_positive",
     "ck_capsule_blobs_expected_ciphertext_sha256_32",
     "ck_capsule_blobs_kind_ordinal_shape",
@@ -88,6 +89,7 @@ _REQUIRED_NAMED_CONSTRAINTS = {
     "ck_capsule_envelopes_ciphertext_size_matches",
     "ck_capsule_envelopes_ciphertext_sha256_32",
     "ck_recipient_delivery_state_state_timestamp_coherence",
+    "uq_recipient_delivery_state_recipient_publication_sequence",
     "ck_capsule_idempotency_records_method_uppercase",
     "ck_capsule_idempotency_records_request_sha256_32",
     "ck_capsule_idempotency_records_response_status_range",
@@ -233,6 +235,16 @@ def _assert_head_schema(conn: psycopg.Connection) -> None:
         """
     ).fetchone()
     assert publish_signature == ("bytea", "YES")
+    publication_sequence = conn.execute(
+        """
+        SELECT data_type, is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'recipient_delivery_state'
+          AND column_name = 'publication_sequence'
+        """
+    ).fetchone()
+    assert publication_sequence == ("bigint", "NO")
 
     primary_keys = {
         "users": "pk_users",

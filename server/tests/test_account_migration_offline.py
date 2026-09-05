@@ -103,6 +103,9 @@ EXPECTED_UPGRADE_FRAGMENTS = [
     "CONSTRAINT ck_capsule_envelopes_ciphertext_sha256_32 CHECK "
     "(octet_length(ciphertext_sha256) = 32)",
     "CREATE TABLE recipient_delivery_state (",
+    "ALTER TABLE recipient_delivery_state ADD COLUMN publication_sequence BIGINT",
+    "ALTER TABLE recipient_delivery_state ADD CONSTRAINT ck_recipient_delivery_state_publication_sequence_positive CHECK",
+    "ALTER TABLE recipient_delivery_state ADD CONSTRAINT uq_recipient_delivery_state_recipient_publication_sequence UNIQUE",
     "CONSTRAINT pk_recipient_delivery_state PRIMARY KEY (recipient_user_id, capsule_id)",
     "CONSTRAINT fk_recipient_delivery_state_recipient_user_id_users FOREIGN KEY(recipient_user_id) "
     "REFERENCES users (id) ON DELETE RESTRICT",
@@ -139,10 +142,11 @@ def offline_config(monkeypatch: pytest.MonkeyPatch) -> Iterator[Config]:
 
 def test_revision_chain_reachable() -> None:
     script = ScriptDirectory(str(MIGRATIONS_DIR))
-    assert script.get_heads() == ["0003_m2_capsule_routing"]
+    assert script.get_heads() == ["0004_r1_publication_order"]
     assert script.get_revision("0001_m0_baseline").revision == "0001_m0_baseline"
     assert script.get_revision("0002_m1_accounts").down_revision == "0001_m0_baseline"
     assert script.get_revision("0003_m2_capsule_routing").down_revision == "0002_m1_accounts"
+    assert script.get_revision("0004_r1_publication_order").down_revision == "0003_m2_capsule_routing"
 
 
 def test_upgrade_emits_full_schema_sql(offline_config: Config) -> None:
@@ -213,7 +217,7 @@ def test_capsule_downgrade_stops_at_m1_and_drops_new_types_last(offline_config: 
         _capture(
             lambda: command.downgrade(
                 offline_config,
-                "0003_m2_capsule_routing:0002_m1_accounts",
+                "0004_r1_publication_order:0002_m1_accounts",
                 sql=True,
             )
         )
@@ -240,6 +244,27 @@ def test_capsule_downgrade_stops_at_m1_and_drops_new_types_last(offline_config: 
     positions = [sql.index(fragment) for fragment in ordered_fragments]
     assert positions == sorted(positions), ordered_fragments
     assert "DROP TYPE key_bundle_status" not in sql
+
+
+def test_publication_order_downgrade_removes_sequence_before_table(
+    offline_config: Config,
+) -> None:
+    sql = _normalized(
+        _capture(
+            lambda: command.downgrade(
+                offline_config,
+                "0004_r1_publication_order:0003_m2_capsule_routing",
+                sql=True,
+            )
+        )
+    )
+    ordered_fragments = [
+        "ALTER TABLE recipient_delivery_state DROP CONSTRAINT uq_recipient_delivery_state_recipient_publication_sequence",
+        "ALTER TABLE recipient_delivery_state DROP CONSTRAINT ck_recipient_delivery_state_publication_sequence_positive",
+        "ALTER TABLE recipient_delivery_state DROP COLUMN publication_sequence",
+    ]
+    positions = [sql.index(fragment) for fragment in ordered_fragments]
+    assert positions == sorted(positions), ordered_fragments
 
 
 def _capture(operation) -> str:

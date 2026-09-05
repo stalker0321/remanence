@@ -4,7 +4,15 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, UUID, func
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    UniqueConstraint,
+    UUID,
+    func,
+)
 from sqlalchemy import Enum as SaEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -25,6 +33,15 @@ class RecipientDeliveryState(Base):
             "((state = 'AVAILABLE' AND ciphertext_synced_at IS NULL) OR "
             "(state = 'CIPHERTEXT_SYNCED' AND ciphertext_synced_at IS NOT NULL))",
             name="ck_recipient_delivery_state_state_timestamp_coherence",
+        ),
+        CheckConstraint(
+            "publication_sequence > 0",
+            name="ck_recipient_delivery_state_publication_sequence_positive",
+        ),
+        UniqueConstraint(
+            "recipient_user_id",
+            "publication_sequence",
+            name="uq_recipient_delivery_state_recipient_publication_sequence",
         ),
     )
 
@@ -52,6 +69,7 @@ class RecipientDeliveryState(Base):
         SaEnum(RecipientDeliveryStatus, name="recipient_delivery_status", native_enum=True),
         nullable=False,
     )
+    publication_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
     available_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Final
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
 from remanence.capsules.blob_models import CapsuleBlob, CapsuleBlobKind, CapsuleBlobState
@@ -187,6 +187,11 @@ class IncomingCapsuleQueryService:
         after: IncomingCursor | None,
         limit: int,
     ) -> IncomingCapsulePage:
+        after_sequence: int | None = None
+        if after is not None:
+            after_sequence = self._resolve_cursor_sequence(
+                recipient_id=recipient_id, after=after
+            )
         stmt = (
             select(Capsule, CapsuleEnvelope, RecipientDeliveryState)
             .select_from(Capsule)
@@ -204,17 +209,15 @@ class IncomingCapsuleQueryService:
             )
         )
         if after is not None:
+            if after_sequence is None:
+                raise _error("INTERNAL_ERROR")
             stmt = stmt.where(
-                or_(
-                    Capsule.ready_at > after.ready_at,
-                    and_(
-                        Capsule.ready_at == after.ready_at,
-                        Capsule.id > after.capsule_id,
-                    ),
-                )
+                RecipientDeliveryState.publication_sequence > after_sequence
             )
         stmt = (
-            stmt.order_by(Capsule.ready_at.asc(), Capsule.id.asc())
+            stmt.order_by(
+                RecipientDeliveryState.publication_sequence.asc(), Capsule.id.asc()
+            )
             .limit(limit + 1)
             .execution_options(populate_existing=True)
         )
@@ -263,6 +266,32 @@ class IncomingCapsuleQueryService:
         return IncomingCapsulePage(
             items=items, has_more=has_more, next_cursor=next_cursor
         )
+
+    def _resolve_cursor_sequence(
+        self, *, recipient_id: uuid.UUID, after: IncomingCursor
+    ) -> int:
+        row = self._session.execute(
+            select(Capsule.ready_at, RecipientDeliveryState.publication_sequence)
+            .select_from(Capsule)
+            .join(
+                RecipientDeliveryState,
+                and_(
+                    RecipientDeliveryState.capsule_id == Capsule.id,
+                    RecipientDeliveryState.recipient_user_id == recipient_id,
+                ),
+            )
+            .where(
+                Capsule.id == after.capsule_id,
+                Capsule.recipient_user_id == recipient_id,
+                Capsule.state == CapsuleState.READY,
+            )
+        ).one_or_none()
+        if row is None:
+            raise _error("VALIDATION_FAILED")
+        ready_at, publication_sequence = row
+        if ready_at != after.ready_at or type(publication_sequence) is not int:
+            raise _error("VALIDATION_FAILED")
+        return publication_sequence
 
     def _load_blobs(
         self, capsule_ids: list[uuid.UUID]

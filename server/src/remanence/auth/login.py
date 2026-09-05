@@ -54,14 +54,14 @@ class LoginService:
             select(User).where(User.email_normalized == email_normalized)
         )
         if user is None:
-            return LoginResult.invalid()
+            return self._invalid_with_dummy_verification(password)
         if user.disabled_at is not None:
-            return LoginResult.invalid()
+            return self._invalid_with_dummy_verification(password)
         credential = self._session.scalar(
             select(AuthCredential).where(AuthCredential.user_id == user.id)
         )
         if credential is None:
-            return LoginResult.invalid()
+            return self._invalid_with_dummy_verification(password)
 
         result = self._password_service.verify_password(credential.password_hash, password)
         if not result.verified:
@@ -109,3 +109,7 @@ class LoginService:
             refresh_expires_at=refresh_expires_at,
             password_hash_replaced=rehashed,
         )
+
+    def _invalid_with_dummy_verification(self, password: str) -> LoginResult:
+        self._password_service.verify_dummy_password(password)
+        return LoginResult.invalid()

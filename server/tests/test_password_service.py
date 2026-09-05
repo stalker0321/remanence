@@ -8,7 +8,11 @@ import pytest
 from argon2 import PasswordHasher
 from argon2.low_level import Type
 
-from remanence.auth.passwords import PasswordService, PasswordVerificationResult
+from remanence.auth.passwords import (
+    DUMMY_PASSWORD_HASH,
+    PasswordService,
+    PasswordVerificationResult,
+)
 
 PASSWORD = "correct horse battery staple"
 _PHC_RE = re.compile(
@@ -112,6 +116,12 @@ def test_hasher_is_configured_argon2id() -> None:
     assert hasher.hash_len == 32
     assert hasher.salt_len == 16
     assert hasher.type is Type.ID
+
+
+def test_dummy_password_hash_is_valid_for_configured_hasher() -> None:
+    service = PasswordService()
+    assert service._hasher.check_needs_rehash(DUMMY_PASSWORD_HASH) is False
+    assert service.verify_dummy_password("request-controlled password").verified is False
 
 
 def test_verify_catches_only_documented_exceptions() -> None:

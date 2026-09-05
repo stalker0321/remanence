@@ -19,7 +19,7 @@ from tink.proto import ed25519_pb2, hpke_pb2, tink_pb2
 
 from remanence.api.problems import problem_payload
 from remanence.auth.models import AuthCredential, AuthSession
-from remanence.auth.passwords import PasswordService
+from remanence.auth.passwords import DUMMY_PASSWORD_HASH, PasswordService
 from remanence.auth.tokens import hash_opaque_token
 from remanence.db.session import build_engine, build_session_factory
 from remanence.main import create_app
@@ -200,6 +200,65 @@ def test_wrong_password_nonexistent_disabled_identical_401_no_session(login_env)
     assert shapes[0] == shapes[1] == shapes[2]
     with factory() as session:
         assert len(session.scalars(select(AuthSession)).all()) == 1
+
+
+def test_early_invalid_login_paths_verify_once_with_fixed_dummy_hash(
+    login_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, factory = login_env
+    _seed_register(client)
+    calls: list[tuple[str, str]] = []
+    original = PasswordService.verify_password
+
+    def spy(self: PasswordService, encoded_hash: str, password: str):
+        calls.append((encoded_hash, password))
+        return original(self, encoded_hash, password)
+
+    monkeypatch.setattr(PasswordService, "verify_password", spy)
+    wrong = client.post(
+        "/v1/auth/login",
+        json={"email": "alice@example.com", "password": "wrong password"},
+    )
+    missing_user = client.post(
+        "/v1/auth/login",
+        json={"email": "nobody@example.com", "password": "missing user password"},
+    )
+
+    with factory() as session:
+        user = session.scalars(select(User)).one()
+        credential = session.get(AuthCredential, user.id)
+        assert credential is not None
+        session.delete(credential)
+        session.commit()
+
+    missing_credential = client.post(
+        "/v1/auth/login",
+        json={"email": "alice@example.com", "password": "missing credential password"},
+    )
+
+    with factory() as session:
+        user = session.scalars(select(User)).one()
+        user.disabled_at = datetime(2030, 1, 1, tzinfo=timezone.utc)
+        session.commit()
+
+    disabled = client.post(
+        "/v1/auth/login",
+        json={"email": "alice@example.com", "password": "disabled account password"},
+    )
+
+    assert [response.status_code for response in (wrong, missing_user, missing_credential, disabled)] == [
+        401,
+        401,
+        401,
+        401,
+    ]
+    assert len(calls) == 4
+    assert calls[0][0] != DUMMY_PASSWORD_HASH
+    assert calls[1:] == [
+        (DUMMY_PASSWORD_HASH, "missing user password"),
+        (DUMMY_PASSWORD_HASH, "missing credential password"),
+        (DUMMY_PASSWORD_HASH, "disabled account password"),
+    ]
 
 
 def test_legacy_argon_params_login_rehashes_and_stamps_now(login_env) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -33,6 +34,23 @@ from remanence.users.models import User
 _GENERIC_SERVICE_MESSAGE: Final = "capsule finalize failed"
 _SIGNATURE_LENGTH: Final = 69
 _PUBLICATION_SEQUENCE_MAX: Final = (1 << 63) - 1
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _log_internal(stage: str, capsule_id: uuid.UUID, exc: BaseException) -> None:
+    """Operational record for a redacted INTERNAL_ERROR.
+
+    Only the stage, the capsule id, and the exception type are logged.
+    Messages, tracebacks, and all request payloads stay out because storage
+    and database errors routinely embed paths, statements, or ciphertext.
+    """
+    _LOGGER.error(
+        "capsule finalize internal failure stage=%s capsule_id=%s exc_type=%s",
+        stage,
+        capsule_id,
+        type(exc).__name__,
+    )
 
 
 class CapsuleFinalizeError(Exception):
@@ -169,7 +187,8 @@ class CapsuleFinalizeService:
             )
         except CapsuleFinalizeError:
             raise
-        except Exception:
+        except Exception as exc:
+            _log_internal("finalize", capsule_id, exc)
             raise _error("INTERNAL_ERROR") from None
 
     def _finalize(
@@ -281,7 +300,8 @@ class CapsuleFinalizeService:
             info = self._blob_store.stat(blob.object_key)
         except (BlobNotFoundError, BlobStoreError, OSError):
             raise _error("INTERNAL_ERROR") from None
-        except Exception:
+        except Exception as exc:
+            _log_internal("blob_stat", blob.capsule_id, exc)
             raise _error("INTERNAL_ERROR") from None
         if (
             info.size != blob.expected_ciphertext_size
@@ -437,8 +457,9 @@ class CapsuleFinalizeService:
         except CapsuleFinalizeError:
             self._restore_capsule(capsule, original, envelope_row, delivery_row)
             raise
-        except Exception:
+        except Exception as exc:
             self._restore_capsule(capsule, original, envelope_row, delivery_row)
+            _log_internal("persist", capsule.id, exc)
             raise _error("INTERNAL_ERROR") from None
         return CapsuleFinalizeResult(
             capsule_id=capsule.id,

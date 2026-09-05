@@ -834,7 +834,12 @@ async def finalize_capsule(
         return _problem_response(request, exc.code)
     except CapsuleFinalizeError as exc:
         return _problem_response(request, exc.code)
-    except Exception:
+    except Exception as exc:
+        _LOGGER.error(
+            "capsule finalize unhandled failure request_id=%s exc_type=%s",
+            request_id_of(request),
+            type(exc).__name__,
+        )
         return _problem_response(request, "INTERNAL_ERROR")
 
 

@@ -23,6 +23,18 @@ import dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource
 import dev.hryshyn.remanence.ui.capsule.PresentationGrantAuthority
 import dev.hryshyn.remanence.ui.capsule.PresentationGrantBinding
 
+/** Background sync health is not an authentication or navigation state. */
+sealed interface IncomingSyncSchedulingState {
+    /** No incoming schedule attempt has completed for the current root. */
+    data object NotAttempted : IncomingSyncSchedulingState
+
+    /** The account-scoped incoming chain was accepted by WorkManager. */
+    data object Enqueued : IncomingSyncSchedulingState
+
+    /** Scheduling failed; a later foreground/bootstrap pass may retry it. */
+    data object RetryableFailure : IncomingSyncSchedulingState
+}
+
 /**
  * I03/FIX-M1-007-08 root state: the single auth state plus guarded navigation
  * position that MainActivity renders. Cold start resolves through
@@ -100,6 +112,15 @@ class RootViewModel internal constructor(
 
     private val _destination = MutableStateFlow<AppDestination>(AppDestination.Authentication)
     val destination: StateFlow<AppDestination> = _destination.asStateFlow()
+
+    /**
+     * R9: WorkManager enqueue health is observable independently from auth.
+     * A scheduling failure never demotes [authState] or changes navigation.
+     */
+    private val _incomingSyncScheduling =
+        MutableStateFlow<IncomingSyncSchedulingState>(IncomingSyncSchedulingState.NotAttempted)
+    val incomingSyncScheduling: StateFlow<IncomingSyncSchedulingState> =
+        _incomingSyncScheduling.asStateFlow()
 
     /**
      * FIX-REVIEW-02: monotonically increasing flow-session epochs. Every entry
@@ -556,10 +577,15 @@ class RootViewModel internal constructor(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                // Work scheduling is part of the bootstrap boundary: do not
-                // leave a resolved-looking root when the authenticated chain
-                // could not be accepted by WorkManager.
-                publishIfCurrent(generation, AuthUiState.RequiresConnectivity)
+                // WorkManager availability is independent from authentication;
+                // retain Home/Scan and expose a retryable sync-only status.
+                if (isCurrentRefresh(generation)) {
+                    _incomingSyncScheduling.value = IncomingSyncSchedulingState.RetryableFailure
+                }
+                return
+            }
+            if (isCurrentRefresh(generation)) {
+                _incomingSyncScheduling.value = IncomingSyncSchedulingState.Enqueued
             }
         }
     }
@@ -575,6 +601,9 @@ class RootViewModel internal constructor(
         }
         _authState.value = next
         controller.updateAuth(next)
+        if (next !is AuthUiState.Authenticated) {
+            _incomingSyncScheduling.value = IncomingSyncSchedulingState.NotAttempted
+        }
         // Losing authentication ejects from any flow: its transient state dies.
         if (previousDestination != controller.current &&
             (previousDestination is AppDestination.Create || previousDestination is AppDestination.Scan)

@@ -42,30 +42,32 @@ class IncomingCapsuleSyncWorker(
         val owner = parseOwner(inputData.getString(INPUT_OWNER_USER_ID)) ?: return Result.failure()
         val application = applicationContext as? RemanenceApplication ?: return Result.failure()
         val container = application.container
-        return mapCombinedOutcome(
-            IncomingSyncAndAcceptanceRunner(
-                currentOwner = {
-                    container.currentAccountStore.load()?.userId?.let { raw ->
-                        runCatching { UserId.parseRest(raw) }.getOrNull()
-                    }
-                },
-                syncNextPage = {
-                    container.incomingCapsuleSyncRepository.syncNextPage(expectedOwner = owner)
-                },
-                runAcceptance = { expectedOwner ->
-                    acceptanceDrainForWorker(container).run(expectedOwner)
-                },
-                runPrefetch = { expectedOwner ->
-                    prefetchCoordinatorForWorker(container).prefetch(expectedOwner)
-                },
-                runMaterialAck = { expectedOwner ->
-                    materialAckDrainForWorker(container).run(
-                        limit = IncomingCapsuleDao.MATERIAL_ACK_HARD_MAX_PAGE_SIZE,
-                        expectedOwner = expectedOwner,
-                    )
-                },
-            ).run(owner),
-        )
+        return runWithRestoredSession(owner, container.sessionOwnerCoordinator) {
+            mapCombinedOutcome(
+                IncomingSyncAndAcceptanceRunner(
+                    currentOwner = {
+                        container.currentAccountStore.load()?.userId?.let { raw ->
+                            runCatching { UserId.parseRest(raw) }.getOrNull()
+                        }
+                    },
+                    syncNextPage = {
+                        container.incomingCapsuleSyncRepository.syncNextPage(expectedOwner = owner)
+                    },
+                    runAcceptance = { expectedOwner ->
+                        acceptanceDrainForWorker(container).run(expectedOwner)
+                    },
+                    runPrefetch = { expectedOwner ->
+                        prefetchCoordinatorForWorker(container).prefetch(expectedOwner)
+                    },
+                    runMaterialAck = { expectedOwner ->
+                        materialAckDrainForWorker(container).run(
+                            limit = IncomingCapsuleDao.MATERIAL_ACK_HARD_MAX_PAGE_SIZE,
+                            expectedOwner = expectedOwner,
+                        )
+                    },
+                ).run(owner),
+            )
+        }
     }
 
     companion object {

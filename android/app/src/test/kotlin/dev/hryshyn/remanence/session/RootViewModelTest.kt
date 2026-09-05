@@ -271,11 +271,12 @@ class RootViewModelTest {
         assertEquals(listOf("uploads", "incoming"), order)
         assertEquals(AuthUiState.Authenticated(owner.toRestString(), "mykola"), vm.authState.value)
         assertEquals(AppDestination.Home, vm.destination.value)
+        assertEquals(IncomingSyncSchedulingState.Enqueued, vm.incomingSyncScheduling.value)
         vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
     }
 
     @Test
-    fun foregroundSchedulingFailureUsesExistingConnectivityBootstrapPolicy() = runTest {
+    fun foregroundSchedulingFailureKeepsAuthenticatedHomeAvailable() = runTest {
         val resolver = MutableOutcomeResolver(
             SessionState.Active("0198f0a0-0000-7000-8000-00000000b506", "mykola", true, true),
         )
@@ -285,8 +286,18 @@ class RootViewModelTest {
         )
 
         advanceUntilIdle()
-        assertEquals(AuthUiState.RequiresConnectivity, vm.authState.value)
-        assertEquals(AppDestination.Authentication, vm.destination.value)
+        assertEquals(
+            AuthUiState.Authenticated(
+                "0198f0a0-0000-7000-8000-00000000b506",
+                "mykola",
+            ),
+            vm.authState.value,
+        )
+        assertEquals(AppDestination.Home, vm.destination.value)
+        assertEquals(
+            IncomingSyncSchedulingState.RetryableFailure,
+            vm.incomingSyncScheduling.value,
+        )
 
         resolver.state = SessionState.Active(
             "0198f0a0-0000-7000-8000-00000000b506",
@@ -296,8 +307,18 @@ class RootViewModelTest {
         )
         vm.onAppForegrounded()
         advanceUntilIdle()
-        assertEquals(AuthUiState.RequiresConnectivity, vm.authState.value)
-        assertEquals(AppDestination.Authentication, vm.destination.value)
+        assertEquals(
+            AuthUiState.Authenticated(
+                "0198f0a0-0000-7000-8000-00000000b506",
+                "mykola",
+            ),
+            vm.authState.value,
+        )
+        assertEquals(AppDestination.Home, vm.destination.value)
+        assertEquals(
+            IncomingSyncSchedulingState.RetryableFailure,
+            vm.incomingSyncScheduling.value,
+        )
         vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
     }
 
@@ -342,6 +363,7 @@ class RootViewModelTest {
 
         assertEquals(AuthUiState.SignedOut, vm.authState.value)
         assertFalse(states.contains(AuthUiState.RequiresConnectivity))
+        assertEquals(IncomingSyncSchedulingState.NotAttempted, vm.incomingSyncScheduling.value)
         observer.cancel()
         vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
     }

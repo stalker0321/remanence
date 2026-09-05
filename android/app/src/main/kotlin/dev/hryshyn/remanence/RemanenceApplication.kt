@@ -45,6 +45,7 @@ import dev.hryshyn.remanence.index.SenderIndexBundleStager
 import dev.hryshyn.remanence.wiring.KekBoundSecretSealer
 import dev.hryshyn.remanence.session.IdentityAvailabilityPort
 import dev.hryshyn.remanence.session.SessionBootstrap
+import dev.hryshyn.remanence.session.SessionOwnerCoordinator
 import dev.hryshyn.remanence.session.SessionTokenPort
 import dev.hryshyn.remanence.sync.CapsuleUploadOrchestrator
 import dev.hryshyn.remanence.sync.CapsuleUploadResumer
@@ -925,6 +926,23 @@ class AppContainer private constructor(
                             dev.hryshyn.remanence.session.SessionRefreshOutcome.Invalidated
                     }
             },
+        )
+    }
+
+    /**
+     * Process-death worker admission over the same bootstrap and refresh
+     * coordinator as the root. Construction does not create an Activity or a
+     * RootViewModel and remains lazy until a worker actually runs.
+     */
+    internal val sessionOwnerCoordinator: SessionOwnerCoordinator by lazy {
+        SessionOwnerCoordinator(
+            sessionResolver = sessionBootstrap,
+            currentOwner = {
+                currentAccountStore.load()?.userId?.let { raw ->
+                    runCatching { UserId.parseRest(raw) }.getOrNull()
+                }
+            },
+            liveAccessToken = { ordinaryAccessToken() },
         )
     }
 

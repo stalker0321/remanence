@@ -23,7 +23,9 @@ class CapsuleUploadWorker(
         val owner = parseUser(inputData.getString(INPUT_OWNER_USER_ID)) ?: return Result.failure()
         val capsule = parseCapsule(inputData.getString(INPUT_CAPSULE_ID)) ?: return Result.failure()
         val application = applicationContext as? RemanenceApplication ?: return Result.failure()
-        return mapOutcome(application.container.capsuleUploadOrchestrator.run(owner, capsule))
+        return runWithRestoredSession(owner, application.container.sessionOwnerCoordinator) {
+            mapOutcome(application.container.capsuleUploadOrchestrator.run(owner, capsule))
+        }
     }
 
     companion object {

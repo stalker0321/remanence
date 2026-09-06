@@ -31,11 +31,19 @@ required before any recipient purge can trigger.
   tiebreak makes the order total even if two rows ever shared a sequence.
 - **Assignment at revoke, same transaction, recipient-serialized.** The
   sequence is assigned inside the existing revoke transaction alongside
-  the `READY`→`REVOKED` state CAS. Allocation is NOT read-max-plus-one:
-  the revoke path takes a per-recipient advisory lock
-  (`recipient_tombstone_lock_key(recipient_user_id)`, same `_lock_key`
-  pattern as `locking.py`) so concurrent same-recipient revokes serialize
-  and sequences are gap-free per recipient. **Lock order is fixed
+  the `READY`→`REVOKED` state CAS via an explicit per-recipient
+  transactional counter row: read the recipient's counter, insert it at
+  zero on first use, increment it in-transaction, and assign the new
+  value — all under the recipient advisory lock below. Rollback returns
+  the counter untouched with the transaction. `MAX()+1` reads are
+  forbidden (unlocked races duplicate even under scrutiny); PostgreSQL
+  `nextval` sequences are forbidden (rollback burns values and breaks
+  gap-free watermarks). Concurrency tests must prove N concurrent
+  same-recipient revokes yield exactly `{base+1 .. base+N}` with no
+  duplicates and no gaps. The revoke path takes a per-recipient advisory
+  lock (`recipient_tombstone_lock_key(recipient_user_id)`, same
+  `_lock_key` pattern as `locking.py`) so concurrent same-recipient
+  revokes serialize. **Lock order is fixed
   globally: recipient lock first, then the existing capsule lock.**
   Finalize takes only the capsule lock and never the recipient lock, so
   no path can acquire the two in opposite order and no AB-BA deadlock is
@@ -70,7 +78,8 @@ required before any recipient purge can trigger.
 
 ## 3. Exact server files (slice scope)
 
-- `capsules/models.py` (+ migration `0006`, chained after R1 `0004`):
+- `capsules/models.py` (+ migration `0006`, `down_revision` chained
+  from `0005_m2_f3_capsule_revocation`, not `0004`):
   nullable `tombstone_sequence BIGINT` + `revoked_at TIMESTAMPTZ` on
   the recipient tombstone row; `UNIQUE(recipient_user_id,
   tombstone_sequence)`; CHECK tying both columns to `REVOKED` state.
@@ -98,7 +107,12 @@ in `REVOKED` state, assign `tombstone_sequence` per recipient ordered by
 timestamp, honestly labeled in code as a **backfill marker, not the true
 revocation instant** (unknowable post hoc). The migration test asserts
 the backfill order, the marker semantics, and the new constraints on a
-seeded tombstone.
+seeded tombstone. Non-blocking clarification: downgrade drops the
+derived tombstone metadata (sequence, timestamps, constraints) with the
+columns, and a later re-upgrade deterministically re-stamps fresh
+backfill markers; no marker value is ever preserved across a downgrade
+cycle, which is acceptable because markers are explicitly not true
+revocation instants.
 
 ## 5. Minimal tests
 

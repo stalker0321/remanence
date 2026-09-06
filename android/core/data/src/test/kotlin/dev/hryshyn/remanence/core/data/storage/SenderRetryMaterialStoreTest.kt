@@ -339,6 +339,41 @@ class SenderRetryMaterialStoreTest {
     }
 
     @Test
+    fun reservationWriteAcceptsFilesDirAliasAndKeepsPersistedPointerContained() = runBlocking {
+        // Android may expose the same app-private tree through an alias such
+        // as /data/user/0/<package> and /data/data/<package>. Model that
+        // shape with a symlinked filesDir: the old attemptPath() passed the
+        // raw alias target to a canonical-root check and falsely rejected it.
+        val realFilesDir = File(filesDir, "real-files").apply {
+            check(mkdirs()) { "could not create real files root" }
+        }
+        val aliasedFilesDir = File(filesDir, "files-alias")
+        java.nio.file.Files.createSymbolicLink(
+            aliasedFilesDir.toPath(),
+            realFilesDir.toPath(),
+        )
+        val aliasedStore = SenderRetryMaterialStore(AccountScopedFileRoots(aliasedFilesDir))
+        val attemptId = "0198f0a0-0000-7000-8000-00000000a111"
+        val payload = "aliased-retry-payload".toByteArray()
+
+        val written = aliasedStore.writeForAttempt(ownerA, capsuleA1, attemptId, payload)
+        val realTarget = File(
+            realFilesDir,
+            "accounts/$ownerAUuid/retry-material/${capsuleA1Uuid}-$attemptId.pwks",
+        )
+        assertEquals(realTarget.canonicalPath, written)
+        assertTrue(written.startsWith(realFilesDir.canonicalPath + File.separator))
+        assertArrayEquals(payload, realTarget.readBytes())
+
+        // The canonical pointer survives a fresh store instance and remains
+        // owner/capsule-scoped for both read and delete.
+        val reopened = SenderRetryMaterialStore(AccountScopedFileRoots(aliasedFilesDir))
+        assertArrayEquals(payload, reopened.readAt(ownerA, capsuleA1, written))
+        assertTrue(reopened.deleteAt(ownerA, capsuleA1, written))
+        assertFalse(realTarget.exists())
+    }
+
+    @Test
     fun noCryptoDependencyAndOpaqueBytesInBytesOut() = runBlocking {
         // The store must accept arbitrary opaque bytes - bytes that
         // are NOT a valid wrapped keyset record, bytes that include

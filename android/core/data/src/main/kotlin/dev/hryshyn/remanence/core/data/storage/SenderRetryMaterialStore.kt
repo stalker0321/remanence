@@ -471,7 +471,7 @@ class SenderRetryMaterialStore(
             ?: throw SenderRetryMaterialStorageException("sender retry attempt id is not canonical")
         val dir = retryMaterialRoot(owner)
         val target = File(dir, "${capsule.toRestString()}-$canonicalAttempt$EXTENSION")
-        requireContained(target, dir.canonicalFile, owner, capsule)
+        requireContained(target.canonicalFile, dir.canonicalFile, owner, capsule)
         return target
     }
 

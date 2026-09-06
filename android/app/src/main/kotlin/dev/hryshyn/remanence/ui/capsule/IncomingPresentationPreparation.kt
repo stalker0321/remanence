@@ -12,6 +12,7 @@ import dev.hryshyn.remanence.core.data.db.BlobCacheState
 import dev.hryshyn.remanence.core.data.db.IncomingCapsuleDao
 import dev.hryshyn.remanence.core.data.db.IncomingCapsuleEntity
 import dev.hryshyn.remanence.core.data.db.IncomingEnvelopeDao
+import dev.hryshyn.remanence.core.data.db.RecipientTombstonePresentationBoundary
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
 import dev.hryshyn.remanence.core.model.CapsuleId
@@ -178,6 +179,8 @@ internal class IncomingPresentationPreparation(
     private val currentRecipientIdentity: suspend () -> CurrentRecipientEncryptionIdentity?,
     private val acceptanceGate: PresentationAcceptanceGate = PresentationAcceptanceGate(),
     private val envelopeCryptor: RecipientEnvelopeCryptor = RecipientEnvelopeCryptor(),
+    private val revocationBoundary: RecipientTombstonePresentationBoundary =
+        RecipientTombstonePresentationBoundary(),
     private val beforePreparedResultDelivery: suspend () -> Unit = {},
     private val beforePreparedDelivery:
         (CancellableContinuation<PreparedIncomingPresentation>) -> Unit = {},
@@ -474,7 +477,15 @@ internal class IncomingPresentationPreparation(
             return when (ioResult) {
                 is PreparedIncomingPresentationReady -> {
                     beforePreparedResultDelivery()
-                    IncomingPresentationPreparationResult.Prepared(deliverPrepared(preparedHolder))
+                    try {
+                        IncomingPresentationPreparationResult.Prepared(
+                            deliverPrepared(preparedHolder, ownerUserId, capsuleId),
+                        )
+                    } catch (_: PresentationRevokedBeforeHandoff) {
+                        rejected(IncomingPresentationPreparationRejection.CAPSULE_STATE_INVALID)
+                    } catch (_: PresentationDatabaseUnavailableAtHandoff) {
+                        unavailable(IncomingPresentationPreparationUnavailable.DATABASE_UNAVAILABLE)
+                    }
                 }
                 else -> ioResult
             }
@@ -485,24 +496,50 @@ internal class IncomingPresentationPreparation(
 
     private suspend fun deliverPrepared(
         preparedHolder: PreparedIncomingPresentationHolder,
-    ): PreparedIncomingPresentation = suspendCancellableCoroutine { continuation ->
-        val presentation = preparedHolder.takeForDelivery()
-        if (presentation == null) {
-            if (continuation.isActive) {
-                continuation.resumeWith(
-                    Result.failure(IllegalStateException("prepared presentation handoff unavailable")),
-                )
+        ownerUserId: UserId,
+        capsuleId: CapsuleId,
+    ): PreparedIncomingPresentation = revocationBoundary.withCapsule(ownerUserId, capsuleId) {
+        val latestCapsule = try {
+            incomingCapsuleDao.getByCapsuleIdAndOwner(
+                capsuleId = capsuleId.toRestString(),
+                ownerUserId = ownerUserId.toRestString(),
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            throw PresentationDatabaseUnavailableAtHandoff()
+        }
+        if (latestCapsule == null ||
+            !hasPresentationBinding(latestCapsule, ownerUserId, capsuleId) ||
+            latestCapsule.materialState != LocalMaterialState.MATERIAL_CACHED &&
+            latestCapsule.materialState != LocalMaterialState.FINGERPRINT_ACCEPTED
+        ) {
+            throw PresentationRevokedBeforeHandoff()
+        }
+
+        suspendCancellableCoroutine { continuation ->
+            val presentation = preparedHolder.takeForDelivery()
+            if (presentation == null) {
+                if (continuation.isActive) {
+                    continuation.resumeWith(
+                        Result.failure(IllegalStateException("prepared presentation handoff unavailable")),
+                    )
+                }
+                return@suspendCancellableCoroutine
             }
-            return@suspendCancellableCoroutine
+            try {
+                beforePreparedDelivery(continuation)
+            } catch (failure: Throwable) {
+                preparedHolder.closeTransferred(presentation)
+                throw failure
+            }
+            continuation.resume(presentation) { _, value, _ -> preparedHolder.closeTransferred(value) }
         }
-        try {
-            beforePreparedDelivery(continuation)
-        } catch (failure: Throwable) {
-            preparedHolder.closeTransferred(presentation)
-            throw failure
-        }
-        continuation.resume(presentation) { _, value, _ -> preparedHolder.closeTransferred(value) }
     }
+
+    private class PresentationRevokedBeforeHandoff : Exception()
+
+    private class PresentationDatabaseUnavailableAtHandoff : Exception()
 
     private suspend fun validateAndReadBlob(
         blob: BlobCacheEntity,

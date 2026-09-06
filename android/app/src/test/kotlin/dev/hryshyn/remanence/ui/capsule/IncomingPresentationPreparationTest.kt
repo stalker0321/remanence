@@ -23,6 +23,13 @@ import dev.hryshyn.remanence.core.data.db.BlobCacheState
 import dev.hryshyn.remanence.core.data.db.IncomingCapsuleEntity
 import dev.hryshyn.remanence.core.data.db.IncomingEnvelopeEntity
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
+import dev.hryshyn.remanence.core.data.db.IncomingSyncSession
+import dev.hryshyn.remanence.core.data.db.IncomingTombstoneSyncRepository
+import dev.hryshyn.remanence.core.data.db.RecipientTombstonePresentationBoundary
+import dev.hryshyn.remanence.core.data.network.IncomingTombstone
+import dev.hryshyn.remanence.core.data.network.IncomingTombstoneFeed
+import dev.hryshyn.remanence.core.data.network.IncomingTombstonePage
+import dev.hryshyn.remanence.core.data.network.IncomingTombstoneResult
 import dev.hryshyn.remanence.core.data.fingerprints.SecretSealer
 import dev.hryshyn.remanence.core.data.fingerprints.EncryptedFingerprintStore
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
@@ -81,6 +88,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.filterIsInstance
@@ -184,6 +192,53 @@ class IncomingPresentationPreparationTest {
             prepared.close()
         }
         assertTrue(runCatching { prepared.loadPhoto(0) }.isFailure)
+    }
+
+    @Test
+    fun tombstoneCommittedBeforeHandoffRefusesInFlightPreparation() = runBlocking {
+        val enteredDispatch = CompletableDeferred<Unit>()
+        val allowDelivery = CompletableDeferred<Unit>()
+        val boundary = RecipientTombstonePresentationBoundary()
+        val preparation = preparation(
+            revocationBoundary = boundary,
+            beforePreparedResultDelivery = {
+                enteredDispatch.complete(Unit)
+                allowDelivery.await()
+            },
+        )
+        val preparationResult = async { preparation.prepare(OWNER, CAPSULE) }
+        enteredDispatch.await()
+
+        val feed = IncomingTombstoneFeed { _, _, _, _ ->
+            IncomingTombstoneResult.Success(
+                IncomingTombstonePage(
+                    items = listOf(IncomingTombstone(CAPSULE, 123L)),
+                    hasMore = false,
+                    nextCursor = "r1",
+                ),
+                httpStatus = 200,
+            )
+        }
+        val syncResult = async {
+            IncomingTombstoneSyncRepository(
+                remote = feed,
+                database = database,
+                roots = roots,
+                currentSession = { IncomingSyncSession(OWNER, "access-token") },
+                revocationBoundary = boundary,
+                filePurger = { _, _ -> },
+            ).syncNextPage()
+        }.await()
+        assertTrue(syncResult is dev.hryshyn.remanence.core.data.db.IncomingTombstoneSyncResult.Committed)
+
+        allowDelivery.complete(Unit)
+        val rejected = requireType<IncomingPresentationPreparationResult.Rejected>(
+            preparationResult.await(),
+        )
+        assertEquals(
+            IncomingPresentationPreparationRejection.CAPSULE_STATE_INVALID,
+            rejected.reason,
+        )
     }
 
     @Test
@@ -409,6 +464,8 @@ class IncomingPresentationPreparationTest {
         beforePreparedResultDelivery: suspend () -> Unit = {},
         beforePreparedDelivery: (kotlinx.coroutines.CancellableContinuation<PreparedIncomingPresentation>) -> Unit = {},
         onPreparedMaterialClosed: () -> Unit = {},
+        revocationBoundary: RecipientTombstonePresentationBoundary =
+            RecipientTombstonePresentationBoundary(),
     ) = IncomingPresentationPreparation(
         incomingCapsuleDao = database.incomingCapsuleDao(),
         incomingEnvelopeDao = database.incomingEnvelopeDao(),
@@ -418,6 +475,7 @@ class IncomingPresentationPreparationTest {
         currentRecipientIdentity = identity,
         acceptanceGate = PresentationAcceptanceGate(),
         envelopeCryptor = RecipientEnvelopeCryptor(),
+        revocationBoundary = revocationBoundary,
         beforePreparedResultDelivery = beforePreparedResultDelivery,
         beforePreparedDelivery = beforePreparedDelivery,
         onPreparedMaterialClosed = onPreparedMaterialClosed,

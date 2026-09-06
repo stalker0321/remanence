@@ -42,6 +42,8 @@ class IncomingTombstoneSyncRepository(
     private val database: RemanenceLocalDatabase,
     private val roots: AccountScopedFileRoots,
     private val currentSession: suspend () -> IncomingSyncSession?,
+    private val revocationBoundary: RecipientTombstonePresentationBoundary =
+        RecipientTombstonePresentationBoundary(),
     private val clockEpochMs: () -> Long = System::currentTimeMillis,
     private val filePurger: suspend (UserId, List<TombstoneBlobRow>) -> Unit =
         IncomingTombstoneFilePurger(roots)::purge,
@@ -119,30 +121,30 @@ class IncomingTombstoneSyncRepository(
 
         // A crash here leaves the DB marker and cursor unchanged. A retry
         // deletes the same exact paths (or observes them already absent) and
-        // then commits the durable marker/purge/watermark atomically.
+        // then commits the durable marker/purge/watermark atomically. The
+        // owner boundary also orders this transaction against an offline
+        // presentation's final state check and continuation handoff.
         try {
-            filePurger(owner, blobRows)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
-            return failure(IncomingSyncFailure.DATABASE_FAILURE, true)
-        }
-        coroutineContext.ensureActive()
+            revocationBoundary.withCapsules(owner, page.items.map { it.capsuleId }) {
+                filePurger(owner, blobRows)
+                coroutineContext.ensureActive()
 
-        val commitSession = liveSession()
-        if (commitSession == null || !requestSession.isSameSession(commitSession)) {
-            return failure(IncomingSyncFailure.ACCOUNT_CHANGED, false)
-        }
-        try {
-            database.recipientTombstoneDao().applyPage(
-                ownerUserId = ownerString,
-                expectedCursor = expectedCursor,
-                tombstones = tombstones,
-                nextCursor = page.nextCursor,
-                committedAtEpochMs = committedAt,
-            )
+                val commitSession = liveSession()
+                if (commitSession == null || !requestSession.isSameSession(commitSession)) {
+                    throw AccountChangedDuringCommit()
+                }
+                database.recipientTombstoneDao().applyPage(
+                    ownerUserId = ownerString,
+                    expectedCursor = expectedCursor,
+                    tombstones = tombstones,
+                    nextCursor = page.nextCursor,
+                    committedAtEpochMs = committedAt,
+                )
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
+        } catch (_: AccountChangedDuringCommit) {
+            return failure(IncomingSyncFailure.ACCOUNT_CHANGED, false)
         } catch (_: Exception) {
             return failure(IncomingSyncFailure.DATABASE_FAILURE, true)
         }
@@ -169,6 +171,8 @@ class IncomingTombstoneSyncRepository(
 
     private fun failure(reason: IncomingSyncFailure, retryable: Boolean) =
         IncomingTombstoneSyncResult.Failure(reason, retryable)
+
+    private class AccountChangedDuringCommit : Exception()
 
     private companion object {
         const val DEFAULT_LIMIT = 50

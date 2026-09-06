@@ -4,6 +4,7 @@ import dev.hryshyn.remanence.core.model.UserId
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
@@ -93,6 +94,49 @@ class IncomingTombstoneRepositoryTest {
         assertEquals(IncomingTombstoneFailure.VALIDATION_FAILED,
             assertIs<IncomingTombstoneResult.Failure>(result).reason)
         assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun malformedNon2xxUsesHttpFallbackRetryabilityButMalformed200IsTerminal() = runTest {
+        val repository = IncomingTombstoneRepository(
+            OkHttpClient(),
+            ApiBaseUrl.parse(server.url("/").toString()),
+        )
+        listOf(
+            Triple(429, "text/plain", ""),
+            Triple(502, "text/html", "<html>proxy unavailable</html>"),
+            Triple(503, "application/json", "{malformed"),
+        ).forEach { (status, contentType, body) ->
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(status)
+                    .setHeader("Content-Type", contentType)
+                    .body(body)
+                    .build(),
+            )
+        }
+        server.enqueue(
+            MockResponse.Builder()
+                .code(200)
+                .setHeader("Content-Type", "application/json")
+                .body("not-json")
+                .build(),
+        )
+
+        listOf(429, 502, 503).forEach { status ->
+            val failure = assertIs<IncomingTombstoneResult.Failure>(
+                repository.fetchPage(OWNER, null, 50, "access-token"),
+            )
+            assertEquals(IncomingTombstoneFailure.INVALID_RESPONSE, failure.reason)
+            assertEquals(status, failure.httpStatus)
+            assertTrue(failure.retryable)
+        }
+        val malformed200 = assertIs<IncomingTombstoneResult.Failure>(
+            repository.fetchPage(OWNER, null, 50, "access-token"),
+        )
+        assertEquals(IncomingTombstoneFailure.INVALID_RESPONSE, malformed200.reason)
+        assertEquals(200, malformed200.httpStatus)
+        assertFalse(malformed200.retryable)
     }
 
     private companion object {

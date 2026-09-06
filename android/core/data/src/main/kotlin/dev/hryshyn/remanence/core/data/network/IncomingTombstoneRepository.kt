@@ -192,7 +192,7 @@ class IncomingTombstoneRepository internal constructor(
     private fun invalidResponse(status: Int) = IncomingTombstoneResult.Failure(
         reason = IncomingTombstoneFailure.INVALID_RESPONSE,
         httpStatus = status,
-        retryable = false,
+        retryable = status != HTTP_OK && capsuleHttpFallbackIsRetryable(status),
     )
 
     private fun isJson(response: Response): Boolean = response.body.contentType()?.let {

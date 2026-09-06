@@ -19,6 +19,7 @@ import dev.hryshyn.remanence.core.data.db.IncomingCapsuleDao
 import dev.hryshyn.remanence.core.data.db.IncomingAcceptanceCandidateSelector
 import dev.hryshyn.remanence.core.data.db.IncomingEnvelopeDao
 import dev.hryshyn.remanence.core.data.db.IncomingSyncSession
+import dev.hryshyn.remanence.core.data.db.RecipientTombstonePresentationBoundary
 import dev.hryshyn.remanence.core.data.fingerprints.EncryptedFingerprintStore
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
 import dev.hryshyn.remanence.core.data.network.ApiBaseUrl
@@ -169,6 +170,10 @@ class AppContainer private constructor(
             .fallbackToDestructiveMigration(dropAllTables = true)
             .build()
     }
+
+    /** Shared owner boundary ordering tombstone commit and offline handoff. */
+    internal val recipientTombstonePresentationBoundary =
+        RecipientTombstonePresentationBoundary()
 
     /** Non-exportable Android Keystore KEKs; overridable for JVM tests. */
     val kekBoundary: KekBoundary = kekBoundaryOverride ?: AndroidKeystoreKekBoundary()
@@ -414,6 +419,7 @@ class AppContainer private constructor(
             remote = apiStack.incomingTombstoneRepository,
             database = database,
             roots = accountScopedFileRoots,
+            revocationBoundary = recipientTombstonePresentationBoundary,
             currentSession = {
                 val account = currentAccountStore.load() ?: return@IncomingTombstoneSyncRepository null
                 val token = ordinaryAccessToken() ?: return@IncomingTombstoneSyncRepository null
@@ -477,6 +483,7 @@ class AppContainer private constructor(
             roots = accountScopedFileRoots,
             senderIndexBundleReader = senderIndexBundleReader,
             currentRecipientIdentity = { currentLocalRecipientEncryptionIdentity() },
+            revocationBoundary = recipientTombstonePresentationBoundary,
         )
     }
 

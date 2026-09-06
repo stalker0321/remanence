@@ -5,12 +5,15 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
     LargeBinary,
+    PrimaryKeyConstraint,
     SmallInteger,
+    UniqueConstraint,
     UUID,
     func,
 )
@@ -56,6 +59,21 @@ class Capsule(Base):
             "AND signed_statement IS NULL AND signed_statement_sha256 IS NULL "
             "AND publish_signature IS NULL))",
             name="ck_capsules_state_finalization_shape",
+        ),
+        CheckConstraint(
+            "((state = 'REVOKED' AND tombstone_sequence IS NOT NULL AND revoked_at IS NOT NULL) OR "
+            "(state IN ('DRAFT', 'READY', 'ABORTED') "
+            "AND tombstone_sequence IS NULL AND revoked_at IS NULL))",
+            name="ck_capsules_tombstone_fields_shape",
+        ),
+        CheckConstraint(
+            "tombstone_sequence IS NULL OR tombstone_sequence > 0",
+            name="ck_capsules_tombstone_sequence_positive",
+        ),
+        UniqueConstraint(
+            "recipient_user_id",
+            "tombstone_sequence",
+            name="uq_capsules_recipient_tombstone_sequence",
         ),
         Index("ix_capsules_sender_user_id", "sender_user_id"),
         Index("ix_capsules_recipient_user_id", "recipient_user_id"),
@@ -126,7 +144,43 @@ class Capsule(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    tombstone_sequence: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     draft_expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
     )
+
+
+class RecipientTombstoneCounter(Base):
+    """Transactional high-water mark for one recipient's tombstone feed."""
+
+    __tablename__ = "recipient_tombstone_counters"
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "recipient_user_id",
+            name="pk_recipient_tombstone_counters",
+        ),
+        CheckConstraint(
+            "last_sequence >= 0",
+            name="ck_recipient_tombstone_counters_last_sequence_nonnegative",
+        ),
+    )
+
+    recipient_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "users.id",
+            name="fk_recipient_tombstone_counters_recipient_user_id_users",
+            ondelete="CASCADE",
+        ),
+        primary_key=True,
+        nullable=False,
+    )
+    last_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)

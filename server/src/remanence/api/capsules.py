@@ -80,6 +80,17 @@ from remanence.capsules.schemas import (
     parse_create_capsule_draft_request,
     parse_finalize_capsule_request,
 )
+from remanence.capsules.tombstone_cursor import (
+    TombstoneCursorCodecError,
+    decode_tombstone_cursor,
+    encode_tombstone_cursor,
+)
+from remanence.capsules.tombstone_query_service import (
+    TombstonePage,
+    TombstoneQueryError,
+    TombstoneQueryService,
+    TombstoneSnapshot,
+)
 from remanence.storage import (
     BlobInfo,
     BlobIntegrityError,
@@ -199,6 +210,21 @@ class IncomingCapsulesResponse(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True, frozen=True)
 
     items: tuple[IncomingCapsuleItemResponse, ...]
+    has_more: bool
+    next_cursor: str | None
+
+
+class TombstoneItemResponse(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True, frozen=True)
+
+    capsule_id: uuid.UUID
+    revoked_at: datetime
+
+
+class TombstonesResponse(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True, frozen=True)
+
+    items: tuple[TombstoneItemResponse, ...]
     has_more: bool
     next_cursor: str | None
 
@@ -1005,6 +1031,54 @@ def _parse_incoming_query(request: Request) -> tuple[str | None, int]:
     return cursor, limit
 
 
+def _parse_tombstone_query(request: Request) -> tuple[str | None, int]:
+    raw = request.scope.get("query_string", b"")
+    if raw is None:
+        raw = b""
+    if not isinstance(raw, (bytes, bytearray)):
+        raise CapsuleDraftValidationError()
+    try:
+        text = bytes(raw).decode("ascii")
+    except UnicodeDecodeError:
+        raise CapsuleDraftValidationError() from None
+    cursor_values: list[str] = []
+    limit_values: list[str] = []
+    if text:
+        for part in text.split("&"):
+            if not part or "=" not in part:
+                raise CapsuleDraftValidationError()
+            name, value = part.split("=", 1)
+            if name == "since":
+                cursor_values.append(value)
+            elif name == "limit":
+                limit_values.append(value)
+            else:
+                raise CapsuleDraftValidationError()
+    if len(cursor_values) > 1 or len(limit_values) > 1:
+        raise CapsuleDraftValidationError()
+    cursor: str | None = None
+    if cursor_values:
+        cursor = cursor_values[0]
+        if not cursor:
+            raise CapsuleDraftValidationError()
+        try:
+            decode_tombstone_cursor(cursor)
+        except TombstoneCursorCodecError:
+            raise CapsuleDraftValidationError() from None
+        except Exception:
+            raise CapsuleDraftValidationError() from None
+    limit = LIMITS_V1.incoming_page_default
+    if limit_values:
+        limit_text = limit_values[0]
+        if _INCOMING_LIMIT_RE.fullmatch(limit_text) is None:
+            raise CapsuleDraftValidationError()
+        parsed_limit = int(limit_text)
+        if not 1 <= parsed_limit <= LIMITS_V1.incoming_page_max:
+            raise CapsuleDraftValidationError()
+        limit = parsed_limit
+    return cursor, limit
+
+
 def _incoming_blob_response(blob: object) -> IncomingBlobResponse:
     if not isinstance(blob, IncomingBlobSnapshot):
         raise IncomingCapsuleQueryError("INTERNAL_ERROR")
@@ -1163,6 +1237,76 @@ def _incoming_page_response(
         raise IncomingCapsuleQueryError("INTERNAL_ERROR") from None
 
 
+def _tombstone_item_response(item: object) -> TombstoneItemResponse:
+    if not isinstance(item, TombstoneSnapshot):
+        raise TombstoneQueryError("INTERNAL_ERROR")
+    if (
+        not isinstance(item.capsule_id, uuid.UUID)
+        or not isinstance(item.revoked_at, datetime)
+        or item.revoked_at.tzinfo is None
+        or item.revoked_at.utcoffset() != timedelta(0)
+    ):
+        raise TombstoneQueryError("INTERNAL_ERROR")
+    try:
+        return TombstoneItemResponse(
+            capsule_id=item.capsule_id,
+            revoked_at=item.revoked_at,
+        )
+    except Exception:
+        raise TombstoneQueryError("INTERNAL_ERROR") from None
+
+
+def _tombstone_page_response(
+    result: object, *, requested_cursor: str | None
+) -> TombstonesResponse:
+    if not isinstance(result, TombstonePage):
+        raise TombstoneQueryError("INTERNAL_ERROR")
+    if type(result.has_more) is not bool or not isinstance(result.items, tuple):
+        raise TombstoneQueryError("INTERNAL_ERROR")
+    items = tuple(_tombstone_item_response(item) for item in result.items)
+    if result.has_more is True and not items:
+        raise TombstoneQueryError("INTERNAL_ERROR")
+    if result.next_cursor is not None:
+        if type(result.next_cursor) is not str or not result.next_cursor:
+            raise TombstoneQueryError("INTERNAL_ERROR")
+        try:
+            decoded = decode_tombstone_cursor(result.next_cursor)
+            canonical = encode_tombstone_cursor(
+                tombstone_sequence=decoded.tombstone_sequence,
+                capsule_id=decoded.capsule_id,
+            )
+        except Exception:
+            raise TombstoneQueryError("INTERNAL_ERROR") from None
+        if canonical != result.next_cursor:
+            raise TombstoneQueryError("INTERNAL_ERROR")
+    if items:
+        last = result.items[-1]
+        if not isinstance(last, TombstoneSnapshot):
+            raise TombstoneQueryError("INTERNAL_ERROR")
+        try:
+            expected_cursor = encode_tombstone_cursor(
+                tombstone_sequence=last.tombstone_sequence,
+                capsule_id=last.capsule_id,
+            )
+        except Exception:
+            raise TombstoneQueryError("INTERNAL_ERROR") from None
+        if expected_cursor != result.next_cursor:
+            raise TombstoneQueryError("INTERNAL_ERROR")
+        next_cursor = result.next_cursor
+    else:
+        if result.next_cursor != requested_cursor:
+            raise TombstoneQueryError("INTERNAL_ERROR")
+        next_cursor = result.next_cursor
+    try:
+        return TombstonesResponse(
+            items=items,
+            has_more=result.has_more,
+            next_cursor=next_cursor,
+        )
+    except Exception:
+        raise TombstoneQueryError("INTERNAL_ERROR") from None
+
+
 @router.get(
     "/v1/capsules/incoming",
     response_model=IncomingCapsulesResponse,
@@ -1194,6 +1338,38 @@ def list_incoming_capsules(
     except CapsuleDraftValidationError as exc:
         return _problem_response(request, exc.code)
     except IncomingCapsuleQueryError as exc:
+        return _problem_response(request, exc.code)
+    except Exception:
+        return _problem_response(request, "INTERNAL_ERROR")
+
+
+@router.get(
+    "/v1/incoming/tombstones",
+    response_model=TombstonesResponse,
+    status_code=200,
+)
+def list_tombstones(
+    request: Request,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    session: Session = Depends(get_db_session, use_cache=False),
+) -> TombstonesResponse | JSONResponse:
+    try:
+        cursor, limit = _parse_tombstone_query(request)
+        with session.begin():
+            result = TombstoneQueryService(session).list_tombstones(
+                authenticated_recipient_user_id=principal.user_id,
+                cursor=cursor,
+                limit=limit,
+            )
+            dto = _tombstone_page_response(result, requested_cursor=cursor)
+            try:
+                payload = dto.model_dump(mode="json")
+            except Exception:
+                raise TombstoneQueryError("INTERNAL_ERROR") from None
+        return JSONResponse(content=payload, status_code=200)
+    except CapsuleDraftValidationError as exc:
+        return _problem_response(request, exc.code)
+    except TombstoneQueryError as exc:
         return _problem_response(request, exc.code)
     except Exception:
         return _problem_response(request, "INTERNAL_ERROR")

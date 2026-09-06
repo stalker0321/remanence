@@ -8,6 +8,7 @@ from remanence.capsules.delivery_models import RecipientDeliveryState as _Recipi
 from remanence.capsules.envelope_models import CapsuleEnvelope as _CapsuleEnvelope
 from remanence.capsules.idempotency_models import CapsuleIdempotencyRecord as _CapsuleIdempotencyRecord
 from remanence.capsules.models import Capsule as _Capsule
+from remanence.capsules.models import RecipientTombstoneCounter as _RecipientTombstoneCounter
 from remanence.db.base import Base
 from remanence.db.session import DatabaseConfigurationError
 from remanence.settings import Settings

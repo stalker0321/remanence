@@ -18,7 +18,11 @@ from remanence.capsules.draft_service import (
 )
 from remanence.capsules.idempotency_models import CapsuleIdempotencyRecord
 from remanence.capsules.limits import LIMITS_V1
-from remanence.capsules.locking import capsule_lock_key, idempotency_scope_lock_key
+from remanence.capsules.locking import (
+    capsule_lock_key,
+    idempotency_scope_lock_key,
+    recipient_tombstone_lock_key,
+)
 from remanence.capsules.models import Capsule, CapsuleState
 from remanence.capsules.schemas import CreateCapsuleDraftRequest
 from remanence.users.key_models import KeyBundleStatus, UserKeyBundle
@@ -178,11 +182,15 @@ def test_advisory_lock_key_vectors_are_signed_and_domain_separated() -> None:
     owner = UUID("00112233-4455-6677-8899-aabbccddeeff")
     idempotency_key = UUID("ffeeddcc-bbaa-9988-7766-554433221100")
     capsule_id = UUID("12345678-1234-5678-9abc-def012345678")
+    recipient_id = UUID("abcdefab-cdef-abcd-efab-cdefabcdefab")
 
     assert idempotency_scope_lock_key(owner, idempotency_key) == 3972513700668854354
     assert capsule_lock_key(capsule_id) == -1716220365651879455
     assert -2**63 <= idempotency_scope_lock_key(owner, idempotency_key) < 2**63
     assert -2**63 <= capsule_lock_key(capsule_id) < 2**63
+    assert recipient_tombstone_lock_key(recipient_id) == recipient_tombstone_lock_key(recipient_id)
+    assert -2**63 <= recipient_tombstone_lock_key(recipient_id) < 2**63
+    assert recipient_tombstone_lock_key(recipient_id) != capsule_lock_key(capsule_id)
     assert idempotency_scope_lock_key(owner, idempotency_key) != capsule_lock_key(capsule_id)
     assert idempotency_scope_lock_key(owner, idempotency_key) != idempotency_scope_lock_key(
         UUID("00112233-4455-6677-8899-aabbccddeefe"), idempotency_key

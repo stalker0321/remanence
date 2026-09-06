@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -11,7 +12,7 @@ from sqlalchemy.engine import make_url
 
 _ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 _BASELINE = "0001_m0_baseline"
-_HEAD = "0005_m2_f3_capsule_revocation"
+_HEAD = "0006_m2_f3_tombstone_feed"
 _HEAD_TABLES = {
     "alembic_version",
     "users",
@@ -23,6 +24,7 @@ _HEAD_TABLES = {
     "capsule_envelopes",
     "recipient_delivery_state",
     "capsule_idempotency_records",
+    "recipient_tombstone_counters",
 }
 _REQUIRED_FKS = {
     "fk_auth_credentials_user_id_users": "c",
@@ -40,6 +42,7 @@ _REQUIRED_FKS = {
     "fk_recipient_delivery_state_recipient_user_id_users": "r",
     "fk_recipient_delivery_state_capsule_id_capsules": "c",
     "fk_capsule_idempotency_records_owner_user_id_users": "c",
+    "fk_recipient_tombstone_counters_recipient_user_id_users": "c",
 }
 _REQUIRED_NAMED_CONSTRAINTS = {
     "pk_users",
@@ -94,6 +97,12 @@ _REQUIRED_NAMED_CONSTRAINTS = {
     "ck_capsule_idempotency_records_request_sha256_32",
     "ck_capsule_idempotency_records_response_status_range",
     "ck_capsule_idempotency_records_expiry_order",
+    "pk_recipient_tombstone_counters",
+    "fk_recipient_tombstone_counters_recipient_user_id_users",
+    "ck_recipient_tombstone_counters_last_sequence_nonnegative",
+    "ck_capsules_tombstone_fields_shape",
+    "ck_capsules_tombstone_sequence_positive",
+    "uq_capsules_recipient_tombstone_sequence",
 }
 
 
@@ -235,6 +244,38 @@ def _assert_head_schema(conn: psycopg.Connection) -> None:
         """
     ).fetchone()
     assert publish_signature == ("bytea", "YES")
+    tombstone_sequence = conn.execute(
+        """
+        SELECT data_type, is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'capsules'
+          AND column_name = 'tombstone_sequence'
+        """
+    ).fetchone()
+    assert tombstone_sequence == ("bigint", "YES")
+    revoked_at = conn.execute(
+        """
+        SELECT data_type, is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'capsules'
+          AND column_name = 'revoked_at'
+        """
+    ).fetchone()
+    assert revoked_at == ("timestamp with time zone", "YES")
+    counter_columns = conn.execute(
+        """
+        SELECT column_name, data_type, is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'recipient_tombstone_counters'
+        ORDER BY ordinal_position
+        """
+    ).fetchall()
+    assert counter_columns == [
+        ("recipient_user_id", "uuid", "NO"),
+        ("last_sequence", "bigint", "NO"),
+    ]
     publication_sequence = conn.execute(
         """
         SELECT data_type, is_nullable
@@ -256,6 +297,7 @@ def _assert_head_schema(conn: psycopg.Connection) -> None:
         "capsule_envelopes": "pk_capsule_envelopes",
         "recipient_delivery_state": "pk_recipient_delivery_state",
         "capsule_idempotency_records": "pk_capsule_idempotency_records",
+        "recipient_tombstone_counters": "pk_recipient_tombstone_counters",
     }
     for table, name in primary_keys.items():
         constraints = _constraint_names_by_table(conn, table)
@@ -396,14 +438,14 @@ def test_account_migration_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
         config = Config(str(_ALEMBIC_INI))
         config.set_main_option("path_separator", "os")
 
-        command.upgrade(config, "head")
-        with _connect_db(url, database) as conn:
-            _assert_head_schema(conn)
-        command.check(config)
-
         revoked_user_id = uuid4()
         revoked_bundle_id = uuid4()
-        revoked_capsule_id = uuid4()
+        revoked_capsule_ids = [uuid4(), uuid4()]
+        ready_ats = [
+            datetime.now(timezone.utc) - timedelta(days=2),
+            datetime.now(timezone.utc) - timedelta(days=1),
+        ]
+        command.upgrade(config, "0005_m2_f3_capsule_revocation")
         with _connect_db(url, database) as conn:
             conn.execute(
                 """
@@ -434,33 +476,57 @@ def test_account_migration_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
                     "ACTIVE",
                 ),
             )
-            conn.execute(
+            for index, capsule_id in enumerate(revoked_capsule_ids):
+                conn.execute(
+                    """
+                    INSERT INTO capsules (
+                        id, sender_user_id, recipient_user_id, sender_key_bundle_id,
+                        recipient_key_bundle_id, protocol_version, state,
+                        signed_statement, signed_statement_sha256, publish_signature,
+                        ready_at, draft_expires_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        capsule_id,
+                        revoked_user_id,
+                        revoked_user_id,
+                        revoked_bundle_id,
+                        revoked_bundle_id,
+                        1,
+                        "REVOKED",
+                        f"signed-statement-{index}".encode(),
+                        bytes(range(32)),
+                        bytes((index + 1,)) * 69,
+                        ready_ats[index],
+                        ready_ats[index] + timedelta(days=7),
+                    ),
+                )
+        command.upgrade(config, "head")
+        with _connect_db(url, database) as conn:
+            _assert_head_schema(conn)
+            backfilled = conn.execute(
                 """
-                INSERT INTO capsules (
-                    id, sender_user_id, recipient_user_id, sender_key_bundle_id,
-                    recipient_key_bundle_id, protocol_version, state,
-                    signed_statement, signed_statement_sha256, publish_signature,
-                    ready_at, draft_expires_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now() + interval '7 days')
+                SELECT id, tombstone_sequence, revoked_at
+                FROM capsules
+                WHERE recipient_user_id = %s
+                ORDER BY tombstone_sequence
                 """,
-                (
-                    revoked_capsule_id,
-                    revoked_user_id,
-                    revoked_user_id,
-                    revoked_bundle_id,
-                    revoked_bundle_id,
-                    1,
-                    "REVOKED",
-                    b"signed-statement",
-                    bytes(range(32)),
-                        b"\x01" * 69,
-                ),
-            )
+                (revoked_user_id,),
+            ).fetchall()
+            assert [row[0] for row in backfilled] == revoked_capsule_ids
+            assert [row[1] for row in backfilled] == [1, 2]
+            assert backfilled[0][2] is not None
+            assert backfilled[0][2] == backfilled[1][2]
+            assert conn.execute(
+                "SELECT last_sequence FROM recipient_tombstone_counters WHERE recipient_user_id = %s",
+                (revoked_user_id,),
+            ).fetchone() == (2,)
+        command.check(config)
         with pytest.raises(RuntimeError, match="revoked rows exist"):
             command.downgrade(config, "0004_r1_publication_order")
         with _connect_db(url, database) as conn:
             assert _alembic_version(conn) == [_HEAD]
-            conn.execute("DELETE FROM capsules WHERE id = %s", (revoked_capsule_id,))
+            conn.execute("DELETE FROM capsules WHERE id = ANY(%s)", (revoked_capsule_ids,))
             conn.execute("DELETE FROM user_key_bundles WHERE id = %s", (revoked_bundle_id,))
             conn.execute("DELETE FROM users WHERE id = %s", (revoked_user_id,))
 

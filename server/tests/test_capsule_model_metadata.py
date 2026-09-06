@@ -2,10 +2,20 @@
 
 import uuid
 
-from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKeyConstraint, LargeBinary
-from sqlalchemy import SmallInteger, UUID
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKeyConstraint,
+    LargeBinary,
+    PrimaryKeyConstraint,
+    SmallInteger,
+    UUID,
+    UniqueConstraint,
+)
 
-from remanence.capsules.models import Capsule, CapsuleState
+from remanence.capsules.models import Capsule, CapsuleState, RecipientTombstoneCounter
 from remanence.db.base import Base
 
 EXPECTED_COLUMNS = frozenset(
@@ -22,6 +32,8 @@ EXPECTED_COLUMNS = frozenset(
         "publish_signature",
         "created_at",
         "ready_at",
+        "tombstone_sequence",
+        "revoked_at",
         "draft_expires_at",
     }
 )
@@ -57,7 +69,7 @@ def test_capsule_state_members_exact() -> None:
 def test_table_name_and_exact_column_set() -> None:
     assert Capsule.__tablename__ == "capsules"
     assert set(_table().columns.keys()) == EXPECTED_COLUMNS
-    assert len(_table().columns) == 13
+    assert len(_table().columns) == 15
 
 
 def test_column_types_and_nullability_exact() -> None:
@@ -87,10 +99,11 @@ def test_column_types_and_nullability_exact() -> None:
     assert state.type.enum_class is CapsuleState
     assert state.type.native_enum is True
     assert list(state.type.enums) == ["DRAFT", "READY", "ABORTED", "REVOKED"]
-    for name in ("created_at", "ready_at", "draft_expires_at"):
+    for name in ("created_at", "ready_at", "revoked_at", "draft_expires_at"):
         column = _column(name)
         assert isinstance(column.type, DateTime), name
         assert column.type.timezone is True, name
+    assert isinstance(_column("tombstone_sequence").type, BigInteger)
     for name in NON_NULL_COLUMNS:
         assert _column(name).nullable is False, name
     for name in EXPECTED_COLUMNS - NON_NULL_COLUMNS:
@@ -159,7 +172,7 @@ def test_exactly_four_named_restrict_fks() -> None:
         assert constraint.ondelete == "RESTRICT"
 
 
-def test_exactly_five_named_checks_and_normalized_sql() -> None:
+def test_exactly_seven_named_checks_and_normalized_sql() -> None:
     checks = {
         constraint.name: " ".join(str(constraint.sqltext).split())
         for constraint in _table().constraints
@@ -182,7 +195,54 @@ def test_exactly_five_named_checks_and_normalized_sql() -> None:
             "AND ready_at IS NULL AND signed_statement IS NULL "
             "AND signed_statement_sha256 IS NULL AND publish_signature IS NULL))"
         ),
+        "ck_capsules_tombstone_fields_shape": (
+            "((state = 'REVOKED' AND tombstone_sequence IS NOT NULL AND revoked_at IS NOT NULL) OR "
+            "(state IN ('DRAFT', 'READY', 'ABORTED') "
+            "AND tombstone_sequence IS NULL AND revoked_at IS NULL))"
+        ),
+        "ck_capsules_tombstone_sequence_positive": (
+            "tombstone_sequence IS NULL OR tombstone_sequence > 0"
+        ),
     }
+
+
+def test_tombstone_sequence_unique_constraint_is_recipient_scoped() -> None:
+    constraints = {
+        constraint.name: constraint
+        for constraint in _table().constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+    assert set(constraints) == {"uq_capsules_recipient_tombstone_sequence"}
+    assert [column.name for column in constraints["uq_capsules_recipient_tombstone_sequence"].columns] == [
+        "recipient_user_id",
+        "tombstone_sequence",
+    ]
+
+
+def test_counter_table_has_explicit_transactional_model_contract() -> None:
+    table = RecipientTombstoneCounter.__table__
+    assert RecipientTombstoneCounter.__tablename__ == "recipient_tombstone_counters"
+    assert set(table.columns.keys()) == {"recipient_user_id", "last_sequence"}
+    assert isinstance(table.columns["recipient_user_id"].type, UUID)
+    assert isinstance(table.columns["last_sequence"].type, BigInteger)
+    assert table.columns["recipient_user_id"].nullable is False
+    assert table.columns["last_sequence"].nullable is False
+    primary_key = next(
+        constraint
+        for constraint in table.constraints
+        if isinstance(constraint, PrimaryKeyConstraint)
+    )
+    assert primary_key.name == "pk_recipient_tombstone_counters"
+    assert [column.name for column in primary_key.columns] == ["recipient_user_id"]
+    foreign_keys = [
+        constraint
+        for constraint in table.constraints
+        if isinstance(constraint, ForeignKeyConstraint)
+    ]
+    assert len(foreign_keys) == 1
+    assert foreign_keys[0].name == "fk_recipient_tombstone_counters_recipient_user_id_users"
+    assert foreign_keys[0].ondelete == "CASCADE"
+    assert [element.column.table.name for element in foreign_keys[0].elements] == ["users"]
 
 
 def test_exactly_three_named_indexes() -> None:

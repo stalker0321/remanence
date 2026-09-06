@@ -607,6 +607,8 @@ def test_live_recipient_manifest_and_photo_exact_bytes(client_factory, tmp_path:
             ready_at=_NOW + timedelta(seconds=1),
         )
         revoked.state = CapsuleState.REVOKED
+        revoked.tombstone_sequence = 1
+        revoked.revoked_at = _NOW
         session.commit()
         blobs = _blobs(session, capsule.id)
         recognition = next(blob for blob in blobs if blob.kind is CapsuleBlobKind.RECOGNITION_MANIFEST)

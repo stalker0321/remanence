@@ -542,6 +542,8 @@ def test_revoked_cursor_anchor_is_skipped_without_losing_later_ready_rows(sessio
         assert first_page.next_cursor is not None
 
         first.state = CapsuleState.REVOKED
+        first.tombstone_sequence = 1
+        first.revoked_at = _NOW
         session.commit()
 
         continuation = _query(session, recipient.id, cursor=first_page.next_cursor, limit=10)
@@ -575,6 +577,8 @@ def test_revoked_capsules_are_excluded_from_ready_pages(session_factory):
             ready_at=_NOW + timedelta(seconds=1),
         )
         revoked.state = CapsuleState.REVOKED
+        revoked.tombstone_sequence = 1
+        revoked.revoked_at = _NOW
         session.commit()
 
         page = _query(session, recipient.id, limit=10)

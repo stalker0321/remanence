@@ -11,12 +11,13 @@ from typing import Final
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from remanence.capsules.locking import capsule_lock_key
-from remanence.capsules.models import Capsule, CapsuleState
+from remanence.capsules.locking import capsule_lock_key, recipient_tombstone_lock_key
+from remanence.capsules.models import Capsule, CapsuleState, RecipientTombstoneCounter
 
 
 _GENERIC_SERVICE_MESSAGE: Final = "capsule revoke failed"
 _REVOCATION_WINDOW: Final = timedelta(hours=24)
+_TOMBSTONE_SEQUENCE_MAX: Final = (1 << 63) - 1
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -106,6 +107,18 @@ class CapsuleRevokeService:
         now: datetime,
     ) -> CapsuleRevokeResult:
         with self._session.no_autoflush:
+            recipient_user_id = self._session.scalar(
+                select(Capsule.recipient_user_id).where(Capsule.id == capsule_id)
+            )
+            if recipient_user_id is None:
+                raise _error("CAPSULE_NOT_FOUND")
+            self._session.execute(
+                select(
+                    func.pg_advisory_xact_lock(
+                        recipient_tombstone_lock_key(recipient_user_id)
+                    )
+                )
+            )
             self._session.execute(
                 select(func.pg_advisory_xact_lock(capsule_lock_key(capsule_id)))
             )
@@ -130,13 +143,42 @@ class CapsuleRevokeService:
             if now > ready_at + _REVOCATION_WINDOW:
                 raise _error("WINDOW_EXPIRED")
 
-            capsule.state = CapsuleState.REVOKED
             try:
+                tombstone_sequence = self._next_tombstone_sequence(recipient_user_id)
+                capsule.state = CapsuleState.REVOKED
+                capsule.tombstone_sequence = tombstone_sequence
+                capsule.revoked_at = now
                 self._session.flush()
+            except CapsuleRevokeError:
+                raise
             except Exception as exc:
                 _log_internal("persist", capsule.id, exc)
                 raise _error("INTERNAL_ERROR") from None
             return self._accepted(capsule, is_replay=False)
+
+    def _next_tombstone_sequence(self, recipient_user_id: uuid.UUID) -> int:
+        counter = self._session.scalar(
+            select(RecipientTombstoneCounter)
+            .where(
+                RecipientTombstoneCounter.recipient_user_id == recipient_user_id
+            )
+            .with_for_update()
+        )
+        if counter is None:
+            counter = RecipientTombstoneCounter(
+                recipient_user_id=recipient_user_id,
+                last_sequence=0,
+            )
+            self._session.add(counter)
+            self._session.flush()
+        if (
+            not isinstance(counter, RecipientTombstoneCounter)
+            or type(counter.last_sequence) is not int
+            or not 0 <= counter.last_sequence < _TOMBSTONE_SEQUENCE_MAX
+        ):
+            raise _error("INTERNAL_ERROR")
+        counter.last_sequence += 1
+        return counter.last_sequence
 
     @staticmethod
     def _accepted(capsule: Capsule, *, is_replay: bool) -> CapsuleRevokeResult:
@@ -145,6 +187,14 @@ class CapsuleRevokeService:
         if not isinstance(capsule.id, uuid.UUID):
             raise _error("INTERNAL_ERROR")
         if not isinstance(capsule.ready_at, datetime) or capsule.ready_at.utcoffset() != timedelta(0):
+            raise _error("INTERNAL_ERROR")
+        if (
+            type(capsule.tombstone_sequence) is not int
+            or not 0 < capsule.tombstone_sequence <= _TOMBSTONE_SEQUENCE_MAX
+            or not isinstance(capsule.revoked_at, datetime)
+            or capsule.revoked_at.tzinfo is None
+            or capsule.revoked_at.utcoffset() != timedelta(0)
+        ):
             raise _error("INTERNAL_ERROR")
         if type(is_replay) is not bool:
             raise _error("INTERNAL_ERROR")

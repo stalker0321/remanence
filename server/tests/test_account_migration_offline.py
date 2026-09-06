@@ -69,6 +69,16 @@ EXPECTED_UPGRADE_FRAGMENTS = [
     "CONSTRAINT ck_capsules_state_finalization_shape CHECK",
     "AND signed_statement_sha256 IS NOT NULL AND publish_signature IS NOT NULL) OR",
     "AND signed_statement_sha256 IS NULL AND publish_signature IS NULL))",
+    "ALTER TABLE capsules ADD COLUMN tombstone_sequence BIGINT",
+    "ALTER TABLE capsules ADD COLUMN revoked_at TIMESTAMP WITH TIME ZONE",
+    "CREATE TABLE recipient_tombstone_counters (",
+    "CONSTRAINT pk_recipient_tombstone_counters PRIMARY KEY (recipient_user_id)",
+    "CONSTRAINT fk_recipient_tombstone_counters_recipient_user_id_users FOREIGN KEY(recipient_user_id) "
+    "REFERENCES users (id) ON DELETE CASCADE",
+    "CONSTRAINT ck_recipient_tombstone_counters_last_sequence_nonnegative CHECK (last_sequence >= 0)",
+    "ALTER TABLE capsules ADD CONSTRAINT ck_capsules_tombstone_fields_shape CHECK",
+    "ALTER TABLE capsules ADD CONSTRAINT ck_capsules_tombstone_sequence_positive CHECK",
+    "ALTER TABLE capsules ADD CONSTRAINT uq_capsules_recipient_tombstone_sequence UNIQUE",
     "CREATE INDEX ix_capsules_sender_user_id ON capsules (sender_user_id)",
     "CREATE INDEX ix_capsules_recipient_user_id ON capsules (recipient_user_id)",
     "CREATE INDEX ix_capsules_draft_expires_at ON capsules (draft_expires_at)",
@@ -142,12 +152,13 @@ def offline_config(monkeypatch: pytest.MonkeyPatch) -> Iterator[Config]:
 
 def test_revision_chain_reachable() -> None:
     script = ScriptDirectory(str(MIGRATIONS_DIR))
-    assert script.get_heads() == ["0005_m2_f3_capsule_revocation"]
+    assert script.get_heads() == ["0006_m2_f3_tombstone_feed"]
     assert script.get_revision("0001_m0_baseline").revision == "0001_m0_baseline"
     assert script.get_revision("0002_m1_accounts").down_revision == "0001_m0_baseline"
     assert script.get_revision("0003_m2_capsule_routing").down_revision == "0002_m1_accounts"
     assert script.get_revision("0004_r1_publication_order").down_revision == "0003_m2_capsule_routing"
     assert script.get_revision("0005_m2_f3_capsule_revocation").down_revision == "0004_r1_publication_order"
+    assert script.get_revision("0006_m2_f3_tombstone_feed").down_revision == "0005_m2_f3_capsule_revocation"
 
 
 def test_upgrade_emits_full_schema_sql(offline_config: Config) -> None:

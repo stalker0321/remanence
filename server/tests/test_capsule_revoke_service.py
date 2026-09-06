@@ -20,7 +20,7 @@ from remanence.capsules.blob_models import CapsuleBlob
 from remanence.capsules.delivery_models import RecipientDeliveryState
 from remanence.capsules.envelope_models import CapsuleEnvelope
 from remanence.capsules.finalize_service import CapsuleFinalizeError
-from remanence.capsules.models import Capsule, CapsuleState
+from remanence.capsules.models import Capsule, CapsuleState, RecipientTombstoneCounter
 from remanence.capsules.revoke_service import (
     CapsuleRevokeError,
     CapsuleRevokeResult,
@@ -82,6 +82,27 @@ def _revoke(session, world, *, now=_NOW) -> CapsuleRevokeResult:
     )
 
 
+def _add_direct_ready(session, *, sender, sender_bundle, recipient, recipient_bundle) -> Capsule:
+    capsule = Capsule(
+        id=uuid4(),
+        sender_user_id=sender.id,
+        recipient_user_id=recipient.id,
+        sender_key_bundle_id=sender_bundle.id,
+        recipient_key_bundle_id=recipient_bundle.id,
+        protocol_version=1,
+        state=CapsuleState.READY,
+        signed_statement=b"signed-statement",
+        signed_statement_sha256=b"\x01" * 32,
+        publish_signature=b"\x02" * 69,
+        created_at=_NOW,
+        ready_at=_NOW,
+        draft_expires_at=_NOW + timedelta(days=7),
+    )
+    session.add(capsule)
+    session.flush()
+    return capsule
+
+
 def test_revoke_ready_capsule_preserves_tombstone_material_and_delivery_rows(
     session_factory, tmp_path, monkeypatch
 ):
@@ -134,10 +155,19 @@ def test_double_revoke_is_idempotent_and_replay_ignores_expired_window(
         world = _make_ready(session, tmp_path)
         first = _revoke(session, world)
         session.commit()
+        first_tombstone = session.get(Capsule, world["capsule"].id)
+        assert first_tombstone is not None
+        first_fields = (first_tombstone.tombstone_sequence, first_tombstone.revoked_at)
+        assert first_fields[0] == 1
+        assert first_fields[1] == _NOW
         replay = _revoke(session, world, now=_NOW + timedelta(days=3))
         session.commit()
         assert (first.is_replay, replay.is_replay) == (False, True)
-        assert session.get(Capsule, world["capsule"].id).state is CapsuleState.REVOKED
+        replayed_tombstone = session.get(Capsule, world["capsule"].id)
+        assert replayed_tombstone is not None
+        assert (replayed_tombstone.tombstone_sequence, replayed_tombstone.revoked_at) == first_fields
+        counter = session.get(RecipientTombstoneCounter, world["recipient"].id)
+        assert counter is not None and counter.last_sequence == 1
 
 
 def test_revoke_window_allows_inside_and_exact_boundary_but_rejects_after(
@@ -295,6 +325,93 @@ def test_concurrent_double_revoke_has_one_transition(session_factory, tmp_path):
     assert sorted(outcomes) == [("ok", False), ("ok", True)]
     with session_factory() as session:
         assert session.get(Capsule, capsule_id).state is CapsuleState.REVOKED
+
+
+def test_concurrent_same_recipient_revoke_sequences_are_gap_free(session_factory):
+    count = 4
+    with session_factory() as session:
+        sender, sender_bundle = _seed_user(session, "sender")
+        recipient, recipient_bundle = _seed_user(session, "recipient")
+        capsules = [
+            _add_direct_ready(
+                session,
+                sender=sender,
+                sender_bundle=sender_bundle,
+                recipient=recipient,
+                recipient_bundle=recipient_bundle,
+            )
+            for _ in range(count)
+        ]
+        session.commit()
+        sender_id = sender.id
+        capsule_ids = tuple(capsule.id for capsule in capsules)
+
+    barrier = Barrier(count)
+
+    def worker(capsule_id):
+        with session_factory() as session:
+            session.execute(text("SET LOCAL lock_timeout = '5s'"))
+            barrier.wait(timeout=10)
+            try:
+                result = CapsuleRevokeService(session).revoke(
+                    authenticated_sender_user_id=sender_id,
+                    capsule_id=capsule_id,
+                    now=_NOW,
+                )
+                session.commit()
+                return ("ok", result.is_replay)
+            except CapsuleRevokeError as error:
+                session.rollback()
+                return ("error", error.code)
+
+    with ThreadPoolExecutor(max_workers=count) as executor:
+        outcomes = list(executor.map(worker, capsule_ids))
+
+    assert outcomes == [("ok", False)] * count
+    with session_factory() as session:
+        sequences = session.scalars(
+            select(Capsule.tombstone_sequence)
+            .where(Capsule.id.in_(capsule_ids))
+            .order_by(Capsule.tombstone_sequence)
+        ).all()
+        assert sequences == list(range(1, count + 1))
+        counter = session.get(RecipientTombstoneCounter, recipient.id)
+        assert counter is not None and counter.last_sequence == count
+
+
+def test_rollback_does_not_burn_tombstone_sequence(session_factory):
+    with session_factory() as session:
+        sender, sender_bundle = _seed_user(session, "sender")
+        recipient, recipient_bundle = _seed_user(session, "recipient")
+        capsule = _add_direct_ready(
+            session,
+            sender=sender,
+            sender_bundle=sender_bundle,
+            recipient=recipient,
+            recipient_bundle=recipient_bundle,
+        )
+        session.commit()
+        result = CapsuleRevokeService(session).revoke(
+            authenticated_sender_user_id=sender.id,
+            capsule_id=capsule.id,
+            now=_NOW,
+        )
+        assert result.is_replay is False
+        assert capsule.tombstone_sequence == 1
+        session.rollback()
+        restored = session.get(Capsule, capsule.id)
+        assert restored is not None and restored.state is CapsuleState.READY
+        assert restored.tombstone_sequence is None
+        assert session.get(RecipientTombstoneCounter, recipient.id) is None
+
+        result = CapsuleRevokeService(session).revoke(
+            authenticated_sender_user_id=sender.id,
+            capsule_id=capsule.id,
+            now=_NOW,
+        )
+        session.commit()
+        assert result.is_replay is False
+        assert session.get(Capsule, capsule.id).tombstone_sequence == 1
 
 
 def test_finalize_and_revoke_race_has_no_lost_update(session_factory, tmp_path):

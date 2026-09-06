@@ -2,10 +2,13 @@ package dev.hryshyn.remanence.core.data.db
 
 import android.content.Context
 import androidx.room.Room
+import androidx.room.testing.MigrationTestHelper
+import androidx.test.InstrumentationRegistry
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -14,6 +17,12 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class RemanenceLocalSchemaTest {
+
+    @get:Rule
+    val migrationHelper = MigrationTestHelper(
+        InstrumentationRegistry.getInstrumentation(),
+        RemanenceLocalDatabase::class.java,
+    )
 
     private val context: Context = ApplicationProvider.getApplicationContext()
 
@@ -48,7 +57,32 @@ class RemanenceLocalSchemaTest {
         dbFile.delete()
     }
 
+    @Test
+    fun explicitV8ToV9MigrationCreatesRecipientTombstoneTables() {
+        val legacy = migrationHelper.createDatabase(MIGRATION_DB_NAME, 8)
+        legacy.close()
+
+        val migrated = migrationHelper.runMigrationsAndValidate(
+            MIGRATION_DB_NAME,
+            9,
+            true,
+            MIGRATION_8_9_RECIPIENT_TOMBSTONES,
+        )
+        migrated.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' " +
+                "AND name IN ('recipient_tombstone', 'tombstone_watermark') " +
+                "ORDER BY name",
+        ).use { cursor ->
+            val names = buildList {
+                while (cursor.moveToNext()) add(cursor.getString(0))
+            }
+            assertEquals(listOf("recipient_tombstone", "tombstone_watermark"), names)
+        }
+        migrated.close()
+    }
+
     private companion object {
         const val REOPEN_DB_NAME = "remanence-reopen-test.db"
+        const val MIGRATION_DB_NAME = "remanence-tombstone-migration-test.db"
     }
 }

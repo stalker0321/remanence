@@ -165,6 +165,7 @@ class AppContainer private constructor(
 
     val database: RemanenceLocalDatabase by lazy {
         Room.databaseBuilder(appContext, RemanenceLocalDatabase::class.java, DATABASE_NAME)
+            .addMigrations(dev.hryshyn.remanence.core.data.db.MIGRATION_8_9_RECIPIENT_TOMBSTONES)
             .fallbackToDestructiveMigration(dropAllTables = true)
             .build()
     }
@@ -401,6 +402,24 @@ class AppContainer private constructor(
                 val owner = runCatching {
                     dev.hryshyn.remanence.core.model.UserId.parseRest(account.userId)
                 }.getOrNull() ?: return@IncomingCapsuleSyncRepository null
+                dev.hryshyn.remanence.core.data.db.IncomingSyncSession(owner, token)
+            },
+        )
+    }
+
+    /** A11 account-scoped authenticated recipient tombstone feed. */
+    val incomingTombstoneSyncRepository:
+        dev.hryshyn.remanence.core.data.db.IncomingTombstoneSyncRepository by lazy {
+        dev.hryshyn.remanence.core.data.db.IncomingTombstoneSyncRepository(
+            remote = apiStack.incomingTombstoneRepository,
+            database = database,
+            roots = accountScopedFileRoots,
+            currentSession = {
+                val account = currentAccountStore.load() ?: return@IncomingTombstoneSyncRepository null
+                val token = ordinaryAccessToken() ?: return@IncomingTombstoneSyncRepository null
+                val owner = runCatching {
+                    dev.hryshyn.remanence.core.model.UserId.parseRest(account.userId)
+                }.getOrNull() ?: return@IncomingTombstoneSyncRepository null
                 dev.hryshyn.remanence.core.data.db.IncomingSyncSession(owner, token)
             },
         )

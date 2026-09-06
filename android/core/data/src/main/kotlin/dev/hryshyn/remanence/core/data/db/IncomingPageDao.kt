@@ -41,17 +41,16 @@ abstract class IncomingPageDao {
             "incoming page cursor changed before commit"
         }
 
-        val capsuleIds = capsules.map { it.capsuleId }
-        require(capsuleIds.size == capsuleIds.toSet().size) {
+        val allCapsuleIds = capsules.map { it.capsuleId }
+        require(allCapsuleIds.size == allCapsuleIds.toSet().size) {
             "incoming page contains duplicate capsule IDs"
         }
-        val capsuleIdSet = capsuleIds.toSet()
 
         val envelopeIds = envelopes.map { it.capsuleId }
         require(envelopeIds.size == envelopeIds.toSet().size) {
             "incoming page contains duplicate envelope IDs"
         }
-        require(envelopeIds.toSet() == capsuleIdSet) {
+        require(envelopeIds.toSet() == allCapsuleIds.toSet()) {
             "incoming page envelope bindings are incomplete"
         }
 
@@ -59,12 +58,39 @@ abstract class IncomingPageDao {
         require(blobIds.size == blobIds.toSet().size) {
             "incoming page contains duplicate blob IDs"
         }
-        require(blobs.all { it.capsuleId in capsuleIdSet }) {
+        require(blobs.all { it.capsuleId in allCapsuleIds }) {
             "incoming page blob is bound to an unknown capsule"
         }
 
-        val migratedCapsuleIds = mutableListOf<String>()
         for (capsule in capsules) {
+            require(capsule.ownerUserId == ownerUserId) {
+                "incoming capsule owner does not match the authoritative owner"
+            }
+            val existingOwner = findCapsuleOwner(capsule.capsuleId)
+            require(existingOwner == null || existingOwner == ownerUserId) {
+                "incoming capsule is already owned by another local account"
+            }
+        }
+
+        // A tombstone is authoritative even if an older incoming page races
+        // with the feed. Drop that page item's envelope/blob rows rather than
+        // resurrecting READY material; the page cursor can still complete.
+        val revokedCapsuleIds = allCapsuleIds.filter { capsuleId ->
+            findTombstone(ownerUserId, capsuleId) != null
+        }.toSet()
+        val activeCapsules = capsules.filterNot { it.capsuleId in revokedCapsuleIds }
+        val capsuleIdSet = activeCapsules.map { it.capsuleId }.toSet()
+        val activeEnvelopes = envelopes.filter { it.capsuleId in capsuleIdSet }
+        val activeBlobs = blobs.filter { it.capsuleId in capsuleIdSet }
+        require(activeEnvelopes.map { it.capsuleId }.toSet() == capsuleIdSet) {
+            "incoming active page envelope bindings are incomplete"
+        }
+        require(activeBlobs.all { it.capsuleId in capsuleIdSet }) {
+            "incoming active page blob is bound to an unknown capsule"
+        }
+
+        val migratedCapsuleIds = mutableListOf<String>()
+        for (capsule in activeCapsules) {
             require(capsule.ownerUserId == ownerUserId) {
                 "incoming capsule owner does not match the authoritative owner"
             }
@@ -83,7 +109,7 @@ abstract class IncomingPageDao {
             }
         }
 
-        for (envelope in envelopes) {
+        for (envelope in activeEnvelopes) {
             require(envelope.ownerUserId == ownerUserId) {
                 "incoming envelope owner does not match the authoritative owner"
             }
@@ -95,7 +121,7 @@ abstract class IncomingPageDao {
             if (existing != null) requireSameEnvelope(existing, envelope)
         }
 
-        for (blob in blobs) {
+        for (blob in activeBlobs) {
             require(blob.ownerUserId == ownerUserId) {
                 "incoming blob owner does not match the authoritative owner"
             }
@@ -121,9 +147,9 @@ abstract class IncomingPageDao {
                 ) == 1,
             ) { "incoming migrated capsule completion lost its compare-and-set" }
         }
-        val newCapsules = capsules.filter { findCapsule(it.capsuleId) == null }
-        val newEnvelopes = envelopes.filter { findEnvelope(it.capsuleId) == null }
-        val newBlobs = blobs.filter { findBlob(it.blobId) == null }
+        val newCapsules = activeCapsules.filter { findCapsule(it.capsuleId) == null }
+        val newEnvelopes = activeEnvelopes.filter { findEnvelope(it.capsuleId) == null }
+        val newBlobs = activeBlobs.filter { findBlob(it.blobId) == null }
         if (newCapsules.isNotEmpty()) insertCapsules(newCapsules)
         if (newEnvelopes.isNotEmpty()) insertEnvelopes(newEnvelopes)
         if (newBlobs.isNotEmpty()) insertBlobs(newBlobs)
@@ -157,6 +183,12 @@ abstract class IncomingPageDao {
 
     @Query("SELECT owner_user_id FROM incoming_capsule WHERE capsule_id = :capsuleId LIMIT 1")
     protected abstract suspend fun findCapsuleOwner(capsuleId: String): String?
+
+    @Query(
+        "SELECT capsule_id FROM recipient_tombstone " +
+            "WHERE owner_user_id = :ownerUserId AND capsule_id = :capsuleId LIMIT 1",
+    )
+    protected abstract suspend fun findTombstone(ownerUserId: String, capsuleId: String): String?
 
     @Query("SELECT * FROM incoming_capsule WHERE capsule_id = :capsuleId LIMIT 1")
     protected abstract suspend fun findCapsule(capsuleId: String): IncomingCapsuleEntity?

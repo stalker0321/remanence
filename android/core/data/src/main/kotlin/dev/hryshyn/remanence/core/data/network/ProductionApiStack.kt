@@ -85,6 +85,10 @@ class ProductionApiStack private constructor(
     val incomingCapsuleRepository: IncomingCapsuleRepository =
         IncomingCapsuleRepository(authenticatedClient, baseUrl)
 
+    /** Redacted recipient tombstones share the authenticated transport. */
+    val incomingTombstoneRepository: IncomingTombstoneRepository =
+        IncomingTombstoneRepository(authenticatedClient, baseUrl)
+
     companion object {
         fun create(
             baseUrl: ApiBaseUrl,

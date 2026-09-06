@@ -18,6 +18,7 @@ import dev.hryshyn.remanence.RemanenceApplication
 import dev.hryshyn.remanence.core.data.db.IncomingCapsuleDao
 import dev.hryshyn.remanence.core.data.db.IncomingSyncFailure
 import dev.hryshyn.remanence.core.data.db.IncomingSyncResult
+import dev.hryshyn.remanence.core.data.db.IncomingTombstoneSyncResult
 import dev.hryshyn.remanence.core.data.network.IncomingMaterialAckDrain
 import dev.hryshyn.remanence.core.data.network.IncomingMaterialAckDrainResult
 import dev.hryshyn.remanence.core.data.prefetch.IncomingCiphertextPrefetchCoordinator
@@ -49,6 +50,9 @@ class IncomingCapsuleSyncWorker(
                         container.currentAccountStore.load()?.userId?.let { raw ->
                             runCatching { UserId.parseRest(raw) }.getOrNull()
                         }
+                    },
+                    syncTombstonePage = {
+                        container.incomingTombstoneSyncRepository.syncNextPage(expectedOwner = owner)
                     },
                     syncNextPage = {
                         container.incomingCapsuleSyncRepository.syncNextPage(expectedOwner = owner)
@@ -136,9 +140,18 @@ class IncomingCapsuleSyncWorker(
     }
 }
 
-/** One worker invocation: page sync, acceptance, prefetch, then one ACK page. */
+/** One worker invocation: tombstones, page sync, acceptance, prefetch, then ACK. */
 internal class IncomingSyncAndAcceptanceRunner(
     private val currentOwner: suspend () -> UserId?,
+    private val syncTombstonePage: suspend () -> IncomingTombstoneSyncResult = {
+        IncomingTombstoneSyncResult.Committed(
+            dev.hryshyn.remanence.core.data.network.IncomingTombstonePage(
+                items = emptyList(),
+                hasMore = false,
+                nextCursor = null,
+            ),
+        )
+    },
     private val syncNextPage: suspend () -> IncomingSyncResult,
     private val runAcceptance: suspend (UserId) -> IncomingAcceptanceDrainResult,
     private val runPrefetch: suspend (UserId) -> IncomingPrefetchResult,
@@ -147,6 +160,21 @@ internal class IncomingSyncAndAcceptanceRunner(
 ) {
 
     suspend fun run(owner: UserId): IncomingSyncAndAcceptanceRunOutcome {
+        val tombstoneOutcome = IncomingTombstonePageLoop(
+            currentOwner = currentOwner,
+            syncNextPage = syncTombstonePage,
+            maxPagesPerRun = maxPagesPerRun,
+        ).run(owner)
+        if (tombstoneOutcome !is IncomingSyncRunOutcome.Succeeded) {
+            return when (tombstoneOutcome) {
+                IncomingSyncRunOutcome.PageCapReached,
+                is IncomingSyncRunOutcome.Retryable,
+                -> IncomingSyncAndAcceptanceRunOutcome.Retryable
+                is IncomingSyncRunOutcome.Terminal -> IncomingSyncAndAcceptanceRunOutcome.Terminal
+                is IncomingSyncRunOutcome.Succeeded -> error("unreachable")
+            }
+        }
+
         val pageOutcome = IncomingSyncPageLoop(
             currentOwner = currentOwner,
             syncNextPage = syncNextPage,
@@ -244,6 +272,66 @@ internal enum class IncomingSyncAndAcceptanceRunOutcome {
     Succeeded,
     Retryable,
     Terminal,
+}
+
+/** Explicit bounded tombstone-feed loop; every page position is Room-owned. */
+internal class IncomingTombstonePageLoop(
+    private val currentOwner: suspend () -> UserId?,
+    private val syncNextPage: suspend () -> IncomingTombstoneSyncResult,
+    private val maxPagesPerRun: Int = MAX_PAGES_PER_RUN,
+) {
+
+    init {
+        require(maxPagesPerRun > 0) { "tombstone sync page cap must be positive" }
+    }
+
+    suspend fun run(owner: UserId): IncomingSyncRunOutcome {
+        var pagesProcessed = 0
+        while (true) {
+            when (val ownerFailure = ownerFailure(owner)) {
+                null -> Unit
+                else -> return ownerFailure
+            }
+            val result = try {
+                syncNextPage()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: IllegalArgumentException) {
+                return IncomingSyncRunOutcome.Terminal(IncomingSyncFailure.VALIDATION_FAILED)
+            } catch (_: Exception) {
+                return IncomingSyncRunOutcome.Retryable(IncomingSyncFailure.DATABASE_FAILURE)
+            }
+            when (result) {
+                is IncomingTombstoneSyncResult.Failure -> {
+                    return if (result.retryable) {
+                        IncomingSyncRunOutcome.Retryable(result.reason)
+                    } else {
+                        IncomingSyncRunOutcome.Terminal(result.reason)
+                    }
+                }
+                is IncomingTombstoneSyncResult.Committed -> {
+                    pagesProcessed += 1
+                    if (!result.hasMore) return IncomingSyncRunOutcome.Succeeded(pagesProcessed)
+                    if (pagesProcessed >= maxPagesPerRun) return IncomingSyncRunOutcome.PageCapReached
+                }
+            }
+        }
+    }
+
+    private suspend fun ownerFailure(owner: UserId): IncomingSyncRunOutcome? {
+        val liveOwner = try {
+            currentOwner()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return IncomingSyncRunOutcome.Retryable(IncomingSyncFailure.DATABASE_FAILURE)
+        }
+        return when {
+            liveOwner == owner -> null
+            liveOwner == null -> IncomingSyncRunOutcome.Terminal(IncomingSyncFailure.NO_ACTIVE_SESSION)
+            else -> IncomingSyncRunOutcome.Terminal(IncomingSyncFailure.ACCOUNT_CHANGED)
+        }
+    }
 }
 
 /** Explicit result of one bounded incoming page loop, without WorkManager types. */

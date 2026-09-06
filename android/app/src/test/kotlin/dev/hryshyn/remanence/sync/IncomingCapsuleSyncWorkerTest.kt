@@ -5,6 +5,7 @@ import androidx.work.BackoffPolicy
 import androidx.work.NetworkType
 import dev.hryshyn.remanence.core.data.db.IncomingSyncFailure
 import dev.hryshyn.remanence.core.data.db.IncomingSyncResult
+import dev.hryshyn.remanence.core.data.db.IncomingTombstoneSyncResult
 import dev.hryshyn.remanence.core.data.network.IncomingMaterialAckDrainResult
 import dev.hryshyn.remanence.core.data.network.IncomingCapsule
 import dev.hryshyn.remanence.core.data.network.IncomingEnvelope
@@ -255,6 +256,71 @@ class IncomingCapsuleSyncWorkerTest {
 
         assertEquals(IncomingSyncAndAcceptanceRunOutcome.Succeeded, result)
         assertEquals(listOf("page", "acceptance", "prefetch", "ack"), events)
+    }
+
+    @Test
+    fun tombstoneSyncRunsBeforeIncomingMaterialStages() = runTest {
+        val pages = FakePages(
+            listOf(IncomingSyncResult.Committed(page(nextCursor = null, hasMore = false))),
+        )
+        val events = mutableListOf<String>()
+
+        val result = combinedRunner(
+            pages = pages,
+            syncTombstonePage = {
+                events += "tombstone"
+                IncomingTombstoneSyncResult.Committed(
+                    dev.hryshyn.remanence.core.data.network.IncomingTombstonePage(
+                        emptyList(), false, null,
+                    ),
+                )
+            },
+            syncNextPage = {
+                events += "page"
+                pages.next()
+            },
+            runAcceptance = {
+                events += "acceptance"
+                IncomingAcceptanceDrainResult.Completed(0, 0, false)
+            },
+            runPrefetch = {
+                events += "prefetch"
+                IncomingPrefetchResult.Completed(0, 0)
+            },
+            runMaterialAck = {
+                events += "ack"
+                IncomingMaterialAckDrainResult.Completed(0, 0, false)
+            },
+        ).run(OWNER)
+
+        assertEquals(IncomingSyncAndAcceptanceRunOutcome.Succeeded, result)
+        assertEquals(listOf("tombstone", "page", "acceptance", "prefetch", "ack"), events)
+    }
+
+    @Test
+    fun tombstoneFailureStopsStaleMaterialStages() = runTest {
+        var pageCalls = 0
+        var acceptanceCalls = 0
+        val result = combinedRunner(
+            pages = FakePages(
+                listOf(IncomingSyncResult.Committed(page(nextCursor = null, hasMore = false))),
+            ),
+            syncTombstonePage = {
+                IncomingTombstoneSyncResult.Failure(IncomingSyncFailure.NETWORK, retryable = true)
+            },
+            syncNextPage = {
+                pageCalls += 1
+                IncomingSyncResult.Committed(page(nextCursor = null, hasMore = false))
+            },
+            runAcceptance = {
+                acceptanceCalls += 1
+                IncomingAcceptanceDrainResult.Completed(0, 0, false)
+            },
+        ).run(OWNER)
+
+        assertEquals(IncomingSyncAndAcceptanceRunOutcome.Retryable, result)
+        assertEquals(0, pageCalls)
+        assertEquals(0, acceptanceCalls)
     }
 
     @Test
@@ -526,7 +592,9 @@ class IncomingCapsuleSyncWorkerTest {
             ),
             currentOwner = {
                 ownerReads += 1
-                if (ownerReads <= 3) OWNER else OTHER_OWNER
+                // The tombstone feed is the first owner-checked stage; the
+                // switch therefore occurs at the post-prefetch fence.
+                if (ownerReads <= 4) OWNER else OTHER_OWNER
             },
             runAcceptance = { IncomingAcceptanceDrainResult.Completed(0, 0, false) },
             runPrefetch = {
@@ -609,6 +677,13 @@ class IncomingCapsuleSyncWorkerTest {
 
     private fun combinedRunner(
         pages: FakePages,
+        syncTombstonePage: suspend () -> IncomingTombstoneSyncResult = {
+            IncomingTombstoneSyncResult.Committed(
+                dev.hryshyn.remanence.core.data.network.IncomingTombstonePage(
+                    emptyList(), false, null,
+                ),
+            )
+        },
         syncNextPage: suspend () -> IncomingSyncResult = pages::next,
         currentOwner: suspend () -> UserId? = { OWNER },
         maxPages: Int = MAX_PAGES_PER_RUN,
@@ -621,6 +696,7 @@ class IncomingCapsuleSyncWorkerTest {
         },
     ) = IncomingSyncAndAcceptanceRunner(
         currentOwner = currentOwner,
+        syncTombstonePage = syncTombstonePage,
         syncNextPage = syncNextPage,
         runAcceptance = runAcceptance,
         runPrefetch = runPrefetch,

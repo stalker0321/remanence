@@ -5,8 +5,10 @@ import androidx.room.RoomDatabase
 
 /**
  * Local infrastructure database. Contains no content plaintext, no gallery or
- * inbox projection. Version 8 is a clean-reset schema; old local rows are
- * intentionally disposable and no legacy migration path is registered.
+ * inbox projection. Version 9 adds durable recipient tombstone markers and
+ * the account-scoped tombstone feed watermark. The explicit 8 -> 9
+ * migration preserves existing local material; unknown older paths still use
+ * the existing destructive fallback policy.
  */
 @Database(
     entities = [
@@ -18,8 +20,10 @@ import androidx.room.RoomDatabase
         OutboxBlobEntity::class,
         RecognitionFingerprintEntity::class,
         SyncCursorEntity::class,
+        RecipientTombstoneEntity::class,
+        TombstoneWatermarkEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = true,
 )
 abstract class RemanenceLocalDatabase : RoomDatabase() {
@@ -38,6 +42,8 @@ abstract class RemanenceLocalDatabase : RoomDatabase() {
     abstract fun recognitionFingerprintDao(): RecognitionFingerprintDao
 
     abstract fun syncCursorDao(): SyncCursorDao
+
+    abstract fun recipientTombstoneDao(): RecipientTombstoneDao
 
     abstract fun incomingPageDao(): IncomingPageDao
 

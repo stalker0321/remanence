@@ -158,6 +158,35 @@ class IncomingPresentationPreparationTest {
     }
 
     @Test
+    fun revocationRefusesFutureOfflineOpenButLeavesCurrentPresentationUntilClose() = runBlocking {
+        val prepared = requireType<IncomingPresentationPreparationResult.Prepared>(
+            preparation().prepare(OWNER, CAPSULE),
+        ).presentation
+        val openPhoto = prepared.loadPhoto(0)
+        try {
+            database.openHelper.writableDatabase.execSQL(
+                "UPDATE incoming_capsule SET server_status = 'REVOKED' " +
+                    "WHERE capsule_id = ? AND owner_user_id = ?",
+                arrayOf(CAPSULE.toRestString(), OWNER.toRestString()),
+            )
+
+            // The already-open, in-memory presentation remains usable until
+            // its normal close boundary; the source file/database revoke does
+            // not pretend it can erase an exported/decrypted copy.
+            assertArrayEquals(ByteArray(1024) { (0 + it).toByte() }, openPhoto)
+            val futureOpen = preparation().prepare(OWNER, CAPSULE)
+            assertEquals(
+                IncomingPresentationPreparationRejection.CAPSULE_STATE_INVALID,
+                requireType<IncomingPresentationPreparationResult.Rejected>(futureOpen).reason,
+            )
+        } finally {
+            openPhoto.fill(0)
+            prepared.close()
+        }
+        assertTrue(runCatching { prepared.loadPhoto(0) }.isFailure)
+    }
+
+    @Test
     fun repeatScanUsesSenderFallbackAndOpensPreparedIncomingMaterialOffline() = runBlocking {
         val front = scanFingerprint(count = 64)
         val weakFront = scanFingerprint(count = 3)

@@ -505,6 +505,15 @@ class CapsuleOutboxStager(
         existing
     }
 
+    /**
+     * The double fileKey/content checks and active reservation fence narrow
+     * accidental/in-process races. A hostile same-UID replacement in the
+     * final check-to-unlink window is outside this repository threat model:
+     * ADR-011 Decision lines 17-20 and Consequences lines 43-48, plus
+     * security.md §2 Not claimed lines 38-45 and §3 lines 57-60. If identity
+     * is unavailable or residue is ambiguous, fail closed and preserve it;
+     * reservation-unique filenames ensure it cannot wedge a later retry.
+     */
     private suspend fun deleteOrphanAttemptTargets(
         targets: List<ExpectedCiphertextTarget>,
         reservation: dev.hryshyn.remanence.core.data.db.ExactDuplicateReservation,
@@ -527,6 +536,16 @@ class CapsuleOutboxStager(
         }
     }
 
+    /**
+     * Rollback is fenced to this reservation's unique names and exact
+     * fileKey/content. The double checks narrow accidental/in-process races;
+     * hostile same-UID mutation in the final check-to-unlink window is
+     * explicitly outside the repository threat model (ADR-011 Decision
+     * lines 17-20 and Consequences lines 43-48; security.md §2 Not claimed
+     * lines 38-45 and §3 lines 57-60). Missing identity or ambiguity fails
+     * closed and preserves residue, while unique reservation filenames keep
+     * that residue from wedging a later retry.
+     */
     private suspend fun cleanupOwnedStagingFiles(
         owner: UserId,
         capsule: CapsuleId,

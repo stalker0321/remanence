@@ -267,7 +267,17 @@ class SenderRetryMaterialStore(
         }
     }
 
-    /** Deletes an attempt target only after confirming its exact prepared bytes. */
+    /**
+     * Deletes one reservation-owned retry target only after confirming its
+     * reservation-derived name, stable fileKey, and exact bytes twice. Those
+     * checks plus reservation ownership narrow accidental/in-process races.
+     * The final check-to-unlink window is not a hostile same-UID guarantee:
+     * ADR-011 Decision lines 17-20 and Consequences lines 43-48 exclude that
+     * app-private-storage attacker; security.md §2 Not claimed lines 38-45
+     * and §3 lines 57-60 state the same boundary. Missing identity or
+     * ambiguity fails closed and preserves residue; the reservation-unique
+     * filename keeps that residue from wedging a later retry.
+     */
     suspend fun deleteAttempt(
         owner: UserId,
         capsule: CapsuleId,
@@ -382,7 +392,16 @@ class SenderRetryMaterialStore(
         }
     }
 
-    /** Reconciles exact reservation-owned retry orphans; paths are never reused by a winner. */
+    /**
+     * Reconciles exact reservation-owned retry orphans; paths are never
+     * reused by a winner. Double fileKey/content checks plus current
+     * reservation ownership narrow accidental/in-process races, but do not
+     * claim protection from hostile same-UID mutation in the final
+     * check-to-unlink window (ADR-011 Decision lines 17-20, Consequences
+     * lines 43-48; security.md §2 Not claimed lines 38-45 and §3 lines 57-60).
+     * Missing identity or ambiguity fails closed and preserves residue; the
+     * reservation-unique filename keeps preserved residue retryable.
+     */
     suspend fun reconcileOrphanAttempts(
         owner: UserId,
         capsule: CapsuleId,

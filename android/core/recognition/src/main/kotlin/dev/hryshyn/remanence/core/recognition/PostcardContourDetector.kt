@@ -16,6 +16,8 @@ data class QuadCandidate(
     val corners: List<PointD>,
     val areaRatio: Double,
     val rectangularity: Double,
+    /** Optional independent side-support evidence from a line locator. */
+    val edgeSupport: Double? = null,
 )
 
 /**

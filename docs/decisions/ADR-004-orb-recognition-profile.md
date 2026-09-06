@@ -1,7 +1,8 @@
 # ADR-004: ORB as the MVP local-feature profile
 
 Status: Accepted as initial profile; FRONT-only identity requirements are
-defined by ADR-012; thresholds require M3 calibration
+defined by ADR-012; thresholds require M3 calibration. Experimental V2
+localization is an opt-in proposal-source integration only.
 
 ## Context
 
@@ -20,6 +21,16 @@ are historical evidence only and are superseded by ADR-012.
 - Never auto-open multiple owner-scoped candidates; a recipient picker is a
   future milestone. Full E2EE verification remains mandatory after a single
   result or later explicit selection.
+- The experimental V2 line locator may supply the first crop proposal, followed
+  by the legacy contour and guide fallback through the same warp. Missing V2
+  proposals and invalid V2 warps fall through; invalid final warp and empty
+  features remain hard failures. Blur, darkness, small-card, and glare
+  signals are advisory telemetry and do not short-circuit extraction or
+  matching.
+- This integration does not change the profile thresholds, strong gate,
+  score/margin rules, or cryptographic verification. The debug build may opt
+  in with `-Premanence.localization.v2.enabled=true`; release remains false so
+  disabling the switch is the rollback path.
 
 ## Alternatives
 

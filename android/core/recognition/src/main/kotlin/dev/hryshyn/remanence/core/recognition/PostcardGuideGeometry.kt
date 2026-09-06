@@ -84,7 +84,20 @@ object PostcardGuideGeometry {
 data class PostcardCropSelection(
     val candidate: QuadCandidate,
     val usedGuideFallback: Boolean,
+    val proposalSource: LocalizationProposalSource = if (usedGuideFallback) {
+        LocalizationProposalSource.GUIDE_FALLBACK
+    } else {
+        LocalizationProposalSource.LEGACY_CONTOUR
+    },
 )
+
+/** Final proposal source used for one production warp attempt. */
+enum class LocalizationProposalSource {
+    V2_LINE,
+    LEGACY_CONTOUR,
+    GUIDE_FALLBACK,
+    NONE,
+}
 
 /** Chooses the best credible contour, or the bounded guide crop if none pass. */
 class PostcardCropSelector(private val profile: RecognitionProfile) {
@@ -99,7 +112,7 @@ class PostcardCropSelector(private val profile: RecognitionProfile) {
         val credible = candidates.filter { isCredible(it, frameWidth, frameHeight) }
         val selected = CandidateRanker(profile)
             .rank(
-                inputs = credible.map(::CandidateWithEdges),
+                inputs = credible.map { CandidateWithEdges(it, it.edgeSupport) },
                 frameDiagonalPx = kotlin.math.hypot(frameWidth.toDouble(), frameHeight.toDouble()),
                 guide = guide,
             )

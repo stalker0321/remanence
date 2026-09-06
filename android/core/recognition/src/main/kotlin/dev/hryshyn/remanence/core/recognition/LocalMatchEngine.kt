@@ -62,6 +62,7 @@ class LocalMatchEngine(
     private val grantIssuer: ScanGrantIssuer,
     private val estimatorProvider: () -> HomographyEstimator = { HomographyEstimator() },
     private val matcher: DescriptorMatcher = DescriptorMatcher(),
+    private val diagnosticObserver: ((MatchDiagnosticEvent) -> Unit)? = null,
 ) {
 
     private val plausibilityGate = HomographyPlausibilityGate(profile.match)
@@ -76,6 +77,7 @@ class LocalMatchEngine(
         candidates: List<IndexedCandidate>,
     ): ScanFlowResult {
         if (candidates.isEmpty()) {
+            reportResult(MatchDiagnosticOutcome.RECAPTURE)
             return ScanFlowResult.RecaptureRequired
         }
 
@@ -92,28 +94,55 @@ class LocalMatchEngine(
         return when (val decision = coordinator.coordinate(recipientUniverse, senderUniverse)) {
             is CoordinatorDecision.AutoAccepted -> {
                 val capsuleId = UUID.fromString(decision.candidateId)
-                if (!verifier.verify(capsuleId)) return ScanFlowResult.RecaptureRequired
-                val grantId = grantIssuer.issue(capsuleId) ?: return ScanFlowResult.RecaptureRequired
+                if (!verifier.verify(capsuleId)) {
+                    reportResult(MatchDiagnosticOutcome.RECAPTURE, decision.origin)
+                    return ScanFlowResult.RecaptureRequired
+                }
+                val grantId = grantIssuer.issue(capsuleId) ?: run {
+                    reportResult(MatchDiagnosticOutcome.RECAPTURE, decision.origin)
+                    return ScanFlowResult.RecaptureRequired
+                }
                 val score = (if (decision.origin == CandidateOrigin.RECIPIENT_PREFERRED) recipientUniverse else senderUniverse)
                     ?.acceptance?.autoAccepted?.compositeScore ?: Double.NaN
+                reportResult(MatchDiagnosticOutcome.GRANT, decision.origin)
                 ScanFlowResult.Granted(capsuleId, decision.origin, grantId, score)
             }
             is CoordinatorDecision.SenderFallbackAccepted -> {
                 val capsuleId = UUID.fromString(decision.candidateId)
-                if (!verifier.verify(capsuleId)) return ScanFlowResult.RecaptureRequired
-                val grantId = grantIssuer.issue(capsuleId) ?: return ScanFlowResult.RecaptureRequired
+                if (!verifier.verify(capsuleId)) {
+                    reportResult(MatchDiagnosticOutcome.RECAPTURE, CandidateOrigin.SENDER_FALLBACK)
+                    return ScanFlowResult.RecaptureRequired
+                }
+                val grantId = grantIssuer.issue(capsuleId) ?: run {
+                    reportResult(MatchDiagnosticOutcome.RECAPTURE, CandidateOrigin.SENDER_FALLBACK)
+                    return ScanFlowResult.RecaptureRequired
+                }
+                reportResult(MatchDiagnosticOutcome.GRANT, CandidateOrigin.SENDER_FALLBACK)
                 ScanFlowResult.Granted(
                     capsuleId, CandidateOrigin.SENDER_FALLBACK, grantId,
                     senderUniverse?.acceptance?.autoAccepted?.compositeScore ?: Double.NaN,
                 )
             }
-            is CoordinatorDecision.Ambiguous -> ScanFlowResult.Ambiguous(
-                origin = decision.origin,
-                rows = decision.classification.chooserRows.map { UUID.fromString(it.candidateId) to it.compositeScore },
-                singleRecaptureFirst =
-                    decision.classification.outcome == ScanOutcome.SINGLE_CANDIDATE_RECAPTURE,
-            )
-            CoordinatorDecision.NoMatchEverywhere -> ScanFlowResult.RecaptureRequired
+            is CoordinatorDecision.Ambiguous -> {
+                reportResult(
+                    if (decision.classification.outcome == ScanOutcome.SINGLE_CANDIDATE_RECAPTURE) {
+                        MatchDiagnosticOutcome.RECAPTURE
+                    } else {
+                        MatchDiagnosticOutcome.AMBIGUOUS
+                    },
+                    decision.origin,
+                )
+                ScanFlowResult.Ambiguous(
+                    origin = decision.origin,
+                    rows = decision.classification.chooserRows.map { UUID.fromString(it.candidateId) to it.compositeScore },
+                    singleRecaptureFirst =
+                        decision.classification.outcome == ScanOutcome.SINGLE_CANDIDATE_RECAPTURE,
+                )
+            }
+            CoordinatorDecision.NoMatchEverywhere -> {
+                reportResult(MatchDiagnosticOutcome.NO_MATCH)
+                ScanFlowResult.RecaptureRequired
+            }
         }
     }
 
@@ -128,14 +157,34 @@ class LocalMatchEngine(
         }
 
         val frontOutcomes = HashMap<String, FrontCandidate>(universe.size)
+        val sideOutcomes = HashMap<String, SideOutcome>(universe.size)
         val frontStrengths = HashMap<String, Boolean>(universe.size)
         universe.forEach { candidate ->
             val outcome = evaluateSide(queryFront, candidate.front)
             val front = FrontCandidate(candidate.capsuleId.toString(), outcome.report.sideScore, outcome.report.weakGatePassed)
             frontOutcomes[candidate.capsuleId.toString()] = front
+            sideOutcomes[candidate.capsuleId.toString()] = outcome
             frontStrengths[candidate.capsuleId.toString()] = outcome.report.strongGatePassed
         }
         val frontRanking = frontRanker.rank(frontOutcomes.values.toList())
+        val top = frontRanking.retained.firstOrNull()
+        val topOutcome = top?.let { sideOutcomes[it.candidateId] }
+        reportDiagnostic(
+            MatchDiagnosticEvent(
+                phase = MatchDiagnosticPhase.CANDIDATE_EVALUATED,
+                origin = origin,
+                candidateCount = universe.size,
+                score = top?.sideScore,
+                margin = if (frontRanking.retained.size >= 2) {
+                    frontRanking.retained[0].sideScore - frontRanking.retained[1].sideScore
+                } else {
+                    null
+                },
+                ratioMutualMatches = topOutcome?.signals?.ratioMutualMatches,
+                ransacInliers = topOutcome?.signals?.ransacInliers,
+                coverage = topOutcome?.signals?.spatialCoverage,
+            ),
+        )
 
         val composites = frontRanking.retained.map { retained ->
             CompositeCandidate(
@@ -147,6 +196,15 @@ class LocalMatchEngine(
         }
         val acceptance = if (composites.isEmpty()) null else acceptanceEvaluator.evaluate(composites, frontRanking.duplicateFrontGroup)
         return UniverseScanResult(origin, frontRanking, acceptance)
+    }
+
+    private fun reportResult(
+        outcome: MatchDiagnosticOutcome,
+        origin: CandidateOrigin? = null,
+    ) = reportDiagnostic(MatchDiagnosticEvent.result(outcome, origin))
+
+    private fun reportDiagnostic(event: MatchDiagnosticEvent) {
+        runCatching { diagnosticObserver?.invoke(event) }
     }
 
     private data class SideOutcome(

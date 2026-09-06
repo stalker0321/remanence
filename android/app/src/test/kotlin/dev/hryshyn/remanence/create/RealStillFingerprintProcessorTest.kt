@@ -60,14 +60,14 @@ class RealStillFingerprintProcessorTest {
     }
 
     @Test
-    fun fallbackStillRejectsBlurDarkAndGlare() {
+    fun qualityReasonsAreAdvisoryButFeatureFailureStillRejects() {
         val blurry = processor(::emptyContours).process(patternJpeg(blur = true))
         val dark = processor(::emptyContours).process(patternJpeg(dark = true))
         val glare = processor(::emptyContours).process(patternJpeg(glare = true))
 
-        assertRejectedWith(blurry, QualityReason.TOO_BLURRY)
-        assertRejectedWith(dark, QualityReason.TOO_DARK)
-        assertRejectedWith(glare, QualityReason.GLARE_EXCESSIVE)
+        assertAdvisoryOrFeatureFailure(blurry, QualityReason.TOO_BLURRY)
+        assertAcceptedWithAdvisory(dark, QualityReason.TOO_DARK)
+        assertAdvisoryOrFeatureFailure(glare, QualityReason.GLARE_EXCESSIVE)
     }
 
     private fun processor(detector: (IntArray, Int, Int) -> List<QuadCandidate>) =
@@ -83,9 +83,30 @@ class RealStillFingerprintProcessorTest {
         height: Int,
     ): List<QuadCandidate> = emptyList()
 
-    private fun assertRejectedWith(result: ProcessedStill, reason: QualityReason) {
-        assertTrue("expected $reason rejection, got $result", result is ProcessedStill.Rejected)
-        assertTrue(reason in (result as ProcessedStill.Rejected).reasons)
+    private fun assertAcceptedWithAdvisory(result: ProcessedStill, reason: QualityReason) {
+        assertTrue("expected accepted advisory $reason, got $result", result is ProcessedStill.Accepted)
+        val accepted = result as ProcessedStill.Accepted
+        try {
+            assertTrue(reason in accepted.advisoryQualityReasons)
+        } finally {
+            accepted.serializedBytes.fill(0)
+        }
+    }
+
+    private fun assertAdvisoryOrFeatureFailure(result: ProcessedStill, reason: QualityReason) {
+        when (result) {
+            is ProcessedStill.Accepted -> {
+                try {
+                    assertTrue(reason in result.advisoryQualityReasons)
+                } finally {
+                    result.serializedBytes.fill(0)
+                }
+            }
+            is ProcessedStill.Rejected -> {
+                assertTrue(QualityReason.FEATURES_INSUFFICIENT in result.reasons)
+                assertTrue(reason !in result.reasons)
+            }
+        }
     }
 
     private fun patternJpeg(

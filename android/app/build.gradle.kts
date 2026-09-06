@@ -3,6 +3,17 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// Local compile-time rollback switch. The legacy contour path remains the
+// default; only the debug variant consumes this opt-in property. Release is
+// deliberately hard-disabled so an experimental debug build cannot enable v2.
+val v2LineLocalizationEnabled = when (
+    (findProperty("remanence.localization.v2.enabled") as? String ?: "false").lowercase()
+) {
+    "true" -> "true"
+    "false" -> "false"
+    else -> error("remanence.localization.v2.enabled must be true or false")
+}
+
 android {
     namespace = "dev.hryshyn.remanence"
     compileSdk = libs.versions.compileSdk.get().toInt()
@@ -23,6 +34,7 @@ android {
                 "API_BASE_URL",
                 quoteBuildConfigString(remanenceApiBaseUrl("http://127.0.0.1:8000/")),
             )
+            buildConfigField("boolean", "REMANENCE_V2_LINE_LOCALIZATION", v2LineLocalizationEnabled)
         }
         named("release") {
             buildConfigField(
@@ -30,6 +42,7 @@ android {
                 "API_BASE_URL",
                 quoteBuildConfigString(remanenceApiBaseUrl("https://invalid.invalid/")),
             )
+            buildConfigField("boolean", "REMANENCE_V2_LINE_LOCALIZATION", "false")
         }
     }
 

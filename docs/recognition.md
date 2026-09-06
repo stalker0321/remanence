@@ -1,6 +1,6 @@
 # Local postcard recognition
 
-Status: **APPROVED architecture checkpoint via ADR-012; `mvp-orb-v1` remains the profile and seed thresholds remain uncalibrated until M3.**
+Status: **APPROVED architecture checkpoint via ADR-012; `mvp-orb-v1` remains the profile and seed thresholds remain uncalibrated until M3. The V2 line-localization path is an experimental, debug-only opt-in with legacy rollback.**
 
 Recognition runs entirely on Android from exactly one required FRONT still
 capture. It identifies a design only among capsules routed to the
@@ -61,13 +61,18 @@ Both sender and recipient use the same still-capture component and profile:
    preview/capture aspect ratio.
 2. Capture JPEG still with CameraX `ImageCapture`; no continuous `ImageAnalysis`.
 3. Apply EXIF orientation, decode a bounded-resolution working bitmap, and strip metadata.
-4. Detect the postcard quadrilateral and show the proposed crop briefly. If no
-   convex four-point contour is credible, use only the bounded guide-aligned
-   central crop; never silently use the full frame. The same blur, exposure,
-   glare, and usable-ORB gates apply to either crop source.
+4. Select localization proposals in this order when the experimental V2 switch
+   is enabled: V2 line proposal, legacy contour proposal, then the bounded
+   guide-aligned crop. If V2 has no proposal, or its warp is invalid, continue
+   with the next source through the same warp step; never silently use the full
+   frame. The release/default path starts at the legacy contour.
 5. If automatic corners fail or are visibly wrong, allow manual four-corner correction; do not silently use the full frame.
-6. Run quality gates. Failed quality returns a specific recapture instruction.
-7. Perspective-normalize and extract a fingerprint.
+6. Measure capture quality and retain reason codes as advisory telemetry. In
+   particular, `TOO_BLURRY`, `TOO_DARK`, and `CARD_TOO_SMALL` do not
+   short-circuit extraction or matching.
+7. Perspective-normalize and extract a fingerprint. Decode failure, an
+   invalid final warp after fallback, and an empty feature set remain hard
+   failures.
 8. Release/delete the raw capture after the fingerprint has been encrypted/durably staged.
 
 For the production contract, FRONT is required and is the only capture passed
@@ -105,6 +110,14 @@ Initial capture gates for `mvp-orb-v1`:
 | Maximum contiguous glare-region fraction | 0.12 |
 
 These are initial device-independent approximations, not product truth. The quality evaluator returns measured signals and reason codes such as `CARD_TOO_SMALL`, `CROP_UNCERTAIN`, `ANGLE_UNCERTAIN`, `RESOLUTION_INSUFFICIENT`, `TOO_BLURRY`, `TOO_DARK`, or `GLARE_EXCESSIVE`.
+
+For the experimental production localization path, quality measurement is
+advisory telemetry rather than an early return: `TOO_BLURRY`, `TOO_DARK`,
+`CARD_TOO_SMALL`, and `GLARE_EXCESSIVE` are carried with an otherwise valid
+fingerprint and do not short-circuit extraction or matching. Decode failure,
+invalid final warp after all localization fallbacks, and empty features remain
+hard failures. The matcher still applies the unchanged profile gates and
+verification below.
 
 ### Canonical image
 
@@ -251,6 +264,10 @@ Strong evidence gate:
 
 All constants above are fields of `RecognitionProfile`, not scattered code literals. A match report retains each raw signal and gate outcome; UI receives only classification and guidance.
 
+The V2 localization integration does not change these thresholds, the strong
+gate, score/margin rules, or cryptographic verification. Localization only
+changes which crop proposal reaches this unchanged matcher pipeline.
+
 ## 9. Hierarchical candidate ranking
 
 ### Stage 1: FRONT design candidates
@@ -284,6 +301,8 @@ ambiguous design-to-many result.
   guided recapture first. After another quality-passing scan, the user may
   explicitly confirm that single candidate rather than loop forever.
 - If no plausible candidate exists, show recapture guidance; do not show arbitrary known capsules.
+- Weak evidence and `NO_MATCH` remain recapture outcomes and never issue a
+  grant. An advisory quality reason alone is not a grant or recapture decision.
 - Chooser rows reveal only locally decrypted sender handle snapshot, year/date, and optional place label. No thumbnails, notes, photo counts, or browsing after leaving the scan flow.
 
 Manual selection is not treated as stronger vision evidence. It still must pass envelope, signature, IDs, hashes, and AEAD verification before a scan grant is issued.
@@ -322,7 +341,7 @@ This compares an aged card primarily with its post-delivery identity, so origina
 | Condition | Detection | Response |
 | --- | --- | --- |
 | Low-texture FRONT | too few features/matches | Improve light/angle and recapture the FRONT. |
-| Glare/blur/shadow | capture quality gates | Immediate targeted recapture instruction. |
+| Blur, darkness, small card, or glare | advisory quality telemetry | Continue extraction/matching; if evidence is weak or absent, recapture. These reasons never grant. |
 | Border not visible | quad confidence/manual corners | Move farther away or adjust four corners. |
 | Severe crop/occlusion/damage | weak coverage/inliers | Retry; chooser if a small plausible set remains. |
 | One design with multiple capsules | more than one owner-scoped candidate | Never auto-open; use the explicit chooser when available. |
@@ -330,6 +349,7 @@ This compares an aged card primarily with its post-delivery identity, so origina
 | Wrong physical postcard | no plausible routed candidate | No match; no global lookup. |
 | Profile version unsupported | format gate | Rebuild compatible fingerprint if local raw input exists; otherwise explicit unsupported state. |
 | Candidate selected but crypto corrupt | signature/AEAD failure | Show nothing; re-sync/diagnostic path. |
+| Decode failure, invalid final warp, or empty features | hard pipeline failure | Reject and recapture; no fingerprint or grant. |
 
 ## 13. Reproducible evaluation dataset
 
@@ -404,7 +424,60 @@ Failure to hit false-accept behavior blocks automatic opening. Failure only in a
 
 Recognition logs may include profile ID, timing, feature counts, inlier counts, coverage, score, result class, and opaque candidate count. They must not include bitmap bytes, descriptors, keypoint coordinates, chooser text, handles, capsule IDs in analytics, or address/note OCR. OCR is not part of the pipeline.
 
-## 15. Primary references
+## 15. Experimental localization integration and verification evidence
+
+The V2 line proposal source is experimental production integration, not a
+recognition-profile or matcher change. With the feature enabled, the ordered
+runtime path is V2 line proposal → legacy contour proposal → guide fallback,
+with the common perspective warp attempted in that order. A missing V2
+proposal or invalid V2 warp falls through; failure of the final warp or an
+empty feature set is hard. Quality reasons remain advisory telemetry, while
+weak/no-match remains recapture and never grant. The existing thresholds,
+strong gate, score/margin rules, and E2EE verification are unchanged.
+
+Verification snapshot for the current uncommitted diff:
+
+- The durable focused localization/processor XML set is five suites: `RealStillFingerprintProcessorTest` (3), `LocalizationTelemetryContractTest` (2), `CaptureLocalizationDiagnosticsTest` (1), `V2LinePostcardLocatorTest` (1), and `LocalizationProposalSelectorTest` (3), for **10/10 tests**, 0 skipped, failures, or errors. The reports are under `android/app/build/test-results/testDebugUnitTest/` for the two app suites and `android/core/recognition/build/test-results/testDebugUnitTest/` for the three recognition suites.
+- The durable XML aggregate for the four Android `testDebugUnitTest` dependencies is **1,639 tests**, 4 skipped, 0 failures, and 0 errors: app 720/3 skipped, core data 488/1, core crypto 232/0, and core recognition 199/0. The root `android/build.gradle.kts` `testDebugUnitTest` task depends additionally on `:core:model:test`; its separate `android/core/model/build/test-results/test/` XML contains 51 tests, 0 skipped, failures, or errors. Thus **1,690 total and 4 skipped** is the precisely traceable sum of the five root-task dependency report sets, while 1,639 is the Android-module XML aggregate; no single XML file contains the 1,690 total.
+### Publishable debug artifact release note
+
+The publishable debug artifact must be built with the hosted API property
+explicitly supplied; an unparameterized local-default debug build is not
+release evidence. Reproducible command (hosted API and V2 explicitly enabled):
+
+`env -u JAVA_TOOL_OPTIONS JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ./gradlew --no-daemon --max-workers=1 -Dorg.gradle.jvmargs=-Xmx1024m -Pkotlin.compiler.execution.strategy=in-process -Premanence.apiBaseUrl=https://remanence.hryshyn.dev/ -Premanence.localization.v2.enabled=true :app:assembleDebug`
+
+The resulting `app-debug` variant has application version
+`0.1.0-m2-f0-front-only` (versionCode 10), and its compiled
+`BuildConfig.API_BASE_URL` is exactly `https://remanence.hryshyn.dev/` — not
+localhost, `10.0.2.2`, a LAN address, or another local endpoint. Its SHA-256 is
+`7a7aabb9ab3cb18c393c17290887c5f7a605a8d4966fa9555c8756f696bc285a`.
+
+- `apkanalyzer dex code --class dev.hryshyn.remanence.BuildConfig` on the
+  resulting `android/app/build/outputs/apk/debug/app-debug.apk` reports
+  `API_BASE_URL:Ljava/lang/String; = "https://remanence.hryshyn.dev/"` and
+  `REMANENCE_V2_LINE_LOCALIZATION:Z = true`. The static final localization
+  flag is inlined in the debug DEX: the default
+  `RealStillFingerprintProcessor` constructor calls `v2LineThenLegacy()` when
+  the localization argument is omitted, and the production Create/Scan call
+  sites invoke that default constructor. The release build constant remains
+  `false`, providing the rollback/default-off path. This is compiled DEX
+  evidence, not physical-device runtime evidence.
+
+The bounded experimental benchmark snapshot is **not an 80% claim**:
+
+- create: **20/20**;
+- correct: **94/138 = 68.12%**;
+- wrong grants: **0/138**;
+- recapture/miss: **18/138**;
+- truth-absent ambiguous: **26/138**;
+- localization sources: V2 **105**, legacy **4**, guide **49**.
+
+The corpus and its diagnostic harness are experimental evidence only. The
+observed `0/138` wrong-grant count is not a false-accept rate (FAR), and these
+results do not establish an M3 acceptance target.
+
+## 16. Primary references
 
 - [OpenCV ORB API](https://docs.opencv.org/4.x/db/d95/classcv_1_1ORB.html)
 - [OpenCV feature matching and homography tutorial](https://docs.opencv.org/4.x/d1/de0/tutorial_py_feature_homography.html)

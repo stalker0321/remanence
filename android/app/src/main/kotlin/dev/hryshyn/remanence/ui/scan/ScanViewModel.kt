@@ -548,6 +548,7 @@ class ScanViewModel internal constructor(
                             null
                         }
                     },
+                    diagnosticObserver = RecognitionDiagnostics::report,
                 )
                 val result = engine.run(
                     queryFront = FingerprintCodec.parse(sessionFront.serializedBytes),

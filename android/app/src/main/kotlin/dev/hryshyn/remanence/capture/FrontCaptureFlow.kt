@@ -13,11 +13,11 @@ import dev.hryshyn.remanence.core.recognition.QualityReason
 import dev.hryshyn.remanence.core.recognition.FingerprintSide as RecognitionFingerprintSide
 import java.util.Locale
 
-/** Port over the OpenCV-backed still pipeline: decode→crop→warp→quality→ORB. */
+/** Port over the OpenCV-backed still pipeline: decode→locate→warp→quality→ORB. */
 fun interface StillProcessor {
     /**
-     * Returns the extracted fingerprint bytes, or the set of quality reasons
-     * that reject this still before any extraction result is trusted.
+     * Returns extracted fingerprint bytes. Quality reasons on an accepted still
+     * are advisory only; decode/warp/feature failures remain hard failures.
      * The caller transfers the temporary JPEG to the flow; it is wiped after
      * processing, including rejection and exception paths.
      */
@@ -29,7 +29,12 @@ sealed interface ProcessedStill {
      * The flow takes ownership of [serializedBytes] for the remainder of the
      * delivery and wipes it after persistence or any failure.
      */
-    data class Accepted(val profileId: String, val serializedBytes: ByteArray) : ProcessedStill
+    data class Accepted(
+        val profileId: String,
+        val serializedBytes: ByteArray,
+        /** Redacted, transient telemetry; never serialized into the fingerprint. */
+        val advisoryQualityReasons: Set<QualityReason> = emptySet(),
+    ) : ProcessedStill
 
     data class Rejected(
         val reasons: Set<QualityReason>,
@@ -145,7 +150,10 @@ enum class CaptureDiagnosticStage {
  * that is no longer current (cancelled/reset/disposed); it changes nothing.
  */
 sealed interface FrontCaptureOutcome {
-    data class Captured(val fingerprintId: String) : FrontCaptureOutcome
+    data class Captured(
+        val fingerprintId: String,
+        val advisoryQualityReasons: Set<QualityReason> = emptySet(),
+    ) : FrontCaptureOutcome
 
     data class QualityRejected(val reasons: Set<QualityReason>) : FrontCaptureOutcome
 
@@ -236,7 +244,7 @@ class FrontCaptureFlow(
                         createRepository(persistence, owner).captureFront(capsuleId)
                     }
                     attempt.accept()
-                    FrontCaptureOutcome.Captured(id)
+                    FrontCaptureOutcome.Captured(id, processed.advisoryQualityReasons)
                 }
             }
         } catch (cancelled: CancellationException) {

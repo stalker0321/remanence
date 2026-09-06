@@ -36,3 +36,32 @@ val MIGRATION_8_9_RECIPIENT_TOMBSTONES = object : Migration(8, 9) {
         )
     }
 }
+
+/** Explicit v9 -> v10 migration for owner-local exact duplicate history. */
+val MIGRATION_9_10_LOCAL_SEND_DUPLICATES = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `local_send_duplicate` (
+                `reservation_id` TEXT NOT NULL,
+                `owner_user_id` TEXT NOT NULL,
+                `front_sha256` BLOB NOT NULL,
+                `capsule_id` TEXT NOT NULL,
+                `state` TEXT NOT NULL,
+                `created_at_epoch_ms` INTEGER NOT NULL,
+                `reservation_expires_at_epoch_ms` INTEGER NOT NULL,
+                PRIMARY KEY(`reservation_id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS `index_local_send_duplicate_owner_user_id_front_sha256` " +
+                "ON `local_send_duplicate` (`owner_user_id`, `front_sha256`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_local_send_duplicate_owner_user_id_state_created_at_epoch_ms_reservation_id` " +
+                "ON `local_send_duplicate` " +
+                "(`owner_user_id`, `state`, `created_at_epoch_ms`, `reservation_id`)",
+        )
+    }
+}

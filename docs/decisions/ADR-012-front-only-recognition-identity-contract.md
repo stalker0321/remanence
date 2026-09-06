@@ -91,8 +91,10 @@ criterion.
 ## Deferred milestones
 
 - M2-F1: recipient-facing picker for multiple FRONT candidates.
-- M2-F2: conservative sender+recipient duplicate prevention using FRONT
-  similarity; no global uniqueness rule.
+- M2-F2 Phase 1: owner-local exact duplicate protection using the SHA-256 of
+  captured FRONT bytes and bounded offline send history; no global uniqueness
+  rule. Tier 2 similarity warnings remain deferred pending a separate
+  comparator and calibration contract.
 - M2-F3: optional short cancellation window with durable revoke semantics.
 
 ## Consequences

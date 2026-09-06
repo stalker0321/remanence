@@ -26,6 +26,7 @@ import dev.hryshyn.remanence.core.crypto.RecipientEnvelopeCryptor
 import dev.hryshyn.remanence.core.crypto.TinkPrimitives
 import dev.hryshyn.remanence.core.data.db.OutboxBlobUploadState
 import dev.hryshyn.remanence.core.data.db.OutboxCapsuleState
+import dev.hryshyn.remanence.core.data.db.ExactDuplicateBlockedException
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 import dev.hryshyn.remanence.core.model.ArtifactAadInput
@@ -162,6 +163,8 @@ class CapsuleOutboxStagerTest {
             envelopeCiphertext = envelope,
             publishStatementBytes = "signed-statement".toByteArray(),
             publishStatementSignature = ByteArray(69) { 1 },
+            frontContentSha256 = MessageDigest.getInstance("SHA-256")
+                .digest("captured-front-content".toByteArray(Charsets.UTF_8)),
             senderRetryWrappedKeysetBytes = senderRetryWrappedKeysetBytes,
             artifacts =
             listOf(
@@ -254,6 +257,16 @@ class CapsuleOutboxStagerTest {
         assertEquals(
             0,
             database.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleId.toString(), OWNER).size,
+        )
+
+        // The failed invocation released its exact reservation, so removing
+        // only the injected blocker permits the same captured FRONT to retry.
+        assertTrue(blockedTarget.delete())
+        val retried = stager.stage(prepared)
+        assertEquals(prepared.capsuleId, retried.capsuleId)
+        assertEquals(
+            OutboxCapsuleState.ENCRYPTED,
+            database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId.toString(), OWNER)?.state,
         )
     }
 
@@ -594,6 +607,28 @@ class CapsuleOutboxStagerTest {
                 database.outboxBlobDao().getAllByCapsuleIdAndOwner(capsuleId.toString(), OWNER).map { it.localCiphertextPath }
         committedPaths.forEach { assertTrue(File(it).exists() && File(it).length() > 0L) }
         assertTrue(outboxRoot().listFiles()!!.none { it.name.contains(".tmp-") })
+    }
+
+    @Test
+    fun concurrentDifferentCapsulesWithSameFrontHaveOneExactReservationWinner() = runBlocking {
+        database = newFileBackedDatabase("stager-exact-concurrent.db")
+        val stager = newStager()
+        val otherCapsule = UUID.fromString("3c111111-2222-4333-8444-555555555555")
+
+        val outcomes = kotlinx.coroutines.coroutineScope {
+            val first = this@coroutineScope.async { runCatching { stager.stage(preparedCapsule()) } }
+            val second = this@coroutineScope.async {
+                runCatching {
+                    stager.stage(preparedCapsule(capsuleUuid = otherCapsule, blobIdBase = 100_000L))
+                }
+            }
+            listOf(first.await(), second.await())
+        }
+
+        assertEquals(1, outcomes.count { it.isSuccess })
+        assertEquals(1, outcomes.count { it.isFailure })
+        assertTrue(outcomes.single { it.isFailure }.exceptionOrNull() is ExactDuplicateBlockedException)
+        assertEquals(1, countOutboxCapsuleRows())
     }
 
     @Test

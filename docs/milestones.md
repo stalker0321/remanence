@@ -168,14 +168,19 @@ Scope: scan-scoped, bounded candidate rows with minimal locally decrypted
 chooser hints; explicit user selection; complete E2EE verification for the
 selected capsule; no “best score wins” ambiguity behavior.
 
-## M2-F2 — Conservative duplicate policy (future)
+## M2-F2 — Phase 1 exact local duplicate protection
 
 Goal: prevent accidental sender+recipient duplicates without treating a design
 as globally unique or blocking legitimate multiple capsules for that design.
 
-Scope: a separately approved privacy-preserving policy and protocol/DB
-decision, with sender+recipient scope, idempotency/retry semantics, and no
-server-visible visual equality or global index. This is not part of M2-F0.
+Phase 1 scope is the owner/account-local offline foundation only: the canonical
+SHA-256 of the captured FRONT bytes used for publication is retained in a
+bounded recent local send history. An active reservation is atomic with local
+outbox staging, so concurrent same-owner exact duplicates have one winner;
+failed staging releases the reservation and expired/pruned rows stop blocking.
+No server-visible equality, protocol field, global index, or recognition score
+is involved. Tier 2 similarity warnings, comparator selection, and calibration
+remain deferred to a separately approved contract and are not implemented here.
 
 ## M2-F3 — Optional 24-hour cancellation (future)
 

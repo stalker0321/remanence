@@ -6,9 +6,10 @@ import androidx.room.RoomDatabase
 /**
  * Local infrastructure database. Contains no content plaintext, no gallery or
  * inbox projection. Version 9 adds durable recipient tombstone markers and
- * the account-scoped tombstone feed watermark. The explicit 8 -> 9
- * migration preserves existing local material; unknown older paths still use
- * the existing destructive fallback policy.
+ * the account-scoped tombstone feed watermark. Version 10 adds bounded
+ * owner-local exact FRONT duplicate history. The explicit migrations preserve
+ * existing local material; unknown older paths still use the existing
+ * destructive fallback policy.
  */
 @Database(
     entities = [
@@ -22,8 +23,9 @@ import androidx.room.RoomDatabase
         SyncCursorEntity::class,
         RecipientTombstoneEntity::class,
         TombstoneWatermarkEntity::class,
+        LocalSendDuplicateEntity::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = true,
 )
 abstract class RemanenceLocalDatabase : RoomDatabase() {
@@ -46,6 +48,8 @@ abstract class RemanenceLocalDatabase : RoomDatabase() {
     abstract fun recipientTombstoneDao(): RecipientTombstoneDao
 
     abstract fun incomingPageDao(): IncomingPageDao
+
+    abstract fun localSendDuplicateDao(): LocalSendDuplicateDao
 
     abstract fun incomingIndexAcceptanceDao(): IncomingIndexAcceptanceDao
 

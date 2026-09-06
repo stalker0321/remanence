@@ -109,7 +109,8 @@ class CapsulePublisherTest {
 
     @Test
     fun publishedCapsuleCarriesExactArtifactCardinalityAndEnvelope() {
-        val prepared = publisher.publish(selfSendRequest())
+        val request = selfSendRequest()
+        val prepared = publisher.publish(request)
 
         assertEquals(5, prepared.artifacts.size)
         assertEquals(
@@ -120,6 +121,10 @@ class CapsulePublisherTest {
         assertTrue(prepared.envelopeCiphertext.size > 60)
         assertTrue(prepared.publishStatementBytes.isNotEmpty())
         assertEquals(69, prepared.publishStatementSignature.size)
+        assertArrayEquals(
+            MessageDigest.getInstance("SHA-256").digest(request.frontFingerprintBytes),
+            prepared.frontContentSha256,
+        )
     }
 
     @Test

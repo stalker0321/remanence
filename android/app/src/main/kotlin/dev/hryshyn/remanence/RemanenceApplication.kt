@@ -166,7 +166,10 @@ class AppContainer private constructor(
 
     val database: RemanenceLocalDatabase by lazy {
         Room.databaseBuilder(appContext, RemanenceLocalDatabase::class.java, DATABASE_NAME)
-            .addMigrations(dev.hryshyn.remanence.core.data.db.MIGRATION_8_9_RECIPIENT_TOMBSTONES)
+            .addMigrations(
+                dev.hryshyn.remanence.core.data.db.MIGRATION_8_9_RECIPIENT_TOMBSTONES,
+                dev.hryshyn.remanence.core.data.db.MIGRATION_9_10_LOCAL_SEND_DUPLICATES,
+            )
             .fallbackToDestructiveMigration(dropAllTables = true)
             .build()
     }

@@ -81,8 +81,36 @@ class RemanenceLocalSchemaTest {
         migrated.close()
     }
 
+    @Test
+    fun explicitV9ToV10MigrationCreatesExactDuplicateTableAndIndexes() {
+        val legacy = migrationHelper.createDatabase(MIGRATION_V9_DB_NAME, 9)
+        legacy.close()
+
+        val migrated = migrationHelper.runMigrationsAndValidate(
+            MIGRATION_V9_DB_NAME,
+            10,
+            true,
+            MIGRATION_9_10_LOCAL_SEND_DUPLICATES,
+        )
+        migrated.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' " +
+                "AND name = 'local_send_duplicate'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("local_send_duplicate", cursor.getString(0))
+        }
+        migrated.query("PRAGMA index_list('local_send_duplicate')").use { cursor ->
+            val indexNames = buildList {
+                while (cursor.moveToNext()) add(cursor.getString(1))
+            }
+            assertTrue(indexNames.contains("index_local_send_duplicate_owner_user_id_front_sha256"))
+        }
+        migrated.close()
+    }
+
     private companion object {
         const val REOPEN_DB_NAME = "remanence-reopen-test.db"
         const val MIGRATION_DB_NAME = "remanence-tombstone-migration-test.db"
+        const val MIGRATION_V9_DB_NAME = "remanence-exact-duplicate-migration-test.db"
     }
 }

@@ -137,6 +137,7 @@ class CapsulePublisher(
         require(request.ownerUserId == request.senderUserId.value.toString()) {
             "ownerUserId must equal senderUserId (current sender owns the retry key)"
         }
+        val frontContentSha256 = sha256(request.frontFingerprintBytes)
         TinkPrimitives.ensureRegistered()
         val senderUser = request.senderUserId
         // M2-P06: distinct routing identities for every context/AAD. Read
@@ -284,6 +285,10 @@ class CapsulePublisher(
             artifacts = artifacts,
             publishStatementBytes = signed.deterministicStatementBytes,
             publishStatementSignature = signed.signature,
+            // Exact local duplicate identity: this is the digest of the same
+            // captured FRONT bytes consumed by the recognition manifest
+            // builder, never ciphertext or a recognition score.
+            frontContentSha256 = frontContentSha256,
             // M2-P08: serialized wrapped retry record; the stager
             // persists this through SenderRetryMaterialStore.
             senderRetryWrappedKeysetBytes = wrappedRetryRecord.serialize(),

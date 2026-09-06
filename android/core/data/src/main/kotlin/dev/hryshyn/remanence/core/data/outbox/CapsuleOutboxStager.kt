@@ -17,6 +17,7 @@ import dev.hryshyn.remanence.core.data.db.OutboxBlobUploadState
 import dev.hryshyn.remanence.core.data.db.OutboxCapsuleDao
 import dev.hryshyn.remanence.core.data.db.OutboxCapsuleEntity
 import dev.hryshyn.remanence.core.data.db.OutboxCapsuleState
+import dev.hryshyn.remanence.core.data.db.LocalExactDuplicateProtection
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 
 /** Kind of one declared ciphertext blob in the outbox. */
@@ -72,6 +73,8 @@ data class PreparedOutboxCapsule(
     /** Signed deterministic statement carried for the finalize call (M2). */
     val publishStatementBytes: ByteArray,
     val publishStatementSignature: ByteArray,
+    /** SHA-256 of the captured FRONT bytes used to build the staged manifest. */
+    val frontContentSha256: ByteArray = ByteArray(0),
     /**
      * M2-P08: opaque wrapped retry keyset bytes, or null when the
      * publisher did not generate a wrapped keyset for this capsule.
@@ -133,6 +136,8 @@ class CapsuleOutboxStager(
     private val database: RemanenceLocalDatabase,
     private val roots: AccountScopedFileRoots,
     private val senderRetryMaterialStore: SenderRetryMaterialStore,
+    private val exactDuplicateProtection: LocalExactDuplicateProtection =
+        LocalExactDuplicateProtection(database),
 ) {
 
     private val stagingMutex = Mutex()
@@ -193,6 +198,11 @@ class CapsuleOutboxStager(
             )?.let {
                 throw IllegalStateException("capsule already staged")
             }
+            val duplicateReservation = exactDuplicateProtection.reserve(
+                ownerUserId = prepared.ownerUserId,
+                capsuleId = prepared.capsuleId.toString(),
+                frontSha256 = prepared.frontContentSha256,
+            )
             val created = ArrayList<File>(prepared.artifacts.size + 3)
             // M2-P08: the retry material file (when one is staged) is added
             // to `created` so any later failure in this invocation rolls
@@ -299,6 +309,9 @@ class CapsuleOutboxStager(
                             )
                         },
                     )
+                    check(exactDuplicateProtection.commitReservedInTransaction(duplicateReservation)) {
+                        "exact duplicate reservation expired before staging committed"
+                    }
                 }
                 StagedOutboxCapsule(prepared.capsuleId, envelopePath, artifactPaths)
             } catch (failure: Throwable) {
@@ -308,6 +321,9 @@ class CapsuleOutboxStager(
                 // pre-call state, and the retry store is a separate
                 // owner-scoped surface.
                 created.forEach { it.delete() }
+                runCatching { exactDuplicateProtection.release(duplicateReservation) }
+                    .exceptionOrNull()
+                    ?.let(failure::addSuppressed)
                 throw failure
             }
         }
@@ -359,6 +375,9 @@ class CapsuleOutboxStager(
         require(prepared.publishStatementBytes.isNotEmpty()) { "publish statement bytes empty" }
         require(prepared.publishStatementSignature.size == PUBLISH_SIGNATURE_LENGTH) {
             "publish signature must be the protocol-v1 69-byte TINK-prefixed Ed25519 form"
+        }
+        require(prepared.frontContentSha256.size == LocalExactDuplicateProtection.SHA256_BYTES) {
+            "FRONT identity must be the SHA-256 digest of captured FRONT bytes"
         }
         val kinds = prepared.artifacts.groupBy { it.kind }
         require(kinds[OutboxArtifactKind.RECOGNITION_MANIFEST].orEmpty().size == 1) {

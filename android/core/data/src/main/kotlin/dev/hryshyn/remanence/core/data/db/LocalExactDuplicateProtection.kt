@@ -105,6 +105,37 @@ class LocalExactDuplicateProtection(
         ) == 1
     }
 
+    /**
+     * Extends only a still-live in-flight reservation. The staging seam calls
+     * this before each bounded file write so a live writer cannot be reaped
+     * while it is making progress. A lease that has already expired is never
+     * resurrected; the next process must reopen through [reserve].
+     */
+    suspend fun renew(reservation: ExactDuplicateReservation): Boolean = database.withTransaction {
+        renewInFlightInTransaction(reservation)
+    }
+
+    internal suspend fun renewInFlightInTransaction(reservation: ExactDuplicateReservation): Boolean {
+        val now = nowEpochMs()
+        return database.localSendDuplicateDao().renewReservation(
+            reservationId = reservation.reservationId,
+            ownerUserId = reservation.ownerUserId,
+            frontSha256 = reservation.frontSha256,
+            capsuleId = reservation.capsuleId,
+            nowEpochMs = now,
+            newExpiryEpochMs = now + reservationLeaseMs,
+        ) == 1
+    }
+
+    /** True when another live staging attempt owns the same owner/capsule. */
+    internal suspend fun hasOtherInFlightReservationInTransaction(
+        reservation: ExactDuplicateReservation,
+    ): Boolean = database.localSendDuplicateDao().countOtherReservedForCapsule(
+        ownerUserId = reservation.ownerUserId,
+        capsuleId = reservation.capsuleId,
+        reservationId = reservation.reservationId,
+    ) > 0
+
     private suspend fun cleanupExpiredInTransaction(
         dao: LocalSendDuplicateDao,
         ownerUserId: String,
@@ -124,8 +155,12 @@ class LocalExactDuplicateProtection(
         const val SHA256_BYTES = 32
         const val DEFAULT_RETENTION_WINDOW_MS = 24L * 60L * 60L * 1000L
         const val DEFAULT_MAX_RECENT_COUNT = 100
-        /** A crashed reservation is reclaimable after the same bounded window. */
-        const val DEFAULT_RESERVATION_LEASE_MS = DEFAULT_RETENTION_WINDOW_MS
+        /**
+         * In-flight staging is fenced separately from duplicate history.
+         * Staging renews this short lease at each bounded file boundary;
+         * committed history remains retained for [DEFAULT_RETENTION_WINDOW_MS].
+         */
+        const val DEFAULT_RESERVATION_LEASE_MS = 5L * 60L * 1000L
         const val STATE_RESERVED = "RESERVED"
         const val STATE_COMMITTED = "COMMITTED"
     }

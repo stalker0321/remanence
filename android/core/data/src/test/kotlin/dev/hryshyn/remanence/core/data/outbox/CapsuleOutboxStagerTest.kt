@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import java.io.File
+import java.nio.file.Files
 import java.security.MessageDigest
 import java.util.UUID
 import kotlinx.coroutines.async
@@ -245,7 +246,7 @@ class CapsuleOutboxStagerTest {
             throw AssertionError("expected failure")
         } catch (expected: IllegalStateException) {
             // The existing blocker path must be refused BEFORE any overwrite.
-            assertEquals("outbox file already present: $blockedBlobId.bin", expected.message)
+            assertEquals("canonical orphan outbox target is not a regular file", expected.message)
         }
 
         // Nothing of this invocation may survive: only the injected blocker
@@ -492,6 +493,124 @@ class CapsuleOutboxStagerTest {
         winnerFiles.forEachIndexed { index, file ->
             assertTrue("winner file ${file.name} must survive replay", file.exists())
             assertEquals(winnerBytes[index], file.readBytes().toList())
+        }
+    }
+
+    @Test
+    fun exactCanonicalOrphansFromProcessDeathAreReconciledAndRetriedAfterReopen() = runBlocking {
+        val dbName = "stager-orphan-reopen.db"
+        database = newFileBackedDatabase(dbName)
+        val retryBytes = "orphan-retry-material".toByteArray()
+        val prepared = preparedCapsule(senderRetryWrappedKeysetBytes = retryBytes)
+        seedCanonicalOrphanTargets(prepared)
+
+        // No Room row was committed before the simulated process death.
+        assertNull(database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId.toString(), OWNER))
+        database.close()
+        database = newFileBackedDatabase(dbName)
+
+        val staged = newStager().stage(prepared)
+        val row = database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId.toString(), OWNER)
+        assertEquals(OutboxCapsuleState.ENCRYPTED, row?.state)
+        assertTrue(File(staged.envelopePath).exists())
+        assertTrue(staged.artifactPaths.all { File(it).exists() })
+        assertTrue(File(row!!.senderRetryKeysetPath!!).readBytes().contentEquals(retryBytes))
+        assertTrue(outboxRoot().listFiles().orEmpty().none { it.name.contains(".tmp-") })
+    }
+
+    @Test
+    fun freshCompetingCapsuleReservationKeepsExactOrphanTargetsUntouched() = runBlocking {
+        database = newFileBackedDatabase("stager-orphan-competing.db")
+        val prepared = preparedCapsule()
+        seedCanonicalOrphanTargets(prepared)
+        val competingProtection = dev.hryshyn.remanence.core.data.db.LocalExactDuplicateProtection(
+            database = database,
+            nowEpochMs = { System.currentTimeMillis() },
+            reservationLeaseMs = 5L * 60L * 1000L,
+        )
+        val competing = competingProtection.reserve(
+            ownerUserId = OWNER,
+            capsuleId = prepared.capsuleId.toString(),
+            frontSha256 = MessageDigest.getInstance("SHA-256").digest("other-front".toByteArray()),
+        )
+        val envelope = File(outboxRoot(), "envelope-${prepared.capsuleId}.bin")
+        val envelopeBytes = envelope.readBytes()
+
+        try {
+            newStager().stage(prepared)
+            throw AssertionError("expected competing reservation refusal")
+        } catch (expected: IllegalStateException) {
+            assertEquals("another staging reservation owns this capsule", expected.message)
+        } finally {
+            competingProtection.release(competing)
+        }
+        assertTrue(envelope.readBytes().contentEquals(envelopeBytes))
+        assertNull(database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId.toString(), OWNER))
+    }
+
+    @Test
+    fun ambiguousOrMaliciousCanonicalOrphanFailsClosedWithoutDeletingIt() = runBlocking {
+        database = newFileBackedDatabase("stager-orphan-ambiguous.db")
+        val prepared = preparedCapsule()
+        val envelope = File(outboxRoot(), "envelope-${prepared.capsuleId}.bin")
+        outboxRoot().mkdirs()
+        val maliciousBytes = "not-the-prepared-envelope".toByteArray()
+        envelope.writeBytes(maliciousBytes)
+
+        try {
+            newStager().stage(prepared)
+            throw AssertionError("expected ambiguous orphan refusal")
+        } catch (expected: IllegalStateException) {
+            assertEquals("canonical orphan outbox target is ambiguous", expected.message)
+        }
+        assertTrue(envelope.readBytes().contentEquals(maliciousBytes))
+        assertNull(database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId.toString(), OWNER))
+
+        envelope.delete()
+        val outside = File(context.cacheDir, "stager-orphan-symlink-target").apply {
+            writeBytes("outside-owner-material".toByteArray())
+        }
+        Files.createSymbolicLink(envelope.toPath(), outside.toPath())
+        try {
+            newStager().stage(prepared)
+            throw AssertionError("expected symlink orphan refusal")
+        } catch (expected: IllegalStateException) {
+            assertEquals("canonical orphan outbox target is not a regular file", expected.message)
+        }
+        assertTrue(Files.isSymbolicLink(envelope.toPath()))
+        assertTrue(outside.exists())
+        Files.deleteIfExists(envelope.toPath())
+
+        val retryPrepared = preparedCapsule(senderRetryWrappedKeysetBytes = "expected-retry".toByteArray())
+        val retryTarget = retryStore().expectedPath(UserId(UUID.fromString(OWNER)), CapsuleId(retryPrepared.capsuleId))
+            .apply {
+                parentFile!!.mkdirs()
+                writeBytes("different-retry".toByteArray())
+            }
+        try {
+            newStager().stage(retryPrepared)
+            throw AssertionError("expected ambiguous retry orphan refusal")
+        } catch (expected: RuntimeException) {
+            assertEquals("canonical sender retry target is ambiguous", expected.message)
+        }
+        assertTrue(retryTarget.readBytes().contentEquals("different-retry".toByteArray()))
+        retryTarget.delete()
+        Unit
+    }
+
+    private fun seedCanonicalOrphanTargets(prepared: PreparedOutboxCapsule) {
+        val root = outboxRoot().apply { mkdirs() }
+        File(root, "envelope-${prepared.capsuleId}.bin").writeBytes(prepared.envelopeCiphertext)
+        prepared.artifacts.forEach { artifact ->
+            File(root, "${artifact.blobId}.bin").writeBytes(artifact.ciphertext)
+        }
+        File(root, "statement-${prepared.capsuleId}.bin").writeBytes(prepared.publishStatementBytes)
+        File(root, "signature-${prepared.capsuleId}.bin").writeBytes(prepared.publishStatementSignature)
+        prepared.senderRetryWrappedKeysetBytes?.let { bytes ->
+            retryStore().expectedPath(UserId(UUID.fromString(OWNER)), CapsuleId(prepared.capsuleId)).apply {
+                parentFile!!.mkdirs()
+                writeBytes(bytes)
+            }
         }
     }
 

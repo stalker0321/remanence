@@ -3,7 +3,9 @@ package dev.hryshyn.remanence.core.data.db
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import java.io.File
 import java.security.MessageDigest
+import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -128,6 +130,65 @@ class LocalExactDuplicateProtectionTest {
     }
 
     @Test
+    fun staleReservedRowCanBeReopenedAndRetriedAfterProcessDeath() = runBlocking {
+        val dbName = "local-duplicate-reopen-${UUID.randomUUID()}.db"
+        database.close()
+        database = Room.databaseBuilder(context, RemanenceLocalDatabase::class.java, dbName)
+            .allowMainThreadQueries()
+            .build()
+        val first = protection(leaseMs = 100L)
+        first.reserve(OWNER_A, CAPSULE_A, digest("reopen-after-crash"))
+
+        database.close()
+        now = 101L
+        database = Room.databaseBuilder(context, RemanenceLocalDatabase::class.java, dbName)
+            .allowMainThreadQueries()
+            .build()
+        val reopened = protection(leaseMs = 100L)
+        val retry = reopened.reserve(OWNER_A, CAPSULE_B, digest("reopen-after-crash"))
+        assertTrue(reopened.commit(retry))
+        assertEquals(1, database.localSendDuplicateDao().countCommittedForOwner(OWNER_A))
+
+        database.close()
+        context.getDatabasePath(dbName).delete()
+        File(context.getDatabasePath(dbName).path + "-wal").delete()
+        File(context.getDatabasePath(dbName).path + "-shm").delete()
+        Unit
+    }
+
+    @Test
+    fun freshCompetingReservationRemainsBlockedBeforeLeaseExpiry() = runBlocking {
+        val protection = protection(leaseMs = 100L)
+        val digest = digest("fresh-competitor")
+        protection.reserve(OWNER_A, CAPSULE_A, digest)
+        now = 99L
+
+        try {
+            protection.reserve(OWNER_A, CAPSULE_B, digest)
+            throw AssertionError("expected fresh reservation block")
+        } catch (expected: ExactDuplicateBlockedException) {
+            assertEquals("exact duplicate blocked", expected.message)
+        }
+    }
+
+    @Test
+    fun liveReservationRenewalFencesACompetingRetryPastOriginalLease() = runBlocking {
+        val protection = protection(leaseMs = 100L)
+        val digest = digest("renewed-live-staging")
+        val live = protection.reserve(OWNER_A, CAPSULE_A, digest)
+        now = 90L
+        assertTrue(protection.renew(live))
+        now = 101L
+
+        try {
+            protection.reserve(OWNER_A, CAPSULE_B, digest)
+            throw AssertionError("expected renewed reservation block")
+        } catch (expected: ExactDuplicateBlockedException) {
+            assertEquals("exact duplicate blocked", expected.message)
+        }
+    }
+
+    @Test
     fun concurrentSameOwnerSameDigestHasExactlyOneReservationWinner() = runBlocking {
         val protection = protection()
         val digest = digest("concurrent-front")
@@ -148,7 +209,7 @@ class LocalExactDuplicateProtectionTest {
     private fun protection(
         windowMs: Long = 10_000L,
         maxCount: Int = 100,
-        leaseMs: Long = windowMs,
+        leaseMs: Long = LocalExactDuplicateProtection.DEFAULT_RESERVATION_LEASE_MS,
     ) = LocalExactDuplicateProtection(
         database = database,
         nowEpochMs = { now },

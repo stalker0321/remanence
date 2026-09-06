@@ -61,6 +61,37 @@ abstract class LocalSendDuplicateDao {
     ): Int
 
     @Query(
+        "UPDATE local_send_duplicate SET reservation_expires_at_epoch_ms = :newExpiryEpochMs " +
+            "WHERE reservation_id = :reservationId " +
+            "AND owner_user_id = :ownerUserId " +
+            "AND front_sha256 = :frontSha256 " +
+            "AND capsule_id = :capsuleId " +
+            "AND state = 'RESERVED' " +
+            "AND reservation_expires_at_epoch_ms > :nowEpochMs",
+    )
+    abstract suspend fun renewReservation(
+        reservationId: String,
+        ownerUserId: String,
+        frontSha256: ByteArray,
+        capsuleId: String,
+        nowEpochMs: Long,
+        newExpiryEpochMs: Long,
+    ): Int
+
+    @Query(
+        "SELECT COUNT(*) FROM local_send_duplicate " +
+            "WHERE owner_user_id = :ownerUserId " +
+            "AND capsule_id = :capsuleId " +
+            "AND state = 'RESERVED' " +
+            "AND reservation_id <> :reservationId",
+    )
+    abstract suspend fun countOtherReservedForCapsule(
+        ownerUserId: String,
+        capsuleId: String,
+        reservationId: String,
+    ): Int
+
+    @Query(
         "SELECT reservation_id FROM local_send_duplicate " +
             "WHERE owner_user_id = :ownerUserId AND state = 'COMMITTED' " +
             "ORDER BY created_at_epoch_ms DESC, reservation_id DESC " +

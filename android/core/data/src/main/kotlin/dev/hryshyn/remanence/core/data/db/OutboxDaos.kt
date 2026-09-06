@@ -47,6 +47,10 @@ abstract class OutboxCapsuleDao {
     )
     protected abstract suspend fun findOwnersOfImmutableIds(capsuleId: String, idempotencyKey: String): List<String>
 
+    /** Owner probe used by narrow orphan reconciliation before any file delete. */
+    open suspend fun ownersOfCapsule(capsuleId: String): List<String> =
+        findOwnersOfImmutableIds(capsuleId, "")
+
     /** Owner-scoped teardown: removes only rows belonging to [ownerUserId]. */
     @Query("DELETE FROM outbox_capsule WHERE owner_user_id = :ownerUserId")
     abstract suspend fun clearForOwner(ownerUserId: String)

@@ -8,6 +8,8 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -99,7 +101,7 @@ class SenderRetryMaterialStore(
         val mutex = mutexFor(owner, capsule)
         mutex.withLock {
             val target = expectedPath(owner, capsule)
-            if (target.exists()) {
+            if (Files.exists(target.toPath(), LinkOption.NOFOLLOW_LINKS)) {
                 throw SenderRetryMaterialStorageException(
                     "sender retry material already present for $capsule; refusing overwrite",
                 )
@@ -134,10 +136,15 @@ class SenderRetryMaterialStore(
                         "could not write sender retry material temp file",
                     ).initCauseOrThrow(failure)
                 }
-                if (!temporary.renameTo(target)) {
+                try {
+                    // No REPLACE_EXISTING: a concurrent winner's canonical
+                    // target must remain untouched if it appears after the
+                    // preflight check.
+                    Files.move(temporary.toPath(), target.toPath())
+                } catch (failure: IOException) {
                     throw SenderRetryMaterialStorageException(
                         "could not persist sender retry material",
-                    )
+                    ).initCauseOrThrow(failure)
                 }
                 // Canonical containment: the persisted file's
                 // canonical path MUST live under the owner's
@@ -226,6 +233,58 @@ class SenderRetryMaterialStore(
                     )
                 }
                 return@withLock false
+            }
+            true
+        }
+    }
+
+    /**
+     * Reconciles only the canonical owner/capsule retry target left by an
+     * interrupted outbox staging attempt. A present target is removable only
+     * when it is a regular non-symlink file whose bytes exactly match the
+     * current prepared capsule. A present target with no expected retry bytes,
+     * a type mismatch, or different bytes is ambiguous and fails closed.
+     */
+    suspend fun reconcileOrphan(
+        owner: UserId,
+        capsule: CapsuleId,
+        expectedBytes: ByteArray?,
+    ): Boolean = withContext(Dispatchers.IO) {
+        mutexFor(owner, capsule).withLock {
+            val target = expectedPath(owner, capsule)
+            val path = target.toPath()
+            if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) return@withLock false
+            if (Files.isSymbolicLink(path) || !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+                throw SenderRetryMaterialStorageException(
+                    "canonical sender retry target is not a regular file",
+                )
+            }
+            val expected = expectedBytes ?: throw SenderRetryMaterialStorageException(
+                "unexpected canonical sender retry target",
+            )
+            val actual = try {
+                Files.readAllBytes(path)
+            } catch (failure: IOException) {
+                throw SenderRetryMaterialStorageException(
+                    "could not inspect canonical sender retry target",
+                ).initCauseOrThrow(failure)
+            }
+            if (!actual.contentEquals(expected)) {
+                throw SenderRetryMaterialStorageException(
+                    "canonical sender retry target is ambiguous",
+                )
+            }
+            try {
+                Files.delete(path)
+            } catch (failure: IOException) {
+                throw SenderRetryMaterialStorageException(
+                    "could not reconcile canonical sender retry target",
+                ).initCauseOrThrow(failure)
+            }
+            if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+                throw SenderRetryMaterialStorageException(
+                    "reconciled sender retry target still exists",
+                )
             }
             true
         }

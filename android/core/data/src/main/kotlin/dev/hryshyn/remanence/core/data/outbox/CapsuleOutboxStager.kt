@@ -2,6 +2,9 @@ package dev.hryshyn.remanence.core.data.outbox
 
 import androidx.room.withTransaction
 import java.io.File
+import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.LinkOption
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
 import dev.hryshyn.remanence.core.model.CapsuleId
@@ -99,8 +102,10 @@ data class StagedOutboxCapsule(
  * then-rename, temp deleted in finally), then capsule and blob rows are
  * inserted and moved PREPARING -> ENCRYPTED through the guarded transition
  * inside a single Room transaction; any local failure before commit removes
- * only the files this invocation created, so neither a partial file set nor a
- * partial row set can ever be observed.
+ * the files this invocation created. A retry may additionally remove only
+ * exact-content canonical orphan targets after proving that no capsule row or
+ * competing reservation exists; ambiguous residue fails closed, so neither a
+ * partial file set nor a partial row set can be adopted.
  *
  * Concurrent or replayed staging of the same capsule refuses before touching
  * the filesystem and can never overwrite or delete an already-committed
@@ -211,6 +216,40 @@ class CapsuleOutboxStager(
             // canonical retry path available for the entity column.
             var retryKeysetPath: String? = null
             try {
+                // A reservation is a short in-flight lease, not the 24-hour
+                // duplicate-history window. Renew before every bounded file
+                // boundary so a live writer cannot lose ownership while it
+                // stages; an expired lease is never resurrected.
+                renewReservationOrFail(duplicateReservation)
+                check(capsuleDao.ownersOfCapsule(prepared.capsuleId.toString()).isEmpty()) {
+                    "capsule already staged"
+                }
+                check(!exactDuplicateProtection.hasOtherInFlightReservationInTransaction(duplicateReservation)) {
+                    "another staging reservation owns this capsule"
+                }
+
+                // A process may have died after canonical files were renamed
+                // but before the Room transaction. Reconcile only exact
+                // owner/capsule targets with byte identity proven by this
+                // prepared capsule. All targets are inspected before any is
+                // removed; ambiguity fails closed.
+                val reconciledCiphertextTargets = inspectOrphanCiphertextTargets(
+                    ciphertextDirectory = ciphertextDirectory,
+                    prepared = prepared,
+                    reservation = duplicateReservation,
+                )
+                renewReservationOrFail(duplicateReservation)
+                senderRetryMaterialStore.reconcileOrphan(
+                    owner = ownerId,
+                    capsule = capsuleId,
+                    expectedBytes = prepared.senderRetryWrappedKeysetBytes,
+                )
+                deleteReconciledCiphertextTargets(
+                    targets = reconciledCiphertextTargets,
+                    reservation = duplicateReservation,
+                )
+
+                renewReservationOrFail(duplicateReservation)
                 val envelopePath =
                     writeBytes(
                         ciphertextDirectory,
@@ -219,14 +258,17 @@ class CapsuleOutboxStager(
                         prepared.envelopeCiphertext,
                     )
                 val artifactPaths = prepared.artifacts.map { artifact ->
+                    renewReservationOrFail(duplicateReservation)
                     writeBytes(ciphertextDirectory, created, "${artifact.blobId}.bin", artifact.ciphertext)
                 }
+                renewReservationOrFail(duplicateReservation)
                 val statementPath = writeBytes(
                     ciphertextDirectory,
                     created,
                     "statement-${prepared.capsuleId}.bin",
                     prepared.publishStatementBytes,
                 )
+                renewReservationOrFail(duplicateReservation)
                 val signaturePath = writeBytes(
                     ciphertextDirectory,
                     created,
@@ -240,6 +282,7 @@ class CapsuleOutboxStager(
                 // The retry store refuses to overwrite, so a concurrent
                 // winner cannot be silently replaced.
                 if (prepared.senderRetryWrappedKeysetBytes != null) {
+                    renewReservationOrFail(duplicateReservation)
                     retryKeysetPath = senderRetryMaterialStore.write(
                         owner = ownerId,
                         capsule = capsuleId,
@@ -252,6 +295,7 @@ class CapsuleOutboxStager(
                     created += File(retryKeysetPath)
                 }
 
+                renewReservationOrFail(duplicateReservation)
                 database.withTransaction {
                     // Authoritative re-check inside the transaction so a
                     // concurrent staging of the same capsule cannot slip
@@ -329,6 +373,67 @@ class CapsuleOutboxStager(
         }
     }
 
+    private suspend fun renewReservationOrFail(reservation: dev.hryshyn.remanence.core.data.db.ExactDuplicateReservation) {
+        check(exactDuplicateProtection.renew(reservation)) {
+            "exact duplicate staging reservation expired"
+        }
+    }
+
+    private data class ExpectedCiphertextTarget(
+        val file: File,
+        val bytes: ByteArray,
+    )
+
+    private suspend fun inspectOrphanCiphertextTargets(
+        ciphertextDirectory: File,
+        prepared: PreparedOutboxCapsule,
+        reservation: dev.hryshyn.remanence.core.data.db.ExactDuplicateReservation,
+    ): List<ExpectedCiphertextTarget> = withContext(Dispatchers.IO) {
+        val expected = buildList {
+            add(ExpectedCiphertextTarget(File(ciphertextDirectory, "envelope-${prepared.capsuleId}.bin"), prepared.envelopeCiphertext))
+            prepared.artifacts.forEach { artifact ->
+                add(ExpectedCiphertextTarget(File(ciphertextDirectory, "${artifact.blobId}.bin"), artifact.ciphertext))
+            }
+            add(ExpectedCiphertextTarget(File(ciphertextDirectory, "statement-${prepared.capsuleId}.bin"), prepared.publishStatementBytes))
+            add(ExpectedCiphertextTarget(File(ciphertextDirectory, "signature-${prepared.capsuleId}.bin"), prepared.publishStatementSignature))
+        }
+        val existing = ArrayList<ExpectedCiphertextTarget>()
+        expected.forEach { target ->
+            renewReservationOrFail(reservation)
+            val path = target.file.toPath()
+            if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) return@forEach
+            if (Files.isSymbolicLink(path) || !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+                throw IllegalStateException("canonical orphan outbox target is not a regular file")
+            }
+            if (!Files.readAllBytes(path).contentEquals(target.bytes)) {
+                throw IllegalStateException("canonical orphan outbox target is ambiguous")
+            }
+            existing += target
+        }
+        existing
+    }
+
+    private suspend fun deleteReconciledCiphertextTargets(
+        targets: List<ExpectedCiphertextTarget>,
+        reservation: dev.hryshyn.remanence.core.data.db.ExactDuplicateReservation,
+    ) = withContext(Dispatchers.IO) {
+        targets.forEach { target ->
+            renewReservationOrFail(reservation)
+            val path = target.file.toPath()
+            if (
+                Files.isSymbolicLink(path) ||
+                !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) ||
+                !Files.readAllBytes(path).contentEquals(target.bytes)
+            ) {
+                throw IllegalStateException("canonical orphan outbox target changed during reconciliation")
+            }
+            Files.delete(path)
+            check(!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+                "reconciled orphan outbox target still exists"
+            }
+        }
+    }
+
     /** Writes [bytes] beneath the owner's own ciphertext directory; refuses to overwrite any pre-existing target. */
     private suspend fun writeBytes(
         ownerCiphertextRoot: File,
@@ -344,7 +449,7 @@ class CapsuleOutboxStager(
             // it would silently damage the winner. Refuse BEFORE any byte of
             // this invocation lands, so a foreign-owner capsule_id collision
             // cannot touch winner-owned files either.
-            if (target.exists()) {
+            if (Files.exists(target.toPath(), LinkOption.NOFOLLOW_LINKS)) {
                 throw IllegalStateException("outbox file already present: $name")
             }
             // Unique per-invocation temp name: two stagings can never rename
@@ -352,8 +457,12 @@ class CapsuleOutboxStager(
             val temporary = File(ownerCiphertextRoot, "$name.tmp-${UUID.randomUUID()}")
             try {
                 temporary.writeBytes(bytes)
-                if (!temporary.renameTo(target)) {
-                    throw IllegalStateException("could not persist $name")
+                try {
+                    // No REPLACE_EXISTING: if a winner appears after the
+                    // preflight, its canonical target remains untouched.
+                    Files.move(temporary.toPath(), target.toPath())
+                } catch (failure: IOException) {
+                    throw IllegalStateException("could not persist $name", failure)
                 }
                 created += target
                 target.absolutePath

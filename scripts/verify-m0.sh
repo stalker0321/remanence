@@ -178,7 +178,7 @@ log "checking alembic_version"
 alembic_version="$("${COMPOSE[@]}" exec -T postgres psql -U remanence -d remanence -tAc "SELECT version_num FROM alembic_version;")"
 alembic_version="${alembic_version//$'\r'/}"
 alembic_version="${alembic_version%%$'\n'*}"
-[[ "${alembic_version}" == "0004_r1_publication_order" ]] || die "alembic_version is not 0004_r1_publication_order"
+[[ "${alembic_version}" == "0005_m2_f3_capsule_revocation" ]] || die "alembic_version is not 0005_m2_f3_capsule_revocation"
 
 log "checking api uid/gid"
 api_uid="$("${COMPOSE[@]}" exec -T api id -u)"
@@ -227,6 +227,6 @@ git -C "${REPO_ROOT}" diff --check
 
 log "M0 verify PASS"
 log "postgres healthy; migrate exited 0; api healthy uid/gid 10001"
-log "healthz {\"status\":\"ok\"}; alembic 0004_r1_publication_order; blob probe mode 0600"
+log "healthz {\"status\":\"ok\"}; alembic 0005_m2_f3_capsule_revocation; blob probe mode 0600"
 log "apk ${apk_bytes} bytes; git diff --check clean"
 log "device/camera/CV not validated (adb not run)"

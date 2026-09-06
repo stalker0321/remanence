@@ -32,6 +32,10 @@ import dev.hryshyn.remanence.core.data.db.OutboxCapsuleState
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
 import dev.hryshyn.remanence.core.data.network.DirectoryLookupResult
 import dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot
+import dev.hryshyn.remanence.core.data.network.CapsuleRevokePort
+import dev.hryshyn.remanence.core.data.network.CapsuleRevokeResult
+import dev.hryshyn.remanence.core.data.network.CapsuleRevokeState
+import dev.hryshyn.remanence.core.data.network.CapsuleRevokeFailure
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.core.model.CapsuleId
@@ -166,6 +170,33 @@ class CreatePublishLifetimeTest {
             DirectoryLookupResult.NotFound
     }
 
+    private class ScriptedRevokePort(
+        private val responses: MutableList<CapsuleRevokeResult>,
+    ) : CapsuleRevokePort {
+        val calls = mutableListOf<CapsuleId>()
+
+        override suspend fun revoke(
+            capsuleId: CapsuleId,
+            accessToken: String,
+        ): CapsuleRevokeResult {
+            calls += capsuleId
+            return responses.removeAt(0)
+        }
+    }
+
+    private class BlockingRevokePort : CapsuleRevokePort {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<CapsuleRevokeResult>()
+
+        override suspend fun revoke(
+            capsuleId: CapsuleId,
+            accessToken: String,
+        ): CapsuleRevokeResult {
+            started.complete(Unit)
+            return release.await()
+        }
+    }
+
     private fun b64Url(bytes: ByteArray): String =
         com.google.crypto.tink.subtle.Base64.urlSafeEncode(bytes)
 
@@ -198,12 +229,15 @@ class CreatePublishLifetimeTest {
         identityGate: CompletableDeferred<SenderIdentitySnapshot>,
         normalizerGate: CompletableDeferred<Unit>? = null,
         enqueueUpload: suspend (UserId, CapsuleId) -> Unit = { _, _ -> },
+        revoke: CapsuleRevokePort? = null,
+        networkConnected: () -> Boolean = { true },
+        accessToken: String? = null,
     ): CreateViewModel {
         val persistence = RecordingPersistence()
         val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(outboxDir))
         val vm = CreateViewModel(
             directory = StaticDirectory(),
-            accessTokenProvider = { null },
+            accessTokenProvider = { accessToken },
             identityProvider = { identityGate.await() },
             persistence = persistence,
             outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(outboxDir), retryStore),
@@ -225,6 +259,8 @@ class CreatePublishLifetimeTest {
             senderRetryKekAlias = testAlias,
             enqueueUpload = enqueueUpload,
             outboxCapsuleDao = database.outboxCapsuleDao(),
+            capsuleRevoke = revoke,
+            networkConnected = networkConnected,
         )
         vm.beginSession(1L, userUuid.toString())
         vm.onResolved(selfSnapshot())
@@ -241,6 +277,17 @@ class CreatePublishLifetimeTest {
 
     private suspend fun outboxRow(capsuleId: String) =
         database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId, userUuid.toString())
+
+    private suspend fun promoteToPublished(vm: CreateViewModel) {
+        val dao = database.outboxCapsuleDao()
+        assertEquals(1, dao.beginUploadForOwner(vm.capsuleId, userUuid.toString()))
+        assertEquals(1, dao.beginFinalizeForOwner(vm.capsuleId, userUuid.toString()))
+        assertEquals(1, dao.markPublishedForOwner(vm.capsuleId, userUuid.toString()))
+        awaitCondition("published status") {
+            vm.uploadStatus.value == CreateViewModel.CreateUploadStatus.Published
+        }
+        assertEquals(CreateViewModel.Step.PUBLISHED, vm.step.value)
+    }
 
     // ------------------------------------------------------------------
     // Scenarios.
@@ -441,6 +488,112 @@ class CreatePublishLifetimeTest {
             assertEquals(OutboxCapsuleState.PUBLISHED, outboxRow(capsuleId)!!.state)
         }
         assertTrue("terminal publication still owns no plaintext staging", createStagingRoot().listFiles()?.isEmpty() ?: true)
+    }
+
+    @Test
+    fun publishedCapsuleRetainsIdAndRetryCanConvergeOnReplaySuccess() = runBlocking {
+        val revoke = ScriptedRevokePort(
+            mutableListOf(
+                CapsuleRevokeResult.Failure(CapsuleRevokeFailure.NETWORK, retryable = true),
+                CapsuleRevokeResult.Success(
+                    revoke = dev.hryshyn.remanence.core.data.network.CapsuleRevoke(
+                        CapsuleId.parseRest("0198f0a0-0000-7000-8000-00000000ca01"),
+                        CapsuleRevokeState.REVOKED,
+                        isReplay = true,
+                    ),
+                    httpStatus = 200,
+                ),
+            ),
+        )
+        val vm = contentStage(
+            CompletableDeferred<SenderIdentitySnapshot>().apply { complete(senderIdentity()) },
+            revoke = revoke,
+            networkConnected = { true },
+            accessToken = "revoke-token",
+        )
+        vm.startPublishing()
+        awaitTerminalPublish(vm)
+        val publishedId = CapsuleId.parseRest(vm.capsuleId)
+        promoteToPublished(vm)
+
+        vm.revokePublished()
+        assertEquals(
+            CreateViewModel.CapsuleRevokeStatus.Failed(CapsuleRevokeFailure.NETWORK, true),
+            vm.revokeStatus.value,
+        )
+        assertEquals(publishedId, revoke.calls.single())
+        assertEquals(publishedId.toRestString(), vm.capsuleId)
+
+        vm.revokePublished()
+        assertEquals(
+            CreateViewModel.CapsuleRevokeStatus.Succeeded(isReplay = true),
+            vm.revokeStatus.value,
+        )
+        assertEquals(listOf(publishedId, publishedId), revoke.calls)
+        assertEquals(CreateViewModel.Step.PUBLISHED, vm.step.value)
+    }
+
+    @Test
+    fun offlineRevokeDoesNotCallOrQueueAnything() = runBlocking {
+        val revoke = ScriptedRevokePort(
+            mutableListOf(
+                CapsuleRevokeResult.Success(
+                    dev.hryshyn.remanence.core.data.network.CapsuleRevoke(
+                        CapsuleId.parseRest("0198f0a0-0000-7000-8000-00000000ca01"),
+                        CapsuleRevokeState.REVOKED,
+                        isReplay = false,
+                    ),
+                    httpStatus = 200,
+                ),
+            ),
+        )
+        val vm = contentStage(
+            CompletableDeferred<SenderIdentitySnapshot>().apply { complete(senderIdentity()) },
+            revoke = revoke,
+            networkConnected = { false },
+            accessToken = "revoke-token",
+        )
+        vm.startPublishing()
+        awaitTerminalPublish(vm)
+        promoteToPublished(vm)
+
+        vm.revokePublished()
+
+        assertEquals(
+            CreateViewModel.CapsuleRevokeStatus.Failed(CapsuleRevokeFailure.NETWORK, true),
+            vm.revokeStatus.value,
+        )
+        assertTrue(revoke.calls.isEmpty())
+        assertEquals(CreateViewModel.Step.PUBLISHED, vm.step.value)
+    }
+
+    @Test
+    fun routeExitCancelsUnknownRevokeWithoutClaimingSuccess() = runBlocking {
+        val revoke = BlockingRevokePort()
+        val vm = contentStage(
+            CompletableDeferred<SenderIdentitySnapshot>().apply { complete(senderIdentity()) },
+            revoke = revoke,
+            accessToken = "revoke-token",
+        )
+        vm.startPublishing()
+        awaitTerminalPublish(vm)
+        promoteToPublished(vm)
+
+        vm.revokePublished()
+        revoke.started.await()
+        vm.endSession()
+        revoke.release.complete(
+            CapsuleRevokeResult.Success(
+                dev.hryshyn.remanence.core.data.network.CapsuleRevoke(
+                    CapsuleId.parseRest("0198f0a0-0000-7000-8000-00000000ca01"),
+                    CapsuleRevokeState.REVOKED,
+                    isReplay = false,
+                ),
+                httpStatus = 200,
+            ),
+        )
+        assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
+        assertEquals(CreateViewModel.CapsuleRevokeStatus.Idle, vm.revokeStatus.value)
     }
 
     @Test

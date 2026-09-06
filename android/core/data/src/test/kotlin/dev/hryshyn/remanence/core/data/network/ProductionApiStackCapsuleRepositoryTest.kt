@@ -196,6 +196,26 @@ class ProductionApiStackCapsuleRepositoryTest {
     }
 
     @Test
+    fun revokeRepositoryUsesAuthenticatedStackAndRetriesOnceAfterRefresh() = runTest {
+        val (result, trace) = withAuthenticatedStack(
+            path = "/v1/capsules/${capsuleId.toRestString()}/revoke",
+            success = MockResponse.Builder()
+                .code(200)
+                .setHeader("Content-Type", "application/json")
+                .body(revokeSuccessJson())
+                .build(),
+        ) { stack ->
+            stack.capsuleRevokeRepository.revoke(capsuleId, OLD_ACCESS)
+        }
+
+        val success = assertIs<CapsuleRevokeResult.Success>(result)
+        assertEquals(200, success.httpStatus)
+        assertEquals(capsuleId, success.revoke.capsuleId)
+        assertEquals(CapsuleRevokeState.REVOKED, success.revoke.state)
+        assertRefreshAndRetry(trace)
+    }
+
+    @Test
     fun closedDomainStripsExplicitOrdinaryAuthorizationAndBareLogoutKeepsToken() = runTest {
         val server = MockWebServer()
         val seen = CopyOnWriteArrayList<Pair<String, String?>>()
@@ -405,6 +425,15 @@ class ProductionApiStackCapsuleRepositoryTest {
           "capsule_id": "${capsuleId.toRestString()}",
           "state": "READY",
           "ready_at": "2026-08-30T03:00:00Z"
+        }
+        """.trimIndent()
+
+    private fun revokeSuccessJson(): String =
+        """
+        {
+          "capsule_id": "${capsuleId.toRestString()}",
+          "state": "REVOKED",
+          "is_replay": false
         }
         """.trimIndent()
 

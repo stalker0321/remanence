@@ -10,6 +10,7 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -43,9 +44,13 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import dev.hryshyn.remanence.core.crypto.AccountIdentityGenerator
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
+import dev.hryshyn.remanence.core.data.db.OutboxCapsuleState
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
 import dev.hryshyn.remanence.core.data.network.DirectoryLookupResult
 import dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot
+import dev.hryshyn.remanence.core.data.network.CapsuleRevokePort
+import dev.hryshyn.remanence.core.data.network.CapsuleRevokeResult
+import dev.hryshyn.remanence.core.data.network.CapsuleRevokeState
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.core.model.CapsuleId
@@ -165,6 +170,20 @@ class CreateContentPublishRecoveryTest {
             DirectoryLookupResult.NotFound
     }
 
+    private class RecordingRevokePort(
+        private val result: CapsuleRevokeResult,
+    ) : CapsuleRevokePort {
+        val calls = mutableListOf<CapsuleId>()
+
+        override suspend fun revoke(
+            capsuleId: CapsuleId,
+            accessToken: String,
+        ): CapsuleRevokeResult {
+            calls += capsuleId
+            return result
+        }
+    }
+
     private fun b64Url(bytes: ByteArray): String =
         com.google.crypto.tink.subtle.Base64.urlSafeEncode(bytes)
 
@@ -211,12 +230,15 @@ class CreateContentPublishRecoveryTest {
         identityGate: CompletableDeferred<SenderIdentitySnapshot>? = null,
         enqueueUpload: suspend (UserId, CapsuleId) -> Unit = { _, _ -> },
         ioDispatcher: CoroutineDispatcher = testDispatcher,
+        revoke: CapsuleRevokePort? = null,
+        networkConnected: () -> Boolean = { true },
+        accessToken: String? = null,
     ): Triple<CreateViewModel, RecordingPersistence, androidx.compose.ui.test.junit4.ComposeTestRule> {
         val persistence = RecordingPersistence()
         val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir()))
         val vm = CreateViewModel(
             directory = StaticDirectory(),
-            accessTokenProvider = { null },
+            accessTokenProvider = { accessToken },
             identityProvider = {
                 if (identityGate != null) identityGate.await() else null
             },
@@ -224,7 +246,11 @@ class CreateContentPublishRecoveryTest {
             outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir()), retryStore),
             profile = RecognitionProfile.mvpOrbV1(),
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir()),
-            openPhotoSource = { error("picker streams not used here") },
+            openPhotoSource = { id ->
+                dev.hryshyn.remanence.create.PhotoSource {
+                    java.io.ByteArrayInputStream("photo-$id".toByteArray())
+                }
+            },
             frontProcessor = ScriptedProcessor(synthetic(FingerprintSide.FRONT)),
             photoNormalizer = { input -> dev.hryshyn.remanence.create.NormalizedPhotoDto(input.copyOf(), 800, 600) },
             cpuDispatcher = testDispatcher,
@@ -232,6 +258,9 @@ class CreateContentPublishRecoveryTest {
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
             enqueueUpload = enqueueUpload,
+            outboxCapsuleDao = database.outboxCapsuleDao(),
+            capsuleRevoke = revoke,
+            networkConnected = networkConnected,
         )
         vm.beginSession(1L, userUuid.toString())
 
@@ -277,6 +306,16 @@ class CreateContentPublishRecoveryTest {
         keyBundleStatus = "ACTIVE",
         directoryVersion = "v1",
     )
+
+    private fun promoteToPublished(vm: CreateViewModel) {
+        runBlocking {
+            val dao = database.outboxCapsuleDao()
+            assertEquals(1, dao.beginUploadForOwner(vm.capsuleId, userUuid.toString()))
+            assertEquals(1, dao.beginFinalizeForOwner(vm.capsuleId, userUuid.toString()))
+            assertEquals(1, dao.markPublishedForOwner(vm.capsuleId, userUuid.toString()))
+        }
+        awaitStep(vm, CreateViewModel.Step.PUBLISHED)
+    }
 
     // ------------------------------------------------------------------
     // Note input visibility.
@@ -443,6 +482,46 @@ class CreateContentPublishRecoveryTest {
             Thread.sleep(5)
         }
         assertTrue(persistence.decryptedBuffers.all { bytes -> bytes.all { it == 0.toByte() } })
+    }
+
+    @Test
+    fun publishedScreenConfirmsAndRendersHonestRevokeSuccess() = runBlocking {
+        val capsuleId = CapsuleId.parseRest("0198f0a0-0000-7000-8000-00000000ca01")
+        val revoke = RecordingRevokePort(
+            CapsuleRevokeResult.Success(
+                dev.hryshyn.remanence.core.data.network.CapsuleRevoke(
+                    capsuleId,
+                    CapsuleRevokeState.REVOKED,
+                    isReplay = true,
+                ),
+                httpStatus = 200,
+            ),
+        )
+        val (vm, _, _) = contentStage(
+            identityGate = CompletableDeferred<SenderIdentitySnapshot>().apply { complete(senderIdentity()) },
+            revoke = revoke,
+            accessToken = "test-token",
+        )
+        vm.onPhotosPicked(listOf("p1", "p2", "p3"))
+        assertTrue(vm.noteEditor.onChange("honest copy"))
+        vm.startPublishing()
+        awaitStep(vm, CreateViewModel.Step.UPLOAD_PENDING)
+        promoteToPublished(vm)
+
+        composeRule.setContent { MaterialTheme { CreateScreen(viewModel = vm) } }
+        composeRule.onNodeWithTag("create_revoke_disclaimer").assertIsDisplayed()
+        composeRule.onNodeWithTag("create_revoke_button").assertIsDisplayed().assertIsEnabled().performClick()
+        composeRule.onNodeWithTag("create_revoke_confirm").assertIsDisplayed().performClick()
+        composeRule.waitForIdle()
+
+        assertEquals(1, revoke.calls.size)
+        assertEquals(vm.capsuleId, revoke.calls.single().toRestString())
+        composeRule.onNodeWithTag("create_revoke_success").assertIsDisplayed()
+        composeRule.onNodeWithTag("create_revoke_success")
+            .assertTextContains("already received or decrypted", substring = true)
+        composeRule.onNodeWithTag("create_revoke_button").assertIsNotEnabled()
+        assertEquals(CreateViewModel.Step.PUBLISHED, vm.step.value)
+        assertEquals(OutboxCapsuleState.PUBLISHED, database.outboxCapsuleDao().getByCapsuleIdAndOwner(vm.capsuleId, userUuid.toString())!!.state)
     }
 
     private fun awaitTerminal(vm: CreateViewModel) {

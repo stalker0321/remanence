@@ -12,14 +12,18 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
@@ -54,6 +58,8 @@ fun CreateScreen(
     val uploadStatus by viewModel.uploadStatus.collectAsStateWithLifecycle()
     val publishError by viewModel.publishError.collectAsStateWithLifecycle()
     val flowError by viewModel.flowError.collectAsStateWithLifecycle()
+    val revokeStatus by viewModel.revokeStatus.collectAsStateWithLifecycle()
+    var showRevokeConfirmation by remember { mutableStateOf(false) }
 
     // The caller distinguishes true route exit from activity recreation. This
     // effect is intentionally not keyed by configuration so rotation does not
@@ -125,10 +131,42 @@ fun CreateScreen(
                     modifier = Modifier.testTag("create_upload_pending"),
                 )
             }
-            CreateViewModel.Step.PUBLISHED -> Text(
-                "Capsule sealed. Send the physical postcard.",
-                modifier = Modifier.testTag("create_published"),
-            )
+            CreateViewModel.Step.PUBLISHED -> Column {
+                Text(
+                    "Capsule sealed. Send the physical postcard.",
+                    modifier = Modifier.testTag("create_published"),
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Cancellation stops future delivery when possible. A copy already received or decrypted by the recipient cannot be removed.",
+                    modifier = Modifier.testTag("create_revoke_disclaimer"),
+                )
+                Spacer(Modifier.height(8.dp))
+                when (val status = revokeStatus) {
+                    CreateViewModel.CapsuleRevokeStatus.Idle -> Unit
+                    CreateViewModel.CapsuleRevokeStatus.InFlight -> Text(
+                        "Cancelling capsule...",
+                        modifier = Modifier.testTag("create_revoke_in_flight"),
+                    )
+                    is CreateViewModel.CapsuleRevokeStatus.Succeeded -> Text(
+                        "Capsule cancelled for future delivery. A copy already received or decrypted by the recipient is not removed.",
+                        modifier = Modifier.testTag("create_revoke_success"),
+                    )
+                    is CreateViewModel.CapsuleRevokeStatus.Failed -> Text(
+                        createRevokeCopy(status),
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.testTag("create_revoke_error"),
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = { showRevokeConfirmation = true },
+                    enabled = revokeActionEnabled(revokeStatus),
+                    modifier = Modifier.testTag("create_revoke_button"),
+                ) {
+                    Text("Cancel capsule")
+                }
+            }
         }
 
         // FIX-STATE-02: visible recovery for guarded/out-of-order events.
@@ -143,6 +181,34 @@ fun CreateScreen(
             Spacer(Modifier.height(8.dp))
             Text(text = error, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("create_error"))
         }
+    }
+
+    if (showRevokeConfirmation && step == CreateViewModel.Step.PUBLISHED) {
+        AlertDialog(
+            onDismissRequest = { showRevokeConfirmation = false },
+            title = { Text("Cancel this capsule?") },
+            text = {
+                Text(
+                    "This stops future delivery if the recipient has not already received it. A copy already received or decrypted by the recipient cannot be removed.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showRevokeConfirmation = false
+                        viewModel.revokePublished()
+                    },
+                    enabled = revokeActionEnabled(revokeStatus),
+                    modifier = Modifier.testTag("create_revoke_confirm"),
+                ) { Text("Cancel capsule") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showRevokeConfirmation = false },
+                    modifier = Modifier.testTag("create_revoke_dismiss"),
+                ) { Text("Keep capsule") }
+            },
+        )
     }
 }
 
@@ -273,4 +339,28 @@ internal fun createUploadPendingCopy(status: CreateViewModel.CreateUploadStatus)
         is CreateViewModel.CreateUploadStatus.RetryableFailure -> "Send needs a retry."
         is CreateViewModel.CreateUploadStatus.TerminalFailure -> "Send failed permanently."
         else -> "Encrypted capsule queued. Upload will continue in the background."
+    }
+
+private fun revokeActionEnabled(status: CreateViewModel.CapsuleRevokeStatus): Boolean =
+    when (status) {
+        CreateViewModel.CapsuleRevokeStatus.Idle -> true
+        CreateViewModel.CapsuleRevokeStatus.InFlight -> false
+        is CreateViewModel.CapsuleRevokeStatus.Succeeded -> false
+        is CreateViewModel.CapsuleRevokeStatus.Failed ->
+            status.reason != dev.hryshyn.remanence.core.data.network.CapsuleRevokeFailure.WINDOW_EXPIRED &&
+                status.reason != dev.hryshyn.remanence.core.data.network.CapsuleRevokeFailure.CAPSULE_STATE_INVALID &&
+                status.reason != dev.hryshyn.remanence.core.data.network.CapsuleRevokeFailure.CAPSULE_NOT_FOUND
+    }
+
+internal fun createRevokeCopy(status: CreateViewModel.CapsuleRevokeStatus.Failed): String =
+    when (status.reason) {
+        dev.hryshyn.remanence.core.data.network.CapsuleRevokeFailure.NETWORK ->
+            "Connect to the internet to cancel this capsule, then try again."
+        dev.hryshyn.remanence.core.data.network.CapsuleRevokeFailure.WINDOW_EXPIRED,
+        dev.hryshyn.remanence.core.data.network.CapsuleRevokeFailure.CAPSULE_STATE_INVALID,
+        dev.hryshyn.remanence.core.data.network.CapsuleRevokeFailure.CAPSULE_NOT_FOUND,
+        -> "This capsule can no longer be cancelled."
+        dev.hryshyn.remanence.core.data.network.CapsuleRevokeFailure.AUTH_INVALID ->
+            "Your session expired. Sign in again."
+        else -> "Couldn’t cancel the capsule. Try again."
     }

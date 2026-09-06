@@ -52,6 +52,9 @@ class ProductionApiStack private constructor(
     val capsuleFinalizeRepository: CapsuleFinalizeRepository =
         CapsuleFinalizeRepository(authenticatedClient, baseUrl)
 
+    val capsuleRevokeRepository: CapsuleRevokeRepository =
+        CapsuleRevokeRepository(authenticatedClient, baseUrl)
+
     /** Mutable handle lookup shares the authenticated refreshing client. */
     val directoryRepository: DirectoryRepository =
         DirectoryRepository(authenticatedClient, baseUrl)

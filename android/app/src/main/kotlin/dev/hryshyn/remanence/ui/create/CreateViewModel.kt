@@ -28,6 +28,9 @@ import dev.hryshyn.remanence.core.data.db.OutboxCapsuleState
 import dev.hryshyn.remanence.core.data.db.OutboxCapsuleStatus
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
 import dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot
+import dev.hryshyn.remanence.core.data.network.CapsuleRevokeFailure
+import dev.hryshyn.remanence.core.data.network.CapsuleRevokePort
+import dev.hryshyn.remanence.core.data.network.CapsuleRevokeResult
 import dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.data.storage.AccountStorageRetention
@@ -69,7 +72,7 @@ data class SenderIdentitySnapshot(
  */
 class CreateViewModel(
     private val directory: RecipientDirectoryPort,
-    accessTokenProvider: () -> String?,
+    private val accessTokenProvider: () -> String?,
     private val identityProvider: suspend () -> SenderIdentitySnapshot?,
     private val persistence: SealedFingerprintPersistence,
     private val outboxStager: CapsuleOutboxStager,
@@ -117,6 +120,10 @@ class CreateViewModel(
     private val enqueueUpload: suspend (UserId, CapsuleId) -> Unit,
     /** Exact owner + capsule current-send projection for the mounted flow. */
     private val outboxCapsuleDao: OutboxCapsuleDao? = null,
+    /** Server-authoritative sender cancellation; absent only in legacy test fixtures. */
+    private val capsuleRevoke: CapsuleRevokePort? = null,
+    /** Foreground connectivity admission for the no-offline-queue revoke action. */
+    private val networkConnected: () -> Boolean = { true },
     /** Stable account fence for asynchronous recipient-directory completion. */
     recipientLookupOwnerProvider: suspend () -> String? = { accessTokenProvider() },
     recipientLookupBoundaryEpoch: () -> Long = { 0L },
@@ -130,6 +137,16 @@ class CreateViewModel(
         data class RetryableFailure(val errorCode: String?) : CreateUploadStatus
         data class TerminalFailure(val errorCode: String?) : CreateUploadStatus
         data object Published : CreateUploadStatus
+    }
+
+    sealed interface CapsuleRevokeStatus {
+        data object Idle : CapsuleRevokeStatus
+        data object InFlight : CapsuleRevokeStatus
+        data class Succeeded(val isReplay: Boolean) : CapsuleRevokeStatus
+        data class Failed(
+            val reason: CapsuleRevokeFailure,
+            val retryable: Boolean,
+        ) : CapsuleRevokeStatus
     }
 
     enum class Step {
@@ -217,11 +234,15 @@ class CreateViewModel(
      * outbox nor mutate step/error of any later session.
      */
     private var publishJob: Job? = null
+    private var revokeJob: Job? = null
     private var outboxObservationJob: Job? = null
     private var createSessionGeneration: Long = 0L
 
     private val _uploadStatus = MutableStateFlow<CreateUploadStatus>(CreateUploadStatus.NotStarted)
     val uploadStatus: StateFlow<CreateUploadStatus> = _uploadStatus.asStateFlow()
+
+    private val _revokeStatus = MutableStateFlow<CapsuleRevokeStatus>(CapsuleRevokeStatus.Idle)
+    val revokeStatus: StateFlow<CapsuleRevokeStatus> = _revokeStatus.asStateFlow()
 
     /** Owner captured synchronously at session entry, before publish suspends. */
     private var sessionOwner: UserId? = null
@@ -281,6 +302,7 @@ class CreateViewModel(
         createSessionGeneration += 1
         deliveryGeneration += 1
         cancelPublishingLocked()
+        cancelRevokeLocked()
         outboxObservationJob?.cancel()
         outboxObservationJob = null
         // FIX-STATE-13: ownership is tracked by the in-flight ledger, NOT by
@@ -303,6 +325,7 @@ class CreateViewModel(
         _flowError.value = null
         _publishError.value = null
         _uploadStatus.value = CreateUploadStatus.NotStarted
+        _revokeStatus.value = CapsuleRevokeStatus.Idle
         observeCurrentOutbox(sessionOwner, _capsuleId, createSessionGeneration)
     }
 
@@ -548,6 +571,81 @@ class CreateViewModel(
         publishJob = viewModelScope.launch { publish(generation, inputs) }
     }
 
+    /** Starts one explicit, online-only sender cancellation for the published capsule. */
+    fun revokePublished() {
+        if (!requireStep(Step.PUBLISHED, "cancellation")) return
+        if (_uploadStatus.value !is CreateUploadStatus.Published) {
+            failGuard("cancellation requires a published capsule")
+            return
+        }
+        if (_revokeStatus.value is CapsuleRevokeStatus.InFlight ||
+            _revokeStatus.value is CapsuleRevokeStatus.Succeeded
+        ) {
+            return
+        }
+        val repository = capsuleRevoke ?: run {
+            _revokeStatus.value = CapsuleRevokeStatus.Failed(
+                CapsuleRevokeFailure.INTERNAL_ERROR,
+                retryable = false,
+            )
+            return
+        }
+        val requestedCapsuleId = runCatching { CapsuleId.parseRest(capsuleId) }.getOrNull()
+        if (requestedCapsuleId == null) {
+            _revokeStatus.value = CapsuleRevokeStatus.Failed(
+                CapsuleRevokeFailure.INVALID_RESPONSE,
+                retryable = false,
+            )
+            return
+        }
+        val accessToken = accessTokenProvider()
+        if (accessToken.isNullOrBlank()) {
+            _revokeStatus.value = CapsuleRevokeStatus.Failed(
+                CapsuleRevokeFailure.AUTH_INVALID,
+                retryable = false,
+            )
+            return
+        }
+        if (!networkConnected()) {
+            _revokeStatus.value = CapsuleRevokeStatus.Failed(
+                CapsuleRevokeFailure.NETWORK,
+                retryable = true,
+            )
+            return
+        }
+        clearGuardError()
+        _revokeStatus.value = CapsuleRevokeStatus.InFlight
+        val generation = createSessionGeneration
+        revokeJob = viewModelScope.launch {
+            try {
+                when (val result = repository.revoke(requestedCapsuleId, accessToken)) {
+                    is CapsuleRevokeResult.Success -> {
+                        if (isRevokeCurrent(generation, requestedCapsuleId)) {
+                            _revokeStatus.value = CapsuleRevokeStatus.Succeeded(result.revoke.isReplay)
+                        }
+                    }
+                    is CapsuleRevokeResult.Failure -> {
+                        if (isRevokeCurrent(generation, requestedCapsuleId)) {
+                            _revokeStatus.value = CapsuleRevokeStatus.Failed(
+                                result.reason,
+                                result.retryable,
+                            )
+                        }
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                if (isRevokeCurrent(generation, requestedCapsuleId)) {
+                    _revokeStatus.value = CapsuleRevokeStatus.Failed(
+                        CapsuleRevokeFailure.INTERNAL_ERROR,
+                        retryable = true,
+                    )
+                }
+            }
+        }
+    }
+
     /** Cancels an in-flight publication; returns whether one existed. */
     private fun cancelPublishingLocked(): Boolean {
         val job = publishJob ?: return false
@@ -555,6 +653,18 @@ class CreateViewModel(
         job.cancel()
         return true
     }
+
+    private fun cancelRevokeLocked(): Boolean {
+        val job = revokeJob ?: return false
+        revokeJob = null
+        job.cancel()
+        return true
+    }
+
+    private fun isRevokeCurrent(generation: Long, capsuleId: CapsuleId): Boolean =
+        generation == createSessionGeneration &&
+            _step.value == Step.PUBLISHED &&
+            capsuleId.toRestString() == _capsuleId
 
     /**
      * FIX-STATE-06: EVERY publish failure - including identity resolution or
@@ -785,6 +895,7 @@ class CreateViewModel(
         val owner = sessionOwner
         val capsuleId = _capsuleId
         cancelPublishingLocked()
+        cancelRevokeLocked()
         outboxObservationJob?.cancel()
         outboxObservationJob = null
         recipientFlow.clearTransientMaterial()
@@ -802,6 +913,7 @@ class CreateViewModel(
         begunEpoch = null
         sessionOwner = null
         _uploadStatus.value = CreateUploadStatus.NotStarted
+        _revokeStatus.value = CapsuleRevokeStatus.Idle
     }
 
     override fun onCleared() {

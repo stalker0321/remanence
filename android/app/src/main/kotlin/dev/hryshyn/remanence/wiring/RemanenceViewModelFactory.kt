@@ -51,6 +51,17 @@ class RemanenceViewModelFactory(
             accessTokenProvider = {
                 container.apiStack.sessionRefreshCoordinator.openDomainAccessToken()
             },
+            capsuleRevoke = container.apiStack.capsuleRevokeRepository,
+            networkConnected = {
+                val manager = container.appContext.getSystemService(
+                    android.net.ConnectivityManager::class.java,
+                )
+                val network = manager?.activeNetwork
+                val capabilities = network?.let { manager.getNetworkCapabilities(it) }
+                capabilities?.hasCapability(
+                    android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET,
+                ) == true
+            },
             recipientLookupOwnerProvider = {
                 container.currentAccountStore.load()?.userId
             },

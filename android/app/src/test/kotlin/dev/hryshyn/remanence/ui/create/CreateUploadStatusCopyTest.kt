@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.ui.create
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Test
+import dev.hryshyn.remanence.core.data.network.CapsuleRevokeFailure
 
 /**
  * User-facing Create send copy must stay fixed. Persisted last_error_code
@@ -38,5 +39,20 @@ class CreateUploadStatusCopyTest {
             "Send failed permanently.",
             createUploadPendingCopy(CreateViewModel.CreateUploadStatus.TerminalFailure(null)),
         )
+    }
+
+    @Test
+    fun revokeCopyNamesTheLimitWithoutClaimingRecipientDeletion() {
+        val success = createRevokeCopy(
+            CreateViewModel.CapsuleRevokeStatus.Failed(CapsuleRevokeFailure.NETWORK, true),
+        )
+        assertEquals("Connect to the internet to cancel this capsule, then try again.", success)
+
+        val terminal = createRevokeCopy(
+            CreateViewModel.CapsuleRevokeStatus.Failed(CapsuleRevokeFailure.WINDOW_EXPIRED, false),
+        )
+        assertEquals("This capsule can no longer be cancelled.", terminal)
+        assertFalse(success.contains("delete", ignoreCase = true))
+        assertFalse(terminal.contains("delete", ignoreCase = true))
     }
 }

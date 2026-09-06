@@ -7,6 +7,9 @@ import java.io.File
 import java.nio.file.Files
 import java.security.MessageDigest
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -84,13 +87,37 @@ class CapsuleOutboxStagerTest {
     /** M2-P08: the retry material store backed by the same test roots. */
     private fun retryStore(): SenderRetryMaterialStore = SenderRetryMaterialStore(storageRoots)
 
-    private fun newStager(): CapsuleOutboxStager = CapsuleOutboxStager(database, storageRoots, retryStore())
+    private fun newStager(
+        protection: dev.hryshyn.remanence.core.data.db.LocalExactDuplicateProtection =
+            dev.hryshyn.remanence.core.data.db.LocalExactDuplicateProtection(database),
+        beforeOrphanDelete: (() -> Unit)? = null,
+        beforeRollbackCleanup: (() -> Unit)? = null,
+        beforeRollbackDelete: (() -> Unit)? = null,
+        beforeFileWrite: ((File) -> Unit)? = null,
+        beforeCommit: (() -> Unit)? = null,
+    ): CapsuleOutboxStager = CapsuleOutboxStager(
+        database = database,
+        roots = storageRoots,
+        senderRetryMaterialStore = retryStore(),
+        exactDuplicateProtection = protection,
+        beforeOrphanDelete = beforeOrphanDelete,
+        beforeRollbackCleanup = beforeRollbackCleanup,
+        beforeRollbackDelete = beforeRollbackDelete,
+        beforeFileWrite = beforeFileWrite,
+        beforeCommit = beforeCommit,
+    )
 
     /** The staged owner's own outbox-ciphertext directory (per P04 wiring). */
     private fun outboxRoot(owner: String = OWNER): File =
         storageRoots.child(
             dev.hryshyn.remanence.core.model.UserId(java.util.UUID.fromString(owner)),
             dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots.ChildRoot.OUTBOX_CIPHERTEXT,
+        )
+
+    private fun retryRoot(owner: String = OWNER): File =
+        storageRoots.child(
+            dev.hryshyn.remanence.core.model.UserId(java.util.UUID.fromString(owner)),
+            dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots.ChildRoot.RETRY_MATERIAL,
         )
 
     private fun newFileBackedDatabase(name: String): RemanenceLocalDatabase =
@@ -104,6 +131,8 @@ class CapsuleOutboxStagerTest {
         capsuleUuid: java.util.UUID = capsuleId,
         blobIdBase: Long = 0L,
         senderRetryWrappedKeysetBytes: ByteArray? = null,
+        frontSha256: ByteArray = MessageDigest.getInstance("SHA-256")
+            .digest("captured-front-content".toByteArray(Charsets.UTF_8)),
     ): PreparedOutboxCapsule {
         val capsuleKeyset = CapsuleKeysetGenerator().generate()
         val identity = AccountIdentityGenerator().generate()
@@ -164,8 +193,7 @@ class CapsuleOutboxStagerTest {
             envelopeCiphertext = envelope,
             publishStatementBytes = "signed-statement".toByteArray(),
             publishStatementSignature = ByteArray(69) { 1 },
-            frontContentSha256 = MessageDigest.getInstance("SHA-256")
-                .digest("captured-front-content".toByteArray(Charsets.UTF_8)),
+            frontContentSha256 = frontSha256,
             senderRetryWrappedKeysetBytes = senderRetryWrappedKeysetBytes,
             artifacts =
             listOf(
@@ -233,26 +261,32 @@ class CapsuleOutboxStagerTest {
     fun localFailureRollsBackRowsAndRemovesEveryFileWithoutPlaintextTraces() = runBlocking {
         database = newFileBackedDatabase("stager-failure.db")
         val prepared = preparedCapsule()
-        // Deterministic local failure committed BEFORE staging begins: a
-        // directory occupies the last photo's target path, so its rename fails
-        // after the envelope and earlier artifacts were already persisted.
+        // Deterministic local failure after earlier A-owned files exist: the
+        // write seam occupies the last photo's reservation-owned target.
         val blockedBlobId = prepared.artifacts.last().blobId
-        val blockedTarget = File(outboxRoot(), "$blockedBlobId.bin")
-        blockedTarget.mkdirs()
+        lateinit var blockedTarget: File
+        var injectBlocker = true
 
-        val stager = newStager()
+        val stager = newStager(
+            beforeFileWrite = { target ->
+                if (injectBlocker && target.name.startsWith("$blockedBlobId-")) {
+                    injectBlocker = false
+                    blockedTarget = target
+                    target.mkdirs()
+                }
+            },
+        )
         try {
             stager.stage(prepared)
             throw AssertionError("expected failure")
         } catch (expected: IllegalStateException) {
-            // The existing blocker path must be refused BEFORE any overwrite.
-            assertEquals("canonical orphan outbox target is not a regular file", expected.message)
+            assertTrue(expected.message.orEmpty().startsWith("outbox file already present:"))
         }
 
         // Nothing of this invocation may survive: only the injected blocker
         // directory remains, and neither capsule nor blob rows exist.
         val leftovers = outboxRoot().listFiles().orEmpty()
-        assertEquals(listOf("$blockedBlobId.bin"), leftovers.map { it.name })
+        assertEquals(listOf(blockedTarget.name), leftovers.map { it.name })
         assertTrue(leftovers.single().isDirectory)
         assertEquals(null, database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId.toString(), OWNER))
         assertEquals(
@@ -519,6 +553,140 @@ class CapsuleOutboxStagerTest {
     }
 
     @Test
+    fun reservationOwnedOrphansAreReconciledAndRetriedAfterReopen() = runBlocking {
+        val dbName = "stager-attempt-orphan-reopen.db"
+        database = newFileBackedDatabase(dbName)
+        val prepared = preparedCapsule(senderRetryWrappedKeysetBytes = "attempt-orphan-retry".toByteArray())
+        val orphanAttempt = "0f111111-2222-4333-8444-555555555555"
+        seedAttemptOrphanTargets(prepared, orphanAttempt)
+
+        database.close()
+        database = newFileBackedDatabase(dbName)
+        val staged = newStager().stage(prepared)
+
+        assertEquals(
+            OutboxCapsuleState.ENCRYPTED,
+            database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId.toString(), OWNER)?.state,
+        )
+        assertTrue(File(staged.envelopePath).exists())
+        assertTrue(
+            outboxRoot().listFiles().orEmpty().none {
+                it.name.endsWith("-$orphanAttempt.bin")
+            },
+        )
+        assertFalse(
+            retryStore().attemptPath(
+                UserId(UUID.fromString(OWNER)),
+                CapsuleId(prepared.capsuleId),
+                orphanAttempt,
+            ).exists(),
+        )
+    }
+
+    @Test
+    fun staleWriterUnwindCannotDeleteTakeoverWinners() = runBlocking {
+        database = newFileBackedDatabase("stager-stale-takeover.db")
+        val clock = AtomicLong(0L)
+        val aReady = CountDownLatch(1)
+        val bDone = CountDownLatch(1)
+        val prepared = preparedCapsule(senderRetryWrappedKeysetBytes = "takeover-retry".toByteArray())
+        val protectionA = dev.hryshyn.remanence.core.data.db.LocalExactDuplicateProtection(
+            database = database,
+            nowEpochMs = { clock.get() },
+            reservationLeaseMs = 100L,
+        )
+        val protectionB = dev.hryshyn.remanence.core.data.db.LocalExactDuplicateProtection(
+            database = database,
+            nowEpochMs = { clock.get() },
+            reservationLeaseMs = 100L,
+        )
+        val stale = newStager(
+            protection = protectionA,
+            beforeCommit = {
+                aReady.countDown()
+                check(bDone.await(5, TimeUnit.SECONDS)) { "takeover did not commit" }
+            },
+        )
+        val staleResult = java.util.concurrent.CompletableFuture.supplyAsync {
+            kotlinx.coroutines.runBlocking { runCatching { stale.stage(prepared) } }
+        }
+        assertTrue(aReady.await(5, TimeUnit.SECONDS))
+
+        clock.set(101L)
+        val winner = newStager(protection = protectionB).stage(prepared)
+        val winnerRow = database.outboxCapsuleDao()
+            .getByCapsuleIdAndOwner(prepared.capsuleId.toString(), OWNER)!!
+        val winnerFiles = listOfNotNull(
+            winnerRow.envelopePath,
+            winnerRow.publishStatementPath,
+            winnerRow.publishStatementSignaturePath,
+            winnerRow.senderRetryKeysetPath,
+        ).map { File(it) } + database.outboxBlobDao()
+            .getAllByCapsuleIdAndOwner(prepared.capsuleId.toString(), OWNER)
+            .map { File(it.localCiphertextPath) }
+        val winnerBytes = winnerFiles.map { it.readBytes().toList() }
+        bDone.countDown()
+
+        assertTrue(staleResult.get(5, TimeUnit.SECONDS).isFailure)
+        assertEquals(winner.capsuleId, prepared.capsuleId)
+        assertEquals(winnerRow, database.outboxCapsuleDao()
+            .getByCapsuleIdAndOwner(prepared.capsuleId.toString(), OWNER))
+        winnerFiles.forEachIndexed { index, file ->
+            assertTrue("takeover winner path must survive stale unwind", file.exists())
+            assertEquals(winnerBytes[index], file.readBytes().toList())
+        }
+    }
+
+    @Test
+    fun replacementBetweenRollbackValidationAndDeleteFailsClosed() = runBlocking {
+        database = newFileBackedDatabase("stager-replacement-race.db")
+        val winnerCapsule = UUID.fromString("8c111111-2222-4333-8444-555555555555")
+        newStager().stage(
+            preparedCapsule(
+                capsuleUuid = winnerCapsule,
+                blobIdBase = 9_000_000L,
+                frontSha256 = MessageDigest.getInstance("SHA-256")
+                    .digest("winner-front".toByteArray()),
+            ),
+        )
+        val winnerRow = database.outboxCapsuleDao()
+            .getByCapsuleIdAndOwner(winnerCapsule.toString(), OWNER)!!
+        val winnerEnvelope = File(winnerRow.envelopePath!!)
+        val winnerEnvelopeBytes = winnerEnvelope.readBytes().toList()
+
+        val prepared = preparedCapsule()
+        lateinit var attackerEnvelope: File
+        var replaced = false
+        val attacker = newStager(
+            beforeFileWrite = { target ->
+                if (target.name.startsWith("envelope-${prepared.capsuleId}-")) attackerEnvelope = target
+            },
+            beforeCommit = { error("deterministic post-file failure") },
+            beforeRollbackDelete = {
+                if (!replaced) {
+                    replaced = true
+                    val replacement = File(attackerEnvelope.parentFile, "replacement-${UUID.randomUUID()}.bin")
+                        .apply { writeBytes(attackerEnvelope.readBytes()) }
+                    Files.delete(attackerEnvelope.toPath())
+                    Files.move(replacement.toPath(), attackerEnvelope.toPath())
+                }
+            },
+        )
+        try {
+            attacker.stage(prepared)
+            throw AssertionError("expected forced failure")
+        } catch (expected: IllegalStateException) {
+            assertEquals("deterministic post-file failure", expected.message)
+        }
+
+        assertTrue("replacement must remain after fail-closed cleanup", attackerEnvelope.exists())
+        assertEquals(winnerEnvelopeBytes, winnerEnvelope.readBytes().toList())
+        assertEquals(winnerRow, database.outboxCapsuleDao()
+            .getByCapsuleIdAndOwner(winnerCapsule.toString(), OWNER))
+        assertNull(database.outboxCapsuleDao().getByCapsuleIdAndOwner(capsuleId.toString(), OWNER))
+    }
+
+    @Test
     fun freshCompetingCapsuleReservationKeepsExactOrphanTargetsUntouched() = runBlocking {
         database = newFileBackedDatabase("stager-orphan-competing.db")
         val prepared = preparedCapsule()
@@ -611,6 +779,23 @@ class CapsuleOutboxStagerTest {
                 parentFile!!.mkdirs()
                 writeBytes(bytes)
             }
+        }
+    }
+
+    private fun seedAttemptOrphanTargets(prepared: PreparedOutboxCapsule, attemptId: String) {
+        val root = outboxRoot().apply { mkdirs() }
+        File(root, "envelope-${prepared.capsuleId}-$attemptId.bin").writeBytes(prepared.envelopeCiphertext)
+        prepared.artifacts.forEach { artifact ->
+            File(root, "${artifact.blobId}-$attemptId.bin").writeBytes(artifact.ciphertext)
+        }
+        File(root, "statement-${prepared.capsuleId}-$attemptId.bin").writeBytes(prepared.publishStatementBytes)
+        File(root, "signature-${prepared.capsuleId}-$attemptId.bin").writeBytes(prepared.publishStatementSignature)
+        prepared.senderRetryWrappedKeysetBytes?.let { bytes ->
+            retryStore().attemptPath(UserId(UUID.fromString(OWNER)), CapsuleId(prepared.capsuleId), attemptId)
+                .apply {
+                    parentFile!!.mkdirs()
+                    writeBytes(bytes)
+                }
         }
     }
 
@@ -952,9 +1137,13 @@ class CapsuleOutboxStagerTest {
         // after the retry file is written but before the transaction.
         // Instead, we verify rollback by staging a blocked blob.
         val blockedBlobId = preparedB.artifacts.last().blobId
-        File(outboxRoot(), "$blockedBlobId.bin").mkdirs()
+        val stagerB = newStager(
+            beforeFileWrite = { target ->
+                if (target.name.startsWith("$blockedBlobId-")) target.mkdirs()
+            },
+        )
         try {
-            newStager().stage(preparedB)
+            stagerB.stage(preparedB)
             throw AssertionError("expected failure")
         } catch (_: IllegalStateException) {
             // deterministic refusal on the pre-blocked target path
@@ -982,19 +1171,26 @@ class CapsuleOutboxStagerTest {
             capsuleUuid = UUID.fromString("6c111111-2222-4333-8444-555555555555"),
             senderRetryWrappedKeysetBytes = retryBytes,
         )
-        // Block the last artifact's path to force a file-write failure
-        // AFTER the retry file was already written.
+        // Inject a last-artifact directory after the earlier ciphertext files
+        // exist; retry material is written only after all ciphertext succeeds,
+        // so this also proves no retry target is left.
         val blockedBlobId = prepared.artifacts.last().blobId
-        File(outboxRoot(), "$blockedBlobId.bin").mkdirs()
+        val stager = newStager(
+            beforeFileWrite = { target ->
+                if (target.name.startsWith("$blockedBlobId-")) target.mkdirs()
+            },
+        )
 
         try {
-            newStager().stage(prepared)
+            stager.stage(prepared)
             throw AssertionError("expected failure")
         } catch (_: IllegalStateException) {
             // deterministic refusal on the pre-blocked target path
         }
         // The retry file must not remain on disk.
-        val retryFiles = outboxRoot().listFiles().orEmpty().filter { it.name.endsWith(".pwks") }
+        val retryFiles = retryRoot().listFiles().orEmpty().filter {
+            it.name.startsWith("${prepared.capsuleId}-")
+        }
         assertTrue("no retry file residue must remain after ciphertext failure", retryFiles.isEmpty())
         assertNull(database.outboxCapsuleDao().getByCapsuleIdAndOwner(
             prepared.capsuleId.toString(), OWNER,

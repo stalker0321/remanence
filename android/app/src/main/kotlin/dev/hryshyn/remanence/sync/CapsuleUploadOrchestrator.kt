@@ -297,15 +297,12 @@ class CapsuleUploadOrchestrator(
             return CapsuleUploadOutcome.RecipientKeyStale
         }
         val retryPath = staleCapsule.senderRetryKeysetPath ?: return CapsuleUploadOutcome.RecipientKeyStale
-        val expectedRetryPath = try {
-            retryStore.expectedPath(owner, capsuleId).canonicalPath
-        } catch (_: Exception) {
+        if (!retryStore.isCanonicalPath(owner, capsuleId, retryPath)) {
             return CapsuleUploadOutcome.RecipientKeyStale
         }
-        if (retryPath != expectedRetryPath) return CapsuleUploadOutcome.RecipientKeyStale
 
         val wrappedBytes = try {
-            retryStore.read(owner, capsuleId)
+            retryStore.readAt(owner, capsuleId, retryPath)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {

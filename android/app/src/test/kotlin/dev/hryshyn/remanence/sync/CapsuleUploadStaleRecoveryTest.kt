@@ -419,12 +419,13 @@ class CapsuleUploadStaleRecoveryTest {
 
     @Test
     fun missingCorruptOrWrongAadRetryMaterialLeavesRowParked() = runBlocking {
-        retryStore.delete(OWNER, CAPSULE)
+        val initialRetryPath = capsuleRow().senderRetryKeysetPath!!
+        retryStore.deleteAt(OWNER, CAPSULE, initialRetryPath)
         assertEquals(CapsuleUploadOutcome.RecipientKeyStale, orchestrator().run(OWNER, CAPSULE))
         assertEquals(RECIPIENT_KEY_STALE_DRAFT, capsuleRow().lastErrorCode)
 
         stageFreshStaleRow()
-        val retryFile = retryStore.expectedPath(OWNER, CAPSULE)
+        val retryFile = File(capsuleRow().senderRetryKeysetPath!!)
         retryFile.writeBytes(byteArrayOf(1, 2, 3))
         assertEquals(CapsuleUploadOutcome.RecipientKeyStale, orchestrator().run(OWNER, CAPSULE))
         assertEquals(RECIPIENT_KEY_STALE_DRAFT, capsuleRow().lastErrorCode)

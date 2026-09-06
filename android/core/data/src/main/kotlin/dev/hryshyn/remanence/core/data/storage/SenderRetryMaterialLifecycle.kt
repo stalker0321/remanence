@@ -54,12 +54,11 @@ import kotlin.coroutines.cancellation.CancellationException
  * expected prior path. If deletion fails or the target still
  * exists, the pointer remains.
  *
- * **Pointer integrity**: the DB path is NEVER used as a deletion
- * target. The expected path is derived from typed [UserId] /
- * [CapsuleId] via [SenderRetryMaterialStore.expectedPath]. Any
- * non-null stored pointer that does not equal its canonical
- * expected path causes a fail-closed refusal; neither the file
- * nor the pointer is touched.
+ * **Pointer integrity**: the DB path is never trusted as an arbitrary
+ * deletion target. [SenderRetryMaterialStore] accepts only the typed
+ * owner/capsule legacy path or a reservation-owned path whose canonical
+ * filename and root are proven. Any other pointer causes a fail-closed
+ * refusal; neither the file nor the pointer is touched.
  *
  * **CAS outcome discipline**: after a successful file deletion (or
  * confirmed absence), the result of the pointer-clear CAS is
@@ -146,10 +145,9 @@ class SenderRetryMaterialLifecycle(
         val storedPath = entity.senderRetryKeysetPath
         if (storedPath == null) return Result.OK
 
-        val expectedPath = retryStore.expectedPath(owner, capsule).canonicalPath
-        if (storedPath != expectedPath) return Result.POINTER_MISMATCH
+        if (!retryStore.isCanonicalPath(owner, capsule, storedPath)) return Result.POINTER_MISMATCH
 
-        val filePresent = retryStore.read(owner, capsule) != null
+        val filePresent = retryStore.readAt(owner, capsule, storedPath) != null
         if (filePresent) return Result.OK
 
         return Result.MATERIAL_MISSING
@@ -163,11 +161,10 @@ class SenderRetryMaterialLifecycle(
         val storedPath = entity.senderRetryKeysetPath
         if (storedPath == null) return Result.OK
 
-        val expectedPath = retryStore.expectedPath(owner, capsule).canonicalPath
-        if (storedPath != expectedPath) return Result.POINTER_MISMATCH
+        if (!retryStore.isCanonicalPath(owner, capsule, storedPath)) return Result.POINTER_MISMATCH
 
         try {
-            retryStore.delete(owner, capsule)
+            retryStore.deleteAt(owner, capsule, storedPath)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
@@ -204,7 +201,7 @@ class SenderRetryMaterialLifecycle(
         OK,
         /** Entity not found or state does not qualify for this operation. */
         STATE_NOT_ELIGIBLE,
-        /** Stored pointer does not equal canonical path; neither touched. */
+        /** Stored pointer is not a typed legacy or reservation-owned path; neither touched. */
         POINTER_MISMATCH,
         /** Nonterminal capsule whose retry material file is missing or corrupt. Pointer retained. */
         MATERIAL_MISSING,

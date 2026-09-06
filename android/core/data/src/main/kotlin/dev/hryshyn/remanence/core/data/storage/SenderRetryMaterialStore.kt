@@ -10,6 +10,7 @@ import java.io.File
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.LinkOption
+import java.nio.file.attribute.BasicFileAttributes
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -21,9 +22,11 @@ import java.util.concurrent.ConcurrentHashMap
  * which this material lands on disk: every read, write, and delete
  * is owner-scoped AND capsule-scoped, the persisted file name is
  * derived from the typed [CapsuleId] and never accepted from the
- * caller, and the on-disk layout is fixed at
- * `accounts/<owner-uuid>/retry-material/<capsule-uuid>.pwks` (the
- * `.pwks` extension matches the wrapped-keyset record's domain).
+ * caller. Legacy callers use
+ * `accounts/<owner-uuid>/retry-material/<capsule-uuid>.pwks`; outbox
+ * reservations use the non-reused
+ * `<capsule-uuid>-<reservation-uuid>.pwks` form (the `.pwks` extension
+ * matches the wrapped-keyset record's domain).
  *
  * Design contract:
  *  - **No crypto**: this layer is bytes-in, bytes-out. It never
@@ -31,11 +34,10 @@ import java.util.concurrent.ConcurrentHashMap
  *    producer in [dev.hryshyn.remanence.core.crypto] is the only
  *    caller allowed to touch the wrapped format. Error messages
  *    never include the wrapped bytes.
- *  - **No overwrite on first write**: a target that already exists
- *    is either a prior committed record or corrupt residue. A second
- *    write for the same (owner, capsule) MUST fail before any byte
- *    of the new payload is written, and the original bytes MUST
- *    stay byte-for-byte identical.
+ *  - **No overwrite on first write**: a target that already exists is
+ *    either a prior committed record or corrupt residue. A second write
+ *    to the same target MUST fail before any byte of the new payload is
+ *    written, and the original bytes MUST stay byte-for-byte identical.
  *  - **Per-key serialization**: every write for the same
  *    (owner, capsule) pair is serialized through a per-pair
  *    coroutine [Mutex], so two concurrent writes cannot both pass
@@ -46,11 +48,11 @@ import java.util.concurrent.ConcurrentHashMap
  *  - **Atomic on disk**: writes go to a same-directory temp file
  *    with a random suffix and rename into place; the temp is
  *    removed in a `finally` block so a failure cannot leave residue.
- *  - **Owner + capsule scoped**: read and delete accept the same
- *    typed [UserId] and [CapsuleId] as write and resolve the same
- *    canonical path. A wrong owner or wrong capsule can neither read
- *    nor delete; the call returns "absent" exactly like a missing
- *    file.
+ *  - **Owner + capsule scoped**: every path resolver accepts the same
+ *    typed [UserId] and [CapsuleId] as write. Stored row pointers are
+ *    accepted only when they resolve to the fixed legacy path or a
+ *    reservation-owned path for that pair. A wrong owner or wrong
+ *    capsule can neither read nor delete.
  *  - **Canonical containment**: the path returned by [write] is
  *    the canonical path of the persisted file and is always
  *    contained beneath the canonical retry root for [owner].
@@ -73,7 +75,7 @@ class SenderRetryMaterialStore(
 ) {
 
     /**
-     * Writes [bytes] beneath the owner's
+     * Writes [bytes] beneath the owner's legacy
      * `accounts/<owner>/retry-material/<capsule>.pwks` file. Refuses
      * empty payloads, refuses to overwrite an existing target, and
      * performs an atomic same-directory write through a temp file
@@ -98,70 +100,76 @@ class SenderRetryMaterialStore(
         require(bytes.isNotEmpty()) {
             "refusing to persist empty sender retry material for $capsule"
         }
-        val mutex = mutexFor(owner, capsule)
-        mutex.withLock {
-            val target = expectedPath(owner, capsule)
-            if (Files.exists(target.toPath(), LinkOption.NOFOLLOW_LINKS)) {
-                throw SenderRetryMaterialStorageException(
-                    "sender retry material already present for $capsule; refusing overwrite",
-                )
-            }
-            val parent = target.parentFile
-                ?: throw SenderRetryMaterialStorageException(
-                    "sender retry material directory resolved to null for $capsule",
-                )
-            try {
-                if (!parent.exists() && !parent.mkdirs() && (!parent.exists() || !parent.isDirectory())) {
-                    throw SenderRetryMaterialStorageException(
-                        "could not prepare sender retry material directory",
-                    )
-                }
-            } catch (failure: SecurityException) {
+        mutexFor(owner, capsule).withLock {
+            writeTarget(owner, capsule, expectedPath(owner, capsule), bytes)
+        }
+    }
+
+    /** Writes a reservation-owned retry target without reusing the legacy path. */
+    suspend fun writeForAttempt(
+        owner: UserId,
+        capsule: CapsuleId,
+        attemptId: String,
+        bytes: ByteArray,
+    ): String = withContext(Dispatchers.IO) {
+        require(bytes.isNotEmpty()) {
+            "refusing to persist empty sender retry material for $capsule"
+        }
+        mutexFor(owner, capsule).withLock {
+            writeTarget(owner, capsule, attemptPath(owner, capsule, attemptId), bytes)
+        }
+    }
+
+    private suspend fun writeTarget(
+        owner: UserId,
+        capsule: CapsuleId,
+        target: File,
+        bytes: ByteArray,
+    ): String {
+        if (Files.exists(target.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+            throw SenderRetryMaterialStorageException(
+                "sender retry material already present for $capsule; refusing overwrite",
+            )
+        }
+        val parent = target.parentFile
+            ?: throw SenderRetryMaterialStorageException(
+                "sender retry material directory resolved to null for $capsule",
+            )
+        try {
+            if (!parent.exists() && !parent.mkdirs() && (!parent.exists() || !parent.isDirectory())) {
                 throw SenderRetryMaterialStorageException(
                     "could not prepare sender retry material directory",
+                )
+            }
+        } catch (failure: SecurityException) {
+            throw SenderRetryMaterialStorageException(
+                "could not prepare sender retry material directory",
+            ).initCauseOrThrow(failure)
+        }
+        val temporary = File(parent, "${target.name}.tmp-${UUID.randomUUID()}")
+        return try {
+            try {
+                temporary.writeBytes(bytes)
+            } catch (failure: IOException) {
+                throw SenderRetryMaterialStorageException(
+                    "could not write sender retry material temp file",
                 ).initCauseOrThrow(failure)
             }
-            // Unique per-invocation temp name: two writes can never
-            // rename over or delete each other's in-flight temporary
-            // file. The mutex above already serializes same-pair
-            // writes; the random suffix additionally protects against
-            // any two concurrent writers that somehow race past the
-            // lock.
-            val temporary = File(parent, "${target.name}.tmp-${UUID.randomUUID()}")
             try {
-                try {
-                    temporary.writeBytes(bytes)
-                } catch (failure: IOException) {
-                    throw SenderRetryMaterialStorageException(
-                        "could not write sender retry material temp file",
-                    ).initCauseOrThrow(failure)
-                }
-                try {
-                    // No REPLACE_EXISTING: a concurrent winner's canonical
-                    // target must remain untouched if it appears after the
-                    // preflight check.
-                    Files.move(temporary.toPath(), target.toPath())
-                } catch (failure: IOException) {
-                    throw SenderRetryMaterialStorageException(
-                        "could not persist sender retry material",
-                    ).initCauseOrThrow(failure)
-                }
-                // Canonical containment: the persisted file's
-                // canonical path MUST live under the owner's
-                // canonical retry root. The check happens AFTER the
-                // rename so the resolver's requireContained() guard
-                // runs against the on-disk file, not the
-                // not-yet-resolved path.
-                val canonical = target.canonicalFile
-                val canonicalRoot = retryMaterialRoot(owner).canonicalFile
-                requireContained(canonical, canonicalRoot, owner, capsule)
-                canonical.path
-            } finally {
-                // The rename either succeeded and the temp was
-                // consumed, or it failed; either way, no temp file
-                // must remain.
-                temporary.delete()
+                // No REPLACE_EXISTING: a concurrent winner's reservation-owned
+                // target must remain untouched if it appears after preflight.
+                Files.move(temporary.toPath(), target.toPath())
+            } catch (failure: IOException) {
+                throw SenderRetryMaterialStorageException(
+                    "could not persist sender retry material",
+                ).initCauseOrThrow(failure)
             }
+            val canonical = target.canonicalFile
+            val canonicalRoot = retryMaterialRoot(owner).canonicalFile
+            requireContained(canonical, canonicalRoot, owner, capsule)
+            canonical.path
+        } finally {
+            temporary.delete()
         }
     }
 
@@ -196,6 +204,102 @@ class SenderRetryMaterialStore(
                 )
             }
             bytes
+        }
+    }
+
+    /** Reads a fixed legacy path or a reservation-owned persisted pointer. */
+    suspend fun readAt(
+        owner: UserId,
+        capsule: CapsuleId,
+        storedPath: String,
+    ): ByteArray? = withContext(Dispatchers.IO) {
+        mutexFor(owner, capsule).withLock {
+            val target = resolveStoredPath(owner, capsule, storedPath)
+                ?: throw SenderRetryMaterialStorageException("sender retry material pointer is not owner-scoped")
+            val path = target.toPath()
+            if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) return@withLock null
+            if (Files.isSymbolicLink(path) || !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+                throw SenderRetryMaterialStorageException("sender retry material target is not a regular file")
+            }
+            val bytes = try {
+                Files.readAllBytes(path)
+            } catch (failure: IOException) {
+                throw SenderRetryMaterialStorageException(
+                    "could not read sender retry material",
+                ).initCauseOrThrow(failure)
+            }
+            if (bytes.isEmpty()) {
+                throw SenderRetryMaterialStorageException("sender retry material is empty")
+            }
+            bytes
+        }
+    }
+
+    /** Returns whether a persisted pointer is the fixed legacy or attempt path for this owner/capsule. */
+    fun isCanonicalPath(owner: UserId, capsule: CapsuleId, storedPath: String): Boolean =
+        resolveStoredPath(owner, capsule, storedPath) != null
+
+    /** Deletes only the exact owner/capsule pointer stored in the committed row. */
+    suspend fun deleteAt(
+        owner: UserId,
+        capsule: CapsuleId,
+        storedPath: String,
+    ): Boolean = withContext(Dispatchers.IO) {
+        mutexFor(owner, capsule).withLock {
+            val target = resolveStoredPath(owner, capsule, storedPath)
+                ?: throw SenderRetryMaterialStorageException("sender retry material pointer is not owner-scoped")
+            val path = target.toPath()
+            if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) return@withLock false
+            if (Files.isSymbolicLink(path) || !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+                throw SenderRetryMaterialStorageException("sender retry material target is not a regular file")
+            }
+            try {
+                Files.delete(path)
+            } catch (failure: IOException) {
+                throw SenderRetryMaterialStorageException(
+                    "could not delete sender retry material",
+                ).initCauseOrThrow(failure)
+            }
+            if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+                throw SenderRetryMaterialStorageException("sender retry material target still exists")
+            }
+            true
+        }
+    }
+
+    /** Deletes an attempt target only after confirming its exact prepared bytes. */
+    suspend fun deleteAttempt(
+        owner: UserId,
+        capsule: CapsuleId,
+        attemptId: String,
+        expectedBytes: ByteArray,
+        expectedFileKey: Any,
+    ): Boolean = withContext(Dispatchers.IO) {
+        mutexFor(owner, capsule).withLock {
+            val target = attemptPath(owner, capsule, attemptId)
+            val path = target.toPath()
+            if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) return@withLock false
+            if (Files.isSymbolicLink(path) || !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+                throw SenderRetryMaterialStorageException("sender retry attempt target is not a regular file")
+            }
+            val fileKey = Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).fileKey()
+                ?: throw SenderRetryMaterialStorageException("sender retry attempt target has no stable file identity")
+            if (fileKey != expectedFileKey) {
+                throw SenderRetryMaterialStorageException("sender retry attempt target changed")
+            }
+            if (!Files.readAllBytes(path).contentEquals(expectedBytes)) {
+                throw SenderRetryMaterialStorageException("sender retry attempt target changed")
+            }
+            val finalKey = Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).fileKey()
+                ?: throw SenderRetryMaterialStorageException("sender retry attempt target has no stable file identity")
+            if (finalKey != expectedFileKey || !Files.readAllBytes(path).contentEquals(expectedBytes)) {
+                throw SenderRetryMaterialStorageException("sender retry attempt target changed")
+            }
+            Files.delete(path)
+            check(!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+                "sender retry attempt target still exists"
+            }
+            true
         }
     }
 
@@ -239,11 +343,11 @@ class SenderRetryMaterialStore(
     }
 
     /**
-     * Reconciles only the canonical owner/capsule retry target left by an
-     * interrupted outbox staging attempt. A present target is removable only
-     * when it is a regular non-symlink file whose bytes exactly match the
-     * current prepared capsule. A present target with no expected retry bytes,
-     * a type mismatch, or different bytes is ambiguous and fails closed.
+     * Validates, but deliberately does not delete, the legacy fixed
+     * owner/capsule retry target left by an interrupted outbox staging attempt.
+     * A pathname delete cannot prove that the inode validated here is still
+     * the inode at cleanup time. Legacy residue is therefore preserved; new
+     * attempts use reservation-owned paths and never reuse this name.
      */
     suspend fun reconcileOrphan(
         owner: UserId,
@@ -274,31 +378,102 @@ class SenderRetryMaterialStore(
                     "canonical sender retry target is ambiguous",
                 )
             }
-            try {
-                Files.delete(path)
-            } catch (failure: IOException) {
-                throw SenderRetryMaterialStorageException(
-                    "could not reconcile canonical sender retry target",
-                ).initCauseOrThrow(failure)
-            }
-            if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
-                throw SenderRetryMaterialStorageException(
-                    "reconciled sender retry target still exists",
-                )
-            }
             true
         }
     }
 
+    /** Reconciles exact reservation-owned retry orphans; paths are never reused by a winner. */
+    suspend fun reconcileOrphanAttempts(
+        owner: UserId,
+        capsule: CapsuleId,
+        expectedBytes: ByteArray?,
+        beforeDelete: (() -> Unit)? = null,
+    ): Int = withContext(Dispatchers.IO) {
+        mutexFor(owner, capsule).withLock {
+            val root = retryMaterialRoot(owner)
+            val candidates = root.listFiles().orEmpty().filter { file ->
+                val name = file.name
+                name.startsWith("${capsule.toRestString()}-") && name.endsWith(EXTENSION) &&
+                    runCatching {
+                        UUID.fromString(name.removePrefix("${capsule.toRestString()}-").removeSuffix(EXTENSION))
+                    }.isSuccess
+            }
+            if (candidates.isEmpty()) return@withLock 0
+            val expected = expectedBytes ?: throw SenderRetryMaterialStorageException(
+                "unexpected reservation-owned sender retry target",
+            )
+            val fileKeys = candidates.associateWith { target ->
+                val path = target.toPath()
+                if (Files.isSymbolicLink(path) || !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+                    throw SenderRetryMaterialStorageException("reservation-owned retry target is not a regular file")
+                }
+                Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).fileKey()
+                    ?: throw SenderRetryMaterialStorageException("reservation-owned retry target has no stable file identity")
+            }
+            candidates.forEach { target ->
+                val path = target.toPath()
+                if (!Files.readAllBytes(path).contentEquals(expected)) {
+                    throw SenderRetryMaterialStorageException("reservation-owned retry target is ambiguous")
+                }
+            }
+            beforeDelete?.invoke()
+            candidates.forEach { target ->
+                val path = target.toPath()
+                if (
+                    Files.isSymbolicLink(path) ||
+                    !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) ||
+                    Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).fileKey() != fileKeys[target] ||
+                    !Files.readAllBytes(path).contentEquals(expected)
+                ) {
+                    throw SenderRetryMaterialStorageException("reservation-owned retry target changed")
+                }
+                Files.delete(path)
+                check(!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+                    "reservation-owned retry target still exists"
+                }
+            }
+            candidates.size
+        }
+    }
+
     /**
-     * Derives the canonical persisted path for (owner, capsule) and
-     * returns it WITHOUT creating any directory or file. Useful for
-     * tests and for callers that want to assert the exact on-disk
-     * target before issuing a write.
+     * Derives the legacy fixed path for (owner, capsule) without creating
+     * any directory or file. New outbox rows persist [attemptPath] instead.
      */
     fun expectedPath(owner: UserId, capsule: CapsuleId): File {
         val dir = retryMaterialRoot(owner)
         return File(dir, "${capsule.toRestString()}$EXTENSION")
+    }
+
+    /** Derives the non-reused retry target owned by one staging reservation. */
+    fun attemptPath(owner: UserId, capsule: CapsuleId, attemptId: String): File {
+        val canonicalAttempt = runCatching { UUID.fromString(attemptId) }.getOrNull()
+            ?.takeIf { it.toString() == attemptId }
+            ?: throw SenderRetryMaterialStorageException("sender retry attempt id is not canonical")
+        val dir = retryMaterialRoot(owner)
+        val target = File(dir, "${capsule.toRestString()}-$canonicalAttempt$EXTENSION")
+        requireContained(target, dir.canonicalFile, owner, capsule)
+        return target
+    }
+
+    private fun resolveStoredPath(owner: UserId, capsule: CapsuleId, storedPath: String): File? {
+        val target = runCatching { File(storedPath).canonicalFile }.getOrNull() ?: return null
+        val rawPath = runCatching { File(storedPath).toPath() }.getOrNull() ?: return null
+        if (Files.isSymbolicLink(rawPath)) return null
+        val fixed = expectedPath(owner, capsule).canonicalFile
+        if (target == fixed) return target
+        val root = retryMaterialRoot(owner).canonicalFile
+        val prefix = "${capsule.toRestString()}-"
+        val suffix = EXTENSION
+        if (target.parentFile?.canonicalFile != root ||
+            !target.name.startsWith(prefix) ||
+            !target.name.endsWith(suffix)
+        ) return null
+        val attemptId = target.name.removePrefix(prefix).removeSuffix(suffix)
+        return runCatching { UUID.fromString(attemptId) }
+            .getOrNull()
+            ?.takeIf { it.toString() == attemptId }
+            ?.let { target }
     }
 
     /**

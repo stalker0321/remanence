@@ -70,6 +70,11 @@ from remanence.capsules.recipient_material_synced_service import (
     RecipientMaterialSyncedService,
     is_transient_database_unavailability,
 )
+from remanence.capsules.revoke_service import (
+    CapsuleRevokeError,
+    CapsuleRevokeResult,
+    CapsuleRevokeService,
+)
 from remanence.capsules.schemas import (
     CapsuleDraftValidationError,
     parse_create_capsule_draft_request,
@@ -138,6 +143,14 @@ class CapsuleFinalizeResponse(BaseModel):
     capsule_id: uuid.UUID
     state: Literal["READY"]
     ready_at: datetime
+
+
+class CapsuleRevokeResponse(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    capsule_id: uuid.UUID
+    state: Literal["REVOKED"]
+    is_replay: bool
 
 
 class IncomingSignedStatementResponse(BaseModel):
@@ -837,6 +850,57 @@ async def finalize_capsule(
     except Exception as exc:
         _LOGGER.error(
             "capsule finalize unhandled failure request_id=%s exc_type=%s",
+            request_id_of(request),
+            type(exc).__name__,
+        )
+        return _problem_response(request, "INTERNAL_ERROR")
+
+
+def _accepted_revoke_response(result: object) -> CapsuleRevokeResponse:
+    if not isinstance(result, CapsuleRevokeResult):
+        raise CapsuleRevokeError("INTERNAL_ERROR")
+    if result.state is not CapsuleState.REVOKED:
+        raise CapsuleRevokeError("INTERNAL_ERROR")
+    if not isinstance(result.capsule_id, uuid.UUID) or type(result.is_replay) is not bool:
+        raise CapsuleRevokeError("INTERNAL_ERROR")
+    try:
+        return CapsuleRevokeResponse(
+            capsule_id=result.capsule_id,
+            state="REVOKED",
+            is_replay=result.is_replay,
+        )
+    except Exception:
+        raise CapsuleRevokeError("INTERNAL_ERROR") from None
+
+
+@router.post(
+    "/v1/capsules/{capsule_id}/revoke",
+    response_model=CapsuleRevokeResponse,
+    status_code=200,
+)
+def revoke_capsule(
+    capsule_id: str,
+    request: Request,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    session: Session = Depends(get_db_session, use_cache=False),
+) -> CapsuleRevokeResponse | JSONResponse:
+    try:
+        parsed_capsule_id = _canonical_path_uuid(capsule_id)
+        with session.begin():
+            result = CapsuleRevokeService(session).revoke(
+                authenticated_sender_user_id=principal.user_id,
+                capsule_id=parsed_capsule_id,
+                now=datetime.now(timezone.utc),
+            )
+            dto = _accepted_revoke_response(result)
+        return dto
+    except CapsuleDraftValidationError as exc:
+        return _problem_response(request, exc.code)
+    except CapsuleRevokeError as exc:
+        return _problem_response(request, exc.code)
+    except Exception as exc:
+        _LOGGER.error(
+            "capsule revoke unhandled failure request_id=%s exc_type=%s",
             request_id_of(request),
             type(exc).__name__,
         )

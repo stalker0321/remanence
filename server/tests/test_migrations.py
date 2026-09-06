@@ -11,7 +11,7 @@ from sqlalchemy.engine import make_url
 
 _ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 _BASELINE = "0001_m0_baseline"
-_HEAD = "0004_r1_publication_order"
+_HEAD = "0005_m2_f3_capsule_revocation"
 _HEAD_TABLES = {
     "alembic_version",
     "users",
@@ -214,7 +214,7 @@ def _assert_head_schema(conn: psycopg.Connection) -> None:
     assert _alembic_version(conn) == [_HEAD]
     assert _public_tables(conn) == _HEAD_TABLES
     assert _enum_labels(conn) == ["ACTIVE", "RETIRED", "REVOKED"]
-    assert _enum_labels(conn, "capsule_state") == ["DRAFT", "READY", "ABORTED"]
+    assert _enum_labels(conn, "capsule_state") == ["DRAFT", "READY", "ABORTED", "REVOKED"]
     assert _enum_labels(conn, "capsule_blob_kind") == [
         "RECOGNITION_MANIFEST",
         "CONTENT_MANIFEST",
@@ -400,6 +400,69 @@ def test_account_migration_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
         with _connect_db(url, database) as conn:
             _assert_head_schema(conn)
         command.check(config)
+
+        revoked_user_id = uuid4()
+        revoked_bundle_id = uuid4()
+        revoked_capsule_id = uuid4()
+        with _connect_db(url, database) as conn:
+            conn.execute(
+                """
+                INSERT INTO users (id, email_normalized, handle_normalized, handle_display)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (
+                    revoked_user_id,
+                    f"migration-{revoked_user_id}@example.com",
+                    f"migration{revoked_user_id.hex[:20]}",
+                    f"migration{revoked_user_id.hex[:20]}",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO user_key_bundles (
+                    id, user_id, encryption_public_keyset, signing_public_keyset,
+                    suite, protocol_version, status
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    revoked_bundle_id,
+                    revoked_user_id,
+                    b"encryption-public",
+                    b"signing-public",
+                    "test-suite",
+                    1,
+                    "ACTIVE",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO capsules (
+                    id, sender_user_id, recipient_user_id, sender_key_bundle_id,
+                    recipient_key_bundle_id, protocol_version, state,
+                    signed_statement, signed_statement_sha256, publish_signature,
+                    ready_at, draft_expires_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now() + interval '7 days')
+                """,
+                (
+                    revoked_capsule_id,
+                    revoked_user_id,
+                    revoked_user_id,
+                    revoked_bundle_id,
+                    revoked_bundle_id,
+                    1,
+                    "REVOKED",
+                    b"signed-statement",
+                    bytes(range(32)),
+                        b"\x01" * 69,
+                ),
+            )
+        with pytest.raises(RuntimeError, match="revoked rows exist"):
+            command.downgrade(config, "0004_r1_publication_order")
+        with _connect_db(url, database) as conn:
+            assert _alembic_version(conn) == [_HEAD]
+            conn.execute("DELETE FROM capsules WHERE id = %s", (revoked_capsule_id,))
+            conn.execute("DELETE FROM user_key_bundles WHERE id = %s", (revoked_bundle_id,))
+            conn.execute("DELETE FROM users WHERE id = %s", (revoked_user_id,))
 
         command.downgrade(config, "0002_m1_accounts")
         with _connect_db(url, database) as conn:

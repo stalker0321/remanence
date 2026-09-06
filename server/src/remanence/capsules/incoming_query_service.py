@@ -283,7 +283,7 @@ class IncomingCapsuleQueryService:
             .where(
                 Capsule.id == after.capsule_id,
                 Capsule.recipient_user_id == recipient_id,
-                Capsule.state == CapsuleState.READY,
+                Capsule.state.in_((CapsuleState.READY, CapsuleState.REVOKED)),
             )
         ).one_or_none()
         if row is None:

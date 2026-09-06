@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from contextlib import contextmanager
+from datetime import timedelta
 from io import BytesIO
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -597,6 +598,15 @@ def test_live_recipient_manifest_and_photo_exact_bytes(client_factory, tmp_path:
             with_idempotency=False,
         )
         aborted.state = CapsuleState.ABORTED
+        revoked = _add_incoming_ready(
+            session,
+            sender=sender,
+            sender_bundle=sender_bundle,
+            recipient=recipient,
+            recipient_bundle=recipient_bundle,
+            ready_at=_NOW + timedelta(seconds=1),
+        )
+        revoked.state = CapsuleState.REVOKED
         session.commit()
         blobs = _blobs(session, capsule.id)
         recognition = next(blob for blob in blobs if blob.kind is CapsuleBlobKind.RECOGNITION_MANIFEST)
@@ -604,16 +614,19 @@ def test_live_recipient_manifest_and_photo_exact_bytes(client_factory, tmp_path:
         other_blob = _blobs(session, other_capsule.id)[0]
         draft_blob = _blobs(session, draft.id)[0]
         aborted_blob = _blobs(session, aborted.id)[0]
+        revoked_blob = _blobs(session, revoked.id)[0]
         rec_body = _put_blob(store, recognition)
         photo_body = _put_blob(store, photo)
         capsule_id = capsule.id
         draft_id = draft.id
         aborted_id = aborted.id
+        revoked_id = revoked.id
         recognition_id = recognition.id
         photo_id = photo.id
         other_blob_id = other_blob.id
         draft_blob_id = draft_blob.id
         aborted_blob_id = aborted_blob.id
+        revoked_blob_id = revoked_blob.id
         rec_key = recognition.object_key
         photo_key = photo.object_key
 
@@ -642,6 +655,8 @@ def test_live_recipient_manifest_and_photo_exact_bytes(client_factory, tmp_path:
     _assert_problem(draft_resp, status=404, code="CAPSULE_NOT_FOUND")
     aborted_resp = _get(client, recipient_reg["access_token"], aborted_id, aborted_blob_id)
     _assert_problem(aborted_resp, status=404, code="CAPSULE_NOT_FOUND")
+    revoked_resp = _get(client, recipient_reg["access_token"], revoked_id, revoked_blob_id)
+    _assert_problem(revoked_resp, status=404, code="CAPSULE_NOT_FOUND")
     unknown = _get(client, recipient_reg["access_token"], capsule_id, uuid4())
     _assert_problem(unknown, status=404, code="BLOB_NOT_DECLARED")
     cross = _get(client, recipient_reg["access_token"], capsule_id, other_blob_id)
@@ -656,7 +671,7 @@ def test_live_recipient_manifest_and_photo_exact_bytes(client_factory, tmp_path:
     _assert_problem(ranged, status=422, code="VALIDATION_FAILED")
     leaked = "".join(
         response.text
-        for response in (sender_resp, other_resp, draft_resp, aborted_resp, unknown, cross, ranged)
+        for response in (sender_resp, other_resp, draft_resp, aborted_resp, revoked_resp, unknown, cross, ranged)
     )
     assert rec_key not in leaked
     assert photo_key not in leaked

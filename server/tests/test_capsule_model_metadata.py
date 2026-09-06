@@ -50,8 +50,8 @@ def _column(name: str):
 
 def test_capsule_state_members_exact() -> None:
     assert issubclass(CapsuleState, str)
-    assert [member.name for member in CapsuleState] == ["DRAFT", "READY", "ABORTED"]
-    assert [member.value for member in CapsuleState] == ["DRAFT", "READY", "ABORTED"]
+    assert [member.name for member in CapsuleState] == ["DRAFT", "READY", "ABORTED", "REVOKED"]
+    assert [member.value for member in CapsuleState] == ["DRAFT", "READY", "ABORTED", "REVOKED"]
 
 
 def test_table_name_and_exact_column_set() -> None:
@@ -86,7 +86,7 @@ def test_column_types_and_nullability_exact() -> None:
     assert state.type.name == "capsule_state"
     assert state.type.enum_class is CapsuleState
     assert state.type.native_enum is True
-    assert list(state.type.enums) == ["DRAFT", "READY", "ABORTED"]
+    assert list(state.type.enums) == ["DRAFT", "READY", "ABORTED", "REVOKED"]
     for name in ("created_at", "ready_at", "draft_expires_at"):
         column = _column(name)
         assert isinstance(column.type, DateTime), name
@@ -175,8 +175,9 @@ def test_exactly_five_named_checks_and_normalized_sql() -> None:
             "publish_signature IS NULL OR octet_length(publish_signature) = 69"
         ),
         "ck_capsules_state_finalization_shape": (
-            "((state = 'READY' AND ready_at IS NOT NULL AND signed_statement IS NOT NULL "
-            "AND signed_statement_sha256 IS NOT NULL AND publish_signature IS NOT NULL) OR "
+            "((state IN ('READY', 'REVOKED') AND ready_at IS NOT NULL "
+            "AND signed_statement IS NOT NULL AND signed_statement_sha256 IS NOT NULL "
+            "AND publish_signature IS NOT NULL) OR "
             "(state IN ('DRAFT', 'ABORTED') "
             "AND ready_at IS NULL AND signed_statement IS NULL "
             "AND signed_statement_sha256 IS NULL AND publish_signature IS NULL))"

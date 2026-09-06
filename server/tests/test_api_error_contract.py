@@ -82,6 +82,7 @@ def test_catalog_required_codes_and_internal_unavailable() -> None:
         "CAPSULE_NOT_FOUND",
         "CAPSULE_STATE_INVALID",
         "DRAFT_EXPIRED",
+        "WINDOW_EXPIRED",
         "BLOB_NOT_DECLARED",
         "BLOB_SIZE_INVALID",
         "BLOB_HASH_MISMATCH",

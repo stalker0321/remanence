@@ -26,6 +26,7 @@ class CapsuleState(str, enum.Enum):
     DRAFT = "DRAFT"
     READY = "READY"
     ABORTED = "ABORTED"
+    REVOKED = "REVOKED"
 
 
 class Capsule(Base):
@@ -48,8 +49,9 @@ class Capsule(Base):
             name="ck_capsules_publish_signature_69",
         ),
         CheckConstraint(
-            "((state = 'READY' AND ready_at IS NOT NULL AND signed_statement IS NOT NULL "
-            "AND signed_statement_sha256 IS NOT NULL AND publish_signature IS NOT NULL) OR "
+            "((state IN ('READY', 'REVOKED') AND ready_at IS NOT NULL "
+            "AND signed_statement IS NOT NULL AND signed_statement_sha256 IS NOT NULL "
+            "AND publish_signature IS NOT NULL) OR "
             "(state IN ('DRAFT', 'ABORTED') AND ready_at IS NULL "
             "AND signed_statement IS NULL AND signed_statement_sha256 IS NULL "
             "AND publish_signature IS NULL))",

@@ -507,6 +507,81 @@ def test_empty_initial_and_empty_continuation_cursor_semantics(session_factory):
         assert only.id == terminal.items[0].capsule_id
 
 
+def test_revoked_cursor_anchor_is_skipped_without_losing_later_ready_rows(session_factory):
+    with session_factory() as session:
+        sender, sender_bundle = _seed_user(session, "sender")
+        recipient, recipient_bundle = _seed_user(session, "recipient")
+        first = _add_incoming_ready(
+            session,
+            sender=sender,
+            sender_bundle=sender_bundle,
+            recipient=recipient,
+            recipient_bundle=recipient_bundle,
+            ready_at=_NOW,
+        )
+        second = _add_incoming_ready(
+            session,
+            sender=sender,
+            sender_bundle=sender_bundle,
+            recipient=recipient,
+            recipient_bundle=recipient_bundle,
+            ready_at=_NOW + timedelta(seconds=1),
+        )
+        third = _add_incoming_ready(
+            session,
+            sender=sender,
+            sender_bundle=sender_bundle,
+            recipient=recipient,
+            recipient_bundle=recipient_bundle,
+            ready_at=_NOW + timedelta(seconds=2),
+        )
+        session.commit()
+
+        first_page = _query(session, recipient.id, limit=1)
+        assert [item.capsule_id for item in first_page.items] == [first.id]
+        assert first_page.next_cursor is not None
+
+        first.state = CapsuleState.REVOKED
+        session.commit()
+
+        continuation = _query(session, recipient.id, cursor=first_page.next_cursor, limit=10)
+        assert [item.capsule_id for item in continuation.items] == [second.id, third.id]
+        assert first.id not in {item.capsule_id for item in continuation.items}
+        assert continuation.has_more is False
+        assert continuation.next_cursor == encode_incoming_cursor(
+            ready_at=third.ready_at,
+            capsule_id=third.id,
+        )
+
+
+def test_revoked_capsules_are_excluded_from_ready_pages(session_factory):
+    with session_factory() as session:
+        sender, sender_bundle = _seed_user(session, "sender")
+        recipient, recipient_bundle = _seed_user(session, "recipient")
+        revoked = _add_incoming_ready(
+            session,
+            sender=sender,
+            sender_bundle=sender_bundle,
+            recipient=recipient,
+            recipient_bundle=recipient_bundle,
+            ready_at=_NOW,
+        )
+        retained = _add_incoming_ready(
+            session,
+            sender=sender,
+            sender_bundle=sender_bundle,
+            recipient=recipient,
+            recipient_bundle=recipient_bundle,
+            ready_at=_NOW + timedelta(seconds=1),
+        )
+        revoked.state = CapsuleState.REVOKED
+        session.commit()
+
+        page = _query(session, recipient.id, limit=10)
+        assert [item.capsule_id for item in page.items] == [retained.id]
+        assert revoked.id not in {item.capsule_id for item in page.items}
+
+
 def test_cross_user_draft_aborted_excluded_and_ciphertext_synced_included(session_factory):
     with session_factory() as session:
         sender, sender_bundle = _seed_user(session, "sender")

@@ -177,6 +177,12 @@ PROBLEM_CATALOG: Final[dict[str, ProblemSpec]] = {
         "Draft expired",
         "The draft has expired.",
     ),
+    "WINDOW_EXPIRED": _spec(
+        "WINDOW_EXPIRED",
+        409,
+        "Revocation window expired",
+        "The capsule can no longer be revoked.",
+    ),
     "BLOB_NOT_DECLARED": _spec(
         "BLOB_NOT_DECLARED",
         404,

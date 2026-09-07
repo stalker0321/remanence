@@ -140,7 +140,12 @@ Why ORB now:
 - perspective normalization removes much of the scale/projective burden before matching;
 - the interaction is still-image, so accuracy can use up to 1,500 local features without realtime constraints.
 
-SIFT may be more robust on some low-texture/scale cases, but its 128-float descriptors are materially larger/slower. It is not a silent fallback. M3 runs an offline ORB-vs-SIFT comparison on the same locked dataset only if ORB misses the acceptance target. Switching or adding SIFT requires an ADR, new fingerprint/profile version, storage/performance measurements, and migration/fallback behavior.
+SIFT may be more robust on some low-texture/scale cases, but it is not a silent
+fallback. P0 now defines an isolated format-3 codec contract for the experimental
+`postcard-sift-rootsift-v1` profile; it does not add an extractor, matcher,
+reader, dual-read path, migration, thresholds, or runtime wiring. Any future
+selection of SIFT requires physical/device evidence, performance measurements,
+and a separate implementation decision.
 
 ## 6. Fingerprint format
 
@@ -193,6 +198,39 @@ Initial ORB extraction parameters:
 | `fastThreshold` | 20 |
 
 Sender fingerprints live inside the capsule’s encrypted recognition manifest. Recipient fingerprints are encrypted locally with a Keystore-protected fingerprint-storage key. Neither raw fingerprints nor coarse hashes are sent plaintext to the backend.
+
+### 6a. Experimental SIFT/RootSIFT format-3 contract (P0 codec only)
+
+The normative schema is `protocol/proto/remanence/recognition/v2/recognition_v2.proto`
+and the Android codec is `SiftRootSiftFingerprintCodec`. The exact profile ID is
+`postcard-sift-rootsift-v1` and the exact format version is `3`. This is an
+independent contract beside the existing ORB format; no production consumer reads
+it yet.
+
+The domain constructor does not defensively copy descriptor rows: arrays supplied
+to it remain caller-owned. Rows returned by parsing are fresh codec/domain-owned
+arrays and can be cleared with the domain value's `wipe()` method.
+
+The payload is rejected before protobuf parsing when empty or larger than 1 MiB
+(1,048,576 bytes). It contains bounded integer metadata only: canonical dimensions
+are 1..100,000 px; there are 1..1,500 keypoints; normalized x/y/scale micro-units
+are 0..1,000,000; angle is 0..35,999 centidegrees; response metadata is
+0..1,000,000; octave is -8..8. The descriptor blob must contain exactly 128 bytes
+per keypoint. Rows are stored as raw unsigned-byte quantized OpenCV SIFT values;
+finite detector values are rounded with `Math.rint(value)` (ties-to-even) and
+clipped to 0..255, with no additional `*255` scaling. RootSIFT derivation occurs
+only during P2 matching and must not double-transform these stored rows. Detector
+settings, grid/order rules, and thresholds remain deferred to P1; no matcher
+behavior is implemented here. An all-zero row is storage-valid but
+matcher-unusable.
+
+Serialization validates the domain, rebuilds the protobuf in field order, and
+parsing accepts only when reserialization is byte-for-byte identical. Unknown,
+duplicate, reordered, truncated, noncanonical, out-of-range, and descriptor-length
+violations fail closed. The codec does not change the F2 duplicate identity rule:
+the SHA-256 is over the exact serialized FRONT fingerprint bytes actually
+captured/published. The outer manifest, AEAD, server, index, and grant contracts
+are unchanged.
 
 ## 7. FRONT local-feature match
 

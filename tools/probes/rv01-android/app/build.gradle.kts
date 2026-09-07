@@ -31,6 +31,7 @@ dependencies {
     implementation(platform("androidx.compose:compose-bom:2026.06.01"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
+    implementation("com.google.android.gms:play-services-auth-blockstore:16.4.0")
 
     testImplementation("junit:junit:4.13.2")
 }

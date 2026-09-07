@@ -89,6 +89,11 @@ dependencies {
     testImplementation(libs.androidx.work.testing)
     testImplementation(libs.okhttp)
     debugImplementation(libs.compose.ui.test.manifest)
+
+    // Native-capability probe only (androidTest source set; never packaged
+    // into the release APK or production runtime graph).
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation("androidx.test:runner:1.5.0")
 }
 
 fun remanenceApiBaseUrl(default: String): String {

@@ -4,6 +4,7 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -87,13 +88,69 @@ class AuthRepositoryRegisterTest {
                 MockResponse.Builder()
                     .code(409)
                     .setHeader("Content-Type", "application/problem+json")
-                    .body("""{"code":"EMAIL_UNAVAILABLE"}""")
+                    .body(problemJson("EMAIL_UNAVAILABLE"))
                     .build(),
             )
             val result = repository(server).register(request)
             val failure = assertIs<AuthResult.Failure>(result)
             assertEquals(AuthFailure.HTTP, failure.reason)
             assertEquals(409, failure.httpStatus)
+            assertEquals(RegistrationProblemCode.EMAIL_UNAVAILABLE, failure.registrationProblemCode)
+        }
+    }
+
+    @Test
+    fun canonicalRegistrationConflictsPreserveEachAllowlistedCodeAndStatus() = runTest {
+        withMockServer { server ->
+            val codes = listOf(
+                RegistrationProblemCode.EMAIL_UNAVAILABLE,
+                RegistrationProblemCode.HANDLE_UNAVAILABLE,
+                RegistrationProblemCode.KEY_BUNDLE_INVALID,
+            )
+            codes.forEach { code ->
+                server.enqueue(
+                    MockResponse.Builder()
+                        .code(409)
+                        .setHeader("Content-Type", "application/problem+json")
+                        .body(problemJson(code.wireCode))
+                        .build(),
+                )
+            }
+
+            val failures = codes.map {
+                assertIs<AuthResult.Failure>(repository(server).register(request))
+            }
+
+            assertEquals(codes, failures.map { it.registrationProblemCode })
+            assertEquals(listOf(409, 409, 409), failures.map { it.httpStatus })
+        }
+    }
+
+    @Test
+    fun malformedUnknownAndMissingProblemBodiesFallBackWithoutAProblemCode() = runTest {
+        withMockServer { server ->
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(409)
+                    .setHeader("Content-Type", "application/problem+json")
+                    .body("not-json")
+                    .build(),
+            )
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(409)
+                    .setHeader("Content-Type", "application/problem+json")
+                    .body(problemJson("UNKNOWN_PRIVATE_CODE"))
+                    .build(),
+            )
+            server.enqueue(MockResponse.Builder().code(409).build())
+
+            repeat(3) {
+                val failure = assertIs<AuthResult.Failure>(repository(server).register(request))
+                assertEquals(AuthFailure.HTTP, failure.reason)
+                assertEquals(409, failure.httpStatus)
+                assertNull(failure.registrationProblemCode)
+            }
         }
     }
 
@@ -148,6 +205,9 @@ class AuthRepositoryRegisterTest {
 
     private fun kotlinx.serialization.json.JsonElement.jsonPrimitiveContent(): String =
         (this as kotlinx.serialization.json.JsonPrimitive).content
+
+    private fun problemJson(code: String): String =
+        """{"type":"https://remanence.invalid/problems/${code.lowercase()}","title":"safe","status":409,"code":"$code","detail":"private detail","request_id":"0198f0a0-0000-7000-8000-00000000ac01","retryable":false}"""
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private suspend fun <T> withMockServer(block: suspend (MockWebServer) -> T): T {

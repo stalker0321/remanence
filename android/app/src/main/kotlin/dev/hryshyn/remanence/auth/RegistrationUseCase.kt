@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.auth
 import dev.hryshyn.remanence.wiring.PreparedIdentity
 import dev.hryshyn.remanence.core.data.network.AuthResult
 import dev.hryshyn.remanence.core.data.network.RegisterRequestDto
+import dev.hryshyn.remanence.core.data.network.RegistrationProblemCode
 import dev.hryshyn.remanence.core.data.network.RegistrationUserDto
 import dev.hryshyn.remanence.core.model.UserId
 import kotlin.coroutines.cancellation.CancellationException
@@ -50,7 +51,10 @@ class RegistrationUseCase(
         ) : Outcome
 
         /** Server answered with a redacted rejection (e.g. EMAIL_UNAVAILABLE). */
-        data class Rejected(val httpStatus: Int) : Outcome
+        data class Rejected(
+            val httpStatus: Int,
+            val problemCode: RegistrationProblemCode? = null,
+        ) : Outcome
 
         data object NetworkUnreachable : Outcome
 
@@ -99,7 +103,10 @@ class RegistrationUseCase(
                 )
             }
             is AuthResult.Failure -> when (result.reason) {
-                dev.hryshyn.remanence.core.data.network.AuthFailure.HTTP -> Outcome.Rejected(result.httpStatus ?: 0)
+                dev.hryshyn.remanence.core.data.network.AuthFailure.HTTP -> Outcome.Rejected(
+                    httpStatus = result.httpStatus ?: 0,
+                    problemCode = result.registrationProblemCode,
+                )
                 dev.hryshyn.remanence.core.data.network.AuthFailure.NETWORK -> Outcome.NetworkUnreachable
                 dev.hryshyn.remanence.core.data.network.AuthFailure.INVALID_RESPONSE -> Outcome.InvalidResponse
             }

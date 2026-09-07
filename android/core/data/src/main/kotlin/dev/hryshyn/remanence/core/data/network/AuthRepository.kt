@@ -2,6 +2,9 @@ package dev.hryshyn.remanence.core.data.network
 
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -12,12 +15,27 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okhttp3.ResponseBody
 import okhttp3.coroutines.executeAsync
+import okio.Buffer
 
 enum class AuthFailure {
     NETWORK,
     HTTP,
     INVALID_RESPONSE,
+}
+
+/** Registration problem codes that are safe for the client to act on. */
+enum class RegistrationProblemCode(val wireCode: String) {
+    EMAIL_UNAVAILABLE("EMAIL_UNAVAILABLE"),
+    HANDLE_UNAVAILABLE("HANDLE_UNAVAILABLE"),
+    KEY_BUNDLE_INVALID("KEY_BUNDLE_INVALID"),
+    ;
+
+    companion object {
+        fun fromWireCode(code: String): RegistrationProblemCode? =
+            values().firstOrNull { it.wireCode == code }
+    }
 }
 
 sealed interface AuthResult<out T> {
@@ -29,6 +47,7 @@ sealed interface AuthResult<out T> {
     data class Failure(
         val reason: AuthFailure,
         val httpStatus: Int? = null,
+        val registrationProblemCode: RegistrationProblemCode? = null,
     ) : AuthResult<Nothing>
 }
 
@@ -45,6 +64,7 @@ class AuthRepository internal constructor(
         path = "v1/auth/register",
         body = NetworkJson.encodeToString(request),
         successStatus = 201,
+        allowedProblemCodes = REGISTRATION_PROBLEM_CODES,
         decode = { text -> NetworkJson.decodeFromString<RegisterResponseDto>(text) },
     )
 
@@ -89,6 +109,7 @@ class AuthRepository internal constructor(
         path: String,
         body: String,
         successStatus: Int,
+        allowedProblemCodes: Set<RegistrationProblemCode> = emptySet(),
         decode: (String) -> T,
     ): AuthResult<T> {
         val requestBody = body.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
@@ -99,7 +120,7 @@ class AuthRepository internal constructor(
             .build()
         return try {
             client.newCall(request).executeAsync().use { response ->
-                interpret(response, successStatus, decode)
+                interpret(response, successStatus, allowedProblemCodes, decode)
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -111,10 +132,15 @@ class AuthRepository internal constructor(
     private fun <T> interpret(
         response: Response,
         successStatus: Int,
+        allowedProblemCodes: Set<RegistrationProblemCode>,
         decode: (String) -> T,
     ): AuthResult<T> {
         if (response.code != successStatus) {
-            return AuthResult.Failure(AuthFailure.HTTP, response.code)
+            return AuthResult.Failure(
+                reason = AuthFailure.HTTP,
+                httpStatus = response.code,
+                registrationProblemCode = parseRegistrationProblem(response, allowedProblemCodes),
+            )
         }
         val contentType = response.body.contentType()
         if (contentType == null || contentType.type != "application" || contentType.subtype != "json") {
@@ -134,6 +160,46 @@ class AuthRepository internal constructor(
         return AuthResult.Success(dto, response.code)
     }
 
+    private fun parseRegistrationProblem(
+        response: Response,
+        allowedProblemCodes: Set<RegistrationProblemCode>,
+    ): RegistrationProblemCode? {
+        if (allowedProblemCodes.isEmpty()) return null
+        val contentType = response.body.contentType()
+        if (contentType?.type != "application" || contentType.subtype != "problem+json") {
+            return null
+        }
+        val body = response.body.readBoundedUtf8() ?: return null
+        val classified = classifyCapsuleProblem(
+            text = body,
+            httpStatus = response.code,
+            allowedCodes = allowedProblemCodes.map { it.wireCode }.toSet(),
+        ) ?: return null
+        return RegistrationProblemCode.fromWireCode(classified.code)
+    }
+
+    private fun ResponseBody.readBoundedUtf8(): String? {
+        if (contentLength() > MAX_BODY_BYTES) return null
+        val source = source()
+        val buffer = Buffer()
+        var totalBytes = 0L
+        while (true) {
+            val read = source.read(buffer, MAX_BODY_BYTES + 1L - totalBytes)
+            if (read == -1L) break
+            totalBytes += read
+            if (totalBytes > MAX_BODY_BYTES) return null
+        }
+        return try {
+            Charsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(buffer.readByteArray()))
+                .toString()
+        } catch (_: CharacterCodingException) {
+            null
+        }
+    }
+
     companion object {
         /**
          * Bare client repository: no bearer interceptor and no authenticator.
@@ -143,6 +209,11 @@ class AuthRepository internal constructor(
         fun create(baseUrl: ApiBaseUrl): AuthRepository =
             AuthRepository(HttpClientFactory.create(), baseUrl)
 
+        private val REGISTRATION_PROBLEM_CODES = setOf(
+            RegistrationProblemCode.EMAIL_UNAVAILABLE,
+            RegistrationProblemCode.HANDLE_UNAVAILABLE,
+            RegistrationProblemCode.KEY_BUNDLE_INVALID,
+        )
         private const val MAX_BODY_BYTES = 64 * 1024
     }
 }

@@ -9,6 +9,7 @@ import dev.hryshyn.remanence.wiring.PreparedIdentity
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -16,6 +17,7 @@ import org.junit.Test
 import dev.hryshyn.remanence.core.data.network.AuthResult
 import dev.hryshyn.remanence.core.data.network.RegisterRequestDto
 import dev.hryshyn.remanence.core.data.network.RegisterResponseDto
+import dev.hryshyn.remanence.core.data.network.RegistrationProblemCode
 import dev.hryshyn.remanence.core.data.network.RegistrationUserDto
 
 class RegistrationViewModelTest {
@@ -79,7 +81,11 @@ class RegistrationViewModelTest {
 
             override suspend fun register(request: RegisterRequestDto): AuthResult<RegisterResponseDto> =
                 when (++requests) {
-                    1 -> AuthResult.Failure(dev.hryshyn.remanence.core.data.network.AuthFailure.HTTP, 409)
+                    1 -> AuthResult.Failure(
+                        reason = dev.hryshyn.remanence.core.data.network.AuthFailure.HTTP,
+                        httpStatus = 409,
+                        registrationProblemCode = RegistrationProblemCode.EMAIL_UNAVAILABLE,
+                    )
                     else -> AuthResult.Success(successResponse, 201)
                 }
         }
@@ -97,6 +103,54 @@ class RegistrationViewModelTest {
         vm.submit()
         advanceUntilIdle()
         assertEquals(RegistrationSubmitState.Completed, vm.submitState.value)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun handleUnavailableUsesTheSameCombinedRedactedMessage() = runTest {
+        val api = rejectingApi(RegistrationProblemCode.HANDLE_UNAVAILABLE)
+        val vm = viewModel(api, testScheduler)
+        applyValidForm(vm)
+
+        vm.submit()
+        advanceUntilIdle()
+
+        assertEquals(
+            RegistrationSubmitState.Failed("Email or handle is unavailable."),
+            vm.submitState.value,
+        )
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun invalidKeyBundleUsesDistinctSafeRegistrationIdentityMessage() = runTest {
+        val api = rejectingApi(RegistrationProblemCode.KEY_BUNDLE_INVALID)
+        val vm = viewModel(api, testScheduler)
+        applyValidForm(vm)
+
+        vm.submit()
+        advanceUntilIdle()
+
+        assertEquals(
+            RegistrationSubmitState.Failed("The registration identity was not accepted. Try again later."),
+            vm.submitState.value,
+        )
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun missingProblemCodeUsesGenericRegistrationFailure() = runTest {
+        val api = rejectingApi(null)
+        val vm = viewModel(api, testScheduler)
+        applyValidForm(vm)
+
+        vm.submit()
+        advanceUntilIdle()
+
+        assertEquals(
+            RegistrationSubmitState.Failed("Registration failed. Try again later."),
+            vm.submitState.value,
+        )
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -135,6 +189,24 @@ class RegistrationViewModelTest {
             signingPublicKeysetB64Url = "CJsig",
         )
     }
+
+    private fun rejectingApi(code: RegistrationProblemCode?) = object : RegistrationAuthApiPort {
+        override suspend fun register(request: RegisterRequestDto): AuthResult<RegisterResponseDto> =
+            AuthResult.Failure(
+                reason = dev.hryshyn.remanence.core.data.network.AuthFailure.HTTP,
+                httpStatus = 409,
+                registrationProblemCode = code,
+            )
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun viewModel(
+        api: RegistrationAuthApiPort,
+        scheduler: TestCoroutineScheduler,
+    ): RegistrationViewModel = RegistrationViewModel(
+        useCase = RegistrationUseCase(identityPort(), api, FakeAccounts(), NoOpSessionReplacement),
+        scope = kotlinx.coroutines.CoroutineScope(UnconfinedTestDispatcher(scheduler)),
+    )
 
     private fun applyValidForm(vm: RegistrationViewModel) {
         vm.onFieldChange(RegistrationField.EMAIL, validForm().email)

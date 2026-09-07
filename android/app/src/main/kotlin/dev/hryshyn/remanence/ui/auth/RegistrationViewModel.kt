@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.ui.auth
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.hryshyn.remanence.auth.RegistrationUseCase
+import dev.hryshyn.remanence.core.data.network.RegistrationProblemCode
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -67,7 +68,7 @@ class RegistrationViewModel(
 
     private fun mapOutcome(outcome: RegistrationUseCase.Outcome): RegistrationSubmitState = when (outcome) {
         is RegistrationUseCase.Outcome.Registered -> RegistrationSubmitState.Completed
-        is RegistrationUseCase.Outcome.Rejected -> RegistrationSubmitState.Failed(rejectedMessage(outcome.httpStatus))
+        is RegistrationUseCase.Outcome.Rejected -> RegistrationSubmitState.Failed(rejectedMessage(outcome.problemCode))
         RegistrationUseCase.Outcome.NetworkUnreachable ->
             RegistrationSubmitState.Failed("Network unreachable. Try again later.")
         RegistrationUseCase.Outcome.InvalidResponse ->
@@ -76,9 +77,11 @@ class RegistrationViewModel(
             RegistrationSubmitState.Failed("Existing keys cannot be opened on this device; recovery required.")
     }
 
-    private fun rejectedMessage(httpStatus: Int): String = when (httpStatus) {
-        409 -> "Email or handle is unavailable."
-        422 -> "Please check the entered fields."
-        else -> "Registration failed. Try again later."
+    private fun rejectedMessage(problemCode: RegistrationProblemCode?): String = when (problemCode) {
+        RegistrationProblemCode.EMAIL_UNAVAILABLE,
+        RegistrationProblemCode.HANDLE_UNAVAILABLE,
+        -> "Email or handle is unavailable."
+        RegistrationProblemCode.KEY_BUNDLE_INVALID -> "The registration identity was not accepted. Try again later."
+        null -> "Registration failed. Try again later."
     }
 }

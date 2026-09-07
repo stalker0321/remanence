@@ -8,6 +8,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import dev.hryshyn.remanence.core.data.network.RegistrationProblemCode
 
 class RegistrationUseCaseOrderingTest {
 
@@ -105,14 +106,23 @@ class RegistrationUseCaseOrderingTest {
     fun networkFailureLeavesNoAccountRecordButKeepsWrappedIdentity() = runTest {
         val trace = mutableListOf<String>()
         val identity = RecordingIdentityPort(trace)
-        val api = FakeAuthApi(trace).apply { nextResult = AuthResult.Failure(dev.hryshyn.remanence.core.data.network.AuthFailure.HTTP, 409) }
+        val api = FakeAuthApi(trace).apply {
+            nextResult = AuthResult.Failure(
+                reason = dev.hryshyn.remanence.core.data.network.AuthFailure.HTTP,
+                httpStatus = 409,
+                registrationProblemCode = RegistrationProblemCode.HANDLE_UNAVAILABLE,
+            )
+        }
         val accounts = FakeAccounts(trace)
         val replacement = RecordingReplacement(trace)
         val useCase = RegistrationUseCase(identity, api, accounts, replacement)
 
         val outcome = useCase.register("private@example.com", "secret-password", "@mykola")
 
-        assertEquals(RegistrationUseCase.Outcome.Rejected(409), outcome)
+        assertEquals(
+            RegistrationUseCase.Outcome.Rejected(409, RegistrationProblemCode.HANDLE_UNAVAILABLE),
+            outcome,
+        )
         assertEquals(listOf("identity", "lease", "network"), trace)
         assertEquals(0, replacement.installCount)
 

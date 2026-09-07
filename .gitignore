@@ -1,3 +1,10 @@
+# Slice 0 probe outputs (defaults outside the tree; belt and braces)
+tools/probes/postcard-matcher/outputs/
+# Never create an env inside the frozen vendor snapshot; use the
+# matcher's own out-of-tree environment documented in the probe README.
+tools/probes/postcard-matcher/vendor/.venv/
+Remanence-postcard-matcher-eval-out/
+
 # Gradle / Android
 .gradle/
 build/

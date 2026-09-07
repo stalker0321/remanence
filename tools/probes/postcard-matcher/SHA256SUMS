@@ -1,0 +1,13 @@
+# Frozen postcard-matcher snapshot (Slice 0) — SHA-256 manifest.
+#
+# Paths are relative to the repository root; verify from the worktree root:
+#   sha256sum -c tools/probes/postcard-matcher/SHA256SUMS
+# Verified byte-identical to /home/vodkolyan/postcard-matcher on 2026-09-07.
+# That source directory is NOT a git repository; file hashes + mtimes in the
+# probe README are the snapshot identity.
+e946e77cfc41c5160e47a1c099bc850e6c352b52ad9bfd414d13c529df0eaace  tools/probes/postcard-matcher/vendor/MATCHER_ARCHITECTURE.md
+9e967db5be35d11d154693abe19a3fee5156153baef3adfc91edfa29d21a4645  tools/probes/postcard-matcher/vendor/README.md
+906349b8dd7dd154b30ccec43175ce820f8e08873ddc5aa7de54266439271db8  tools/probes/postcard-matcher/vendor/engine.py
+5ae9d12d0d65bfa0b0116d890e381aff02005590ca7edad0f52e67d3fcebdd9a  tools/probes/postcard-matcher/vendor/requirements.lock.txt
+dd9037086eeee60d38a5ef3224fc727c572109e1525415005a9efd26ab4a22d0  tools/probes/postcard-matcher/vendor/requirements.txt
+ca0650be941f05d1fa3ec696ffdc27775d4701e1eaab08452a025929e841cfbb  tools/probes/postcard-matcher/vendor/vision.py

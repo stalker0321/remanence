@@ -297,7 +297,7 @@ class SiftRootSiftMatcher {
         return point.x to point.y
     }
 
-    /** Canonical TL,TR,BR,BL support winding; reflection is no evidence. */
+    /** Canonical TL,TR,BR,BL positive winding is valid; reflection is no evidence. */
     internal fun supportOrientationForTesting(
         points: List<Pair<Double, Double>>,
     ): Boolean = isCanonicalSupportOrientation(

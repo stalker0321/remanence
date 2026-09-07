@@ -255,6 +255,24 @@ REMANENCE_TEST_API_BASE_URL=http://127.0.0.1:8000/ \
 
 The serialized flags plus the heap cap keep the gate inside a 7.6 GiB host: one single-use Gradle JVM (Kotlin compiles in-process, so no second Kotlin JVM exists) plus Gradle's default-capped test workers. The variable accepts values like `1024m` or `2g` and fails closed otherwise; `verify-m0.sh` applies the same invocation and logs the effective cap.
 
+## One-shot server maintenance
+
+Expired drafts and final objects belonging to committed `ABORTED` capsules can
+be processed separately from API startup. With the API image and its normal
+database/blob environment available, invoke one bounded attempt through the
+existing container runner:
+
+```sh
+sudo -n docker compose run --rm api /app/.venv/bin/python -m remanence.maintenance
+```
+
+One attempt examines at most 100 drafts and 100 aborted objects. Exit `0`
+means the attempted pages completed; exit `2` means a deferred time budget,
+backlog, or per-object partial result; exit `1` means an infrastructure or
+stage failure. The command never scans or removes the server `.staging` root,
+and repeated runs start the object cursor from the beginning, so `has_more`
+does not claim eventual completion.
+
 ```sh
 stat -c '%s %n' /home/vodkolyan/projects/Remanence/android/app/build/outputs/apk/debug/app-debug.apk
 ```

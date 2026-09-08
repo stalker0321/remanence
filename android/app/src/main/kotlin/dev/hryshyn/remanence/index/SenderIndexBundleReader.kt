@@ -2,6 +2,7 @@ package dev.hryshyn.remanence.index
 
 import dev.hryshyn.remanence.core.data.fingerprints.SecretSealer
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
+import dev.hryshyn.remanence.core.data.storage.TrustedPathSafety
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.UserId
@@ -431,20 +432,29 @@ class SenderIndexBundleReader internal constructor(
     private fun resolvePaths(owner: UserId, capsule: CapsuleId): ReaderPaths {
         val root = roots.child(owner, AccountScopedFileRoots.ChildRoot.FINGERPRINTS)
             .toPath().toAbsolutePath().normalize()
-        val parent = root.resolve("capsules").normalize()
+        val parent = roots.resolveTrustedRelative(root, "capsules")
         val destination = parent.resolve("${capsule.toRestString()}.index.bundle").normalize()
-        check(parent != root && parent.startsWith(root) && destination.startsWith(root)) {
+        check(roots.isContainedPath(destination, root)) {
             "sender index path escapes owner root"
         }
         return ReaderPaths(root, parent, destination)
     }
 
     private fun directoryChainState(root: Path, parent: Path): DirectoryChainState {
-        if (!parent.startsWith(root) || parent == root) return DirectoryChainState.UNSAFE
-        val filesystemRoot = root.root ?: return DirectoryChainState.UNSAFE
-        var current = filesystemRoot
+        if (!roots.isContainedPath(parent, root)) return DirectoryChainState.UNSAFE
+        when (roots.trustedPathSafety(parent)) {
+            TrustedPathSafety.UNSAFE -> return DirectoryChainState.UNSAFE
+            TrustedPathSafety.UNAVAILABLE -> return DirectoryChainState.UNAVAILABLE
+            TrustedPathSafety.SAFE -> Unit
+        }
+        var current = root
         return try {
-            for (segment in filesystemRoot.relativize(parent)) {
+            val rootAttributes = fileSystem.attributes(root)
+                ?: return DirectoryChainState.MISSING
+            if (rootAttributes.isSymbolicLink || !rootAttributes.isDirectory) {
+                return DirectoryChainState.UNSAFE
+            }
+            for (segment in root.relativize(parent)) {
                 current = current.resolve(segment)
                 val attributes = fileSystem.attributes(current)
                     ?: return DirectoryChainState.MISSING

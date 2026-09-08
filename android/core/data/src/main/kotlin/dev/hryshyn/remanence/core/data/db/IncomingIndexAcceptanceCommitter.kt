@@ -2,6 +2,7 @@ package dev.hryshyn.remanence.core.data.db
 
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.data.storage.DurableIncomingCiphertextFile
+import dev.hryshyn.remanence.core.data.storage.TrustedPathSafety
 import dev.hryshyn.remanence.core.model.BlobId
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
 import dev.hryshyn.remanence.core.model.CapsuleId
@@ -154,7 +155,7 @@ class IncomingIndexAcceptanceCommitter(
         } catch (_: Exception) {
             return@withContext failure(IncomingIndexAcceptanceFailure.PATH_MISMATCH, false)
         }
-        if (capabilityPath != expectedDestination ||
+        if (!roots.sameTrustedPath(capabilityPath, expectedDestination) ||
             !isContained(capabilityPath, incomingRoot) ||
             !isNoSymlinkPath(capabilityPath)
         ) {
@@ -263,33 +264,11 @@ class IncomingIndexAcceptanceCommitter(
     }
 
     private fun isNoSymlinkPath(path: Path): Boolean {
-        var current: Path? = path
-        return try {
-            while (current != null) {
-                val examined = current
-                val attributes = try {
-                    Files.readAttributes(
-                        examined,
-                        BasicFileAttributes::class.java,
-                        LinkOption.NOFOLLOW_LINKS,
-                    )
-                } catch (_: java.nio.file.NoSuchFileException) {
-                    current = examined.parent
-                    continue
-                }
-                if (attributes.isSymbolicLink) return false
-                current = examined.parent
-            }
-            true
-        } catch (_: IOException) {
-            false
-        } catch (_: SecurityException) {
-            false
-        }
+        return roots.trustedPathSafety(path) == TrustedPathSafety.SAFE
     }
 
     private fun isContained(candidate: Path, root: Path): Boolean =
-        candidate != root && candidate.startsWith(root)
+        roots.isContainedPath(candidate, root)
 
     private fun failure(
         reason: IncomingIndexAcceptanceFailure,

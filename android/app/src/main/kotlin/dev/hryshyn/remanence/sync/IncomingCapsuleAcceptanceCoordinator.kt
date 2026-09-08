@@ -17,6 +17,7 @@ import dev.hryshyn.remanence.core.data.storage.DurableIncomingCiphertextFile
 import dev.hryshyn.remanence.core.data.storage.IncomingRecognitionCiphertextAdopter
 import dev.hryshyn.remanence.core.data.storage.IncomingRecognitionCiphertextAdoptionRequest
 import dev.hryshyn.remanence.core.data.storage.IncomingRecognitionCiphertextAdoptionResult
+import dev.hryshyn.remanence.core.data.storage.TrustedPathSafety
 import dev.hryshyn.remanence.core.crypto.RecognitionManifestContent
 import dev.hryshyn.remanence.core.model.BlobId
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
@@ -465,7 +466,8 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
 
             val returnedPathMatches = sameNormalizedPath(downloaded.ciphertextFile.toPath(), tempPath)
             val returnedSizeMatches = downloaded.sizeBytes == readyDeclaration.expectedSizeBytes
-            val noSymlinkPath = isNoSymlinkPath(tempPath)
+            val noSymlinkPath = isNoSymlinkPath(tempPath) &&
+                roots.trustedPathSafety(downloaded.ciphertextFile.toPath()) == TrustedPathSafety.SAFE
             if (!returnedPathMatches || !returnedSizeMatches || !noSymlinkPath) {
                 val reason = when {
                     !returnedPathMatches -> IncomingAcceptanceLocalPathFailureReason.RETURNED_PATH
@@ -869,11 +871,27 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
             // contract instead of allowing it to escape as a crash.
             throw UnsafeTempPath()
         }
-        val parent = tempRoot.resolve("incoming-recognition")
-            .resolve(capsule.toRestString())
-            .resolve("blobs")
-            .normalize()
-        val path = parent.resolve("${blob.toRestString()}.ciphertext.tmp").normalize()
+        val parent = try {
+            roots.resolveTrustedRelative(
+                tempRoot,
+                "incoming-recognition",
+                capsule.toRestString(),
+                "blobs",
+            )
+        } catch (_: IllegalStateException) {
+            throw UnsafeTempPath()
+        }
+        val path = try {
+            roots.resolveTrustedRelative(
+                tempRoot,
+                "incoming-recognition",
+                capsule.toRestString(),
+                "blobs",
+                "${blob.toRestString()}.ciphertext.tmp",
+            )
+        } catch (_: IllegalStateException) {
+            throw UnsafeTempPath()
+        }
         if (!isContained(parent, tempRoot) || !isContained(path, tempRoot)) {
             throw UnsafeTempPath()
         }
@@ -898,6 +916,10 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
     }
 
     private fun ensureNoSymlinkDirectory(path: Path) {
+        if (roots.isTrustedRoot(path)) {
+            if (!Files.isDirectory(path)) throw UnsafeTempPath()
+            return
+        }
         when (inspectDirectory(path)) {
             DirectoryInspection.SAFE -> return
             DirectoryInspection.UNSAFE -> throw UnsafeTempPath()
@@ -939,6 +961,7 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
                 .toPath().toAbsolutePath().normalize()
         }.getOrNull() ?: return
         if (!isContained(path, root)) return
+        if (roots.trustedPathSafety(path) != TrustedPathSafety.SAFE) return
         runCatching { Files.deleteIfExists(path) }
     }
 
@@ -1069,36 +1092,14 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
     }
 
     private fun isNoSymlinkPath(path: Path): Boolean {
-        var current: Path? = path
-        return try {
-            while (current != null) {
-                val examined = current
-                val attributes = try {
-                    Files.readAttributes(
-                        examined,
-                        BasicFileAttributes::class.java,
-                        LinkOption.NOFOLLOW_LINKS,
-                    )
-                } catch (_: java.nio.file.NoSuchFileException) {
-                    current = examined.parent
-                    continue
-                }
-                if (attributes.isSymbolicLink) return false
-                current = examined.parent
-            }
-            true
-        } catch (_: IOException) {
-            false
-        } catch (_: SecurityException) {
-            false
-        }
+        return roots.trustedPathSafety(path) == TrustedPathSafety.SAFE
     }
 
     private fun sameNormalizedPath(first: Path, second: Path): Boolean =
-        first.toAbsolutePath().normalize() == second.toAbsolutePath().normalize()
+        roots.sameTrustedPath(first, second)
 
     private fun isContained(candidate: Path, root: Path): Boolean =
-        candidate != root && candidate.startsWith(root)
+        roots.isContainedPath(candidate, root)
 
     private fun stripe(key: String): Int =
         (key.hashCode() and Int.MAX_VALUE) % ATTEMPT_LOCK_STRIPES

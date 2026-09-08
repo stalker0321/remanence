@@ -73,7 +73,8 @@ class AccountStorageRetention(
      * Same-UID TOCTOU beyond these checks is M4-deferred.
      */
     fun sweepCreateStaging(owner: UserId) {
-        val accountDir = roots.accountDirectory(owner).toPath()
+        val accountDir = roots.accountDirectoryForInspection(owner).toPath()
+        if (roots.trustedPathSafety(accountDir) != TrustedPathSafety.SAFE) return
         if (!Files.isDirectory(accountDir, LinkOption.NOFOLLOW_LINKS)) return
         val tempDir = File(accountDir.toFile(), AccountScopedFileRoots.ChildRoot.TEMP.directoryName).toPath()
         if (!Files.isDirectory(tempDir, LinkOption.NOFOLLOW_LINKS)) return

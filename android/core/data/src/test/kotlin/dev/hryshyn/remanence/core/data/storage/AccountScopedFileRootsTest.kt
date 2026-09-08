@@ -117,35 +117,71 @@ class AccountScopedFileRootsTest {
     }
 
     @Test
-    fun resolverRejectsHostileOwnerUuidThatEscapesAccountsBoundary() {
-        // The protocol layer rejects a non-canonical UUID outright, so the
-        // only remaining attack is to make `filesDir` itself point at a
-        // location where the accounts root resolves to something the caller
-        // can then escape. We exercise the containment check directly by
-        // constructing a resolver whose accounts root is a symlink, then
-        // expect traversal to be refused.
+    fun rawFilesDirAliasAndCanonicalTargetAreOneTrustedRootIdentity() {
+        val parent = sandbox("android-alias")
+        val realFilesDir = File(parent, "real-files").apply { mkdirs() }
+        val rawFilesDir = File(parent, "raw-files")
+        java.nio.file.Files.createSymbolicLink(rawFilesDir.toPath(), realFilesDir.toPath())
+        val roots = AccountScopedFileRoots(rawFilesDir)
+
+        val rawTemp = roots.child(ownerA, AccountScopedFileRoots.ChildRoot.TEMP).toPath()
+        val canonicalTemp = rawTemp.toFile().canonicalFile.toPath()
+
+        assertEquals(TrustedPathSafety.SAFE, roots.trustedPathSafety(rawTemp))
+        assertEquals(TrustedPathSafety.SAFE, roots.trustedPathSafety(canonicalTemp))
+        assertTrue(roots.sameTrustedPath(rawTemp, canonicalTemp))
+        assertTrue(roots.isContainedPath(canonicalTemp, roots.accountDirectory(ownerA).toPath()))
+    }
+
+    @Test
+    fun externalAliasIntoTrustedRootIsNotATrustedPath() {
+        val parent = sandbox("external-alias")
+        val realFilesDir = File(parent, "real-files").apply { mkdirs() }
+        val rawFilesDir = File(parent, "raw-files")
+        val externalAlias = File(parent, "external-alias")
+        java.nio.file.Files.createSymbolicLink(rawFilesDir.toPath(), realFilesDir.toPath())
+        java.nio.file.Files.createSymbolicLink(externalAlias.toPath(), realFilesDir.toPath())
+        val roots = AccountScopedFileRoots(rawFilesDir)
+        val externalPath = externalAlias.toPath().resolve("accounts/${ownerAUuid}/temp")
+
+        assertEquals(TrustedPathSafety.UNSAFE, roots.trustedPathSafety(externalPath))
+    }
+
+    @Test
+    fun resolverRejectsSymlinkedAccountsRootWithoutMaterializingOutside() {
         val filesDir = sandbox("traversal")
-        val real = File(filesDir, "real")
-        real.mkdirs()
         val accountsLink = File(filesDir, "accounts")
         accountsLink.delete()
-        // The symlink target is a sibling of `real` outside any account.
         val outside = File(filesDir, "outside")
         outside.mkdirs()
         java.nio.file.Files.createSymbolicLink(accountsLink.toPath(), outside.toPath())
 
         val resolver = AccountScopedFileRoots(filesDir)
-        val resolved = resolver.child(ownerA, AccountScopedFileRoots.ChildRoot.TEMP)
-        // Canonical resolution follows the symlink, so the resolved file
-        // lives under `outside/<owner>/temp` - still contained beneath
-        // the canonical accounts root (`outside/`), so this is allowed.
-        // The crucial property the resolver enforces is that nothing ends
-        // up *outside* the accounts root, regardless of filesDir layout.
-        val accounts = File(filesDir, "accounts").canonicalFile
-        assertTrue(
-            "resolved path must still be inside canonical accounts root: ${resolved.path}",
-            resolved.canonicalPath.startsWith(accounts.canonicalPath + File.separator),
-        )
+        try {
+            resolver.child(ownerA, AccountScopedFileRoots.ChildRoot.TEMP)
+            fail("a controlled accounts symlink must be rejected")
+        } catch (_: IllegalStateException) {
+            // Expected fail-closed result.
+        }
+        assertTrue(outside.isDirectory)
+        assertFalse(File(outside, ownerAUuid).exists())
+    }
+
+    @Test
+    fun fixedRelativeResolverRejectsTraversalAndSiblingPrefix() {
+        val filesDir = sandbox("fixed-components")
+        val roots = AccountScopedFileRoots(filesDir)
+        val root = roots.child(ownerA, AccountScopedFileRoots.ChildRoot.TEMP).toPath()
+
+        assertFalse(roots.isContainedPath(root.resolveSibling("${root.fileName}-sibling"), root))
+        for (component in listOf("..", ".", "/tmp/escape", "nested/escape", "\\\\escape")) {
+            try {
+                roots.resolveTrustedRelative(root, component)
+                fail("unsafe component must be rejected: $component")
+            } catch (_: IllegalArgumentException) {
+                // Expected fail-closed result.
+            }
+        }
     }
 
     @Test

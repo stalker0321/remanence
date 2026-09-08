@@ -6,6 +6,7 @@ import dev.hryshyn.remanence.core.data.network.IncomingCapsulePage
 import dev.hryshyn.remanence.core.data.network.IncomingCapsuleRepository
 import dev.hryshyn.remanence.core.data.network.IncomingCapsuleResult
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
+import dev.hryshyn.remanence.core.data.storage.TrustedPathSafety
 import dev.hryshyn.remanence.core.model.BlobId
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.UserId
@@ -221,7 +222,9 @@ class IncomingCapsuleSyncRepository(
         capsule: CapsuleId,
         blob: BlobId,
     ): String = try {
-        roots.incomingCiphertextPath(owner, capsule, blob).toString()
+        roots.incomingCiphertextPath(owner, capsule, blob).also { path ->
+            check(roots.trustedPathSafety(path) == TrustedPathSafety.SAFE)
+        }.toString()
     } catch (_: Exception) {
         throw IncomingStoragePathFailure()
     }

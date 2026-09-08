@@ -14,6 +14,7 @@ import dev.hryshyn.remanence.core.data.db.IncomingCapsuleEntity
 import dev.hryshyn.remanence.core.data.db.IncomingEnvelopeDao
 import dev.hryshyn.remanence.core.data.db.RecipientTombstonePresentationBoundary
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
+import dev.hryshyn.remanence.core.data.storage.TrustedPathSafety
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.KeyBundleId
@@ -580,11 +581,23 @@ internal class IncomingPresentationPreparation(
         }
         if (blob.expectedSizeBytes !in 1L..maximum) return null
 
-        val expectedPath = expectedBlobPath(ownerUserId, capsuleId, blobId)
-        val incomingRoot = roots.child(
-            ownerUserId,
-            AccountScopedFileRoots.ChildRoot.INCOMING_CIPHERTEXT,
-        ).toPath().toAbsolutePath().normalize()
+        val expectedPath = try {
+            expectedBlobPath(ownerUserId, capsuleId, blobId)
+        } catch (_: IllegalStateException) {
+            return null
+        } catch (_: SecurityException) {
+            return null
+        }
+        val incomingRoot = try {
+            roots.child(
+                ownerUserId,
+                AccountScopedFileRoots.ChildRoot.INCOMING_CIPHERTEXT,
+            ).toPath().toAbsolutePath().normalize()
+        } catch (_: IllegalStateException) {
+            return null
+        } catch (_: SecurityException) {
+            return null
+        }
         if (blob.localPath != expectedPath.toString() ||
             !safeDirectories(incomingRoot, expectedPath.parent) ||
             !regularNoFollow(expectedPath)
@@ -637,14 +650,17 @@ internal class IncomingPresentationPreparation(
         }
     }
 
-    private fun expectedBlobPath(owner: UserId, capsule: CapsuleId, blobId: dev.hryshyn.remanence.core.model.BlobId): Path =
-        roots.child(owner, AccountScopedFileRoots.ChildRoot.INCOMING_CIPHERTEXT)
-            .toPath().toAbsolutePath().normalize()
-            .resolve("capsules").resolve(capsule.toRestString()).resolve("blobs")
-            .resolve("${blobId.toRestString()}.ciphertext").normalize()
+    private fun expectedBlobPath(
+        owner: UserId,
+        capsule: CapsuleId,
+        blobId: dev.hryshyn.remanence.core.model.BlobId,
+    ): Path = roots.incomingCiphertextPath(owner, capsule, blobId)
 
     private fun safeDirectories(root: Path, parent: Path?): Boolean {
-        if (parent == null || parent == root || !parent.startsWith(root)) return false
+        if (parent == null || !roots.isContainedPath(parent, root) ||
+            roots.trustedPathSafety(root) != TrustedPathSafety.SAFE ||
+            roots.trustedPathSafety(parent) != TrustedPathSafety.SAFE
+        ) return false
         var current = root
         return try {
             val rootAttributes = Files.readAttributes(

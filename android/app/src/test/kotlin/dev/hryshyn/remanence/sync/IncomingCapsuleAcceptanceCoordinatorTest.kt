@@ -174,6 +174,43 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
     }
 
     @Test
+    fun androidFilesDirAliasAcceptsCanonicalDownloaderReturnPath() = runBlocking {
+        val realFilesDir = File(testRoot.parentFile, "a11d1-real-files-${System.nanoTime()}")
+            .apply { mkdirs() }
+        val rawAlias = File(testRoot.parentFile, "a11d1-raw-files-${System.nanoTime()}")
+        Files.createSymbolicLink(rawAlias.toPath(), realFilesDir.toPath())
+        try {
+            roots = AccountScopedFileRoots(rawAlias)
+            adopter = IncomingRecognitionCiphertextAdopter(roots)
+            committer = IncomingIndexAcceptanceCommitter(database, roots)
+            seed()
+
+            val result = coordinator(
+                download = IncomingRecipientBlobDownloader { request, _ ->
+                    assertTrue(request.destination.createNewFile())
+                    request.destination.writeBytes(bytes)
+                    RecipientBlobDownloadResult.Success(
+                        request.destination.canonicalFile,
+                        bytes.size.toLong(),
+                    )
+                },
+            ).accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+
+            assertIs<IncomingCapsuleAcceptanceResult.Committed>(result)
+            assertArrayEquals(bytes, incomingCiphertextPath().readBytes())
+            assertTrue(
+                incomingCiphertextPath().canonicalPath.startsWith(
+                    realFilesDir.canonicalPath + File.separator,
+                ),
+            )
+            assertEquals(incomingCiphertextPath().path, recognitionRow().localPath)
+        } finally {
+            rawAlias.delete()
+            realFilesDir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun reconstructedTest7UpgradeRepairsStaleSafePathBeforeDownloadAdoptionAndCommit() = runBlocking {
         seed()
         val oldPath = File(testRoot, "legacy-test7/capsules/${capsule.toRestString()}/${blob.toRestString()}.bin")

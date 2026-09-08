@@ -4,6 +4,7 @@ import dev.hryshyn.remanence.core.data.network.IncomingTombstoneFailure
 import dev.hryshyn.remanence.core.data.network.IncomingTombstoneFeed
 import dev.hryshyn.remanence.core.data.network.IncomingTombstoneResult
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
+import dev.hryshyn.remanence.core.data.storage.TrustedPathSafety
 import dev.hryshyn.remanence.core.model.BlobId
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.UserId
@@ -212,23 +213,28 @@ private class IncomingTombstoneFilePurger(
 
             val tempRoot = roots.child(owner, AccountScopedFileRoots.ChildRoot.TEMP)
                 .toPath().toAbsolutePath().normalize()
-            val temp = tempRoot.resolve(
-                "incoming-prefetch/${capsule.toRestString()}/" +
-                    "${blob.toRestString()}.ciphertext.tmp",
-            ).normalize()
+            val temp = roots.resolveTrustedRelative(
+                tempRoot,
+                "incoming-prefetch",
+                capsule.toRestString(),
+                "${blob.toRestString()}.ciphertext.tmp",
+            )
             deleteExact(temp, tempRoot)
 
-            val acceptanceTemp = tempRoot.resolve(
-                "incoming-recognition/${capsule.toRestString()}/blobs/" +
-                    "${blob.toRestString()}.ciphertext.tmp",
-            ).normalize()
+            val acceptanceTemp = roots.resolveTrustedRelative(
+                tempRoot,
+                "incoming-recognition",
+                capsule.toRestString(),
+                "blobs",
+                "${blob.toRestString()}.ciphertext.tmp",
+            )
             deleteExact(acceptanceTemp, tempRoot)
         }
     }
 
     private fun deleteExact(path: Path, root: Path) {
-        require(path != root && path.startsWith(root))
-        checkNoSymlink(path, root)
+        require(roots.isContainedPath(path, root))
+        check(roots.trustedPathSafety(path) == TrustedPathSafety.SAFE)
         val attributes = try {
             Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
         } catch (_: java.nio.file.NoSuchFileException) {
@@ -240,15 +246,5 @@ private class IncomingTombstoneFilePurger(
             "tombstone file is not a regular file"
         }
         Files.deleteIfExists(path)
-    }
-
-    private fun checkNoSymlink(path: Path, root: Path) {
-        var current: Path? = path
-        while (current != null && current.startsWith(root)) {
-            if (Files.exists(current, LinkOption.NOFOLLOW_LINKS) && Files.isSymbolicLink(current)) {
-                error("tombstone path contains a symbolic link")
-            }
-            current = current.parent
-        }
     }
 }

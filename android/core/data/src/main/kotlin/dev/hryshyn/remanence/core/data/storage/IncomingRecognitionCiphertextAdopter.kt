@@ -663,27 +663,11 @@ class IncomingRecognitionCiphertextAdopter internal constructor(
         IncomingRecognitionCiphertextAdoptionResult.Failure(reason, retryable)
 
     private fun isSafePath(path: Path): Boolean {
-        var current: Path? = path
-        return try {
-            while (current != null) {
-                val examined = current
-                val attrs = fileSystem.attributes(examined) ?: run {
-                    current = examined.parent
-                    continue
-                }
-                if (attrs.isSymbolicLink) return false
-                current = examined.parent
-            }
-            true
-        } catch (_: IOException) {
-            false
-        } catch (_: SecurityException) {
-            false
-        }
+        return roots.trustedPathSafety(path) == TrustedPathSafety.SAFE
     }
 
     private fun isContained(candidate: Path, root: Path): Boolean =
-        candidate != root && candidate.startsWith(root)
+        roots.isContainedPath(candidate, root)
 
     private data class AdoptionPaths(
         val tempRoot: Path,

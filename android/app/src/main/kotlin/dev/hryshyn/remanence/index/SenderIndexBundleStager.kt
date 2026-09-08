@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.index
 import dev.hryshyn.remanence.core.crypto.RecognitionManifestContent
 import dev.hryshyn.remanence.core.data.fingerprints.SecretSealer
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
+import dev.hryshyn.remanence.core.data.storage.TrustedPathSafety
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.UserId
@@ -190,7 +191,7 @@ class SenderIndexBundleStager internal constructor(
                 } catch (_: Exception) {
                     return@withLock failure(SenderIndexBundleStageFailure.PATH_UNSAFE, false)
                 }
-                if (!paths.areSafe(fileSystem)) {
+                if (!paths.areSafe(roots, fileSystem)) {
                     return@withLock failure(SenderIndexBundleStageFailure.PATH_UNSAFE, false)
                 }
                 try {
@@ -324,7 +325,7 @@ class SenderIndexBundleStager internal constructor(
     private fun resolvePaths(owner: UserId, capsule: CapsuleId): StagePaths {
         val root = roots.child(owner, AccountScopedFileRoots.ChildRoot.FINGERPRINTS)
             .toPath().toAbsolutePath().normalize()
-        val parent = root.resolve("capsules").normalize()
+        val parent = roots.resolveTrustedRelative(root, "capsules")
         val baseName = "${capsule.toRestString()}.index.bundle"
         return StagePaths(
             root = root,
@@ -388,7 +389,8 @@ class SenderIndexBundleStager internal constructor(
                 val normalized = freshPart.path.toAbsolutePath().normalize()
                 if (freshPart.path != normalized ||
                     normalized.parent != paths.parent ||
-                    !normalized.startsWith(paths.root) ||
+                    !roots.isContainedPath(normalized, paths.root) ||
+                    roots.trustedPathSafety(normalized) != TrustedPathSafety.SAFE ||
                     normalized.fileName.toString().length <=
                         paths.partPrefix.length + paths.partSuffix.length ||
                     !normalized.fileName.toString().startsWith(paths.partPrefix) ||
@@ -604,27 +606,11 @@ class SenderIndexBundleStager internal constructor(
         return attributes != null && attributes.isDirectory && !attributes.isSymbolicLink && isSafePath(path)
     }
 
-    private fun isSafePath(path: Path): Boolean {
-        var current: Path? = path
-        return try {
-            while (current != null) {
-                val examined = current
-                val attributes = fileSystem.attributes(examined)
-                if (attributes?.isSymbolicLink == true) return false
-                current = if (attributes == null) examined.parent else examined.parent
-            }
-            true
-        } catch (_: IOException) {
-            false
-        } catch (_: SecurityException) {
-            false
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        }
-    }
+    private fun isSafePath(path: Path): Boolean =
+        roots.trustedPathSafety(path) == TrustedPathSafety.SAFE
 
     private fun isContained(candidate: Path, root: Path): Boolean =
-        candidate != root && candidate.startsWith(root)
+        roots.isContainedPath(candidate, root)
 
     private suspend fun inspectSemantic(
         path: Path,
@@ -924,15 +910,23 @@ class SenderIndexBundleStager internal constructor(
         val partPrefix: String,
         val partSuffix: String,
     ) {
-        fun areSafe(fileSystem: SenderIndexBundleFileSystem): Boolean =
-            isSafe(fileSystem, root) && isSafe(fileSystem, parent) &&
-                isSafe(fileSystem, destination) && isSafe(fileSystem, temporary) &&
-                destination.startsWith(root) && temporary.startsWith(root)
+        fun areSafe(
+            roots: AccountScopedFileRoots,
+            fileSystem: SenderIndexBundleFileSystem,
+        ): Boolean =
+            isSafe(roots, fileSystem, root) && isSafe(roots, fileSystem, parent) &&
+                isSafe(roots, fileSystem, destination) && isSafe(roots, fileSystem, temporary) &&
+                roots.isContainedPath(destination, root) && roots.isContainedPath(temporary, root)
 
-        private fun isSafe(fileSystem: SenderIndexBundleFileSystem, path: Path): Boolean {
+        private fun isSafe(
+            roots: AccountScopedFileRoots,
+            fileSystem: SenderIndexBundleFileSystem,
+            path: Path,
+        ): Boolean {
+            if (roots.trustedPathSafety(path) != TrustedPathSafety.SAFE) return false
             var current: Path? = path
             return try {
-                while (current != null) {
+                while (current != null && !roots.isTrustedRoot(current!!)) {
                     val attributes = fileSystem.attributes(current!!)
                     if (attributes?.isSymbolicLink == true) return false
                     current = current!!.parent

@@ -23,6 +23,7 @@ import dev.hryshyn.remanence.core.model.LocalMaterialState
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.UserId
 import java.io.File
+import java.nio.file.Files
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -122,6 +123,41 @@ class IncomingCiphertextPrefetchCoordinatorTest {
         assertEquals(listOf(contentBlob, photoBlobs[0], photoBlobs[1], photoBlobs[2]), calls)
         assertEquals(LocalMaterialState.MATERIAL_CACHED, capsuleState())
         assertTrue(allPhotosCached())
+    }
+
+    @Test
+    fun androidFilesDirAliasAllowsCanonicalDownloaderReturnAndSafePrefetchAdoption() = runBlocking {
+        val realFilesDir = File(root.parentFile, "incoming-prefetch-real-${System.nanoTime()}")
+            .apply { mkdirs() }
+        val rawAlias = File(root.parentFile, "incoming-prefetch-alias-${System.nanoTime()}")
+        Files.createSymbolicLink(rawAlias.toPath(), realFilesDir.toPath())
+        try {
+            roots = AccountScopedFileRoots(rawAlias)
+            seedCapsule(
+                recognitionState = BlobCacheState.CACHED,
+                contentState = BlobCacheState.DOWNLOADING,
+                photoStates = List(photoBlobs.size) { BlobCacheState.DOWNLOADING },
+            )
+            writeCached(recognitionBlob, CapsuleArtifactKind.RECOGNITION_MANIFEST, -1)
+
+            val result = coordinator(
+                download = { request, _ ->
+                    writeTemp(request)
+                    RecipientBlobDownloadResult.Success(
+                        request.destination.canonicalFile,
+                        request.expectedCiphertextSize,
+                    )
+                },
+            ).prefetch(owner)
+
+            assertEquals(IncomingPrefetchResult.Completed(4, 1, pageMayHaveMore = true), result)
+            assertEquals(BlobCacheState.CACHED, blobState(contentBlob))
+            assertTrue(allPhotosCached())
+            assertTrue(destination(contentBlob).canonicalPath.startsWith(realFilesDir.canonicalPath + File.separator))
+        } finally {
+            rawAlias.delete()
+            realFilesDir.deleteRecursively()
+        }
     }
 
     @Test
@@ -768,7 +804,7 @@ class IncomingCiphertextPrefetchCoordinatorTest {
     ): File = File(
         roots.child(ownerUserId, AccountScopedFileRoots.ChildRoot.INCOMING_CIPHERTEXT),
         "capsules/${capsuleId.toRestString()}/blobs/${blob.toRestString()}.ciphertext",
-    ).canonicalFile
+    )
 
     private fun blobState(blob: BlobId, ownerUserId: UserId = owner): BlobCacheState = runBlocking {
         database.blobCacheDao().getByBlobIdAndOwner(blob.toRestString(), ownerUserId.toRestString())!!.cacheState

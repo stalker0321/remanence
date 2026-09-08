@@ -16,6 +16,7 @@ import dev.hryshyn.remanence.core.data.storage.IncomingCiphertextAdoptionRequest
 import dev.hryshyn.remanence.core.data.storage.IncomingCiphertextAdoptionResult
 import dev.hryshyn.remanence.core.data.storage.IncomingCiphertextAdopter
 import dev.hryshyn.remanence.core.data.storage.IncomingCiphertextAdoptionFailure
+import dev.hryshyn.remanence.core.data.storage.TrustedPathSafety
 import dev.hryshyn.remanence.core.model.BlobId
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
 import dev.hryshyn.remanence.core.model.CapsuleId
@@ -241,6 +242,11 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
                 result = IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.INVALID_METADATA),
                 disposition = TerminalDisposition.QUARANTINE_CAPSULE,
             )
+        } catch (_: IllegalStateException) {
+            return CandidateOutcome.Terminal(
+                result = IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.INVALID_METADATA),
+                disposition = TerminalDisposition.QUARANTINE_CAPSULE,
+            )
         } catch (_: IOException) {
             return CandidateOutcome.Retry(
                 IncomingPrefetchResult.Retryable(IncomingPrefetchRetryReason.LOCAL_STORAGE),
@@ -330,6 +336,7 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
         when (downloaded) {
             is RecipientBlobDownloadResult.Success -> {
                 if (!sameNormalizedPath(downloaded.ciphertextFile.toPath(), temp.path) ||
+                    roots.trustedPathSafety(downloaded.ciphertextFile.toPath()) != TrustedPathSafety.SAFE ||
                     downloaded.sizeBytes != candidate.expectedSizeBytes
                 ) {
                     cleanupTemp(temp.path)
@@ -401,7 +408,8 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
                 if (destination.ownerUserId != ownerUserId ||
                     destination.capsuleId != candidate.capsuleId ||
                     destination.blobId != candidate.blobId ||
-                    !sameNormalizedPath(destination.asFile().toPath(), paths.destination)
+                    !sameNormalizedPath(destination.asFile().toPath(), paths.destination) ||
+                    roots.trustedPathSafety(destination.asFile().toPath()) != TrustedPathSafety.SAFE
                 ) {
                     return CandidateOutcome.Terminal(
                         result = IncomingPrefetchResult.Terminal(
@@ -635,17 +643,21 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
         val tempRoot = roots.child(
             candidate.ownerUserId,
             AccountScopedFileRoots.ChildRoot.TEMP,
-        ).canonicalFile.toPath().toAbsolutePath().normalize()
+        ).toPath().toAbsolutePath().normalize()
         val destination = roots.incomingCiphertextPath(
             owner = candidate.ownerUserId,
             capsule = candidate.capsuleId,
             blob = candidate.blobId,
         )
-        val temp = tempRoot.resolve(
-            "incoming-prefetch/${candidate.capsuleId.toRestString()}/" +
-                "${candidate.blobId.toRestString()}.ciphertext.tmp",
-        ).normalize()
+        val temp = roots.resolveTrustedRelative(
+            tempRoot,
+            "incoming-prefetch",
+            candidate.capsuleId.toRestString(),
+            "${candidate.blobId.toRestString()}.ciphertext.tmp",
+        )
         require(isContained(destination, incomingRoot) && isContained(temp, tempRoot))
+        check(roots.trustedPathSafety(incomingRoot) == TrustedPathSafety.SAFE)
+        check(roots.trustedPathSafety(destination) == TrustedPathSafety.SAFE)
         require(candidate.localPath == destination.toString())
         return PrefetchPaths(incomingRoot, tempRoot, temp, destination)
     }
@@ -659,7 +671,7 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
             roots.child(
                 candidate.ownerUserId,
                 AccountScopedFileRoots.ChildRoot.TEMP,
-            ).canonicalFile.toPath().toAbsolutePath().normalize()
+            ).toPath().toAbsolutePath().normalize()
         } catch (_: IOException) {
             return TempPreparation.Unavailable
         } catch (_: SecurityException) {
@@ -789,38 +801,18 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
     }
 
     private fun sameNormalizedPath(first: Path, second: Path): Boolean =
-        first.toAbsolutePath().normalize() == second.toAbsolutePath().normalize()
+        roots.sameTrustedPath(first, second)
 
     private fun isNoSymlinkPath(path: Path): PathSafety {
-        var current: Path? = path
-        return try {
-            while (current != null) {
-                val examined = current
-                val attrs = try {
-                    Files.readAttributes(
-                        examined,
-                        java.nio.file.attribute.BasicFileAttributes::class.java,
-                        LinkOption.NOFOLLOW_LINKS,
-                    )
-                } catch (_: java.nio.file.NoSuchFileException) {
-                    current = examined.parent
-                    continue
-                }
-                if (attrs.isSymbolicLink) return PathSafety.UNSAFE
-                current = examined.parent
-            }
-            PathSafety.SAFE
-        } catch (_: IOException) {
-            PathSafety.UNAVAILABLE
-        } catch (_: SecurityException) {
-            PathSafety.UNAVAILABLE
-        } catch (_: UnsupportedOperationException) {
-            PathSafety.UNAVAILABLE
+        return when (roots.trustedPathSafety(path)) {
+            TrustedPathSafety.SAFE -> PathSafety.SAFE
+            TrustedPathSafety.UNSAFE -> PathSafety.UNSAFE
+            TrustedPathSafety.UNAVAILABLE -> PathSafety.UNAVAILABLE
         }
     }
 
     private fun isContained(candidate: Path, root: Path): Boolean =
-        candidate != root && candidate.startsWith(root)
+        roots.isContainedPath(candidate, root)
 
     private suspend fun checkSession(owner: UserId): SessionCheck = try {
         val session = currentSession()

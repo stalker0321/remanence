@@ -1,8 +1,11 @@
 package dev.hryshyn.remanence.sync
 
+import dev.hryshyn.remanence.BuildConfig
 import dev.hryshyn.remanence.core.data.db.IncomingAcceptanceCandidate
 import dev.hryshyn.remanence.core.data.db.IncomingAcceptanceCandidateSelection
 import dev.hryshyn.remanence.core.data.db.IncomingCapsuleQuarantineResult
+import dev.hryshyn.remanence.core.data.network.RecipientBlobDownloadFailure
+import dev.hryshyn.remanence.core.data.network.RecipientBlobDownloadResult
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.UserId
 import java.util.ArrayDeque
@@ -365,6 +368,40 @@ class IncomingAcceptanceDrainTest {
         assertEquals(IncomingAcceptanceDrainResult.Completed(1, 1, false), drain.run())
         assertEquals(IncomingAcceptanceDrainResult.Completed(1, 1, false), drain.run())
         assertEquals(2, callCount)
+    }
+
+    @Test
+    fun downloadDiagnosticSurvivesDrainOutcomeRendering() = runBlocking {
+        val diagnostic = IncomingAcceptanceDownloadDiagnostic.fromFailure(
+            RecipientBlobDownloadResult.Failure(
+                reason = RecipientBlobDownloadFailure.INVALID_RESPONSE,
+                httpStatus = 200,
+                retryable = false,
+            ),
+        )
+        IncomingAcceptanceDiagnostics.report("not run")
+        try {
+            val result = drain(
+                rows = listOf(candidate(1, 10)),
+                attempts = ArrayDeque(
+                    listOf(
+                        IncomingAcceptanceDrainAttempt.Acceptance(
+                            IncomingCapsuleAcceptanceResult.Rejected(
+                                IncomingCapsuleAcceptanceRejectionReason.DOWNLOAD_REJECTED,
+                                diagnostic,
+                            ),
+                        ),
+                    ),
+                ),
+            ).run()
+
+            assertEquals(IncomingAcceptanceDrainResult.Completed(0, 1, false), result)
+            if (BuildConfig.DEBUG) {
+                assertEquals(diagnostic.safeSummary(), IncomingAcceptanceDiagnostics.state.value)
+            }
+        } finally {
+            IncomingAcceptanceDiagnostics.report("not run")
+        }
     }
 
     private fun drain(

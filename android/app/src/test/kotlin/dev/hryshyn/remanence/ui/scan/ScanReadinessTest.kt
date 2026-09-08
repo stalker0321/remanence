@@ -5,9 +5,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import dev.hryshyn.remanence.BuildConfig
 import dev.hryshyn.remanence.capture.CaptureAttemptPhase
 import dev.hryshyn.remanence.capture.CapturePermissionStep
 import dev.hryshyn.remanence.capture.ProcessedStill
@@ -19,6 +21,9 @@ import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
 import dev.hryshyn.remanence.core.data.db.RecognitionFingerprintEntity
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
+import dev.hryshyn.remanence.core.data.network.RecipientBlobDownloadFailure
+import dev.hryshyn.remanence.core.data.network.RecipientBlobDownloadResult
+import dev.hryshyn.remanence.core.data.network.RecipientBlobDownloadHeaderChecks
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.LocalMaterialState
@@ -34,6 +39,8 @@ import dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource
 import dev.hryshyn.remanence.ui.capsule.IncomingPresentationPreparationRejection
 import dev.hryshyn.remanence.ui.capsule.IncomingPresentationPreparationResult
 import dev.hryshyn.remanence.ui.create.SenderIdentitySnapshot
+import dev.hryshyn.remanence.sync.IncomingAcceptanceDiagnostics
+import dev.hryshyn.remanence.sync.IncomingAcceptanceDownloadDiagnostic
 import dev.hryshyn.remanence.session.SessionBoundary
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
@@ -271,6 +278,38 @@ class ScanReadinessTest {
         vm.retryIndexSync()
         assertEquals(ScanMatchUiState.AwaitingCapture, vm.matchState.value)
         assertTrue(scheduled.count { it == ownerA } >= 2)
+    }
+
+    @Test
+    fun debugScanScreenRendersSafeIncomingDownloadDiagnostic() {
+        val vm = viewModel(includeCandidate = false)
+        val diagnostic = IncomingAcceptanceDownloadDiagnostic.fromFailure(
+            RecipientBlobDownloadResult.Failure(
+                reason = RecipientBlobDownloadFailure.INVALID_RESPONSE,
+                httpStatus = 200,
+                retryable = false,
+                headerChecks = RecipientBlobDownloadHeaderChecks(
+                    contentTypeExact = false,
+                    contentLengthExact = true,
+                    etagExact = true,
+                    contentEncodingAbsent = true,
+                    transferEncodingAbsent = true,
+                    contentRangeAbsent = true,
+                    trailerAbsent = true,
+                ),
+            ),
+        )
+        IncomingAcceptanceDiagnostics.report(diagnostic)
+        try {
+            composeRule.setContent {
+                MaterialTheme { ScanScreen(viewModel = vm, requestPermissionOnAttach = false) }
+            }
+            if (BuildConfig.DEBUG) {
+                composeRule.onNodeWithText("Sync: ${diagnostic.safeSummary()}").assertIsDisplayed()
+            }
+        } finally {
+            IncomingAcceptanceDiagnostics.report("not run")
+        }
     }
 
     @Test

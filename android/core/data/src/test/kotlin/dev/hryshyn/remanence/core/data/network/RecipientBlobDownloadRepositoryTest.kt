@@ -65,20 +65,20 @@ class RecipientBlobDownloadRepositoryTest {
     fun successRejectsMissingDuplicateMalformedAndUnexpectedHeaders() = runTest {
         withServer { server ->
             val payload = "opaque-download".toByteArray()
-            val cases = listOf<(MockResponse.Builder, Long) -> Unit>(
-                { builder, _ -> builder.removeHeader("Content-Type") },
-                { builder, _ -> builder.setHeader("Content-Type", "application/octet-stream; charset=utf-8") },
-                { builder, _ -> builder.removeHeader("Content-Length") },
-                { builder, size -> builder.setHeader("Content-Length", "00$size") },
-                { builder, size -> builder.addHeader("Content-Length", size) },
-                { builder, _ -> builder.removeHeader("ETag") },
-                { builder, _ -> builder.setHeader("ETag", "W/\"weak\"") },
-                { builder, _ -> builder.setHeader("Content-Encoding", "gzip") },
-                { builder, _ -> builder.setHeader("Transfer-Encoding", "chunked") },
-                { builder, _ -> builder.setHeader("Content-Range", "bytes 0-1/2") },
-                { builder, _ -> builder.setHeader("Trailer", "Digest") },
+            val cases = listOf<Pair<String, (MockResponse.Builder, Long) -> Unit>>(
+                "contentType" to { builder, _ -> builder.removeHeader("Content-Type") },
+                "contentType" to { builder, _ -> builder.setHeader("Content-Type", "application/octet-stream; charset=utf-8") },
+                "contentLength" to { builder, _ -> builder.removeHeader("Content-Length") },
+                "contentLength" to { builder, size -> builder.setHeader("Content-Length", "00$size") },
+                "contentLength" to { builder, size -> builder.addHeader("Content-Length", size) },
+                "etag" to { builder, _ -> builder.removeHeader("ETag") },
+                "etag" to { builder, _ -> builder.setHeader("ETag", "W/\"weak\"") },
+                "contentEncoding" to { builder, _ -> builder.setHeader("Content-Encoding", "gzip") },
+                "transferEncoding" to { builder, _ -> builder.setHeader("Transfer-Encoding", "chunked") },
+                "contentRange" to { builder, _ -> builder.setHeader("Content-Range", "bytes 0-1/2") },
+                "trailer" to { builder, _ -> builder.setHeader("Trailer", "Digest") },
             )
-            cases.forEach { mutate ->
+            cases.forEach { (failedHeader, mutate) ->
                 val root = tempRoot()
                 try {
                     val destination = File(root, "ciphertext.tmp")
@@ -90,6 +90,19 @@ class RecipientBlobDownloadRepositoryTest {
                     )
                     assertEquals(RecipientBlobDownloadFailure.INVALID_RESPONSE, failure.reason)
                     assertFalse(failure.retryable)
+                    val checks = requireNotNull(failure.headerChecks)
+                    assertFalse(checks.canonical, failedHeader)
+                    when (failedHeader) {
+                        "contentType" -> assertFalse(checks.contentTypeExact)
+                        "contentLength" -> assertFalse(checks.contentLengthExact)
+                        "etag" -> assertFalse(checks.etagExact)
+                        // OkHttp may transparently normalize these hop-by-hop
+                        // headers before the repository observes them; the
+                        // canonical=false assertion above remains required.
+                        "contentEncoding", "transferEncoding" -> Unit
+                        "contentRange" -> assertFalse(checks.contentRangeAbsent)
+                        "trailer" -> assertFalse(checks.trailerAbsent)
+                    }
                     assertFalse(destination.exists())
                 } finally {
                     root.deleteRecursively()

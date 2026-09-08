@@ -244,16 +244,24 @@ class IncomingAcceptanceDrain internal constructor(
 
             when (candidateAttempt) {
                 is IncomingAcceptanceDrainAttempt.Acceptance -> {
-                    IncomingAcceptanceDiagnostics.report(
-                        when (val result = candidateAttempt.result) {
-                            IncomingCapsuleAcceptanceResult.Committed -> "acceptance committed"
-                            IncomingCapsuleAcceptanceResult.IdempotentReplay -> "acceptance replayed"
-                            is IncomingCapsuleAcceptanceResult.Retryable ->
-                                "acceptance retry: ${result.reason.name}"
-                            is IncomingCapsuleAcceptanceResult.Rejected ->
-                                "acceptance rejected: ${result.reason.name}"
-                        },
-                    )
+                    when (val result = candidateAttempt.result) {
+                        IncomingCapsuleAcceptanceResult.Committed ->
+                            IncomingAcceptanceDiagnostics.report("acceptance committed")
+                        IncomingCapsuleAcceptanceResult.IdempotentReplay ->
+                            IncomingAcceptanceDiagnostics.report("acceptance replayed")
+                        is IncomingCapsuleAcceptanceResult.Retryable -> {
+                            result.downloadDiagnostic?.let(IncomingAcceptanceDiagnostics::report)
+                                ?: IncomingAcceptanceDiagnostics.report(
+                                    "acceptance retry: ${result.reason.name}",
+                                )
+                        }
+                        is IncomingCapsuleAcceptanceResult.Rejected -> {
+                            result.downloadDiagnostic?.let(IncomingAcceptanceDiagnostics::report)
+                                ?: IncomingAcceptanceDiagnostics.report(
+                                    "acceptance rejected: ${result.reason.name}",
+                                )
+                        }
+                    }
                     when (IncomingAcceptanceDrainClassifier.classify(candidateAttempt.result)) {
                         IncomingAcceptanceDrainDisposition.ACCEPTED -> progressCount += 1
                         IncomingAcceptanceDrainDisposition.RETRY ->

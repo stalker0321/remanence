@@ -84,10 +84,16 @@ sealed interface IncomingCapsuleAcceptanceResult {
     data object Committed : IncomingCapsuleAcceptanceResult
     data object IdempotentReplay : IncomingCapsuleAcceptanceResult
 
-    data class Retryable(val reason: IncomingCapsuleAcceptanceRetryReason) :
+    data class Retryable(
+        val reason: IncomingCapsuleAcceptanceRetryReason,
+        val downloadDiagnostic: IncomingAcceptanceDownloadDiagnostic? = null,
+    ) :
         IncomingCapsuleAcceptanceResult
 
-    data class Rejected(val reason: IncomingCapsuleAcceptanceRejectionReason) :
+    data class Rejected(
+        val reason: IncomingCapsuleAcceptanceRejectionReason,
+        val downloadDiagnostic: IncomingAcceptanceDownloadDiagnostic? = null,
+    ) :
         IncomingCapsuleAcceptanceResult
 }
 
@@ -342,18 +348,48 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
                 expectedSha256 = readyDeclaration.expectedSha256,
             )
         } catch (_: UnsafeTempPath) {
-            return@withContext rejected(IncomingCapsuleAcceptanceRejectionReason.TEMP_PATH_UNSAFE)
+            return@withContext rejected(
+                reason = IncomingCapsuleAcceptanceRejectionReason.TEMP_PATH_UNSAFE,
+                downloadDiagnostic = IncomingAcceptanceDownloadDiagnostic.localPathFailure(
+                    reason = IncomingAcceptanceLocalPathFailureReason.UNSAFE_TEMP_PATH,
+                    retryable = false,
+                ),
+            )
         } catch (_: IOException) {
-            return@withContext retryable(IncomingCapsuleAcceptanceRetryReason.LOCAL_STORAGE)
+            return@withContext retryable(
+                reason = IncomingCapsuleAcceptanceRetryReason.LOCAL_STORAGE,
+                downloadDiagnostic = IncomingAcceptanceDownloadDiagnostic.localPathFailure(
+                    reason = IncomingAcceptanceLocalPathFailureReason.LOCAL_STORAGE,
+                    retryable = true,
+                ),
+            )
         } catch (_: SecurityException) {
-            return@withContext retryable(IncomingCapsuleAcceptanceRetryReason.LOCAL_STORAGE)
+            return@withContext retryable(
+                reason = IncomingCapsuleAcceptanceRetryReason.LOCAL_STORAGE,
+                downloadDiagnostic = IncomingAcceptanceDownloadDiagnostic.localPathFailure(
+                    reason = IncomingAcceptanceLocalPathFailureReason.LOCAL_STORAGE,
+                    retryable = true,
+                ),
+            )
         }
         when (tempPreparation) {
             is TempPreparation.Unavailable ->
-                return@withContext retryable(IncomingCapsuleAcceptanceRetryReason.LOCAL_STORAGE)
+                return@withContext retryable(
+                    reason = IncomingCapsuleAcceptanceRetryReason.LOCAL_STORAGE,
+                    downloadDiagnostic = IncomingAcceptanceDownloadDiagnostic.localPathFailure(
+                        reason = IncomingAcceptanceLocalPathFailureReason.LOCAL_STORAGE,
+                        retryable = true,
+                    ),
+                )
             is TempPreparation.Invalid -> {
                 deleteExactTemp(tempPreparation.path, request.ownerUserId)
-                return@withContext rejected(IncomingCapsuleAcceptanceRejectionReason.RECOVERY_TEMP_INVALID)
+                return@withContext rejected(
+                    reason = IncomingCapsuleAcceptanceRejectionReason.RECOVERY_TEMP_INVALID,
+                    downloadDiagnostic = IncomingAcceptanceDownloadDiagnostic.localPathFailure(
+                        reason = IncomingAcceptanceLocalPathFailureReason.INVALID_RECOVERY_TEMP,
+                        retryable = false,
+                    ),
+                )
             }
             is TempPreparation.Ready -> Unit
         }
@@ -398,14 +434,24 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
                                     // discard a possible valid winner.
                                     preserveTemp = true
                                     return@withContext retryable(
-                                        IncomingCapsuleAcceptanceRetryReason.DOWNLOAD,
+                                        reason = IncomingCapsuleAcceptanceRetryReason.DOWNLOAD,
+                                        downloadDiagnostic =
+                                            IncomingAcceptanceDownloadDiagnostic.fromFailure(result),
                                     )
                                 }
                             } else {
                                 return@withContext if (result.retryable) {
-                                    retryable(IncomingCapsuleAcceptanceRetryReason.DOWNLOAD)
+                                    retryable(
+                                        reason = IncomingCapsuleAcceptanceRetryReason.DOWNLOAD,
+                                        downloadDiagnostic =
+                                            IncomingAcceptanceDownloadDiagnostic.fromFailure(result),
+                                    )
                                 } else {
-                                    rejected(IncomingCapsuleAcceptanceRejectionReason.DOWNLOAD_REJECTED)
+                                    rejected(
+                                        reason = IncomingCapsuleAcceptanceRejectionReason.DOWNLOAD_REJECTED,
+                                        downloadDiagnostic =
+                                            IncomingAcceptanceDownloadDiagnostic.fromFailure(result),
+                                    )
                                 }
                             }
                         }
@@ -417,11 +463,25 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
                 }
             }
 
-            if (!sameNormalizedPath(downloaded.ciphertextFile.toPath(), tempPath) ||
-                downloaded.sizeBytes != readyDeclaration.expectedSizeBytes ||
-                !isNoSymlinkPath(tempPath)
-            ) {
-                return@withContext rejected(IncomingCapsuleAcceptanceRejectionReason.DOWNLOAD_REJECTED)
+            val returnedPathMatches = sameNormalizedPath(downloaded.ciphertextFile.toPath(), tempPath)
+            val returnedSizeMatches = downloaded.sizeBytes == readyDeclaration.expectedSizeBytes
+            val noSymlinkPath = isNoSymlinkPath(tempPath)
+            if (!returnedPathMatches || !returnedSizeMatches || !noSymlinkPath) {
+                val reason = when {
+                    !returnedPathMatches -> IncomingAcceptanceLocalPathFailureReason.RETURNED_PATH
+                    !returnedSizeMatches -> IncomingAcceptanceLocalPathFailureReason.RETURNED_SIZE
+                    else -> IncomingAcceptanceLocalPathFailureReason.SYMLINK_PATH
+                }
+                return@withContext rejected(
+                    reason = IncomingCapsuleAcceptanceRejectionReason.DOWNLOAD_REJECTED,
+                    downloadDiagnostic = IncomingAcceptanceDownloadDiagnostic.localPathFailure(
+                        reason = reason,
+                        returnedPathMatches = returnedPathMatches,
+                        returnedSizeMatches = returnedSizeMatches,
+                        noSymlinkPath = noSymlinkPath,
+                        retryable = false,
+                    ),
+                )
             }
 
             // A11b performs its own current-key/account check before and after
@@ -1043,11 +1103,15 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
     private fun stripe(key: String): Int =
         (key.hashCode() and Int.MAX_VALUE) % ATTEMPT_LOCK_STRIPES
 
-    private fun retryable(reason: IncomingCapsuleAcceptanceRetryReason) =
-        IncomingCapsuleAcceptanceResult.Retryable(reason)
+    private fun retryable(
+        reason: IncomingCapsuleAcceptanceRetryReason,
+        downloadDiagnostic: IncomingAcceptanceDownloadDiagnostic? = null,
+    ) = IncomingCapsuleAcceptanceResult.Retryable(reason, downloadDiagnostic)
 
-    private fun rejected(reason: IncomingCapsuleAcceptanceRejectionReason) =
-        IncomingCapsuleAcceptanceResult.Rejected(reason)
+    private fun rejected(
+        reason: IncomingCapsuleAcceptanceRejectionReason,
+        downloadDiagnostic: IncomingAcceptanceDownloadDiagnostic? = null,
+    ) = IncomingCapsuleAcceptanceResult.Rejected(reason, downloadDiagnostic)
 
     private sealed interface SessionCheck {
         data class Ready(val session: IncomingSyncSession) : SessionCheck

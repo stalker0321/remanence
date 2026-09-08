@@ -61,6 +61,30 @@ enum class RecipientBlobDownloadFailure {
     INTERNAL_ERROR,
 }
 
+/**
+ * Redacted evidence for a failed canonical success-header check. It contains
+ * booleans only; values, header contents, URLs, and response bodies never
+ * cross the downloader boundary.
+ */
+data class RecipientBlobDownloadHeaderChecks(
+    val contentTypeExact: Boolean,
+    val contentLengthExact: Boolean,
+    val etagExact: Boolean,
+    val contentEncodingAbsent: Boolean,
+    val transferEncodingAbsent: Boolean,
+    val contentRangeAbsent: Boolean,
+    val trailerAbsent: Boolean,
+) {
+    val canonical: Boolean
+        get() = contentTypeExact &&
+            contentLengthExact &&
+            etagExact &&
+            contentEncodingAbsent &&
+            transferEncodingAbsent &&
+            contentRangeAbsent &&
+            trailerAbsent
+}
+
 sealed interface RecipientBlobDownloadResult {
     class Success(
         val ciphertextFile: File,
@@ -73,6 +97,7 @@ sealed interface RecipientBlobDownloadResult {
         val reason: RecipientBlobDownloadFailure,
         val httpStatus: Int? = null,
         val retryable: Boolean,
+        val headerChecks: RecipientBlobDownloadHeaderChecks? = null,
     ) : RecipientBlobDownloadResult
 }
 
@@ -123,13 +148,16 @@ class RecipientBlobDownloadRepository internal constructor(
                 client.newCall(httpRequest).executeAsync().use { response ->
                     if (response.code != HTTP_OK) {
                         interpretNonSuccess(response)
-                    } else if (!hasCanonicalSuccessHeaders(response, request)) {
-                        RecipientBlobDownloadResult.Failure(
-                            reason = RecipientBlobDownloadFailure.INVALID_RESPONSE,
-                            httpStatus = response.code,
-                            retryable = false,
-                        )
                     } else {
+                        val headerChecks = canonicalSuccessHeaderChecks(response, request)
+                        if (!headerChecks.canonical) {
+                            return@use RecipientBlobDownloadResult.Failure(
+                                reason = RecipientBlobDownloadFailure.INVALID_RESPONSE,
+                                httpStatus = response.code,
+                                retryable = false,
+                                headerChecks = headerChecks,
+                            )
+                        }
                         val created = try {
                             request.destination.createNewFile()
                         } catch (_: IOException) {
@@ -234,19 +262,21 @@ class RecipientBlobDownloadRepository internal constructor(
         )
     }
 
-    private fun hasCanonicalSuccessHeaders(
+    private fun canonicalSuccessHeaderChecks(
         response: Response,
         request: RecipientBlobDownloadRequest,
-    ): Boolean {
+    ): RecipientBlobDownloadHeaderChecks {
         val expectedEtag = "\"${lowercaseHex(request.expectedCiphertextSha256)}\""
-        return response.headers.values(CONTENT_TYPE_HEADER).singleOrNull() == OCTET_STREAM_MEDIA_TYPE &&
-            response.headers.values(CONTENT_LENGTH_HEADER).singleOrNull() ==
-            request.expectedCiphertextSize.toString() &&
-            response.headers.values(ETAG_HEADER).singleOrNull() == expectedEtag &&
-            response.headers.values(CONTENT_ENCODING_HEADER).isEmpty() &&
-            response.headers.values(TRANSFER_ENCODING_HEADER).isEmpty() &&
-            response.headers.values(CONTENT_RANGE_HEADER).isEmpty() &&
-            response.headers.values(TRAILER_HEADER).isEmpty()
+        return RecipientBlobDownloadHeaderChecks(
+            contentTypeExact = response.headers.values(CONTENT_TYPE_HEADER).singleOrNull() == OCTET_STREAM_MEDIA_TYPE,
+            contentLengthExact = response.headers.values(CONTENT_LENGTH_HEADER).singleOrNull() ==
+                request.expectedCiphertextSize.toString(),
+            etagExact = response.headers.values(ETAG_HEADER).singleOrNull() == expectedEtag,
+            contentEncodingAbsent = response.headers.values(CONTENT_ENCODING_HEADER).isEmpty(),
+            transferEncodingAbsent = response.headers.values(TRANSFER_ENCODING_HEADER).isEmpty(),
+            contentRangeAbsent = response.headers.values(CONTENT_RANGE_HEADER).isEmpty(),
+            trailerAbsent = response.headers.values(TRAILER_HEADER).isEmpty(),
+        )
     }
 
     /** Returns a stable transport failure, or null after full verification. */

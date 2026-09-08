@@ -20,6 +20,7 @@ import dev.hryshyn.remanence.core.data.network.ApiBaseUrl
 import dev.hryshyn.remanence.core.data.network.AuthTokenHolder
 import dev.hryshyn.remanence.core.data.network.ProductionApiStack
 import dev.hryshyn.remanence.core.data.network.RecipientBlobDownloadFailure
+import dev.hryshyn.remanence.core.data.network.RecipientBlobDownloadHeaderChecks
 import dev.hryshyn.remanence.core.data.network.RecipientBlobDownloadResult
 import dev.hryshyn.remanence.core.data.network.SessionRotationSink
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
@@ -778,10 +779,13 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
                 )
             },
         ).accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+        val retryResult = assertIs<IncomingCapsuleAcceptanceResult.Retryable>(retry)
+        assertEquals(IncomingCapsuleAcceptanceRetryReason.DOWNLOAD, retryResult.reason)
         assertEquals(
-            IncomingCapsuleAcceptanceRetryReason.DOWNLOAD,
-            assertIs<IncomingCapsuleAcceptanceResult.Retryable>(retry).reason,
+            RecipientBlobDownloadFailure.NETWORK,
+            retryResult.downloadDiagnostic?.transportReason,
         )
+        assertTrue(retryResult.downloadDiagnostic?.retryable == true)
         assertEquals(1, retryCalls)
         assertFalse(recoveryTempPath().exists())
 
@@ -797,13 +801,75 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
                 )
             },
         ).accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+        val terminalResult = assertIs<IncomingCapsuleAcceptanceResult.Rejected>(terminal)
+        assertEquals(IncomingCapsuleAcceptanceRejectionReason.DOWNLOAD_REJECTED, terminalResult.reason)
         assertEquals(
-            IncomingCapsuleAcceptanceRejectionReason.DOWNLOAD_REJECTED,
-            assertIs<IncomingCapsuleAcceptanceResult.Rejected>(terminal).reason,
+            RecipientBlobDownloadFailure.INTEGRITY_FAILED,
+            terminalResult.downloadDiagnostic?.transportReason,
         )
+        assertFalse(terminalResult.downloadDiagnostic?.retryable == true)
         assertEquals(1, terminalCalls)
         assertFalse(recoveryTempPath().exists())
         assertInitialState()
+    }
+
+    @Test
+    fun invalidResponsePreservesOnlySafeHeaderEvidence() = runBlocking {
+        seed()
+        val result = coordinator(
+            download = IncomingRecipientBlobDownloader { _, _ ->
+                RecipientBlobDownloadResult.Failure(
+                    reason = RecipientBlobDownloadFailure.INVALID_RESPONSE,
+                    httpStatus = 200,
+                    retryable = false,
+                    headerChecks = RecipientBlobDownloadHeaderChecks(
+                        contentTypeExact = false,
+                        contentLengthExact = true,
+                        etagExact = false,
+                        contentEncodingAbsent = true,
+                        transferEncodingAbsent = true,
+                        contentRangeAbsent = true,
+                        trailerAbsent = true,
+                    ),
+                )
+            },
+        ).accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+
+        val rejection = assertIs<IncomingCapsuleAcceptanceResult.Rejected>(result)
+        assertEquals(IncomingCapsuleAcceptanceRejectionReason.DOWNLOAD_REJECTED, rejection.reason)
+        val diagnostic = requireNotNull(rejection.downloadDiagnostic)
+        assertEquals(RecipientBlobDownloadFailure.INVALID_RESPONSE, diagnostic.transportReason)
+        assertEquals(200, diagnostic.httpStatus)
+        assertFalse(diagnostic.retryable)
+        assertFalse(requireNotNull(diagnostic.headerChecks).contentTypeExact)
+        assertFalse(diagnostic.safeSummary().contains(testRoot.path))
+    }
+
+    @Test
+    fun returnedPathSafetyFailureIsDiagnosedWithoutExposingPath() = runBlocking {
+        seed()
+        val returnedPath = File(testRoot, "outside-ciphertext.bin")
+        val result = coordinator(
+            download = IncomingRecipientBlobDownloader { request, _ ->
+                assertTrue(request.destination.createNewFile())
+                request.destination.writeBytes(bytes)
+                RecipientBlobDownloadResult.Success(returnedPath, bytes.size.toLong())
+            },
+        ).accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+
+        val rejection = assertIs<IncomingCapsuleAcceptanceResult.Rejected>(result)
+        assertEquals(IncomingCapsuleAcceptanceRejectionReason.DOWNLOAD_REJECTED, rejection.reason)
+        val diagnostic = requireNotNull(rejection.downloadDiagnostic)
+        assertEquals(
+            IncomingAcceptanceDownloadDiagnostic.Category.LOCAL_PATH_FAILURE,
+            diagnostic.category,
+        )
+        assertEquals(
+            IncomingAcceptanceLocalPathFailureReason.RETURNED_PATH,
+            diagnostic.localPathReason,
+        )
+        assertFalse(requireNotNull(diagnostic.returnedPathMatches))
+        assertFalse(diagnostic.safeSummary().contains(returnedPath.path))
     }
 
     @Test

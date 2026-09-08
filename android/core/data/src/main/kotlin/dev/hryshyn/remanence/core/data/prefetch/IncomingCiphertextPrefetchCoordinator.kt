@@ -884,9 +884,13 @@ class IncomingCiphertextPrefetchCoordinator internal constructor(
             result = IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.ADOPTION_REJECTED),
             disposition = TerminalDisposition.QUARANTINE_CAPSULE,
         )
-        IncomingCiphertextAdoptionFailure.SOURCE_MISSING,
-        IncomingCiphertextAdoptionFailure.ATOMIC_MOVE_UNAVAILABLE,
+        IncomingCiphertextAdoptionFailure.MOVE_UNAVAILABLE,
         IncomingCiphertextAdoptionFailure.DURABILITY_UNAVAILABLE,
+        -> CandidateOutcome.Terminal(
+            result = IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.ADOPTION_REJECTED),
+            disposition = TerminalDisposition.STOP_WITHOUT_QUARANTINE,
+        )
+        IncomingCiphertextAdoptionFailure.SOURCE_MISSING,
         IncomingCiphertextAdoptionFailure.LOCAL_STORAGE,
         -> CandidateOutcome.Retry(
             IncomingPrefetchResult.Retryable(IncomingPrefetchRetryReason.LOCAL_STORAGE),

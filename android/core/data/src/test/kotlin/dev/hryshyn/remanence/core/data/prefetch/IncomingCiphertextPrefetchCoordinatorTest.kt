@@ -563,7 +563,7 @@ class IncomingCiphertextPrefetchCoordinatorTest {
     }
 
     @Test
-    fun durabilityFailurePreservesTempAndLinkedDestinationWithoutQuarantine() = runBlocking {
+    fun durabilityFailureStopsWithoutQuarantineAndPreservesTempAndDestination() = runBlocking {
         seedCapsule(
             recognitionState = BlobCacheState.CACHED,
             contentState = BlobCacheState.DOWNLOADING,
@@ -595,7 +595,7 @@ class IncomingCiphertextPrefetchCoordinatorTest {
         ).prefetch(owner)
 
         assertEquals(
-            IncomingPrefetchResult.Retryable(IncomingPrefetchRetryReason.LOCAL_STORAGE),
+            IncomingPrefetchResult.Terminal(IncomingPrefetchTerminalReason.ADOPTION_REJECTED),
             result,
         )
         assertTrue(tempFile.isFile)

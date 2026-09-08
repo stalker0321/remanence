@@ -9,7 +9,6 @@ import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import java.nio.file.FileAlreadyExistsException
-import java.nio.file.FileSystemException
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
@@ -96,7 +95,7 @@ enum class IncomingCiphertextAdoptionFailure {
     SOURCE_INTEGRITY_FAILED,
     DESTINATION_PATH_UNSAFE,
     DESTINATION_CONFLICT,
-    ATOMIC_MOVE_UNAVAILABLE,
+    MOVE_UNAVAILABLE,
     DURABILITY_UNAVAILABLE,
     LOCAL_STORAGE,
 }
@@ -209,7 +208,7 @@ class DurableIncomingCiphertextFile internal constructor(
  * The boundary deliberately has no Room or material-state dependency. It
  * verifies the source immediately before adoption, installs only the fixed
  * owner/capsule/blob-derived destination, and never falls back to copying a
- * file when an atomic no-replace link is unavailable. A process retry treats an already
+ * file when a same-directory no-replace move is unavailable. A process retry treats an already
  * installed, independently re-verified destination as an idempotent success.
  */
 class IncomingRecognitionCiphertextAdopter internal constructor(
@@ -292,9 +291,10 @@ class IncomingRecognitionCiphertextAdopter internal constructor(
             )
         }
 
-        // The monitor closes the check/link race between concurrent adopters
-        // in this Android process. createLink is itself atomic and refuses an
-        // existing destination; no copy or replacement fallback is permitted.
+        // The monitor closes the check/move race between concurrent adopters
+        // in this Android process. Files.move with no options is the provider's
+        // same-directory no-replace operation; no copy or replacement fallback
+        // is permitted.
         val operationContext = coroutineContext
         synchronized(destinationLock(paths.destination)) {
             operationContext.ensureActive()
@@ -361,7 +361,7 @@ class IncomingRecognitionCiphertextAdopter internal constructor(
             }
 
             try {
-                fileSystem.atomicNoReplaceLink(paths.source, paths.destination)
+                fileSystem.moveNoReplace(paths.source, paths.destination)
             } catch (_: FileAlreadyExistsException) {
                 return@withContext reconcileConcurrentWinner(
                     request,
@@ -369,9 +369,12 @@ class IncomingRecognitionCiphertextAdopter internal constructor(
                     paths.destination,
                     checkCancellation,
                 )
-            } catch (_: FileSystemException) {
+            } catch (_: UnsupportedOperationException) {
+                // A provider that cannot implement move cannot become capable
+                // merely because the caller retries. Keep this terminal so the
+                // coordinator does not loop after verified payload processing.
                 return@withContext failure(
-                    IncomingRecognitionCiphertextAdoptionFailure.ATOMIC_MOVE_UNAVAILABLE,
+                    IncomingRecognitionCiphertextAdoptionFailure.MOVE_UNAVAILABLE,
                     retryable = false,
                 )
             } catch (_: SecurityException) {
@@ -387,11 +390,6 @@ class IncomingRecognitionCiphertextAdopter internal constructor(
                     paths,
                     paths.destination,
                     checkCancellation,
-                )
-            } catch (_: UnsupportedOperationException) {
-                return@withContext failure(
-                    IncomingRecognitionCiphertextAdoptionFailure.ATOMIC_MOVE_UNAVAILABLE,
-                    retryable = false,
                 )
             }
 
@@ -743,7 +741,8 @@ internal interface IncomingCiphertextFileSystem {
 
     fun openRead(path: Path): InputStream
 
-    fun atomicNoReplaceLink(source: Path, destination: Path)
+    /** Same-directory move using the provider's default no-replace semantics. */
+    fun moveNoReplace(source: Path, destination: Path)
 
     fun deleteIfExists(path: Path): Boolean
 
@@ -776,12 +775,11 @@ private object RealIncomingCiphertextFileSystem : IncomingCiphertextFileSystem {
     override fun openRead(path: Path): InputStream =
         Files.newInputStream(path, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)
 
-    override fun atomicNoReplaceLink(source: Path, destination: Path) {
-        // createLink is an atomic same-filesystem no-replace install. If the
-        // provider cannot hard-link, adoption fails closed; copying or
-        // ATOMIC_MOVE (whose existing-target behavior is unspecified) is not
-        // a safe substitute.
-        Files.createLink(destination, source)
+    override fun moveNoReplace(source: Path, destination: Path) {
+        // No options means provider-default same-directory no-replace move
+        // semantics. Copying, replacement, and provider-specific atomic
+        // options are not used.
+        Files.move(source, destination)
     }
 
     override fun deleteIfExists(path: Path): Boolean = Files.deleteIfExists(path)

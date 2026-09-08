@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.sync
 import dev.hryshyn.remanence.index.SenderIndexBundleStageFailure
 import dev.hryshyn.remanence.index.SenderIndexBundleStageRequest
 import dev.hryshyn.remanence.index.SenderIndexBundleStageResult
+import dev.hryshyn.remanence.index.SenderIndexBundleStageSubreason
 import dev.hryshyn.remanence.index.SenderIndexBundleStager
 import dev.hryshyn.remanence.core.model.UserId
 import kotlin.coroutines.cancellation.CancellationException
@@ -64,27 +65,55 @@ class SenderIndexBundlePersistenceAdapter internal constructor(
 
             SenderIndexBundleStageFailure.PATH_UNSAFE,
             SenderIndexBundleStageFailure.DESTINATION_CONFLICT,
-            SenderIndexBundleStageFailure.ATOMIC_MOVE_UNAVAILABLE,
             SenderIndexBundleStageFailure.DURABILITY_UNAVAILABLE,
+            SenderIndexBundleStageFailure.MOVE_UNAVAILABLE,
             -> rejected(IncomingVerifiedControlIndexPersistenceRejectionReason.LOCAL_CAPABILITY_UNAVAILABLE)
 
             SenderIndexBundleStageFailure.SEALING_FAILED,
             -> if (failure.retryable) {
-                retryable(IncomingVerifiedControlIndexPersistenceRetryReason.DEPENDENCY_UNAVAILABLE)
+                retryable(
+                    IncomingVerifiedControlIndexPersistenceRetryReason.DEPENDENCY_UNAVAILABLE,
+                    failure.subreason,
+                )
             } else {
                 rejected(IncomingVerifiedControlIndexPersistenceRejectionReason.LOCAL_CAPABILITY_UNAVAILABLE)
             }
 
             SenderIndexBundleStageFailure.DEPENDENCY_UNAVAILABLE ->
-                retryable(IncomingVerifiedControlIndexPersistenceRetryReason.DEPENDENCY_UNAVAILABLE)
+                retryable(
+                    IncomingVerifiedControlIndexPersistenceRetryReason.DEPENDENCY_UNAVAILABLE,
+                    failure.subreason,
+                )
 
             SenderIndexBundleStageFailure.LOCAL_STORAGE ->
-                retryable(IncomingVerifiedControlIndexPersistenceRetryReason.LOCAL_STORAGE)
+                retryable(
+                    IncomingVerifiedControlIndexPersistenceRetryReason.LOCAL_STORAGE,
+                    failure.subreason,
+                )
         }
     }
 
-    private fun retryable(reason: IncomingVerifiedControlIndexPersistenceRetryReason) =
-        IncomingVerifiedControlIndexPersistenceResult.Retryable(reason)
+    private fun retryable(
+        reason: IncomingVerifiedControlIndexPersistenceRetryReason,
+        subreason: SenderIndexBundleStageSubreason? = null,
+    ) = IncomingVerifiedControlIndexPersistenceResult.Retryable(
+        reason = reason,
+        persistenceDiagnostic = subreason?.let { stageSubreason ->
+            IncomingAcceptancePersistenceDiagnostic(
+                stage = when (stageSubreason) {
+                    SenderIndexBundleStageSubreason.SEAL -> IncomingAcceptancePersistenceStage.SEAL
+                    SenderIndexBundleStageSubreason.PART_CREATE -> IncomingAcceptancePersistenceStage.PART_CREATE
+                    SenderIndexBundleStageSubreason.PART_WRITE -> IncomingAcceptancePersistenceStage.PART_WRITE
+                    SenderIndexBundleStageSubreason.FILE_FORCE -> IncomingAcceptancePersistenceStage.FILE_FORCE
+                    SenderIndexBundleStageSubreason.DIRECTORY_FORCE -> IncomingAcceptancePersistenceStage.DIRECTORY_FORCE
+                    SenderIndexBundleStageSubreason.PUBLICATION -> IncomingAcceptancePersistenceStage.PUBLICATION
+                    SenderIndexBundleStageSubreason.DESTINATION_VERIFY -> IncomingAcceptancePersistenceStage.DESTINATION_VERIFY
+                    SenderIndexBundleStageSubreason.REPLAY_READ -> IncomingAcceptancePersistenceStage.REPLAY_READ
+                    SenderIndexBundleStageSubreason.REPLAY_UNSEAL -> IncomingAcceptancePersistenceStage.REPLAY_UNSEAL
+                },
+            )
+        },
+    )
 
     private fun rejected(reason: IncomingVerifiedControlIndexPersistenceRejectionReason) =
         IncomingVerifiedControlIndexPersistenceResult.Rejected(reason)

@@ -183,7 +183,11 @@ class IncomingIndexAcceptanceCommitter(
                 recognitionBlobId = blob,
                 expectedSizeBytes = request.expectedSizeBytes,
                 expectedSha256 = request.expectedSha256,
-                expectedLocalPath = capabilityPath.toString(),
+                // Room's durable contract is the deterministic raw spelling
+                // produced by the resolver. The capability may carry the
+                // equivalent canonical spelling when Android exposed an
+                // alias for filesDir, but that spelling is not persisted.
+                expectedLocalPath = expectedDestination.toString(),
             )
         } catch (cancelled: CancellationException) {
             throw cancelled

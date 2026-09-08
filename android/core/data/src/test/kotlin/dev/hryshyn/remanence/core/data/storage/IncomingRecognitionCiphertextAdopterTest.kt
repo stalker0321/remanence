@@ -7,7 +7,6 @@ import dev.hryshyn.remanence.core.model.UserId
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
-import java.nio.file.FileSystemException
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
@@ -56,7 +55,7 @@ class IncomingRecognitionCiphertextAdopterTest {
     }
 
     @Test
-    fun verifiedSourceIsAtomicallyAdoptedAtTheCanonicalOwnerCapsuleBlobPath() = runBlocking {
+    fun verifiedSourceIsMovedAtTheCanonicalOwnerCapsuleBlobPath() = runBlocking {
         val bytes = "verified-recognition-ciphertext".toByteArray()
         val source = source(ownerA, "recognition.tmp", bytes)
         val result = IncomingRecognitionCiphertextAdopter(roots).adopt(request(source, bytes))
@@ -68,6 +67,34 @@ class IncomingRecognitionCiphertextAdopterTest {
         assertArrayEquals(bytes, destination.readBytes())
         assertFalse(result.toString().contains(filesDir.path))
         assertFalse(result.toString().contains(ownerA.toRestString()))
+    }
+
+    @Test
+    fun androidShapedTrustedRootAliasSucceedsWithRawAndCanonicalDestinationSpellings() = runBlocking {
+        val aliasParent = File(filesDir.parentFile, "${filesDir.name}-alias-parent").apply { mkdirs() }
+        val realFilesDir = File(aliasParent, "real-files").apply { mkdirs() }
+        val rawAlias = File(aliasParent, "android-files-alias")
+        Files.createSymbolicLink(rawAlias.toPath(), realFilesDir.toPath())
+        val originalRoots = roots
+        try {
+            roots = AccountScopedFileRoots(rawAlias)
+            val bytes = "android-files-alias".toByteArray()
+            val source = source(ownerA, "alias.tmp", bytes)
+            val expectedDestination = destination(ownerA)
+
+            val result = IncomingRecognitionCiphertextAdopter(roots).adopt(request(source, bytes))
+
+            assertTrue(result is IncomingRecognitionCiphertextAdoptionResult.Adopted)
+            val capability = (result as IncomingRecognitionCiphertextAdoptionResult.Adopted).destination.asFile()
+            assertEquals(expectedDestination.absoluteFile, capability.absoluteFile)
+            assertEquals(expectedDestination.canonicalFile, capability.canonicalFile)
+            assertArrayEquals(bytes, expectedDestination.readBytes())
+            assertFalse(source.exists())
+        } finally {
+            roots = originalRoots
+            aliasParent.deleteRecursively()
+        }
+        Unit
     }
 
     @Test
@@ -174,6 +201,55 @@ class IncomingRecognitionCiphertextAdopterTest {
     }
 
     @Test
+    fun destinationLeafSymlinkToOutsideIsNeverReplacedOrFollowed() = runBlocking {
+        val bytes = "destination-symlink".toByteArray()
+        val outside = File(filesDir.parentFile, "${filesDir.name}-destination-outside").apply { mkdirs() }
+        val sentinel = File(outside, "sentinel").apply { writeBytes("outside".toByteArray()) }
+        val final = destination(ownerA).apply {
+            parentFile!!.mkdirs()
+            Files.createSymbolicLink(toPath(), sentinel.toPath())
+        }
+        val source = source(ownerA, "destination-symlink.tmp", bytes)
+
+        val result = IncomingRecognitionCiphertextAdopter(roots).adopt(request(source, bytes))
+
+        assertEquals(
+            IncomingRecognitionCiphertextAdoptionFailure.DESTINATION_PATH_UNSAFE,
+            (result as IncomingRecognitionCiphertextAdoptionResult.Failure).reason,
+        )
+        assertTrue(Files.isSymbolicLink(final.toPath()))
+        assertArrayEquals("outside".toByteArray(), sentinel.readBytes())
+        assertArrayEquals(bytes, source.readBytes())
+        outside.deleteRecursively()
+        Unit
+    }
+
+    @Test
+    fun sourceSymlinkToOutsideIsNeverFollowedOrDeleted() = runBlocking {
+        val outside = File(filesDir.parentFile, "${filesDir.name}-source-outside").apply { mkdirs() }
+        val sentinel = File(outside, "sentinel").apply { writeBytes("outside".toByteArray()) }
+        val symlink = File(
+            roots.child(ownerA, AccountScopedFileRoots.ChildRoot.TEMP),
+            "outside-source.tmp",
+        ).apply {
+            parentFile!!.mkdirs()
+            Files.createSymbolicLink(toPath(), sentinel.toPath())
+        }
+        val result = IncomingRecognitionCiphertextAdopter(roots)
+            .adopt(request(symlink, "outside".toByteArray()))
+
+        assertEquals(
+            IncomingRecognitionCiphertextAdoptionFailure.SOURCE_PATH_UNSAFE,
+            (result as IncomingRecognitionCiphertextAdoptionResult.Failure).reason,
+        )
+        assertTrue(Files.isSymbolicLink(symlink.toPath()))
+        assertArrayEquals("outside".toByteArray(), sentinel.readBytes())
+        assertFalse(destination(ownerA).exists())
+        outside.deleteRecursively()
+        Unit
+    }
+
+    @Test
     fun sourceSizeAndHashMustMatchAndRecognitionCapIsEnforced() = runBlocking {
         val bytes = "short".toByteArray()
         val source = source(ownerA, "bad.tmp", bytes)
@@ -242,23 +318,57 @@ class IncomingRecognitionCiphertextAdopterTest {
     }
 
     @Test
-    fun linkUnsupportedFailsClosedAndLeavesSourceUntouched() = runBlocking {
-        val bytes = "hard-link-required".toByteArray()
+    fun moveUnsupportedIsTerminalAndLeavesSourceUntouched() = runBlocking {
+        val bytes = "move-required".toByteArray()
         val source = source(ownerA, "unsupported.tmp", bytes)
-        val fs = RecordingFileSystem().apply { failLink = true }
+        val fs = RecordingFileSystem().apply { unsupportedMove = true }
 
         val result = IncomingRecognitionCiphertextAdopter(roots, fs).adopt(request(source, bytes))
 
         assertEquals(
-            IncomingRecognitionCiphertextAdoptionFailure.ATOMIC_MOVE_UNAVAILABLE,
+            IncomingRecognitionCiphertextAdoptionFailure.MOVE_UNAVAILABLE,
             (result as IncomingRecognitionCiphertextAdoptionResult.Failure).reason,
         )
+        assertFalse((result as IncomingRecognitionCiphertextAdoptionResult.Failure).retryable)
         assertTrue(source.exists())
         assertFalse(destination(ownerA).exists())
     }
 
     @Test
-    fun mandatoryFileForceFailureKeepsBothNamesAndRetryReconciles() = runBlocking {
+    fun destinationAppearingAtMoveTimeWithMismatchingBytesPreservesBothEntries() = runBlocking {
+        val bytes = "owned-source".toByteArray()
+        val conflict = "unknown-winner".toByteArray()
+        val source = source(ownerA, "move-race.tmp", bytes)
+        val fs = RecordingFileSystem().apply { destinationAppearanceBytes = conflict }
+
+        val result = IncomingRecognitionCiphertextAdopter(roots, fs).adopt(request(source, bytes))
+
+        assertEquals(
+            IncomingRecognitionCiphertextAdoptionFailure.DESTINATION_CONFLICT,
+            (result as IncomingRecognitionCiphertextAdoptionResult.Failure).reason,
+        )
+        assertArrayEquals(conflict, destination(ownerA).readBytes())
+        assertArrayEquals(bytes, source.readBytes())
+    }
+
+    @Test
+    fun ambiguousMoveIOExceptionReconcilesToDurableIdempotentSuccess() = runBlocking {
+        val bytes = "ambiguous-move".toByteArray()
+        val source = source(ownerA, "ambiguous.tmp", bytes)
+        val fs = RecordingFileSystem().apply { throwAfterMove = true }
+        val adopter = IncomingRecognitionCiphertextAdopter(roots, fs)
+
+        val first = adopter.adopt(request(source, bytes))
+        val replay = adopter.adopt(request(source, bytes))
+
+        assertTrue(first is IncomingRecognitionCiphertextAdoptionResult.Adopted)
+        assertTrue(replay is IncomingRecognitionCiphertextAdoptionResult.Adopted)
+        assertFalse(source.exists())
+        assertArrayEquals(bytes, destination(ownerA).readBytes())
+    }
+
+    @Test
+    fun mandatoryFileForceFailureKeepsPublishedDestinationAndRetryReconciles() = runBlocking {
         val bytes = "force-file".toByteArray()
         val source = source(ownerA, "force.tmp", bytes)
         val fs = RecordingFileSystem().apply { failFileForce = true }
@@ -270,7 +380,7 @@ class IncomingRecognitionCiphertextAdopterTest {
             IncomingRecognitionCiphertextAdoptionFailure.LOCAL_STORAGE,
             (first as IncomingRecognitionCiphertextAdoptionResult.Failure).reason,
         )
-        assertTrue(source.exists())
+        assertFalse(source.exists())
         assertArrayEquals(bytes, destination(ownerA).readBytes())
 
         fs.failFileForce = false
@@ -292,7 +402,7 @@ class IncomingRecognitionCiphertextAdopterTest {
             IncomingRecognitionCiphertextAdoptionFailure.DURABILITY_UNAVAILABLE,
             (result as IncomingRecognitionCiphertextAdoptionResult.Failure).reason,
         )
-        assertTrue(source.exists())
+        assertFalse(source.exists())
         assertArrayEquals(bytes, destination(ownerA).readBytes())
     }
 
@@ -309,7 +419,7 @@ class IncomingRecognitionCiphertextAdopterTest {
             IncomingRecognitionCiphertextAdoptionFailure.LOCAL_STORAGE,
             (first as IncomingRecognitionCiphertextAdoptionResult.Failure).reason,
         )
-        assertTrue(source.exists())
+        assertFalse(source.exists())
         assertArrayEquals(bytes, destination(ownerA).readBytes())
 
         fs.failDirectoryForce = false
@@ -322,6 +432,10 @@ class IncomingRecognitionCiphertextAdopterTest {
     fun sourceUnlinkFailureLeavesExactFinalForRetry() = runBlocking {
         val bytes = "unlink-failure".toByteArray()
         val source = source(ownerA, "unlink.tmp", bytes)
+        val final = destination(ownerA).apply {
+            parentFile!!.mkdirs()
+            writeBytes(bytes)
+        }
         val fs = RecordingFileSystem().apply { failDelete = true }
         val adopter = IncomingRecognitionCiphertextAdopter(roots, fs)
 
@@ -332,7 +446,7 @@ class IncomingRecognitionCiphertextAdopterTest {
             (first as IncomingRecognitionCiphertextAdoptionResult.Failure).reason,
         )
         assertTrue(source.exists())
-        assertArrayEquals(bytes, destination(ownerA).readBytes())
+        assertArrayEquals(bytes, final.readBytes())
 
         fs.failDelete = false
         val retry = adopter.adopt(request(source, bytes))
@@ -368,7 +482,7 @@ class IncomingRecognitionCiphertextAdopterTest {
             listOf(destinationParent, sourceParent, destinationParent, sourceParent),
             fs.directoryForcePaths,
         )
-        assertEquals(listOf(source.toPath()), fs.deletedPaths)
+        assertEquals(emptyList<Path>(), fs.deletedPaths)
         assertTrue(fs.directoryForcePaths.size > beforeReplay)
         assertArrayEquals(bytes, destination(ownerA).readBytes())
     }
@@ -378,6 +492,10 @@ class IncomingRecognitionCiphertextAdopterTest {
         val bytes = "directory-order".toByteArray()
         val source = source(ownerA, "nested/recognition.tmp", bytes)
         val fs = RecordingFileSystem()
+        destination(ownerA).apply {
+            parentFile!!.mkdirs()
+            writeBytes(bytes)
+        }
         val destinationParent = destination(ownerA).parentFile!!.toPath()
         val sourceParent = source.parentFile!!.toPath()
 
@@ -472,7 +590,9 @@ class IncomingRecognitionCiphertextAdopterTest {
     private open class RecordingFileSystem : IncomingCiphertextFileSystem {
         var failMkdir = false
         var failRead = false
-        var failLink = false
+        var unsupportedMove = false
+        var throwAfterMove = false
+        var destinationAppearanceBytes: ByteArray? = null
         var failFileForce = false
         var unsupportedFileForce = false
         var failDirectoryForce = false
@@ -509,9 +629,23 @@ class IncomingRecognitionCiphertextAdopterTest {
             return Files.newInputStream(path, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)
         }
 
-        override fun atomicNoReplaceLink(source: Path, destination: Path) {
-            if (failLink) throw FileSystemException(source.toString(), destination.toString(), "unsupported")
-            Files.createLink(destination, source)
+        override fun moveNoReplace(source: Path, destination: Path) {
+            if (unsupportedMove) throw UnsupportedOperationException("injected unsupported move")
+            destinationAppearanceBytes?.let { bytes ->
+                destinationAppearanceBytes = null
+                Files.write(
+                    destination,
+                    bytes,
+                    StandardOpenOption.CREATE_NEW,
+                    StandardOpenOption.WRITE,
+                )
+                throw java.nio.file.FileAlreadyExistsException(destination.toString())
+            }
+            Files.move(source, destination)
+            if (throwAfterMove) {
+                throwAfterMove = false
+                throw IOException("injected ambiguous move failure")
+            }
         }
 
         override fun deleteIfExists(path: Path): Boolean {

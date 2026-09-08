@@ -48,8 +48,21 @@ enum class SenderIndexBundleStageFailure {
     SEALING_FAILED,
     DEPENDENCY_UNAVAILABLE,
     LOCAL_STORAGE,
-    ATOMIC_MOVE_UNAVAILABLE,
     DURABILITY_UNAVAILABLE,
+    MOVE_UNAVAILABLE,
+}
+
+/** Bounded, privacy-safe stage detail for a retryable persistence failure. */
+enum class SenderIndexBundleStageSubreason {
+    SEAL,
+    PART_CREATE,
+    PART_WRITE,
+    FILE_FORCE,
+    DIRECTORY_FORCE,
+    PUBLICATION,
+    DESTINATION_VERIFY,
+    REPLAY_READ,
+    REPLAY_UNSEAL,
 }
 
 sealed interface SenderIndexBundleStageResult {
@@ -63,6 +76,7 @@ sealed interface SenderIndexBundleStageResult {
     data class Failure(
         val reason: SenderIndexBundleStageFailure,
         val retryable: Boolean,
+        val subreason: SenderIndexBundleStageSubreason? = null,
     ) : SenderIndexBundleStageResult
 }
 
@@ -229,10 +243,12 @@ class SenderIndexBundleStager internal constructor(
                     SemanticInspection.READ_FAILURE -> return@withLock failure(
                         SenderIndexBundleStageFailure.LOCAL_STORAGE,
                         true,
+                        SenderIndexBundleStageSubreason.REPLAY_READ,
                     )
                     SemanticInspection.UNAVAILABLE -> return@withLock failure(
                         SenderIndexBundleStageFailure.DEPENDENCY_UNAVAILABLE,
                         true,
+                        SenderIndexBundleStageSubreason.REPLAY_UNSEAL,
                     )
                     SemanticInspection.MISMATCH,
                     SemanticInspection.UNSAFE,
@@ -260,14 +276,17 @@ class SenderIndexBundleStager internal constructor(
                     SemanticInspection.INVALID -> return@withLock failure(
                         SenderIndexBundleStageFailure.LOCAL_STORAGE,
                         true,
+                        SenderIndexBundleStageSubreason.REPLAY_READ,
                     )
                     SemanticInspection.UNAVAILABLE -> return@withLock failure(
                         SenderIndexBundleStageFailure.DEPENDENCY_UNAVAILABLE,
                         true,
+                        SenderIndexBundleStageSubreason.REPLAY_UNSEAL,
                     )
                     SemanticInspection.READ_FAILURE -> return@withLock failure(
                         SenderIndexBundleStageFailure.LOCAL_STORAGE,
                         true,
+                        SenderIndexBundleStageSubreason.REPLAY_READ,
                     )
                     SemanticInspection.MISMATCH,
                     SemanticInspection.UNSAFE,
@@ -277,7 +296,7 @@ class SenderIndexBundleStager internal constructor(
                     )
                 }
                 try {
-                    fileSystem.atomicNoReplaceLink(paths.temporary, paths.destination)
+                    fileSystem.moveNoReplace(paths.temporary, paths.destination)
                 } catch (_: FileAlreadyExistsException) {
                     return@withLock reconcileExistingDestination(
                         request,
@@ -287,11 +306,16 @@ class SenderIndexBundleStager internal constructor(
                     )
                 } catch (_: UnsupportedOperationException) {
                     return@withLock failure(
-                        SenderIndexBundleStageFailure.ATOMIC_MOVE_UNAVAILABLE,
+                        SenderIndexBundleStageFailure.MOVE_UNAVAILABLE,
                         false,
+                        SenderIndexBundleStageSubreason.PUBLICATION,
                     )
                 } catch (_: SecurityException) {
-                    return@withLock failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+                    return@withLock failure(
+                        SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                        true,
+                        SenderIndexBundleStageSubreason.PUBLICATION,
+                    )
                 } catch (_: IOException) {
                     return@withLock reconcileExistingDestination(
                         request,
@@ -302,10 +326,14 @@ class SenderIndexBundleStager internal constructor(
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: RuntimeException) {
-                    return@withLock failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+                    return@withLock failure(
+                        SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                        true,
+                        SenderIndexBundleStageSubreason.PUBLICATION,
+                    )
                 }
 
-                // Link success means the destination now owns these exact
+                // Move success means the destination now owns these exact
                 // bytes. From here on, no cleanup failure may delete it.
                 return@withLock finishDurableDestination(
                     request = request,
@@ -366,10 +394,18 @@ class SenderIndexBundleStager internal constructor(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                return failure(SenderIndexBundleStageFailure.SEALING_FAILED, true)
+                return failure(
+                    SenderIndexBundleStageFailure.SEALING_FAILED,
+                    true,
+                    SenderIndexBundleStageSubreason.SEAL,
+                )
             }
             if (sealed!!.isEmpty() || sealed!!.size > MAX_CIPHERTEXT_BYTES) {
-                return failure(SenderIndexBundleStageFailure.SEALING_FAILED, false)
+                return failure(
+                    SenderIndexBundleStageFailure.SEALING_FAILED,
+                    false,
+                    SenderIndexBundleStageSubreason.SEAL,
+                )
             }
 
             returnedPart = try {
@@ -381,10 +417,18 @@ class SenderIndexBundleStager internal constructor(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+                return failure(
+                    SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                    true,
+                    SenderIndexBundleStageSubreason.PART_CREATE,
+                )
             }
             val freshPart = returnedPart
-                ?: return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+                ?: return failure(
+                    SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                    true,
+                    SenderIndexBundleStageSubreason.PART_CREATE,
+                )
             val normalizedPart = try {
                 val normalized = freshPart.path.toAbsolutePath().normalize()
                 if (freshPart.path != normalized ||
@@ -402,7 +446,11 @@ class SenderIndexBundleStager internal constructor(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                return failure(SenderIndexBundleStageFailure.PATH_UNSAFE, false)
+                return failure(
+                    SenderIndexBundleStageFailure.PATH_UNSAFE,
+                    false,
+                    SenderIndexBundleStageSubreason.PART_CREATE,
+                )
             }
             // Shape validation proves this exact path is inside the canonical
             // parent before ownership is retained for cleanup.
@@ -412,7 +460,11 @@ class SenderIndexBundleStager internal constructor(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+                return failure(
+                    SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                    true,
+                    SenderIndexBundleStageSubreason.PART_CREATE,
+                )
             }
             if (partAttributes == null ||
                 partAttributes.isSymbolicLink ||
@@ -427,46 +479,82 @@ class SenderIndexBundleStager internal constructor(
                 freshPart.close()
                 forceFile(normalizedPart)?.let { return it }
                 if (!forceDirectoryBestEffort(normalizedPart.parent!!)) {
-                    return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+                    return failure(
+                        SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                        true,
+                        SenderIndexBundleStageSubreason.DIRECTORY_FORCE,
+                    )
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: FileAlreadyExistsException) {
-                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+                return failure(
+                    SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                    true,
+                    SenderIndexBundleStageSubreason.PART_WRITE,
+                )
             } catch (_: SecurityException) {
-                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+                return failure(
+                    SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                    true,
+                    SenderIndexBundleStageSubreason.PART_WRITE,
+                )
             } catch (_: IOException) {
-                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+                return failure(
+                    SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                    true,
+                    SenderIndexBundleStageSubreason.PART_WRITE,
+                )
             } catch (_: UnsupportedOperationException) {
-                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+                return failure(
+                    SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                    true,
+                    SenderIndexBundleStageSubreason.PART_WRITE,
+                )
             } catch (_: RuntimeException) {
-                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+                return failure(
+                    SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                    true,
+                    SenderIndexBundleStageSubreason.PART_WRITE,
+                )
             }
 
             try {
-                fileSystem.atomicNoReplaceLink(normalizedPart, paths.temporary)
+                fileSystem.moveNoReplace(normalizedPart, paths.temporary)
             } catch (_: FileAlreadyExistsException) {
-                return reconcileTemporaryAfterLinkFailure(
+                return reconcileTemporaryAfterMoveFailure(
                     paths,
                     normalizedPart,
                     expectedPlaintext,
                     aad,
                 ) { ownedPart = null }
             } catch (_: UnsupportedOperationException) {
-                return failure(SenderIndexBundleStageFailure.ATOMIC_MOVE_UNAVAILABLE, false)
+                return failure(
+                    SenderIndexBundleStageFailure.MOVE_UNAVAILABLE,
+                    false,
+                    SenderIndexBundleStageSubreason.PUBLICATION,
+                )
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: SecurityException) {
-                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+                return failure(
+                    SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                    true,
+                    SenderIndexBundleStageSubreason.PUBLICATION,
+                )
             } catch (_: IOException) {
-                return reconcileTemporaryAfterLinkFailure(
+                return reconcileTemporaryAfterMoveFailure(
                     paths,
                     normalizedPart,
                     expectedPlaintext,
                     aad,
                 ) { ownedPart = null }
             } catch (_: RuntimeException) {
-                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+                return failure(
+                    SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                    true,
+                    SenderIndexBundleStageSubreason.PUBLICATION,
+                )
             }
 
             return completeTemporaryPublication(paths, normalizedPart, expectedPlaintext, aad) {
@@ -483,7 +571,7 @@ class SenderIndexBundleStager internal constructor(
         }
     }
 
-    private suspend fun reconcileTemporaryAfterLinkFailure(
+    private suspend fun reconcileTemporaryAfterMoveFailure(
         paths: StagePaths,
         ownedPart: Path,
         expectedPlaintext: ByteArray,
@@ -503,8 +591,21 @@ class SenderIndexBundleStager internal constructor(
         SemanticInspection.UNSAFE,
         -> failure(SenderIndexBundleStageFailure.DESTINATION_CONFLICT, false)
         SemanticInspection.UNAVAILABLE ->
-            failure(SenderIndexBundleStageFailure.DEPENDENCY_UNAVAILABLE, true)
-        else -> failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+            failure(
+                SenderIndexBundleStageFailure.DEPENDENCY_UNAVAILABLE,
+                true,
+                SenderIndexBundleStageSubreason.REPLAY_UNSEAL,
+            )
+        SemanticInspection.READ_FAILURE -> failure(
+            SenderIndexBundleStageFailure.LOCAL_STORAGE,
+            true,
+            SenderIndexBundleStageSubreason.REPLAY_READ,
+        )
+        else -> failure(
+            SenderIndexBundleStageFailure.LOCAL_STORAGE,
+            true,
+            SenderIndexBundleStageSubreason.PUBLICATION,
+        )
     }
 
     private suspend fun completeTemporaryPublication(
@@ -516,20 +617,36 @@ class SenderIndexBundleStager internal constructor(
     ): SenderIndexBundleStageResult.Failure? {
         forceFile(paths.temporary)?.let { return it }
         if (!forceDirectoryBestEffort(paths.temporary.parent!!)) {
-            return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+            return failure(
+                SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                true,
+                SenderIndexBundleStageSubreason.DIRECTORY_FORCE,
+            )
         }
         try {
             if (!deleteOwnedPart(ownedPart)) {
-                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+                return failure(
+                    SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                    true,
+                    SenderIndexBundleStageSubreason.PART_WRITE,
+                )
             }
             onPartConsumed()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
-            return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+            return failure(
+                SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                true,
+                SenderIndexBundleStageSubreason.PART_WRITE,
+            )
         }
         if (!forceDirectoryBestEffort(ownedPart.parent!!)) {
-            return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+            return failure(
+                SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                true,
+                SenderIndexBundleStageSubreason.DIRECTORY_FORCE,
+            )
         }
         return when (inspectSemantic(paths.temporary, expectedPlaintext, aad)) {
             SemanticInspection.MATCH -> null
@@ -537,8 +654,16 @@ class SenderIndexBundleStager internal constructor(
             SemanticInspection.UNSAFE,
             -> failure(SenderIndexBundleStageFailure.DESTINATION_CONFLICT, false)
             SemanticInspection.UNAVAILABLE ->
-                failure(SenderIndexBundleStageFailure.DEPENDENCY_UNAVAILABLE, true)
-            else -> failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+                failure(
+                    SenderIndexBundleStageFailure.DEPENDENCY_UNAVAILABLE,
+                    true,
+                    SenderIndexBundleStageSubreason.REPLAY_UNSEAL,
+                )
+            else -> failure(
+                SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                true,
+                SenderIndexBundleStageSubreason.REPLAY_READ,
+            )
         }
     }
 
@@ -737,15 +862,31 @@ class SenderIndexBundleStager internal constructor(
         fileSystem.forceFile(path)
         null
     } catch (_: UnsupportedOperationException) {
-        failure(SenderIndexBundleStageFailure.DURABILITY_UNAVAILABLE, false)
+        failure(
+            SenderIndexBundleStageFailure.DURABILITY_UNAVAILABLE,
+            false,
+            SenderIndexBundleStageSubreason.FILE_FORCE,
+        )
     } catch (_: SecurityException) {
-        failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+        failure(
+            SenderIndexBundleStageFailure.LOCAL_STORAGE,
+            true,
+            SenderIndexBundleStageSubreason.FILE_FORCE,
+        )
     } catch (_: IOException) {
-        failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+        failure(
+            SenderIndexBundleStageFailure.LOCAL_STORAGE,
+            true,
+            SenderIndexBundleStageSubreason.FILE_FORCE,
+        )
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (_: RuntimeException) {
-        failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+        failure(
+            SenderIndexBundleStageFailure.LOCAL_STORAGE,
+            true,
+            SenderIndexBundleStageSubreason.FILE_FORCE,
+        )
     }
 
     private suspend fun finishDurableDestination(
@@ -757,7 +898,11 @@ class SenderIndexBundleStager internal constructor(
     ): SenderIndexBundleStageResult {
         forceFile(paths.destination)?.let { return it }
         if (!forceDirectoryBestEffort(paths.destination.parent!!)) {
-            return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+            return failure(
+                SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                true,
+                SenderIndexBundleStageSubreason.DIRECTORY_FORCE,
+            )
         }
 
         when (inspectSemantic(paths.temporary, expectedPlaintext, aad)) {
@@ -767,23 +912,43 @@ class SenderIndexBundleStager internal constructor(
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Exception) {
-                    return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+                    return failure(
+                        SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                        true,
+                        SenderIndexBundleStageSubreason.REPLAY_READ,
+                    )
                 }
                 if (!forceDirectoryBestEffort(paths.temporary.parent!!)) {
-                    return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+                    return failure(
+                        SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                        true,
+                        SenderIndexBundleStageSubreason.DIRECTORY_FORCE,
+                    )
                 }
             }
             SemanticInspection.MISSING -> {
                 // A previous attempt may have unlinked the temp and failed to
                 // persist that unlink. Close that directory-durability gap.
                 if (!forceDirectoryBestEffort(paths.temporary.parent!!)) {
-                    return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+                    return failure(
+                        SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                        true,
+                        SenderIndexBundleStageSubreason.DIRECTORY_FORCE,
+                    )
                 }
             }
             SemanticInspection.READ_FAILURE ->
-                return failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+                return failure(
+                    SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                    true,
+                    SenderIndexBundleStageSubreason.REPLAY_READ,
+                )
             SemanticInspection.UNAVAILABLE ->
-                return failure(SenderIndexBundleStageFailure.DEPENDENCY_UNAVAILABLE, true)
+                return failure(
+                    SenderIndexBundleStageFailure.DEPENDENCY_UNAVAILABLE,
+                    true,
+                    SenderIndexBundleStageSubreason.REPLAY_UNSEAL,
+                )
             else -> Unit // keep an unknown orphan; never risk the winner
         }
 
@@ -798,6 +963,7 @@ class SenderIndexBundleStager internal constructor(
                     SenderIndexBundleStageFailure.LOCAL_STORAGE
                 },
                 true,
+                SenderIndexBundleStageSubreason.DESTINATION_VERIFY,
             )
         }
         return try {
@@ -868,10 +1034,22 @@ class SenderIndexBundleStager internal constructor(
                 aad,
                 replayed = true,
             )
-            SemanticInspection.MISSING,
-            SemanticInspection.READ_FAILURE -> failure(SenderIndexBundleStageFailure.LOCAL_STORAGE, true)
+            SemanticInspection.MISSING -> failure(
+                SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                true,
+                SenderIndexBundleStageSubreason.PUBLICATION,
+            )
+            SemanticInspection.READ_FAILURE -> failure(
+                SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                true,
+                SenderIndexBundleStageSubreason.REPLAY_READ,
+            )
             SemanticInspection.UNAVAILABLE ->
-                failure(SenderIndexBundleStageFailure.DEPENDENCY_UNAVAILABLE, true)
+                failure(
+                    SenderIndexBundleStageFailure.DEPENDENCY_UNAVAILABLE,
+                    true,
+                    SenderIndexBundleStageSubreason.REPLAY_UNSEAL,
+                )
             SemanticInspection.MISMATCH,
             SemanticInspection.UNSAFE,
             SemanticInspection.INVALID,
@@ -900,7 +1078,8 @@ class SenderIndexBundleStager internal constructor(
     private fun failure(
         reason: SenderIndexBundleStageFailure,
         retryable: Boolean,
-    ) = SenderIndexBundleStageResult.Failure(reason, retryable)
+        subreason: SenderIndexBundleStageSubreason? = null,
+    ) = SenderIndexBundleStageResult.Failure(reason, retryable, subreason)
 
     private data class StagePaths(
         val root: Path,
@@ -993,7 +1172,8 @@ internal interface SenderIndexBundleFileSystem {
     fun makeDirectories(path: Path)
     fun openRead(path: Path): InputStream
     fun createFreshPart(parent: Path, prefix: String, suffix: String): SenderIndexBundleOwnedPart
-    fun atomicNoReplaceLink(source: Path, destination: Path)
+    /** Same-directory move with the provider's default no-replace semantics. */
+    fun moveNoReplace(source: Path, destination: Path)
     fun deleteIfExists(path: Path): Boolean
     fun forceFile(path: Path)
     fun forceDirectory(path: Path)
@@ -1045,8 +1225,10 @@ private object RealSenderIndexBundleFileSystem : SenderIndexBundleFileSystem {
         throw IOException("fresh part creation exhausted")
     }
 
-    override fun atomicNoReplaceLink(source: Path, destination: Path) {
-        Files.createLink(destination, source)
+    override fun moveNoReplace(source: Path, destination: Path) {
+        // No options means the provider's default no-replace move semantics.
+        // Both paths are already proven to share the trusted, controlled parent.
+        Files.move(source, destination)
     }
 
     override fun deleteIfExists(path: Path): Boolean = Files.deleteIfExists(path)

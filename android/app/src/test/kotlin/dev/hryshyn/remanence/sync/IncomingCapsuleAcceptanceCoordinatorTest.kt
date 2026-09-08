@@ -1064,6 +1064,9 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
             persistence = IncomingVerifiedControlIndexPersistencePort { _, _ ->
                 IncomingVerifiedControlIndexPersistenceResult.Retryable(
                     IncomingVerifiedControlIndexPersistenceRetryReason.LOCAL_STORAGE,
+                    IncomingAcceptancePersistenceDiagnostic(
+                        IncomingAcceptancePersistenceStage.PUBLICATION,
+                    ),
                 )
             },
             adoptionPort = IncomingRecognitionAdoptionPort {
@@ -1076,9 +1079,14 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
             },
         ).accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
 
+        val firstRetry = assertIs<IncomingCapsuleAcceptanceResult.Retryable>(first)
         assertEquals(
             IncomingCapsuleAcceptanceRetryReason.VERIFIED_PAYLOAD_PERSISTENCE,
-            assertIs<IncomingCapsuleAcceptanceResult.Retryable>(first).reason,
+            firstRetry.reason,
+        )
+        assertEquals(
+            IncomingAcceptancePersistenceStage.PUBLICATION,
+            firstRetry.persistenceDiagnostic?.stage,
         )
         assertEquals(1, cryptoCalls)
         assertEquals(0, adoptionCalls)
@@ -1109,14 +1117,17 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
     }
 
     @Test
-    fun unavailableLocalCapabilityIsGenericPersistenceRejectionNotOwnerMismatch() = runBlocking {
+    fun unsupportedMoveIsTerminalPersistenceRejectionNotVerifiedPayloadRetry() = runBlocking {
         seed()
         var adoptionCalls = 0
         var commitCalls = 0
         val result = coordinator(
-            persistence = IncomingVerifiedControlIndexPersistencePort { _, _ ->
-                IncomingVerifiedControlIndexPersistenceResult.Rejected(
-                    IncomingVerifiedControlIndexPersistenceRejectionReason.LOCAL_CAPABILITY_UNAVAILABLE,
+            persistence = SenderIndexBundlePersistenceAdapter {
+                SenderIndexBundleStageResult.Failure(
+                    reason = dev.hryshyn.remanence.index.SenderIndexBundleStageFailure.MOVE_UNAVAILABLE,
+                    // Even a stale/incorrect retryable bit cannot make a
+                    // provider capability failure retryable at this boundary.
+                    retryable = true,
                 )
             },
             adoptionPort = IncomingRecognitionAdoptionPort {

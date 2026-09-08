@@ -118,9 +118,9 @@ class SenderIndexBundlePersistenceAdapterTest {
                 IncomingVerifiedControlIndexPersistenceRejectionReason.LOCAL_CAPABILITY_UNAVAILABLE,
             SenderIndexBundleStageFailure.DESTINATION_CONFLICT to
                 IncomingVerifiedControlIndexPersistenceRejectionReason.LOCAL_CAPABILITY_UNAVAILABLE,
-            SenderIndexBundleStageFailure.SEALING_FAILED to
+            SenderIndexBundleStageFailure.MOVE_UNAVAILABLE to
                 IncomingVerifiedControlIndexPersistenceRejectionReason.LOCAL_CAPABILITY_UNAVAILABLE,
-            SenderIndexBundleStageFailure.ATOMIC_MOVE_UNAVAILABLE to
+            SenderIndexBundleStageFailure.SEALING_FAILED to
                 IncomingVerifiedControlIndexPersistenceRejectionReason.LOCAL_CAPABILITY_UNAVAILABLE,
             SenderIndexBundleStageFailure.DURABILITY_UNAVAILABLE to
                 IncomingVerifiedControlIndexPersistenceRejectionReason.LOCAL_CAPABILITY_UNAVAILABLE,
@@ -159,6 +159,29 @@ class SenderIndexBundlePersistenceAdapterTest {
                 result,
             )
         }
+    }
+
+    @Test
+    fun publicationSubreasonIsBoundedAndPreservedForAcceptanceDiagnostics() = runBlocking {
+        val result = SenderIndexBundlePersistenceAdapter {
+            SenderIndexBundleStageResult.Failure(
+                reason = SenderIndexBundleStageFailure.LOCAL_STORAGE,
+                retryable = true,
+                subreason = dev.hryshyn.remanence.index.SenderIndexBundleStageSubreason.PUBLICATION,
+            )
+        }.persist(request, owner)
+
+        val retry = result as IncomingVerifiedControlIndexPersistenceResult.Retryable
+        assertEquals(IncomingVerifiedControlIndexPersistenceRetryReason.LOCAL_STORAGE, retry.reason)
+        assertEquals(
+            IncomingAcceptancePersistenceStage.PUBLICATION,
+            retry.persistenceDiagnostic?.stage,
+        )
+        assertEquals(
+            "acceptance persistence stage=PUBLICATION",
+            retry.persistenceDiagnostic?.safeSummary(),
+        )
+        assertFalse(retry.toString().contains("private"))
     }
 
     @Test
@@ -251,11 +274,15 @@ class SenderIndexBundlePersistenceAdapterTest {
                 adapter.persist(validRequest, owner),
             )
             sealer.unsealUnavailable = true
+            val retry = adapter.persist(validRequest, owner)
+                as IncomingVerifiedControlIndexPersistenceResult.Retryable
             assertEquals(
-                IncomingVerifiedControlIndexPersistenceResult.Retryable(
-                    IncomingVerifiedControlIndexPersistenceRetryReason.DEPENDENCY_UNAVAILABLE,
-                ),
-                adapter.persist(validRequest, owner),
+                IncomingVerifiedControlIndexPersistenceRetryReason.DEPENDENCY_UNAVAILABLE,
+                retry.reason,
+            )
+            assertEquals(
+                IncomingAcceptancePersistenceStage.REPLAY_UNSEAL,
+                retry.persistenceDiagnostic?.stage,
             )
         } finally {
             filesDir.deleteRecursively()

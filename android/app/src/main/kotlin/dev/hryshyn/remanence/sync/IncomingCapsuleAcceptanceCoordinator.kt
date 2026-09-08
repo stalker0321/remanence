@@ -88,6 +88,7 @@ sealed interface IncomingCapsuleAcceptanceResult {
     data class Retryable(
         val reason: IncomingCapsuleAcceptanceRetryReason,
         val downloadDiagnostic: IncomingAcceptanceDownloadDiagnostic? = null,
+        val persistenceDiagnostic: IncomingAcceptancePersistenceDiagnostic? = null,
     ) :
         IncomingCapsuleAcceptanceResult
 
@@ -174,6 +175,7 @@ sealed interface IncomingVerifiedControlIndexPersistenceResult {
 
     data class Retryable(
         val reason: IncomingVerifiedControlIndexPersistenceRetryReason,
+        val persistenceDiagnostic: IncomingAcceptancePersistenceDiagnostic? = null,
     ) : IncomingVerifiedControlIndexPersistenceResult
 
     data class Rejected(
@@ -546,6 +548,7 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
                         is IncomingVerifiedControlIndexPersistenceResult.Retryable ->
                             return@withContext retryable(
                                 IncomingCapsuleAcceptanceRetryReason.VERIFIED_PAYLOAD_PERSISTENCE,
+                                persistenceDiagnostic = persistenceResult.persistenceDiagnostic,
                             )
                         is IncomingVerifiedControlIndexPersistenceResult.Rejected -> {
                             return@withContext when (persistenceResult.reason) {
@@ -1108,7 +1111,12 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
     private fun retryable(
         reason: IncomingCapsuleAcceptanceRetryReason,
         downloadDiagnostic: IncomingAcceptanceDownloadDiagnostic? = null,
-    ) = IncomingCapsuleAcceptanceResult.Retryable(reason, downloadDiagnostic)
+        persistenceDiagnostic: IncomingAcceptancePersistenceDiagnostic? = null,
+    ) = IncomingCapsuleAcceptanceResult.Retryable(
+        reason = reason,
+        downloadDiagnostic = downloadDiagnostic,
+        persistenceDiagnostic = persistenceDiagnostic,
+    )
 
     private fun rejected(
         reason: IncomingCapsuleAcceptanceRejectionReason,

@@ -279,7 +279,7 @@ class SenderIndexBundleStagerTest {
                 assertEquals(SenderIndexBundleStageFailure.PATH_UNSAFE, result.reason)
                 assertTrue(fs.deletedPaths.isEmpty())
                 assertTrue(fs.openedWritePaths.isEmpty())
-                assertTrue(fs.events.none { it == "link" })
+                assertTrue(fs.events.none { it == "move" })
             }
 
         assertArrayEquals(byteArrayOf(1, 2, 3), outsideCandidate.readBytes())
@@ -345,28 +345,27 @@ class SenderIndexBundleStagerTest {
         ).stage(request(ownerA)) as SenderIndexBundleStageResult.Staged
         val ownedPart = fs.createdParts.single()
         val parent = ownedPart.parent
-        val firstLink = fs.events.indexOf("link")
+        val firstMove = fs.events.indexOf("move")
         val partForce = fs.events.indexOf("force-file:${ownedPart.fileName}")
         val firstParentForce = fs.events.indexOf("force-dir:${parent.fileName}")
         val temporaryForce = fs.events.indexOf("force-file:${temporary(ownerA).toPath().fileName}")
-        val partDelete = fs.events.indexOf("delete:${ownedPart.fileName}")
-        val sourceParentForceAfterDelete = fs.events.withIndex()
-            .firstOrNull { it.index > partDelete && it.value == "force-dir:${parent.fileName}" }
+        val sourceParentForceAfterMove = fs.events.withIndex()
+            .firstOrNull { it.index > temporaryForce && it.value == "force-dir:${parent.fileName}" }
             ?.index ?: -1
-        val destinationLink = fs.events.lastIndexOf("link")
+        val destinationMove = fs.events.lastIndexOf("move")
         val destinationForce = fs.events.indexOf("force-file:${destination(ownerA).toPath().fileName}")
 
         assertTrue(result.durable.asFile().isFile)
         assertEquals(parent, fs.forceDirectoryPaths.first())
         assertTrue(fs.forceDirectoryPaths.all { it == parent })
-        assertTrue(fs.deletedPaths.any { it == ownedPart })
+        assertFalse(fs.deletedPaths.any { it == ownedPart })
+        assertFalse(Files.exists(ownedPart, LinkOption.NOFOLLOW_LINKS))
         assertEquals(listOf(ownedPart), fs.openedWritePaths.distinct())
         assertTrue(partForce < firstParentForce)
-        assertTrue(firstParentForce < firstLink)
-        assertTrue(firstLink < temporaryForce)
-        assertTrue(temporaryForce < partDelete)
-        assertTrue(partDelete < sourceParentForceAfterDelete)
-        assertTrue(destinationLink < destinationForce)
+        assertTrue(firstParentForce < firstMove)
+        assertTrue(firstMove < temporaryForce)
+        assertTrue(temporaryForce < sourceParentForceAfterMove)
+        assertTrue(destinationMove < destinationForce)
     }
 
     @Test
@@ -410,7 +409,7 @@ class SenderIndexBundleStagerTest {
         val retried = stager.stage(request(ownerA))
         assertTrue(retried is SenderIndexBundleStageResult.Staged)
         assertTrue(
-            fs.events.indexOfFirst { it == "link" } <
+            fs.events.indexOfFirst { it == "move" } <
                 fs.events.indexOfFirst { it == "force-file:${destination.name}" },
         )
         assertTrue(fs.events.indexOfFirst { it.startsWith("force-dir:") } >= 0)
@@ -429,7 +428,7 @@ class SenderIndexBundleStagerTest {
         )
         val result = stager.stage(request(ownerA))
         assertEquals(SenderIndexBundleStageFailure.LOCAL_STORAGE, (result as SenderIndexBundleStageResult.Failure).reason)
-        assertFalse(fs.events.contains("link"))
+        assertFalse(fs.events.contains("move"))
         assertFalse(destination(ownerA).exists())
     }
 
@@ -505,12 +504,12 @@ class SenderIndexBundleStagerTest {
         assertArrayEquals(byteArrayOf(9, 8, 7), orphan.readBytes())
         assertTrue(fs.createdParts.isEmpty())
         assertTrue(fs.deletedPaths.isEmpty())
-        assertTrue(fs.events.none { it == "link" })
+        assertTrue(fs.events.none { it == "move" })
     }
 
     @Test
-    fun handledTemporaryLinkFailureCleansTheCurrentInvocationPart() = runBlocking {
-        val fs = RecordingFileSystem().apply { failLink = true }
+    fun handledTemporaryMoveFailureCleansTheCurrentInvocationPart() = runBlocking {
+        val fs = RecordingFileSystem().apply { failMove = true }
         val result = SenderIndexBundleStager(
             roots = roots,
             sealer = RandomAuthenticatedSealer(),
@@ -527,8 +526,68 @@ class SenderIndexBundleStagerTest {
     }
 
     @Test
-    fun temporaryLinkIoAfterTargetCreationReconcilesToSuccess() = runBlocking {
-        val fs = RecordingFileSystem().apply { throwAfterTemporaryLink = true }
+    fun publicationMoveFailureMapsToRetryablePersistenceStageAndRecovers() = runBlocking {
+        val fs = RecordingFileSystem().apply { failMove = true }
+        val stager = SenderIndexBundleStager(
+            roots = roots,
+            sealer = RandomAuthenticatedSealer(),
+            codec = SenderIndexBundleCodec(),
+            fileSystem = fs,
+            wipe = { it.fill(0) },
+        )
+
+        val failed = stager.stage(request(ownerA)) as SenderIndexBundleStageResult.Failure
+        assertEquals(SenderIndexBundleStageFailure.LOCAL_STORAGE, failed.reason)
+        assertTrue(failed.retryable)
+        assertEquals(SenderIndexBundleStageSubreason.PUBLICATION, failed.subreason)
+        assertFalse(destination(ownerA).exists())
+        assertFalse(temporary(ownerA).exists())
+
+        fs.failMove = false
+        val recovered = stager.stage(request(ownerA))
+        assertTrue(recovered is SenderIndexBundleStageResult.Staged)
+        assertTrue(destination(ownerA).isFile)
+    }
+
+    @Test
+    fun unsupportedPublicationMoveIsTerminalAndNotRetryable() = runBlocking {
+        val fs = RecordingFileSystem().apply { unsupportedMove = true }
+        val result = SenderIndexBundleStager(
+            roots = roots,
+            sealer = RandomAuthenticatedSealer(),
+            codec = SenderIndexBundleCodec(),
+            fileSystem = fs,
+            wipe = { it.fill(0) },
+        ).stage(request(ownerA)) as SenderIndexBundleStageResult.Failure
+
+        assertEquals(SenderIndexBundleStageFailure.MOVE_UNAVAILABLE, result.reason)
+        assertFalse(result.retryable)
+        assertEquals(SenderIndexBundleStageSubreason.PUBLICATION, result.subreason)
+        assertFalse(destination(ownerA).exists())
+        assertFalse(temporary(ownerA).exists())
+    }
+
+    @Test
+    fun unsupportedDestinationPublicationMoveIsTerminalAndPreservesTemporaryWinner() = runBlocking {
+        val fs = RecordingFileSystem().apply { unsupportedDestinationMove = true }
+        val result = SenderIndexBundleStager(
+            roots = roots,
+            sealer = RandomAuthenticatedSealer(),
+            codec = SenderIndexBundleCodec(),
+            fileSystem = fs,
+            wipe = { it.fill(0) },
+        ).stage(request(ownerA)) as SenderIndexBundleStageResult.Failure
+
+        assertEquals(SenderIndexBundleStageFailure.MOVE_UNAVAILABLE, result.reason)
+        assertFalse(result.retryable)
+        assertEquals(SenderIndexBundleStageSubreason.PUBLICATION, result.subreason)
+        assertFalse(destination(ownerA).exists())
+        assertTrue(temporary(ownerA).isFile)
+    }
+
+    @Test
+    fun temporaryMoveIoAfterTargetCreationReconcilesToSuccess() = runBlocking {
+        val fs = RecordingFileSystem().apply { throwAfterTemporaryMove = true }
         val result = SenderIndexBundleStager(
             roots = roots,
             sealer = RandomAuthenticatedSealer(),
@@ -544,8 +603,8 @@ class SenderIndexBundleStagerTest {
     }
 
     @Test
-    fun destinationLinkIoAfterTargetCreationReconcilesToReplay() = runBlocking {
-        val fs = RecordingFileSystem().apply { throwAfterDestinationLink = true }
+    fun destinationMoveIoAfterTargetCreationReconcilesToReplay() = runBlocking {
+        val fs = RecordingFileSystem().apply { throwAfterDestinationMove = true }
         val result = SenderIndexBundleStager(
             roots = roots,
             sealer = RandomAuthenticatedSealer(),
@@ -596,7 +655,7 @@ class SenderIndexBundleStagerTest {
 
     @Test
     fun unavailableUnsealPreservesTemporaryAndDestinationForLaterReplay() = runBlocking {
-        val fs = RecordingFileSystem().apply { failDestinationLink = true }
+        val fs = RecordingFileSystem().apply { failDestinationMove = true }
         val sealer = RandomAuthenticatedSealer()
         val stager = SenderIndexBundleStager(
             roots = roots,
@@ -619,7 +678,7 @@ class SenderIndexBundleStagerTest {
         assertTrue(temporary(ownerA).isFile)
         assertTrue(fs.createdParts.all { !Files.exists(it, LinkOption.NOFOLLOW_LINKS) })
 
-        fs.failDestinationLink = false
+        fs.failDestinationMove = false
         sealer.unsealUnavailable = false
         val recovered = stager.stage(request(ownerA)) as SenderIndexBundleStageResult.Staged
         assertTrue(recovered.durable.asFile().isFile)
@@ -676,7 +735,7 @@ class SenderIndexBundleStagerTest {
         )
         assertTrue(failure.retryable)
         assertFalse(failure.toString().contains(filesDir.path))
-        assertFalse(fs.events.contains("link"))
+        assertFalse(fs.events.contains("move"))
     }
 
     @Test
@@ -704,7 +763,7 @@ class SenderIndexBundleStagerTest {
             failure.reason,
         )
         assertFalse(failure.retryable)
-        assertFalse(fs.events.contains("link"))
+        assertFalse(fs.events.contains("move"))
         assertFalse(destination(ownerA).exists())
     }
 
@@ -845,10 +904,12 @@ private class RecordingFileSystem : SenderIndexBundleFileSystem {
     var substituteBeforeWriteTarget: Path? = null
     var cancelDuringWrite: CancellationException? = null
     var cleanupForceCancellation: CancellationException? = null
-    var failLink = false
-    var failDestinationLink = false
-    var throwAfterTemporaryLink = false
-    var throwAfterDestinationLink = false
+    var failMove = false
+    var unsupportedMove = false
+    var unsupportedDestinationMove = false
+    var failDestinationMove = false
+    var throwAfterTemporaryMove = false
+    var throwAfterDestinationMove = false
     val createdParts = mutableListOf<Path>()
     val deletedPaths = mutableListOf<Path>()
     val openedWritePaths = mutableListOf<Path>()
@@ -950,19 +1011,24 @@ private class RecordingFileSystem : SenderIndexBundleFileSystem {
         override fun close() = delegate.close()
     }
 
-    override fun atomicNoReplaceLink(source: Path, destination: Path) {
-        events += "link"
-        if (failLink || (failDestinationLink && destination.fileName.toString().endsWith(".index.bundle"))) {
-            throw java.nio.file.FileSystemException("injected link failure")
+    override fun moveNoReplace(source: Path, destination: Path) {
+        events += "move"
+        if (unsupportedMove ||
+            (unsupportedDestinationMove && destination.fileName.toString().endsWith(".index.bundle"))
+        ) {
+            throw UnsupportedOperationException("injected unsupported move")
         }
-        Files.createLink(destination, source)
-        if (destination.fileName.toString().endsWith(".index.bundle.tmp") && throwAfterTemporaryLink) {
-            throwAfterTemporaryLink = false
-            throw java.nio.file.FileSystemException("injected post-link temporary failure")
+        if (failMove || (failDestinationMove && destination.fileName.toString().endsWith(".index.bundle"))) {
+            throw java.nio.file.FileSystemException("injected move failure")
         }
-        if (destination.fileName.toString().endsWith(".index.bundle") && throwAfterDestinationLink) {
-            throwAfterDestinationLink = false
-            throw IOException("injected post-link destination failure")
+        Files.move(source, destination)
+        if (destination.fileName.toString().endsWith(".index.bundle.tmp") && throwAfterTemporaryMove) {
+            throwAfterTemporaryMove = false
+            throw java.nio.file.FileSystemException("injected post-move temporary failure")
+        }
+        if (destination.fileName.toString().endsWith(".index.bundle") && throwAfterDestinationMove) {
+            throwAfterDestinationMove = false
+            throw IOException("injected post-move destination failure")
         }
     }
 

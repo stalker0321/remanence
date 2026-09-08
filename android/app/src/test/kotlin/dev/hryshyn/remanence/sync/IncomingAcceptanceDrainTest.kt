@@ -404,6 +404,44 @@ class IncomingAcceptanceDrainTest {
         }
     }
 
+    @Test
+    fun persistenceDiagnosticKeepsCoarseRetryReasonAndAddsOnlyItsBoundedStage() = runBlocking {
+        IncomingAcceptanceDiagnostics.report("not run")
+        try {
+            val result = drain(
+                rows = listOf(candidate(1, 10)),
+                attempts = ArrayDeque(
+                    listOf(
+                        IncomingAcceptanceDrainAttempt.Acceptance(
+                            IncomingCapsuleAcceptanceResult.Retryable(
+                                reason = IncomingCapsuleAcceptanceRetryReason.VERIFIED_PAYLOAD_PERSISTENCE,
+                                persistenceDiagnostic = IncomingAcceptancePersistenceDiagnostic(
+                                    IncomingAcceptancePersistenceStage.PUBLICATION,
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ).run()
+
+            assertEquals(
+                IncomingAcceptanceDrainResult.Retryable(
+                    IncomingAcceptanceDrainRetryReason.ACCEPTANCE_RETRYABLE,
+                ),
+                result,
+            )
+            if (BuildConfig.DEBUG) {
+                assertEquals(
+                    "acceptance retry: VERIFIED_PAYLOAD_PERSISTENCE " +
+                        "acceptance persistence stage=PUBLICATION",
+                    IncomingAcceptanceDiagnostics.state.value,
+                )
+            }
+        } finally {
+            IncomingAcceptanceDiagnostics.report("not run")
+        }
+    }
+
     private fun drain(
         rows: List<IncomingAcceptanceCandidate>,
         max: Int = IncomingAcceptanceDrain.MAX_CANDIDATES_PER_RUN,

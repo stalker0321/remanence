@@ -29,4 +29,49 @@ internal object IncomingAcceptanceDiagnostics {
             },
         )
     }
+
+    fun report(diagnostic: IncomingAcceptancePersistenceDiagnostic) {
+        report(
+            if (BuildConfig.DEBUG) {
+                diagnostic.safeSummary()
+            } else {
+                "acceptance persistence failure"
+            },
+        )
+    }
+
+    fun reportPersistenceRetry(
+        reason: IncomingCapsuleAcceptanceRetryReason,
+        diagnostic: IncomingAcceptancePersistenceDiagnostic,
+    ) {
+        report(
+            if (BuildConfig.DEBUG) {
+                "acceptance retry: ${reason.name} ${diagnostic.safeSummary()}"
+            } else {
+                "acceptance retry: ${reason.name}"
+            },
+        )
+    }
+}
+
+/** The bounded persistence stages exposed by the debug acceptance diagnostic. */
+enum class IncomingAcceptancePersistenceStage {
+    SEAL,
+    PART_CREATE,
+    PART_WRITE,
+    FILE_FORCE,
+    DIRECTORY_FORCE,
+    PUBLICATION,
+    DESTINATION_VERIFY,
+    REPLAY_READ,
+    REPLAY_UNSEAL,
+}
+
+/** No path, exception, secret, or payload is carried across this boundary. */
+data class IncomingAcceptancePersistenceDiagnostic(
+    val stage: IncomingAcceptancePersistenceStage,
+) {
+    fun safeSummary(): String = "acceptance persistence stage=${stage.name}"
+
+    override fun toString(): String = "IncomingAcceptancePersistenceDiagnostic(<redacted>)"
 }

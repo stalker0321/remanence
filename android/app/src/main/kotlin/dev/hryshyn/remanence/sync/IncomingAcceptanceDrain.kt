@@ -250,10 +250,20 @@ class IncomingAcceptanceDrain internal constructor(
                         IncomingCapsuleAcceptanceResult.IdempotentReplay ->
                             IncomingAcceptanceDiagnostics.report("acceptance replayed")
                         is IncomingCapsuleAcceptanceResult.Retryable -> {
-                            result.downloadDiagnostic?.let(IncomingAcceptanceDiagnostics::report)
-                                ?: IncomingAcceptanceDiagnostics.report(
+                            var reported = false
+                            result.downloadDiagnostic?.let {
+                                IncomingAcceptanceDiagnostics.report(it)
+                                reported = true
+                            }
+                            result.persistenceDiagnostic?.let {
+                                IncomingAcceptanceDiagnostics.reportPersistenceRetry(result.reason, it)
+                                reported = true
+                            }
+                            if (!reported) {
+                                IncomingAcceptanceDiagnostics.report(
                                     "acceptance retry: ${result.reason.name}",
                                 )
+                            }
                         }
                         is IncomingCapsuleAcceptanceResult.Rejected -> {
                             result.downloadDiagnostic?.let(IncomingAcceptanceDiagnostics::report)

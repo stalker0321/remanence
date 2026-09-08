@@ -153,4 +153,14 @@ class IncomingAcceptanceDownloadDiagnosticTest {
             assertFalse("diagnostic leaked $forbidden", summary.contains(forbidden, ignoreCase = true))
         }
     }
+
+    @Test
+    fun persistenceStagesAreFiniteAndRedacted() {
+        IncomingAcceptancePersistenceStage.entries.forEach { stage ->
+            val diagnostic = IncomingAcceptancePersistenceDiagnostic(stage)
+            assertEquals("acceptance persistence stage=${stage.name}", diagnostic.safeSummary())
+            assertFalse(diagnostic.toString().contains("/"))
+            assertFalse(diagnostic.toString().contains("secret", ignoreCase = true))
+        }
+    }
 }

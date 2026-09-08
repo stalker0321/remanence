@@ -376,6 +376,47 @@ class IncomingIndexAcceptanceCommitterTest {
     }
 
     @Test
+    fun canonicalCapabilityCommitsWhileRoomRetainsRawDestinationSpelling() = runTest {
+        val realFilesDir = File(testRoot.parentFile, "a11c2-raw-canonical-real-${System.nanoTime()}")
+            .apply { mkdirs() }
+        val rawAlias = File(testRoot.parentFile, "a11c2-raw-canonical-alias-${System.nanoTime()}")
+        Files.createSymbolicLink(rawAlias.toPath(), realFilesDir.toPath())
+        try {
+            database.close()
+            roots = AccountScopedFileRoots(rawAlias)
+            adopter = IncomingRecognitionCiphertextAdopter(roots)
+            database = Room.inMemoryDatabaseBuilder(
+                ApplicationProvider.getApplicationContext(),
+                RemanenceLocalDatabase::class.java,
+            ).allowMainThreadQueries().build()
+            committer = IncomingIndexAcceptanceCommitter(database, roots)
+            val request = seedAndAdopt(
+                persistedLocalPath = roots.incomingCiphertextPath(owner, capsule, blob).toString(),
+            )
+            val canonicalCapability = DurableIncomingCiphertextFile(
+                ownerUserId = owner,
+                capsuleId = capsule,
+                blobId = blob,
+                file = request.durableCiphertext.asFile().canonicalFile,
+            )
+
+            val result = committer.commit(request.copy(durableCiphertext = canonicalCapability), owner)
+
+            assertIs<IncomingIndexAcceptanceCommitResult.Committed>(result)
+            val persisted = database.blobCacheDao()
+                .getByBlobIdAndOwner(blob.toRestString(), owner.toRestString())!!
+            assertEquals(
+                roots.incomingCiphertextPath(owner, capsule, blob).toString(),
+                persisted.localPath,
+            )
+            assertTrue(canonicalCapability.asFile().path != persisted.localPath)
+        } finally {
+            rawAlias.delete()
+            realFilesDir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun requestAndFailureAreRedacted() = runTest {
         val request = seedAndAdopt()
         val failure = assertIs<IncomingIndexAcceptanceCommitResult.Failure>(
@@ -391,6 +432,7 @@ class IncomingIndexAcceptanceCommitterTest {
         capsuleState: LocalMaterialState = LocalMaterialState.DISCOVERED,
         blobState: BlobCacheState = BlobCacheState.DOWNLOADING,
         persistRows: Boolean = true,
+        persistedLocalPath: String? = null,
     ): IncomingIndexAcceptanceCommitRequest {
         val ownerText = ownerUserId.toRestString()
         val sourceRoot = roots.child(ownerUserId, AccountScopedFileRoots.ChildRoot.TEMP)
@@ -452,7 +494,7 @@ class IncomingIndexAcceptanceCommitterTest {
                     ordinal = null,
                     expectedSizeBytes = bytes.size.toLong(),
                     expectedSha256 = sha256(bytes),
-                    localPath = adopted.asFile().canonicalPath,
+                    localPath = persistedLocalPath ?: adopted.asFile().canonicalPath,
                     cacheState = blobState,
                 ),
             )

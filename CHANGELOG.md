@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.2.0-sift-it.4 — Android trusted-root alias fix
+
+- Fixes the Android local-staging false positive for a system-shaped alias at
+  or above the app-private `filesDir` root. The trusted canonical root identity
+  is snapshotted once, and all derived destinations remain fail-closed against
+  traversal, sibling-prefix confusion, intermediate symlinks, leaf symlinks,
+  and boundary-alias swaps.
+- Android `versionCode` is 15. This debug integrated-test build targets
+  `https://remanence.hryshyn.dev/` and explicitly enables V2 line localization.
+- Wire identity remains REST `/v1` and outer protobuf
+  `remanence.protocol.v1`; recognition uses schema `remanence.recognition.v2`,
+  fingerprint format 3, and profile `postcard-sift-rootsift-v1`.
+- Tag: `v0.2.0-sift-it.4`. Artifact naming is
+  `Remanence-android-v0.2.0-sift-it.4-code15-g<git-sha>-debug.apk`.
+- The hosted server was not redeployed for this client hotfix, and Postmark
+  remains stopped. This is an installable integrated-test prerelease: physical
+  device, dataset, recovery, and later public-release gates remain separate
+  evidence requirements. Rollback remains an explicit artifact/tag mapping and
+  never reuses an Android `versionCode`.
+
 ## 0.2.0-sift-it.2 — sync compatibility integrated-test candidate
 
 - Adds the bounded incoming-sync compatibility hotfix: a deployed server that

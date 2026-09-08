@@ -32,6 +32,8 @@ import dev.hryshyn.remanence.core.model.RecipientEnvelopeContextInput
 import dev.hryshyn.remanence.core.model.SenderRetryPurpose
 import dev.hryshyn.remanence.core.model.SenderRetryWrapContextInput
 import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.core.model.CanonicalSiftFingerprintValidator
+import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 
 /**
  * Inputs for one capsule: content plus BOTH identity halves - the SENDER and
@@ -73,6 +75,8 @@ data class CapsulePublishRequest(
     val noteUtf8: String?,
     /** Required FRONT recognition fingerprint; BACK is not a publication input. */
     val frontFingerprintBytes: ByteArray,
+    /** Profile identifier paired with [frontFingerprintBytes]. */
+    val frontFingerprintProfileId: String = RecognitionProfile.SIFT_ROOTSIFT_V1_ID,
     /** Sender's own Ed25519 signing keyset (same account = also the recipient). */
     val signingKeyset: KeysetHandle,
     /** Recipient HPKE public keyset; same account means our own public half. */
@@ -132,6 +136,10 @@ class CapsulePublisher(
         ) { "photo metadata cardinality must match photoJpegs" }
         require(request.photoJpegs.size in 3..5) { "3..5 photos required" }
         require(request.frontFingerprintBytes.isNotEmpty()) { "front fingerprint is required" }
+        CanonicalSiftFingerprintValidator.requireCanonical(
+            profileId = request.frontFingerprintProfileId,
+            bytes = request.frontFingerprintBytes,
+        )
         // M2-P08: the current sender owns the retry key; ownerUserId
         // must equal senderUserId before any crypto work begins.
         require(request.ownerUserId == request.senderUserId.value.toString()) {

@@ -14,6 +14,7 @@ import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -35,12 +36,15 @@ import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.LocalMaterialState
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.CandidateOrigin
-import dev.hryshyn.remanence.core.recognition.FingerprintCodec
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.IndexedCandidate
 import dev.hryshyn.remanence.core.recognition.LocalMatchEngine
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.core.recognition.ScanFlowResult
+import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprint
+import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec
+import dev.hryshyn.remanence.core.recognition.SiftRootSiftMatcher
+import dev.hryshyn.remanence.core.recognition.SiftRootSiftMatcherPort
 import dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource
 import dev.hryshyn.remanence.ui.capsule.IncomingPresentationPreparation
 import dev.hryshyn.remanence.ui.capsule.IncomingPresentationPreparationRejection
@@ -48,6 +52,8 @@ import dev.hryshyn.remanence.ui.capsule.IncomingPresentationPreparationResult
 import dev.hryshyn.remanence.ui.capsule.PresentationGrantAuthority
 import dev.hryshyn.remanence.session.SessionBoundary
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 /**
  * One chooser row carrying ONLY locally decrypted minimal hints plus score
@@ -76,9 +82,9 @@ sealed interface ScanTerminalState {
 /**
  * FIX-M1-007-12 / FIX-REVIEW-01 / M2-F0-07: the production Scan flow.
  * Entry is an honest FRONT-only capture state - one FRONT still through the
- * real ORB pipeline, then matching runs immediately against the encrypted
+ * real SIFT pipeline, then matching runs immediately against the encrypted
  * local index (docs/recognition.md section 3). The candidate index is
- * built from locally sealed fingerprint rows only; stills run through the ORB
+ * built from locally sealed fingerprint rows only; stills run through the SIFT
  * processor; [LocalMatchEngine] classifies the hierarchy; and every path to
  * a grant - automatic or manually chosen - passes the existing verification
  * boundary first. Incoming sender-index candidates are joined in memory with
@@ -105,6 +111,9 @@ class ScanViewModel internal constructor(
     private val presentationGrants: PresentationGrantAuthority,
     frontProcessor: dev.hryshyn.remanence.capture.StillProcessor =
         RealStillFingerprintProcessor(profile, FingerprintSide.FRONT),
+    private val matcher: SiftRootSiftMatcherPort = SiftRootSiftMatcherPort { query, reference ->
+        SiftRootSiftMatcher().match(query, reference)
+    },
     private val candidateIndexProvider: suspend (UserId) -> ScanCandidateIndex,
     /** The production factory supplies the real local incoming preparation gate. */
     private val incomingPresentationPreparation: IncomingPresentationPreparation?,
@@ -191,6 +200,8 @@ class ScanViewModel internal constructor(
     private var pendingWatcherJob: Job? = null
     private var watchedPending: PendingIncoming? = null
     private var incomingSyncScheduleJob: Job? = null
+    /** The owning job for CPU/native matching; cancellation waits for its finally. */
+    private var matchingJob: Job? = null
     private var sessionBoundaryEpoch: Long = sessionBoundary?.currentEpoch() ?: 0L
     private val unregisterSessionBoundary: (() -> Unit)? = sessionBoundary?.register {
         invalidateForAccountBoundary()
@@ -216,6 +227,7 @@ class ScanViewModel internal constructor(
         cancelIncomingSyncSchedule()
         sessionBoundaryEpoch = sessionBoundary?.currentEpoch() ?: sessionBoundaryEpoch
         matchGeneration++
+        cancelMatchingJob()
         chooserContext = null
         pendingIncoming = null
         deliveryGeneration++
@@ -273,7 +285,7 @@ class ScanViewModel internal constructor(
 
     /**
      * FIX-STATE-01: a delivered still ALWAYS terminates its attempt -
-     * Accepted, Rejected, or Failed - even when the ORB processor throws;
+     * Accepted, Rejected, or Failed - even when the SIFT processor throws;
      * cancellation completes the lifecycle without publishing any result.
      * M2-F0-07: delivery transfers the temporary JPEG to this flow; it is
      * zeroized on every path (stale, rejected, success, exception,
@@ -361,6 +373,14 @@ class ScanViewModel internal constructor(
                 attempt.fail(failure.message ?: "capture failed")
             }
             false
+        } catch (failure: Error) {
+            untransferredAccepted?.fill(0)
+            untransferredAccepted = null
+            if (deliveryIsCurrent(generation)) {
+                clearQueuedStill()
+                attempt.fail(failure.message ?: "capture failed")
+            }
+            throw failure
         } finally {
             jpegBytes.fill(0)
         }
@@ -392,6 +412,7 @@ class ScanViewModel internal constructor(
         cancelPendingWatcher()
         cancelIncomingSyncSchedule()
         matchGeneration++
+        cancelMatchingJob()
         chooserContext = null
         pendingIncoming = null
         deliveryGeneration++
@@ -419,98 +440,137 @@ class ScanViewModel internal constructor(
         identity: SenderIdentitySnapshot,
     ): ScanCandidateIndex {
         val rows = database.recognitionFingerprintDao().getAllForOwner(identity.userId)
-        val candidates = rows
-            .groupBy { it.capsuleId }
-            .toSortedMap()
-            .flatMap { (capsuleId, capsuleRows) ->
-                listOf(FingerprintOrigin.RECIPIENT, FingerprintOrigin.SENDER).mapNotNull { origin ->
+        val candidates = ArrayList<IndexedCandidate>()
+        try {
+            for ((capsuleId, capsuleRows) in rows.groupBy { it.capsuleId }.toSortedMap()) {
+                for (origin in listOf(FingerprintOrigin.RECIPIENT, FingerprintOrigin.SENDER)) {
                     val originRows = capsuleRows.filter { it.origin == origin }
-                    val frontRow = originRows.singleOrNull() ?: return@mapNotNull null
-                    val frontBytes = try {
+            val frontRow = originRows.singleOrNull() ?: continue
+            if (frontRow.fingerprintProfileId != profile.profileId) continue
+            val frontBytes = try {
                         persistence.decrypt(frontRow.fingerprintId)
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Exception) {
-                        return@mapNotNull null
-                    }
-                    try {
-                        IndexedCandidate(
-                            capsuleId = UUID.fromString(capsuleId),
-                            front = FingerprintCodec.parse(frontBytes),
-                            // Keep each complete origin available to the
-                            // engine; it searches recipient and sender
-                            // FRONTs as separate universes.
-                            recipientPreferred = origin == FingerprintOrigin.RECIPIENT &&
-                                originRows.any { it.preferred },
-                        )
-                    } catch (_: Exception) {
                         null
+                    }
+                    if (frontBytes == null) continue
+                    try {
+                        var parsedFront: SiftRootSiftFingerprint? = null
+                        val candidate = try {
+                            val parsed = SiftRootSiftFingerprintCodec.parse(frontBytes)
+                            parsedFront = parsed
+                            val parsedCandidate = IndexedCandidate(
+                                capsuleId = UUID.fromString(capsuleId),
+                                front = parsed,
+                                // Keep each complete origin available to the
+                                // engine; it searches recipient and sender
+                                // FRONTs as separate universes.
+                                recipientPreferred = origin == FingerprintOrigin.RECIPIENT &&
+                                    originRows.any { it.preferred },
+                            )
+                            parsedFront = null
+                            parsedCandidate
+                        } catch (_: Exception) {
+                            parsedFront?.wipe()
+                            null
+                        } catch (failure: Error) {
+                            parsedFront?.wipe()
+                            throw failure
+                        }
+                        if (candidate != null) {
+                            try {
+                                candidates += candidate
+                            } catch (failure: Throwable) {
+                                // The parsed value is not owned by the
+                                // collection when insertion fails.
+                                candidate.front.wipe()
+                                throw failure
+                            }
+                        }
                     } finally {
                         frontBytes.fill(0)
                     }
                 }
             }
-        return ScanCandidateIndex(candidates)
+            return ScanCandidateIndex(candidates)
+        } catch (failure: Throwable) {
+            candidates.forEach { it.front.wipe() }
+            throw failure
+        }
     }
 
     private suspend fun buildCandidateIndex(): ScanCandidateIndex {
-        val identity = identityProvider() ?: return ScanCandidateIndex.EMPTY
-        val owner = try {
-            UserId.parseRest(identity.userId)
-        } catch (_: Exception) {
+        var room: ScanCandidateIndex? = null
+        var incoming: ScanCandidateIndex? = null
+        fun discard(): ScanCandidateIndex {
+            incoming?.wipeFingerprints()
+            room?.wipeFingerprints()
             return ScanCandidateIndex.EMPTY
         }
-        val room = buildRoomCandidateIndex(identity)
-        val incoming = candidateIndexProvider(owner)
-        val merged = ArrayList<IndexedCandidate>(incoming.candidates.size + room.candidates.size)
-        val mergedReferences = HashSet<Pair<UUID, Boolean>>()
-        fun retain(candidate: IndexedCandidate) {
-            // Incoming and Room sender rows are the same sender reference for
-            // one capsule. Keep the incoming copy when available, while never
-            // collapsing a recipient candidate into that sender reference.
-            if (mergedReferences.add(candidate.capsuleId to candidate.recipientPreferred)) {
-                merged += candidate
+        try {
+            val identity = identityProvider() ?: return discard()
+            val owner = try {
+                UserId.parseRest(identity.userId)
+            } catch (_: Exception) {
+                return discard()
             }
-        }
-        incoming.candidates.forEach(::retain)
-        room.candidates.forEach(::retain)
-        // Storage membership is independent of recognition validity. Probe the
-        // owner-scoped OUTBOX plane for every merged candidate, including an
-        // incoming candidate whose Room recognition rows are absent/corrupt;
-        // otherwise that candidate could be rebound to INCOMING silently.
-        val outboxSources = LinkedHashMap<UUID, CapsulePresentationSource>()
-        for (candidateId in merged.map { it.capsuleId }.distinct()) {
-            if (database.outboxCapsuleDao().getByCapsuleIdAndOwner(
-                    candidateId.toString(),
-                    owner.toRestString(),
-                ) != null
-            ) {
-                outboxSources[candidateId] = CapsulePresentationSource.OUTBOX
+            val loadedRoom = buildRoomCandidateIndex(identity)
+            room = loadedRoom
+            val loadedIncoming = candidateIndexProvider(owner)
+            incoming = loadedIncoming
+            val merged = ArrayList<IndexedCandidate>(loadedIncoming.candidates.size + loadedRoom.candidates.size)
+            val mergedReferences = HashSet<Pair<UUID, Boolean>>()
+            fun retain(candidate: IndexedCandidate) {
+                // Incoming and Room sender rows are the same sender reference
+                // for one capsule. Keep the incoming copy when available,
+                // while never collapsing a recipient candidate into it.
+                if (mergedReferences.add(candidate.capsuleId to candidate.recipientPreferred)) {
+                    merged += candidate
+                } else if (merged.none { it.front === candidate.front }) {
+                    // The duplicate is a distinct decoded owner and must not
+                    // remain live after the preferred copy wins.
+                    candidate.front.wipe()
+                }
             }
+            loadedIncoming.candidates.forEach(::retain)
+            loadedRoom.candidates.forEach(::retain)
+            // Storage membership is independent of recognition validity. Probe
+            // the owner-scoped OUTBOX plane for every merged candidate.
+            val outboxSources = LinkedHashMap<UUID, CapsulePresentationSource>()
+            for (candidateId in merged.map { it.capsuleId }.distinct()) {
+                if (database.outboxCapsuleDao().getByCapsuleIdAndOwner(
+                        candidateId.toString(),
+                        owner.toRestString(),
+                    ) != null
+                ) {
+                    outboxSources[candidateId] = CapsulePresentationSource.OUTBOX
+                }
+            }
+            // Re-read the authenticated owner after all Room/provider loads,
+            // including that probe, before returning any candidate material.
+            val finalIdentity = identityProvider() ?: return discard()
+            val finalOwner = try {
+                UserId.parseRest(finalIdentity.userId)
+            } catch (_: Exception) {
+                return discard()
+            }
+            if (finalOwner != owner) return discard()
+            val hints = loadedIncoming.chooserHints.filterKeys { id ->
+                val candidateId = runCatching { UUID.fromString(id) }.getOrNull()
+                merged.none { it.capsuleId == candidateId && it.recipientPreferred }
+            }
+            // Source is a storage-plane fact, not recognition provenance.
+            val presentationSources = resolvePresentationSources(
+                candidateIds = merged.map { it.capsuleId }.distinct(),
+                incomingSources = loadedIncoming.presentationSources,
+                roomSources = outboxSources,
+            )
+            return ScanCandidateIndex(merged, hints, presentationSources)
+        } catch (failure: Throwable) {
+            discard()
+            throw failure
         }
-        // The OUTBOX probe is also owner-scoped work. Re-read the authenticated
-        // owner after all Room/provider loads, including that probe, before any
-        // source or candidate data can be returned to the scan engine.
-        val finalIdentity = identityProvider() ?: return ScanCandidateIndex.EMPTY
-        val finalOwner = try {
-            UserId.parseRest(finalIdentity.userId)
-        } catch (_: Exception) {
-            return ScanCandidateIndex.EMPTY
-        }
-        if (finalOwner != owner) return ScanCandidateIndex.EMPTY
-        val hints = incoming.chooserHints.filterKeys { id ->
-            val candidateId = runCatching { UUID.fromString(id) }.getOrNull()
-            merged.none { it.capsuleId == candidateId && it.recipientPreferred }
-        }
-        // Source is a storage-plane fact, not recognition provenance. An
-        // incoming row wins this binding even when a recipient-preferred Room
-        // baseline wins the recognition duplicate.
-        val presentationSources = resolvePresentationSources(
-            candidateIds = merged.map { it.capsuleId }.distinct(),
-            incomingSources = incoming.presentationSources,
-            roomSources = outboxSources,
-        )
-        return ScanCandidateIndex(merged, hints, presentationSources)
     }
 
     /** Test-only view of the same merged, owner-bound scan index. */
@@ -518,13 +578,30 @@ class ScanViewModel internal constructor(
 
     private fun evaluateMatch() {
         val sessionFront = captureSession.front ?: return
+        // Snapshot before launching work: resetSession()/consume() owns and
+        // wipes the session buffer, while this matching generation owns the
+        // independent copy until its finally block completes.
+        val queryBytes = sessionFront.serializedBytes.copyOf()
         // M2-F0-07 FRONT-only: one FRONT fingerprint drives candidate
         // matching immediately; missing/multiple matches stay fail-closed.
         _matchState.value = ScanMatchUiState.Matching
+        // A replacement capture owns the next matching job. Cancellation is
+        // deliberately cooperative: if native matching is already inside a
+        // synchronous call, its finally block retains cleanup ownership until
+        // that call returns; reset never wipes those objects concurrently.
+        matchingJob?.cancel()
         val generation = ++matchGeneration
-        viewModelScope.launch {
+        val ownedIndex = AtomicReference<ScanCandidateIndex?>()
+        val ownedQuery = AtomicReference<SiftRootSiftFingerprint?>()
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
             try {
-                val candidateIndex = buildCandidateIndex()
+                // Room/provider loading is off Main; the loaded collection is
+                // published to an owner slot before the cancellable context
+                // can return, so cancellation cannot strand parsed rows.
+                withContext(ioDispatcher) {
+                    ownedIndex.set(buildCandidateIndex())
+                }
+                val candidateIndex = ownedIndex.get() ?: return@launch
                 val engine = LocalMatchEngine(
                     profile = profile,
                     verifier = { capsuleId ->
@@ -548,12 +625,27 @@ class ScanViewModel internal constructor(
                             null
                         }
                     },
+                    matcher = matcher,
                     diagnosticObserver = RecognitionDiagnostics::report,
                 )
-                val result = engine.run(
-                    queryFront = FingerprintCodec.parse(sessionFront.serializedBytes),
-                    candidates = candidateIndex.candidates,
-                )
+                val visualResult = withContext(cpuDispatcher) {
+                    // The slot is populated immediately after parse and before
+                    // the next suspend point, retaining ownership through any
+                    // cancellation at the dispatcher boundary.
+                    val parsedQuery = SiftRootSiftFingerprintCodec.parse(queryBytes)
+                    ownedQuery.set(parsedQuery)
+                    engine.evaluateVisual(
+                        queryFront = parsedQuery,
+                        candidates = candidateIndex.candidates,
+                        cancellationCheck = { currentCoroutineContext().ensureActive() },
+                    )
+                }
+                if (generation != matchGeneration) return@launch
+
+                // This resumes on the ViewModel's owner/UI context. Crypto,
+                // grant publication, and UI state therefore remain outside
+                // the CPU-only visual evaluation boundary.
+                val result = engine.completeVisual(visualResult)
                 if (generation == matchGeneration) {
                     applyResult(
                         result = result,
@@ -564,12 +656,31 @@ class ScanViewModel internal constructor(
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
+            } catch (_: dev.hryshyn.remanence.core.recognition.OpenCvUnavailableException) {
+                if (generation == matchGeneration) {
+                    _matchState.value = ScanMatchUiState.RecaptureGuidance(failedAttempts = 1)
+                }
             } catch (_: Exception) {
                 if (generation == matchGeneration) {
                     _matchState.value = ScanMatchUiState.RecaptureGuidance(failedAttempts = 1)
                 }
             }
+            finally {
+                ownedQuery.getAndSet(null)?.wipe()
+                ownedIndex.getAndSet(null)?.wipeFingerprints()
+                queryBytes.fill(0)
+            }
         }
+        matchingJob = job
+        // If lifecycle cancellation wins before the coroutine body starts,
+        // its finally block cannot run; completion is the owner of the
+        // already-snapshotted query in that case. This is idempotent with the
+        // in-body wipe and runs only after the job has settled.
+        job.invokeOnCompletion {
+            queryBytes.fill(0)
+            if (matchingJob === job) matchingJob = null
+        }
+        job.start()
     }
 
     private suspend fun applyResult(
@@ -688,38 +799,56 @@ class ScanViewModel internal constructor(
     }
 
     private suspend fun onVerifiedGrant(result: ScanFlowResult.Granted, generation: Int) {
-        if (generation != matchGeneration) {
-            revokeIssuedGrant(result.grantId)
-            return
-        }
-        if (!grantStillLive(result.grantId)) {
-            revokeIssuedGrant(result.grantId)
-            return
-        }
         try {
-            persistVerifiedRecipientBaseline(result.capsuleId.toString())
+            if (generation != matchGeneration) {
+                revokeIssuedGrant(result.grantId)
+                return
+            }
+            if (!grantStillLive(result.grantId)) {
+                revokeIssuedGrant(result.grantId)
+                return
+            }
+            try {
+                persistVerifiedRecipientBaseline(result.capsuleId.toString())
+            } catch (cancelled: CancellationException) {
+                revokeIssuedGrant(result.grantId)
+                throw cancelled
+            } catch (failure: Exception) {
+                revokeIssuedGrant(result.grantId)
+                throw failure
+            } catch (failure: Error) {
+                revokeIssuedGrant(result.grantId)
+                throw failure
+            }
+            if (generation != matchGeneration || !grantStillLive(result.grantId)) {
+                revokeIssuedGrant(result.grantId)
+                return
+            }
+            pendingIncoming = null
+            cancelPendingWatcher()
+            _terminal.value = ScanTerminalState.Granted(
+                grantId = result.grantId,
+                capsuleId = result.capsuleId.toString(),
+                viaSenderFallback = result.origin == CandidateOrigin.SENDER_FALLBACK,
+            )
+            _matchState.value = ScanMatchUiState.Accepted(
+                candidateId = result.capsuleId.toString(),
+                viaSenderFallback = result.origin == CandidateOrigin.SENDER_FALLBACK,
+            )
         } catch (cancelled: CancellationException) {
             revokeIssuedGrant(result.grantId)
             throw cancelled
         } catch (failure: Exception) {
             revokeIssuedGrant(result.grantId)
             throw failure
-        }
-        if (generation != matchGeneration || !grantStillLive(result.grantId)) {
+        } catch (failure: Error) {
             revokeIssuedGrant(result.grantId)
-            return
+            throw failure
+        } finally {
+            // The query is needed through recipient-baseline persistence and
+            // terminal publication, then must not survive the accepted scan.
+            captureSession.consume()
         }
-        pendingIncoming = null
-        cancelPendingWatcher()
-        _terminal.value = ScanTerminalState.Granted(
-            grantId = result.grantId,
-            capsuleId = result.capsuleId.toString(),
-            viaSenderFallback = result.origin == CandidateOrigin.SENDER_FALLBACK,
-        )
-        _matchState.value = ScanMatchUiState.Accepted(
-            candidateId = result.capsuleId.toString(),
-            viaSenderFallback = result.origin == CandidateOrigin.SENDER_FALLBACK,
-        )
     }
 
     private fun revokeIssuedGrant(grantId: String) {
@@ -747,6 +876,7 @@ class ScanViewModel internal constructor(
         val owner = runCatching { UserId.parseRest(identity.userId) }.getOrNull() ?: return null
 
         var prepared: dev.hryshyn.remanence.ui.capsule.PreparedIncomingPresentation? = null
+        var issuedGrantId: UUID? = null
         try {
             if (source == CapsulePresentationSource.INCOMING) {
                 val result = incomingPrepareOverride?.invoke(owner, CapsuleId(capsuleId))
@@ -787,13 +917,19 @@ class ScanViewModel internal constructor(
                 expectedEpoch = presentationEpoch,
                 incomingPresentation = prepared,
             )
+            issuedGrantId = grant.grantId
             // The authority now owns the exact prepared handle.
             prepared = null
             return grant.grantId.toString()
         } catch (cancelled: CancellationException) {
+            issuedGrantId?.let(presentationGrants::revoke)
             throw cancelled
         } catch (_: Exception) {
+            issuedGrantId?.let(presentationGrants::revoke)
             return null
+        } catch (failure: Error) {
+            issuedGrantId?.let(presentationGrants::revoke)
+            throw failure
         } finally {
             // This covers every failure after preparation, including a
             // provider exception while the final owner is reread. Once the
@@ -1154,6 +1290,10 @@ class ScanViewModel internal constructor(
     private fun cancelIncomingSyncSchedule() {
         incomingSyncScheduleJob?.cancel()
         incomingSyncScheduleJob = null
+    }
+
+    private fun cancelMatchingJob() {
+        matchingJob?.cancel()
     }
 
     private fun sessionBoundaryIsCurrent(

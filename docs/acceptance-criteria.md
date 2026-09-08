@@ -73,7 +73,7 @@ Every item is pass/fail. A screenshot, agent statement, or successful command fr
 
 ### Scan gate and persistence
 
-- [ ] Local `mvp-orb-v1` matching uses exactly one required FRONT and explicit
+- [x] Local `postcard-sift-rootsift-v1` matching uses exactly one required FRONT and explicit
   manifest-format parsing; unsupported versions fail closed and raw match
   evidence/classification is emitted.
 - [ ] Capsule presentation cannot be navigated/deep-linked by capsule ID.
@@ -176,7 +176,7 @@ Every item is pass/fail. A screenshot, agent statement, or successful command fr
 - [ ] P95 post-capture matching is under 2 seconds for 100 candidates on documented reference hardware.
 - [ ] Encrypted fingerprint baseline median is under 256 KiB and hard max under
   1 MiB.
-- [ ] Any SIFT adoption has an approved ADR and measured advantage; otherwise ORB remains sole v1 algorithm.
+- [x] SIFT/RootSIFT adoption is governed by ADR-016 and is the sole current production recognition profile.
 
 ## M4 — Security/failure hardening
 

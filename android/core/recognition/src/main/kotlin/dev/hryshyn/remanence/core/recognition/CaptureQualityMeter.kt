@@ -18,30 +18,43 @@ data class CaptureQualitySignals(
  * (docs/recognition.md section 4 initial gates). Measurement constants are
  * fixed here; the ACCEPTANCE thresholds they feed all live in the profile.
  */
-class CaptureQualityMeter {
+class CaptureQualityMeter private constructor(
+    private val matAllocator: NativeMatAllocator,
+    private val operationFault: NativeOperationFault,
+) {
+    constructor() : this(NativeMatAllocator.DEFAULT, NativeOperationFault.NONE)
+
+    internal constructor(
+        matAllocator: NativeMatAllocator,
+        operationFault: NativeOperationFault = NativeOperationFault.NONE,
+        testOnly: Unit = Unit,
+    ) : this(matAllocator, operationFault)
 
     fun measure(argbPixels: IntArray, width: Int, height: Int): CaptureQualitySignals {
         require(width > 0 && height > 0 && argbPixels.size == width * height)
         if (Core.getVersionMajor() <= 0) throw IllegalStateException("OpenCV native library not initialized")
 
-        val rgba = Mat(height, width, CvType.CV_8UC4)
+        val owner = NativeMatOwner(matAllocator)
         try {
+            val rgba = owner.allocate { Mat(height, width, CvType.CV_8UC4) }
             fill(rgba, argbPixels, width)
-            val gray = Mat()
-            Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY)
+            val grayMat = owner.allocate { Mat() }
+            Imgproc.cvtColor(rgba, grayMat, Imgproc.COLOR_RGBA2GRAY)
 
             // Blur: variance of the Laplacian response.
-            val laplacian = Mat()
-            Imgproc.Laplacian(gray, laplacian, CvType.CV_64F)
-            val mean = Core.mean(laplacian).`val`[0]
-            val meanSq = Core.mean(laplacian.mul(laplacian, 1.0)).`val`[0]
+            val laplacianMat = owner.allocate { Mat() }
+            Imgproc.Laplacian(grayMat, laplacianMat, CvType.CV_64F)
+            val laplacianSquaredMat = owner.allocate { laplacianMat.mul(laplacianMat, 1.0) }
+            operationFault.check("after-laplacian-mul")
+            val mean = Core.mean(laplacianMat).`val`[0]
+            val meanSq = Core.mean(laplacianSquaredMat).`val`[0]
             val laplacianVariance = meanSq - mean * mean
 
             // Exposure fractions from luminance cutoffs.
             var nearBlack = 0L
             var clippedWhite = 0L
             val pixels = ByteArray(width * height)
-            gray.get(0, 0, pixels)
+            grayMat.get(0, 0, pixels)
             for (luminanceByte in pixels) {
                 val luminance = luminanceByte.toInt() and 0xFF
                 if (luminance <= NEAR_BLACK_CUTOFF) nearBlack++
@@ -50,24 +63,17 @@ class CaptureQualityMeter {
             val total = (width.toLong() * height).toDouble()
 
             // Glare: largest connected region of near-clipping luminance.
-            val glareMask = Mat()
-            Imgproc.threshold(gray, glareMask, GLARE_THRESHOLD.toDouble(), 255.0, Imgproc.THRESH_BINARY)
-            val labels = Mat()
-            val stats = Mat()
-            val centroids = Mat()
-            val labelCount = Imgproc.connectedComponentsWithStats(glareMask, labels, stats, centroids)
+            val glareMaskMat = owner.allocate { Mat() }
+            Imgproc.threshold(grayMat, glareMaskMat, GLARE_THRESHOLD.toDouble(), 255.0, Imgproc.THRESH_BINARY)
+            val labelsMat = owner.allocate { Mat() }
+            val statsMat = owner.allocate { Mat() }
+            val centroidsMat = owner.allocate { Mat() }
+            val labelCount = Imgproc.connectedComponentsWithStats(glareMaskMat, labelsMat, statsMat, centroidsMat)
             var largestGlare = 0L
             for (label in 1 until labelCount) { // label 0 is background
-                val area = stats.get(label, Imgproc.CC_STAT_AREA)[0].toLong()
+                val area = statsMat.get(label, Imgproc.CC_STAT_AREA)[0].toLong()
                 if (area > largestGlare) largestGlare = area
             }
-            labels.release()
-            stats.release()
-            centroids.release()
-
-            gray.release()
-            laplacian.release()
-            glareMask.release()
 
             return CaptureQualitySignals(
                 laplacianVariance = laplacianVariance,
@@ -76,7 +82,7 @@ class CaptureQualityMeter {
                 largestGlareFraction = largestGlare / total,
             )
         } finally {
-            rgba.release()
+            owner.releaseAll()
         }
     }
 

@@ -50,7 +50,7 @@ class RecognitionFingerprintDaoTest {
         ownerUserId = "0198f0a0-0000-7000-8000-00000000ow01",
         capsuleId = "0198f0a0-0000-7000-8000-00000000ca01",
         origin = origin,
-        fingerprintProfileId = "mvp-orb-v1",
+        fingerprintProfileId = "postcard-sift-rootsift-v1",
         encryptedPath = "files/fingerprints/$id.bin",
         createdAtEpochMs = 1_755_000_000_000,
         preferred = preferred,

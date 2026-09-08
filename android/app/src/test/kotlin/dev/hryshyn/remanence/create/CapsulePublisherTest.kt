@@ -43,6 +43,7 @@ import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.SenderRetryPurpose
 import dev.hryshyn.remanence.core.model.SenderRetryWrapContextInput
 import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture
 
 /**
  * I08 end-to-end proof on the JVM with real crypto: publish produces a
@@ -100,7 +101,7 @@ class CapsulePublisherTest {
         photoWidthsPx = listOf(800, 800, 800),
         photoHeightsPx = listOf(600, 600, 600),
         noteUtf8 = "hello self",
-        frontFingerprintBytes = "front-fp".toByteArray(),
+        frontFingerprintBytes = CanonicalSiftFingerprintFixture.bytes(seed = 5),
         signingKeyset = identity.signingPrivateHandle,
         recipientEncryptionPublicKeyset = TinkProtoKeysetFormat.parseKeysetWithoutSecret(
             identity.encryptionPublicKeyset,
@@ -110,6 +111,7 @@ class CapsulePublisherTest {
     @Test
     fun publishedCapsuleCarriesExactArtifactCardinalityAndEnvelope() {
         val request = selfSendRequest()
+        val originalFrontBytes = request.frontFingerprintBytes.copyOf()
         val prepared = publisher.publish(request)
 
         assertEquals(5, prepared.artifacts.size)
@@ -125,6 +127,7 @@ class CapsulePublisherTest {
             MessageDigest.getInstance("SHA-256").digest(request.frontFingerprintBytes),
             prepared.frontContentSha256,
         )
+        assertArrayEquals(originalFrontBytes, request.frontFingerprintBytes)
     }
 
     @Test
@@ -214,6 +217,29 @@ class CapsulePublisherTest {
             guardedPublisher.publish(selfSendRequest().copy(frontFingerprintBytes = ByteArray(0)))
         }
         assertEquals("front fingerprint is required", failure.message)
+        assertEquals(0, boundary.loadCalls)
+    }
+
+    @Test
+    fun profileMismatchIsRejectedBeforeHashingOrRetryWrapping() {
+        val boundary = CountingKekBoundary()
+        val alias = "test-mismatched-front-${UUID.randomUUID()}"
+        boundary.createAes256GcmKey(alias)
+        val bytes = CanonicalSiftFingerprintFixture.bytes(seed = 6)
+        val original = bytes.copyOf()
+        val guardedPublisher = CapsulePublisher(SenderRetryKeysetWrapper(boundary), alias)
+
+        val failure = assertThrows(IllegalArgumentException::class.java) {
+            guardedPublisher.publish(
+                selfSendRequest().copy(
+                    frontFingerprintBytes = bytes,
+                    frontFingerprintProfileId = "retired-profile-v0",
+                ),
+            )
+        }
+
+        assertEquals("unsupported fingerprint profile", failure.message)
+        assertArrayEquals(original, bytes)
         assertEquals(0, boundary.loadCalls)
     }
 

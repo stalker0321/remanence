@@ -1,8 +1,8 @@
 # ADR-004: ORB as the MVP local-feature profile
 
-Status: Accepted as initial profile; FRONT-only identity requirements are
-defined by ADR-012; thresholds require M3 calibration. Experimental V2
-localization is an opt-in proposal-source integration only.
+Status: Superseded historical record. ADR-016 is the current production
+SIFT/RootSIFT profile contract; the ORB profile is not shipped or callable.
+The FRONT-only identity requirements remain defined by ADR-012.
 
 ## Context
 

@@ -21,11 +21,7 @@ import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
 import dev.hryshyn.remanence.core.model.BlobId
 import dev.hryshyn.remanence.core.model.LocalMaterialState
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
-import dev.hryshyn.remanence.core.recognition.ExtractionQuality
-import dev.hryshyn.remanence.core.recognition.FingerprintCodec
-import dev.hryshyn.remanence.core.recognition.FingerprintKeypoint
 import dev.hryshyn.remanence.core.recognition.FingerprintSide as RecognitionFingerprintSide
-import dev.hryshyn.remanence.core.recognition.PostcardFingerprint
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.index.SenderIndexBundleReadRequest
 import dev.hryshyn.remanence.index.SenderIndexBundleReadResult
@@ -126,7 +122,7 @@ class RemanenceApplicationContainerTest {
         container.fingerprintPersistence.persist(
             capsuleId = "capsule-1",
             origin = FingerprintOrigin.SENDER,
-            profileId = "mvp-orb-v1",
+            profileId = "postcard-sift-rootsift-v1",
             plaintextBytes = "fp".toByteArray(),
         )
         assertTrue(container.fingerprintPersistence.hasBaseline("capsule-1", FingerprintOrigin.SENDER))
@@ -978,31 +974,32 @@ class RemanenceApplicationContainerTest {
         frontFingerprint = fingerprint(RecognitionFingerprintSide.FRONT),
     )
 
-    private fun fingerprint(side: RecognitionFingerprintSide): ByteArray = FingerprintCodec.serialize(
-        PostcardFingerprint(
-            profileId = RecognitionProfile.MVP_ORB_V1_ID,
+    private fun fingerprint(@Suppress("UNUSED_PARAMETER") side: RecognitionFingerprintSide): ByteArray {
+        val fingerprint = dev.hryshyn.remanence.core.model.SiftRootSiftFingerprint(
+            profileId = RecognitionProfile.SIFT_ROOTSIFT_V1_ID,
             canonicalWidthPx = 1200,
             canonicalHeightPx = 800,
             coarseHash64 = 17L,
             keypoints = listOf(
-                FingerprintKeypoint(
-                    xNormalized = 0.5,
-                    yNormalized = 0.5,
-                    scaleNormalized = 1.0,
+                dev.hryshyn.remanence.core.model.SiftRootSiftKeypoint(
+                    xMicro = 500_000,
+                    yMicro = 500_000,
+                    scaleMicro = 1_000_000,
                     angleCentiDegrees = 9000,
                     responseQuantized = 2,
                     octave = 0,
                 ),
             ),
-            descriptors = listOf(ByteArray(FingerprintCodec.DESCRIPTOR_BYTES) { 3 }),
-            quality = ExtractionQuality(
-                blurScore = 1.0,
-                exposureScore = 1.0,
-                glareFraction = 0.1,
-                detectedAreaRatio = 0.5,
+            quantizedSiftDescriptors = listOf(
+                ByteArray(dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec.DESCRIPTOR_BYTES) { 3 },
             ),
-        ),
-    )
+        )
+        return try {
+            dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec.serialize(fingerprint)
+        } finally {
+            fingerprint.wipe()
+        }
+    }
 
     private inline fun <reified T> assertIs(value: Any?): T {
         assertTrue(value is T)

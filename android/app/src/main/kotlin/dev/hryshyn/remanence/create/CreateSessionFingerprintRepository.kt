@@ -4,6 +4,7 @@ import java.util.UUID
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
 import dev.hryshyn.remanence.core.data.fingerprints.DuplicateFingerprintException
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
+import dev.hryshyn.remanence.core.model.CanonicalSiftFingerprintValidator
 
 /** The serialized FRONT fingerprint handed off by the capture pipeline. */
 class StagedSideFingerprint(
@@ -15,7 +16,7 @@ class StagedSideFingerprint(
 /**
  * Extraction port over :core:recognition so this repository stays free of
  * OpenCV and bitmap types; the real adapter runs the bounded capture
- * pipeline plus ORB extraction at wiring time.
+ * pipeline plus SIFT extraction at wiring time.
  */
 fun interface SideFingerprintExtractor {
     fun extract(): StagedSideFingerprint
@@ -40,6 +41,10 @@ class CreateSessionFingerprintRepository(
         requireValidCapsuleId(capsuleId)
         val staged = extractor.extract()
         return try {
+            CanonicalSiftFingerprintValidator.requireCanonical(
+                profileId = staged.profileId,
+                bytes = staged.serializedBytes,
+            )
             persistence.persist(
                 capsuleId = capsuleId,
                 origin = FingerprintOrigin.SENDER,

@@ -84,9 +84,9 @@ class CreateStaleDeliveryTest {
         var bytes: ByteArray? = null
 
         override fun process(jpegBytes: ByteArray): ProcessedStill {
-            val result = "late-orb".toByteArray()
+            val result = dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture.bytes(seed = 10)
             bytes = result
-            return ProcessedStill.Accepted("mvp-orb-v1", result)
+            return ProcessedStill.Accepted("postcard-sift-rootsift-v1", result)
         }
     }
 
@@ -128,7 +128,7 @@ class CreateStaleDeliveryTest {
             identityProvider = { null },
             persistence = NoPersistence(),
             outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir), retryStore),
-            profile = RecognitionProfile.mvpOrbV1(),
+            profile = RecognitionProfile.postcardSiftRootSiftV1(),
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir),
             openPhotoSource = { error("unused") },
             frontProcessor = processor,

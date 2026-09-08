@@ -9,7 +9,7 @@ import kotlin.test.assertTrue
 /** Union-level 0/1/N proof for FRONT-only recipient-first / sender-fallback coordination (ADR-012). */
 class MatchCoordinatorTest {
 
-    private val coordinator = MatchCoordinator(RecognitionProfile.mvpOrbV1())
+    private val coordinator = MatchCoordinator(RecognitionProfile.postcardSiftRootSiftV1())
 
     private fun scored(
         candidateId: String,
@@ -46,7 +46,7 @@ class MatchCoordinatorTest {
 
     private fun emptyRecipient() = UniverseScanResult(
         CandidateOrigin.RECIPIENT_PREFERRED,
-        FrontCandidateRanker(RecognitionProfile.mvpOrbV1()).rank(emptyList()),
+        FrontCandidateRanker(RecognitionProfile.postcardSiftRootSiftV1()).rank(emptyList()),
         null,
     )
 

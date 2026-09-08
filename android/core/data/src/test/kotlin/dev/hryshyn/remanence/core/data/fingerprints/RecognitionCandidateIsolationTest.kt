@@ -47,7 +47,7 @@ class RecognitionCandidateIsolationTest {
     private val ownerAId = dev.hryshyn.remanence.core.model.UserId(java.util.UUID.fromString(ownerA))
     private val ownerB = "5108f0a0-0000-7000-8000-00000000bb02"
     private val capsuleId = "0198f0a0-0000-7000-8000-00000000ca01"
-    private val profileId = "mvp-orb-v1"
+    private val profileId = "postcard-sift-rootsift-v1"
 
     private lateinit var database: RemanenceLocalDatabase
     private lateinit var filesRoot: File

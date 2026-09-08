@@ -147,7 +147,7 @@ class ProcessRestartResilienceTest {
                     ownerUserId = OWNER_USER_ID,
                     capsuleId = capsuleId.toString(),
                     origin = FingerprintOrigin.RECIPIENT,
-                    fingerprintProfileId = "mvp-orb-v1",
+                    fingerprintProfileId = "postcard-sift-rootsift-v1",
                     encryptedPath = sealedFp.relativeTo(filesRoot).path,
                     createdAtEpochMs = 5L,
                     preferred = true,

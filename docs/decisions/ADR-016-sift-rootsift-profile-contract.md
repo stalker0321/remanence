@@ -1,15 +1,14 @@
 # ADR-016: SIFT/RootSIFT profile and format-3 contract
 
-Status: Accepted contract checkpoint for P0 codec only; extraction, matching, device evidence, and production adoption remain open
+Status: Accepted; current production SIFT/RootSIFT cutover contract
 
 Date: 2026-09-07
 
 ## Context
 
-The current production recognition path remains the FRONT-only `mvp-orb-v1`
-profile. A feasibility investigation may need a separately versioned
-SIFT/RootSIFT representation, but a codec contract must not silently create a
-second reader, extractor, matcher, migration, or runtime path.
+The current production recognition path is the FRONT-only
+`postcard-sift-rootsift-v1` profile. This is a breaking cutover: the deleted
+ORB path is not a compatibility reader, migration writer, or runtime fallback.
 
 F2 duplicate protection remains defined over the SHA-256 of the exact
 serialized FRONT fingerprint bytes that were actually captured and published.
@@ -23,7 +22,7 @@ in `protocol/proto/remanence/recognition/v2/recognition_v2.proto`. Its Kotlin
 domain and strict codec are:
 
 - `SiftRootSiftFingerprint` and `SiftRootSiftFingerprintCodec` in
-  `android/core/recognition/.../recognition`;
+  `android/core/model/.../model`, with `CanonicalSiftFingerprintValidator`;
 - bounded to a non-empty payload no larger than 1 MiB before protobuf parsing;
 - bounded to 1..1,500 keypoints;
 - encoded with bounded integer metadata: dimensions 1..100,000 px, x/y/scale
@@ -43,19 +42,21 @@ that row as unusable. Constructor-supplied descriptor arrays remain caller-owned
 rows freshly returned by parsing are codec/domain-owned and explicitly wipeable.
 
 RootSIFT derivation occurs only during P2 matching and must not double-transform
-these stored rows. Detector and grid/order contracts, thresholds, extractor
-integration, matcher behavior, manifest/index wiring, and any compatibility
-reader are deferred out of P0.
+these stored rows. The pure wire model, codec, and canonical validator are
+native-free and owned only by `:core:model`; native extraction/matching callers
+import them directly, with no compatibility aliases or re-exports. Detector and grid/order contracts,
+thresholds, extractor integration, matcher behavior, manifest/index wiring, and
+any compatibility reader are deferred out of P0.
 
 ## Explicit non-decisions
 
-- ORB remains the only existing reader/production path; there is no ORB/SIFT
-  dual-read or fallback.
-- No SIFT extractor, matcher, threshold, migration, runtime wiring, server
-  change, manifest change, AEAD change, index change, or grant change is made.
-- No device or dataset feasibility claim follows from codec/unit-test success.
-- Selecting SIFT for production requires independent device/dataset evidence,
-  performance/size measurements, and a later adoption decision.
+- The production extractor, matcher, profile, manifest/index readers, and
+  capture fixtures use SIFT/RootSIFT only. There is no ORB/SIFT dual-read or
+  fallback.
+- Existing matcher thresholds/geometry, manifest, AEAD, index, and grant
+  policy remain unchanged by the feature cutover.
+- Device/dataset calibration remains separate from this format and wiring
+  contract.
 
 ## Consequences
 

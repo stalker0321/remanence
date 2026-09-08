@@ -145,7 +145,7 @@ class CreateSmallViewportTest {
                 dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(context().filesDir, "small-vp")),
                 retryStore,
             ),
-            profile = RecognitionProfile.mvpOrbV1(),
+            profile = RecognitionProfile.postcardSiftRootSiftV1(),
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(
                 File(context().filesDir, "small-vp-staging"),
             ),
@@ -234,12 +234,17 @@ class CreateSmallViewportTest {
                 dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(context().filesDir, "small-vp")),
                 retryStore,
             ),
-            profile = RecognitionProfile.mvpOrbV1(),
+            profile = RecognitionProfile.postcardSiftRootSiftV1(),
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(
                 File(context().filesDir, "small-vp-staging"),
             ),
             openPhotoSource = { error("unused") },
-            frontProcessor = StillProcessor { ProcessedStill.Accepted("p", ByteArray(1)) },
+            frontProcessor = StillProcessor {
+                ProcessedStill.Accepted(
+                    "postcard-sift-rootsift-v1",
+                    dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture.bytes(seed = 11),
+                )
+            },
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
             senderRetryKeysetWrapper = testWrapper,
@@ -289,7 +294,7 @@ class CreateSmallViewportTest {
                 dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(context().filesDir, "small-vp")),
                 retryStore,
             ),
-            profile = RecognitionProfile.mvpOrbV1(),
+            profile = RecognitionProfile.postcardSiftRootSiftV1(),
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(
                 File(context().filesDir, "small-vp-staging"),
             ),

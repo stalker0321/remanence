@@ -8,8 +8,8 @@ import kotlin.test.assertTrue
 /** Threshold/margin proof for FRONT-only acceptance (ADR-012, M2-F0-01). */
 class CompositeAcceptanceEvaluatorTest {
 
-    private val ranking = RecognitionProfile.mvpOrbV1().ranking
-    private val evaluator = CompositeAcceptanceEvaluator(RecognitionProfile.mvpOrbV1())
+    private val ranking = RecognitionProfile.postcardSiftRootSiftV1().ranking
+    private val evaluator = CompositeAcceptanceEvaluator(RecognitionProfile.postcardSiftRootSiftV1())
 
     // FRONT-only: composite == frontScore.
     private fun strongCandidate(id: String, front: Double) = CompositeCandidate(

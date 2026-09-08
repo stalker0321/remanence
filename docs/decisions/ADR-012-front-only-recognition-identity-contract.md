@@ -47,9 +47,10 @@ recognition-blob cardinality remain unchanged unless a separate protocol ADR
 requires otherwise. The backend treats the encrypted recognition bytes as
 opaque and does not build a visual index or uniqueness relation.
 
-`mvp-orb-v1` remains the fingerprint extraction/profile identity. Its profile
-ID is independent of manifest parsing and must not be overloaded to represent
-the front-only product contract.
+`postcard-sift-rootsift-v1` is the current fingerprint extraction/profile
+identity. Its profile ID is independent of manifest parsing and must not be
+overloaded to represent the front-only product contract. The breaking reset
+does not retain a legacy fingerprint reader, writer, or migration path.
 
 ### Local storage and ownership
 

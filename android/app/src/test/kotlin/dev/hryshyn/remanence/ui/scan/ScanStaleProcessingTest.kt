@@ -9,6 +9,7 @@ import dev.hryshyn.remanence.capture.CapturePermissionStep
 import dev.hryshyn.remanence.capture.ProcessedStill
 import dev.hryshyn.remanence.capture.StillProcessor
 import dev.hryshyn.remanence.scan.ScanSessionState
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -40,32 +41,9 @@ import dev.hryshyn.remanence.core.recognition.RecognitionProfile
  * pipeline is literally QUEUED work until the test advances it.
  */
 private fun scanSynthetic(): ProcessedStill.Accepted {
-    val profile = RecognitionProfile.mvpOrbV1()
-    val keypoints = List(64) {
-        dev.hryshyn.remanence.core.recognition.FingerprintKeypoint(
-            xNormalized = (it % 8) / 8.0,
-            yNormalized = (it / 8) / 8.0,
-            scaleNormalized = 1.0,
-            angleCentiDegrees = 0,
-            responseQuantized = it,
-            octave = 0,
-        )
-    }
     return ProcessedStill.Accepted(
-        profileId = profile.profileId,
-        serializedBytes = dev.hryshyn.remanence.core.recognition.FingerprintCodec.serialize(
-            dev.hryshyn.remanence.core.recognition.PostcardFingerprint(
-                profileId = profile.profileId,
-                canonicalWidthPx = profile.capture.canonicalLongEdgePx,
-                canonicalHeightPx = 1000,
-                coarseHash64 = 4L,
-                keypoints = keypoints,
-                descriptors = List(64) { i ->
-                    ByteArray(32) { ((it * 3 + i * 19) and 0xFF).toByte() }
-                },
-                quality = dev.hryshyn.remanence.core.recognition.ExtractionQuality(200.0, 90.0, 0.01, 0.85),
-            ),
-        ),
+        profileId = dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec.PROFILE_ID,
+        serializedBytes = dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture.bytes(4),
     )
 }
 
@@ -133,11 +111,12 @@ class ScanStaleProcessingTest {
 
     private fun newViewModel(
         processor: StillProcessor = Accepting(),
+        identityProvider: suspend () -> dev.hryshyn.remanence.ui.create.SenderIdentitySnapshot? = { null },
     ): ScanViewModel = ScanViewModel(
         persistence = NoPersistence(),
         database = database,
-        profile = RecognitionProfile.mvpOrbV1(),
-        identityProvider = { null },
+        profile = RecognitionProfile.postcardSiftRootSiftV1(),
+        identityProvider = identityProvider,
         trustedSenderKeys = dev.hryshyn.remanence.identity.DirectorySenderKeyStore(
             directoryFetch = { error("verification unreachable in this test") },
             ownAccount = { null },
@@ -215,6 +194,34 @@ class ScanStaleProcessingTest {
     @Test
     fun staleFrontProcessingAfterNewEpochBeginSessionIsInert() =
         staleOutcomeIsInert { it.beginSession(epoch = 2L) }
+
+    @Test
+    fun resetCancelsOwnedMatchingJobAndLeavesItsCleanupToTheWorker() {
+        val matchingEntered = CompletableDeferred<Unit>()
+        val matchingRelease = CompletableDeferred<Unit>()
+        val vm = newViewModel(
+            identityProvider = {
+                matchingEntered.complete(Unit)
+                matchingRelease.await()
+                null
+            },
+        )
+        bind(vm.frontAttempt)
+        assertTrue(vm.beginFrontCapture())
+        vm.deliverFrontJpeg("matching-front".toByteArray())
+        cpuDispatcher.scheduler.advanceUntilIdle()
+        assertTrue("matching must own a live job before reset", matchingEntered.isCompleted)
+
+        val scopeJob = vm.viewModelScope.coroutineContext[Job] ?: error("no scope job")
+        assertTrue("the matching job must be retained", scopeJob.children.any { it.isActive })
+        vm.resetSession()
+        cpuDispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue("reset must cancel the matching job", scopeJob.children.none { it.isActive })
+        assertTrue("reset cancellation must settle the suspended matcher", matchingRelease.complete(Unit))
+        assertEquals(ScanSessionState.AWAITING_FRONT, vm.captureSession.state)
+        assertNull(vm.captureSession.front)
+    }
 
     /**
      * M2-F0-07 cancellation boundary proof: the worker RETURNS Accepted, and

@@ -1,5 +1,6 @@
 package dev.hryshyn.remanence.core.recognition
 
+import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprint
 import java.util.Random
 import java.util.UUID
 import kotlin.test.BeforeTest
@@ -13,7 +14,7 @@ import org.junit.Assume.assumeTrue
 
 class PerspectiveWarperTest {
 
-    private val profile = RecognitionProfile.mvpOrbV1()
+    private val profile = RecognitionProfile.postcardSiftRootSiftV1()
     private val warper = PerspectiveWarper(profile)
 
     private val frameW = 400
@@ -150,7 +151,7 @@ class PerspectiveWarperTest {
     }
 
     @Test
-    fun landscapeAndNinetyDegreePortraitTexturesPassRealWarpOrbAndMatch() = runBlocking {
+    fun landscapeAndNinetyDegreePortraitTexturesPassRealWarpSiftAndMatch() = runBlocking {
         val landscapeFrame = texturedPostcardFrame()
         val portraitFrame = rotateClockwise(landscapeFrame, texturedFrameW, texturedFrameH)
         val portraitCorners = listOf(
@@ -174,21 +175,21 @@ class PerspectiveWarperTest {
         assertEquals(landscapeWarped.width, portraitWarped.width)
         assertEquals(landscapeWarped.height, portraitWarped.height)
 
-        val extractor = FingerprintExtractor(profile)
-        fun fingerprint(warped: WarpedCapture): PostcardFingerprint =
+        val extractor = SiftRootSiftFingerprintExtractor(profile.sift)
+        fun fingerprint(warped: WarpedCapture): SiftRootSiftFingerprint =
             extractor.extract(warped.pixels, warped.width, warped.height)
 
         val landscapeFingerprint = fingerprint(landscapeWarped)
         val portraitFingerprint = fingerprint(portraitWarped)
-        val matcher = DescriptorMatcher()
+        val matcher = SiftRootSiftMatcher()
         val landscapeToPortrait = matcher.match(landscapeFingerprint, portraitFingerprint)
         val portraitToLandscape = matcher.match(portraitFingerprint, landscapeFingerprint)
-        assertTrue(landscapeToPortrait.size >= profile.match.weakMinRatioMatches)
-        assertTrue(portraitToLandscape.size >= profile.match.weakMinRatioMatches)
+        assertTrue(landscapeToPortrait.diagnostics.uniqueMatches >= profile.match.weakMinRatioMatches)
+        assertTrue(portraitToLandscape.diagnostics.uniqueMatches >= profile.match.weakMinRatioMatches)
 
         suspend fun accept(
-            query: PostcardFingerprint,
-            reference: PostcardFingerprint,
+            query: SiftRootSiftFingerprint,
+            reference: SiftRootSiftFingerprint,
         ): ScanFlowResult {
             val capsuleId = UUID.nameUUIDFromBytes("textured-postcard".toByteArray())
             return LocalMatchEngine(
@@ -263,6 +264,65 @@ class PerspectiveWarperTest {
         // Normal case must succeed; budget guard is structural only.
         val warped = warper.warp(quadrantFrame(), frameW, frameH, huge)
         assertTrue(warped.width > 0 && warped.height > 0)
+    }
+
+    @Test
+    fun allocationFailureReleasesEarlierWarpMats() {
+        val allocator = FailingNativeMatAllocator(failAt = 2)
+
+        assertFailsWith<AssertionError> {
+            PerspectiveWarper(profile, allocator).warp(quadrantFrame(), frameW, frameH, corners)
+        }
+
+        assertEquals(1, allocator.allocated.size)
+        assertTrue(allocator.allocated.all { it.empty() })
+    }
+
+    @Test
+    fun readFailureReleasesEveryWarpMatForExceptionCancellationAndError() {
+        val failures = listOf<Throwable>(
+            IllegalStateException("deterministic warp read failure"),
+            kotlinx.coroutines.CancellationException("deterministic cancellation"),
+            AssertionError("deterministic fatal read failure"),
+        )
+
+        failures.forEach { expected ->
+            val allocator = FailingNativeMatAllocator(failAt = Int.MAX_VALUE)
+            val warper = PerspectiveWarper(
+                profile,
+                allocator,
+                NativeOperationFault { stage ->
+                    if (stage == "before-read") throw expected
+                },
+            )
+
+            val thrown = assertFailsWith<Throwable> {
+                warper.warp(quadrantFrame(), frameW, frameH, corners)
+            }
+
+            assertTrue(thrown === expected)
+            assertEquals(5, allocator.allocated.size)
+            assertTrue(allocator.allocated.all { it.empty() })
+        }
+    }
+
+    @Test
+    fun warpFailureReleasesEveryWarpMat() {
+        val allocator = FailingNativeMatAllocator(failAt = Int.MAX_VALUE)
+        val warper = PerspectiveWarper(
+            profile,
+            allocator,
+            NativeOperationFault { stage ->
+                if (stage == "before-warp") throw IllegalArgumentException("deterministic warp failure")
+            },
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            warper.warp(quadrantFrame(), frameW, frameH, corners)
+        }
+
+        assertEquals(5, allocator.allocated.size)
+        assertTrue(allocator.allocated.all { it.empty() })
     }
 
     private fun texturedPostcardFrame(): IntArray {

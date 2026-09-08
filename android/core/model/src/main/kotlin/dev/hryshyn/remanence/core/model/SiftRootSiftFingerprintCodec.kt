@@ -1,4 +1,4 @@
-package dev.hryshyn.remanence.core.recognition
+package dev.hryshyn.remanence.core.model
 
 import com.google.protobuf.ByteString
 import dev.hryshyn.remanence.recognition.v2.SiftRootSiftFingerprint as FingerprintWire

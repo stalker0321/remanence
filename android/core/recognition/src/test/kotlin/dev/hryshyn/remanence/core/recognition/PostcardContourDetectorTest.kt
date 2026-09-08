@@ -4,12 +4,13 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import org.junit.Assume.assumeTrue
 
 class PostcardContourDetectorTest {
 
-    private val profile = RecognitionProfile.mvpOrbV1()
+    private val profile = RecognitionProfile.postcardSiftRootSiftV1()
 
     private val frameW = 400
     private val frameH = 300
@@ -97,5 +98,32 @@ class PostcardContourDetectorTest {
         drawFilledRect(pixels, 10, 10, 390, 12) // 2px tall strip
         val candidates = PostcardContourDetector(profile).detect(pixels, frameW, frameH)
         assertTrue(candidates.all { it.areaRatio >= PostcardContourDetector.MIN_CANDIDATE_AREA_RATIO })
+    }
+
+    @Test
+    fun contourProcessingFailureReleasesEveryMatContourAndTemporary() {
+        val pixels = blankFrame()
+        drawFilledRect(pixels, 60, 50, 340, 250)
+        val allocator = FailingNativeMatAllocator(failAt = Int.MAX_VALUE)
+        var contours: List<org.opencv.core.MatOfPoint>? = null
+        val detector = PostcardContourDetector(
+            profile,
+            allocator,
+            NativeOperationFault { stage ->
+                if (stage == "after-contour-approximation") {
+                    throw IllegalStateException("deterministic contour processing failure")
+                }
+            },
+            contourObserver = { contours = it },
+        )
+
+        assertFailsWith<IllegalStateException> {
+            detector.detect(pixels, frameW, frameH)
+        }
+
+        assertTrue(allocator.allocated.size >= 8)
+        assertTrue(allocator.allocated.all { it.empty() })
+        assertTrue(contours!!.isNotEmpty())
+        assertTrue(contours!!.all { it.empty() })
     }
 }

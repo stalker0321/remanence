@@ -15,6 +15,8 @@ import dev.hryshyn.remanence.capture.StillProcessor
 import dev.hryshyn.remanence.core.crypto.AccountIdentityGenerator
 import dev.hryshyn.remanence.core.data.db.IncomingCapsuleEntity
 import dev.hryshyn.remanence.core.data.db.LocalMaterialTransitionResult
+import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
+import dev.hryshyn.remanence.core.data.db.RecognitionFingerprintEntity
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
 import dev.hryshyn.remanence.core.model.CapsuleId
@@ -22,9 +24,9 @@ import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.LocalMaterialState
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.UserId
-import dev.hryshyn.remanence.core.recognition.FingerprintCodec
 import dev.hryshyn.remanence.core.recognition.IndexedCandidate
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec
 import dev.hryshyn.remanence.protocol.v1.PublishStatement
 import dev.hryshyn.remanence.core.recognition.ScanGrantManager
 import dev.hryshyn.remanence.identity.DirectorySenderKeyStore
@@ -39,6 +41,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -68,7 +71,7 @@ class ScanReadinessTest {
     val composeRule = createComposeRule()
 
     private val testDispatcher = UnconfinedTestDispatcher()
-    private val profile = RecognitionProfile.mvpOrbV1()
+    private val profile = RecognitionProfile.postcardSiftRootSiftV1()
     private val identity = AccountIdentityGenerator().generate()
     private val ownerA = UserId.parseRest("0198f0a0-0000-7000-8000-00000000a001")
     private val ownerB = UserId.parseRest("0198f0a0-0000-7000-8000-00000000a002")
@@ -262,13 +265,43 @@ class ScanReadinessTest {
         assertEquals(ScanMatchUiState.RecaptureGuidance(failedAttempts = 1), vm.matchState.value)
     }
 
+    @Test
+    fun localPersistedFingerprintWithWrongRoomProfileIsSkippedBeforeDecrypt() = runBlocking {
+        val fingerprintId = "fp-wrong-profile"
+        database.recognitionFingerprintDao().insertAll(
+            ownerA.toRestString(),
+            listOf(
+                RecognitionFingerprintEntity(
+                    fingerprintId = fingerprintId,
+                    ownerUserId = ownerA.toRestString(),
+                    capsuleId = capsuleUuid.toString(),
+                    origin = FingerprintOrigin.SENDER,
+                    fingerprintProfileId = "retired-profile-v0",
+                    encryptedPath = "unused",
+                    createdAtEpochMs = 1_700_000_000_000,
+                    preferred = false,
+                ),
+            ),
+        )
+        val persistence = NoPersistence(
+            decrypted = mapOf(fingerprintId to serializedSynthetic()),
+        )
+
+        val vm = viewModel(includeCandidate = false, persistence = persistence)
+        captureMatchingPair(vm)
+
+        assertEquals(ScanMatchUiState.RecaptureGuidance(failedAttempts = 1), vm.matchState.value)
+        assertEquals(0, persistence.decryptCalls)
+    }
+
     private fun viewModel(
         includeCandidate: Boolean = true,
         scheduleGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null,
+        persistence: SealedFingerprintPersistence = NoPersistence(),
     ): ScanViewModel {
         val frontBytes = serializedSynthetic()
         val vm = ScanViewModel(
-            persistence = NoPersistence(),
+            persistence = persistence,
             database = database,
             profile = profile,
             identityProvider = {
@@ -289,13 +322,14 @@ class ScanReadinessTest {
                 ScanGrantManager(clockMillis = { 1_000L }),
             ),
             frontProcessor = FixedProcessor(frontBytes),
+            matcher = deterministicMatcher(),
             candidateIndexProvider = { owner ->
                 if (!includeCandidate || owner != ownerA) return@ScanViewModel ScanCandidateIndex.EMPTY
                 ScanCandidateIndex(
                     candidates = listOf(
                         IndexedCandidate(
                             capsuleId = capsuleUuid,
-                            front = FingerprintCodec.parse(frontBytes),
+                            front = SiftRootSiftFingerprintCodec.parse(frontBytes),
                             recipientPreferred = false,
                         ),
                     ),
@@ -320,6 +354,44 @@ class ScanReadinessTest {
         )
         vm.beginSession(1L)
         return vm
+    }
+
+    /** Keeps readiness/routing assertions independent of native OpenCV. */
+    private fun deterministicMatcher() = dev.hryshyn.remanence.core.recognition.SiftRootSiftMatcherPort {
+            query, reference ->
+        val queryUsable = query.quantizedSiftDescriptors.count { row -> row.any { it.toInt() != 0 } }
+        val referenceUsable = reference.quantizedSiftDescriptors.count { row -> row.any { it.toInt() != 0 } }
+        val count = if (query.coarseHash64 == reference.coarseHash64) minOf(queryUsable, referenceUsable) else 0
+        val pairs = (0 until count).map { index ->
+            dev.hryshyn.remanence.core.recognition.SiftRootSiftMatchPair(index, index, 0.1)
+        }
+        dev.hryshyn.remanence.core.recognition.SiftRootSiftMatchResult(
+            matches = pairs,
+            inlierMatchIndices = pairs.indices.toList(),
+            homographyRowMajor = if (count >= 6) doubleArrayOf(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0) else null,
+            diagnostics = dev.hryshyn.remanence.core.recognition.SiftRootSiftMatchDiagnostics(
+                rawQueryRows = query.quantizedSiftDescriptors.size,
+                rawReferenceRows = reference.quantizedSiftDescriptors.size,
+                usableQueryRows = queryUsable,
+                usableReferenceRows = referenceUsable,
+                forwardRatioMatches = count,
+                reverseRatioMatches = count,
+                reciprocalMatches = count,
+                uniqueMatches = count,
+                geometryAttempted = count >= 6,
+                geometryFound = count >= 6,
+                geometryAccepted = count >= 6,
+                inliers = count,
+                inlierRatio = if (count == 0) 0.0 else 1.0,
+                medianInlierReprojectionErrorPx = if (count == 0) -1.0 else 1.0,
+                referenceConvexHullCoverage = if (count == 0) -1.0 else 1.0,
+                supportAreaPx2 = if (count == 0) 0.0 else 400.0,
+                supportEdgeRatio = if (count == 0) 0.0 else 1.0,
+                failure = if (count >= 6) dev.hryshyn.remanence.core.recognition.SiftRootSiftMatchFailure.NONE
+                else if (count == 0) dev.hryshyn.remanence.core.recognition.SiftRootSiftMatchFailure.NO_RATIO_MATCHES
+                else dev.hryshyn.remanence.core.recognition.SiftRootSiftMatchFailure.INSUFFICIENT_UNIQUE_PAIRS,
+            ),
+        )
     }
 
     private fun boundaryInvalidate() = sessionBoundary.invalidate()
@@ -376,10 +448,14 @@ class ScanReadinessTest {
 
     private class FixedProcessor(private val serializedBytes: ByteArray) : StillProcessor {
         override fun process(jpegBytes: ByteArray): ProcessedStill =
-            ProcessedStill.Accepted(RecognitionProfile.mvpOrbV1().profileId, serializedBytes)
+            ProcessedStill.Accepted(RecognitionProfile.postcardSiftRootSiftV1().profileId, serializedBytes)
     }
 
-    private class NoPersistence : SealedFingerprintPersistence {
+    private class NoPersistence(
+        private val decrypted: Map<String, ByteArray> = emptyMap(),
+    ) : SealedFingerprintPersistence {
+        var decryptCalls: Int = 0
+
         override suspend fun persist(
             capsuleId: String,
             origin: dev.hryshyn.remanence.core.data.db.FingerprintOrigin,
@@ -392,7 +468,10 @@ class ScanReadinessTest {
             origin: dev.hryshyn.remanence.core.data.db.FingerprintOrigin,
         ): Boolean = false
 
-        override suspend fun decrypt(fingerprintId: String): ByteArray = ByteArray(0)
+        override suspend fun decrypt(fingerprintId: String): ByteArray {
+            decryptCalls += 1
+            return decrypted[fingerprintId]?.copyOf() ?: ByteArray(0)
+        }
 
         override suspend fun setPreferredOrigin(
             capsuleId: String,
@@ -407,27 +486,31 @@ class ScanReadinessTest {
 
     private fun serializedSynthetic(): ByteArray {
         val keypoints = List(64) {
-            dev.hryshyn.remanence.core.recognition.FingerprintKeypoint(
-                xNormalized = (it % 8) / 8.0,
-                yNormalized = (it / 8) / 8.0,
-                scaleNormalized = 1.0,
+            dev.hryshyn.remanence.core.model.SiftRootSiftKeypoint(
+                xMicro = Math.rint((it % 8) / 8.0 * SiftRootSiftFingerprintCodec.MICRO_UNITS).toInt(),
+                yMicro = Math.rint((it / 8) / 8.0 * SiftRootSiftFingerprintCodec.MICRO_UNITS).toInt(),
+                scaleMicro = SiftRootSiftFingerprintCodec.MICRO_UNITS,
                 angleCentiDegrees = 0,
                 responseQuantized = it,
                 octave = 0,
             )
         }
-        return FingerprintCodec.serialize(
-            dev.hryshyn.remanence.core.recognition.PostcardFingerprint(
+        val fingerprint = dev.hryshyn.remanence.core.model.SiftRootSiftFingerprint(
                 profileId = profile.profileId,
                 canonicalWidthPx = profile.capture.canonicalLongEdgePx,
                 canonicalHeightPx = 1000,
                 coarseHash64 = 11L,
                 keypoints = keypoints,
-                descriptors = List(64) { i ->
-                    ByteArray(32) { ((i * 13 + it) and 0xFF).toByte() }
+                quantizedSiftDescriptors = List(64) { i ->
+                    ByteArray(SiftRootSiftFingerprintCodec.DESCRIPTOR_BYTES) {
+                        ((i * 13 + it).coerceIn(1, 255)).toByte()
+                    }
                 },
-                quality = dev.hryshyn.remanence.core.recognition.ExtractionQuality(200.0, 90.0, 0.01, 0.85),
-            ),
-        )
+            )
+        return try {
+            SiftRootSiftFingerprintCodec.serialize(fingerprint)
+        } finally {
+            fingerprint.wipe()
+        }
     }
 }

@@ -1,5 +1,8 @@
 # M1 implementation evidence (automated runs)
 
+Status: Historical/superseded evidence. Its pre-P3A algorithm references do
+not describe the current production recognition contract.
+
 Generated at the close of the I-queue. Every item below was executed on this
 workstation in a clean shell. Physical-device items are explicitly **PENDING**
 and are not claimed.
@@ -455,7 +458,8 @@ The following require real hardware/emulator runs and remain **PENDING**:
   ejecting an open capsule on hardware (unit-proven with virtual clocks only).
 - Directory-backed sender verification from FIX-REVIEW2-04 against a live
   authenticated backend (owner/status/malformed refusals over real HTTP).
-- ORB extraction latency and match-loop timing on-device (OpenCV instrumentation).
+- SIFT/RootSIFT extraction latency and match-loop timing on-device (OpenCV
+  instrumentation; still pending physical-device evidence).
 - Full two-device physical scenario: mail card, second device scans and opens.
 - FIX-M1-ONDEVICE-01 physical retest: install the hosted release-candidate
   APK (`ded0aeca…`) and repeat the real Create self-send flow on hardware —

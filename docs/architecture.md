@@ -83,7 +83,7 @@ The server necessarily sees metadata required for accounts and routing: normaliz
 | --- | --- | --- |
 | Android | Kotlin, Gradle, Jetpack Compose | Native camera/security integration and a reproducible CLI build. |
 | Capture | CameraX still capture | One deliberate required FRONT still; no realtime frame pipeline is required. |
-| Recognition | OpenCV Android | On-device rectangle normalization, ORB features, matching, homography, and RANSAC. |
+| Recognition | OpenCV Android | On-device rectangle normalization, SIFT/RootSIFT features, matching, homography, and RANSAC. |
 | Local data | Room plus app-private files | Transactional metadata plus efficient ciphertext/descriptor file storage. |
 | Background work | WorkManager | Resume ciphertext upload and incoming index sync after process/network interruption. |
 | Cryptography | Google Tink plus Android Keystore | Established HPKE, AEAD, signatures, keysets, and a device-protected wrapping key. |
@@ -132,6 +132,7 @@ Pure Kotlin definitions with no Android, network, persistence, Tink, or OpenCV t
 - normalized handle value object;
 - capsule and delivery lifecycle enums;
 - protocol-independent domain failures;
+- canonical SIFT/RootSIFT wire model, codec, and strict validator;
 - encrypted-blob references and recognition result summaries.
 
 ### `:core:data`
@@ -169,11 +170,13 @@ Android library responsible for:
 - capture quality evaluation;
 - postcard rectangle detection and manual-corner input model;
 - perspective normalization;
-- ORB fingerprint extraction/serialization;
+- native SIFT/RootSIFT fingerprint extraction;
 - descriptor and homography matching;
 - configurable scoring and ambiguity classification.
 
 OpenCV classes never cross its public boundary. It depends only on `:core:model`.
+The pure SIFT/RootSIFT wire model, codec, and canonical validator are owned by
+`:core:model` and are re-exported here for recognition callers.
 
 ### `:app`
 

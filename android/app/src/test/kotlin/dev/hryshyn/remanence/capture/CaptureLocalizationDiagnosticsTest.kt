@@ -14,7 +14,7 @@ class CaptureLocalizationDiagnosticsTest {
             side = FingerprintSide.FRONT,
             featureV2Enabled = true,
             source = LocalizationProposalSource.LEGACY_CONTOUR,
-            stage = CaptureDiagnosticStage.ORB,
+            stage = CaptureDiagnosticStage.FEATURES,
             outcome = CaptureLocalizationOutcome.ACCEPTED,
             fallbackReason = LocalizationFallbackReason.V2_WARP_INVALID,
             qualityReasons = setOf(QualityReason.TOO_DARK, QualityReason.CARD_TOO_SMALL),

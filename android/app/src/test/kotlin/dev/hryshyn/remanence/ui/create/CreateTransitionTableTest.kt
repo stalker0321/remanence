@@ -111,9 +111,9 @@ class CreateTransitionTableTest {
             calls += 1
             deliveries += jpegBytes.size
             return when (val next = queue.removeFirst()) {
-                is Scripted.Accept -> ProcessedStill.Accepted("mvp-orb-v1", next.bytes)
+                is Scripted.Accept -> ProcessedStill.Accepted("postcard-sift-rootsift-v1", next.bytes)
                 is Scripted.Reject -> ProcessedStill.Rejected(next.reasons)
-                Scripted.ThrowIllegalState -> throw IllegalStateException("orb exploded")
+                Scripted.ThrowIllegalState -> throw IllegalStateException("sift extraction failed")
             }
         }
     }
@@ -174,30 +174,7 @@ class CreateTransitionTableTest {
     )
 
     private fun syntheticFingerprint(seed: Int, side: FingerprintSide): ByteArray {
-        val profile = RecognitionProfile.mvpOrbV1()
-        val keypoints = List(64) {
-            dev.hryshyn.remanence.core.recognition.FingerprintKeypoint(
-                xNormalized = (it % 8) / 8.0,
-                yNormalized = (it / 8) / 8.0,
-                scaleNormalized = 1.0,
-                angleCentiDegrees = 0,
-                responseQuantized = it,
-                octave = 0,
-            )
-        }
-        return dev.hryshyn.remanence.core.recognition.FingerprintCodec.serialize(
-            dev.hryshyn.remanence.core.recognition.PostcardFingerprint(
-                profileId = profile.profileId,
-                canonicalWidthPx = profile.capture.canonicalLongEdgePx,
-                canonicalHeightPx = 1000,
-                coarseHash64 = seed.toLong(),
-                keypoints = keypoints,
-                descriptors = List(64) { i ->
-                    ByteArray(32) { ((it * 7 + i * 13 + seed * 29) and 0xFF).toByte() }
-                },
-                quality = dev.hryshyn.remanence.core.recognition.ExtractionQuality(200.0, 90.0, 0.01, 0.85),
-            ),
-        )
+        return dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture.bytes(seed)
     }
 
     private fun viewModel(
@@ -227,7 +204,7 @@ class CreateTransitionTableTest {
                 dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(stagingDir.parentFile, "transition-outbox")),
                 retryStore,
             ),
-            profile = RecognitionProfile.mvpOrbV1(),
+            profile = RecognitionProfile.postcardSiftRootSiftV1(),
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir),
             openPhotoSource = openPhotoSource,
             frontProcessor = frontProcessor,
@@ -359,7 +336,7 @@ class CreateTransitionTableTest {
         deliverFront(vm)
         assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
         val failed = vm.frontAttempt.phase as CaptureAttemptPhase.Failed
-        assertEquals("orb exploded", failed.message)
+        assertEquals("sift extraction failed", failed.message)
 
         vm.retakeFront()
         bindReady(vm.frontAttempt)

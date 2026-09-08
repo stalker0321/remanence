@@ -215,13 +215,13 @@ class CameraFocusDiagnosticsTest {
             usedGuideFallback = true,
             warpedWidth = 1600,
             warpedHeight = 1067,
-            orbKeypoints = 763,
-            orbDescriptors = 763,
+            featureKeypoints = 763,
+            featureDescriptors = 763,
         )
         val expected =
             "DEBUG capture: side=BACK stage=QUALITY laplacian=60.0312 threshold=55.0000 " +
                 "darkness=0.0103 clippedWhite=0.0014 glare=0.0020 cropFallback=true " +
-                "warp=1600x1067 orb=763 descriptors=763"
+                "warp=1600x1067 featureKeypoints=763 featureDescriptors=763"
 
         composeRule.setContent {
             MaterialTheme {

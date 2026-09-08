@@ -1,4 +1,4 @@
-package dev.hryshyn.remanence.core.recognition
+package dev.hryshyn.remanence.core.model
 
 import com.google.protobuf.ByteString
 import com.google.protobuf.CodedOutputStream
@@ -74,7 +74,7 @@ class SiftRootSiftFingerprintCodecTest {
         }
 
         val wrongProfile = FingerprintWire.parseFrom(valid).toBuilder()
-            .setRecognitionProfileId("mvp-orb-v1")
+            .setRecognitionProfileId("postcard-sift-rootsift-v9")
             .build()
         assertFailsWith<IllegalArgumentException> {
             SiftRootSiftFingerprintCodec.parse(wrongProfile.toByteArray())

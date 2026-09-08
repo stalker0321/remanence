@@ -142,7 +142,7 @@ Operational completion checks between tasks confirm commit/status/declared comma
 
 | ID | Single outcome | Minimum verification |
 | --- | --- | --- |
-| M1-R01 | Add versioned `mvp-orb-v1` profile asset/parser with every documented threshold. | exact parse/default rejection tests |
+| M1-R01 | Add versioned `postcard-sift-rootsift-v1` profile asset/parser with every documented threshold. | exact parse/default rejection tests |
 | M1-R02 | Add bounded fingerprint binary/protobuf schema/parser. | roundtrip/malformed length tests |
 | M1-R03 | Add EXIF orientation and bounded bitmap decode helper. | fixture orientation tests |
 | M1-R04 | Add four-corner ordering/validation math. | rotation/self-intersection tests |
@@ -152,7 +152,7 @@ Operational completion checks between tasks confirm commit/status/declared comma
 | M1-R08 | Add perspective warp preserving aspect at canonical long edge. | golden geometry test |
 | M1-R09 | Add blur/exposure/glare measurement. | synthetic image tests |
 | M1-R10 | Add quality reason classification from profile. | exact threshold tests |
-| M1-R11 | Add grayscale/CLAHE ORB extraction and keypoint deduplication. | deterministic fixture property test |
+| M1-R11 | Add canonical SIFT extraction and keypoint deduplication. | deterministic fixture property test |
 | M1-R12 | Add normalized fingerprint serialization. | size/coordinate roundtrip test |
 | M1-R13 | Add CameraX permission/preview shell for one still. | assemble plus UI state test |
 | M1-R14 | Add still capture result into bounded normalization pipeline. | fake capture test |
@@ -448,6 +448,18 @@ commitment verification, and threat-model longer-lived sender envelopes,
 provider identity, email privacy, expiry, abuse, and eventual delivery.
 
 ## 14. Review and correction tasks
+
+### P3A review deferrals (separate create-path hardening)
+
+These findings are intentionally outside the bounded P3A recognition cleanup
+and must be scheduled as separate create-flow corrections:
+
+- `PhotoStagingPipeline`: an `Error` after a plaintext file write needs an
+  owner-scoped rollback path that removes the file before rethrowing.
+- `CreateViewModel`: the transient `photoBytes` list needs explicit wiping on
+  every return, cancellation, and failure path after publication preparation.
+
+No general create hardening is bundled with the P3A recognition work.
 
 Review findings are not bundled. Each correction becomes a new task shaped as:
 

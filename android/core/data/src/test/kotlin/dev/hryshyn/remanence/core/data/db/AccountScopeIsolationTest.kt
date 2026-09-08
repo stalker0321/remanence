@@ -130,7 +130,7 @@ class AccountScopeIsolationTest {
             ownerUserId = ownerUserId,
             capsuleId = capsuleId,
             origin = FingerprintOrigin.SENDER,
-            fingerprintProfileId = "mvp-orb-v1",
+            fingerprintProfileId = "postcard-sift-rootsift-v1",
             encryptedPath = "files/fingerprints/$id.bin",
             createdAtEpochMs = 1_755_000_000_000,
             preferred = false,

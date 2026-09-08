@@ -26,7 +26,26 @@ data class QuadCandidate(
  * detection, morphological close, contour enumeration, convex four-point
  * approximation. The caller must have initialized the OpenCV native runtime.
  */
-class PostcardContourDetector(private val profile: RecognitionProfile) {
+class PostcardContourDetector private constructor(
+    private val profile: RecognitionProfile,
+    private val matAllocator: NativeMatAllocator,
+    private val operationFault: NativeOperationFault,
+    private val contourObserver: ((List<MatOfPoint>) -> Unit)?,
+) {
+    constructor(profile: RecognitionProfile) : this(
+        profile,
+        NativeMatAllocator.DEFAULT,
+        NativeOperationFault.NONE,
+        null,
+    )
+
+    internal constructor(
+        profile: RecognitionProfile,
+        matAllocator: NativeMatAllocator,
+        operationFault: NativeOperationFault = NativeOperationFault.NONE,
+        contourObserver: ((List<MatOfPoint>) -> Unit)? = null,
+        testOnly: Unit = Unit,
+    ) : this(profile, matAllocator, operationFault, contourObserver)
 
     init {
         require(profile.capture.minCardAreaRatio > 0.0)
@@ -39,63 +58,63 @@ class PostcardContourDetector(private val profile: RecognitionProfile) {
             throw IllegalStateException("OpenCV native library not initialized")
         }
 
-        val rgba = Mat(height, width, CvType.CV_8UC4)
+        val owner = NativeMatOwner(matAllocator)
+        var contours: ArrayList<MatOfPoint>? = null
         try {
+            val rgba = owner.allocate { Mat(height, width, CvType.CV_8UC4) }
             fillRgba(rgba, argbPixels, width, height)
-            val gray = Mat()
-            Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY)
+            val grayMat = owner.allocate { Mat() }
+            Imgproc.cvtColor(rgba, grayMat, Imgproc.COLOR_RGBA2GRAY)
 
-            val denoised = Mat()
-            Imgproc.GaussianBlur(gray, denoised, Size(5.0, 5.0), 0.0)
+            val denoisedMat = owner.allocate { Mat() }
+            Imgproc.GaussianBlur(grayMat, denoisedMat, Size(5.0, 5.0), 0.0)
 
             // Automatic Canny thresholds from mean luminance (adaptive/automatic per profile).
-            val mean = Core.mean(denoised).`val`[0]
+            val mean = Core.mean(denoisedMat).`val`[0]
             val low = COEFF_LOW * mean
             val high = COEFF_HIGH * mean
-            val edges = Mat()
-            Imgproc.Canny(denoised, edges, low, high)
+            val edgesMat = owner.allocate { Mat() }
+            Imgproc.Canny(denoisedMat, edgesMat, low, high)
 
-            val kernel = Imgproc.getStructuringElement(
+            val kernelMat = owner.allocate {
+                Imgproc.getStructuringElement(
                 Imgproc.MORPH_RECT,
                 Size(CLOSE_KERNEL_PX.toDouble(), CLOSE_KERNEL_PX.toDouble()),
-            )
-            Imgproc.morphologyEx(edges, edges, Imgproc.MORPH_CLOSE, kernel)
-
-            val contours = ArrayList<MatOfPoint>()
-            val hierarchy = Mat()
-            try {
-                Imgproc.findContours(edges, contours, hierarchy, Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
-            } finally {
-                hierarchy.release()
+                )
             }
+            Imgproc.morphologyEx(edgesMat, edgesMat, Imgproc.MORPH_CLOSE, kernelMat)
+
+            val contourList = ArrayList<MatOfPoint>().also { contours = it }
+            val hierarchyMat = owner.allocate { Mat() }
+            Imgproc.findContours(edgesMat, contourList, hierarchyMat, Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
+            contourObserver?.invoke(contourList)
 
             val frameArea = width.toDouble() * height
             val candidates = ArrayList<QuadCandidate>()
-            for (contour in contours) {
+            for (contour in contourList) {
                 val candidate = toQuadCandidate(contour, frameArea) ?: continue
                 candidates += candidate
-                contour.release()
             }
-            // Release any contour we skipped.
-            contours.forEach { if (!it.empty()) it.release() }
-            gray.release()
-            denoised.release()
-            edges.release()
-            kernel.release()
             return candidates.sortedByDescending { it.areaRatio }
         } finally {
-            rgba.release()
+            contours?.forEach { it.release() }
+            owner.releaseAll()
         }
     }
 
     private fun toQuadCandidate(contour: MatOfPoint, frameArea: Double): QuadCandidate? {
-        val perimeter = Imgproc.arcLength(MatOfPoint2f(*contour.toArray()), true)
-        val approx = MatOfPoint2f()
+        val owner = NativeMatOwner(matAllocator)
         try {
-            Imgproc.approxPolyDP(MatOfPoint2f(*contour.toArray()), approx, APPROX_EPSILON_RATIO * perimeter, true)
+            val contourPoints = owner.allocate { MatOfPoint2f(*contour.toArray()) }
+            operationFault.check("after-contour-points")
+            val perimeter = Imgproc.arcLength(contourPoints, true)
+            val approx = owner.allocate { MatOfPoint2f() }
+            Imgproc.approxPolyDP(contourPoints, approx, APPROX_EPSILON_RATIO * perimeter, true)
+            operationFault.check("after-contour-approximation")
             val points = approx.toArray()
             if (points.size != 4) return null
-            if (!Imgproc.isContourConvex(MatOfPoint(*points))) return null
+            val convexInput = owner.allocate { MatOfPoint(*points) }
+            if (!Imgproc.isContourConvex(convexInput)) return null
 
             val quadArea = abs(Imgproc.contourArea(approx))
             if (quadArea <= 0.0) return null
@@ -112,7 +131,7 @@ class PostcardContourDetector(private val profile: RecognitionProfile) {
                 rectangularity = if (quadArea > 0) contourArea / quadArea else 0.0,
             )
         } finally {
-            approx.release()
+            owner.releaseAll()
         }
     }
 

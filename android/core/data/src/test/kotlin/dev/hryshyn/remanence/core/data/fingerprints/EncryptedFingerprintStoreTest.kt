@@ -10,6 +10,7 @@ import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -127,7 +128,7 @@ class EncryptedFingerprintStoreTest {
         val sut = store()
         val plaintext = "fingerprint-bytes-π".toByteArray()
 
-        val id = sut.persist("capsule-a", FingerprintOrigin.SENDER, "mvp-orb-v1", plaintext)
+        val id = sut.persist("capsule-a", FingerprintOrigin.SENDER, "postcard-sift-rootsift-v1", plaintext)
 
         val entity = database.recognitionFingerprintDao().getByFingerprintIdAndOwner(id, OWNER_ID.toRestString())!!
         val onDisk = File(ownerFingerprintRoot, entity.encryptedPath).readBytes()
@@ -141,10 +142,10 @@ class EncryptedFingerprintStoreTest {
     @Test
     fun duplicateBaselineIsRejectedBeforeAnyWrite() = runBlocking {
         val sut = store()
-        val firstId = sut.persist("capsule-a", FingerprintOrigin.SENDER, "mvp-orb-v1", byteArrayOf(1))
+        val firstId = sut.persist("capsule-a", FingerprintOrigin.SENDER, "postcard-sift-rootsift-v1", byteArrayOf(1))
 
         try {
-            sut.persist("capsule-a", FingerprintOrigin.SENDER, "mvp-orb-v1", byteArrayOf(2))
+            sut.persist("capsule-a", FingerprintOrigin.SENDER, "postcard-sift-rootsift-v1", byteArrayOf(2))
             throw AssertionError("expected duplicate rejection")
         } catch (expected: DuplicateFingerprintException) {
             // correct
@@ -168,7 +169,7 @@ class EncryptedFingerprintStoreTest {
         )
 
         try {
-            sut.persist("capsule-a", FingerprintOrigin.SENDER, "mvp-orb-v1", byteArrayOf(9))
+            sut.persist("capsule-a", FingerprintOrigin.SENDER, "postcard-sift-rootsift-v1", byteArrayOf(9))
             throw AssertionError("expected insert failure")
         } catch (expected: IllegalStateException) {
             assertEquals("database exploded", expected.message)
@@ -177,11 +178,33 @@ class EncryptedFingerprintStoreTest {
     }
 
     @Test
+    fun fatalInsertFailureAlsoRemovesItsCiphertextFile() = runBlocking {
+        val dao = database.recognitionFingerprintDao()
+        val explodingDao = DelegatingRecognitionFingerprintDao(dao) { _, _ ->
+            throw AssertionError("fatal database failure")
+        }
+        val sut = EncryptedFingerprintStore(
+            roots,
+            XorSealer(),
+            explodingDao,
+            ownerUserIdProvider = { OWNER_ID.toRestString() },
+        )
+
+        assertThrows(AssertionError::class.java) {
+            runBlocking {
+                sut.persist("capsule-fatal", FingerprintOrigin.SENDER, "postcard-sift-rootsift-v1", byteArrayOf(9))
+            }
+        }
+
+        assertEquals(0, ownerFingerprintRoot.listFiles()!!.size)
+    }
+
+    @Test
     fun hasBaselineReflectsPersistedState() = runBlocking {
         val sut = store()
         assertFalse(sut.hasBaseline("capsule-c", FingerprintOrigin.SENDER))
 
-        sut.persist("capsule-c", FingerprintOrigin.SENDER, "mvp-orb-v1", byteArrayOf(1))
+        sut.persist("capsule-c", FingerprintOrigin.SENDER, "postcard-sift-rootsift-v1", byteArrayOf(1))
 
         assertTrue(sut.hasBaseline("capsule-c", FingerprintOrigin.SENDER))
         assertFalse(sut.hasBaseline("capsule-other", FingerprintOrigin.SENDER))
@@ -197,7 +220,7 @@ class EncryptedFingerprintStoreTest {
             // correct
         }
 
-        val id = sut.persist("capsule-b", FingerprintOrigin.SENDER, "mvp-orb-v1", byteArrayOf(3))
+        val id = sut.persist("capsule-b", FingerprintOrigin.SENDER, "postcard-sift-rootsift-v1", byteArrayOf(3))
         database.recognitionFingerprintDao().deleteByCapsuleIdAndOwner("capsule-b", OWNER_ID.toRestString())
         try {
             sut.decrypt(id)
@@ -227,7 +250,7 @@ class EncryptedFingerprintStoreTest {
         )
 
         val id = swappingStore.persist(
-            "capsule-swap", FingerprintOrigin.SENDER, "mvp-orb-v1", byteArrayOf(7),
+            "capsule-swap", FingerprintOrigin.SENDER, "postcard-sift-rootsift-v1", byteArrayOf(7),
         )
 
         // Everything landed under the ORIGINAL owner only.

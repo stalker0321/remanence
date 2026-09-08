@@ -33,7 +33,9 @@ import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.ui.create.SenderIdentitySnapshot
-import dev.hryshyn.remanence.core.recognition.FingerprintCodec
+import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec
+import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprint
+import dev.hryshyn.remanence.core.model.SiftRootSiftKeypoint
 import dev.hryshyn.remanence.core.recognition.IndexedCandidate
 import dev.hryshyn.remanence.core.recognition.LocalMatchEngine
 import dev.hryshyn.remanence.core.recognition.QualityReason
@@ -91,12 +93,12 @@ class ScanCaptureParityTest {
     }
 
     private fun synthetic(seed: Long = 7L): ProcessedStill.Accepted {
-        val profile = RecognitionProfile.mvpOrbV1()
+        val profile = RecognitionProfile.postcardSiftRootSiftV1()
         val keypoints = List(64) {
-            dev.hryshyn.remanence.core.recognition.FingerprintKeypoint(
-                xNormalized = (it % 8) / 8.0,
-                yNormalized = (it / 8) / 8.0,
-                scaleNormalized = 1.0,
+            SiftRootSiftKeypoint(
+                xMicro = Math.rint((it % 8) / 8.0 * SiftRootSiftFingerprintCodec.MICRO_UNITS).toInt(),
+                yMicro = Math.rint((it / 8) / 8.0 * SiftRootSiftFingerprintCodec.MICRO_UNITS).toInt(),
+                scaleMicro = SiftRootSiftFingerprintCodec.MICRO_UNITS,
                 angleCentiDegrees = 0,
                 responseQuantized = it,
                 octave = 0,
@@ -104,17 +106,18 @@ class ScanCaptureParityTest {
         }
         return ProcessedStill.Accepted(
             profileId = profile.profileId,
-            serializedBytes = dev.hryshyn.remanence.core.recognition.FingerprintCodec.serialize(
-                dev.hryshyn.remanence.core.recognition.PostcardFingerprint(
+            serializedBytes = SiftRootSiftFingerprintCodec.serialize(
+                SiftRootSiftFingerprint(
                     profileId = profile.profileId,
                     canonicalWidthPx = profile.capture.canonicalLongEdgePx,
                     canonicalHeightPx = 1000,
                     coarseHash64 = seed,
                     keypoints = keypoints,
-                    descriptors = List(64) { i ->
-                        ByteArray(32) { ((it * 7 + i * 13 + seed.toInt() * 29) and 0xFF).toByte() }
+                    quantizedSiftDescriptors = List(64) { i ->
+                        ByteArray(SiftRootSiftFingerprintCodec.DESCRIPTOR_BYTES) {
+                            ((it * 7 + i * 13 + seed.toInt() * 29).coerceIn(1, 255)).toByte()
+                        }
                     },
-                    quality = dev.hryshyn.remanence.core.recognition.ExtractionQuality(200.0, 90.0, 0.01, 0.85),
                 ),
             ),
         )
@@ -150,7 +153,7 @@ class ScanCaptureParityTest {
     ): ScanViewModel = ScanViewModel(
         persistence = NoPersistence(),
         database = database,
-        profile = RecognitionProfile.mvpOrbV1(),
+        profile = RecognitionProfile.postcardSiftRootSiftV1(),
         identityProvider = identityProvider,
         trustedSenderKeys = dev.hryshyn.remanence.identity.DirectorySenderKeyStore(
             directoryFetch = { error("verification must be unreachable in this test") },
@@ -160,11 +163,50 @@ class ScanCaptureParityTest {
             dev.hryshyn.remanence.core.recognition.ScanGrantManager(clockMillis = { 0L }),
         ),
         frontProcessor = front,
+        matcher = deterministicMatcher(),
         candidateIndexProvider = candidateIndexProvider,
         incomingPresentationPreparation = null,
         cpuDispatcher = testDispatcher,
         ioDispatcher = testDispatcher,
     )
+
+    /** Keeps routing assertions independent of native OpenCV availability. */
+    private fun deterministicMatcher() = dev.hryshyn.remanence.core.recognition.SiftRootSiftMatcherPort {
+            query, reference ->
+        val queryUsable = query.quantizedSiftDescriptors.count { row -> row.any { it.toInt() != 0 } }
+        val referenceUsable = reference.quantizedSiftDescriptors.count { row -> row.any { it.toInt() != 0 } }
+        val count = if (query.coarseHash64 == reference.coarseHash64) minOf(queryUsable, referenceUsable) else 0
+        val pairs = (0 until count).map { index ->
+            dev.hryshyn.remanence.core.recognition.SiftRootSiftMatchPair(index, index, 0.1)
+        }
+        dev.hryshyn.remanence.core.recognition.SiftRootSiftMatchResult(
+            matches = pairs,
+            inlierMatchIndices = pairs.indices.toList(),
+            homographyRowMajor = if (count >= 6) doubleArrayOf(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0) else null,
+            diagnostics = dev.hryshyn.remanence.core.recognition.SiftRootSiftMatchDiagnostics(
+                rawQueryRows = query.quantizedSiftDescriptors.size,
+                rawReferenceRows = reference.quantizedSiftDescriptors.size,
+                usableQueryRows = queryUsable,
+                usableReferenceRows = referenceUsable,
+                forwardRatioMatches = count,
+                reverseRatioMatches = count,
+                reciprocalMatches = count,
+                uniqueMatches = count,
+                geometryAttempted = count >= 6,
+                geometryFound = count >= 6,
+                geometryAccepted = count >= 6,
+                inliers = count,
+                inlierRatio = if (count == 0) 0.0 else 1.0,
+                medianInlierReprojectionErrorPx = if (count == 0) -1.0 else 1.0,
+                referenceConvexHullCoverage = if (count == 0) -1.0 else 1.0,
+                supportAreaPx2 = if (count == 0) 0.0 else 400.0,
+                supportEdgeRatio = if (count == 0) 0.0 else 1.0,
+                failure = if (count >= 6) dev.hryshyn.remanence.core.recognition.SiftRootSiftMatchFailure.NONE
+                else if (count == 0) dev.hryshyn.remanence.core.recognition.SiftRootSiftMatchFailure.NO_RATIO_MATCHES
+                else dev.hryshyn.remanence.core.recognition.SiftRootSiftMatchFailure.INSUFFICIENT_UNIQUE_PAIRS,
+            ),
+        )
+    }
 
     /** Resolves permission and binds exactly as the production surface does. */
     private fun bind(attempt: CaptureAttemptController) {
@@ -223,7 +265,7 @@ class ScanCaptureParityTest {
 
     @Test
     fun processorExceptionShowsFailedThenRetryAcceptsIntoMatching() = runBlocking {
-        val front = ScriptedProcessor("orb exploded", synthetic())
+        val front = ScriptedProcessor("sift extraction failed", synthetic())
         val vm = viewModel(front)
         bind(vm.frontAttempt)
 
@@ -231,7 +273,7 @@ class ScanCaptureParityTest {
         vm.deliverFrontJpeg("boom".toByteArray())
 
         val failed = vm.frontAttempt.phase as CaptureAttemptPhase.Failed
-        assertEquals("orb exploded", failed.message)
+        assertEquals("sift extraction failed", failed.message)
         assertEquals(ScanSessionState.AWAITING_FRONT, vm.captureSession.state)
 
         vm.retakeFront()
@@ -305,7 +347,7 @@ class ScanCaptureParityTest {
         val accepted = synthetic()
         val front = ScriptedProcessor(
             ProcessedStill.Rejected(rejection),
-            "orb exploded",
+            "sift extraction failed",
             accepted,
         )
         val vm = viewModel(front)
@@ -412,19 +454,23 @@ class ScanCaptureParityTest {
      * read as noise, so the candidate lands weak-plausible below auto rules.
      */
     private fun weakenedFront(fullBytes: ByteArray, intact: Int): ByteArray {
-        val full = FingerprintCodec.parse(fullBytes)
-        val weakened = dev.hryshyn.remanence.core.recognition.PostcardFingerprint(
+        val full = SiftRootSiftFingerprintCodec.parse(fullBytes)
+        val weakened = SiftRootSiftFingerprint(
             profileId = full.profileId,
             canonicalWidthPx = full.canonicalWidthPx,
             canonicalHeightPx = full.canonicalHeightPx,
             coarseHash64 = full.coarseHash64,
             keypoints = full.keypoints,
-            descriptors = full.descriptors.mapIndexed { index, bytes ->
+            quantizedSiftDescriptors = full.quantizedSiftDescriptors.mapIndexed { index, bytes ->
                 if (index < intact) bytes.copyOf() else ByteArray(bytes.size)
             },
-            quality = full.quality,
         )
-        return FingerprintCodec.serialize(weakened)
+        return try {
+            SiftRootSiftFingerprintCodec.serialize(weakened)
+        } finally {
+            weakened.wipe()
+            full.wipe()
+        }
     }
 
     @Test
@@ -436,18 +482,19 @@ class ScanCaptureParityTest {
         // above verify). RANSAC is fixed-seed, so this pin is deterministic.
         val candidate = IndexedCandidate(
             capsuleId = capsuleId,
-            front = FingerprintCodec.parse(weakenedFront(fullBytes, intact = 18)),
+            front = SiftRootSiftFingerprintCodec.parse(weakenedFront(fullBytes, intact = 18)),
             recipientPreferred = false,
         )
 
         // Phase 1: pin the fixture through the REAL engine — exactly one
         // plausible below auto rules, so verifier/issuer must never run.
         val engine = LocalMatchEngine(
-            RecognitionProfile.mvpOrbV1(),
+            RecognitionProfile.postcardSiftRootSiftV1(),
             verifier = { error("single weak candidate must never verify") },
             grantIssuer = { error("single weak candidate must never mint a grant") },
+            matcher = deterministicMatcher(),
         )
-        val decision = engine.run(FingerprintCodec.parse(fullBytes), listOf(candidate))
+        val decision = engine.run(SiftRootSiftFingerprintCodec.parse(fullBytes), listOf(candidate))
         assertTrue("fixture must classify SINGLE_CANDIDATE_RECAPTURE, got $decision", decision is ScanFlowResult.Ambiguous)
         val ambiguous = decision as ScanFlowResult.Ambiguous
         assertTrue(ambiguous.singleRecaptureFirst)
@@ -460,7 +507,7 @@ class ScanCaptureParityTest {
         val identity = AccountIdentityGenerator().generate()
         val userUuid = java.util.UUID.randomUUID()
         val vm = viewModel(
-            StillProcessor { ProcessedStill.Accepted("mvp-orb-v1", fullBytes.copyOf()) },
+            StillProcessor { ProcessedStill.Accepted("postcard-sift-rootsift-v1", fullBytes.copyOf()) },
             candidateIndexProvider = {
                 ScanCandidateIndex(
                     candidates = listOf(candidate),

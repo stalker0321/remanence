@@ -24,14 +24,14 @@ import dev.hryshyn.remanence.core.recognition.CaptureQualityGate
 import dev.hryshyn.remanence.core.recognition.CaptureAdmissionProfile
 import dev.hryshyn.remanence.core.recognition.CaptureQualityInput
 import dev.hryshyn.remanence.core.recognition.CaptureQualityMeter
-import dev.hryshyn.remanence.core.recognition.FingerprintCodec
-import dev.hryshyn.remanence.core.recognition.FingerprintExtractor
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.PerspectiveWarper
 import dev.hryshyn.remanence.core.recognition.PostcardContourDetector
 import dev.hryshyn.remanence.core.recognition.PostcardCropSelector
 import dev.hryshyn.remanence.core.recognition.QualityReason
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec
+import dev.hryshyn.remanence.core.recognition.SiftRootSiftFingerprintExtractor
 import dev.hryshyn.remanence.core.recognition.StillCapturePipeline
 
 /**
@@ -49,14 +49,17 @@ import dev.hryshyn.remanence.core.recognition.StillCapturePipeline
  * capture-status file, and current image files; runs the production processor,
  * traces the same bounded stages for post-crop metrics, and writes redacted
  * JSONL only after internal production-agreement checks have passed. Agreement
- * is consistency evidence, not an independent truth source.
+ * is consistency evidence, not an independent truth source. BACK entries are
+ * retained only to prove the diagnostic capture-quality rejection contract;
+ * they are never serialized, persisted, matched, or used as production
+ * recognition fixtures.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class CaptureDatasetHarnessTest {
 
-    private val profile = RecognitionProfile.mvpOrbV1()
+    private val profile = RecognitionProfile.postcardSiftRootSiftV1()
 
     private fun loadNative() {
         runCatching { System.loadLibrary("opencv_java4100") }
@@ -129,50 +132,6 @@ class CaptureDatasetHarnessTest {
             cases.size,
             output.toFile().readLines(Charsets.UTF_8).size,
         )
-    }
-
-    @Test
-    fun calibratedSharpBackRescuesCompleteProductionOrbExtraction() {
-        val rootRaw = System.getProperty(DATASET_ROOT_PROPERTY)
-        val repositoryRaw = System.getProperty(REPOSITORY_ROOT_PROPERTY)
-        assumeTrue(
-            "rescued-back proof requires explicit dataset and repository-root properties",
-            !rootRaw.isNullOrBlank() && !repositoryRaw.isNullOrBlank(),
-        )
-        loadNative()
-        val repositoryRoot = actualWorktree(Paths.get(requireNotNull(repositoryRaw)))
-        val root = existingDirectory(Paths.get(requireNotNull(rootRaw)), repositoryRoot)
-        val cases = datasetCases(root).associateBy { it.redactedId }
-        val processor = RealStillFingerprintProcessor(profile, FingerprintSide.BACK)
-
-        RESCUED_SHARP_BACK_CASES.forEach { caseId ->
-            val testCase = requireNotNull(cases[caseId]) { "missing locked rescue case $caseId" }
-            val bytes = Files.readAllBytes(testCase.path)
-            try {
-                val result = processor.process(bytes)
-                assertTrue("$caseId must pass the complete production pipeline: $result", result is ProcessedStill.Accepted)
-                val accepted = result as ProcessedStill.Accepted
-                try {
-                    val fingerprint = FingerprintCodec.parse(accepted.serializedBytes)
-                    assertEquals("$caseId profile", RecognitionProfile.MVP_ORB_V1_ID, fingerprint.profileId)
-                    assertTrue("$caseId must have ORB keypoints", fingerprint.keypoints.isNotEmpty())
-                    assertEquals(
-                        "$caseId descriptors align with keypoints",
-                        fingerprint.keypoints.size,
-                        fingerprint.descriptors.size,
-                    )
-                    assertTrue(
-                        "$caseId descriptors must be aligned 32-byte ORB rows",
-                        fingerprint.descriptors.all { it.size == FingerprintCodec.DESCRIPTOR_BYTES },
-                    )
-                    fingerprint.descriptors.forEach { it.fill(0) }
-                } finally {
-                    accepted.serializedBytes.fill(0)
-                }
-            } finally {
-                bytes.fill(0)
-            }
-        }
     }
 
     @Test
@@ -945,7 +904,7 @@ class CaptureDatasetHarnessTest {
         val warper = PerspectiveWarper(profile)
         val meter = CaptureQualityMeter()
         val gate = CaptureQualityGate(profile, CaptureAdmissionProfile.calibratedM2())
-        val extractor = FingerprintExtractor(profile)
+        val extractor = SiftRootSiftFingerprintExtractor(profile.sift)
         val working = try {
             pipeline.process(bytes)
         } catch (_: IllegalArgumentException) {
@@ -1000,7 +959,7 @@ class CaptureDatasetHarnessTest {
                     )
                     try {
                         if (fingerprint.keypoints.isEmpty() ||
-                            fingerprint.descriptors.size != fingerprint.keypoints.size
+                            fingerprint.quantizedSiftDescriptors.size != fingerprint.keypoints.size
                         ) {
                             return TraceResult(
                                 accepted = false,
@@ -1013,10 +972,10 @@ class CaptureDatasetHarnessTest {
                                 cropAspectRatio = qualityInput.cropAspectRatio,
                                 shortEdgePx = qualityInput.croppedShortEdgePx,
                                 signals = signals,
-                                orbKeypoints = fingerprint.keypoints.size,
+                                featureKeypoints = fingerprint.keypoints.size,
                             )
                         }
-                        val serialized = FingerprintCodec.serialize(fingerprint)
+                        val serialized = SiftRootSiftFingerprintCodec.serialize(fingerprint)
                         serialized.fill(0)
                         return TraceResult(
                             accepted = true,
@@ -1029,10 +988,10 @@ class CaptureDatasetHarnessTest {
                             cropAspectRatio = qualityInput.cropAspectRatio,
                             shortEdgePx = qualityInput.croppedShortEdgePx,
                             signals = signals,
-                            orbKeypoints = fingerprint.keypoints.size,
+                            featureKeypoints = fingerprint.keypoints.size,
                         )
                     } finally {
-                        fingerprint.descriptors.forEach { it.fill(0) }
+                        fingerprint.wipe()
                     }
                 } finally {
                     warped.pixels.fill(0)
@@ -1065,7 +1024,7 @@ class CaptureDatasetHarnessTest {
         val cropAspectRatio: Double? = null,
         val shortEdgePx: Int? = null,
         val signals: dev.hryshyn.remanence.core.recognition.CaptureQualitySignals? = null,
-        val orbKeypoints: Int? = null,
+        val featureKeypoints: Int? = null,
     ) {
         fun toJson(redactedId: String): String = buildString {
             append("{\"case\":\"").append(redactedId).append("\",\"outcome\":\"")
@@ -1083,7 +1042,7 @@ class CaptureDatasetHarnessTest {
                 .append(",\"nearBlackFraction\":").append(number(signals?.nearBlackFraction))
                 .append(",\"clippedWhiteFraction\":").append(number(signals?.clippedWhiteFraction))
                 .append(",\"largestGlareFraction\":").append(number(signals?.largestGlareFraction))
-                .append(",\"orbKeypoints\":").append(orbKeypoints ?: "null")
+                .append(",\"featureKeypoints\":").append(featureKeypoints ?: "null")
                 .append("},\"reasons\":[")
                 .append(reasons.sortedBy { it.name }.joinToString(",") { "\"${it.name}\"" })
                 .append("]}")
@@ -1109,14 +1068,6 @@ class CaptureDatasetHarnessTest {
         const val REPOSITORY_ROOT_PROPERTY = "remanence.repo.root"
         const val EXPECTED_SUMMARY_PROPERTY = "remanence.dataset.expected-summary"
         const val EXPECTED_CASES_PROPERTY = "remanence.dataset.expected-cases"
-        private val RESCUED_SHARP_BACK_CASES = setOf(
-            "021/T05/back",
-            "022/T04/back",
-            "025/T01/back",
-            "025/T08/back",
-            "027/T03/back",
-            "027/T08/back",
-        )
         private val FOCUS_NEGATIVE_CASES = setOf(
             "021/T07/front", "021/T07/back",
             "022/T07/front", "022/T07/back",

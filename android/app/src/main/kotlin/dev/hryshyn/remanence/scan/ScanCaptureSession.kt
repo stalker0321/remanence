@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.scan
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import dev.hryshyn.remanence.core.model.CanonicalSiftFingerprintValidator
 
 /**
  * One extracted FRONT of the physically scanned postcard. Mirrors the create-
@@ -47,7 +48,7 @@ class ScanCaptureSession(
         val side = extractor.extract()
         try {
             side.validated()
-        } catch (failure: Exception) {
+        } catch (failure: Throwable) {
             side.serializedBytes.fill(0)
             throw failure
         }
@@ -74,7 +75,7 @@ class ScanCaptureSession(
     }
 
     private fun ScannedSide.validated(): ScannedSide {
-        require(serializedBytes.isNotEmpty()) { "extracted fingerprint is empty" }
+        CanonicalSiftFingerprintValidator.requireCanonical(profileId, serializedBytes)
         return this
     }
 }

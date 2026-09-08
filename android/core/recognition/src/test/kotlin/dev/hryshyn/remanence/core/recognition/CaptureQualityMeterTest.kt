@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.core.recognition
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import org.junit.Assume.assumeTrue
 
@@ -70,5 +71,37 @@ class CaptureQualityMeterTest {
             "glare=${signals.largestGlareFraction} expected≈$expected",
         )
         assertEquals(expected, signals.clippedWhiteFraction, expected * 0.25 + 1e-9)
+    }
+
+    @Test
+    fun allocationFailureReleasesAlreadyOwnedMats() {
+        val allocator = FailingNativeMatAllocator(failAt = 2)
+
+        assertFailsWith<AssertionError> {
+            CaptureQualityMeter(allocator).measure(solid(0xFF808080.toInt()), w, h)
+        }
+
+        assertTrue(allocator.allocated.isNotEmpty())
+        assertTrue(allocator.allocated.all { it.empty() })
+    }
+
+    @Test
+    fun operationFailureAfterLaplacianMulReleasesMulTemporary() {
+        val allocator = FailingNativeMatAllocator(failAt = Int.MAX_VALUE)
+        val meter = CaptureQualityMeter(
+            allocator,
+            NativeOperationFault { stage ->
+                if (stage == "after-laplacian-mul") {
+                    throw IllegalStateException("deterministic quality operation failure")
+                }
+            },
+        )
+
+        assertFailsWith<IllegalStateException> {
+            meter.measure(solid(0xFF808080.toInt()), w, h)
+        }
+
+        assertEquals(4, allocator.allocated.size)
+        assertTrue(allocator.allocated.all { it.empty() })
     }
 }

@@ -13,6 +13,33 @@ import org.opencv.core.Mat
 import org.opencv.core.Point
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
+import org.opencv.imgproc.LineSegmentDetector
+
+internal interface LineSegmentDetectorPort {
+    fun detect(image: Mat, lines: Mat)
+
+    fun clear()
+}
+
+internal fun interface LineSegmentDetectorFactory {
+    fun create(): LineSegmentDetectorPort
+}
+
+private class OpenCvLineSegmentDetectorPort(
+    private val delegate: LineSegmentDetector,
+) : LineSegmentDetectorPort {
+    override fun detect(image: Mat, lines: Mat) {
+        delegate.detect(image, lines)
+    }
+
+    override fun clear() {
+        delegate.clear()
+    }
+}
+
+private val DEFAULT_LINE_SEGMENT_DETECTOR_FACTORY = LineSegmentDetectorFactory {
+    OpenCvLineSegmentDetectorPort(Imgproc.createLineSegmentDetector())
+}
 
 /**
  * Production equivalent of the validated v2 proposal stage.
@@ -23,23 +50,43 @@ import org.opencv.imgproc.Imgproc
  * The returned [QuadCandidate.edgeSupport] is measured from the current frame;
  * [QuadCandidate.rectangularity] is a geometry-derived score, not a constant.
  */
-class V2LinePostcardLocator(
+class V2LinePostcardLocator private constructor(
     private val profile: RecognitionProfile,
+    private val matAllocator: NativeMatAllocator,
+    private val operationFault: NativeOperationFault,
+    private val detectorFactory: LineSegmentDetectorFactory,
 ) {
+    constructor(profile: RecognitionProfile) : this(
+        profile,
+        NativeMatAllocator.DEFAULT,
+        NativeOperationFault.NONE,
+        DEFAULT_LINE_SEGMENT_DETECTOR_FACTORY,
+    )
+
+    internal constructor(
+        profile: RecognitionProfile,
+        matAllocator: NativeMatAllocator,
+        operationFault: NativeOperationFault = NativeOperationFault.NONE,
+        detectorFactory: LineSegmentDetectorFactory = DEFAULT_LINE_SEGMENT_DETECTOR_FACTORY,
+        testOnly: Unit = Unit,
+    ) : this(profile, matAllocator, operationFault, detectorFactory)
 
     fun detect(argbPixels: IntArray, width: Int, height: Int): List<QuadCandidate> {
         require(width > 0 && height > 0)
         require(argbPixels.size == width * height)
         check(Core.getVersionMajor() > 0) { "OpenCV native library not initialized" }
 
-        val rgba = Mat(height, width, CvType.CV_8UC4)
-        val small = Mat()
-        val gray = Mat()
-        val bgr = Mat()
-        val lab = Mat()
-        val edgeUnion = Mat()
-        val detector = Imgproc.createLineSegmentDetector()
+        val owner = NativeMatOwner(matAllocator)
+        var detector: LineSegmentDetectorPort? = null
         try {
+            val rgba = owner.allocate { Mat(height, width, CvType.CV_8UC4) }
+            val small = owner.allocate { Mat() }
+            val gray = owner.allocate { Mat() }
+            val bgr = owner.allocate { Mat() }
+            val lab = owner.allocate { Mat() }
+            val edgeUnion = owner.allocate { Mat() }
+            val detectorInstance = detectorFactory.create().also { detector = it }
+            operationFault.check("after-line-detector-created")
             fillRgba(rgba, argbPixels, width)
             val scale = min(1.0, TARGET_LONG_EDGE_PX.toDouble() / max(width, height).toDouble())
             val smallWidth = max(1, round(width * scale).toInt())
@@ -57,68 +104,68 @@ class V2LinePostcardLocator(
             edgeUnion.create(h, w, CvType.CV_8UC1)
             edgeUnion.setTo(org.opencv.core.Scalar(0.0))
 
+            val chromaOneMat = owner.allocate { Mat() }
+            Core.extractChannel(lab, chromaOneMat, 1)
+            val chromaTwoMat = owner.allocate { Mat() }
+            Core.extractChannel(lab, chromaTwoMat, 2)
             val groups = Array(GROUP_COUNT) { ArrayList<LineHypothesis>() }
             val sources = listOf(
                 Source(gray, downsample = 1, sigma = 0.8, color = false),
                 Source(gray, downsample = 2, sigma = 1.5, color = false),
                 Source(gray, downsample = 4, sigma = 1.2, color = false),
-                Source(channel(lab, 1), downsample = 2, sigma = 1.2, color = true),
-                Source(channel(lab, 2), downsample = 2, sigma = 1.2, color = true),
+                Source(chromaOneMat, downsample = 2, sigma = 1.2, color = true),
+                Source(chromaTwoMat, downsample = 2, sigma = 1.2, color = true),
             )
-            try {
-                for (source in sources) {
+            for (source in sources) {
+                val sourceOwner = NativeMatOwner(matAllocator)
+                try {
                     val sourceMat = source.channel
                     val downWidth = max(1, w / source.downsample)
                     val downHeight = max(1, h / source.downsample)
-                    val scaled = Mat()
-                    val blurred = Mat()
-                    val lines = Mat()
-                    val edges = Mat()
-                    val resizedEdges = Mat()
-                    try {
-                        if (downWidth == sourceMat.cols() && downHeight == sourceMat.rows()) {
-                            sourceMat.copyTo(scaled)
-                        } else {
-                            Imgproc.resize(
-                                sourceMat,
-                                scaled,
-                                Size(downWidth.toDouble(), downHeight.toDouble()),
-                                0.0,
-                                0.0,
-                                Imgproc.INTER_AREA,
-                            )
-                        }
-                        Imgproc.GaussianBlur(scaled, blurred, Size(), source.sigma)
-                        detector.detect(blurred, lines)
-                        collectLines(lines, source.downsample, w, h, groups)
-
-                        val mean = if (source.color) COLOR_LOW to COLOR_HIGH else GRAY_LOW to GRAY_HIGH
-                        Imgproc.Canny(blurred, edges, mean.first, mean.second)
-                        if (edges.cols() == w && edges.rows() == h) {
-                            edges.copyTo(resizedEdges)
-                        } else {
-                            Imgproc.resize(edges, resizedEdges, Size(w.toDouble(), h.toDouble()), 0.0, 0.0, Imgproc.INTER_NEAREST)
-                        }
-                        Core.bitwise_or(edgeUnion, resizedEdges, edgeUnion)
-                    } finally {
-                        scaled.release()
-                        blurred.release()
-                        lines.release()
-                        edges.release()
-                        resizedEdges.release()
+                    val scaled = sourceOwner.allocate { Mat() }
+                    val blurred = sourceOwner.allocate { Mat() }
+                    val lines = sourceOwner.allocate { Mat() }
+                    val edges = sourceOwner.allocate { Mat() }
+                    val resizedEdges = sourceOwner.allocate { Mat() }
+                    operationFault.check("after-source-mats")
+                    if (downWidth == sourceMat.cols() && downHeight == sourceMat.rows()) {
+                        sourceMat.copyTo(scaled)
+                    } else {
+                        Imgproc.resize(
+                            sourceMat,
+                            scaled,
+                            Size(downWidth.toDouble(), downHeight.toDouble()),
+                            0.0,
+                            0.0,
+                            Imgproc.INTER_AREA,
+                        )
                     }
+                    Imgproc.GaussianBlur(scaled, blurred, Size(), source.sigma)
+                    detectorInstance.detect(blurred, lines)
+                    collectLines(lines, source.downsample, w, h, groups)
+
+                    val mean = if (source.color) COLOR_LOW to COLOR_HIGH else GRAY_LOW to GRAY_HIGH
+                    Imgproc.Canny(blurred, edges, mean.first, mean.second)
+                    if (edges.cols() == w && edges.rows() == h) {
+                        edges.copyTo(resizedEdges)
+                    } else {
+                        Imgproc.resize(edges, resizedEdges, Size(w.toDouble(), h.toDouble()), 0.0, 0.0, Imgproc.INTER_NEAREST)
+                    }
+                    Core.bitwise_or(edgeUnion, resizedEdges, edgeUnion)
+                } finally {
+                    sourceOwner.releaseAll()
                 }
-            } finally {
-                sources.forEach { it.releaseIfOwned(gray, lab) }
             }
 
             val keptGroups = groups.map { keepDistinct(it) }
             if (keptGroups.any { it.isEmpty() }) return emptyList()
 
-            val inverseEdges = Mat()
-            val distance = Mat()
-            val smoothLab = Mat()
+            val derivedOwner = NativeMatOwner(matAllocator)
             try {
+                val inverseEdges = derivedOwner.allocate { Mat() }
+                val distance = derivedOwner.allocate { Mat() }
+                operationFault.check("after-derived-distance")
+                val smoothLab = derivedOwner.allocate { Mat() }
                 Core.bitwise_not(edgeUnion, inverseEdges)
                 Imgproc.distanceTransform(inverseEdges, distance, Imgproc.DIST_L2, 3)
                 Imgproc.GaussianBlur(lab, smoothLab, Size(), 2.0)
@@ -131,18 +178,14 @@ class V2LinePostcardLocator(
                     lab = smoothLab,
                 )
             } finally {
-                inverseEdges.release()
-                distance.release()
-                smoothLab.release()
+                derivedOwner.releaseAll()
             }
         } finally {
-            detector.clear()
-            rgba.release()
-            small.release()
-            gray.release()
-            bgr.release()
-            lab.release()
-            edgeUnion.release()
+            try {
+                detector?.clear()
+            } finally {
+                owner.releaseAll()
+            }
         }
     }
 
@@ -364,12 +407,6 @@ class V2LinePostcardLocator(
             }
             target.put(y, 0, row)
         }
-    }
-
-    private fun channel(lab: Mat, index: Int): Mat = Mat().also { Core.extractChannel(lab, it, index) }
-
-    private fun Source.releaseIfOwned(gray: Mat, lab: Mat) {
-        if (channel !== gray && channel !== lab) channel.release()
     }
 
     private data class Source(

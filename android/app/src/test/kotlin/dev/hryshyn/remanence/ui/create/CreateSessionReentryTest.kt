@@ -123,7 +123,7 @@ class CreateSessionReentryTest {
             identityProvider = { null },
             persistence = NoPersistence(),
             outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir), retryStore),
-            profile = RecognitionProfile.mvpOrbV1(),
+            profile = RecognitionProfile.postcardSiftRootSiftV1(),
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir),
             openPhotoSource = { error("photo picker not used in this test") },
             senderRetryKeysetWrapper = testWrapper,

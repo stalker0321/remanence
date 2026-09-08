@@ -6,7 +6,7 @@ import kotlin.test.assertTrue
 
 class CandidateRankerTest {
 
-    private val profile = RecognitionProfile.mvpOrbV1()
+    private val profile = RecognitionProfile.postcardSiftRootSiftV1()
     private val ranker = CandidateRanker(profile)
 
     private fun candidate(areaRatio: Double, rectangularity: Double) =

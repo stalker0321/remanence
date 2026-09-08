@@ -19,7 +19,23 @@ class WarpedCapture(
  * lands exactly on the profile's canonical long edge while the detected
  * aspect ratio is preserved (docs/recognition.md section 4).
  */
-class PerspectiveWarper(private val profile: RecognitionProfile) {
+class PerspectiveWarper private constructor(
+    private val profile: RecognitionProfile,
+    private val matAllocator: NativeMatAllocator,
+    private val operationFault: NativeOperationFault,
+) {
+    constructor(profile: RecognitionProfile) : this(
+        profile,
+        NativeMatAllocator.DEFAULT,
+        NativeOperationFault.NONE,
+    )
+
+    internal constructor(
+        profile: RecognitionProfile,
+        matAllocator: NativeMatAllocator,
+        operationFault: NativeOperationFault = NativeOperationFault.NONE,
+        testOnly: Unit = Unit,
+    ) : this(profile, matAllocator, operationFault)
 
     fun warp(
         argbPixels: IntArray,
@@ -62,37 +78,41 @@ class PerspectiveWarper(private val profile: RecognitionProfile) {
             throw IllegalArgumentException("warped output exceeds pixel budget")
         }
 
-        val src = MatOfPoint2f(
-            Point(canonicalCorners[0].x, canonicalCorners[0].y),
-            Point(canonicalCorners[1].x, canonicalCorners[1].y),
-            Point(canonicalCorners[2].x, canonicalCorners[2].y),
-            Point(canonicalCorners[3].x, canonicalCorners[3].y),
-        )
         val targetWidth = targetLong
         val targetHeight = targetShort
-        val dst = MatOfPoint2f(
-            Point(0.0, 0.0),
-            Point((targetWidth - 1).toDouble(), 0.0),
-            Point((targetWidth - 1).toDouble(), (targetHeight - 1).toDouble()),
-            Point(0.0, (targetHeight - 1).toDouble()),
-        )
-        val transform = Imgproc.getPerspectiveTransform(src, dst)
-
-        val source = Mat(height, width, CvType.CV_8UC4)
+        val owner = NativeMatOwner(matAllocator)
         try {
-            fillMat(source, argbPixels, width)
-            val output = Mat()
-            try {
-                Imgproc.warpPerspective(source, output, transform, org.opencv.core.Size(targetWidth.toDouble(), targetHeight.toDouble()))
-                return WarpedCapture(readPixels(output), targetWidth, targetHeight)
-            } finally {
-                output.release()
+            val srcMat = owner.allocate {
+                MatOfPoint2f(
+                Point(canonicalCorners[0].x, canonicalCorners[0].y),
+                Point(canonicalCorners[1].x, canonicalCorners[1].y),
+                Point(canonicalCorners[2].x, canonicalCorners[2].y),
+                Point(canonicalCorners[3].x, canonicalCorners[3].y),
+                )
             }
+            val dstMat = owner.allocate {
+                MatOfPoint2f(
+                Point(0.0, 0.0),
+                Point((targetWidth - 1).toDouble(), 0.0),
+                Point((targetWidth - 1).toDouble(), (targetHeight - 1).toDouble()),
+                Point(0.0, (targetHeight - 1).toDouble()),
+                )
+            }
+            val transformMat = owner.allocate { Imgproc.getPerspectiveTransform(srcMat, dstMat) }
+            val sourceMat = owner.allocate { Mat(height, width, CvType.CV_8UC4) }
+            fillMat(sourceMat, argbPixels, width)
+            val outputMat = owner.allocate { Mat() }
+            operationFault.check("before-warp")
+            Imgproc.warpPerspective(
+                sourceMat,
+                outputMat,
+                transformMat,
+                org.opencv.core.Size(targetWidth.toDouble(), targetHeight.toDouble()),
+            )
+            operationFault.check("before-read")
+            return WarpedCapture(readPixels(outputMat), targetWidth, targetHeight)
         } finally {
-            source.release()
-            src.release()
-            dst.release()
-            transform.release()
+            owner.releaseAll()
         }
     }
 

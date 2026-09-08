@@ -15,10 +15,6 @@ import dev.hryshyn.remanence.core.model.LocalMaterialState
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.TestSenderVerification
-import dev.hryshyn.remanence.core.recognition.ExtractionQuality
-import dev.hryshyn.remanence.core.recognition.FingerprintCodec
-import dev.hryshyn.remanence.core.recognition.FingerprintKeypoint
-import dev.hryshyn.remanence.core.recognition.PostcardFingerprint
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource
 import dev.hryshyn.remanence.index.SenderIndexBundleFileAttributes
@@ -186,6 +182,33 @@ class IncomingSenderIndexCandidateProviderTest {
         assertTrue(index.chooserHints.isEmpty())
     }
 
+    @Test
+    fun fatalReaderErrorEscapesInsteadOfBecomingAnAbsentCandidate() = runBlocking {
+        val fatal = capsule("0198f0a0-0000-7000-8000-00000000c051", 1, owner)
+        seedIndexed(fatal)
+        stage(fatal.capsuleId)
+        val reader = SenderIndexBundleReader(
+            roots = roots,
+            sealer = sealer,
+            codec = dev.hryshyn.remanence.index.SenderIndexBundleCodec(),
+            fileSystem = FatalReaderFileSystem,
+            wipe = { it.fill(0) },
+        )
+
+        try {
+            IncomingSenderIndexCandidateProvider(
+                incomingCapsuleDao = database.incomingCapsuleDao(),
+                senderIndexBundleReader = reader,
+                currentOwner = { owner },
+            ).load(owner)
+            error("fatal reader error was converted to an absent candidate")
+        } catch (failure: AssertionError) {
+            throw failure
+        } catch (_: OutOfMemoryError) {
+            // Expected: provider cleanup must not downgrade a fatal Error.
+        }
+    }
+
     private suspend fun seedIndexed(capsule: IncomingCapsuleEntity) {
         database.incomingCapsuleDao().upsertAllForOwner(
             capsule.ownerUserId,
@@ -239,19 +262,32 @@ class IncomingSenderIndexCandidateProviderTest {
             frontFingerprint = fingerprint(11),
         )
 
-    private fun fingerprint(seed: Int): ByteArray = FingerprintCodec.serialize(
-        PostcardFingerprint(
-            profileId = RecognitionProfile.MVP_ORB_V1_ID,
+    private fun fingerprint(seed: Int): ByteArray {
+        val fingerprint = dev.hryshyn.remanence.core.model.SiftRootSiftFingerprint(
+            profileId = RecognitionProfile.SIFT_ROOTSIFT_V1_ID,
             canonicalWidthPx = 1200,
             canonicalHeightPx = 800,
             coarseHash64 = seed.toLong(),
             keypoints = listOf(
-                FingerprintKeypoint(0.5, 0.5, 1.0, 9000, seed, 0),
+                dev.hryshyn.remanence.core.model.SiftRootSiftKeypoint(
+                    500_000,
+                    500_000,
+                    1_000_000,
+                    9000,
+                    seed,
+                    0,
+                ),
             ),
-            descriptors = listOf(ByteArray(FingerprintCodec.DESCRIPTOR_BYTES) { seed.toByte() }),
-            quality = ExtractionQuality(1.0, 1.0, 0.1, 0.5),
-        ),
-    )
+            quantizedSiftDescriptors = listOf(ByteArray(dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec.DESCRIPTOR_BYTES) {
+                seed.coerceIn(1, 255).toByte()
+            }),
+        )
+        return try {
+            dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec.serialize(fingerprint)
+        } finally {
+            fingerprint.wipe()
+        }
+    }
 
     private fun destination(owner: UserId, capsule: CapsuleId): File = File(
         roots.child(owner, AccountScopedFileRoots.ChildRoot.FINGERPRINTS),
@@ -278,4 +314,12 @@ private object RealProviderFileSystem : SenderIndexBundleReaderFileSystem {
 
     override fun openRead(path: Path): InputStream =
         Files.newInputStream(path, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)
+}
+
+private object FatalReaderFileSystem : SenderIndexBundleReaderFileSystem {
+    override fun attributes(path: Path): SenderIndexBundleFileAttributes =
+        throw OutOfMemoryError("fatal test reader failure")
+
+    override fun openRead(path: Path): InputStream =
+        throw AssertionError("fatal reader must fail before opening a stream")
 }

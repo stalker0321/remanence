@@ -6,7 +6,8 @@ enum class FingerprintSide { FRONT, BACK }
 /**
  * Local capture-only admission thresholds — FRONT-only production contract
  * (ADR-012). These values deliberately do not belong to [RecognitionProfile]:
- * changing them must not change the persisted `mvp-orb-v1` identity,
+ * changing them must not change the persisted
+ * `postcard-sift-rootsift-v1` identity,
  * fingerprint wire format, or matching compatibility. BACK is not a production
  * capture; its former independent threshold is deleted and any BACK request
  * fails closed.

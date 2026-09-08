@@ -26,7 +26,7 @@ import dev.hryshyn.remanence.sync.IncomingAcceptanceDiagnostics
 
 /**
  * M2-F0-07: the production Scan surface. Entry renders the honest FRONT-only
- * capture flow - one FRONT still through the real ORB pipeline - before any
+ * capture flow - one FRONT still through the real SIFT pipeline - before any
  * matching runs against the encrypted local index; the ambiguity chooser
  * shows only decrypted minimal hints; and a grant exists only after the full
  * crypto gate passes - manual selection included.

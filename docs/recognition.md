@@ -1,13 +1,14 @@
 # Local postcard recognition
 
-Status: **APPROVED architecture checkpoint via ADR-012; `mvp-orb-v1` remains the profile and seed thresholds remain uncalibrated until M3. The V2 line-localization path is an experimental, debug-only opt-in with legacy rollback.**
+Status: **Production cutover slice P3A uses `postcard-sift-rootsift-v1` as the sole current FRONT profile. The existing seed classifier/strong-gate/score/margin values remain uncalibrated until M3. The V2 line-localization path retains its existing fallback chain.**
 
 Recognition runs entirely on Android from exactly one required FRONT still
 capture. It identifies a design only among capsules routed to the
 authenticated recipient. A design can map locally to zero, one, or many
 capsules. It is not global image search, object recognition, OCR, AR, or a
 cryptographic authentication mechanism. ADR-012 is the current contract; this
-document records its FRONT-only implementation at `88fb80d` (M2-F0 closure, see implementation-plan §10a). Physical-device and dataset acceptance remain open.
+document records the current FRONT-only implementation and its bounded P3A
+cutover. Physical-device and dataset acceptance remain open.
 
 Test8/Test9 recognition state is disposable development data. A clean app
 database and server recognition state are accepted for the breaking reset.
@@ -22,8 +23,7 @@ database and server recognition state are accepted for the breaking reset.
 - Keep raw FRONT images local and short-lived.
 - Make every capture, feature, score, and acceptance parameter versioned/configurable.
 - Keep the fingerprint algorithm/profile ID separate from the manifest format
-  version. `mvp-orb-v1` remains unchanged unless a later ADR changes the
-  algorithm/profile.
+  version. The current algorithm/profile is `postcard-sift-rootsift-v1`.
 - Replace sender-before-mail fingerprints with recipient-after-delivery
   fingerprints as the preferred long-term reference without deleting the
   sender fallback.
@@ -94,7 +94,7 @@ On a downscaled preview copy:
 - convex four-point polygon approximation;
 - rank by area, rectangularity, edge support, and distance from guide overlay.
 
-Initial capture gates for `mvp-orb-v1`:
+Initial capture gates for `postcard-sift-rootsift-v1`:
 
 | Parameter | Seed value |
 | --- | ---: |
@@ -125,35 +125,41 @@ verification below.
 - Preserve the detected aspect ratio; do not stretch every postcard to a fixed ratio.
 - Warp perspective so the long edge is 1600 px.
 - Produce canonical grayscale for features plus a small normalized luminance summary for diagnostics.
-- Apply CLAHE only as an explicitly versioned extraction branch. `mvp-orb-v1` extracts ORB from both normal grayscale and CLAHE grayscale, deduplicates nearby keypoints, ranks by response/spatial distribution, and caps the merged result at 1,500 features for low-texture print regions.
+- Extract raw OpenCV SIFT with `SIFT.create(0, 3, 0.018, 12.0, 1.6)`.
+  Distribute detections over a deterministic 6×6 grid, retain at most 45 per
+  cell, then apply the deliberate global cap of 1,500. RootSIFT is derived
+  exactly once by the matcher, never during extraction or persistence.
 - Coordinates stored in fingerprints are normalized to `[0,1]` relative to canonical width/height, so geometry is resolution-independent.
 
-## 5. ORB versus SIFT decision
+## 5. SIFT/RootSIFT production profile
 
-MVP selects ORB.
+P3A is a breaking replacement: `postcard-sift-rootsift-v1` format 3 is the sole
+current production profile and the create/scan paths have one SIFT extractor,
+one codec, and one RootSIFT matcher. There is no legacy reader, writer,
+dual-read path, migration, or runtime fallback.
 
-Why ORB now:
+The detector stores raw quantized SIFT rows. During matching, each non-zero row
+is L1-normalized and square-rooted once. This keeps extraction/persistence
+independent from the matcher representation and prevents double RootSIFT
+transformation.
 
-- compact 256-bit binary descriptors make an encrypted index for hundreds of cards practical;
-- Hamming matching is fast on mid-range Android devices;
-- the required detector/descriptor is in the main OpenCV Android distribution;
-- perspective normalization removes much of the scale/projective burden before matching;
-- the interaction is still-image, so accuracy can use up to 1,500 local features without realtime constraints.
-
-SIFT may be more robust on some low-texture/scale cases, but it is not a silent
-fallback. P0 now defines an isolated format-3 codec contract for the experimental
-`postcard-sift-rootsift-v1` profile; it does not add an extractor, matcher,
-reader, dual-read path, migration, thresholds, or runtime wiring. Any future
-selection of SIFT requires physical/device evidence, performance measurements,
-and a separate implementation decision.
+The typed `LocalMatchEngine` boundary adapts P2 technical evidence without
+changing the existing policy: `uniqueMatches` supplies the existing
+`ratioMutualMatches`, the minimum of query- and reference-inlier hull coverage
+supplies `spatialCoverage`, and pixel median error is normalized against the
+configured canonical long edge. P2's `geometryAccepted` is necessary but not
+sufficient: the engine reuses P2's returned reference-pixel homography after
+normalizing it as `Dquery^-1 * Hpixels * Dreference`, then requires the existing
+full-card plausibility gate as well. No score, strong-gate, margin, or
+classifier values are changed by this cutover.
 
 ## 6. Fingerprint format
 
 A fingerprint contains no pixels but remains sensitive derived visual data.
 
 ```text
-PostcardFingerprintV2 {
-  format_version = 2
+PostcardFingerprintV3 {
+  format_version = 3
   recognition_profile_id
   canonical_width
   canonical_height
@@ -166,13 +172,7 @@ PostcardFingerprintV2 {
     response_quantized
     octave
   }
-  orb_descriptors[]  // 32 bytes each, aligned with keypoints
-  extraction_quality {
-    blur_score
-    exposure_score
-    glare_fraction
-    detected_area_ratio
-  }
+  quantized_sift_descriptors[]  // 128 raw uint8 bytes each, aligned with keypoints
 }
 ```
 
@@ -183,29 +183,29 @@ unsupported versions and any fields outside this contract.
 
 `coarse_hash64` is a DCT perceptual hash used only for cheap front diagnostics/tie context, never as an acceptance decision or secret. All numeric fields use a fixed binary encoding defined by the normative recognition protobuf/schema. Counts and lengths are bounded before allocation.
 
-Initial ORB extraction parameters:
+Current SIFT extraction parameters:
 
 | Parameter | Seed value |
 | --- | ---: |
-| `nfeatures` | 1500 |
-| `scaleFactor` | 1.2 |
-| `nlevels` | 8 |
-| `edgeThreshold` | 31 |
-| `firstLevel` | 0 |
-| `WTA_K` | 2 |
-| `scoreType` | HARRIS_SCORE |
-| `patchSize` | 31 |
-| `fastThreshold` | 20 |
+| `nfeatures` | 0 |
+| `nOctaveLayers` | 3 |
+| `contrastThreshold` | 0.018 |
+| `edgeThreshold` | 12.0 |
+| `sigma` | 1.6 |
+| grid / per-cell / global cap | 6×6 / 45 / 1,500 |
 
 Sender fingerprints live inside the capsule’s encrypted recognition manifest. Recipient fingerprints are encrypted locally with a Keystore-protected fingerprint-storage key. Neither raw fingerprints nor coarse hashes are sent plaintext to the backend.
 
-### 6a. Experimental SIFT/RootSIFT format-3 contract (P0 codec only)
+### 6a. SIFT/RootSIFT format-3 contract
 
 The normative schema is `protocol/proto/remanence/recognition/v2/recognition_v2.proto`
-and the Android codec is `SiftRootSiftFingerprintCodec`. The exact profile ID is
-`postcard-sift-rootsift-v1` and the exact format version is `3`. This is an
-independent contract beside the existing ORB format; no production consumer reads
-it yet.
+and the pure model codec is `:core:model.SiftRootSiftFingerprintCodec`. Native
+extraction/matching callers import the model types directly; the recognition
+module owns no compatibility aliases or re-exports. The exact profile ID is
+`postcard-sift-rootsift-v1` and the exact format version is `3`. This is the
+sole current production recognition format after the disposable-data breaking
+reset. The outer manifest, AEAD, server, index, and grant contracts are
+unchanged.
 
 The domain constructor does not defensively copy descriptor rows: arrays supplied
 to it remain caller-owned. Rows returned by parsing are fresh codec/domain-owned
@@ -220,8 +220,8 @@ per keypoint. Rows are stored as raw unsigned-byte quantized OpenCV SIFT values;
 finite detector values are rounded with `Math.rint(value)` (ties-to-even) and
 clipped to 0..255, with no additional `*255` scaling. RootSIFT derivation occurs
 only during P2 matching and must not double-transform these stored rows. Detector
-settings, grid/order rules, and thresholds remain deferred to P1; no matcher
-behavior is implemented here. An all-zero row is storage-valid but
+settings, grid/order rules, extraction, and matcher behavior are implemented by
+the current P1/P2 components. An all-zero row is storage-valid but
 matcher-unusable.
 
 Serialization validates the domain, rebuilds the protobuf in field order, and
@@ -236,34 +236,44 @@ are unchanged.
 
 For one query FRONT and one reference FRONT:
 
-1. Reject incompatible fingerprint/profile versions unless an explicit compatible matcher exists.
-2. Match ORB descriptors with brute-force `NORM_HAMMING`, KNN `k=2`.
-3. Apply the ratio test `best_distance / second_distance <= 0.75`.
-4. Apply reverse matching and retain mutual-consistent matches.
-5. Estimate query-to-reference homography with RANSAC from normalized keypoint coordinates.
-6. Classify RANSAC inliers at a reprojection threshold equivalent to 5 px on a 1600-px long edge.
-7. Compute descriptor matches, inlier count, inlier ratio, median inlier reprojection error, spatial coverage on query and reference, and homography plausibility.
+1. Reject incompatible fingerprint/profile versions before matching.
+2. Convert raw unsigned rows to RootSIFT exactly once, then use brute-force
+   `NORM_L2`, `crossCheck=false`, and KNN `k=2` in both directions.
+3. Apply the strict ratio test `best_distance < 0.75 * second_distance` and
+   retain only reciprocal matches. Fewer than two neighbors, zero second
+   distance, and non-finite/negative distances fail closed.
+4. Deterministically sort reciprocal pairs and deduplicate repeated rounded
+   query pixels only; reference-side deduplication is deliberately not applied.
+5. Estimate reference-to-query homography with the pinned USAC_MAGSAC call and
+   deterministic RNG seed. Compute scalar match, inlier, error, and both-side
+   coverage diagnostics; production policy uses the smaller query/reference
+   inlier-hull coverage.
 
 ### Spatial coverage
 
-Coverage is the smaller of:
-
-- normalized convex-hull area of inlier query points;
-- normalized convex-hull area of inlier reference points.
+Production policy coverage is the smaller of the normalized convex-hull areas
+of the inlier query points and inlier reference points. This preserves the
+existing full-card protection; P2's reference-only diagnostic remains useful
+evidence but is not the product coverage signal.
 
 A secondary 4×4 occupancy grid must contain inliers in at least three cells. This prevents a stamp corner or a short word from dominating an entire-card claim.
 
 ### Homography plausibility
 
-The transformed reference corners must:
+After converting the row-major reference-pixel -> query-pixel homography into
+canonical normalized coordinates, the transformed reference corners must:
 
 - be finite and form a convex non-self-intersecting quadrilateral;
 - preserve orientation (no reflection);
-- have mapped area ratio in `[0.20, 5.0]` before canonical normalization correction;
+- have mapped area ratio in `[0.20, 5.0]`;
 - have no single edge-length ratio above 4× its opposite counterpart;
+- have support area at least 300 px² and projected edge ratio at most 8;
 - have median inlier reprojection error within the configured limit.
 
-Failure is a hard geometry rejection, not merely a small score penalty.
+These are technical no-evidence checks. Their observed scalar diagnostics and
+already-observed inlier evidence are retained when a later support check fails;
+they are not new grant thresholds. Failure is ordinary no-evidence for the
+matcher and can never issue a grant.
 
 ## 8. Match score
 
@@ -473,7 +483,7 @@ empty feature set is hard. Quality reasons remain advisory telemetry, while
 weak/no-match remains recapture and never grant. The existing thresholds,
 strong gate, score/margin rules, and E2EE verification are unchanged.
 
-Verification snapshot for the current uncommitted diff:
+Historical localization verification snapshot (not the P3A cutover gate):
 
 - The durable focused localization/processor XML set is five suites: `RealStillFingerprintProcessorTest` (3), `LocalizationTelemetryContractTest` (2), `CaptureLocalizationDiagnosticsTest` (1), `V2LinePostcardLocatorTest` (1), and `LocalizationProposalSelectorTest` (3), for **10/10 tests**, 0 skipped, failures, or errors. The reports are under `android/app/build/test-results/testDebugUnitTest/` for the two app suites and `android/core/recognition/build/test-results/testDebugUnitTest/` for the three recognition suites.
 - The durable XML aggregate for the four Android `testDebugUnitTest` dependencies is **1,639 tests**, 4 skipped, 0 failures, and 0 errors: app 720/3 skipped, core data 488/1, core crypto 232/0, and core recognition 199/0. The root `android/build.gradle.kts` `testDebugUnitTest` task depends additionally on `:core:model:test`; its separate `android/core/model/build/test-results/test/` XML contains 51 tests, 0 skipped, failures, or errors. Thus **1,690 total and 4 skipped** is the precisely traceable sum of the five root-task dependency report sets, while 1,639 is the Android-module XML aggregate; no single XML file contains the 1,690 total.
@@ -517,6 +527,5 @@ results do not establish an M3 acceptance target.
 
 ## 16. Primary references
 
-- [OpenCV ORB API](https://docs.opencv.org/4.x/db/d95/classcv_1_1ORB.html)
 - [OpenCV feature matching and homography tutorial](https://docs.opencv.org/4.x/d1/de0/tutorial_py_feature_homography.html)
 - [OpenCV SIFT API](https://docs.opencv.org/4.x/d7/d60/classcv_1_1SIFT.html)

@@ -1,5 +1,8 @@
 package dev.hryshyn.remanence.core.recognition
 
+import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprint
+import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec
+import dev.hryshyn.remanence.core.model.SiftRootSiftKeypoint
 import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertContentEquals

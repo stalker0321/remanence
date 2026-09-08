@@ -8,6 +8,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -18,6 +19,9 @@ import org.robolectric.annotation.Config
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
+import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprint
+import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec
+import dev.hryshyn.remanence.core.model.SiftRootSiftKeypoint
 
 
 private class XorSealerForRecipient : SecretSealer {
@@ -45,9 +49,27 @@ class RecipientBaselineCreatorTest {
     private val capsuleId = "3c111111-2222-4333-8444-555555555555"
 
     private fun front() = ReceivedFrontCapture(
-        profileId = "mvp-orb-v1",
-        serializedBytes = "fp-FRONT".toByteArray(),
+        profileId = SiftRootSiftFingerprintCodec.PROFILE_ID,
+        serializedBytes = canonicalBytes(1),
     )
+
+    private fun canonicalBytes(seed: Int): ByteArray {
+        val fingerprint = SiftRootSiftFingerprint(
+            profileId = SiftRootSiftFingerprintCodec.PROFILE_ID,
+            canonicalWidthPx = 1600,
+            canonicalHeightPx = 1000,
+            coarseHash64 = seed.toLong(),
+            keypoints = listOf(
+                SiftRootSiftKeypoint(100_000, 200_000, 1_000_000, 0, seed, 0),
+            ),
+            quantizedSiftDescriptors = listOf(ByteArray(SiftRootSiftFingerprintCodec.DESCRIPTOR_BYTES) { (it + seed).toByte() }),
+        )
+        return try {
+            SiftRootSiftFingerprintCodec.serialize(fingerprint)
+        } finally {
+            fingerprint.wipe()
+        }
+    }
 
     @Before
     fun setUp() {
@@ -71,7 +93,7 @@ class RecipientBaselineCreatorTest {
 
     private suspend fun seedSenderFront(preferred: Boolean) {
         val store = EncryptedFingerprintStore(roots, XorSealerForRecipient(), database.recognitionFingerprintDao(), ownerUserIdProvider = { "5108f0a0-0000-7000-8000-00000000aa01" })
-        store.persist(capsuleId, FingerprintOrigin.SENDER, "mvp-orb-v1", "sender-front".toByteArray())
+        store.persist(capsuleId, FingerprintOrigin.SENDER, SiftRootSiftFingerprintCodec.PROFILE_ID, canonicalBytes(9))
         if (preferred) {
             store.setPreferredOrigin(capsuleId, FingerprintOrigin.SENDER)
         }
@@ -94,7 +116,9 @@ class RecipientBaselineCreatorTest {
         // The recipient baseline is sealed and round-trips.
         val frontRow = recipientRows.single()
         val store = EncryptedFingerprintStore(roots, XorSealerForRecipient(), database.recognitionFingerprintDao(), ownerUserIdProvider = { "5108f0a0-0000-7000-8000-00000000aa01" })
-        assertEquals("fp-FRONT", String(store.decrypt(frontRow.fingerprintId)))
+        val restored = store.decrypt(frontRow.fingerprintId)
+        assertArrayEquals(canonicalBytes(1), restored)
+        restored.fill(0)
     }
 
     @Test
@@ -115,5 +139,41 @@ class RecipientBaselineCreatorTest {
         val rows = database.recognitionFingerprintDao().getAllByCapsuleIdAndOwner(capsuleId, OWNER)
             .filter { it.origin == FingerprintOrigin.RECIPIENT }
         assertEquals(1, rows.size)
+    }
+
+    @Test
+    fun invalidFrontIsRejectedBeforeAnyBaselineReadOrMutation() = runBlocking {
+        val invalid = ReceivedFrontCapture(
+            profileId = SiftRootSiftFingerprintCodec.PROFILE_ID,
+            serializedBytes = "not-canonical".toByteArray(),
+        )
+
+        assertThrows(IllegalArgumentException::class.java) {
+            runBlocking { creator.createAfterVerifiedReceipt(capsuleId, invalid) }
+        }
+
+        assertTrue(
+            database.recognitionFingerprintDao()
+                .getAllByCapsuleIdAndOwner(capsuleId, OWNER)
+                .isEmpty(),
+        )
+    }
+
+    @Test
+    fun mismatchedProfileIsRejectedBeforeAnyBaselineMutation() = runBlocking {
+        val mismatched = ReceivedFrontCapture(
+            profileId = "retired-profile-v0",
+            serializedBytes = canonicalBytes(2),
+        )
+
+        assertThrows(IllegalArgumentException::class.java) {
+            runBlocking { creator.createAfterVerifiedReceipt(capsuleId, mismatched) }
+        }
+
+        assertTrue(
+            database.recognitionFingerprintDao()
+                .getAllByCapsuleIdAndOwner(capsuleId, OWNER)
+                .isEmpty(),
+        )
     }
 }

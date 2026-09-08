@@ -107,30 +107,7 @@ class CrossIdentityCapsuleFlowTest {
     }
 
     private fun syntheticFingerprint(seed: Int, side: FingerprintSide): ByteArray {
-        val profile = RecognitionProfile.mvpOrbV1()
-        val keypoints = List(64) {
-            dev.hryshyn.remanence.core.recognition.FingerprintKeypoint(
-                xNormalized = (it % 8) / 8.0,
-                yNormalized = (it / 8) / 8.0,
-                scaleNormalized = 1.0,
-                angleCentiDegrees = 0,
-                responseQuantized = it,
-                octave = 0,
-            )
-        }
-        return dev.hryshyn.remanence.core.recognition.FingerprintCodec.serialize(
-            dev.hryshyn.remanence.core.recognition.PostcardFingerprint(
-                profileId = profile.profileId,
-                canonicalWidthPx = profile.capture.canonicalLongEdgePx,
-                canonicalHeightPx = 1000,
-                coarseHash64 = seed.toLong(),
-                keypoints = keypoints,
-                descriptors = List(64) { i ->
-                    ByteArray(32) { ((it * 7 + i * 13 + seed * 29) and 0xFF).toByte() }
-                },
-                quality = dev.hryshyn.remanence.core.recognition.ExtractionQuality(200.0, 90.0, 0.01, 0.85),
-            ),
-        )
+        return dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture.bytes(seed)
     }
 
     private suspend fun publishAndStageCrossIdentity() {

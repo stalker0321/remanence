@@ -51,7 +51,7 @@ data class SenderIdentitySnapshot(
 
 /**
  * FIX-M1-007-11: the production Create flow over real components only -
- * directory resolve + explicit confirmation, front capture through the ORB
+ * directory resolve + explicit confirmation, front capture through the SIFT
  * processor into sealed persistence, Photo Picker 3-5 plus bounded note,
  * and ONE sealing path: the ciphertext-only
  * publisher feeding the durable outbox and account-scoped upload work. There is no second, all-plaintext
@@ -792,6 +792,7 @@ class CreateViewModel(
                         photoHeightsPx = staged.map { it.height },
                         noteUtf8 = inputs.noteText,
                         frontFingerprintBytes = frontForPublish,
+                        frontFingerprintProfileId = RecognitionProfile.SIFT_ROOTSIFT_V1_ID,
                         signingKeyset = sender.signingPrivateHandle,
                         recipientEncryptionPublicKeyset =
                             parsePublicHandle(snapshot.encryptionPublicKeysetB64Url),

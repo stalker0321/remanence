@@ -1,5 +1,6 @@
 package dev.hryshyn.remanence.core.recognition
 
+import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec
 import java.util.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -204,6 +205,20 @@ class SiftRootSiftFingerprintExtractorTest {
         assertEquals(listOf("sift", "descriptors", "selected", "detected", "mask", "gray"), released)
         assertEquals(1, primary.suppressed.size)
         assertEquals("clear failed", primary.suppressed.single().message)
+    }
+
+    @Test
+    fun cleanupFailureWipesDescriptorRowsBeforeOwnershipTransferFails() {
+        val row = ByteArray(128) { 7 }
+
+        assertFailsWith<IllegalStateException> {
+            extractor.cleanupBeforeTransferForTesting(
+                outputDescriptors = listOf(row),
+                actions = listOf { throw IllegalStateException("clear failed") },
+            )
+        }
+
+        assertTrue(row.all { it == 0.toByte() })
     }
 
     private fun loadNativeOrSkip() {

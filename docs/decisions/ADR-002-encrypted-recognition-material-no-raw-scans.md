@@ -9,7 +9,7 @@ The postcard back can contain address, handwriting, signature, and private text.
 ## Decision
 
 - Raw front/back scans never upload in MVP, plaintext or ciphertext.
-- Sender uploads ORB fingerprints/keypoints only inside the capsule-encrypted recognition manifest.
+- Sender uploads SIFT/RootSIFT fingerprints/keypoints only inside the capsule-encrypted recognition manifest.
 - Recipient downloads routed envelopes/manifests and performs all matching locally.
 - Recipient-after-delivery fingerprints are stored locally encrypted and become preferred.
 - Derived descriptors are treated as sensitive, not anonymous.

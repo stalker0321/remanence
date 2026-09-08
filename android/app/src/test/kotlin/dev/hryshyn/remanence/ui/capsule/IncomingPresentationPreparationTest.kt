@@ -51,11 +51,8 @@ import dev.hryshyn.remanence.capture.CaptureAttemptPhase
 import dev.hryshyn.remanence.capture.CapturePermissionStep
 import dev.hryshyn.remanence.capture.ProcessedStill
 import dev.hryshyn.remanence.capture.StillProcessor
-import dev.hryshyn.remanence.core.recognition.ExtractionQuality
-import dev.hryshyn.remanence.core.recognition.FingerprintCodec
-import dev.hryshyn.remanence.core.recognition.FingerprintKeypoint
-import dev.hryshyn.remanence.core.recognition.PostcardFingerprint
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.test.DeterministicSiftMatcher
 import dev.hryshyn.remanence.core.recognition.ScanGrantManager
 import dev.hryshyn.remanence.index.SenderIndexBundleAad
 import dev.hryshyn.remanence.index.SenderIndexBundleCodec
@@ -87,10 +84,12 @@ import javax.crypto.spec.SecretKeySpec
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -254,7 +253,7 @@ class IncomingPresentationPreparationTest {
         fingerprintStore.persist(
             CAPSULE.toRestString(),
             dev.hryshyn.remanence.core.data.db.FingerprintOrigin.RECIPIENT,
-            RecognitionProfile.mvpOrbV1().profileId,
+            RecognitionProfile.postcardSiftRootSiftV1().profileId,
             weakFront,
         )
         fingerprintStore.setPreferredOrigin(
@@ -287,10 +286,11 @@ class IncomingPresentationPreparationTest {
             currentOwner = { OWNER },
         )
         val grants = PresentationGrantAuthority(ScanGrantManager(clockMillis = { 1_000L }))
+        val referenceSizes = mutableListOf<Int>()
         val scan = ScanViewModel(
             persistence = fingerprintStore,
             database = database,
-            profile = RecognitionProfile.mvpOrbV1(),
+            profile = RecognitionProfile.postcardSiftRootSiftV1(),
             identityProvider = {
                 SenderIdentitySnapshot(
                     userId = OWNER.toRestString(),
@@ -310,6 +310,7 @@ class IncomingPresentationPreparationTest {
             },
             presentationGrants = grants,
             frontProcessor = FixedScanProcessor(front),
+            matcher = recordingFallbackMatcher(referenceSizes),
             candidateIndexProvider = { provider.load(it) },
             incomingPresentationPreparation = preparation(),
             cpuDispatcher = testDispatcher,
@@ -321,10 +322,9 @@ class IncomingPresentationPreparationTest {
             check(scan.beginFrontCapture())
             scan.deliverFrontJpeg("front".toByteArray())
 
-            val granted = scan.terminal
-                .filterIsInstance<ScanTerminalState.Granted>()
-                .first()
+            val granted = awaitGranted(scan, referenceSizes)
             assertTrue(granted.viaSenderFallback)
+            assertEquals(listOf(3, 64), referenceSizes)
             val binding = grants.activeForTests()
             assertEquals(CapsulePresentationSource.INCOMING, binding?.source)
             val prepared = requireNotNull(binding?.incomingPresentation)
@@ -491,7 +491,7 @@ class IncomingPresentationPreparationTest {
         private val serializedBytes: ByteArray,
     ) : StillProcessor {
         override fun process(jpegBytes: ByteArray): ProcessedStill =
-            ProcessedStill.Accepted(RecognitionProfile.mvpOrbV1().profileId, serializedBytes)
+            ProcessedStill.Accepted(RecognitionProfile.postcardSiftRootSiftV1().profileId, serializedBytes)
     }
 
     private fun readyCameras(scan: ScanViewModel) {
@@ -701,51 +701,46 @@ class IncomingPresentationPreparationTest {
         path.writeBytes(bytes)
     }
 
-    private fun fingerprint(): ByteArray = FingerprintCodec.serialize(
-        PostcardFingerprint(
-            profileId = RecognitionProfile.MVP_ORB_V1_ID,
-            canonicalWidthPx = 1200,
-            canonicalHeightPx = 800,
-            coarseHash64 = 17L,
-            keypoints = listOf(
-                FingerprintKeypoint(
-                    xNormalized = 0.5,
-                    yNormalized = 0.5,
-                    scaleNormalized = 1.0,
-                    angleCentiDegrees = 9000,
-                    responseQuantized = 2,
-                    octave = 0,
-                ),
-            ),
-            descriptors = listOf(ByteArray(FingerprintCodec.DESCRIPTOR_BYTES) { 3 }),
-            quality = ExtractionQuality(1.0, 1.0, 0.1, 0.5),
-        ),
-    )
+    private fun fingerprint(): ByteArray =
+        dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture.bytes(
+            seed = 17,
+            keypointCount = 1,
+            width = 1200,
+            height = 800,
+        )
 
-    private fun scanFingerprint(count: Int): ByteArray = FingerprintCodec.serialize(
-        PostcardFingerprint(
-            profileId = RecognitionProfile.MVP_ORB_V1_ID,
-            canonicalWidthPx = 1200,
-            canonicalHeightPx = 800,
-            coarseHash64 = 17L,
-            keypoints = List(count) { index ->
-                FingerprintKeypoint(
-                    xNormalized = (index % 8) / 8.0,
-                    yNormalized = (index / 8) / 8.0,
-                    scaleNormalized = 1.0,
-                    angleCentiDegrees = 0,
-                    responseQuantized = index,
-                    octave = 0,
-                )
-            },
-            descriptors = List(count) { index ->
-                ByteArray(FingerprintCodec.DESCRIPTOR_BYTES) { byteIndex ->
-                    ((byteIndex * 7 + index * 13 + 29) and 0xFF).toByte()
-                }
-            },
-            quality = ExtractionQuality(1.0, 1.0, 0.1, 0.5),
-        ),
-    )
+    private fun scanFingerprint(count: Int): ByteArray =
+        dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture.bytes(
+            seed = 17,
+            keypointCount = count,
+            width = 1200,
+            height = 800,
+        )
+
+    private fun recordingFallbackMatcher(referenceSizes: MutableList<Int>) =
+        dev.hryshyn.remanence.core.recognition.SiftRootSiftMatcherPort { query, reference ->
+            referenceSizes += reference.quantizedSiftDescriptors.size
+            DeterministicSiftMatcher.port().match(query, reference)
+        }
+
+    private suspend fun awaitGranted(
+        scan: ScanViewModel,
+        referenceSizes: List<Int>,
+    ): ScanTerminalState.Granted = try {
+        withTimeout(10_000) {
+            scan.terminal
+                .filterIsInstance<ScanTerminalState.Granted>()
+                .first()
+        }
+    } catch (timeout: TimeoutCancellationException) {
+        throw AssertionError(
+            "timed out waiting for sender-fallback grant: " +
+                "terminal=${scan.terminal.value}; " +
+                "match=${scan.matchState.value}; " +
+                "referenceSizes=$referenceSizes",
+            timeout,
+        )
+    }
 
     private fun sha256(bytes: ByteArray): ByteArray =
         MessageDigest.getInstance("SHA-256").digest(bytes)

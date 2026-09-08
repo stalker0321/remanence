@@ -11,8 +11,8 @@ import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.UserId
-import dev.hryshyn.remanence.core.recognition.FingerprintCodec
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec
 import dev.hryshyn.remanence.identity.CapsuleRoutingPolicy
 import dev.hryshyn.remanence.wiring.PreparedIdentity
 import java.security.MessageDigest
@@ -203,14 +203,14 @@ class SenderIndexBundlePlaintext internal constructor(
             require(bytes.size <= ProtocolV1Limits.RECOGNITION_MANIFEST_MAX_CIPHERTEXT_BYTES) {
                 "fingerprint exceeds bounded recognition payload size"
             }
-            val parsed = FingerprintCodec.parse(bytes)
+            val parsed = SiftRootSiftFingerprintCodec.parse(bytes)
             try {
-                require(parsed.profileId == RecognitionProfile.MVP_ORB_V1_ID) {
+                require(parsed.profileId == RecognitionProfile.SIFT_ROOTSIFT_V1_ID) {
                     "unsupported recognition profile"
                 }
                 // Unknown protobuf fields are not part of the canonical local
                 // representation and must not survive into the sealed bundle.
-                val canonicalBytes = FingerprintCodec.serialize(parsed)
+                val canonicalBytes = SiftRootSiftFingerprintCodec.serialize(parsed)
                 try {
                     require(canonicalBytes.contentEquals(bytes)) {
                         "fingerprint encoding is not canonical"

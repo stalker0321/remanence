@@ -1,4 +1,4 @@
-package dev.hryshyn.remanence.core.recognition
+package dev.hryshyn.remanence.core.model
 
 /** One bounded SIFT keypoint record; all wire metadata is integer-valued. */
 data class SiftRootSiftKeypoint(

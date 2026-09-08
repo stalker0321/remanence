@@ -7,11 +7,11 @@ import kotlin.test.assertTrue
 
 class RecognitionProfileTest {
 
-    private val seed = RecognitionProfile.mvpOrbV1()
+    private val seed = RecognitionProfile.postcardSiftRootSiftV1()
 
     @Test
     fun seedMatchesEveryDocumentedValue() {
-        assertEquals("mvp-orb-v1", seed.profileId)
+        assertEquals(RecognitionProfile.SIFT_ROOTSIFT_V1_ID, seed.profileId)
         assertEquals(1, seed.formatVersion)
         with(seed.capture) {
             assertEquals(0.35, minCardAreaRatio)
@@ -26,16 +26,15 @@ class RecognitionProfileTest {
             assertEquals(0.12, maxGlareRegionFraction)
             assertEquals(0.80, minRectangularity)
         }
-        with(seed.orb) {
-            assertEquals(1500, nfeatures)
-            assertEquals(1.2, scaleFactor)
-            assertEquals(8, nlevels)
-            assertEquals(31, edgeThreshold)
-            assertEquals(0, firstLevel)
-            assertEquals(2, wtaK)
-            assertTrue(scoreTypeHarris)
-            assertEquals(31, patchSize)
-            assertEquals(20, fastThreshold)
+        with(seed.sift) {
+            assertEquals(0, nfeatures)
+            assertEquals(3, octaveLayers)
+            assertEquals(0.018, contrastThreshold)
+            assertEquals(12.0, edgeThreshold)
+            assertEquals(1.6, sigma)
+            assertEquals(6, gridSize)
+            assertEquals(45, maxPerCell)
+            assertEquals(1500, maxKeypoints)
         }
         with(seed.match) {
             assertEquals(5.0, inlierReprojectionTolerancePx)
@@ -80,7 +79,7 @@ class RecognitionProfileTest {
     fun unknownProfileIdFailsClosed() {
         val base = RecognitionProfileJson.encode(seed)
         assertFailsWith<IllegalArgumentException> {
-            RecognitionProfile.fromJson(base.replace("\"mvp-orb-v1\"", "\"mvp-orb-v9\""))
+            RecognitionProfile.fromJson(base.replace("\"postcard-sift-rootsift-v1\"", "\"postcard-sift-rootsift-v9\""))
         }
     }
 
@@ -88,8 +87,8 @@ class RecognitionProfileTest {
     fun unknownJsonFieldFailsClosed() {
         val base = RecognitionProfileJson.encode(seed)
         val withExtra = base.replace(
-            "\"profileId\": \"mvp-orb-v1\"",
-            "\"profileId\": \"mvp-orb-v1\", \"surprise\": true",
+            "\"profileId\": \"postcard-sift-rootsift-v1\"",
+            "\"profileId\": \"postcard-sift-rootsift-v1\", \"surprise\": true",
         )
         assertFailsWith<Exception> { RecognitionProfile.fromJson(withExtra) }
     }

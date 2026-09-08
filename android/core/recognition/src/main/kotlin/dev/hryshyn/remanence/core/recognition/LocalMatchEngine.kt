@@ -1,5 +1,7 @@
 package dev.hryshyn.remanence.core.recognition
 
+import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprint
+import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec
 import java.util.UUID
 
 /**
@@ -8,7 +10,7 @@ import java.util.UUID
  */
 data class IndexedCandidate(
     val capsuleId: UUID,
-    val front: PostcardFingerprint,
+    val front: SiftRootSiftFingerprint,
     /** True when this FRONT comes from the preferred recipient baseline. */
     val recipientPreferred: Boolean = false,
 )
@@ -22,6 +24,14 @@ fun interface CapsuleVerifier {
 fun interface ScanGrantIssuer {
     /** Returns the random grant ID for this capsule, or null when refused. */
     suspend fun issue(capsuleId: UUID): String?
+}
+
+/** Typed seam for the sole current SIFT/RootSIFT matcher. */
+fun interface SiftRootSiftMatcherPort {
+    fun match(
+        query: SiftRootSiftFingerprint,
+        reference: SiftRootSiftFingerprint,
+    ): SiftRootSiftMatchResult
 }
 
 /** Final result of running the whole local hierarchy for one scan session. */
@@ -43,6 +53,25 @@ sealed interface ScanFlowResult {
     data object RecaptureRequired : ScanFlowResult
 }
 
+/** Visual-only result; it carries no verification result or grant capability. */
+sealed interface VisualScanResult {
+    data class Accepted(
+        val capsuleId: UUID,
+        val origin: CandidateOrigin,
+        val compositeScore: Double,
+    ) : VisualScanResult
+
+    data class Ambiguous(
+        val origin: CandidateOrigin,
+        val rows: List<Pair<UUID, Double>>,
+        val singleRecaptureFirst: Boolean,
+    ) : VisualScanResult
+
+    data class RecaptureRequired(
+        val outcome: MatchDiagnosticOutcome,
+    ) : VisualScanResult
+}
+
 /**
  * M2-F0-01 FRONT-only: runs the complete documented hierarchy — descriptor
  * matching, RANSAC geometry, coverage, plausibility gates, FRONT scoring,
@@ -60,33 +89,44 @@ class LocalMatchEngine(
     private val profile: RecognitionProfile,
     private val verifier: CapsuleVerifier,
     private val grantIssuer: ScanGrantIssuer,
-    private val estimatorProvider: () -> HomographyEstimator = { HomographyEstimator() },
-    private val matcher: DescriptorMatcher = DescriptorMatcher(),
+    private val matcher: SiftRootSiftMatcherPort = SiftRootSiftMatcherPort {
+        query, reference -> SiftRootSiftMatcher().match(query, reference)
+    },
     private val diagnosticObserver: ((MatchDiagnosticEvent) -> Unit)? = null,
 ) {
 
-    private val plausibilityGate = HomographyPlausibilityGate(profile.match)
     private val sideScorer = SideScorer(profile)
     private val frontRanker = FrontCandidateRanker(profile)
     private val acceptanceEvaluator = CompositeAcceptanceEvaluator(profile)
     private val coordinator = MatchCoordinator(profile)
+    private val homographyPlausibilityGate = HomographyPlausibilityGate(profile.match)
 
     /** FRONT-only entry point. */
     suspend fun run(
-        queryFront: PostcardFingerprint,
+        queryFront: SiftRootSiftFingerprint,
         candidates: List<IndexedCandidate>,
-    ): ScanFlowResult {
+    ): ScanFlowResult = completeVisual(evaluateVisual(queryFront, candidates))
+
+    /**
+     * Runs only visual matching and policy classification. This boundary is
+     * safe to execute on a CPU dispatcher: it never verifies crypto, issues a
+     * grant, or mutates UI-owned state.
+     */
+    suspend fun evaluateVisual(
+        queryFront: SiftRootSiftFingerprint,
+        candidates: List<IndexedCandidate>,
+        cancellationCheck: suspend () -> Unit = {},
+    ): VisualScanResult {
         if (candidates.isEmpty()) {
-            reportResult(MatchDiagnosticOutcome.RECAPTURE)
-            return ScanFlowResult.RecaptureRequired
+            return VisualScanResult.RecaptureRequired(MatchDiagnosticOutcome.RECAPTURE)
         }
 
         val recipientList = candidates.filter { it.recipientPreferred }
         val senderList = candidates.filterNot { it.recipientPreferred }
 
-        val recipientUniverse = evaluateUniverse(recipientList, queryFront)
+        val recipientUniverse = evaluateUniverse(recipientList, queryFront, cancellationCheck)
         val senderUniverse = if (senderList.isNotEmpty()) {
-            evaluateUniverse(senderList, queryFront)
+            evaluateUniverse(senderList, queryFront, cancellationCheck)
         } else {
             null
         }
@@ -94,45 +134,20 @@ class LocalMatchEngine(
         return when (val decision = coordinator.coordinate(recipientUniverse, senderUniverse)) {
             is CoordinatorDecision.AutoAccepted -> {
                 val capsuleId = UUID.fromString(decision.candidateId)
-                if (!verifier.verify(capsuleId)) {
-                    reportResult(MatchDiagnosticOutcome.RECAPTURE, decision.origin)
-                    return ScanFlowResult.RecaptureRequired
-                }
-                val grantId = grantIssuer.issue(capsuleId) ?: run {
-                    reportResult(MatchDiagnosticOutcome.RECAPTURE, decision.origin)
-                    return ScanFlowResult.RecaptureRequired
-                }
                 val score = (if (decision.origin == CandidateOrigin.RECIPIENT_PREFERRED) recipientUniverse else senderUniverse)
                     ?.acceptance?.autoAccepted?.compositeScore ?: Double.NaN
-                reportResult(MatchDiagnosticOutcome.GRANT, decision.origin)
-                ScanFlowResult.Granted(capsuleId, decision.origin, grantId, score)
+                VisualScanResult.Accepted(capsuleId, decision.origin, score)
             }
             is CoordinatorDecision.SenderFallbackAccepted -> {
                 val capsuleId = UUID.fromString(decision.candidateId)
-                if (!verifier.verify(capsuleId)) {
-                    reportResult(MatchDiagnosticOutcome.RECAPTURE, CandidateOrigin.SENDER_FALLBACK)
-                    return ScanFlowResult.RecaptureRequired
-                }
-                val grantId = grantIssuer.issue(capsuleId) ?: run {
-                    reportResult(MatchDiagnosticOutcome.RECAPTURE, CandidateOrigin.SENDER_FALLBACK)
-                    return ScanFlowResult.RecaptureRequired
-                }
-                reportResult(MatchDiagnosticOutcome.GRANT, CandidateOrigin.SENDER_FALLBACK)
-                ScanFlowResult.Granted(
-                    capsuleId, CandidateOrigin.SENDER_FALLBACK, grantId,
+                VisualScanResult.Accepted(
+                    capsuleId,
+                    CandidateOrigin.SENDER_FALLBACK,
                     senderUniverse?.acceptance?.autoAccepted?.compositeScore ?: Double.NaN,
                 )
             }
             is CoordinatorDecision.Ambiguous -> {
-                reportResult(
-                    if (decision.classification.outcome == ScanOutcome.SINGLE_CANDIDATE_RECAPTURE) {
-                        MatchDiagnosticOutcome.RECAPTURE
-                    } else {
-                        MatchDiagnosticOutcome.AMBIGUOUS
-                    },
-                    decision.origin,
-                )
-                ScanFlowResult.Ambiguous(
+                VisualScanResult.Ambiguous(
                     origin = decision.origin,
                     rows = decision.classification.chooserRows.map { UUID.fromString(it.candidateId) to it.compositeScore },
                     singleRecaptureFirst =
@@ -140,15 +155,58 @@ class LocalMatchEngine(
                 )
             }
             CoordinatorDecision.NoMatchEverywhere -> {
-                reportResult(MatchDiagnosticOutcome.NO_MATCH)
-                ScanFlowResult.RecaptureRequired
+                VisualScanResult.RecaptureRequired(MatchDiagnosticOutcome.NO_MATCH)
             }
         }
     }
 
-    private fun evaluateUniverse(
+    /** Completes a visual result on the caller's owner/UI context. */
+    suspend fun completeVisual(result: VisualScanResult): ScanFlowResult = when (result) {
+        is VisualScanResult.Accepted -> {
+            if (!verifier.verify(result.capsuleId)) {
+                reportResult(MatchDiagnosticOutcome.RECAPTURE, result.origin)
+                ScanFlowResult.RecaptureRequired
+            } else {
+                val grantId = grantIssuer.issue(result.capsuleId)
+                if (grantId == null) {
+                    reportResult(MatchDiagnosticOutcome.RECAPTURE, result.origin)
+                    ScanFlowResult.RecaptureRequired
+                } else {
+                    reportResult(MatchDiagnosticOutcome.GRANT, result.origin)
+                    ScanFlowResult.Granted(
+                        result.capsuleId,
+                        result.origin,
+                        grantId,
+                        result.compositeScore,
+                    )
+                }
+            }
+        }
+        is VisualScanResult.Ambiguous -> {
+            reportResult(
+                if (result.singleRecaptureFirst) {
+                    MatchDiagnosticOutcome.RECAPTURE
+                } else {
+                    MatchDiagnosticOutcome.AMBIGUOUS
+                },
+                result.origin,
+            )
+            ScanFlowResult.Ambiguous(
+                origin = result.origin,
+                rows = result.rows,
+                singleRecaptureFirst = result.singleRecaptureFirst,
+            )
+        }
+        is VisualScanResult.RecaptureRequired -> {
+            reportResult(result.outcome)
+            ScanFlowResult.RecaptureRequired
+        }
+    }
+
+    private suspend fun evaluateUniverse(
         universe: List<IndexedCandidate>,
-        queryFront: PostcardFingerprint,
+        queryFront: SiftRootSiftFingerprint,
+        cancellationCheck: suspend () -> Unit,
     ): UniverseScanResult {
         val origin = if (universe.firstOrNull()?.recipientPreferred == true || universe.isEmpty()) {
             CandidateOrigin.RECIPIENT_PREFERRED
@@ -159,13 +217,17 @@ class LocalMatchEngine(
         val frontOutcomes = HashMap<String, FrontCandidate>(universe.size)
         val sideOutcomes = HashMap<String, SideOutcome>(universe.size)
         val frontStrengths = HashMap<String, Boolean>(universe.size)
+        cancellationCheck()
         universe.forEach { candidate ->
+            cancellationCheck()
             val outcome = evaluateSide(queryFront, candidate.front)
+            cancellationCheck()
             val front = FrontCandidate(candidate.capsuleId.toString(), outcome.report.sideScore, outcome.report.weakGatePassed)
             frontOutcomes[candidate.capsuleId.toString()] = front
             sideOutcomes[candidate.capsuleId.toString()] = outcome
             frontStrengths[candidate.capsuleId.toString()] = outcome.report.strongGatePassed
         }
+        cancellationCheck()
         val frontRanking = frontRanker.rank(frontOutcomes.values.toList())
         val top = frontRanking.retained.firstOrNull()
         val topOutcome = top?.let { sideOutcomes[it.candidateId] }
@@ -212,62 +274,139 @@ class LocalMatchEngine(
         val report: SideScoreReport,
     )
 
-    /** Descriptor matching + RANSAC + coverage + plausibility + scoring. */
-    private fun evaluateSide(query: PostcardFingerprint, reference: PostcardFingerprint): SideOutcome {
-        val matches = matcher.match(query, reference)
-        val insufficient = profile.match.weakMinRatioMatches
-        if (matches.size < insufficient) {
-            return SideOutcome(
-                signalsOf(matches.size, 0, 0.0, 0.0, 0, 1.0, false),
-                sideScorer.score(signalsOf(matches.size, 0, 0.0, 0.0, 0, 1.0, false)),
+    /** P2 matcher output adapted to the unchanged FRONT policy/scorer. */
+    private fun evaluateSide(
+        query: SiftRootSiftFingerprint,
+        reference: SiftRootSiftFingerprint,
+    ): SideOutcome {
+        val result = matcher.match(query, reference)
+        val diagnostics = result.diagnostics
+        val inlierPoints = result.inlierMatchIndices.mapNotNull { index ->
+            result.matches.getOrNull(index)?.let { pair ->
+                MatchPoint(
+                    query.keypoints[pair.queryIndex].xMicro.toDouble() / SiftRootSiftFingerprintCodec.MICRO_UNITS,
+                    query.keypoints[pair.queryIndex].yMicro.toDouble() / SiftRootSiftFingerprintCodec.MICRO_UNITS,
+                    reference.keypoints[pair.referenceIndex].xMicro.toDouble() / SiftRootSiftFingerprintCodec.MICRO_UNITS,
+                    reference.keypoints[pair.referenceIndex].yMicro.toDouble() / SiftRootSiftFingerprintCodec.MICRO_UNITS,
+                )
+            }
+        }
+        val coverage = if (inlierPoints.isEmpty()) {
+            null
+        } else {
+            SpatialCoverageMeter(profile.match.coverageGridSize).measure(
+                inlierPoints.map { it.queryX to it.queryY },
+                inlierPoints.map { it.referenceX to it.referenceY },
             )
         }
-
-        val points = matches.map { m ->
-            MatchPoint(
-                query.keypoints[m.queryIndex].xNormalized,
-                query.keypoints[m.queryIndex].yNormalized,
-                reference.keypoints[m.referenceIndex].xNormalized,
-                reference.keypoints[m.referenceIndex].yNormalized,
+        val occupiedGridCells = coverage?.occupiedGridCells ?: 0
+        val normalizedMedianError = diagnostics.medianInlierReprojectionErrorPx
+            .takeIf { it >= 0.0 && it.isFinite() }
+            ?.div(profile.capture.canonicalLongEdgePx.toDouble())
+            ?: UNOBSERVABLE_MEDIAN_ERROR_NORMALIZED
+        val fullCardPlausible = if (diagnostics.geometryAccepted) {
+            fullCardPlausible(
+                result = result,
+                query = query,
+                reference = reference,
+                medianInlierErrorNormalized = normalizedMedianError,
             )
+        } else {
+            false
         }
-        val report = estimatorProvider().estimate(points)
-
-        var coverageValue = 0.0
-        var gridCells = 0
-        var plausible = false
-        if (report.success && report.matrix != null) {
-            val inlierQuery = report.inlierIndices.map { points[it].queryX to points[it].queryY }
-            val inlierReference = report.inlierIndices.map { points[it].referenceX to points[it].referenceY }
-            val coverage = SpatialCoverageMeter(profile.match.coverageGridSize).measure(inlierQuery, inlierReference)
-            coverageValue = coverage.hullAreaNormalized
-            gridCells = coverage.occupiedGridCells
-            plausible = plausibilityGate.check(
-                report.matrix!!,
-                report.medianInlierErrorNormalized,
-                profile.match.inlierReprojectionTolerancePx / profile.capture.canonicalLongEdgePx,
-            ).plausible
-        }
-
         val signals = SideMatchSignals(
-            ratioMutualMatches = matches.size,
-            ransacInliers = report.inlierCount,
-            inlierRatio = report.inlierRatio,
-            spatialCoverage = coverageValue,
-            occupiedGridCells = gridCells,
-            medianInlierErrorNormalized = report.medianInlierErrorNormalized,
-            homographyPlausible = plausible,
+            // P2's unique count is the policy's one-sided ratio-match count:
+            // it is after reciprocal matching, deterministic ordering, and
+            // deliberate query-pixel deduplication.
+            ratioMutualMatches = diagnostics.uniqueMatches,
+            ransacInliers = diagnostics.inliers,
+            inlierRatio = diagnostics.inlierRatio,
+            // Preserve the existing policy's binding min(query, reference)
+            // inlier-hull coverage; P2's reference-only diagnostic is not a
+            // substitute for this product signal.
+            spatialCoverage = coverage?.hullAreaNormalized
+                ?.takeIf { it >= 0.0 && it.isFinite() }
+                ?: 0.0,
+            occupiedGridCells = occupiedGridCells,
+            medianInlierErrorNormalized = normalizedMedianError,
+            // P2 support validity is necessary but not sufficient. Reapply the
+            // existing full-card gate to P2's pixel homography after converting
+            // it to normalized reference->query coordinates.
+            homographyPlausible = diagnostics.geometryAccepted && fullCardPlausible,
         )
         return SideOutcome(signals, sideScorer.score(signals))
     }
 
-    private fun signalsOf(
-        matches: Int,
-        inliers: Int,
-        ratio: Double,
-        coverage: Double,
-        cells: Int,
-        medianError: Double,
-        plausible: Boolean,
-    ) = SideMatchSignals(matches, inliers, ratio, coverage, cells, medianError, plausible)
+    /**
+     * Reuses the P2 homography without another match/estimation pass. P2's H
+     * maps reference pixels to query pixels; the existing gate consumes the
+     * equivalent normalized-coordinate matrix Dquery^-1 * Hpixels * Dreference.
+     */
+    private fun fullCardPlausible(
+        result: SiftRootSiftMatchResult,
+        query: SiftRootSiftFingerprint,
+        reference: SiftRootSiftFingerprint,
+        medianInlierErrorNormalized: Double,
+    ): Boolean {
+        val pixelMatrix = result.homographyRowMajor ?: return false
+        if (pixelMatrix.size != HOMOGRAPHY_VALUES) return false
+        val normalizedMatrix = normalizePixelHomography(
+            pixelMatrix = pixelMatrix,
+            queryWidthPx = query.canonicalWidthPx,
+            queryHeightPx = query.canonicalHeightPx,
+            referenceWidthPx = reference.canonicalWidthPx,
+            referenceHeightPx = reference.canonicalHeightPx,
+        )
+        return homographyPlausibilityGate.check(
+            matrix = normalizedMatrix,
+            medianInlierErrorNormalized = medianInlierErrorNormalized,
+            medianErrorLimitNormalized =
+                profile.match.inlierReprojectionTolerancePx / profile.capture.canonicalLongEdgePx,
+        ).plausible
+    }
+
+    /** Converts reference/query pixel coordinates to their normalized domains. */
+    private fun normalizePixelHomography(
+        pixelMatrix: DoubleArray,
+        queryWidthPx: Int,
+        queryHeightPx: Int,
+        referenceWidthPx: Int,
+        referenceHeightPx: Int,
+    ): DoubleArray {
+        val dReference = doubleArrayOf(
+            referenceWidthPx.toDouble(), 0.0, 0.0,
+            0.0, referenceHeightPx.toDouble(), 0.0,
+            0.0, 0.0, 1.0,
+        )
+        val inverseDQuery = doubleArrayOf(
+            1.0 / queryWidthPx.toDouble(), 0.0, 0.0,
+            0.0, 1.0 / queryHeightPx.toDouble(), 0.0,
+            0.0, 0.0, 1.0,
+        )
+        return multiply3x3(inverseDQuery, multiply3x3(pixelMatrix, dReference))
+    }
+
+    private fun multiply3x3(left: DoubleArray, right: DoubleArray): DoubleArray {
+        val result = DoubleArray(HOMOGRAPHY_VALUES)
+        for (row in 0 until MATRIX_DIMENSION) {
+            for (column in 0 until MATRIX_DIMENSION) {
+                var value = 0.0
+                for (inner in 0 until MATRIX_DIMENSION) {
+                    value += left[row * MATRIX_DIMENSION + inner] *
+                        right[inner * MATRIX_DIMENSION + column]
+                }
+                result[row * MATRIX_DIMENSION + column] = value
+            }
+        }
+        return result
+    }
+
+    private companion object {
+        const val HOMOGRAPHY_VALUES = 9
+        const val MATRIX_DIMENSION = 3
+        // SideScorer multiplies this by the configured maximum error, so an
+        // unobservable error receives zero error credit without changing any
+        // existing acceptance threshold.
+        const val UNOBSERVABLE_MEDIAN_ERROR_NORMALIZED = 1.0
+    }
 }

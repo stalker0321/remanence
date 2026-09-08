@@ -50,6 +50,7 @@ import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.ui.scan.ScanCandidateIndex
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
+import dev.hryshyn.remanence.test.DeterministicSiftMatcher
 
 /**
  * FIX-REVIEW2-01 regression: persisted routing identity material is parsed
@@ -230,13 +231,27 @@ class CapsuleRoutingCorruptionTest {
 
     private class MatchingProcessor(private val bytes: ByteArray) : StillProcessor {
         override fun process(jpegBytes: ByteArray): ProcessedStill =
-            ProcessedStill.Accepted(profileId = RecognitionProfile.mvpOrbV1().profileId, serializedBytes = bytes)
+            ProcessedStill.Accepted(profileId = RecognitionProfile.postcardSiftRootSiftV1().profileId, serializedBytes = bytes)
+    }
+
+    private class VisualEvidenceRecorder {
+        var calls = 0
+            private set
+        var accepted = 0
+            private set
+
+        fun port() = dev.hryshyn.remanence.core.recognition.SiftRootSiftMatcherPort { query, reference ->
+            val result = DeterministicSiftMatcher.port().match(query, reference)
+            calls += 1
+            if (result.diagnostics.geometryAccepted) accepted += 1
+            result
+        }
     }
 
     private suspend fun stagePublishedSelfSendCapsule() {
         store().persist(
             capsuleUuid.toString(), FingerprintOrigin.SENDER,
-            RecognitionProfile.mvpOrbV1().profileId,
+            RecognitionProfile.postcardSiftRootSiftV1().profileId,
             syntheticFingerprint(11),
         )
         val prepared = CapsulePublisher(testWrapper, testAlias).publish(
@@ -273,10 +288,13 @@ class CapsuleRoutingCorruptionTest {
         database.outboxCapsuleDao().insertOrAbort(userUuid.toString(), transform(row))
     }
 
-    private fun scanViewModel(): ScanViewModel = ScanViewModel(
+    private fun scanViewModel(
+        matcher: dev.hryshyn.remanence.core.recognition.SiftRootSiftMatcherPort =
+            DeterministicSiftMatcher.port(),
+    ): ScanViewModel = ScanViewModel(
         persistence = store(),
         database = database,
-        profile = RecognitionProfile.mvpOrbV1(),
+        profile = RecognitionProfile.postcardSiftRootSiftV1(),
         identityProvider = {
             SenderIdentitySnapshot(
                 userId = userUuid.toString(),
@@ -304,6 +322,7 @@ class CapsuleRoutingCorruptionTest {
         ),
         candidateIndexProvider = { ScanCandidateIndex.EMPTY },
         incomingPresentationPreparation = null,
+        matcher = matcher,
         frontProcessor = MatchingProcessor(syntheticFingerprint(11)),
         cpuDispatcher = testDispatcher,
         ioDispatcher = testDispatcher,
@@ -326,9 +345,14 @@ class CapsuleRoutingCorruptionTest {
     }
 
     /** Runs one full scan attempt and asserts the corrupt row yields nothing. */
-    private suspend fun assertScanYieldsNoGrantAndNoBaseline(vm: ScanViewModel) {
+    private suspend fun assertScanYieldsNoGrantAndNoBaseline(
+        vm: ScanViewModel,
+        visualEvidence: VisualEvidenceRecorder,
+    ) {
         capturePair(vm)
         awaitCondition { vm.matchState.value !is ScanMatchUiState.Matching }
+        assertEquals(1, visualEvidence.calls)
+        assertEquals(1, visualEvidence.accepted)
         assertTrue("corrupt row must never grant", vm.terminal.value !is ScanTerminalState.Granted)
         assertTrue(vm.matchState.value is ScanMatchUiState.RecaptureGuidance)
         assertTrue(
@@ -344,28 +368,32 @@ class CapsuleRoutingCorruptionTest {
     fun corruptedPersistedSenderUserIdNeverGrants() = runBlocking {
         stagePublishedSelfSendCapsule()
         tamperRow { it.copy(senderUserId = "not-a-uuid") }
-        assertScanYieldsNoGrantAndNoBaseline(scanViewModel())
+        val visualEvidence = VisualEvidenceRecorder()
+        assertScanYieldsNoGrantAndNoBaseline(scanViewModel(visualEvidence.port()), visualEvidence)
     }
 
     @Test
     fun corruptedPersistedRecipientUserIdNeverGrants() = runBlocking {
         stagePublishedSelfSendCapsule()
         tamperRow { it.copy(recipientUserId = "also-not-a-uuid") }
-        assertScanYieldsNoGrantAndNoBaseline(scanViewModel())
+        val visualEvidence = VisualEvidenceRecorder()
+        assertScanYieldsNoGrantAndNoBaseline(scanViewModel(visualEvidence.port()), visualEvidence)
     }
 
     @Test
     fun corruptedPersistedSenderBundleNeverGrants() = runBlocking {
         stagePublishedSelfSendCapsule()
         tamperRow { it.copy(senderKeyBundleId = "broken-bundle") }
-        assertScanYieldsNoGrantAndNoBaseline(scanViewModel())
+        val visualEvidence = VisualEvidenceRecorder()
+        assertScanYieldsNoGrantAndNoBaseline(scanViewModel(visualEvidence.port()), visualEvidence)
     }
 
     @Test
     fun corruptedPersistedRecipientBundleNeverGrants() = runBlocking {
         stagePublishedSelfSendCapsule()
         tamperRow { it.copy(recipientKeyBundleId = "broken-bundle") }
-        assertScanYieldsNoGrantAndNoBaseline(scanViewModel())
+        val visualEvidence = VisualEvidenceRecorder()
+        assertScanYieldsNoGrantAndNoBaseline(scanViewModel(visualEvidence.port()), visualEvidence)
     }
 
     @Test
@@ -373,7 +401,8 @@ class CapsuleRoutingCorruptionTest {
         stagePublishedSelfSendCapsule()
         // Invalid encoding: fail closed even though our OWN valid export exists.
         tamperRow { it.copy(senderSigningPublicKeysetB64 = "!!!not-base64!!!") }
-        assertScanYieldsNoGrantAndNoBaseline(scanViewModel())
+        val visualEvidence = VisualEvidenceRecorder()
+        assertScanYieldsNoGrantAndNoBaseline(scanViewModel(visualEvidence.port()), visualEvidence)
     }
 
     @Test
@@ -417,29 +446,6 @@ class CapsuleRoutingCorruptionTest {
     }
 
     private fun syntheticFingerprint(seed: Int): ByteArray {
-        val profile = RecognitionProfile.mvpOrbV1()
-        val keypoints = List(64) {
-            dev.hryshyn.remanence.core.recognition.FingerprintKeypoint(
-                xNormalized = (it % 8) / 8.0,
-                yNormalized = (it / 8) / 8.0,
-                scaleNormalized = 1.0,
-                angleCentiDegrees = 0,
-                responseQuantized = it,
-                octave = 0,
-            )
-        }
-        return dev.hryshyn.remanence.core.recognition.FingerprintCodec.serialize(
-            dev.hryshyn.remanence.core.recognition.PostcardFingerprint(
-                profileId = profile.profileId,
-                canonicalWidthPx = profile.capture.canonicalLongEdgePx,
-                canonicalHeightPx = 1000,
-                coarseHash64 = seed.toLong(),
-                keypoints = keypoints,
-                descriptors = List(64) { i ->
-                    ByteArray(32) { ((it * 7 + i * 13 + seed * 29) and 0xFF).toByte() }
-                },
-                quality = dev.hryshyn.remanence.core.recognition.ExtractionQuality(200.0, 90.0, 0.01, 0.85),
-            ),
-        )
+        return dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture.bytes(seed)
     }
 }

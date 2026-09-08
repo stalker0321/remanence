@@ -54,32 +54,9 @@ import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
  * session. Duplicate taps stay a single publish.
  */
 private fun lifetimeSynthetic(side: FingerprintSide): ProcessedStill.Accepted {
-    val profile = RecognitionProfile.mvpOrbV1()
-    val keypoints = List(64) {
-        dev.hryshyn.remanence.core.recognition.FingerprintKeypoint(
-            xNormalized = (it % 8) / 8.0,
-            yNormalized = (it / 8) / 8.0,
-            scaleNormalized = 1.0,
-            angleCentiDegrees = 0,
-            responseQuantized = it,
-            octave = 0,
-        )
-    }
-    return ProcessedStill.Accepted(
-        profileId = profile.profileId,
-        serializedBytes = dev.hryshyn.remanence.core.recognition.FingerprintCodec.serialize(
-            dev.hryshyn.remanence.core.recognition.PostcardFingerprint(
-                profileId = profile.profileId,
-                canonicalWidthPx = profile.capture.canonicalLongEdgePx,
-                canonicalHeightPx = 1000,
-                coarseHash64 = 6L,
-                keypoints = keypoints,
-                descriptors = List(64) { i ->
-                    ByteArray(32) { ((it * 17 + i * 5) and 0xFF).toByte() }
-                },
-                quality = dev.hryshyn.remanence.core.recognition.ExtractionQuality(200.0, 90.0, 0.01, 0.85),
-            ),
-        ),
+        return ProcessedStill.Accepted(
+        profileId = dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec.PROFILE_ID,
+        serializedBytes = dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture.bytes(6),
     )
 }
 
@@ -241,7 +218,7 @@ class CreatePublishLifetimeTest {
             identityProvider = { identityGate.await() },
             persistence = persistence,
             outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(outboxDir), retryStore),
-            profile = RecognitionProfile.mvpOrbV1(),
+            profile = RecognitionProfile.postcardSiftRootSiftV1(),
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir),
             openPhotoSource = { id ->
                 dev.hryshyn.remanence.create.PhotoSource {

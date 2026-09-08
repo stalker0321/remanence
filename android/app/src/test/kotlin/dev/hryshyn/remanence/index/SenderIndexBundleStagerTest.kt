@@ -8,11 +8,7 @@ import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.TestSenderVerification
-import dev.hryshyn.remanence.core.recognition.ExtractionQuality
-import dev.hryshyn.remanence.core.recognition.FingerprintCodec
-import dev.hryshyn.remanence.core.recognition.FingerprintKeypoint
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
-import dev.hryshyn.remanence.core.recognition.PostcardFingerprint
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import java.io.File
 import java.io.ByteArrayOutputStream
@@ -749,31 +745,30 @@ class SenderIndexBundleStagerTest {
         frontFingerprint = frontFingerprint,
     )
 
-    private fun contentBytes(@Suppress("UNUSED_PARAMETER") side: FingerprintSide): ByteArray = FingerprintCodec.serialize(
-        PostcardFingerprint(
-            profileId = RecognitionProfile.MVP_ORB_V1_ID,
+    private fun contentBytes(@Suppress("UNUSED_PARAMETER") side: FingerprintSide): ByteArray {
+        val fingerprint = dev.hryshyn.remanence.core.model.SiftRootSiftFingerprint(
+            profileId = RecognitionProfile.SIFT_ROOTSIFT_V1_ID,
             canonicalWidthPx = 1200,
             canonicalHeightPx = 800,
             coarseHash64 = 17L,
             keypoints = listOf(
-                FingerprintKeypoint(
-                    xNormalized = 0.5,
-                    yNormalized = 0.5,
-                    scaleNormalized = 1.0,
+                dev.hryshyn.remanence.core.model.SiftRootSiftKeypoint(
+                    xMicro = 500_000,
+                    yMicro = 500_000,
+                    scaleMicro = 1_000_000,
                     angleCentiDegrees = 9000,
                     responseQuantized = 2,
                     octave = 0,
                 ),
             ),
-            descriptors = listOf(ByteArray(FingerprintCodec.DESCRIPTOR_BYTES) { 3 }),
-            quality = ExtractionQuality(
-                blurScore = 1.0,
-                exposureScore = 1.0,
-                glareFraction = 0.1,
-                detectedAreaRatio = 0.5,
-            ),
-        ),
-    )
+            quantizedSiftDescriptors = listOf(ByteArray(dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec.DESCRIPTOR_BYTES) { 3 }),
+        )
+        return try {
+            dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec.serialize(fingerprint)
+        } finally {
+            fingerprint.wipe()
+        }
+    }
 
     private fun destination(owner: UserId): File = File(
         roots.child(owner, AccountScopedFileRoots.ChildRoot.FINGERPRINTS),

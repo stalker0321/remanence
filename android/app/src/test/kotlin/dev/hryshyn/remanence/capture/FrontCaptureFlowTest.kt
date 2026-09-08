@@ -7,15 +7,18 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Before
 import org.junit.Test
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
 import dev.hryshyn.remanence.core.recognition.QualityReason
 import dev.hryshyn.remanence.create.StagedSideFingerprint
+import dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture
 
 /**
  * FIX-STATE-01/03 regression proof for the front still delivery: the attempt
@@ -72,11 +75,13 @@ class FrontCaptureFlowTest {
 
     @Test
     fun deliveredStillFlowsThroughToSealedPersistenceAndAccepts() = runBlocking {
+        val expected = CanonicalSiftFingerprintFixture.bytes(seed = 1)
+        val expectedCopy = expected.copyOf()
         var processorBytes: ByteArray? = null
         val flow = FrontCaptureFlow(
             StillProcessor {
-                "serialized-orb".toByteArray().also { processorBytes = it }
-                    .let { ProcessedStill.Accepted("mvp-orb-v1", it) }
+                expected.also { processorBytes = it }
+                    .let { ProcessedStill.Accepted("postcard-sift-rootsift-v1", it) }
             },
         )
         val controller = capturingController()
@@ -85,9 +90,10 @@ class FrontCaptureFlowTest {
 
         assertTrue(outcome is FrontCaptureOutcome.Captured)
         assertEquals(
-            listOf("serialized-orb"),
-            persistence.persisted.map { String(it) },
+            1,
+            persistence.persisted.size,
         )
+        assertArrayEquals(expectedCopy, persistence.persisted.single())
         assertEquals(CaptureAttemptPhase.Accepted, controller.phase)
         assertTrue(processorBytes!!.all { it == 0.toByte() })
     }
@@ -135,8 +141,8 @@ class FrontCaptureFlowTest {
         var processorBytes: ByteArray? = null
         val flow = FrontCaptureFlow(
             StillProcessor {
-                "bytes".toByteArray().also { processorBytes = it }
-                    .let { ProcessedStill.Accepted("mvp-orb-v1", it) }
+                CanonicalSiftFingerprintFixture.bytes(seed = 2).also { processorBytes = it }
+                    .let { ProcessedStill.Accepted("postcard-sift-rootsift-v1", it) }
             },
         )
         val controller = capturingController()
@@ -150,22 +156,51 @@ class FrontCaptureFlowTest {
     }
 
     @Test
+    fun fatalFailureAfterOfferBeforeExtractionClearsOwnerQueueAndWipesBuffers() = runBlocking {
+        val handoff = CaptureHandoffQueue()
+        var processorBytes: ByteArray? = null
+        val flow = FrontCaptureFlow(
+            StillProcessor {
+                CanonicalSiftFingerprintFixture.bytes(seed = 6).also { processorBytes = it }
+                    .let { ProcessedStill.Accepted("postcard-sift-rootsift-v1", it) }
+            },
+            Dispatchers.Unconfined,
+            Dispatchers.Unconfined,
+            handoff,
+            { throw AssertionError("fatal failure after handoff offer") },
+        )
+        val controller = capturingController()
+        val jpeg = "jpeg".toByteArray()
+
+        val failure = assertThrows(AssertionError::class.java) {
+            runBlocking {
+                flow.onJpegDelivered(jpeg, CAPSULE_ID, persistence, controller)
+            }
+        }
+
+        assertEquals("fatal failure after handoff offer", failure.message)
+        assertTrue(processorBytes!!.all { it == 0.toByte() })
+        assertTrue(jpeg.all { it == 0.toByte() })
+        assertTrue(handoff.take(1L) == null)
+    }
+
+    @Test
     fun oldFailureCleanupCannotRemoveNewerQueuedHandoff() = runBlocking {
         lateinit var queue: CaptureHandoffQueue
-        val newerBytes = "newer-front".toByteArray()
+        val newerBytes = CanonicalSiftFingerprintFixture.bytes(seed = 3)
         queue = CaptureHandoffQueue { owner ->
             if (owner == 1L) {
                 queue.offer(
                     owner + 1,
-                    StagedSideFingerprint("mvp-orb-v1", newerBytes),
+                    StagedSideFingerprint("postcard-sift-rootsift-v1", newerBytes),
                 )
             }
         }
         var oldBytes: ByteArray? = null
         val flow = FrontCaptureFlow(
             StillProcessor {
-                "old-front".toByteArray().also { oldBytes = it }
-                    .let { ProcessedStill.Accepted("mvp-orb-v1", it) }
+                CanonicalSiftFingerprintFixture.bytes(seed = 4).also { oldBytes = it }
+                    .let { ProcessedStill.Accepted("postcard-sift-rootsift-v1", it) }
             },
             Dispatchers.Unconfined,
             Dispatchers.Unconfined,
@@ -180,8 +215,8 @@ class FrontCaptureFlowTest {
         assertEquals(FrontCaptureOutcome.Failed("capsule id must be a canonical UUID string"), outcome)
         assertTrue(oldBytes!!.all { it == 0.toByte() })
         val surviving = requireNotNull(queue.take(2))
-        assertEquals("newer-front", String(surviving.serializedBytes))
         assertTrue(surviving.serializedBytes.any { it != 0.toByte() })
+        assertArrayEquals(newerBytes, surviving.serializedBytes)
         surviving.serializedBytes.fill(0)
     }
 
@@ -190,11 +225,11 @@ class FrontCaptureFlowTest {
         val parent = Job()
         var processorBytes: ByteArray? = null
         val flow = FrontCaptureFlow(StillProcessor {
-            val bytes = "cancel-at-return".toByteArray().also { processorBytes = it }
+            val bytes = CanonicalSiftFingerprintFixture.bytes(seed = 5).also { processorBytes = it }
             // Cancellation is requested at the Accepted return handoff, not
             // later during persistence.
             parent.cancel()
-            ProcessedStill.Accepted("mvp-orb-v1", bytes)
+            ProcessedStill.Accepted("postcard-sift-rootsift-v1", bytes)
         })
         val controller = capturingController()
         val child = CoroutineScope(parent + Dispatchers.Default).launch {
@@ -211,7 +246,10 @@ class FrontCaptureFlowTest {
         var processorCalls = 0
         val flow = FrontCaptureFlow(StillProcessor {
             processorCalls += 1
-            ProcessedStill.Accepted("p", ByteArray(1))
+            ProcessedStill.Accepted(
+                "postcard-sift-rootsift-v1",
+                CanonicalSiftFingerprintFixture.bytes(seed = 7),
+            )
         })
         val controller = capturingController()
 
@@ -229,7 +267,10 @@ class FrontCaptureFlowTest {
         var processorCalls = 0
         val flow = FrontCaptureFlow(StillProcessor {
             processorCalls += 1
-            ProcessedStill.Accepted("p", ByteArray(1))
+            ProcessedStill.Accepted(
+                "postcard-sift-rootsift-v1",
+                CanonicalSiftFingerprintFixture.bytes(seed = 8),
+            )
         })
         val controller = capturingController().apply { cancelActiveAttempt() }
         val jpeg = "jpeg".toByteArray()
@@ -243,7 +284,7 @@ class FrontCaptureFlowTest {
     }
 
     /**
-     * FIX-STATE-03 regression: decode/contour/ORB run on the INJECTED CPU
+     * FIX-STATE-03 regression: decode/contour/SIFT run on the INJECTED CPU
      * dispatcher and sealed persistence on the IO dispatcher - never on the
      * caller (Main) thread.
      */
@@ -268,7 +309,10 @@ class FrontCaptureFlowTest {
             val flow = FrontCaptureFlow(
                 StillProcessor {
                     seenCpu += Thread.currentThread().name
-                    ProcessedStill.Accepted("mvp-orb-v1", "bytes".toByteArray())
+                    ProcessedStill.Accepted(
+                        "postcard-sift-rootsift-v1",
+                        CanonicalSiftFingerprintFixture.bytes(seed = 6),
+                    )
                 },
                 cpuDispatcher,
                 ioDispatcher,

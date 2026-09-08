@@ -73,7 +73,7 @@ scan state machine, or parallel outbox is proposed anywhere below.
   `ui/scan/ScanViewModel.kt` verifies via `outboxCapsuleDao`/`outboxBlobDao`
   files through `CapsuleAcceptanceGate`; chooser hints decrypt from outbox rows;
   `ui/capsule/CapsuleContentSource.kt` decrypts photos/note from outbox rows.
-- Recognition engine (`:core:recognition`): `LocalMatchEngine`, `DescriptorMatcher`,
+- Recognition engine (`:core:recognition`): `LocalMatchEngine`, `SiftRootSiftMatcher`,
   `HomographyEstimator`, `HomographyPlausibility`, `SpatialCoverage`, `SideScorer`,
   `FrontCandidateRanker`, `CompositeAcceptance`, `ScanOutcomeClassifier`,
   `MatchCoordinator` (recipient-first / sender-fallback), `ScanGrantManager`

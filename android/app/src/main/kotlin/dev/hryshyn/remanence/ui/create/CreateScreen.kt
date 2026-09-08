@@ -33,7 +33,7 @@ import dev.hryshyn.remanence.capture.CaptureAttemptSurface
 /**
  * FIX-M1-007-11: the production Create surface. Every control is bound to the
  * real [CreateViewModel] - directory resolve and explicit confirmation,
- * CameraX stills through the ORB processor into sealed persistence, the
+ * CameraX stills through the SIFT processor into sealed persistence, the
  * Photo Picker (exactly 3-5), the bounded note, and the single sealing path
  * into the ciphertext outbox. No step advances without its real gate.
  *

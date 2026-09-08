@@ -7,7 +7,7 @@ import kotlin.test.assertTrue
 
 class CaptureQualityGateTest {
 
-    private val gate = CaptureQualityGate(RecognitionProfile.mvpOrbV1())
+    private val gate = CaptureQualityGate(RecognitionProfile.postcardSiftRootSiftV1())
 
     private fun passingSignals() = CaptureQualitySignals(
         laplacianVariance = 500.0,
@@ -42,7 +42,7 @@ class CaptureQualityGateTest {
     @Test
     fun calibratedCaptureAdmissionUsesFrontOnlyBlurBoundary() {
         val sideGate = CaptureQualityGate(
-            RecognitionProfile.mvpOrbV1(),
+            RecognitionProfile.postcardSiftRootSiftV1(),
             CaptureAdmissionProfile.calibratedM2(),
         )
 
@@ -63,13 +63,13 @@ class CaptureQualityGateTest {
 
     @Test
     fun recognitionProfileIdentityAndGenericGateRemainUnchanged() {
-        val profile = RecognitionProfile.mvpOrbV1()
+        val profile = RecognitionProfile.postcardSiftRootSiftV1()
         val sideGate = CaptureQualityGate(profile, CaptureAdmissionProfile.calibratedM2())
         val legacyBoundary = passingInput().copy(
             signals = passingSignals().copy(laplacianVariance = 80.0),
         )
 
-        assertEquals(RecognitionProfile.MVP_ORB_V1_ID, profile.profileId)
+        assertEquals(RecognitionProfile.SIFT_ROOTSIFT_V1_ID, profile.profileId)
         assertTrue(CaptureQualityGate(profile).evaluate(legacyBoundary).isEmpty())
         assertFailsWith<IllegalStateException> { sideGate.evaluate(legacyBoundary) }
     }

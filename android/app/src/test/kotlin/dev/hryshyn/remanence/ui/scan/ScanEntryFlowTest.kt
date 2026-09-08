@@ -33,7 +33,7 @@ import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 /**
  * M2-F0-07 regression: the PRODUCTION ScanViewModel wiring enters an honest
  * FRONT-only capture state - one FRONT, then matching runs immediately.
- * reset returns the whole flow to FRONT. The ORB processor is faked at the
+ * reset returns the whole flow to FRONT. The SIFT processor is faked at the
  * existing [StillProcessor] seam; capture session, match state machine, and
  * ViewModel are the real production objects.
  */
@@ -82,7 +82,7 @@ class ScanEntryFlowTest {
 
     /** Accepts every still with a real serialized FRONT fingerprint. */
     private class AcceptedProcessor : StillProcessor {
-        private val profile = RecognitionProfile.mvpOrbV1()
+        private val profile = RecognitionProfile.postcardSiftRootSiftV1()
         override fun process(jpegBytes: ByteArray): ProcessedStill = ProcessedStill.Accepted(
             profileId = profile.profileId,
             serializedBytes = serializedSynthetic(profile),
@@ -99,7 +99,7 @@ class ScanEntryFlowTest {
         return ScanViewModel(
             persistence = NoPersistence(),
             database = database,
-            profile = RecognitionProfile.mvpOrbV1(),
+            profile = RecognitionProfile.postcardSiftRootSiftV1(),
             identityProvider = { null },
             // FIX-REVIEW2-04: unreachable here (no identity), but the API
             // requires THE trusted boundary explicitly.
@@ -188,26 +188,7 @@ class ScanEntryFlowTest {
         fun serializedSynthetic(
             profile: RecognitionProfile,
         ): ByteArray {
-            val keypoints = List(64) {
-                dev.hryshyn.remanence.core.recognition.FingerprintKeypoint(
-                    xNormalized = (it % 8) / 8.0,
-                    yNormalized = (it / 8) / 8.0,
-                    scaleNormalized = 1.0,
-                    angleCentiDegrees = 0,
-                    responseQuantized = it,
-                    octave = 0,
-                )
-            }
-            val fingerprint = dev.hryshyn.remanence.core.recognition.PostcardFingerprint(
-                profileId = profile.profileId,
-                canonicalWidthPx = profile.capture.canonicalLongEdgePx,
-                canonicalHeightPx = 1000,
-                coarseHash64 = 7L,
-                keypoints = keypoints,
-                descriptors = List(64) { i -> ByteArray(32) { ((i * 13 + it) and 0xFF).toByte() } },
-                quality = dev.hryshyn.remanence.core.recognition.ExtractionQuality(200.0, 90.0, 0.01, 0.85),
-            )
-            return dev.hryshyn.remanence.core.recognition.FingerprintCodec.serialize(fingerprint)
+            return dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture.bytes(7)
         }
     }
 }

@@ -6,7 +6,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class LocalizationProposalSelectorTest {
-    private val profile = RecognitionProfile.mvpOrbV1()
+    private val profile = RecognitionProfile.postcardSiftRootSiftV1()
     private val selector = LocalizationProposalSelector(PostcardCropSelector(profile))
 
     @Test

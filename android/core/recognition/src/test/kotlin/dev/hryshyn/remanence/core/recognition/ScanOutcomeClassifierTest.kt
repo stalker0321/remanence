@@ -7,8 +7,8 @@ import kotlin.test.assertTrue
 /** Fail-safe matrix proof for FRONT-only scan outcome classification (ADR-012, M2-F0-01). */
 class ScanOutcomeClassifierTest {
 
-    private val classifier = ScanOutcomeClassifier(RecognitionProfile.mvpOrbV1())
-    private val notMatchFront = FrontCandidateRanker(RecognitionProfile.mvpOrbV1())
+    private val classifier = ScanOutcomeClassifier(RecognitionProfile.postcardSiftRootSiftV1())
+    private val notMatchFront = FrontCandidateRanker(RecognitionProfile.postcardSiftRootSiftV1())
         .rank(emptyList())
 
     private fun composite(

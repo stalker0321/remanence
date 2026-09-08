@@ -32,9 +32,10 @@ format/version exists solely for fail-closed parsing.
 Test8/Test9 local/server recognition state is disposable. Deployment of this
 breaking reset starts with a clean app database and clean server recognition
 state; no migration, compatibility reader, or data repair is required. The
-fingerprint algorithm/profile remains `mvp-orb-v1` unless separately changed
-by ADR. Outer transport, statement, envelope, and blob cardinality remain
-unchanged. This checkpoint changes the approved documentation contract only;
+current fingerprint algorithm/profile is the breaking
+`postcard-sift-rootsift-v1` contract. Outer transport, statement, envelope,
+and blob cardinality remain unchanged. This checkpoint changes the approved
+documentation contract only;
 it does not claim source implementation at `f01c379`.
 
 ## M0 — Reproducible foundation
@@ -68,7 +69,7 @@ Scope:
 - self-recipient handle resolution through the real directory;
 - explicit confirmation bound to immutable user/key IDs;
 - CameraX FRONT still capture and manual crop fallback;
-- capture normalization, ORB fingerprint extraction, encrypted local fingerprint storage;
+- capture normalization, SIFT/RootSIFT fingerprint extraction, encrypted local fingerprint storage;
 - Android Photo Picker for exactly 3–5 normalized photos and optional note;
 - real capsule keyset, AEAD artifacts, publish statement/signature, self envelope;
 - encrypted local outbox and blob-granular retry machinery;
@@ -205,7 +206,8 @@ Scope:
 - low light, perspective, rotation, crop, shadow, glare, blur, occlusion, dirt, wear;
 - locked instance/design-separated evaluation split;
 - threshold/profile tuning and performance measurements;
-- optional ORB-versus-SIFT experiment only if ORB misses the agreed gate;
+- the pre-cutover ORB-versus-SIFT experiment plan is superseded by ADR-016;
+  future recognition evidence uses the locked SIFT-only corpus;
 - captured match reports and regression fixtures without private user data.
 
 The benchmark measures design candidate recall, zero-match rejection,

@@ -22,11 +22,7 @@ import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.core.model.RecipientEnvelopeContextInput
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
-import dev.hryshyn.remanence.core.recognition.FingerprintKeypoint
-import dev.hryshyn.remanence.core.recognition.PostcardFingerprint
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
-import dev.hryshyn.remanence.core.recognition.ExtractionQuality
-import dev.hryshyn.remanence.core.recognition.FingerprintCodec
 import dev.hryshyn.remanence.auth.SoftwareKekBoundary
 import dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper
 import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
@@ -198,7 +194,7 @@ class CreateRecipientPublicationBindingTest {
                 dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(outboxDir),
                 retryStore,
             ),
-            profile = RecognitionProfile.mvpOrbV1(),
+            profile = RecognitionProfile.postcardSiftRootSiftV1(),
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir),
             openPhotoSource = { id ->
                 dev.hryshyn.remanence.create.PhotoSource {
@@ -399,32 +395,9 @@ class CreateRecipientPublicationBindingTest {
 
     companion object {
         private fun synthetic(side: FingerprintSide): ProcessedStill.Accepted {
-            val profile = RecognitionProfile.mvpOrbV1()
-            val keypoints = List(64) {
-                FingerprintKeypoint(
-                    xNormalized = (it % 8) / 8.0,
-                    yNormalized = (it / 8) / 8.0,
-                    scaleNormalized = 1.0,
-                    angleCentiDegrees = 0,
-                    responseQuantized = it,
-                    octave = 0,
-                )
-            }
             return ProcessedStill.Accepted(
-                profileId = profile.profileId,
-                serializedBytes = FingerprintCodec.serialize(
-                    PostcardFingerprint(
-                        profileId = profile.profileId,
-                        canonicalWidthPx = profile.capture.canonicalLongEdgePx,
-                        canonicalHeightPx = 1000,
-                        coarseHash64 = 6L,
-                        keypoints = keypoints,
-                        descriptors = List(64) { i ->
-                            ByteArray(32) { ((it * 17 + i * 5) and 0xFF).toByte() }
-                        },
-                        quality = ExtractionQuality(200.0, 90.0, 0.01, 0.85),
-                    ),
-                ),
+                profileId = dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec.PROFILE_ID,
+                serializedBytes = dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture.bytes(6),
             )
         }
     }

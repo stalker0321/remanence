@@ -112,7 +112,7 @@ class CapsuleUploadStaleRecoveryTest {
                 photoWidthsPx = listOf(800, 800, 800),
                 photoHeightsPx = listOf(600, 600, 600),
                 noteUtf8 = "a06-test",
-                frontFingerprintBytes = "front".toByteArray(),
+                frontFingerprintBytes = dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture.bytes(seed = 8),
                 signingKeyset = senderIdentity.signingPrivateHandle,
                 recipientEncryptionPublicKeyset = TinkProtoKeysetFormat.parseKeysetWithoutSecret(
                     oldRecipientIdentity.encryptionPublicKeyset,

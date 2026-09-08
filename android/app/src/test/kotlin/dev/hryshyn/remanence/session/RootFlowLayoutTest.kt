@@ -135,7 +135,7 @@ class RootFlowLayoutTest {
             dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(context().filesDir, "root-flow")),
             SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(context().filesDir, "root-flow"))),
         ),
-        profile = RecognitionProfile.mvpOrbV1(),
+        profile = RecognitionProfile.postcardSiftRootSiftV1(),
         accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(
             File(context().filesDir, "root-flow-staging"),
         ),

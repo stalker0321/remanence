@@ -38,7 +38,7 @@ That command does not prove physical-device, camera, or M1/M2 success.
 - [`docs/architecture.md`](docs/architecture.md) — Android/backend/storage/sync lifecycle
 - [`docs/security.md`](docs/security.md) — threat model, keys, E2EE, recovery limits
 - [`docs/protocol.md`](docs/protocol.md) — protobuf/REST/database state contracts
-- [`docs/recognition.md`](docs/recognition.md) — local ORB/homography scoring pipeline
+- [`docs/recognition.md`](docs/recognition.md) — local SIFT/RootSIFT/homography scoring pipeline
 - [`docs/milestones.md`](docs/milestones.md) — vertical delivery gates
 - [`docs/acceptance-criteria.md`](docs/acceptance-criteria.md) — pass/fail evidence
 - [`docs/test-strategy.md`](docs/test-strategy.md) — automated, adversarial, and physical validation

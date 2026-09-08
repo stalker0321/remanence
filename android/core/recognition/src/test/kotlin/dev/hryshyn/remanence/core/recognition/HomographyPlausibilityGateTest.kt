@@ -31,8 +31,9 @@ class HomographyPlausibilityGateTest {
 
     @Test
     fun reflectionFailsOrientationButNothingElse() {
-        // Vertical mirror: determinant negative, geometry otherwise perfect.
-        val mirrored = doubleArrayOf(-1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+        // A translated, unequal-axis vertical mirror: determinant negative,
+        // with an intentionally non-symmetric finite quadrilateral.
+        val mirrored = doubleArrayOf(-0.9, 0.1, 1.1, 0.05, 0.8, 0.1, 0.0, 0.0, 1.0)
 
         val report = gate.check(mirrored, 0.001, zeroMedian)
 
@@ -57,11 +58,13 @@ class HomographyPlausibilityGateTest {
 
     @Test
     fun trapezoidForeshorteningBeyondFourToOneFailsOppositeEdges() {
-        // Projective map squeezing the top edge far below the bottom edge.
-        val steep = doubleArrayOf(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, -0.9, 1.0)
+        // A finite trapezoid with acceptable area (.55), but a 10x top/bottom
+        // opposite-edge ratio. This isolates that gate from max-area failure.
+        val steep = doubleArrayOf(0.1, 0.0, 0.0, 0.0, 0.1, 0.0, 0.0, -0.9, 1.0)
 
         val report = gate.check(steep, 0.001, zeroMedian)
 
+        assertTrue(report.mappedAreaRatio in 0.20..5.0, "area must remain acceptable, got $report")
         assertTrue(report.maxOppositeEdgeRatio > 4.0, "expected heavy foreshortening, got $report")
         assertFalse(report.plausible)
 
@@ -72,9 +75,9 @@ class HomographyPlausibilityGateTest {
 
     @Test
     fun wSignChangeProducesSelfIntersectionAndFails() {
-        // w(x,y) = x + y - 1 changes sign inside the unit square, so the
-        // projected corners form a crossed (bowtie) quadrilateral.
-        val bowtie = doubleArrayOf(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, -1.0)
+        // w(x,y) = x + y - .8 changes sign inside the unit square. Every
+        // corner remains finite: w is -.8, .2, 1.2, .2 in TL,TR,BR,BL order.
+        val bowtie = doubleArrayOf(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, -0.8)
 
         val report = gate.check(bowtie, 0.001, zeroMedian)
 
@@ -116,7 +119,7 @@ class HomographyPlausibilityGateTest {
 
     @Test
     fun profileConstructorCarriesTheFrozenThresholds() {
-        val profileGate = HomographyPlausibilityGate(RecognitionProfile.mvpOrbV1().match)
+        val profileGate = HomographyPlausibilityGate(RecognitionProfile.postcardSiftRootSiftV1().match)
         val identity = doubleArrayOf(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
 
         val report = profileGate.check(identity, 0.0, HomographyEstimator.DEFAULT_TOLERANCE_NORMALIZED)

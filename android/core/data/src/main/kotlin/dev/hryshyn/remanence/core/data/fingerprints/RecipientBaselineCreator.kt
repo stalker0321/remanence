@@ -1,6 +1,7 @@
 package dev.hryshyn.remanence.core.data.fingerprints
 
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
+import dev.hryshyn.remanence.core.model.CanonicalSiftFingerprintValidator
 
 /** The captured FRONT of the delivered postcard, ready for sealed persistence. */
 data class ReceivedFrontCapture(
@@ -28,9 +29,10 @@ class RecipientBaselineCreator(
         capsuleId: String,
         front: ReceivedFrontCapture,
     ) {
-        require(front.serializedBytes.isNotEmpty()) {
-            "captured fingerprint must not be empty"
-        }
+        CanonicalSiftFingerprintValidator.requireCanonical(
+            profileId = front.profileId,
+            bytes = front.serializedBytes,
+        )
         if (persistence.hasBaseline(capsuleId, FingerprintOrigin.RECIPIENT)) {
             throw ImmutableBaselineException(capsuleId)
         }

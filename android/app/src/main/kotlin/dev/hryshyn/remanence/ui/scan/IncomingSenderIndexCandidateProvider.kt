@@ -3,8 +3,9 @@ package dev.hryshyn.remanence.ui.scan
 import dev.hryshyn.remanence.core.data.db.IncomingCapsuleDao
 import dev.hryshyn.remanence.core.data.db.IncomingSenderIndexCandidate
 import dev.hryshyn.remanence.core.model.UserId
-import dev.hryshyn.remanence.core.recognition.FingerprintCodec
 import dev.hryshyn.remanence.core.recognition.IndexedCandidate
+import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprint
+import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec
 import dev.hryshyn.remanence.index.SenderIndexBundleReadRequest
 import dev.hryshyn.remanence.index.SenderIndexBundleReadResult
 import dev.hryshyn.remanence.index.SenderIndexBundleInspectionSnapshot
@@ -29,6 +30,11 @@ internal data class ScanCandidateIndex(
     /** Ephemeral presentation-plane binding, independent of CandidateOrigin. */
     val presentationSources: Map<java.util.UUID, CapsulePresentationSource> = emptyMap(),
 ) {
+    /** Matching owns these parsed models only for this scan invocation. */
+    fun wipeFingerprints() {
+        candidates.forEach { it.front.wipe() }
+    }
+
     override fun toString(): String = "ScanCandidateIndex(<redacted>)"
 
     companion object {
@@ -77,23 +83,41 @@ internal class IncomingSenderIndexCandidateProvider(
         val candidates = ArrayList<IndexedCandidate>(selected.size)
         val hints = LinkedHashMap<String, ScanChooserHint>(selected.size)
         val presentationSources = LinkedHashMap<java.util.UUID, CapsulePresentationSource>(selected.size)
-        for (candidate in selected) {
-            // The incoming Room row proves the storage plane independently of
-            // whether its encrypted index can be read. A recipient baseline
-            // for the same capsule must still prepare from incoming storage.
-            presentationSources[candidate.capsuleId.value] = CapsulePresentationSource.INCOMING
-            if (currentOwner() != ownerUserId) return ScanCandidateIndex.EMPTY
-            val loaded = readCandidate(ownerUserId, candidate) ?: continue
-            candidates += loaded.first
-            hints[loaded.first.capsuleId.toString()] = loaded.second
-            presentationSources[loaded.first.capsuleId] = CapsulePresentationSource.INCOMING
+        try {
+            for (candidate in selected) {
+                // The incoming Room row proves the storage plane independently of
+                // whether its encrypted index can be read. A recipient baseline
+                // for the same capsule must still prepare from incoming storage.
+                presentationSources[candidate.capsuleId.value] = CapsulePresentationSource.INCOMING
+                if (currentOwner() != ownerUserId) {
+                    candidates.forEach { it.front.wipe() }
+                    return ScanCandidateIndex.EMPTY
+                }
+                val loaded = readCandidate(ownerUserId, candidate) ?: continue
+                try {
+                    candidates += loaded.first
+                    hints[loaded.first.capsuleId.toString()] = loaded.second
+                    presentationSources[loaded.first.capsuleId] = CapsulePresentationSource.INCOMING
+                } catch (failure: Throwable) {
+                    // The pair has transferred ownership from readCandidate,
+                    // but the collection/map handoff did not finish.
+                    loaded.first.front.wipe()
+                    throw failure
+                }
+            }
+            if (currentOwner() != ownerUserId) {
+                candidates.forEach { it.front.wipe() }
+                return ScanCandidateIndex.EMPTY
+            }
+            return ScanCandidateIndex(
+                candidates = candidates,
+                chooserHints = hints,
+                presentationSources = presentationSources,
+            )
+        } catch (failure: Throwable) {
+            candidates.forEach { it.front.wipe() }
+            throw failure
         }
-        if (currentOwner() != ownerUserId) return ScanCandidateIndex.EMPTY
-        return ScanCandidateIndex(
-            candidates = candidates,
-            chooserHints = hints,
-            presentationSources = presentationSources,
-        )
     }
 
     private suspend fun readCandidate(
@@ -104,6 +128,9 @@ internal class IncomingSenderIndexCandidateProvider(
 
         var snapshot: SenderIndexBundleInspectionSnapshot? = null
         var frontBytes: ByteArray? = null
+        var parsedFront: SiftRootSiftFingerprint? = null
+        var snapshotCloseAttempted = false
+        var transferred = false
         var primaryFailure: Throwable? = null
         try {
             val result = senderIndexBundleReader.inspect(
@@ -118,9 +145,10 @@ internal class IncomingSenderIndexCandidateProvider(
             if (snapshot.capsuleId != candidate.capsuleId) return null
 
             frontBytes = snapshot.frontFingerprint
-            val front = FingerprintCodec.parse(frontBytes!!)
+            val front = SiftRootSiftFingerprintCodec.parse(frontBytes)
+            parsedFront = front
             val capsuleId = candidate.capsuleId.toString()
-            return IndexedCandidate(
+            val indexed = IndexedCandidate(
                 capsuleId = candidate.capsuleId.value,
                 front = front,
                 // These are the sender's fingerprints, not a recipient baseline.
@@ -131,13 +159,28 @@ internal class IncomingSenderIndexCandidateProvider(
                 createdAtEpochSeconds = snapshot.createdAtEpochSeconds,
                 placeLabel = snapshot.placeLabel,
             )
-        } catch (failure: Throwable) {
+            snapshotCloseAttempted = true
+            closeSnapshot(requireNotNull(snapshot), primaryFailure)
+            snapshot = null
+            transferred = true
+            return indexed
+        } catch (failure: Exception) {
             primaryFailure = failure
             if (failure is CancellationException) throw failure
             return null
+        } catch (failure: Error) {
+            // Fatal VM/native errors are not an absent candidate. The finally
+            // block still releases every owned snapshot/model before this is
+            // allowed to escape the provider.
+            primaryFailure = failure
+            throw failure
         } finally {
             frontBytes?.fill(0)
-            snapshot?.let { closeSnapshot(it, primaryFailure) }
+            try {
+                if (!snapshotCloseAttempted) snapshot?.let { closeSnapshot(it, primaryFailure) }
+            } finally {
+                if (!transferred) parsedFront?.wipe()
+            }
         }
     }
 

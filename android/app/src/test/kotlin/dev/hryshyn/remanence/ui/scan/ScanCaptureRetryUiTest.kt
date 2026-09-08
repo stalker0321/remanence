@@ -108,32 +108,9 @@ class ScanCaptureRetryUiTest {
 
     /** Real serialized fingerprint so an accepted still advances the session. */
     private fun synthetic(): ProcessedStill.Accepted {
-        val profile = RecognitionProfile.mvpOrbV1()
-        val keypoints = List(64) {
-            dev.hryshyn.remanence.core.recognition.FingerprintKeypoint(
-                xNormalized = (it % 8) / 8.0,
-                yNormalized = (it / 8) / 8.0,
-                scaleNormalized = 1.0,
-                angleCentiDegrees = 0,
-                responseQuantized = it,
-                octave = 0,
-            )
-        }
         return ProcessedStill.Accepted(
-            profileId = profile.profileId,
-            serializedBytes = dev.hryshyn.remanence.core.recognition.FingerprintCodec.serialize(
-                dev.hryshyn.remanence.core.recognition.PostcardFingerprint(
-                    profileId = profile.profileId,
-                    canonicalWidthPx = profile.capture.canonicalLongEdgePx,
-                    canonicalHeightPx = 1000,
-                    coarseHash64 = 7L,
-                    keypoints = keypoints,
-                    descriptors = List(64) { i ->
-                        ByteArray(32) { ((it * 7 + i * 13) and 0xFF).toByte() }
-                    },
-                    quality = dev.hryshyn.remanence.core.recognition.ExtractionQuality(200.0, 90.0, 0.01, 0.85),
-                ),
-            ),
+            profileId = dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec.PROFILE_ID,
+            serializedBytes = dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture.bytes(7),
         )
     }
 
@@ -142,13 +119,13 @@ class ScanCaptureRetryUiTest {
         val front = ScriptedProcessor(
             ProcessedStill.Rejected(setOf(QualityReason.TOO_BLURRY)),
             ProcessedStill.Rejected(setOf(QualityReason.TOO_BLURRY)),
-            "orb exploded",
+            "sift extraction failed",
             synthetic(),
         )
         val vm = ScanViewModel(
             persistence = NoPersistence(),
             database = database,
-            profile = RecognitionProfile.mvpOrbV1(),
+            profile = RecognitionProfile.postcardSiftRootSiftV1(),
             identityProvider = { null },
             trustedSenderKeys = dev.hryshyn.remanence.identity.DirectorySenderKeyStore(
                 directoryFetch = { error("unreachable") },

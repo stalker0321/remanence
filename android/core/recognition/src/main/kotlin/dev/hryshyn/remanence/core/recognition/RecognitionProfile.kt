@@ -17,7 +17,7 @@ data class RecognitionProfile(
     val formatVersion: Int,
     val profileId: String,
     val capture: CaptureGates,
-    val orb: OrbExtraction,
+    val sift: SiftExtraction,
     val match: MatchThresholds,
     val ranking: RankingThresholds,
 ) {
@@ -37,16 +37,15 @@ data class RecognitionProfile(
     )
 
     @Serializable
-    data class OrbExtraction(
+    data class SiftExtraction(
         val nfeatures: Int,
-        val scaleFactor: Double,
-        val nlevels: Int,
-        val edgeThreshold: Int,
-        val firstLevel: Int,
-        val wtaK: Int,
-        val scoreTypeHarris: Boolean,
-        val patchSize: Int,
-        val fastThreshold: Int,
+        val octaveLayers: Int,
+        val contrastThreshold: Double,
+        val edgeThreshold: Double,
+        val sigma: Double,
+        val gridSize: Int,
+        val maxPerCell: Int,
+        val maxKeypoints: Int,
     )
 
     @Serializable
@@ -90,7 +89,7 @@ data class RecognitionProfile(
     companion object {
 
         const val FORMAT_VERSION_1: Int = 1
-        const val MVP_ORB_V1_ID: String = "mvp-orb-v1"
+        const val SIFT_ROOTSIFT_V1_ID: String = "postcard-sift-rootsift-v1"
 
         private val strictJson = Json {
             ignoreUnknownKeys = false
@@ -98,10 +97,10 @@ data class RecognitionProfile(
             encodeDefaults = true
         }
 
-        /** Seed values exactly as documented for `mvp-orb-v1` (docs/recognition.md sections 4, 6–9). */
-        fun mvpOrbV1(): RecognitionProfile = RecognitionProfile(
+        /** Seed values for the sole current postcard SIFT/RootSIFT profile. */
+        fun postcardSiftRootSiftV1(): RecognitionProfile = RecognitionProfile(
             formatVersion = FORMAT_VERSION_1,
-            profileId = MVP_ORB_V1_ID,
+            profileId = SIFT_ROOTSIFT_V1_ID,
             capture = CaptureGates(
                 minCardAreaRatio = 0.35,
                 minShortEdgeAfterWarpPx = 600,
@@ -115,16 +114,15 @@ data class RecognitionProfile(
                 maxGlareRegionFraction = 0.12,
                 minRectangularity = 0.80,
             ),
-            orb = OrbExtraction(
-                nfeatures = 1500,
-                scaleFactor = 1.2,
-                nlevels = 8,
-                edgeThreshold = 31,
-                firstLevel = 0,
-                wtaK = 2,
-                scoreTypeHarris = true,
-                patchSize = 31,
-                fastThreshold = 20,
+            sift = SiftExtraction(
+                nfeatures = 0,
+                octaveLayers = 3,
+                contrastThreshold = 0.018,
+                edgeThreshold = 12.0,
+                sigma = 1.6,
+                gridSize = 6,
+                maxPerCell = 45,
+                maxKeypoints = 1500,
             ),
             match = MatchThresholds(
                 inlierReprojectionTolerancePx = 5.0,
@@ -170,7 +168,7 @@ data class RecognitionProfile(
             val dto = strictJson.decodeFromString<ProfileDto>(text)
             val restored = dto.toDomain()
             require(restored.formatVersion == FORMAT_VERSION_1) { "unsupported profile format version" }
-            require(restored.profileId == MVP_ORB_V1_ID) { "unknown profile id" }
+            require(restored.profileId == SIFT_ROOTSIFT_V1_ID) { "unknown profile id" }
             restored.validate()
             return restored
         }
@@ -182,7 +180,7 @@ internal data class ProfileDto(
     val formatVersion: Int,
     val profileId: String,
     val capture: CaptureDto,
-    val orb: OrbDto,
+    val sift: SiftDto,
     val match: MatchDto,
     val ranking: RankingDto,
 ) {
@@ -202,16 +200,15 @@ internal data class ProfileDto(
             capture.maxGlareRegionFraction,
             capture.minRectangularity,
         ),
-        orb = RecognitionProfile.OrbExtraction(
-            orb.nfeatures,
-            orb.scaleFactor,
-            orb.nlevels,
-            orb.edgeThreshold,
-            orb.firstLevel,
-            orb.wtaK,
-            orb.scoreTypeHarris,
-            orb.patchSize,
-            orb.fastThreshold,
+        sift = RecognitionProfile.SiftExtraction(
+            sift.nfeatures,
+            sift.octaveLayers,
+            sift.contrastThreshold,
+            sift.edgeThreshold,
+            sift.sigma,
+            sift.gridSize,
+            sift.maxPerCell,
+            sift.maxKeypoints,
         ),
         match = RecognitionProfile.MatchThresholds(
             match.inlierReprojectionTolerancePx,
@@ -265,16 +262,15 @@ internal data class ProfileDto(
     )
 
     @Serializable
-    internal data class OrbDto(
+    internal data class SiftDto(
         val nfeatures: Int,
-        val scaleFactor: Double,
-        val nlevels: Int,
-        val edgeThreshold: Int,
-        val firstLevel: Int,
-        val wtaK: Int,
-        val scoreTypeHarris: Boolean,
-        val patchSize: Int,
-        val fastThreshold: Int,
+        val octaveLayers: Int,
+        val contrastThreshold: Double,
+        val edgeThreshold: Double,
+        val sigma: Double,
+        val gridSize: Int,
+        val maxPerCell: Int,
+        val maxKeypoints: Int,
     )
 
     @Serializable
@@ -329,12 +325,15 @@ private fun RecognitionProfile.validate() {
         require(maxGlareRegionFraction in 0.0..1.0)
         require(minRectangularity in 0.0..1.0)
     }
-    with(orb) {
-        require(nfeatures > 0 && nlevels > 0 && edgeThreshold > 0 && patchSize > 0)
-        require(scaleFactor > 1.0)
-        require(firstLevel >= 0)
-        require(wtaK in 2..4)
-        require(fastThreshold >= 0)
+    with(sift) {
+        require(nfeatures == 0)
+        require(octaveLayers == 3)
+        require(contrastThreshold == 0.018)
+        require(edgeThreshold == 12.0)
+        require(sigma == 1.6)
+        require(gridSize == 6)
+        require(maxPerCell == 45)
+        require(maxKeypoints == 1500)
     }
     with(match) {
         require(inlierReprojectionTolerancePx > 0.0)
@@ -382,16 +381,15 @@ internal fun RecognitionProfile.toDto() = ProfileDto(
         capture.maxGlareRegionFraction,
         capture.minRectangularity,
     ),
-    orb = ProfileDto.OrbDto(
-        orb.nfeatures,
-        orb.scaleFactor,
-        orb.nlevels,
-        orb.edgeThreshold,
-        orb.firstLevel,
-        orb.wtaK,
-        orb.scoreTypeHarris,
-        orb.patchSize,
-        orb.fastThreshold,
+    sift = ProfileDto.SiftDto(
+        sift.nfeatures,
+        sift.octaveLayers,
+        sift.contrastThreshold,
+        sift.edgeThreshold,
+        sift.sigma,
+        sift.gridSize,
+        sift.maxPerCell,
+        sift.maxKeypoints,
     ),
     match = ProfileDto.MatchDto(
         match.inlierReprojectionTolerancePx,

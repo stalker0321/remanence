@@ -13,7 +13,7 @@ import dev.hryshyn.remanence.core.recognition.QualityReason
 import dev.hryshyn.remanence.core.recognition.FingerprintSide as RecognitionFingerprintSide
 import java.util.Locale
 
-/** Port over the OpenCV-backed still pipeline: decode→locate→warp→quality→ORB. */
+/** Port over the OpenCV-backed still pipeline: decode→locate→warp→quality→FEATURES. */
 fun interface StillProcessor {
     /**
      * Returns extracted fingerprint bytes. Quality reasons on an accepted still
@@ -108,8 +108,8 @@ data class CaptureDiagnostic(
     val usedGuideFallback: Boolean? = null,
     val warpedWidth: Int? = null,
     val warpedHeight: Int? = null,
-    val orbKeypoints: Int? = null,
-    val orbDescriptors: Int? = null,
+    val featureKeypoints: Int? = null,
+    val featureDescriptors: Int? = null,
 ) {
     /** Stable, redacted one-line form used by the DEBUG rejection panel. */
     fun summary(): String = buildString {
@@ -128,8 +128,8 @@ data class CaptureDiagnostic(
                 "n/a"
             },
         )
-        append(" orb=").append(orbKeypoints?.toString() ?: "n/a")
-        append(" descriptors=").append(orbDescriptors?.toString() ?: "n/a")
+        append(" featureKeypoints=").append(featureKeypoints?.toString() ?: "n/a")
+        append(" featureDescriptors=").append(featureDescriptors?.toString() ?: "n/a")
     }
 
     private fun decimal(value: Double?): String =
@@ -141,7 +141,7 @@ enum class CaptureDiagnosticStage {
     CROP,
     WARP,
     QUALITY,
-    ORB,
+    FEATURES,
 }
 
 /**
@@ -163,14 +163,14 @@ sealed interface FrontCaptureOutcome {
 }
 
 /**
- * I05 integration: runs the bounded normalize-crop-quality-ORB pipeline and
+ * I05 integration: runs the bounded normalize-crop-quality-FEATURES pipeline and
  * the sealed fingerprint repository for one delivered still, publishing every
  * transition through THE authoritative [CaptureAttemptController].
  *
  * FIX-STATE-01: a begun attempt ALWAYS terminates - Accepted, Rejected, or
  * Failed - even when the processor or persistence throws; cancellation ends
  * the lifecycle cleanly without publishing any result. FIX-STATE-03: JPEG/
- * OpenCV decode and ORB extraction run on [cpuDispatcher] (never Main);
+ * OpenCV decode and SIFT extraction run on [cpuDispatcher] (never Main);
  * sealed file/database persistence runs on [ioDispatcher]; raw plaintext
  * bytes live only inside this call.
  */
@@ -190,9 +190,14 @@ class FrontCaptureFlow(
         cpuDispatcher: CoroutineDispatcher,
         ioDispatcher: CoroutineDispatcher,
         handoffQueue: CaptureHandoffQueue,
+        afterHandoffOffer: (() -> Unit)? = null,
     ) : this(processor, cpuDispatcher, ioDispatcher) {
         this.handoffQueue = handoffQueue
+        this.afterHandoffOffer = afterHandoffOffer
     }
+
+    /** Internal fault seam used to exercise cleanup while the owner still has the handoff. */
+    private var afterHandoffOffer: (() -> Unit)? = null
 
     private fun createRepository(
         persistence: dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence,
@@ -230,6 +235,9 @@ class FrontCaptureFlow(
                         result.serializedBytes,
                     )
                     check(handoffQueue.offer(owner, staged)) { "capture superseded" }
+                    // The repository has not yet taken the staged value. A fatal
+                    // failure here must still clear this owner and wipe its bytes.
+                    afterHandoffOffer?.invoke()
                 }
                 result
             }
@@ -258,6 +266,13 @@ class FrontCaptureFlow(
             val message = failure.message ?: "capture failed"
             attempt.fail(message)
             return FrontCaptureOutcome.Failed(message)
+        } catch (failure: Error) {
+            // Fatal failures are not converted into a UI outcome, but an
+            // accepted processor result may already be queued for persistence.
+            // Clear that owner before preserving the fatal error; the finally
+            // below still wipes the temporary JPEG.
+            handoffQueue.clear(owner)
+            throw failure
         } finally {
             // Delivery transfers the temporary JPEG to this flow; it never
             // survives the processor/persistence handoff.

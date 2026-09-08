@@ -8,8 +8,8 @@ import kotlin.test.assertTrue
 /** Ranking/margin proof for M1-M06 front candidate ranking. */
 class FrontCandidateRankerTest {
 
-    private val ranker = FrontCandidateRanker(RecognitionProfile.mvpOrbV1())
-    private val margin = RecognitionProfile.mvpOrbV1().ranking.duplicateFrontMargin
+    private val ranker = FrontCandidateRanker(RecognitionProfile.postcardSiftRootSiftV1())
+    private val margin = RecognitionProfile.postcardSiftRootSiftV1().ranking.duplicateFrontMargin
 
     private fun candidate(id: String, score: Double, weak: Boolean = true) =
         FrontCandidate(id, score, weak)

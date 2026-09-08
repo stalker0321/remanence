@@ -108,7 +108,7 @@ class RootScanFlowLayoutTest {
         return ScanViewModel(
             persistence = NoPersistence(),
             database = database,
-            profile = RecognitionProfile.mvpOrbV1(),
+            profile = RecognitionProfile.postcardSiftRootSiftV1(),
             identityProvider = { null },
             // Unreachable here (no identity), but THE trusted boundary is
             // required explicitly by the API.

@@ -103,9 +103,11 @@ class EncryptedFingerprintStore(
                     ),
                 ),
             )
-        } catch (failure: Exception) {
+        } catch (failure: Throwable) {
             target.delete()
             throw failure
+        } finally {
+            sealed.fill(0)
         }
         return fingerprintId
     }

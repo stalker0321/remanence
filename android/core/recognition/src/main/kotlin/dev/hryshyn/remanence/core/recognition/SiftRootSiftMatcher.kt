@@ -1,5 +1,8 @@
 package dev.hryshyn.remanence.core.recognition
 
+import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprint
+import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec
+import dev.hryshyn.remanence.core.model.SiftRootSiftKeypoint
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.sqrt
@@ -12,6 +15,11 @@ import org.opencv.core.MatOfDMatch
 import org.opencv.core.MatOfPoint2f
 import org.opencv.core.Point
 import org.opencv.features2d.BFMatcher
+
+/** Expected native-linkage failure; callers map this to unavailable/recapture. */
+class OpenCvUnavailableException(
+    cause: UnsatisfiedLinkError? = null,
+) : IllegalStateException("OpenCV native library unavailable", cause)
 
 /** Technical no-evidence reason; none of these values grants or rejects a scan. */
 enum class SiftRootSiftMatchFailure {
@@ -74,17 +82,31 @@ data class SiftRootSiftMatchDiagnostics(
 data class SiftRootSiftMatchResult(
     val matches: List<SiftRootSiftMatchPair>,
     val inlierMatchIndices: List<Int>,
+    /** Row-major 3x3 homography mapping reference pixels to query pixels. */
     val homographyRowMajor: DoubleArray?,
     val diagnostics: SiftRootSiftMatchDiagnostics,
 )
 
 /**
- * Bounded production-quality P2 matcher for the P0/P1 SIFT profile.
- * Production Create/Scan wiring remains intentionally absent.
+ * Bounded production-quality matcher for the current P0/P1 SIFT profile.
+ * This class exposes technical visual evidence only; LocalMatchEngine owns
+ * the unchanged policy and crypto/grant boundaries.
  */
 class SiftRootSiftMatcher {
 
     fun match(
+        query: SiftRootSiftFingerprint,
+        reference: SiftRootSiftFingerprint,
+    ): SiftRootSiftMatchResult = try {
+        matchInternal(query, reference)
+    } catch (failure: UnsatisfiedLinkError) {
+        // Include native cleanup in this translation boundary. A linkage
+        // failure from a release/clear operation is still unavailable, not a
+        // raw native error leaking into scan routing.
+        throw OpenCvUnavailableException(failure)
+    }
+
+    private fun matchInternal(
         query: SiftRootSiftFingerprint,
         reference: SiftRootSiftFingerprint,
     ): SiftRootSiftMatchResult {
@@ -224,6 +246,10 @@ class SiftRootSiftMatcher {
                     failure = geometry.failure,
                 ),
             )
+        } catch (failure: UnsatisfiedLinkError) {
+            val unavailable = OpenCvUnavailableException(failure)
+            primaryFailure = unavailable
+            throw unavailable
         } catch (failure: Throwable) {
             primaryFailure = failure
             throw failure
@@ -852,10 +878,12 @@ class SiftRootSiftMatcher {
     private fun requireOpenCv() {
         try {
             if (Core.getVersionMajor() <= 0) {
-                throw IllegalStateException("OpenCV native library not initialized")
+                throw OpenCvUnavailableException()
             }
-        } catch (failure: LinkageError) {
-            throw IllegalStateException("OpenCV native library not initialized", failure)
+        } catch (failure: OpenCvUnavailableException) {
+            throw failure
+        } catch (failure: UnsatisfiedLinkError) {
+            throw OpenCvUnavailableException(failure)
         }
     }
 

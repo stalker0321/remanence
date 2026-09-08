@@ -5,10 +5,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-/** Exact report-to-score proof for M1-M05 using the frozen mvp-orb-v1 seeds. */
+/** Exact report-to-score proof using the frozen FRONT SIFT policy seeds. */
 class SideScorerTest {
 
-    private val scorer = SideScorer(RecognitionProfile.mvpOrbV1())
+    private val scorer = SideScorer(RecognitionProfile.postcardSiftRootSiftV1())
 
     /** All sub-scores land exactly on 0.5 with the seeded thresholds. */
     private fun halfWaySignals() = SideMatchSignals(

@@ -1,5 +1,8 @@
 package dev.hryshyn.remanence.core.recognition
 
+import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprint
+import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec
+import dev.hryshyn.remanence.core.model.SiftRootSiftKeypoint
 import kotlin.math.floor
 import kotlin.math.min
 import org.opencv.core.Core
@@ -27,9 +30,24 @@ import org.opencv.imgproc.Imgproc
  * index.  The final native index is the deterministic last tie-break for
  * genuinely identical detections and keeps descriptor/keypoint alignment.
  */
-class SiftRootSiftFingerprintExtractor {
+class SiftRootSiftFingerprintExtractor(
+    private val settings: RecognitionProfile.SiftExtraction =
+        RecognitionProfile.postcardSiftRootSiftV1().sift,
+) {
 
     fun extract(
+        warpedArgb: IntArray,
+        width: Int,
+        height: Int,
+    ): SiftRootSiftFingerprint = try {
+        extractInternal(warpedArgb, width, height)
+    } catch (failure: UnsatisfiedLinkError) {
+        // The native operation includes its finally cleanup; translate a
+        // linkage failure from either the body or cleanup at this boundary.
+        throw OpenCvUnavailableException(failure)
+    }
+
+    private fun extractInternal(
         warpedArgb: IntArray,
         width: Int,
         height: Int,
@@ -38,9 +56,7 @@ class SiftRootSiftFingerprintExtractor {
         require(pixelCount == warpedArgb.size.toLong()) {
             "frame pixels do not match dimensions"
         }
-        if (Core.getVersionMajor() <= 0) {
-            throw IllegalStateException("OpenCV native library not initialized")
-        }
+        requireOpenCv()
 
         var gray: Mat? = null
         var mask: Mat? = null
@@ -48,7 +64,18 @@ class SiftRootSiftFingerprintExtractor {
         var selectedKeypoints: MatOfKeyPoint? = null
         var descriptors: Mat? = null
         var sift: SIFT? = null
+        var outputDescriptorsOwned: List<ByteArray>? = null
+        var returnedFingerprint = false
+        var cleanupAttempted = false
         var primaryFailure: Throwable? = null
+        val cleanupActions = listOf<() -> Unit>(
+            { sift?.clear() },
+            { descriptors?.release() },
+            { selectedKeypoints?.release() },
+            { detectedKeypoints?.release() },
+            { mask?.release() },
+            { gray?.release() },
+        )
         try {
             val grayMat = Mat(height, width, CvType.CV_8UC1)
             gray = grayMat
@@ -61,11 +88,11 @@ class SiftRootSiftFingerprintExtractor {
             val descriptorsMat = Mat()
             descriptors = descriptorsMat
             val detector = SIFT.create(
-                NFEATURES,
-                NOCTAVE_LAYERS,
-                CONTRAST_THRESHOLD,
-                EDGE_THRESHOLD,
-                SIGMA,
+                settings.nfeatures,
+                settings.octaveLayers,
+                settings.contrastThreshold,
+                settings.edgeThreshold,
+                settings.sigma,
             )
             sift = detector
             fillGray(grayMat, warpedArgb, width)
@@ -94,23 +121,35 @@ class SiftRootSiftFingerprintExtractor {
 
             val outputKeypoints = ArrayList<SiftRootSiftKeypoint>(selected.size)
             val outputDescriptors = ArrayList<ByteArray>(selected.size)
+            outputDescriptorsOwned = outputDescriptors
             val rawRow = FloatArray(DESCRIPTOR_BYTES)
-            for (row in computed.indices) {
-                val point = computed[row]
-                val outputCandidate = candidateFromKeyPoint(
-                    point,
-                    selected[row].candidate.sourceIndex,
-                )
-                val descriptor = readRawDescriptor(descriptorsMat, row, rawRow)
-                outputKeypoints += outputCandidate.toDomain(width, height)
-                outputDescriptors += descriptor
+            try {
+                for (row in computed.indices) {
+                    val point = computed[row]
+                    val outputCandidate = candidateFromKeyPoint(
+                        point,
+                        selected[row].candidate.sourceIndex,
+                    )
+                    val descriptor = readRawDescriptor(descriptorsMat, row, rawRow)
+                    try {
+                        outputKeypoints += outputCandidate.toDomain(width, height)
+                        outputDescriptors += descriptor
+                    } catch (failure: Throwable) {
+                        // The current descriptor has not necessarily entered
+                        // the owned list when collection insertion fails.
+                        descriptor.fill(0)
+                        throw failure
+                    }
+                }
+            } finally {
+                rawRow.fill(0f)
             }
             require(outputKeypoints.isNotEmpty()) { "SIFT produced no usable features" }
             require(hasMatcherUsableDescriptorRows(outputDescriptors)) {
                 "SIFT produced no matcher-usable descriptor rows"
             }
 
-            return SiftRootSiftFingerprint(
+            val fingerprint = SiftRootSiftFingerprint(
                 profileId = SiftRootSiftFingerprintCodec.PROFILE_ID,
                 canonicalWidthPx = width,
                 canonicalHeightPx = height,
@@ -118,23 +157,38 @@ class SiftRootSiftFingerprintExtractor {
                 keypoints = outputKeypoints,
                 quantizedSiftDescriptors = outputDescriptors,
             )
+            // Native cleanup must complete before ownership of the descriptor
+            // rows can transfer to the returned domain object. If cleanup
+            // fails, the normal failure path below wipes those rows.
+            cleanupAttempted = true
+            try {
+                cleanupBeforeTransfer(outputDescriptors, cleanupActions)
+            } catch (failure: Throwable) {
+                // cleanupBeforeTransfer has already wiped the rows it still
+                // owns; clear the outer owner so that path is not wiped twice.
+                outputDescriptorsOwned = null
+                throw failure
+            }
+            outputDescriptorsOwned = null
+            returnedFingerprint = true
+            return fingerprint
+        } catch (failure: UnsatisfiedLinkError) {
+            val unavailable = OpenCvUnavailableException(failure)
+            primaryFailure = unavailable
+            throw unavailable
         } catch (failure: Throwable) {
             primaryFailure = failure
             throw failure
         } finally {
-            // OpenCV Java objects own native allocations even when an
-            // exception occurs during detection, conversion, or validation.
-            finishCleanup(
-                primaryFailure,
-                listOf(
-                    { sift?.clear() },
-                    { descriptors?.release() },
-                    { selectedKeypoints?.release() },
-                    { detectedKeypoints?.release() },
-                    { mask?.release() },
-                    { gray?.release() },
-                ),
-            )
+            if (!returnedFingerprint) {
+                outputDescriptorsOwned?.forEach { it.fill(0) }
+            }
+            if (!cleanupAttempted) {
+                cleanupAttempted = true
+                // OpenCV Java objects own native allocations even when an
+                // exception occurs during detection, conversion, or validation.
+                finishCleanup(primaryFailure, cleanupActions)
+            }
         }
     }
 
@@ -199,22 +253,22 @@ class SiftRootSiftFingerprintExtractor {
             }
             PreparedCandidate(
                 candidate = candidate,
-                cellX = cell(normalizedX, GRID_SIZE),
-                cellY = cell(normalizedY, GRID_SIZE),
+                cellX = cell(normalizedX, settings.gridSize),
+                cellY = cell(normalizedY, settings.gridSize),
             )
         }
 
-        val cells = Array(GRID_SIZE * GRID_SIZE) { ArrayList<PreparedCandidate>() }
+        val cells = Array(settings.gridSize * settings.gridSize) { ArrayList<PreparedCandidate>() }
         prepared.forEach { item ->
-            cells[item.cellY * GRID_SIZE + item.cellX] += item
+            cells[item.cellY * settings.gridSize + item.cellX] += item
         }
-        val perCell = ArrayList<PreparedCandidate>(MAX_KEYPOINTS + GRID_SIZE * GRID_SIZE)
+        val perCell = ArrayList<PreparedCandidate>(settings.maxKeypoints + settings.gridSize * settings.gridSize)
         cells.forEach { cellCandidates ->
             cellCandidates.sortWith(candidateComparator)
-            perCell += cellCandidates.take(MAX_PER_CELL)
+            perCell += cellCandidates.take(settings.maxPerCell)
         }
         perCell.sortWith(candidateComparator)
-        return perCell.take(MAX_KEYPOINTS).map {
+        return perCell.take(settings.maxKeypoints).map {
             SelectedSiftCandidate(it.candidate, it.cellX, it.cellY)
         }
     }
@@ -263,9 +317,9 @@ class SiftRootSiftFingerprintExtractor {
         row: Int,
         reusableRawRow: FloatArray,
     ): ByteArray {
-        descriptors.get(row, 0, reusableRawRow)
         val values = DoubleArray(DESCRIPTOR_BYTES)
         try {
+            descriptors.get(row, 0, reusableRawRow)
             reusableRawRow.forEachIndexed { index, value ->
                 require(value.isFinite()) { "SIFT descriptor value must be finite" }
                 values[index] = value.toDouble()
@@ -326,6 +380,24 @@ class SiftRootSiftFingerprintExtractor {
         finishCleanup(primaryFailure, actions)
     }
 
+    /** Exercises the same pre-transfer cleanup boundary without native setup. */
+    internal fun cleanupBeforeTransferForTesting(
+        outputDescriptors: List<ByteArray>,
+        actions: List<() -> Unit>,
+    ) {
+        cleanupBeforeTransfer(outputDescriptors, actions)
+    }
+
+    private fun requireOpenCv() {
+        try {
+            if (Core.getVersionMajor() <= 0) throw OpenCvUnavailableException()
+        } catch (failure: OpenCvUnavailableException) {
+            throw failure
+        } catch (failure: UnsatisfiedLinkError) {
+            throw OpenCvUnavailableException(failure)
+        }
+    }
+
     private fun finishCleanup(
         primaryFailure: Throwable?,
         actions: List<() -> Unit>,
@@ -347,6 +419,23 @@ class SiftRootSiftFingerprintExtractor {
             cleanupFailure?.let(primaryFailure::addSuppressed)
         } else {
             cleanupFailure?.let { throw it }
+        }
+    }
+
+    /**
+     * Native cleanup is a prerequisite for transferring descriptor ownership to
+     * a returned fingerprint. A cleanup failure therefore scrubs the still
+     * caller-owned rows before propagating the failure.
+     */
+    private fun cleanupBeforeTransfer(
+        outputDescriptors: List<ByteArray>,
+        actions: List<() -> Unit>,
+    ) {
+        try {
+            finishCleanup(primaryFailure = null, actions = actions)
+        } catch (failure: Throwable) {
+            outputDescriptors.forEach { it.fill(0) }
+            throw failure
         }
     }
 
@@ -404,13 +493,6 @@ class SiftRootSiftFingerprintExtractor {
     }
 
     private companion object {
-        const val NFEATURES = 0
-        const val NOCTAVE_LAYERS = 3
-        const val CONTRAST_THRESHOLD = 0.018
-        const val EDGE_THRESHOLD = 12.0
-        const val SIGMA = 1.6
-        const val GRID_SIZE = 6
-        const val MAX_PER_CELL = 45
         const val MAX_KEYPOINTS = SiftRootSiftFingerprintCodec.MAX_KEYPOINTS
         const val MAX_DETECTED_KEYPOINTS = 100_000
         // Matches PerspectiveWarper's bounded canonical output budget.  The

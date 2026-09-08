@@ -93,7 +93,7 @@ class RemanenceViewModelFactory(
                     container.accountScopedFileRoots,
                 ),
             ),
-            profile = dev.hryshyn.remanence.core.recognition.RecognitionProfile.mvpOrbV1(),
+            profile = dev.hryshyn.remanence.core.recognition.RecognitionProfile.postcardSiftRootSiftV1(),
             // LUNA-01: plaintext staging resolves from the immutable owner
             // snapshot into accounts/<owner>/temp/create/<capsule UUID>.
             accountScopedFileRoots = container.accountScopedFileRoots,
@@ -122,7 +122,7 @@ class RemanenceViewModelFactory(
         ScanViewModel::class.java -> ScanViewModel(
             persistence = container.fingerprintPersistence,
             database = container.database,
-            profile = dev.hryshyn.remanence.core.recognition.RecognitionProfile.mvpOrbV1(),
+            profile = dev.hryshyn.remanence.core.recognition.RecognitionProfile.postcardSiftRootSiftV1(),
             identityProvider = {
                 val row = container.currentAccountStore.loadEntity() ?: return@ScanViewModel null
                 when (val loaded = container.identityRepository.load()) {

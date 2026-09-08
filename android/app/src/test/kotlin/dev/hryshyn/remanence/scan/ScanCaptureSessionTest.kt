@@ -7,6 +7,8 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec
+import dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture
 
 /** State-machine proof for M2-F0-07 FRONT-only scan capture session. */
 class ScanCaptureSessionTest {
@@ -19,7 +21,10 @@ class ScanCaptureSessionTest {
     }
 
     private fun session() = ScanCaptureSession {
-        ScannedSide("mvp-orb-v1-${profileCounter++}", ByteArray(32) { it.toByte() })
+        ScannedSide(
+            SiftRootSiftFingerprintCodec.PROFILE_ID,
+            CanonicalSiftFingerprintFixture.bytes(seed = profileCounter++),
+        )
     }
 
     private inline fun <reified T : Throwable> assertThrows(block: () -> Unit): T {
@@ -74,11 +79,37 @@ class ScanCaptureSessionTest {
     @Test
     fun emptySerializedFingerprintIsRejected() {
         val emptyExtractor = ScanSideExtractor {
-            ScannedSide("mvp-orb-v1", ByteArray(0))
+            ScannedSide(SiftRootSiftFingerprintCodec.PROFILE_ID, ByteArray(0))
         }
         assertThrows<IllegalArgumentException> {
             ScanCaptureSession(emptyExtractor).captureFront()
         }
+    }
+
+    @Test
+    fun profileMismatchIsRejectedAndWipesTheExtractedBytes() {
+        val bytes = CanonicalSiftFingerprintFixture.bytes(seed = 20)
+        val scan = ScanCaptureSession {
+            ScannedSide("retired-profile-v0", bytes)
+        }
+
+        assertThrows<IllegalArgumentException> { scan.captureFront() }
+
+        assertNull(scan.front)
+        assertTrue(bytes.all { it == 0.toByte() })
+    }
+
+    @Test
+    fun noncanonicalBytesAreRejectedAndWiped() {
+        val bytes = CanonicalSiftFingerprintFixture.bytes(seed = 21) + byteArrayOf(0x50, 0x01)
+        val scan = ScanCaptureSession {
+            ScannedSide(SiftRootSiftFingerprintCodec.PROFILE_ID, bytes)
+        }
+
+        assertThrows<IllegalArgumentException> { scan.captureFront() }
+
+        assertNull(scan.front)
+        assertTrue(bytes.all { it == 0.toByte() })
     }
 
     @Test
@@ -114,12 +145,12 @@ class ScanCaptureSessionTest {
      */
     @Test
     fun failedRecapturePreservesLiveFrontUntilResetWipesIt() {
-        val live = ByteArray(32) { (it + 1).toByte() }
+        val live = CanonicalSiftFingerprintFixture.bytes(seed = 22)
         assertTrue(live.any { it != 0.toByte() })
         var extractions = 0
         val scan = ScanCaptureSession {
             extractions++
-            ScannedSide("mvp-orb-v1", live)
+            ScannedSide(SiftRootSiftFingerprintCodec.PROFILE_ID, live)
         }
         scan.captureFront()
         assertThrows<IllegalStateException> { scan.captureFront() }

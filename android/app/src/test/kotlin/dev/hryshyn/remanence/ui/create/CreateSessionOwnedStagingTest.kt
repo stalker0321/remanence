@@ -217,7 +217,7 @@ class CreateSessionOwnedStagingTest {
             },
             persistence = persistence,
             outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(stagingRoot.parentFile, "session-owned-outbox")), retryStore),
-            profile = RecognitionProfile.mvpOrbV1(),
+            profile = RecognitionProfile.postcardSiftRootSiftV1(),
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingRoot),
             openPhotoSource = { id ->
                 dev.hryshyn.remanence.create.PhotoSource {
@@ -635,31 +635,8 @@ class CreateSessionOwnedStagingTest {
 }
 
 private fun synthetic(side: FingerprintSide): ProcessedStill.Accepted {
-    val profile = RecognitionProfile.mvpOrbV1()
-    val keypoints = List(64) {
-        dev.hryshyn.remanence.core.recognition.FingerprintKeypoint(
-            xNormalized = (it % 8) / 8.0,
-            yNormalized = (it / 8) / 8.0,
-            scaleNormalized = 1.0,
-            angleCentiDegrees = 0,
-            responseQuantized = it,
-            octave = 0,
-        )
-    }
-    return ProcessedStill.Accepted(
-        profileId = profile.profileId,
-        serializedBytes = dev.hryshyn.remanence.core.recognition.FingerprintCodec.serialize(
-            dev.hryshyn.remanence.core.recognition.PostcardFingerprint(
-                profileId = profile.profileId,
-                canonicalWidthPx = profile.capture.canonicalLongEdgePx,
-                canonicalHeightPx = 1000,
-                coarseHash64 = 9L,
-                keypoints = keypoints,
-                descriptors = List(64) { i ->
-                    ByteArray(32) { ((it * 23 + i * 7) and 0xFF).toByte() }
-                },
-                quality = dev.hryshyn.remanence.core.recognition.ExtractionQuality(200.0, 90.0, 0.01, 0.85),
-            ),
-        ),
+        return ProcessedStill.Accepted(
+        profileId = dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec.PROFILE_ID,
+        serializedBytes = dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture.bytes(9),
     )
 }

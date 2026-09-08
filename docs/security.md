@@ -298,7 +298,7 @@ dedicated recovery milestone passes, device loss remains honestly unrecoverable.
   they are not production inputs, encrypted manifest fields, or acceptance
   material.
 - The sender uploads only a recognition manifest encrypted under the capsule AEAD keyset.
-- ORB descriptors, keypoint positions, coarse image hashes, and chooser hints are sensitive derived data. They may reveal visual structure and must not be described as anonymized.
+- SIFT/RootSIFT descriptors, keypoint positions, coarse image hashes, and chooser hints are sensitive derived data. They may reveal visual structure and must not be described as anonymized.
 - Recipient fingerprints are stored locally encrypted with a separate Keystore-protected fingerprint-storage AEAD key.
 - The local visual relation is owner-scoped `design -> 0..N`; there is no
   global/server visual index, server-side matching, or design uniqueness signal.

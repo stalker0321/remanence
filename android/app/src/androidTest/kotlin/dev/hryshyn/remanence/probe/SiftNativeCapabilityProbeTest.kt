@@ -30,7 +30,7 @@ import org.opencv.imgproc.Imgproc
  * RootSIFT normalization, and `findHomography` with `USAC_MAGSAC`.
  *
  * Explicitly NOT: product wiring (this source set never enters the release
- * APK or runtime graph), threshold/ORB changes, or accuracy evidence. All
+ * APK or runtime graph), threshold changes, or accuracy evidence. All
  * fixtures are synthetic and deterministic; a passing probe says the native
  * primitives exist and behave, nothing about recognition quality on real
  * postcards. Runtime requires a connected arm64-v8a device or x86_64

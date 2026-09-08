@@ -2,6 +2,7 @@ package dev.hryshyn.remanence.create
 
 import android.graphics.Bitmap
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
@@ -11,11 +12,13 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import dev.hryshyn.remanence.capture.ProcessedStill
 import dev.hryshyn.remanence.core.recognition.CaptureDecoder
-import dev.hryshyn.remanence.core.recognition.FingerprintCodec
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.QualityReason
 import dev.hryshyn.remanence.core.recognition.QuadCandidate
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprint
+import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec
+import dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -32,28 +35,29 @@ class RealStillFingerprintProcessorTest {
             }
     }
 
-    private val profile = RecognitionProfile.mvpOrbV1()
+    private val profile = RecognitionProfile.postcardSiftRootSiftV1()
 
     @Test
-    fun guideAlignedCaptureWithoutQuadUsesFallbackAndProducesUsableOrb() {
+    fun guideAlignedCaptureWithoutQuadUsesFallbackAndProducesUsableSift() {
         val result = processor(::emptyContours).process(patternJpeg())
 
         assertTrue("expected accepted fallback capture, got $result", result is ProcessedStill.Accepted)
         val accepted = result as ProcessedStill.Accepted
         try {
-            val fingerprint = FingerprintCodec.parse(accepted.serializedBytes)
+            val fingerprint = SiftRootSiftFingerprintCodec.parse(accepted.serializedBytes)
             assertTrue(fingerprint.keypoints.isNotEmpty())
-            assertTrue(fingerprint.descriptors.isNotEmpty())
-            assertTrue(fingerprint.descriptors.all { it.size == FingerprintCodec.DESCRIPTOR_BYTES })
-            assertTrue(fingerprint.descriptors.size == fingerprint.keypoints.size)
-            assertTrue(fingerprint.profileId == RecognitionProfile.MVP_ORB_V1_ID)
+            assertTrue(fingerprint.quantizedSiftDescriptors.isNotEmpty())
+            assertTrue(fingerprint.quantizedSiftDescriptors.all { it.size == SiftRootSiftFingerprintCodec.DESCRIPTOR_BYTES })
+            assertTrue(fingerprint.quantizedSiftDescriptors.size == fingerprint.keypoints.size)
+            assertTrue(fingerprint.profileId == SiftRootSiftFingerprintCodec.PROFILE_ID)
+            fingerprint.wipe()
         } finally {
             accepted.serializedBytes.fill(0)
         }
     }
 
     @Test
-    fun portraitGuideFallbackProducesUsableOrbThroughProductionPipeline() {
+    fun portraitGuideFallbackProducesUsableSiftThroughProductionPipeline() {
         val result = processor(::emptyContours).process(patternJpeg(width = 600, height = 900))
 
         assertTrue("expected accepted portrait fallback capture, got $result", result is ProcessedStill.Accepted)
@@ -66,8 +70,25 @@ class RealStillFingerprintProcessorTest {
         val glare = processor(::emptyContours).process(patternJpeg(glare = true))
 
         assertAdvisoryOrFeatureFailure(blurry, QualityReason.TOO_BLURRY)
-        assertAcceptedWithAdvisory(dark, QualityReason.TOO_DARK)
+        assertAdvisoryOrFeatureFailure(dark, QualityReason.TOO_DARK)
         assertAdvisoryOrFeatureFailure(glare, QualityReason.GLARE_EXCESSIVE)
+    }
+
+    @Test
+    fun diagnosticAssertionErrorStillWipesExtractedFingerprint() {
+        val fingerprint = CanonicalSiftFingerprintFixture.fingerprint(seed = 23)
+        val failure = assertThrows(AssertionError::class.java) {
+            RealStillFingerprintProcessor(
+                profile = profile,
+                side = FingerprintSide.FRONT,
+                contourDetector = ::emptyContours,
+                captureDiagnosticObserver = { throw AssertionError("diagnostic failure") },
+                fingerprintExtractor = { _, _, _ -> fingerprint },
+            ).process(patternJpeg())
+        }
+
+        assertTrue(failure.message == "diagnostic failure")
+        assertTrue(fingerprint.quantizedSiftDescriptors.all { row -> row.all { it == 0.toByte() } })
     }
 
     private fun processor(detector: (IntArray, Int, Int) -> List<QuadCandidate>) =

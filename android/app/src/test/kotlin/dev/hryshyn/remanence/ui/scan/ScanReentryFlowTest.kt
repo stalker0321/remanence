@@ -107,28 +107,29 @@ class ScanReentryFlowTest {
     )
 
     private fun syntheticFingerprint(seed: Int): ByteArray {
-        val profile = RecognitionProfile.mvpOrbV1()
+        val profile = RecognitionProfile.postcardSiftRootSiftV1()
         val keypoints = List(64) {
-            dev.hryshyn.remanence.core.recognition.FingerprintKeypoint(
-                xNormalized = (it % 8) / 8.0,
-                yNormalized = (it / 8) / 8.0,
-                scaleNormalized = 1.0,
+            dev.hryshyn.remanence.core.model.SiftRootSiftKeypoint(
+                xMicro = (it % 8) * 125_000,
+                yMicro = (it / 8) * 125_000,
+                scaleMicro = 1_000_000,
                 angleCentiDegrees = 0,
                 responseQuantized = it,
                 octave = 0,
             )
         }
-        return dev.hryshyn.remanence.core.recognition.FingerprintCodec.serialize(
-            dev.hryshyn.remanence.core.recognition.PostcardFingerprint(
+        return dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec.serialize(
+            dev.hryshyn.remanence.core.model.SiftRootSiftFingerprint(
                 profileId = profile.profileId,
                 canonicalWidthPx = profile.capture.canonicalLongEdgePx,
                 canonicalHeightPx = 1000,
                 coarseHash64 = seed.toLong(),
                 keypoints = keypoints,
-                descriptors = List(64) { i ->
-                    ByteArray(32) { ((it * 7 + i * 13 + seed * 29) and 0xFF).toByte() }
+                quantizedSiftDescriptors = List(64) { i ->
+                    ByteArray(dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec.DESCRIPTOR_BYTES) {
+                        ((it * 7 + i * 13 + seed * 29) and 0xFF).toByte()
+                    }
                 },
-                quality = dev.hryshyn.remanence.core.recognition.ExtractionQuality(200.0, 90.0, 0.01, 0.85),
             ),
         )
     }
@@ -136,13 +137,18 @@ class ScanReentryFlowTest {
     /** Accepts every still with the SAME fingerprint the sender staged. */
     private class MatchingProcessor(private val bytes: ByteArray) : StillProcessor {
         override fun process(jpegBytes: ByteArray): ProcessedStill =
-            ProcessedStill.Accepted(profileId = RecognitionProfile.mvpOrbV1().profileId, serializedBytes = bytes)
+            ProcessedStill.Accepted(
+                profileId = RecognitionProfile.postcardSiftRootSiftV1().profileId,
+                // Each capture receives fresh ownership; ScanViewModel wipes
+                // the consumed session buffer after the first handoff.
+                serializedBytes = bytes.copyOf(),
+            )
     }
 
     private suspend fun stagePublishedCapsule() {
         store().persist(
             capsuleUuid.toString(), FingerprintOrigin.SENDER,
-            RecognitionProfile.mvpOrbV1().profileId,
+            RecognitionProfile.postcardSiftRootSiftV1().profileId,
             syntheticFingerprint(11),
         )
         val prepared = CapsulePublisher(testWrapper, testAlias).publish(
@@ -176,7 +182,7 @@ class ScanReentryFlowTest {
     ): ScanViewModel = ScanViewModel(
         persistence = store(),
         database = database,
-        profile = RecognitionProfile.mvpOrbV1(),
+        profile = RecognitionProfile.postcardSiftRootSiftV1(),
         identityProvider = {
             SenderIdentitySnapshot(
                 userId = userUuid.toString(),
@@ -203,9 +209,48 @@ class ScanReentryFlowTest {
         candidateIndexProvider = { ScanCandidateIndex.EMPTY },
         incomingPresentationPreparation = null,
         frontProcessor = MatchingProcessor(syntheticFingerprint(11)),
+        matcher = deterministicMatcher(),
         cpuDispatcher = testDispatcher,
         ioDispatcher = testDispatcher,
     )
+
+    /** Keeps reentry/grant routing assertions independent of native OpenCV. */
+    private fun deterministicMatcher() = dev.hryshyn.remanence.core.recognition.SiftRootSiftMatcherPort {
+            query, reference ->
+        val queryUsable = query.quantizedSiftDescriptors.count { row -> row.any { it.toInt() != 0 } }
+        val referenceUsable = reference.quantizedSiftDescriptors.count { row -> row.any { it.toInt() != 0 } }
+        val count = if (query.coarseHash64 == reference.coarseHash64) minOf(queryUsable, referenceUsable) else 0
+        val pairs = (0 until count).map { index ->
+            dev.hryshyn.remanence.core.recognition.SiftRootSiftMatchPair(index, index, 0.1)
+        }
+        dev.hryshyn.remanence.core.recognition.SiftRootSiftMatchResult(
+            matches = pairs,
+            inlierMatchIndices = pairs.indices.toList(),
+            homographyRowMajor = if (count >= 6) doubleArrayOf(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0) else null,
+            diagnostics = dev.hryshyn.remanence.core.recognition.SiftRootSiftMatchDiagnostics(
+                rawQueryRows = query.quantizedSiftDescriptors.size,
+                rawReferenceRows = reference.quantizedSiftDescriptors.size,
+                usableQueryRows = queryUsable,
+                usableReferenceRows = referenceUsable,
+                forwardRatioMatches = count,
+                reverseRatioMatches = count,
+                reciprocalMatches = count,
+                uniqueMatches = count,
+                geometryAttempted = count >= 6,
+                geometryFound = count >= 6,
+                geometryAccepted = count >= 6,
+                inliers = count,
+                inlierRatio = if (count == 0) 0.0 else 1.0,
+                medianInlierReprojectionErrorPx = if (count == 0) -1.0 else 1.0,
+                referenceConvexHullCoverage = if (count == 0) -1.0 else 1.0,
+                supportAreaPx2 = if (count == 0) 0.0 else 400.0,
+                supportEdgeRatio = if (count == 0) 0.0 else 1.0,
+                failure = if (count >= 6) dev.hryshyn.remanence.core.recognition.SiftRootSiftMatchFailure.NONE
+                else if (count == 0) dev.hryshyn.remanence.core.recognition.SiftRootSiftMatchFailure.NO_RATIO_MATCHES
+                else dev.hryshyn.remanence.core.recognition.SiftRootSiftMatchFailure.INSUFFICIENT_UNIQUE_PAIRS,
+            ),
+        )
+    }
 
     /** FIX-STATE-01: production-shaped FRONT-only delivery through the authoritative controller. */
     private fun capturePairThroughRealDelivery(vm: ScanViewModel) {

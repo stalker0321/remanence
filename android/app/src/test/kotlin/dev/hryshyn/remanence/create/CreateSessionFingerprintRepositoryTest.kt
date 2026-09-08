@@ -9,6 +9,7 @@ import org.junit.Test
 import dev.hryshyn.remanence.core.data.fingerprints.DuplicateFingerprintException
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
+import dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture
 
 private class RecordingPersistence : SealedFingerprintPersistence {
         override suspend fun decrypt(fingerprintId: String): ByteArray = ByteArray(0)
@@ -49,7 +50,10 @@ private class StubExtractor : SideFingerprintExtractor {
 
     override fun extract(): StagedSideFingerprint {
         extractions.incrementAndGet()
-        return StagedSideFingerprint("mvp-orb-v1", "serialized-fingerprint".toByteArray()).also {
+        return StagedSideFingerprint(
+            "postcard-sift-rootsift-v1",
+            CanonicalSiftFingerprintFixture.bytes(seed = 1),
+        ).also {
             lastBytes = it.serializedBytes
         }
     }
@@ -74,7 +78,7 @@ class CreateSessionFingerprintRepositoryTest {
         assertEquals(capsuleId, storedCapsule)
         assertEquals(FingerprintOrigin.SENDER, origin)
         assertTrue(bytes.isNotEmpty())
-        assertEquals("mvp-orb-v1", persistence.profiles.single())
+        assertEquals("postcard-sift-rootsift-v1", persistence.profiles.single())
         assertTrue(extractor.lastBytes!!.all { it == 0.toByte() })
     }
 
@@ -87,6 +91,25 @@ class CreateSessionFingerprintRepositoryTest {
             runBlocking { sut.captureFront(capsuleId) }
         }
         assertEquals(0, persistence.persisted.size)
+    }
+
+    @Test
+    fun noncanonicalExtractionIsRejectedAndTheHandoffIsWiped() = runBlocking {
+        val persistence = RecordingPersistence()
+        var staged: StagedSideFingerprint? = null
+        val extractor = SideFingerprintExtractor {
+            StagedSideFingerprint(
+                "postcard-sift-rootsift-v1",
+                byteArrayOf(1, 2, 3),
+            ).also { staged = it }
+        }
+
+        assertThrows(IllegalArgumentException::class.java) {
+            runBlocking { CreateSessionFingerprintRepository(persistence, extractor).captureFront(capsuleId) }
+        }
+
+        assertEquals(0, persistence.persisted.size)
+        assertTrue(staged!!.serializedBytes.all { it == 0.toByte() })
     }
 
     @Test

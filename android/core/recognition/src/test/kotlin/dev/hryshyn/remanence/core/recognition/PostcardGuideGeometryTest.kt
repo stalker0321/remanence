@@ -7,7 +7,7 @@ import kotlin.test.assertTrue
 
 class PostcardGuideGeometryTest {
 
-    private val profile = RecognitionProfile.mvpOrbV1()
+    private val profile = RecognitionProfile.postcardSiftRootSiftV1()
 
     @Test
     fun guideCropUsesAdaptiveGeometryAcrossPreviewAndCaptureAspects() {

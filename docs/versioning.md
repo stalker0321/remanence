@@ -11,7 +11,7 @@ consumes both values; do not duplicate them in `android/app/build.gradle.kts`.
 The SIFT/RootSIFT integrated-test sequence is:
 
 ```text
-0.2.0-sift-it.1  →  0.2.0-sift-it.2  →  0.2.0-sift-it.3  →  0.2.0-sift-it.4  →  0.2.0-rc.1  →  0.2.0
+0.2.0-sift-it.1  →  0.2.0-sift-it.2  →  0.2.0-sift-it.3  →  0.2.0-sift-it.4  →  0.2.0-sift-it.5  →  0.2.0-rc.1  →  0.2.0
 ```
 
 `sift-it.N` identifies an installable integrated-test candidate. `rc.N` is a
@@ -22,15 +22,15 @@ in the product version.
 
 Every distributed Android artifact receives a new monotonically increasing
 `versionCode`. The current historical preview consumed code 11; SIFT candidates
-consumed codes 12, 13, 14, and 15 in order. A consumed code is never reused, including
+consumed codes 12, 13, 14, 15, and 16 in order. A consumed code is never reused, including
 for a corrected or rollback build.
 
 Product and wire versions are independent. The SIFT candidate records the
 following separately:
 
 ```text
-product:             0.2.0-sift-it.4
-Android code:        15
+product:             0.2.0-sift-it.5
+Android code:        16
 REST API:            /v1
 outer protobuf:      remanence.protocol.v1
 recognition schema:  remanence.recognition.v2
@@ -46,14 +46,14 @@ decision and compatibility evidence.
 
 Release tags use the exact product version with a `v` prefix:
 `v0.2.0-sift-it.1`, `v0.2.0-sift-it.2`, `v0.2.0-sift-it.3`,
-`v0.2.0-sift-it.4`, `v0.2.0-rc.1`, and `v0.2.0`. Tags point to the exact clean
+`v0.2.0-sift-it.4`, `v0.2.0-sift-it.5`, `v0.2.0-rc.1`, and `v0.2.0`. Tags point to the exact clean
 release commit. Existing tags are historical and must never be moved, deleted,
 or rewritten.
 
 Published Android artifacts use the version, Android code, and release commit:
 
 ```text
-Remanence-android-v0.2.0-sift-it.4-code15-g<git-sha>-debug.apk
+Remanence-android-v0.2.0-sift-it.5-code16-g<git-sha>-debug.apk
 ```
 
 Record the matching SHA-256, backend image/digest, protocol and schema

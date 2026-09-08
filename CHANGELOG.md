@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.2.0-sift-it.5 — Android sync persistence hotfix
+
+- Publishes verified incoming postcard index and ciphertext files with the
+  Android-safe same-directory no-replace move path, preserving no-follow path
+  safety, integrity/hash/size verification, durability ordering, ambiguous
+  outcome reconciliation, exact owned-source cleanup, and unknown conflicts.
+- Raw deterministic destination spelling remains the persisted Room `localPath`
+  contract even when a trusted-root capability uses its canonical spelling.
+  Provider move or mandatory durability unavailability is terminal and cannot
+  loop as verified-payload persistence retry; diagnostics remain bounded and
+  privacy-safe.
+- Android `versionCode` is 16. This debug integrated-test build targets
+  `https://remanence.hryshyn.dev/` and explicitly enables V2 line localization
+  through the current `V2LinePostcardLocator`; the release/default feature
+  remains disabled. SIFT/RootSIFT remains the sole current matcher profile;
+  no legacy ORB path or threshold changes are included.
+- Wire identity remains REST `/v1` and outer protobuf
+  `remanence.protocol.v1`; recognition uses schema `remanence.recognition.v2`,
+  fingerprint format 3, and profile `postcard-sift-rootsift-v1`.
+- Tag: `v0.2.0-sift-it.5`. Artifact naming is
+  `Remanence-android-v0.2.0-sift-it.5-code16-g<git-sha>-debug.apk`.
+- The hosted server was not redeployed for this client hotfix, and Postmark
+  remains stopped. This is an installable integrated-test prerelease: physical
+  device, dataset, recovery, and later public-release gates remain separate
+  evidence requirements. Rollback remains an explicit artifact/tag mapping
+  and never reuses an Android `versionCode`.
+
 ## 0.2.0-sift-it.4 — Android trusted-root alias fix
 
 - Fixes the Android local-staging false positive for a system-shaped alias at

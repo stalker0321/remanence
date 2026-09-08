@@ -40,10 +40,19 @@ enum class TrustedPathSafety {
 class AccountScopedFileRoots(
     private val filesDir: File,
 ) {
-    private val rawFilesRoot: Path = filesDir.toPath().toAbsolutePath().normalize()
+    private val rawFilesRoot: Path
+    private val canonicalFilesRoot: Path
 
     init {
         require(filesDir.path.isNotEmpty()) { "filesDir must be resolvable" }
+        rawFilesRoot = filesDir.toPath().toAbsolutePath().normalize()
+        canonicalFilesRoot = try {
+            filesDir.canonicalFile.toPath().toAbsolutePath().normalize()
+        } catch (failure: IOException) {
+            throw IllegalStateException("filesDir identity is unavailable", failure)
+        } catch (failure: SecurityException) {
+            throw IllegalStateException("filesDir identity is unavailable", failure)
+        }
     }
 
     /** The fixed set of child roots for every authenticated account. */
@@ -146,9 +155,7 @@ class AccountScopedFileRoots(
     /** Returns whether [path] is the raw or canonical spelling of this root. */
     fun isTrustedRoot(path: Path): Boolean = try {
         val normalized = path.toAbsolutePath().normalize()
-        normalized == rawFilesRoot || normalized == canonicalFilesRoot()
-    } catch (_: IOException) {
-        false
+        normalized == rawFilesRoot || normalized == canonicalFilesRoot
     } catch (_: SecurityException) {
         false
     }
@@ -164,13 +171,6 @@ class AccountScopedFileRoots(
         } catch (_: SecurityException) {
             return TrustedPathSafety.UNAVAILABLE
         }
-        val canonicalRoot = try {
-            canonicalFilesRoot()
-        } catch (_: IOException) {
-            return TrustedPathSafety.UNAVAILABLE
-        } catch (_: SecurityException) {
-            return TrustedPathSafety.UNAVAILABLE
-        }
         val canonical = try {
             normalized.toFile().canonicalFile.toPath().toAbsolutePath().normalize()
         } catch (_: IOException) {
@@ -178,15 +178,15 @@ class AccountScopedFileRoots(
         } catch (_: SecurityException) {
             return TrustedPathSafety.UNAVAILABLE
         }
-        if (!isEqualOrDescendant(canonical, canonicalRoot)) {
+        if (!isEqualOrDescendant(canonical, canonicalFilesRoot)) {
             return TrustedPathSafety.UNSAFE
         }
 
         val inspection = when {
             isEqualOrDescendant(normalized, rawFilesRoot) ->
                 normalized to rawFilesRoot
-            isEqualOrDescendant(normalized, canonicalRoot) ->
-                normalized to canonicalRoot
+            isEqualOrDescendant(normalized, canonicalFilesRoot) ->
+                normalized to canonicalFilesRoot
             else -> return TrustedPathSafety.UNSAFE
         }
         return inspectControlledComponents(inspection.first, inspection.second)
@@ -204,15 +204,23 @@ class AccountScopedFileRoots(
         } catch (_: SecurityException) {
             return false
         }
-        if (firstNormalized == secondNormalized) return true
-        return try {
-            firstNormalized.toFile().canonicalFile.toPath().toAbsolutePath().normalize() ==
-                secondNormalized.toFile().canonicalFile.toPath().toAbsolutePath().normalize()
+        val firstCanonical = try {
+            firstNormalized.toFile().canonicalFile.toPath().toAbsolutePath().normalize()
         } catch (_: IOException) {
-            false
+            return false
         } catch (_: SecurityException) {
-            false
+            return false
         }
+        val secondCanonical = try {
+            secondNormalized.toFile().canonicalFile.toPath().toAbsolutePath().normalize()
+        } catch (_: IOException) {
+            return false
+        } catch (_: SecurityException) {
+            return false
+        }
+        if (firstNormalized != secondNormalized && firstCanonical != secondCanonical) return false
+        return trustedPathSafety(firstNormalized) == TrustedPathSafety.SAFE &&
+            trustedPathSafety(secondNormalized) == TrustedPathSafety.SAFE
     }
 
     /** Segment-aware containment for raw or canonical spellings. */
@@ -271,9 +279,6 @@ class AccountScopedFileRoots(
         }
         return resolved
     }
-
-    private fun canonicalFilesRoot(): Path =
-        filesDir.canonicalFile.toPath().toAbsolutePath().normalize()
 
     private fun inspectControlledComponents(path: Path, boundary: Path): TrustedPathSafety {
         var current = path

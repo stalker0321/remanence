@@ -917,6 +917,7 @@ class IncomingCapsuleAcceptanceCoordinator internal constructor(
 
     private fun ensureNoSymlinkDirectory(path: Path) {
         if (roots.isTrustedRoot(path)) {
+            if (roots.trustedPathSafety(path) != TrustedPathSafety.SAFE) throw UnsafeTempPath()
             if (!Files.isDirectory(path)) throw UnsafeTempPath()
             return
         }

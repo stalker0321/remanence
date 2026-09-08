@@ -148,6 +148,33 @@ class AccountScopedFileRootsTest {
     }
 
     @Test
+    fun swappedFilesDirAliasTargetIsNotReauthorizedOrMaterialized() {
+        val parent = sandbox("swapped-alias")
+        val realFilesDir = File(parent, "real-files").apply { mkdirs() }
+        val outside = File(parent, "outside").apply { mkdirs() }
+        val rawFilesDir = File(parent, "raw-files")
+        java.nio.file.Files.createSymbolicLink(rawFilesDir.toPath(), realFilesDir.toPath())
+        val roots = AccountScopedFileRoots(rawFilesDir)
+        val rawTemp = rawFilesDir.toPath().resolve("accounts/$ownerAUuid/temp")
+
+        assertEquals(TrustedPathSafety.SAFE, roots.trustedPathSafety(rawTemp))
+        java.nio.file.Files.delete(rawFilesDir.toPath())
+        java.nio.file.Files.createSymbolicLink(rawFilesDir.toPath(), outside.toPath())
+        try {
+            assertEquals(TrustedPathSafety.UNSAFE, roots.trustedPathSafety(rawTemp))
+            try {
+                roots.child(ownerA, AccountScopedFileRoots.ChildRoot.TEMP)
+                fail("a swapped filesDir alias must not authorize the new target")
+            } catch (_: IllegalStateException) {
+                // Expected fail-closed result.
+            }
+            assertFalse(File(outside, "accounts/$ownerAUuid").exists())
+        } finally {
+            java.nio.file.Files.deleteIfExists(rawFilesDir.toPath())
+        }
+    }
+
+    @Test
     fun resolverRejectsSymlinkedAccountsRootWithoutMaterializingOutside() {
         val filesDir = sandbox("traversal")
         val accountsLink = File(filesDir, "accounts")

@@ -213,6 +213,64 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
     }
 
     @Test
+    fun swappedFilesDirAliasFailsClosedBeforeDownloadCryptoAdoptionOrCommit() = runBlocking {
+        val realFilesDir = File(testRoot.parentFile, "a11d1-swap-real-${System.nanoTime()}")
+            .apply { mkdirs() }
+        val rawAlias = File(testRoot.parentFile, "a11d1-swap-raw-${System.nanoTime()}")
+        val outside = File(testRoot.parentFile, "a11d1-swap-outside-${System.nanoTime()}")
+            .apply { mkdirs() }
+        val sentinel = File(outside, "sentinel.bin").apply { writeBytes(byteArrayOf(4, 5, 6)) }
+        val sentinelBytes = sentinel.readBytes()
+        Files.createSymbolicLink(rawAlias.toPath(), realFilesDir.toPath())
+        try {
+            roots = AccountScopedFileRoots(rawAlias)
+            adopter = IncomingRecognitionCiphertextAdopter(roots)
+            committer = IncomingIndexAcceptanceCommitter(database, roots)
+            seed()
+
+            Files.delete(rawAlias.toPath())
+            Files.createSymbolicLink(rawAlias.toPath(), outside.toPath())
+
+            var downloads = 0
+            var cryptoCalls = 0
+            var adoptionCalls = 0
+            var commitCalls = 0
+            val result = coordinator(
+                download = IncomingRecipientBlobDownloader { _, _ ->
+                    downloads += 1
+                    throw AssertionError("swapped filesDir must stop before download")
+                },
+                control = IncomingControlIndexAcceptancePort {
+                    cryptoCalls += 1
+                    throw AssertionError("swapped filesDir must stop before crypto")
+                },
+                adoptionPort = IncomingRecognitionAdoptionPort {
+                    adoptionCalls += 1
+                    throw AssertionError("swapped filesDir must stop before adoption")
+                },
+                commitPort = IncomingIndexCommitPort { _, _ ->
+                    commitCalls += 1
+                    throw AssertionError("swapped filesDir must stop before commit")
+                },
+            ).accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+
+            assertEquals(
+                IncomingCapsuleAcceptanceRejectionReason.TEMP_PATH_UNSAFE,
+                assertIs<IncomingCapsuleAcceptanceResult.Rejected>(result).reason,
+            )
+            assertEquals(0, downloads)
+            assertEquals(0, cryptoCalls)
+            assertEquals(0, adoptionCalls)
+            assertEquals(0, commitCalls)
+            assertArrayEquals(sentinelBytes, sentinel.readBytes())
+        } finally {
+            rawAlias.delete()
+            realFilesDir.deleteRecursively()
+            outside.deleteRecursively()
+        }
+    }
+
+    @Test
     fun wrongReturnedSizeReportsReturnedSizeAndCleansBeforeCryptoAdoptionOrCommit() = runBlocking {
         seed()
         var cryptoCalls = 0

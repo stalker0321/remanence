@@ -236,6 +236,19 @@ class BlockStoreOperation<T> internal constructor(
 
     internal fun isOpen(): Boolean = synchronized(lock) { settled == null }
 
+    /** Adds ownership cleanup for a parent stage that may settle before its child. */
+    internal fun addUncertainCleanup(cleanup: () -> Unit) {
+        var runNow = false
+        synchronized(lock) {
+            if (settled != null) {
+                runNow = true
+            } else {
+                onUncertain = combineCleanup(onUncertain, cleanup)
+            }
+        }
+        if (runNow) cleanup()
+    }
+
     /**
      * Atomically reserves and launches a provider child. The launch closure is
      * deliberately invoked while the operation lock is held. A synchronous
@@ -245,11 +258,16 @@ class BlockStoreOperation<T> internal constructor(
     internal fun <R> reserveAndLaunch(
         onUncertain: (() -> Unit)? = null,
         launch: () -> R,
-    ): R? = synchronized(lock) {
-        if (settled != null || childReserved) return@synchronized null
-        childReserved = true
-        this.onUncertain = onUncertain
-        launch()
+    ): R? = try {
+        synchronized(lock) {
+            if (settled != null || childReserved) return@synchronized null
+            childReserved = true
+            this.onUncertain = combineCleanup(this.onUncertain, onUncertain)
+            launch()
+        }
+    } catch (error: Error) {
+        settle(BlockStoreResult.failure(BlockStoreOutcome.INDETERMINATE))
+        throw error
     }
 
     internal fun settle(result: BlockStoreResult<T>): Boolean {
@@ -271,11 +289,26 @@ class BlockStoreOperation<T> internal constructor(
         onSettled(actions.second)
         return true
     }
+
+    private fun combineCleanup(
+        first: (() -> Unit)?,
+        second: (() -> Unit)?,
+    ): (() -> Unit)? = when {
+        first == null -> second
+        second == null -> first
+        else -> {
+            {
+                first()
+                second()
+            }
+        }
+    }
 }
 
 /**
- * Permanent local tombstone for a real uncertain delete. There is no clear or
- * reconcile operation: Block Store has no proof/token fence for a late delete.
+ * Permanent local tombstone for a real uncertain provider mutation. There is
+ * no clear or reconcile operation: Block Store has no proof/token fence for a
+ * late store or delete.
  */
 class BlockStoreDeleteTombstone(
     private val registry: AbandonedKeyRegistry,
@@ -693,20 +726,33 @@ class GoogleBlockStoreUStore(
             operation.settle(BlockStoreResult.failure(BlockStoreOutcome.INDETERMINATE))
             return operation
         }
+        // The E2EE check is asynchronous. The caller-owned value may be wiped
+        // as soon as this method returns, so the bridge must retain its own
+        // copy before registering any callback. This copy is never passed to
+        // the provider and is wiped if the check settles, times out, or is
+        // abandoned before the cloud-store child is reserved.
+        val retainedValue = OwnedStoreBytes(value.copyOf())
+        operation.addUncertainCleanup(retainedValue::wipe)
         try {
             BlockStoreTaskOwner(e2eeTask).start { e2ee ->
-                if (!operation.isOpen()) return@start
+                if (!operation.isOpen()) {
+                    retainedValue.wipe()
+                    return@start
+                }
                 when (e2ee.outcome) {
                     BlockStoreOutcome.COMPLETED -> {
                         if (e2ee.value != true) {
                             operation.settle(BlockStoreResult.failure(BlockStoreOutcome.UNAVAILABLE))
                         } else {
-                            startStoreTask(operation, client, key, value)
+                            startStoreTask(operation, client, key, retainedValue)
                         }
                     }
                     else -> operation.settle(BlockStoreResult.failure(e2ee.outcome))
                 }
             }
+        } catch (error: Error) {
+            operation.settle(BlockStoreResult.failure(BlockStoreOutcome.INDETERMINATE))
+            throw error
         } catch (_: RuntimeException) {
             operation.settle(BlockStoreResult.failure(BlockStoreOutcome.INDETERMINATE))
         }
@@ -838,18 +884,39 @@ class GoogleBlockStoreUStore(
         operation: BlockStoreOperation<Unit>,
         client: BlockStoreClientPort,
         key: String,
-        value: ByteArray,
+        retainedValue: OwnedStoreBytes,
     ) {
-        val material = OwnedStoreBytes(value.copyOf())
+        val material = try {
+            OwnedStoreBytes(retainedValue.bytes.copyOf())
+        } catch (error: Error) {
+            retainedValue.wipe()
+            operation.settle(BlockStoreResult.failure(BlockStoreOutcome.INDETERMINATE))
+            throw error
+        } catch (_: RuntimeException) {
+            retainedValue.wipe()
+            operation.settle(BlockStoreResult.failure(BlockStoreOutcome.INDETERMINATE))
+            return
+        } finally {
+            retainedValue.wipe()
+        }
         val request = BlockStoreStoreRequest(
             key = key,
             value = material.bytes,
             shouldBackupToCloud = true,
         )
         val task = try {
-            operation.reserveAndLaunch {
+            operation.reserveAndLaunch(
+                onUncertain = {
+                    material.wipe()
+                    tombstone.abandon(key)
+                },
+            ) {
                 client.storeBytes(request)
             }
+        } catch (error: Error) {
+            material.wipe()
+            operation.settle(BlockStoreResult.failure(BlockStoreOutcome.INDETERMINATE))
+            throw error
         } catch (_: RuntimeException) {
             material.wipe()
             operation.settle(BlockStoreResult.failure(BlockStoreOutcome.INDETERMINATE))
@@ -878,6 +945,10 @@ class GoogleBlockStoreUStore(
                     },
                 )
             }
+        } catch (error: Error) {
+            material.wipe()
+            operation.settle(BlockStoreResult.failure(BlockStoreOutcome.INDETERMINATE))
+            throw error
         } catch (_: RuntimeException) {
             material.wipe()
             operation.settle(BlockStoreResult.failure(BlockStoreOutcome.INDETERMINATE))

@@ -47,6 +47,35 @@ class TwoArtifactProbeTest {
     }
 
     @Test
+    fun `external D2 handoff is required and never reuses D1 context`() {
+        val material = bytes(33)
+        val canary = bytes(1)
+        val d1 = context(
+            AccountBindingClass.A,
+            ContextGeneration.G1,
+            ContextTargetRole.D1_SOURCE,
+        )
+        val d2 = context(
+            AccountBindingClass.A,
+            ContextGeneration.G1,
+            ContextTargetRole.D2_TARGET,
+            runIdStart = 65,
+        )
+        val key = validKey()
+        val case = TwoArtifactCase(key, material, d1)
+        val pForD2 = checkNotNull(ProbeSidecar.seal(canary, material, d2, FixedRandom()))
+        val d2Fixture = checkNotNull(ExpectedContextFixture.fromExternal(key, d2))
+
+        assertNull(ExpectedContextFixture.fromExternal(key, d1))
+        val runner = TwoArtifactProbeRunner(FakeUStore(), FakePTransport())
+        val fixture = suppliedFixture(runner.prepareForExternalD2(case, pForD2, d2Fixture))
+
+        assertEquals(ContextTargetRole.D2_TARGET, fixture.expectedContext.targetRole)
+        assertFalse(fixture.expectedContext == d1)
+        assertEquals(TwoArtifactOutcome.PASS, runner.run(fixture).outcome)
+    }
+
+    @Test
     fun `well formed account run generation and role mismatches are rejected before AEAD`() {
         val material = bytes(33)
         val canary = bytes(1)
@@ -287,9 +316,10 @@ class TwoArtifactProbeTest {
         account: AccountBindingClass,
         generation: ContextGeneration,
         role: ContextTargetRole,
+        runIdStart: Int = 1,
     ) = ExpectedContext(
         accountBindingClass = account,
-        runId = ByteArray(16) { (it + 1).toByte() },
+        runId = ByteArray(16) { (it + runIdStart).toByte() },
         generation = generation,
         targetRole = role,
     )

@@ -4,6 +4,8 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
@@ -13,6 +15,37 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
 class ProbeControllerTest {
+    @Test
+    fun `operation installation Error clears active flight and propagates`() {
+        val p = ManualPTransportPort()
+        val expected = AssertionError("test operation deadline installation")
+        val controller = controller(
+            ImmediateUStorePort(),
+            p,
+            scheduler = ErrorScheduler(expected),
+        )
+
+        assertTrue(controller.begin())
+        val thrown = assertThrows(AssertionError::class.java) {
+            controller.exportSidecar()
+        }
+
+        assertSame(expected, thrown)
+        assertEquals(ProbeControllerStatus.FAIL, controller.state.status)
+        assertEquals(ProbeControllerPhase.EXPORT_P, controller.state.phase)
+        assertEquals(ProbeControllerReason.INDETERMINATE, controller.state.reason)
+        assertTrue(controller.state.canCleanup)
+        assertFalse(controller.state.canCancel)
+        assertFalse(controller.cancel())
+        assertEquals(1, p.operation.cancelCalls)
+
+        // The operation callback remains callable but cannot reopen the
+        // cleared flight or change its terminal failure state.
+        p.completeExport(TaskResult.Completed(Unit))
+        assertEquals(ProbeControllerStatus.FAIL, controller.state.status)
+        assertEquals(ProbeControllerReason.INDETERMINATE, controller.state.reason)
+    }
+
     @Test
     fun `happy pre-wipe path stores exports verifies and cleans exact key`() {
         val u = ImmediateUStorePort()
@@ -53,6 +86,7 @@ class ProbeControllerTest {
         assertEquals(ProbeControllerStatus.PASS, controller.state.status)
         assertTrue(controller.state.evidence.cleanupAttempted)
         assertTrue(controller.state.evidence.cleanupCompleted)
+        assertFalse(controller.state.evidence.providerEntryMayRemain)
         assertEquals(listOf(key), u.deletedKeys)
         controller.close()
     }
@@ -300,6 +334,66 @@ class ProbeControllerTest {
     }
 
     @Test
+    fun `store timeout keeps provider entry possible and late success cannot reopen cleanup`() {
+        val u = ManualStoreUStorePort()
+        val scheduler = TestScheduler()
+        val controller = controller(
+            u,
+            ImmediatePTransportPort(),
+            scheduler = scheduler,
+        )
+
+        assertTrue(controller.begin())
+        assertEquals(ProbeControllerPhase.STORE_U, controller.state.phase)
+
+        scheduler.fireNext()
+
+        assertEquals(ProbeControllerStatus.BLOCKED, controller.state.status)
+        assertEquals(ProbeControllerReason.RETRYABLE_UNAVAILABLE, controller.state.reason)
+        assertTrue(controller.state.evidence.providerEntryMayRemain)
+        assertFalse(controller.state.evidence.cleanupCompleted)
+        assertFalse(controller.state.canCleanup)
+        assertTrue(controller.state.canRetry)
+
+        u.completeStore(TaskResult.Completed(Unit))
+        assertEquals(ProbeControllerReason.RETRYABLE_UNAVAILABLE, controller.state.reason)
+        assertFalse(controller.state.canCleanup)
+        assertFalse(controller.state.evidence.cleanupCompleted)
+    }
+
+    @Test
+    fun `cleanup timeout is ambiguous and late delete success cannot claim completion`() {
+        val u = ManualDeleteUStorePort()
+        val scheduler = TestScheduler()
+        val controller = controller(
+            u,
+            ImmediatePTransportPort(),
+            scheduler = scheduler,
+        )
+
+        assertTrue(controller.begin())
+        assertTrue(controller.exportSidecar())
+        assertTrue(controller.verifyBeforeWipe())
+        assertTrue(controller.cleanup())
+
+        scheduler.fireNext()
+
+        assertEquals(ProbeControllerStatus.FAIL, controller.state.status)
+        assertEquals(ProbeControllerPhase.CLEANUP, controller.state.phase)
+        assertEquals(ProbeControllerReason.PROVIDER_ENTRY_MAY_REMAIN, controller.state.reason)
+        assertTrue(controller.state.evidence.cleanupAttempted)
+        assertTrue(controller.state.evidence.providerEntryMayRemain)
+        assertFalse(controller.state.evidence.cleanupCompleted)
+        assertFalse(controller.state.canCleanup)
+        assertFalse(controller.state.canRetry)
+
+        u.completeDelete(TaskResult.Completed(Unit))
+        assertEquals(ProbeControllerStatus.FAIL, controller.state.status)
+        assertEquals(ProbeControllerReason.PROVIDER_ENTRY_MAY_REMAIN, controller.state.reason)
+        assertFalse(controller.state.evidence.cleanupCompleted)
+    }
+
+    @Test
     fun `E2EE availability alone never makes backup eligible`() {
         val mapped = BlockStoreResult.completed(true).toEligibilityTaskResult()
         assertTrue(mapped is TaskResult.Completed)
@@ -474,7 +568,7 @@ class ProbeControllerTest {
     }
 
     @Test
-    fun `retryable cleanup preserves pass result and reuses exact key only`() {
+    fun `ambiguous cleanup never claims completion or permits retry`() {
         val u = ImmediateUStorePort()
         val p = ImmediatePTransportPort()
         val controller = controller(u, p)
@@ -484,12 +578,15 @@ class ProbeControllerTest {
         val key = u.lastStoredKey
         u.nextDelete = TaskResult.RetryableUnavailable
         assertTrue(controller.cleanup())
-        assertEquals(ProbeControllerStatus.BLOCKED, controller.state.status)
-        assertTrue(controller.state.canRetry)
-        assertTrue(controller.retry())
-        assertEquals(ProbeControllerStatus.PASS, controller.state.status)
-        assertEquals(ProbeControllerPhase.TERMINAL, controller.state.phase)
-        assertEquals(listOf(key), u.deleteKeys)
+        assertEquals(ProbeControllerStatus.FAIL, controller.state.status)
+        assertEquals(ProbeControllerReason.PROVIDER_ENTRY_MAY_REMAIN, controller.state.reason)
+        assertTrue(controller.state.evidence.providerEntryMayRemain)
+        assertFalse(controller.state.evidence.cleanupCompleted)
+        assertFalse(controller.state.canCleanup)
+        assertFalse(controller.state.canRetry)
+        assertFalse(controller.retry())
+        assertEquals(emptyList<String>(), u.deleteKeys)
+        assertNotNull(key)
     }
 
     private fun controller(
@@ -621,6 +718,43 @@ class ProbeControllerTest {
 
         fun completeStore(result: TaskResult<Unit>) {
             storeCallback?.invoke(result)
+        }
+    }
+
+    private class ManualDeleteUStorePort : ProbeUStorePort {
+        private val delegate = FakeUStore()
+        private var deleteCallback: ((TaskResult<Unit>) -> Unit)? = null
+        private val deleteOperation = ManualOperation()
+
+        override fun storeU(
+            key: String,
+            value: ByteArray,
+            onSettled: (TaskResult<Unit>) -> Unit,
+        ): ProbeControllerOperation {
+            val result = delegate.storeU(key, value)
+            value.fill(0)
+            onSettled(result)
+            return ImmediateOperation()
+        }
+
+        override fun retrieveU(
+            key: String,
+            onSettled: (TaskResult<ByteArray>) -> Unit,
+        ): ProbeControllerOperation {
+            onSettled(delegate.retrieveU(key))
+            return ImmediateOperation()
+        }
+
+        override fun deleteU(
+            key: String,
+            onSettled: (TaskResult<Unit>) -> Unit,
+        ): ProbeControllerOperation {
+            deleteCallback = onSettled
+            return deleteOperation
+        }
+
+        fun completeDelete(result: TaskResult<Unit>) {
+            deleteCallback?.invoke(result)
         }
     }
 
@@ -825,6 +959,14 @@ class ProbeControllerTest {
                 ?: error("no scheduled deadline")
             entry.cancelled = true
             entry.callback()
+        }
+    }
+
+    private class ErrorScheduler(
+        private val error: AssertionError,
+    ) : ProbeScheduler {
+        override fun schedule(delayMs: Long, callback: () -> Unit): ProbeScheduledHandle {
+            throw error
         }
     }
 

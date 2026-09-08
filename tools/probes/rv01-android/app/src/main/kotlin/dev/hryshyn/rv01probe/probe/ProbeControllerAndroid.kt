@@ -142,6 +142,9 @@ class AndroidProbeUStorePort(context: Context) : ProbeUStorePort {
             onSettled(TaskResult.Indeterminate)
             NoopProbeControllerOperation
         } finally {
+            // GoogleBlockStoreUStore copies synchronously before it registers
+            // the asynchronous E2EE callback; this port-owned handoff can
+            // therefore be wiped when the delegate returns.
             owned.fill(0)
         }
     }

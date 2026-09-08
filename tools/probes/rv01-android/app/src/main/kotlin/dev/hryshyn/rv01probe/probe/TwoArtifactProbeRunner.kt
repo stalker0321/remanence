@@ -69,6 +69,47 @@ class TwoArtifactProbeRunner(
         }
     }
 
+    /**
+     * Supplies a D1-created U to a fresh D2 target using an independent,
+     * externally handed-off non-secret context. The sidecar must have been
+     * constructed by the external fixture with that D2 context; this runner
+     * never falls back to the source case context.
+     */
+    fun prepareForExternalD2(
+        case: TwoArtifactCase,
+        opaqueP: ByteArray,
+        d2Fixture: ExpectedContextFixture,
+    ): FixtureSetupResult {
+        val fixture = TwoArtifactFixture(d2Fixture.key, d2Fixture.expectedContext)
+        if (case.expectedContext.targetRole != ContextTargetRole.D1_SOURCE ||
+            d2Fixture.key != case.key ||
+            case.unwrapMaterial.size != ProbeSidecar.KEY_BYTES ||
+            opaqueP.size > ProbeSidecar.MAX_SIZE
+        ) {
+            return FixtureSetupResult.Failed(
+                result = TwoArtifactRunResult(TwoArtifactOutcome.FAIL_CLOSED),
+                cleanupFixture = fixture,
+            )
+        }
+
+        val materialCopy = case.unwrapMaterial.copyOf()
+        val packageCopy = opaqueP.copyOf()
+        return try {
+            when (val stored = uStore.storeU(case.key, materialCopy)) {
+                is TaskResult.Completed -> Unit
+                else -> return FixtureSetupResult.Failed(taskOutcome(stored, setup = true), fixture)
+            }
+            when (val stored = pTransport.storeP(packageCopy, d2Fixture.expectedContext)) {
+                is TaskResult.Completed -> Unit
+                else -> return FixtureSetupResult.Failed(taskOutcome(stored, setup = true), fixture)
+            }
+            FixtureSetupResult.Supplied(fixture)
+        } finally {
+            materialCopy.fill(0)
+            packageCopy.fill(0)
+        }
+    }
+
     /** Runs read/unwrap only; null means no fixture was ever supplied. */
     fun run(fixture: TwoArtifactFixture?): TwoArtifactRunResult {
         if (fixture == null) return TwoArtifactRunResult(TwoArtifactOutcome.INCOMPLETE)

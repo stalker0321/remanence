@@ -8,6 +8,8 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -39,6 +41,25 @@ class BlockStoreProviderBackendTest {
     }
 
     @Test
+    fun `caller wipe before E2EE completion cannot alter retained store material`() {
+        val key = validKey()
+        val value = bytes(32)
+        val original = value.copyOf()
+        val client = FakeClient()
+        val results = mutableListOf<BlockStoreResult<Unit>>()
+
+        bridge(client).storeU(key, value) { results += it }
+        value.fill(0)
+        client.e2eeTask.succeed(true)
+
+        val request = client.storeRequests.single()
+        assertArrayEquals(original, request.value)
+        client.storeTask.succeed(32)
+        assertEquals(BlockStoreOutcome.COMPLETED, results.single().outcome)
+        assertTrue(request.value.all { it.toInt() == 0 })
+    }
+
+    @Test
     fun `store failure timeout and cancel wipe the retained request reference`() {
         listOf(BlockStoreTaskFailure.INDETERMINATE, null, null).forEachIndexed { index, failure ->
             val client = FakeClient()
@@ -56,7 +77,7 @@ class BlockStoreProviderBackendTest {
             if (index == 0) {
                 assertTrue(request.value.all { it.toInt() == 0 })
             } else {
-                assertTrue(request.value.any { it.toInt() != 0 })
+                assertTrue(request.value.all { it.toInt() == 0 })
             }
 
             // A late success is still scrubbed by the late-callback ownership path.
@@ -64,6 +85,33 @@ class BlockStoreProviderBackendTest {
             assertTrue(request.value.all { it.toInt() == 0 })
             assertEquals(1, results.size)
         }
+    }
+
+    @Test
+    fun `uncertain store tombstones exact key before late provider success`() {
+        val key = validKey()
+        val client = FakeClient()
+        val tombstone = BlockStoreDeleteTombstone.inMemoryForTest()
+        val results = mutableListOf<BlockStoreResult<Unit>>()
+        val bridge = bridge(client, tombstone = tombstone)
+
+        val operation = bridge.storeU(key, bytes(32)) { results += it }
+        client.e2eeTask.succeed(true)
+        val request = client.storeRequests.single()
+        assertTrue(operation.timeout())
+
+        assertEquals(BlockStoreOutcome.RETRYABLE_UNAVAILABLE, results.single().outcome)
+        assertTrue(tombstone.isTombstoned(key))
+        assertTrue(request.value.all { it.toInt() == 0 })
+
+        client.storeTask.succeed(32)
+        assertEquals(1, results.size)
+        assertTrue(request.value.all { it.toInt() == 0 })
+
+        val successor = mutableListOf<BlockStoreResult<Unit>>()
+        bridge.storeU(key, bytes(32)) { successor += it }
+        assertEquals(BlockStoreOutcome.FAIL_CLOSED, successor.single().outcome)
+        assertEquals(1, client.e2eeCalls)
     }
 
     @Test
@@ -626,7 +674,7 @@ class BlockStoreProviderBackendTest {
         client.storeLaunchHook = { request ->
             assertTrue(request.value.any { it.toInt() != 0 })
             checkNotNull(operation).timeout()
-            assertTrue(request.value.any { it.toInt() != 0 })
+            assertTrue(request.value.all { it.toInt() == 0 })
         }
         operation = bridge(client).storeU(validKey(), bytes(32)) { results += it }
 
@@ -634,7 +682,7 @@ class BlockStoreProviderBackendTest {
         assertEquals(1, client.storeRequests.size)
         assertEquals(BlockStoreOutcome.RETRYABLE_UNAVAILABLE, results.single().outcome)
         val request = client.storeRequests.single()
-        assertTrue(request.value.any { it.toInt() != 0 })
+        assertTrue(request.value.all { it.toInt() == 0 })
 
         client.storeTask.succeed(32)
         assertEquals(1, results.size)
@@ -649,14 +697,14 @@ class BlockStoreProviderBackendTest {
         client.storeLaunchHook = { request ->
             assertTrue(request.value.any { it.toInt() != 0 })
             checkNotNull(operation).cancel()
-            assertTrue(request.value.any { it.toInt() != 0 })
+            assertTrue(request.value.all { it.toInt() == 0 })
         }
         operation = bridge(client).storeU(validKey(), bytes(32)) { results += it }
 
         client.e2eeTask.succeed(true)
         assertEquals(1, client.storeRequests.size)
         assertEquals(BlockStoreOutcome.RETRYABLE_UNAVAILABLE, results.single().outcome)
-        assertTrue(client.storeRequests.single().value.any { it.toInt() != 0 })
+        assertTrue(client.storeRequests.single().value.all { it.toInt() == 0 })
         client.storeTask.succeed(32)
         assertEquals(1, results.size)
         assertTrue(client.storeRequests.single().value.all { it.toInt() == 0 })
@@ -728,6 +776,93 @@ class BlockStoreProviderBackendTest {
         assertTrue(client.retainedStoreValues.single().all { it.toInt() == 0 })
     }
 
+    @Test
+    fun `E2EE listener Error settles once wipes retained U and propagates`() {
+        val client = FakeClient()
+        val expected = AssertionError("test E2EE listener installation")
+        client.e2eeTask.errorOnFailureRegistration = expected
+        val results = mutableListOf<BlockStoreResult<Unit>>()
+
+        val thrown = assertThrows(AssertionError::class.java) {
+            bridge(client).storeU(validKey(), bytes(32)) { results += it }
+        }
+
+        assertSame(expected, thrown)
+        assertEquals(1, results.size)
+        assertEquals(BlockStoreOutcome.INDETERMINATE, results.single().outcome)
+        assertTrue(client.storeRequests.isEmpty())
+
+        // The success listener was installed before the Error. A late E2EE
+        // callback must observe the closed parent and never launch a store.
+        client.e2eeTask.succeed(true)
+        assertEquals(1, results.size)
+        assertTrue(client.storeRequests.isEmpty())
+    }
+
+    @Test
+    fun `storeBytes Error tombstones exact key wipes request and propagates once`() {
+        val client = FakeClient()
+        val expected = AssertionError("test storeBytes Error")
+        client.throwSynchronouslyInStoreError = expected
+        val tombstone = BlockStoreDeleteTombstone.inMemoryForTest()
+        val results = mutableListOf<BlockStoreResult<Unit>>()
+
+        val operation = bridge(client, tombstone = tombstone).storeU(validKey(), bytes(32)) {
+            results += it
+        }
+        val thrown = assertThrows(AssertionError::class.java) {
+            client.e2eeTask.succeed(true)
+        }
+
+        assertSame(expected, thrown)
+        val request = client.storeRequests.single()
+        assertTrue(request.value.all { it.toInt() == 0 })
+        assertTrue(tombstone.isTombstoned(request.key))
+        assertEquals(1, results.size)
+        assertEquals(BlockStoreOutcome.INDETERMINATE, results.single().outcome)
+        assertEquals(BlockStoreOutcome.INDETERMINATE, operation.snapshot()?.outcome)
+
+        // The provider/fake may still report a late success, but the settled
+        // parent has no callback left to reopen the key or emit a result.
+        client.storeTask.succeed(32)
+        assertEquals(1, results.size)
+        assertTrue(request.value.all { it.toInt() == 0 })
+        val successor = mutableListOf<BlockStoreResult<Unit>>()
+        bridge(client, tombstone = tombstone).storeU(request.key, bytes(32)) {
+            successor += it
+        }
+        assertEquals(BlockStoreOutcome.FAIL_CLOSED, successor.single().outcome)
+    }
+
+    @Test
+    fun `store listener Error tombstones exact key wipes request and ignores late success`() {
+        val client = FakeClient()
+        val expected = AssertionError("test store listener installation")
+        // Success registration happens first, so the later Error leaves a
+        // deliberately live late-callback path to exercise.
+        client.storeTask.errorOnFailureRegistration = expected
+        val tombstone = BlockStoreDeleteTombstone.inMemoryForTest()
+        val results = mutableListOf<BlockStoreResult<Unit>>()
+
+        bridge(client, tombstone = tombstone).storeU(validKey(), bytes(32)) {
+            results += it
+        }
+        val thrown = assertThrows(AssertionError::class.java) {
+            client.e2eeTask.succeed(true)
+        }
+
+        assertSame(expected, thrown)
+        val request = client.storeRequests.single()
+        assertTrue(request.value.all { it.toInt() == 0 })
+        assertTrue(tombstone.isTombstoned(request.key))
+        assertEquals(1, results.size)
+        assertEquals(BlockStoreOutcome.INDETERMINATE, results.single().outcome)
+
+        client.storeTask.succeed(32)
+        assertEquals(1, results.size)
+        assertTrue(request.value.all { it.toInt() == 0 })
+    }
+
     private fun retrieve(
         bridge: GoogleBlockStoreUStore,
         client: FakeClient,
@@ -790,6 +925,7 @@ class BlockStoreProviderBackendTest {
         val deleteRequests = mutableListOf<BlockStoreDeleteRequest>()
         var storeLaunchHook: ((BlockStoreStoreRequest) -> Unit)? = null
         var throwSynchronouslyInStore = false
+        var throwSynchronouslyInStoreError: AssertionError? = null
 
         override fun isEndToEndEncryptionAvailable(): BlockStoreTaskPort<Boolean> {
             e2eeCalls += 1
@@ -801,6 +937,7 @@ class BlockStoreProviderBackendTest {
             storeRequests += request
             retainedStoreValues += request.value
             storeLaunchHook?.invoke(request)
+            throwSynchronouslyInStoreError?.let { throw it }
             if (throwSynchronouslyInStore) throw IllegalStateException("test-only synchronous failure")
             return storeTask
         }
@@ -822,16 +959,22 @@ class BlockStoreProviderBackendTest {
         private var success: ((T) -> Unit)? = null
         private var failure: ((BlockStoreTaskFailure) -> Unit)? = null
         private var cancelled: (() -> Unit)? = null
+        var errorOnSuccessRegistration: AssertionError? = null
+        var errorOnFailureRegistration: AssertionError? = null
+        var errorOnCanceledRegistration: AssertionError? = null
 
         override fun addOnSuccessListener(listener: (T) -> Unit) {
+            errorOnSuccessRegistration?.let { throw it }
             success = listener
         }
 
         override fun addOnFailureListener(listener: (BlockStoreTaskFailure) -> Unit) {
+            errorOnFailureRegistration?.let { throw it }
             failure = listener
         }
 
         override fun addOnCanceledListener(listener: () -> Unit) {
+            errorOnCanceledRegistration?.let { throw it }
             cancelled = listener
         }
 

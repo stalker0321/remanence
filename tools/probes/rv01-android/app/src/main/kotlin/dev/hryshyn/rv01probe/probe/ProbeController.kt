@@ -657,13 +657,21 @@ class ProbeController(
                     canCleanup = true,
                     canRetry = false,
                     canCancel = false,
+                    evidence = currentState.evidence.copy(providerEntryMayRemain = true),
                 )
             }
             emit()
         } else {
             addEvent(flight, evidenceResult(result), ProbeTuple.P2_WRAP)
             if (!isLifecycleGenerationCurrent(flight)) return
-            setBlockedOrFailed(flight, result, reasonFor(result), cleanup = true)
+            markProviderEntryMayRemain()
+            setBlockedOrFailed(
+                flight,
+                result,
+                reasonFor(result),
+                cleanup = false,
+                retry = result !is TaskResult.Indeterminate,
+            )
         }
     }
 
@@ -888,12 +896,26 @@ class ProbeController(
                     canCleanup = false,
                     canRetry = false,
                     canCancel = false,
-                    evidence = currentState.evidence.copy(cleanupCompleted = true),
+                    evidence = currentState.evidence.copy(
+                        cleanupCompleted = true,
+                        providerEntryMayRemain = false,
+                    ),
                 )
             }
             emit()
         } else {
-            setBlockedOrFailed(flight, result, reasonFor(result), cleanup = true)
+            // A delete callback without a definitive success is not proof
+            // that an earlier provider write is absent. The exact key must
+            // remain quarantined; no later callback or retry may claim the
+            // cleanup completed.
+            markProviderEntryMayRemain()
+            setBlockedOrFailed(
+                flight,
+                TaskResult.Indeterminate,
+                ProbeControllerReason.PROVIDER_ENTRY_MAY_REMAIN,
+                cleanup = false,
+                retry = false,
+            )
         }
     }
 
@@ -967,6 +989,9 @@ class ProbeController(
                 }
                 installOperation(token, invocation())
             }
+        } catch (error: Error) {
+            abortErroredFlight(token)
+            throw error
         } catch (_: RuntimeException) {
             synchronized(lock) {
                 acceptedFlight(token)?.let {
@@ -974,6 +999,42 @@ class ProbeController(
                 }
             }
         }
+    }
+
+    /**
+     * Invocation/operation installation is a synchronous ownership boundary.
+     * If a fatal Error escapes it, clear the flight and cancel any operation
+     * that was installed before propagating the original Error.
+     */
+    private fun abortErroredFlight(token: Long) {
+        val teardown: FlightTeardown? = synchronized(lock) {
+            val found = activeFlight
+            if (found == null ||
+                found.token != token ||
+                found.lifecycleGeneration != lifecycleGeneration
+            ) {
+                null
+            } else {
+                activeFlight = null
+                found.deadline?.cancel()
+                val cleanup = found.pendingCleanup
+                val abandonment = found.abandonmentCleanup
+                found.pendingCompletion = null
+                found.pendingCleanup = null
+                found.abandonmentCleanup = null
+                FlightTeardown(found, cleanup, abandonment)
+            }
+        }
+        teardown ?: return
+        teardown.pendingCleanup?.invoke()
+        teardown.abandonmentCleanup?.invoke()
+        val flight = checkNotNull(teardown.flight)
+        flight.operation?.cancel()
+        finishFlight(
+            flight,
+            TaskResult.Indeterminate,
+            ProbeControllerReason.INDETERMINATE,
+        )
     }
 
     private fun installOperation(token: Long, operation: ProbeControllerOperation) {
@@ -1123,10 +1184,25 @@ class ProbeController(
         val duration = (clock.nowMs() - flight.startedMs).coerceAtLeast(0L)
         addEvent(flight, evidenceResult(result), null, duration)
         if (!isLifecycleGenerationCurrent(flight)) return
+        if (flight.phase == ProbeControllerPhase.STORE_U) {
+            markProviderEntryMayRemain()
+        }
         if (flight.phase == ProbeControllerPhase.CLEANUP) {
-            setBlockedOrFailed(flight, result, reason, cleanup = true)
+            markProviderEntryMayRemain()
+            setBlockedOrFailed(
+                flight,
+                TaskResult.Indeterminate,
+                ProbeControllerReason.PROVIDER_ENTRY_MAY_REMAIN,
+                cleanup = false,
+                retry = false,
+            )
         } else {
-            setBlockedOrFailed(flight, result, reason, cleanup = liveCase != null)
+            setBlockedOrFailed(
+                flight,
+                result,
+                reason,
+                cleanup = flight.phase != ProbeControllerPhase.STORE_U && liveCase != null,
+            )
         }
     }
 
@@ -1160,6 +1236,18 @@ class ProbeController(
             retryAction = if (retry && liveCase != null) retryAction else null
         }
         emit()
+    }
+
+    private fun markProviderEntryMayRemain() {
+        synchronized(lock) {
+            liveCase?.providerEntryMayRemain = true
+            currentState = currentState.copy(
+                evidence = currentState.evidence.copy(
+                    cleanupCompleted = false,
+                    providerEntryMayRemain = true,
+                ),
+            )
+        }
     }
 
     private fun setTerminal(

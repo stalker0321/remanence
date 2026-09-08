@@ -43,6 +43,7 @@ That command does not prove physical-device, camera, or M1/M2 success.
 - [`docs/acceptance-criteria.md`](docs/acceptance-criteria.md) — pass/fail evidence
 - [`docs/test-strategy.md`](docs/test-strategy.md) — automated, adversarial, and physical validation
 - [`docs/implementation-plan.md`](docs/implementation-plan.md) — atomic Grok task queue
+- [`docs/versioning.md`](docs/versioning.md) — product, Android, wire, tag, artifact, and rollback identity
 - [`docs/decisions/`](docs/decisions/) — accepted architecture decisions
 
 The current recognition identity decision is

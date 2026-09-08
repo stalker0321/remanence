@@ -14,6 +14,10 @@ val v2LineLocalizationEnabled = when (
     else -> error("remanence.localization.v2.enabled must be true or false")
 }
 
+val remanenceProductVersion = providers.gradleProperty("remanence.productVersion").get()
+val remanenceAndroidVersionCode =
+    providers.gradleProperty("remanence.androidVersionCode").get().toInt()
+
 android {
     namespace = "dev.hryshyn.remanence"
     compileSdk = libs.versions.compileSdk.get().toInt()
@@ -23,8 +27,8 @@ android {
         applicationId = "dev.hryshyn.remanence"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 11
-        versionName = "0.1.0-m3-registration-maintenance-preview.1"
+        versionCode = remanenceAndroidVersionCode
+        versionName = remanenceProductVersion
     }
 
     buildTypes {

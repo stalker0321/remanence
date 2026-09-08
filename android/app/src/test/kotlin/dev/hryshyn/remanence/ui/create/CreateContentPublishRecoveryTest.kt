@@ -2,6 +2,8 @@ package dev.hryshyn.remanence.ui.create
 
 import android.content.Context
 import androidx.compose.material3.MaterialTheme
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.viewModelScope
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.compose.ui.test.assertCountEquals
@@ -27,10 +29,12 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -79,6 +83,7 @@ class CreateContentPublishRecoveryTest {
         @Volatile var armed = false
         @Volatile var cancellationRequested = false
         @Volatile var jobSeen = false
+        val cancellationObserved = CompletableDeferred<Unit>()
 
         override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) {
             delegate.dispatch(context) {
@@ -89,6 +94,7 @@ class CreateContentPublishRecoveryTest {
                         jobSeen = true
                         it.cancel()
                     }
+                    cancellationObserved.complete(Unit)
                 }
             }
         }
@@ -100,6 +106,8 @@ class CreateContentPublishRecoveryTest {
     private val testDispatcher = UnconfinedTestDispatcher()
 
     private lateinit var database: RemanenceLocalDatabase
+    private val viewModelStore = ViewModelStore()
+    private var viewModelKey = 0
 
     private val identity = AccountIdentityGenerator().generate()
     private val userUuid = UUID.fromString("8c111111-2222-4333-8444-555555555555")
@@ -122,6 +130,13 @@ class CreateContentPublishRecoveryTest {
 
     @After
     fun tearDown() {
+        val viewModelJobs = viewModelStore.keys().mapNotNull { key ->
+            viewModelStore.get(key)?.viewModelScope?.coroutineContext?.get(Job)
+        }
+        viewModelStore.clear()
+        runBlocking {
+            viewModelJobs.forEach { it.join() }
+        }
         Dispatchers.resetMain()
         if (::database.isInitialized) database.close()
     }
@@ -239,6 +254,7 @@ class CreateContentPublishRecoveryTest {
             capsuleRevoke = revoke,
             networkConnected = networkConnected,
         )
+        viewModelStore.put("create-${viewModelKey++}", vm)
         vm.beginSession(1L, userUuid.toString())
 
         // Walk the production table to CONTENT.
@@ -452,6 +468,7 @@ class CreateContentPublishRecoveryTest {
             Thread.sleep(5)
         }
         assertTrue("decrypt must return before cancellation", persistence.decryptedBuffers.isNotEmpty())
+        runBlocking { withTimeout(10_000) { ioDispatcher.cancellationObserved.await() } }
         assertTrue(ioDispatcher.cancellationRequested)
         assertTrue(ioDispatcher.jobSeen)
         while (persistence.decryptedBuffers.any { bytes -> bytes.any { it != 0.toByte() } } &&

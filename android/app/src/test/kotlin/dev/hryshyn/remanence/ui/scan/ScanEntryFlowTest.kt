@@ -150,10 +150,10 @@ class ScanEntryFlowTest {
         readyCameras(vm)
         deliverFront(vm)
 
-        // One FRONT exists, so matching actually ran (empty index => guidance).
+        // One FRONT exists, but there is no local index to evaluate.
         assertNotNull(vm.captureSession.front)
         assertEquals(ScanSessionState.READY_FOR_MATCHING, vm.captureSession.state)
-        assertEquals(ScanMatchUiState.RecaptureGuidance(failedAttempts = 1), vm.matchState.value)
+        assertEquals(ScanMatchUiState.IndexUnavailable, vm.matchState.value)
 
         // Explicit restart returns the WHOLE flow to FRONT.
         vm.resetSession()
@@ -171,7 +171,7 @@ class ScanEntryFlowTest {
 
         readyCameras(vm)
         deliverFront(vm)
-        assertEquals(ScanMatchUiState.RecaptureGuidance(failedAttempts = 1), vm.matchState.value)
+        assertEquals(ScanMatchUiState.IndexUnavailable, vm.matchState.value)
 
         // A reset discards the finished generation; a later stale write (the
         // chooser path shares the guard) cannot resurrect old results.

@@ -285,6 +285,7 @@ class ScanGrantRoutingTest {
         identityProvider: suspend () -> SenderIdentitySnapshot = { identitySnapshot() },
         frontProcessor: StillProcessor = FixedProcessor(syntheticFingerprint(11)),
         persistence: dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence = store(),
+        matcher: dev.hryshyn.remanence.core.recognition.SiftRootSiftMatcherPort = deterministicMatcher(),
     ): ScanViewModel =
         ScanViewModel(
             persistence = persistence,
@@ -296,7 +297,7 @@ class ScanGrantRoutingTest {
             candidateIndexProvider = candidateIndexProvider,
             incomingPresentationPreparation = null,
             frontProcessor = frontProcessor,
-            matcher = deterministicMatcher(),
+            matcher = matcher,
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
         )
@@ -705,10 +706,15 @@ class ScanGrantRoutingTest {
         val accountB = UUID.fromString("5faaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
         val aIdentity = identitySnapshot()
         val countingKeys = CountingTrustedSenderKeyStore(ownTrustedSenderKeys())
+        var matcherCalls = 0
         val grantsManager = ScanGrantManager({ now })
         val scanVm = scanViewModel(
             grantsManager,
             trustedSenderKeys = countingKeys,
+            matcher = dev.hryshyn.remanence.core.recognition.SiftRootSiftMatcherPort { query, reference ->
+                matcherCalls++
+                deterministicMatcher().match(query, reference)
+            },
             identityProvider = {
                 if (identityReads++ == 0) aIdentity
                 else identitySnapshot(accountB)
@@ -736,8 +742,9 @@ class ScanGrantRoutingTest {
                 scanVm.matchState.first { it !is ScanMatchUiState.Matching }
             }
 
-            assertTrue(settled is ScanMatchUiState.RecaptureGuidance)
+            assertTrue(settled is ScanMatchUiState.IndexUnavailable)
             assertTrue(settled !is ScanMatchUiState.Chooser)
+            assertEquals(0, matcherCalls)
             assertEquals(0, countingKeys.calls)
             assertEquals(ScanTerminalState.Idle, scanVm.terminal.value)
         } finally {

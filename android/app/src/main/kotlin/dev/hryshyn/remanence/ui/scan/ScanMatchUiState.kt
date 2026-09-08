@@ -7,8 +7,8 @@ import dev.hryshyn.remanence.core.recognition.CandidateOrigin
  * 9, 12). FIX-STATE-05: the unreachable GuidedRecapture/ConfirmSingle
  * variants were removed from the production state surface - the production
  * matcher only ever produces AwaitingCapture, Matching, Accepted, Chooser,
- * RecaptureGuidance, and MaterialPending, and every remaining state renders a
- * working action.
+ * RecaptureGuidance, MaterialPending, and IndexUnavailable, and every
+ * remaining state renders a working action.
  */
 sealed interface ScanMatchUiState {
 
@@ -36,6 +36,9 @@ sealed interface ScanMatchUiState {
 
     /** Nothing plausible: show recapture guidance; never arbitrary capsules. */
     data class RecaptureGuidance(val failedAttempts: Int) : ScanMatchUiState
+
+    /** No local candidate index was available; visual matching did not run. */
+    data object IndexUnavailable : ScanMatchUiState
 
     /**
      * The scan recognized an owner-scoped incoming capsule whose sender index

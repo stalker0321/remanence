@@ -259,10 +259,18 @@ class ScanReadinessTest {
     }
 
     @Test
-    fun emptyIndexStillReportsRecaptureGuidance() {
+    fun emptyIndexReportsIndexUnavailableInsteadOfVisualRecapture() {
         val vm = viewModel(includeCandidate = false)
         captureMatchingPair(vm)
-        assertEquals(ScanMatchUiState.RecaptureGuidance(failedAttempts = 1), vm.matchState.value)
+        assertEquals(ScanMatchUiState.IndexUnavailable, vm.matchState.value)
+
+        composeRule.setContent {
+            MaterialTheme { ScanScreen(viewModel = vm, requestPermissionOnAttach = false) }
+        }
+        composeRule.onNodeWithTag("scan_index_unavailable").assertIsDisplayed()
+        vm.retryIndexSync()
+        assertEquals(ScanMatchUiState.AwaitingCapture, vm.matchState.value)
+        assertTrue(scheduled.count { it == ownerA } >= 2)
     }
 
     @Test
@@ -290,7 +298,7 @@ class ScanReadinessTest {
         val vm = viewModel(includeCandidate = false, persistence = persistence)
         captureMatchingPair(vm)
 
-        assertEquals(ScanMatchUiState.RecaptureGuidance(failedAttempts = 1), vm.matchState.value)
+        assertEquals(ScanMatchUiState.IndexUnavailable, vm.matchState.value)
         assertEquals(0, persistence.decryptCalls)
     }
 

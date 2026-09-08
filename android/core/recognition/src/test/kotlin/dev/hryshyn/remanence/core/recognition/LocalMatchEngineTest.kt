@@ -621,6 +621,37 @@ class LocalMatchEngineTest {
     }
 
     @Test
+    fun evaluatedWeakFailureReportsMatcherAndGateScalars() = kotlinx.coroutines.runBlocking {
+        val events = mutableListOf<MatchDiagnosticEvent>()
+        val engine = LocalMatchEngine(
+            profile = RecognitionProfile.postcardSiftRootSiftV1(),
+            verifier = { true },
+            grantIssuer = { "grant" },
+            matcher = fakeMatcher(),
+            diagnosticObserver = { events += it },
+        )
+
+        val result = engine.run(
+            queryFront = fingerprint(55, 64),
+            candidates = listOf(
+                IndexedCandidate(
+                    capsuleId = UUID.nameUUIDFromBytes("starved-diagnostic".toByteArray()),
+                    front = fingerprint(91, 3),
+                    recipientPreferred = false,
+                ),
+            ),
+        )
+
+        assertEquals(ScanFlowResult.RecaptureRequired, result)
+        val evaluated = events.last { it.phase == MatchDiagnosticPhase.CANDIDATE_EVALUATED }
+        assertEquals(1, evaluated.candidateCount)
+        assertEquals(SiftRootSiftMatchFailure.INSUFFICIENT_UNIQUE_PAIRS, evaluated.matcherFailure)
+        assertEquals(false, evaluated.weakGatePassed)
+        assertEquals(false, evaluated.strongGatePassed)
+        assertTrue(evaluated.score != null)
+    }
+
+    @Test
     fun emptyCandidateIndexIsNoMatchNotAnError() = kotlinx.coroutines.runBlocking {
         val (engine, _) = engine()
 

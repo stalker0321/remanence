@@ -229,22 +229,26 @@ class LocalMatchEngine(
         }
         cancellationCheck()
         val frontRanking = frontRanker.rank(frontOutcomes.values.toList())
-        val top = frontRanking.retained.firstOrNull()
-        val topOutcome = top?.let { sideOutcomes[it.candidateId] }
+        // Diagnostics also retain the best evaluated row when every row fails
+        // the weak gate, without changing ranking or acceptance decisions.
+        val topEvaluated = sideOutcomes.values.maxByOrNull { it.report.sideScore }
         reportDiagnostic(
             MatchDiagnosticEvent(
                 phase = MatchDiagnosticPhase.CANDIDATE_EVALUATED,
                 origin = origin,
                 candidateCount = universe.size,
-                score = top?.sideScore,
+                score = topEvaluated?.report?.sideScore,
                 margin = if (frontRanking.retained.size >= 2) {
                     frontRanking.retained[0].sideScore - frontRanking.retained[1].sideScore
                 } else {
                     null
                 },
-                ratioMutualMatches = topOutcome?.signals?.ratioMutualMatches,
-                ransacInliers = topOutcome?.signals?.ransacInliers,
-                coverage = topOutcome?.signals?.spatialCoverage,
+                ratioMutualMatches = topEvaluated?.signals?.ratioMutualMatches,
+                ransacInliers = topEvaluated?.signals?.ransacInliers,
+                coverage = topEvaluated?.signals?.spatialCoverage,
+                matcherFailure = topEvaluated?.technicalFailure,
+                weakGatePassed = topEvaluated?.report?.weakGatePassed,
+                strongGatePassed = topEvaluated?.report?.strongGatePassed,
             ),
         )
 
@@ -272,6 +276,7 @@ class LocalMatchEngine(
     private data class SideOutcome(
         val signals: SideMatchSignals,
         val report: SideScoreReport,
+        val technicalFailure: SiftRootSiftMatchFailure,
     )
 
     /** P2 matcher output adapted to the unchanged FRONT policy/scorer. */
@@ -334,7 +339,7 @@ class LocalMatchEngine(
             // it to normalized reference->query coordinates.
             homographyPlausible = diagnostics.geometryAccepted && fullCardPlausible,
         )
-        return SideOutcome(signals, sideScorer.score(signals))
+        return SideOutcome(signals, sideScorer.score(signals), diagnostics.failure)
     }
 
     /**

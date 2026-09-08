@@ -4,12 +4,14 @@ import java.util.Locale
 
 /** Safe phase for recognition telemetry; candidate rows are never identified. */
 enum class MatchDiagnosticPhase {
+    INDEX,
     CANDIDATE_EVALUATED,
     RESULT,
 }
 
-/** Outcome label emitted after the existing matcher/verification decision. */
+/** Outcome label emitted at index, matcher, or verification decision points. */
 enum class MatchDiagnosticOutcome {
+    INDEX_UNAVAILABLE,
     GRANT,
     AMBIGUOUS,
     RECAPTURE,
@@ -31,11 +33,22 @@ data class MatchDiagnosticEvent(
     val ratioMutualMatches: Int? = null,
     val ransacInliers: Int? = null,
     val coverage: Double? = null,
+    val rawCandidateCount: Int? = null,
+    val validCandidateCount: Int? = null,
+    val profileSkippedCandidateCount: Int? = null,
+    val invalidCandidateCount: Int? = null,
+    val matcherFailure: SiftRootSiftMatchFailure? = null,
+    val weakGatePassed: Boolean? = null,
+    val strongGatePassed: Boolean? = null,
 ) {
     init {
         require(candidateCount >= 0)
         require(ratioMutualMatches == null || ratioMutualMatches >= 0)
         require(ransacInliers == null || ransacInliers >= 0)
+        require(rawCandidateCount == null || rawCandidateCount >= 0)
+        require(validCandidateCount == null || validCandidateCount >= 0)
+        require(profileSkippedCandidateCount == null || profileSkippedCandidateCount >= 0)
+        require(invalidCandidateCount == null || invalidCandidateCount >= 0)
     }
 
     /** Stable redacted representation suitable for a DEBUG log line. */
@@ -49,6 +62,13 @@ data class MatchDiagnosticEvent(
         append(" ratioMutual=").append(ratioMutualMatches?.toString() ?: "n/a")
         append(" inliers=").append(ransacInliers?.toString() ?: "n/a")
         append(" coverage=").append(decimal(coverage))
+        append(" raw=").append(rawCandidateCount?.toString() ?: "n/a")
+        append(" valid=").append(validCandidateCount?.toString() ?: "n/a")
+        append(" profileSkipped=").append(profileSkippedCandidateCount?.toString() ?: "n/a")
+        append(" invalid=").append(invalidCandidateCount?.toString() ?: "n/a")
+        append(" matcherFailure=").append(matcherFailure?.name ?: "n/a")
+        append(" weakGate=").append(weakGatePassed?.toString() ?: "n/a")
+        append(" strongGate=").append(strongGatePassed?.toString() ?: "n/a")
     }
 
     private fun decimal(value: Double?): String =

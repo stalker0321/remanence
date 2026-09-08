@@ -134,6 +134,47 @@ class IncomingTombstoneSyncRepositoryTest {
     }
 
     @Test
+    fun unsupportedFeedNoOpCommitsItsEmptyPageWithoutChangingIncomingData() = runTest {
+        val capsule = CapsuleId.parseRest(CAPSULE)
+        seedIncoming(OWNER, capsule, BlobId.parseRest(BLOB))
+        val cachedCursor = "cached-tombstone-cursor"
+        database.recipientTombstoneDao().applyPage(
+            ownerUserId = OWNER.toRestString(),
+            expectedCursor = null,
+            tombstones = emptyList(),
+            nextCursor = cachedCursor,
+            committedAtEpochMs = 1L,
+        )
+        val feed = Feed(
+            IncomingTombstoneResult.Success(
+                page = IncomingTombstonePage(
+                    emptyList(),
+                    hasMore = false,
+                    nextCursor = cachedCursor,
+                ),
+                httpStatus = 404,
+                capabilityUnsupported = true,
+            ),
+        )
+
+        val result = repository(feed).syncNextPage()
+
+        val committed = assertIs<IncomingTombstoneSyncResult.Committed>(result)
+        assertTrue(committed.capabilityUnsupported)
+        assertEquals(listOf<String?>(cachedCursor), feed.requestedCursors)
+        assertEquals(
+            cachedCursor,
+            database.recipientTombstoneDao()
+                .getWatermarkForOwner(OWNER.toRestString())!!.serverCursor,
+        )
+        assertEquals(
+            "READY",
+            database.incomingCapsuleDao()
+                .getByCapsuleIdAndOwner(CAPSULE, OWNER.toRestString())!!.serverStatus,
+        )
+    }
+
+    @Test
     fun fileFailureLeavesMarkerAndWatermarkForSafeRetry() = runTest {
         val capsule = CapsuleId.parseRest(CAPSULE)
         seedIncoming(OWNER, capsule, BlobId.parseRest(BLOB))

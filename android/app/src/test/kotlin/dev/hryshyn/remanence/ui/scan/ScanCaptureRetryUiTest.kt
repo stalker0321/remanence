@@ -232,7 +232,7 @@ class ScanCaptureRetryUiTest {
             " session=" + vm.captureSession.state +
             " binds=" + bindCount
         assertEquals(dbg, dev.hryshyn.remanence.scan.ScanSessionState.READY_FOR_MATCHING, vm.captureSession.state)
-        assertEquals(dbg, ScanMatchUiState.RecaptureGuidance(failedAttempts = 1), vm.matchState.value)
+        assertEquals(dbg, ScanMatchUiState.IndexUnavailable, vm.matchState.value)
         assertTrue(bindCount >= 4)
     }
 }

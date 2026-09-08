@@ -97,6 +97,10 @@ class IncomingSenderIndexCandidateProviderTest {
         val index = provider.load(owner)
 
         assertEquals(listOf(valid.capsuleId), index.candidates.map { it.capsuleId.toString() })
+        assertEquals(3, index.diagnostics.rawCandidateCount)
+        assertEquals(1, index.diagnostics.validCandidateCount)
+        assertEquals(0, index.diagnostics.profileSkippedCandidateCount)
+        assertEquals(2, index.diagnostics.invalidCandidateCount)
         assertTrue(index.candidates.single().recipientPreferred.not())
         assertEquals("sender_c011", index.chooserHints[valid.capsuleId]?.senderHandleSnapshot)
         assertEquals("place_c011", index.chooserHints[valid.capsuleId]?.placeLabel)

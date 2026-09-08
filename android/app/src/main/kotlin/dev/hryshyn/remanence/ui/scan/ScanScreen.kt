@@ -106,6 +106,13 @@ fun ScanScreen(
                 Spacer(Modifier.height(8.dp))
                 FrontCapture(viewModel, Modifier.fillMaxWidth(), adapterFactory, requestPermissionOnAttach)
             }
+            is ScanMatchUiState.IndexUnavailable -> Column {
+                Text(
+                    "Postcard index unavailable. Connect to the internet and try again.",
+                    modifier = Modifier.testTag("scan_index_unavailable"),
+                )
+                Button(onClick = viewModel::retryIndexSync) { Text("Sync and try again") }
+            }
             is ScanMatchUiState.MaterialPending -> Text(
                 text = if (current.connected) {
                     "Postcard recognized. Downloading it now…"

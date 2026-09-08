@@ -39,6 +39,9 @@ import dev.hryshyn.remanence.core.recognition.CandidateOrigin
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.recognition.IndexedCandidate
 import dev.hryshyn.remanence.core.recognition.LocalMatchEngine
+import dev.hryshyn.remanence.core.recognition.MatchDiagnosticEvent
+import dev.hryshyn.remanence.core.recognition.MatchDiagnosticOutcome
+import dev.hryshyn.remanence.core.recognition.MatchDiagnosticPhase
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.core.recognition.ScanFlowResult
 import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprint
@@ -427,6 +430,13 @@ class ScanViewModel internal constructor(
         _terminal.value = ScanTerminalState.Idle
     }
 
+    /** Restarts capture and explicitly re-enqueues the existing sync chain. */
+    fun retryIndexSync() {
+        if (_matchState.value !is ScanMatchUiState.IndexUnavailable) return
+        resetSession()
+        scheduleOwnerIncomingSync(matchGeneration)
+    }
+
     // ------------------------------------------------------------------
     // Matching over the encrypted local index.
     // ------------------------------------------------------------------
@@ -441,20 +451,30 @@ class ScanViewModel internal constructor(
     ): ScanCandidateIndex {
         val rows = database.recognitionFingerprintDao().getAllForOwner(identity.userId)
         val candidates = ArrayList<IndexedCandidate>()
+        var rawCandidateCount = 0
+        var profileSkippedCandidateCount = 0
+        var invalidCandidateCount = 0
         try {
             for ((capsuleId, capsuleRows) in rows.groupBy { it.capsuleId }.toSortedMap()) {
                 for (origin in listOf(FingerprintOrigin.RECIPIENT, FingerprintOrigin.SENDER)) {
                     val originRows = capsuleRows.filter { it.origin == origin }
-            val frontRow = originRows.singleOrNull() ?: continue
-            if (frontRow.fingerprintProfileId != profile.profileId) continue
-            val frontBytes = try {
+                    val frontRow = originRows.singleOrNull() ?: continue
+                    rawCandidateCount++
+                    if (frontRow.fingerprintProfileId != profile.profileId) {
+                        profileSkippedCandidateCount++
+                        continue
+                    }
+                    val frontBytes = try {
                         persistence.decrypt(frontRow.fingerprintId)
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Exception) {
                         null
                     }
-                    if (frontBytes == null) continue
+                    if (frontBytes == null) {
+                        invalidCandidateCount++
+                        continue
+                    }
                     try {
                         var parsedFront: SiftRootSiftFingerprint? = null
                         val candidate = try {
@@ -487,13 +507,23 @@ class ScanViewModel internal constructor(
                                 candidate.front.wipe()
                                 throw failure
                             }
+                        } else {
+                            invalidCandidateCount++
                         }
                     } finally {
                         frontBytes.fill(0)
                     }
                 }
             }
-            return ScanCandidateIndex(candidates)
+            return ScanCandidateIndex(
+                candidates = candidates,
+                diagnostics = ScanCandidateLoadDiagnostics(
+                    rawCandidateCount = rawCandidateCount,
+                    validCandidateCount = candidates.size,
+                    profileSkippedCandidateCount = profileSkippedCandidateCount,
+                    invalidCandidateCount = invalidCandidateCount,
+                ),
+            )
         } catch (failure: Throwable) {
             candidates.forEach { it.front.wipe() }
             throw failure
@@ -566,7 +596,13 @@ class ScanViewModel internal constructor(
                 incomingSources = loadedIncoming.presentationSources,
                 roomSources = outboxSources,
             )
-            return ScanCandidateIndex(merged, hints, presentationSources)
+            val sourceDiagnostics = loadedRoom.diagnostics + loadedIncoming.diagnostics
+            return ScanCandidateIndex(
+                candidates = merged,
+                chooserHints = hints,
+                presentationSources = presentationSources,
+                diagnostics = sourceDiagnostics.copy(validCandidateCount = merged.size),
+            )
         } catch (failure: Throwable) {
             discard()
             throw failure
@@ -593,6 +629,7 @@ class ScanViewModel internal constructor(
         val generation = ++matchGeneration
         val ownedIndex = AtomicReference<ScanCandidateIndex?>()
         val ownedQuery = AtomicReference<SiftRootSiftFingerprint?>()
+        var indexLoadComplete = false
         val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
             try {
                 // Room/provider loading is off Main; the loaded collection is
@@ -601,7 +638,27 @@ class ScanViewModel internal constructor(
                 withContext(ioDispatcher) {
                     ownedIndex.set(buildCandidateIndex())
                 }
+                indexLoadComplete = true
                 val candidateIndex = ownedIndex.get() ?: return@launch
+                RecognitionDiagnostics.report(
+                    MatchDiagnosticEvent(
+                        phase = MatchDiagnosticPhase.INDEX,
+                        outcome = MatchDiagnosticOutcome.INDEX_UNAVAILABLE
+                            .takeIf { candidateIndex.candidates.isEmpty() },
+                        candidateCount = candidateIndex.candidates.size,
+                        rawCandidateCount = candidateIndex.diagnostics.rawCandidateCount,
+                        validCandidateCount = candidateIndex.diagnostics.validCandidateCount,
+                        profileSkippedCandidateCount =
+                            candidateIndex.diagnostics.profileSkippedCandidateCount,
+                        invalidCandidateCount = candidateIndex.diagnostics.invalidCandidateCount,
+                    ),
+                )
+                if (candidateIndex.candidates.isEmpty()) {
+                    if (generation == matchGeneration) {
+                        _matchState.value = ScanMatchUiState.IndexUnavailable
+                    }
+                    return@launch
+                }
                 val engine = LocalMatchEngine(
                     profile = profile,
                     verifier = { capsuleId ->
@@ -662,7 +719,11 @@ class ScanViewModel internal constructor(
                 }
             } catch (_: Exception) {
                 if (generation == matchGeneration) {
-                    _matchState.value = ScanMatchUiState.RecaptureGuidance(failedAttempts = 1)
+                    _matchState.value = if (indexLoadComplete) {
+                        ScanMatchUiState.RecaptureGuidance(failedAttempts = 1)
+                    } else {
+                        ScanMatchUiState.IndexUnavailable
+                    }
                 }
             }
             finally {

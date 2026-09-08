@@ -254,7 +254,7 @@ class ScanCaptureParityTest {
 
         assertEquals(CaptureAttemptPhase.Accepted, vm.frontAttempt.phase)
         assertEquals(ScanSessionState.READY_FOR_MATCHING, vm.captureSession.state)
-        assertEquals(ScanMatchUiState.RecaptureGuidance(failedAttempts = 1), vm.matchState.value)
+        assertEquals(ScanMatchUiState.IndexUnavailable, vm.matchState.value)
         assertEquals(3, front.calls.size)
         Unit
     }
@@ -282,9 +282,9 @@ class ScanCaptureParityTest {
         vm.deliverFrontJpeg("good".toByteArray())
         assertEquals(CaptureAttemptPhase.Accepted, vm.frontAttempt.phase)
 
-        // Accepted FRONT => matching actually ran (empty index => guidance).
+        // Accepted FRONT => matching cannot run without a local index.
         assertEquals(ScanSessionState.READY_FOR_MATCHING, vm.captureSession.state)
-        assertEquals(ScanMatchUiState.RecaptureGuidance(failedAttempts = 1), vm.matchState.value)
+        assertEquals(ScanMatchUiState.IndexUnavailable, vm.matchState.value)
         Unit
     }
 
@@ -300,7 +300,7 @@ class ScanCaptureParityTest {
 
         assertTrue(vm.beginFrontCapture())
         vm.deliverFrontJpeg("front".toByteArray())
-        assertEquals(ScanMatchUiState.RecaptureGuidance(failedAttempts = 1), vm.matchState.value)
+        assertEquals(ScanMatchUiState.IndexUnavailable, vm.matchState.value)
 
         // "Start over": whole flow returns to FRONT.
         vm.resetSession()

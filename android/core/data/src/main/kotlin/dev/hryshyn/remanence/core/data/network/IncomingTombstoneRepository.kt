@@ -49,7 +49,12 @@ enum class IncomingTombstoneFailure {
 }
 
 sealed interface IncomingTombstoneResult {
-    data class Success(val page: IncomingTombstonePage, val httpStatus: Int) : IncomingTombstoneResult
+    data class Success(
+        val page: IncomingTombstonePage,
+        val httpStatus: Int,
+        /** True only when this optional endpoint is absent on an older server. */
+        val capabilityUnsupported: Boolean = false,
+    ) : IncomingTombstoneResult
 
     data class Failure(
         val reason: IncomingTombstoneFailure,
@@ -121,6 +126,26 @@ class IncomingTombstoneRepository internal constructor(
         val status = response.code
         val bytes = readBounded(response.body) ?: return invalidResponse(status)
         val text = decodeUtf8(bytes) ?: return invalidResponse(status)
+        if (status == HTTP_NOT_FOUND || status == HTTP_METHOD_NOT_ALLOWED) {
+            // This feed is an optional post-release capability. An older
+            // server's canonical problem response identifies an absent
+            // optional endpoint. The exact canonical route/method problem is
+            // the only accepted exception; all other responses remain
+            // fail-closed. This branch is intentionally local to this endpoint.
+            if (!isProblemJson(response)) return invalidResponse(status)
+            val problem = classifyCapsuleProblem(
+                text = text,
+                httpStatus = status,
+                allowedCodes = ALLOWED_PROBLEM_CODES,
+            )
+            if (problem != null &&
+                problem.code == unsupportedProblemCode(status) &&
+                !problem.retryable
+            ) {
+                return unsupportedCapabilityPage(status, requestedCursor)
+            }
+            return if (problem == null) invalidResponse(status) else problemFailure(status, problem)
+        }
         if (status != HTTP_OK) {
             if (!isProblemJson(response)) return invalidResponse(status)
             val problem = classifyCapsuleProblem(
@@ -128,17 +153,7 @@ class IncomingTombstoneRepository internal constructor(
                 httpStatus = status,
                 allowedCodes = ALLOWED_PROBLEM_CODES,
             )
-            return IncomingTombstoneResult.Failure(
-                reason = when (problem?.code) {
-                    CODE_AUTH_INVALID -> IncomingTombstoneFailure.AUTH_INVALID
-                    CODE_RATE_LIMITED -> IncomingTombstoneFailure.RATE_LIMITED
-                    CODE_VALIDATION_FAILED -> IncomingTombstoneFailure.VALIDATION_FAILED
-                    CODE_INTERNAL_ERROR -> IncomingTombstoneFailure.INTERNAL_ERROR
-                    else -> IncomingTombstoneFailure.HTTP
-                },
-                httpStatus = status,
-                retryable = problem?.retryable ?: capsuleHttpFallbackIsRetryable(status),
-            )
+            return if (problem == null) invalidResponse(status) else problemFailure(status, problem)
         }
         if (!isJson(response)) return invalidResponse(status)
         val dto = try {
@@ -195,6 +210,40 @@ class IncomingTombstoneRepository internal constructor(
         retryable = status != HTTP_OK && capsuleHttpFallbackIsRetryable(status),
     )
 
+    private fun problemFailure(
+        status: Int,
+        problem: ClassifiedCapsuleProblem,
+    ) = IncomingTombstoneResult.Failure(
+        reason = when (problem.code) {
+            CODE_AUTH_INVALID -> IncomingTombstoneFailure.AUTH_INVALID
+            CODE_RATE_LIMITED -> IncomingTombstoneFailure.RATE_LIMITED
+            CODE_VALIDATION_FAILED -> IncomingTombstoneFailure.VALIDATION_FAILED
+            CODE_INTERNAL_ERROR -> IncomingTombstoneFailure.INTERNAL_ERROR
+            else -> IncomingTombstoneFailure.HTTP
+        },
+        httpStatus = status,
+        retryable = problem.retryable,
+    )
+
+    private fun unsupportedCapabilityPage(
+        status: Int,
+        requestedCursor: String?,
+    ) = IncomingTombstoneResult.Success(
+        page = IncomingTombstonePage(
+            items = emptyList(),
+            hasMore = false,
+            nextCursor = requestedCursor,
+        ),
+        httpStatus = status,
+        capabilityUnsupported = true,
+    )
+
+    private fun unsupportedProblemCode(status: Int): String? = when (status) {
+        HTTP_NOT_FOUND -> CODE_ROUTE_NOT_FOUND
+        HTTP_METHOD_NOT_ALLOWED -> CODE_METHOD_NOT_ALLOWED
+        else -> null
+    }
+
     private fun isJson(response: Response): Boolean = response.body.contentType()?.let {
         it.type == "application" && it.subtype == "json"
     } == true
@@ -236,15 +285,21 @@ class IncomingTombstoneRepository internal constructor(
         private const val JSON_MEDIA_TYPE = "application/json"
         private const val BEARER_PREFIX = "Bearer "
         private const val HTTP_OK = 200
+        private const val HTTP_NOT_FOUND = 404
+        private const val HTTP_METHOD_NOT_ALLOWED = 405
         private const val MAX_PAGE_SIZE = 100
         private const val MAX_CURSOR_CHARS = 4096
         private const val MAX_RESPONSE_BYTES = 256 * 1024L
         private const val CODE_AUTH_INVALID = "AUTH_INVALID"
+        private const val CODE_ROUTE_NOT_FOUND = "ROUTE_NOT_FOUND"
+        private const val CODE_METHOD_NOT_ALLOWED = "METHOD_NOT_ALLOWED"
         private const val CODE_RATE_LIMITED = "RATE_LIMITED"
         private const val CODE_VALIDATION_FAILED = "VALIDATION_FAILED"
         private const val CODE_INTERNAL_ERROR = "INTERNAL_ERROR"
         private val ALLOWED_PROBLEM_CODES = setOf(
             CODE_AUTH_INVALID,
+            CODE_ROUTE_NOT_FOUND,
+            CODE_METHOD_NOT_ALLOWED,
             CODE_RATE_LIMITED,
             CODE_VALIDATION_FAILED,
             CODE_INTERNAL_ERROR,

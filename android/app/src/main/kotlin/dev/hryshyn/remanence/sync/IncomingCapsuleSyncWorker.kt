@@ -52,7 +52,17 @@ class IncomingCapsuleSyncWorker(
                         }
                     },
                     syncTombstonePage = {
-                        container.incomingTombstoneSyncRepository.syncNextPage(expectedOwner = owner)
+                        container.incomingTombstoneSyncRepository
+                            .syncNextPage(expectedOwner = owner)
+                            .also { result ->
+                                if (result is IncomingTombstoneSyncResult.Committed &&
+                                    result.capabilityUnsupported
+                                ) {
+                                    IncomingAcceptanceDiagnostics.report(
+                                        "tombstone feed unsupported; incoming sync continued",
+                                    )
+                                }
+                            }
                     },
                     syncNextPage = {
                         container.incomingCapsuleSyncRepository.syncNextPage(expectedOwner = owner)

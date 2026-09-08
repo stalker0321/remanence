@@ -324,6 +324,39 @@ class IncomingCapsuleSyncWorkerTest {
     }
 
     @Test
+    fun unsupportedTombstoneFeedNoOpStillRunsIncomingStages() = runTest {
+        listOf(404, 405).forEach { unsupportedStatus ->
+            val events = mutableListOf<String>()
+            val pages = FakePages(
+                listOf(IncomingSyncResult.Committed(page(nextCursor = null, hasMore = false))),
+            )
+            val result = combinedRunner(
+                pages = pages,
+                syncTombstonePage = {
+                    events += "tombstone-$unsupportedStatus"
+                    IncomingTombstoneSyncResult.Committed(
+                        dev.hryshyn.remanence.core.data.network.IncomingTombstonePage(
+                            emptyList(), false, null,
+                        ),
+                        capabilityUnsupported = true,
+                    )
+                },
+                syncNextPage = {
+                    events += "page"
+                    pages.next()
+                },
+                runAcceptance = {
+                    events += "acceptance"
+                    IncomingAcceptanceDrainResult.Completed(0, 0, false)
+                },
+            ).run(OWNER)
+
+            assertEquals(IncomingSyncAndAcceptanceRunOutcome.Succeeded, result)
+            assertEquals(listOf("tombstone-$unsupportedStatus", "page", "acceptance"), events)
+        }
+    }
+
+    @Test
     fun nonSuccessfulPageOutcomesBypassAcceptance() = runTest {
         val cases = listOf(
             listOf(IncomingSyncResult.Committed(page(nextCursor = "more", hasMore = true))) to

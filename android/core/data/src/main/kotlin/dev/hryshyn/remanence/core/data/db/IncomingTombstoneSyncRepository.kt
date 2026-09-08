@@ -21,6 +21,7 @@ import kotlinx.coroutines.withContext
 sealed interface IncomingTombstoneSyncResult {
     data class Committed(
         val page: dev.hryshyn.remanence.core.data.network.IncomingTombstonePage,
+        val capabilityUnsupported: Boolean = false,
     ) : IncomingTombstoneSyncResult {
         val hasMore: Boolean get() = page.hasMore
     }
@@ -148,7 +149,10 @@ class IncomingTombstoneSyncRepository(
         } catch (_: Exception) {
             return failure(IncomingSyncFailure.DATABASE_FAILURE, true)
         }
-        return IncomingTombstoneSyncResult.Committed(page)
+        return IncomingTombstoneSyncResult.Committed(
+            page = page,
+            capabilityUnsupported = remoteResult.capabilityUnsupported,
+        )
     }
 
     private suspend fun liveSession(): IncomingSyncSession? = try {

@@ -23,12 +23,40 @@ internal data class ScanChooserHint(
     override fun toString(): String = "ScanChooserHint(<redacted>)"
 }
 
+/** Bounded, redacted accounting for one local index load. */
+internal data class ScanCandidateLoadDiagnostics(
+    val rawCandidateCount: Int = 0,
+    val validCandidateCount: Int = 0,
+    val profileSkippedCandidateCount: Int = 0,
+    val invalidCandidateCount: Int = 0,
+) {
+    init {
+        require(rawCandidateCount >= 0)
+        require(validCandidateCount >= 0)
+        require(profileSkippedCandidateCount >= 0)
+        require(invalidCandidateCount >= 0)
+    }
+
+    operator fun plus(other: ScanCandidateLoadDiagnostics): ScanCandidateLoadDiagnostics =
+        ScanCandidateLoadDiagnostics(
+            rawCandidateCount = rawCandidateCount + other.rawCandidateCount,
+            validCandidateCount = validCandidateCount + other.validCandidateCount,
+            profileSkippedCandidateCount =
+                profileSkippedCandidateCount + other.profileSkippedCandidateCount,
+            invalidCandidateCount = invalidCandidateCount + other.invalidCandidateCount,
+        )
+}
+
 /** Sender-index candidates and their scan-scoped, already-decrypted hints. */
 internal data class ScanCandidateIndex(
     val candidates: List<IndexedCandidate>,
     val chooserHints: Map<String, ScanChooserHint> = emptyMap(),
     /** Ephemeral presentation-plane binding, independent of CandidateOrigin. */
     val presentationSources: Map<java.util.UUID, CapsulePresentationSource> = emptyMap(),
+    val diagnostics: ScanCandidateLoadDiagnostics = ScanCandidateLoadDiagnostics(
+        rawCandidateCount = candidates.size,
+        validCandidateCount = candidates.size,
+    ),
 ) {
     /** Matching owns these parsed models only for this scan invocation. */
     fun wipeFingerprints() {
@@ -113,6 +141,11 @@ internal class IncomingSenderIndexCandidateProvider(
                 candidates = candidates,
                 chooserHints = hints,
                 presentationSources = presentationSources,
+                diagnostics = ScanCandidateLoadDiagnostics(
+                    rawCandidateCount = selected.size,
+                    validCandidateCount = candidates.size,
+                    invalidCandidateCount = selected.size - candidates.size,
+                ),
             )
         } catch (failure: Throwable) {
             candidates.forEach { it.front.wipe() }

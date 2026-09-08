@@ -114,6 +114,35 @@ class AccountScopedFileRoots(
         owner.toRestString(),
     ).toFile()
 
+    /**
+     * Returns an exact lexical root entry for bounded no-follow deletion.
+     * Only the parent chain is inspected: the returned final entry may be a
+     * symlink so [AccountStorageRetention.deleteNoFollow] can unlink that
+     * entry itself without canonicalizing through its target.
+     */
+    internal fun noFollowDeletionPath(
+        owner: UserId,
+        childRoot: ChildRoot? = null,
+    ): File? {
+        val path = if (childRoot == null) {
+            resolveFixedRelative(
+                filesDir.toPath(),
+                ACCOUNTS_DIR,
+                owner.toRestString(),
+            )
+        } else {
+            resolveFixedRelative(
+                filesDir.toPath(),
+                ACCOUNTS_DIR,
+                owner.toRestString(),
+                childRoot.directoryName,
+            )
+        }
+        return path.parent
+            ?.takeIf { trustedPathSafety(it) == TrustedPathSafety.SAFE }
+            ?.let { path.toFile() }
+    }
+
     /** Returns whether [path] is the raw or canonical spelling of this root. */
     fun isTrustedRoot(path: Path): Boolean = try {
         val normalized = path.toAbsolutePath().normalize()

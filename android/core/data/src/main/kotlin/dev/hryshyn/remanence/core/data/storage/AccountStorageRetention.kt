@@ -58,8 +58,8 @@ class AccountStorageRetention(
      * of that account is purged. Other accounts are never touched.
      */
     fun onLogout(owner: UserId) {
-        val tempRoot = roots.child(owner, AccountScopedFileRoots.ChildRoot.TEMP)
-        deleteNoFollow(tempRoot)
+        roots.noFollowDeletionPath(owner, AccountScopedFileRoots.ChildRoot.TEMP)
+            ?.let(::deleteNoFollow)
     }
 
     /**
@@ -128,8 +128,7 @@ class AccountStorageRetention(
      * is not contained beneath the accounts root.
      */
     fun purgeAccount(owner: UserId) {
-        val accountDir = roots.accountDirectory(owner)
-        deleteNoFollow(accountDir)
+        roots.noFollowDeletionPath(owner)?.let(::deleteNoFollow)
     }
 
     /**

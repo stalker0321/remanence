@@ -174,7 +174,7 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
     }
 
     @Test
-    fun androidFilesDirAliasAcceptsCanonicalDownloaderReturnPath() = runBlocking {
+    fun androidFilesDirAliasFormerPhoneTupleCommitsWithoutSymlinkPathFailure() = runBlocking {
         val realFilesDir = File(testRoot.parentFile, "a11d1-real-files-${System.nanoTime()}")
             .apply { mkdirs() }
         val rawAlias = File(testRoot.parentFile, "a11d1-raw-files-${System.nanoTime()}")
@@ -189,6 +189,8 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
                 download = IncomingRecipientBlobDownloader { request, _ ->
                     assertTrue(request.destination.createNewFile())
                     request.destination.writeBytes(bytes)
+                    // Former phone tuple: returnedPath=true, returnedSize=true;
+                    // the canonical target is the same trusted Android root.
                     RecipientBlobDownloadResult.Success(
                         request.destination.canonicalFile,
                         bytes.size.toLong(),
@@ -208,6 +210,53 @@ class IncomingCapsuleAcceptanceCoordinatorTest {
             rawAlias.delete()
             realFilesDir.deleteRecursively()
         }
+    }
+
+    @Test
+    fun wrongReturnedSizeReportsReturnedSizeAndCleansBeforeCryptoAdoptionOrCommit() = runBlocking {
+        seed()
+        var cryptoCalls = 0
+        var adoptionCalls = 0
+        var commitCalls = 0
+
+        val result = coordinator(
+            download = IncomingRecipientBlobDownloader { request, _ ->
+                assertTrue(request.destination.createNewFile())
+                request.destination.writeBytes(bytes)
+                RecipientBlobDownloadResult.Success(request.destination, bytes.size.toLong() + 1L)
+            },
+            control = IncomingControlIndexAcceptancePort {
+                cryptoCalls += 1
+                IncomingControlIndexAcceptancePortResult.Verified(verifiedPayload())
+            },
+            adoptionPort = IncomingRecognitionAdoptionPort {
+                adoptionCalls += 1
+                throw AssertionError("wrong download size must stop before adoption")
+            },
+            commitPort = IncomingIndexCommitPort { _, _ ->
+                commitCalls += 1
+                throw AssertionError("wrong download size must stop before commit")
+            },
+        ).accept(IncomingCapsuleAcceptanceRequest(owner, capsule))
+
+        val rejection = assertIs<IncomingCapsuleAcceptanceResult.Rejected>(result)
+        assertEquals(IncomingCapsuleAcceptanceRejectionReason.DOWNLOAD_REJECTED, rejection.reason)
+        val diagnostic = requireNotNull(rejection.downloadDiagnostic)
+        assertEquals(
+            IncomingAcceptanceDownloadDiagnostic.Category.LOCAL_PATH_FAILURE,
+            diagnostic.category,
+        )
+        assertEquals(
+            IncomingAcceptanceLocalPathFailureReason.RETURNED_SIZE,
+            diagnostic.localPathReason,
+        )
+        assertTrue(requireNotNull(diagnostic.returnedPathMatches))
+        assertFalse(requireNotNull(diagnostic.returnedSizeMatches))
+        assertEquals(0, cryptoCalls)
+        assertEquals(0, adoptionCalls)
+        assertEquals(0, commitCalls)
+        assertFalse(recoveryTempPath().exists())
+        assertInitialState()
     }
 
     @Test

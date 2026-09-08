@@ -339,6 +339,24 @@ class AccountStorageRetentionTest {
         assertTrue("B account directory must survive A logout", roots.accountDirectory(ownerB).exists())
     }
 
+    @Test
+    fun logoutUnlinksTempRootSymlinkAndPreservesOutsideTarget() {
+        val ownerDirectory = roots.accountDirectory(ownerA)
+        check(ownerDirectory.mkdirs())
+        val outside = File(filesDir.parentFile, "remanence-logout-root-target-${System.nanoTime()}")
+            .apply { mkdirs() }
+        val sentinel = touch(outside, "sentinel.bin")
+        val sentinelBytes = sentinel.readBytes()
+        val tempRoot = File(ownerDirectory, AccountScopedFileRoots.ChildRoot.TEMP.directoryName)
+        java.nio.file.Files.createSymbolicLink(tempRoot.toPath(), outside.toPath())
+
+        retention.onLogout(ownerA)
+
+        assertFalse(java.nio.file.Files.exists(tempRoot.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS))
+        assertTrue(outside.isDirectory)
+        assertArrayEquals(sentinelBytes, sentinel.readBytes())
+    }
+
     /**
      * Regression for the explicit purge path: a symlink in A's account root
      * that targets a file in B's account root must not delete the B file
@@ -393,6 +411,23 @@ class AccountStorageRetentionTest {
         assertTrue(foreign.isDirectory)
         assertTrue(foreignFile.exists())
         assertArrayEquals(foreignBytes, foreignFile.readBytes())
+    }
+
+    @Test
+    fun purgeUnlinksAccountRootSymlinkAndPreservesOutsideTarget() {
+        val accountDirectory = roots.accountDirectory(ownerA)
+        check(accountDirectory.parentFile!!.mkdirs())
+        val outside = File(filesDir.parentFile, "remanence-purge-root-target-${System.nanoTime()}")
+            .apply { mkdirs() }
+        val sentinel = touch(outside, "sentinel.bin")
+        val sentinelBytes = sentinel.readBytes()
+        java.nio.file.Files.createSymbolicLink(accountDirectory.toPath(), outside.toPath())
+
+        retention.purgeAccount(ownerA)
+
+        assertFalse(java.nio.file.Files.exists(accountDirectory.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS))
+        assertTrue(outside.isDirectory)
+        assertArrayEquals(sentinelBytes, sentinel.readBytes())
     }
 
     /**

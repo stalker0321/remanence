@@ -146,6 +146,10 @@ class RemanenceViewModelFactory(
             candidateIndexProvider = { owner ->
                 container.incomingSenderIndexCandidateProvider.load(owner)
             },
+            observeIncomingIndexReadiness = { owner ->
+                container.database.incomingCapsuleDao()
+                    .observeSenderIndexCandidateCountForOwner(owner.toRestString())
+            },
             scheduleIncomingSync = { owner ->
                 container.scheduleIncomingSync(owner)
             },

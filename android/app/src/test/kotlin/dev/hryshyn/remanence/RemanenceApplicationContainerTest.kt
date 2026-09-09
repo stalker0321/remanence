@@ -36,7 +36,9 @@ import dev.hryshyn.remanence.sync.IncomingControlIndexAcceptanceResult
 import java.io.File
 import java.security.MessageDigest
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
@@ -858,9 +860,11 @@ class RemanenceApplicationContainerTest {
             val otherWorkName = dev.hryshyn.remanence.sync.AccountWorkIdentity
                 .incomingSync(otherOwner).uniqueName
 
-            // No local account or access token means the authenticated-root
-            // callback is a no-op, even when handed a typed owner.
-            container.scheduleIncomingSync(owner)
+            // No local account is a terminal owner-boundary rejection.
+            assertEquals(
+                dev.hryshyn.remanence.sync.IncomingSyncSchedulingOutcome.SessionOwnerRejected,
+                container.scheduleIncomingSync(owner),
+            )
             assertTrue(workManager.getWorkInfosForUniqueWork(ownerWorkName).get().isEmpty())
 
             container.currentAccountStore.record(
@@ -868,21 +872,151 @@ class RemanenceApplicationContainerTest {
                 "mykola",
                 "0198f0a0-0000-7000-8000-00000000c603",
             )
-            container.scheduleIncomingSync(owner)
-            assertTrue(workManager.getWorkInfosForUniqueWork(ownerWorkName).get().isEmpty())
+            // A cold process may have no in-memory bearer yet. Scheduling is
+            // still safe; the worker restores the owner/session before I/O.
+            assertEquals(
+                dev.hryshyn.remanence.sync.IncomingSyncSchedulingOutcome.Queued,
+                container.scheduleIncomingSync(owner),
+            )
+            assertEquals(1, workManager.getWorkInfosForUniqueWork(ownerWorkName).get().size)
 
             container.authTokenHolder.updateTokens("access-token", "refresh-token")
-            container.scheduleIncomingSync(owner)
-            container.scheduleIncomingSync(owner)
+            val existing = container.scheduleIncomingSync(owner)
+            assertTrue(existing is dev.hryshyn.remanence.sync.IncomingSyncSchedulingOutcome.AlreadyWaiting)
+            assertEquals(
+                "KEEP accepted (observed enqueued; retry timing unknown)",
+                existing.safeStatus,
+            )
             assertEquals(1, workManager.getWorkInfosForUniqueWork(ownerWorkName).get().size)
 
             // A valid but different owner cannot reuse the authenticated A
             // container boundary to enqueue B's chain.
-            container.scheduleIncomingSync(otherOwner)
+            assertEquals(
+                dev.hryshyn.remanence.sync.IncomingSyncSchedulingOutcome.SessionOwnerRejected,
+                container.scheduleIncomingSync(otherOwner),
+            )
             assertTrue(workManager.getWorkInfosForUniqueWork(otherWorkName).get().isEmpty())
         } finally {
             container.currentAccountStore.clear()
             container.authTokenHolder.clearSession()
+            container.database.close()
+            WorkManagerTestInitHelper.closeWorkDatabase()
+        }
+    }
+
+    @Test
+    fun staleIncomingScheduleCannotBorrowReloggedEpochAfterDelayedFirstOwnerRead() = runBlocking {
+        WorkManagerTestInitHelper.initializeTestWorkManager(
+            context,
+            Configuration.Builder()
+                .setMinimumLoggingLevel(android.util.Log.ERROR)
+                .setWorkerFactory(object : WorkerFactory() {
+                    override fun createWorker(
+                        appContext: Context,
+                        workerClassName: String,
+                        workerParameters: androidx.work.WorkerParameters,
+                    ): ListenableWorker? = if (workerClassName == IncomingCapsuleSyncWorker::class.java.name) {
+                        NoOpWorker(appContext, workerParameters)
+                    } else {
+                        null
+                    }
+                })
+                .build(),
+        )
+        val container = AppContainer(context, kekBoundaryOverride = SoftwareKekBoundary())
+        val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000c611")
+        val workManager = WorkManager.getInstance(context)
+        val ownerWorkName = dev.hryshyn.remanence.sync.AccountWorkIdentity
+            .incomingSync(owner)
+            .uniqueName
+        val readCalls = AtomicInteger(0)
+        val oldReadStarted = CompletableDeferred<Unit>()
+        val releaseOldRead = CompletableDeferred<Unit>()
+        val accountRead: suspend () -> String? = {
+            if (readCalls.incrementAndGet() == 1) {
+                oldReadStarted.complete(Unit)
+                releaseOldRead.await()
+            }
+            owner.toRestString()
+        }
+
+        try {
+            val oldAttempt = async(Dispatchers.Default) {
+                container.scheduleIncomingSyncWithOwnerRead(owner, accountRead)
+            }
+            oldReadStarted.await()
+
+            // The delayed old A read resumes only after logout invalidates the
+            // epoch and a fresh A session is logically available.
+            container.sessionBoundary.invalidate()
+            val freshOutcome = container.scheduleIncomingSyncWithOwnerRead(owner, accountRead)
+            assertEquals(
+                dev.hryshyn.remanence.sync.IncomingSyncSchedulingOutcome.Queued,
+                freshOutcome,
+            )
+            assertEquals(1, workManager.getWorkInfosForUniqueWork(ownerWorkName).get().size)
+
+            releaseOldRead.complete(Unit)
+            assertEquals(
+                dev.hryshyn.remanence.sync.IncomingSyncSchedulingOutcome.SessionOwnerRejected,
+                oldAttempt.await(),
+            )
+            // The stale attempt cannot recreate a second KEEP chain.
+            assertEquals(1, workManager.getWorkInfosForUniqueWork(ownerWorkName).get().size)
+        } finally {
+            container.database.close()
+            WorkManagerTestInitHelper.closeWorkDatabase()
+        }
+    }
+
+    @Test
+    fun cancellationDuringSecondOwnerReadIsRethrownWithoutEnqueue() = runBlocking {
+        WorkManagerTestInitHelper.initializeTestWorkManager(
+            context,
+            Configuration.Builder()
+                .setMinimumLoggingLevel(android.util.Log.ERROR)
+                .setWorkerFactory(object : WorkerFactory() {
+                    override fun createWorker(
+                        appContext: Context,
+                        workerClassName: String,
+                        workerParameters: androidx.work.WorkerParameters,
+                    ): ListenableWorker? = if (workerClassName == IncomingCapsuleSyncWorker::class.java.name) {
+                        NoOpWorker(appContext, workerParameters)
+                    } else {
+                        null
+                    }
+                })
+                .build(),
+        )
+        val container = AppContainer(context, kekBoundaryOverride = SoftwareKekBoundary())
+        val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000c612")
+        val ownerWorkName = dev.hryshyn.remanence.sync.AccountWorkIdentity
+            .incomingSync(owner)
+            .uniqueName
+        val secondReadStarted = CompletableDeferred<Unit>()
+        val readCalls = AtomicInteger(0)
+        val accountRead: suspend () -> String? = {
+            if (readCalls.incrementAndGet() == 2) {
+                secondReadStarted.complete(Unit)
+                throw CancellationException("test cancellation")
+            }
+            owner.toRestString()
+        }
+
+        try {
+            val attempt = async(Dispatchers.Default) {
+                container.scheduleIncomingSyncWithOwnerRead(owner, accountRead)
+            }
+            secondReadStarted.await()
+            val failure = runCatching { attempt.await() }.exceptionOrNull()
+            assertTrue(failure is CancellationException)
+            assertTrue(
+                WorkManager.getInstance(context)
+                    .getWorkInfosForUniqueWork(ownerWorkName)
+                    .get()
+                    .isEmpty(),
+            )
+        } finally {
             container.database.close()
             WorkManagerTestInitHelper.closeWorkDatabase()
         }

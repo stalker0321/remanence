@@ -15,6 +15,7 @@ import dev.hryshyn.remanence.session.SessionOwnerResolution
 internal suspend fun runWithRestoredSession(
     expectedOwner: UserId,
     coordinator: SessionOwnerCoordinator,
+    onSessionOwnerRejected: () -> Unit = {},
     operation: suspend () -> ListenableWorker.Result,
 ): ListenableWorker.Result = when (coordinator.ensure(expectedOwner)) {
     SessionOwnerResolution.Ready -> operation()
@@ -23,5 +24,5 @@ internal suspend fun runWithRestoredSession(
     SessionOwnerResolution.AccountChanged,
     SessionOwnerResolution.Rejected,
     SessionOwnerResolution.RecoveryRequired,
-    -> ListenableWorker.Result.failure()
+    -> onSessionOwnerRejected().let { ListenableWorker.Result.failure() }
 }

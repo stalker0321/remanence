@@ -70,7 +70,10 @@ internal data class CapturePreviewSize(
 
 internal fun capturePreviewMaxHeight(screenHeight: Dp): Dp {
     require(screenHeight > 0.dp)
-    return minOf(CAPTURE_PREVIEW_MAX_HEIGHT, screenHeight * PORTRAIT_PREVIEW_HEIGHT_FRACTION)
+    return maxOf(
+        CAPTURE_PREVIEW_MIN_HEIGHT,
+        minOf(CAPTURE_PREVIEW_MAX_HEIGHT, screenHeight * PORTRAIT_PREVIEW_HEIGHT_FRACTION),
+    )
 }
 
 /**

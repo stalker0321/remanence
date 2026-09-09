@@ -18,8 +18,11 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import dev.hryshyn.remanence.core.crypto.CapsuleAcceptanceGate
 import dev.hryshyn.remanence.core.crypto.CapsuleAcceptanceInput
 import dev.hryshyn.remanence.core.crypto.CapsuleAcceptanceResult
@@ -54,6 +57,8 @@ import dev.hryshyn.remanence.ui.capsule.IncomingPresentationPreparationRejection
 import dev.hryshyn.remanence.ui.capsule.IncomingPresentationPreparationResult
 import dev.hryshyn.remanence.ui.capsule.PresentationGrantAuthority
 import dev.hryshyn.remanence.session.SessionBoundary
+import dev.hryshyn.remanence.sync.IncomingAcceptanceDiagnostics
+import dev.hryshyn.remanence.sync.IncomingSyncSchedulingOutcome
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -69,6 +74,26 @@ data class ChooserRow(
     val createdAtEpochSeconds: Long? = null,
     val placeLabel: String? = null,
 )
+
+/**
+ * Builds readiness only inside the IO ownership boundary. The caller gets a
+ * Boolean, never a decrypted candidate index; wiping therefore happens before
+ * cancellation or dispatcher return can strand the temporary models.
+ */
+internal suspend fun loadIndexReadiness(
+    ioDispatcher: kotlinx.coroutines.CoroutineDispatcher,
+    build: suspend () -> ScanCandidateIndex,
+    afterIndexBuilt: suspend () -> Unit = {},
+): Boolean = withContext(ioDispatcher) {
+    var ownedIndex: ScanCandidateIndex? = null
+    try {
+        ownedIndex = build()
+        afterIndexBuilt()
+        ownedIndex.candidates.isNotEmpty()
+    } finally {
+        ownedIndex?.wipeFingerprints()
+    }
+}
 
 /** Terminal scan-flow state handed to navigation and presentation. */
 sealed interface ScanTerminalState {
@@ -118,6 +143,8 @@ class ScanViewModel internal constructor(
         SiftRootSiftMatcher().match(query, reference)
     },
     private val candidateIndexProvider: suspend (UserId) -> ScanCandidateIndex,
+    /** Room readiness hints; matching still validates the complete index. */
+    private val observeIncomingIndexReadiness: ((UserId) -> Flow<Int>)? = null,
     /** The production factory supplies the real local incoming preparation gate. */
     private val incomingPresentationPreparation: IncomingPresentationPreparation?,
     private val incomingPrepareOverride:
@@ -126,7 +153,10 @@ class ScanViewModel internal constructor(
      * Existing owner-scoped incoming KEEP chain (sync + prefetch + ack).
      * Scan never enqueues a second worker type.
      */
-    private val scheduleIncomingSync: suspend (UserId) -> Unit = {},
+    private val scheduleIncomingSync:
+        suspend (UserId) -> IncomingSyncSchedulingOutcome = {
+            IncomingSyncSchedulingOutcome.EnqueueFailed
+        },
     /** Live connectivity for pending-material copy; WorkManager still owns backoff. */
     private val networkConnected: () -> Boolean = { true },
     /** Immediate account-boundary fence shared with RootViewModel. */
@@ -203,6 +233,10 @@ class ScanViewModel internal constructor(
     private var pendingWatcherJob: Job? = null
     private var watchedPending: PendingIncoming? = null
     private var incomingSyncScheduleJob: Job? = null
+    /** Monotonic nonce invalidating cancelled-but-uncancellable scheduler attempts. */
+    private var incomingSyncScheduleAttemptNonce: Long = 0L
+    private var incomingIndexReadinessJob: Job? = null
+    private var incomingIndexReadinessAttempt: Long? = null
     /** The owning job for CPU/native matching; cancellation waits for its finally. */
     private var matchingJob: Job? = null
     private var sessionBoundaryEpoch: Long = sessionBoundary?.currentEpoch() ?: 0L
@@ -433,8 +467,14 @@ class ScanViewModel internal constructor(
     /** Restarts capture and explicitly re-enqueues the existing sync chain. */
     fun retryIndexSync() {
         if (_matchState.value !is ScanMatchUiState.IndexUnavailable) return
-        resetSession()
-        scheduleOwnerIncomingSync(matchGeneration)
+        val generation = matchGeneration
+        scheduleOwnerIncomingSync(generation) { owner, outcome, attempt ->
+            if (outcome is IncomingSyncSchedulingOutcome.Queued ||
+                outcome is IncomingSyncSchedulingOutcome.AlreadyWaiting
+            ) {
+                watchIncomingIndexReadiness(owner, generation, attempt)
+            }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -1201,28 +1241,157 @@ class ScanViewModel internal constructor(
         super.onCleared()
     }
 
-    private fun scheduleOwnerIncomingSync(generation: Int) {
+    private fun scheduleOwnerIncomingSync(
+        generation: Int,
+        onAccepted: ((UserId, IncomingSyncSchedulingOutcome, Long) -> Unit)? = null,
+    ) {
         cancelIncomingSyncSchedule()
+        val attempt = ++incomingSyncScheduleAttemptNonce
         val boundary = sessionBoundaryEpoch
         incomingSyncScheduleJob = viewModelScope.launch {
-            val identity = try {
-                identityProvider()
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                return@launch
-            } ?: return@launch
-            if (generation != matchGeneration || !sessionBoundaryIsCurrent(boundary)) return@launch
-            val owner = runCatching { UserId.parseRest(identity.userId) }.getOrNull() ?: return@launch
-            if (!sessionBoundaryIsCurrent(boundary)) return@launch
+            var reporter: IncomingAcceptanceDiagnostics.Reporter? = null
+            var ownerForDiagnostic: UserId? = null
             try {
-                scheduleIncomingSync(owner)
+                val identity = identityProvider() ?: return@launch
+                if (generation != matchGeneration || !sessionBoundaryIsCurrent(boundary)) return@launch
+                val owner = runCatching { UserId.parseRest(identity.userId) }.getOrNull()
+                    ?: return@launch
+                ownerForDiagnostic = owner
+                if (!sessionBoundaryIsCurrent(boundary)) return@launch
+                reporter = IncomingAcceptanceDiagnostics.schedulingReporter {
+                    generation == matchGeneration &&
+                        attempt == incomingSyncScheduleAttemptNonce &&
+                        boundary == sessionBoundaryEpoch &&
+                        sessionBoundaryIsCurrent(boundary)
+                }
+                val outcome = scheduleIncomingSync(owner)
+                if (!scheduleCompletionIsCurrent(owner, generation, boundary, attempt)) return@launch
+                reporter.report(outcome)
+                if (outcome is IncomingSyncSchedulingOutcome.Queued ||
+                    outcome is IncomingSyncSchedulingOutcome.AlreadyWaiting
+                ) {
+                    onAccepted?.invoke(owner, outcome, attempt)
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                // Existing KEEP enqueue remains best-effort; pending UI still stands.
+                val owner = ownerForDiagnostic
+                if (owner != null &&
+                    reporter != null &&
+                    scheduleCompletionIsCurrent(owner, generation, boundary, attempt)
+                ) {
+                    reporter.report(IncomingSyncSchedulingOutcome.EnqueueFailed)
+                }
+            } finally {
+                reporter?.close()
             }
         }
+    }
+
+    private suspend fun scheduleCompletionIsCurrent(
+        owner: UserId,
+        generation: Int,
+        boundary: Long,
+        attempt: Long,
+    ): Boolean {
+        if (generation != matchGeneration ||
+            attempt != incomingSyncScheduleAttemptNonce ||
+            boundary != sessionBoundaryEpoch ||
+            !sessionBoundaryIsCurrent(boundary)
+        ) return false
+        val identity = try {
+            identityProvider()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return false
+        } ?: return false
+        return runCatching { UserId.parseRest(identity.userId) }.getOrNull() == owner
+    }
+
+    /**
+     * Waits for one owner-scoped Room readiness emission, then re-runs the
+     * ordinary matcher over the FRONT already held by this generation. The
+     * observer is deliberately bounded and event-driven: it never polls a
+     * worker or opens a presentation without the normal matcher/crypto/grant
+     * path succeeding.
+     */
+    private fun watchIncomingIndexReadiness(owner: UserId, generation: Int, attempt: Long) {
+        val observer = observeIncomingIndexReadiness ?: return
+        incomingIndexReadinessJob?.cancel()
+        incomingIndexReadinessAttempt = attempt
+        val boundary = sessionBoundaryEpoch
+        incomingIndexReadinessJob = viewModelScope.launch {
+            val progressReporter = IncomingAcceptanceDiagnostics.workerReporter {
+                generation == matchGeneration &&
+                    attempt == incomingSyncScheduleAttemptNonce &&
+                    incomingIndexReadinessAttempt == attempt &&
+                    boundary == sessionBoundaryEpoch &&
+                    sessionBoundaryIsCurrent(boundary) &&
+                    captureSession.front != null
+            }
+            try {
+                val becameReady = withTimeoutOrNull(INDEX_READINESS_TIMEOUT_MS) {
+                    observer(owner).first {
+                        if (!indexRematchIsCurrent(owner, generation, boundary, attempt)) {
+                            return@first false
+                        }
+                        loadIndexReadiness(
+                            ioDispatcher = ioDispatcher,
+                            build = { buildCandidateIndex() },
+                        )
+                    }
+                }
+                if (becameReady == null &&
+                    indexRematchIsCurrent(owner, generation, boundary, attempt)
+                ) {
+                    progressReporter.report("sync readiness timeout")
+                }
+                if (becameReady != null &&
+                    indexRematchIsCurrent(owner, generation, boundary, attempt)
+                ) {
+                    evaluateMatch()
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // The user can explicitly retry again; no unsafe rematch is
+                // attempted after an observer or index-read failure.
+            } finally {
+                progressReporter.close()
+                if (incomingIndexReadinessJob === coroutineContext[Job] &&
+                    incomingIndexReadinessAttempt == attempt
+                ) {
+                    incomingIndexReadinessJob = null
+                    incomingIndexReadinessAttempt = null
+                }
+            }
+        }
+    }
+
+    private suspend fun indexRematchIsCurrent(
+        owner: UserId,
+        generation: Int,
+        boundary: Long,
+        attempt: Long,
+    ): Boolean {
+        if (generation != matchGeneration ||
+            attempt != incomingSyncScheduleAttemptNonce ||
+            incomingIndexReadinessAttempt != attempt ||
+            boundary != sessionBoundaryEpoch ||
+            !sessionBoundaryIsCurrent(boundary) ||
+            captureSession.front == null ||
+            _matchState.value !is ScanMatchUiState.IndexUnavailable
+        ) return false
+        val identity = try {
+            identityProvider()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return false
+        } ?: return false
+        val currentOwner = runCatching { UserId.parseRest(identity.userId) }.getOrNull()
+        return currentOwner == owner
     }
 
     private suspend fun shouldHoldForIncomingMaterial(
@@ -1349,8 +1518,12 @@ class ScanViewModel internal constructor(
     }
 
     private fun cancelIncomingSyncSchedule() {
+        incomingSyncScheduleAttemptNonce += 1
         incomingSyncScheduleJob?.cancel()
         incomingSyncScheduleJob = null
+        incomingIndexReadinessJob?.cancel()
+        incomingIndexReadinessJob = null
+        incomingIndexReadinessAttempt = null
     }
 
     private fun cancelMatchingJob() {
@@ -1363,11 +1536,13 @@ class ScanViewModel internal constructor(
 
     private fun invalidateForAccountBoundary() {
         sessionBoundaryEpoch = sessionBoundary?.currentEpoch() ?: (sessionBoundaryEpoch + 1L)
+        IncomingAcceptanceDiagnostics.reset()
         resetSession()
         begunEpoch = null
     }
 
     companion object {
         const val RECOGNITION_BLOB_BYTE = 0x01
+        private const val INDEX_READINESS_TIMEOUT_MS = 30_000L
     }
 }

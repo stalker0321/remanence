@@ -177,6 +177,22 @@ abstract class IncomingCapsuleDao {
     }
 
     /**
+     * Emits only the bounded owner-scoped readiness cardinality used by Scan
+     * to retry an already captured FRONT after an index/material transition.
+     * The value is a readiness hint; Scan still rebuilds and validates the
+     * complete owner-bound index before matching.
+     */
+    @Query(
+        "SELECT COUNT(*) FROM incoming_capsule " +
+            "WHERE owner_user_id = :ownerUserId " +
+            "AND server_status = 'READY' " +
+            "AND material_state IN ('INDEX_CACHED', 'MATERIAL_CACHED', 'FINGERPRINT_ACCEPTED')",
+    )
+    abstract fun observeSenderIndexCandidateCountForOwner(
+        ownerUserId: String,
+    ): Flow<Int>
+
+    /**
      * Selects only bounded, typed identities. Invalid limits are rejected
      * before Room is called; cancellation identity is preserved exactly.
      */

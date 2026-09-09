@@ -22,17 +22,25 @@ import kotlinx.coroutines.launch
 import dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource
 import dev.hryshyn.remanence.ui.capsule.PresentationGrantAuthority
 import dev.hryshyn.remanence.ui.capsule.PresentationGrantBinding
+import dev.hryshyn.remanence.sync.IncomingSyncSchedulingOutcome
+import dev.hryshyn.remanence.sync.IncomingAcceptanceDiagnostics
 
 /** Background sync health is not an authentication or navigation state. */
 sealed interface IncomingSyncSchedulingState {
     /** No incoming schedule attempt has completed for the current root. */
     data object NotAttempted : IncomingSyncSchedulingState
 
-    /** The account-scoped incoming chain was accepted by WorkManager. */
-    data object Enqueued : IncomingSyncSchedulingState
+    /** WorkManager accepted a new request for the owner-scoped KEEP chain. */
+    data object Queued : IncomingSyncSchedulingState
+
+    /** A confirmed unfinished KEEP chain already exists for this owner. */
+    data object AlreadyWaiting : IncomingSyncSchedulingState
+
+    /** The durable current session did not match the requested owner. */
+    data object SessionOwnerRejected : IncomingSyncSchedulingState
 
     /** Scheduling failed; a later foreground/bootstrap pass may retry it. */
-    data object RetryableFailure : IncomingSyncSchedulingState
+    data object EnqueueFailed : IncomingSyncSchedulingState
 }
 
 /**
@@ -70,16 +78,30 @@ class RootViewModel internal constructor(
     /** Best-effort owner-scoped upload discovery after a proven Active session. */
     private val resumeCapsuleUploads: suspend (UserId) -> Unit = {},
     /** Authenticated owner-scoped incoming chain enqueue after upload discovery. */
-    private val scheduleIncomingSync: suspend (UserId) -> Unit = {},
+    private val scheduleIncomingSync:
+        suspend (UserId) -> IncomingSyncSchedulingOutcome = {
+            IncomingSyncSchedulingOutcome.EnqueueFailed
+        },
     /** Authenticated startup cleanup before the account UI becomes visible. */
     private val recoverCreateStaging: suspend (UserId) -> Unit = {},
 ) : ViewModel() {
 
     /** Serializes root refresh requests while retaining one trailing request. */
     private val refreshMutex = Mutex()
+    /**
+     * Synchronous publication fence. Logout cannot suspend, so it must be
+     * able to invalidate a refresh before its next callback resumes; the same
+     * monitor protects the generation check and the state write.
+     */
+    private val publicationFence = Any()
     private var refreshRunning = false
     private var refreshPending = false
     private var refreshGeneration = 0L
+    /**
+     * Set synchronously before logout teardown starts. All refresh admission,
+     * publication, and scheduling checks observe it under [publicationFence].
+     */
+    private var logoutInProgress = false
     private val refreshWaiters = mutableListOf<CompletableDeferred<Unit>>()
 
     private val controller = AppNavigationController(AuthUiState.SignedOut)
@@ -160,48 +182,82 @@ class RootViewModel internal constructor(
     }
 
     fun logout() {
-        // A refresh already in flight must not publish the old account after
-        // this account boundary begins; the coordinator fences it atomically.
+        // The lifecycle flag, generation invalidation, owner boundary, and
+        // diagnostic reset form one synchronous admission fence. A second
+        // logout cannot start a duplicate teardown or boundary transaction.
+        val started = synchronized(publicationFence) {
+            if (logoutInProgress) {
+                false
+            } else {
+                logoutInProgress = true
+                refreshGeneration += 1
+                // Retire a trailing refresh while the same synchronous fence
+                // closes admission. The coordinator must not carry a
+                // pre-logout request into the post-SignedOut session.
+                refreshPending = false
+                invalidateSessionBoundaryAndResetDiagnostics()
+                _incomingSyncScheduling.value = IncomingSyncSchedulingState.NotAttempted
+                true
+            }
+        }
+        if (!started) return
+
+        // Invalidate the underlying refresh coordinator only after Root has
+        // closed its own admission gate; it is synchronous and non-suspending.
         invalidateSessionRefreshes()
-        invalidateSessionBoundary()
-        // No pending expiry timer may outlive the account context.
         expiryWatch.cancel()
         // Revoke at initiation, before asynchronous server/session teardown;
         // the later cleanup remains a defense against a late callback.
         revokeAllPresentation()
         viewModelScope.launch {
-            // Full ordered teardown when wired; otherwise token-only clearing.
-            (logoutAction ?: { sessionBootstrap.logout() })()
-            // Any live scan grant was already revoked at account teardown
-            // initiation; repeat is intentionally idempotent.
-            revokeAllPresentation()
-            // Every flow's transient state dies with the account context.
-            AppDestination.Create.let { runTransientCleanups(it) }
-            AppDestination.Scan.let { runTransientCleanups(it) }
-            resolveNow()
+            try {
+                // Full ordered teardown when wired; otherwise token-only clearing.
+                (logoutAction ?: { sessionBootstrap.logout() })()
+                // Any live scan grant was already revoked at account teardown
+                // initiation; repeat is intentionally idempotent.
+                revokeAllPresentation()
+                // Every flow's transient state dies with the account context.
+                AppDestination.Create.let { runTransientCleanups(it) }
+                AppDestination.Scan.let { runTransientCleanups(it) }
+            } finally {
+                // Do not re-bootstrap here: a late/stale resolver is not
+                // allowed to reopen A/B during logout. SignedOut is the
+                // authoritative terminal publication for this logout.
+                synchronized(publicationFence) {
+                    refreshGeneration += 1
+                    publish(AuthUiState.SignedOut)
+                    logoutInProgress = false
+                }
+            }
         }
     }
 
     /** Home entry point: sender create flow (authenticated accounts only). */
     fun openCreate() {
-        if (controller.current is AppDestination.Capsule) {
-            expiryWatch.cancel()
-            revokeAllPresentation()
+        synchronized(publicationFence) {
+            if (!authenticatedEntryAdmitted()) return
+            if (controller.current is AppDestination.Capsule) {
+                expiryWatch.cancel()
+                revokeAllPresentation()
+            }
+            _createSessionEpoch.value += 1
+            controller.navigate(AppDestination.Create)
+            _destination.value = controller.current
         }
-        _createSessionEpoch.value += 1
-        controller.navigate(AppDestination.Create)
-        _destination.value = controller.current
     }
 
     /** Home entry point: scan flow (authenticated accounts only). */
     fun openScan() {
-        if (controller.current is AppDestination.Capsule) {
-            expiryWatch.cancel()
-            revokeAllPresentation()
+        synchronized(publicationFence) {
+            if (!authenticatedEntryAdmitted()) return
+            if (controller.current is AppDestination.Capsule) {
+                expiryWatch.cancel()
+                revokeAllPresentation()
+            }
+            _scanSessionEpoch.value += 1
+            controller.navigate(AppDestination.Scan)
+            _destination.value = controller.current
         }
-        _scanSessionEpoch.value += 1
-        controller.navigate(AppDestination.Scan)
-        _destination.value = controller.current
     }
 
     /**
@@ -226,11 +282,13 @@ class RootViewModel internal constructor(
     internal fun openCapsuleWithGrant(
         grantId: String,
         onPresentationClosed: (() -> Unit)?,
-    ): Boolean {
-        val uuid = runCatching { UUID.fromString(grantId) }.getOrNull() ?: return false
+    ): Boolean = synchronized(publicationFence) {
+        if (!authenticatedEntryAdmitted()) return@synchronized false
+        val uuid = runCatching { UUID.fromString(grantId) }.getOrNull()
+            ?: return@synchronized false
         val authenticatedOwner = currentAuthenticatedOwner()
         val binding = authenticatedOwner?.let { presentationGrants.resolve(uuid, it) }
-        if (binding == null) return false
+        if (binding == null) return@synchronized false
         controller.grantCapsuleAccess(
             grantId = grantId,
             capsuleId = binding.capsuleId.toString(),
@@ -245,7 +303,7 @@ class RootViewModel internal constructor(
         _destination.value = controller.current
         // FIX-REVIEW2-03: schedule THIS presentation's exact-expiry wake-up.
         expiryWatch.watch(grantId)
-        return true
+        true
     }
 
     /**
@@ -401,6 +459,14 @@ class RootViewModel internal constructor(
         return runCatching { UserId.parseRest(authenticated.userId) }.getOrNull()
     }
 
+    /**
+     * Root-owned admission for every authenticated flow route. The caller
+     * must already hold [publicationFence], so logout cannot begin between
+     * the authentication check and route/epoch publication.
+     */
+    private fun authenticatedEntryAdmitted(): Boolean =
+        !logoutInProgress && _authState.value is AuthUiState.Authenticated
+
     private fun authBoundary(state: AuthUiState): AuthenticatedBoundary? =
         (state as? AuthUiState.Authenticated)?.let {
             AuthenticatedBoundary(it.userId, it.activeKeyBundleId)
@@ -418,6 +484,10 @@ class RootViewModel internal constructor(
     }
 
     private fun refreshAsync() {
+        // Admission is checked at callback time as well as inside resolveNow:
+        // a foreground/session callback received during logout must not sit in
+        // the scope and become a fresh login after terminal SignedOut.
+        if (synchronized(publicationFence) { logoutInProgress }) return
         viewModelScope.launch {
             resolveNow()
         }
@@ -430,18 +500,36 @@ class RootViewModel internal constructor(
      * RequiresConnectivity rather than silently accepting stale credentials.
      */
     suspend fun resolveNow() {
-        val waiter = CompletableDeferred<Unit>()
-        val startsRunner = refreshMutex.withLock {
+        // Foreground/session callbacks arriving during logout are intentionally
+        // dropped. Only the terminal logout path may publish SignedOut while
+        // this gate is closed; a later explicit session-established callback
+        // starts a fresh resolve after the gate opens.
+        synchronized(publicationFence) {
+            if (logoutInProgress) return
             refreshGeneration += 1
-            refreshWaiters += waiter
-            if (refreshRunning) {
-                refreshPending = true
-                false
-            } else {
-                refreshRunning = true
-                true
+        }
+        val waiter = CompletableDeferred<Unit>()
+        val startsRunner: Boolean? = refreshMutex.withLock {
+            synchronized(publicationFence) {
+                // Logout may have started after the initial admission check
+                // but before this request reached the coordinator mutex. Do
+                // not add a waiter, mark pending, or start a new iteration.
+                if (logoutInProgress) {
+                    null
+                } else {
+                    refreshWaiters += waiter
+                    if (refreshRunning) {
+                        refreshPending = true
+                        false
+                    } else {
+                        refreshRunning = true
+                        true
+                    }
+                }
             }
         }
+
+        if (startsRunner == null) return
 
         if (startsRunner) {
             runRefreshCoordinator()
@@ -458,15 +546,21 @@ class RootViewModel internal constructor(
     private suspend fun runRefreshCoordinator() {
         try {
             while (true) {
-                val generation = refreshMutex.withLock { refreshGeneration }
+                val generation = currentRefreshGeneration()
                 performResolveNow(generation)
                 val waitersToComplete = refreshMutex.withLock {
-                    if (refreshPending) {
-                        refreshPending = false
-                        null
-                    } else {
-                        refreshRunning = false
-                        refreshWaiters.toList().also { refreshWaiters.clear() }
+                    synchronized(publicationFence) {
+                        if (refreshPending && !logoutInProgress) {
+                            refreshPending = false
+                            null
+                        } else {
+                            // A logout fence retires any request that was
+                            // queued before it. Never let that request turn
+                            // into a post-logout resolver iteration.
+                            refreshPending = false
+                            refreshRunning = false
+                            refreshWaiters.toList().also { refreshWaiters.clear() }
+                        }
                     }
                 }
                 if (waitersToComplete == null) continue
@@ -484,9 +578,11 @@ class RootViewModel internal constructor(
 
     private suspend fun failRefreshWaiters(failure: Throwable) {
         val waitersToComplete = refreshMutex.withLock {
-            refreshRunning = false
-            refreshPending = false
-            refreshWaiters.toList().also { refreshWaiters.clear() }
+            synchronized(publicationFence) {
+                refreshRunning = false
+                refreshPending = false
+                refreshWaiters.toList().also { refreshWaiters.clear() }
+            }
         }
         waitersToComplete.forEach { it.completeExceptionally(failure) }
     }
@@ -494,19 +590,25 @@ class RootViewModel internal constructor(
     private suspend fun publishIfCurrent(
         generation: Long,
         next: AuthUiState,
-    ): Boolean = refreshMutex.withLock {
-        if (refreshGeneration != generation) {
-            false
-        } else {
-            // Keep the generation check and state publication atomic so a
-            // later request cannot be followed by a stale Authenticated state.
+    ): Boolean = synchronized(publicationFence) {
+        if (!logoutInProgress && refreshGeneration == generation) {
+            // Keep the generation check and state publication atomic with the
+            // synchronous logout invalidation.
             publish(next)
             true
+        } else {
+            false
         }
     }
 
-    private suspend fun isCurrentRefresh(generation: Long): Boolean =
-        refreshMutex.withLock { refreshGeneration == generation }
+    private fun isCurrentRefresh(generation: Long): Boolean =
+        synchronized(publicationFence) {
+            !logoutInProgress && refreshGeneration == generation
+        }
+
+    private fun currentRefreshGeneration(): Long = synchronized(publicationFence) {
+        refreshGeneration
+    }
 
     private suspend fun performResolveNow(generation: Long) {
         var activeUserId: String? = null
@@ -548,6 +650,10 @@ class RootViewModel internal constructor(
             return
         }
         if (next is AuthUiState.Authenticated && activeOwner != null) {
+            // A resolver result that was admitted before logout must not
+            // continue into owner-bound recovery work after the lifecycle
+            // fence closes, even though publication below is also guarded.
+            if (!isCurrentRefresh(generation)) return
             try {
                 recoverCreateStaging(activeOwner)
             } catch (cancelled: CancellationException) {
@@ -572,22 +678,49 @@ class RootViewModel internal constructor(
                 // Discovery is best-effort; authenticated navigation remains intact.
             }
             if (!isCurrentRefresh(generation)) return
+            val schedulingReporter = IncomingAcceptanceDiagnostics.schedulingReporter {
+                isCurrentRefresh(generation)
+            }
             try {
-                scheduleIncomingSync(owner)
+                val outcome = scheduleIncomingSync(owner)
+                // The scheduler is a suspend boundary. A logout, account
+                // switch, or trailing refresh may have invalidated this
+                // completion while WorkManager was deciding the outcome.
+                publishSchedulingIfCurrent(generation, outcome, schedulingReporter)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
                 // WorkManager availability is independent from authentication;
                 // retain Home/Scan and expose a retryable sync-only status.
-                if (isCurrentRefresh(generation)) {
-                    _incomingSyncScheduling.value = IncomingSyncSchedulingState.RetryableFailure
-                }
+                publishSchedulingIfCurrent(
+                    generation,
+                    IncomingSyncSchedulingOutcome.EnqueueFailed,
+                    schedulingReporter,
+                )
                 return
-            }
-            if (isCurrentRefresh(generation)) {
-                _incomingSyncScheduling.value = IncomingSyncSchedulingState.Enqueued
+            } finally {
+                schedulingReporter.close()
             }
         }
+    }
+
+    private fun publishSchedulingIfCurrent(
+        generation: Long,
+        outcome: IncomingSyncSchedulingOutcome,
+        reporter: IncomingAcceptanceDiagnostics.Reporter,
+    ): Boolean = synchronized(publicationFence) {
+        if (logoutInProgress || refreshGeneration != generation) return false
+        reporter.report(outcome)
+        _incomingSyncScheduling.value = when (outcome) {
+            IncomingSyncSchedulingOutcome.Queued -> IncomingSyncSchedulingState.Queued
+            is IncomingSyncSchedulingOutcome.AlreadyWaiting ->
+                IncomingSyncSchedulingState.AlreadyWaiting
+            IncomingSyncSchedulingOutcome.SessionOwnerRejected ->
+                IncomingSyncSchedulingState.SessionOwnerRejected
+            IncomingSyncSchedulingOutcome.EnqueueFailed ->
+                IncomingSyncSchedulingState.EnqueueFailed
+        }
+        true
     }
 
     private fun publish(next: AuthUiState) {
@@ -596,7 +729,17 @@ class RootViewModel internal constructor(
         val ownerOrKeyBoundaryChanged = authBoundary(previousAuth) != authBoundary(next)
         if (ownerOrKeyBoundaryChanged) {
             // Account identity changes invalidate the prepared owner-bound
-            // handle before the guarded controller publishes the new state.
+            // handle and clear diagnostics in one short publication fence,
+            // before the guarded controller can publish B/SignedOut.
+            if (previousAuth is AuthUiState.Authenticated && !logoutInProgress) {
+                invalidateSessionBoundaryAndResetDiagnostics()
+            } else {
+                IncomingAcceptanceDiagnostics.reset()
+            }
+            // A authenticated A -> authenticated B transition is an account
+            // boundary too. Clear the old owner's scheduling result in the
+            // same publication fence, before B's scheduler may report.
+            _incomingSyncScheduling.value = IncomingSyncSchedulingState.NotAttempted
             revokeAllPresentation()
         }
         _authState.value = next
@@ -616,5 +759,17 @@ class RootViewModel internal constructor(
             controller.navigate(AppDestination.Home)
         }
         _destination.value = controller.current
+    }
+
+    /**
+     * The only Root-owned account-boundary transaction. The injected
+     * SessionBoundary callback remains testable, while the diagnostic reset
+     * cannot race or occur before epoch invalidation.
+     */
+    private fun invalidateSessionBoundaryAndResetDiagnostics() {
+        IncomingAcceptanceDiagnostics.withPublicationFence {
+            invalidateSessionBoundary()
+            IncomingAcceptanceDiagnostics.reset()
+        }
     }
 }

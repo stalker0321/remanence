@@ -59,4 +59,27 @@ class IncomingCapsuleSyncSchedulingTest {
         assertTrue(info.tags.containsAll(identity.tags))
         assertEquals(NetworkType.CONNECTED, info.constraints.requiredNetworkType)
     }
+
+    @Test
+    fun typedStatusMakesKeepAndBackoffVisibleWithoutWorkIdentityDetails() {
+        assertEquals(
+            "queued",
+            IncomingSyncSchedulingOutcome.Queued.safeStatus,
+        )
+        assertEquals(
+            "KEEP accepted (observed enqueued; retry timing unknown)",
+            IncomingSyncSchedulingOutcome.AlreadyWaiting(
+                ExistingIncomingWorkState.ENQUEUED,
+            ).safeStatus,
+        )
+        assertEquals(
+            "KEEP accepted (observed enqueued; retry timing unknown)",
+            IncomingSyncSchedulingOutcome.AlreadyWaiting(
+                ExistingIncomingWorkState.ENQUEUED,
+            ).safeStatus,
+        )
+        assertEquals("session-owner rejected", IncomingSyncSchedulingOutcome.SessionOwnerRejected.safeStatus)
+        assertEquals("enqueue failed", IncomingSyncSchedulingOutcome.EnqueueFailed.safeStatus)
+    }
+
 }

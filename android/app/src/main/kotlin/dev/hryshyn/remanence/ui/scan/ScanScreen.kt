@@ -20,7 +20,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.hryshyn.remanence.capture.CaptureAttemptSurface
-import dev.hryshyn.remanence.BuildConfig
 import dev.hryshyn.remanence.scan.ScanSessionState
 import dev.hryshyn.remanence.sync.IncomingAcceptanceDiagnostics
 
@@ -48,7 +47,8 @@ fun ScanScreen(
     onScreenDispose: () -> Unit = viewModel::resetSession,
 ) {
     val matchState by viewModel.matchState.collectAsStateWithLifecycle()
-    val acceptanceDiagnostic by IncomingAcceptanceDiagnostics.state.collectAsStateWithLifecycle()
+    val schedulingStatus by IncomingAcceptanceDiagnostics.schedulingState.collectAsStateWithLifecycle()
+    val workerProgress by IncomingAcceptanceDiagnostics.workerProgress.collectAsStateWithLifecycle()
 
     DisposableEffect(Unit) {
         onDispose(onScreenDispose)
@@ -64,11 +64,16 @@ fun ScanScreen(
             .padding(16.dp),
     ) {
         Text("Scan a postcard", style = MaterialTheme.typography.titleLarge)
-        if (BuildConfig.DEBUG) {
+        Text(
+            text = "Sync: $schedulingStatus",
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.testTag("scan_sync_diagnostic"),
+        )
+        if (workerProgress != "not run") {
             Text(
-                text = "Sync: $acceptanceDiagnostic",
+                text = "Sync progress: $workerProgress",
                 style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.testTag("scan_sync_diagnostic"),
+                modifier = Modifier.testTag("scan_sync_progress"),
             )
         }
         Spacer(Modifier.height(8.dp))

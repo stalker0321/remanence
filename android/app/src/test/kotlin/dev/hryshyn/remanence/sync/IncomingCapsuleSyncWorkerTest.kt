@@ -259,6 +259,33 @@ class IncomingCapsuleSyncWorkerTest {
     }
 
     @Test
+    fun workerReportsBoundedStagesBeforeAndAfterAcceptance() = runTest {
+        val pages = FakePages(
+            listOf(IncomingSyncResult.Committed(page(nextCursor = null, hasMore = false))),
+        )
+        val stages = mutableListOf<IncomingSyncWorkerStage>()
+
+        val result = combinedRunner(
+            pages = pages,
+            reportStage = { stages += it },
+            runAcceptance = { IncomingAcceptanceDrainResult.Completed(0, 0, false) },
+        ).run(OWNER)
+
+        assertEquals(IncomingSyncAndAcceptanceRunOutcome.Succeeded, result)
+        assertEquals(
+            listOf(
+                IncomingSyncWorkerStage.TOMBSTONE_SYNC,
+                IncomingSyncWorkerStage.INDEX_SYNC,
+                IncomingSyncWorkerStage.ACCEPTANCE,
+                IncomingSyncWorkerStage.PREFETCH,
+                IncomingSyncWorkerStage.ACK,
+            ),
+            stages,
+        )
+        assertTrue(stages.all { it.safeStatus.length <= 64 })
+    }
+
+    @Test
     fun tombstoneSyncRunsBeforeIncomingMaterialStages() = runTest {
         val pages = FakePages(
             listOf(IncomingSyncResult.Committed(page(nextCursor = null, hasMore = false))),
@@ -727,6 +754,7 @@ class IncomingCapsuleSyncWorkerTest {
         runMaterialAck: suspend (UserId) -> IncomingMaterialAckDrainResult = {
             IncomingMaterialAckDrainResult.Completed(0, 0, false)
         },
+        reportStage: (IncomingSyncWorkerStage) -> Unit = {},
     ) = IncomingSyncAndAcceptanceRunner(
         currentOwner = currentOwner,
         syncTombstonePage = syncTombstonePage,
@@ -735,6 +763,7 @@ class IncomingCapsuleSyncWorkerTest {
         runPrefetch = runPrefetch,
         runMaterialAck = runMaterialAck,
         maxPagesPerRun = maxPages,
+        reportStage = reportStage,
     )
 
     private fun page(

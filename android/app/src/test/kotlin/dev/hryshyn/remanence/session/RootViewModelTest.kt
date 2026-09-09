@@ -6,6 +6,7 @@ import dev.hryshyn.remanence.core.model.UserId
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -15,6 +16,8 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kotlin.coroutines.cancellation.CancellationException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -23,6 +26,9 @@ import org.junit.Before
 import org.junit.Test
 import dev.hryshyn.remanence.ui.navigation.AppDestination
 import dev.hryshyn.remanence.ui.navigation.AuthUiState
+import dev.hryshyn.remanence.sync.IncomingSyncSchedulingOutcome
+import dev.hryshyn.remanence.sync.ExistingIncomingWorkState
+import dev.hryshyn.remanence.sync.IncomingAcceptanceDiagnostics
 
 /**
  * Auth route-guard wiring proof (FIX-M1-007-05/08): the root is a lifecycle
@@ -183,7 +189,10 @@ class RootViewModelTest {
         val scheduled = mutableListOf<UserId>()
         val vm = RootViewModel(
             MutableOutcomeResolver(SessionState.Active(owner.toRestString(), "mykola", true, true)),
-            scheduleIncomingSync = { scheduled += it },
+            scheduleIncomingSync = {
+                scheduled += it
+                IncomingSyncSchedulingOutcome.Queued
+            },
         )
 
         advanceUntilIdle()
@@ -203,7 +212,10 @@ class RootViewModelTest {
         val scheduled = mutableListOf<UserId>()
         val vm = RootViewModel(
             resolver,
-            scheduleIncomingSync = { scheduled += it },
+            scheduleIncomingSync = {
+                scheduled += it
+                IncomingSyncSchedulingOutcome.Queued
+            },
         )
 
         advanceUntilIdle()
@@ -242,7 +254,10 @@ class RootViewModelTest {
         repeat(2) {
             val vm = RootViewModel(
                 FixedOutcomeResolver(SessionState.Active(owner.toRestString(), "mykola", true, true)),
-                scheduleIncomingSync = { scheduled += it },
+                scheduleIncomingSync = {
+                    scheduled += it
+                    IncomingSyncSchedulingOutcome.Queued
+                },
             )
             advanceUntilIdle()
             assertEquals(AuthUiState.Authenticated(owner.toRestString(), "mykola"), vm.authState.value)
@@ -265,13 +280,14 @@ class RootViewModelTest {
             scheduleIncomingSync = { activeOwner ->
                 assertEquals(owner, activeOwner)
                 order += "incoming"
+                IncomingSyncSchedulingOutcome.Queued
             },
         )
 
         assertEquals(listOf("uploads", "incoming"), order)
         assertEquals(AuthUiState.Authenticated(owner.toRestString(), "mykola"), vm.authState.value)
         assertEquals(AppDestination.Home, vm.destination.value)
-        assertEquals(IncomingSyncSchedulingState.Enqueued, vm.incomingSyncScheduling.value)
+        assertEquals(IncomingSyncSchedulingState.Queued, vm.incomingSyncScheduling.value)
         vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
     }
 
@@ -295,7 +311,7 @@ class RootViewModelTest {
         )
         assertEquals(AppDestination.Home, vm.destination.value)
         assertEquals(
-            IncomingSyncSchedulingState.RetryableFailure,
+            IncomingSyncSchedulingState.EnqueueFailed,
             vm.incomingSyncScheduling.value,
         )
 
@@ -316,10 +332,34 @@ class RootViewModelTest {
         )
         assertEquals(AppDestination.Home, vm.destination.value)
         assertEquals(
-            IncomingSyncSchedulingState.RetryableFailure,
+            IncomingSyncSchedulingState.EnqueueFailed,
             vm.incomingSyncScheduling.value,
         )
         vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+    }
+
+    @Test
+    fun foregroundMapsTypedIncomingSchedulingOutcomeWithoutAssumingQueued() = runTest {
+        val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000b521")
+        val cases = listOf(
+            IncomingSyncSchedulingOutcome.Queued to IncomingSyncSchedulingState.Queued,
+            IncomingSyncSchedulingOutcome.AlreadyWaiting(
+                ExistingIncomingWorkState.BLOCKED,
+            ) to IncomingSyncSchedulingState.AlreadyWaiting,
+            IncomingSyncSchedulingOutcome.SessionOwnerRejected to
+                IncomingSyncSchedulingState.SessionOwnerRejected,
+            IncomingSyncSchedulingOutcome.EnqueueFailed to IncomingSyncSchedulingState.EnqueueFailed,
+        )
+
+        cases.forEach { (outcome, expected) ->
+            val vm = RootViewModel(
+                FixedOutcomeResolver(SessionState.Active(owner.toRestString(), "mykola", true, true)),
+                scheduleIncomingSync = { outcome },
+            )
+            advanceUntilIdle()
+            assertEquals(expected, vm.incomingSyncScheduling.value)
+            vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+        }
     }
 
     @Test
@@ -340,6 +380,7 @@ class RootViewModelTest {
                     failSchedule.await()
                     error("scheduled work rejected")
                 }
+                IncomingSyncSchedulingOutcome.Queued
             },
         )
         advanceUntilIdle()
@@ -369,6 +410,385 @@ class RootViewModelTest {
     }
 
     @Test
+    fun staleSchedulerSuccessCannotPublishSchedulingDiagnosticAfterNewSession() = runTest {
+        IncomingAcceptanceDiagnostics.reset()
+        val resolver = MutableOutcomeResolver(SessionState.SignedOut)
+        val scheduleEntered = CompletableDeferred<Unit>()
+        val releaseSchedule = CompletableDeferred<Unit>()
+        lateinit var vm: RootViewModel
+        vm = RootViewModel(
+            resolver,
+            scheduleIncomingSync = {
+                scheduleEntered.complete(Unit)
+                releaseSchedule.await()
+                IncomingSyncSchedulingOutcome.Queued
+            },
+        )
+        advanceUntilIdle()
+
+        resolver.state = SessionState.Active(
+            "0198f0a0-0000-7000-8000-00000000b522",
+            "mykola",
+            true,
+            true,
+        )
+        vm.onAppForegrounded()
+        advanceUntilIdle()
+        assertTrue(scheduleEntered.isCompleted)
+
+        resolver.state = SessionState.SignedOut
+        vm.onAppForegrounded()
+        releaseSchedule.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(IncomingSyncSchedulingState.NotAttempted, vm.incomingSyncScheduling.value)
+        assertEquals("not run", IncomingAcceptanceDiagnostics.schedulingState.value)
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+        IncomingAcceptanceDiagnostics.reset()
+    }
+
+    @Test
+    fun logoutImmediatelyFencesInFlightSchedulerPublication() = runTest {
+        IncomingAcceptanceDiagnostics.reset()
+        val owner = "0198f0a0-0000-7000-8000-00000000b523"
+        val resolver = MutableOutcomeResolver(SessionState.SignedOut)
+        val scheduleEntered = CompletableDeferred<Unit>()
+        val releaseSchedule = CompletableDeferred<Unit>()
+        val vm = RootViewModel(
+            resolver,
+            scheduleIncomingSync = {
+                scheduleEntered.complete(Unit)
+                releaseSchedule.await()
+                IncomingSyncSchedulingOutcome.Queued
+            },
+        )
+        advanceUntilIdle()
+
+        resolver.state = SessionState.Active(owner, "mykola", true, true)
+        vm.onAppForegrounded()
+        advanceUntilIdle()
+        assertTrue(scheduleEntered.isCompleted)
+
+        resolver.state = SessionState.SignedOut
+        vm.logout()
+        // The in-flight callback resumes only after the logout fence has
+        // already invalidated its generation.
+        releaseSchedule.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(AuthUiState.SignedOut, vm.authState.value)
+        assertEquals(IncomingSyncSchedulingState.NotAttempted, vm.incomingSyncScheduling.value)
+        assertEquals("not run", IncomingAcceptanceDiagnostics.schedulingState.value)
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+        IncomingAcceptanceDiagnostics.reset()
+    }
+
+    @Test
+    fun logoutBoundaryDoesNotAllowOldReporterEmissionAfterFenceBegins() = runTest {
+        IncomingAcceptanceDiagnostics.reset()
+        val owner = "0198f0a0-0000-7000-8000-00000000b523"
+        val resolver = MutableOutcomeResolver(
+            SessionState.Active(owner, "mykola", true, true),
+        )
+        val eligibility = CountDownLatch(1)
+        val releasePublication = CountDownLatch(1)
+        val logoutStarted = CountDownLatch(1)
+        var boundaryStarted = false
+        var oldReporterCurrent = true
+        val oldReporter = IncomingAcceptanceDiagnostics.schedulingReporter(
+            isCurrent = { oldReporterCurrent },
+            beforePublishForTests = {
+                eligibility.countDown()
+                releasePublication.await()
+            },
+        )
+        val vm = RootViewModel(
+            resolver,
+            invalidateSessionBoundary = {
+                boundaryStarted = true
+                oldReporterCurrent = false
+            },
+        )
+        advanceUntilIdle()
+        assertEquals(AuthUiState.Authenticated(owner, "mykola"), vm.authState.value)
+
+        val oldEmission = async(Dispatchers.Default) {
+            oldReporter.report("old A")
+        }
+        assertTrue(eligibility.await(5, TimeUnit.SECONDS))
+
+        resolver.state = SessionState.SignedOut
+        val logout = async(Dispatchers.Default) {
+            logoutStarted.countDown()
+            vm.logout()
+        }
+        assertTrue(logoutStarted.await(5, TimeUnit.SECONDS))
+        // The reporter owns the publication fence, so invalidation cannot
+        // begin midway through its eligibility-to-publication window.
+        assertFalse(boundaryStarted)
+
+        releasePublication.countDown()
+        oldEmission.await()
+        logout.await()
+        advanceUntilIdle()
+        assertTrue(boundaryStarted)
+
+        // A late callback from the old owner/session is rejected after the
+        // boundary and cannot recreate an A diagnostic.
+        oldReporter.report("late old A")
+        assertEquals("not run", IncomingAcceptanceDiagnostics.schedulingState.value)
+        oldReporter.close()
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+        IncomingAcceptanceDiagnostics.reset()
+    }
+
+    @Test
+    fun pendingLogoutDropsSameOwnerRefreshUntilFreshSessionEstablished() = runTest {
+        IncomingAcceptanceDiagnostics.reset()
+        val owner = "0198f0a0-0000-7000-8000-00000000b526"
+        val resolver = MutableOutcomeResolver(SessionState.SignedOut)
+        val logoutEntered = CompletableDeferred<Unit>()
+        val releaseLogout = CompletableDeferred<Unit>()
+        val scheduleEntered = CompletableDeferred<Unit>()
+        val releaseSchedule = CompletableDeferred<Unit>()
+        val publishedStates = mutableListOf<AuthUiState>()
+        var scheduleCalls = 0
+        var boundaryInvalidations = 0
+        val vm = RootViewModel(
+            resolver,
+            logoutAction = {
+                logoutEntered.complete(Unit)
+                releaseLogout.await()
+            },
+            invalidateSessionBoundary = { boundaryInvalidations += 1 },
+            scheduleIncomingSync = {
+                scheduleCalls += 1
+                if (scheduleCalls == 1) {
+                    scheduleEntered.complete(Unit)
+                    releaseSchedule.await()
+                }
+                IncomingSyncSchedulingOutcome.Queued
+            },
+        )
+        val observer = launch {
+            vm.authState.collect { publishedStates += it }
+        }
+        advanceUntilIdle()
+
+        resolver.state = SessionState.Active(owner, "mykola", true, true)
+        vm.onSessionEstablished()
+        advanceUntilIdle()
+        assertTrue(scheduleEntered.isCompleted)
+        assertEquals(AuthUiState.Authenticated(owner, "mykola"), vm.authState.value)
+        val statesBeforeLogout = publishedStates.size
+
+        vm.logout()
+        assertTrue(logoutEntered.isCompleted)
+        assertEquals(1, boundaryInvalidations)
+
+        // A same-owner foreground/bootstrap result is intentionally dropped
+        // while logoutAction is held. It cannot publish A, schedule again, or
+        // create another boundary/diagnostic epoch.
+        resolver.state = SessionState.Active(owner, "mykola", true, true)
+        vm.onAppForegrounded()
+        vm.resolveNow()
+        advanceUntilIdle()
+        assertEquals(statesBeforeLogout, publishedStates.size)
+        assertEquals(1, scheduleCalls)
+        assertEquals(1, boundaryInvalidations)
+        assertEquals("not run", IncomingAcceptanceDiagnostics.schedulingState.value)
+
+        // The pre-logout scheduler resumes only after the boundary and its
+        // report remains stale; it cannot recreate the old diagnostic.
+        releaseSchedule.complete(Unit)
+        advanceUntilIdle()
+        assertEquals("not run", IncomingAcceptanceDiagnostics.schedulingState.value)
+
+        resolver.state = SessionState.SignedOut
+        releaseLogout.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(AuthUiState.SignedOut, vm.authState.value)
+        assertEquals(1, boundaryInvalidations)
+        assertEquals("not run", IncomingAcceptanceDiagnostics.schedulingState.value)
+
+        // Only a separate post-completion session-established callback may
+        // reopen the owner and schedule once.
+        resolver.state = SessionState.Active(owner, "mykola", true, true)
+        vm.onSessionEstablished()
+        advanceUntilIdle()
+        assertEquals(AuthUiState.Authenticated(owner, "mykola"), vm.authState.value)
+        assertEquals(2, scheduleCalls)
+        assertEquals(1, boundaryInvalidations)
+        assertEquals("queued", IncomingAcceptanceDiagnostics.schedulingState.value)
+
+        observer.cancel()
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+        IncomingAcceptanceDiagnostics.reset()
+    }
+
+    @Test
+    fun pendingLogoutFencesCreateAndScanEntryBeforeTerminalSignedOut() = runTest {
+        val owner = "0198f0a0-0000-7000-8000-00000000b527"
+        val releaseLogout = CompletableDeferred<Unit>()
+        val logoutEntered = CompletableDeferred<Unit>()
+        var scheduleCalls = 0
+        val vm = RootViewModel(
+            MutableOutcomeResolver(SessionState.Active(owner, "mykola", true, true)),
+            logoutAction = {
+                logoutEntered.complete(Unit)
+                releaseLogout.await()
+            },
+            scheduleIncomingSync = {
+                scheduleCalls += 1
+                IncomingSyncSchedulingOutcome.Queued
+            },
+        )
+        advanceUntilIdle()
+
+        assertEquals(AuthUiState.Authenticated(owner, "mykola"), vm.authState.value)
+        assertEquals(AppDestination.Home, vm.destination.value)
+        val createEpochBeforeLogout = vm.createSessionEpoch.value
+        val scanEpochBeforeLogout = vm.scanSessionEpoch.value
+        val schedulesBeforeLogout = scheduleCalls
+
+        vm.logout()
+        assertTrue(logoutEntered.isCompleted)
+
+        // The auth state remains A until the ordered teardown completes, but
+        // Root admission is already closed. Neither tap can navigate or mint
+        // a new flow epoch while logoutAction is suspended.
+        vm.openCreate()
+        vm.openScan()
+        assertEquals(AppDestination.Home, vm.destination.value)
+        assertEquals(createEpochBeforeLogout, vm.createSessionEpoch.value)
+        assertEquals(scanEpochBeforeLogout, vm.scanSessionEpoch.value)
+        assertEquals(schedulesBeforeLogout, scheduleCalls)
+
+        releaseLogout.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(AuthUiState.SignedOut, vm.authState.value)
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+    }
+
+    @Test
+    fun logoutRetiresSeededTrailingRefreshAndFreshSessionSchedulesOnce() = runTest {
+        val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000b528")
+        val resolver = GatedActiveResolver(owner)
+        val logoutEntered = CompletableDeferred<Unit>()
+        val releaseLogout = CompletableDeferred<Unit>()
+        var scheduleCalls = 0
+        val vm = RootViewModel(
+            resolver,
+            logoutAction = {
+                logoutEntered.complete(Unit)
+                releaseLogout.await()
+            },
+            scheduleIncomingSync = {
+                scheduleCalls += 1
+                IncomingSyncSchedulingOutcome.Queued
+            },
+        )
+        assertTrue(resolver.firstEntered.isCompleted)
+
+        // Seed the one trailing request while the first resolver is held.
+        vm.onAppForegrounded()
+        vm.logout()
+        assertTrue(logoutEntered.isCompleted)
+
+        // Logout retires the pending request before the old resolver returns;
+        // this release must not cause a second bootstrap or schedule.
+        resolver.firstGate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(1, resolver.calls)
+        assertEquals(0, scheduleCalls)
+
+        releaseLogout.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(AuthUiState.SignedOut, vm.authState.value)
+
+        // Only a distinct post-completion session-established signal may
+        // reopen the resolver and schedule the fresh A session.
+        vm.onSessionEstablished()
+        assertTrue(resolver.secondEntered.isCompleted)
+        assertEquals(2, resolver.calls)
+        resolver.secondGate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(AuthUiState.Authenticated(owner.toRestString(), "mykola"), vm.authState.value)
+        assertEquals(1, scheduleCalls)
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+    }
+
+    @Test
+    fun authenticatedOwnerBoundaryResetsSchedulingBeforeOnlyNewOwnerOutcome() = runTest {
+        IncomingAcceptanceDiagnostics.reset()
+        val ownerA = UserId.parseRest("0198f0a0-0000-7000-8000-00000000b524")
+        val ownerB = UserId.parseRest("0198f0a0-0000-7000-8000-00000000b525")
+        val resolver = MutableOutcomeResolver(SessionState.SignedOut)
+        val aEntered = CompletableDeferred<Unit>()
+        val releaseA = CompletableDeferred<Unit>()
+        val bEntered = CompletableDeferred<Unit>()
+        val releaseB = CompletableDeferred<Unit>()
+        var boundaryInvalidations = 0
+        val vm = RootViewModel(
+            resolver,
+            invalidateSessionBoundary = { boundaryInvalidations += 1 },
+            scheduleIncomingSync = { owner ->
+                when (owner) {
+                    ownerA -> {
+                        aEntered.complete(Unit)
+                        releaseA.await()
+                        IncomingSyncSchedulingOutcome.Queued
+                    }
+                    ownerB -> {
+                        bEntered.complete(Unit)
+                        releaseB.await()
+                        IncomingSyncSchedulingOutcome.AlreadyWaiting(
+                            ExistingIncomingWorkState.BLOCKED,
+                        )
+                    }
+                    else -> error("unexpected owner")
+                }
+            },
+        )
+        advanceUntilIdle()
+
+        resolver.state = SessionState.Active(ownerA.toRestString(), "a", true, true)
+        vm.onAppForegrounded()
+        advanceUntilIdle()
+        assertTrue(aEntered.isCompleted)
+
+        // A is still inside its scheduler. A trailing authenticated B refresh
+        // invalidates A's generation; its state is reset only when B is
+        // atomically published, before B's scheduler is allowed to report.
+        resolver.state = SessionState.Active(ownerB.toRestString(), "b", true, true)
+        vm.onAppForegrounded()
+        advanceUntilIdle()
+        releaseA.complete(Unit)
+        advanceUntilIdle()
+
+        assertTrue(bEntered.isCompleted)
+        assertEquals(1, boundaryInvalidations)
+        assertEquals(
+            IncomingSyncSchedulingState.NotAttempted,
+            vm.incomingSyncScheduling.value,
+        )
+        assertEquals("not run", IncomingAcceptanceDiagnostics.schedulingState.value)
+
+        releaseB.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(
+            IncomingSyncSchedulingState.AlreadyWaiting,
+            vm.incomingSyncScheduling.value,
+        )
+        assertEquals(
+            "KEEP accepted (observed blocked)",
+            IncomingAcceptanceDiagnostics.schedulingState.value,
+        )
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+        IncomingAcceptanceDiagnostics.reset()
+    }
+
+    @Test
     fun offlineActiveReachesHomeWithoutSchedulingNetworkWork() = runTest {
         val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000b530")
         var resumeCalls = 0
@@ -384,7 +804,10 @@ class RootViewModelTest {
                 ),
             ),
             resumeCapsuleUploads = { resumeCalls++ },
-            scheduleIncomingSync = { incomingCalls++ },
+            scheduleIncomingSync = {
+                incomingCalls++
+                IncomingSyncSchedulingOutcome.Queued
+            },
         )
 
         assertEquals(
@@ -432,7 +855,10 @@ class RootViewModelTest {
             val vm = RootViewModel(
                 MutableOutcomeResolver(state),
                 resumeCapsuleUploads = { hookCalls++ },
-                scheduleIncomingSync = { incomingHookCalls++ },
+                scheduleIncomingSync = {
+                    incomingHookCalls++
+                    IncomingSyncSchedulingOutcome.Queued
+                },
             )
             vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
         }
@@ -454,7 +880,10 @@ class RootViewModelTest {
         states.forEach { state ->
             val vm = RootViewModel(
                 MutableOutcomeResolver(state),
-                scheduleIncomingSync = { incomingHookCalls++ },
+                scheduleIncomingSync = {
+                    incomingHookCalls++
+                    IncomingSyncSchedulingOutcome.Queued
+                },
             )
             vm.onAppForegrounded()
             advanceUntilIdle()
@@ -500,7 +929,10 @@ class RootViewModelTest {
             val vm = RootViewModel(
                 MutableOutcomeResolver(SessionState.Active(rawUserId, "mykola", true, true)),
                 resumeCapsuleUploads = { hookCalls++ },
-                scheduleIncomingSync = { incomingHookCalls++ },
+            scheduleIncomingSync = {
+                incomingHookCalls++
+                IncomingSyncSchedulingOutcome.Queued
+            },
             )
             assertEquals(AuthUiState.Authenticated(rawUserId ?: "", "mykola"), vm.authState.value)
             assertEquals(AppDestination.Home, vm.destination.value)
@@ -631,7 +1063,10 @@ class RootViewModelTest {
             resolver,
             recoverCreateStaging = { error("create staging sweep failed") },
             resumeCapsuleUploads = { resumeCalls++ },
-            scheduleIncomingSync = { resumeCalls++ },
+            scheduleIncomingSync = {
+                resumeCalls++
+                IncomingSyncSchedulingOutcome.Queued
+            },
         )
 
         resolver.state = SessionState.Active(owner.toRestString(), "mykola", true, true)

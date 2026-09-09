@@ -43,44 +43,73 @@ class IncomingCapsuleSyncWorker(
         val owner = parseOwner(inputData.getString(INPUT_OWNER_USER_ID)) ?: return Result.failure()
         val application = applicationContext as? RemanenceApplication ?: return Result.failure()
         val container = application.container
-        return runWithRestoredSession(owner, container.sessionOwnerCoordinator) {
-            mapCombinedOutcome(
-                IncomingSyncAndAcceptanceRunner(
-                    currentOwner = {
-                        container.currentAccountStore.load()?.userId?.let { raw ->
-                            runCatching { UserId.parseRest(raw) }.getOrNull()
-                        }
-                    },
-                    syncTombstonePage = {
-                        container.incomingTombstoneSyncRepository
-                            .syncNextPage(expectedOwner = owner)
-                            .also { result ->
-                                if (result is IncomingTombstoneSyncResult.Committed &&
-                                    result.capabilityUnsupported
-                                ) {
-                                    IncomingAcceptanceDiagnostics.report(
-                                        "tombstone feed unsupported; incoming sync continued",
-                                    )
-                                }
+        val diagnosticEpoch = container.sessionBoundary.currentEpoch()
+        var admittedOwner: UserId? = null
+        val reporter = IncomingAcceptanceDiagnostics.workerReporter {
+            // SessionBoundary is the synchronous owner/session fence. The
+            // owner is captured by this worker attempt; admission must happen
+            // before any stage can publish, and the epoch rejects late events
+            // after logout/login or account replacement.
+            diagnosticEpoch == container.sessionBoundary.currentEpoch() &&
+                admittedOwner == owner
+        }
+        return try {
+            runWithRestoredSession(
+                expectedOwner = owner,
+                coordinator = container.sessionOwnerCoordinator,
+                onSessionOwnerRejected = {
+                    reporter.report(IncomingSyncSchedulingOutcome.SessionOwnerRejected)
+                },
+            ) {
+                // Do not publish worker progress before the owner/session
+                // admission has passed. The reporter remains attempt-bound
+                // until this invocation closes below.
+                admittedOwner = owner
+                reporter.report(IncomingSyncWorkerStage.SESSION_RESTORE)
+                mapCombinedOutcome(
+                    IncomingSyncAndAcceptanceRunner(
+                        currentOwner = {
+                            container.currentAccountStore.load()?.userId?.let { raw ->
+                                runCatching { UserId.parseRest(raw) }.getOrNull()
                             }
-                    },
-                    syncNextPage = {
-                        container.incomingCapsuleSyncRepository.syncNextPage(expectedOwner = owner)
-                    },
-                    runAcceptance = { expectedOwner ->
-                        acceptanceDrainForWorker(container).run(expectedOwner)
-                    },
-                    runPrefetch = { expectedOwner ->
-                        prefetchCoordinatorForWorker(container).prefetch(expectedOwner)
-                    },
-                    runMaterialAck = { expectedOwner ->
-                        materialAckDrainForWorker(container).run(
-                            limit = IncomingCapsuleDao.MATERIAL_ACK_HARD_MAX_PAGE_SIZE,
-                            expectedOwner = expectedOwner,
-                        )
-                    },
-                ).run(owner),
-            )
+                        },
+                        syncTombstonePage = {
+                            container.incomingTombstoneSyncRepository
+                                .syncNextPage(expectedOwner = owner)
+                                .also { result ->
+                                    if (result is IncomingTombstoneSyncResult.Committed &&
+                                        result.capabilityUnsupported
+                                    ) {
+                                        reporter.report(
+                                            "tombstone feed unsupported; incoming sync continued",
+                                        )
+                                    }
+                                }
+                        },
+                        syncNextPage = {
+                            container.incomingCapsuleSyncRepository.syncNextPage(expectedOwner = owner)
+                        },
+                        runAcceptance = { expectedOwner ->
+                            acceptanceDrainForWorker(container).run(
+                                expectedOwner,
+                                diagnostics = reporter,
+                            )
+                        },
+                        runPrefetch = { expectedOwner ->
+                            prefetchCoordinatorForWorker(container).prefetch(expectedOwner)
+                        },
+                        runMaterialAck = { expectedOwner ->
+                            materialAckDrainForWorker(container).run(
+                                limit = IncomingCapsuleDao.MATERIAL_ACK_HARD_MAX_PAGE_SIZE,
+                                expectedOwner = expectedOwner,
+                            )
+                        },
+                        reportStage = reporter::report,
+                    ).run(owner),
+                )
+            }
+        } finally {
+            reporter.close()
         }
     }
 
@@ -167,9 +196,11 @@ internal class IncomingSyncAndAcceptanceRunner(
     private val runPrefetch: suspend (UserId) -> IncomingPrefetchResult,
     private val runMaterialAck: suspend (UserId) -> IncomingMaterialAckDrainResult,
     private val maxPagesPerRun: Int = MAX_PAGES_PER_RUN,
+    private val reportStage: (IncomingSyncWorkerStage) -> Unit = {},
 ) {
 
     suspend fun run(owner: UserId): IncomingSyncAndAcceptanceRunOutcome {
+        reportStage(IncomingSyncWorkerStage.TOMBSTONE_SYNC)
         val tombstoneOutcome = IncomingTombstonePageLoop(
             currentOwner = currentOwner,
             syncNextPage = syncTombstonePage,
@@ -185,6 +216,7 @@ internal class IncomingSyncAndAcceptanceRunner(
             }
         }
 
+        reportStage(IncomingSyncWorkerStage.INDEX_SYNC)
         val pageOutcome = IncomingSyncPageLoop(
             currentOwner = currentOwner,
             syncNextPage = syncNextPage,
@@ -209,6 +241,7 @@ internal class IncomingSyncAndAcceptanceRunner(
             IncomingSyncAndAcceptanceOwnerStatus.Current -> Unit
         }
 
+        reportStage(IncomingSyncWorkerStage.ACCEPTANCE)
         val acceptanceNeedsRetry = when (val acceptance = runAcceptance(owner)) {
             is IncomingAcceptanceDrainResult.Completed ->
                 acceptance.pageMayHaveMore
@@ -226,6 +259,7 @@ internal class IncomingSyncAndAcceptanceRunner(
             IncomingSyncAndAcceptanceOwnerStatus.Current -> Unit
         }
 
+        reportStage(IncomingSyncWorkerStage.PREFETCH)
         val prefetchNeedsRetry = when (val prefetch = runPrefetch(owner)) {
             is IncomingPrefetchResult.Completed -> prefetch.pageMayHaveMore
             is IncomingPrefetchResult.Retryable ->
@@ -243,6 +277,7 @@ internal class IncomingSyncAndAcceptanceRunner(
             IncomingSyncAndAcceptanceOwnerStatus.Current -> Unit
         }
 
+        reportStage(IncomingSyncWorkerStage.ACK)
         val ackNeedsRetry = when (val acknowledgement = runMaterialAck(owner)) {
             is IncomingMaterialAckDrainResult.Completed -> acknowledgement.pageMayHaveMore
             is IncomingMaterialAckDrainResult.Retryable ->

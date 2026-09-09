@@ -41,6 +41,8 @@ import dev.hryshyn.remanence.ui.capsule.IncomingPresentationPreparationResult
 import dev.hryshyn.remanence.ui.create.SenderIdentitySnapshot
 import dev.hryshyn.remanence.sync.IncomingAcceptanceDiagnostics
 import dev.hryshyn.remanence.sync.IncomingAcceptanceDownloadDiagnostic
+import dev.hryshyn.remanence.sync.ExistingIncomingWorkState
+import dev.hryshyn.remanence.sync.IncomingSyncSchedulingOutcome
 import dev.hryshyn.remanence.session.SessionBoundary
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
@@ -48,7 +50,9 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -95,6 +99,7 @@ class ScanReadinessTest {
     @Before
     fun setUp() {
         Dispatchers.setMain(testDispatcher)
+        IncomingAcceptanceDiagnostics.reset()
         val context = ApplicationProvider.getApplicationContext<Context>()
         database = Room.inMemoryDatabaseBuilder(context, RemanenceLocalDatabase::class.java)
             .allowMainThreadQueries()
@@ -106,6 +111,7 @@ class ScanReadinessTest {
 
     @After
     fun tearDown() {
+        IncomingAcceptanceDiagnostics.reset()
         Dispatchers.resetMain()
         if (::database.isInitialized) database.close()
     }
@@ -276,8 +282,123 @@ class ScanReadinessTest {
         }
         composeRule.onNodeWithTag("scan_index_unavailable").assertIsDisplayed()
         vm.retryIndexSync()
-        assertEquals(ScanMatchUiState.AwaitingCapture, vm.matchState.value)
+        assertEquals(ScanMatchUiState.IndexUnavailable, vm.matchState.value)
         assertTrue(scheduled.count { it == ownerA } >= 2)
+    }
+
+    @Test
+    fun retryWaitsForIndexReadinessAndRematchesTheStoredFrontWithoutRecapture() {
+        val readiness = MutableStateFlow(0)
+        val processorCalls = AtomicInteger(0)
+        val matcherCalls = AtomicInteger(0)
+        val vm = viewModel(
+            includeCandidate = true,
+            indexReadiness = readiness,
+            processorCalls = processorCalls,
+            matcherCalls = matcherCalls,
+        )
+        captureMatchingPair(vm)
+        assertEquals(ScanMatchUiState.IndexUnavailable, vm.matchState.value)
+        assertEquals(1, processorCalls.get())
+
+        vm.retryIndexSync()
+        readiness.value = 1
+
+        awaitCondition("automatic rematch after index readiness") {
+            vm.matchState.value !is ScanMatchUiState.IndexUnavailable
+        }
+        assertTrue("unexpected rematch state: ${vm.matchState.value}",
+            vm.matchState.value is ScanMatchUiState.RecaptureGuidance ||
+                vm.matchState.value is ScanMatchUiState.MaterialPending)
+        assertEquals(1, processorCalls.get())
+        assertTrue(matcherCalls.get() > 0)
+    }
+
+    @Test
+    fun staleIndexReadinessAfterAccountBoundaryCannotRematchOldFront() {
+        val readiness = MutableStateFlow(0)
+        val processorCalls = AtomicInteger(0)
+        val vm = viewModel(
+            includeCandidate = true,
+            indexReadiness = readiness,
+            processorCalls = processorCalls,
+        )
+        captureMatchingPair(vm)
+        assertEquals(ScanMatchUiState.IndexUnavailable, vm.matchState.value)
+        vm.retryIndexSync()
+
+        liveOwner.set(ownerB)
+        vm.beginSession(2L)
+        readiness.value = 1
+        Thread.sleep(50)
+
+        assertEquals(ScanMatchUiState.AwaitingCapture, vm.matchState.value)
+        assertEquals(1, processorCalls.get())
+        assertEquals(ScanTerminalState.Idle, vm.terminal.value)
+    }
+
+    @Test
+    fun staleScanSchedulerCompletionCannotPublishQueuedStatus() {
+        IncomingAcceptanceDiagnostics.reset()
+        val scheduleStarted = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val releaseSchedule = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val vm = viewModel(
+            scheduleGate = releaseSchedule,
+            scheduleIgnoresCancellation = true,
+            scheduleStarted = scheduleStarted,
+        )
+        kotlinx.coroutines.runBlocking { scheduleStarted.await() }
+
+        boundaryInvalidate()
+        releaseSchedule.complete(Unit)
+        Thread.sleep(50)
+
+        assertEquals("not run", IncomingAcceptanceDiagnostics.schedulingState.value)
+        IncomingAcceptanceDiagnostics.reset()
+    }
+
+    @Test
+    fun sameGenerationRetryNonceKeepsOnlyNewestWatcherAndRematchesExactlyOnce() {
+        val readiness = MutableStateFlow(0)
+        val processorCalls = AtomicInteger(0)
+        val matcherCalls = AtomicInteger(0)
+        val scheduleCalls = AtomicInteger(0)
+        val scheduleGate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val vm = viewModel(
+            includeCandidate = true,
+            scheduleGate = scheduleGate,
+            scheduleIgnoresCancellation = true,
+            scheduleCalls = scheduleCalls,
+            scheduleOutcome = { call ->
+                if (call == 3) {
+                    IncomingSyncSchedulingOutcome.Queued
+                } else {
+                    IncomingSyncSchedulingOutcome.AlreadyWaiting(
+                        ExistingIncomingWorkState.BLOCKED,
+                    )
+                }
+            },
+            indexReadiness = readiness,
+            processorCalls = processorCalls,
+            matcherCalls = matcherCalls,
+        )
+        captureMatchingPair(vm)
+        assertEquals(ScanMatchUiState.IndexUnavailable, vm.matchState.value)
+
+        vm.retryIndexSync()
+        vm.retryIndexSync()
+        assertEquals(3, scheduleCalls.get())
+
+        scheduleGate.complete(Unit)
+        readiness.value = 1
+        awaitCondition("one rematch from newest same-generation retry") {
+            vm.matchState.value !is ScanMatchUiState.IndexUnavailable
+        }
+        Thread.sleep(50)
+
+        assertEquals(1, processorCalls.get())
+        assertEquals(1, matcherCalls.get())
+        assertEquals("queued", IncomingAcceptanceDiagnostics.schedulingState.value)
     }
 
     @Test
@@ -305,8 +426,33 @@ class ScanReadinessTest {
                 MaterialTheme { ScanScreen(viewModel = vm, requestPermissionOnAttach = false) }
             }
             if (BuildConfig.DEBUG) {
-                composeRule.onNodeWithText("Sync: ${diagnostic.safeSummary()}").assertIsDisplayed()
+                composeRule.onNodeWithText("Sync progress: ${diagnostic.safeSummary()}").assertIsDisplayed()
             }
+        } finally {
+            IncomingAcceptanceDiagnostics.report("not run")
+        }
+    }
+
+    @Test
+    fun scanRendersTypedEnqueueFailureWithoutRawException() {
+        val vm = viewModel(includeCandidate = false)
+        IncomingAcceptanceDiagnostics.report(IncomingSyncSchedulingOutcome.EnqueueFailed)
+        try {
+            composeRule.setContent {
+                MaterialTheme { ScanScreen(viewModel = vm, requestPermissionOnAttach = false) }
+            }
+            composeRule.onNodeWithText("Sync: enqueue failed").assertIsDisplayed()
+        } finally {
+            IncomingAcceptanceDiagnostics.report("not run")
+        }
+    }
+
+    @Test
+    fun scanConvertsSchedulerExceptionToBoundedEnqueueFailure() {
+        IncomingAcceptanceDiagnostics.report("not run")
+        try {
+            viewModel(scheduleThrows = true)
+            assertEquals("enqueue failed", IncomingAcceptanceDiagnostics.state.value)
         } finally {
             IncomingAcceptanceDiagnostics.report("not run")
         }
@@ -344,6 +490,14 @@ class ScanReadinessTest {
     private fun viewModel(
         includeCandidate: Boolean = true,
         scheduleGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null,
+        scheduleThrows: Boolean = false,
+        scheduleIgnoresCancellation: Boolean = false,
+        scheduleStarted: kotlinx.coroutines.CompletableDeferred<Unit>? = null,
+        scheduleCalls: AtomicInteger? = null,
+        scheduleOutcome: ((Int) -> IncomingSyncSchedulingOutcome)? = null,
+        indexReadiness: MutableStateFlow<Int>? = null,
+        processorCalls: AtomicInteger? = null,
+        matcherCalls: AtomicInteger? = null,
         persistence: SealedFingerprintPersistence = NoPersistence(),
     ): ScanViewModel {
         val frontBytes = serializedSynthetic()
@@ -368,10 +522,12 @@ class ScanReadinessTest {
             presentationGrants = dev.hryshyn.remanence.ui.capsule.PresentationGrantAuthority(
                 ScanGrantManager(clockMillis = { 1_000L }),
             ),
-            frontProcessor = FixedProcessor(frontBytes),
-            matcher = deterministicMatcher(),
+            frontProcessor = FixedProcessor(frontBytes, processorCalls),
+            matcher = deterministicMatcher(matcherCalls),
             candidateIndexProvider = { owner ->
-                if (!includeCandidate || owner != ownerA) return@ScanViewModel ScanCandidateIndex.EMPTY
+                if (!includeCandidate || owner != ownerA || indexReadiness?.value == 0) {
+                    return@ScanViewModel ScanCandidateIndex.EMPTY
+                }
                 ScanCandidateIndex(
                     candidates = listOf(
                         IndexedCandidate(
@@ -383,6 +539,7 @@ class ScanReadinessTest {
                     presentationSources = mapOf(capsuleUuid to CapsulePresentationSource.INCOMING),
                 )
             },
+            observeIncomingIndexReadiness = indexReadiness?.let { flow -> { _ -> flow } },
             incomingPresentationPreparation = null,
             incomingPrepareOverride = { owner, capsule ->
                 prepareCalls.incrementAndGet()
@@ -391,8 +548,16 @@ class ScanReadinessTest {
                 )
             },
             scheduleIncomingSync = { owner ->
-                scheduleGate?.await()
+                val call = scheduleCalls?.incrementAndGet() ?: 1
+                scheduleStarted?.complete(Unit)
+                if (scheduleIgnoresCancellation && scheduleGate != null) {
+                    withContext(kotlinx.coroutines.NonCancellable) { scheduleGate.await() }
+                } else {
+                    scheduleGate?.await()
+                }
+                if (scheduleThrows) error("test-only scheduler failure")
                 scheduled += owner
+                scheduleOutcome?.invoke(call) ?: IncomingSyncSchedulingOutcome.Queued
             },
             networkConnected = { connected.get() },
             sessionBoundary = sessionBoundary,
@@ -404,8 +569,11 @@ class ScanReadinessTest {
     }
 
     /** Keeps readiness/routing assertions independent of native OpenCV. */
-    private fun deterministicMatcher() = dev.hryshyn.remanence.core.recognition.SiftRootSiftMatcherPort {
+    private fun deterministicMatcher(
+        calls: AtomicInteger? = null,
+    ) = dev.hryshyn.remanence.core.recognition.SiftRootSiftMatcherPort {
             query, reference ->
+        calls?.incrementAndGet()
         val queryUsable = query.quantizedSiftDescriptors.count { row -> row.any { it.toInt() != 0 } }
         val referenceUsable = reference.quantizedSiftDescriptors.count { row -> row.any { it.toInt() != 0 } }
         val count = if (query.coarseHash64 == reference.coarseHash64) minOf(queryUsable, referenceUsable) else 0
@@ -493,9 +661,17 @@ class ScanReadinessTest {
         }
     }
 
-    private class FixedProcessor(private val serializedBytes: ByteArray) : StillProcessor {
-        override fun process(jpegBytes: ByteArray): ProcessedStill =
-            ProcessedStill.Accepted(RecognitionProfile.postcardSiftRootSiftV1().profileId, serializedBytes)
+    private class FixedProcessor(
+        private val serializedBytes: ByteArray,
+        private val calls: AtomicInteger? = null,
+    ) : StillProcessor {
+        override fun process(jpegBytes: ByteArray): ProcessedStill {
+            calls?.incrementAndGet()
+            return ProcessedStill.Accepted(
+                RecognitionProfile.postcardSiftRootSiftV1().profileId,
+                serializedBytes,
+            )
+        }
     }
 
     private class NoPersistence(

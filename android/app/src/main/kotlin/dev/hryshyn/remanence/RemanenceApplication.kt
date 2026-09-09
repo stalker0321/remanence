@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.work.WorkManager
 import androidx.work.await
+import androidx.work.WorkInfo
 import java.io.File
 import dev.hryshyn.remanence.core.crypto.AndroidKeystoreKekBoundary
 import dev.hryshyn.remanence.core.crypto.IdentityBundleRepository
@@ -54,17 +55,24 @@ import dev.hryshyn.remanence.sync.CapsuleUploadWorker
 import dev.hryshyn.remanence.sync.CurrentRecipientEncryptionIdentity
 import dev.hryshyn.remanence.sync.IncomingCapsuleAcceptanceCoordinator
 import dev.hryshyn.remanence.sync.IncomingAcceptanceDrain
+import dev.hryshyn.remanence.sync.IncomingAcceptanceDiagnostics
 import dev.hryshyn.remanence.sync.IncomingControlIndexAcceptanceCoordinator
+import dev.hryshyn.remanence.sync.IncomingSyncSchedulingOutcome
+import dev.hryshyn.remanence.sync.ExistingIncomingWorkState
+import dev.hryshyn.remanence.sync.IncomingKeepScheduleOperation
+import dev.hryshyn.remanence.sync.IncomingScheduleLeaseRejected
 import dev.hryshyn.remanence.sync.SenderIndexBundlePersistenceAdapter
 import dev.hryshyn.remanence.ui.scan.IncomingSenderIndexCandidateProvider
 import dev.hryshyn.remanence.ui.capsule.IncomingPresentationPreparation
 import dev.hryshyn.remanence.ui.capsule.PresentationGrantAuthority
 import dev.hryshyn.remanence.wiring.TinkRegistrationIdentityAdapter
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * I01 explicit application container: every long-lived dependency is built
@@ -162,7 +170,13 @@ class AppContainer private constructor(
 
     /** Immediate account-boundary fence for live Scan scheduling/watchers. */
     internal val sessionBoundary: dev.hryshyn.remanence.session.SessionBoundary =
-        dev.hryshyn.remanence.session.SessionBoundary()
+        dev.hryshyn.remanence.session.SessionBoundary { invalidate ->
+            // Root owns the account-boundary publication transaction.  Keep
+            // this low-level boundary callback limited to the epoch/listener
+            // invalidation so Root does not perform a second reset after the
+            // fence has already been released.
+            invalidate()
+        }
 
     val database: RemanenceLocalDatabase by lazy {
         Room.databaseBuilder(appContext, RemanenceLocalDatabase::class.java, DATABASE_NAME)
@@ -223,6 +237,9 @@ class AppContainer private constructor(
     /** Per-process, per-owner Create plaintext recovery completion ledger. */
     private val createStagingSweepOwners = ConcurrentHashMap.newKeySet<String>()
     private val createStagingSweepMutex = Mutex()
+    /** Keeps WorkInfo observation and KEEP enqueue one operation per owner. */
+    private val incomingScheduleLocks =
+        dev.hryshyn.remanence.sync.OwnerScopedIncomingScheduleLocks()
 
     /**
      * Runs before authenticated root publication. A failed sweep is not
@@ -662,16 +679,112 @@ class AppContainer private constructor(
         )
     }
 
-    /** A10b authenticated incoming scheduling boundary; invalid or stale owners are ignored. */
-    suspend fun scheduleIncomingSync(owner: UserId) {
-        val liveOwner = currentAccountStore.load()?.userId?.let { raw ->
-            runCatching { UserId.parseRest(raw) }.getOrNull()
-        } ?: return
-        if (liveOwner != owner || ordinaryAccessToken() == null) return
-        dev.hryshyn.remanence.sync.IncomingCapsuleSyncWorker.enqueue(
-            WorkManager.getInstance(appContext),
-            owner,
-        ).await()
+    /** A10b owner-scoped incoming scheduling boundary with safe typed outcomes. */
+    suspend fun scheduleIncomingSync(owner: UserId): IncomingSyncSchedulingOutcome =
+        scheduleIncomingSyncWithOwnerRead(owner) {
+            currentAccountStore.load()?.userId
+        }
+
+    /**
+     * The owner-read seam keeps the lease invariant testable without changing
+     * the production caller contract. The supplied read is used for both
+     * admission reads; the lease is still captured before its first suspend.
+     */
+    internal suspend fun scheduleIncomingSyncWithOwnerRead(
+        owner: UserId,
+        accountRead: suspend () -> String?,
+    ): IncomingSyncSchedulingOutcome {
+        // Capture the lease before the first account/token read. It must never
+        // be refreshed after a suspension: an old A attempt must remain stale
+        // across logout -> login A rather than borrowing the new epoch.
+        val scheduleEpoch = sessionBoundary.currentEpoch()
+        val liveOwner = try {
+            accountRead()?.let { raw ->
+                runCatching { UserId.parseRest(raw) }.getOrNull()
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return IncomingSyncSchedulingOutcome.EnqueueFailed
+        }
+        if (liveOwner != owner) {
+            return IncomingSyncSchedulingOutcome.SessionOwnerRejected
+        }
+
+        val uniqueName = dev.hryshyn.remanence.sync.AccountWorkIdentity
+            .incomingSync(owner)
+            .uniqueName
+        return try {
+            // WorkManager initialization is part of this typed failure
+            // boundary too; application startup must not leak its exception
+            // into Root/Scan or turn it into an unconditional "enqueued".
+            val workManager = WorkManager.getInstance(appContext)
+            lateinit var enqueueOperation: androidx.work.Operation
+            val keepSchedule = IncomingKeepScheduleOperation(
+                observe = {
+                    val existing = withContext(Dispatchers.IO) {
+                        workManager.getWorkInfosForUniqueWork(uniqueName).get(5, TimeUnit.SECONDS)
+                    }
+                    existing.firstOrNull { info ->
+                        when (info.state) {
+                            WorkInfo.State.ENQUEUED,
+                            WorkInfo.State.RUNNING,
+                            WorkInfo.State.BLOCKED,
+                            -> true
+                            WorkInfo.State.SUCCEEDED,
+                            WorkInfo.State.FAILED,
+                            WorkInfo.State.CANCELLED,
+                            -> false
+                        }
+                    }?.let { info ->
+                        when (info.state) {
+                            WorkInfo.State.ENQUEUED -> ExistingIncomingWorkState.ENQUEUED
+                            WorkInfo.State.RUNNING -> ExistingIncomingWorkState.RUNNING
+                            WorkInfo.State.BLOCKED -> ExistingIncomingWorkState.BLOCKED
+                            else -> null
+                        }
+                    }
+                },
+                enqueue = {
+                    // KEEP is mandatory even after an active snapshot. The
+                    // snapshot is observability only. The second owner read
+                    // is cancellation-transparent: lifecycle cancellation
+                    // must not become a false owner rejection.
+                    val currentOwner = try {
+                        accountRead()?.let { raw -> UserId.parseRest(raw) }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        null
+                    }
+                    enqueueOperation = sessionBoundary.withCurrentLease(scheduleEpoch) {
+                        if (currentOwner != owner) {
+                            throw IncomingScheduleLeaseRejected()
+                        }
+                        // This is the only WorkManager enqueue call. It is
+                        // made while the short lifecycle lease is held;
+                        // awaiting its result happens after the owner lock.
+                        dev.hryshyn.remanence.sync.IncomingCapsuleSyncWorker.enqueue(
+                            workManager,
+                            owner,
+                        )
+                    } ?: throw IncomingScheduleLeaseRejected()
+                },
+                awaitEnqueue = { enqueueOperation.await() },
+            )
+            // Observation and the KEEP enqueue are the short owner-scoped
+            // critical section. Operation.await() is deliberately outside it
+            // so a hung WorkManager future cannot block the next lifecycle
+            // operation for this owner.
+            val prepared = incomingScheduleLocks.withOwner(owner) {
+                keepSchedule.prepare()
+            }
+            keepSchedule.complete(prepared)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            IncomingSyncSchedulingOutcome.EnqueueFailed
+        }
     }
 
     /** Returns a typed snapshot only while the durable current-account row is coherent. */

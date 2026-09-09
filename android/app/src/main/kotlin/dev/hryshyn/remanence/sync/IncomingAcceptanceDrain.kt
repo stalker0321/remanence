@@ -157,9 +157,13 @@ class IncomingAcceptanceDrain internal constructor(
         }
     }
 
-    suspend fun run(expectedOwner: UserId? = null): IncomingAcceptanceDrainResult {
+    internal suspend fun run(
+        expectedOwner: UserId? = null,
+        diagnostics: IncomingAcceptanceDiagnostics.Reporter? = null,
+    ): IncomingAcceptanceDrainResult {
         coroutineContext.ensureActive()
-        IncomingAcceptanceDiagnostics.report("acceptance started")
+        diagnostics?.report("acceptance started")
+            ?: IncomingAcceptanceDiagnostics.report("acceptance started")
 
         val owner = when (val initial = readOwner()) {
             is OwnerStatus.Ready -> initial.owner
@@ -186,7 +190,8 @@ class IncomingAcceptanceDrain internal constructor(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
-            IncomingAcceptanceDiagnostics.report("acceptance selector exception")
+            diagnostics?.report("acceptance selector exception")
+                ?: IncomingAcceptanceDiagnostics.report("acceptance selector exception")
             return IncomingAcceptanceDrainResult.Retryable(
                 IncomingAcceptanceDrainRetryReason.SELECTOR_UNAVAILABLE,
             )
@@ -199,15 +204,19 @@ class IncomingAcceptanceDrain internal constructor(
             IncomingAcceptanceCandidateSelection.InvalidRequest,
             IncomingAcceptanceCandidateSelection.Unavailable,
             -> {
-                IncomingAcceptanceDiagnostics.report("acceptance selector unavailable")
+                diagnostics?.report("acceptance selector unavailable")
+                    ?: IncomingAcceptanceDiagnostics.report("acceptance selector unavailable")
                 return IncomingAcceptanceDrainResult.Retryable(
                     IncomingAcceptanceDrainRetryReason.SELECTOR_UNAVAILABLE,
                 )
             }
         }
-        IncomingAcceptanceDiagnostics.report(
-            if (page.candidates.isEmpty()) "no acceptance candidate" else "acceptance candidate found",
-        )
+        val pageStatus = if (page.candidates.isEmpty()) {
+            "no acceptance candidate"
+        } else {
+            "acceptance candidate found"
+        }
+        diagnostics?.report(pageStatus) ?: IncomingAcceptanceDiagnostics.report(pageStatus)
 
         // A correct Room selector is already bounded. Keeping this defensive
         // cap makes the runner bounded even when an injected source misbehaves.
@@ -236,7 +245,8 @@ class IncomingAcceptanceDrain internal constructor(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                IncomingAcceptanceDiagnostics.report("acceptance exception")
+                diagnostics?.report("acceptance exception")
+                    ?: IncomingAcceptanceDiagnostics.report("acceptance exception")
                 return IncomingAcceptanceDrainResult.Retryable(
                     IncomingAcceptanceDrainRetryReason.ACCEPTANCE_UNAVAILABLE,
                 )
@@ -246,30 +256,34 @@ class IncomingAcceptanceDrain internal constructor(
                 is IncomingAcceptanceDrainAttempt.Acceptance -> {
                     when (val result = candidateAttempt.result) {
                         IncomingCapsuleAcceptanceResult.Committed ->
-                            IncomingAcceptanceDiagnostics.report("acceptance committed")
+                            diagnostics?.report("acceptance committed")
+                                ?: IncomingAcceptanceDiagnostics.report("acceptance committed")
                         IncomingCapsuleAcceptanceResult.IdempotentReplay ->
-                            IncomingAcceptanceDiagnostics.report("acceptance replayed")
+                            diagnostics?.report("acceptance replayed")
+                                ?: IncomingAcceptanceDiagnostics.report("acceptance replayed")
                         is IncomingCapsuleAcceptanceResult.Retryable -> {
                             var reported = false
                             result.downloadDiagnostic?.let {
-                                IncomingAcceptanceDiagnostics.report(it)
+                                diagnostics?.report(it) ?: IncomingAcceptanceDiagnostics.report(it)
                                 reported = true
                             }
                             result.persistenceDiagnostic?.let {
-                                IncomingAcceptanceDiagnostics.reportPersistenceRetry(result.reason, it)
+                                diagnostics?.reportPersistenceRetry(result.reason, it)
+                                    ?: IncomingAcceptanceDiagnostics.reportPersistenceRetry(result.reason, it)
                                 reported = true
                             }
                             if (!reported) {
-                                IncomingAcceptanceDiagnostics.report(
-                                    "acceptance retry: ${result.reason.name}",
-                                )
+                                val status = "acceptance retry: ${result.reason.name}"
+                                diagnostics?.report(status) ?: IncomingAcceptanceDiagnostics.report(status)
                             }
                         }
                         is IncomingCapsuleAcceptanceResult.Rejected -> {
-                            result.downloadDiagnostic?.let(IncomingAcceptanceDiagnostics::report)
-                                ?: IncomingAcceptanceDiagnostics.report(
-                                    "acceptance rejected: ${result.reason.name}",
-                                )
+                            result.downloadDiagnostic?.let {
+                                diagnostics?.report(it) ?: IncomingAcceptanceDiagnostics.report(it)
+                            } ?: run {
+                                val status = "acceptance rejected: ${result.reason.name}"
+                                diagnostics?.report(status) ?: IncomingAcceptanceDiagnostics.report(status)
+                            }
                         }
                     }
                     when (IncomingAcceptanceDrainClassifier.classify(candidateAttempt.result)) {

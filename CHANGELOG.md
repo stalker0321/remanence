@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.2.0-sift-it.6 — Android scan sync lifecycle fix
+
+- Fixes the scan-triggered owner-scoped incoming sync/readiness path with typed,
+  bounded scheduling outcomes and privacy-safe progress diagnostics, while
+  preserving KEEP semantics and fail-closed worker/session restore behavior.
+- Fences Root flow admission, refresh coalescing, scheduling, diagnostics, and
+  logout/account-session boundaries so stale owner work cannot publish, reopen
+  Create/Scan, or schedule after logout, owner switch, or a fresh session.
+- No matcher algorithm or threshold change is included. Crypto, matcher grant,
+  path, size, hash, and integrity boundaries remain strict; there is no server,
+  wire protocol, schema, or database change.
+- Android `versionCode` is 17. This debug integrated-test build targets
+  `https://remanence.hryshyn.dev/` and explicitly enables V2 line localization;
+  the release/default feature remains disabled. Focused lifecycle coverage and
+  the full unit gate are green; physical two-device validation is still pending.
+- Tag: `v0.2.0-sift-it.6`. Artifact naming is
+  `Remanence-android-v0.2.0-sift-it.6-code17-g<git-sha>-debug.apk`.
+- The hosted server was not redeployed for this client hotfix, and Postmark
+  remains stopped. This is an installable integrated-test prerelease; physical
+  device, dataset, recovery, and later public-release gates remain separate
+  evidence requirements. Rollback remains an explicit artifact/tag mapping and
+  never reuses an Android `versionCode`.
+
 ## 0.2.0-sift-it.5 — Android sync persistence hotfix
 
 - Publishes verified incoming postcard index and ciphertext files with the

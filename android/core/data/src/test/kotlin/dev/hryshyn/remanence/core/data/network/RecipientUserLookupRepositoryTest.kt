@@ -282,6 +282,11 @@ class RecipientUserLookupRepositoryTest {
                 },
                 rotationSink = sink,
             )
+            stack.sessionRefreshCoordinator.install(
+                dev.hryshyn.remanence.core.model.UserId.parseRest(
+                    "0198f0a0-0000-7000-8000-00000000a001",
+                ),
+            )
 
             val result = stack.recipientUserLookupRepository.lookup(userId)
 

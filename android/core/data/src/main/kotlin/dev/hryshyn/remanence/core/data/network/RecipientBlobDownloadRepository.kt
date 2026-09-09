@@ -111,13 +111,28 @@ class RecipientBlobDownloadRepository internal constructor(
     private val client: OkHttpClient,
     private val baseUrl: ApiBaseUrl,
     private val outputStreamFactory: (File) -> OutputStream = { FileOutputStream(it) },
+    private val requestLeaseProvider: SessionRequestLeaseProvider? = null,
 ) {
+
+    /** Source-compatible seam for tests that inject the output stream factory. */
+    internal constructor(
+        client: OkHttpClient,
+        baseUrl: ApiBaseUrl,
+        outputStreamFactory: (File) -> OutputStream,
+    ) : this(client, baseUrl, outputStreamFactory, null)
 
     suspend fun downloadBlob(
         request: RecipientBlobDownloadRequest,
         accessToken: String,
     ): RecipientBlobDownloadResult {
         require(accessToken.isNotBlank()) { "access token must not be blank" }
+        val requestLease = requestLeaseProvider?.capture()
+        if (requestLeaseProvider != null && requestLease == null) {
+            return RecipientBlobDownloadResult.Failure(
+                reason = RecipientBlobDownloadFailure.NETWORK,
+                retryable = true,
+            )
+        }
 
         val destinationExists = try {
             request.destination.exists()
@@ -140,6 +155,7 @@ class RecipientBlobDownloadRepository internal constructor(
             .header("Authorization", BEARER_PREFIX + accessToken)
             .get()
             .build()
+            .let { requestLeaseProvider?.tag(it, requestLease!!) ?: it }
 
         var createdByInvocation = false
         var retainDestination = false
@@ -414,7 +430,7 @@ class RecipientBlobDownloadRepository internal constructor(
             CODE_INTERNAL_ERROR,
         )
 
-        fun create(baseUrl: ApiBaseUrl): RecipientBlobDownloadRepository =
+        internal fun create(baseUrl: ApiBaseUrl): RecipientBlobDownloadRepository =
             RecipientBlobDownloadRepository(HttpClientFactory.create(), baseUrl)
 
         private fun lowercaseHex(bytes: ByteArray): String = buildString(bytes.size * 2) {

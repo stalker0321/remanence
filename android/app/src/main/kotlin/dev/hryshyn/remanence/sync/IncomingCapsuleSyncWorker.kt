@@ -24,6 +24,7 @@ import dev.hryshyn.remanence.core.data.network.IncomingMaterialAckDrainResult
 import dev.hryshyn.remanence.core.data.prefetch.IncomingCiphertextPrefetchCoordinator
 import dev.hryshyn.remanence.core.data.prefetch.IncomingPrefetchResult
 import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.session.SessionOwnerCoordinator
 import kotlin.coroutines.cancellation.CancellationException
 import java.util.concurrent.TimeUnit
 
@@ -39,8 +40,32 @@ class IncomingCapsuleSyncWorker(
     workerParams: WorkerParameters,
 ) : CoroutineWorker(appContext, workerParams) {
 
+    private var testAdmission: SessionOwnerCoordinator? = null
+    private var testProtectedOperation: (suspend (UserId) -> Result)? = null
+
+    /**
+     * Internal production-shaped worker seam: tests still invoke [doWork]
+     * and the real [runWithRestoredSession] gate, while replacing only the
+     * application graph's terminal protected operation.
+     */
+    internal fun installTestRuntime(
+        admission: SessionOwnerCoordinator,
+        protectedOperation: suspend (UserId) -> Result,
+    ) {
+        testAdmission = admission
+        testProtectedOperation = protectedOperation
+    }
+
     override suspend fun doWork(): Result {
         val owner = parseOwner(inputData.getString(INPUT_OWNER_USER_ID)) ?: return Result.failure()
+        val configuredAdmission = this.testAdmission
+        val configuredProtectedOperation = this.testProtectedOperation
+        if (configuredAdmission != null || configuredProtectedOperation != null) {
+            if (configuredAdmission == null || configuredProtectedOperation == null) return Result.failure()
+            return runWithRestoredSession(owner, configuredAdmission) {
+                configuredProtectedOperation(owner)
+            }
+        }
         val application = applicationContext as? RemanenceApplication ?: return Result.failure()
         val container = application.container
         val diagnosticEpoch = container.sessionBoundary.currentEpoch()

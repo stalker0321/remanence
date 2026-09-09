@@ -83,7 +83,7 @@ class RefreshingAuthenticatorTest {
             },
             rotationSink = sink,
         )
-        return RefreshingAuthenticator.attach(
+        return RefreshingAuthenticator.attachForTests(
             OkHttpClient.Builder(),
             coordinator,
         ).build()
@@ -191,7 +191,7 @@ class RefreshingAuthenticatorTest {
             },
                 rotationSink = sink,
             )
-            val client = RefreshingAuthenticator.attach(OkHttpClient.Builder(), coordinator).build()
+            val client = RefreshingAuthenticator.attachForTests(OkHttpClient.Builder(), coordinator).build()
 
             val response = client.newCall(protectedRequest(server, "pm_at_stale")).executeAsync()
             response.use { assertEquals(401, it.code) }
@@ -247,7 +247,7 @@ class RefreshingAuthenticatorTest {
             },
                 rotationSink = throwingSink,
             )
-            val client = RefreshingAuthenticator.attach(OkHttpClient.Builder(), coordinator).build()
+            val client = RefreshingAuthenticator.attachForTests(OkHttpClient.Builder(), coordinator).build()
 
             val response = client.newCall(protectedRequest(server, "pm_at_stale")).executeAsync()
             response.use { assertEquals(401, it.code) }

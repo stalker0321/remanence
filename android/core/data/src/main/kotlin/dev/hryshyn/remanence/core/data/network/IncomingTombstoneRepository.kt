@@ -77,6 +77,7 @@ fun interface IncomingTombstoneFeed {
 class IncomingTombstoneRepository internal constructor(
     private val client: OkHttpClient,
     private val baseUrl: ApiBaseUrl,
+    private val requestLeaseProvider: SessionRequestLeaseProvider? = null,
 ) : IncomingTombstoneFeed {
 
     override suspend fun fetchPage(
@@ -93,6 +94,13 @@ class IncomingTombstoneRepository internal constructor(
                 retryable = false,
             )
         }
+        val requestLease = requestLeaseProvider?.capture()
+        if (requestLeaseProvider != null && requestLease == null) {
+            return IncomingTombstoneResult.Failure(
+                reason = IncomingTombstoneFailure.NETWORK,
+                retryable = true,
+            )
+        }
         val url = baseUrl.resolve(PATH).newBuilder().apply {
             if (cursor != null) addQueryParameter("since", cursor)
             addQueryParameter("limit", limit.toString())
@@ -105,7 +113,8 @@ class IncomingTombstoneRepository internal constructor(
             .build()
 
         return try {
-            client.newCall(request).executeAsync().use { response ->
+            val boundRequest = requestLeaseProvider?.tag(request, requestLease!!) ?: request
+            client.newCall(boundRequest).executeAsync().use { response ->
                 interpret(response, cursor, limit)
             }
         } catch (cancelled: CancellationException) {
@@ -278,7 +287,7 @@ class IncomingTombstoneRepository internal constructor(
     }
 
     companion object {
-        fun create(client: OkHttpClient, baseUrl: ApiBaseUrl): IncomingTombstoneRepository =
+        internal fun create(client: OkHttpClient, baseUrl: ApiBaseUrl): IncomingTombstoneRepository =
             IncomingTombstoneRepository(client, baseUrl)
 
         private const val PATH = "v1/incoming/tombstones"

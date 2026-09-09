@@ -40,6 +40,7 @@ internal sealed interface RecipientMaterialSyncedResult {
 internal class RecipientMaterialSyncedRepository internal constructor(
     private val client: OkHttpClient,
     private val baseUrl: ApiBaseUrl,
+    private val requestLeaseProvider: SessionRequestLeaseProvider? = null,
 ) {
 
     suspend fun markMaterialSynced(
@@ -47,6 +48,13 @@ internal class RecipientMaterialSyncedRepository internal constructor(
         accessToken: String,
     ): RecipientMaterialSyncedResult {
         require(accessToken.isNotBlank()) { "access token must not be blank" }
+        val requestLease = requestLeaseProvider?.capture()
+        if (requestLeaseProvider != null && requestLease == null) {
+            return RecipientMaterialSyncedResult.Failure(
+                reason = RecipientMaterialSyncedFailure.NETWORK,
+                retryable = true,
+            )
+        }
         val canonicalCapsuleId = capsuleId.toRestString()
         require(CapsuleId.parseRest(canonicalCapsuleId).toRestString() == canonicalCapsuleId) {
             "capsule id must be canonical"
@@ -57,6 +65,7 @@ internal class RecipientMaterialSyncedRepository internal constructor(
             .header("Authorization", BEARER_PREFIX + accessToken)
             .post(ByteArray(0).toRequestBody(null))
             .build()
+            .let { requestLeaseProvider?.tag(it, requestLease!!) ?: it }
 
         return try {
             client.newCall(request).executeAsync().use { response ->

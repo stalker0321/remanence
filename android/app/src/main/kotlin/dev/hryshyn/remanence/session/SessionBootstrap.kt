@@ -1,6 +1,7 @@
 package dev.hryshyn.remanence.session
 
 import dev.hryshyn.remanence.core.crypto.SessionRefreshRecord
+import dev.hryshyn.remanence.core.data.network.SessionRequestLease
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.UserId
 
@@ -44,6 +45,7 @@ sealed interface SessionState {
         val hasEncryptionKeyset: Boolean,
         val hasSigningKeyset: Boolean,
         val activeKeyBundleId: String? = null,
+        val requestLease: SessionRequestLease? = null,
     ) : SessionState
 }
 
@@ -94,10 +96,14 @@ sealed interface SessionRefreshOutcome {
     data class Rotated(
         val accessToken: String,
         val refreshToken: String,
+        val lease: SessionRequestLease? = null,
     ) : SessionRefreshOutcome
 
     /** A concurrent caller already rotated the token while this call waited. */
-    data class Reused(val accessToken: String) : SessionRefreshOutcome
+    data class Reused(
+        val accessToken: String,
+        val lease: SessionRequestLease? = null,
+    ) : SessionRefreshOutcome
 
     /** The server definitively refused the session (401/replayed lineage). */
     data object Rejected : SessionRefreshOutcome
@@ -197,6 +203,10 @@ class SessionBootstrap(
                 hasEncryptionKeyset = true,
                 hasSigningKeyset = true,
                 activeKeyBundleId = summary.activeKeyBundleId,
+                requestLease = when (outcome) {
+                    is SessionRefreshOutcome.Rotated -> outcome.lease
+                    is SessionRefreshOutcome.Reused -> outcome.lease
+                },
             )
 
             SessionRefreshOutcome.Rejected,

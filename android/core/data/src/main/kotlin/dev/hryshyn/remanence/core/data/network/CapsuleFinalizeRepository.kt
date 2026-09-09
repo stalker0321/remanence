@@ -159,12 +159,17 @@ private data class CapsuleFinalizeResponseDto(
 class CapsuleFinalizeRepository internal constructor(
     private val client: OkHttpClient,
     private val baseUrl: ApiBaseUrl,
+    private val requestLeaseProvider: SessionRequestLeaseProvider? = null,
 ) {
 
     suspend fun finalize(
         request: CapsuleFinalizeRequest,
         accessToken: String,
     ): CapsuleFinalizeResult {
+        val requestLease = requestLeaseProvider?.capture()
+        if (requestLeaseProvider != null && requestLease == null) {
+            return CapsuleFinalizeResult.Failure(CapsuleFinalizeFailure.NETWORK, retryable = true)
+        }
         val statement = request.statement
         val signature = request.signature
         val envelopeCiphertext = request.recipientEnvelopeCiphertext
@@ -190,6 +195,7 @@ class CapsuleFinalizeRepository internal constructor(
             .header("Authorization", BEARER_PREFIX + accessToken)
             .post(requestBody)
             .build()
+            .let { requestLeaseProvider?.tag(it, requestLease!!) ?: it }
 
         return try {
             client.newCall(httpRequest).executeAsync().use { response ->
@@ -335,7 +341,7 @@ class CapsuleFinalizeRepository internal constructor(
             "INTERNAL_ERROR",
         )
 
-        fun create(baseUrl: ApiBaseUrl): CapsuleFinalizeRepository =
+        internal fun create(baseUrl: ApiBaseUrl): CapsuleFinalizeRepository =
             CapsuleFinalizeRepository(HttpClientFactory.create(), baseUrl)
     }
 }

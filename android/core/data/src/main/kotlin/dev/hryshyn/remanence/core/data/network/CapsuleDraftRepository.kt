@@ -139,12 +139,17 @@ private data class CapsuleDraftResponseDto(
 class CapsuleDraftRepository internal constructor(
     private val client: OkHttpClient,
     private val baseUrl: ApiBaseUrl,
+    private val requestLeaseProvider: SessionRequestLeaseProvider? = null,
 ) {
 
     suspend fun createDraft(
         request: CapsuleDraftRequest,
         accessToken: String,
     ): CapsuleDraftResult {
+        val requestLease = requestLeaseProvider?.capture()
+        if (requestLeaseProvider != null && requestLease == null) {
+            return CapsuleDraftResult.Failure(CapsuleDraftFailure.NETWORK, retryable = true)
+        }
         val target = request.recipientTarget
         val body = CapsuleDraftRequestDto(
             capsuleId = request.capsuleId.toRestString(),
@@ -174,6 +179,7 @@ class CapsuleDraftRepository internal constructor(
             .header("Idempotency-Key", request.idempotencyKey.toString())
             .post(requestBody)
             .build()
+            .let { requestLeaseProvider?.tag(it, requestLease!!) ?: it }
 
         return try {
             client.newCall(httpRequest).executeAsync().use { response ->
@@ -324,7 +330,7 @@ class CapsuleDraftRepository internal constructor(
             "INTERNAL_ERROR",
         )
 
-        fun create(baseUrl: ApiBaseUrl): CapsuleDraftRepository =
+        internal fun create(baseUrl: ApiBaseUrl): CapsuleDraftRepository =
             CapsuleDraftRepository(HttpClientFactory.create(), baseUrl)
     }
 }

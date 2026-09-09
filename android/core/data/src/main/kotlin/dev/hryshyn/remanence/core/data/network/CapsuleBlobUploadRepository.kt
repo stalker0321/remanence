@@ -85,12 +85,17 @@ sealed interface CapsuleBlobUploadResult {
 class CapsuleBlobUploadRepository internal constructor(
     private val client: OkHttpClient,
     private val baseUrl: ApiBaseUrl,
+    private val requestLeaseProvider: SessionRequestLeaseProvider? = null,
 ) {
 
     suspend fun uploadBlob(
         request: CapsuleBlobUploadRequest,
         accessToken: String,
     ): CapsuleBlobUploadResult {
+        val requestLease = requestLeaseProvider?.capture()
+        if (requestLeaseProvider != null && requestLease == null) {
+            return CapsuleBlobUploadResult.Failure(CapsuleBlobUploadFailure.NETWORK, retryable = true)
+        }
         val ciphertext = request.ciphertext
         val ciphertextSha256 = request.ciphertextSha256
         val hashHeader = Base64.getUrlEncoder()
@@ -107,6 +112,7 @@ class CapsuleBlobUploadRepository internal constructor(
             .header("Idempotency-Key", request.idempotencyKey.toString())
             .put(requestBody)
             .build()
+            .let { requestLeaseProvider?.tag(it, requestLease!!) ?: it }
 
         return try {
             client.newCall(httpRequest).executeAsync().use { response ->
@@ -211,7 +217,7 @@ class CapsuleBlobUploadRepository internal constructor(
             "INTERNAL_ERROR",
         )
 
-        fun create(baseUrl: ApiBaseUrl): CapsuleBlobUploadRepository =
+        internal fun create(baseUrl: ApiBaseUrl): CapsuleBlobUploadRepository =
             CapsuleBlobUploadRepository(HttpClientFactory.create(), baseUrl)
     }
 }

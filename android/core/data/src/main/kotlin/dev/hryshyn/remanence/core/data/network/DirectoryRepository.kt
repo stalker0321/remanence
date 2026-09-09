@@ -42,9 +42,16 @@ sealed interface DirectoryLookupResult {
 class DirectoryRepository internal constructor(
     private val client: okhttp3.OkHttpClient,
     private val baseUrl: ApiBaseUrl,
+    private val requestLeaseProvider: SessionRequestLeaseProvider? = null,
 ) {
     /** Looks up [rawHandle]; the wire handle is percent-encoded and never cached here. */
     suspend fun lookup(rawHandle: String): DirectoryLookupResult {
+        val requestLease = requestLeaseProvider?.capture()
+            ?: if (requestLeaseProvider != null) {
+                return DirectoryLookupResult.Failure(DirectoryFailure.NETWORK)
+            } else {
+                null
+            }
         val encodedPath = "v1/directory/handles/" + java.net.URLEncoder.encode(rawHandle, "UTF-8")
             .replace("+", "%20")
         val request = okhttp3.Request.Builder()
@@ -53,7 +60,8 @@ class DirectoryRepository internal constructor(
             .get()
             .build()
         return try {
-            client.newCall(request).executeAsync().use { response ->
+            val boundRequest = requestLeaseProvider?.tag(request, requestLease!!) ?: request
+            client.newCall(boundRequest).executeAsync().use { response ->
                 interpret(response)
             }
         } catch (cancelled: kotlin.coroutines.cancellation.CancellationException) {

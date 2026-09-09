@@ -149,6 +149,7 @@ private data class IncomingCapsulesResponseDto(
 class IncomingCapsuleRepository internal constructor(
     private val client: OkHttpClient,
     private val baseUrl: ApiBaseUrl,
+    private val requestLeaseProvider: SessionRequestLeaseProvider? = null,
 ) {
 
     suspend fun fetchPage(
@@ -169,6 +170,13 @@ class IncomingCapsuleRepository internal constructor(
                 retryable = false,
             )
         }
+        val requestLease = requestLeaseProvider?.capture()
+        if (requestLeaseProvider != null && requestLease == null) {
+            return IncomingCapsuleResult.Failure(
+                reason = IncomingCapsuleFailure.NETWORK,
+                retryable = true,
+            )
+        }
 
         val url = baseUrl.resolve(PATH).newBuilder().apply {
             if (cursor != null) addQueryParameter("cursor", cursor)
@@ -183,7 +191,8 @@ class IncomingCapsuleRepository internal constructor(
         }
 
         return try {
-            client.newCall(requestBuilder.build()).executeAsync().use { response ->
+            val request = requestLeaseProvider?.tag(requestBuilder.build(), requestLease!!) ?: requestBuilder.build()
+            client.newCall(request).executeAsync().use { response ->
                 interpret(response, ownerUserId, cursor, limit)
             }
         } catch (cancelled: CancellationException) {
@@ -460,7 +469,7 @@ class IncomingCapsuleRepository internal constructor(
     }
 
     companion object {
-        fun create(client: OkHttpClient, baseUrl: ApiBaseUrl): IncomingCapsuleRepository =
+        internal fun create(client: OkHttpClient, baseUrl: ApiBaseUrl): IncomingCapsuleRepository =
             IncomingCapsuleRepository(client, baseUrl)
 
         private const val PATH = "v1/capsules/incoming"

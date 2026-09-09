@@ -4,7 +4,6 @@ import dev.hryshyn.remanence.core.data.network.ActiveKeyBundleMetadataDto
 import dev.hryshyn.remanence.core.data.network.ApiBaseUrl
 import dev.hryshyn.remanence.core.data.network.AuthResult
 import dev.hryshyn.remanence.core.data.network.AuthTokenHolder
-import dev.hryshyn.remanence.core.data.network.BearerAuthInterceptor
 import dev.hryshyn.remanence.core.data.network.BoundRefreshCredential
 import dev.hryshyn.remanence.core.data.network.CoordinatedRefreshOutcome
 import dev.hryshyn.remanence.core.data.network.LoginResponseDto
@@ -137,7 +136,20 @@ class SessionReplacementOrderingTest {
     private fun attachedAuthorization(coordinator: SessionRefreshCoordinator): String? {
         var captured: String? = null
         val client = OkHttpClient.Builder()
-            .addInterceptor(BearerAuthInterceptor { coordinator.openDomainAccessToken() })
+            .addInterceptor { chain ->
+                val request = chain.request()
+                val accessToken = coordinator.openDomainAccessToken()
+                val authenticatedRequest = if (
+                    accessToken != null && request.header("Authorization") == null
+                ) {
+                    request.newBuilder()
+                        .header("Authorization", "Bearer $accessToken")
+                        .build()
+                } else {
+                    request
+                }
+                chain.proceed(authenticatedRequest)
+            }
             .addInterceptor { chain ->
                 captured = chain.request().header("Authorization")
                 Response.Builder()

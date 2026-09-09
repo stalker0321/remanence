@@ -35,6 +35,15 @@ class ProductionApiStack private constructor(
             rotationSink = rotationSink,
         )
 
+    /** Every resource repository captures an in-memory lease at call entry. */
+    private val requestLeaseProvider = SessionRequestLeaseProvider(sessionRefreshCoordinator)
+
+    /** Final worker/root admission bound to the bootstrap lease. */
+    fun admitOwnerLease(
+        ownerUserId: dev.hryshyn.remanence.core.model.UserId,
+        expectedLease: SessionRequestLease?,
+    ): Boolean = requestLeaseProvider.admitOwner(ownerUserId, expectedLease) != null
+
     /** Fully wired client for every authenticated API surface. */
     private val authenticatedClient: OkHttpClient =
         RefreshingAuthenticator.attach(
@@ -44,32 +53,36 @@ class ProductionApiStack private constructor(
 
     /** Capsule clients share the serialized authenticated transport boundary. */
     val capsuleDraftRepository: CapsuleDraftRepository =
-        CapsuleDraftRepository(authenticatedClient, baseUrl)
+        CapsuleDraftRepository(authenticatedClient, baseUrl, requestLeaseProvider)
 
     val capsuleBlobUploadRepository: CapsuleBlobUploadRepository =
-        CapsuleBlobUploadRepository(authenticatedClient, baseUrl)
+        CapsuleBlobUploadRepository(authenticatedClient, baseUrl, requestLeaseProvider)
 
     val capsuleFinalizeRepository: CapsuleFinalizeRepository =
-        CapsuleFinalizeRepository(authenticatedClient, baseUrl)
+        CapsuleFinalizeRepository(authenticatedClient, baseUrl, requestLeaseProvider)
 
     val capsuleRevokeRepository: CapsuleRevokeRepository =
-        CapsuleRevokeRepository(authenticatedClient, baseUrl)
+        CapsuleRevokeRepository(authenticatedClient, baseUrl, requestLeaseProvider)
 
     /** Mutable handle lookup shares the authenticated refreshing client. */
     val directoryRepository: DirectoryRepository =
-        DirectoryRepository(authenticatedClient, baseUrl)
+        DirectoryRepository(authenticatedClient, baseUrl, requestLeaseProvider)
 
     /** Immutable recipient lookup shares the authenticated refreshing client. */
     val recipientUserLookupRepository: RecipientUserLookupRepository =
-        RecipientUserLookupRepository(authenticatedClient, baseUrl)
+        RecipientUserLookupRepository(authenticatedClient, baseUrl, requestLeaseProvider)
 
     /** Recipient ciphertext transport shares the authenticated refreshing client. */
     val recipientBlobDownloadRepository: RecipientBlobDownloadRepository =
-        RecipientBlobDownloadRepository(authenticatedClient, baseUrl)
+        RecipientBlobDownloadRepository(
+            authenticatedClient,
+            baseUrl,
+            requestLeaseProvider = requestLeaseProvider,
+        )
 
     /** Material acknowledgement transport shares the authenticated refreshing client. */
     internal val recipientMaterialSyncedRepository: RecipientMaterialSyncedRepository =
-        RecipientMaterialSyncedRepository(authenticatedClient, baseUrl)
+        RecipientMaterialSyncedRepository(authenticatedClient, baseUrl, requestLeaseProvider)
 
     /** Creates the public drain surface while retaining the repository internally. */
     fun createIncomingMaterialAckDrain(
@@ -83,11 +96,15 @@ class ProductionApiStack private constructor(
 
     /** Account-scoped incoming cursor pages use the same authenticated stack. */
     val incomingCapsuleRepository: IncomingCapsuleRepository =
-        IncomingCapsuleRepository(authenticatedClient, baseUrl)
+        IncomingCapsuleRepository(authenticatedClient, baseUrl, requestLeaseProvider)
 
     /** Redacted recipient tombstones share the authenticated transport. */
     val incomingTombstoneRepository: IncomingTombstoneRepository =
-        IncomingTombstoneRepository(authenticatedClient, baseUrl)
+        IncomingTombstoneRepository(authenticatedClient, baseUrl, requestLeaseProvider)
+
+    /** Historical key-bundle lookup must use the same lease-bound client. */
+    val keyBundleByIdRepository: KeyBundleByIdRepository =
+        KeyBundleByIdRepository(authenticatedClient, baseUrl, requestLeaseProvider)
 
     companion object {
         fun create(

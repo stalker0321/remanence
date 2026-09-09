@@ -1,5 +1,6 @@
 package dev.hryshyn.remanence.session
 
+import dev.hryshyn.remanence.core.data.network.SessionRequestLease
 import dev.hryshyn.remanence.core.model.UserId
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -38,7 +39,11 @@ internal class SessionOwnerCoordinator(
     private val sessionResolver: SessionStateResolver,
     private val currentOwner: suspend () -> UserId?,
     private val liveAccessToken: () -> String?,
+    private val finalAdmission: ((UserId, SessionRequestLease?) -> Boolean)? = null,
 ) {
+
+    /** Test-only barrier immediately before the final atomic admission. */
+    internal var onBeforeFinalAdmission: (() -> Unit)? = null
 
     suspend fun ensure(expectedOwner: UserId): SessionOwnerResolution {
         when (val before = readOwner()) {
@@ -72,7 +77,10 @@ internal class SessionOwnerCoordinator(
                 if (resolvedOwner != expectedOwner) {
                     return SessionOwnerResolution.AccountChanged
                 }
-                return if (liveAccessToken()?.isNotBlank() == true) {
+                onBeforeFinalAdmission?.invoke()
+                val admitted = finalAdmission?.invoke(expectedOwner, state.requestLease)
+                    ?: (liveAccessToken()?.isNotBlank() == true)
+                return if (admitted) {
                     SessionOwnerResolution.Ready
                 } else {
                     SessionOwnerResolution.Retryable

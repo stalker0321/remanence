@@ -39,8 +39,13 @@ sealed interface RecipientUserLookupResult {
 class RecipientUserLookupRepository internal constructor(
     private val client: OkHttpClient,
     private val baseUrl: ApiBaseUrl,
+    private val requestLeaseProvider: SessionRequestLeaseProvider? = null,
 ) {
     suspend fun lookup(userId: UserId, accessToken: String? = null): RecipientUserLookupResult {
+        val requestLease = requestLeaseProvider?.capture()
+        if (requestLeaseProvider != null && requestLease == null) {
+            return RecipientUserLookupResult.Failure(RecipientUserLookupFailure.NETWORK, retryable = true)
+        }
         val requestBuilder = Request.Builder()
             .url(baseUrl.resolve("v1/directory/users/${userId.toRestString()}"))
             .header("Accept", "application/json")
@@ -49,7 +54,8 @@ class RecipientUserLookupRepository internal constructor(
             requestBuilder.header(AUTHORIZATION_HEADER, BEARER_PREFIX + accessToken)
         }
         return try {
-            client.newCall(requestBuilder.build()).executeAsync().use { response ->
+            val request = requestLeaseProvider?.tag(requestBuilder.build(), requestLease!!) ?: requestBuilder.build()
+            client.newCall(request).executeAsync().use { response ->
                 interpret(response, userId)
             }
         } catch (cancelled: CancellationException) {
@@ -151,7 +157,7 @@ class RecipientUserLookupRepository internal constructor(
         )
 
     companion object {
-        fun create(client: OkHttpClient, baseUrl: ApiBaseUrl): RecipientUserLookupRepository =
+        internal fun create(client: OkHttpClient, baseUrl: ApiBaseUrl): RecipientUserLookupRepository =
             RecipientUserLookupRepository(client, baseUrl)
 
         private const val AUTHORIZATION_HEADER = "Authorization"

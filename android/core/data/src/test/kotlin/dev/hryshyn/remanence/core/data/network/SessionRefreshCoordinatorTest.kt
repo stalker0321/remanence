@@ -103,7 +103,7 @@ class SessionRefreshCoordinatorTest {
             val stored = AtomicReference(bound("pm_rt_old"))
             val sink = RecordingSink()
             val coordinator = coordinator(server, tokens, sink, stored)
-            val client = RefreshingAuthenticator.attach(OkHttpClient.Builder(), coordinator).build()
+            val client = RefreshingAuthenticator.attachForTests(OkHttpClient.Builder(), coordinator).build()
 
             val bootstrap = async(Dispatchers.IO) { coordinator.refreshForBootstrap(OWNER_A) }
             val authenticator = async(Dispatchers.IO) {
@@ -170,6 +170,8 @@ class SessionRefreshCoordinatorTest {
             assertTrue(outcomes.any { it is CoordinatedRefreshOutcome.Rotated })
             assertTrue(outcomes.any { it is CoordinatedRefreshOutcome.Reused })
             assertEquals("pm_at_new", (outcomes[1] as? CoordinatedRefreshOutcome.Reused)?.accessToken ?: tokens.accessToken)
+            assertEquals(OWNER_A, coordinator.installedOwnerOrNull())
+            assertEquals(OWNER_A, coordinator.captureRequestLease()?.ownerUserId)
         } finally {
             server.close()
         }
@@ -308,6 +310,7 @@ class SessionRefreshCoordinatorTest {
             coordinator.invalidate()
             stored.set(bound("pm_rt_login"))
             tokens.updateTokens("pm_at_login", "pm_rt_login")
+            coordinator.install(OWNER_B)
             release.countDown()
 
             assertEquals(CoordinatedRefreshOutcome.Invalidated, inFlight.await())
@@ -316,6 +319,8 @@ class SessionRefreshCoordinatorTest {
             assertEquals("pm_rt_login", tokens.refreshToken)
             assertEquals(0, sink.rotations.size)
             assertEquals(0, sink.clears.get())
+            assertEquals(OWNER_B, coordinator.installedOwnerOrNull())
+            assertEquals(OWNER_B, coordinator.captureRequestLease()?.ownerUserId)
         } finally {
             server.close()
         }
@@ -633,6 +638,137 @@ class SessionRefreshCoordinatorTest {
         runBlocking {
             assertOwnerReplacementBeforeEntryDoesNotPost(success = false)
         }
+
+    @Test
+    fun bootstrapStartedBeforeSameOwnerReplacementCannotAdoptA2Lineage(): Unit = runBlocking {
+        val server = MockWebServer()
+        val refreshCount = AtomicInteger()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: mockwebserver3.RecordedRequest): MockResponse {
+                refreshCount.incrementAndGet()
+                return MockResponse.Builder()
+                    .code(200)
+                    .setHeader("Content-Type", "application/json")
+                    .body(REFRESH_RESPONSE)
+                    .build()
+            }
+        }
+        server.start()
+        try {
+            val tokens = AuthTokenHolder(null, "pm_rt_a1")
+            val stored = AtomicReference(bound("pm_rt_a1", OWNER_A))
+            val sink = RecordingSink()
+            val coordinator = coordinator(server, tokens, sink, stored)
+            val entered = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            coordinator.onBeforeRefreshMutex = {
+                entered.countDown()
+                check(release.await(2, TimeUnit.SECONDS))
+            }
+
+            val staleBootstrap = async(Dispatchers.IO) {
+                coordinator.refreshForBootstrap(OWNER_A)
+            }
+            assertTrue(entered.await(2, TimeUnit.SECONDS))
+
+            coordinator.invalidate()
+            stored.set(bound("pm_rt_a2", OWNER_A))
+            tokens.updateTokens("pm_at_a2", "pm_rt_a2")
+            coordinator.install(OWNER_A)
+            release.countDown()
+
+            assertEquals(CoordinatedRefreshOutcome.Invalidated, staleBootstrap.await())
+            assertEquals(0, refreshCount.get())
+            assertEquals(OWNER_A, coordinator.installedOwnerOrNull())
+            assertEquals("pm_at_a2", tokens.accessToken)
+            assertEquals("pm_rt_a2", stored.get()?.refreshToken)
+            assertEquals(0, sink.rotations.size)
+        } finally {
+            server.close()
+        }
+    }
+
+    @Test
+    fun bootstrapEpochCapturedBeforeDispatcherCannotAdoptSameOwnerA2(): Unit = runBlocking {
+        val server = MockWebServer()
+        val refreshCount = AtomicInteger()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: mockwebserver3.RecordedRequest): MockResponse {
+                refreshCount.incrementAndGet()
+                return MockResponse.Builder().code(200).body(REFRESH_RESPONSE).build()
+            }
+        }
+        server.start()
+        try {
+            val tokens = AuthTokenHolder(null, "pm_rt_a1")
+            val stored = AtomicReference(bound("pm_rt_a1", OWNER_A))
+            val sink = RecordingSink()
+            val coordinator = coordinator(server, tokens, sink, stored)
+            val entered = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            coordinator.onBeforeBootstrapDispatch = {
+                entered.countDown()
+                check(release.await(2, TimeUnit.SECONDS))
+            }
+
+            val stale = async(Dispatchers.IO) { coordinator.refreshForBootstrap(OWNER_A) }
+            assertTrue(entered.await(2, TimeUnit.SECONDS))
+            coordinator.invalidate()
+            stored.set(bound("pm_rt_a2", OWNER_A))
+            tokens.updateTokens("pm_at_a2", "pm_rt_a2")
+            coordinator.install(OWNER_A)
+            release.countDown()
+
+            assertEquals(CoordinatedRefreshOutcome.Invalidated, stale.await())
+            assertEquals(0, refreshCount.get())
+            assertEquals(OWNER_A, coordinator.installedOwnerOrNull())
+            assertEquals("pm_at_a2", tokens.accessToken)
+            assertEquals(0, sink.rotations.size)
+        } finally {
+            server.close()
+        }
+    }
+
+    @Test
+    fun bootstrapEpochCapturedBeforeDispatcherCannotAdoptReplacementB(): Unit = runBlocking {
+        val server = MockWebServer()
+        val refreshCount = AtomicInteger()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: mockwebserver3.RecordedRequest): MockResponse {
+                refreshCount.incrementAndGet()
+                return MockResponse.Builder().code(200).body(REFRESH_RESPONSE).build()
+            }
+        }
+        server.start()
+        try {
+            val tokens = AuthTokenHolder(null, "pm_rt_a1")
+            val stored = AtomicReference(bound("pm_rt_a1", OWNER_A))
+            val sink = RecordingSink()
+            val coordinator = coordinator(server, tokens, sink, stored)
+            val entered = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            coordinator.onBeforeBootstrapDispatch = {
+                entered.countDown()
+                check(release.await(2, TimeUnit.SECONDS))
+            }
+
+            val stale = async(Dispatchers.IO) { coordinator.refreshForBootstrap(OWNER_A) }
+            assertTrue(entered.await(2, TimeUnit.SECONDS))
+            coordinator.invalidate()
+            stored.set(bound("pm_rt_b1", OWNER_B))
+            tokens.updateTokens("pm_at_b1", "pm_rt_b1")
+            coordinator.install(OWNER_B)
+            release.countDown()
+
+            assertEquals(CoordinatedRefreshOutcome.Invalidated, stale.await())
+            assertEquals(0, refreshCount.get())
+            assertEquals(OWNER_B, coordinator.installedOwnerOrNull())
+            assertEquals("pm_at_b1", tokens.accessToken)
+            assertEquals(0, sink.rotations.size)
+        } finally {
+            server.close()
+        }
+    }
 
     private suspend fun kotlinx.coroutines.CoroutineScope.assertOwnerReplacementBeforeEntryDoesNotPost(
         success: Boolean,

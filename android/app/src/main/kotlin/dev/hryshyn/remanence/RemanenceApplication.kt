@@ -389,7 +389,7 @@ class AppContainer private constructor(
 
     /** FIX-REVIEW2-04: immutable public key-bundle lookup for verification. */
     val keyBundleByIdRepository: dev.hryshyn.remanence.core.data.network.KeyBundleByIdRepository by lazy {
-        dev.hryshyn.remanence.core.data.network.KeyBundleByIdRepository.create(apiBaseUrl)
+        apiStack.keyBundleByIdRepository
     }
 
     /** A04's three existing authenticated capsule boundaries. */
@@ -462,8 +462,7 @@ class AppContainer private constructor(
     val trustedSenderKeys: dev.hryshyn.remanence.identity.TrustedSenderKeyStore by lazy {
         dev.hryshyn.remanence.identity.DirectorySenderKeyStore(
             directoryFetch = { bundleId ->
-                val token = ordinaryAccessToken() ?: return@DirectorySenderKeyStore null
-                keyBundleByIdRepository.fetch(bundleId, token)
+                keyBundleByIdRepository.fetch(bundleId)
             },
             ownAccount = {
                 val row = currentAccountStore.loadEntity()
@@ -1053,9 +1052,13 @@ class AppContainer private constructor(
                             dev.hryshyn.remanence.session.SessionRefreshOutcome.Rotated(
                                 accessToken = result.accessToken,
                                 refreshToken = result.refreshToken,
+                                lease = result.lease,
                             )
                         is dev.hryshyn.remanence.core.data.network.CoordinatedRefreshOutcome.Reused ->
-                            dev.hryshyn.remanence.session.SessionRefreshOutcome.Reused(result.accessToken)
+                            dev.hryshyn.remanence.session.SessionRefreshOutcome.Reused(
+                                accessToken = result.accessToken,
+                                lease = result.lease,
+                            )
                         dev.hryshyn.remanence.core.data.network.CoordinatedRefreshOutcome.NoToken ->
                             dev.hryshyn.remanence.session.SessionRefreshOutcome.NoToken
                         dev.hryshyn.remanence.core.data.network.CoordinatedRefreshOutcome.Rejected ->
@@ -1085,6 +1088,7 @@ class AppContainer private constructor(
                 }
             },
             liveAccessToken = { ordinaryAccessToken() },
+            finalAdmission = { owner, lease -> apiStack.admitOwnerLease(owner, lease) },
         )
     }
 

@@ -81,6 +81,9 @@ class ProductionApiStackCapsuleRepositoryTest {
                 },
                 rotationSink = sink,
             )
+            stack.sessionRefreshCoordinator.install(
+                UserId.parseRest("0198f0a0-0000-7000-8000-00000000a001"),
+            )
 
             val results = listOf(
                 async { stack.directoryRepository.lookup("mykola") },
@@ -245,6 +248,9 @@ class ProductionApiStackCapsuleRepositoryTest {
                 },
                 rotationSink = RecordingRotationSink(),
             )
+            stack.sessionRefreshCoordinator.install(
+                UserId.parseRest("0198f0a0-0000-7000-8000-00000000a001"),
+            )
             stack.sessionRefreshCoordinator.invalidate()
             assertEquals(OLD_ACCESS, stack.sessionRefreshCoordinator.rawAccessToken())
             assertNull(stack.sessionRefreshCoordinator.openDomainAccessToken())
@@ -261,7 +267,7 @@ class ProductionApiStackCapsuleRepositoryTest {
             assertIs<AuthResult.Success<Unit>>(logout)
 
             val ordinary = seen.filterNot { it.first.endsWith("v1/auth/logout") }
-            assertTrue(ordinary.isNotEmpty())
+            assertTrue(ordinary.isEmpty())
             assertIs<DirectoryLookupResult.Failure>(closedDirectory)
             assertTrue(seen.none { it.first.endsWith("v1/auth/refresh") })
             ordinary.forEach { (_, authorization) ->
@@ -298,6 +304,9 @@ class ProductionApiStackCapsuleRepositoryTest {
                     }
                 },
                 rotationSink = sink,
+            )
+            stack.sessionRefreshCoordinator.install(
+                UserId.parseRest("0198f0a0-0000-7000-8000-00000000a001"),
             )
             val result = call(stack)
             trace.tokens = tokens

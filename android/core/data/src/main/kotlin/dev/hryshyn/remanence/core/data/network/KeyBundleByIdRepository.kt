@@ -47,17 +47,40 @@ sealed interface KeyBundleByIdResult {
 class KeyBundleByIdRepository internal constructor(
     private val client: OkHttpClient,
     private val baseUrl: ApiBaseUrl,
+    private val requestLeaseProvider: SessionRequestLeaseProvider? = null,
 ) {
 
     suspend fun fetch(keyBundleId: String, accessToken: String): KeyBundleByIdResult {
+        return fetchInternal(keyBundleId, accessToken)
+    }
+
+    /** Production entry point: the shared stack supplies the live bearer. */
+    suspend fun fetch(keyBundleId: String): KeyBundleByIdResult =
+        fetchInternal(keyBundleId, accessToken = null)
+
+    private suspend fun fetchInternal(
+        keyBundleId: String,
+        accessToken: String?,
+    ): KeyBundleByIdResult {
+        val requestLease = requestLeaseProvider?.capture()
+            ?: if (requestLeaseProvider != null) {
+                return KeyBundleByIdResult.Failure(KeyBundleFailure.NETWORK)
+            } else {
+                null
+            }
         val request = Request.Builder()
             .url(baseUrl.resolve("v1/directory/key-bundles/$keyBundleId"))
             .header("Accept", "application/json")
-            .header(AUTHORIZATION_HEADER, BEARER_PREFIX + accessToken)
+            .apply {
+                if (accessToken != null) {
+                    header(AUTHORIZATION_HEADER, BEARER_PREFIX + accessToken)
+                }
+            }
             .get()
             .build()
         return try {
-            client.newCall(request).executeAsync().use { response ->
+            val boundRequest = requestLeaseProvider?.tag(request, requestLease!!) ?: request
+            client.newCall(boundRequest).executeAsync().use { response ->
                 interpret(response)
             }
         } catch (cancelled: CancellationException) {
@@ -101,7 +124,7 @@ class KeyBundleByIdRepository internal constructor(
     }
 
     companion object {
-        fun create(baseUrl: ApiBaseUrl): KeyBundleByIdRepository =
+        internal fun create(baseUrl: ApiBaseUrl): KeyBundleByIdRepository =
             KeyBundleByIdRepository(HttpClientFactory.create(), baseUrl)
 
         internal val KNOWN_STATUSES = setOf("ACTIVE", "RETIRED", "REVOKED")

@@ -66,18 +66,24 @@ private data class CapsuleRevokeResponseDto(
 class CapsuleRevokeRepository internal constructor(
     private val client: OkHttpClient,
     private val baseUrl: ApiBaseUrl,
+    private val requestLeaseProvider: SessionRequestLeaseProvider? = null,
 ) : CapsuleRevokePort {
 
     override suspend fun revoke(
         capsuleId: CapsuleId,
         accessToken: String,
     ): CapsuleRevokeResult {
+        val requestLease = requestLeaseProvider?.capture()
+        if (requestLeaseProvider != null && requestLease == null) {
+            return CapsuleRevokeResult.Failure(CapsuleRevokeFailure.NETWORK, retryable = true)
+        }
         val httpRequest = Request.Builder()
             .url(baseUrl.resolve("v1/capsules/${capsuleId.toRestString()}/revoke"))
             .header("Accept", JSON_MEDIA_TYPE)
             .header("Authorization", BEARER_PREFIX + accessToken)
             .post(ByteArray(0).toRequestBody(null))
             .build()
+            .let { requestLeaseProvider?.tag(it, requestLease!!) ?: it }
 
         return try {
             client.newCall(httpRequest).executeAsync().use { response ->
@@ -199,7 +205,7 @@ class CapsuleRevokeRepository internal constructor(
             "INTERNAL_ERROR",
         )
 
-        fun create(baseUrl: ApiBaseUrl): CapsuleRevokeRepository =
+        internal fun create(baseUrl: ApiBaseUrl): CapsuleRevokeRepository =
             CapsuleRevokeRepository(HttpClientFactory.create(), baseUrl)
     }
 }

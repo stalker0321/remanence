@@ -51,7 +51,10 @@ class LoginService:
 
     def login(self, email_normalized: str, password: str, now: datetime) -> LoginResult:
         user = self._session.scalar(
-            select(User).where(User.email_normalized == email_normalized)
+            select(User)
+            .where(User.email_normalized == email_normalized)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
         if user is None:
             return self._invalid_with_dummy_verification(password)

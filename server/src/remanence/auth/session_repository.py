@@ -1,4 +1,10 @@
-"""Auth session persistence creation, read/expiry lookups, and rotation primitives."""
+"""Auth session persistence creation, lookups, and rotation primitives.
+
+Session mutation lock order is deliberately narrow and shared by every
+lifecycle path: lock the owning ``users`` row first, then lock the affected
+``auth_sessions`` lineage rows in ascending ``AuthSession.id`` order, then
+mutate. No caller may hold either database lock while doing network I/O.
+"""
 
 import uuid
 from datetime import datetime
@@ -7,6 +13,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from remanence.auth.models import AuthSession
+from remanence.users.models import User
 
 
 class AuthSessionRepository:
@@ -41,6 +48,18 @@ class AuthSessionRepository:
         self._session.flush()
         return auth_session
 
+    def lock_user(self, user_id: uuid.UUID) -> User | None:
+        """Lock the account row before changing or issuing its sessions.
+
+        Account disablement and refresh rotation both take this lock before
+        touching ``auth_sessions``.  Keeping the user lock first gives the
+        lifecycle boundary one consistent order: user, then lineage/session.
+        """
+        statement = select(User).where(User.id == user_id).with_for_update()
+        return self._session.scalar(
+            statement, execution_options={"populate_existing": True}
+        )
+
     def find_by_access_token_hash(self, token_hash: bytes, now: datetime) -> AuthSession | None:
         statement = select(AuthSession).where(
             AuthSession.access_token_hash == token_hash,
@@ -48,6 +67,11 @@ class AuthSessionRepository:
             AuthSession.rotated_at.is_(None),
             AuthSession.access_expires_at > now,
         )
+        return self._session.scalar(statement)
+
+    def find_session_by_access_token_hash(self, token_hash: bytes) -> AuthSession | None:
+        """Resolve ownership without active-session filtering for logout."""
+        statement = select(AuthSession).where(AuthSession.access_token_hash == token_hash)
         return self._session.scalar(statement)
 
     def find_by_refresh_token_hash(self, token_hash: bytes) -> AuthSession | None:
@@ -99,6 +123,19 @@ class AuthSessionRepository:
             update(AuthSession)
             .where(
                 AuthSession.lineage_id == lineage_id,
+                AuthSession.revoked_at.is_(None),
+            )
+            .values(revoked_at=revoked_at)
+        )
+        result = self._session.execute(statement)
+        return result.rowcount
+
+    def revoke_all_for_user(self, user_id: uuid.UUID, revoked_at: datetime) -> int:
+        """Revoke every still-live session after the user row is locked."""
+        statement = (
+            update(AuthSession)
+            .where(
+                AuthSession.user_id == user_id,
                 AuthSession.revoked_at.is_(None),
             )
             .values(revoked_at=revoked_at)

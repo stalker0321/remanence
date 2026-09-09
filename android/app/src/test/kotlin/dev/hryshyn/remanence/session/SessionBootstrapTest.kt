@@ -1,13 +1,23 @@
 package dev.hryshyn.remanence.session
 
+import com.sun.net.httpserver.HttpServer
 import java.io.File
+import java.net.InetSocketAddress
 import javax.crypto.KeyGenerator
 import kotlin.io.path.createTempDirectory
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import dev.hryshyn.remanence.core.data.network.ApiBaseUrl
+import dev.hryshyn.remanence.core.data.network.AuthTokenHolder
+import dev.hryshyn.remanence.core.data.network.BoundRefreshCredential
+import dev.hryshyn.remanence.core.data.network.CoordinatedRefreshOutcome
+import dev.hryshyn.remanence.core.data.network.ProductionApiStack
+import dev.hryshyn.remanence.core.data.network.RefreshTokenReader
+import dev.hryshyn.remanence.core.data.network.SessionRotationSink
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import dev.hryshyn.remanence.core.crypto.KekBoundary
@@ -185,6 +195,73 @@ class SessionBootstrapTest {
         assertEquals(0, (f.identity as FakeIdentity).calls)
         assertEquals(0, f.refresher.calls)
         assertEquals(1, f.tokens.clearCount)
+    }
+
+    @Test
+    fun realAuthInvalidRefreshMapsToSignedOutAndClearsStoredToken() = runBlocking {
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/v1/auth/refresh") { exchange ->
+            exchange.requestBody.use { it.readBytes() }
+            val body = """{"code":"AUTH_INVALID"}""".toByteArray()
+            exchange.responseHeaders.add("Content-Type", "application/problem+json")
+            exchange.sendResponseHeaders(401, body.size.toLong())
+            exchange.responseBody.use { it.write(body) }
+        }
+        server.start()
+        try {
+            val f = fixture()
+            val holder = AuthTokenHolder(initialAccess = "old-access")
+            val stack = ProductionApiStack.create(
+                baseUrl = ApiBaseUrl.parse("http://127.0.0.1:${server.address.port}/"),
+                tokens = holder,
+                refreshTokenReader = RefreshTokenReader {
+                    f.tokens.readRecord()?.let { record ->
+                        BoundRefreshCredential(record.ownerUserId, record.refreshToken)
+                    }
+                },
+                rotationSink = object : SessionRotationSink {
+                    override fun rotate(
+                        accessToken: String,
+                        refreshToken: String,
+                        ownerUserId: UserId,
+                    ) = error("401 refresh must not rotate")
+
+                    override fun clear() {
+                        f.tokens.clearToken()
+                        holder.clearSession()
+                    }
+                },
+            )
+            val bootstrap = SessionBootstrap(
+                tokens = f.tokens,
+                identity = f.identity,
+                account = { PersistedAccountSummary(ownerA, "mykola", bundleA) },
+                refresher = object : SessionRefresher {
+                    override suspend fun hasStoredToken(): Boolean =
+                        stack.sessionRefreshCoordinator.hasStoredToken()
+
+                    override suspend fun refresh(expectedOwner: UserId): SessionRefreshOutcome =
+                        when (stack.sessionRefreshCoordinator.refreshForBootstrap(expectedOwner)) {
+                            is CoordinatedRefreshOutcome.Rotated,
+                            is CoordinatedRefreshOutcome.Reused,
+                            -> error("401 refresh must not produce active credentials")
+                            CoordinatedRefreshOutcome.Rejected -> SessionRefreshOutcome.Rejected
+                            CoordinatedRefreshOutcome.NoToken -> SessionRefreshOutcome.NoToken
+                            CoordinatedRefreshOutcome.Unreachable -> SessionRefreshOutcome.Unreachable
+                            CoordinatedRefreshOutcome.Unavailable -> SessionRefreshOutcome.Unavailable
+                            CoordinatedRefreshOutcome.Invalidated -> SessionRefreshOutcome.Invalidated
+                        }
+                },
+            )
+
+            assertEquals(SessionState.SignedOut, bootstrap.bootstrap())
+            assertNull(f.tokens.readRecord())
+            assertNull(holder.accessToken)
+            assertNull(holder.refreshToken)
+            assertEquals(1, f.tokens.clearCount)
+        } finally {
+            server.stop(0)
+        }
     }
 
     @Test

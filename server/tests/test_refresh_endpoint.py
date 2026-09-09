@@ -3,6 +3,7 @@
 import base64
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -17,16 +18,20 @@ from sqlalchemy.engine import make_url
 from tink.proto import ed25519_pb2, hpke_pb2, tink_pb2
 
 from remanence.api.problems import problem_payload
+from remanence.auth.account_status import AccountStatusService
 from remanence.auth.models import AuthSession
+from remanence.auth.session_repository import AuthSessionRepository
 from remanence.auth.tokens import hash_opaque_token
 from remanence.db.session import build_engine, build_session_factory
 from remanence.main import create_app
 from remanence.settings import AppMode, Settings
+from remanence.users.models import User
 
 _ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 _HPKE_KEY = bytes(range(32))
 _ED_KEY = bytes(range(32, 64))
 _PASSWORD = "correct horse battery staple"
+_DISABLE_NOW = datetime(2029, 6, 1, 12, 0, tzinfo=timezone.utc)
 
 
 def _hpke_public_key() -> hpke_pb2.HpkePublicKey:
@@ -229,3 +234,51 @@ def test_refresh_response_repr_hides_tokens(refresh_env) -> None:
     rendered = repr(model)
     assert body["access_token"] not in rendered
     assert body["refresh_token"] not in rendered
+
+
+def test_disabled_refresh_is_auth_invalid_without_child_and_reenable_does_not_resurrect(
+    refresh_env,
+) -> None:
+    client, factory = refresh_env
+    seed = _seed(client)
+    user_id = UUID(seed["user"]["user_id"])
+
+    with factory() as session:
+        with session.begin():
+            assert AccountStatusService(AuthSessionRepository(session)).disable(
+                user_id, _DISABLE_NOW
+            )
+
+    disabled = client.post(
+        "/v1/auth/refresh", json={"refresh_token": seed["refresh_token"]}
+    )
+    assert disabled.status_code == 401
+    assert disabled.json() == problem_payload("AUTH_INVALID", disabled.headers["x-request-id"])
+    with factory() as session:
+        rows = session.scalars(select(AuthSession)).all()
+        assert len(rows) == 1
+        assert rows[0].revoked_at == _DISABLE_NOW
+
+    with factory() as session:
+        with session.begin():
+            assert AccountStatusService(AuthSessionRepository(session)).enable(user_id)
+        enabled_user = session.get(User, user_id)
+        assert enabled_user is not None
+        assert enabled_user.disabled_at is None
+        restored_rows = session.scalars(
+            select(AuthSession).where(AuthSession.user_id == user_id)
+        ).all()
+        assert len(restored_rows) == 1
+        assert restored_rows[0].revoked_at == _DISABLE_NOW
+
+    after_reenable = client.post(
+        "/v1/auth/refresh", json={"refresh_token": seed["refresh_token"]}
+    )
+    assert after_reenable.status_code == 401
+    assert after_reenable.json() == problem_payload(
+        "AUTH_INVALID", after_reenable.headers["x-request-id"]
+    )
+    with factory() as session:
+        rows = session.scalars(select(AuthSession).where(AuthSession.user_id == user_id)).all()
+        assert len(rows) == 1
+        assert rows[0].revoked_at == _DISABLE_NOW

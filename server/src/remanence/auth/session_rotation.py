@@ -34,15 +34,25 @@ class SessionRotationService:
 
     def rotate(self, refresh_token: str, now: datetime) -> RefreshRotationResult:
         token_hash = hash_opaque_token(refresh_token)
-        lineage_id = self._repo.find_lineage_id_by_refresh_token_hash(token_hash)
-        if lineage_id is None:
+        candidate = self._repo.find_by_refresh_token_hash(token_hash)
+        if candidate is None:
             return RefreshRotationResult(
                 status=RefreshRotationStatus.INVALID,
                 session_id=None,
             )
-        self._repo.lock_lineage(lineage_id)
+
+        # Account disablement takes this lock before revoking any session.
+        # Refresh must do the same before it can inspect or create a child.
+        user = self._repo.lock_user(candidate.user_id)
+        if user is None or user.disabled_at is not None:
+            return RefreshRotationResult(
+                status=RefreshRotationStatus.INVALID,
+                session_id=None,
+            )
+
+        self._repo.lock_lineage(candidate.lineage_id)
         old = self._repo.find_by_refresh_token_hash_for_update(token_hash)
-        if old is None:
+        if old is None or old.user_id != user.id:
             return RefreshRotationResult(
                 status=RefreshRotationStatus.INVALID,
                 session_id=None,

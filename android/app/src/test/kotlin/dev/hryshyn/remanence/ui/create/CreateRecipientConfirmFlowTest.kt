@@ -177,7 +177,7 @@ class CreateRecipientConfirmFlowTest {
         composeRule.onNodeWithTag("create_handle_input").performTextInput(handle)
         composeRule.onNodeWithTag("create_lookup_button").performClick()
         composeRule.waitUntil(timeoutMillis = 10_000) {
-            composeRule.onAllNodesWithTag("confirm_handle_text")
+            composeRule.onAllNodesWithTag("confirm_handle_text", useUnmergedTree = true)
                 .fetchSemanticsNodes().isNotEmpty()
         }
     }
@@ -197,7 +197,7 @@ class CreateRecipientConfirmFlowTest {
         assertNotNull(resolvedBeforeConfirm)
 
         // The confirmation controls are REALLY rendered (was: blank screen).
-        composeRule.onNodeWithTag("confirm_handle_text").assertIsDisplayed()
+        composeRule.onNodeWithTag("confirm_handle_text", useUnmergedTree = true).assertIsDisplayed()
         composeRule.onNodeWithTag("confirm_account_cue_text").assertIsDisplayed()
         composeRule.onNodeWithTag("confirm_ack_checkbox").assertIsDisplayed()
         composeRule.onNodeWithTag("confirm_button").assertIsDisplayed().assertIsNotEnabled()

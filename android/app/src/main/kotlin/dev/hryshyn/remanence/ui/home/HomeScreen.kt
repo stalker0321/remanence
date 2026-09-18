@@ -61,6 +61,10 @@ fun HomeScreen(
         verticalArrangement = Arrangement.spacedBy(24.dp),
     ) {
         Text("remanence", style = MaterialTheme.typography.titleLarge)
+        if (accountCapability == AccountCapabilityState.RecoveryRequired) {
+            Text("Private keys for this account are not on this device; recovery required.",
+                style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("home_recovery_note"))
+        }
         HoldActionObject(
             title = stringResource(R.string.hold_home_open_title),
             detail = stringResource(R.string.hold_home_open_body),
@@ -73,9 +77,6 @@ fun HomeScreen(
             action = stringResource(R.string.hold_make), onClick = onCreate, enabled = enabled, secondary = true,
             modifier = Modifier.padding(start = 12.dp, end = 6.dp).testTag("create_action"),
         )
-        if (accountCapability == AccountCapabilityState.RecoveryRequired) {
-            Text("Private keys for this account are not on this device; recovery required.",
-                style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("home_recovery_note"))
-        }
+
     }
 }

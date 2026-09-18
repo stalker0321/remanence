@@ -1,0 +1,45 @@
+# Hold Android integration audit — 18 September 2026
+
+Completed before application edits. Baseline `d29cc8d727c7774409ca2e9baefb25b59f71a132`; remote HEAD/main checked and equal. No other Android checkout found. Preserve `reference/remanence` on main; create a worktree at `implementation/remanence`, branch `ui/hold-integration`.
+
+Design authority: `design/handoff/README.md`, `guide.mjs`, current assets and validation. Hold, Remainder, portrait default, underlayer and accepted DejaVu Sans Cyrillic are settled. Browser timings and exact underlayer scale are device hypotheses. Existing Android behavior remains authoritative where the artifacts simulate services.
+
+## Real system → integration
+
+| Flow / source | Preserve | Replace / structural UI work | Hold primitives / motion boundary | Device evidence |
+|---|---|---|---|---|
+| `MainActivity`, `session/RootScreen`, `RootViewModel`, `ui/navigation/AppNavigation` | Root refresh fencing, owner/key boundaries, flow epochs, same-owner rotation, transient cleanup, opaque live grant routing | One inset owner; remove redundant large headings; public Home + memory-only make/open intent through auth; independent login/register screens | Page, quiet toolbar, action objects; pressure immediately; no animation retaining private content after revoke | Bars, back, rotation, cold start, interrupted auth |
+| `SessionBootstrap`, login/register view models and use cases | Proven refresh vs coherent offline account; missing-key block; registration ordering; validation; session leases | Password masking/IME, scrollable forms, progress; correct false recovery promise | Input, primary/secondary button, flat error/status | IME, failed auth, no keys, registration, RU/UK font |
+| `HomeScreen`, `HomeCapabilityViewModel` | Crypto capability gate; health never authorizes access | Scan-led whole surfaces; remove architecture/API debug copy; bounded account row | Lilac/sand actionable objects with label/arrow/pressure, single button semantics | Spacious vs empty, whole-surface tappability |
+| `RecipientPickerViewModel`, `RecipientConfirmationScreen`, Create recipient flow | Exact immutable account/key snapshot, explicit confirmation, stale lookup/owner fencing | Clear lookup/loading/not-found; informational handle context vs explicit confirmation object; retain acknowledgment gate | Field, flat feedback, raised confirm; no identity morph | Long handle, keyboard, latency, double taps |
+| `CreateViewModel`, `CreateSessionStore`, `CreateScreen` | LOOKUP → CONFIRM → FRONT → CONTENT → PUBLISHING → UPLOAD_PENDING → PUBLISHED; guards; 3–5 photos; UTF-8 note limit; owned staging; generation fences | Shared page grammar, accurate queued/published copy; future generator boundary after content and before freeze/publish | Subject vs action; selection label; local status changes | Photo picker return, rotation, leaving, failed seal, process death |
+| `CaptureAttemptSurface`, controller, `CameraXPreviewBinder`, still adapter | Authoritative permission/binding/capture/processing/rejected states, preview-before-bind, stale callback rejection, JPEG wiping, existing guide/CV input | Quiet portrait capture; settings recovery using actual permission; preserve geometry seam for comparison | Shutter, subject surface, status/error; freeze continuity only if safe retained image exists | Permission deny/settings/revoke; portrait vs landscape postcards; focus/glare/blur |
+| `ScanViewModel`, `ScanCaptureSession`, `ScanMatchUiState` | FRONT-only SIFT/RootSIFT; 0/1/many; chooser hints only; retained fresh capture rematch after index arrives; distinct recognized/body-pending; full verification before grant; owner/generation fences | Remove diagnostic strings from product UI, fit real states to shared grammar | Stable subject/status; no private preview during matching; Carry only after verification | Offline with/without local index/body, ambiguity, no match, invalid crypto, matcher orientation |
+| `CapsuleRoute`, presentation state/pager/grant authority | Single-page demand decryption, pre/post decrypt checks, bytes zeroing, close/expiry/account cleanup; no gallery | Shell disappears; fit existing complete photo; underlayer prototype for actual available note/navigation only | Subject with no whole-button affordance; direct drag + explicit reveal, instant private teardown | Scale, gesture vs photo navigation, note overflow, back/expiry/background |
+| Outbox, Room, WorkManager, publisher, revoke | Owner-scoped encrypted staging, durable retry discovery, server-acknowledged READY and revoke, sender/READY/24h eligibility | Honest current-operation status; do not claim leave discards queued upload or deletes received copies | Flat status, destructive confirmation, no invented progress | Kill/restart, ack loss, offline revoke, duplicate send |
+
+## Boundaries and portability
+
+- Reuse protocol protobufs, REST identity/envelope contracts, canonical crypto contexts/signatures and `protocol/fixtures`. A web client must implement the same authenticated recipient binding and fresh physical capture requirement. Installation/deep links are not access grants.
+- Android Keystore wrapping, Tink adapters, CameraX, OpenCV native runtime, content URIs, Room and WorkManager are platform adapters. A PWA needs explicit key persistence/recovery and foreground/background upload constraints; do not pretend web storage has Keystore guarantees.
+- `PhotoSelectionState`, `NoteEditorState`, `CaptureAttemptController`, `CapsulePresentationState` embed behavior in Compose `mutableStateOf`. Their invariants should be documented/tested as contracts before any later port, not copied with UI dependencies.
+- `CreateViewModel` directly orchestrates crypto, file roots, normalization, outbox and picker IDs. `ScanViewModel` combines recognition, sync watchers and authorization. Keep existing fences; future extraction can follow demonstrated needs. No framework/KMP migration.
+- UI strings/errors are mostly English Kotlin literals, and some failures carry exception messages. New shell copy can use Android resources; a full structured error/localization migration is distinct from this visual pass.
+- Recipient resolution is promoted from Compose `LaunchedEffect` into the Create state machine. Preserve now, but this is a domain transition coupled to composition that a web client must implement explicitly.
+- A transient draft dies on route exit/restart, whereas encrypted outbox work can survive. Current-session completion has no later re-entry surface; product must define that without inventing an inbox.
+
+## Generator boundary
+
+Existing separate renderer architecture inspected at `../Remanence/CANONICAL_PRODUCT_RENDERER_ARCHITECTURE.md`. Do not reimplement grammars. Enter after validated 3–5 ordered originals + optional note, before `startPublishing()` freezes inputs. Adapter inputs need opaque content IDs, authored order, original dimensions/read access and sender identity. Outputs need versioned bounded canvas, expression IDs, content mapping, placements/crops/masks, exact font/palette dependencies and diagnostics. Selection retains the exact candidate; crop correction updates the selected source window, then revalidates. Freeze resolved expression and referenced assets atomically with publication inputs; never regenerate received expressions.
+
+Current manifest/publisher/presentation only support photos plus note. There is no resolved-expression artifact, music contract, source metadata or approved share payload. Full generator integration requires a deliberate protocol/artifact change and round-trip crypto tests. Record an integration contract; ship surrounding real flow without fake candidates, fixture compositions, fake metadata or music controls. Underlayer can expose only actual note/photo navigation until provenance reaches the presentation contract. Do not silently change the existing byte-based note limit to the generator's provisional character count.
+
+## Implementation and validation order
+
+1. Compact theme/components, local font + license, static Remainder identity.
+2. Root/auth/Home and recipient/early Create. Test guarded intent, auth, identity binding, keyboard/layout. Build immediately.
+3. Carry theme through remaining sender/scan real states; settings recovery if covered by tests. Keep matching/capture coordinates unchanged.
+4. Existing content fullscreen + underlayer prototype while keeping decryption ownership untouched. Generated whole-canvas display remains blocked on its artifact contract.
+5. Run app unit/Compose tests and assemble APK; inspect adb and install/start only if an authorized device is available. Physical feel is not certified by unit tests or screenshots.
+
+Host initially has no JDK, SDK, adb or device connection exposed. Temporary toolchain setup is in progress. No claim of on-device validation until execution evidence exists.

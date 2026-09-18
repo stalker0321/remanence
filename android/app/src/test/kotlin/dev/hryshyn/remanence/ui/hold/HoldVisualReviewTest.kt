@@ -9,7 +9,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.activity.ComponentActivity
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hryshyn.remanence.ui.home.*
@@ -26,7 +27,7 @@ import org.robolectric.annotation.GraphicsMode
 @Config(sdk = [35], qualifiers = "w390dp-h844dp-xhdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class HoldVisualReviewTest {
-    @get:Rule val composeRule = createComposeRule()
+    @get:Rule val composeRule = createAndroidComposeRule<ComponentActivity>()
 
     @Test fun homeHasTwoWholeActionSurfaces() {
         composeRule.setContent {
@@ -65,9 +66,15 @@ class HoldVisualReviewTest {
 
     private fun capture(name: String) {
         composeRule.waitForIdle()
-        val bitmap = composeRule.onRoot().captureToImage().asAndroidBitmap()
-        val output = File("build/hold-review/$name.png")
-        output.parentFile.mkdirs()
-        output.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+        composeRule.runOnIdle {
+            // PixelCopy has no real Surface producer on Robolectric. Draw the
+            // measured native View tree directly into the review bitmap.
+            val view = composeRule.activity.window.decorView
+            val bitmap = android.graphics.Bitmap.createBitmap(view.width, view.height, android.graphics.Bitmap.Config.ARGB_8888)
+            view.draw(android.graphics.Canvas(bitmap))
+            val output = File("build/hold-review/$name.png")
+            output.parentFile.mkdirs()
+            output.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+        }
     }
 }

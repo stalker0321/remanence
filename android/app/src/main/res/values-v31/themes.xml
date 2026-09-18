@@ -1,9 +1,9 @@
-<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.Remanence" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/hold_paper</item>
-        <item name="android:colorAccent">@color/hold_ink</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:windowSplashScreenBackground">@color/hold_paper</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/remainder_foreground</item>
     </style>
 </resources>

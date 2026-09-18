@@ -1,6 +1,6 @@
 # Hold Android integration audit — 18 September 2026
 
-Completed before application edits. Baseline `d29cc8d727c7774409ca2e9baefb25b59f71a132`; remote HEAD/main checked and equal. No other Android checkout found. Preserve `reference/remanence` on main; create a worktree at `implementation/remanence`, branch `ui/hold-integration`.
+Completed before application edits. Baseline `d29cc8d727c7774409ca2e9baefb25b59f71a132`; remote HEAD/main checked and equal. Initially only this local Android checkout was known. Preserve `reference/remanence` on main; create a worktree at `implementation/remanence`, branch `ui/hold-integration`.
 
 Design authority: `design/handoff/README.md`, `guide.mjs`, current assets and validation. Hold, Remainder, portrait default, underlayer and accepted DejaVu Sans Cyrillic are settled. Browser timings and exact underlayer scale are device hypotheses. Existing Android behavior remains authoritative where the artifacts simulate services.
 
@@ -42,4 +42,6 @@ Current manifest/publisher/presentation only support photos plus note. There is 
 4. Existing content fullscreen + underlayer prototype while keeping decryption ownership untouched. Generated whole-canvas display remains blocked on its artifact contract.
 5. Run app unit/Compose tests and assemble APK; inspect adb and install/start only if an authorized device is available. Physical feel is not certified by unit tests or screenshots.
 
-Host initially has no JDK, SDK, adb or device connection exposed. Temporary toolchain setup is in progress. No claim of on-device validation until execution evidence exists.
+The user subsequently identified `ssh vuzol-main` as the established development host. Its clean latest release worktree is `~/projects/Remanence-sa02-disabled-refresh` at the same baseline. The older `~/projects/Postmark` main has unresolved changes, and `Remanence-cancel-enforcement` contains substantial uncommitted first-open/cancellation work: both were preserved. The new authoritative build worktree is `/home/vodkolyan/projects/Remanence-hold-integration`, mirrored to the local implementation worktree through Git bundles.
+
+JDK 17, Android SDK and cached dependencies are available on vuzol-main. The host's quota-limited `/tmp` broke the first test attempt; `scripts/verify-hold.sh` directs this branch's JVM temporary files to `.hold-build/tmp` on disk. No physical device is exposed through adb on either host. No claim of on-device validation.

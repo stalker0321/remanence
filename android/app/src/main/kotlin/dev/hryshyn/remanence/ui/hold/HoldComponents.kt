@@ -2,10 +2,12 @@ package dev.hryshyn.remanence.ui.hold
 
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -16,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 
@@ -99,6 +102,7 @@ fun HoldActionObject(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val focused by interaction.collectIsFocusedAsState()
     // Compose's duration scale honors Android's animator-duration setting.
     val travel by animateDpAsState(if (pressed && enabled) 4.dp else 0.dp, tween(110), label = "Hold pressure")
     val shape = RoundedCornerShape(if (secondary) 19.dp else 24.dp)
@@ -109,6 +113,7 @@ fun HoldActionObject(
         Column(
             Modifier.fillMaxWidth().offset(y = travel).clip(shape)
                 .background(if (!enabled) HoldColors.Field else if (secondary) HoldColors.Sand else HoldColors.Lilac)
+                .then(if (focused) Modifier.border(2.dp, HoldColors.Accent, shape) else Modifier)
                 .padding(if (compact) 18.dp else 24.dp),
             verticalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 16.dp),
         ) {
@@ -117,7 +122,7 @@ fun HoldActionObject(
             Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(action, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, color = HoldColors.Ink)
                 Box(Modifier.size(44.dp).background(if (secondary) HoldColors.Paper else HoldColors.Accent, RoundedCornerShape(13.dp)), contentAlignment = Alignment.Center) {
-                    Text("→", color = if (secondary) HoldColors.Ink else HoldColors.OnAccent, style = MaterialTheme.typography.titleLarge)
+                    Text("→", modifier = Modifier.clearAndSetSemantics {}, color = if (secondary) HoldColors.Ink else HoldColors.OnAccent, style = MaterialTheme.typography.titleLarge)
                 }
             }
         }

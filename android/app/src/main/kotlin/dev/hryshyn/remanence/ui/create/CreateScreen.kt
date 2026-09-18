@@ -20,6 +20,8 @@ import dev.hryshyn.remanence.ui.hold.HoldInput as OutlinedTextField
 import androidx.compose.material3.Text
 import dev.hryshyn.remanence.ui.hold.HoldTextButton as TextButton
 import androidx.compose.runtime.Composable
+import dev.hryshyn.remanence.ui.hold.HoldDestructiveButton
+import dev.hryshyn.remanence.ui.hold.HoldColors
 import dev.hryshyn.remanence.ui.hold.HoldInformation
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
@@ -162,7 +164,7 @@ fun CreateScreen(
                     )
                 }
                 Spacer(Modifier.height(8.dp))
-                Button(
+                HoldDestructiveButton(
                     onClick = { showRevokeConfirmation = true },
                     enabled = revokeActionEnabled(revokeStatus),
                     modifier = Modifier.testTag("create_revoke_button"),
@@ -203,7 +205,7 @@ fun CreateScreen(
                     },
                     enabled = revokeActionEnabled(revokeStatus),
                     modifier = Modifier.testTag("create_revoke_confirm"),
-                ) { Text("Cancel capsule") }
+                ) { Text("Cancel capsule", color = HoldColors.Destructive) }
             },
             dismissButton = {
                 TextButton(

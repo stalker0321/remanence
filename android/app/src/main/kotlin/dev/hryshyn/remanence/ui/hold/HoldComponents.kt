@@ -32,6 +32,18 @@ fun HoldButton(
 )
 
 @Composable
+fun HoldDestructiveButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    content: @Composable RowScope.() -> Unit,
+) = Button(
+    onClick = onClick, enabled = enabled, modifier = modifier.heightIn(min = 52.dp),
+    colors = ButtonDefaults.buttonColors(containerColor = HoldColors.Destructive, contentColor = HoldColors.OnAccent),
+    shape = RoundedCornerShape(15.dp), content = content,
+)
+
+@Composable
 fun HoldSecondaryButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,

@@ -10,6 +10,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import dev.hryshyn.remanence.ui.hold.HoldActionObject
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -47,47 +50,30 @@ fun HomeScreen(
     accountCapability: AccountCapabilityState = AccountCapabilityState.NotAuthenticated,
     onCreate: () -> Unit = {},
     onScan: () -> Unit = {},
+    publicEntry: Boolean = false,
 ) {
+    val enabled = accountCapability.actionsEnabled ||
+        (publicEntry && accountCapability == AccountCapabilityState.NotAuthenticated)
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(24.dp),
     ) {
-        Text("Remanence")
-        Spacer(Modifier.height(12.dp))
-        Text(
-            text = when (state) {
-                BackendHealthUiState.CHECKING -> "Architecture approved · API checking"
-                BackendHealthUiState.AVAILABLE -> "Architecture approved · API available"
-                BackendHealthUiState.UNAVAILABLE -> "Architecture approved · API unavailable"
-            },
-            modifier = Modifier.testTag("home_build_label"),
-        )
-        Spacer(Modifier.height(24.dp))
-        Button(
-            onClick = onCreate,
-            enabled = accountCapability.actionsEnabled,
-            modifier = Modifier.testTag("create_action"),
-        ) {
-            Text("Create")
-        }
-        Spacer(Modifier.height(12.dp))
-        Button(
-            onClick = onScan,
-            enabled = accountCapability.actionsEnabled,
+        Text("remanence", style = MaterialTheme.typography.titleLarge)
+        HoldActionObject(
+            title = "a postcard\nholds more",
+            detail = "There may be a memory waiting inside yours.",
+            action = "scan a postcard", onClick = onScan, enabled = enabled,
             modifier = Modifier.testTag("scan_action"),
-        ) {
-            Text("Scan")
-        }
-        when (accountCapability) {
-            AccountCapabilityState.RecoveryRequired -> Text(
-                text = "Private keys for this account are not on this device; recovery required.",
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.testTag("home_recovery_note"),
-            )
-            else -> Unit
+        )
+        HoldActionObject(
+            title = "leave something\nwith someone",
+            detail = "A few photographs. A small note. A postcard to carry them.",
+            action = "make a remanence", onClick = onCreate, enabled = enabled, secondary = true,
+            modifier = Modifier.padding(start = 12.dp, end = 6.dp).testTag("create_action"),
+        )
+        if (accountCapability == AccountCapabilityState.RecoveryRequired) {
+            Text("Private keys for this account are not on this device; recovery required.",
+                style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("home_recovery_note"))
         }
     }
 }

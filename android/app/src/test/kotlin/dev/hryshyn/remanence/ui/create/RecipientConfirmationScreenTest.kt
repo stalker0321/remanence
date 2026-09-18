@@ -53,7 +53,7 @@ class RecipientConfirmationScreenTest {
     @Test
     fun showsHandleAndImmutableAccountCue() {
         setContent()
-        composeRule.onNodeWithTag("confirm_handle_text").assertIsDisplayed()
+        composeRule.onNodeWithTag("confirm_handle_text", useUnmergedTree = true).assertIsDisplayed()
         composeRule
             .onNodeWithTag("confirm_account_cue_text")
             .assertIsDisplayed()

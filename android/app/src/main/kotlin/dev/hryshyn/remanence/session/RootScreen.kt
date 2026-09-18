@@ -5,14 +5,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.OutlinedButton
+import dev.hryshyn.remanence.ui.hold.HoldTextButton as OutlinedButton
+import androidx.compose.foundation.layout.Row
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.Alignment
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -39,19 +41,23 @@ fun RootScreen(
     scanContent: @Composable () -> Unit = {},
     capsuleContent: @Composable (grantId: String) -> Unit = {},
     onExitFlow: () -> Unit = {},
+    showPublicHome: Boolean = false,
 ) {
+    if (authState == AuthUiState.SignedOut && showPublicHome) {
+        homeContent()
+        return
+    }
     if (authState !is AuthUiState.Authenticated) {
         // FIX-STATE-07: the auth surface scrolls and stays keyboard-reachable
         // on small screens - every field and the submit buttons are reachable.
         Column(
             modifier = modifier
                 .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .imePadding(),
+                .verticalScroll(rememberScrollState()),
         ) {
             if (authState is AuthUiState.RecoveryRequired) {
                 Text(
-                    "Local keys are missing on this device. Sign in to complete account recovery.",
+                    "The private keys for this account are missing on this device. Signing in alone cannot restore them.",
                     modifier = Modifier.padding(16.dp),
                 )
                 Spacer(Modifier.height(8.dp))
@@ -96,17 +102,15 @@ fun RootScreen(
 /** Shared exit chrome for the two reachable flows; leaving drops flow state. */
 @Composable
 private fun FlowHeader(title: String, onExit: () -> Unit) {
-    OutlinedButton(
-        onClick = onExit,
-        modifier = Modifier
-            .padding(16.dp)
-            .testTag("flow_exit_${title.lowercase()}"),
-    ) { Text("Back to Home") }
-    Text(
-        text = title,
-        modifier = Modifier.testTag("flow_title_${title.lowercase()}"),
-    )
-    Spacer(Modifier.height(8.dp))
+    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        OutlinedButton(onClick = onExit, modifier = Modifier.testTag("flow_exit_${title.lowercase()}")) {
+            Text("Back to Home")
+        }
+        Spacer(Modifier.weight(1f))
+        Text(if (title == "Create") "make a remanence" else "open a remanence",
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.padding(end = 12.dp).testTag("flow_title_${title.lowercase()}"))
+    }
 }
 
 /** Home chrome including the logout action, rendered for authenticated users. */
@@ -117,17 +121,11 @@ fun AuthenticatedHomeChrome(
     homeContent: @Composable () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier.fillMaxWidth().padding(16.dp)) {
-        Text(
-            text = "Signed in as @$handle",
-            modifier = Modifier.testTag("root_signed_in_as"),
-        )
-        Spacer(Modifier.height(8.dp))
-        OutlinedButton(
-            onClick = onLogout,
-            modifier = Modifier.testTag("root_logout_button"),
-        ) { Text("Log out") }
-        Spacer(Modifier.height(8.dp))
-        homeContent()
+    Column(modifier = modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("@$handle", modifier = Modifier.weight(1f).testTag("root_signed_in_as"), style = MaterialTheme.typography.labelMedium)
+            OutlinedButton(onClick = onLogout, modifier = Modifier.testTag("root_logout_button")) { Text("log out") }
+        }
+        Box(Modifier.weight(1f)) { homeContent() }
     }
 }

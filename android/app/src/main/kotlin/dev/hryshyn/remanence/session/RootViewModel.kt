@@ -26,6 +26,9 @@ import dev.hryshyn.remanence.ui.capsule.PresentationGrantBinding
 import dev.hryshyn.remanence.sync.IncomingSyncSchedulingOutcome
 import dev.hryshyn.remanence.sync.IncomingAcceptanceDiagnostics
 
+/** Memory-only public Home intent. This never authorizes a protected route. */
+enum class HomeIntent { OPEN, MAKE, ACCOUNT }
+
 /** Background sync health is not an authentication or navigation state. */
 sealed interface IncomingSyncSchedulingState {
     /** No incoming schedule attempt has completed for the current root. */
@@ -161,6 +164,9 @@ class RootViewModel internal constructor(
     /** Transient cleanup hooks keyed by the flow or presentation destination. */
     private val transientCleanups = mutableMapOf<AppDestination, MutableList<() -> Unit>>()
 
+    private val _homeIntent = MutableStateFlow<HomeIntent?>(null)
+    val homeIntent: StateFlow<HomeIntent?> = _homeIntent.asStateFlow()
+
     init {
         viewModelScope.launch {
             presentationGrants.incomingRevocations.collect { grantId ->
@@ -195,6 +201,7 @@ class RootViewModel internal constructor(
             if (logoutInProgress) {
                 false
             } else {
+                _homeIntent.value = null
                 logoutInProgress = true
                 refreshGeneration += 1
                 // Retire a trailing refresh while the same synchronous fence
@@ -236,6 +243,27 @@ class RootViewModel internal constructor(
                 }
             }
         }
+    }
+
+
+    /** Public Home chooses an intent; the existing entry methods still enforce auth. */
+    fun requestHomeIntent(intent: HomeIntent) {
+        synchronized(publicationFence) {
+            if (logoutInProgress) return
+            if (_authState.value is AuthUiState.Authenticated) {
+                when (intent) {
+                    HomeIntent.OPEN -> openScan()
+                    HomeIntent.MAKE -> openCreate()
+                    HomeIntent.ACCOUNT -> Unit
+                }
+            } else if (_authState.value == AuthUiState.SignedOut) {
+                _homeIntent.value = intent
+            }
+        }
+    }
+
+    fun cancelHomeIntent() {
+        synchronized(publicationFence) { _homeIntent.value = null }
     }
 
     /** Home entry point: sender create flow (authenticated accounts only). */
@@ -763,6 +791,15 @@ class RootViewModel internal constructor(
         // already redirected by the controller's guard.
         if (next is AuthUiState.Authenticated && previousAuth !is AuthUiState.Authenticated) {
             controller.navigate(AppDestination.Home)
+            // Resume only an explicit public-Home intent after real session resolution.
+            // No intent or scan grant survives process death or logout.
+            val intent = _homeIntent.value
+            _homeIntent.value = null
+            when (intent) {
+                HomeIntent.OPEN -> openScan()
+                HomeIntent.MAKE -> openCreate()
+                HomeIntent.ACCOUNT, null -> Unit
+            }
         }
         _destination.value = controller.current
     }

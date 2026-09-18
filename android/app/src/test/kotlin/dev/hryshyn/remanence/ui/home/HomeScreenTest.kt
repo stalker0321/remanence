@@ -1,12 +1,10 @@
 package dev.hryshyn.remanence.ui.home
 
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.assertIsNotEnabled
-import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createComposeRule
-import androidx.compose.ui.test.onNodeWithTag
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import dev.hryshyn.remanence.ui.hold.HoldTheme
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -15,55 +13,25 @@ import org.robolectric.annotation.Config
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35])
 class HomeScreenTest {
-    @get:Rule
-    val composeRule = createComposeRule()
+    @get:Rule val composeRule = createComposeRule()
 
-    @Test
-    fun homeSemanticsAreWired() {
+    @Test fun publicHomeActionsChooseIntentEvenWhenHealthIsUnavailable() {
+        var opens = 0
+        var makes = 0
         composeRule.setContent {
-            MaterialTheme {
-                HomeScreen(BackendHealthUiState.CHECKING)
-            }
+            HoldTheme { HomeScreen(BackendHealthUiState.UNAVAILABLE, publicEntry = true,
+                onCreate = { makes++ }, onScan = { opens++ }) }
         }
-
-        composeRule.onNodeWithTag("home_build_label")
-            .assertTextEquals("Architecture approved · API checking")
-            .assertIsDisplayed()
-
-        composeRule.onNodeWithTag("create_action")
-            .assertTextEquals("Create")
-            .assertIsDisplayed()
-            .assertIsNotEnabled()
-
-        composeRule.onNodeWithTag("scan_action")
-            .assertTextEquals("Scan")
-            .assertIsDisplayed()
-            .assertIsNotEnabled()
+        composeRule.onNodeWithTag("home_build_label").assertDoesNotExist()
+        composeRule.onNodeWithTag("scan_action").performScrollTo().assertIsEnabled().performClick()
+        composeRule.onNodeWithTag("create_action").performScrollTo().assertIsEnabled().performClick()
+        assertEquals(1, opens)
+        assertEquals(1, makes)
     }
 
-    @Test
-    fun availableStateShowsAvailableBuildLabel() {
-        composeRule.setContent {
-            MaterialTheme {
-                HomeScreen(BackendHealthUiState.AVAILABLE)
-            }
-        }
-
-        composeRule.onNodeWithTag("home_build_label")
-            .assertTextEquals("Architecture approved · API available")
-            .assertIsDisplayed()
-    }
-
-    @Test
-    fun unavailableStateShowsUnavailableBuildLabel() {
-        composeRule.setContent {
-            MaterialTheme {
-                HomeScreen(BackendHealthUiState.UNAVAILABLE)
-            }
-        }
-
-        composeRule.onNodeWithTag("home_build_label")
-            .assertTextEquals("Architecture approved · API unavailable")
-            .assertIsDisplayed()
+    @Test fun ordinaryCapabilityGateStillDisablesUnprovenEntry() {
+        composeRule.setContent { HoldTheme { HomeScreen(BackendHealthUiState.AVAILABLE) } }
+        composeRule.onNodeWithTag("scan_action").assertIsNotEnabled()
+        composeRule.onNodeWithTag("create_action").assertIsNotEnabled()
     }
 }

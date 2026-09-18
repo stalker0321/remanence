@@ -82,25 +82,26 @@ fun HoldActionObject(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     secondary: Boolean = false,
+    titleModifier: Modifier = Modifier,
+    compact: Boolean = false,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     // Compose's duration scale honors Android's animator-duration setting.
     val travel by animateDpAsState(if (pressed && enabled) 4.dp else 0.dp, tween(110), label = "Hold pressure")
     val shape = RoundedCornerShape(if (secondary) 19.dp else 24.dp)
-    Box(modifier = modifier.padding(bottom = 6.dp)) {
+    Box(modifier = modifier.padding(bottom = 6.dp).clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)) {
         Box(Modifier.matchParentSize().offset(y = 6.dp).background(
             if (!enabled) HoldColors.Field else if (secondary) HoldColors.SandEdge else HoldColors.LilacEdge, shape,
         ))
         Column(
             Modifier.fillMaxWidth().offset(y = travel).clip(shape)
                 .background(if (!enabled) HoldColors.Field else if (secondary) HoldColors.Sand else HoldColors.Lilac)
-                .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
-                .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+                .padding(if (compact) 18.dp else 24.dp),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 16.dp),
         ) {
-            Text(title, style = if (secondary) MaterialTheme.typography.displaySmall else MaterialTheme.typography.displayLarge, color = HoldColors.Ink)
-            Text(detail, style = MaterialTheme.typography.bodyMedium, color = HoldColors.Ink)
+            Text(title, modifier = titleModifier, style = if (compact) MaterialTheme.typography.headlineSmall else if (secondary) MaterialTheme.typography.displaySmall else MaterialTheme.typography.displayLarge, color = HoldColors.Ink)
+            if (detail.isNotEmpty()) Text(detail, style = MaterialTheme.typography.bodyMedium, color = HoldColors.Ink)
             Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(action, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, color = HoldColors.Ink)
                 Box(Modifier.size(44.dp).background(if (secondary) HoldColors.Paper else HoldColors.Accent, RoundedCornerShape(13.dp)), contentAlignment = Alignment.Center) {

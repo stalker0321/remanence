@@ -6,12 +6,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
+import dev.hryshyn.remanence.ui.hold.HoldButton as Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import dev.hryshyn.remanence.ui.hold.HoldSecondaryButton as OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import dev.hryshyn.remanence.ui.hold.HoldActionObject
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,27 +35,19 @@ fun RecipientConfirmationScreen(
     onCancel: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var acknowledged by remember { mutableStateOf(false) }
+    var acknowledged by remember(snapshot) { mutableStateOf(false) }
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(24.dp),
+            .padding(vertical = 8.dp),
     ) {
-        Text("Send to", style = MaterialTheme.typography.labelLarge)
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = snapshot.handle.toDisplayString(),
-            style = MaterialTheme.typography.headlineSmall,
-            modifier = Modifier.testTag("confirm_handle_text"),
-        )
-        Spacer(Modifier.height(8.dp))
         Text(
             text = "Account ${snapshot.userId.toRestString()}",
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.testTag("confirm_account_cue_text"),
         )
         Text(
-            text = "This account is identified by its immutable ID. The capsule will be encrypted only for this account's current key.",
+            text = "Only this account can open what you send. Check the handle before continuing.",
             style = MaterialTheme.typography.bodySmall,
         )
         Spacer(Modifier.height(16.dp))
@@ -67,15 +60,13 @@ fun RecipientConfirmationScreen(
             Text("This is the person I intend to send to")
         }
         Spacer(Modifier.height(16.dp))
-        Button(
-            onClick = onConfirm,
-            enabled = acknowledged,
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("confirm_button"),
-        ) {
-            Text("Encrypt for this account")
-        }
+        HoldActionObject(
+            title = snapshot.handle.toDisplayString(),
+            titleModifier = Modifier.testTag("confirm_handle_text"),
+            detail = "a remanence, just for them",
+            action = "yes, continue", onClick = onConfirm, enabled = acknowledged,
+            compact = true, modifier = Modifier.fillMaxWidth().testTag("confirm_button"),
+        )
         Spacer(Modifier.height(8.dp))
         OutlinedButton(
             onClick = onCancel,

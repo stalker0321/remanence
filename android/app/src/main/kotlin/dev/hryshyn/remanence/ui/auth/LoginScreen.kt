@@ -4,10 +4,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.material3.Button
+import dev.hryshyn.remanence.ui.hold.HoldButton as Button
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
+import dev.hryshyn.remanence.ui.hold.HoldInput as OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -22,11 +27,13 @@ fun LoginScreen(
     onSubmit: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier.fillMaxWidth()) {
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         OutlinedTextField(
             value = form.email,
             onValueChange = onEmailChange,
-            label = { Text("Email") },
+            label = { Text("email") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
             isError = form.email.isNotEmpty() && LoginFormValidator.emailError(form.email) != null,
             modifier = Modifier
                 .fillMaxWidth()
@@ -44,7 +51,10 @@ fun LoginScreen(
         OutlinedTextField(
             value = form.password,
             onValueChange = onPasswordChange,
-            label = { Text("Password") },
+            label = { Text("password") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag("login_password_field"),
@@ -73,7 +83,7 @@ fun LoginScreen(
                 .fillMaxWidth()
                 .testTag("login_submit_button"),
         ) {
-            Text("Sign in")
+            Text(if (submitState is LoginSubmitState.Submitting) "signing in…" else "sign in")
         }
     }
 }

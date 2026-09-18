@@ -1,6 +1,16 @@
 package dev.hryshyn.remanence
 
 import android.os.Bundle
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.SystemBarStyle
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.saveable.rememberSaveable
+import dev.hryshyn.remanence.ui.hold.HoldTheme
+import dev.hryshyn.remanence.ui.hold.HoldTextButton
+import dev.hryshyn.remanence.ui.hold.HoldInformation
+import dev.hryshyn.remanence.session.HomeIntent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Column
@@ -49,11 +59,19 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT),
+        )
         val container = (application as RemanenceApplication).container
 
         setContent {
-            MaterialTheme {
-                RootSurface(container = container)
+            HoldTheme {
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    Box(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
+                        RootSurface(container = container)
+                    }
+                }
             }
         }
     }
@@ -118,46 +136,60 @@ private fun RootSurface(container: AppContainer) {
     }
     val accountCapability by capabilityViewModel.capability.collectAsStateWithLifecycle()
 
+    val homeIntent by rootViewModel.homeIntent.collectAsStateWithLifecycle()
+    var registering by rememberSaveable { mutableStateOf(false) }
+    BackHandler(authState == AuthUiState.SignedOut && homeIntent != null) {
+        registering = false
+        rootViewModel.cancelHomeIntent()
+    }
+
     RootScreen(
+        showPublicHome = homeIntent == null,
         authState = authState,
         destination = destination,
         authenticationContent = {
-            Column(modifier = Modifier.padding(16.dp)) {
-                val form by loginViewModel.form.collectAsStateWithLifecycle()
-                val submitState by loginViewModel.submitState.collectAsStateWithLifecycle()
-                LoginScreen(
-                    form = form,
-                    submitState = submitState,
-                    onEmailChange = loginViewModel::onEmailChange,
-                    onPasswordChange = loginViewModel::onPasswordChange,
-                    onSubmit = loginViewModel::submit,
-                    modifier = Modifier.padding(bottom = 24.dp),
-                )
-                val registrationForm by registrationViewModel.form.collectAsStateWithLifecycle()
-                val registrationSubmit by registrationViewModel.submitState.collectAsStateWithLifecycle()
-                RegistrationFormScreen(
-                    form = registrationForm,
-                    submitState = registrationSubmit,
-                    onFieldChange = registrationViewModel::onFieldChange,
-                    onSubmit = registrationViewModel::submit,
-                    modifier = Modifier,
-                )
+            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                if (authState == AuthUiState.SignedOut) {
+                    HoldTextButton(onClick = { registering = false; rootViewModel.cancelHomeIntent() }) { Text("back") }
+                }
+                Text(if (registering) "make yourself at home" else "a place for your memories", style = MaterialTheme.typography.headlineLarge)
+                HoldInformation(when (homeIntent) {
+                    HomeIntent.OPEN -> "Sign in to open the remanence meant for you."
+                    HomeIntent.MAKE -> "Sign in to leave a memory for someone."
+                    else -> "Your account keeps each remanence with the person it was meant for."
+                })
+                if (authState == AuthUiState.RequiresConnectivity) {
+                    HoldInformation("Connect to the internet so we can check your session.")
+                    HoldTextButton(onClick = rootViewModel::onAppForegrounded) { Text("try connection again") }
+                }
+                if (registering) {
+                    val form by registrationViewModel.form.collectAsStateWithLifecycle()
+                    val submit by registrationViewModel.submitState.collectAsStateWithLifecycle()
+                    RegistrationFormScreen(form, submit, registrationViewModel::onFieldChange, registrationViewModel::submit)
+                    HoldTextButton(onClick = { registering = false }, enabled = submit !is RegistrationSubmitState.Submitting) { Text("I already have an account") }
+                } else {
+                    val form by loginViewModel.form.collectAsStateWithLifecycle()
+                    val submit by loginViewModel.submitState.collectAsStateWithLifecycle()
+                    LoginScreen(form, submit, loginViewModel::onEmailChange, loginViewModel::onPasswordChange, loginViewModel::submit)
+                    HoldTextButton(onClick = { registering = true }, enabled = submit !is LoginSubmitState.Submitting) { Text("create an account") }
+                }
             }
         },
         homeContent = {
             val authenticated = authState as? AuthUiState.Authenticated
-            AuthenticatedHomeChrome(
-                handle = authenticated?.handle ?: "",
-                onLogout = rootViewModel::logout,
-                homeContent = {
-                    HomeScreen(
-                        state = healthState,
-                        accountCapability = accountCapability,
-                        onCreate = rootViewModel::openCreate,
-                        onScan = rootViewModel::openScan,
-                    )
-                },
-            )
+            val home: @Composable () -> Unit = {
+                HomeScreen(
+                    state = healthState, accountCapability = accountCapability,
+                    publicEntry = authState == AuthUiState.SignedOut,
+                    onCreate = { rootViewModel.requestHomeIntent(HomeIntent.MAKE) },
+                    onScan = { rootViewModel.requestHomeIntent(HomeIntent.OPEN) },
+                )
+            }
+            if (authenticated != null) {
+                AuthenticatedHomeChrome(authenticated.handle, rootViewModel::logout, home)
+            } else {
+                home()
+            }
         },
         createContent = {
             val createViewModel: CreateViewModel = viewModel(factory = factory)

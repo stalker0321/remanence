@@ -11,13 +11,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
+import dev.hryshyn.remanence.ui.hold.HoldButton as Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
+import dev.hryshyn.remanence.ui.hold.HoldInput as OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import dev.hryshyn.remanence.ui.hold.HoldTextButton as TextButton
 import androidx.compose.runtime.Composable
+import dev.hryshyn.remanence.ui.hold.HoldInformation
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -73,21 +76,19 @@ fun CreateScreen(
             .fillMaxSize()
             .testTag("create_screen_scroll")
             .verticalScroll(rememberScrollState())
-            .padding(16.dp),
+            .padding(horizontal = 24.dp, vertical = 16.dp),
     ) {
-        Text("Create a capsule", style = MaterialTheme.typography.titleLarge)
-        Spacer(Modifier.height(8.dp))
         Text(
             text = when (step) {
-                CreateViewModel.Step.RECIPIENT_LOOKUP -> "1 - Resolve the recipient handle"
-                CreateViewModel.Step.RECIPIENT_CONFIRM -> "2 - Confirm the resolved recipient"
-                CreateViewModel.Step.FRONT -> "3 - Capture the postcard FRONT"
-                CreateViewModel.Step.CONTENT -> "4 - Choose 3-5 photos and an optional note"
-                CreateViewModel.Step.PUBLISHING -> "5 - Encrypting and staging"
-                CreateViewModel.Step.UPLOAD_PENDING -> "5 - Encrypted capsule queued for upload"
-                CreateViewModel.Step.PUBLISHED -> "Done - Capsule published and ready"
+                CreateViewModel.Step.RECIPIENT_LOOKUP -> "who is it for?"
+                CreateViewModel.Step.RECIPIENT_CONFIRM -> "is this the person?"
+                CreateViewModel.Step.FRONT -> "the postcard that carries it"
+                CreateViewModel.Step.CONTENT -> "what would you like to leave?"
+                CreateViewModel.Step.PUBLISHING -> "sealing your remanence"
+                CreateViewModel.Step.UPLOAD_PENDING -> "on its way"
+                CreateViewModel.Step.PUBLISHED -> "ready for the post"
             },
-            style = MaterialTheme.typography.labelLarge,
+            style = MaterialTheme.typography.headlineSmall,
             modifier = Modifier.testTag("create_step_label"),
         )
         Spacer(Modifier.height(12.dp))
@@ -221,15 +222,17 @@ private fun RecipientLookupContent(viewModel: CreateViewModel) {
         OutlinedTextField(
             value = handle,
             onValueChange = viewModel::onHandleChange,
-            label = { Text("Recipient handle") },
+            label = { Text("their handle") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
             modifier = Modifier.fillMaxWidth().testTag("create_handle_input"),
         )
         Spacer(Modifier.height(8.dp))
         Button(
             onClick = viewModel::lookupRecipient,
             enabled = viewModel.pickerVm.canLookup,
-            modifier = Modifier.testTag("create_lookup_button"),
-        ) { Text("Resolve handle") }
+            modifier = Modifier.fillMaxWidth().testTag("create_lookup_button"),
+        ) { Text(if (state is RecipientLookupUiState.LookingUp) "looking for them…" else "find them") }
         Spacer(Modifier.height(8.dp))
         when (val current = state) {
             is RecipientLookupUiState.Resolved -> LaunchedEffect(current.snapshot) {
@@ -288,7 +291,9 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
     }
 
     Column {
-        Text("Choose 3-5 photos", style = MaterialTheme.typography.titleMedium)
+        val recipient by viewModel.confirmedRecipient.collectAsStateWithLifecycle()
+        recipient?.let { HoldInformation("for ${it.handle.toDisplayString()}") }
+        Text("choose 3–5 photographs", style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(8.dp))
         Button(
             onClick = {
@@ -297,7 +302,7 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
                 )
             },
             modifier = Modifier.testTag("create_pick_photos"),
-        ) { Text("Open photo picker") }
+        ) { Text("choose photographs") }
         Spacer(Modifier.height(4.dp))
         Text(
             "Selected: ${selectedIds.size} of 3-5",
@@ -308,13 +313,13 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
         OutlinedTextField(
             value = viewModel.noteEditor.text,
             onValueChange = viewModel.noteEditor::onChange,
-            label = { Text("Optional note (${NoteEditorState.MAX_NOTE_BYTES} byte limit)") },
+            label = { Text("a small note, if you like") },
             isError = viewModel.noteEditor.limitReached || !viewModel.noteEditor.canIncludeInCapsule,
             modifier = Modifier.fillMaxWidth().testTag("create_note_input"),
         )
         if (viewModel.noteEditor.limitReached || !viewModel.noteEditor.canIncludeInCapsule) {
             Text(
-                "The note exceeds the ${NoteEditorState.MAX_NOTE_BYTES} byte limit.",
+                "That note is a little too long. Try shortening it.",
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.testTag("create_note_limit_error"),
             )
@@ -324,8 +329,8 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
         Button(
             onClick = viewModel::startPublishing,
             enabled = viewModel.photoSelection.canProceed && viewModel.noteEditor.canIncludeInCapsule,
-            modifier = Modifier.testTag("create_publish"),
-        ) { Text("Encrypt and stage capsule") }
+            modifier = Modifier.fillMaxWidth().testTag("create_publish"),
+        ) { Text("seal and send") }
     }
 }
 

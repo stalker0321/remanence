@@ -1,5 +1,7 @@
 package dev.hryshyn.remanence.ui.home
 
+import androidx.compose.ui.res.stringResource
+import dev.hryshyn.remanence.R
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -60,15 +62,15 @@ fun HomeScreen(
     ) {
         Text("remanence", style = MaterialTheme.typography.titleLarge)
         HoldActionObject(
-            title = "a postcard\nholds more",
-            detail = "There may be a memory waiting inside yours.",
-            action = "scan a postcard", onClick = onScan, enabled = enabled,
+            title = stringResource(R.string.hold_home_open_title),
+            detail = stringResource(R.string.hold_home_open_body),
+            action = stringResource(R.string.hold_scan), onClick = onScan, enabled = enabled,
             modifier = Modifier.testTag("scan_action"),
         )
         HoldActionObject(
-            title = "leave something\nwith someone",
-            detail = "A few photographs. A small note. A postcard to carry them.",
-            action = "make a remanence", onClick = onCreate, enabled = enabled, secondary = true,
+            title = stringResource(R.string.hold_home_make_title),
+            detail = stringResource(R.string.hold_home_make_body),
+            action = stringResource(R.string.hold_make), onClick = onCreate, enabled = enabled, secondary = true,
             modifier = Modifier.padding(start = 12.dp, end = 6.dp).testTag("create_action"),
         )
         if (accountCapability == AccountCapabilityState.RecoveryRequired) {

@@ -1,5 +1,7 @@
 package dev.hryshyn.remanence.ui.capsule
 
+import androidx.compose.ui.res.stringResource
+import dev.hryshyn.remanence.R
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -14,6 +16,24 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.ContentScale
+import dev.hryshyn.remanence.ui.hold.HoldColors
+import dev.hryshyn.remanence.ui.hold.HoldTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -248,6 +268,7 @@ fun CapsuleScreen(
     state: CapsulePresentationState,
     modifier: Modifier = Modifier,
     decoder: CapsulePageDecoder = DefaultCapsulePageDecoder,
+    underlayerEnabled: Boolean = true,
     onClose: () -> Unit,
 ) {
     var currentIndex by remember { mutableIntStateOf(0) }
@@ -265,80 +286,83 @@ fun CapsuleScreen(
         pager.show(currentIndex)
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(
-            "Photo ${currentIndex + 1} of ${state.photoCount}",
-            style = MaterialTheme.typography.labelLarge,
-            modifier = Modifier.testTag("capsule_page_indicator"),
-        )
-        Spacer(Modifier.height(8.dp))
-        val bitmap = pager.displayedBitmap
-        when {
-            bitmap != null -> Image(
-                bitmap = bitmap.asImageBitmap(),
-                contentDescription = "Capsule photo ${currentIndex + 1}",
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f, fill = false)
-                    .testTag("capsule_page_${currentIndex}"),
-            )
-            pager.pageError != null -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    pager.pageError!!,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.testTag("capsule_page_error"),
-                )
-                Spacer(Modifier.height(8.dp))
-                Button(
-                    onClick = { pageRetryEpoch += 1 },
-                    modifier = Modifier.testTag("capsule_page_retry"),
-                ) { Text("Try again") }
+    // Do not keep plaintext visible for an exit transition after close/expiry.
+    if (!state.isOpen) return
+    var reveal by remember(state) { mutableFloatStateOf(0f) }
+    var dragging by remember(state) { mutableStateOf(false) }
+    val settled by animateFloatAsState(reveal, tween(280), label = "capsule underlayer")
+    val progress = if (dragging) reveal else settled
+    val density = LocalDensity.current
+
+    BoxWithConstraints(modifier.fillMaxSize().background(HoldColors.Paper)) {
+        val footer = 76.dp
+        val available = (maxHeight - footer).coerceAtLeast(1.dp)
+        val revealDistance = with(density) { (available * .34f).toPx() }.coerceAtLeast(1f)
+        val imageHeight = available * (1f - .34f * progress)
+        val gesture = if (underlayerEnabled) Modifier.draggable(
+            orientation = Orientation.Vertical,
+            state = rememberDraggableState { delta -> reveal = (reveal - delta / revealDistance).coerceIn(0f, 1f) },
+            onDragStarted = { dragging = true; reveal = progress },
+            onDragStopped = { dragging = false; reveal = if (reveal > .3f) 1f else 0f },
+        ) else Modifier
+
+        Column(Modifier.fillMaxSize()) {
+            Box(Modifier.fillMaxWidth().height(imageHeight).then(gesture), contentAlignment = Alignment.Center) {
+                val bitmap = pager.displayedBitmap
+                when {
+                    bitmap != null -> Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = "Capsule photo ${currentIndex + 1}",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize().testTag("capsule_page_${currentIndex}"),
+                    )
+                    pager.pageError != null -> Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(pager.pageError!!, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("capsule_page_error"))
+                        HoldTextButton(onClick = { pageRetryEpoch += 1 }, modifier = Modifier.testTag("capsule_page_retry")) { Text(stringResource(R.string.hold_retry)) }
+                    }
+                    else -> CircularProgressIndicator(modifier = Modifier.testTag("capsule_page_loading"))
+                }
             }
-            else -> CircularProgressIndicator(modifier = Modifier.testTag("capsule_page_loading"))
-        }
-        Spacer(Modifier.height(12.dp))
-        state.note?.let { note ->
-            Text(
-                text = note,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.testTag("capsule_note_text"),
-            )
-            Spacer(Modifier.height(12.dp))
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(
-                onClick = {
-                    if (state.canRewind(currentIndex)) currentIndex -= 1
-                },
-                enabled = state.canRewind(currentIndex),
-                modifier = Modifier.testTag("capsule_previous_button"),
+            if (progress > .001f) {
+                Column(
+                    Modifier.fillMaxWidth().height(available - imageHeight)
+                        .verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 12.dp)
+                        .testTag("capsule_underlayer"),
+                ) {
+                    // Only actual content is available in the current artifact contract.
+                    // Sender/date/share need protocol metadata, never specimen values.
+                    Text(stringResource(R.string.hold_inside), style = MaterialTheme.typography.labelMedium, color = HoldColors.Muted)
+                    Spacer(Modifier.height(12.dp))
+                    Text(state.note ?: stringResource(R.string.hold_photo_summary, state.photoCount),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.testTag(if (state.note != null) "capsule_note_text" else "capsule_content_summary"))
+                }
+            }
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = footer).padding(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Previous")
-            }
-            Button(
-                onClick = {
-                    if (state.canAdvance(currentIndex)) currentIndex += 1
-                },
-                enabled = state.canAdvance(currentIndex),
-                modifier = Modifier.testTag("capsule_next_button"),
-            ) {
-                Text("Next")
+                HoldTextButton(onClick = { if (state.canRewind(currentIndex)) currentIndex-- },
+                    enabled = state.canRewind(currentIndex), modifier = Modifier.testTag("capsule_previous_button")) { Text(stringResource(R.string.hold_previous_photo)) }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    if (underlayerEnabled) {
+                        HoldTextButton(onClick = { reveal = if (reveal < .5f) 1f else 0f }, modifier = Modifier.testTag("capsule_reveal_button")) {
+                            Text(if (reveal < .5f) stringResource(R.string.hold_about_short) else stringResource(R.string.hold_collapse))
+                        }
+                    }
+                    Text("${currentIndex + 1} / ${state.photoCount}", style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.testTag("capsule_page_indicator"))
+                }
+                HoldTextButton(onClick = { if (state.canAdvance(currentIndex)) currentIndex++ },
+                    enabled = state.canAdvance(currentIndex), modifier = Modifier.testTag("capsule_next_button")) { Text(stringResource(R.string.hold_next_photo)) }
             }
         }
-        Spacer(Modifier.height(4.dp))
-        OutlinedButton(
-            onClick = {
-                state.close()
-                onClose()
-            },
-            modifier = Modifier.testTag("capsule_close_button"),
-        ) {
-            Text("Close")
-        }
+        HoldTextButton(
+            onClick = { state.close(); onClose() },
+            modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
+                .background(HoldColors.Paper.copy(alpha = .92f), androidx.compose.foundation.shape.RoundedCornerShape(24.dp))
+                .testTag("capsule_close_button"),
+        ) { Text(stringResource(R.string.hold_close)) }
     }
 }

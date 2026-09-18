@@ -1,5 +1,7 @@
 package dev.hryshyn.remanence.ui.scan
 
+import androidx.compose.ui.res.stringResource
+import dev.hryshyn.remanence.R
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -47,8 +49,6 @@ fun ScanScreen(
     onScreenDispose: () -> Unit = viewModel::resetSession,
 ) {
     val matchState by viewModel.matchState.collectAsStateWithLifecycle()
-    val schedulingStatus by IncomingAcceptanceDiagnostics.schedulingState.collectAsStateWithLifecycle()
-    val workerProgress by IncomingAcceptanceDiagnostics.workerProgress.collectAsStateWithLifecycle()
 
     DisposableEffect(Unit) {
         onDispose(onScreenDispose)
@@ -61,29 +61,21 @@ fun ScanScreen(
             // FIX-STATE-14: named scroll container so layout tests prove the
             // step content scrolls INSIDE the bounded root region.
             .testTag("scan_screen_scroll")
-            .padding(16.dp),
+            .padding(horizontal = 24.dp, vertical = 16.dp),
     ) {
-        Text("Scan a postcard", style = MaterialTheme.typography.titleLarge)
-        Text(
-            text = "Sync: $schedulingStatus",
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.testTag("scan_sync_diagnostic"),
-        )
-        if (workerProgress != "not run") {
-            Text(
-                text = "Sync progress: $workerProgress",
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.testTag("scan_sync_progress"),
-            )
-        }
-        Spacer(Modifier.height(8.dp))
+        Text(stringResource(R.string.hold_scan_title), style = MaterialTheme.typography.headlineSmall)
+        Spacer(Modifier.height(16.dp))
 
         when (val current = matchState) {
             is ScanMatchUiState.AwaitingCapture ->
                 FrontCapture(viewModel, Modifier.fillMaxWidth(), adapterFactory, requestPermissionOnAttach)
-            is ScanMatchUiState.Matching -> Text("Matching...", modifier = Modifier.testTag("scan_matching"))
+            is ScanMatchUiState.Matching -> Column {
+                androidx.compose.material3.CircularProgressIndicator()
+                Spacer(Modifier.height(16.dp))
+                Text(stringResource(R.string.hold_recognizing), modifier = Modifier.testTag("scan_matching"))
+            }
             is ScanMatchUiState.Accepted -> Text(
-                "Verified. Opening the capsule...",
+                "opening your remanence…",
                 modifier = Modifier.testTag("scan_verified"),
             )
             is ScanMatchUiState.Chooser -> AmbiguityChooserScreen(
@@ -109,7 +101,7 @@ fun ScanScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
             is ScanMatchUiState.RecaptureGuidance -> Column {
-                Text("No confident match. Recapture the front.", modifier = Modifier.testTag("scan_recapture"))
+                Text(stringResource(R.string.hold_nomatch), modifier = Modifier.testTag("scan_recapture"))
                 OutlinedButton(onClick = viewModel::resetSession) { Text("Start over") }
                 Spacer(Modifier.height(8.dp))
                 FrontCapture(viewModel, Modifier.fillMaxWidth(), adapterFactory, requestPermissionOnAttach)

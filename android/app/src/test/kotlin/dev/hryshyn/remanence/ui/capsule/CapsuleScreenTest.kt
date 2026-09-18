@@ -122,6 +122,7 @@ class CapsuleScreenTest {
             composeRule.onAllNodesWithTag("capsule_page_0").fetchSemanticsNodes().isNotEmpty()
         }
         composeRule.onNodeWithTag("capsule_page_0").assertIsDisplayed()
+        composeRule.onNodeWithTag("capsule_reveal_button").performClick()
         composeRule.onNodeWithTag("capsule_note_text").assertIsDisplayed()
 
         // Previous is disabled at the first page.

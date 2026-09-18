@@ -76,3 +76,6 @@ Thumbs.db
 !**/fixtures/**
 !**/testdata/**
 !**/test-fixtures/**
+
+# Hold verification output and test runtime files
+.hold-build/

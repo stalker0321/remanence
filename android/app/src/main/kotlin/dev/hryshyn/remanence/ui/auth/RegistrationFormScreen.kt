@@ -1,5 +1,7 @@
 package dev.hryshyn.remanence.ui.auth
 
+import androidx.compose.ui.res.stringResource
+import dev.hryshyn.remanence.R
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -41,7 +43,7 @@ fun RegistrationFormScreen(
         OutlinedTextField(
             value = form.email,
             onValueChange = { onFieldChange(RegistrationField.EMAIL, it) },
-            label = { Text("email") },
+            label = { Text(stringResource(R.string.hold_email)) },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
             isError = form.email.isNotEmpty() && RegistrationFormValidator.emailError(form.email) != null,
@@ -54,7 +56,7 @@ fun RegistrationFormScreen(
         OutlinedTextField(
             value = form.password,
             onValueChange = { onFieldChange(RegistrationField.PASSWORD, it) },
-            label = { Text("password") },
+            label = { Text(stringResource(R.string.hold_password)) },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
@@ -78,7 +80,7 @@ fun RegistrationFormScreen(
         OutlinedTextField(
             value = form.handle,
             onValueChange = { onFieldChange(RegistrationField.HANDLE, it) },
-            label = { Text("handle") },
+            label = { Text(stringResource(R.string.hold_handle)) },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
             isError = form.handle.isNotEmpty() && RegistrationFormValidator.handleError(form.handle) != null,
@@ -116,7 +118,7 @@ fun RegistrationFormScreen(
                     .weight(1f)
                     .testTag("reg_submit_button"),
             ) {
-                Text("Create account")
+                Text(stringResource(R.string.hold_create_account))
             }
             if (submitState is RegistrationSubmitState.Submitting) {
                 Spacer(Modifier.width(12.dp))

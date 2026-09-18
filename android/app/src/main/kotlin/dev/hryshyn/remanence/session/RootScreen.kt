@@ -1,5 +1,7 @@
 package dev.hryshyn.remanence.session
 
+import androidx.compose.ui.res.stringResource
+import dev.hryshyn.remanence.R
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -107,7 +109,7 @@ private fun FlowHeader(title: String, onExit: () -> Unit) {
             Text("Back to Home")
         }
         Spacer(Modifier.weight(1f))
-        Text(if (title == "Create") "make a remanence" else "open a remanence",
+        Text(if (title == "Create") stringResource(R.string.hold_make) else stringResource(R.string.hold_scan),
             style = MaterialTheme.typography.labelMedium,
             modifier = Modifier.padding(end = 12.dp).testTag("flow_title_${title.lowercase()}"))
     }
@@ -124,7 +126,7 @@ fun AuthenticatedHomeChrome(
     Column(modifier = modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("@$handle", modifier = Modifier.weight(1f).testTag("root_signed_in_as"), style = MaterialTheme.typography.labelMedium)
-            OutlinedButton(onClick = onLogout, modifier = Modifier.testTag("root_logout_button")) { Text("log out") }
+            OutlinedButton(onClick = onLogout, modifier = Modifier.testTag("root_logout_button")) { Text(stringResource(R.string.hold_logout)) }
         }
         Box(Modifier.weight(1f)) { homeContent() }
     }

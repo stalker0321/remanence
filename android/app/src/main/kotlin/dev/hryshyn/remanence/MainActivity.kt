@@ -1,5 +1,7 @@
 package dev.hryshyn.remanence
 
+import androidx.compose.ui.res.stringResource
+import dev.hryshyn.remanence.R
 import android.os.Bundle
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.SystemBarStyle
@@ -150,9 +152,9 @@ private fun RootSurface(container: AppContainer) {
         authenticationContent = {
             Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 if (authState == AuthUiState.SignedOut) {
-                    HoldTextButton(onClick = { registering = false; rootViewModel.cancelHomeIntent() }) { Text("back") }
+                    HoldTextButton(onClick = { registering = false; rootViewModel.cancelHomeIntent() }) { Text(stringResource(R.string.hold_back)) }
                 }
-                Text(if (registering) "make yourself at home" else "a place for your memories", style = MaterialTheme.typography.headlineLarge)
+                Text(if (registering) stringResource(R.string.hold_register_title) else stringResource(R.string.hold_auth_title), style = MaterialTheme.typography.headlineLarge)
                 HoldInformation(when (homeIntent) {
                     HomeIntent.OPEN -> "Sign in to open the remanence meant for you."
                     HomeIntent.MAKE -> "Sign in to leave a memory for someone."
@@ -166,12 +168,12 @@ private fun RootSurface(container: AppContainer) {
                     val form by registrationViewModel.form.collectAsStateWithLifecycle()
                     val submit by registrationViewModel.submitState.collectAsStateWithLifecycle()
                     RegistrationFormScreen(form, submit, registrationViewModel::onFieldChange, registrationViewModel::submit)
-                    HoldTextButton(onClick = { registering = false }, enabled = submit !is RegistrationSubmitState.Submitting) { Text("I already have an account") }
+                    HoldTextButton(onClick = { registering = false }, enabled = submit !is RegistrationSubmitState.Submitting) { Text(stringResource(R.string.hold_existing_account)) }
                 } else {
                     val form by loginViewModel.form.collectAsStateWithLifecycle()
                     val submit by loginViewModel.submitState.collectAsStateWithLifecycle()
                     LoginScreen(form, submit, loginViewModel::onEmailChange, loginViewModel::onPasswordChange, loginViewModel::submit)
-                    HoldTextButton(onClick = { registering = true }, enabled = submit !is LoginSubmitState.Submitting) { Text("create an account") }
+                    HoldTextButton(onClick = { registering = true }, enabled = submit !is LoginSubmitState.Submitting) { Text(stringResource(R.string.hold_create_account)) }
                 }
             }
         },

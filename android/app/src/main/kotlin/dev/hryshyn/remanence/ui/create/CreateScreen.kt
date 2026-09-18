@@ -1,5 +1,7 @@
 package dev.hryshyn.remanence.ui.create
 
+import androidx.compose.ui.res.stringResource
+import dev.hryshyn.remanence.R
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -80,13 +82,13 @@ fun CreateScreen(
     ) {
         Text(
             text = when (step) {
-                CreateViewModel.Step.RECIPIENT_LOOKUP -> "who is it for?"
-                CreateViewModel.Step.RECIPIENT_CONFIRM -> "is this the person?"
-                CreateViewModel.Step.FRONT -> "the postcard that carries it"
-                CreateViewModel.Step.CONTENT -> "what would you like to leave?"
-                CreateViewModel.Step.PUBLISHING -> "sealing your remanence"
-                CreateViewModel.Step.UPLOAD_PENDING -> "on its way"
-                CreateViewModel.Step.PUBLISHED -> "ready for the post"
+                CreateViewModel.Step.RECIPIENT_LOOKUP -> stringResource(R.string.hold_recipient_title)
+                CreateViewModel.Step.RECIPIENT_CONFIRM -> stringResource(R.string.hold_confirm_title)
+                CreateViewModel.Step.FRONT -> stringResource(R.string.hold_capture_title)
+                CreateViewModel.Step.CONTENT -> stringResource(R.string.hold_content_title)
+                CreateViewModel.Step.PUBLISHING -> stringResource(R.string.hold_preparing_title)
+                CreateViewModel.Step.UPLOAD_PENDING -> stringResource(R.string.hold_publishing_title)
+                CreateViewModel.Step.PUBLISHED -> stringResource(R.string.hold_ready_title)
             },
             style = MaterialTheme.typography.headlineSmall,
             modifier = Modifier.testTag("create_step_label"),
@@ -222,7 +224,7 @@ private fun RecipientLookupContent(viewModel: CreateViewModel) {
         OutlinedTextField(
             value = handle,
             onValueChange = viewModel::onHandleChange,
-            label = { Text("their handle") },
+            label = { Text(stringResource(R.string.hold_recipient_handle)) },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
             modifier = Modifier.fillMaxWidth().testTag("create_handle_input"),
@@ -232,13 +234,13 @@ private fun RecipientLookupContent(viewModel: CreateViewModel) {
             onClick = viewModel::lookupRecipient,
             enabled = viewModel.pickerVm.canLookup,
             modifier = Modifier.fillMaxWidth().testTag("create_lookup_button"),
-        ) { Text(if (state is RecipientLookupUiState.LookingUp) "looking for them…" else "find them") }
+        ) { Text(if (state is RecipientLookupUiState.LookingUp) stringResource(R.string.hold_looking_up) else stringResource(R.string.hold_find)) }
         Spacer(Modifier.height(8.dp))
         when (val current = state) {
             is RecipientLookupUiState.Resolved -> LaunchedEffect(current.snapshot) {
                 viewModel.onResolved(current.snapshot)
             }
-            RecipientLookupUiState.NotFound -> Text("No account uses that handle.")
+            RecipientLookupUiState.NotFound -> Text(stringResource(R.string.hold_no_handle))
             is RecipientLookupUiState.Failed ->
                 Text(current.message, color = MaterialTheme.colorScheme.error)
             else -> Unit
@@ -292,8 +294,8 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
 
     Column {
         val recipient by viewModel.confirmedRecipient.collectAsStateWithLifecycle()
-        recipient?.let { HoldInformation("for ${it.handle.toDisplayString()}") }
-        Text("choose 3–5 photographs", style = MaterialTheme.typography.titleMedium)
+        recipient?.let { HoldInformation(stringResource(R.string.hold_for_handle, it.handle.toDisplayString())) }
+        Text(stringResource(R.string.hold_photo_count), style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(8.dp))
         Button(
             onClick = {
@@ -302,7 +304,7 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
                 )
             },
             modifier = Modifier.testTag("create_pick_photos"),
-        ) { Text("choose photographs") }
+        ) { Text(stringResource(R.string.hold_choose_photos)) }
         Spacer(Modifier.height(4.dp))
         Text(
             "Selected: ${selectedIds.size} of 3-5",
@@ -313,7 +315,7 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
         OutlinedTextField(
             value = viewModel.noteEditor.text,
             onValueChange = viewModel.noteEditor::onChange,
-            label = { Text("a small note, if you like") },
+            label = { Text(stringResource(R.string.hold_note)) },
             isError = viewModel.noteEditor.limitReached || !viewModel.noteEditor.canIncludeInCapsule,
             modifier = Modifier.fillMaxWidth().testTag("create_note_input"),
         )
@@ -330,7 +332,7 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
             onClick = viewModel::startPublishing,
             enabled = viewModel.photoSelection.canProceed && viewModel.noteEditor.canIncludeInCapsule,
             modifier = Modifier.fillMaxWidth().testTag("create_publish"),
-        ) { Text("seal and send") }
+        ) { Text(stringResource(R.string.hold_publish)) }
     }
 }
 

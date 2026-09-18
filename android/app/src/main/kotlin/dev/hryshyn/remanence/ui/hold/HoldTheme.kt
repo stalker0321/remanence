@@ -7,6 +7,7 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -55,6 +56,10 @@ private val HoldTypography = Typography(
 /** Accepted light art direction; do not inherit dynamic wallpaper colours. */
 @Composable
 fun HoldTheme(content: @Composable () -> Unit) {
+    val language = LocalConfiguration.current.locales[0].language
+    val typography = if (language == "ru" || language == "uk") {
+        HoldTypography.copy(displayLarge = type(30, 36, -.2f), headlineLarge = type(30, 36, -.2f))
+    } else HoldTypography
     MaterialTheme(
         colorScheme = lightColorScheme(
             primary = HoldColors.Accent, onPrimary = HoldColors.OnAccent,
@@ -66,7 +71,7 @@ fun HoldTheme(content: @Composable () -> Unit) {
             surfaceVariant = HoldColors.Field, onSurfaceVariant = HoldColors.Muted,
             outline = Color(0xFFC5C8D5), error = HoldColors.Error,
         ),
-        typography = HoldTypography,
+        typography = typography,
         shapes = Shapes(
             extraSmall = RoundedCornerShape(8.dp), small = RoundedCornerShape(12.dp),
             medium = RoundedCornerShape(15.dp), large = RoundedCornerShape(19.dp),

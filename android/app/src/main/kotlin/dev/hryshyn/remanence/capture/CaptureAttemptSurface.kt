@@ -147,6 +147,18 @@ fun CaptureAttemptSurface(
         )
     }
 
+    val settingsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) {
+        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        if (granted && controller.permission != CapturePermissionStep.Granted) {
+            // A denied camera has no live attempt. Re-enter through the same
+            // permission and binding transitions; never manufacture Ready.
+            controller.reset()
+            controller.onPermissionResolved(CapturePermissionStep.Granted)
+        }
+    }
+
     LaunchedEffect(controller) {
         if (requestPermissionOnAttach && controller.permission == CapturePermissionStep.NotRequested) {
             val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
@@ -176,12 +188,19 @@ fun CaptureAttemptSurface(
                 }
             }
 
-            CapturePermissionStep.PermanentlyDenied ->
+            CapturePermissionStep.PermanentlyDenied -> Column {
                 Text(
                     "Camera access is permanently denied; enable it in Settings.",
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.testTag("capture_permanently_denied"),
                 )
+                OutlinedButton(onClick = {
+                    settingsLauncher.launch(android.content.Intent(
+                        android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        android.net.Uri.parse("package:${context.packageName}"),
+                    ))
+                }, modifier = Modifier.testTag("capture_open_settings")) { Text("open settings") }
+            }
 
             CapturePermissionStep.Granted -> GrantedAttemptContent(
                 controller = controller,

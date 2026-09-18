@@ -1,5 +1,7 @@
 package dev.hryshyn.remanence.ui.auth
 
+import androidx.compose.ui.res.stringResource
+import dev.hryshyn.remanence.R
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -31,7 +33,7 @@ fun LoginScreen(
         OutlinedTextField(
             value = form.email,
             onValueChange = onEmailChange,
-            label = { Text("email") },
+            label = { Text(stringResource(R.string.hold_email)) },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
             isError = form.email.isNotEmpty() && LoginFormValidator.emailError(form.email) != null,
@@ -51,7 +53,7 @@ fun LoginScreen(
         OutlinedTextField(
             value = form.password,
             onValueChange = onPasswordChange,
-            label = { Text("password") },
+            label = { Text(stringResource(R.string.hold_password)) },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
@@ -83,7 +85,7 @@ fun LoginScreen(
                 .fillMaxWidth()
                 .testTag("login_submit_button"),
         ) {
-            Text(if (submitState is LoginSubmitState.Submitting) "signing in…" else "sign in")
+            Text(if (submitState is LoginSubmitState.Submitting) stringResource(R.string.hold_signing_in) else stringResource(R.string.hold_signin))
         }
     }
 }

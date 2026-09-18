@@ -1,5 +1,7 @@
 package dev.hryshyn.remanence.ui.create
 
+import androidx.compose.ui.res.stringResource
+import dev.hryshyn.remanence.R
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -57,14 +59,14 @@ fun RecipientConfirmationScreen(
                 onCheckedChange = { acknowledged = it },
                 modifier = Modifier.testTag("confirm_ack_checkbox"),
             )
-            Text("This is the person I intend to send to")
+            Text(stringResource(R.string.hold_ack))
         }
         Spacer(Modifier.height(16.dp))
         HoldActionObject(
             title = snapshot.handle.toDisplayString(),
             titleModifier = Modifier.testTag("confirm_handle_text"),
-            detail = "a remanence, just for them",
-            action = "yes, continue", onClick = onConfirm, enabled = acknowledged,
+            detail = stringResource(R.string.hold_confirm_body),
+            action = stringResource(R.string.hold_confirm), onClick = onConfirm, enabled = acknowledged,
             compact = true, modifier = Modifier.fillMaxWidth().testTag("confirm_button"),
         )
         Spacer(Modifier.height(8.dp))
@@ -74,7 +76,7 @@ fun RecipientConfirmationScreen(
                 .fillMaxWidth()
                 .testTag("cancel_button"),
         ) {
-            Text("Cancel")
+            Text(stringResource(R.string.hold_change))
         }
     }
 }

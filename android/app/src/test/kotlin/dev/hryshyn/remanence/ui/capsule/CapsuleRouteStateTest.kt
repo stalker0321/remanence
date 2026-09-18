@@ -118,6 +118,7 @@ class CapsuleRouteStateTest {
         composeRule.waitForIdle()
 
         composeRule.onNodeWithTag("capsule_page_indicator").assertIsDisplayed()
+        composeRule.onNodeWithTag("capsule_reveal_button").performClick()
         composeRule.onNodeWithTag("capsule_note_text").assertIsDisplayed()
     }
 

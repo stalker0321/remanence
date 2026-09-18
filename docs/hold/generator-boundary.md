@@ -1,0 +1,27 @@
+# Generator adapter boundary (not yet a wire extension)
+
+Use the existing separate generator. The real entry is between validated CONTENT and `CreateViewModel.startPublishing()`. The current protocol can publish only ordered JPEG photos and a note; it cannot round-trip a resolved composition. No generated-expression UI is enabled until that changes.
+
+## Semantic contract to implement with the generator
+
+| Operation | Required input | Result / ownership |
+| --- | --- | --- |
+| Generate | Generation/request ID; owner/session epoch; 3–5 stable photo IDs in authored order; original dimensions and client-owned read handles; exact note; sender representation. Music only after its product contract exists. | Bounded candidate set or explicit incompatibility; versioned canvas/grammar/branch, source-ID mapping, placements, crops, masks, type/font assets, palette, validation and dependencies. No credentials or private keys enter the generator. |
+| Select | Candidate ID and generation ID | Exact candidate snapshot; previous/next restores it, never silently reruns generation. |
+| Correct crop | Selected candidate ID, source ID, normalized crop window within source bounds | Revised candidate plus safety/fit diagnostics; every included object remains represented. Original photo and order stay unchanged. |
+| Freeze | Selected validated candidate and content revision | Immutable resolved expression + content/asset hashes + renderer/font/grammar versions. Late generator callbacks from older content/owner epochs are rejected. |
+| Publish | Frozen expression, exact ordered originals, existing confirmed recipient snapshot | Existing publication ownership/cancellation fences; new versioned encrypted artifact(s), covered by manifest hashes and recipient verification. No transport via arbitrary preview URLs. |
+| Receive | Verified decrypted frozen expression and its declared dependencies | Fit the entire canvas preserving ratio. Open originals in authored order. No regeneration, recropping or new layout decisions at receive time. |
+
+Android maps content URIs to bounded read handles and runs the generator via an adapter. A future web client maps File/Blob references to the same semantics. They need not share implementation code. Crop analysis is a generator concern; CameraX postcard recognition is separate and must not be reused as a photo-composition pipeline.
+
+## Required integration evidence
+
+- Canonical expression serialization, bounded sizes, dependency completeness, content/hash mapping and version rejection fixtures shared across clients.
+- Publish → encrypt → transport → verify → decrypt → identical expression test, including optional note absence and mixed photo aspect ratios.
+- Selection/crop/freeze invalidation on photo/note edits, owner change, cancellation and process death; sender snapshot never changes mid-publish.
+- No plaintext generated previews in durable storage outside the existing owned staging lifecycle. Explicit cleanup policy for originals/derived assets.
+- Define note limits against current v1's 1000 UTF-8 bytes; do not adopt the generator's provisional 200–300 character guidance as a new backend rule.
+- Define provenance semantics and reader metadata before populating date/sender/share on the underlayer. Current photo viewer has no reliable such fields.
+
+This document is an interface handoff, not a claim of generator or new protocol support. Current Android continues to publish the existing real photo/note format.

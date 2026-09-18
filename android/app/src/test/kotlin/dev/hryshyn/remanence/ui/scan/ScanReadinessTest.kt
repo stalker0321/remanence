@@ -402,7 +402,7 @@ class ScanReadinessTest {
     }
 
     @Test
-    fun debugScanScreenRendersSafeIncomingDownloadDiagnostic() {
+    fun downloadDiagnosticRemainsAvailableWithoutEnteringTheProductLayout() {
         val vm = viewModel(includeCandidate = false)
         val diagnostic = IncomingAcceptanceDownloadDiagnostic.fromFailure(
             RecipientBlobDownloadResult.Failure(
@@ -426,7 +426,8 @@ class ScanReadinessTest {
                 MaterialTheme { ScanScreen(viewModel = vm, requestPermissionOnAttach = false) }
             }
             if (BuildConfig.DEBUG) {
-                composeRule.onNodeWithText("Sync progress: ${diagnostic.safeSummary()}").assertIsDisplayed()
+                assertEquals(diagnostic.safeSummary(), IncomingAcceptanceDiagnostics.workerProgress.value)
+                composeRule.onNodeWithText("Sync progress: ${diagnostic.safeSummary()}").assertDoesNotExist()
             }
         } finally {
             IncomingAcceptanceDiagnostics.report("not run")
@@ -434,14 +435,15 @@ class ScanReadinessTest {
     }
 
     @Test
-    fun scanRendersTypedEnqueueFailureWithoutRawException() {
+    fun typedEnqueueFailureDoesNotReplaceTheCaptureSurface() {
         val vm = viewModel(includeCandidate = false)
         IncomingAcceptanceDiagnostics.report(IncomingSyncSchedulingOutcome.EnqueueFailed)
         try {
             composeRule.setContent {
                 MaterialTheme { ScanScreen(viewModel = vm, requestPermissionOnAttach = false) }
             }
-            composeRule.onNodeWithText("Sync: enqueue failed").assertIsDisplayed()
+            assertEquals("enqueue failed", IncomingAcceptanceDiagnostics.schedulingState.value)
+            composeRule.onNodeWithText("Sync: enqueue failed").assertDoesNotExist()
         } finally {
             IncomingAcceptanceDiagnostics.report("not run")
         }

@@ -50,8 +50,9 @@ class CapsuleRouteBackTest {
         composeRule.waitForIdle()
 
         assertTrue(closed)
-        // The route stays mounted in this isolated test, so a zero count is
-        // an observable proof that Back closed the presentation first.
-        composeRule.onNodeWithText("Photo 1 of 0").assertIsDisplayed()
+        // The route stays mounted in this isolated test. Closed content is
+        // removed immediately instead of animating a private page away.
+        composeRule.onNodeWithTag("capsule_page_indicator").assertDoesNotExist()
+        composeRule.onNodeWithTag("capsule_close_button").assertDoesNotExist()
     }
 }

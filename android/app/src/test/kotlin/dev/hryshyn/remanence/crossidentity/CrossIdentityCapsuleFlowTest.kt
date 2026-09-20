@@ -149,6 +149,8 @@ class CrossIdentityCapsuleFlowTest {
                 authenticatedUserId = UserId(recipientUuid),
                 senderVerifyingKeyset = verifier,
                 expectedSenderKeyBundleId = expectedSenderBundle,
+                expectedSenderUserId = UserId(senderUuid),
+                expectedRecipientKeyBundleId = KeyBundleId(recipientBundleUuid),
                 envelopePlaintextBytes = envelopePlaintext,
                 statementBytes = File(requireNotNull(row.publishStatementPath)).readBytes(),
                 signature = File(requireNotNull(row.publishStatementSignaturePath)).readBytes(),

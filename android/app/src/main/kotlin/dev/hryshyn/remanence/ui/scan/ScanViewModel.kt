@@ -1165,6 +1165,8 @@ class ScanViewModel internal constructor(
                 authenticatedUserId = ownUser,
                 senderVerifyingKeyset = senderVerifyingKeyset,
                 expectedSenderKeyBundleId = routing.senderKeyBundleId,
+                expectedSenderUserId = routing.senderUserId,
+                expectedRecipientKeyBundleId = routing.recipientKeyBundleId,
                 envelopePlaintextBytes = openedEnvelope,
                 statementBytes = statementBytes,
                 signature = signatureBytes,

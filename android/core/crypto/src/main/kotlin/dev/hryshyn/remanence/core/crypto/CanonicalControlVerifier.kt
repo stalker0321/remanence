@@ -22,15 +22,23 @@ import java.security.MessageDigest
 
 /**
  * Bundle of identifiers the verifier compares parsed payloads against.
- * Mirrors the four identity fields from [CapsuleAcceptanceInput] needed for
+ * Mirrors the identity fields from [CapsuleAcceptanceInput] needed for
  * the canonical, signature, ID-agreement, and statement-hash stages of
  * [CapsuleAcceptanceGate] without the delivered-blob list.
+ *
+ * [expectedSenderUserId] and [expectedRecipientKeyBundleId] must come from
+ * the same external context the caller used to resolve the trusted sender
+ * key and to open the recipient envelope (HPKE AAD). Both the envelope
+ * plaintext and the signed statement are compared against them, so a jointly
+ * altered envelope/statement pair that only agrees with itself cannot pass.
  */
 internal data class CanonicalControlInput(
     val expectedCapsuleId: CapsuleId,
     val authenticatedUserId: UserId,
     val senderVerifyingKeyset: KeysetHandle,
     val expectedSenderKeyBundleId: KeyBundleId,
+    val expectedSenderUserId: UserId,
+    val expectedRecipientKeyBundleId: KeyBundleId,
     val envelopePlaintextBytes: ByteArray,
     val statementBytes: ByteArray,
     val signature: ByteArray,
@@ -129,12 +137,18 @@ internal class CanonicalControlVerifier(
         val expectedCapsule = input.expectedCapsuleId.toProtoBytes()
         val expectedUser = input.authenticatedUserId.toProtoBytes()
         val expectedSenderBundle = input.expectedSenderKeyBundleId.toProtoBytes()
+        val expectedSenderUser = input.expectedSenderUserId.toProtoBytes()
+        val expectedRecipientBundle = input.expectedRecipientKeyBundleId.toProtoBytes()
         return statement.capsuleId == expectedCapsule &&
             statement.recipientUserId == expectedUser &&
+            statement.senderUserId == expectedSenderUser &&
             statement.senderKeyBundleId == expectedSenderBundle &&
+            statement.recipientKeyBundleId == expectedRecipientBundle &&
             envelope.capsuleId == expectedCapsule &&
             envelope.recipientUserId == expectedUser &&
+            envelope.senderUserId == expectedSenderUser &&
             envelope.senderKeyBundleId == expectedSenderBundle &&
+            envelope.recipientKeyBundleId == expectedRecipientBundle &&
             envelope.capsuleId == statement.capsuleId &&
             envelope.senderUserId == statement.senderUserId &&
             envelope.recipientUserId == statement.recipientUserId &&

@@ -119,6 +119,10 @@ class CanonicalControlVerifierTest {
         artifacts: List<PublishArtifact> = artifacts(),
         statementHash: ByteArray? = null,
         envelopeKeyset: ByteArray? = null,
+        senderUser: UserId = this.senderUser,
+        recipientUser: UserId = this.recipientUser,
+        senderBundle: KeyBundleId = this.senderBundle,
+        recipientBundle: KeyBundleId = this.recipientBundle,
     ): SealedCapsule {
         val success = PublishStatementBuilder.build(
             PublishStatementInput(
@@ -176,11 +180,15 @@ class CanonicalControlVerifierTest {
         authenticatedUser: UserId = recipientUser,
         expectedCapsule: CapsuleId = capsuleId,
         expectedSenderBundle: KeyBundleId = senderBundle,
+        expectedSenderUser: UserId = senderUser,
+        expectedRecipientBundle: KeyBundleId = recipientBundle,
     ): CanonicalControlInput = CanonicalControlInput(
         expectedCapsuleId = expectedCapsule,
         authenticatedUserId = authenticatedUser,
         senderVerifyingKeyset = verifyingKeyset,
         expectedSenderKeyBundleId = expectedSenderBundle,
+        expectedSenderUserId = expectedSenderUser,
+        expectedRecipientKeyBundleId = expectedRecipientBundle,
         envelopePlaintextBytes = capsule.envelopeBytes,
         statementBytes = capsule.statementBytes,
         signature = capsule.signature,
@@ -352,6 +360,45 @@ class CanonicalControlVerifierTest {
         assertEquals(
             RejectionReason.ID_MISMATCH,
             rejected(verifier.verify(controlInput(capsule).copy(envelopePlaintextBytes = disagreeing))),
+        )
+    }
+
+    @Test
+    fun jointlyAlteredSenderUserWithFreshSignatureIsRejectedAgainstExpectedContext() {
+        val alteredSender = UserId(UUID.fromString("6a666666-6666-4666-8666-666666666666"))
+        val capsule = sealedCapsule(senderUser = alteredSender)
+
+        // The altered statement is freshly signed and its envelope is derived
+        // from the same statement, so the pair agrees with itself; only the
+        // external expected sender identity disagrees.
+        assertEquals(alteredSender, UserId.fromProtoBytes(
+            PublishStatement.parseFrom(capsule.statementBytes).senderUserId,
+        ))
+        assertEquals(
+            RejectionReason.ID_MISMATCH,
+            rejected(
+                verifier.verify(controlInput(capsule, expectedSenderUser = senderUser)),
+            ),
+        )
+        // A caller that supplies the matching expected sender still verifies.
+        assertIs<CanonicalControlResult.Verified>(
+            verifier.verify(controlInput(capsule, expectedSenderUser = alteredSender)),
+        )
+    }
+
+    @Test
+    fun jointlyAlteredRecipientKeyBundleWithFreshSignatureIsRejectedAgainstExpectedContext() {
+        val alteredRecipientBundle = KeyBundleId(UUID.fromString("7a777777-7777-4777-8777-777777777777"))
+        val capsule = sealedCapsule(recipientBundle = alteredRecipientBundle)
+
+        assertEquals(
+            RejectionReason.ID_MISMATCH,
+            rejected(
+                verifier.verify(controlInput(capsule, expectedRecipientBundle = recipientBundle)),
+            ),
+        )
+        assertIs<CanonicalControlResult.Verified>(
+            verifier.verify(controlInput(capsule, expectedRecipientBundle = alteredRecipientBundle)),
         )
     }
 

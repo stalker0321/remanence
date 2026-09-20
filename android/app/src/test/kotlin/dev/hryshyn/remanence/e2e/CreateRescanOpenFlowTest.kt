@@ -208,6 +208,8 @@ class CreateRescanOpenFlowTest {
                             identity.signingPublicKeyset,
                         ),
                         expectedSenderKeyBundleId = KeyBundleId(bundleUuid),
+                        expectedSenderUserId = UserId(userUuid),
+                        expectedRecipientKeyBundleId = KeyBundleId(UUID.fromString(row.recipientKeyBundleId)),
                         envelopePlaintextBytes = openedEnvelope,
                         statementBytes = File(requireNotNull(row.publishStatementPath)).readBytes(),
                         signature = File(requireNotNull(row.publishStatementSignaturePath)).readBytes(),

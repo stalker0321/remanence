@@ -281,6 +281,8 @@ class IncomingControlIndexAcceptanceCoordinator(
                             authenticatedUserId = request.ownerUserId,
                             senderVerifyingKeyset = senderKeyset,
                             expectedSenderKeyBundleId = parsed.senderKeyBundleId,
+                            expectedSenderUserId = parsed.senderUserId,
+                            expectedRecipientKeyBundleId = parsed.recipientKeyBundleId,
                             envelopePlaintextBytes = openedEnvelope,
                             statementBytes = parsed.capsule.signedStatementBytes,
                             signature = parsed.capsule.publishSignatureBytes,

@@ -448,6 +448,8 @@ internal class IncomingPresentationPreparation(
                         authenticatedUserId = ownerUserId,
                         senderVerifyingKeyset = senderVerifyingKeyset,
                         expectedSenderKeyBundleId = senderKeyBundleId,
+                        expectedSenderUserId = senderUserId,
+                        expectedRecipientKeyBundleId = recipientKeyBundleId,
                         envelopePlaintextBytes = envelopePlaintext!!,
                         statementBytes = capsule.signedStatementBytes,
                         signature = capsule.publishSignatureBytes,

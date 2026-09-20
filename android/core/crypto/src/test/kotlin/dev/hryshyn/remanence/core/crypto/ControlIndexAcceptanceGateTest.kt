@@ -125,6 +125,8 @@ class ControlIndexAcceptanceGateTest {
         handleSnapshot: String = "mykola",
         createdAtEpochSeconds: Long = 1_700_000_000L,
         placeLabel: String? = null,
+        senderUser: UserId = this.senderUser,
+        recipientKeyBundleId: KeyBundleId = this.recipientBundle,
     ): IndexCapsule {
         val routing = RecognitionManifestCodec.RoutingContext(
             capsuleId = capsuleId,
@@ -146,7 +148,7 @@ class ControlIndexAcceptanceGateTest {
 
         val success = PublishStatementBuilder.build(
             PublishStatementInput(
-                capsuleId, senderUser, recipientUser, senderBundle, recipientBundle,
+                capsuleId, senderUser, recipientUser, senderBundle, recipientKeyBundleId,
                 createdAtEpochSeconds, artifacts(recognitionSize, recognitionSha),
             ),
         ) as PublishStatementBuildResult.Success
@@ -174,11 +176,15 @@ class ControlIndexAcceptanceGateTest {
         expectedCapsule: CapsuleId = capsuleId,
         authenticatedUser: UserId = recipientUser,
         expectedSenderBundle: KeyBundleId = senderBundle,
+        expectedSenderUser: UserId = senderUser,
+        expectedRecipientBundle: KeyBundleId = recipientBundle,
     ): ControlIndexAcceptanceInput = ControlIndexAcceptanceInput(
         expectedCapsuleId = expectedCapsule,
         authenticatedUserId = authenticatedUser,
         senderVerifyingKeyset = senderVerifyingKeyset(),
         expectedSenderKeyBundleId = expectedSenderBundle,
+        expectedSenderUserId = expectedSenderUser,
+        expectedRecipientKeyBundleId = expectedRecipientBundle,
         envelopePlaintextBytes = envelopeOverride ?: capsule.envelopeBytes,
         statementBytes = statementOverride ?: capsule.statementBytes,
         signature = signatureOverride ?: capsule.signature,
@@ -214,6 +220,33 @@ class ControlIndexAcceptanceGateTest {
     fun wrongRecipientFailsAadIntegrityBeforeSemanticCheck() {
         val capsule = buildIndexCapsule()
         val result = indexGate.verify(indexInput(capsule, authenticatedUser = UserId(UUID.fromString("8a888888-8888-4888-8888-888888888888"))))
+        assertEquals(RejectionReason.ID_MISMATCH, rejected(result))
+    }
+
+    /**
+     * Jointly altered envelope/statement identity: the statement is freshly
+     * signed and its envelope is derived from the altered statement, and the
+     * recognition artifact AEAD is sealed under the ALTERED inner sender so it
+     * is cryptographically valid for that statement. The external expected
+     * sender still names the true sender, so the canonical control stage must
+     * reject ID_MISMATCH before the recognition binding check or any artifact
+     * decryption runs.
+     */
+    @Test
+    fun jointlyAlteredSenderWithValidArtifactAeadRejectsIdMismatchBeforeDecryption() {
+        val alteredSender = UserId(UUID.fromString("6a666666-6666-4666-8666-666666666666"))
+        val capsule = buildIndexCapsule(senderUser = alteredSender)
+
+        // Sanity: with the matching expected sender the very same capsule and
+        // its recognition AEAD verify end to end, proving the artifact is valid
+        // under the altered inner sender.
+        assertIs<ControlIndexAcceptanceResult.Verified>(
+            indexGate.verify(indexInput(capsule, expectedSenderUser = alteredSender)),
+        )
+
+        // With the true external expected sender, the canonical verifier must
+        // short-circuit with ID_MISMATCH before reaching the AEAD.
+        val result = indexGate.verify(indexInput(capsule, expectedSenderUser = senderUser))
         assertEquals(RejectionReason.ID_MISMATCH, rejected(result))
     }
 
@@ -468,6 +501,8 @@ class ControlIndexAcceptanceGateTest {
             authenticatedUserId = recipientUser,
             senderVerifyingKeyset = senderVerifyingKeyset(),
             expectedSenderKeyBundleId = senderBundle,
+            expectedSenderUserId = senderUser,
+            expectedRecipientKeyBundleId = recipientBundle,
             envelopePlaintextBytes = envelope,
             statementBytes = bytes,
             signature = signed.signature,
@@ -494,6 +529,8 @@ class ControlIndexAcceptanceGateTest {
             authenticatedUserId = recipientUser,
             senderVerifyingKeyset = senderVerifyingKeyset(),
             expectedSenderKeyBundleId = senderBundle,
+            expectedSenderUserId = senderUser,
+            expectedRecipientKeyBundleId = recipientBundle,
             envelopePlaintextBytes = capsule.envelopeBytes,
             statementBytes = capsule.statementBytes,
             signature = capsule.signature,
@@ -537,6 +574,8 @@ class ControlIndexAcceptanceGateTest {
             authenticatedUserId = recipientUser,
             senderVerifyingKeyset = senderVerifyingKeyset(),
             expectedSenderKeyBundleId = senderBundle,
+            expectedSenderUserId = senderUser,
+            expectedRecipientKeyBundleId = recipientBundle,
             envelopePlaintextBytes = capsule.envelopeBytes,
             statementBytes = capsule.statementBytes,
             signature = capsule.signature,

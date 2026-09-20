@@ -25,7 +25,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 
 private fun Modifier.holdPressShift(pressed: Boolean, enabled: Boolean): Modifier =
-    graphicsLayer { translationY = if (pressed && enabled) 5f else 0f }
+    graphicsLayer { translationY = if (pressed && enabled) 4f else 0f }
 
 @Composable
 fun HoldButton(
@@ -124,10 +124,11 @@ fun HoldActionObject(
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val focused by interaction.collectIsFocusedAsState()
-    // Press snaps immediately so it remains visible when animator duration is 0.
+    // Guide: 6.dp edge, 3–4.dp travel (~110ms), pressed edge 1–2.dp.
+    // Snap on contact so animator-duration 0 still shows press.
     val travel by animateDpAsState(
-        targetValue = if (pressed && enabled) 6.dp else 0.dp,
-        animationSpec = if (pressed) snap() else tween(140),
+        targetValue = if (pressed && enabled) 4.dp else 0.dp,
+        animationSpec = if (pressed) snap() else tween(110),
         label = "Hold pressure",
     )
     val shape = RoundedCornerShape(if (secondary) 19.dp else 24.dp)

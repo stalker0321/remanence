@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Handoff asset only. Not installed in the Android reference. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-    <!-- Path bbox (15,14)–(82,81). Scale 0.80 and translate so the glyph center sits on 54,54 inside the 66dp adaptive safe zone. -->
-    <group android:translateX="15.2" android:translateY="16" android:scaleX="0.80" android:scaleY="0.80">
+    <!-- Handoff: 0.72 and (21.96, 19.8) keep the curved shoulder inside the 66-unit circle. Do not bbox-center. -->
+    <group android:translateX="21.96" android:translateY="19.8" android:scaleX="0.72" android:scaleY="0.72">
         <path android:fillColor="#333951" android:pathData="M15,14H35V47C35,57 39,61 49,61H65V81H46C25,81 15,70 15,50V14Z"/>
         <path android:fillColor="#333951" android:pathData="M47,14H67C76,14 82,20 82,29V48H63V36C63,33 61,31 58,31H47V14Z"/>
     </group>

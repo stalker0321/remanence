@@ -22,7 +22,9 @@ The MVP uses the following constraints as architectural invariants:
    global visual index, inbox, or gallery.
 7. A capsule is published atomically only after every declared ciphertext blob and the recipient envelope have been uploaded and verified.
 8. Upload retry is blob-granular. Byte-range multipart upload is unnecessary for the deliberately size-limited MVP payload.
-9. The server never records a semantic `OPENED` state. At most it knows that encrypted material was synchronized.
+9. The server never records physical receipt, decryption, viewing, or render success. It may record a durable authenticated
+   first-open **admission claim** (`first_opened_at`) under the capsule transaction; that claim authorizes the recipient-side
+   grant/open boundary and is not proof that the recipient physically possessed, rendered, or viewed the capsule.
 10. Music, contacts, iOS, web, notifications, AR, realtime frame analysis, and public/social surfaces are outside the core design.
 
 ## 2. System context and trust boundaries
@@ -410,7 +412,12 @@ protocol, and threat-model decision.
 - state `AVAILABLE` or `CIPHERTEXT_SYNCED`;
 - timestamps.
 
-This state is an optimization for delivery/sync only. There is no server state for physical receipt, recognition result, decryption, capsule opening, or later scans. It is never exposed to the sender in MVP.
+This state is an optimization for delivery/sync only. Separately, the server may retain the recipient's durable authenticated
+first-open admission claim under the capsule lock. Neither state proves physical receipt, recognition success, decryption,
+rendering, viewing, or later scans; the admission claim is authorization state, not a semantic render-success state. A
+committed sender tombstone wins before admission; after admission, cancellation is rejected. Local preparation failure before
+admission leaves cancellation available, while a later local presentation failure does not undo an already committed claim.
+These states are not exposed to the sender as proof of viewing.
 
 ## 9. Capsule publication lifecycle
 
@@ -553,9 +560,13 @@ The architecture leaves extension points but does not implement them now:
 - iOS can implement the documented protocol later; no shared UI or multiplatform abstraction is introduced now.
 - conservative sender+recipient+FRONT duplicate prevention is a separate
   future decision and must not create visual uniqueness leakage;
-- an optional 24-hour post-publication cancellation window is a separate future
-  decision requiring a durable revoke/tombstone and cannot erase recipient
-  copies.
+- the 24-hour post-publication cancellation window is implemented as a
+  separate durable revoke/tombstone and first-open admission contract:
+  cancellation and first-open admission serialize under the capsule lock, the
+  first committed operation wins, unopened local state is invalidated by a
+  committed tombstone, and already-open material cannot be retroactively
+  erased. The authenticated admission claim is not proof of physical
+  possession, rendering, or viewing.
 
 ## 15. Architecture gate checklist
 

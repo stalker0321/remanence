@@ -14,12 +14,15 @@ import dev.hryshyn.remanence.core.model.LocalMaterialState
 import dev.hryshyn.remanence.core.model.UserId
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
@@ -250,6 +253,52 @@ class IncomingTombstoneSyncRepositoryTest {
             "incoming",
         )!!.serverCursor)
         assertNotNull(database.recipientTombstoneDao().getForOwner(OWNER.toRestString(), CAPSULE))
+    }
+
+    @Test
+    fun roomCommitCompleteBeforeCancellationStillInvalidatesPreparedState() = runTest {
+        val capsule = CapsuleId.parseRest(CAPSULE)
+        val commitComplete = CompletableDeferred<Unit>()
+        val releaseAfterCommit = CompletableDeferred<Unit>()
+        val invalidated = AtomicInteger(0)
+        val boundary = RecipientTombstonePresentationBoundary()
+        val registration = boundary.registerPrepared(OWNER, capsule) {
+            invalidated.incrementAndGet()
+        }
+        val feed = Feed(success(listOf(IncomingTombstone(capsule, 66L)), "r1"))
+        val repository = IncomingTombstoneSyncRepository(
+            remote = feed,
+            database = database,
+            roots = roots,
+            currentSession = { IncomingSyncSession(OWNER, "access-token") },
+            revocationBoundary = boundary,
+            durableApplyPage = { ownerUserId, expectedCursor, tombstones, nextCursor, committedAtEpochMs ->
+                database.recipientTombstoneDao().applyPage(
+                    ownerUserId = ownerUserId,
+                    expectedCursor = expectedCursor,
+                    tombstones = tombstones,
+                    nextCursor = nextCursor,
+                    committedAtEpochMs = committedAtEpochMs,
+                )
+                commitComplete.complete(Unit)
+                releaseAfterCommit.await()
+            },
+        )
+
+        val job = launch { repository.syncNextPage() }
+        commitComplete.await()
+        job.cancel(kotlinx.coroutines.CancellationException("cancel after Room commit"))
+        releaseAfterCommit.complete(Unit)
+        job.join()
+
+        assertTrue(job.isCancelled)
+        assertEquals(1, invalidated.get())
+        assertNotNull(database.recipientTombstoneDao().getForOwner(OWNER.toRestString(), CAPSULE))
+        assertEquals(
+            "r1",
+            database.recipientTombstoneDao().getWatermarkForOwner(OWNER.toRestString())!!.serverCursor,
+        )
+        registration.close()
     }
 
     @Test

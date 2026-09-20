@@ -256,8 +256,12 @@ BACK production mode, or Room/data migration is required.
 single-candidate behavior, and no-auto-open ambiguity result must exist before
 any UI selection is added. The recipient picker is the separately named future
 milestone `M2-F1`, below. Duplicate prevention and a 24-hour
-cancellation/tombstone window are separate future milestones, not hidden
-subtasks in this queue.
+cancellation/tombstone window are separate from this reset queue; M2-F3 is
+implemented in the current cancel slice as a durable authenticated first-open
+admission claim plus sender revoke/tombstone semantics. The claim authorizes
+the grant/open boundary but is not proof of physical possession, rendering,
+or viewing; the first committed cancel/admission operation wins, and local
+preparation failure before admission leaves cancellation available.
 
 ### M2-F0 closure record (recorded at `88fb80d`)
 

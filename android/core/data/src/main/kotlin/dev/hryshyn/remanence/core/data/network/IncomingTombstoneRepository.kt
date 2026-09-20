@@ -7,6 +7,8 @@ import java.nio.charset.CodingErrorAction
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
@@ -17,7 +19,6 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.ResponseBody
-import okhttp3.coroutines.executeAsync
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.UserId
 
@@ -114,8 +115,29 @@ class IncomingTombstoneRepository internal constructor(
 
         return try {
             val boundRequest = requestLeaseProvider?.tag(request, requestLease!!) ?: request
-            client.newCall(boundRequest).executeAsync().use { response ->
-                interpret(response, cursor, limit)
+            val result = client.executeResponseWithCallLifetime(boundRequest) { response ->
+                if (requestLease != null &&
+                    requestLeaseProvider != null &&
+                    !requestLeaseProvider.isLive(requestLease)
+                ) {
+                    IncomingTombstoneResult.Failure(
+                        reason = IncomingTombstoneFailure.NETWORK,
+                        retryable = true,
+                    )
+                } else {
+                    interpret(response, cursor, limit)
+                }
+            }
+            if (requestLease != null &&
+                requestLeaseProvider != null &&
+                !requestLeaseProvider.isLive(requestLease)
+            ) {
+                IncomingTombstoneResult.Failure(
+                    reason = IncomingTombstoneFailure.NETWORK,
+                    retryable = true,
+                )
+            } else {
+                result
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -127,7 +149,7 @@ class IncomingTombstoneRepository internal constructor(
         }
     }
 
-    private fun interpret(
+    private suspend fun interpret(
         response: Response,
         requestedCursor: String?,
         limit: Int,
@@ -261,15 +283,18 @@ class IncomingTombstoneRepository internal constructor(
         it.type == "application" && it.subtype == "problem+json"
     } == true
 
-    private fun readBounded(body: ResponseBody): ByteArray? {
+    private suspend fun readBounded(body: ResponseBody): ByteArray? {
         if (body.contentLength() > MAX_RESPONSE_BYTES) return null
         val output = ByteArrayOutputStream()
         val buffer = ByteArray(8 * 1024)
         body.byteStream().use { input ->
             while (true) {
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
                 val read = input.read(buffer)
                 if (read == -1) break
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
                 output.write(buffer, 0, read)
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
                 if (output.size() > MAX_RESPONSE_BYTES) return null
             }
         }

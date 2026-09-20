@@ -145,7 +145,8 @@ abstract class RecipientTombstoneDao {
     protected abstract suspend fun insertTombstone(tombstone: RecipientTombstoneEntity)
 
     @Query(
-        "UPDATE incoming_capsule SET server_status = 'REVOKED' " +
+        "UPDATE incoming_capsule SET server_status = 'REVOKED', " +
+            "first_open_claimed_at_epoch_ms = NULL " +
             "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId " +
             "AND server_status != 'REVOKED'",
     )

@@ -44,10 +44,21 @@ class ProductionApiStack private constructor(
         expectedLease: SessionRequestLease?,
     ): Boolean = requestLeaseProvider.admitOwner(ownerUserId, expectedLease) != null
 
+    /** Captures the exact live owner/incarnation for a long-lived operation. */
+    fun captureSessionRequestLease(): SessionRequestLease? = requestLeaseProvider.capture()
+
+    /** Selects the bearer only while [lease] still names the live session. */
+    fun accessTokenForSessionRequestLease(lease: SessionRequestLease): String? =
+        requestLeaseProvider.accessTokenFor(lease)
+
+    /** Read-only liveness check for a prepared operation's session boundary. */
+    fun isSessionRequestLeaseLive(lease: SessionRequestLease): Boolean =
+        requestLeaseProvider.isLive(lease)
+
     /** Fully wired client for every authenticated API surface. */
     private val authenticatedClient: OkHttpClient =
         RefreshingAuthenticator.attach(
-            OkHttpClient.Builder(),
+            HttpClientFactory.create().newBuilder(),
             sessionRefreshCoordinator,
         ).build()
 
@@ -63,6 +74,10 @@ class ProductionApiStack private constructor(
 
     val capsuleRevokeRepository: CapsuleRevokeRepository =
         CapsuleRevokeRepository(authenticatedClient, baseUrl, requestLeaseProvider)
+
+    /** Recipient first-open claims share the same authenticated lease boundary. */
+    val capsuleFirstOpenRepository: CapsuleFirstOpenRepository =
+        CapsuleFirstOpenRepository(authenticatedClient, baseUrl, requestLeaseProvider)
 
     /** Mutable handle lookup shares the authenticated refreshing client. */
     val directoryRepository: DirectoryRepository =

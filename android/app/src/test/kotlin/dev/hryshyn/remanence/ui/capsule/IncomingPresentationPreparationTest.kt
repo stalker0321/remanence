@@ -30,6 +30,7 @@ import dev.hryshyn.remanence.core.data.network.IncomingTombstone
 import dev.hryshyn.remanence.core.data.network.IncomingTombstoneFeed
 import dev.hryshyn.remanence.core.data.network.IncomingTombstonePage
 import dev.hryshyn.remanence.core.data.network.IncomingTombstoneResult
+import dev.hryshyn.remanence.core.data.network.SessionRequestLease
 import dev.hryshyn.remanence.core.data.fingerprints.SecretSealer
 import dev.hryshyn.remanence.core.data.fingerprints.EncryptedFingerprintStore
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
@@ -99,6 +100,7 @@ import kotlin.coroutines.cancellation.CancellationException
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -191,6 +193,309 @@ class IncomingPresentationPreparationTest {
             prepared.close()
         }
         assertTrue(runCatching { prepared.loadPhoto(0) }.isFailure)
+    }
+
+    @Test
+    fun tombstoneCommittedAfterPreparationRefusesPreviouslyCachedButUnopenedMaterial() = runBlocking {
+        val boundary = RecipientTombstonePresentationBoundary()
+        val prepared = requireType<IncomingPresentationPreparationResult.Prepared>(
+            preparation(revocationBoundary = boundary).prepare(OWNER, CAPSULE),
+        ).presentation
+
+        val result = IncomingTombstoneSyncRepository(
+            remote = IncomingTombstoneFeed { _, _, _, _ ->
+                IncomingTombstoneResult.Success(
+                    IncomingTombstonePage(
+                        items = listOf(IncomingTombstone(CAPSULE, 124L)),
+                        hasMore = false,
+                        nextCursor = "r1",
+                    ),
+                    httpStatus = 200,
+                )
+            },
+            database = database,
+            roots = roots,
+            currentSession = { IncomingSyncSession(OWNER, "access-token") },
+            revocationBoundary = boundary,
+            filePurger = { _, _ -> },
+        ).syncNextPage()
+
+        assertTrue(result is dev.hryshyn.remanence.core.data.db.IncomingTombstoneSyncResult.Committed)
+        assertFalse(prepared.admitForOpen())
+        assertTrue(runCatching { prepared.loadPhoto(0) }.isFailure)
+        prepared.close()
+    }
+
+    @Test
+    fun unknownFirstOpenFailsClosedWhenOfflineAndClosesPreparedMaterial() = runBlocking {
+        val prepared = requireType<IncomingPresentationPreparationResult.Prepared>(
+            preparation(firstOpenClaim = { _, _, _ -> null }).prepare(OWNER, CAPSULE),
+        ).presentation
+
+        assertFalse(prepared.admitForOpen())
+        assertTrue(runCatching { prepared.loadPhoto(0) }.isFailure)
+    }
+
+    @Test
+    fun serverConfirmedClaimPersistsAndAllowsKnownReplayOffline() = runBlocking {
+        val claimCalls = AtomicInteger(0)
+        val prepared = requireType<IncomingPresentationPreparationResult.Prepared>(
+            preparation(
+                firstOpenClaim = { _, _, _ ->
+                    claimCalls.incrementAndGet()
+                    1_700_000_000_002L
+                },
+            ).prepare(OWNER, CAPSULE),
+        ).presentation
+
+        assertTrue(prepared.admitForOpen())
+        assertEquals(1, claimCalls.get())
+        assertEquals(
+            1_700_000_000_002L,
+            database.incomingCapsuleDao().getByCapsuleIdAndOwner(
+                CAPSULE.toRestString(),
+                OWNER.toRestString(),
+            )?.firstOpenClaimedAtEpochMs,
+        )
+        prepared.close()
+
+        val replay = requireType<IncomingPresentationPreparationResult.Prepared>(
+            preparation(firstOpenClaim = { _, _, _ -> error("offline replay must not claim") })
+                .prepare(OWNER, CAPSULE),
+        ).presentation
+        assertTrue(replay.admitForOpen())
+        replay.close()
+    }
+
+    @Test
+    fun staleA1PreparedMaterialCannotClaimUnderSameOwnerA2() = runBlocking {
+        val a1 = currentIdentity()
+        val a2 = CurrentRecipientEncryptionIdentity(
+            ownerUserId = OWNER,
+            activeKeyBundleId = RECIPIENT_BUNDLE,
+            encryptionPrivateKeyset = fixture.recipientIdentity.encryptionPrivateHandle,
+            sessionLease = SessionRequestLease(OWNER, 2L),
+        )
+        var identityCalls = 0
+        var claimCalls = 0
+        val prepared = requireType<IncomingPresentationPreparationResult.Prepared>(
+            preparation(
+                identity = {
+                    identityCalls += 1
+                    when (identityCalls) {
+                        1, 2 -> a1
+                        else -> a2
+                    }
+                },
+                firstOpenClaim = { _, _, _ ->
+                    claimCalls += 1
+                    1_700_000_000_003L
+                },
+            ).prepare(OWNER, CAPSULE),
+        ).presentation
+
+        assertFalse(prepared.admitForOpen())
+        assertEquals(0, claimCalls)
+        prepared.close()
+    }
+
+    @Test
+    fun staleA1ClaimedMaterialCannotOpenUnderSameOwnerA2() = runBlocking {
+        database.incomingCapsuleDao().markFirstOpenClaimedForOwner(
+            capsuleId = CAPSULE.toRestString(),
+            ownerUserId = OWNER.toRestString(),
+            claimedAtEpochMs = 1_700_000_000_003L,
+        )
+        val a1 = currentIdentity()
+        val a2 = CurrentRecipientEncryptionIdentity(
+            ownerUserId = a1.ownerUserId,
+            activeKeyBundleId = a1.activeKeyBundleId,
+            encryptionPrivateKeyset = a1.encryptionPrivateKeyset,
+            sessionLease = SessionRequestLease(OWNER, 2L),
+        )
+        var identityCalls = 0
+        val prepared = requireType<IncomingPresentationPreparationResult.Prepared>(
+            preparation(
+                identity = {
+                    identityCalls += 1
+                    if (identityCalls == 1) a1 else a2
+                },
+                firstOpenClaim = { _, _, _ -> error("claimed replay must not issue a server claim") },
+            ).prepare(OWNER, CAPSULE),
+        ).presentation
+
+        assertFalse(prepared.admitForOpen())
+        prepared.close()
+    }
+
+    @Test
+    fun localPresentationFailureBeforeAdmissionLeavesClaimAndCancelAvailable() = runBlocking {
+        var claimCalls = 0
+        val missing = fixture.artifacts.last().path(roots)
+        check(missing.delete())
+        val result = preparation(
+            firstOpenClaim = { _, _, _ ->
+                claimCalls += 1
+                1_700_000_000_004L
+            },
+        ).prepare(OWNER, CAPSULE)
+
+        assertEquals(
+            IncomingPresentationPreparationRejection.MATERIAL_INVALID,
+            requireType<IncomingPresentationPreparationResult.Rejected>(result).reason,
+        )
+        assertEquals(0, claimCalls)
+    }
+
+    @Test
+    fun localPresentationFailureAfterAdmissionDoesNotEraseCommittedClaim() = runBlocking {
+        var claimCalls = 0
+        val prepared = requireType<IncomingPresentationPreparationResult.Prepared>(
+            preparation(
+                firstOpenClaim = { _, _, _ ->
+                    claimCalls += 1
+                    1_700_000_000_005L
+                },
+            ).prepare(OWNER, CAPSULE),
+        ).presentation
+
+        assertTrue(prepared.admitForOpen())
+        // Preparation owns an in-memory verified snapshot.  A render-side
+        // failure must therefore be exercised after admission, without
+        // pretending that deleting the source cache can invalidate it.
+        assertTrue(runCatching { prepared.loadPhoto(99) }.isFailure)
+        assertEquals(1, claimCalls)
+        assertEquals(
+            1_700_000_000_005L,
+            database.incomingCapsuleDao().getByCapsuleIdAndOwner(
+                CAPSULE.toRestString(),
+                OWNER.toRestString(),
+            )?.firstOpenClaimedAtEpochMs,
+        )
+        prepared.close()
+    }
+
+    @Test
+    fun tombstoneInvalidatesTheExactIncomingGrantAfterCommit() = runBlocking {
+        val boundary = RecipientTombstonePresentationBoundary()
+        val prepared = requireType<IncomingPresentationPreparationResult.Prepared>(
+            preparation(revocationBoundary = boundary).prepare(OWNER, CAPSULE),
+        ).presentation
+        val authority = PresentationGrantAuthority(
+            dev.hryshyn.remanence.core.recognition.ScanGrantManager(clockMillis = { 1_000L }),
+        )
+        val grant = authority.issue(
+            ownerUserId = OWNER,
+            capsuleId = CAPSULE.value,
+            source = CapsulePresentationSource.INCOMING,
+            scanGeneration = 1,
+            incomingPresentation = prepared,
+        )
+
+        val result = IncomingTombstoneSyncRepository(
+            remote = IncomingTombstoneFeed { _, _, _, _ ->
+                IncomingTombstoneResult.Success(
+                    IncomingTombstonePage(
+                        items = listOf(IncomingTombstone(CAPSULE, 126L)),
+                        hasMore = false,
+                        nextCursor = "r1",
+                    ),
+                    httpStatus = 200,
+                )
+            },
+            database = database,
+            roots = roots,
+            currentSession = { IncomingSyncSession(OWNER, "access-token") },
+            revocationBoundary = boundary,
+            filePurger = { _, _ -> },
+            onTombstonesCommitted = { owner, capsules ->
+                capsules.forEach { capsule -> authority.revokeIncoming(owner, capsule) }
+            },
+        ).syncNextPage()
+
+        assertTrue(result is dev.hryshyn.remanence.core.data.db.IncomingTombstoneSyncResult.Committed)
+        assertNull(authority.resolve(grant.grantId, OWNER))
+        assertTrue(runCatching { prepared.loadPhoto(0) }.isFailure)
+    }
+
+    @Test
+    fun committedTombstoneBeforeGrantAdmissionIssuesNoGrantAndNoOpen() = runBlocking {
+        val boundary = RecipientTombstonePresentationBoundary()
+        val preparer = preparation(revocationBoundary = boundary)
+        val prepared = requireType<IncomingPresentationPreparationResult.Prepared>(
+            preparer.prepare(OWNER, CAPSULE),
+        ).presentation
+        val result = IncomingTombstoneSyncRepository(
+            remote = IncomingTombstoneFeed { _, _, _, _ ->
+                IncomingTombstoneResult.Success(
+                    IncomingTombstonePage(
+                        items = listOf(IncomingTombstone(CAPSULE, 127L)),
+                        hasMore = false,
+                        nextCursor = "r1",
+                    ),
+                    httpStatus = 200,
+                )
+            },
+            database = database,
+            roots = roots,
+            currentSession = { IncomingSyncSession(OWNER, "access-token") },
+            revocationBoundary = boundary,
+            filePurger = { _, _ -> },
+        ).syncNextPage()
+        assertTrue(result is dev.hryshyn.remanence.core.data.db.IncomingTombstoneSyncResult.Committed)
+
+        var issued = false
+        val grantId = preparer.admitPreparedForGrant(OWNER, CAPSULE, prepared) {
+            issued = true
+            "must-not-be-issued"
+        }
+        assertNull(grantId)
+        assertFalse(issued)
+        assertTrue(runCatching { prepared.loadPhoto(0) }.isFailure)
+    }
+
+    @Test
+    fun cancelCommitWinsBoundaryRaceBeforeFinalOpenAdmission() = runBlocking {
+        val boundary = RecipientTombstonePresentationBoundary()
+        val prepared = requireType<IncomingPresentationPreparationResult.Prepared>(
+            preparation(revocationBoundary = boundary).prepare(OWNER, CAPSULE),
+        ).presentation
+        val tombstoneEntered = CompletableDeferred<Unit>()
+        val releaseTombstone = CompletableDeferred<Unit>()
+        val sync = async {
+            IncomingTombstoneSyncRepository(
+                remote = IncomingTombstoneFeed { _, _, _, _ ->
+                    IncomingTombstoneResult.Success(
+                        IncomingTombstonePage(
+                            items = listOf(IncomingTombstone(CAPSULE, 125L)),
+                            hasMore = false,
+                            nextCursor = "r1",
+                        ),
+                        httpStatus = 200,
+                    )
+                },
+                database = database,
+                roots = roots,
+                currentSession = { IncomingSyncSession(OWNER, "access-token") },
+                revocationBoundary = boundary,
+                filePurger = { _, _ ->
+                    tombstoneEntered.complete(Unit)
+                    releaseTombstone.await()
+                },
+            ).syncNextPage()
+        }
+        tombstoneEntered.await()
+
+        val admission = async { prepared.admitForOpen() }
+        kotlinx.coroutines.yield()
+        assertFalse(admission.isCompleted)
+        releaseTombstone.complete(Unit)
+
+        assertTrue(
+            sync.await() is dev.hryshyn.remanence.core.data.db.IncomingTombstoneSyncResult.Committed,
+        )
+        assertFalse(admission.await())
+        prepared.close()
     }
 
     @Test
@@ -461,6 +766,8 @@ class IncomingPresentationPreparationTest {
 
     private fun preparation(
         identity: suspend () -> CurrentRecipientEncryptionIdentity? = { currentIdentity() },
+        firstOpenClaim: suspend (UserId, CapsuleId, SessionRequestLease?) -> Long? =
+            { _, _, _ -> 1_700_000_000_002L },
         beforePreparedResultDelivery: suspend () -> Unit = {},
         beforePreparedDelivery: (kotlinx.coroutines.CancellableContinuation<PreparedIncomingPresentation>) -> Unit = {},
         onPreparedMaterialClosed: () -> Unit = {},
@@ -470,9 +777,11 @@ class IncomingPresentationPreparationTest {
         incomingCapsuleDao = database.incomingCapsuleDao(),
         incomingEnvelopeDao = database.incomingEnvelopeDao(),
         blobCacheDao = database.blobCacheDao(),
+        recipientTombstoneDao = database.recipientTombstoneDao(),
         roots = roots,
         senderIndexBundleReader = SenderIndexBundleReader(roots, fixture.sealer),
         currentRecipientIdentity = identity,
+        firstOpenClaim = firstOpenClaim,
         acceptanceGate = PresentationAcceptanceGate(),
         envelopeCryptor = RecipientEnvelopeCryptor(),
         revocationBoundary = revocationBoundary,
@@ -485,6 +794,7 @@ class IncomingPresentationPreparationTest {
         ownerUserId = OWNER,
         activeKeyBundleId = RECIPIENT_BUNDLE,
         encryptionPrivateKeyset = fixture.recipientIdentity.encryptionPrivateHandle,
+        sessionLease = SessionRequestLease(OWNER, 1L),
     )
 
     private class FixedScanProcessor(

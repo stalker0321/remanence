@@ -12,7 +12,9 @@ import dev.hryshyn.remanence.core.data.db.BlobCacheState
 import dev.hryshyn.remanence.core.data.db.IncomingCapsuleDao
 import dev.hryshyn.remanence.core.data.db.IncomingCapsuleEntity
 import dev.hryshyn.remanence.core.data.db.IncomingEnvelopeDao
+import dev.hryshyn.remanence.core.data.db.RecipientTombstoneDao
 import dev.hryshyn.remanence.core.data.db.RecipientTombstonePresentationBoundary
+import dev.hryshyn.remanence.core.data.network.SessionRequestLease
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.data.storage.TrustedPathSafety
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
@@ -99,8 +101,15 @@ internal class PreparedIncomingPresentation internal constructor(
     val ownerUserId: UserId,
     val capsuleId: CapsuleId,
     private val material: PreparedPresentationMaterial,
+    private val admissionIdentity: CurrentRecipientEncryptionIdentity,
+    private val openAdmission: suspend () -> Boolean,
+    revocationBoundary: RecipientTombstonePresentationBoundary,
 ) : AutoCloseable {
     private val closed = AtomicBoolean(false)
+    private val revocationRegistration = revocationBoundary.registerPrepared(
+        ownerUserId = ownerUserId,
+        capsuleId = capsuleId,
+    ) { close() }
 
     internal val photoCount: Int
         get() = material.photoCount
@@ -109,8 +118,37 @@ internal class PreparedIncomingPresentation internal constructor(
 
     internal fun loadPhoto(ordinal: Int): ByteArray = material.loadPhoto(ordinal)
 
+    /** Used only while the owner/capsule boundary is held before grant issue. */
+    internal fun isOpenForGrant(): Boolean = !closed.get()
+
+    /**
+     * Final admission for the first route open. Preparation may have crossed
+     * a suspend/navigation boundary after the tombstone handoff, so the
+     * caller must re-enter the same owner-scoped fence immediately before it
+     * creates the content source. A false result is a safe local denial; it
+     * never falls back to network or to a different capsule/session.
+     */
+    internal suspend fun admitForOpen(): Boolean {
+        if (closed.get()) return false
+        val admitted = try {
+            openAdmission()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
+        }
+        if (!admitted) close()
+        return admitted && !closed.get()
+    }
+
     override fun close() {
-        if (closed.compareAndSet(false, true)) material.close()
+        if (closed.compareAndSet(false, true)) {
+            try {
+                material.close()
+            } finally {
+                revocationRegistration.close()
+            }
+        }
     }
 
     override fun toString(): String = "PreparedIncomingPresentation(<redacted>)"
@@ -167,17 +205,20 @@ private class PreparedIncomingPresentationHolder(
 }
 
 /**
- * Owner-scoped offline presentation preparation. This is deliberately
- * independent from [dev.hryshyn.remanence.core.data.db.IncomingSyncSession]:
- * no access token or network repository is needed after local acceptance.
+ * Owner-scoped presentation preparation. The expensive crypto/file snapshot
+ * remains local and owner-fenced; an unknown first open must still pass the
+ * injected durable online claim before the route creates its content source.
+ * A server-confirmed local claim is sufficient for later offline replay.
  */
 internal class IncomingPresentationPreparation(
     private val incomingCapsuleDao: IncomingCapsuleDao,
     private val incomingEnvelopeDao: IncomingEnvelopeDao,
     private val blobCacheDao: BlobCacheDao,
+    private val recipientTombstoneDao: RecipientTombstoneDao,
     private val roots: AccountScopedFileRoots,
     private val senderIndexBundleReader: SenderIndexBundleReader,
     private val currentRecipientIdentity: suspend () -> CurrentRecipientEncryptionIdentity?,
+    private val firstOpenClaim: suspend (UserId, CapsuleId, SessionRequestLease?) -> Long?,
     private val acceptanceGate: PresentationAcceptanceGate = PresentationAcceptanceGate(),
     private val envelopeCryptor: RecipientEnvelopeCryptor = RecipientEnvelopeCryptor(),
     private val revocationBoundary: RecipientTombstonePresentationBoundary =
@@ -438,10 +479,16 @@ internal class IncomingPresentationPreparation(
                 return@withContext rejected(IncomingPresentationPreparationRejection.ACCOUNT_CHANGED)
             }
 
+            val presentationIdentity = initialIdentity
             val presentation = PreparedIncomingPresentation(
                 ownerUserId = ownerUserId,
                 capsuleId = capsuleId,
                 material = accepted,
+                admissionIdentity = presentationIdentity,
+                openAdmission = {
+                    admitPreparedForOpen(ownerUserId, capsuleId, presentationIdentity)
+                },
+                revocationBoundary = revocationBoundary,
             )
             if (!preparedHolder.store(presentation)) {
                 preparedHolder.closeDetached(presentation)
@@ -493,6 +540,177 @@ internal class IncomingPresentationPreparation(
         } finally {
             preparedHolder.closeOwned()
         }
+    }
+
+    private enum class LocalOpenAdmission {
+        DENIED,
+        NEEDS_ONLINE_CLAIM,
+        CLAIMED,
+    }
+
+    /** Local tombstones and claims are read without holding the lock over I/O. */
+    private suspend fun readLocalOpenAdmission(
+        ownerUserId: UserId,
+        capsuleId: CapsuleId,
+    ): LocalOpenAdmission = try {
+        revocationBoundary.withCapsule(ownerUserId, capsuleId) {
+            val latestCapsule = incomingCapsuleDao.getByCapsuleIdAndOwner(
+                capsuleId = capsuleId.toRestString(),
+                ownerUserId = ownerUserId.toRestString(),
+            )
+            val tombstone = recipientTombstoneDao.getForOwner(
+                ownerUserId = ownerUserId.toRestString(),
+                capsuleId = capsuleId.toRestString(),
+            )
+            when {
+                tombstone != null || latestCapsule == null -> LocalOpenAdmission.DENIED
+                !hasPresentationBinding(latestCapsule, ownerUserId, capsuleId) ->
+                    LocalOpenAdmission.DENIED
+                latestCapsule.materialState != LocalMaterialState.MATERIAL_CACHED &&
+                    latestCapsule.materialState != LocalMaterialState.FINGERPRINT_ACCEPTED ->
+                    LocalOpenAdmission.DENIED
+                latestCapsule.firstOpenClaimedAtEpochMs != null -> LocalOpenAdmission.CLAIMED
+                else -> LocalOpenAdmission.NEEDS_ONLINE_CLAIM
+            }
+        }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        LocalOpenAdmission.DENIED
+    }
+
+    private suspend fun admitPreparedForOpen(
+        ownerUserId: UserId,
+        capsuleId: CapsuleId,
+        preparedIdentity: CurrentRecipientEncryptionIdentity,
+    ): Boolean {
+        val initialIdentity = try {
+            currentRecipientIdentity()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return false
+        } ?: return false
+        if (initialIdentity.ownerUserId != ownerUserId ||
+            initialIdentity.activeKeyBundleId != preparedIdentity.activeKeyBundleId
+        ) return false
+
+        when (readLocalOpenAdmission(ownerUserId, capsuleId)) {
+            LocalOpenAdmission.DENIED -> return false
+            LocalOpenAdmission.CLAIMED -> return sameRecipientIncarnation(
+                ownerUserId,
+                initialIdentity,
+                preparedIdentity.sessionLease,
+            )
+            LocalOpenAdmission.NEEDS_ONLINE_CLAIM -> Unit
+        }
+
+        val expectedLease = preparedIdentity.sessionLease ?: return false
+        if (!sameRecipientIncarnation(ownerUserId, initialIdentity, expectedLease)) return false
+
+        val claimedAtEpochMs = try {
+            firstOpenClaim(ownerUserId, capsuleId, expectedLease)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            null
+        } ?: return false
+        if (claimedAtEpochMs < 0L) return false
+        if (!sameRecipientIncarnation(ownerUserId, initialIdentity, expectedLease)) return false
+
+        return try {
+            revocationBoundary.withCapsule(ownerUserId, capsuleId) {
+                val latestCapsule = incomingCapsuleDao.getByCapsuleIdAndOwner(
+                    capsuleId = capsuleId.toRestString(),
+                    ownerUserId = ownerUserId.toRestString(),
+                )
+                val tombstone = recipientTombstoneDao.getForOwner(
+                    ownerUserId = ownerUserId.toRestString(),
+                    capsuleId = capsuleId.toRestString(),
+                )
+                if (tombstone != null || latestCapsule == null ||
+                    !hasPresentationBinding(latestCapsule, ownerUserId, capsuleId) ||
+                    (latestCapsule.materialState != LocalMaterialState.MATERIAL_CACHED &&
+                        latestCapsule.materialState != LocalMaterialState.FINGERPRINT_ACCEPTED)
+                ) {
+                    false
+                } else {
+                    incomingCapsuleDao.markFirstOpenClaimedForOwner(
+                        capsuleId = capsuleId.toRestString(),
+                        ownerUserId = ownerUserId.toRestString(),
+                        claimedAtEpochMs = claimedAtEpochMs,
+                    )
+                    incomingCapsuleDao.getByCapsuleIdAndOwner(
+                        capsuleId = capsuleId.toRestString(),
+                        ownerUserId = ownerUserId.toRestString(),
+                    )?.firstOpenClaimedAtEpochMs != null
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private suspend fun sameRecipientIncarnation(
+        ownerUserId: UserId,
+        initialIdentity: CurrentRecipientEncryptionIdentity,
+        expectedLease: SessionRequestLease? = null,
+    ): Boolean {
+        val current = try {
+            currentRecipientIdentity()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return false
+        } ?: return false
+        return current.ownerUserId == ownerUserId &&
+            current.activeKeyBundleId == initialIdentity.activeKeyBundleId &&
+            (expectedLease == null || current.sessionLease == expectedLease)
+    }
+
+    /**
+     * Final owner/capsule fence between prepared material and grant creation.
+     * A committed tombstone either wins before this block and rejects the
+     * grant, or wins after it and invalidates the grant through the same
+     * boundary callback; it cannot leave a grant behind a tombstone commit.
+     */
+    internal suspend fun <T> admitPreparedForGrant(
+        ownerUserId: UserId,
+        capsuleId: CapsuleId,
+        prepared: PreparedIncomingPresentation,
+        issue: () -> T,
+    ): T? = revocationBoundary.withCapsule(ownerUserId, capsuleId) {
+        if (prepared.ownerUserId != ownerUserId || prepared.capsuleId != capsuleId ||
+            !prepared.isOpenForGrant()
+        ) return@withCapsule null
+        val latestCapsule = try {
+            incomingCapsuleDao.getByCapsuleIdAndOwner(
+                capsuleId = capsuleId.toRestString(),
+                ownerUserId = ownerUserId.toRestString(),
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return@withCapsule null
+        }
+        val tombstone = try {
+            recipientTombstoneDao.getForOwner(
+                ownerUserId = ownerUserId.toRestString(),
+                capsuleId = capsuleId.toRestString(),
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return@withCapsule null
+        }
+        if (tombstone != null || latestCapsule == null ||
+            !hasPresentationBinding(latestCapsule, ownerUserId, capsuleId) ||
+            (latestCapsule.materialState != LocalMaterialState.MATERIAL_CACHED &&
+                latestCapsule.materialState != LocalMaterialState.FINGERPRINT_ACCEPTED)
+        ) return@withCapsule null
+        issue()
     }
 
     private suspend fun deliverPrepared(

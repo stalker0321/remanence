@@ -16,6 +16,7 @@ import java.nio.file.attribute.BasicFileAttributes
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
@@ -49,6 +50,22 @@ class IncomingTombstoneSyncRepository(
     private val clockEpochMs: () -> Long = System::currentTimeMillis,
     private val filePurger: suspend (UserId, List<TombstoneBlobRow>) -> Unit =
         IncomingTombstoneFilePurger(roots)::purge,
+    private val onTombstonesCommitted: (UserId, List<CapsuleId>) -> Unit = { _, _ -> },
+    private val durableApplyPage: suspend (
+        String,
+        String?,
+        List<RecipientTombstoneEntity>,
+        String?,
+        Long,
+    ) -> Unit = { ownerUserId, expectedCursor, tombstones, nextCursor, committedAtEpochMs ->
+        database.recipientTombstoneDao().applyPage(
+            ownerUserId = ownerUserId,
+            expectedCursor = expectedCursor,
+            tombstones = tombstones,
+            nextCursor = nextCursor,
+            committedAtEpochMs = committedAtEpochMs,
+        )
+    },
 ) {
 
     suspend fun syncNextPage(
@@ -135,13 +152,21 @@ class IncomingTombstoneSyncRepository(
                 if (commitSession == null || !requestSession.isSameSession(commitSession)) {
                     throw AccountChangedDuringCommit()
                 }
-                database.recipientTombstoneDao().applyPage(
-                    ownerUserId = ownerString,
-                    expectedCursor = expectedCursor,
-                    tombstones = tombstones,
-                    nextCursor = page.nextCursor,
-                    committedAtEpochMs = committedAt,
-                )
+                // Room commit completion and local invalidation callbacks are
+                // one cancellation-atomic segment. Network and file purge
+                // remain cancellable before this narrow durable boundary.
+                withContext(NonCancellable) {
+                    durableApplyPage(
+                        ownerString,
+                        expectedCursor,
+                        tombstones,
+                        page.nextCursor,
+                        committedAt,
+                    )
+                    revocationBoundary.invalidatePrepared(owner, page.items.map { it.capsuleId })
+                    onTombstonesCommitted(owner, page.items.map { it.capsuleId })
+                }
+                coroutineContext.ensureActive()
             }
         } catch (cancelled: CancellationException) {
             throw cancelled

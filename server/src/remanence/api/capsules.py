@@ -40,6 +40,11 @@ from remanence.capsules.finalize_service import (
     CapsuleFinalizeResult,
     CapsuleFinalizeService,
 )
+from remanence.capsules.first_open_service import (
+    CapsuleFirstOpenError,
+    CapsuleFirstOpenResult,
+    CapsuleFirstOpenService,
+)
 from remanence.capsules.incoming_cursor import IncomingCursorCodecError, decode_incoming_cursor, encode_incoming_cursor
 from remanence.capsules.incoming_query_service import (
     IncomingBlobSnapshot,
@@ -161,6 +166,15 @@ class CapsuleRevokeResponse(BaseModel):
 
     capsule_id: uuid.UUID
     state: Literal["REVOKED"]
+    is_replay: bool
+
+
+class CapsuleFirstOpenResponse(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    capsule_id: uuid.UUID
+    state: Literal["OPENED"]
+    first_opened_at: datetime
     is_replay: bool
 
 
@@ -899,6 +913,22 @@ def _accepted_revoke_response(result: object) -> CapsuleRevokeResponse:
         raise CapsuleRevokeError("INTERNAL_ERROR") from None
 
 
+def _accepted_first_open_response(result: object) -> CapsuleFirstOpenResponse:
+    if not isinstance(result, CapsuleFirstOpenResult):
+        raise CapsuleFirstOpenError("INTERNAL_ERROR")
+    if not isinstance(result.capsule_id, uuid.UUID) or type(result.is_replay) is not bool:
+        raise CapsuleFirstOpenError("INTERNAL_ERROR")
+    try:
+        return CapsuleFirstOpenResponse(
+            capsule_id=result.capsule_id,
+            state="OPENED",
+            first_opened_at=result.first_opened_at,
+            is_replay=result.is_replay,
+        )
+    except Exception:
+        raise CapsuleFirstOpenError("INTERNAL_ERROR") from None
+
+
 @router.post(
     "/v1/capsules/{capsule_id}/revoke",
     response_model=CapsuleRevokeResponse,
@@ -927,6 +957,40 @@ def revoke_capsule(
     except Exception as exc:
         _LOGGER.error(
             "capsule revoke unhandled failure request_id=%s exc_type=%s",
+            request_id_of(request),
+            type(exc).__name__,
+        )
+        return _problem_response(request, "INTERNAL_ERROR")
+
+
+@router.post(
+    "/v1/capsules/{capsule_id}/first-open",
+    response_model=CapsuleFirstOpenResponse,
+    status_code=200,
+)
+def first_open_capsule(
+    capsule_id: str,
+    request: Request,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    session: Session = Depends(get_db_session, use_cache=False),
+) -> CapsuleFirstOpenResponse | JSONResponse:
+    try:
+        parsed_capsule_id = _canonical_path_uuid(capsule_id)
+        with session.begin():
+            result = CapsuleFirstOpenService(session).claim(
+                authenticated_recipient_user_id=principal.user_id,
+                capsule_id=parsed_capsule_id,
+                now=datetime.now(timezone.utc),
+            )
+            dto = _accepted_first_open_response(result)
+        return dto
+    except CapsuleDraftValidationError as exc:
+        return _problem_response(request, exc.code)
+    except CapsuleFirstOpenError as exc:
+        return _problem_response(request, exc.code)
+    except Exception as exc:
+        _LOGGER.error(
+            "capsule first-open unhandled failure request_id=%s exc_type=%s",
             request_id_of(request),
             type(exc).__name__,
         )

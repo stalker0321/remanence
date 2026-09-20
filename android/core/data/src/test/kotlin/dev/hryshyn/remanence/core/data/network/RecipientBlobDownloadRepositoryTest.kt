@@ -5,6 +5,7 @@ import java.io.IOException
 import java.io.OutputStream
 import java.nio.file.Files
 import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -12,15 +13,25 @@ import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import mockwebserver3.SocketEffect
 import okhttp3.OkHttpClient
+import okhttp3.ResponseBody
 import okio.Buffer
+import okio.BufferedSource
 import dev.hryshyn.remanence.core.model.BlobId
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
+import dev.hryshyn.remanence.core.model.UserId
 
 class RecipientBlobDownloadRepositoryTest {
 
@@ -55,6 +66,131 @@ class RecipientBlobDownloadRepositoryTest {
                 )
                 assertEquals("Bearer pm_at_live", recorded.headers["Authorization"])
                 assertEquals("application/octet-stream", recorded.headers["Accept"])
+            } finally {
+                root.deleteRecursively()
+            }
+        }
+    }
+
+    @Test
+    fun delayedBodyStaysOffMainAndCancellationClosesResponseWithoutRetainingFile() = runBlocking {
+        val mainExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "recipient-blob-main")
+        }
+        val main = mainExecutor.asCoroutineDispatcher()
+        try {
+            withServer { server ->
+                val root = tempRoot()
+                try {
+                    val destination = File(root, "ciphertext.tmp")
+                    val bodyReadStarted = CompletableDeferred<String>()
+                    val bodyClosed = CompletableDeferred<Unit>()
+                    val payload = ByteArray(128 * 1024) { index -> (index * 17).toByte() }
+                    server.enqueue(
+                        success(payload)
+                            .bodyDelay(5, TimeUnit.SECONDS)
+                            .build(),
+                    )
+                    val client = HttpClientFactory.create().newBuilder()
+                        .addInterceptor { chain ->
+                            val response = chain.proceed(chain.request())
+                            response.newBuilder()
+                                .body(
+                                    TrackingResponseBody(
+                                        delegate = response.body,
+                                        onSource = {
+                                            bodyReadStarted.complete(Thread.currentThread().name)
+                                        },
+                                        onClose = { bodyClosed.complete(Unit) },
+                                    ),
+                                )
+                                .build()
+                        }
+                        .build()
+                    val operation = async(main) {
+                        RecipientBlobDownloadRepository(
+                            client,
+                            ApiBaseUrl.parse(server.url("/").toString()),
+                        ).downloadBlob(request(destination, payload), ACCESS_TOKEN)
+                    }
+
+                    val bodyThread = withTimeout(2_000) { bodyReadStarted.await() }
+                    assertFalse(bodyThread == "recipient-blob-main")
+                    val heartbeat = async(main) { "heartbeat" }
+                    assertEquals("heartbeat", withTimeout(500) { heartbeat.await() })
+
+                    operation.cancelAndJoin()
+                    assertTrue(operation.isCancelled)
+                    withTimeout(2_000) { bodyClosed.await() }
+                    assertFalse(destination.exists())
+                } finally {
+                    root.deleteRecursively()
+                }
+            }
+        } finally {
+            main.close()
+            mainExecutor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun leaseChangeAcrossHeadersAndBodyDiscardsVerifiedBlob() = runBlocking {
+        withServer { server ->
+            val root = tempRoot()
+            try {
+                val destination = File(root, "ciphertext.tmp")
+                val payload = ByteArray(64 * 1024) { index -> (index * 19).toByte() }
+                val bodyReadStarted = CompletableDeferred<Unit>()
+                server.enqueue(
+                    success(payload)
+                        .bodyDelay(250, TimeUnit.MILLISECONDS)
+                        .build(),
+                )
+                val baseUrl = ApiBaseUrl.parse(server.url("/").toString())
+                val ownerA = UserId.parseRest("0198f0a0-0000-7000-8000-00000000a801")
+                val ownerB = UserId.parseRest("0198f0a0-0000-7000-8000-00000000a802")
+                val tokens = AuthTokenHolder("pm_at_a1", "pm_rt_a1")
+                val coordinator = SessionRefreshCoordinator(
+                    bareAuthRepository = AuthRepository.create(baseUrl),
+                    tokens = tokens,
+                    refreshTokenReader = RefreshTokenReader { null },
+                    rotationSink = object : SessionRotationSink {
+                        override fun rotate(accessToken: String, refreshToken: String, ownerUserId: UserId) = Unit
+                        override fun clear() = Unit
+                    },
+                )
+                coordinator.install(ownerA)
+                val client = RefreshingAuthenticator.attach(
+                    HttpClientFactory.create().newBuilder().addInterceptor { chain ->
+                        val response = chain.proceed(chain.request())
+                        response.newBuilder()
+                            .body(
+                                TrackingResponseBody(
+                                    delegate = response.body,
+                                    onSource = { bodyReadStarted.complete(Unit) },
+                                    onClose = {},
+                                ),
+                            )
+                            .build()
+                    },
+                    coordinator,
+                ).build()
+                val repository = RecipientBlobDownloadRepository(
+                    client = client,
+                    baseUrl = baseUrl,
+                    requestLeaseProvider = SessionRequestLeaseProvider(coordinator),
+                )
+                val operation = async(Dispatchers.IO) {
+                    repository.downloadBlob(request(destination, payload), "pm_at_a1")
+                }
+
+                withTimeout(2_000) { bodyReadStarted.await() }
+                coordinator.invalidate()
+                coordinator.install(ownerB)
+                val result = withTimeout(2_000) { operation.await() }
+                val failure = assertIs<RecipientBlobDownloadResult.Failure>(result)
+                assertEquals(RecipientBlobDownloadFailure.NETWORK, failure.reason)
+                assertFalse(destination.exists())
             } finally {
                 root.deleteRecursively()
             }
@@ -414,6 +550,26 @@ class RecipientBlobDownloadRepositoryTest {
     }
 
     private fun tempRoot(): File = Files.createTempDirectory("remanence-recipient-blob-").toFile()
+
+    private class TrackingResponseBody(
+        private val delegate: ResponseBody,
+        private val onSource: () -> Unit,
+        private val onClose: () -> Unit,
+    ) : ResponseBody() {
+        override fun contentType() = delegate.contentType()
+
+        override fun contentLength(): Long = delegate.contentLength()
+
+        override fun source(): BufferedSource {
+            onSource()
+            return delegate.source()
+        }
+
+        override fun close() {
+            delegate.close()
+            onClose()
+        }
+    }
 
     private companion object {
         const val ACCESS_TOKEN = "pm_at_live"

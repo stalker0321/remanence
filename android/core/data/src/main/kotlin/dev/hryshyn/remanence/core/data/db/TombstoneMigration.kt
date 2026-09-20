@@ -65,3 +65,13 @@ val MIGRATION_9_10_LOCAL_SEND_DUPLICATES = object : Migration(9, 10) {
         )
     }
 }
+
+/** Explicit v10 -> v11 migration for server-confirmed first-open claims. */
+val MIGRATION_10_11_FIRST_OPEN_CLAIMS = object : Migration(10, 11) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "ALTER TABLE `incoming_capsule` " +
+                "ADD COLUMN `first_open_claimed_at_epoch_ms` INTEGER DEFAULT NULL",
+        )
+    }
+}

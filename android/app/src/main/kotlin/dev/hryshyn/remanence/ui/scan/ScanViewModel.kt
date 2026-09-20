@@ -1010,18 +1010,51 @@ class ScanViewModel internal constructor(
             val currentOwner = runCatching { UserId.parseRest(currentIdentity.userId) }.getOrNull()
             if (currentOwner != owner || !sessionBoundaryIsCurrent(boundary)) return null
 
-            val grant = presentationGrants.issue(
-                ownerUserId = owner,
-                capsuleId = capsuleId,
-                source = source,
-                scanGeneration = generation,
-                expectedEpoch = presentationEpoch,
-                incomingPresentation = prepared,
-            )
-            issuedGrantId = grant.grantId
+            val grantId = if (source == CapsulePresentationSource.INCOMING) {
+                val incoming = prepared ?: return null
+                // The durable online admission happens before grant creation;
+                // the route repeats it as an idempotent replay check.
+                if (!incoming.admitForOpen()) return null
+                val preparation = incomingPresentationPreparation
+                if (preparation != null) {
+                    preparation.admitPreparedForGrant(owner, CapsuleId(capsuleId), incoming) {
+                        presentationGrants.issue(
+                            ownerUserId = owner,
+                            capsuleId = capsuleId,
+                            source = source,
+                            scanGeneration = generation,
+                            expectedEpoch = presentationEpoch,
+                            incomingPresentation = incoming,
+                        ).grantId.toString()
+                    } ?: return null
+                } else if (incomingPrepareOverride != null) {
+                    // Test-only override; production always supplies the
+                    // boundary-owning preparation above.
+                    presentationGrants.issue(
+                        ownerUserId = owner,
+                        capsuleId = capsuleId,
+                        source = source,
+                        scanGeneration = generation,
+                        expectedEpoch = presentationEpoch,
+                        incomingPresentation = incoming,
+                    ).grantId.toString()
+                } else {
+                    return null
+                }
+            } else {
+                presentationGrants.issue(
+                    ownerUserId = owner,
+                    capsuleId = capsuleId,
+                    source = source,
+                    scanGeneration = generation,
+                    expectedEpoch = presentationEpoch,
+                    incomingPresentation = null,
+                ).grantId.toString()
+            }
+            issuedGrantId = UUID.fromString(grantId)
             // The authority now owns the exact prepared handle.
             prepared = null
-            return grant.grantId.toString()
+            return grantId
         } catch (cancelled: CancellationException) {
             issuedGrantId?.let(presentationGrants::revoke)
             throw cancelled

@@ -7,7 +7,8 @@ import androidx.room.RoomDatabase
  * Local infrastructure database. Contains no content plaintext, no gallery or
  * inbox projection. Version 9 adds durable recipient tombstone markers and
  * the account-scoped tombstone feed watermark. Version 10 adds bounded
- * owner-local exact FRONT duplicate history. The explicit migrations preserve
+ * owner-local exact FRONT duplicate history. Version 11 adds durable
+ * server-confirmed recipient first-open claims. The explicit migrations preserve
  * existing local material; unknown older paths still use the existing
  * destructive fallback policy.
  */
@@ -25,7 +26,7 @@ import androidx.room.RoomDatabase
         TombstoneWatermarkEntity::class,
         LocalSendDuplicateEntity::class,
     ],
-    version = 10,
+    version = 11,
     exportSchema = true,
 )
 abstract class RemanenceLocalDatabase : RoomDatabase() {

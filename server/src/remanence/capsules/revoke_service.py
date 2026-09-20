@@ -133,6 +133,8 @@ class CapsuleRevokeService:
                 return self._accepted(capsule, is_replay=True)
             if capsule.state is not CapsuleState.READY:
                 raise _error("CAPSULE_STATE_INVALID")
+            if capsule.first_opened_at is not None:
+                raise _error("CAPSULE_STATE_INVALID")
             ready_at = capsule.ready_at
             if (
                 not isinstance(ready_at, datetime)

@@ -135,7 +135,7 @@ Every item is pass/fail. A screenshot, agent statement, or successful command fr
 - [ ] B sees the correct 3–5 photos and note fullscreen.
 - [ ] Successful receipt stores a preferred encrypted recipient FRONT baseline
   and retains sender FRONT fallback.
-- [ ] Server state reveals at most `CIPHERTEXT_SYNCED`, never opened/recognized timestamps.
+- [ ] The server records no recognition, physical-possession, render-success, or view telemetry. It does durably record the authenticated recipient first-open admission timestamp (`first_opened_at`) when the admission commits; that timestamp is used to linearize cancel versus first-open and is not proof of physical viewing or rendering.
 - [ ] `INDEX_CACHED` is local-only; server reaches `CIPHERTEXT_SYNCED` only after every required ciphertext is durably cached and hash-checked.
 
 ### Recipient B later use

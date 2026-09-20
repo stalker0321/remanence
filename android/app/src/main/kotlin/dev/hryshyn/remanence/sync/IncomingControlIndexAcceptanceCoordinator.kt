@@ -12,6 +12,7 @@ import dev.hryshyn.remanence.core.data.db.IncomingCapsuleDao
 import dev.hryshyn.remanence.core.data.db.IncomingCapsuleEntity
 import dev.hryshyn.remanence.core.data.db.IncomingEnvelopeDao
 import dev.hryshyn.remanence.core.data.db.IncomingEnvelopeEntity
+import dev.hryshyn.remanence.core.data.network.SessionRequestLease
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.KeyBundleId
@@ -48,6 +49,8 @@ class CurrentRecipientEncryptionIdentity(
     val ownerUserId: UserId,
     val activeKeyBundleId: KeyBundleId,
     val encryptionPrivateKeyset: KeysetHandle,
+    /** Null only for deliberately offline local reads with no live session. */
+    val sessionLease: SessionRequestLease? = null,
 ) {
     override fun toString(): String = "CurrentRecipientEncryptionIdentity(<redacted>)"
 }

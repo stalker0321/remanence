@@ -1,7 +1,35 @@
-# M2-F3 design: authenticated sender cancellation (24h revoke/tombstone)
+# M2-F3: authenticated sender cancellation and first-open admission
 
-Status: Proposed design packet. Server slice-1 defaults below are decided;
-no implementation exists. Base: `7dfcb17`.
+Status: The original proposal below is superseded by the implemented bounded
+cancel/first-open slice in the current worktree. Independent server/protocol
+and security/transaction review remains the release gate. Base implementation
+line: `d29cc8d727c7774409ca2e9baefb25b59f71a132`.
+
+## Current implemented contract (authoritative)
+
+- Sender cancellation and recipient first-open admission contend under the
+  same capsule transaction/advisory lock. The first successfully committed
+  operation wins.
+- A first-open claim is a durable authenticated **authorization admission**;
+  it is not proof of physical possession, decryption, rendering, viewing, or
+  user-visible success. The authenticated recipient session/incarnation and
+  local key-bundle binding are checked before the claim and again at the
+  grant/open boundary. Unknown offline first-open fails closed.
+- A committed revoke creates the durable tombstone and invalidates unopened
+  local grants, prepared presentations, and cached-but-unopened material. A
+  tombstone committed before grant/open issues no grant and no open. Material
+  that was already opened remains subject to the existing already-open
+  boundary and cannot be retroactively erased.
+- Local preparation failure occurs before admission and therefore leaves a
+  still-valid sender cancellation available. A local presentation/render
+  failure after a committed claim does not erase or unclaim that admission;
+  a later cancel is rejected because the authorization admission already won.
+- Replays are idempotent and return the durable result. A stale pre-logout
+  session/incarnation cannot issue a new claim or reuse its prepared material
+  after logout and re-login.
+
+The historical slice-1 notes below remain useful only where they do not
+contradict this contract; this section controls in case of conflict.
 
 ## 1. Bounded design (source-bound)
 
@@ -41,11 +69,12 @@ no implementation exists. Base: `7dfcb17`.
   `publication_sequence` and related ordering state the tombstone and
   sync filtering build on). Implementing M2-F3 slice 1 requires the R1
   chain present first.
-- **Already received/decrypted copies cannot be deleted.** Revocation
-  stops server distribution and marks the tombstone; ciphertext already
-  synced, let alone decrypted, on a recipient device is outside server
-  reach by construction (E2EE). This limitation is load-bearing for all
-  UX copy and must survive review unchanged.
+- **Already-open copies cannot be retroactively deleted.** Revocation stops
+  server distribution and marks the tombstone; a committed tombstone also
+  invalidates unopened prepared/grant/cache state on the recipient. Ciphertext
+  already synced is outside server reach by construction (E2EE), so local
+  unopened-state invalidation and the already-open boundary are load-bearing
+  for all UX copy.
 - **Offline semantics.** Revoke requires connectivity (server-authoritative
   by definition). An offline sender queues nothing locally in slice 1;
   recipient devices learn revocation on next sync (see slice 3).

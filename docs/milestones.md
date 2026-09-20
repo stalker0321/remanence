@@ -183,14 +183,22 @@ No server-visible equality, protocol field, global index, or recognition score
 is involved. Tier 2 similarity warnings, comparator selection, and calibration
 remain deferred to a separately approved contract and are not implemented here.
 
-## M2-F3 — Optional 24-hour cancellation (future)
+## M2-F3 — Authenticated cancellation and first-open admission (implemented slice)
 
-Goal: optionally allow a short sender cancellation window after publication.
+The current bounded slice implements a 24-hour authenticated sender
+cancellation window plus a durable recipient first-open **admission** claim.
+Cancellation and first-open admission serialize under the same capsule
+transaction/lock; the first committed operation wins and replay is
+idempotent. A claim authorizes the grant/open boundary but is not proof of
+physical possession, decryption, rendering, viewing, or user-visible success.
 
-Scope: a durable revoke/tombstone state and authenticated sender operation;
-define recipient behavior and replay prevention. Revocation cannot erase
-recipient copies already downloaded or decrypted, and it must not be confused
-with current v1 `READY` immutability.
+Before admission, local preparation failure leaves cancellation available.
+After admission, a local presentation failure does not undo the claim, so a
+later cancel is correctly rejected. A committed tombstone invalidates
+unopened prepared/grant/cache state, while already-open material retains the
+existing boundary and cannot be retroactively erased. Unknown offline
+first-open remains fail-closed. Release status is pending the assigned
+independent reviews and gates.
 
 ## M3 — Recognition hardening and design-to-many benchmark
 

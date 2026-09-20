@@ -7,11 +7,12 @@ import java.io.IOException
 import java.io.OutputStream
 import java.security.MessageDigest
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.ResponseBody
-import okhttp3.coroutines.executeAsync
 import okio.BufferedSource
 import dev.hryshyn.remanence.core.model.BlobId
 import dev.hryshyn.remanence.core.model.CapsuleId
@@ -161,58 +162,70 @@ class RecipientBlobDownloadRepository internal constructor(
         var retainDestination = false
         return try {
             val result = try {
-                client.newCall(httpRequest).executeAsync().use { response ->
-                    if (response.code != HTTP_OK) {
-                        interpretNonSuccess(response)
+                client.executeResponseWithCallLifetime(httpRequest) { response ->
+                    if (requestLease != null &&
+                        requestLeaseProvider != null &&
+                        !requestLeaseProvider.isLive(requestLease)
+                    ) {
+                        RecipientBlobDownloadResult.Failure(
+                            reason = RecipientBlobDownloadFailure.NETWORK,
+                            httpStatus = response.code,
+                            retryable = true,
+                        )
                     } else {
-                        val headerChecks = canonicalSuccessHeaderChecks(response, request)
-                        if (!headerChecks.canonical) {
-                            return@use RecipientBlobDownloadResult.Failure(
-                                reason = RecipientBlobDownloadFailure.INVALID_RESPONSE,
-                                httpStatus = response.code,
-                                retryable = false,
-                                headerChecks = headerChecks,
-                            )
-                        }
-                        val created = try {
-                            request.destination.createNewFile()
-                        } catch (_: IOException) {
-                            false
-                        } catch (_: SecurityException) {
-                            false
-                        }
-                        if (!created) {
-                            if (request.destination.exists()) {
+                        if (response.code != HTTP_OK) {
+                            interpretNonSuccess(response)
+                        } else {
+                            val headerChecks = canonicalSuccessHeaderChecks(response, request)
+                            if (!headerChecks.canonical) {
                                 RecipientBlobDownloadResult.Failure(
-                                    reason = RecipientBlobDownloadFailure.DESTINATION_NOT_FRESH,
+                                    reason = RecipientBlobDownloadFailure.INVALID_RESPONSE,
                                     httpStatus = response.code,
                                     retryable = false,
+                                    headerChecks = headerChecks,
                                 )
                             } else {
-                                RecipientBlobDownloadResult.Failure(
-                                    reason = RecipientBlobDownloadFailure.LOCAL_STORAGE,
-                                    httpStatus = response.code,
-                                    retryable = true,
-                                )
-                            }
-                        } else {
-                            createdByInvocation = true
-                            val streamFailure = streamVerifiedCiphertext(
-                                body = response.body,
-                                request = request,
-                            )
-                            if (streamFailure != null) {
-                                RecipientBlobDownloadResult.Failure(
-                                    reason = streamFailure,
-                                    httpStatus = response.code,
-                                    retryable = streamFailure == RecipientBlobDownloadFailure.NETWORK ||
-                                        streamFailure == RecipientBlobDownloadFailure.LOCAL_STORAGE,
-                                )
-                            } else {
-                                RecipientBlobDownloadResult.Success(
-                                    ciphertextFile = request.destination,
-                                    sizeBytes = request.expectedCiphertextSize,
-                                )
+                                val created = try {
+                                    request.destination.createNewFile()
+                                } catch (_: IOException) {
+                                    false
+                                } catch (_: SecurityException) {
+                                    false
+                                }
+                                if (!created) {
+                                    if (request.destination.exists()) {
+                                        RecipientBlobDownloadResult.Failure(
+                                            reason = RecipientBlobDownloadFailure.DESTINATION_NOT_FRESH,
+                                            httpStatus = response.code,
+                                            retryable = false,
+                                        )
+                                    } else {
+                                        RecipientBlobDownloadResult.Failure(
+                                            reason = RecipientBlobDownloadFailure.LOCAL_STORAGE,
+                                            httpStatus = response.code,
+                                            retryable = true,
+                                        )
+                                    }
+                                } else {
+                                    createdByInvocation = true
+                                    val streamFailure = streamVerifiedCiphertext(
+                                        body = response.body,
+                                        request = request,
+                                    )
+                                    if (streamFailure != null) {
+                                        RecipientBlobDownloadResult.Failure(
+                                            reason = streamFailure,
+                                            httpStatus = response.code,
+                                            retryable = streamFailure == RecipientBlobDownloadFailure.NETWORK ||
+                                                streamFailure == RecipientBlobDownloadFailure.LOCAL_STORAGE,
+                                        )
+                                    } else {
+                                        RecipientBlobDownloadResult.Success(
+                                            ciphertextFile = request.destination,
+                                            sizeBytes = request.expectedCiphertextSize,
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -230,10 +243,23 @@ class RecipientBlobDownloadRepository internal constructor(
                     retryable = true,
                 )
             }
-            if (result is RecipientBlobDownloadResult.Success) {
+            val leaseBoundResult = if (
+                result is RecipientBlobDownloadResult.Success &&
+                requestLease != null &&
+                requestLeaseProvider != null &&
+                !requestLeaseProvider.isLive(requestLease)
+            ) {
+                RecipientBlobDownloadResult.Failure(
+                    reason = RecipientBlobDownloadFailure.NETWORK,
+                    retryable = true,
+                )
+            } else {
+                result
+            }
+            if (leaseBoundResult is RecipientBlobDownloadResult.Success) {
                 retainDestination = true
             }
-            result
+            leaseBoundResult
         } catch (cancelled: CancellationException) {
             throw cancelled
         } finally {
@@ -243,7 +269,7 @@ class RecipientBlobDownloadRepository internal constructor(
         }
     }
 
-    private fun interpretNonSuccess(response: Response): RecipientBlobDownloadResult {
+    private suspend fun interpretNonSuccess(response: Response): RecipientBlobDownloadResult {
         val status = response.code
         val problemBody = if (isProblemJson(response)) readBounded(response.body) else null
         val problem = problemBody?.let {
@@ -296,7 +322,7 @@ class RecipientBlobDownloadRepository internal constructor(
     }
 
     /** Returns a stable transport failure, or null after full verification. */
-    private fun streamVerifiedCiphertext(
+    private suspend fun streamVerifiedCiphertext(
         body: ResponseBody,
         request: RecipientBlobDownloadRequest,
     ): RecipientBlobDownloadFailure? {
@@ -321,6 +347,7 @@ class RecipientBlobDownloadRepository internal constructor(
                 val input = body.source()
                 source = input
                 while (failure == null) {
+                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
                     val remaining = request.expectedCiphertextSize - totalBytes
                     val readLimit = if (remaining >= buffer.size.toLong()) {
                         buffer.size
@@ -330,10 +357,12 @@ class RecipientBlobDownloadRepository internal constructor(
                     val read = try {
                         input.read(buffer, 0, readLimit)
                     } catch (_: IOException) {
+                        kotlinx.coroutines.currentCoroutineContext().ensureActive()
                         failure = RecipientBlobDownloadFailure.NETWORK
                         continue
                     }
                     if (read == -1) break
+                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
                     if (read <= 0 || read.toLong() > remaining) {
                         failure = RecipientBlobDownloadFailure.INTEGRITY_FAILED
                         continue
@@ -341,9 +370,11 @@ class RecipientBlobDownloadRepository internal constructor(
                     try {
                         output.write(buffer, 0, read)
                     } catch (_: IOException) {
+                        kotlinx.coroutines.currentCoroutineContext().ensureActive()
                         failure = RecipientBlobDownloadFailure.LOCAL_STORAGE
                         continue
                     }
+                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
                     digest.update(buffer, 0, read)
                     totalBytes += read
                 }
@@ -384,19 +415,22 @@ class RecipientBlobDownloadRepository internal constructor(
         it.type == "application" && it.subtype == "problem+json"
     } == true
 
-    private fun readBounded(body: ResponseBody): String? {
+    private suspend fun readBounded(body: ResponseBody): String? {
         if (body.contentLength() > MAX_PROBLEM_BYTES) return null
         val source = body.source()
         val output = ByteArrayOutputStream()
         val buffer = ByteArray(STREAM_BUFFER_BYTES)
         var totalBytes = 0L
         while (true) {
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
             val read = source.read(buffer, 0, buffer.size)
             if (read == -1) break
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
             if (read <= 0) return null
             totalBytes += read
             if (totalBytes > MAX_PROBLEM_BYTES) return null
             output.write(buffer, 0, read)
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
         }
         return output.toByteArray().toString(Charsets.UTF_8)
     }

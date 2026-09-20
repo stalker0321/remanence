@@ -70,6 +70,10 @@ class Capsule(Base):
             "tombstone_sequence IS NULL OR tombstone_sequence > 0",
             name="ck_capsules_tombstone_sequence_positive",
         ),
+        CheckConstraint(
+            "first_opened_at IS NULL OR state = 'READY'",
+            name="ck_capsules_first_opened_state_shape",
+        ),
         UniqueConstraint(
             "recipient_user_id",
             "tombstone_sequence",
@@ -149,6 +153,10 @@ class Capsule(Base):
         nullable=True,
     )
     revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    first_opened_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
     )

@@ -356,7 +356,17 @@ Finalize is explicitly exempt from the general JSON `Idempotency-Key` requiremen
 
 ### `DELETE /v1/capsules/{capsule_id}`
 
-Authenticated sender abort of an owned `DRAFT`, including an expired draft, returns empty `204`. Owned `ABORTED` replay is the same empty `204`; no `Idempotency-Key` is required. Missing or foreign capsules return `CAPSULE_NOT_FOUND`. `READY` cannot be revoked in the current v1/M2 contract (`CAPSULE_STATE_INVALID`). An optional 24-hour cancellation window with durable revoke/tombstone semantics is a separate future milestone; it cannot erase recipient copies.
+Authenticated sender abort of an owned `DRAFT`, including an expired draft, returns empty `204`. Owned `ABORTED` replay is the same empty `204`; no `Idempotency-Key` is required. Missing or foreign capsules return `CAPSULE_NOT_FOUND`. `READY` is not affected by this draft-abort route; published cancellation uses the separate authenticated revoke route below.
+
+### `POST /v1/capsules/{capsule_id}/revoke`
+
+Within the configured cancellation window, the authenticated sender may revoke
+an owned `READY` capsule. Revoke and recipient first-open admission contend on
+the same capsule transaction lock; the first transaction to commit wins. A
+revoke commit creates the recipient tombstone, while a first-open commit keeps
+the capsule `READY` and records its durable first-open admission. Revoke after
+that admission returns `CAPSULE_STATE_INVALID`; replay of an already committed
+revoke remains idempotent.
 
 ## 8. Recipient delivery endpoints
 
@@ -378,11 +388,32 @@ The client sends this only after the recognition manifest, content manifest,
 and every declared photo ciphertext are durably cached and independently
 hash-checked. Caching the recognition index alone never triggers this call.
 
+### `POST /v1/capsules/{capsule_id}/first-open`
+
+The authenticated recipient may request one durable first-open **authorization
+admission** after local integrity, envelope, signature, and presentation
+preparation gates pass. The request must use the current recipient bearer
+session and its owner/incarnation lease; a stale prepared operation from before
+logout is rejected before it can send a claim. An unknown first-open never
+falls back to offline access. A committed claim is not proof that the device
+physically possesses the postcard, that rendering succeeded, or that the user
+finished reading; it is only the server authorization boundary that makes the
+prepared presentation eligible to open.
+
+The client claims immediately before creating the presentation grant. A local
+preparation failure before that point sends no claim, so a still-valid sender
+cancellation is not blocked. If a later local route/render operation fails
+after the claim committed, the claim is retained and replay-safe; there is no
+unclaim operation, and the sender cancellation is correctly no longer valid.
+When a committed tombstone is received, its transaction purges cached but
+unopened material and invalidates prepared handles and grants before any later
+route handoff. Material already admitted by a first-open claim is preserved.
+
 ## 9. Client state machines
 
 Sender: `PREPARING -> ENCRYPTED -> UPLOADING -> FINALIZING -> PUBLISHED`. Network transitions may enter `RETRYABLE_FAILURE`; incompatible/corrupt/rejected state enters `TERMINAL_FAILURE`.
 
-Recipient: `DISCOVERED -> INDEX_CACHED -> MATERIAL_CACHED -> FINGERPRINT_ACCEPTED`, with `CORRUPT` as a repair state. `MATERIAL_CACHED` may precede scan for offline policy, but plaintext access still requires a current scan grant. No local/server `OPENED` state exists.
+Recipient: `DISCOVERED -> INDEX_CACHED -> MATERIAL_CACHED -> FINGERPRINT_ACCEPTED`, with `CORRUPT` as a repair state. `MATERIAL_CACHED` may precede scan for offline policy, but plaintext access still requires a current scan grant and, for an unknown first-open, an online authorization admission. The first-open response label `OPENED` is not a durable local/server rendering-success state.
 
 `INDEX_CACHED` follows control/index acceptance of the signed declaration,
 envelope, and recognition blob only. `MATERIAL_CACHED` means all required

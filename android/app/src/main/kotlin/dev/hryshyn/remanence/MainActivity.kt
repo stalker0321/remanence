@@ -195,9 +195,13 @@ private fun RootSurface(container: AppContainer) {
                     val capsuleId = binding.capsuleId.toString()
                     val reader = when (binding.source) {
                         dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource.INCOMING ->
-                            dev.hryshyn.remanence.ui.capsule.IncomingPresentationContentSource(
-                                requireNotNull(binding.incomingPresentation),
-                            )
+                            requireNotNull(binding.incomingPresentation).also { prepared ->
+                                check(prepared.admitForOpen()) {
+                                    "incoming capsule is no longer available"
+                                }
+                            }.let { prepared ->
+                                dev.hryshyn.remanence.ui.capsule.IncomingPresentationContentSource(prepared)
+                            }
                         dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource.OUTBOX -> {
                             val handle = when (val loaded = container.identityRepository.load()) {
                                 is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available ->

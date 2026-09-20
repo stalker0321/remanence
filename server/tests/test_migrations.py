@@ -12,7 +12,7 @@ from sqlalchemy.engine import make_url
 
 _ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 _BASELINE = "0001_m0_baseline"
-_HEAD = "0006_m2_f3_tombstone_feed"
+_HEAD = "0007_m2_f3_first_open_claim"
 _HEAD_TABLES = {
     "alembic_version",
     "users",
@@ -103,6 +103,7 @@ _REQUIRED_NAMED_CONSTRAINTS = {
     "ck_capsules_tombstone_fields_shape",
     "ck_capsules_tombstone_sequence_positive",
     "uq_capsules_recipient_tombstone_sequence",
+    "ck_capsules_first_opened_state_shape",
 }
 
 
@@ -264,6 +265,16 @@ def _assert_head_schema(conn: psycopg.Connection) -> None:
         """
     ).fetchone()
     assert revoked_at == ("timestamp with time zone", "YES")
+    first_opened_at = conn.execute(
+        """
+        SELECT data_type, is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'capsules'
+          AND column_name = 'first_opened_at'
+        """
+    ).fetchone()
+    assert first_opened_at == ("timestamp with time zone", "YES")
     counter_columns = conn.execute(
         """
         SELECT column_name, data_type, is_nullable
@@ -409,6 +420,58 @@ def _drop_database(admin: psycopg.Connection, database: str) -> None:
         (database,),
     )
     admin.execute(sql.SQL("DROP DATABASE {}").format(sql.Identifier(database)))
+
+
+def test_resume_after_interrupted_enum_add_reaches_head(monkeypatch: pytest.MonkeyPatch) -> None:
+    source = os.environ.get("REMANENCE_TEST_DATABASE_URL")
+    if not source:
+        pytest.skip("REMANENCE_TEST_DATABASE_URL is not set")
+
+    url = make_url(source)
+    database = f"remanence_tmp_{uuid4().hex}"
+    admin: psycopg.Connection | None = None
+    created = False
+    try:
+        admin = _admin_connect(url)
+        admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database)))
+        created = True
+        for key in list(os.environ):
+            if key.upper().startswith("REMANENCE_"):
+                monkeypatch.delenv(key, raising=False)
+        monkeypatch.setenv("REMANENCE_MODE", "dev")
+        monkeypatch.setenv(
+            "REMANENCE_DATABASE_URL",
+            url.set(database=database).render_as_string(hide_password=False),
+        )
+        monkeypatch.setenv("REMANENCE_BLOB_ROOT", "var/test-blobs")
+        config = Config(str(_ALEMBIC_INI))
+        config.set_main_option("path_separator", "os")
+
+        command.upgrade(config, "0004_r1_publication_order")
+        # Model the process dying after the enum label committed but before
+        # migration 0005 could rebuild its CHECK constraint.
+        with _connect_db(url, database) as conn:
+            conn.execute(
+                "ALTER TYPE capsule_state ADD VALUE IF NOT EXISTS 'REVOKED'"
+            )
+
+        command.upgrade(config, "head")
+        with _connect_db(url, database) as conn:
+            assert _alembic_version(conn) == [_HEAD]
+            assert _enum_labels(conn, "capsule_state") == [
+                "DRAFT",
+                "READY",
+                "ABORTED",
+                "REVOKED",
+            ]
+            _assert_head_schema(conn)
+    finally:
+        if admin is not None:
+            try:
+                if created:
+                    _drop_database(admin, database)
+            finally:
+                admin.close()
 
 
 def test_account_migration_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:

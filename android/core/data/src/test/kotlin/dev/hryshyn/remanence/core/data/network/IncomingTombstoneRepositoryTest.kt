@@ -10,13 +10,20 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import mockwebserver3.SocketEffect
 import okhttp3.OkHttpClient
+import okhttp3.ResponseBody
+import okio.BufferedSource
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -149,6 +156,61 @@ class IncomingTombstoneRepositoryTest {
         operation.cancel()
         assertFailsWith<CancellationException> { operation.await() }
         assertTrue(operation.isCancelled)
+    }
+
+    @Test
+    fun delayedBodyStaysOffMainAndCancellationClosesResponse() = runBlocking {
+        val mainExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "tombstone-main")
+        }
+        val main = mainExecutor.asCoroutineDispatcher()
+        try {
+            val bodyReadStarted = CompletableDeferred<String>()
+            val bodyClosed = CompletableDeferred<Unit>()
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(200)
+                    .setHeader("Content-Type", "application/json")
+                    .headersDelay(50, TimeUnit.MILLISECONDS)
+                    .bodyDelay(5, TimeUnit.SECONDS)
+                    .body(
+                        "{\"items\":[],\"has_more\":false,\"next_cursor\":null}",
+                    )
+                    .build(),
+            )
+            val client = HttpClientFactory.create().newBuilder()
+                .addInterceptor { chain ->
+                    val response = chain.proceed(chain.request())
+                    response.newBuilder()
+                        .body(
+                            TrackingResponseBody(
+                                delegate = response.body,
+                                onSource = { bodyReadStarted.complete(Thread.currentThread().name) },
+                                onClose = { bodyClosed.complete(Unit) },
+                            ),
+                        )
+                        .build()
+                }
+                .build()
+            val operation = async(main) {
+                IncomingTombstoneRepository(
+                    client,
+                    ApiBaseUrl.parse(server.url("/").toString()),
+                ).fetchPage(OWNER, null, 50, "access-token")
+            }
+
+            val bodyThread = withTimeout(2_000) { bodyReadStarted.await() }
+            assertFalse(bodyThread == "tombstone-main")
+            val heartbeat = async(main) { "heartbeat" }
+            assertEquals("heartbeat", withTimeout(500) { heartbeat.await() })
+
+            operation.cancelAndJoin()
+            assertTrue(operation.isCancelled)
+            withTimeout(2_000) { bodyClosed.await() }
+        } finally {
+            main.close()
+            mainExecutor.shutdownNow()
+        }
     }
 
     @Test
@@ -385,4 +447,24 @@ class IncomingTombstoneRepositoryTest {
         OkHttpClient(),
         ApiBaseUrl.parse(server.url("/").toString()),
     )
+
+    private class TrackingResponseBody(
+        private val delegate: ResponseBody,
+        private val onSource: () -> Unit,
+        private val onClose: () -> Unit,
+    ) : ResponseBody() {
+        override fun contentType() = delegate.contentType()
+
+        override fun contentLength(): Long = delegate.contentLength()
+
+        override fun source(): BufferedSource {
+            onSource()
+            return delegate.source()
+        }
+
+        override fun close() {
+            delegate.close()
+            onClose()
+        }
+    }
 }

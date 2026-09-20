@@ -29,7 +29,12 @@ _NEW_STATE_CHECK_SQL = (
 
 
 def upgrade() -> None:
-    op.execute(sa.text("ALTER TYPE capsule_state ADD VALUE 'REVOKED'"))
+    # PostgreSQL does not allow a freshly-added enum label to be referenced by
+    # a CHECK constraint before the transaction that adds the label commits.
+    # Keep the enum-label commit explicit, then rebuild the constraint in the
+    # following Alembic transaction.
+    with op.get_context().autocommit_block():
+        op.execute(sa.text("ALTER TYPE capsule_state ADD VALUE IF NOT EXISTS 'REVOKED'"))
     op.drop_constraint(_STATE_CHECK, "capsules", type_="check")
     op.create_check_constraint(_STATE_CHECK, "capsules", _NEW_STATE_CHECK_SQL)
 

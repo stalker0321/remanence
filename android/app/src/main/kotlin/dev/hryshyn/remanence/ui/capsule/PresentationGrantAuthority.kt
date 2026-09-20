@@ -4,6 +4,9 @@ import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.ScanGrant
 import dev.hryshyn.remanence.core.recognition.ScanGrantManager
 import java.util.UUID
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 
 /** The presentation plane is independent from recognition provenance. */
 enum class CapsulePresentationSource {
@@ -48,6 +51,9 @@ internal class PresentationGrantAuthority(
     private val lock = Any()
     private var active: PresentationGrantBinding? = null
     private var contextEpoch: Long = 0L
+    private val _incomingRevocations = MutableSharedFlow<UUID>(extraBufferCapacity = 8)
+
+    internal val incomingRevocations: SharedFlow<UUID> = _incomingRevocations.asSharedFlow()
 
     /** Snapshot taken before scan preparation; clearAll invalidates it. */
     fun currentEpoch(): Long = synchronized(lock) { contextEpoch }
@@ -132,6 +138,26 @@ internal class PresentationGrantAuthority(
         } else {
             grants.consume(grantId)
         }
+    }
+
+    /** Tombstone-driven invalidation for an exact owner/capsule incoming grant. */
+    fun revokeIncoming(ownerUserId: UserId, capsuleId: dev.hryshyn.remanence.core.model.CapsuleId): Boolean {
+        val revokedGrant = synchronized(lock) {
+            val binding = active
+            if (binding != null &&
+                binding.ownerUserId == ownerUserId &&
+                binding.capsuleId == capsuleId.value &&
+                binding.source == CapsulePresentationSource.INCOMING
+            ) {
+                val grantId = binding.grantId
+                clearActiveLocked()
+                grantId
+            } else {
+                null
+            }
+        }
+        revokedGrant?.let(_incomingRevocations::tryEmit)
+        return revokedGrant != null
     }
 
     /** Invalidates every grant before account/session teardown or scan reset. */

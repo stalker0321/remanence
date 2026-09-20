@@ -34,6 +34,7 @@ EXPECTED_COLUMNS = frozenset(
         "ready_at",
         "tombstone_sequence",
         "revoked_at",
+        "first_opened_at",
         "draft_expires_at",
     }
 )
@@ -69,7 +70,7 @@ def test_capsule_state_members_exact() -> None:
 def test_table_name_and_exact_column_set() -> None:
     assert Capsule.__tablename__ == "capsules"
     assert set(_table().columns.keys()) == EXPECTED_COLUMNS
-    assert len(_table().columns) == 15
+    assert len(_table().columns) == 16
 
 
 def test_column_types_and_nullability_exact() -> None:
@@ -99,7 +100,7 @@ def test_column_types_and_nullability_exact() -> None:
     assert state.type.enum_class is CapsuleState
     assert state.type.native_enum is True
     assert list(state.type.enums) == ["DRAFT", "READY", "ABORTED", "REVOKED"]
-    for name in ("created_at", "ready_at", "revoked_at", "draft_expires_at"):
+    for name in ("created_at", "ready_at", "revoked_at", "first_opened_at", "draft_expires_at"):
         column = _column(name)
         assert isinstance(column.type, DateTime), name
         assert column.type.timezone is True, name
@@ -172,7 +173,7 @@ def test_exactly_four_named_restrict_fks() -> None:
         assert constraint.ondelete == "RESTRICT"
 
 
-def test_exactly_seven_named_checks_and_normalized_sql() -> None:
+def test_exactly_eight_named_checks_and_normalized_sql() -> None:
     checks = {
         constraint.name: " ".join(str(constraint.sqltext).split())
         for constraint in _table().constraints
@@ -203,6 +204,8 @@ def test_exactly_seven_named_checks_and_normalized_sql() -> None:
         "ck_capsules_tombstone_sequence_positive": (
             "tombstone_sequence IS NULL OR tombstone_sequence > 0"
         ),
+        "ck_capsules_first_opened_state_shape":
+            "first_opened_at IS NULL OR state = 'READY'",
     }
 
 

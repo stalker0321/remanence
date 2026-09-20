@@ -96,7 +96,11 @@ criterion.
   captured FRONT bytes and bounded offline send history; no global uniqueness
   rule. Tier 2 similarity warnings remain deferred pending a separate
   comparator and calibration contract.
-- M2-F3: optional short cancellation window with durable revoke semantics.
+- M2-F3: implemented separately from this recognition-identity contract as a
+  short authenticated cancellation window with durable revoke/tombstone and
+  first-open admission semantics. The admission claim authorizes the
+  grant/open boundary; it is not proof of physical possession, rendering, or
+  viewing. See ADR-014 for the current contract and review status.
 
 ## Consequences
 

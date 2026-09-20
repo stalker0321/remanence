@@ -183,6 +183,7 @@ class AppContainer private constructor(
             .addMigrations(
                 dev.hryshyn.remanence.core.data.db.MIGRATION_8_9_RECIPIENT_TOMBSTONES,
                 dev.hryshyn.remanence.core.data.db.MIGRATION_9_10_LOCAL_SEND_DUPLICATES,
+                dev.hryshyn.remanence.core.data.db.MIGRATION_10_11_FIRST_OPEN_CLAIMS,
             )
             .fallbackToDestructiveMigration(dropAllTables = true)
             .build()
@@ -355,6 +356,26 @@ class AppContainer private constructor(
     private fun ordinaryAccessToken(): String? =
         apiStack.sessionRefreshCoordinator.openDomainAccessToken()?.takeIf { it.isNotBlank() }
 
+    /** Owner/incarnation-bound online first-open claim; null is fail-closed. */
+    internal suspend fun claimIncomingFirstOpen(
+        ownerUserId: UserId,
+        capsuleId: dev.hryshyn.remanence.core.model.CapsuleId,
+        expectedLease: dev.hryshyn.remanence.core.data.network.SessionRequestLease?,
+    ): Long? {
+        val account = currentAccountStore.load() ?: return null
+        val currentOwner = runCatching { UserId.parseRest(account.userId) }.getOrNull() ?: return null
+        if (currentOwner != ownerUserId) return null
+        val lease = expectedLease ?: return null
+        val token = apiStack.accessTokenForSessionRequestLease(lease) ?: return null
+        return when (
+            val result = apiStack.capsuleFirstOpenRepository.claim(capsuleId, token, lease)
+        ) {
+            is dev.hryshyn.remanence.core.data.network.CapsuleFirstOpenResult.Success ->
+                result.open.firstOpenedAtEpochMs
+            is dev.hryshyn.remanence.core.data.network.CapsuleFirstOpenResult.Failure -> null
+        }
+    }
+
     /** Identity KEK alias used for wrapping the HPKE/Ed25519 private keysets. */
     val identityKekAlias: String = IDENTITY_KEK_ALIAS
 
@@ -448,6 +469,9 @@ class AppContainer private constructor(
                 }.getOrNull() ?: return@IncomingTombstoneSyncRepository null
                 dev.hryshyn.remanence.core.data.db.IncomingSyncSession(owner, token)
             },
+            onTombstonesCommitted = { owner, capsules ->
+                capsules.forEach { capsule -> presentationGrants.revokeIncoming(owner, capsule) }
+            },
         )
     }
 
@@ -493,15 +517,19 @@ class AppContainer private constructor(
         SenderIndexBundleReader(accountScopedFileRoots, fingerprintSealer)
     }
 
-    /** Real lazy offline presentation preparation; no network/session fallback. */
+    /** Local preparation plus a final online first-open admission claim. */
     internal val incomingPresentationPreparation: IncomingPresentationPreparation by lazy {
         IncomingPresentationPreparation(
             incomingCapsuleDao = database.incomingCapsuleDao(),
             incomingEnvelopeDao = database.incomingEnvelopeDao(),
             blobCacheDao = database.blobCacheDao(),
+            recipientTombstoneDao = database.recipientTombstoneDao(),
             roots = accountScopedFileRoots,
             senderIndexBundleReader = senderIndexBundleReader,
             currentRecipientIdentity = { currentLocalRecipientEncryptionIdentity() },
+            firstOpenClaim = { owner, capsule, lease ->
+                claimIncomingFirstOpen(owner, capsule, lease)
+            },
             revocationBoundary = recipientTombstonePresentationBoundary,
         )
     }
@@ -824,7 +852,8 @@ class AppContainer private constructor(
         beforeCredentialRecheck: suspend () -> Unit,
     ): CurrentRecipientEncryptionIdentity? {
         val account = currentAuthenticatedAccount() ?: return null
-        val token = ordinaryAccessToken() ?: return null
+        val sessionLease = apiStack.captureSessionRequestLease() ?: return null
+        val token = apiStack.accessTokenForSessionRequestLease(sessionLease) ?: return null
         val loaded = incomingAcceptanceIdentityLoader()
         val encryptionHandle = when (loaded) {
             is IdentityBundleRepository.LoadResult.Available -> loaded.encryptionHandle
@@ -840,12 +869,14 @@ class AppContainer private constructor(
         }
         beforeCredentialRecheck()
         if (!exactBundle || currentAuthenticatedAccount() != account ||
-            ordinaryAccessToken() != token
+            apiStack.accessTokenForSessionRequestLease(sessionLease) != token ||
+            !apiStack.isSessionRequestLeaseLive(sessionLease)
         ) return null
         return CurrentRecipientEncryptionIdentity(
             ownerUserId = account.ownerUserId,
             activeKeyBundleId = account.activeKeyBundleId,
             encryptionPrivateKeyset = encryptionHandle,
+            sessionLease = sessionLease,
         )
     }
 
@@ -874,6 +905,7 @@ class AppContainer private constructor(
             ownerUserId = account.ownerUserId,
             activeKeyBundleId = account.activeKeyBundleId,
             encryptionPrivateKeyset = encryptionHandle,
+            sessionLease = apiStack.captureSessionRequestLease(),
         )
     }
 

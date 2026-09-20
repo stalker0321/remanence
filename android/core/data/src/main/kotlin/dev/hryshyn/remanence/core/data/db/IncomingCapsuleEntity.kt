@@ -59,6 +59,9 @@ data class IncomingCapsuleEntity(
     val materialState: LocalMaterialState,
     @ColumnInfo(name = "material_ack_state", defaultValue = "'PENDING'")
     val materialAckState: MaterialAckState = MaterialAckState.PENDING,
+    /** Server-confirmed first-open claim; null means first-open is unknown. */
+    @ColumnInfo(name = "first_open_claimed_at_epoch_ms", defaultValue = "NULL")
+    val firstOpenClaimedAtEpochMs: Long? = null,
 ) {
     override fun equals(other: Any?): Boolean =
         other is IncomingCapsuleEntity && other.capsuleId == capsuleId

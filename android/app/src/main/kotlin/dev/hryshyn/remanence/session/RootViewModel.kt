@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource
 import dev.hryshyn.remanence.ui.capsule.PresentationGrantAuthority
@@ -161,6 +162,11 @@ class RootViewModel internal constructor(
     private val transientCleanups = mutableMapOf<AppDestination, MutableList<() -> Unit>>()
 
     init {
+        viewModelScope.launch {
+            presentationGrants.incomingRevocations.collect { grantId ->
+                revokePresentation(grantId.toString())
+            }
+        }
         refreshAsync()
     }
 

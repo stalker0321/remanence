@@ -3,12 +3,13 @@ package dev.hryshyn.remanence.core.data.network
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.ResponseBody
 import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.coroutines.executeAsync
 import dev.hryshyn.remanence.core.model.CapsuleId
 
 /** Typed result of one recipient material-synced acknowledgement attempt. */
@@ -68,8 +69,19 @@ internal class RecipientMaterialSyncedRepository internal constructor(
             .let { requestLeaseProvider?.tag(it, requestLease!!) ?: it }
 
         return try {
-            client.newCall(request).executeAsync().use { response ->
+            val result = client.executeResponseWithCallLifetime(request) { response ->
                 interpret(response)
+            }
+            if (requestLease != null &&
+                requestLeaseProvider != null &&
+                !requestLeaseProvider.isLive(requestLease)
+            ) {
+                RecipientMaterialSyncedResult.Failure(
+                    reason = RecipientMaterialSyncedFailure.NETWORK,
+                    retryable = true,
+                )
+            } else {
+                result
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -81,7 +93,7 @@ internal class RecipientMaterialSyncedRepository internal constructor(
         }
     }
 
-    private fun interpret(response: Response): RecipientMaterialSyncedResult {
+    private suspend fun interpret(response: Response): RecipientMaterialSyncedResult {
         val status = response.code
         if (status == HTTP_UNAUTHORIZED) {
             return RecipientMaterialSyncedResult.Failure(
@@ -147,15 +159,18 @@ internal class RecipientMaterialSyncedRepository internal constructor(
         return contentType.type == "application" && contentType.subtype == PROBLEM_JSON_SUBTYPE
     }
 
-    private fun readBounded(body: ResponseBody): ByteArray? {
+    private suspend fun readBounded(body: ResponseBody): ByteArray? {
         if (body.contentLength() > MAX_RESPONSE_BYTES) return null
         val output = ByteArrayOutputStream()
         val buffer = ByteArray(8 * 1024)
         body.byteStream().use { input ->
             while (true) {
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
                 val read = input.read(buffer)
                 if (read == -1) break
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
                 output.write(buffer, 0, read)
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
                 if (output.size() > MAX_RESPONSE_BYTES) return null
             }
         }

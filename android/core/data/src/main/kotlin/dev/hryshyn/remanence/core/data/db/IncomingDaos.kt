@@ -403,6 +403,18 @@ abstract class IncomingCapsuleDao {
     )
     abstract suspend fun getByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String): IncomingCapsuleEntity?
 
+    /** Persists only a server-confirmed first-open claim for this owner. */
+    @Query(
+        "UPDATE incoming_capsule SET first_open_claimed_at_epoch_ms = :claimedAtEpochMs " +
+            "WHERE capsule_id = :capsuleId AND owner_user_id = :ownerUserId " +
+            "AND server_status = 'READY' AND first_open_claimed_at_epoch_ms IS NULL",
+    )
+    abstract suspend fun markFirstOpenClaimedForOwner(
+        capsuleId: String,
+        ownerUserId: String,
+        claimedAtEpochMs: Long,
+    ): Int
+
     /** Owner-scoped material-state observation for Scan pending-grant retry. */
     @Query(
         "SELECT material_state FROM incoming_capsule " +

@@ -8,6 +8,8 @@ import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import java.util.Base64
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
@@ -18,7 +20,6 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.ResponseBody
-import okhttp3.coroutines.executeAsync
 import dev.hryshyn.remanence.core.model.ArtifactLayoutValidation
 import dev.hryshyn.remanence.core.model.ArtifactLayoutValidator
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
@@ -192,8 +193,29 @@ class IncomingCapsuleRepository internal constructor(
 
         return try {
             val request = requestLeaseProvider?.tag(requestBuilder.build(), requestLease!!) ?: requestBuilder.build()
-            client.newCall(request).executeAsync().use { response ->
-                interpret(response, ownerUserId, cursor, limit)
+            val result = client.executeResponseWithCallLifetime(request) { response ->
+                if (requestLease != null &&
+                    requestLeaseProvider != null &&
+                    !requestLeaseProvider.isLive(requestLease)
+                ) {
+                    IncomingCapsuleResult.Failure(
+                        reason = IncomingCapsuleFailure.NETWORK,
+                        retryable = true,
+                    )
+                } else {
+                    interpret(response, ownerUserId, cursor, limit)
+                }
+            }
+            if (requestLease != null &&
+                requestLeaseProvider != null &&
+                !requestLeaseProvider.isLive(requestLease)
+            ) {
+                IncomingCapsuleResult.Failure(
+                    reason = IncomingCapsuleFailure.NETWORK,
+                    retryable = true,
+                )
+            } else {
+                result
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -205,7 +227,7 @@ class IncomingCapsuleRepository internal constructor(
         }
     }
 
-    private fun interpret(
+    private suspend fun interpret(
         response: Response,
         ownerUserId: UserId,
         requestedCursor: String?,
@@ -443,15 +465,18 @@ class IncomingCapsuleRepository internal constructor(
         it.type == "application" && it.subtype == "problem+json"
     } == true
 
-    private fun readBounded(body: ResponseBody): ByteArray? {
+    private suspend fun readBounded(body: ResponseBody): ByteArray? {
         if (body.contentLength() > MAX_RESPONSE_BYTES) return null
         val output = ByteArrayOutputStream()
         val buffer = ByteArray(8 * 1024)
         body.byteStream().use { input ->
             while (true) {
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
                 val read = input.read(buffer)
                 if (read == -1) break
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
                 output.write(buffer, 0, read)
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
                 if (output.size() > MAX_RESPONSE_BYTES) return null
             }
         }

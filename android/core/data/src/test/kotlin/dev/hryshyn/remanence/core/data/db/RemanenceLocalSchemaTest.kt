@@ -108,9 +108,30 @@ class RemanenceLocalSchemaTest {
         migrated.close()
     }
 
+    @Test
+    fun explicitV10ToV11MigrationAddsFirstOpenClaimColumn() {
+        val legacy = migrationHelper.createDatabase(MIGRATION_V10_DB_NAME, 10)
+        legacy.close()
+
+        val migrated = migrationHelper.runMigrationsAndValidate(
+            MIGRATION_V10_DB_NAME,
+            11,
+            true,
+            MIGRATION_10_11_FIRST_OPEN_CLAIMS,
+        )
+        migrated.query("PRAGMA table_info('incoming_capsule')").use { cursor ->
+            val columns = buildSet {
+                while (cursor.moveToNext()) add(cursor.getString(1))
+            }
+            assertTrue(columns.contains("first_open_claimed_at_epoch_ms"))
+        }
+        migrated.close()
+    }
+
     private companion object {
         const val REOPEN_DB_NAME = "remanence-reopen-test.db"
         const val MIGRATION_DB_NAME = "remanence-tombstone-migration-test.db"
         const val MIGRATION_V9_DB_NAME = "remanence-exact-duplicate-migration-test.db"
+        const val MIGRATION_V10_DB_NAME = "remanence-first-open-migration-test.db"
     }
 }

@@ -251,11 +251,22 @@ class IncomingControlIndexAcceptanceCoordinator(
                 } catch (_: Exception) {
                     return retryable(IncomingAcceptanceRetryReason.SENDER_KEY_UNAVAILABLE)
                 }
+                // IP-01: capture the authenticated directory's display handle for
+                // the verified sender id. It is best-effort display metadata and
+                // must never fail acceptance; absence renders as unverified.
+                val trustedSenderHandle = try {
+                    trustedSenderKeys.senderDisplayHandle(parsed.senderUserId)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    null
+                }
                 senderVerification = try {
                     SenderIndexBundleSenderVerification.fromTrusted(
                         senderUserId = parsed.senderUserId,
                         senderKeyBundleId = parsed.senderKeyBundleId,
                         verifyingKeyset = senderKeyset,
+                        senderHandle = trustedSenderHandle,
                     )
                 } catch (cancelled: CancellationException) {
                     throw cancelled

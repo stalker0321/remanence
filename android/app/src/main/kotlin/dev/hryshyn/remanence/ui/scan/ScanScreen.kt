@@ -88,9 +88,12 @@ fun ScanScreen(
             )
             is ScanMatchUiState.Chooser -> AmbiguityChooserScreen(
                 rows = current.rows.map { row ->
+                    val (primaryLabel, verified) = chooserPrimarySenderLabel(row.trustedSenderHandle)
                     ChooserHintRow(
                         candidateId = row.candidateId,
-                        senderHandleSnapshot = row.senderHandleSnapshot ?: "Unknown sender",
+                        primarySenderLabel = primaryLabel,
+                        senderIdentityVerified = verified,
+                        claimedSenderHandle = row.senderHandleSnapshot,
                         yearAndDateLabel = row.createdAtEpochSeconds?.let {
                             java.time.LocalDate.ofEpochDay(it / 86400L).year.toString()
                         } ?: "Unknown date",

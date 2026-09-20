@@ -125,6 +125,18 @@ class SenderIndexBundleInspectionSnapshot internal constructor(
             return String(senderHandleChars)
         }
 
+    /**
+     * IP-01: the authenticated directory display handle cached at acceptance,
+     * or null for a legacy/unresolved bundle. This is the only value that may
+     * be rendered as a trusted sender identity; [senderHandleSnapshot] is a
+     * sender-supplied claim.
+     */
+    val trustedSenderHandle: String?
+        get() {
+            checkOpen()
+            return senderVerificationValue?.senderHandle
+        }
+
     val createdAtEpochSeconds: Long
         get() {
             checkOpen()

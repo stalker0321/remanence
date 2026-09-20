@@ -19,6 +19,11 @@ internal data class ScanChooserHint(
     val senderHandleSnapshot: String,
     val createdAtEpochSeconds: Long,
     val placeLabel: String?,
+    /**
+     * IP-01: authenticated directory handle cached for the verified sender, or
+     * null. [senderHandleSnapshot] is only ever the sender's claim.
+     */
+    val trustedSenderHandle: String? = null,
 ) {
     override fun toString(): String = "ScanChooserHint(<redacted>)"
 }
@@ -191,6 +196,7 @@ internal class IncomingSenderIndexCandidateProvider(
                 senderHandleSnapshot = snapshot.senderHandleSnapshot,
                 createdAtEpochSeconds = snapshot.createdAtEpochSeconds,
                 placeLabel = snapshot.placeLabel,
+                trustedSenderHandle = snapshot.trustedSenderHandle,
             )
             snapshotCloseAttempted = true
             closeSnapshot(requireNotNull(snapshot), primaryFailure)

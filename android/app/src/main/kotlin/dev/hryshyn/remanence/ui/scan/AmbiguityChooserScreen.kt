@@ -22,10 +22,41 @@ import androidx.compose.ui.unit.dp
  */
 data class ChooserHintRow(
     val candidateId: String,
-    val senderHandleSnapshot: String,
+    /**
+     * IP-01 primary label. It is derived ONLY from the trusted verified
+     * sender-UUID -> handle mapping cached at acceptance, or the explicit
+     * unverified label. A sender-chosen manifest name never appears here.
+     */
+    val primarySenderLabel: String,
+    /** True only when [primarySenderLabel] came from the trusted mapping. */
+    val senderIdentityVerified: Boolean,
+    /** Sender-supplied manifest claim; rendered only as secondary text. */
+    val claimedSenderHandle: String?,
     val yearAndDateLabel: String,
     val placeLabel: String?,
 )
+
+/** Explicit primary label when no trusted display identity exists. */
+internal const val UNVERIFIED_SENDER_LABEL: String = "Unverified sender"
+
+/**
+ * IP-01: primary sender identity comes only from the trusted mapping. When it
+ * is absent, callers must show the explicit unverified label instead of any
+ * sender-supplied name.
+ */
+internal fun chooserPrimarySenderLabel(trustedSenderHandle: String?): Pair<String, Boolean> {
+    val handle = trustedSenderHandle?.takeIf { it.isNotBlank() }
+    return if (handle != null) {
+        "From @$handle" to true
+    } else {
+        UNVERIFIED_SENDER_LABEL to false
+    }
+}
+
+/** Secondary, clearly-marked claim text; null when the sender supplied none. */
+internal fun chooserClaimLabel(claimedSenderHandle: String?): String? =
+    claimedSenderHandle?.takeIf { it.isNotBlank() }
+        ?.let { "Sender-provided name: $it (not verified)" }
 
 /**
  * M1-M13 scan-scoped ambiguity chooser. Rows are ordered by score (the
@@ -59,9 +90,17 @@ fun AmbiguityChooserScreen(
             ) {
                 Column {
                     Text(
-                        "From ${row.senderHandleSnapshot}",
+                        row.primarySenderLabel,
                         style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.testTag("chooser_primary_${row.candidateId}"),
                     )
+                    chooserClaimLabel(row.claimedSenderHandle)?.let { claim ->
+                        Text(
+                            claim,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.testTag("chooser_claim_${row.candidateId}"),
+                        )
+                    }
                     Text(
                         row.yearAndDateLabel,
                         style = MaterialTheme.typography.bodyMedium,

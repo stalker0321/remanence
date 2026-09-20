@@ -12,6 +12,7 @@ import dev.hryshyn.remanence.core.data.fingerprints.SecretSealer
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.LocalMaterialState
+import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.TestSenderVerification
@@ -118,6 +119,23 @@ class IncomingSenderIndexCandidateProviderTest {
         )
         assertFalse(index.toString().contains("sender_c011"))
         assertFalse(index.toString().contains(filesDir.path))
+    }
+
+    @Test
+    fun trustedSenderHandleFlowsToChooserHintWhileManifestNameStaysAClaim() = runBlocking {
+        val valid = capsule("0198f0a0-0000-7000-8000-00000000c061", 1, owner)
+        seedIndexed(valid)
+        stageWithHandle(valid.capsuleId, NormalizedHandle.parse("trusted_sender"))
+
+        val index = IncomingSenderIndexCandidateProvider(
+            incomingCapsuleDao = database.incomingCapsuleDao(),
+            senderIndexBundleReader = SenderIndexBundleReader(roots, sealer),
+            currentOwner = { owner },
+        ).load(owner)
+
+        val hint = index.chooserHints[valid.capsuleId] ?: error("missing chooser hint")
+        assertEquals("trusted_sender", hint.trustedSenderHandle)
+        assertEquals("sender_c061", hint.senderHandleSnapshot)
     }
 
     @Test
@@ -234,6 +252,20 @@ class IncomingSenderIndexCandidateProviderTest {
                 capsule,
                 recognition(capsule),
                 TestSenderVerification.forCapsule(capsule),
+            ),
+        )
+        if (result !is SenderIndexBundleStageResult.Staged) error("test bundle was not staged")
+    }
+
+    private suspend fun stageWithHandle(capsuleId: String, handle: NormalizedHandle) {
+        val capsule = CapsuleId.parseRest(capsuleId)
+        val result = SenderIndexBundleStager(roots, sealer).stage(
+            SenderIndexBundleStageRequest(
+                ownerFor(capsuleId),
+                ownerFor(capsuleId),
+                capsule,
+                recognition(capsule),
+                TestSenderVerification.forCapsule(capsule, senderHandle = handle),
             ),
         )
         if (result !is SenderIndexBundleStageResult.Staged) error("test bundle was not staged")

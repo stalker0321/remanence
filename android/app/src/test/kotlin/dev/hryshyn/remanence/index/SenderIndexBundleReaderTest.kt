@@ -5,6 +5,7 @@ import dev.hryshyn.remanence.core.crypto.RecognitionManifestCodec
 import dev.hryshyn.remanence.core.data.fingerprints.SecretSealer
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.model.CapsuleId
+import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.TestSenderVerification
@@ -150,6 +151,47 @@ class SenderIndexBundleReaderTest {
         assertArrayEquals(bytesBefore, destination(owner, capsule).readBytes())
         assertTrue(wiped.isNotEmpty())
         assertTrue(wiped.all { bytes -> bytes.all { it == 0.toByte() } })
+    }
+
+    @Test
+    fun trustedSenderHandleIsCachedWhileLegacyBundlesStayUnverified() = runBlocking {
+        val sealer = AesGcmSealer()
+        val trusted = NormalizedHandle.parse("trusted_alice")
+        SenderIndexBundleStager(roots, sealer).stage(
+            SenderIndexBundleStageRequest(
+                owner,
+                owner,
+                capsule,
+                recognition(),
+                TestSenderVerification.forCapsule(capsule, senderHandle = trusted),
+            ),
+        )
+        val snapshot = (
+            reader(sealer).inspect(readRequest(owner, owner, capsule)) as
+                SenderIndexBundleReadResult.Available
+            ).snapshot
+        assertEquals(trusted.value, snapshot.trustedSenderHandle)
+        // The sender-chosen manifest name stays a separate, untrusted claim.
+        assertEquals("alice_1", snapshot.senderHandleSnapshot)
+        snapshot.close()
+
+        val legacyCapsule = otherCapsule
+        SenderIndexBundleStager(roots, sealer).stage(
+            SenderIndexBundleStageRequest(
+                owner,
+                owner,
+                legacyCapsule,
+                recognition(capsuleId = legacyCapsule),
+                TestSenderVerification.forCapsule(legacyCapsule),
+            ),
+        )
+        val legacySnapshot = (
+            reader(sealer).inspect(readRequest(owner, owner, legacyCapsule)) as
+                SenderIndexBundleReadResult.Available
+            ).snapshot
+        assertNull(legacySnapshot.trustedSenderHandle)
+        assertEquals("alice_1", legacySnapshot.senderHandleSnapshot)
+        legacySnapshot.close()
     }
 
     @Test

@@ -5,6 +5,7 @@ import dev.hryshyn.remanence.core.crypto.RecognitionManifestCodec
 import dev.hryshyn.remanence.core.data.fingerprints.SecretSealer
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.model.CapsuleId
+import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.TestSenderVerification
@@ -39,6 +40,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -144,6 +146,29 @@ class SenderIndexBundleStagerTest {
                 TestSenderVerification.forCapsule(capsule),
             )
         }
+    }
+
+    @Test
+    fun trustedSenderHandleRoundTripsAndLegacyBundleDecodesUnverified() {
+        val codec = SenderIndexBundleCodec()
+        val trusted = NormalizedHandle.parse("trusted_alice")
+        val withHandle = SenderIndexBundlePlaintext.fromVerifiedRecognition(
+            capsule,
+            recognition(),
+            TestSenderVerification.forCapsule(capsule, senderHandle = trusted),
+        )
+        val encoded = codec.encode(withHandle)
+        val decoded = codec.decode(encoded)
+        assertEquals(trusted.value, decoded.senderVerification?.senderHandle)
+
+        val legacy = SenderIndexBundlePlaintext.fromVerifiedRecognition(
+            capsule,
+            recognition(),
+            TestSenderVerification.forCapsule(capsule),
+        )
+        val legacyEncoded = codec.encode(legacy)
+        assertFalse(legacyEncoded.contentEquals(encoded))
+        assertNull(codec.decode(legacyEncoded).senderVerification?.senderHandle)
     }
 
     @Test

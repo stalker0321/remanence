@@ -505,6 +505,16 @@ class AppContainer private constructor(
                     else -> null
                 }
             },
+            userHandleLookup = { senderUserId ->
+                when (val result = recipientUserLookupRepository.lookup(senderUserId)) {
+                    is dev.hryshyn.remanence.core.data.network.RecipientUserLookupResult.Found ->
+                        dev.hryshyn.remanence.identity.DirectorySenderKeyStore.ResolvedDisplayIdentity(
+                            userId = result.snapshot.userId,
+                            handle = result.snapshot.handle,
+                        )
+                    else -> null
+                }
+            },
         )
     }
 

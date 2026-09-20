@@ -2,6 +2,7 @@ package dev.hryshyn.remanence.identity
 
 import com.google.crypto.tink.KeysetHandle
 import dev.hryshyn.remanence.core.model.KeyBundleId
+import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.core.model.UserId
 
 /**
@@ -27,6 +28,18 @@ interface TrustedSenderKeyStore {
         senderUserId: UserId,
         senderKeyBundleId: KeyBundleId,
     ): SenderKeyResolution
+
+    /**
+     * IP-01: Resolves the authenticated directory's current display handle for
+     * an ALREADY VERIFIED sender user id, or null when it cannot be established.
+     *
+     * This is a best-effort point-in-time binding captured at acceptance and
+     * cached in the encrypted local index; it is NOT an attestation that a
+     * sender-chosen recognition-manifest name is historically owned. The default
+     * is null so a caller never promotes a sender-supplied claim to a trusted
+     * label without an explicit directory-backed mapping.
+     */
+    suspend fun senderDisplayHandle(senderUserId: UserId): NormalizedHandle? = null
 }
 
 enum class SenderKeyUntrustedReason {

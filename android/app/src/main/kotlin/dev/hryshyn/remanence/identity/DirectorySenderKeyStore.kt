@@ -2,9 +2,11 @@ package dev.hryshyn.remanence.identity
 
 import dev.hryshyn.remanence.core.data.network.KeyBundleByIdResult
 import dev.hryshyn.remanence.core.model.KeyBundleId
+import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.wiring.PreparedIdentity
+import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * FIX-REVIEW2-04: production [TrustedSenderKeyStore] over the authenticated
@@ -28,7 +30,23 @@ import dev.hryshyn.remanence.wiring.PreparedIdentity
 class DirectorySenderKeyStore(
     private val directoryFetch: suspend (keyBundleId: String) -> KeyBundleByIdResult?,
     private val ownAccount: suspend () -> OwnAccount?,
+    /**
+     * IP-01: best-effort authenticated directory lookup of a sender user id's
+     * current display handle. Defaults to null so verification-only callers and
+     * tests never imply a trusted label they did not resolve.
+     */
+    private val userHandleLookup: (suspend (UserId) -> ResolvedDisplayIdentity?)? = null,
 ) : TrustedSenderKeyStore {
+
+    /**
+     * IP-01: a directory-resolved display identity. The store re-checks
+     * [userId] against the requested sender so a reused handle can never bind
+     * to the wrong verified user.
+     */
+    data class ResolvedDisplayIdentity(
+        val userId: UserId,
+        val handle: NormalizedHandle,
+    )
 
     /** The authenticated account's immutable self verification material. */
     data class OwnAccount(
@@ -79,6 +97,18 @@ class DirectorySenderKeyStore(
                     SenderKeyResolution.Trusted(handle)
                 }
             }
+        }
+    }
+
+    override suspend fun senderDisplayHandle(senderUserId: UserId): NormalizedHandle? {
+        val lookup = userHandleLookup ?: return null
+        return try {
+            lookup(senderUserId)?.takeIf { it.userId == senderUserId }?.handle
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // A display handle is never allowed to fail the acceptance gate.
+            null
         }
     }
 }

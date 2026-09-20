@@ -24,6 +24,13 @@ class SenderIndexBundleSenderVerification internal constructor(
     val protocolVersion: Int,
     val suite: String,
     publicKeysetBytes: ByteArray,
+    /**
+     * IP-01: authenticated directory display handle for [senderUserId], captured
+     * at acceptance. Null means "no trusted display identity" (legacy local
+     * index or an unresolved/absent lookup) and MUST render as unverified.
+     * This is never the sender-chosen recognition-manifest name.
+     */
+    val senderHandle: String? = null,
 ) {
     private val publicKeysetBytesSnapshot = publicKeysetBytes.copyOf()
 
@@ -37,6 +44,7 @@ class SenderIndexBundleSenderVerification internal constructor(
             protocolVersion,
             suite,
             publicKeysetBytesSnapshot,
+            senderHandle,
         )
 
     internal fun parsePublicKeyset(): KeysetHandle {
@@ -72,6 +80,7 @@ class SenderIndexBundleSenderVerification internal constructor(
             senderKeyBundleId: KeyBundleId,
             verifyingKeyset: KeysetHandle,
             wipeBytes: (ByteArray) -> Unit = { it.fill(0) },
+            senderHandle: NormalizedHandle? = null,
         ): SenderIndexBundleSenderVerification {
             val publicKeysetBytes = TinkProtoKeysetFormat.serializeKeysetWithoutSecret(verifyingKeyset)
             return try {
@@ -81,6 +90,7 @@ class SenderIndexBundleSenderVerification internal constructor(
                     protocolVersion = PreparedIdentity.PROTOCOL_VERSION,
                     suite = PreparedIdentity.SUITE,
                     publicKeysetBytes = publicKeysetBytes,
+                    senderHandle = senderHandle?.value,
                 )
             } finally {
                 try {
@@ -144,6 +154,7 @@ class SenderIndexBundlePlaintext internal constructor(
                 left.senderKeyBundleId == right.senderKeyBundleId &&
                 left.protocolVersion == right.protocolVersion &&
                 left.suite == right.suite &&
+                left.senderHandle == right.senderHandle &&
                 MessageDigest.isEqual(leftBytes, rightBytes)
         } finally {
             leftBytes.fill(0)
@@ -260,6 +271,14 @@ class SenderIndexBundleCodec {
                 "fingerprint exceeds local bundle limit"
             }
             require(senderVerification != null) { "sender verification material is missing" }
+            senderVerification.senderHandle?.let { handle ->
+                require(NormalizedHandle.parse(handle).value == handle) {
+                    "trusted sender handle is not canonical"
+                }
+                require(handle.toByteArray(Charsets.UTF_8).size <= ProtocolV1Limits.HANDLE_MAX_ASCII_CHARS) {
+                    "trusted sender handle exceeds protocol limit"
+                }
+            }
             val publicKeyset = senderPublicKeyset ?: error("sender verification material is missing")
             require(senderVerification.protocolVersion == PreparedIdentity.PROTOCOL_VERSION)
             require(senderVerification.suite == PreparedIdentity.SUITE)
@@ -279,7 +298,10 @@ class SenderIndexBundleCodec {
                         com.google.protobuf.CodedOutputStream.computeBytesSize(8, it.senderKeyBundleId.toProtoBytes()) +
                         com.google.protobuf.CodedOutputStream.computeUInt32Size(9, it.protocolVersion) +
                         com.google.protobuf.CodedOutputStream.computeStringSize(10, it.suite) +
-                        com.google.protobuf.CodedOutputStream.computeByteArraySize(11, publicKeyset)
+                        com.google.protobuf.CodedOutputStream.computeByteArraySize(11, publicKeyset) +
+                        (it.senderHandle?.let { handle ->
+                            com.google.protobuf.CodedOutputStream.computeStringSize(12, handle)
+                        } ?: 0)
                 } ?: 0)
             require(size <= MAX_PLAINTEXT_BYTES) { "local bundle exceeds bounded size" }
 
@@ -297,6 +319,7 @@ class SenderIndexBundleCodec {
                 coded.writeUInt32(9, it.protocolVersion)
                 coded.writeString(10, it.suite)
                 coded.writeByteArray(11, publicKeyset)
+                it.senderHandle?.let { handle -> coded.writeString(12, handle) }
             }
             coded.flush()
             return output
@@ -324,6 +347,7 @@ class SenderIndexBundleCodec {
         var senderProtocol: Int? = null
         var senderSuite: String? = null
         var senderPublicKeyset: ByteArray? = null
+        var senderHandle: String? = null
         val input = com.google.protobuf.CodedInputStream.newInstance(bytes)
         try {
             while (!input.isAtEnd) {
@@ -383,6 +407,10 @@ class SenderIndexBundleCodec {
                     require(value.isNotEmpty() && value.size <= MAX_PUBLIC_KEYSET_BYTES)
                     senderPublicKeyset = value
                 }
+                98 -> {
+                    require(senderHandle == null) { "duplicate trusted sender handle" }
+                    senderHandle = input.readStringRequireUtf8()
+                }
                 else -> throw IllegalArgumentException("unknown local bundle field $tag")
                 }
             }
@@ -396,6 +424,7 @@ class SenderIndexBundleCodec {
                 senderProtocol,
                 senderSuite,
                 senderPublicKeyset,
+                senderHandle,
             )
             try {
                 senderVerification.parsePublicKeyset()
@@ -411,6 +440,11 @@ class SenderIndexBundleCodec {
                 try {
                     require(NormalizedHandle.parse(decoded.senderHandleSnapshot).value == decoded.senderHandleSnapshot) {
                         "local bundle handle is not canonical"
+                    }
+                    decoded.senderVerification?.senderHandle?.let { trusted ->
+                        require(NormalizedHandle.parse(trusted).value == trusted) {
+                            "local bundle trusted handle is not canonical"
+                        }
                     }
                     require(decoded.createdAtEpochSeconds >= 0L) { "local bundle timestamp is invalid" }
                     decoded.placeLabel?.let { label ->

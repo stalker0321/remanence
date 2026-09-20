@@ -5,6 +5,7 @@ import dev.hryshyn.remanence.core.crypto.AccountIdentityGenerator
 import dev.hryshyn.remanence.core.crypto.TinkPrimitives
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.KeyBundleId
+import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.index.SenderIndexBundleSenderVerification
 import java.util.UUID
@@ -19,9 +20,19 @@ object TestSenderVerification {
         TinkProtoKeysetFormat.parseKeysetWithoutSecret(identity.signingPublicKeyset)
     }
 
+    /** The verified sender id used by [forCapsule]. */
+    fun verifiedSenderUserId(): UserId = sender
+
     fun forCapsule(
         capsuleId: CapsuleId,
+        senderHandle: NormalizedHandle? = null,
         wipeBytes: (ByteArray) -> Unit = { it.fill(0) },
     ): SenderIndexBundleSenderVerification =
-        SenderIndexBundleSenderVerification.fromTrusted(sender, bundle, publicKeyset, wipeBytes)
+        SenderIndexBundleSenderVerification.fromTrusted(
+            senderUserId = sender,
+            senderKeyBundleId = bundle,
+            verifyingKeyset = publicKeyset,
+            wipeBytes = wipeBytes,
+            senderHandle = senderHandle,
+        )
 }

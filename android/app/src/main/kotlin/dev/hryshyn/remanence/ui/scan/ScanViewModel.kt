@@ -70,7 +70,13 @@ import kotlinx.coroutines.ensureActive
 data class ChooserRow(
     val candidateId: String,
     val compositeScore: Double,
+    /** Sender-supplied claim from the recognition manifest; never trusted. */
     val senderHandleSnapshot: String? = null,
+    /**
+     * IP-01: authenticated directory handle cached for the verified sender, or
+     * null. Only this value may render as a trusted sender identity.
+     */
+    val trustedSenderHandle: String? = null,
     val createdAtEpochSeconds: Long? = null,
     val placeLabel: String? = null,
 )
@@ -826,6 +832,7 @@ class ScanViewModel internal constructor(
                             candidateId = id.toString(),
                             compositeScore = score,
                             senderHandleSnapshot = hint?.senderHandleSnapshot,
+                            trustedSenderHandle = hint?.trustedSenderHandle,
                             createdAtEpochSeconds = hint?.createdAtEpochSeconds,
                             placeLabel = hint?.placeLabel,
                         )

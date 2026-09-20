@@ -24,6 +24,7 @@ import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
 import dev.hryshyn.remanence.core.model.CapsuleId
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.LocalMaterialState
+import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.PublishArtifact
 import dev.hryshyn.remanence.core.model.PublishStatementBuildResult
@@ -47,6 +48,7 @@ import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -88,6 +90,41 @@ class IncomingControlIndexAcceptanceCoordinatorTest {
             ?: error("expected verified result, got $result")
         assertEquals(fixture.capsuleId.toProtoBytes(), verified.statement.capsuleId)
         assertArrayEquals(fixture.frontFingerprint, verified.recognition.frontFingerprint)
+    }
+
+    @Test
+    fun senderChosenManifestNameIsNeverTheTrustedSenderIdentity() = runBlocking {
+        // Sender A signs a fully valid capsule but writes a DIFFERENT name into
+        // the recognition manifest; the directory maps verified sender A to
+        // "real_sender". The claim must stay a claim and the trusted identity
+        // must be the directory handle for A.
+        val trustedHandle = NormalizedHandle.parse("real_sender")
+        val store = object : TrustedSenderKeyStore {
+            override suspend fun senderVerifyingKeyset(
+                senderUserId: UserId,
+                senderKeyBundleId: KeyBundleId,
+            ): TrustedSenderResolution = TrustedSenderResolution.Trusted(fixture.senderPublicKeyset)
+
+            override suspend fun senderDisplayHandle(senderUserId: UserId): NormalizedHandle? =
+                trustedHandle.takeIf { senderUserId == fixture.senderUserId }
+        }
+
+        val verified = coordinator(trustedSenderKeys = store).accept(request())
+            as? IncomingControlIndexAcceptanceResult.Verified
+            ?: error("expected a verified acceptance result")
+
+        assertEquals("mykola", verified.recognition.senderHandleSnapshot)
+        assertEquals("real_sender", verified.senderVerification.senderHandle)
+    }
+
+    @Test
+    fun missingDisplayLookupLeavesTheTrustedIdentityUnverified() = runBlocking {
+        val verified = coordinator().accept(request())
+            as? IncomingControlIndexAcceptanceResult.Verified
+            ?: error("expected a verified acceptance result")
+
+        assertEquals("mykola", verified.recognition.senderHandleSnapshot)
+        assertNull(verified.senderVerification.senderHandle)
     }
 
     @Test

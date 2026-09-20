@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0-sift-it.8 — Home layout, press, launcher icon
+
+- Centers the Remainder glyph in the adaptive launcher icon.
+- Home: “got a postcard?” fills leftover height; “someone in mind?” stays the smaller secondary action. Removes the inset that made the two cards look randomly sized.
+- Press on Hold action cards and buttons snaps immediately (visible even if animator duration is 0).
+- Scan no-match copy no longer pretends only framing failed; withdrawn postcards will not open.
+- Generator is still not in the app. Music and M4 recovery are still out of this APK.
+- Android `versionCode` is 19. Debug integrated-test build targets
+  `https://remanence.hryshyn.dev/` with V2 line localization enabled.
+- Tag: `v0.2.0-sift-it.8`. Artifact naming is
+  `Remanence-android-v0.2.0-sift-it.8-code19-g<git-sha>-debug.apk`.
+
 ## 0.2.0-sift-it.7 — cancel, upload preflight, identity, Hold
 
 - Ships sender cancellation vs first-open admission, SA-03 upload preflight,

@@ -23,8 +23,8 @@ class HomeScreenTest {
                 onCreate = { makes++ }, onScan = { opens++ }) }
         }
         composeRule.onNodeWithTag("home_build_label").assertDoesNotExist()
-        composeRule.onNodeWithTag("scan_action").performScrollTo().assertIsEnabled().performClick()
-        composeRule.onNodeWithTag("create_action").performScrollTo().assertIsEnabled().performClick()
+        composeRule.onNodeWithTag("scan_action").assertIsDisplayed().assertIsEnabled().performClick()
+        composeRule.onNodeWithTag("create_action").assertIsDisplayed().assertIsEnabled().performClick()
         assertEquals(1, opens)
         assertEquals(1, makes)
     }

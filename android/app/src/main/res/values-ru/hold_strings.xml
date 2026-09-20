@@ -22,7 +22,7 @@
     <string name="hold_ready_title">теперь отправьте открытку</string>
     <string name="hold_preparing_title">готовим вложение</string>
     <string name="hold_publishing_title">прикрепляем remanence</string>
-    <string name="hold_nomatch">поместите лицевую сторону целиком в рамку. уберите блики и повторите сканирование.</string>
+    <string name="hold_nomatch">не удалось открыть. поместите лицевую сторону целиком в рамку без бликов. если открытку отозвали, здесь она больше не откроется.</string>
     <string name="hold_back">назад</string>
     <string name="hold_close">закрыть</string>
     <string name="hold_retry">попробовать снова</string>

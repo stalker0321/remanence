@@ -1,6 +1,7 @@
 package dev.hryshyn.remanence.ui.hold
 
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
@@ -17,10 +18,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+
+private fun Modifier.holdPressShift(pressed: Boolean, enabled: Boolean): Modifier =
+    graphicsLayer { translationY = if (pressed && enabled) 5f else 0f }
 
 @Composable
 fun HoldButton(
@@ -28,11 +33,16 @@ fun HoldButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     content: @Composable RowScope.() -> Unit,
-) = Button(
-    onClick = onClick, enabled = enabled,
-    modifier = modifier.heightIn(min = 52.dp), shape = RoundedCornerShape(15.dp),
-    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp), content = content,
-)
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    Button(
+        onClick = onClick, enabled = enabled, interactionSource = interaction,
+        modifier = modifier.holdPressShift(pressed, enabled).heightIn(min = 52.dp),
+        shape = RoundedCornerShape(15.dp),
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp), content = content,
+    )
+}
 
 @Composable
 fun HoldDestructiveButton(
@@ -40,11 +50,16 @@ fun HoldDestructiveButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     content: @Composable RowScope.() -> Unit,
-) = Button(
-    onClick = onClick, enabled = enabled, modifier = modifier.heightIn(min = 52.dp),
-    colors = ButtonDefaults.buttonColors(containerColor = HoldColors.Destructive, contentColor = HoldColors.OnAccent),
-    shape = RoundedCornerShape(15.dp), content = content,
-)
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    Button(
+        onClick = onClick, enabled = enabled, interactionSource = interaction,
+        modifier = modifier.holdPressShift(pressed, enabled).heightIn(min = 52.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = HoldColors.Destructive, contentColor = HoldColors.OnAccent),
+        shape = RoundedCornerShape(15.dp), content = content,
+    )
+}
 
 @Composable
 fun HoldSecondaryButton(
@@ -52,10 +67,15 @@ fun HoldSecondaryButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     content: @Composable RowScope.() -> Unit,
-) = OutlinedButton(
-    onClick = onClick, enabled = enabled, modifier = modifier.heightIn(min = 48.dp),
-    shape = RoundedCornerShape(12.dp), content = content,
-)
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    OutlinedButton(
+        onClick = onClick, enabled = enabled, interactionSource = interaction,
+        modifier = modifier.holdPressShift(pressed, enabled).heightIn(min = 48.dp),
+        shape = RoundedCornerShape(12.dp), content = content,
+    )
+}
 
 @Composable
 fun HoldTextButton(
@@ -99,26 +119,40 @@ fun HoldActionObject(
     secondary: Boolean = false,
     titleModifier: Modifier = Modifier,
     compact: Boolean = false,
+    expand: Boolean = false,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val focused by interaction.collectIsFocusedAsState()
-    // Compose's duration scale honors Android's animator-duration setting.
-    val travel by animateDpAsState(if (pressed && enabled) 4.dp else 0.dp, tween(110), label = "Hold pressure")
+    // Press snaps immediately so it remains visible when animator duration is 0.
+    val travel by animateDpAsState(
+        targetValue = if (pressed && enabled) 6.dp else 0.dp,
+        animationSpec = if (pressed) snap() else tween(140),
+        label = "Hold pressure",
+    )
     val shape = RoundedCornerShape(if (secondary) 19.dp else 24.dp)
-    Box(modifier = modifier.padding(bottom = 6.dp).clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)) {
+    Box(
+        modifier = modifier
+            .padding(bottom = 6.dp)
+            .then(if (expand) Modifier.fillMaxSize() else Modifier)
+            .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick),
+    ) {
         Box(Modifier.matchParentSize().offset(y = 6.dp).background(
             if (!enabled) HoldColors.Field else if (secondary) HoldColors.SandEdge else HoldColors.LilacEdge, shape,
         ))
         Column(
-            Modifier.fillMaxWidth().offset(y = travel).clip(shape)
+            Modifier.fillMaxWidth()
+                .then(if (expand) Modifier.fillMaxSize() else Modifier)
+                .offset(y = travel).clip(shape)
                 .background(if (!enabled) HoldColors.Field else if (secondary) HoldColors.Sand else HoldColors.Lilac)
                 .then(if (focused) Modifier.border(2.dp, HoldColors.Accent, shape) else Modifier)
                 .padding(if (compact) 18.dp else 24.dp),
-            verticalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 16.dp),
+            verticalArrangement = if (expand) Arrangement.SpaceBetween else Arrangement.spacedBy(if (compact) 8.dp else 16.dp),
         ) {
-            Text(title, modifier = titleModifier, style = if (compact) MaterialTheme.typography.headlineSmall else if (secondary) MaterialTheme.typography.displaySmall else MaterialTheme.typography.displayLarge, color = HoldColors.Ink)
-            if (detail.isNotEmpty()) Text(detail, style = MaterialTheme.typography.bodyMedium, color = HoldColors.Ink)
+            Column(verticalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 16.dp)) {
+                Text(title, modifier = titleModifier, style = if (compact) MaterialTheme.typography.headlineSmall else if (secondary) MaterialTheme.typography.displaySmall else MaterialTheme.typography.displayLarge, color = HoldColors.Ink)
+                if (detail.isNotEmpty()) Text(detail, style = MaterialTheme.typography.bodyMedium, color = HoldColors.Ink)
+            }
             Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(action, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, color = HoldColors.Ink)
                 Box(Modifier.size(44.dp).background(if (secondary) HoldColors.Paper else HoldColors.Accent, RoundedCornerShape(13.dp)), contentAlignment = Alignment.Center) {

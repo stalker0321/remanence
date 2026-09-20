@@ -22,7 +22,7 @@
     <string name="hold_ready_title">now, the postcard</string>
     <string name="hold_preparing_title">getting it ready</string>
     <string name="hold_publishing_title">attaching your remanence</string>
-    <string name="hold_nomatch">fit the whole picture side in the frame. tilt it away from glare, then try again.</string>
+    <string name="hold_nomatch">we couldn\'t open this. keep the whole picture side in the frame, away from glare. if they withdrew it, it will not open.</string>
     <string name="hold_back">back</string>
     <string name="hold_close">close</string>
     <string name="hold_retry">try again</string>

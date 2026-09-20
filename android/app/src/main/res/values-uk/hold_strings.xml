@@ -22,7 +22,7 @@
     <string name="hold_ready_title">тепер надішліть листівку</string>
     <string name="hold_preparing_title">готуємо вкладення</string>
     <string name="hold_publishing_title">прикріплюємо remanence</string>
-    <string name="hold_nomatch">помістіть лицьовий бік повністю в рамку. усуньте відблиски й повторіть сканування.</string>
+    <string name="hold_nomatch">не вдалося відкрити. помістіть лицьовий бік повністю в рамку без відблисків. якщо листівку відкликали, тут вона більше не відкриється.</string>
     <string name="hold_back">назад</string>
     <string name="hold_close">закрити</string>
     <string name="hold_retry">спробувати ще раз</string>

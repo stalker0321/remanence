@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Hold chrome (branch `ui/hold-integration`, HEAD `b4e9660`)
+## Unreleased — Hold chrome (branch `ui/hold-integration`, base `77b3b38` + items 5–6 feature commit)
 
 Not an APK. Next distributed build must be versionCode **20**.
 
@@ -11,6 +11,26 @@ Not an APK. Next distributed build must be versionCode **20**.
   short viewport.
 - Auth forms pin submit above IME (`HoldFormScaffold`); failed login keeps
   typed values. Password stays masked.
+- Capture copy (item 5): quiet portrait instruction and shutter, honest
+  permission / binding / capture / processing / retry wording, and rejection
+  guidance localized EN/RU/UK in `hold_strings.xml`. The duplicated,
+  untranslated surface header is removed. Matcher geometry, CameraX binding,
+  SIFT, the capture state machine, and every test tag are unchanged.
+- Scan product copy (item 6): Matching/Accepted/RecaptureGuidance/
+  IndexUnavailable/MaterialPending and the ambiguity chooser render authored
+  EN/RU/UK copy (`hold_scan_*`, `hold_chooser_*`). RecaptureGuidance shows one
+  honest message plus one real recapture action; the dead inline camera is
+  removed and the action resets to `AwaitingCapture`. Trusted-vs-claimed
+  identity is unchanged; every user-controlled chooser placeholder (trusted
+  handle with its `@` prefix, claimed name, place label) renders as one
+  bidi-isolated (FSI/PDI) unit so surrounding labels keep their order.
+  ScanViewModel, `ScanMatchUiState`, grants, matcher and crypto are untouched.
+- Items 5–6 are feature-committed on this branch; no APK yet. Filtered
+  `:app:testDebugUnitTest --tests` gate **131/131** (`capture.*`, `ui.scan.*`,
+  `RootScanFlowLayoutTest`, `CreateSmallViewportTest`), final independent
+  review PASS — not the full suite and not device evidence. RecaptureGuidance
+  stays reason-agnostic (no reason field on `ScanMatchUiState`); RU/UK authored
+  copy awaits physical/native context review.
 - See `docs/hold/STATUS.md` and `docs/hold/CODEX-HANDOFF.md`.
 
 ## 0.2.0-sift-it.8 — Home layout, press, launcher icon

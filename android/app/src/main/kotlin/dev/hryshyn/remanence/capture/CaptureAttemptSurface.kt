@@ -32,10 +32,13 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import dev.hryshyn.remanence.BuildConfig
+import dev.hryshyn.remanence.R
 import dev.hryshyn.remanence.core.recognition.PostcardGuideGeometry
 import dev.hryshyn.remanence.core.recognition.QualityReason
 
@@ -118,7 +121,6 @@ internal fun capturePreviewSize(
  */
 @Composable
 fun CaptureAttemptSurface(
-    title: String,
     controller: CaptureAttemptController,
     shutterTag: String,
     retakeTag: String,
@@ -172,34 +174,38 @@ fun CaptureAttemptSurface(
     }
 
     Column(modifier = modifier.fillMaxWidth()) {
-        Text("Capture the $title", style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(8.dp))
         when (controller.permission) {
             CapturePermissionStep.NotRequested ->
                 Text(
-                    "Requesting camera permission...",
+                    stringResource(R.string.hold_capture_permission_needed),
                     modifier = Modifier.testTag("capture_permission_progress"),
                 )
 
             CapturePermissionStep.DeniedRetryable -> Column {
-                Text("Camera permission was declined.")
+                Text(stringResource(R.string.hold_capture_permission_denied_title))
+                Spacer(Modifier.height(4.dp))
+                Text(stringResource(R.string.hold_capture_permission_denied_body))
+                Spacer(Modifier.height(8.dp))
                 Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) {
-                    Text("Ask again")
+                    Text(stringResource(R.string.hold_capture_permission_allow))
                 }
             }
 
             CapturePermissionStep.PermanentlyDenied -> Column {
                 Text(
-                    "Camera access is permanently denied; enable it in Settings.",
+                    stringResource(R.string.hold_capture_permission_blocked_title),
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.testTag("capture_permanently_denied"),
                 )
+                Spacer(Modifier.height(4.dp))
+                Text(stringResource(R.string.hold_capture_permission_blocked_body))
+                Spacer(Modifier.height(8.dp))
                 OutlinedButton(onClick = {
                     settingsLauncher.launch(android.content.Intent(
                         android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                         android.net.Uri.parse("package:${context.packageName}"),
                     ))
-                }, modifier = Modifier.testTag("capture_open_settings")) { Text("open settings") }
+                }, modifier = Modifier.testTag("capture_open_settings")) { Text(stringResource(R.string.hold_capture_open_settings)) }
             }
 
             CapturePermissionStep.Granted -> GrantedAttemptContent(
@@ -243,7 +249,7 @@ private fun GrantedAttemptContent(
         )
 
         CaptureAttemptPhase.Accepted -> Text(
-            "Captured.",
+            stringResource(R.string.hold_capture_accepted),
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.testTag("capture_accepted_status"),
         )
@@ -338,7 +344,7 @@ private fun LivePreviewContent(
                     adapter.preview(Modifier.matchParentSize())
                     PostcardGuideOverlay(modifier = Modifier.matchParentSize())
                     Text(
-                        "Keep all four postcard edges inside the outline.",
+                        stringResource(R.string.hold_capture_guide_instruction),
                         style = MaterialTheme.typography.bodySmall,
                         color = Color.White,
                         modifier = Modifier
@@ -353,7 +359,10 @@ private fun LivePreviewContent(
         Spacer(Modifier.height(8.dp))
         when (phase) {
             CaptureAttemptPhase.Binding ->
-                Text("Starting camera…", modifier = Modifier.testTag("capture_binding_status"))
+                Text(
+                    stringResource(R.string.hold_capture_binding),
+                    modifier = Modifier.testTag("capture_binding_status"),
+                )
 
             CaptureAttemptPhase.Ready -> ShutterButton(
                 tag = shutterTag,
@@ -369,7 +378,10 @@ private fun LivePreviewContent(
             )
 
             CaptureAttemptPhase.Capturing -> Column {
-                Text("Capturing…", modifier = Modifier.testTag("capture_capturing_status"))
+                Text(
+                    stringResource(R.string.hold_capture_capturing),
+                    modifier = Modifier.testTag("capture_capturing_status"),
+                )
                 Spacer(Modifier.height(8.dp))
                 ShutterButton(tag = shutterTag, enabled = false, onClick = {})
             }
@@ -413,7 +425,7 @@ private fun PostcardGuideOverlay(modifier: Modifier) {
 @Composable
 private fun ShutterButton(tag: String, enabled: Boolean, onClick: () -> Unit) {
     Button(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth().testTag(tag)) {
-        Text("Capture")
+        Text(stringResource(R.string.hold_capture_shutter))
     }
 }
 
@@ -426,7 +438,7 @@ private fun ProcessingStatus(shutterTag: String) {
                 modifier = Modifier.testTag("capture_processing_spinner"),
             )
             Spacer(Modifier.width(8.dp))
-            Text("Processing…", modifier = Modifier.testTag("capture_processing_status"))
+            Text(stringResource(R.string.hold_capture_processing), modifier = Modifier.testTag("capture_processing_status"))
         }
         Spacer(Modifier.height(8.dp))
         ShutterButton(tag = shutterTag, enabled = false, onClick = {})
@@ -456,19 +468,29 @@ private fun TerminalPanel(
             )
         } else {
             Text(
-                text = "Capture failed:",
+                text = stringResource(R.string.hold_capture_failed_title),
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.testTag("capture_failed_header"),
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                text = failedMessage ?: "unknown failure",
+                text = stringResource(R.string.hold_capture_failed_body),
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.testTag("capture_failed_message"),
             )
+            if (BuildConfig.DEBUG) {
+                failedMessage?.let {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.testTag("capture_debug_failure_message"),
+                    )
+                }
+            }
             Spacer(Modifier.height(12.dp))
             OutlinedButton(onClick = onRetake, modifier = Modifier.fillMaxWidth().testTag(retakeTag)) {
-                Text("Retake")
+                Text(stringResource(R.string.hold_retry))
             }
         }
     }

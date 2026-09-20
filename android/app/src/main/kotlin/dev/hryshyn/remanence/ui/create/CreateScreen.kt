@@ -101,7 +101,6 @@ fun CreateScreen(
             CreateViewModel.Step.RECIPIENT_LOOKUP -> RecipientLookupContent(viewModel)
             CreateViewModel.Step.RECIPIENT_CONFIRM -> RecipientConfirmContent(viewModel)
             CreateViewModel.Step.FRONT -> CaptureAttemptSurface(
-                title = "postcard front",
                 controller = viewModel.frontAttempt,
                 shutterTag = "capture_shutter_front",
                 retakeTag = "capture_retake_front",

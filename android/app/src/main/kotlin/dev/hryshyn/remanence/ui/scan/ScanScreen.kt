@@ -75,20 +75,19 @@ fun ScanScreen(
                 Text(stringResource(R.string.hold_recognizing), modifier = Modifier.testTag("scan_matching"))
             }
             is ScanMatchUiState.Accepted -> Text(
-                "opening your remanence…",
+                stringResource(R.string.hold_scan_opening),
                 modifier = Modifier.testTag("scan_verified"),
             )
             is ScanMatchUiState.Chooser -> AmbiguityChooserScreen(
                 rows = current.rows.map { row ->
-                    val (primaryLabel, verified) = chooserPrimarySenderLabel(row.trustedSenderHandle)
                     ChooserHintRow(
                         candidateId = row.candidateId,
-                        primarySenderLabel = primaryLabel,
-                        senderIdentityVerified = verified,
+                        primarySenderLabel = chooserPrimaryLabel(row.trustedSenderHandle),
+                        senderIdentityVerified = chooserTrustedHandle(row.trustedSenderHandle) != null,
                         claimedSenderHandle = row.senderHandleSnapshot,
                         yearAndDateLabel = row.createdAtEpochSeconds?.let {
                             java.time.LocalDate.ofEpochDay(it / 86400L).year.toString()
-                        } ?: "Unknown date",
+                        } ?: stringResource(R.string.hold_chooser_unknown_date),
                         placeLabel = row.placeLabel,
                     )
                 },
@@ -102,22 +101,28 @@ fun ScanScreen(
             )
             is ScanMatchUiState.RecaptureGuidance -> Column {
                 Text(stringResource(R.string.hold_nomatch), modifier = Modifier.testTag("scan_recapture"))
-                OutlinedButton(onClick = viewModel::resetSession) { Text("Start over") }
-                Spacer(Modifier.height(8.dp))
-                FrontCapture(viewModel, Modifier.fillMaxWidth(), adapterFactory, requestPermissionOnAttach)
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = viewModel::resetSession,
+                    modifier = Modifier.testTag("scan_recapture_action"),
+                ) { Text(stringResource(R.string.hold_scan_again)) }
             }
             is ScanMatchUiState.IndexUnavailable -> Column {
                 Text(
-                    "Postcard index unavailable. Connect to the internet and try again.",
+                    stringResource(R.string.hold_scan_index_body),
                     modifier = Modifier.testTag("scan_index_unavailable"),
                 )
-                Button(onClick = viewModel::retryIndexSync) { Text("Sync and try again") }
+                Spacer(Modifier.height(12.dp))
+                Button(
+                    onClick = viewModel::retryIndexSync,
+                    modifier = Modifier.testTag("scan_index_retry"),
+                ) { Text(stringResource(R.string.hold_retry)) }
             }
             is ScanMatchUiState.MaterialPending -> Text(
                 text = if (current.connected) {
-                    "Postcard recognized. Downloading it now…"
+                    stringResource(R.string.hold_scan_material_online)
                 } else {
-                    "Postcard recognized. Connect to the internet to download it."
+                    stringResource(R.string.hold_scan_material_offline)
                 },
                 modifier = Modifier.testTag(
                     if (current.connected) "scan_material_pending_online" else "scan_material_pending_offline",
@@ -137,7 +142,6 @@ private fun FrontCapture(
 ) {
     when (viewModel.captureSession.state) {
         ScanSessionState.AWAITING_FRONT -> CaptureAttemptSurface(
-            title = "postcard front",
             controller = viewModel.frontAttempt,
             shutterTag = "capture_shutter_front",
             retakeTag = "capture_retake_front",

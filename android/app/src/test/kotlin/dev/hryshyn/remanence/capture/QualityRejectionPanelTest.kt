@@ -1,10 +1,12 @@
 package dev.hryshyn.remanence.capture
 
+import android.content.Context
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -25,6 +27,11 @@ class QualityRejectionPanelTest {
 
     @get:Rule
     val composeRule = createComposeRule()
+
+    private val context: Context = ApplicationProvider.getApplicationContext()
+
+    private fun guidanceFor(reason: QualityReason): String =
+        context.getString(guidanceResource(reason))
 
     @Test
     fun everyReasonCodeRendersItsSpecificGuidanceAndWorkingRetake() {
@@ -92,7 +99,7 @@ class QualityRejectionPanelTest {
                 QualityReason.FEATURES_INSUFFICIENT to
                     "Use printed detail, focus, good light, and keep the full card inside the outline.",
             ),
-            QualityReason.entries.associateWith(::guidanceFor),
+            QualityReason.entries.associateWith { guidanceFor(it) },
         )
     }
 

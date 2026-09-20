@@ -14,7 +14,14 @@ Branch `ui/hold-integration` (Hold tree:
 | `8627de2` | Home gutters 24/20/18, compact+scroll at large type |
 | `4c04cff` | Auth: `HoldFormScaffold` pins submit above IME; failed login keeps typed values |
 
-These three after `.8` are **not** in an APK yet. Next distributed build must be **versionCode 20** (never reuse 18 or 19).
+These three after `.8`, plus the HOLD-05 capture copy and HOLD-06 scan product
+copy (items 5–6) now feature-committed on this branch, are **not** in an APK
+yet. Next distributed build must be **versionCode 20** (never reuse 18 or 19).
+`.8` names the last shipped APK, not the worktree HEAD.
+
+Orchestrator-managed commits and feature-branch pushes on `ui/hold-integration`
+are allowed. `main`, tags, GitHub releases, APK publication, server deploy and
+DB/Caddy changes still require explicit owner approval.
 
 `origin/main` is still sift-it.7 (`4e5333d`). PAT cannot open PRs.
 
@@ -29,16 +36,27 @@ These three after `.8` are **not** in an APK yet. Next distributed build must be
 `/home/vodkolyan/Projects/Remanence-design` has **no** `handoff/`. Ignore
 `implementation/remanence` in the transfer (it is sift-it.6).
 
-## Your first work (item 5, then 6)
+## Items 5–6 (implemented, feature-committed)
 
-Do **not** mix trees. Stay on `ui/hold-integration`.
+Do **not** mix trees. Stay on `ui/hold-integration`. Both slices are
+feature-committed on top of `77b3b38`. The gate is a filtered
+`:app:testDebugUnitTest --tests` run: **131/131** (`capture.*`, `ui.scan.*`,
+`RootScanFlowLayoutTest`, `CreateSmallViewportTest`), final independent review
+PASS. It is **not** the full suite and not device evidence.
 
-5. **Capture copy only** — `CaptureAttemptSurface.kt`. Portrait 3:4 already.
-   Quiet instruction + shutter. Do not change matcher geometry, CameraX
-   crop, or SIFT. Permission recovery already exists.
-6. **Scan product copy** — `ScanScreen.kt` + `hold_strings.xml` (en/ru/uk).
-   Map IndexUnavailable / MaterialPending / RecaptureGuidance / chooser.
-   Keep withdrawn wording. No diagnostic dumps.
+5. **Capture copy** — done (feature-committed). Quiet portrait 3:4 instruction +
+   shutter, honest permission / binding / capture / processing / retry
+   wording, rejection guidance EN/RU/UK; duplicate untranslated surface header
+   removed. Matcher geometry, CameraX crop and SIFT unchanged.
+6. **Scan product copy** — done (feature-committed). Per-state EN/RU/UK copy for
+   Matching / Accepted (content-free) / RecaptureGuidance / IndexUnavailable /
+   MaterialPending and the chooser (trusted / unverified / claim / date /
+   scan-again), with bidi-isolated user placeholders. RecaptureGuidance is one
+   honest withdrawn-aware message plus one real recapture action; the dead
+   inline camera is removed. It stays reason-agnostic because
+   `ScanMatchUiState` has no reason field. ScanViewModel / state / grants /
+   matcher / crypto unchanged. RU/UK authored copy awaits physical/native
+   context review.
 
 Then 7 underlayer, 8 Carry — only after a device pass. **No Carry now.**
 
@@ -57,8 +75,8 @@ See `docs/recovery/DEVICE-LOOP.md` on that tree.
 
 ## APK
 
-Cut **0.2.0-sift-it.9 / code 20** after 5–6 (or after chrome-only if they
-want phones sooner). Debug:
+Cut **0.2.0-sift-it.9 / code 20** after the items 5–6 feature commit is
+reviewed and the owner approves (no APK yet). Debug:
 `-Premanence.apiBaseUrl=https://remanence.hryshyn.dev/`
 `-Premanence.localization.v2.enabled=true`
 Then `gh release create` prerelease + named APK. Animator scale 1x to judge

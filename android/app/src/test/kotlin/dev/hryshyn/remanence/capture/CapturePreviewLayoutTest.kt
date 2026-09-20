@@ -121,7 +121,6 @@ class CapturePreviewLayoutTest {
                             .testTag("capture_test_host"),
                     ) {
                         CaptureAttemptSurface(
-                            title = "postcard front",
                             controller = controller,
                             shutterTag = "capture_test_shutter",
                             retakeTag = "capture_test_retake",

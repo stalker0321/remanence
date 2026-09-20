@@ -13,11 +13,22 @@ plus grammar-test v1–v7. Do not treat `/home/vodkolyan/Projects/Remanence-desi
 as complete: it has no `handoff/`.
 
 Live Android worktree: `/home/vodkolyan/projects/Remanence-hold-integration`
-on `ui/hold-integration` HEAD **`b4e9660`**. Last shipped APK:
-**0.2.0-sift-it.8 / versionCode 19** (`8614e64`). Chrome after that is
-unreleased (next APK code **20**). GitHub prerelease
+on `ui/hold-integration`. Last shipped APK: **0.2.0-sift-it.8 / versionCode
+19** (`8614e64`); `.8` names that shipped APK, not the worktree HEAD. HOLD-05
+capture copy and HOLD-06 scan product copy (items 5–6) are feature-committed
+on this branch — not in an APK. Next APK code is **20**. Orchestrator-managed
+commits and feature-branch pushes are allowed; `main`, tags, releases, APK
+publication, deploy and DB/Caddy need owner approval. GitHub prerelease
 https://github.com/stalker0321/remanence/releases/tag/v0.2.0-sift-it.8
 `origin/main` is still **sift-it.7** (`4e5333d`). Do not reuse code 18 or 19.
+
+Items 5–6 gate: **131/131** on a filtered
+`:app:testDebugUnitTest --tests` run (`capture.*`, `ui.scan.*`,
+`RootScanFlowLayoutTest`, `CreateSmallViewportTest`) via
+`scripts/verify-hold.sh` (JDK17, `--no-daemon --max-workers=1`); final
+independent review PASS. That is not the full suite and not a physical-device
+claim. RU/UK authored capture/scan copy still awaits physical/native context
+review.
 
 M4 worktree: `/home/vodkolyan/projects/Remanence-m4-recovery` on `work/m4-recovery`.
 Do not mix Hold/IP/cancel into it.
@@ -112,7 +123,8 @@ Music design exists (`REMANENCE_MUSIC_LINKS_DESIGN_2026-09-20.md`) and is
 - Generator playground/v7 was on the host; architecture PDF/md was not, until
   transfer. Even now, no Android adapter.
 - `implementation/remanence` in the design dump is **sift-it.6**. Do not
-  rebase onto it; live tree is hold-integration `.8`.
+  rebase onto it; the live tree is `ui/hold-integration`, where `.8` is only
+  the last shipped APK.
 
 ---
 
@@ -132,17 +144,27 @@ Order (one slice per commit; bump versionCode only when cutting an APK):
 4. **Forms** — done in this tree: HoldFormScaffold pins submit above IME;
    fields scroll; password stays masked; failed login/register keep typed
    values. Manifest already `adjustResize`.
-5. **Capture** — quiet portrait 3:4; instruction + shutter; permission
-   recovery already exists — check copy, not geometry of the matcher.
-6. **Scan product copy** — map real failure reasons, not a single glare
-   sentence; keep withdrawn wording; no diagnostics dump.
+5. **Capture copy** — done in this tree (feature-committed): quiet portrait 3:4
+   instruction + shutter; honest permission / binding / capture / processing /
+   retry wording; rejection guidance EN/RU/UK. Duplicate untranslated surface
+   header removed. Matcher geometry, CameraX crop, SIFT and the capture state
+   machine unchanged.
+6. **Scan product copy** — done in this tree (feature-committed): per-state EN/RU/UK
+   copy for Matching / Accepted (content-free) / RecaptureGuidance /
+   IndexUnavailable / MaterialPending, plus chooser trusted / unverified /
+   claim / date / scan-again with bidi-isolated user placeholders.
+   RecaptureGuidance is one honest withdrawn-aware message plus one real
+   recapture action; the dead inline camera is removed. It stays
+   reason-agnostic because `ScanMatchUiState` has no reason field.
+   ScanViewModel, state, grants, matcher and crypto unchanged.
 7. **Opened capsule** — whole composition, no app header; underlayer drag +
    48 dp reveal; instant private teardown. Carry later, after layout is honest.
 8. **Carry** — only after 1–7 survive a device pass. Reduced-motion must
    skip travel, not skip privacy gates.
 
-Then: new APK (code **20**), GitHub prerelease, two-phone checklist in
-`device-review.md` with animator scale 1x then 0.
+Items 5–6 are feature-committed; no APK yet. Cut code **20** only after owner
+approval, then run the two-phone checklist in `device-review.md` with animator
+scale 1x then 0. Items 7 (underlayer) and 8 (Carry) wait for a device pass.
 
 ---
 
@@ -161,8 +183,9 @@ If design work is in flight, leave M4 parked.
 
 ---
 
-## First slice after this file
+## Next step
 
-Restore Remainder to the measured handoff transform and align action-object
-press to 3–4.dp / 110 ms. No APK bump in that slice unless a device build is
-explicitly requested.
+Items 5–6 are feature-committed on `ui/hold-integration`. Next is the
+owner-approved code **20** APK (`0.2.0-sift-it.9`) and the two-phone checklist
+in `device-review.md` (animator scale 1x then 0). Items 7 (underlayer) and 8
+(Carry) follow only after that device pass.

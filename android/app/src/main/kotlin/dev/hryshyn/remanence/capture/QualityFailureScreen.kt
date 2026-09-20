@@ -11,28 +11,22 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.hryshyn.remanence.BuildConfig
+import dev.hryshyn.remanence.R
 import dev.hryshyn.remanence.core.recognition.QualityReason
 
-/** One actionable recapture instruction per documented failure reason. */
-fun guidanceFor(reason: QualityReason): String = when (reason) {
-    QualityReason.CARD_TOO_SMALL ->
-        "Move closer while keeping all four postcard edges visible."
-    QualityReason.CROP_UNCERTAIN ->
-        "Show all four postcard corners and edges; remove any occlusion."
-    QualityReason.ANGLE_UNCERTAIN ->
-        "Hold the phone parallel to the postcard and align its edges."
-    QualityReason.RESOLUTION_INSUFFICIENT ->
-        "Move closer, use the highest still resolution, and keep the full card visible."
-    QualityReason.TOO_BLURRY ->
-        "Hold the phone steady while the camera focuses."
-    QualityReason.TOO_DARK ->
-        "Use brighter, even light and remove shadows."
-    QualityReason.GLARE_EXCESSIVE ->
-        "Tilt the postcard or move the light to remove glare."
-    QualityReason.FEATURES_INSUFFICIENT ->
-        "Use printed detail, focus, good light, and keep the full card inside the outline."
+/** String resource for the one actionable recapture instruction per failure reason. */
+internal fun guidanceResource(reason: QualityReason): Int = when (reason) {
+    QualityReason.CARD_TOO_SMALL -> R.string.hold_capture_reason_card_too_small
+    QualityReason.CROP_UNCERTAIN -> R.string.hold_capture_reason_crop_uncertain
+    QualityReason.ANGLE_UNCERTAIN -> R.string.hold_capture_reason_angle_uncertain
+    QualityReason.RESOLUTION_INSUFFICIENT -> R.string.hold_capture_reason_resolution_insufficient
+    QualityReason.TOO_BLURRY -> R.string.hold_capture_reason_too_blurry
+    QualityReason.TOO_DARK -> R.string.hold_capture_reason_too_dark
+    QualityReason.GLARE_EXCESSIVE -> R.string.hold_capture_reason_glare_excessive
+    QualityReason.FEATURES_INSUFFICIENT -> R.string.hold_capture_reason_features_insufficient
 }
 
 /**
@@ -52,14 +46,14 @@ fun QualityRejectionPanel(
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
-            text = "This capture cannot be used yet:",
+            text = stringResource(R.string.hold_capture_rejected_title),
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.testTag("quality_failure_header"),
         )
         Spacer(Modifier.height(4.dp))
         for (reason in reasons) {
             Text(
-                text = guidanceFor(reason),
+                text = stringResource(guidanceResource(reason)),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier
@@ -85,7 +79,7 @@ fun QualityRejectionPanel(
                 .padding(top = 12.dp)
                 .testTag(recaptureTag),
         ) {
-            Text("Retake")
+            Text(stringResource(R.string.hold_retry))
         }
     }
 }

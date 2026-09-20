@@ -13,7 +13,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import dev.hryshyn.remanence.R
 
 /**
  * One chooser hint row (docs/recognition.md section 9): only the locally
@@ -36,27 +38,37 @@ data class ChooserHintRow(
     val placeLabel: String?,
 )
 
-/** Explicit primary label when no trusted display identity exists. */
-internal const val UNVERIFIED_SENDER_LABEL: String = "Unverified sender"
+/** FSI/PDI first-strong isolation for user-controlled placeholder runs. */
+internal fun bidiIsolated(value: String): String = "\u2068$value\u2069"
 
 /**
- * IP-01: primary sender identity comes only from the trusted mapping. When it
- * is absent, callers must show the explicit unverified label instead of any
- * sender-supplied name.
+ * IP-01 trusted-mapping policy: a sender-supplied name never becomes the
+ * primary identity. Returns the trusted handle only when non-blank.
  */
-internal fun chooserPrimarySenderLabel(trustedSenderHandle: String?): Pair<String, Boolean> {
-    val handle = trustedSenderHandle?.takeIf { it.isNotBlank() }
-    return if (handle != null) {
-        "From @$handle" to true
+internal fun chooserTrustedHandle(trustedSenderHandle: String?): String? =
+    trustedSenderHandle?.takeIf { it.isNotBlank() }
+
+/**
+ * Primary sender identity comes only from the trusted mapping. When it is
+ * absent, show the explicit unverified label instead of any sender-supplied
+ * name. The user-controlled handle is bidi-isolated.
+ */
+@Composable
+internal fun chooserPrimaryLabel(trustedSenderHandle: String?): String {
+    val handle = chooserTrustedHandle(trustedSenderHandle)
+    return if (handle == null) {
+        stringResource(R.string.hold_chooser_unverified)
     } else {
-        UNVERIFIED_SENDER_LABEL to false
+        stringResource(R.string.hold_chooser_from, bidiIsolated("@$handle"))
     }
 }
 
 /** Secondary, clearly-marked claim text; null when the sender supplied none. */
-internal fun chooserClaimLabel(claimedSenderHandle: String?): String? =
-    claimedSenderHandle?.takeIf { it.isNotBlank() }
-        ?.let { "Sender-provided name: $it (not verified)" }
+@Composable
+internal fun chooserClaimLabel(claimedSenderHandle: String?): String? {
+    val claimed = claimedSenderHandle?.takeIf { it.isNotBlank() } ?: return null
+    return stringResource(R.string.hold_chooser_claim, bidiIsolated(claimed))
+}
 
 /**
  * M1-M13 scan-scoped ambiguity chooser. Rows are ordered by score (the
@@ -76,7 +88,7 @@ fun AmbiguityChooserScreen(
             .padding(24.dp),
     ) {
         Text(
-            "Which postcard is this?",
+            stringResource(R.string.hold_chooser_title),
             style = MaterialTheme.typography.headlineSmall,
             modifier = Modifier.testTag("chooser_title"),
         )
@@ -107,8 +119,9 @@ fun AmbiguityChooserScreen(
                     )
                     if (!row.placeLabel.isNullOrEmpty()) {
                         Text(
-                            row.placeLabel,
+                            bidiIsolated(row.placeLabel),
                             style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.testTag("chooser_place_${row.candidateId}"),
                         )
                     }
                 }
@@ -123,7 +136,7 @@ fun AmbiguityChooserScreen(
                 .fillMaxWidth()
                 .testTag("chooser_recapture_button"),
         ) {
-            Text("Scan again instead")
+            Text(stringResource(R.string.hold_chooser_rescan))
         }
     }
 }

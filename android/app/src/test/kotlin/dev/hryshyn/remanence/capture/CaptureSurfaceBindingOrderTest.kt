@@ -64,7 +64,6 @@ class CaptureSurfaceBindingOrderTest {
         composeRule.setContent {
             MaterialTheme {
                 CaptureAttemptSurface(
-                    title = "postcard front",
                     controller = controller,
                     shutterTag = "binding_race_shutter",
                     retakeTag = "binding_race_retake",

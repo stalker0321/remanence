@@ -39,6 +39,14 @@ class ProtocolV1Limits:
 
 LIMITS_V1 = ProtocolV1Limits()
 
+# Server-side admission control for in-flight ciphertext uploads. These are
+# operational safety bounds, not protocol wire values, so they stay out of
+# ProtocolV1Limits and its fixture. One account may hold at most this many
+# bytes and this many outstanding staged uploads before new uploads are
+# rejected with a retryable rate-limit problem.
+MAX_OUTSTANDING_UPLOAD_BYTES_PER_ACCOUNT = LIMITS_V1.total_capsule_max_ciphertext_bytes
+MAX_OUTSTANDING_UPLOADS_PER_ACCOUNT = 16
+
 # The request envelope is bounded before JSON parsing. This is deliberately
 # separate from the artifact limits in protocol/fixtures/limits-v1.json.
 MAX_CREATE_DRAFT_REQUEST_BYTES = 16 * 1024

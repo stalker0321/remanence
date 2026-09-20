@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import hashlib
 import inspect
@@ -13,6 +14,7 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
+from starlette.requests import Request
 
 pytest_plugins = ("test_registration_endpoint",)
 
@@ -31,11 +33,25 @@ from remanence.capsules.promotion_service import (
     CapsuleBlobPromotionError,
     CapsuleBlobPromotionService,
 )
+from remanence.capsules.upload_preflight_service import (
+    CapsuleUploadPreflight,
+    CapsuleUploadPreflightService,
+)
+from remanence.capsules.upload_reservations import (
+    UploadReservationManager,
+    build_upload_reservation_manager,
+)
 from remanence.capsules.models import Capsule, CapsuleState
 from remanence.capsules.limits import LIMITS_V1
 from remanence.main import create_app
 from remanence.settings import AppMode, Settings
-from remanence.storage import BlobInfo, BlobStoreError, CiphertextStager, LocalFileBlobStore
+from remanence.storage import (
+    BlobInfo,
+    BlobNotFoundError,
+    BlobStoreError,
+    CiphertextStager,
+    LocalFileBlobStore,
+)
 from remanence.capsules.schemas import CapsuleDraftValidationError
 
 from test_capsule_draft_endpoint import (
@@ -60,6 +76,34 @@ def _wire_storage(client: TestClient, root: Path) -> LocalFileBlobStore:
     client.app.state.blob_store = store
     client.app.state.ciphertext_stager = CiphertextStager(root / "staging")
     return store
+
+
+class _SpyStager(CiphertextStager):
+    def __init__(self, root: Path, on_stage=None) -> None:
+        super().__init__(root)
+        self.calls = 0
+        self._on_stage = on_stage
+
+    async def stage(self, chunks, *, expected_size, expected_sha256, max_bytes):
+        self.calls += 1
+        if self._on_stage is not None:
+            self._on_stage()
+        return await super().stage(
+            chunks,
+            expected_size=expected_size,
+            expected_sha256=expected_sha256,
+            max_bytes=max_bytes,
+        )
+
+
+def _wire_spy_storage(
+    client: TestClient, root: Path, *, on_stage=None
+) -> tuple[LocalFileBlobStore, _SpyStager]:
+    store = LocalFileBlobStore(root / "blobs")
+    stager = _SpyStager(root / "staging", on_stage=on_stage)
+    client.app.state.blob_store = store
+    client.app.state.ciphertext_stager = stager
+    return store, stager
 
 
 def _prepare(client: TestClient, root: Path) -> tuple[dict, dict, dict, bytes, LocalFileBlobStore]:
@@ -178,7 +222,21 @@ def test_upload_maps_internal_storage_codes_at_http_boundary(
     def fake_promote(self, **kwargs):
         raise CapsuleBlobPromotionError(service_code)
 
+    payload = b"body"
+
+    def fake_preflight(self, **kwargs):
+        return CapsuleUploadPreflight(
+            capsule_id=uuid4(),
+            blob_id=uuid4(),
+            object_key="capsules/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000.blob",
+            expected_size=len(payload),
+            expected_sha256_hex=_sha256(payload).hex(),
+            artifact_max_bytes=LIMITS_V1.encrypted_photo_max_ciphertext_bytes,
+            state=CapsuleBlobState.DECLARED,
+        )
+
     monkeypatch.setattr(CapsuleBlobPromotionService, "promote_blob", fake_promote)
+    monkeypatch.setattr(CapsuleUploadPreflightService, "preflight", fake_preflight)
     app = create_app(settings=Settings(mode=AppMode.TEST))
     app.dependency_overrides[get_authenticated_principal] = lambda: AuthenticatedPrincipal(
         uuid4(), uuid4()
@@ -193,7 +251,6 @@ def test_upload_maps_internal_storage_codes_at_http_boundary(
             return _begin()
 
     app.dependency_overrides[get_db_session] = lambda: _Session()
-    payload = b"body"
     with TestClient(app) as client:
         _wire_storage(client, tmp_path)
         response = client.put(
@@ -223,14 +280,17 @@ def test_upload_missing_storage_wiring_fails_closed() -> None:
     _assert_problem(response, status=503, code="INTERNAL_ERROR")
 
 
-def test_upload_authentication_and_transport_rejections(client_factory) -> None:
+def test_upload_authentication_and_transport_rejections(client_factory, tmp_path: Path) -> None:
     client, _factory = client_factory
+    _store, stager = _wire_spy_storage(client, tmp_path)
     sender = _register(client, email="alice@example.com", handle="alice")
     payload = b"body"
     path = f"/v1/capsules/{uuid4()}/blobs/{uuid4()}"
 
     unauthenticated = client.put(path, content=payload, headers=_upload_headers(payload))
     _assert_problem(unauthenticated, status=401, code="AUTH_INVALID")
+    assert stager.calls == 0
+    assert _temp_files(tmp_path / "staging") == []
 
     for content_type in ("application/octet-stream; charset=utf-8", "text/plain"):
         response = client.put(
@@ -245,31 +305,131 @@ def test_upload_authentication_and_transport_rejections(client_factory) -> None:
         response = client.put(path, content=payload, headers=headers)
         _assert_problem(response, status=422, code="VALIDATION_FAILED")
 
+    assert stager.calls == 0
+    assert _temp_files(tmp_path / "staging") == []
 
-def test_upload_body_stream_bounds_and_hash_fail_before_db_service(client_factory, tmp_path: Path) -> None:
+
+def test_legal_upload_validates_streamed_bytes_after_preflight(
+    client_factory, tmp_path: Path
+) -> None:
     client, _factory = client_factory
-    sender = _register(client, email="alice@example.com", handle="alice")
-    _wire_storage(client, tmp_path)
-    path = f"/v1/capsules/{uuid4()}/blobs/{uuid4()}"
+    sender, _recipient, draft, payload, _store = _prepare(client, tmp_path)
+    path = f"/v1/capsules/{draft['capsule_id']}/blobs/{draft['blobs'][0]['blob_id']}"
+    auth = {"Authorization": f"Bearer {sender['access_token']}"}
 
-    too_long = client.put(
-        path,
-        content=b"xx",
-        headers={"Authorization": f"Bearer {sender['access_token']}", **_upload_headers(b"xx", length="1")},
-    )
-    _assert_problem(too_long, status=422, code="BLOB_SIZE_INVALID")
-    truncated = client.put(
-        path,
-        content=b"x",
-        headers={"Authorization": f"Bearer {sender['access_token']}", **_upload_headers(b"x", length="2")},
-    )
+    truncated = client.put(path, content=b"x", headers={**auth, **_upload_headers(payload)})
     _assert_problem(truncated, status=422, code="BLOB_SIZE_INVALID")
+
+    wrong_hash = client.put(
+        path,
+        content=b"y" * len(payload),
+        headers={**auth, **_upload_headers(payload)},
+    )
+    _assert_problem(wrong_hash, status=422, code="BLOB_HASH_MISMATCH")
+
+    assert _temp_files(tmp_path / "staging") == []
+    assert (
+        client.app.state.upload_reservations.outstanding_uploads(
+            UUID(sender["user"]["user_id"])
+        )
+        == 0
+    )
+
+
+def test_preflight_rejects_unknown_foreign_and_undeclared_before_staging(
+    client_factory, tmp_path: Path
+) -> None:
+    client, _factory = client_factory
+    sender, _recipient, draft, payload, _store = _prepare(client, tmp_path)
+    _store, stager = _wire_spy_storage(client, tmp_path)
+    other = _register(client, email="carol@example.com", handle="carol")
+    capsule_id = draft["capsule_id"]
+    blob_id = draft["blobs"][0]["blob_id"]
+    owner = UUID(sender["user"]["user_id"])
+
+    def _put(path: str, token: dict = sender):
+        return client.put(
+            path,
+            content=payload,
+            headers={
+                "Authorization": f"Bearer {token['access_token']}",
+                **_upload_headers(payload),
+            },
+        )
+
+    unknown = _put(f"/v1/capsules/{uuid4()}/blobs/{blob_id}")
+    _assert_problem(unknown, status=404, code="CAPSULE_NOT_FOUND")
+
+    foreign = _put(f"/v1/capsules/{capsule_id}/blobs/{blob_id}", token=other)
+    _assert_problem(foreign, status=404, code="CAPSULE_NOT_FOUND")
+
+    undeclared = _put(f"/v1/capsules/{capsule_id}/blobs/{uuid4()}")
+    _assert_problem(undeclared, status=404, code="BLOB_NOT_DECLARED")
+
+    assert stager.calls == 0
+    assert _temp_files(tmp_path / "staging") == []
+    assert client.app.state.upload_reservations.outstanding_uploads(owner) == 0
+
+
+def test_preflight_rejects_expired_and_aborted_before_staging(
+    client_factory, tmp_path: Path
+) -> None:
+    client, factory = client_factory
+    sender, _recipient, draft, payload, _store = _prepare(client, tmp_path)
+    _store, stager = _wire_spy_storage(client, tmp_path)
+    capsule_id = UUID(draft["capsule_id"])
+    path = f"/v1/capsules/{draft['capsule_id']}/blobs/{draft['blobs'][0]['blob_id']}"
+    auth = {"Authorization": f"Bearer {sender['access_token']}"}
+
+    with factory() as session:
+        session.execute(
+            update(Capsule)
+            .where(Capsule.id == capsule_id)
+            .values(
+                created_at=datetime.now(timezone.utc) - timedelta(days=2),
+                draft_expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+            )
+        )
+        session.commit()
+    expired = client.put(path, content=payload, headers={**auth, **_upload_headers(payload)})
+    _assert_problem(expired, status=409, code="DRAFT_EXPIRED")
+
+    with factory() as session:
+        session.execute(
+            update(Capsule)
+            .where(Capsule.id == capsule_id)
+            .values(state=CapsuleState.ABORTED)
+        )
+        session.commit()
+    aborted = client.put(path, content=payload, headers={**auth, **_upload_headers(payload)})
+    _assert_problem(aborted, status=409, code="CAPSULE_STATE_INVALID")
+
+    assert stager.calls == 0
+    assert _temp_files(tmp_path / "staging") == []
+
+
+def test_declared_header_mismatch_rejected_before_body(client_factory, tmp_path: Path) -> None:
+    client, _factory = client_factory
+    sender, _recipient, draft, payload, _store = _prepare(client, tmp_path)
+    _store, stager = _wire_spy_storage(client, tmp_path)
+    path = f"/v1/capsules/{draft['capsule_id']}/blobs/{draft['blobs'][0]['blob_id']}"
+    auth = {"Authorization": f"Bearer {sender['access_token']}"}
+
+    size_bad = client.put(
+        path,
+        content=payload,
+        headers={**auth, **_upload_headers(payload, length=str(len(payload) + 1))},
+    )
+    _assert_problem(size_bad, status=422, code="BLOB_SIZE_INVALID")
+
     hash_bad = client.put(
         path,
-        content=b"x",
-        headers={"Authorization": f"Bearer {sender['access_token']}", **_upload_headers(b"x", digest=_sha256(b"y"))},
+        content=payload,
+        headers={**auth, **_upload_headers(payload, digest=_sha256(b"other"))},
     )
     _assert_problem(hash_bad, status=422, code="BLOB_HASH_MISMATCH")
+
+    assert stager.calls == 0
     assert _temp_files(tmp_path / "staging") == []
 
 
@@ -356,6 +516,9 @@ def test_upload_storage_failure_and_db_failure_keep_problem_redacted(client_fact
     assert "private storage error" not in failure.text
     assert "STORAGE_IO" not in failure.text
     assert _temp_files(tmp_path / "staging") == []
+    owner = UUID(sender["user"]["user_id"])
+    assert client.app.state.upload_reservations.outstanding_uploads(owner) == 0
+    assert client.app.state.upload_reservations.outstanding_bytes(owner) == 0
 
     client.app.state.blob_store = store
     original_factory = client.app.state.session_factory
@@ -392,6 +555,7 @@ def test_upload_uses_stream_not_request_body_and_app_wires_dev_storage(tmp_path:
     source = inspect.getsource(upload_capsule_blob)
     assert "request.body" not in source
     assert "request.stream" in source
+    assert source.index(".preflight(") < source.index(".stage(")
 
     settings = Settings(
         mode=AppMode.DEV,
@@ -403,3 +567,157 @@ def test_upload_uses_stream_not_request_body_and_app_wires_dev_storage(tmp_path:
         assert isinstance(app.state.blob_store, LocalFileBlobStore)
         assert isinstance(app.state.ciphertext_stager, CiphertextStager)
         assert app.state.ciphertext_stager._staging_root == settings.blob_root / ".staging"  # noqa: SLF001
+        assert isinstance(app.state.upload_reservations, UploadReservationManager)
+
+
+def _set_capsule_state(factory, capsule_id: UUID, state: CapsuleState) -> None:
+    with factory() as session:
+        session.execute(update(Capsule).where(Capsule.id == capsule_id).values(state=state))
+        session.commit()
+
+
+def test_state_change_after_preflight_does_not_publish(client_factory, tmp_path: Path) -> None:
+    client, factory = client_factory
+    sender, _recipient, draft, payload, _store = _prepare(client, tmp_path)
+    capsule_id = UUID(draft["capsule_id"])
+    blob_id = UUID(draft["blobs"][0]["blob_id"])
+    object_key = f"capsules/{draft['capsule_id']}/{draft['blobs'][0]['blob_id']}.blob"
+
+    def _abort_after_preflight() -> None:
+        _set_capsule_state(factory, capsule_id, CapsuleState.ABORTED)
+
+    store, stager = _wire_spy_storage(client, tmp_path, on_stage=_abort_after_preflight)
+    response = _upload(client, sender, draft, payload)
+    _assert_problem(response, status=409, code="CAPSULE_STATE_INVALID")
+    assert stager.calls == 1
+    with factory() as session:
+        blob = session.get(CapsuleBlob, blob_id)
+        assert blob is not None
+        assert blob.state is CapsuleBlobState.DECLARED
+    with pytest.raises(BlobNotFoundError):
+        store.stat(object_key)
+    assert _temp_files(tmp_path / "staging") == []
+
+
+def test_ownership_change_after_preflight_does_not_publish(client_factory, tmp_path: Path) -> None:
+    client, factory = client_factory
+    sender, _recipient, draft, payload, _store = _prepare(client, tmp_path)
+    other = _register(client, email="carol@example.com", handle="carol")
+    other_id = UUID(other["user"]["user_id"])
+    capsule_id = UUID(draft["capsule_id"])
+
+    def _reassign_after_preflight() -> None:
+        with factory() as session:
+            session.execute(
+                update(Capsule)
+                .where(Capsule.id == capsule_id)
+                .values(sender_user_id=other_id)
+            )
+            session.commit()
+
+    _store, stager = _wire_spy_storage(client, tmp_path, on_stage=_reassign_after_preflight)
+    response = _upload(client, sender, draft, payload)
+    _assert_problem(response, status=404, code="CAPSULE_NOT_FOUND")
+    assert stager.calls == 1
+
+
+def test_upload_maps_reservation_exhaustion_to_rate_limited(
+    client_factory, tmp_path: Path
+) -> None:
+    client, _factory = client_factory
+    sender, _recipient, draft, payload, _store = _prepare(client, tmp_path)
+    owner = UUID(sender["user"]["user_id"])
+    manager = UploadReservationManager(
+        max_bytes_per_account=len(payload),
+        max_uploads_per_account=1,
+    )
+    client.app.state.upload_reservations = manager
+    held = manager.reserve(owner_user_id=owner, token=("held",), size=len(payload))
+
+    blocked = _upload(client, sender, draft, payload)
+    _assert_problem(blocked, status=429, code="RATE_LIMITED")
+    assert blocked.json()["retryable"] is True
+
+    held.release()
+    retried = _upload(client, sender, draft, payload)
+    assert retried.status_code == 204
+    assert manager.outstanding_uploads(owner) == 0
+
+
+def test_idempotent_upload_retry_does_not_double_charge(client_factory, tmp_path: Path) -> None:
+    client, _factory = client_factory
+    sender, _recipient, draft, payload, _store = _prepare(client, tmp_path)
+    path = f"/v1/capsules/{draft['capsule_id']}/blobs/{draft['blobs'][0]['blob_id']}"
+    auth = {"Authorization": f"Bearer {sender['access_token']}"}
+    key = str(uuid4())
+
+    first = client.put(path, content=payload, headers={**auth, **_upload_headers(payload, idempotency_key=key)})
+    assert first.status_code == 204, first.text
+    replay = client.put(path, content=payload, headers={**auth, **_upload_headers(payload, idempotency_key=key)})
+    assert replay.status_code == 204, replay.text
+
+    owner = UUID(sender["user"]["user_id"])
+    assert client.app.state.upload_reservations.outstanding_uploads(owner) == 0
+    assert client.app.state.upload_reservations.outstanding_bytes(owner) == 0
+
+
+def test_disconnect_releases_reservation(monkeypatch, tmp_path: Path) -> None:
+    owner = uuid4()
+    capsule_id = uuid4()
+    blob_id = uuid4()
+    payload = b"body"
+    manager = build_upload_reservation_manager()
+
+    def fake_preflight(self, **kwargs):
+        return CapsuleUploadPreflight(
+            capsule_id=capsule_id,
+            blob_id=blob_id,
+            object_key="capsules/x/y.blob",
+            expected_size=len(payload),
+            expected_sha256_hex=_sha256(payload).hex(),
+            artifact_max_bytes=LIMITS_V1.encrypted_photo_max_ciphertext_bytes,
+            state=CapsuleBlobState.DECLARED,
+        )
+
+    monkeypatch.setattr(CapsuleUploadPreflightService, "preflight", fake_preflight)
+
+    class _Session:
+        def begin(self):
+            @contextmanager
+            def _begin():
+                yield self
+
+            return _begin()
+
+    observed: dict[str, int] = {}
+
+    async def receive():
+        observed["during"] = manager.outstanding_uploads(owner)
+        return {"type": "http.disconnect"}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "PUT",
+            "path": f"/v1/capsules/{capsule_id}/blobs/{blob_id}",
+            "headers": _header_fixture(payload),
+        },
+        receive,
+    )
+    response = asyncio.run(
+        upload_capsule_blob(
+            str(capsule_id),
+            str(blob_id),
+            request,
+            AuthenticatedPrincipal(owner, uuid4()),
+            _Session(),
+            object(),
+            CiphertextStager(tmp_path / "staging"),
+            manager,
+        )
+    )
+    assert observed["during"] == 1
+    assert response.status_code == 503
+    assert manager.outstanding_uploads(owner) == 0
+    assert manager.outstanding_bytes(owner) == 0
+    assert _temp_files(tmp_path / "staging") == []

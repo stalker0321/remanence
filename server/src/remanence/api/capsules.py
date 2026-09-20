@@ -23,6 +23,7 @@ from remanence.api.dependencies import (
     get_ciphertext_stager,
     get_authenticated_principal,
     get_db_session,
+    get_upload_reservations,
 )
 from remanence.api.problems import PROBLEM_CATALOG, problem_response, request_id_of
 from remanence.capsules.abort_service import CapsuleAbortError, CapsuleAbortService
@@ -63,6 +64,14 @@ from remanence.capsules.models import CapsuleState
 from remanence.capsules.promotion_service import (
     CapsuleBlobPromotionError,
     CapsuleBlobPromotionService,
+)
+from remanence.capsules.upload_preflight_service import (
+    CapsuleUploadPreflightError,
+    CapsuleUploadPreflightService,
+)
+from remanence.capsules.upload_reservations import (
+    UploadReservationError,
+    UploadReservationManager,
 )
 from remanence.capsules.recipient_blob_query_service import (
     RecipientBlobQueryError,
@@ -642,31 +651,51 @@ async def upload_capsule_blob(
     session: Session = Depends(get_db_session, use_cache=False),
     blob_store: BlobStore = Depends(get_blob_store),
     ciphertext_stager: CiphertextStager = Depends(get_ciphertext_stager),
+    upload_reservations: UploadReservationManager = Depends(get_upload_reservations),
 ) -> Response | JSONResponse:
+    reservation = None
     staged: StagedBlob | None = None
     service_owns_staged = False
     try:
         parsed_capsule_id = _canonical_path_uuid(capsule_id)
         parsed_blob_id = _canonical_path_uuid(blob_id)
         upload_headers = _parse_upload_headers(request.scope.get("headers", []))
+        with session.begin():
+            preflight = CapsuleUploadPreflightService(session).preflight(
+                authenticated_sender_user_id=principal.user_id,
+                capsule_id=parsed_capsule_id,
+                blob_id=parsed_blob_id,
+                declared_size=upload_headers.expected_size,
+                declared_sha256_hex=upload_headers.expected_sha256_hex,
+                now=datetime.now(timezone.utc),
+            )
+        reservation = upload_reservations.reserve(
+            owner_user_id=principal.user_id,
+            token=(parsed_capsule_id, parsed_blob_id, upload_headers.idempotency_key),
+            size=preflight.expected_size,
+        )
         staged = await ciphertext_stager.stage(
             request.stream(),
-            expected_size=upload_headers.expected_size,
-            expected_sha256=upload_headers.expected_sha256_hex,
-            max_bytes=LIMITS_V1.encrypted_photo_max_ciphertext_bytes,
+            expected_size=preflight.expected_size,
+            expected_sha256=preflight.expected_sha256_hex,
+            max_bytes=preflight.artifact_max_bytes,
         )
         with session.begin():
             service = CapsuleBlobPromotionService(session, blob_store)
             service_owns_staged = True
             service.promote_blob(
                 authenticated_sender_user_id=principal.user_id,
-                capsule_id=parsed_capsule_id,
-                blob_id=parsed_blob_id,
+                capsule_id=preflight.capsule_id,
+                blob_id=preflight.blob_id,
                 staged_blob=staged,
                 now=datetime.now(timezone.utc),
             )
         return Response(status_code=204)
     except CapsuleDraftValidationError as exc:
+        return _problem_response(request, exc.code)
+    except CapsuleUploadPreflightError as exc:
+        return _problem_response(request, exc.code)
+    except UploadReservationError as exc:
         return _problem_response(request, exc.code)
     except (StagingSizeExceededError, StagingSizeTruncatedError):
         return _problem_response(request, "BLOB_SIZE_INVALID")
@@ -686,6 +715,8 @@ async def upload_capsule_blob(
                 staged.cleanup()
             except Exception:
                 pass
+        if reservation is not None:
+            reservation.release()
 
 
 @router.get(

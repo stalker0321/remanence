@@ -20,6 +20,10 @@ from remanence.api.health import router as health_router
 from remanence.api.capsules import router as capsules_router
 from remanence.api.problems import RequestIdMiddleware, problem_response
 from remanence.api.users import router as users_router
+from remanence.capsules.upload_reservations import (
+    UploadReservationManager,
+    build_upload_reservation_manager,
+)
 from remanence.db.session import build_engine, build_session_factory
 from remanence.settings import AppMode, Settings
 from remanence.storage import BlobStore, CiphertextStager, LocalFileBlobStore
@@ -30,6 +34,7 @@ def create_app(
     session_factory=None,
     blob_store: BlobStore | None = None,
     ciphertext_stager: CiphertextStager | None = None,
+    upload_reservations: UploadReservationManager | None = None,
 ) -> FastAPI:
     resolved = Settings() if settings is None else settings
     engine: Engine | None = None
@@ -57,6 +62,9 @@ def create_app(
     app = FastAPI(title="Remanence API", version="0.1.0", lifespan=lifespan)
     app.add_middleware(RequestIdMiddleware)
     app.state.settings = resolved
+    app.state.upload_reservations = (
+        upload_reservations if upload_reservations is not None else build_upload_reservation_manager()
+    )
     if session_factory is not None:
         app.state.session_factory = session_factory
     if blob_store is not None:

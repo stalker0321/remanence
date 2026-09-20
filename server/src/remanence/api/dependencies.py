@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from remanence.auth.session_repository import AuthSessionRepository
 from remanence.auth.tokens import hash_opaque_token
+from remanence.capsules.upload_reservations import UploadReservationManager
 from remanence.storage import BlobStore, CiphertextStager
 from remanence.users.models import User
 
@@ -61,6 +62,13 @@ def get_ciphertext_stager(request: Request) -> CiphertextStager:
     if stager is None:
         raise StorageUnavailableError()
     return stager
+
+
+def get_upload_reservations(request: Request) -> UploadReservationManager:
+    manager = getattr(request.app.state, "upload_reservations", None)
+    if manager is None:
+        raise StorageUnavailableError()
+    return manager
 
 
 def _validate_access_token(token: str) -> None:

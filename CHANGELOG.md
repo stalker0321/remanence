@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.0-sift-it.7 — cancel, upload preflight, identity, Hold
+
+- Ships sender cancellation vs first-open admission, SA-03 upload preflight,
+  IP-01 chooser identity, IP-02 control-gate identity binding, and Hold UI.
+- Server first-open (`POST /v1/capsules/{id}/first-open`) and pre-body blob
+  authorization are already live as `remanence-api:cancel-46e6bac`
+  (`sha256:e518ca4fa8677a0ef5bed8e5b58dbe6c63b802e39a2609d4a686916b3b39feb5`);
+  database head is `0007_m2_f3_first_open_claim`.
+- Android `versionCode` is 18. This debug integrated-test build targets
+  `https://remanence.hryshyn.dev/` and explicitly enables V2 line localization;
+  the release/default feature remains disabled. Physical two-device validation
+  is still pending (morning device loop).
+- Tag: `v0.2.0-sift-it.7`. Artifact naming is
+  `Remanence-android-v0.2.0-sift-it.7-code18-g<git-sha>-debug.apk`.
+- Music is not included. Recovery (M4) remains a separate worktree.
+- This is an installable integrated-test prerelease. Rollback remains an
+  explicit artifact/tag mapping and never reuses an Android `versionCode`.
+
 ## 0.2.0-sift-it.6 — Android scan sync lifecycle fix
 
 - Fixes the scan-triggered owner-scoped incoming sync/readiness path with typed,

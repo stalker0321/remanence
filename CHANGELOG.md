@@ -37,6 +37,12 @@ is `Remanence-android-v0.2.0-sift-it.9-code20-g<git-sha>-debug.apk`.
   RecaptureGuidance stays reason-agnostic (no reason field on
   `ScanMatchUiState`); RU/UK authored copy awaits physical/native context
   review.
+- Full multi-module Android unit gate on the final test-only fixtures:
+  **1894 tests, 0 failures, 0 errors, 3 environment skips** (`:app` 829,
+  `:core:crypto` 235, `:core:data` 540, `:core:recognition` 225,
+  `:core:model` 65). The three fixes are test-only (live session-lease
+  bootstrap and two stale outbox/storage assertions); **production code and
+  the signed APK are unchanged**.
 - See `docs/hold/STATUS.md` and `docs/hold/CODEX-HANDOFF.md`.
 
 ## 0.2.0-sift-it.8 — Home layout, press, launcher icon

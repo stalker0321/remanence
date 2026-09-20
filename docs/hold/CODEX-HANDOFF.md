@@ -46,10 +46,13 @@ owner-authorized; tag `v0.2.0-sift-it.9`, the GitHub release, and any
 ## Items 5–6 (implemented, feature-committed)
 
 Do **not** mix trees. Stay on `ui/hold-integration`. Both slices are
-feature-committed on top of `77b3b38`. The gate is a filtered
-`:app:testDebugUnitTest --tests` run: **131/131** (`capture.*`, `ui.scan.*`,
-`RootScanFlowLayoutTest`, `CreateSmallViewportTest`), final independent review
-PASS. It is **not** the full suite and not device evidence.
+feature-committed on top of `77b3b38`. Final **full multi-module Android unit
+gate: 1894 tests, 0 failures, 0 errors, 3 environment skips** (`:app` 829,
+`:core:crypto` 235, `:core:data` 540, `:core:recognition` 225, `:core:model`
+65), superseding the earlier filtered 131/131 run. The three residual fixes
+are **test-only** (live session-lease bootstrap and two stale outbox/storage
+assertions); production and the signed APK are unchanged. This is unit
+evidence only, not device evidence.
 
 5. **Capture copy** — done (feature-committed). Quiet portrait 3:4 instruction +
    shutter, honest permission / binding / capture / processing / retry

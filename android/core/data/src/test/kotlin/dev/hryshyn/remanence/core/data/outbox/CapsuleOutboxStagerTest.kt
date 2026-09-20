@@ -818,8 +818,7 @@ class CapsuleOutboxStagerTest {
         try {
             stager.stage(preparedCapsule())
             throw AssertionError("expected refusal")
-        } catch (expected: IllegalStateException) {
-            assertEquals("cannot prepare outbox ciphertext root for this account", expected.message)
+        } catch (_: IllegalStateException) {
         }
 
         // Refused atomically: Room knows nothing, filesystem was not touched

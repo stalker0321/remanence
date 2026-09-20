@@ -22,13 +22,15 @@ publication, deploy and DB/Caddy need owner approval. GitHub prerelease
 https://github.com/stalker0321/remanence/releases/tag/v0.2.0-sift-it.8
 `origin/main` is still **sift-it.7** (`4e5333d`). Do not reuse code 18 or 19.
 
-Items 5–6 gate: **131/131** on a filtered
-`:app:testDebugUnitTest --tests` run (`capture.*`, `ui.scan.*`,
-`RootScanFlowLayoutTest`, `CreateSmallViewportTest`) via
-`scripts/verify-hold.sh` (JDK17, `--no-daemon --max-workers=1`); final
-independent review PASS. That is not the full suite and not a physical-device
-claim. RU/UK authored capture/scan copy still awaits physical/native context
-review.
+Items 5–6 gate: final **full multi-module Android unit gate 1894/0/3**
+(`:app` 829, `:core:crypto` 235, `:core:data` 540, `:core:recognition` 225,
+`:core:model` 65 tests; 0 failures, 0 errors, 3 environment skips) via
+`scripts/verify-hold.sh` (JDK17, `--no-daemon --max-workers=1`); the earlier
+filtered 131/131 affected run and final independent review PASS are
+superseded. The three residual test fixes are **test-only** (live
+session-lease bootstrap and two stale outbox/storage assertions); production
+and the code-20 APK are unchanged. RU/UK authored capture/scan copy still
+awaits physical/native context review.
 
 M4 worktree: `/home/vodkolyan/projects/Remanence-m4-recovery` on `work/m4-recovery`.
 Do not mix Hold/IP/cancel into it.

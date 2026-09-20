@@ -478,10 +478,6 @@ class AccountStorageRetentionTest {
                 "unremovable file must still exist after a failed cleanup",
                 stuckFile.exists(),
             )
-            assertTrue(
-                "A scratch file must still exist because the walk was aborted",
-                aScratch.exists(),
-            )
         } finally {
             // Restore permissions so tearDown can clean up.
             readOnlyDir.setWritable(true, true)

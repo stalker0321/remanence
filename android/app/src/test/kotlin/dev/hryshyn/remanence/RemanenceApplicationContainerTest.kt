@@ -499,7 +499,15 @@ class RemanenceApplicationContainerTest {
                 "alice",
                 "0198f0a0-0000-7000-8000-00000000d434",
             )
-            appContainer.authTokenHolder.updateTokens("access-a", "refresh-a")
+            assertTrue(
+                appContainer.sessionRefreshCoordinator.publishBoundSession(
+                    lease = appContainer.sessionRefreshCoordinator.acquireAccountLease(),
+                    expectedOwner = ownerA,
+                    accessToken = "access-a",
+                    refreshToken = "refresh-a",
+                    currentAccountOwner = ownerA,
+                ),
+            )
 
             val mismatch = appContainer.incomingControlIndexAcceptanceCoordinator.accept(
                 IncomingControlIndexAcceptanceRequest(ownerA, capsule, sentinel),
@@ -558,7 +566,15 @@ class RemanenceApplicationContainerTest {
                 "alice",
                 "0198f0a0-0000-7000-8000-00000000d454",
             )
-            appContainer.authTokenHolder.updateTokens("access", "refresh")
+            assertTrue(
+                appContainer.sessionRefreshCoordinator.publishBoundSession(
+                    lease = appContainer.sessionRefreshCoordinator.acquireAccountLease(),
+                    expectedOwner = owner,
+                    accessToken = "access",
+                    refreshToken = "refresh",
+                    currentAccountOwner = owner,
+                ),
+            )
             val temp = seedReadyRecognitionPath(appContainer, owner, capsule, blob)
             val seededCapsule = appContainer.database.incomingCapsuleDao()
                 .getByCapsuleIdAndOwner(capsule.toRestString(), owner.toRestString())
@@ -611,7 +627,15 @@ class RemanenceApplicationContainerTest {
                 "alice",
                 "0198f0a0-0000-7000-8000-00000000d458",
             )
-            appContainer.authTokenHolder.updateTokens("access", "refresh")
+            assertTrue(
+                appContainer.sessionRefreshCoordinator.publishBoundSession(
+                    lease = appContainer.sessionRefreshCoordinator.acquireAccountLease(),
+                    expectedOwner = owner,
+                    accessToken = "access",
+                    refreshToken = "refresh",
+                    currentAccountOwner = owner,
+                ),
+            )
 
             try {
                 appContainer.incomingControlIndexAcceptanceCoordinator.accept(

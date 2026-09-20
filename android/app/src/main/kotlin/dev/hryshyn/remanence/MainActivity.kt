@@ -12,6 +12,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import dev.hryshyn.remanence.ui.hold.HoldTheme
 import dev.hryshyn.remanence.ui.hold.HoldTextButton
 import dev.hryshyn.remanence.ui.hold.HoldInformation
+import dev.hryshyn.remanence.ui.hold.HoldSpace
 import dev.hryshyn.remanence.session.HomeIntent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -149,7 +150,10 @@ private fun RootSurface(container: AppContainer) {
         authState = authState,
         destination = destination,
         authenticationContent = {
-            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Column(
+                Modifier.fillMaxSize().padding(horizontal = HoldSpace.pageGutter(), vertical = HoldSpace.Gutter),
+                verticalArrangement = Arrangement.spacedBy(HoldSpace.Group),
+            ) {
                 if (authState == AuthUiState.SignedOut) {
                     HoldTextButton(onClick = { registering = false; rootViewModel.cancelHomeIntent() }) { Text(stringResource(R.string.hold_back)) }
                 }
@@ -166,12 +170,18 @@ private fun RootSurface(container: AppContainer) {
                 if (registering) {
                     val form by registrationViewModel.form.collectAsStateWithLifecycle()
                     val submit by registrationViewModel.submitState.collectAsStateWithLifecycle()
-                    RegistrationFormScreen(form, submit, registrationViewModel::onFieldChange, registrationViewModel::submit)
+                    RegistrationFormScreen(
+                        form, submit, registrationViewModel::onFieldChange, registrationViewModel::submit,
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                    )
                     HoldTextButton(onClick = { registering = false }, enabled = submit !is RegistrationSubmitState.Submitting) { Text(stringResource(R.string.hold_existing_account)) }
                 } else {
                     val form by loginViewModel.form.collectAsStateWithLifecycle()
                     val submit by loginViewModel.submitState.collectAsStateWithLifecycle()
-                    LoginScreen(form, submit, loginViewModel::onEmailChange, loginViewModel::onPasswordChange, loginViewModel::submit)
+                    LoginScreen(
+                        form, submit, loginViewModel::onEmailChange, loginViewModel::onPasswordChange, loginViewModel::submit,
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                    )
                     HoldTextButton(onClick = { registering = true }, enabled = submit !is LoginSubmitState.Submitting) { Text(stringResource(R.string.hold_create_account)) }
                 }
             }

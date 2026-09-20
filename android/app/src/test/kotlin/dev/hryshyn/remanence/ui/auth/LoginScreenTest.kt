@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.ui.auth
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTextInput
@@ -73,6 +74,24 @@ class LoginScreenTest {
             }
         }
         composeRule.onNodeWithTag("login_email_field").performTextInput("")
+        composeRule.onNodeWithTag("login_submit_button").assertIsDisplayed()
+    }
+
+    @Test
+    fun failedSubmitKeepsTypedValuesAndShowsError() {
+        composeRule.setContent {
+            MaterialTheme {
+                LoginScreen(
+                    form = LoginFormState(email = "private@example.com", password = "secret-password"),
+                    submitState = LoginSubmitState.Failed("Incorrect email or password."),
+                    onEmailChange = {},
+                    onPasswordChange = {},
+                    onSubmit = {},
+                )
+            }
+        }
+        composeRule.onNodeWithTag("login_error_message").assertIsDisplayed()
+        composeRule.onNodeWithTag("login_email_field").assertTextContains("private@example.com")
         composeRule.onNodeWithTag("login_submit_button").assertIsDisplayed()
     }
 }

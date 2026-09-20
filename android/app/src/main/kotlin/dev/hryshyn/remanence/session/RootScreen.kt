@@ -9,10 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import dev.hryshyn.remanence.ui.hold.HoldTextButton as OutlinedButton
 import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.MaterialTheme
@@ -50,13 +47,8 @@ fun RootScreen(
         return
     }
     if (authState !is AuthUiState.Authenticated) {
-        // FIX-STATE-07: the auth surface scrolls and stays keyboard-reachable
-        // on small screens - every field and the submit buttons are reachable.
-        Column(
-            modifier = modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState()),
-        ) {
+        // Auth fills the remaining height so the form can pin submit above IME.
+        Column(modifier = modifier.fillMaxSize()) {
             if (authState is AuthUiState.RecoveryRequired) {
                 Text(
                     "The private keys for this account are missing on this device. Signing in alone cannot restore them.",
@@ -64,7 +56,9 @@ fun RootScreen(
                 )
                 Spacer(Modifier.height(8.dp))
             }
-            authenticationContent()
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                authenticationContent()
+            }
         }
         return
     }

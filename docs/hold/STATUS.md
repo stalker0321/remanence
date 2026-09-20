@@ -130,8 +130,9 @@ Order (one slice per commit; bump versionCode only when cutting an APK):
 3. **Home gutters** — done in this tree: 24 dp sides, 20 under 400 dp, 18
    under 360; group 16. Compact display + scroll when fontScale ≥ 1.3 or
    height < 640. Do not shrink user text.
-4. **Forms** — IME: body scrolls, primary stays reachable; password masked
-   (already); retain invalid values (handoff).
+4. **Forms** — done in this tree: HoldFormScaffold pins submit above IME;
+   fields scroll; password stays masked; failed login/register keep typed
+   values. Manifest already `adjustResize`.
 5. **Capture** — quiet portrait 3:4; instruction + shutter; permission
    recovery already exists — check copy, not geometry of the matcher.
 6. **Scan product copy** — map real failure reasons, not a single glare

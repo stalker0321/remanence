@@ -10,8 +10,11 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -95,11 +98,13 @@ fun HoldInput(
     enabled: Boolean = true,
     singleLine: Boolean = false,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    keyboardActions: KeyboardActions = KeyboardActions.Default,
     visualTransformation: VisualTransformation = VisualTransformation.None,
 ) = OutlinedTextField(
     value = value, onValueChange = onValueChange, modifier = modifier,
     label = label, isError = isError, enabled = enabled, singleLine = singleLine,
-    keyboardOptions = keyboardOptions, visualTransformation = visualTransformation,
+    keyboardOptions = keyboardOptions, keyboardActions = keyboardActions,
+    visualTransformation = visualTransformation,
     shape = RoundedCornerShape(8.dp), textStyle = MaterialTheme.typography.bodyLarge,
     colors = OutlinedTextFieldDefaults.colors(
         focusedContainerColor = HoldColors.Field, unfocusedContainerColor = HoldColors.Field,
@@ -161,6 +166,27 @@ fun HoldActionObject(
                 }
             }
         }
+    }
+}
+
+/** Scrollable fields above a pinned primary so IME cannot hide submit. */
+@Composable
+fun HoldFormScaffold(
+    modifier: Modifier = Modifier,
+    primary: @Composable () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(HoldSpace.Related),
+            content = content,
+        )
+        Spacer(Modifier.height(HoldSpace.Group))
+        primary()
     }
 }
 

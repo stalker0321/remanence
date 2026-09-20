@@ -2,18 +2,17 @@ package dev.hryshyn.remanence.ui.auth
 
 import androidx.compose.ui.res.stringResource
 import dev.hryshyn.remanence.R
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import dev.hryshyn.remanence.ui.hold.HoldButton as Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import dev.hryshyn.remanence.ui.hold.HoldFormScaffold
 import dev.hryshyn.remanence.ui.hold.HoldInput as OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.ImeAction
@@ -39,7 +38,31 @@ fun RegistrationFormScreen(
     modifier: Modifier = Modifier,
 ) {
     val errors = RegistrationFormValidator.visibleErrors(form)
-    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    HoldFormScaffold(
+        modifier = modifier,
+        primary = {
+            Row(Modifier.fillMaxWidth()) {
+                Button(
+                    onClick = onSubmit,
+                    enabled = submitState !is RegistrationSubmitState.Submitting &&
+                        submitState !is RegistrationSubmitState.Completed &&
+                        RegistrationFormValidator.canSubmit(form),
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("reg_submit_button"),
+                ) {
+                    Text(stringResource(R.string.hold_create_account))
+                }
+                if (submitState is RegistrationSubmitState.Submitting) {
+                    Spacer(Modifier.width(12.dp))
+                    CircularProgressIndicator(
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.testTag("reg_submit_progress"),
+                    )
+                }
+            }
+        },
+    ) {
         OutlinedTextField(
             value = form.email,
             onValueChange = { onFieldChange(RegistrationField.EMAIL, it) },
@@ -59,7 +82,7 @@ fun RegistrationFormScreen(
             label = { Text(stringResource(R.string.hold_password)) },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Next),
             isError = form.password.isNotEmpty() && RegistrationFormValidator.passwordError(form.password) != null,
             modifier = Modifier
                 .fillMaxWidth()
@@ -82,7 +105,8 @@ fun RegistrationFormScreen(
             onValueChange = { onFieldChange(RegistrationField.HANDLE, it) },
             label = { Text(stringResource(R.string.hold_handle)) },
             singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { onSubmit() }),
             isError = form.handle.isNotEmpty() && RegistrationFormValidator.handleError(form.handle) != null,
             modifier = Modifier
                 .fillMaxWidth()
@@ -94,7 +118,6 @@ fun RegistrationFormScreen(
             "reg_error_handle",
         )
 
-        Spacer(Modifier.height(16.dp))
         when (submitState) {
             is RegistrationSubmitState.Failed -> Text(
                 text = submitState.message,
@@ -107,26 +130,6 @@ fun RegistrationFormScreen(
                 modifier = Modifier.testTag("reg_completed_message"),
             )
             else -> Unit
-        }
-        Row {
-            Button(
-                onClick = onSubmit,
-                enabled = submitState !is RegistrationSubmitState.Submitting &&
-                    submitState !is RegistrationSubmitState.Completed &&
-                    RegistrationFormValidator.canSubmit(form),
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag("reg_submit_button"),
-            ) {
-                Text(stringResource(R.string.hold_create_account))
-            }
-            if (submitState is RegistrationSubmitState.Submitting) {
-                Spacer(Modifier.width(12.dp))
-                CircularProgressIndicator(
-                    strokeWidth = 2.dp,
-                    modifier = Modifier.testTag("reg_submit_progress"),
-                )
-            }
         }
     }
 }

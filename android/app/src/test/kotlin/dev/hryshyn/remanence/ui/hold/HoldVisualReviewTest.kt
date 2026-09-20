@@ -1,8 +1,6 @@
 package dev.hryshyn.remanence.ui.hold
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.MaterialTheme
@@ -50,11 +48,15 @@ class HoldVisualReviewTest {
     @Test fun loginHasMaskedPasswordAndReachableSubmit() {
         composeRule.setContent {
             HoldTheme {
-                Surface {
-                    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp)) {
+                Surface(Modifier.fillMaxSize()) {
+                    Column(Modifier.fillMaxSize().padding(24.dp)) {
                         Text("let’s get you in", style = MaterialTheme.typography.headlineLarge)
                         Spacer(Modifier.height(24.dp))
-                        LoginScreen(LoginFormState("person@example.com", "private-password"), LoginSubmitState.Idle, {}, {}, {})
+                        LoginScreen(
+                            LoginFormState("person@example.com", "private-password"),
+                            LoginSubmitState.Idle, {}, {}, {},
+                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                        )
                     }
                 }
             }

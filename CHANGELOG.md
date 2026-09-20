@@ -1,8 +1,13 @@
 # Changelog
 
-## Unreleased — Hold chrome (branch `ui/hold-integration`, base `77b3b38` + items 5–6 feature commit)
+## 0.2.0-sift-it.9 — Hold capture and scan product copy
 
-Not an APK. Next distributed build must be versionCode **20**.
+Android `versionCode` is **20**. Debug integrated-test build targets
+`https://remanence.hryshyn.dev/` with V2 line localization enabled. The APK
+build is owner-authorized; tag `v0.2.0-sift-it.9`, the GitHub release, and any
+`origin/main` fast-forward remain owner-gated. Feature commit `24152ad` is
+**local only** (feature push blocked by missing GitHub auth); artifact naming
+is `Remanence-android-v0.2.0-sift-it.9-code20-g<git-sha>-debug.apk`.
 
 - Remainder restored to the measured handoff transform: scale 0.72, translate
   (21.96, 19.8). Do not bbox-centre; the 0.80 `.8` glyph is superseded.
@@ -25,12 +30,13 @@ Not an APK. Next distributed build must be versionCode **20**.
   handle with its `@` prefix, claimed name, place label) renders as one
   bidi-isolated (FSI/PDI) unit so surrounding labels keep their order.
   ScanViewModel, `ScanMatchUiState`, grants, matcher and crypto are untouched.
-- Items 5–6 are feature-committed on this branch; no APK yet. Filtered
-  `:app:testDebugUnitTest --tests` gate **131/131** (`capture.*`, `ui.scan.*`,
-  `RootScanFlowLayoutTest`, `CreateSmallViewportTest`), final independent
-  review PASS — not the full suite and not device evidence. RecaptureGuidance
-  stays reason-agnostic (no reason field on `ScanMatchUiState`); RU/UK authored
-  copy awaits physical/native context review.
+- Items 5–6 ship in this candidate; feature commit `24152ad` is local-only.
+  Filtered `:app:testDebugUnitTest --tests` gate **131/131** (`capture.*`,
+  `ui.scan.*`, `RootScanFlowLayoutTest`, `CreateSmallViewportTest`), final
+  independent review PASS — not the full suite and not device evidence.
+  RecaptureGuidance stays reason-agnostic (no reason field on
+  `ScanMatchUiState`); RU/UK authored copy awaits physical/native context
+  review.
 - See `docs/hold/STATUS.md` and `docs/hold/CODEX-HANDOFF.md`.
 
 ## 0.2.0-sift-it.8 — Home layout, press, launcher icon

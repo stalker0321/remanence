@@ -23,6 +23,13 @@ Orchestrator-managed commits and feature-branch pushes on `ui/hold-integration`
 are allowed. `main`, tags, GitHub releases, APK publication, server deploy and
 DB/Caddy changes still require explicit owner approval.
 
+Release status: feature commit `24152ad` ("feat(android): localize Hold capture
+and scan product copy") is **local only** — the feature push failed on missing
+GitHub auth and was not retried. The `chore(release): prepare 0.2.0-sift-it.9`
+commit sets versionName 0.2.0-sift-it.9 / versionCode 20. The APK build is
+owner-authorized; tag `v0.2.0-sift-it.9`, the GitHub release, and any
+`origin/main` fast-forward remain owner-gated.
+
 `origin/main` is still sift-it.7 (`4e5333d`). PAT cannot open PRs.
 
 ## Canonical files (read first)

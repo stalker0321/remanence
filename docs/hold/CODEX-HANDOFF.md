@@ -24,6 +24,7 @@ These three after `.8` are **not** in an APK yet. Next distributed build must be
 - `.../handoff/guide.mjs`
 - `docs/hold/STATUS.md` (queues, misses, blockers)
 - `docs/hold/device-review.md`
+- `CHANGELOG.md` Unreleased section (chrome after `.8`)
 
 `/home/vodkolyan/Projects/Remanence-design` has **no** `handoff/`. Ignore
 `implementation/remanence` in the transfer (it is sift-it.6).

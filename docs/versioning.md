@@ -29,8 +29,9 @@ Product and wire versions are independent. The SIFT candidate records the
 following separately:
 
 ```text
-product:             0.2.0-sift-it.8
+product:             0.2.0-sift-it.8   (last shipped APK)
 Android code:        19
+working tree:        ui/hold-integration unreleased chrome; next APK code 20
 REST API:            /v1
 outer protobuf:      remanence.protocol.v1
 recognition schema:  remanence.recognition.v2

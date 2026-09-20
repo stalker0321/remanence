@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — Hold chrome (branch `ui/hold-integration`, HEAD `b4e9660`)
+
+Not an APK. Next distributed build must be versionCode **20**.
+
+- Remainder restored to the measured handoff transform: scale 0.72, translate
+  (21.96, 19.8). Do not bbox-centre; the 0.80 `.8` glyph is superseded.
+- Action-object press: 6.dp edge, 4.dp travel, 110 ms, pressed remainder 2.dp.
+- Home gutters 24 / 20 / 18 dp; compact display + scroll at large type or
+  short viewport.
+- Auth forms pin submit above IME (`HoldFormScaffold`); failed login keeps
+  typed values. Password stays masked.
+- See `docs/hold/STATUS.md` and `docs/hold/CODEX-HANDOFF.md`.
+
 ## 0.2.0-sift-it.8 — Home layout, press, launcher icon
 
 - Centers the Remainder glyph in the adaptive launcher icon.

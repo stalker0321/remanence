@@ -13,8 +13,9 @@ plus grammar-test v1–v7. Do not treat `/home/vodkolyan/Projects/Remanence-desi
 as complete: it has no `handoff/`.
 
 Live Android worktree: `/home/vodkolyan/projects/Remanence-hold-integration`
-on `ui/hold-integration`. Current ship: **0.2.0-sift-it.8 / versionCode 19**
-(`8614e64`), GitHub prerelease
+on `ui/hold-integration` HEAD **`b4e9660`**. Last shipped APK:
+**0.2.0-sift-it.8 / versionCode 19** (`8614e64`). Chrome after that is
+unreleased (next APK code **20**). GitHub prerelease
 https://github.com/stalker0321/remanence/releases/tag/v0.2.0-sift-it.8
 `origin/main` is still **sift-it.7** (`4e5333d`). Do not reuse code 18 or 19.
 
@@ -122,11 +123,9 @@ stay. No fake generator candidates, no share, no music controls.
 
 Order (one slice per commit; bump versionCode only when cutting an APK):
 
-1. **Remainder back to handoff XML** — scale 0.72, translate (21.96, 19.8);
-   monochrome from the same silhouette. Device-check optical size after.
-2. **Action-object pressure to guide** — 6.dp edge, 3–4.dp travel, ~110 ms,
-   pressed edge 1–2.dp; keep immediate press (snap down) so scale-0 still
-   shows contact. Primary/secondary buttons: 52 / 48 min hit.
+1. **Remainder back to handoff XML** — done: scale 0.72, translate (21.96, 19.8).
+2. **Action-object pressure to guide** — done: 6.dp edge, 4.dp travel, 110 ms,
+   pressed remainder 2.dp; snap on contact.
 3. **Home gutters** — done in this tree: 24 dp sides, 20 under 400 dp, 18
    under 360; group 16. Compact display + scroll when fontScale ≥ 1.3 or
    height < 640. Do not shrink user text.

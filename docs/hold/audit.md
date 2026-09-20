@@ -2,6 +2,8 @@
 
 Completed before application edits. Baseline `d29cc8d727c7774409ca2e9baefb25b59f71a132`; remote HEAD/main checked and equal. Initially only this local Android checkout was known. Preserve `reference/remanence` on main; create a worktree at `implementation/remanence`, branch `ui/hold-integration`.
 
+**Current (2026-09-20):** live tree is `/home/vodkolyan/projects/Remanence-hold-integration` @ `ui/hold-integration`. Design authority on this host is `/home/vodkolyan/remanence_transfer_2026-09-20/Remanence-design/design/handoff/` (`README.md`, `guide.mjs`). Chrome slices 1–4 are in `docs/hold/STATUS.md` / `CODEX-HANDOFF.md`. The table below is the original pre-edit plan, not a claim that underlayer/Carry/generator shipped.
+
 Design authority: `design/handoff/README.md`, `guide.mjs`, current assets and validation. Hold, Remainder, portrait default, underlayer and accepted DejaVu Sans Cyrillic are settled. Browser timings and exact underlayer scale are device hypotheses. Existing Android behavior remains authoritative where the artifacts simulate services.
 
 ## Real system → integration

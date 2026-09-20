@@ -127,8 +127,9 @@ Order (one slice per commit; bump versionCode only when cutting an APK):
 2. **Action-object pressure to guide** — 6.dp edge, 3–4.dp travel, ~110 ms,
    pressed edge 1–2.dp; keep immediate press (snap down) so scale-0 still
    shows contact. Primary/secondary buttons: 52 / 48 min hit.
-3. **Home gutters** — 24 dp sides, 16 group; at narrow 18–20. Compact display
-   role when type is large; scroll if needed, do not shrink user text.
+3. **Home gutters** — done in this tree: 24 dp sides, 20 under 400 dp, 18
+   under 360; group 16. Compact display + scroll when fontScale ≥ 1.3 or
+   height < 640. Do not shrink user text.
 4. **Forms** — IME: body scrolls, primary stays reachable; password masked
    (already); retain invalid values (handoff).
 5. **Capture** — quiet portrait 3:4; instruction + shutter; permission

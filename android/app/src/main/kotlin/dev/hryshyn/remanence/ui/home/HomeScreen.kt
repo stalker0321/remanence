@@ -7,13 +7,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import dev.hryshyn.remanence.ui.hold.HoldActionObject
+import dev.hryshyn.remanence.ui.hold.HoldSpace
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.unit.dp
 
 enum class BackendHealthUiState {
     CHECKING,
@@ -51,9 +53,14 @@ fun HomeScreen(
 ) {
     val enabled = accountCapability.actionsEnabled ||
         (publicEntry && accountCapability == AccountCapabilityState.NotAuthenticated)
+    val gutter = HoldSpace.pageGutter()
+    val compactHome = HoldSpace.compactHomeDisplay()
     Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .then(if (compactHome) Modifier.verticalScroll(rememberScrollState()) else Modifier)
+            .padding(horizontal = gutter, vertical = HoldSpace.Gutter),
+        verticalArrangement = Arrangement.spacedBy(HoldSpace.Group),
     ) {
         Text("remanence", style = MaterialTheme.typography.titleLarge)
         if (accountCapability == AccountCapabilityState.RecoveryRequired) {
@@ -64,8 +71,13 @@ fun HomeScreen(
             title = stringResource(R.string.hold_home_open_title),
             detail = stringResource(R.string.hold_home_open_body),
             action = stringResource(R.string.hold_scan), onClick = onScan, enabled = enabled,
-            expand = true,
-            modifier = Modifier.weight(1f).fillMaxWidth().testTag("scan_action"),
+            compact = compactHome,
+            expand = !compactHome,
+            modifier = if (compactHome) {
+                Modifier.fillMaxWidth().testTag("scan_action")
+            } else {
+                Modifier.weight(1f).fillMaxWidth().testTag("scan_action")
+            },
         )
         HoldActionObject(
             title = stringResource(R.string.hold_home_make_title),

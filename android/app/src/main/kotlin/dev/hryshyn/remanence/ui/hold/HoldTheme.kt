@@ -8,10 +8,12 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.hryshyn.remanence.R
@@ -37,6 +39,28 @@ object HoldSpace {
     val Group = 16.dp
     val Gutter = 24.dp
     val Section = 32.dp
+
+    /** Guide: 24 dp sides; 18–20 on a narrow phone. */
+    @Composable
+    fun pageGutter(): Dp {
+        val width = LocalConfiguration.current.screenWidthDp
+        return when {
+            width < 360 -> 18.dp
+            width < 400 -> 20.dp
+            else -> Gutter
+        }
+    }
+
+    /**
+     * Compact Home display role at large type or a short viewport.
+     * Do not shrink user text; grow surfaces and allow scrolling instead.
+     */
+    @Composable
+    fun compactHomeDisplay(): Boolean {
+        val height = LocalConfiguration.current.screenHeightDp
+        val fontScale = LocalDensity.current.fontScale
+        return fontScale >= 1.3f || height < 640
+    }
 }
 
 private val HoldFont = FontFamily(Font(R.font.hold_sans, FontWeight.Normal))

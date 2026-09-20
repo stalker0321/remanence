@@ -34,4 +34,24 @@ class HomeScreenTest {
         composeRule.onNodeWithTag("scan_action").assertIsNotEnabled()
         composeRule.onNodeWithTag("create_action").assertIsNotEnabled()
     }
+
+    @Test
+    @Config(qualifiers = "w320dp-h568dp-xhdpi")
+    fun narrowShortHomeKeepsBothActionsReachable() {
+        composeRule.setContent {
+            HoldTheme { HomeScreen(BackendHealthUiState.AVAILABLE, publicEntry = true) }
+        }
+        composeRule.onNodeWithTag("scan_action").assertIsDisplayed()
+        composeRule.onNodeWithTag("create_action").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w390dp-h844dp-xhdpi", fontScale = 1.5f)
+    fun largeTypeHomeScrollsInsteadOfShrinkingCopy() {
+        composeRule.setContent {
+            HoldTheme { HomeScreen(BackendHealthUiState.AVAILABLE, publicEntry = true) }
+        }
+        composeRule.onNodeWithTag("scan_action").assertIsDisplayed()
+        composeRule.onNodeWithTag("create_action").performScrollTo().assertIsDisplayed()
+    }
 }

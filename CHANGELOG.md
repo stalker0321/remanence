@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.2.0-rc.1 — Astra motion, self-open fix, in-app language switch
+
+Android `versionCode` is **21**. Debug candidate targets
+`https://remanence.hryshyn.dev/` with V2 line localization enabled. Tag
+`v0.2.0-rc.1`, the GitHub prerelease, and any `origin/main` fast-forward
+remain owner-gated; artifact naming is
+`Remanence-android-v0.2.0-rc.1-code21-g<git-sha>-debug.apk`.
+
+- Astra scan motion and drawn postcard: entry/waiting/chooser arrival
+  transitions with the postcard carrying the wait; copy, actions, test tags,
+  matcher geometry, and crypto unchanged.
+- Self-addressed capsules open (dual-plane presentation plus grant routing).
+- Discoverable in-app language switch (English / Русский / Українська plus
+  System reset) on Home and Auth; single restart per selection
+  (AppCompat-driven below 33, framework-driven on 33+); `localeConfig` and
+  AppCompat theme parents on all tiers. No new destination; auth, grants,
+  and flow epochs preserved across the switch.
+- Unit evidence only (targeted locale/home/parity plus scan/self-send suites
+  green on the integration branch). Phone-only checks remain OPEN, neither
+  passed nor VPS-gate failures: camera bind/unbind across the switch,
+  authenticated grant open after the switch, 33+ framework restart on
+  hardware, Astra motion and language-row visual sign-off, release APK
+  install/launch/smoke on device.
+
 ## 0.2.0-sift-it.9 — Hold capture and scan product copy
 
 Android `versionCode` is **20**. Debug integrated-test build targets

@@ -30,6 +30,17 @@ commit sets versionName 0.2.0-sift-it.9 / versionCode 20. The APK build is
 owner-authorized; tag `v0.2.0-sift-it.9`, the GitHub release, and any
 `origin/main` fast-forward remain owner-gated.
 
+Release status rc.1: integrated `fd9e0b8` on this branch (Astra motion and
+drawn postcard, self-addressed capsule open, EN/RU/UK language switch with
+recreation coverage). The `chore(release): prepare 0.2.0-rc.1` commit sets
+versionName 0.2.0-rc.1 / versionCode 21. Unit evidence is green on the
+branch; phone-only checks (camera bind/unbind across the switch,
+authenticated grant open after the switch, 33+ framework restart on
+hardware, Astra motion and language-row visual sign-off, APK
+install/launch/smoke) remain OPEN — neither passed nor VPS-gate failures;
+owner authorized prerelease after a green VPS gate. Tag `v0.2.0-rc.1`, the
+GitHub prerelease, and any `origin/main` fast-forward remain owner-gated.
+
 `origin/main` is still sift-it.7 (`4e5333d`). PAT cannot open PRs.
 
 ## Canonical files (read first)

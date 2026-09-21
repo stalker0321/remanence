@@ -22,16 +22,17 @@ in the product version.
 
 Every distributed Android artifact receives a new monotonically increasing
 `versionCode`. The current historical preview consumed code 11; SIFT candidates
-consumed codes 12, 13, 14, 15, 16, 17, 18, 19, and 20 in order. A consumed code is never reused, including
+consumed codes 12, 13, 14, 15, 16, 17, 18, 19, and 20 in order; rc.1 consumes
+code 21. A consumed code is never reused, including
 for a corrected or rollback build.
 
 Product and wire versions are independent. The SIFT candidate records the
 following separately:
 
 ```text
-product:             0.2.0-sift-it.9   (release candidate; build owner-authorized)
-Android code:        20
-working tree:        ui/hold-integration; feature commit 24152ad local-only
+product:             0.2.0-rc.1   (release candidate; build owner-authorized)
+Android code:        21
+working tree:        ui/hold-integration @ fd9e0b8 (integrated; release commit pending)
 REST API:            /v1
 outer protobuf:      remanence.protocol.v1
 recognition schema:  remanence.recognition.v2
@@ -54,7 +55,7 @@ or rewritten.
 Published Android artifacts use the version, Android code, and release commit:
 
 ```text
-Remanence-android-v0.2.0-sift-it.9-code20-g<git-sha>-debug.apk
+Remanence-android-v0.2.0-rc.1-code21-g<git-sha>-debug.apk
 ```
 
 Record the matching SHA-256, backend image/digest, protocol and schema

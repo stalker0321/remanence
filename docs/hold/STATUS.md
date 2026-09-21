@@ -16,11 +16,14 @@ Live Android worktree: `/home/vodkolyan/projects/Remanence-hold-integration`
 on `ui/hold-integration`. Last shipped APK: **0.2.0-sift-it.8 / versionCode
 19** (`8614e64`); `.8` names that shipped APK, not the worktree HEAD. HOLD-05
 capture copy and HOLD-06 scan product copy (items 5–6) are feature-committed
-on this branch — not in an APK. Next APK code is **20**. Orchestrator-managed
+on this branch — not in an APK. Integrated `fd9e0b8` on this branch adds
+Astra scan motion, self-addressed capsule open, and the EN/RU/UK language
+switch; release commit `f03a4bf` sets rc.1 / code **21**. Next APK code is
+**21** (never reuse 18, 19, or 20). Orchestrator-managed
 commits and feature-branch pushes are allowed; `main`, tags, releases, APK
 publication, deploy and DB/Caddy need owner approval. GitHub prerelease
 https://github.com/stalker0321/remanence/releases/tag/v0.2.0-sift-it.8
-`origin/main` is still **sift-it.7** (`4e5333d`). Do not reuse code 18 or 19.
+`origin/main` is still **sift-it.7** (`4e5333d`).
 
 Items 5–6 gate: final **full multi-module Android unit gate 1894/0/3**
 (`:app` 829, `:core:crypto` 235, `:core:data` 540, `:core:recognition` 225,
@@ -31,6 +34,12 @@ superseded. The three residual test fixes are **test-only** (live
 session-lease bootstrap and two stale outbox/storage assertions); production
 and the code-20 APK are unchanged. RU/UK authored capture/scan copy still
 awaits physical/native context review.
+
+rc.1 unit evidence: targeted locale/home/parity gate 66/66 green (two
+consecutive runs) on the feature branch; lint holds two pre-existing errors
+(themes NewApi, `app_name` translation). Unit evidence only, not device
+evidence. Integration-branch VPS re-gate (full multi-module suite, incl.
+scan/self-send) is still required before the code-21 APK.
 
 M4 worktree: `/home/vodkolyan/projects/Remanence-m4-recovery` on `work/m4-recovery`.
 Do not mix Hold/IP/cancel into it.
@@ -164,7 +173,7 @@ Order (one slice per commit; bump versionCode only when cutting an APK):
 8. **Carry** — only after 1–7 survive a device pass. Reduced-motion must
    skip travel, not skip privacy gates.
 
-Items 5–6 are feature-committed; no APK yet. Cut code **20** only after owner
+Items 5–6 are feature-committed; no APK yet. Cut code **21 (rc.1)** only after owner
 approval, then run the two-phone checklist in `device-review.md` with animator
 scale 1x then 0. Items 7 (underlayer) and 8 (Carry) wait for a device pass.
 
@@ -188,6 +197,6 @@ If design work is in flight, leave M4 parked.
 ## Next step
 
 Items 5–6 are feature-committed on `ui/hold-integration`. Next is the
-owner-approved code **20** APK (`0.2.0-sift-it.9`) and the two-phone checklist
+owner-approved code **21** APK (`0.2.0-rc.1`) and the two-phone checklist
 in `device-review.md` (animator scale 1x then 0). Items 7 (underlayer) and 8
 (Carry) follow only after that device pass.

@@ -29,6 +29,8 @@ import dev.hryshyn.remanence.core.crypto.CapsuleAcceptanceResult
 import dev.hryshyn.remanence.core.crypto.CapsuleKeysetParser
 import dev.hryshyn.remanence.core.crypto.RecipientEnvelopeCryptor
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
+import dev.hryshyn.remanence.core.data.db.IncomingCapsuleEntity
+import dev.hryshyn.remanence.core.data.db.OutboxCapsuleEntity
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.fingerprints.ReceivedFrontCapture
 import dev.hryshyn.remanence.core.data.fingerprints.RecipientBaselineCreator
@@ -611,16 +613,51 @@ class ScanViewModel internal constructor(
             }
             loadedIncoming.candidates.forEach(::retain)
             loadedRoom.candidates.forEach(::retain)
+            val distinctIds = merged.map { it.capsuleId }.distinct()
+            // Incoming-claimed candidates only, bounded by the shared proof
+            // cap (fail-closed overflow inside). Only this bounded set feeds
+            // any proof work below.
+            val proofIds = boundDualProofIds(
+                distinctIds.filter { loadedIncoming.presentationSources[it] != null },
+            ).toHashSet()
             // Storage membership is independent of recognition validity. Probe
-            // the owner-scoped OUTBOX plane for every merged candidate.
+            // the owner-scoped OUTBOX plane in explicit bounded pages - never
+            // an unbounded per-ID loop - reusing one batch query per page.
+            // Existence results are identical to the former point lookups.
+            // Rows for proof candidates are retained for the self proof.
             val outboxSources = LinkedHashMap<UUID, CapsulePresentationSource>()
-            for (candidateId in merged.map { it.capsuleId }.distinct()) {
-                if (database.outboxCapsuleDao().getByCapsuleIdAndOwner(
-                        candidateId.toString(),
-                        owner.toRestString(),
-                    ) != null
-                ) {
+            val outboxRows = LinkedHashMap<UUID, OutboxCapsuleEntity>()
+            for (page in distinctIds.chunked(MAX_SELF_PROOF_DUAL_IDS)) {
+                val rowsById = database.outboxCapsuleDao().getByCapsuleIdsAndOwner(
+                    page.map { it.toString() },
+                    owner.toRestString(),
+                ).associateBy { it.capsuleId }
+                for (candidateId in page) {
+                    val row = rowsById[candidateId.toString()] ?: continue
+                    if (row.ownerUserId != owner.toRestString() ||
+                        row.capsuleId != candidateId.toString()
+                    ) {
+                        continue
+                    }
                     outboxSources[candidateId] = CapsulePresentationSource.OUTBOX
+                    if (candidateId in proofIds) outboxRows[candidateId] = row
+                }
+            }
+            val dualIds = distinctIds.filter { it in proofIds && outboxSources[it] != null }
+            // One owner-scoped batch for the incoming side of the proof;
+            // never per-ID, never unscoped, never on empty input.
+            val incomingRows: Map<String, IncomingCapsuleEntity> = if (dualIds.isEmpty()) {
+                emptyMap()
+            } else {
+                try {
+                    database.incomingCapsuleDao().getByCapsuleIdsAndOwner(
+                        dualIds.map { it.toString() },
+                        owner.toRestString(),
+                    ).associateBy { it.capsuleId }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    emptyMap()
                 }
             }
             // Re-read the authenticated owner after all Room/provider loads,
@@ -637,10 +674,29 @@ class ScanViewModel internal constructor(
                 merged.none { it.capsuleId == candidateId && it.recipientPreferred }
             }
             // Source is a storage-plane fact, not recognition provenance.
+            // A self-send legitimately lives in both planes after sync, so
+            // self-routed dual identities resolve to INCOMING - but only on
+            // complete two-plane proof (below): anything else dual stays
+            // ambiguous and fail-closed; a corrupt row, a disagreeing
+            // incoming row, or an unread incoming bundle never resolves.
+            val selfRouted = collectSelfRoutedDualCapsules(
+                dualIds = dualIds,
+                incomingCandidates = loadedIncoming.candidates,
+                outboxRows = outboxRows,
+                incomingRows = incomingRows,
+                owner = owner,
+            )
             val presentationSources = resolvePresentationSources(
-                candidateIds = merged.map { it.capsuleId }.distinct(),
+                candidateIds = distinctIds,
                 incomingSources = loadedIncoming.presentationSources,
                 roomSources = outboxSources,
+                selfRoutedCapsuleIds = selfRouted,
+            )
+            ScanPresentationSourceDiagnostics.reportDualPlane(
+                dualTotal = distinctIds.count { id ->
+                    loadedIncoming.presentationSources[id] != null && outboxSources[id] != null
+                },
+                selfResolved = selfRouted.count { presentationSources[it] != null },
             )
             val sourceDiagnostics = loadedRoom.diagnostics + loadedIncoming.diagnostics
             return ScanCandidateIndex(
@@ -657,6 +713,57 @@ class ScanViewModel internal constructor(
 
     /** Test-only view of the same merged, owner-bound scan index. */
     internal suspend fun buildCandidateIndexForTests(): ScanCandidateIndex = buildCandidateIndex()
+
+    /**
+     * Proves the self-send exception to the dual-plane ambiguity rule for one
+     * scan invocation, over rows already loaded by the caller - this performs
+     * no database work itself. A capsule qualifies only when ALL of these
+     * hold, so the proof never rests on one plane's attacker-writable fields
+     * alone:
+     * - it is claimed by BOTH the incoming and outbox planes ([dualIds]);
+     * - its incoming fingerprint was actually read (a membership fact alone
+     *   never suffices, so an incoming read failure is never masked by the
+     *   sender's copy);
+     * - its retained owner-scoped outbox row parses through the strict
+     *   routing policy with sender == recipient == current owner (corrupt
+     *   rows stay corrupt);
+     * - its batch-loaded owner-scoped incoming row independently agrees with
+     *   sender == recipient == current owner (a single tampered plane, or
+     *   disagreeing planes, never prove self).
+     * Bundle trust and statement/signature/envelope acceptance still run
+     * downstream in incoming preparation; this only selects the plane.
+     */
+    private fun collectSelfRoutedDualCapsules(
+        dualIds: List<UUID>,
+        incomingCandidates: List<IndexedCandidate>,
+        outboxRows: Map<UUID, OutboxCapsuleEntity>,
+        incomingRows: Map<String, IncomingCapsuleEntity>,
+        owner: UserId,
+    ): Set<UUID> {
+        val ownerString = owner.toRestString()
+        val readableIncoming = incomingCandidates.map { it.capsuleId }.toHashSet()
+        val selfRouted = HashSet<UUID>()
+        for (candidateId in dualIds) {
+            if (candidateId !in readableIncoming) continue
+            val outboxRow = outboxRows[candidateId] ?: continue
+            val routing = when (
+                val resolution = dev.hryshyn.remanence.identity.CapsuleRoutingPolicy.resolve(outboxRow)
+            ) {
+                is dev.hryshyn.remanence.identity.CapsuleRoutingResolution.Resolved -> resolution
+                is dev.hryshyn.remanence.identity.CapsuleRoutingResolution.Corrupt -> continue
+            }
+            if (routing.senderUserId != owner || routing.recipientUserId != owner) continue
+            val incomingRow = incomingRows[candidateId.toString()] ?: continue
+            if (incomingRow.ownerUserId != ownerString) continue
+            val incomingSender = runCatching { UUID.fromString(incomingRow.senderUserId) }.getOrNull()
+                ?: continue
+            val incomingRecipient = runCatching { UUID.fromString(incomingRow.recipientUserId) }.getOrNull()
+                ?: continue
+            if (incomingSender != owner.value || incomingRecipient != owner.value) continue
+            selfRouted += candidateId
+        }
+        return selfRouted
+    }
 
     private fun evaluateMatch() {
         val sessionFront = captureSession.front ?: return

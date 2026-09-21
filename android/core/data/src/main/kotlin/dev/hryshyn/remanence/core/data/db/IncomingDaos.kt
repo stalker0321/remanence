@@ -403,6 +403,21 @@ abstract class IncomingCapsuleDao {
     )
     abstract suspend fun getByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String): IncomingCapsuleEntity?
 
+    /**
+     * Owner-scoped batch read for the scan dual-plane self proof. Returns
+     * only rows owned by [ownerUserId]; the caller bounds [capsuleIds] to a
+     * small hard-capped dual set, never an unbounded enumeration. An empty
+     * input list must never reach SQL (Room rejects empty `IN ()`).
+     */
+    @Query(
+        "SELECT * FROM incoming_capsule " +
+            "WHERE owner_user_id = :ownerUserId AND capsule_id IN (:capsuleIds)",
+    )
+    abstract suspend fun getByCapsuleIdsAndOwner(
+        capsuleIds: List<String>,
+        ownerUserId: String,
+    ): List<IncomingCapsuleEntity>
+
     /** Persists only a server-confirmed first-open claim for this owner. */
     @Query(
         "UPDATE incoming_capsule SET first_open_claimed_at_epoch_ms = :claimedAtEpochMs " +

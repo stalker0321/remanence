@@ -230,6 +230,10 @@ class CapsuleUploadResumerTest {
             ownerUserId: String,
         ): OutboxCapsuleEntity? = null
 
+        override suspend fun getByCapsuleIdsAndOwner(
+            capsuleIds: List<String>,
+            ownerUserId: String,
+        ): List<OutboxCapsuleEntity> = emptyList()
         override fun observeStatusByCapsuleIdAndOwner(
             capsuleId: String,
             ownerUserId: String,

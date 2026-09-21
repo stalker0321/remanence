@@ -262,6 +262,30 @@ class ScanGrantRoutingTest {
     }
 
     /**
+     * Retargets the staged self-send outbox row at a FOREIGN recipient so the
+     * dual-plane rejection below exercises the ordinary non-self ambiguity
+     * rule. Both IDs stay valid typed UUIDs, so routing parses cleanly as
+     * sender == owner != recipient instead of failing closed as corrupt.
+     */
+    private suspend fun retargetOutboxRecipientToForeign() {
+        val row = database.outboxCapsuleDao().getByCapsuleIdAndOwner(
+            capsuleUuid.toString(),
+            userUuid.toString(),
+        ) ?: error("staged outbox row is missing")
+        database.openHelper.writableDatabase.execSQL(
+            "DELETE FROM outbox_capsule WHERE capsule_id = ? AND owner_user_id = ?",
+            arrayOf(row.capsuleId, userUuid.toString()),
+        )
+        database.outboxCapsuleDao().insertOrAbort(
+            userUuid.toString(),
+            row.copy(
+                recipientUserId = "6f111111-2222-4333-8444-555555555555",
+                recipientKeyBundleId = "6f333333-4444-4555-8666-777777777777",
+            ),
+        )
+    }
+
+    /**
      * Production-shaped ScanViewModel: same construction surface as
      * PostmarkViewModelFactory, with fakes only at the camera/still seam and
      * THE given manager injected exactly once.
@@ -565,6 +589,10 @@ class ScanGrantRoutingTest {
             // recognition row. The incoming candidate below must therefore
             // be rejected as a dual storage membership, not rebound to
             // INCOMING merely because it is the only valid recognition row.
+            // The row is retargeted to a FOREIGN recipient so this pins the
+            // ordinary (non-self) ambiguity rule: a self-routed dual now
+            // resolves to INCOMING (see SelfSendDualPlaneTest) and must not
+            // be covered by this rejection.
             stagePublishedCapsule()
             assertEquals(
                 1,
@@ -573,6 +601,7 @@ class ScanGrantRoutingTest {
                     userUuid.toString(),
                 ),
             )
+            retargetOutboxRecipientToForeign()
             assertNotNull(
                 database.outboxCapsuleDao().getByCapsuleIdAndOwner(
                     capsuleUuid.toString(),

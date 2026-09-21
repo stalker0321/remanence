@@ -1,7 +1,7 @@
 package dev.hryshyn.remanence.core.model
 
 /**
- * G3 — provider-independent source normalization/staging leases and
+ * G3 — provider-independent source staging leases and
  * invalidation semantics bridging client-owned read handles to stable
  * G1 input IDs/hashes.
  *
@@ -16,8 +16,8 @@ package dev.hryshyn.remanence.core.model
  * sender representation outside G1 bytes/hash; cleanup on cancel,
  * failure, revocation, death, handoff).
  *
- * Scope (strict): normalization (hash + declared dims + order binding),
- * leases, sessions, epoch/revision gating, revocation/close/sweep,
+ * Scope (strict): ORIGINAL-byte staging and hash verification
+ * (hash + declared dims + order binding), leases, sessions, epoch/revision gating, revocation/close/sweep,
  * hash-keyed reuse within policy, TOCTOU defense, deterministic G1
  * bridge. Explicitly NOT in G3: Android content-URI adapter (G4), real
  * renderer algorithms, crop analysis/CV, UI, publishing, receive

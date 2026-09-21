@@ -286,4 +286,13 @@ class GeneratorExpressionTest {
             GeneratorExpression.canonicalHash(expression()),
         )
     }
+
+    @Test
+    fun zeroDependencyVersionsPassThroughUnchanged() {
+        // G1 pins pass-through: unknown (incl. zero) grammar/font/palette
+        // versions are NOT a G1 concern; G2 rejects only negatives.
+        // No G1 byte/validation change is made or needed here.
+        val zeroed = expression().copy(grammarVersion = 0, fontVersion = 0, paletteVersion = 0)
+        assertIs<GeneratorExpression.InputValidation.Valid>(GeneratorExpression.validateResolved(zeroed))
+    }
 }

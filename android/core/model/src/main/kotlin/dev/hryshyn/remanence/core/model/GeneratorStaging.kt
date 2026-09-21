@@ -282,6 +282,7 @@ object GeneratorStaging {
             if (ordinal >= record.expected.size) return StageResult.Rejected("unknown slot")
             val expected = record.expected[ordinal]
             if (widthPx <= 0 || heightPx <= 0) return StageResult.Rejected("non-positive dims")
+            if (bytes.isEmpty()) return StageResult.Rejected("empty bytes")
             if (bytes.size > RAW_SOURCE_MAX_BYTES) return StageResult.Rejected("bytes over bound")
             if (record.staged.size >= MAX_LEASES_PER_SESSION) return StageResult.Rejected("too many leases")
             val sessionBytes = record.staged.values.sumOf { it.bytes.size.toLong() } + bytes.size

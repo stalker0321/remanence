@@ -13,17 +13,30 @@ plus grammar-test v1–v7. Do not treat `/home/vodkolyan/Projects/Remanence-desi
 as complete: it has no `handoff/`.
 
 Live Android worktree: `/home/vodkolyan/projects/Remanence-hold-integration`
-on `ui/hold-integration`. Last shipped APK: **0.2.0-sift-it.8 / versionCode
-19** (`8614e64`); `.8` names that shipped APK, not the worktree HEAD. HOLD-05
-capture copy and HOLD-06 scan product copy (items 5–6) are feature-committed
-on this branch — not in an APK. Integrated `fd9e0b8` on this branch adds
-Astra scan motion, self-addressed capsule open, and the EN/RU/UK language
-switch; release commit `f03a4bf` sets rc.1 / code **21**. Next APK code is
-**21** (never reuse 18, 19, or 20). Orchestrator-managed
-commits and feature-branch pushes are allowed; `main`, tags, releases, APK
-publication, deploy and DB/Caddy need owner approval. GitHub prerelease
+on `ui/hold-integration`. Shipped APK: **0.2.0-rc.1 / versionCode
+21** (`9cb2807`), published as GitHub prerelease
+https://github.com/stalker0321/remanence/releases/tag/v0.2.0-rc.1
+(tag `v0.2.0-rc.1`, published 2026-09-21T07:23:57Z). It bundles HOLD-05/06
+capture and scan product copy (items 5–6), Astra scan motion,
+self-addressed capsule open, and the in-app EN/RU/UK language switch
+(`fd9e0b8` integration; release commit `f03a4bf` sets rc.1 / code **21**,
+docs follow-up `9cb2807`). Codes 18, 19, 20 are consumed and never reused.
+The previous shipped APK was sift-it.8 / code 19 (`8614e64`).
+Orchestrator-managed commits and feature-branch pushes are allowed; `main`,
+tags, releases, APK publication, deploy and DB/Caddy need owner approval.
+Earlier prerelease:
 https://github.com/stalker0321/remanence/releases/tag/v0.2.0-sift-it.8
-`origin/main` is still **sift-it.7** (`4e5333d`).
+`origin/main` and `origin/ui/hold-integration` are both **`9cb2807`**.
+
+rc.1 APK evidence (local build from the tagged tree `9cb2807`):
+`Remanence-android-v0.2.0-rc.1-code21-g9cb2807-debug.apk`, 157,004,484 B,
+SHA-256 `fc1e8d6c7e5568f94c0aeaf01e79da3c3de57dd94189b25baf28d031fc2b90a6`,
+signer cert SHA-256 `2cb40556c18cba2181e1d778f505d2218697f872e2cb63b92ebf6d8a8942d872`
+— identical to the sift-it.9 reference (install-over continuity),
+versionCode 21, versionName 0.2.0-rc.1, API
+`https://remanence.hryshyn.dev/`, V2 line localization true. The first
+build attempt signed with a wrong environment debug key (`fcbbec65...`);
+those bytes were quarantined as `.REJECTED`, never installed or published.
 
 Items 5–6 gate: final **full multi-module Android unit gate 1894/0/3**
 (`:app` 829, `:core:crypto` 235, `:core:data` 540, `:core:recognition` 225,
@@ -37,9 +50,13 @@ awaits physical/native context review.
 
 rc.1 unit evidence: targeted locale/home/parity gate 66/66 green (two
 consecutive runs) on the feature branch; lint holds two pre-existing errors
-(themes NewApi, `app_name` translation). Unit evidence only, not device
-evidence. Integration-branch VPS re-gate (full multi-module suite, incl.
-scan/self-send) is still required before the code-21 APK.
+(themes NewApi, `app_name` translation). Final integration-branch VPS
+re-gate on `fd9e0b8` (the exact tree under the rc.1 release commits,
+modulo version/docs-only files): **full multi-module suite 1988/0/3**
+(`:app` 923 = 829 baseline + Astra 30 + self 14 + locale 50, other modules
+unchanged; 0 failures, 0 errors, same 3 environment skips), BUILD
+SUCCESSFUL via `scripts/verify-hold.sh` (JDK17, `--no-daemon
+--max-workers=1`). Unit evidence only, not device evidence.
 
 M4 worktree: `/home/vodkolyan/projects/Remanence-m4-recovery` on `work/m4-recovery`.
 Do not mix Hold/IP/cancel into it.
@@ -173,9 +190,10 @@ Order (one slice per commit; bump versionCode only when cutting an APK):
 8. **Carry** — only after 1–7 survive a device pass. Reduced-motion must
    skip travel, not skip privacy gates.
 
-Items 5–6 are feature-committed; no APK yet. Cut code **21 (rc.1)** only after owner
-approval, then run the two-phone checklist in `device-review.md` with animator
-scale 1x then 0. Items 7 (underlayer) and 8 (Carry) wait for a device pass.
+Items 5–6 shipped in 0.2.0-rc.1 / code 21 (published prerelease, see top).
+Run the two-phone checklist in `device-review.md` with animator scale 1x
+then 0 before any device claim. Items 7 (underlayer) and 8 (Carry) wait for
+a device pass.
 
 ---
 
@@ -196,7 +214,6 @@ If design work is in flight, leave M4 parked.
 
 ## Next step
 
-Items 5–6 are feature-committed on `ui/hold-integration`. Next is the
-owner-approved code **21** APK (`0.2.0-rc.1`) and the two-phone checklist
-in `device-review.md` (animator scale 1x then 0). Items 7 (underlayer) and 8
-(Carry) follow only after that device pass.
+0.2.0-rc.1 / code 21 (`v0.2.0-rc.1`, `9cb2807`) is published as prerelease.
+Next: the two-phone checklist in `device-review.md` (animator scale 1x then
+0). Items 7 (underlayer) and 8 (Carry) follow only after that device pass.

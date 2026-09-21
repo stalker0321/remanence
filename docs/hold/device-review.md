@@ -1,6 +1,13 @@
 # Hold first-device review
 
-Phones currently have **sift-it.8 / code 19** (the last shipped APK). Hold chrome after that (`b910e15`…`77b3b38`) plus the feature-committed HOLD-05/06 capture and scan product copy (items 5–6), Astra scan motion, self-addressed capsule open, and the in-app EN/RU/UK language switch is on `ui/hold-integration` only — no APK until code **21 (rc.1)**. Install a new debug APK over the existing app with the same signing key; do not clear data. Build API is `https://remanence.hryshyn.dev/`. No server deployment belongs to this branch. If Android reports a signature mismatch, stop rather than uninstalling: uninstall loses the device identity and is not a recovery solution.
+Phones should now carry **0.2.0-rc.1 / code 21** from the published prerelease
+https://github.com/stalker0321/remanence/releases/tag/v0.2.0-rc.1
+(previous shipped APK was sift-it.8 / code 19). The rc.1 tree adds HOLD-05/06
+capture and scan product copy (items 5–6), Astra scan motion, self-addressed
+capsule open, and the in-app EN/RU/UK language switch. Install a new debug APK
+over the existing app with the same signing key (rc.1 signer cert SHA-256
+`2cb40556c18cba2181e1d778f505d2218697f872e2cb63b92ebf6d8a8942d872`,
+identical to sift-it.9 — continuity verified); do not clear data. Build API is `https://remanence.hryshyn.dev/`. No server deployment belongs to this branch. If Android reports a signature mismatch, stop rather than uninstalling: uninstall loses the device identity and is not a recovery solution.
 
 1. **Entry and scale:** open signed-out Home. Tap anywhere on each soft object. Back out of auth; reopen, sign in, and verify the selected make/open flow resumes once. Missing keys must remain blocked. Check authenticated Home on a compact and a tall phone; leave judgment about spaciousness until seeing it in the hand.
 2. **Forms:** login/register switch, wrong password, repeated submit, long handle, lookup offline/not found, explicit recipient acknowledgment and cancel. Open the keyboard in email, password, handle and note; fields scroll, **Sign in** stays above the IME. Wrong password must leave the typed values. Password is masked. Rotate during lookup/confirmation.

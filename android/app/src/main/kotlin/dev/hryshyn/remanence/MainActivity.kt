@@ -14,8 +14,8 @@ import dev.hryshyn.remanence.ui.hold.HoldTextButton
 import dev.hryshyn.remanence.ui.hold.HoldInformation
 import dev.hryshyn.remanence.ui.hold.HoldSpace
 import dev.hryshyn.remanence.session.HomeIntent
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
@@ -56,8 +56,17 @@ import dev.hryshyn.remanence.wiring.RemanenceViewModelFactory
 import dev.hryshyn.remanence.ui.navigation.AuthUiState
 import dev.hryshyn.remanence.ui.navigation.AppDestination
 import dev.hryshyn.remanence.core.data.network.HealthCheckResult
+import dev.hryshyn.remanence.ui.locale.AppLocale
+import dev.hryshyn.remanence.ui.locale.AppLocaleController
+import dev.hryshyn.remanence.ui.locale.LanguageSwitchRow
 
-class MainActivity : ComponentActivity() {
+/**
+ * AppCompatActivity (not ComponentActivity): the AppCompat per-app locale
+ * backport only functions with an attached AppCompat delegate, and Compose
+ * + setApplicationLocales officially requires AppCompatActivity. The delegate
+ * applies and restores the stored locales; no manual context wrapping.
+ */
+class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -68,10 +77,22 @@ class MainActivity : ComponentActivity() {
         val container = (application as RemanenceApplication).container
 
         setContent {
+            // Hoisted here (not in a ViewModel): the locale switch recreates
+            // only this Activity, so ViewModels, auth state and capsule grants
+            // survive; the persisted tag restores the choice after restart.
+            var appLocale by remember {
+                mutableStateOf(container.appLocaleRepository.load())
+            }
             HoldTheme {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     Box(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
-                        RootSurface(container = container)
+                        RootSurface(
+                            container = container,
+                            appLocale = appLocale,
+                            onLocaleSelected = { locale ->
+                                appLocale = AppLocaleController.select(locale)
+                            },
+                        )
                     }
                 }
             }
@@ -97,7 +118,11 @@ internal fun ForegroundResumeEffect(onResume: () -> Unit) {
  * never poke the root directly.
  */
 @Composable
-private fun RootSurface(container: AppContainer) {
+private fun RootSurface(
+    container: AppContainer,
+    appLocale: AppLocale,
+    onLocaleSelected: (AppLocale) -> Unit,
+) {
     val factory = remember { RemanenceViewModelFactory(container) }
 
     // I02/I03: cold-start session bootstrap decides the first surface.
@@ -184,6 +209,7 @@ private fun RootSurface(container: AppContainer) {
                     )
                     HoldTextButton(onClick = { registering = true }, enabled = submit !is LoginSubmitState.Submitting) { Text(stringResource(R.string.hold_create_account)) }
                 }
+                LanguageSwitchRow(current = appLocale, onSelect = onLocaleSelected)
             }
         },
         homeContent = {
@@ -194,6 +220,8 @@ private fun RootSurface(container: AppContainer) {
                     publicEntry = authState == AuthUiState.SignedOut,
                     onCreate = { rootViewModel.requestHomeIntent(HomeIntent.MAKE) },
                     onScan = { rootViewModel.requestHomeIntent(HomeIntent.OPEN) },
+                    appLocale = appLocale,
+                    onLocaleSelected = onLocaleSelected,
                 )
             }
             if (authenticated != null) {

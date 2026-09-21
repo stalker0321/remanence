@@ -88,6 +88,9 @@ class RemanenceApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // No locale bootstrap here: AppCompat owns the store (platform
+        // LocaleManager on 33+, backport below) and the attached activity
+        // delegates apply/restore it. Nothing to mirror or wrap.
         // OpenCV native runtime must be live before any capture/extraction
         // component runs (docs/recognition.md section 4).
         org.opencv.android.OpenCVLoader.initLocal()
@@ -167,6 +170,17 @@ class AppContainer private constructor(
     val healthRepository: HealthRepository by lazy { HealthRepository.create(apiBaseUrl) }
 
     val appContext: Context = context.applicationContext
+
+    /**
+     * In-app language choice (EN/RU/UK + system default). Handle only: the
+     * store is AppCompat's (single source of truth), so switching recreates
+     * at most the Activity while auth state, ViewModels and capsule grants
+     * are preserved; the choice survives restart via the AppCompat/platform
+     * record.
+     */
+    val appLocaleRepository: dev.hryshyn.remanence.ui.locale.AppLocaleRepository by lazy {
+        dev.hryshyn.remanence.ui.locale.AppLocaleRepository()
+    }
 
     /** Immediate account-boundary fence for live Scan scheduling/watchers. */
     internal val sessionBoundary: dev.hryshyn.remanence.session.SessionBoundary =

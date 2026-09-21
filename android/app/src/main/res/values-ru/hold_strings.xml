@@ -86,4 +86,9 @@
     <string name="hold_chooser_claim">имя от отправителя: %1$s (не подтверждено)</string>
     <string name="hold_chooser_rescan">лучше сканировать ещё раз</string>
     <string name="hold_chooser_unknown_date">дата неизвестна</string>
+    <string name="hold_language_system">Система</string>
+    <string name="hold_language_english">English</string>
+    <string name="hold_language_russian">Русский</string>
+    <string name="hold_language_ukrainian">Українська</string>
+    <string name="hold_language_label">язык</string>
 </resources>

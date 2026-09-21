@@ -3,5 +3,14 @@
     xmlns:tools="http://schemas.android.com/tools">
     <application
         android:usesCleartextTraffic="true"
-        tools:replace="android:usesCleartextTraffic" />
+        tools:replace="android:usesCleartextTraffic">
+        <!-- Harness for LocaleSelectActivityTest (Robolectric launches it by
+             intent, so it must resolve in the test manifest). Explicit
+             AppCompat theme: the delegate enforces it in onPostCreate.
+             Production manifest is otherwise untouched. -->
+        <activity
+            android:name="dev.hryshyn.remanence.ui.locale.LocaleSelectHarnessActivity"
+            android:theme="@style/Theme.AppCompat.Light.NoActionBar"
+            android:exported="false" />
+    </application>
 </manifest>

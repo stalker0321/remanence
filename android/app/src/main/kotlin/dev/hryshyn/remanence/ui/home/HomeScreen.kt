@@ -14,6 +14,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import dev.hryshyn.remanence.ui.hold.HoldActionObject
 import dev.hryshyn.remanence.ui.hold.HoldSpace
+import dev.hryshyn.remanence.ui.locale.AppLocale
+import dev.hryshyn.remanence.ui.locale.LanguageSwitchRow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 
@@ -50,6 +52,8 @@ fun HomeScreen(
     onCreate: () -> Unit = {},
     onScan: () -> Unit = {},
     publicEntry: Boolean = false,
+    appLocale: AppLocale = AppLocale.SYSTEM,
+    onLocaleSelected: (AppLocale) -> Unit = {},
 ) {
     val enabled = accountCapability.actionsEnabled ||
         (publicEntry && accountCapability == AccountCapabilityState.NotAuthenticated)
@@ -85,6 +89,10 @@ fun HomeScreen(
             action = stringResource(R.string.hold_make), onClick = onCreate, enabled = enabled,
             secondary = true, compact = true,
             modifier = Modifier.fillMaxWidth().testTag("create_action"),
+        )
+        LanguageSwitchRow(
+            current = appLocale,
+            onSelect = onLocaleSelected,
         )
     }
 }

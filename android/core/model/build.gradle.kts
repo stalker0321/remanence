@@ -34,6 +34,10 @@ protobuf {
 
 dependencies {
     api(libs.protobuf.javalite)
+    // B2: suspend boundary + kotlinx CancellationException propagation.
+    // Same aliases/versions as :core:data (cached, no network needed).
+    implementation(libs.kotlinx.coroutines.core)
+    testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(kotlin("test-junit5"))
     testImplementation(libs.kotlinx.serialization.json)
 }

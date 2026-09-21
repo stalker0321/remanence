@@ -24,6 +24,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.hryshyn.remanence.capture.CaptureAttemptSurface
 import dev.hryshyn.remanence.scan.ScanSessionState
 import dev.hryshyn.remanence.sync.IncomingAcceptanceDiagnostics
+import dev.hryshyn.remanence.ui.motion.AstraEnterTransition
+import dev.hryshyn.remanence.ui.motion.rememberAstraMotion
 
 /**
  * M2-F0-07: the production Scan surface. Entry renders the honest FRONT-only
@@ -67,18 +69,30 @@ fun ScanScreen(
         Spacer(Modifier.height(16.dp))
 
         when (val current = matchState) {
-            is ScanMatchUiState.AwaitingCapture ->
+            // ASTRA-FIDELITY: entry arrives with the routine transition.
+            // The FRONT camera lifecycle (adapter bind/release, permission,
+            // controller) is untouched — only the arrival is wrapped.
+            is ScanMatchUiState.AwaitingCapture -> AstraEnterTransition(
+                motion = rememberAstraMotion(),
+            ) {
                 FrontCapture(viewModel, Modifier.fillMaxWidth(), adapterFactory, requestPermissionOnAttach)
-            is ScanMatchUiState.Matching -> Column {
-                androidx.compose.material3.CircularProgressIndicator()
-                Spacer(Modifier.height(16.dp))
-                Text(stringResource(R.string.hold_recognizing), modifier = Modifier.testTag("scan_matching"))
             }
-            is ScanMatchUiState.Accepted -> Text(
-                stringResource(R.string.hold_scan_opening),
-                modifier = Modifier.testTag("scan_verified"),
+            // ASTRA-FIDELITY: post-scan waiting states share one waiting
+            // group — the drawn postcard carries the wait while only the
+            // status copy switches (design/motion/render.mjs:42-46).
+            is ScanMatchUiState.Matching,
+            is ScanMatchUiState.Accepted,
+            is ScanMatchUiState.MaterialPending -> ScanWaitingGroup(
+                state = current,
+                motion = rememberAstraMotion(),
+                // Real recovery: reset the whole flow, same as recapture.
+                onStopScanning = viewModel::resetSession,
+                modifier = Modifier.fillMaxWidth(),
             )
-            is ScanMatchUiState.Chooser -> AmbiguityChooserScreen(
+            // ASTRA-FIDELITY: chooser arrival goes through the branch
+            // wrapper (routine entry transition). Mapping and both actions
+            // are verbatim production behavior.
+            is ScanMatchUiState.Chooser -> ScanChooserBranch(
                 rows = current.rows.map { row ->
                     ChooserHintRow(
                         candidateId = row.candidateId,
@@ -97,37 +111,39 @@ fun ScanScreen(
                     // invalidates in-flight matching work.
                     viewModel.resetSession()
                 },
+                motion = rememberAstraMotion(),
                 modifier = Modifier.fillMaxWidth(),
             )
-            is ScanMatchUiState.RecaptureGuidance -> Column {
-                Text(stringResource(R.string.hold_nomatch), modifier = Modifier.testTag("scan_recapture"))
-                Spacer(Modifier.height(12.dp))
-                OutlinedButton(
-                    onClick = viewModel::resetSession,
-                    modifier = Modifier.testTag("scan_recapture_action"),
-                ) { Text(stringResource(R.string.hold_scan_again)) }
+            // ASTRA-FIDELITY: result states arrive with the same routine
+            // entry transition as the waiting group (study arrival beat).
+            // Copy and actions are the honest production ones, unchanged.
+            is ScanMatchUiState.RecaptureGuidance -> AstraEnterTransition(
+                motion = rememberAstraMotion(),
+            ) {
+                Column {
+                    Text(stringResource(R.string.hold_nomatch), modifier = Modifier.testTag("scan_recapture"))
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedButton(
+                        onClick = viewModel::resetSession,
+                        modifier = Modifier.testTag("scan_recapture_action"),
+                    ) { Text(stringResource(R.string.hold_scan_again)) }
+                }
             }
-            is ScanMatchUiState.IndexUnavailable -> Column {
-                Text(
-                    stringResource(R.string.hold_scan_index_body),
-                    modifier = Modifier.testTag("scan_index_unavailable"),
-                )
-                Spacer(Modifier.height(12.dp))
-                Button(
-                    onClick = viewModel::retryIndexSync,
-                    modifier = Modifier.testTag("scan_index_retry"),
-                ) { Text(stringResource(R.string.hold_retry)) }
+            is ScanMatchUiState.IndexUnavailable -> AstraEnterTransition(
+                motion = rememberAstraMotion(),
+            ) {
+                Column {
+                    Text(
+                        stringResource(R.string.hold_scan_index_body),
+                        modifier = Modifier.testTag("scan_index_unavailable"),
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Button(
+                        onClick = viewModel::retryIndexSync,
+                        modifier = Modifier.testTag("scan_index_retry"),
+                    ) { Text(stringResource(R.string.hold_retry)) }
+                }
             }
-            is ScanMatchUiState.MaterialPending -> Text(
-                text = if (current.connected) {
-                    stringResource(R.string.hold_scan_material_online)
-                } else {
-                    stringResource(R.string.hold_scan_material_offline)
-                },
-                modifier = Modifier.testTag(
-                    if (current.connected) "scan_material_pending_online" else "scan_material_pending_offline",
-                ),
-            )
         }
     }
 }

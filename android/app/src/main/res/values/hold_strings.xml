@@ -80,6 +80,10 @@
     <string name="hold_scan_material_online">found the postcard. downloading the attachment; it will open after verification.</string>
     <string name="hold_scan_material_offline">found it — the attachment is not on this device yet. connect to continue.</string>
     <string name="hold_scan_again">scan again</string>
+    <string name="hold_scan_stop">stop scanning</string>
+    <string name="hold_scan_recognizing_body">keep the postcard nearby.</string>
+    <string name="hold_scan_opening_body">checking it\'s ready to open.</string>
+    <string name="hold_scan_material_online_body">getting what\'s attached.</string>
     <string name="hold_chooser_title">which postcard is this?</string>
     <string name="hold_chooser_from">from %1$s</string>
     <string name="hold_chooser_unverified">unverified sender</string>

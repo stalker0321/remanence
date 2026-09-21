@@ -80,6 +80,10 @@
     <string name="hold_scan_material_online">листівку знайдено. завантажуємо вкладення; після перевірки воно відкриється.</string>
     <string name="hold_scan_material_offline">листівку знайдено, потрібен інтернет. вкладення ще немає на пристрої.</string>
     <string name="hold_scan_again">сканувати знову</string>
+    <string name="hold_scan_stop">зупинити сканування</string>
+    <string name="hold_scan_recognizing_body">поки залиште листівку поруч.</string>
+    <string name="hold_scan_opening_body">перевіряємо, чи можна відкрити вкладення.</string>
+    <string name="hold_scan_material_online_body">завантажуємо вкладення.</string>
     <string name="hold_chooser_title">яка це листівка?</string>
     <string name="hold_chooser_from">від %1$s</string>
     <string name="hold_chooser_unverified">відправника не підтверджено</string>

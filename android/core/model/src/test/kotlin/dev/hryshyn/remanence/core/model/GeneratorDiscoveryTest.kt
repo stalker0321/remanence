@@ -177,7 +177,7 @@ class GeneratorDiscoveryTest {
         val result = GeneratorDiscovery.run(request(), listOf(shuffled))
         assertTrue(result.accepted.isEmpty())
         assertEquals(2, result.rejected.size)
-        assertEquals("failed", result.providers.single().outcome)
+        assertEquals(GeneratorDiscovery.ProviderOutcomeRecord.FAILED, result.providers.single().outcome)
     }
 
     @Test
@@ -197,9 +197,9 @@ class GeneratorDiscoveryTest {
         assertEquals(1, result.accepted.size)
         assertEquals("good#gen-1#0", result.accepted.single().candidateId)
         val byId = result.providers.associateBy { it.provider.providerId }
-        assertEquals("failed", byId.getValue("boom").outcome)
-        assertEquals("unsupported", byId.getValue("nope").outcome)
-        assertEquals("candidates", byId.getValue("good").outcome)
+        assertEquals(GeneratorDiscovery.ProviderOutcomeRecord.FAILED, byId.getValue("boom").outcome)
+        assertEquals(GeneratorDiscovery.ProviderOutcomeRecord.UNSUPPORTED, byId.getValue("nope").outcome)
+        assertEquals(GeneratorDiscovery.ProviderOutcomeRecord.CANDIDATES, byId.getValue("good").outcome)
         // B5 redaction: class name recorded, message text never persisted.
         val boomDetail = byId.getValue("boom").detail
         assertTrue(boomDetail.contains("IllegalStateException"))
@@ -227,7 +227,7 @@ class GeneratorDiscoveryTest {
         }
         val result = GeneratorDiscovery.run(request(), listOf(empty))
         assertTrue(result.accepted.isEmpty())
-        assertEquals("failed", result.providers.single().outcome)
+        assertEquals(GeneratorDiscovery.ProviderOutcomeRecord.FAILED, result.providers.single().outcome)
         assertEquals("empty candidate set", result.providers.single().detail)
     }
 
@@ -600,7 +600,190 @@ class GeneratorDiscoveryTest {
         val result = GeneratorDiscovery.run(request(), listOf(skip, stop))
         assertTrue(result.accepted.isEmpty())
         val byId = result.providers.associateBy { it.provider.providerId }
-        assertEquals("not-applicable", byId.getValue("skip").outcome)
-        assertEquals("incompatible", byId.getValue("halt").outcome)
+        assertEquals(GeneratorDiscovery.ProviderOutcomeRecord.NOT_APPLICABLE, byId.getValue("skip").outcome)
+        assertEquals(GeneratorDiscovery.ProviderOutcomeRecord.INCOMPATIBLE, byId.getValue("halt").outcome)
+    }
+
+    @Test
+    fun zeroVersionRejection() = runTest {
+        val base = fakeExpression(input())
+        val bad = object : GeneratorDiscovery.GeneratorProvider {
+            override val ref = GeneratorDiscovery.ProviderRef("zeroed", 1)
+            override suspend fun generate(request: GeneratorDiscovery.GenerationRequest) =
+                GeneratorDiscovery.ProviderOutcome.Candidates(
+                    listOf(
+                        GeneratorDiscovery.Candidate("z0", 0, ref, base.copy(grammarVersion = 0)),
+                        GeneratorDiscovery.Candidate("z1", 1, ref, base.copy(fontVersion = 0)),
+                        GeneratorDiscovery.Candidate("z2", 2, ref, base.copy(paletteVersion = 0)),
+                    ),
+                )
+        }
+        val result = GeneratorDiscovery.run(request(), listOf(bad))
+        assertTrue(result.accepted.isEmpty())
+        assertEquals(3, result.rejected.size)
+        assertTrue(result.rejected.all { it.cause == "zero version" })
+        assertTrue(
+            result.rejected.all { it.causeCode == GeneratorDiscovery.RejectionCause.ZERO_VERSION },
+        )
+    }
+
+    @Test
+    fun unknownPositiveVersionsPassThrough() = runTest {
+        val exotic = object : GeneratorDiscovery.GeneratorProvider {
+            override val ref = GeneratorDiscovery.ProviderRef("exotic", 1)
+            override suspend fun generate(request: GeneratorDiscovery.GenerationRequest) =
+                GeneratorDiscovery.ProviderOutcome.Candidates(
+                    listOf(
+                        GeneratorDiscovery.Candidate(
+                            "x0", 0, ref,
+                            fakeExpression(request.input).copy(
+                                grammarVersion = Int.MAX_VALUE,
+                                fontVersion = Int.MAX_VALUE,
+                                paletteVersion = Int.MAX_VALUE,
+                            ),
+                        ),
+                    ),
+                )
+        }
+        val result = GeneratorDiscovery.run(request(), listOf(exotic))
+        assertEquals(1, result.accepted.size)
+        assertEquals(Int.MAX_VALUE, result.accepted.single().expression.grammarVersion)
+        assertEquals(
+            GeneratorDiscovery.GenerationTerminalOutcome.SUCCESS,
+            result.terminal,
+        )
+    }
+
+    @Test
+    fun laterValidAfterIncompatible() = runTest {
+        val halt = object : GeneratorDiscovery.GeneratorProvider {
+            override val ref = GeneratorDiscovery.ProviderRef("aaa-halt", 1)
+            override suspend fun generate(request: GeneratorDiscovery.GenerationRequest) =
+                GeneratorDiscovery.ProviderOutcome.Incompatible("input class excluded")
+        }
+        val good = FakeDeterministic("zzz-good", count = 1)
+        val result = GeneratorDiscovery.run(request(), listOf(halt, good))
+        assertEquals(1, result.accepted.size)
+        assertEquals("zzz-good#gen-1#0", result.accepted.single().candidateId)
+        assertEquals(
+            GeneratorDiscovery.GenerationTerminalOutcome.SUCCESS,
+            result.terminal,
+        )
+    }
+
+    @Test
+    fun allIncompatibleTerminalOutcome() = runTest {
+        val halted = listOf("h1", "h2").map { id ->
+            object : GeneratorDiscovery.GeneratorProvider {
+                override val ref = GeneratorDiscovery.ProviderRef(id, 1)
+                override suspend fun generate(request: GeneratorDiscovery.GenerationRequest) =
+                    GeneratorDiscovery.ProviderOutcome.Incompatible("excluded $id")
+            }
+        }
+        val result = GeneratorDiscovery.run(request(), halted)
+        assertTrue(result.accepted.isEmpty())
+        assertEquals(
+            GeneratorDiscovery.GenerationTerminalOutcome.INCOMPATIBLE,
+            result.terminal,
+        )
+        val routed = object : GeneratorDiscovery.GeneratorProvider {
+            override val ref = GeneratorDiscovery.ProviderRef("routed", 1)
+            override suspend fun generate(request: GeneratorDiscovery.GenerationRequest) =
+                GeneratorDiscovery.ProviderOutcome.NotApplicable("elsewhere")
+        }
+        val emptyResult = GeneratorDiscovery.run(request(), listOf(routed))
+        assertTrue(emptyResult.accepted.isEmpty())
+        assertEquals(
+            GeneratorDiscovery.GenerationTerminalOutcome.EMPTY,
+            emptyResult.terminal,
+        )
+    }
+
+    @Test
+    fun typedOutcomesNeedNoStringParsing() = runTest {
+        val good = FakeDeterministic("good", count = 1)
+        val result = GeneratorDiscovery.run(request(), listOf(good))
+        val record = result.providers.single()
+        assertIs<GeneratorDiscovery.ProviderOutcomeRecord>(record.outcome)
+        assertEquals(GeneratorDiscovery.ProviderOutcomeRecord.CANDIDATES, record.outcome)
+        assertIs<GeneratorDiscovery.GenerationTerminalOutcome>(result.terminal)
+    }
+
+    @Test
+    fun deepNestedMutationCannotReachAcceptedOrFrozen() = runTest {
+        val mutablePhotos = input().photos.toMutableList()
+        val mutablePlacements = mutableListOf(
+            GeneratorExpression.Placement("p1", 0, 0, 120, 213, null, null),
+            GeneratorExpression.Placement("p2", 0, 0, 120, 213, null, null),
+            GeneratorExpression.Placement("p3", 0, 0, 120, 213, null, null),
+        )
+        val mutableDiagnostics = mutableListOf("d0")
+        val mutableInput = input().copy(photos = mutablePhotos)
+        val mutableExpression = fakeExpression(mutableInput).copy(
+            placements = mutablePlacements,
+            diagnostics = mutableDiagnostics,
+        )
+        val provider = object : GeneratorDiscovery.GeneratorProvider {
+            override val ref = GeneratorDiscovery.ProviderRef("mutable", 1)
+            override suspend fun generate(request: GeneratorDiscovery.GenerationRequest) =
+                GeneratorDiscovery.ProviderOutcome.Candidates(
+                    listOf(GeneratorDiscovery.Candidate("m0", 0, ref, mutableExpression)),
+                )
+        }
+        val result = GeneratorDiscovery.run(request(), listOf(provider))
+        assertEquals(1, result.accepted.size)
+        val acceptedHashBefore = GeneratorExpression.canonicalHash(result.accepted.single().expression)
+        val frozen = GeneratorExpression.freeze(result.accepted.single().expression, 1L, 7L)
+        mutablePhotos.clear()
+        mutablePlacements.clear()
+        mutableDiagnostics.add("injected")
+        assertEquals(3, result.accepted.single().expression.input.photos.size)
+        assertEquals(3, result.accepted.single().expression.placements.size)
+        assertEquals(listOf("d0"), result.accepted.single().expression.diagnostics)
+        assertEquals(acceptedHashBefore, GeneratorExpression.canonicalHash(result.accepted.single().expression))
+        assertEquals(3, frozen.expression.input.photos.size)
+        assertEquals(acceptedHashBefore, frozen.expressionHash)
+    }
+
+    @Test
+    fun diagnosticsHashStabilityAcrossRuns() = runTest {
+        val noisy = object : GeneratorDiscovery.GeneratorProvider {
+            override val ref = GeneratorDiscovery.ProviderRef("noisy", 1)
+            override suspend fun generate(request: GeneratorDiscovery.GenerationRequest) =
+                GeneratorDiscovery.ProviderOutcome.Candidates(
+                    listOf(
+                        GeneratorDiscovery.Candidate(
+                            "n0", 0, ref,
+                            fakeExpression(request.input).copy(
+                                diagnostics = (0 until GeneratorDiscovery.MAX_DIAGNOSTICS + 8).map { "d$it" },
+                            ),
+                        ),
+                    ),
+                )
+        }
+        val first = GeneratorDiscovery.run(request(), listOf(noisy))
+        val second = GeneratorDiscovery.run(request(), listOf(noisy))
+        assertEquals(
+            GeneratorExpression.canonicalHash(first.accepted.single().expression),
+            GeneratorExpression.canonicalHash(second.accepted.single().expression),
+        )
+        val manual = fakeExpression(input()).copy(
+            diagnostics = (0 until GeneratorDiscovery.MAX_DIAGNOSTICS).map { "d$it" },
+        )
+        assertEquals(
+            GeneratorExpression.canonicalHash(manual),
+            GeneratorExpression.canonicalHash(first.accepted.single().expression),
+        )
+    }
+
+    @Test
+    fun duplicateProviderRefsFailFast() = runTest {
+        val twins = listOf(
+            FakeDeterministic("twin", version = 1, count = 1),
+            FakeDeterministic("twin", version = 1, count = 1),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            GeneratorDiscovery.run(request(), twins)
+        }
     }
 }

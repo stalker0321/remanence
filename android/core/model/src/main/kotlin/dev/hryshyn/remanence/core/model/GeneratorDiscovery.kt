@@ -30,6 +30,18 @@ import kotlinx.coroutines.ensureActive
  * - Outcome taxonomy: `NotApplicable` (route elsewhere) vs
  *   `Incompatible` (stop) per arch §4/§6. `Unsupported` is retained
  *   unchanged for compatibility and records as route-elsewhere.
+ * - `Incompatible` is typed and explicit but never suppresses later
+ *   independent providers; when the final accepted set is empty and any
+ *   applicable provider was incompatible, the terminal outcome is typed
+ *   `INCOMPATIBLE` rather than an empty success (`NotApplicable` stays
+ *   routable). Record outcomes are typed ([ProviderOutcomeRecord]) —
+ *   routers must not string-parse.
+ * - Dependency versions are strictly positive at enumeration:
+ *   zero and negative grammar/font/palette versions are rejected;
+ *   unknown positive versions pass through recorded.
+ * - Accepted nested containers (input photos, placements, diagnostics)
+ *   are deep-detached from provider-owned lists before accept/freeze;
+ *   canonical bytes and hashes are unchanged.
  * - A provider claiming applicability MUST yield a non-empty candidate
  *   list; an empty list is recorded as a provider failure
  *   (fail-closed: the boundary never proceeds on an empty set silently).
@@ -156,6 +168,29 @@ object GeneratorDiscovery {
         NON_SEQUENTIAL_ORDINAL,
         PROVIDER_BOUND_EXCEEDED,
         NEGATIVE_VERSION,
+        ZERO_VERSION,
+    }
+
+    /** Typed provider-record outcome (no string parsing by routers). */
+    enum class ProviderOutcomeRecord {
+        CANDIDATES,
+        NOT_APPLICABLE,
+        INCOMPATIBLE,
+        UNSUPPORTED,
+        FAILED,
+    }
+
+    /**
+     * Typed terminal outcome of an enumeration: [SUCCESS] when the accepted
+     * set is non-empty; [INCOMPATIBLE] when it is empty but at least one
+     * applicable provider was incompatible (never an empty success);
+     * [EMPTY] otherwise. `Incompatible` never suppresses later independent
+     * providers — enumeration always continues.
+     */
+    enum class GenerationTerminalOutcome {
+        SUCCESS,
+        INCOMPATIBLE,
+        EMPTY,
     }
 
     /** One rejected candidate with machine-readable cause. */
@@ -166,10 +201,10 @@ object GeneratorDiscovery {
         val causeCode: RejectionCause,
     )
 
-    /** Per-provider execution record (stable order). */
+    /** Per-provider execution record (stable order, typed outcome). */
     data class ProviderRecord(
         val provider: ProviderRef,
-        val outcome: String,
+        val outcome: ProviderOutcomeRecord,
         val accepted: Int,
         val rejected: Int,
         val detail: String,
@@ -184,6 +219,7 @@ object GeneratorDiscovery {
         val rejected: List<CandidateRejection>,
         val providers: List<ProviderRecord>,
         val truncated: Int,
+        val terminal: GenerationTerminalOutcome,
     )
 
     /** Validates a boundary request (structural + explicit bounds). */
@@ -242,6 +278,8 @@ object GeneratorDiscovery {
         val refProblems = providers.flatMap { validateProviderRef(it.ref) }
         require(refProblems.isEmpty()) { "invalid provider: ${refProblems.joinToString("; ")}" }
         require(providers.size <= MAX_PROVIDERS) { "providers exceed bound $MAX_PROVIDERS" }
+        val duplicateRefs = providers.groupingBy { it.ref }.eachCount().filterValues { it > 1 }.keys
+        require(duplicateRefs.isEmpty()) { "duplicate provider ref: ${duplicateRefs.joinToString()}" }
         val ordered = discover(providers)
         val accepted = mutableListOf<Candidate>()
         val rejected = mutableListOf<CandidateRejection>()
@@ -271,28 +309,28 @@ object GeneratorDiscovery {
             when (outcome) {
                 is ProviderOutcome.Unsupported -> records += ProviderRecord(
                     provider = provider.ref,
-                    outcome = "unsupported",
+                    outcome = ProviderOutcomeRecord.UNSUPPORTED,
                     accepted = 0,
                     rejected = 0,
                     detail = boundReason(outcome.reason),
                 )
                 is ProviderOutcome.NotApplicable -> records += ProviderRecord(
                     provider = provider.ref,
-                    outcome = "not-applicable",
+                    outcome = ProviderOutcomeRecord.NOT_APPLICABLE,
                     accepted = 0,
                     rejected = 0,
                     detail = boundReason(outcome.reason),
                 )
                 is ProviderOutcome.Incompatible -> records += ProviderRecord(
                     provider = provider.ref,
-                    outcome = "incompatible",
+                    outcome = ProviderOutcomeRecord.INCOMPATIBLE,
                     accepted = 0,
                     rejected = 0,
                     detail = boundReason(outcome.reason),
                 )
                 is ProviderOutcome.Failed -> records += ProviderRecord(
                     provider = provider.ref,
-                    outcome = "failed",
+                    outcome = ProviderOutcomeRecord.FAILED,
                     accepted = 0,
                     rejected = 0,
                     detail = boundReason(outcome.error),
@@ -300,12 +338,14 @@ object GeneratorDiscovery {
                 is ProviderOutcome.Candidates -> {
                     val list = outcome.candidates
                     if (list.isEmpty()) {
-                        records += ProviderRecord(provider.ref, "failed", 0, 0, "empty candidate set")
+                        records += ProviderRecord(
+                            provider.ref, ProviderOutcomeRecord.FAILED, 0, 0, "empty candidate set",
+                        )
                         continue
                     }
                     if (list.size > MAX_PROVIDER_CANDIDATES) {
                         records += ProviderRecord(
-                            provider.ref, "failed", 0, 0,
+                            provider.ref, ProviderOutcomeRecord.FAILED, 0, 0,
                             "candidate set exceeds bound $MAX_PROVIDER_CANDIDATES",
                         )
                         continue
@@ -324,7 +364,10 @@ object GeneratorDiscovery {
                             )
                             localRejected++
                         }
-                        records += ProviderRecord(provider.ref, "failed", 0, localRejected, "non-sequential ordinals")
+                        records += ProviderRecord(
+                            provider.ref, ProviderOutcomeRecord.FAILED,
+                            0, localRejected, "non-sequential ordinals",
+                        )
                         continue
                     }
                     for (candidate in list) {
@@ -348,9 +391,15 @@ object GeneratorDiscovery {
                             localRejected++
                             continue
                         }
+                        // Deep-detach provider-owned nested containers BEFORE
+                        // any check or accept: later provider-side mutation of
+                        // photos/placements/diagnostics must not reach the
+                        // accepted set. Content-identical, so validity and
+                        // hashes are unaffected (no canonical byte change).
+                        val detached = detach(candidate.expression)
                         // Validity BEFORE duplicate tracking: an invalid-first
                         // record must never suppress a later valid candidate.
-                        val validity = GeneratorExpression.validateResolved(candidate.expression)
+                        val validity = GeneratorExpression.validateResolved(detached)
                         if (validity is GeneratorExpression.InputValidation.Invalid) {
                             rejected += CandidateRejection(
                                 candidate.candidateId,
@@ -361,18 +410,29 @@ object GeneratorDiscovery {
                             localRejected++
                             continue
                         }
-                        if (candidate.expression.grammarVersion < 0 ||
-                            candidate.expression.fontVersion < 0 ||
-                            candidate.expression.paletteVersion < 0
-                        ) {
+                        // Strictly positive dependency versions (orchestrator
+                        // ruling): zero and negative rejected here; unknown
+                        // positive versions pass through recorded. G1 itself
+                        // is unchanged (versions opaque at that layer).
+                        val negative = detached.grammarVersion < 0 ||
+                            detached.fontVersion < 0 ||
+                            detached.paletteVersion < 0
+                        val zero = detached.grammarVersion == 0 ||
+                            detached.fontVersion == 0 ||
+                            detached.paletteVersion == 0
+                        if (negative || zero) {
+                            val (cause, code) = if (negative) {
+                                "negative version" to RejectionCause.NEGATIVE_VERSION
+                            } else {
+                                "zero version" to RejectionCause.ZERO_VERSION
+                            }
                             rejected += CandidateRejection(
-                                candidate.candidateId, provider.ref,
-                                "negative version", RejectionCause.NEGATIVE_VERSION,
+                                candidate.candidateId, provider.ref, cause, code,
                             )
                             localRejected++
                             continue
                         }
-                        if (candidate.expression.input != request.input) {
+                        if (detached.input != request.input) {
                             rejected += CandidateRejection(
                                 candidate.candidateId, provider.ref,
                                 "input mismatch", RejectionCause.INPUT_MISMATCH,
@@ -388,7 +448,7 @@ object GeneratorDiscovery {
                             localRejected++
                             continue
                         }
-                        var stored = candidate.expression
+                        var stored = detached
                         if (stored.diagnostics.size > MAX_DIAGNOSTICS) {
                             diagnosticsDropped += stored.diagnostics.size - MAX_DIAGNOSTICS
                             stored = stored.copy(diagnostics = stored.diagnostics.take(MAX_DIAGNOSTICS))
@@ -404,13 +464,23 @@ object GeneratorDiscovery {
                     if (diagnosticsDropped > 0) details += "diagnostics truncated: dropped=$diagnosticsDropped"
                     records += ProviderRecord(
                         provider = provider.ref,
-                        outcome = "candidates",
+                        outcome = ProviderOutcomeRecord.CANDIDATES,
                         accepted = localAccepted,
                         rejected = localRejected,
                         detail = details.joinToString("; "),
                     )
                 }
             }
+        }
+        // Terminal outcome: non-empty accepted set wins; an empty set with
+        // at least one incompatible provider is typed Incompatible (never
+        // an empty success); otherwise Empty. Incompatible never suppressed
+        // later providers — enumeration above always continued.
+        val terminal = when {
+            accepted.isNotEmpty() -> GenerationTerminalOutcome.SUCCESS
+            records.any { it.outcome == ProviderOutcomeRecord.INCOMPATIBLE } ->
+                GenerationTerminalOutcome.INCOMPATIBLE
+            else -> GenerationTerminalOutcome.EMPTY
         }
         return GenerationResult(
             generationId = request.generationId,
@@ -420,8 +490,22 @@ object GeneratorDiscovery {
             rejected = rejected.toList(),
             providers = records.toList(),
             truncated = truncated,
+            terminal = terminal,
         )
     }
+
+    /**
+     * Deep-detaches provider-owned nested containers (input photos,
+     * placements, diagnostics) into fresh lists. Data classes themselves
+     * are immutable; only the containers are provider-reachable. Content
+     * is unchanged, so canonical bytes and hashes are unaffected.
+     */
+    private fun detach(expression: GeneratorExpression.ResolvedExpression) =
+        expression.copy(
+            input = expression.input.copy(photos = expression.input.photos.toList()),
+            placements = expression.placements.toList(),
+            diagnostics = expression.diagnostics.toList(),
+        )
 
     /** Bounds rejection ids (blank stays blank-flagged, long truncated). */
     private fun boundId(candidateId: String): String =

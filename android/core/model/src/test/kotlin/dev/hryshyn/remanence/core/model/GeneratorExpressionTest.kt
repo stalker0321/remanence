@@ -289,9 +289,9 @@ class GeneratorExpressionTest {
 
     @Test
     fun zeroDependencyVersionsPassThroughUnchanged() {
-        // G1 pins pass-through: unknown (incl. zero) grammar/font/palette
-        // versions are NOT a G1 concern; G2 rejects only negatives.
-        // No G1 byte/validation change is made or needed here.
+        // Layering pin: G1 passes zero/unknown versions through (versions
+        // opaque at this layer; no G1 byte/validation change). G2
+        // enumeration rejects zero and negative, accepts unknown positive.
         val zeroed = expression().copy(grammarVersion = 0, fontVersion = 0, paletteVersion = 0)
         assertIs<GeneratorExpression.InputValidation.Valid>(GeneratorExpression.validateResolved(zeroed))
     }

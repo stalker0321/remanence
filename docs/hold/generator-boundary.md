@@ -24,4 +24,17 @@ Android maps content URIs to bounded read handles and runs the generator via an 
 - Define note limits against current v1's 1000 UTF-8 bytes; do not adopt the generator's provisional 200–300 character guidance as a new backend rule.
 - Define provenance semantics and reader metadata before populating date/sender/share on the underlayer. Current photo viewer has no reliable such fields.
 
+## Enumeration policy (orchestrator ruling, product-authoritative)
+
+- Dependency versions (grammar/font/palette) are strictly positive at
+  enumeration: zero and negative versions are rejected; unknown positive
+  versions pass through recorded for renderers to interpret.
+- `Incompatible` never suppresses later independent providers. An empty
+  accepted set with at least one incompatible provider is a typed
+  `INCOMPATIBLE` terminal outcome, never an empty success.
+- Accepted nested containers (photos, placements, diagnostics) are
+  deep-detached from provider-owned lists before accept/freeze.
+- Source byte handles (`contentId`→bytes binding) are a mandatory G3
+  adapter concern and must never enter G1 canonical bytes/hash.
+
 This document is an interface handoff, not a claim of generator or new protocol support. Current Android continues to publish the existing real photo/note format.

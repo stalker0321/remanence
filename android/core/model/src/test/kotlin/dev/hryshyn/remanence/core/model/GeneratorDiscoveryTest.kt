@@ -219,7 +219,7 @@ class GeneratorDiscoveryTest {
     }
 
     @Test
-    fun providerMismatchRejected() {
+    fun lyingProviderIdentityIsStampedByDispatcher() {
         val liar = object : GeneratorDiscovery.GeneratorProvider {
             override val ref = GeneratorDiscovery.ProviderRef("liar", 1)
             override fun generate(request: GeneratorDiscovery.GenerationRequest) =
@@ -234,9 +234,171 @@ class GeneratorDiscoveryTest {
                 )
         }
         val result = GeneratorDiscovery.run(request(), listOf(liar))
-        assertTrue(result.accepted.isEmpty())
-        assertEquals("provider mismatch", result.rejected.single().cause)
+        assertEquals(1, result.accepted.size)
+        assertEquals(GeneratorDiscovery.ProviderRef("liar", 1), result.accepted.single().provider)
+        assertTrue(result.rejected.isEmpty())
     }
+
+    @Test
+    fun invalidFirstNeverSuppressesLaterValid() {
+        val evil = fakeExpression(input()).copy(
+            placements = listOf(
+                GeneratorExpression.Placement("p1", 300, 600, 120, 213, null, null),
+                GeneratorExpression.Placement("p2", 0, 0, 120, 213, null, null),
+                GeneratorExpression.Placement("p3", 0, 0, 120, 213, null, null),
+            ),
+        )
+        val first = object : GeneratorDiscovery.GeneratorProvider {
+            override val ref = GeneratorDiscovery.ProviderRef("first", 1)
+            override fun generate(request: GeneratorDiscovery.GenerationRequest) =
+                GeneratorDiscovery.ProviderOutcome.Candidates(
+                    listOf(GeneratorDiscovery.Candidate("shared", 0, ref, evil)),
+                )
+        }
+        val second = object : GeneratorDiscovery.GeneratorProvider {
+            override val ref = GeneratorDiscovery.ProviderRef("second", 1)
+            override fun generate(request: GeneratorDiscovery.GenerationRequest) =
+                GeneratorDiscovery.ProviderOutcome.Candidates(
+                    listOf(GeneratorDiscovery.Candidate("shared", 0, ref, fakeExpression(request.input))),
+                )
+        }
+        val result = GeneratorDiscovery.run(request(), listOf(first, second))
+        assertEquals(1, result.accepted.size)
+        assertEquals("shared", result.accepted.single().candidateId)
+        assertEquals(GeneratorDiscovery.ProviderRef("second", 1), result.accepted.single().provider)
+        assertEquals(1, result.rejected.size)
+        assertTrue(result.rejected.single().cause.startsWith("invalid expression: "))
+    }
+
+    @Test
+    fun cancellationRethrownNotConverted() {
+        val cancelling = object : GeneratorDiscovery.GeneratorProvider {
+            override val ref = GeneratorDiscovery.ProviderRef("cancel", 1)
+            override fun generate(request: GeneratorDiscovery.GenerationRequest): GeneratorDiscovery.ProviderOutcome =
+                throw java.util.concurrent.CancellationException("stop")
+        }
+        var threw = false
+        try {
+            GeneratorDiscovery.run(request(), listOf(cancelling))
+        } catch (e: java.util.concurrent.CancellationException) {
+            threw = true
+        }
+        assertTrue(threw, "provider CancellationException must propagate, not convert")
+
+        var ownThrew = false
+        try {
+            GeneratorDiscovery.run(request(), listOf(FakeDeterministic("s")), shouldCancel = { true })
+        } catch (e: GeneratorDiscovery.GenerationCancelledException) {
+            ownThrew = true
+        }
+        assertTrue(ownThrew, "observed cancellation must throw GenerationCancelledException")
+
+        var calls = 0
+        val counting = object : GeneratorDiscovery.GeneratorProvider {
+            override val ref = GeneratorDiscovery.ProviderRef("counting", 1)
+            override fun generate(request: GeneratorDiscovery.GenerationRequest) =
+                GeneratorDiscovery.ProviderOutcome.Unsupported("never").also { calls++ }
+        }
+        try {
+            GeneratorDiscovery.run(request(), listOf(counting), shouldCancel = { calls >= 1 })
+        } catch (e: GeneratorDiscovery.GenerationCancelledException) {
+            // expected: cancel observed between providers
+        }
+        assertEquals(1, calls)
+    }
+
+    @Test
+    fun oversizedInputsRejectedOrBounded() {
+        assertTrue(GeneratorDiscovery.validateRequest(request(id = "x".repeat(257))).isNotEmpty())
+        assertTrue(
+            GeneratorDiscovery.validateRequest(request(max = GeneratorDiscovery.MAX_CANDIDATES + 1)).isNotEmpty(),
+        )
+        val badProvider = object : GeneratorDiscovery.GeneratorProvider {
+            override val ref = GeneratorDiscovery.ProviderRef("x".repeat(300), 1)
+            override fun generate(request: GeneratorDiscovery.GenerationRequest) =
+                GeneratorDiscovery.ProviderOutcome.Unsupported("no")
+        }
+        var refThrew = false
+        try {
+            GeneratorDiscovery.run(request(), listOf(badProvider))
+        } catch (e: IllegalArgumentException) {
+            refThrew = true
+        }
+        assertTrue(refThrew, "oversized providerId must fail fast")
+
+        val longId = object : GeneratorDiscovery.GeneratorProvider {
+            override val ref = GeneratorDiscovery.ProviderRef("long", 1)
+            override fun generate(request: GeneratorDiscovery.GenerationRequest) =
+                GeneratorDiscovery.ProviderOutcome.Candidates(
+                    listOf(
+                        GeneratorDiscovery.Candidate(
+                            "y".repeat(300), 0, ref, fakeExpression(request.input),
+                        ),
+                    ),
+                )
+        }
+        val longResult = GeneratorDiscovery.run(request(), listOf(longId))
+        assertTrue(longResult.accepted.isEmpty())
+        assertEquals("bad id", longResult.rejected.single().cause)
+
+        val loud = object : GeneratorDiscovery.GeneratorProvider {
+            override val ref = GeneratorDiscovery.ProviderRef("loud", 1)
+            override fun generate(request: GeneratorDiscovery.GenerationRequest) =
+                GeneratorDiscovery.ProviderOutcome.Unsupported("r".repeat(2500))
+        }
+        val loudResult = GeneratorDiscovery.run(request(), listOf(loud))
+        val detail = loudResult.providers.single().detail
+        assertTrue(detail.endsWith("…[truncated]"))
+        assertEquals(GeneratorDiscovery.MAX_REASON_CHARS + "…[truncated]".length, detail.length)
+    }
+
+    @Test
+    fun fullResultDeterministicAcrossRegistrationOrders() {
+        val throwing = object : GeneratorDiscovery.GeneratorProvider {
+            override val ref = GeneratorDiscovery.ProviderRef("boom", 1)
+            override fun generate(request: GeneratorDiscovery.GenerationRequest): GeneratorDiscovery.ProviderOutcome =
+                throw IllegalStateException("fixed failure")
+        }
+        val unsupported = object : GeneratorDiscovery.GeneratorProvider {
+            override val ref = GeneratorDiscovery.ProviderRef("nope", 1)
+            override fun generate(request: GeneratorDiscovery.GenerationRequest) =
+                GeneratorDiscovery.ProviderOutcome.Unsupported("music input")
+        }
+        val good = FakeDeterministic("good", count = 1)
+        val orders = listOf(
+            listOf(throwing, unsupported, good),
+            listOf(good, throwing, unsupported),
+            listOf(unsupported, good, throwing),
+        )
+        val results = orders.map { GeneratorDiscovery.run(request(), it) }
+        assertEquals(results[0], results[1])
+        assertEquals(results[0], results[2])
+    }
+
+    @Test
+    fun resultSnapshotsAreDetachedCopies() {
+        val dup = object : GeneratorDiscovery.GeneratorProvider {
+            override val ref = GeneratorDiscovery.ProviderRef("dup", 1)
+            override fun generate(request: GeneratorDiscovery.GenerationRequest) =
+                GeneratorDiscovery.ProviderOutcome.Candidates(
+                    listOf(
+                        GeneratorDiscovery.Candidate("d", 0, ref, fakeExpression(request.input)),
+                        GeneratorDiscovery.Candidate("d", 1, ref, fakeExpression(request.input)),
+                    ),
+                )
+        }
+        val providers = listOf(dup, FakeDeterministic("s", count = 1))
+        val first = GeneratorDiscovery.run(request(), providers)
+        val second = GeneratorDiscovery.run(request(), providers)
+        assertEquals(first, second)
+        assertEquals(2, first.accepted.size)
+        assertEquals(1, first.rejected.size)
+        assertTrue(!sameInstance(first.accepted, second.accepted))
+        assertTrue(!sameInstance(first.rejected, second.rejected))
+        assertTrue(!sameInstance(first.providers, second.providers))
+    }
+
+    private fun sameInstance(a: Any, b: Any): Boolean = a === b
 
     @Test
     fun seedChangesProvenanceButNotFakeShape() {

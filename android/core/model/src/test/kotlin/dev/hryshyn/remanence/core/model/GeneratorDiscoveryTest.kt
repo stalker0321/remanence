@@ -10,7 +10,6 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /**
@@ -637,9 +636,9 @@ class GeneratorDiscoveryTest {
                         GeneratorDiscovery.Candidate(
                             "x0", 0, ref,
                             fakeExpression(request.input).copy(
-                                grammarVersion = Int.MAX_VALUE,
-                                fontVersion = Int.MAX_VALUE,
-                                paletteVersion = Int.MAX_VALUE,
+                                grammarVersion = 1_000_003,
+                                fontVersion = 2_000_033,
+                                paletteVersion = 3_000_037,
                             ),
                         ),
                     ),
@@ -647,7 +646,10 @@ class GeneratorDiscoveryTest {
         }
         val result = GeneratorDiscovery.run(request(), listOf(exotic))
         assertEquals(1, result.accepted.size)
-        assertEquals(Int.MAX_VALUE, result.accepted.single().expression.grammarVersion)
+        val accepted = result.accepted.single().expression
+        assertEquals(1_000_003, accepted.grammarVersion)
+        assertEquals(2_000_033, accepted.fontVersion)
+        assertEquals(3_000_037, accepted.paletteVersion)
         assertEquals(
             GeneratorDiscovery.GenerationTerminalOutcome.SUCCESS,
             result.terminal,
@@ -700,13 +702,49 @@ class GeneratorDiscoveryTest {
     }
 
     @Test
-    fun typedOutcomesNeedNoStringParsing() = runTest {
-        val good = FakeDeterministic("good", count = 1)
-        val result = GeneratorDiscovery.run(request(), listOf(good))
-        val record = result.providers.single()
-        assertIs<GeneratorDiscovery.ProviderOutcomeRecord>(record.outcome)
-        assertEquals(GeneratorDiscovery.ProviderOutcomeRecord.CANDIDATES, record.outcome)
-        assertIs<GeneratorDiscovery.GenerationTerminalOutcome>(result.terminal)
+    fun typedOutcomesDescribeActualRunBehavior() = runTest {
+        // Replaces the compile-time-tautological assertIs check: every
+        // outcome enum value is produced by a real run and asserted on
+        // runtime behavior, so routers never need string parsing.
+        val skip = object : GeneratorDiscovery.GeneratorProvider {
+            override val ref = GeneratorDiscovery.ProviderRef("aaa-skip", 1)
+            override suspend fun generate(request: GeneratorDiscovery.GenerationRequest) =
+                GeneratorDiscovery.ProviderOutcome.NotApplicable("elsewhere")
+        }
+        val halt = object : GeneratorDiscovery.GeneratorProvider {
+            override val ref = GeneratorDiscovery.ProviderRef("mmm-halt", 1)
+            override suspend fun generate(request: GeneratorDiscovery.GenerationRequest) =
+                GeneratorDiscovery.ProviderOutcome.Incompatible("excluded")
+        }
+        val good = FakeDeterministic("zzz-good", count = 1)
+        val mixed = GeneratorDiscovery.run(request(), listOf(skip, halt, good))
+        assertEquals(1, mixed.accepted.size)
+        assertEquals("zzz-good#gen-1#0", mixed.accepted.single().candidateId)
+        val byId = mixed.providers.associateBy { it.provider.providerId }
+        assertEquals(
+            GeneratorDiscovery.ProviderOutcomeRecord.NOT_APPLICABLE,
+            byId.getValue("aaa-skip").outcome,
+        )
+        assertEquals(
+            GeneratorDiscovery.ProviderOutcomeRecord.INCOMPATIBLE,
+            byId.getValue("mmm-halt").outcome,
+        )
+        assertEquals(
+            GeneratorDiscovery.ProviderOutcomeRecord.CANDIDATES,
+            byId.getValue("zzz-good").outcome,
+        )
+        assertEquals(GeneratorDiscovery.GenerationTerminalOutcome.SUCCESS, mixed.terminal)
+
+        val stopped = GeneratorDiscovery.run(request(), listOf(halt))
+        assertTrue(stopped.accepted.isEmpty())
+        assertEquals(
+            GeneratorDiscovery.ProviderOutcomeRecord.INCOMPATIBLE,
+            stopped.providers.single().outcome,
+        )
+        assertEquals(
+            GeneratorDiscovery.GenerationTerminalOutcome.INCOMPATIBLE,
+            stopped.terminal,
+        )
     }
 
     @Test

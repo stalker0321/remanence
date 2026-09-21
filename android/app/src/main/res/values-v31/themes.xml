@@ -1,5 +1,9 @@
 <resources>
-    <style name="Theme.Remanence" parent="android:Theme.Material.Light.NoActionBar">
+    <!-- AppCompat parent is mandatory on every API tier: MainActivity is an
+         AppCompatActivity (per-app locale backport), whose delegate enforces
+         it in onPostCreate even for Compose-only content. All window/splash
+         items are preserved verbatim. -->
+    <style name="Theme.Remanence" parent="Theme.AppCompat.Light.NoActionBar">
         <item name="android:windowBackground">@color/hold_paper</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowLightNavigationBar">true</item>

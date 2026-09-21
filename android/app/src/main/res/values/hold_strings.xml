@@ -90,4 +90,9 @@
     <string name="hold_chooser_claim">sender-provided name: %1$s (not verified)</string>
     <string name="hold_chooser_rescan">scan again instead</string>
     <string name="hold_chooser_unknown_date">unknown date</string>
+    <string name="hold_language_system">System</string>
+    <string name="hold_language_english">English</string>
+    <string name="hold_language_russian">Русский</string>
+    <string name="hold_language_ukrainian">Українська</string>
+    <string name="hold_language_label">language</string>
 </resources>

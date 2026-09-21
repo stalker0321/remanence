@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Remanence" parent="android:Theme.Material.Light.NoActionBar">
+    <!-- AppCompat parent is mandatory: MainActivity is an AppCompatActivity
+         (per-app locale backport), whose delegate enforces it in
+         onPostCreate even for Compose-only content. Window items are
+         unchanged, so the launch look is identical and Compose draws all UI
+         through HoldTheme regardless. -->
+    <style name="Theme.Remanence" parent="Theme.AppCompat.Light.NoActionBar">
         <item name="android:windowBackground">@color/hold_paper</item>
         <item name="android:colorAccent">@color/hold_ink</item>
         <item name="android:windowLightStatusBar">true</item>

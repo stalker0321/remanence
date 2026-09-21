@@ -90,4 +90,9 @@
     <string name="hold_chooser_claim">ім’я від відправника: %1$s (не підтверджено)</string>
     <string name="hold_chooser_rescan">краще сканувати знову</string>
     <string name="hold_chooser_unknown_date">дата невідома</string>
+    <string name="hold_language_system">Система</string>
+    <string name="hold_language_english">English</string>
+    <string name="hold_language_russian">Русский</string>
+    <string name="hold_language_ukrainian">Українська</string>
+    <string name="hold_language_label">мова</string>
 </resources>

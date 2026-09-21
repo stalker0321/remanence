@@ -59,8 +59,10 @@ class GeneratorSourceBindingTest {
         private val height: Int,
     ) : GeneratorSourceBinding.PhotoDecoderPort {
         var calls = 0
+        val seen = mutableListOf<ByteArray>()
         override suspend fun decodeUpright(jpeg: ByteArray): GeneratorSourceBinding.UprightPhoto {
             calls++
+            seen += jpeg
             return GeneratorSourceBinding.UprightPhoto(width, height)
         }
     }
@@ -72,10 +74,11 @@ class GeneratorSourceBindingTest {
         private val hang: Boolean = false,
         private val fail: Boolean = false,
     ) : PhotoNormalizerPort {
+        var lastOutput: ByteArray? = null
         override suspend fun normalize(inputJpeg: ByteArray): NormalizedPhotoDto {
             if (hang) delay(60_000)
             if (fail) throw IllegalStateException("ladder exhausted")
-            return NormalizedPhotoDto(bytes, width, height)
+            return NormalizedPhotoDto(bytes, width, height).also { lastOutput = bytes }
         }
     }
 
@@ -143,21 +146,28 @@ class GeneratorSourceBindingTest {
     }
 
     @Test
-    fun swappedSourcesBothRejected() = runTest {
+    fun slotMismatchRejectedOthersBind() = runTest {
         val bytesA = byteArrayOf(10)
         val bytesB = byteArrayOf(20)
         val sourceA = FakePhotoSource(bytesA)
         val sourceB = FakePhotoSource(bytesB)
+        val sourceC = FakePhotoSource(bytesA)
         val results = binder().bindAll(
             listOf(
-                sourceA to expected(bytesB, id = "p1", ordinal = 0),
-                sourceB to expected(bytesA, id = "p2", ordinal = 1),
+                sourceA to expected(bytesA, id = "p0", ordinal = 0),
+                sourceB to expected(bytesA, id = "p1", ordinal = 1),
+                sourceC to expected(bytesA, id = "p2", ordinal = 2),
             ),
         )
-        assertEquals(2, results.size)
-        assertTrue(results.all { it is GeneratorSourceBinding.BindResult.Rejected })
+        // Slot 1 receives bytesB against a bytesA hash: rejected in place,
+        // neighbors bind, order preserved, every source closed once.
+        assertEquals(3, results.size)
+        assertTrue(results[0] is GeneratorSourceBinding.BindResult.Bound)
+        assertTrue(results[1] is GeneratorSourceBinding.BindResult.Rejected)
+        assertTrue(results[2] is GeneratorSourceBinding.BindResult.Bound)
         assertEquals(1, sourceA.closes.get())
         assertEquals(1, sourceB.closes.get())
+        assertEquals(1, sourceC.closes.get())
     }
 
     @Test
@@ -273,5 +283,173 @@ class GeneratorSourceBindingTest {
         assertEquals(120, value.normalizedWidthPx)
         assertEquals(213, value.normalizedHeightPx)
         assertEquals(64, value.normalizedBytes.size)
+    }
+
+    @Test
+    fun normalizedBytesCopiedOnRetain() = runTest {
+        val bytes = byteArrayOf(21, 22)
+        val source = FakePhotoSource(bytes)
+        val normalizer = FakeNormalizer()
+        val bound = binder(normalizer = normalizer).bindOne(source, expected(bytes))
+        assertTrue(bound is GeneratorSourceBinding.BindResult.Bound)
+        val retained = (bound as GeneratorSourceBinding.BindResult.Bound).bound.normalizedBytes
+        normalizer.lastOutput!!.fill(0)
+        assertTrue(retained.any { it != 0.toByte() })
+    }
+
+    @Test
+    fun derivedIdentityDiffersAcrossBytesAndVersions() = runTest {
+        val bytes = byteArrayOf(31, 32)
+        val first = binder(normalizer = FakeNormalizer(bytes = ByteArray(32) { 1 })).bindOne(
+            FakePhotoSource(bytes), expected(bytes),
+        )
+        val second = binder(
+            normalizer = FakeNormalizer(bytes = ByteArray(32) { 2 }),
+            decoder = FakeDecoder(100, 200),
+        ).bindOne(FakePhotoSource(bytes), expected(bytes))
+        val third = GeneratorSourceBinding.SourceBinder(
+            FakeNormalizer(), FakeDecoder(100, 200), normalizerVersion = 2, codecVersion = 3,
+        ).bindOne(FakePhotoSource(bytes), expected(bytes))
+        assertTrue(first is GeneratorSourceBinding.BindResult.Bound)
+        assertTrue(second is GeneratorSourceBinding.BindResult.Bound)
+        assertTrue(third is GeneratorSourceBinding.BindResult.Bound)
+        val a = (first as GeneratorSourceBinding.BindResult.Bound).bound
+        val b = (second as GeneratorSourceBinding.BindResult.Bound).bound
+        val c = (third as GeneratorSourceBinding.BindResult.Bound).bound
+        assertTrue(a.derived != b.derived)
+        assertTrue(a.derived != c.derived)
+        // G1 identity is untouched by derived differences.
+        assertEquals(binder().toPhotoRef(a), binder().toPhotoRef(b))
+        assertEquals(binder().toPhotoRef(a), binder().toPhotoRef(c))
+        val inputA = GeneratorExpression.GeneratorInput("o", 1L, listOf(binder().toPhotoRef(a)), null, null)
+        val inputC = GeneratorExpression.GeneratorInput("o", 1L, listOf(binder().toPhotoRef(c)), null, null)
+        assertEquals(
+            GeneratorExpression.canonicalHash(inputA),
+            GeneratorExpression.canonicalHash(inputC),
+        )
+    }
+
+    @Test
+    fun binderVersionsStrictlyPositive() {
+        try {
+            GeneratorSourceBinding.SourceBinder(FakeNormalizer(), FakeDecoder(1, 1), normalizerVersion = 0)
+            fail("zero normalizer version accepted")
+        } catch (e: IllegalArgumentException) {
+        }
+        try {
+            GeneratorSourceBinding.SourceBinder(FakeNormalizer(), FakeDecoder(1, 1), codecVersion = 0)
+            fail("zero codec version accepted")
+        } catch (e: IllegalArgumentException) {
+        }
+    }
+
+    @Test
+    fun contractVersionGatedBeforeOpen() = runTest {
+        val source = FakePhotoSource(byteArrayOf(1))
+        try {
+            binder().bindOne(source, expected(byteArrayOf(1)), contractVersion = 0)
+            fail("contract 0 accepted")
+        } catch (e: IllegalArgumentException) {
+        }
+        assertEquals(0, source.opens.get())
+        try {
+            binder().bindAll(
+                listOf(source to expected(byteArrayOf(1), id = "p0", ordinal = 0)),
+                contractVersion = 2,
+            )
+            fail("contract 2 accepted")
+        } catch (e: IllegalArgumentException) {
+        }
+        assertEquals(0, source.opens.get())
+    }
+
+    @Test
+    fun expectedSetValidatedBeforeAnyOpen() = runTest {
+        val good = { index: Int ->
+            val bytes = byteArrayOf(index.toByte())
+            FakePhotoSource(bytes) to expected(bytes, id = "p$index", ordinal = index)
+        }
+        // Too few / too many slots.
+        for (pairs in listOf(listOf(good(0), good(1)), (0 until 6).map { good(it) })) {
+            val sources = pairs.map { it.first as FakePhotoSource }
+            val results = binder().bindAll(pairs)
+            assertTrue(results.all { it is GeneratorSourceBinding.BindResult.Rejected })
+            assertTrue(sources.all { (it as FakePhotoSource).opens.get() == 0 })
+        }
+        // Shuffled ordinals, duplicate ids, bad hash, zero dims.
+        val bytes = byteArrayOf(9)
+        val badSets = listOf(
+            listOf(
+                FakePhotoSource(bytes) to expected(bytes, id = "p0", ordinal = 1),
+                FakePhotoSource(bytes) to expected(bytes, id = "p1", ordinal = 0),
+                FakePhotoSource(bytes) to expected(bytes, id = "p2", ordinal = 2),
+            ),
+            listOf(
+                FakePhotoSource(bytes) to expected(bytes, id = "p0", ordinal = 0),
+                FakePhotoSource(bytes) to expected(bytes, id = "p0", ordinal = 1),
+                FakePhotoSource(bytes) to expected(bytes, id = "p2", ordinal = 2),
+            ),
+            listOf(
+                FakePhotoSource(bytes) to expected(bytes, id = "p0", ordinal = 0).copy(contentHash = "nope"),
+                FakePhotoSource(bytes) to expected(bytes, id = "p1", ordinal = 1),
+                FakePhotoSource(bytes) to expected(bytes, id = "p2", ordinal = 2),
+            ),
+            listOf(
+                FakePhotoSource(bytes) to expected(bytes, id = "p0", ordinal = 0, w = 0, h = 200),
+                FakePhotoSource(bytes) to expected(bytes, id = "p1", ordinal = 1),
+                FakePhotoSource(bytes) to expected(bytes, id = "p2", ordinal = 2),
+            ),
+        )
+        for (pairs in badSets) {
+            val sources = pairs.map { it.first as FakePhotoSource }
+            val results = binder().bindAll(pairs)
+            assertTrue(results.all { it is GeneratorSourceBinding.BindResult.Rejected })
+            assertTrue(sources.all { (it as FakePhotoSource).opens.get() == 0 })
+        }
+        // Opaque punctuation in ids is accepted (opacity, not charset).
+        val punct = listOf("photo:p1", "p1.x-2_y", "id 3")
+        val punctPairs = punct.mapIndexed { index, id ->
+            val data = byteArrayOf((50 + index).toByte())
+            FakePhotoSource(data) to expected(data, id = id, ordinal = index)
+        }
+        val punctResults = binder().bindAll(punctPairs)
+        assertEquals(3, punctResults.count { it is GeneratorSourceBinding.BindResult.Bound })
+        // ...but the source's own markers never become identity.
+        val sneaky = FakePhotoSource(
+            byteArrayOf(70),
+            uriMarker = "content://media/sneaky",
+            senderMarker = "@intruder",
+        )
+        val sneakyResult = binder().bindAll(
+            listOf(
+                FakePhotoSource(byteArrayOf(71)) to expected(byteArrayOf(71), id = "p0", ordinal = 0),
+                sneaky to expected(byteArrayOf(70), id = "p1", ordinal = 1),
+                FakePhotoSource(byteArrayOf(72)) to expected(byteArrayOf(72), id = "p2", ordinal = 2),
+            ),
+        )
+        assertEquals(3, sneakyResult.count { it is GeneratorSourceBinding.BindResult.Bound })
+        val sneakyIds = sneakyResult.map {
+            assertTrue(it is GeneratorSourceBinding.BindResult.Bound)
+            (it as GeneratorSourceBinding.BindResult.Bound).bound.contentId
+        }
+        assertEquals(listOf("p0", "p1", "p2"), sneakyIds)
+    }
+
+    @Test
+    fun ownedBufferWipedAfterBindAndOnReject() = runTest {
+        val decoder = FakeDecoder(100, 200)
+        val bytes = byteArrayOf(81, 82)
+        val source = FakePhotoSource(bytes)
+        val bound = binder(decoder = decoder).bindOne(source, expected(bytes))
+        assertTrue(bound is GeneratorSourceBinding.BindResult.Bound)
+        assertEquals(1, decoder.seen.size)
+        assertTrue(decoder.seen.single().all { it == 0.toByte() })
+        val badDecoder = FakeDecoder(100, 200)
+        val bad = binder(decoder = badDecoder).bindOne(
+            FakePhotoSource(bytes), expected(bytes, w = 999, h = 999),
+        )
+        assertTrue(bad is GeneratorSourceBinding.BindResult.Rejected)
+        assertEquals(1, badDecoder.seen.size)
+        assertTrue(badDecoder.seen.single().all { it == 0.toByte() })
     }
 }

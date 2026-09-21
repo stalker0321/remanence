@@ -19,28 +19,29 @@ class GeneratorStagingTest {
         const val OWNER_B = "0198f0a0-0000-7000-8000-00000000b001"
     }
 
-    private class FakeStore(
+    private open class FakeStore(
         var throwOnPut: Boolean = false,
         var throwOnGet: Boolean = false,
         var throwOnDeleteKey: String? = null,
     ) : GeneratorStaging.BlobStore {
+        private val guard = Any()
         val data = mutableMapOf<String, ByteArray>()
         val deleted = mutableListOf<String>()
-        override fun put(key: String, bytes: ByteArray) {
+        override fun put(key: String, bytes: ByteArray) = synchronized(guard) {
             if (throwOnPut) throw IllegalStateException("store down")
             data[key] = bytes.copyOf()
         }
-        override fun get(key: String): ByteArray? {
+        override fun get(key: String): ByteArray? = synchronized(guard) {
             if (throwOnGet) throw IllegalStateException("store down")
-            return data[key]?.copyOf()
+            data[key]?.copyOf()
         }
-        override fun delete(key: String): Boolean {
+        override fun delete(key: String): Boolean = synchronized(guard) {
             if (key == throwOnDeleteKey) throw IllegalStateException("delete failed")
             deleted += key
-            return data.remove(key) != null
+            data.remove(key) != null
         }
-        override fun keys(): Set<String> = data.keys.toSet()
-        fun tamper(key: String, bytes: ByteArray) {
+        override fun keys(): Set<String> = synchronized(guard) { data.keys.toSet() }
+        fun tamper(key: String, bytes: ByteArray) = synchronized(guard) {
             data[key] = bytes.copyOf()
         }
     }
@@ -544,45 +545,136 @@ class GeneratorStagingTest {
     }
 
     @Test
-    fun concurrentStageRevokeInvariant() {
+    fun concurrentStageRevokeHasNoOrphanOrPostRevokeRead() {
         setup()
-        val session = openOk()
-        val errors = java.util.Collections.synchronizedList(mutableListOf<Throwable>())
-        val revoker = Thread {
-            try {
-                repeat(20) {
-                    manager.revoke(session.sessionId, session.ownerId, session.epoch, session.contentRevision)
+        val barrierStore = object : FakeStore() {
+            val entered = java.util.concurrent.CountDownLatch(1)
+            val release = java.util.concurrent.CountDownLatch(1)
+            override fun put(key: String, bytes: ByteArray) {
+                entered.countDown()
+                if (!release.await(15, java.util.concurrent.TimeUnit.SECONDS)) {
+                    throw IllegalStateException("barrier timeout")
                 }
+                super.put(key, bytes)
+            }
+        }
+        val gated = GeneratorStaging.Manager(barrierStore) { now }
+        val opened = gated.openFor(input(), null)
+        assertIs<GeneratorStaging.OpenResult.Opened>(opened)
+        val session = opened.session
+        val errors = java.util.Collections.synchronizedList(mutableListOf<Throwable>())
+        val stager = Thread {
+            try {
+                gated.stagePhoto(
+                    session.sessionId, session.ownerId, session.epoch,
+                    session.contentRevision, 0, 100, 200, bytes(1),
+                )
             } catch (e: Throwable) {
                 errors += e
             }
         }
-        val stagers = (0 until 4).map {
-            Thread {
-                try {
-                    repeat(20) {
-                        manager.stagePhoto(
-                            session.sessionId, session.ownerId, session.epoch,
-                            session.contentRevision, 0, 100, 200, bytes(1),
-                        )
-                    }
-                } catch (e: Throwable) {
-                    errors += e
-                }
+        stager.start()
+        assertTrue(
+            barrierStore.entered.await(10, java.util.concurrent.TimeUnit.SECONDS),
+            "stage must enter store.put() while revoke is pending",
+        )
+        // Revoke in a second thread: it must end up BLOCKED on the manager
+        // lock while the stage is provably in-flight inside put().
+        val revoked = java.util.concurrent.atomic.AtomicInteger(-1)
+        val revoker = Thread {
+            try {
+                revoked.set(
+                    gated.revoke(session.sessionId, session.ownerId, session.epoch, session.contentRevision),
+                )
+            } catch (e: Throwable) {
+                errors += e
             }
         }
-        (stagers + revoker).forEach { it.start() }
-        (stagers + revoker).forEach { it.join(10_000) }
+        revoker.start()
+        var waitedMs = 0
+        while (revoker.state != Thread.State.BLOCKED && waitedMs < 5_000) {
+            Thread.sleep(10)
+            waitedMs += 10
+        }
+        assertEquals(
+            Thread.State.BLOCKED, revoker.state,
+            "revoker must be pending on the lock while stage is in-flight",
+        )
+        barrierStore.release.countDown()
+        stager.join(10_000)
+        revoker.join(10_000)
+        assertTrue(!stager.isAlive, "stage thread must complete, never hang silently")
+        assertTrue(!revoker.isAlive, "revoker thread must complete, never hang silently")
+        assertEquals(1, revoked.get())
         assertTrue(errors.isEmpty(), "no throwable may escape sealed taxonomy: $errors")
-        // Deterministic end state: the single session is always evicted
-        // (stages cannot recreate it), every written key was deleted by
-        // some revoke, and post-revoke reads are rejected.
-        assertTrue(store.keys().isEmpty(), store.keys().toString())
+        assertTrue(barrierStore.keys().isEmpty(), barrierStore.keys().toString())
         val probe = GeneratorStaging.Lease(
-            "${session.sessionId}#0", session.sessionId, "p1", 0, sha(bytes(0)), 64L,
+            "${session.sessionId}#0", session.sessionId, "p1", 0, sha(bytes(1)), 64L,
+        )
+        assertIs<GeneratorStaging.LeaseUse.Rejected>(
+            gated.use(probe, session.ownerId, session.epoch, session.contentRevision),
+        )
+    }
+
+    @Test
+    fun emptyOriginalBytesRejected() {
+        setup()
+        val emptyHash = sha(ByteArray(0))
+        val tagged = input(b1 = ByteArray(0))
+        assertEquals(emptyHash, tagged.photos[0].contentHash)
+        val session = openOk(tagged)
+        val rejected = manager.stagePhoto(
+            session.sessionId, session.ownerId, session.epoch, session.contentRevision, 0, 100, 200, ByteArray(0),
+        )
+        assertIs<GeneratorStaging.StageResult.Rejected>(rejected)
+        assertTrue(store.keys().none { it == "${session.sessionId}/0" })
+        // No phantom staged entry: the slot still reads as unstaged.
+        val probe = GeneratorStaging.Lease(
+            "${session.sessionId}#0", session.sessionId, "p1", 0, emptyHash, 0L,
         )
         assertIs<GeneratorStaging.LeaseUse.Rejected>(
             manager.use(probe, session.ownerId, session.epoch, session.contentRevision),
         )
+    }
+
+    @Test
+    fun exactRawSourceLimitAcceptedAndOneByteOverRejected() {
+        setup()
+        val exact = ByteArray(GeneratorStaging.RAW_SOURCE_MAX_BYTES)
+        val tagged = input(b1 = exact)
+        val session = openOk(tagged)
+        val staged = manager.stagePhoto(
+            session.sessionId, session.ownerId, session.epoch, session.contentRevision, 0, 100, 200, exact,
+        )
+        assertIs<GeneratorStaging.StageResult.Staged>(staged)
+        assertEquals(GeneratorStaging.RAW_SOURCE_MAX_BYTES.toLong(), staged.lease.byteCount)
+        val used = manager.use(staged.lease, session.ownerId, session.epoch, session.contentRevision)
+        assertIs<GeneratorStaging.LeaseUse.Bytes>(used)
+        assertEquals(sha(exact), sha(used.bytes))
+        val over = ByteArray(GeneratorStaging.RAW_SOURCE_MAX_BYTES + 1)
+        val rejected = manager.stagePhoto(
+            session.sessionId, session.ownerId, session.epoch, session.contentRevision, 1, 100, 200, over,
+        )
+        assertIs<GeneratorStaging.StageResult.Rejected>(rejected)
+        assertTrue(store.keys().none { it == "${session.sessionId}/1" })
+    }
+
+    @Test
+    fun clockRollbackDoesNotExpireSession() {
+        setup()
+        val session = openOk(ttl = 100L)
+        val leases = stageAll(session)
+        now = 1_000L + 100L
+        // Exact boundary still live, and the use renews lastUse to 1100.
+        assertIs<GeneratorStaging.LeaseUse.Bytes>(
+            manager.use(leases[0], session.ownerId, session.epoch, session.contentRevision),
+        )
+        // Clock jumps backward below lastUse: fail-closed, nothing expires.
+        now = 500L
+        assertEquals(0, manager.sweep(now))
+        assertIs<GeneratorStaging.LeaseUse.Bytes>(
+            manager.use(leases[0], session.ownerId, session.epoch, session.contentRevision),
+        )
+        assertTrue(store.keys().size == 3)
     }
 }

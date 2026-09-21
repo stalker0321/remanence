@@ -2,6 +2,7 @@ package dev.hryshyn.remanence.ui.scan
 
 import dev.hryshyn.remanence.core.data.db.IncomingCapsuleDao
 import dev.hryshyn.remanence.core.data.db.IncomingSenderIndexCandidate
+import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.IndexedCandidate
 import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprint
@@ -76,14 +77,38 @@ internal data class ScanCandidateIndex(
 }
 
 /**
+ * Hard bound on the dual-plane self-proof batch, tied to the protocol
+ * incoming page max: the server never pages more than this per sync, so a
+ * larger local dual set is pathological and fails closed instead of proving
+ * a subset. Every DAO page on the scan proof path uses this same bound, so
+ * no unbounded ID set is ever loaded for proof work.
+ */
+internal const val MAX_SELF_PROOF_DUAL_IDS = ProtocolV1Limits.INCOMING_PAGE_MAX
+
+/**
+ * Bounds the self-proof input to [MAX_SELF_PROOF_DUAL_IDS]. Overflow yields
+ * an empty proof (fail closed) rather than an arbitrary subset, which also
+ * guarantees the batch DAO below is never called with an oversized list.
+ */
+internal fun boundDualProofIds(incomingClaimed: List<java.util.UUID>): List<java.util.UUID> =
+    if (incomingClaimed.size > MAX_SELF_PROOF_DUAL_IDS) emptyList() else incomingClaimed
+
+/**
  * Binds storage origin only from explicit owner-scoped membership facts. A
- * dual incoming/outbox identity is intentionally ambiguous and is rejected;
- * recognition preference never supplies a missing source.
+ * dual incoming/outbox identity is intentionally ambiguous and is rejected,
+ * EXCEPT for provably self-routed capsules ([selfRoutedCapsuleIds]) whose
+ * sender == recipient == current owner and whose incoming fingerprint was
+ * actually read: those prefer INCOMING so a self-send keeps opening after
+ * sync through incoming preparation, first-open admission, and tombstone
+ * handling. Recognition preference never supplies a missing source, and an
+ * incoming read failure must never be masked (callers pass only IDs with a
+ * valid incoming candidate).
  */
 internal fun resolvePresentationSources(
     candidateIds: Iterable<java.util.UUID>,
     incomingSources: Map<java.util.UUID, CapsulePresentationSource>,
     roomSources: Map<java.util.UUID, CapsulePresentationSource>,
+    selfRoutedCapsuleIds: Set<java.util.UUID> = emptySet(),
 ): Map<java.util.UUID, CapsulePresentationSource> {
     val resolved = LinkedHashMap<java.util.UUID, CapsulePresentationSource>()
     for (candidateId in candidateIds) {
@@ -91,11 +116,37 @@ internal fun resolvePresentationSources(
         val room = roomSources[candidateId]
         // Membership is a provenance fact, not an enum value supplied by the
         // caller. Two non-null planes are ambiguous even if their labels
-        // happen to be equal, so never publish either binding.
-        if (incoming != null && room != null) continue
+        // happen to be equal, so never publish either binding - unless this
+        // exact capsule was proven self-routed by the caller, in which case
+        // the recipient plane wins and the outbox copy stays out of the
+        // presentation path. Crypto acceptance still runs downstream.
+        if (incoming != null && room != null) {
+            if (candidateId in selfRoutedCapsuleIds && incoming == CapsulePresentationSource.INCOMING) {
+                resolved[candidateId] = CapsulePresentationSource.INCOMING
+            }
+            continue
+        }
         (incoming ?: room)?.let { resolved[candidateId] = it }
     }
     return resolved
+}
+
+/**
+ * Debug-only, redacted accounting for dual-plane presentation binding.
+ * Counts only - capsule IDs, users, handles, and key material never enter
+ * any log line, in any build type.
+ */
+internal object ScanPresentationSourceDiagnostics {
+    private const val TAG = "RemanenceScanSources"
+
+    fun reportDualPlane(dualTotal: Int, selfResolved: Int) {
+        if (!dev.hryshyn.remanence.BuildConfig.DEBUG) return
+        android.util.Log.d(
+            TAG,
+            "dual-plane presentation binding: dual=$dualTotal " +
+                "selfResolved=$selfResolved rejected=${dualTotal - selfResolved}",
+        )
+    }
 }
 
 /**

@@ -62,6 +62,21 @@ abstract class OutboxCapsuleDao {
     )
     abstract suspend fun getByCapsuleIdAndOwner(capsuleId: String, ownerUserId: String): OutboxCapsuleEntity?
 
+    /**
+     * Owner-scoped batch read for the scan membership probe and self proof.
+     * Returns only rows owned by [ownerUserId]; callers page [capsuleIds] to
+     * a small hard cap, never an unbounded enumeration. An empty input list
+     * must never reach SQL (Room rejects empty `IN ()`).
+     */
+    @Query(
+        "SELECT * FROM outbox_capsule " +
+            "WHERE owner_user_id = :ownerUserId AND capsule_id IN (:capsuleIds)",
+    )
+    abstract suspend fun getByCapsuleIdsAndOwner(
+        capsuleIds: List<String>,
+        ownerUserId: String,
+    ): List<OutboxCapsuleEntity>
+
     /** Exact owner + capsule current-send state for the mounted Create flow. */
     @Query(
         "SELECT state, last_error_code FROM outbox_capsule " +

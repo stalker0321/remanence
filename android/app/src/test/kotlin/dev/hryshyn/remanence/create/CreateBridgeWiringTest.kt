@@ -44,6 +44,7 @@ import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -90,6 +91,7 @@ class CreateBridgeWiringTest {
     // Memory-backed bridge seam: one fake-clocked manager per owner.
     private var now = 1_000L
     private val managers = mutableMapOf<String, GeneratorStaging.Manager>()
+    private val stores = mutableMapOf<String, FakeStore>()
     private val bridges = mutableMapOf<String, GeneratorCreateBridge.Bridge>()
     private val requestedOwners = mutableListOf<UserId>()
 
@@ -134,23 +136,22 @@ class CreateBridgeWiringTest {
         override fun keys(): Set<String> = data.keys.toSet()
     }
 
-    private class FakeDecoder : GeneratorSourceBinding.PhotoDecoderPort {
-        override suspend fun decodeUpright(jpeg: ByteArray) =
-            GeneratorSourceBinding.UprightPhoto(100, 200)
-    }
-
     private class FakeNormalizer : PhotoNormalizerPort {
         override suspend fun normalize(inputJpeg: ByteArray) =
             NormalizedPhotoDto(ByteArray(32) { 5 }, 120, 213)
     }
 
-    private val memoryBinder = GeneratorSourceBinding.SourceBinder(FakeNormalizer(), FakeDecoder())
+    // The test binder decodes for real (production decoder): bind-time
+    // upright dims must match the VM pre-read that built the begin input.
+    private val memoryBinder = GeneratorSourceBinding.SourceBinder(FakeNormalizer(), GeneratorExifDecoder)
 
     private val memoryBridgeProvider: (UserId) -> GeneratorCreateBridge.Bridge = { owner ->
         requestedOwners += owner
         val key = owner.toRestString()
         val staging = managers.getOrPut(key) {
-            GeneratorStaging.Manager(FakeStore(), nowMillis = { now })
+            val store = FakeStore()
+            stores[key] = store
+            GeneratorStaging.Manager(store, nowMillis = { now })
         }
         bridges.getOrPut(key) { GeneratorCreateBridge.Bridge(staging, memoryBinder) }
     }
@@ -244,10 +245,31 @@ class CreateBridgeWiringTest {
         }
     }
 
+    // Stable picker content: every open of one id yields identical bytes,
+    // so pre-read hashes and bind-time re-reads always agree.
+    private val sourceBytesById = mutableMapOf<String, ByteArray>()
+    private val sourceOpens = mutableMapOf<String, Int>()
+
+    private fun sourceBytes(id: String): ByteArray = sourceBytesById.getOrPut(id) {
+        val (width, height) = when (id) {
+            "w2" -> 80 to 40
+            "w3" -> 96 to 48
+            else -> 64 to 32
+        }
+        realJpeg(width, height)
+    }
+
+    private fun defaultSource(id: String): PhotoSource {
+        sourceOpens[id] = sourceOpens.getOrDefault(id, 0) + 1
+        return PhotoSource { ByteArrayInputStream(sourceBytes(id)) }
+    }
+
     /** Builds a ViewModel parked at CONTENT with real-JPEG photos + note ready. */
     private fun contentStage(
         bridgeProvider: ((UserId) -> GeneratorCreateBridge.Bridge)? = memoryBridgeProvider,
         identity: suspend () -> SenderIdentitySnapshot = { senderIdentity() },
+        normalizer: PhotoNormalizerPort = { input -> NormalizedPhotoDto(input.copyOf(), 800, 600) },
+        sources: ((String) -> PhotoSource)? = null,
     ): CreateViewModel {
         val persistence = RecordingPersistence()
         val retryStore = SenderRetryMaterialStore(AccountScopedFileRoots(outboxDir))
@@ -261,18 +283,9 @@ class CreateBridgeWiringTest {
             accountScopedFileRoots = AccountScopedFileRoots(stagingDir),
             // Distinct bytes per photo: G1 requires a unique contentHash
             // per original (dedup key), so identical sources are rejected.
-            openPhotoSource = { id ->
-                val (width, height) = when (id) {
-                    "w2" -> 80 to 40
-                    "w3" -> 96 to 48
-                    else -> 64 to 32
-                }
-                PhotoSource { ByteArrayInputStream(realJpeg(width, height)) }
-            },
+            openPhotoSource = { id -> sources?.invoke(id) ?: defaultSource(id) },
             frontProcessor = Accepting(FingerprintSide.FRONT),
-            photoNormalizer = { input ->
-                NormalizedPhotoDto(input.copyOf(), 800, 600)
-            },
+            photoNormalizer = normalizer,
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
             senderRetryKeysetWrapper = testWrapper,
@@ -396,7 +409,11 @@ class CreateBridgeWiringTest {
         vm.startPublishing()
         awaitTerminalPublish(vm)
 
-        assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
+        assertEquals(
+            "publishError=" + vm.publishError.value + " flowError=" + vm.flowError.value,
+            CreateViewModel.Step.UPLOAD_PENDING,
+            vm.step.value,
+        )
         assertEquals(OutboxCapsuleState.ENCRYPTED, outboxRow(vm.capsuleId)!!.state)
         assertEquals(listOf(UserId(userUuid)), requestedOwners)
         assertEquals(1, liveBridgeSessions())
@@ -468,28 +485,55 @@ class CreateBridgeWiringTest {
     }
 
     @Test
-    fun retryAfterPipelineFailureReBeginsWithoutOrphaningTheFirstBinding() = runBlocking {
-        val vm = contentStage()
-        // Sabotage the legacy photo staging root: attempt 1 fails AFTER
-        // the bridge binding is stored but BEFORE any outbox row exists,
-        // so a retry stays viable on the legacy path too.
-        stagingDir.deleteRecursively()
-        stagingDir.writeText("staging root is unavailable")
+    fun retryAfterBindFailureReBeginsCleanlyWithoutOrphan() = runBlocking {
+        // Sabotage only the bind-time open of w2: the pre-read (first
+        // open) succeeds so begin stores a binding, the bind re-read
+        // (second open) fails.
+        var sabotageBind = true
+        val vm = contentStage(sources = { id ->
+            val opens = sourceOpens.getOrDefault(id, 0)
+            if (sabotageBind && id == "w2" && opens >= 1) {
+                sourceOpens[id] = opens + 1
+                PhotoSource { throw java.io.IOException("picker stream unavailable") }
+            } else {
+                defaultSource(id)
+            }
+        })
         vm.startPublishing()
         awaitTerminalPublish(vm)
 
+        // Bind slot 1 fails: fail closed, session revoked, no partial row.
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        assertEquals("generator bind rejected slot 1; publishing cancelled", vm.publishError.value)
         assertEquals(0, liveBridgeSessions())
+        assertNull(outboxRow(vm.capsuleId))
 
-        stagingDir.delete()
-        stagingDir.mkdirs()
+        sabotageBind = false
         vm.startPublishing()
         awaitTerminalPublish(vm)
 
         assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
         assertEquals(OutboxCapsuleState.ENCRYPTED, outboxRow(vm.capsuleId)!!.state)
-        // Exactly one live session: the failed attempt's binding was
-        // revoked before the retry re-began, never orphaned.
+        // Exactly one live session: the failed attempt left nothing behind.
+        assertEquals(1, liveBridgeSessions())
+    }
+
+    @Test
+    fun wiredPublishNormalizesExactlyOnceInsideTheBind() = runBlocking {
+        val vm = contentStage(normalizer = {
+            throw IllegalStateException("legacy normalize must not run on the wired path")
+        })
+        vm.startPublishing()
+        awaitTerminalPublish(vm)
+
+        assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
+        assertEquals(OutboxCapsuleState.ENCRYPTED, outboxRow(vm.capsuleId)!!.state)
+        // G3 ORIGINAL-byte staging contract: exactly the three pre-read
+        // originals reached the store (never the 32-byte normalizer fakes).
+        val stagedSizes = stores.values.flatMap { it.data.values }.map { it.size }.sorted()
+        val expectedSizes =
+            listOf(realJpeg(64, 32).size, realJpeg(80, 40).size, realJpeg(96, 48).size).sorted()
+        assertEquals(expectedSizes, stagedSizes)
         assertEquals(1, liveBridgeSessions())
     }
 

@@ -35,6 +35,17 @@ import kotlinx.coroutines.ensureActive
  * (G3 owns time/TTL); all byte movement is in-memory. Cancellation
  * ([CancellationException]) always propagates; sources are closed by
  * `use {}` on every path.
+ *
+ * Concurrency: all bridge gates and record transitions are serialized on
+ * one private lock ([synchronized]), while byte IO and binder work run
+ * outside it. Same-session duplicate/stale/order gates plus an in-flight
+ * ordinal reservation are therefore atomic and always evaluated before
+ * any source is opened: two concurrent binds of one ordinal cannot both
+ * pass, and at most one of them ever opens its source. Invalidators
+ * revoke and drop a record only on exact context match, so a
+ * stale/mismatched cancel or edit can neither drop a live record nor
+ * orphan G3 bytes. Lock order is always bridge → G3 (never the reverse),
+ * so the synchronous G3 calls under the bridge lock cannot deadlock.
  */
 object GeneratorCreateBridge {
 
@@ -88,8 +99,10 @@ object GeneratorCreateBridge {
             val context: GenerationContext,
             val expected: List<ExpectedSlot>,
             val done: MutableSet<Int> = mutableSetOf(),
+            val inFlight: MutableSet<Int> = mutableSetOf(),
         )
 
+        private val lock = Any()
         private val records = mutableMapOf<String, BridgeRecord>()
 
         private val frozenSessions = mutableSetOf<String>()
@@ -97,7 +110,7 @@ object GeneratorCreateBridge {
         private data class ExpectedSlot(val contentId: String, val hash: String, val width: Int, val height: Int)
 
         /** Next monotonic content revision (separate from any UI generation). */
-        fun nextRevision(): Long = ++revisionCounter
+        fun nextRevision(): Long = synchronized(lock) { ++revisionCounter }
 
         /**
          * Begins one generation: opens the G3 session for [input] with an
@@ -120,21 +133,29 @@ object GeneratorCreateBridge {
             )
             if (opened !is GeneratorStaging.OpenResult.Opened) return null
             val context = GenerationContext(owner, sessionEpoch, revision, generationId)
-            records[opened.session.sessionId] = BridgeRecord(
-                context,
-                input.photos.map {
-                    ExpectedSlot(it.contentId, it.contentHash, it.widthPx, it.heightPx)
-                },
-            )
+            synchronized(lock) {
+                records[opened.session.sessionId] = BridgeRecord(
+                    context,
+                    input.photos.map {
+                        ExpectedSlot(it.contentId, it.contentHash, it.widthPx, it.heightPx)
+                    },
+                )
+            }
             return BegunSession(context, opened.session.sessionId)
         }
 
         /**
          * Binds one authored slot: reads the source once (bounded),
          * verifies + normalizes through G4B on a one-shot memory source,
-         * then stages the SAME bytes into G3. Context, slot freshness and
-         * order are validated before any IO; any bind failure revokes the
-         * whole session fail-closed (no partial frozen handoff can form).
+         * then stages the SAME bytes into G3. The stale/duplicate/order
+         * gates plus an in-flight ordinal reservation are atomic under the
+         * bridge lock and evaluated before any IO, so two concurrent binds
+         * of one ordinal cannot both pass and at most one ever opens its
+         * source; any bind failure revokes the whole session fail-closed
+         * (no partial frozen handoff can form). A bind parked in IO whose
+         * session dies underneath completes as [SlotResult.Stale] without
+         * touching any other record. Cancellation always revokes the
+         * matched session first, then rethrows.
          */
         suspend fun bindSlot(
             context: GenerationContext,
@@ -143,67 +164,84 @@ object GeneratorCreateBridge {
             source: PhotoSource,
         ): SlotResult {
             currentCoroutineContext().ensureActive()
-            val record = records[sessionId] ?: return SlotResult.Stale("unknown session")
-            if (context != record.context) return SlotResult.Stale("stale context")
-            if (sessionId in frozenSessions) return SlotResult.Stale("already consumed")
-            if (ordinal in record.done) return SlotResult.Duplicate(ordinal)
-            val probe = record.expected.getOrNull(ordinal)
-                ?: return SlotResult.Failed("unknown slot").also {
-                    revokeQuietly(context, sessionId)
-                    kill(sessionId)
+            val expected = synchronized(lock) {
+                val record = records[sessionId] ?: return SlotResult.Stale("unknown session")
+                if (context != record.context) return SlotResult.Stale("stale context")
+                if (sessionId in frozenSessions) return SlotResult.Stale("already consumed")
+                if (ordinal in record.done || ordinal in record.inFlight) {
+                    return SlotResult.Duplicate(ordinal)
                 }
+                if (ordinal != record.done.size) {
+                    revokeIfMatchedLocked(context, sessionId)
+                    return SlotResult.Failed("out-of-order stage")
+                }
+                val probe = record.expected.getOrNull(ordinal)
+                    ?: run {
+                        revokeIfMatchedLocked(context, sessionId)
+                        return SlotResult.Failed("unknown slot")
+                    }
+                record.inFlight += ordinal
+                GeneratorSourceBinding.ExpectedOriginal(
+                    probe.contentId, ordinal, probe.hash, probe.width, probe.height,
+                )
+            }
             val original: ByteArray = try {
                 source.openInputStream().use { stream ->
                     stream.readBoundedBytes(PhotoStagingPipeline.MAX_SOURCE_BYTES)
                 }
             } catch (e: CancellationException) {
+                synchronized(lock) { revokeIfMatchedLocked(context, sessionId) }
                 throw e
             } catch (e: IllegalArgumentException) {
-                revokeQuietly(context, sessionId)
-                kill(sessionId)
+                synchronized(lock) { revokeIfMatchedLocked(context, sessionId) }
                 return SlotResult.Failed("source over bound")
             } catch (e: IOException) {
-                revokeQuietly(context, sessionId)
-                kill(sessionId)
+                synchronized(lock) { revokeIfMatchedLocked(context, sessionId) }
                 return SlotResult.Failed("source unreadable")
             } catch (e: Exception) {
-                revokeQuietly(context, sessionId)
-                kill(sessionId)
+                synchronized(lock) { revokeIfMatchedLocked(context, sessionId) }
                 return SlotResult.Failed("source failed")
             }
-            val expected = GeneratorSourceBinding.ExpectedOriginal(
-                probe.contentId, ordinal, probe.hash, probe.width, probe.height,
-            )
             val bound = try {
                 binder.bindOne(PhotoSource { ByteArrayInputStream(original) }, expected)
             } catch (e: CancellationException) {
-                revokeQuietly(context, sessionId)
-                kill(sessionId)
+                synchronized(lock) { revokeIfMatchedLocked(context, sessionId) }
                 throw e
             } catch (e: Exception) {
-                revokeQuietly(context, sessionId)
-                kill(sessionId)
+                synchronized(lock) { revokeIfMatchedLocked(context, sessionId) }
                 return SlotResult.Failed("bind failed")
             }
             if (bound !is GeneratorSourceBinding.BindResult.Bound) {
-                revokeQuietly(context, sessionId)
-                kill(sessionId)
                 val reason = (bound as GeneratorSourceBinding.BindResult.Rejected).reason
+                synchronized(lock) { revokeIfMatchedLocked(context, sessionId) }
                 return SlotResult.Failed(reason)
             }
-            val staged = staging.stagePhoto(
-                sessionId, context.owner.toRestString(), context.sessionEpoch,
-                context.contentRevision, ordinal,
-                bound.bound.uprightWidthPx, bound.bound.uprightHeightPx, original,
-            )
-            if (staged !is GeneratorStaging.StageResult.Staged) {
-                revokeQuietly(context, sessionId)
-                kill(sessionId)
-                val reason = (staged as GeneratorStaging.StageResult.Rejected).reason
-                return SlotResult.Failed(reason)
+            synchronized(lock) {
+                val record = records[sessionId] ?: return SlotResult.Stale("unknown session")
+                if (context != record.context) return SlotResult.Stale("stale context")
+                if (sessionId in frozenSessions) {
+                    record.inFlight -= ordinal
+                    return SlotResult.Stale("already consumed")
+                }
+                if (ordinal in record.done) {
+                    record.inFlight -= ordinal
+                    return SlotResult.Duplicate(ordinal)
+                }
+                if (ordinal !in record.inFlight) return SlotResult.Stale("stale context")
+                val staged = staging.stagePhoto(
+                    sessionId, context.owner.toRestString(), context.sessionEpoch,
+                    context.contentRevision, ordinal,
+                    bound.bound.uprightWidthPx, bound.bound.uprightHeightPx, original,
+                )
+                if (staged !is GeneratorStaging.StageResult.Staged) {
+                    val reason = (staged as GeneratorStaging.StageResult.Rejected).reason
+                    revokeIfMatchedLocked(context, sessionId)
+                    return SlotResult.Failed(reason)
+                }
+                record.inFlight -= ordinal
+                record.done += ordinal
+                return SlotResult.Bound(staged.lease)
             }
-            record.done += ordinal
-            return SlotResult.Bound(staged.lease)
         }
 
         /**
@@ -211,63 +249,91 @@ object GeneratorCreateBridge {
          * Never calls any publisher; the handoff is opaque data for a
          * later `startPublishing` after its own guards. One-shot: the
          * first successful freeze consumes the session, a second freeze
-         * is rejected as already consumed.
+         * is rejected as already consumed. Fully serialized with binds
+         * and invalidations on the bridge lock, so a freeze racing an
+         * in-flight bind observes either the pre-bind (incomplete) or the
+         * post-bind state, never a torn one.
          */
         fun freeze(context: GenerationContext, sessionId: String): FreezeResult {
-            val record = records[sessionId] ?: return FreezeResult.Rejected("unknown session")
-            if (context != record.context) return FreezeResult.Rejected("stale context")
-            if (sessionId in frozenSessions) return FreezeResult.Rejected("already consumed")
-            val input = staging.toInput(
-                sessionId, context.owner.toRestString(),
-                context.sessionEpoch, context.contentRevision,
-            ) ?: return FreezeResult.Rejected("incomplete session")
-            if (record.done.size != input.photos.size) return FreezeResult.Rejected("incomplete slots")
-            if (GeneratorExpression.validate(input) !is GeneratorExpression.InputValidation.Valid) {
-                return FreezeResult.Rejected("invalid input")
+            synchronized(lock) {
+                val record = records[sessionId] ?: return FreezeResult.Rejected("unknown session")
+                if (context != record.context) return FreezeResult.Rejected("stale context")
+                if (sessionId in frozenSessions) return FreezeResult.Rejected("already consumed")
+                val input = staging.toInput(
+                    sessionId, context.owner.toRestString(),
+                    context.sessionEpoch, context.contentRevision,
+                ) ?: return FreezeResult.Rejected("incomplete session")
+                if (record.done.size != input.photos.size) return FreezeResult.Rejected("incomplete slots")
+                if (GeneratorExpression.validate(input) !is GeneratorExpression.InputValidation.Valid) {
+                    return FreezeResult.Rejected("invalid input")
+                }
+                frozenSessions += sessionId
+                return FreezeResult.Frozen(
+                    FrozenHandoff(context, input, GeneratorExpression.canonicalHash(input)),
+                )
             }
-            frozenSessions += sessionId
-            return FreezeResult.Frozen(
-                FrozenHandoff(context, input, GeneratorExpression.canonicalHash(input)),
-            )
         }
 
-        /** Photo edit: revokes the session; the old context goes stale. */
+        /**
+         * Photo edit: revokes the session, but only on exact context
+         * match — a stale or mismatched call is a no-op that preserves
+         * the live record and its G3 bytes.
+         */
         fun onPhotoEdit(context: GenerationContext, sessionId: String) {
-            revokeQuietly(context, sessionId)
-            kill(sessionId)
+            synchronized(lock) { revokeIfMatchedLocked(context, sessionId) }
         }
 
-        /** Note edit: revokes the session; the old context goes stale. */
+        /** Note edit: revokes the session; gated exactly like [onPhotoEdit]. */
         fun onNoteEdit(context: GenerationContext, sessionId: String) {
-            revokeQuietly(context, sessionId)
-            kill(sessionId)
+            synchronized(lock) { revokeIfMatchedLocked(context, sessionId) }
         }
 
-        /** Owner switch or epoch change: revokes; caller begins fresh. */
+        /**
+         * Owner switch or epoch change: revokes; caller begins fresh.
+         * Callers pass the session's OWN context; a mismatched context
+         * is a no-op so a live record is never dropped by mistake.
+         */
         fun onOwnerOrEpochChange(context: GenerationContext, sessionId: String) {
-            revokeQuietly(context, sessionId)
-            kill(sessionId)
+            synchronized(lock) { revokeIfMatchedLocked(context, sessionId) }
         }
 
-        /** Cancel: revokes staging (cleanup via G3) and drops the record. */
+        /**
+         * Cancel: revokes staging (cleanup via G3) and drops the record;
+         * gated exactly like [onPhotoEdit] so a stale cancel cannot kill
+         * a live session.
+         */
         fun cancel(context: GenerationContext, sessionId: String) {
-            revokeQuietly(context, sessionId)
-            kill(sessionId)
+            synchronized(lock) { revokeIfMatchedLocked(context, sessionId) }
         }
 
         /** Logout: revokes every session of the owner held by this bridge. */
         fun onLogout(owner: UserId) {
-            staging.revokeOwner(owner.toRestString())
-            val owned = records.filterValues { it.context.owner == owner }.keys.toList()
-            for (sessionId in owned) {
-                records.remove(sessionId)
-                frozenSessions.remove(sessionId)
+            synchronized(lock) {
+                staging.revokeOwner(owner.toRestString())
+                val owned = records.filterValues { it.context.owner == owner }.keys.toList()
+                for (id in owned) {
+                    records.remove(id)
+                    frozenSessions.remove(id)
+                }
             }
         }
 
-        private fun kill(sessionId: String) {
+        /**
+         * Revokes the G3 session and drops the bridge record, but ONLY
+         * when the stored record still carries exactly [context]. A
+         * missing record or a context mismatch is a no-op: the live
+         * record (possibly a newer session under the same id) and its G3
+         * bytes are preserved. Must be called with [lock] held; the G3
+         * revoke underneath is synchronous and short. Returns true when
+         * a matched session was revoked.
+         */
+        private fun revokeIfMatchedLocked(context: GenerationContext, sessionId: String): Boolean {
+            val record = records[sessionId] ?: return false
+            if (record.context != context) return false
+            revokeQuietly(context, sessionId)
             records.remove(sessionId)
             frozenSessions.remove(sessionId)
+            return true
         }
 
         private fun revokeQuietly(context: GenerationContext, sessionId: String) {

@@ -14,6 +14,13 @@ import androidx.compose.runtime.setValue
  */
 class PhotoSelectionState {
 
+    /**
+     * C2 invalidation hook: invoked on user-edit funnels ([toggle],
+     * [remove]) only — never on teardown ([clear]), which the owner
+     * revokes explicitly first. Null by default (no behavior change).
+     */
+    var onEdit: (() -> Unit)? = null
+
     /** Opaque picker item IDs in selection order; no content URIs are stored here. */
     val selectedIds: List<String>
         get() = _selected
@@ -40,15 +47,18 @@ class PhotoSelectionState {
         val current = _selected
         if (id in current) {
             _selected = current - id
+            onEdit?.invoke()
             return ToggleResult.Removed(_selected.size)
         }
         if (current.size >= MAX_PHOTOS) return ToggleResult.RejectedAtLimit
         _selected = current + id
+        onEdit?.invoke()
         return ToggleResult.Added(_selected.size)
     }
 
     fun remove(id: String) {
         _selected = _selected - id
+        onEdit?.invoke()
     }
 
     fun clear() {

@@ -14,6 +14,14 @@ import androidx.compose.runtime.setValue
  */
 class NoteEditorState(private val maxBytes: Int = MAX_NOTE_BYTES) {
 
+    /**
+     * C2 invalidation hook: invoked when an [onChange] candidate is
+     * ACCEPTED as the new note text only — rejected input changes nothing
+     * and never fires, and teardown ([reset]) never fires. Null by default
+     * (no behavior change).
+     */
+    var onEdit: (() -> Unit)? = null
+
     var text: String by mutableStateOf("")
         private set
 
@@ -37,6 +45,7 @@ class NoteEditorState(private val maxBytes: Int = MAX_NOTE_BYTES) {
         }
         text = candidate
         limitReached = false
+        onEdit?.invoke()
         return true
     }
 

@@ -8,6 +8,13 @@ import dev.hryshyn.remanence.capture.FrontCaptureOutcome
 import dev.hryshyn.remanence.create.RealStillFingerprintProcessor
 import dev.hryshyn.remanence.create.CapsulePublisher
 import dev.hryshyn.remanence.create.CapsulePublishRequest
+import dev.hryshyn.remanence.create.GeneratorCreateBridge
+import dev.hryshyn.remanence.create.GeneratorExifDecoder
+import dev.hryshyn.remanence.create.PhotoStagingPipeline
+import dev.hryshyn.remanence.core.crypto.readBoundedBytes
+import dev.hryshyn.remanence.core.model.GeneratorExpression
+import dev.hryshyn.remanence.core.model.GeneratorStaging
+import java.security.MessageDigest
 import com.google.crypto.tink.KeysetHandle
 import com.google.crypto.tink.TinkProtoKeysetFormat
 import com.google.crypto.tink.subtle.Base64
@@ -128,6 +135,12 @@ class CreateViewModel(
     recipientLookupOwnerProvider: suspend () -> String? = { accessTokenProvider() },
     recipientLookupBoundaryEpoch: () -> Long = { 0L },
     registerRecipientLookupBoundary: (((() -> Unit)) -> (() -> Unit))? = null,
+    /**
+     * C2 generator seam: per-owner C1 bridge provider from the factory.
+     * Null (tests, legacy fixtures) means a legacy-only session: every
+     * hook below is a no-op and publishing behaves exactly as before.
+     */
+    private val generatorBridgeProvider: ((UserId) -> GeneratorCreateBridge.Bridge)? = null,
 ) : ViewModel() {
 
     /** Current-send state; deliberately contains no history or inbox projection. */
@@ -206,8 +219,8 @@ class CreateViewModel(
     val publishError: StateFlow<String?> = _publishError.asStateFlow()
 
     // Content state.
-    val photoSelection = PhotoSelectionState()
-    val noteEditor = NoteEditorState()
+    val photoSelection = PhotoSelectionState().also { it.onEdit = { invalidateGeneratorForPhotoEdit() } }
+    val noteEditor = NoteEditorState().also { it.onEdit = { invalidateGeneratorForNoteEdit() } }
 
     // ---------------------------------------------------------------------
     // Authoritative capture attempt (FIX-STATE-01).
@@ -246,6 +259,27 @@ class CreateViewModel(
 
     /** Owner captured synchronously at session entry, before publish suspends. */
     private var sessionOwner: UserId? = null
+
+    /**
+     * C2 bridge session-sync: the bridge resolved for the session owner in
+     * [beginSession] (null = legacy-only session) plus the epoch retained
+     * for the bridge context. The bridge owns the monotonic content
+     * revision; [createSessionGeneration] never substitutes for it.
+     */
+    private var generatorBridge: GeneratorCreateBridge.Bridge? = null
+    private var generatorSessionEpoch: Long? = null
+
+    /** One bound bridge generation: exact immutable context + G3 session. */
+    private data class GeneratorBoundSession(
+        val bridge: GeneratorCreateBridge.Bridge,
+        val context: GeneratorCreateBridge.GenerationContext,
+        val sessionId: String,
+    )
+
+    private var generatorBound: GeneratorBoundSession? = null
+
+    /** One pre-read original for bridge session-sync (D2: pre-read allowed). */
+    private data class PrereadOriginal(val bytes: ByteArray, val widthPx: Int, val heightPx: Int)
 
     /**
      * FIX-STATE-13: capsule ids whose publication job is still alive and
@@ -305,6 +339,11 @@ class CreateViewModel(
         cancelRevokeLocked()
         outboxObservationJob?.cancel()
         outboxObservationJob = null
+        // C2: owner/epoch change revokes any bound bridge session on its
+        // exact context before its fields are overwritten below.
+        dropGeneratorBound { bridge, context, sessionId ->
+            bridge.onOwnerOrEpochChange(context, sessionId)
+        }
         // FIX-STATE-13: ownership is tracked by the in-flight ledger, NOT by
         // the local job handle - endSession()/an earlier beginSession() may
         // already have detached a publication that is still running its
@@ -314,6 +353,11 @@ class CreateViewModel(
         }
         _capsuleId = UUID.randomUUID().toString()
         sessionOwner = nextOwner
+        // C2: session-sync for the bridge — the epoch is retained for the
+        // context and the bridge is resolved per session owner (null owner
+        // or null provider means a legacy-only session).
+        generatorSessionEpoch = epoch
+        generatorBridge = nextOwner?.let { owner -> generatorBridgeProvider?.invoke(owner) }
         _step.value = Step.RECIPIENT_LOOKUP
         // FIX-M1-ONDEVICE-01: pending and confirmed recipient material both die.
         recipientFlow.clearTransientMaterial()
@@ -514,6 +558,11 @@ class CreateViewModel(
      * previous selection (the system picker is authoritative per attempt).
      */
     fun onPhotosPicked(ids: List<String>) {
+        // C2: a fresh picker result is a photo edit — it revokes any bound
+        // bridge session on its exact context before the selection changes.
+        dropGeneratorBound { bridge, context, sessionId ->
+            bridge.onPhotoEdit(context, sessionId)
+        }
         photoSelection.clear()
         ids.forEach { id -> photoSelection.toggle(id) }
     }
@@ -674,6 +723,136 @@ class CreateViewModel(
     private fun isPublishCurrent(generation: Long): Boolean =
         generation == createSessionGeneration && _step.value == Step.PUBLISHING
 
+    // ---------------------------------------------------------------------
+    // C2 generator session-sync + invalidation hooks.
+    // ---------------------------------------------------------------------
+
+    /**
+     * Revokes the bound bridge session through [invalidator] on its exact
+     * immutable context, then drops it. A missing bound session is a no-op,
+     * so legacy-only sessions and teardown ordering never matter here.
+     * Revocation is best-effort cleanup: authoring must never break because
+     * teardown of a dead session failed.
+     */
+    private fun dropGeneratorBound(
+        invalidator: (
+            GeneratorCreateBridge.Bridge,
+            GeneratorCreateBridge.GenerationContext,
+            String,
+        ) -> Unit,
+    ) {
+        val bound = generatorBound ?: return
+        generatorBound = null
+        try {
+            invalidator(bound.bridge, bound.context, bound.sessionId)
+        } catch (_: Exception) {
+        }
+    }
+
+    /** Photo edit after begin (picker result or direct toggle/remove). */
+    private fun invalidateGeneratorForPhotoEdit() {
+        dropGeneratorBound { bridge, context, sessionId ->
+            bridge.onPhotoEdit(context, sessionId)
+        }
+    }
+
+    /**
+     * Note edit after begin. An in-place note edit never amends a bound
+     * generation: the old session is revoked, and the next startPublishing
+     * begins a fresh content revision — regeneration is mandatory.
+     */
+    private fun invalidateGeneratorForNoteEdit() {
+        dropGeneratorBound { bridge, context, sessionId ->
+            bridge.onNoteEdit(context, sessionId)
+        }
+    }
+
+    private fun sha256Hex(bytes: ByteArray): String =
+        MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+
+    /**
+     * C2 session-sync: binds one bridge generation for THIS publication,
+     * synchronizing the bridge context (canonical owner, session epoch,
+     * monotonic content revision) with the legacy publish inputs.
+     *
+     * Owner rulings applied: `generationId` is the session capsule id; the
+     * sender snapshot is captured exactly once here at begin; the input
+     * carries opaque-UUID content ids with SHA-256 pre-reads of the
+     * selected originals (pre-read/hash at selection allowed) and the
+     * authored note. No bind/freeze happens here — that is the C3
+     * publisher cutover; the begun session holds no staged bytes and dies
+     * by revocation below or by G3 TTL/sweep.
+     *
+     * Returns false (fail closed, back at CONTENT) only when the sources
+     * pre-read cleanly yet the bridge rejects the session. A pre-read
+     * failure skips the bridge silently so the legacy pipeline fails
+     * exactly as it does today; a null sender does the same (publishSealed
+     * reports its own identity error). Cancellation propagates.
+     */
+    private suspend fun beginGeneratorSession(generation: Long, inputs: PublishInputs): Boolean {
+        val bridge = generatorBridge
+        if (generatorBridgeProvider == null || bridge == null) return true
+        val epoch = generatorSessionEpoch
+        if (epoch == null) {
+            failPublishing("generator session has no epoch; publishing cancelled", generation)
+            return false
+        }
+        val sender = identityProvider()
+        if (sender == null) return true
+        val preread: List<PrereadOriginal>? = withContext(ioDispatcher) {
+            try {
+                inputs.photoIds.map { pickerId ->
+                    val bytes = openPhotoSource(pickerId).openInputStream().use { stream ->
+                        stream.readBoundedBytes(PhotoStagingPipeline.MAX_SOURCE_BYTES)
+                    }
+                    val upright = GeneratorExifDecoder.decodeUpright(bytes)
+                    PrereadOriginal(bytes, upright.widthPx, upright.heightPx)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            }
+        }
+        if (preread == null) return true
+        try {
+            val input = GeneratorExpression.GeneratorInput(
+                ownerId = inputs.owner.toRestString(),
+                epoch = epoch,
+                photos = preread.mapIndexed { index, original ->
+                    GeneratorExpression.PhotoRef(
+                        contentId = UUID.randomUUID().toString(),
+                        ordinal = index,
+                        widthPx = original.widthPx,
+                        heightPx = original.heightPx,
+                        contentHash = sha256Hex(original.bytes),
+                    )
+                },
+                note = inputs.noteText,
+                music = null,
+            )
+            val begun = bridge.begin(
+                owner = inputs.owner,
+                sessionEpoch = epoch,
+                generationId = inputs.capsuleId,
+                input = input,
+                sender = GeneratorStaging.SenderSnapshot(sender.userId, sender.handle),
+            )
+            if (begun == null) {
+                failPublishing("generator session was rejected; publishing cancelled", generation)
+                return false
+            }
+            if (!isPublishCurrent(generation)) {
+                bridge.cancel(begun.context, begun.sessionId)
+                throw PublishSuperseded()
+            }
+            generatorBound = GeneratorBoundSession(bridge, begun.context, begun.sessionId)
+            return true
+        } finally {
+            preread.forEach { it.bytes.fill(0) }
+        }
+    }
+
     private suspend fun clearStagedPhotosGuarded(owner: UserId, capsuleId: String) {
         // FIX-STATE-11: guaranteed plaintext removal even on cancellation -
         // but NEVER any state publication from this path.
@@ -686,6 +865,7 @@ class CreateViewModel(
     private suspend fun publish(generation: Long, inputs: PublishInputs) {
         _publishError.value = null
         try {
+            if (!beginGeneratorSession(generation, inputs)) return
             publishSealed(generation, inputs)
         } catch (superseded: PublishSuperseded) {
             // The owning session is gone: ITS staging dies, nothing is
@@ -899,6 +1079,11 @@ class CreateViewModel(
         cancelRevokeLocked()
         outboxObservationJob?.cancel()
         outboxObservationJob = null
+        // C2: leaving the surface revokes any bound bridge session on its
+        // exact context.
+        dropGeneratorBound { bridge, context, sessionId ->
+            bridge.cancel(context, sessionId)
+        }
         recipientFlow.clearTransientMaterial()
         pickerVm.reset()
         photoSelection.clear()
@@ -913,6 +1098,8 @@ class CreateViewModel(
         if (capsuleId !in inFlightPublications) deleteSessionStaging(owner, capsuleId)
         begunEpoch = null
         sessionOwner = null
+        generatorBridge = null
+        generatorSessionEpoch = null
         _uploadStatus.value = CreateUploadStatus.NotStarted
         _revokeStatus.value = CapsuleRevokeStatus.Idle
     }

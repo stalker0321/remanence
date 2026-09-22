@@ -1070,6 +1070,11 @@ class AppContainer private constructor(
             workCancellation = { owner ->
                 accountWorkCancellation.cancelForAccount(owner)
             },
+            // C2: the snapshotted owner's generator bridge sessions die
+            // with the account, exactly once at step 4.5.
+            generatorBridgeLogout = dev.hryshyn.remanence.auth.GeneratorBridgeLogoutPort { owner ->
+                generatorCreateBridge(owner).onLogout(owner)
+            },
             invalidateSessionLease = { apiStack.sessionRefreshCoordinator.invalidate() },
         )
     }

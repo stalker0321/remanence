@@ -5,6 +5,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.work.WorkManager
 import androidx.work.await
 import dev.hryshyn.remanence.AppContainer
+import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.create.GeneratorCreateBridge
 import dev.hryshyn.remanence.session.RootViewModel
 import dev.hryshyn.remanence.ui.create.CreateViewModel
 import dev.hryshyn.remanence.ui.scan.ScanViewModel
@@ -19,6 +21,15 @@ import dev.hryshyn.remanence.sync.CapsuleUploadWorker
  */
 class RemanenceViewModelFactory(
     private val container: AppContainer,
+    /**
+     * C2 factory threading (step 2 seam): per-owner C1 bridge provider for
+     * the upcoming CreateViewModel session-sync step. Defaults to the
+     * production container wiring (`AppContainer.generatorCreateBridge`);
+     * tests may substitute a memory-backed provider. Not yet consumed —
+     * CreateViewModel stays untouched until the next step.
+     */
+    val generatorBridgeProvider: (UserId) -> GeneratorCreateBridge.Bridge =
+        container::generatorCreateBridge,
 ) : ViewModelProvider.Factory {
 
     @Suppress("UNCHECKED_CAST")

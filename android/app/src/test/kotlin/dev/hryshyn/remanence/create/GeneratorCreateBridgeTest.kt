@@ -7,10 +7,14 @@ import java.io.ByteArrayInputStream
 import java.io.InputStream
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 /**
@@ -56,6 +60,23 @@ class GeneratorCreateBridgeTest {
             NormalizedPhotoDto(ByteArray(32) { 5 }, 120, 213)
     }
 
+    /** Normalizer parked on a gate so tests can stage deterministic bind races without sleeps. */
+    private class GateNormalizer(val gate: CompletableDeferred<Unit>) : PhotoNormalizerPort {
+        override suspend fun normalize(inputJpeg: ByteArray): NormalizedPhotoDto {
+            gate.await()
+            return NormalizedPhotoDto(ByteArray(32) { 5 }, 120, 213)
+        }
+    }
+
+    /** Source whose stream throws CancellationException on read (M2 path). */
+    private class CancellingSource : PhotoSource {
+        override fun openInputStream(): InputStream = object : ByteArrayInputStream(ByteArray(8)) {
+            override fun read(b: ByteArray, off: Int, len: Int): Int {
+                throw CancellationException("test-cancel")
+            }
+        }
+    }
+
     private class FakeStore : GeneratorStaging.BlobStore {
         val data = mutableMapOf<String, ByteArray>()
         override fun put(key: String, bytes: ByteArray) {
@@ -71,12 +92,12 @@ class GeneratorCreateBridgeTest {
     private lateinit var staging: GeneratorStaging.Manager
     private lateinit var bridge: GeneratorCreateBridge.Bridge
 
-    private fun setup() {
+    private fun setup(normalizer: PhotoNormalizerPort = FakeNormalizer()) {
         store = FakeStore()
         staging = GeneratorStaging.Manager(store, nowMillis = { now })
         bridge = GeneratorCreateBridge.Bridge(
             staging,
-            GeneratorSourceBinding.SourceBinder(FakeNormalizer(), FakeDecoder()),
+            GeneratorSourceBinding.SourceBinder(normalizer, FakeDecoder()),
         )
     }
 
@@ -288,5 +309,141 @@ class GeneratorCreateBridgeTest {
         assertTrue(
             bridge.freeze(first.context, first.sessionId) is GeneratorCreateBridge.FreezeResult.Rejected,
         )
+    }
+
+    @Test
+    fun concurrentDuplicateSameOrdinalOpensOnceAndSurvives() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        setup(GateNormalizer(gate))
+        val first = begun()
+        val firstSource = FakePhotoSource(bytes(1))
+        val dupSource = FakePhotoSource(bytes(1))
+        val firstBind = async { bridge.bindSlot(first.context, first.sessionId, 0, firstSource) }
+        testScheduler.runCurrent()
+        val dupBind = async { bridge.bindSlot(first.context, first.sessionId, 0, dupSource) }
+        testScheduler.runCurrent()
+        assertTrue(dupBind.await() is GeneratorCreateBridge.SlotResult.Duplicate)
+        assertEquals(0, dupSource.opens.get())
+        gate.complete(Unit)
+        assertTrue(firstBind.await() is GeneratorCreateBridge.SlotResult.Bound)
+        assertEquals(1, firstSource.opens.get())
+        assertTrue(
+            bridge.bindSlot(first.context, first.sessionId, 1, FakePhotoSource(bytes(2)))
+                is GeneratorCreateBridge.SlotResult.Bound,
+        )
+        assertTrue(
+            bridge.bindSlot(first.context, first.sessionId, 2, FakePhotoSource(bytes(3)))
+                is GeneratorCreateBridge.SlotResult.Bound,
+        )
+        assertTrue(bridge.freeze(first.context, first.sessionId) is GeneratorCreateBridge.FreezeResult.Frozen)
+    }
+
+    @Test
+    fun outOfOrderBindOpensNoSource() = runTest {
+        setup()
+        val first = begun()
+        val source = FakePhotoSource(bytes(2))
+        val result = bridge.bindSlot(first.context, first.sessionId, 1, source)
+        assertTrue(result is GeneratorCreateBridge.SlotResult.Failed)
+        assertEquals(0, source.opens.get())
+        assertTrue(store.data.isEmpty())
+        assertTrue(
+            bridge.bindSlot(first.context, first.sessionId, 0, FakePhotoSource(bytes(1)))
+                is GeneratorCreateBridge.SlotResult.Stale,
+        )
+        assertTrue(
+            bridge.freeze(first.context, first.sessionId) is GeneratorCreateBridge.FreezeResult.Rejected,
+        )
+    }
+
+    @Test
+    fun staleInvalidatorsPreserveLiveRecordAndData() = runTest {
+        setup()
+        val first = begun()
+        assertTrue(
+            bridge.bindSlot(first.context, first.sessionId, 0, FakePhotoSource(bytes(1)))
+                is GeneratorCreateBridge.SlotResult.Bound,
+        )
+        assertEquals(1, store.data.size)
+        bridge.onPhotoEdit(first.context.copy(generationId = "gen-evil"), first.sessionId)
+        bridge.onNoteEdit(first.context.copy(sessionEpoch = 99L), first.sessionId)
+        bridge.onOwnerOrEpochChange(first.context.copy(contentRevision = 999L), first.sessionId)
+        bridge.cancel(first.context.copy(owner = UserId.parseRest(OWNER_B)), first.sessionId)
+        bridge.onPhotoEdit(first.context, "stg-0000000000000000")
+        assertEquals(1, store.data.size)
+        assertTrue(
+            bridge.bindSlot(first.context, first.sessionId, 1, FakePhotoSource(bytes(2)))
+                is GeneratorCreateBridge.SlotResult.Bound,
+        )
+        assertTrue(
+            bridge.bindSlot(first.context, first.sessionId, 2, FakePhotoSource(bytes(3)))
+                is GeneratorCreateBridge.SlotResult.Bound,
+        )
+        assertTrue(bridge.freeze(first.context, first.sessionId) is GeneratorCreateBridge.FreezeResult.Frozen)
+    }
+
+    @Test
+    fun cancellationDuringReadRevokesAndRethrows() = runTest {
+        setup()
+        val first = begun()
+        assertTrue(
+            bridge.bindSlot(first.context, first.sessionId, 0, FakePhotoSource(bytes(1)))
+                is GeneratorCreateBridge.SlotResult.Bound,
+        )
+        try {
+            bridge.bindSlot(first.context, first.sessionId, 1, CancellingSource())
+            fail("expected CancellationException")
+        } catch (e: CancellationException) {
+            // Expected: same cleanup guarantee as binder cancellation.
+        }
+        assertTrue(store.data.isEmpty())
+        assertTrue(
+            bridge.bindSlot(first.context, first.sessionId, 2, FakePhotoSource(bytes(3)))
+                is GeneratorCreateBridge.SlotResult.Stale,
+        )
+        assertTrue(
+            bridge.freeze(first.context, first.sessionId) is GeneratorCreateBridge.FreezeResult.Rejected,
+        )
+    }
+
+    @Test
+    fun invalidationDuringInflightBindLeavesNoOrphans() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        setup(GateNormalizer(gate))
+        val first = begun()
+        val pending = async {
+            bridge.bindSlot(first.context, first.sessionId, 0, FakePhotoSource(bytes(1)))
+        }
+        testScheduler.runCurrent()
+        bridge.onPhotoEdit(first.context, first.sessionId)
+        gate.complete(Unit)
+        assertTrue(pending.await() is GeneratorCreateBridge.SlotResult.Stale)
+        assertTrue(store.data.isEmpty())
+        val second = begun()
+        assertTrue(bindAll(second).all { it is GeneratorCreateBridge.SlotResult.Bound })
+    }
+
+    @Test
+    fun freezeDuringInflightBindRejectsThenSucceeds() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        setup(GateNormalizer(gate))
+        val first = begun()
+        val pending = async {
+            bridge.bindSlot(first.context, first.sessionId, 0, FakePhotoSource(bytes(1)))
+        }
+        testScheduler.runCurrent()
+        assertTrue(bridge.freeze(first.context, first.sessionId) is GeneratorCreateBridge.FreezeResult.Rejected)
+        gate.complete(Unit)
+        assertTrue(pending.await() is GeneratorCreateBridge.SlotResult.Bound)
+        assertTrue(
+            bridge.bindSlot(first.context, first.sessionId, 1, FakePhotoSource(bytes(2)))
+                is GeneratorCreateBridge.SlotResult.Bound,
+        )
+        assertTrue(
+            bridge.bindSlot(first.context, first.sessionId, 2, FakePhotoSource(bytes(3)))
+                is GeneratorCreateBridge.SlotResult.Bound,
+        )
+        assertTrue(bridge.freeze(first.context, first.sessionId) is GeneratorCreateBridge.FreezeResult.Frozen)
+        assertTrue(bridge.freeze(first.context, first.sessionId) is GeneratorCreateBridge.FreezeResult.Rejected)
     }
 }

@@ -64,6 +64,8 @@ class CreateTransitionTableTest {
     private val testAlias = "test-sender-retry-${java.util.UUID.randomUUID()}"
     private lateinit var testWrapper: SenderRetryKeysetWrapper
 
+    private val bridge = dev.hryshyn.remanence.create.MemoryGeneratorBridge()
+
     @Before
     fun setUp() {
         testKekBoundary.createAes256GcmKey(testAlias)
@@ -191,6 +193,7 @@ class CreateTransitionTableTest {
         openPhotoSource: (String) -> dev.hryshyn.remanence.create.PhotoSource = {
             error("photo picker seam not used in this test")
         },
+        bridgeProvider: ((dev.hryshyn.remanence.core.model.UserId) -> dev.hryshyn.remanence.create.GeneratorCreateBridge.Bridge)? = null,
     ): Pair<CreateViewModel, RecordingPersistence> {
         val persistence = RecordingPersistence()
         val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(stagingDir.parentFile, "transition-outbox")))
@@ -208,9 +211,9 @@ class CreateTransitionTableTest {
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir),
             openPhotoSource = openPhotoSource,
             frontProcessor = frontProcessor,
-            // FIX-STATE-08: deterministic normalization keeps publishing
-            // exercisable without native image decoding in JVM tests.
-            photoNormalizer = { input -> dev.hryshyn.remanence.create.NormalizedPhotoDto(input.copyOf(), 800, 600) },
+            // C3 authoritative cutover: normalization runs once inside the
+            // G4B bind; the legacy photoNormalizer port is gone.
+            generatorBridgeProvider = bridgeProvider,
             // FIX-STATE-01: delivery completes synchronously under the test
             // dispatcher so transition assertions are deterministic.
             cpuDispatcher = testDispatcher,
@@ -252,15 +255,19 @@ class CreateTransitionTableTest {
     // ------------------------------------------------------------------
 
     @Test
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
     fun goldenHappyPathFromLookupThroughUploadPending() = runBlocking {
         val front = ScriptedProcessor(ScriptedProcessor.Scripted.Accept(syntheticFingerprint(11, FingerprintSide.FRONT)))
         val (vm, persistence) = viewModel(
             front,
             openPhotoSource = { id ->
                 dev.hryshyn.remanence.create.PhotoSource {
-                    java.io.ByteArrayInputStream("jpeg-payload-$id".toByteArray())
+                    java.io.ByteArrayInputStream(
+                        dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(id),
+                    )
                 }
             },
+            bridgeProvider = bridge.provider,
         )
 
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)

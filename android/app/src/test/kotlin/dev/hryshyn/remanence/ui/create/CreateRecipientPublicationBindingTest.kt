@@ -87,6 +87,8 @@ class CreateRecipientPublicationBindingTest {
     private val testAlias = "test-sender-retry-${java.util.UUID.randomUUID()}"
     private lateinit var testWrapper: SenderRetryKeysetWrapper
 
+    private val bridge = dev.hryshyn.remanence.create.MemoryGeneratorBridge()
+
     @Before
     fun setUp() {
         testKekBoundary.createAes256GcmKey(testAlias)
@@ -198,13 +200,15 @@ class CreateRecipientPublicationBindingTest {
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir),
             openPhotoSource = { id ->
                 dev.hryshyn.remanence.create.PhotoSource {
-                    java.io.ByteArrayInputStream("photo-$id".toByteArray())
+                    java.io.ByteArrayInputStream(
+                        dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(id),
+                    )
                 }
             },
             frontProcessor = Accepting(FingerprintSide.FRONT),
-            photoNormalizer = { input ->
-                dev.hryshyn.remanence.create.NormalizedPhotoDto(input.copyOf(), 800, 600)
-            },
+            // C3 authoritative cutover: normalization runs once inside the
+            // G4B bind; the publisher consumes bind results through the bridge.
+            generatorBridgeProvider = bridge.provider,
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
             senderRetryKeysetWrapper = testWrapper,
@@ -242,6 +246,7 @@ class CreateRecipientPublicationBindingTest {
     // ------------------------------------------------------------------
 
     @Test
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
     fun distinctRecipientSnapshotProducesSenderAOwnerARecipientBBundle() = runBlocking {
         val vm = contentStageForRecipient(recipientSnapshot())
         val capsuleId = vm.capsuleId
@@ -274,6 +279,7 @@ class CreateRecipientPublicationBindingTest {
     }
 
     @Test
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
     fun distinctRecipientEnvelopeIsSealedToTheBoundRecipientAndSenderCannotOpenIt() = runBlocking {
         val vm = contentStageForRecipient(recipientSnapshot())
         val capsuleId = vm.capsuleId
@@ -347,6 +353,7 @@ class CreateRecipientPublicationBindingTest {
     }
 
     @Test
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
     fun selfConfirmedRecipientProducesSelfSendOutboxRow() = runBlocking {
         // M2-P07: a self-send is a valid publication path. The user confirms
         // their OWN handle; the publisher receives equal values for sender

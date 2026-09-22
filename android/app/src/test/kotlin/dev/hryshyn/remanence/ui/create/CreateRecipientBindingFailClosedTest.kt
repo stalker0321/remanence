@@ -86,6 +86,8 @@ class CreateRecipientBindingFailClosedTest {
     private val testAlias = "test-sender-retry-${java.util.UUID.randomUUID()}"
     private lateinit var testWrapper: SenderRetryKeysetWrapper
 
+    private val bridge = dev.hryshyn.remanence.create.MemoryGeneratorBridge()
+
     @Before
     fun setUp() {
         testKekBoundary.createAes256GcmKey(testAlias)
@@ -215,7 +217,6 @@ class CreateRecipientBindingFailClosedTest {
             it.set(mapOf("mykola" to selfSnapshot(), "friend" to otherSnapshot()))
         },
         identityGate: CompletableDeferred<SenderIdentitySnapshot>? = null,
-        normalizerGate: CompletableDeferred<Unit>? = null,
     ): CreateViewModel {
         val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(outboxDir))
         return CreateViewModel(
@@ -232,14 +233,15 @@ class CreateRecipientBindingFailClosedTest {
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir),
         openPhotoSource = { id ->
             dev.hryshyn.remanence.create.PhotoSource {
-                java.io.ByteArrayInputStream("photo-$id".toByteArray())
+                java.io.ByteArrayInputStream(
+                    dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(id),
+                )
             }
         },
         frontProcessor = Accepting(FingerprintSide.FRONT),
-        photoNormalizer = { input ->
-            normalizerGate?.await()
-            dev.hryshyn.remanence.create.NormalizedPhotoDto(input.copyOf(), 800, 600)
-        },
+        // C3 authoritative cutover: normalization runs once inside the G4B
+        // bind; the publisher consumes bind results through the bridge.
+        generatorBridgeProvider = bridge.provider,
         cpuDispatcher = testDispatcher,
         ioDispatcher = testDispatcher,
         senderRetryKeysetWrapper = testWrapper,
@@ -351,6 +353,7 @@ class CreateRecipientBindingFailClosedTest {
     // ------------------------------------------------------------------
 
     @Test
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
     fun pendingUnconfirmedReplacementCannotRedirectTheBoundSnapshot() = runBlocking {
         val vm = viewModel()
         driveToContent(vm, selfSnapshot())
@@ -388,20 +391,21 @@ class CreateRecipientBindingFailClosedTest {
     // ------------------------------------------------------------------
 
     @Test
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
     fun mutatingDirectoryDataAfterConfirmationCannotRedirectInFlightPublish() = runBlocking {
         val directory = MutableDirectory().also {
             it.set(mapOf("mykola" to selfSnapshot(), "friend" to otherSnapshot()))
         }
         val identityGate = CompletableDeferred<SenderIdentitySnapshot>()
-        val normalizerGate = CompletableDeferred<Unit>()
-        val vm = viewModel(directory = directory, identityGate = identityGate, normalizerGate = normalizerGate)
+        val vm = viewModel(directory = directory, identityGate = identityGate)
         driveToContent(vm, selfSnapshot())
         val selfCapsuleId = vm.capsuleId
 
         vm.startPublishing()
-        // The publish is parked inside normalization (before any artifact
-        // is written). The directory is now mutated: a re-lookup of the
-        // same handle resolves to a different user / key bundle.
+        // The publish is parked at the single identity capture (before
+        // any artifact is written). The directory is now mutated: a
+        // re-lookup of the same handle resolves to a different user /
+        // key bundle.
         directory.set(
             mapOf(
                 "mykola" to otherSnapshot(),
@@ -411,7 +415,6 @@ class CreateRecipientBindingFailClosedTest {
 
         // Resume the publish. The captured snapshot stays the original
         // self snapshot; the redirect attempt is irrelevant.
-        normalizerGate.complete(Unit)
         identityGate.complete(senderIdentitySnapshot())
         awaitTerminalPublish(vm)
         assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
@@ -434,6 +437,7 @@ class CreateRecipientBindingFailClosedTest {
     // ------------------------------------------------------------------
 
     @Test
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
     fun malformedRecipientKeyMaterialFailsClosedAndCleansUpStaging() = runBlocking {
         val vm = viewModel()
         driveToContent(vm, malformedKeySnapshot())

@@ -802,20 +802,24 @@ class CreateViewModel(
      * monotonic content revision) with the legacy publish inputs.
      *
      * Owner rulings applied: `generationId` is the session capsule id; the
-     * sender snapshot is captured exactly once here at begin; the input
-     * carries opaque-UUID content ids with SHA-256 pre-reads of the
-     * selected originals (pre-read/hash at selection allowed) and the
-     * authored note. No bind/freeze happens here — that is the C3
-     * publisher cutover; the begun session holds no staged bytes and dies
-     * by revocation below or by G3 TTL/sweep.
+     * sender snapshot arrives captured exactly once per publication (see
+     * [publish]) and is used here for begin; the input carries opaque-UUID
+     * content ids with SHA-256 pre-reads of the selected originals
+     * (pre-read/hash at selection allowed) and the authored note. No
+     * bind/freeze happens here — that is the C3 publisher cutover; the
+     * begun session holds no staged bytes and dies by revocation below or
+     * by G3 TTL/sweep.
      *
      * Returns false (fail closed, back at CONTENT) only when the sources
      * pre-read cleanly yet the bridge rejects the session. A pre-read
      * failure skips the bridge silently so the legacy pipeline fails
-     * exactly as it does today; a null sender does the same (publishSealed
-     * reports its own identity error). Cancellation propagates.
+     * exactly as it does today. Cancellation propagates.
      */
-    private suspend fun beginGeneratorSession(generation: Long, inputs: PublishInputs): Boolean {
+    private suspend fun beginGeneratorSession(
+        generation: Long,
+        inputs: PublishInputs,
+        capturedSender: SenderIdentitySnapshot?,
+    ): Boolean {
         val bridge = generatorBridge
         if (generatorBridgeProvider == null || bridge == null) return true
         val epoch = generatorSessionEpoch
@@ -823,8 +827,9 @@ class CreateViewModel(
             failPublishing("generator session has no epoch; publishing cancelled", generation)
             return false
         }
-        val sender = identityProvider()
-        if (sender == null) return true
+        // The sender arrives captured once per publication; a missing value
+        // here is a backstop that preserves the old skip-legacy behavior.
+        val sender = capturedSender ?: return true
         val preread: List<PrereadOriginal>? = withContext(ioDispatcher) {
             try {
                 inputs.photoIds.map { pickerId ->
@@ -901,8 +906,23 @@ class CreateViewModel(
     private suspend fun publish(generation: Long, inputs: PublishInputs) {
         _publishError.value = null
         try {
-            if (!beginGeneratorSession(generation, inputs)) return
-            publishSealed(generation, inputs)
+            // C3-prep single sender snapshot: the local identity is read
+            // exactly once per publication here. The captured value feeds
+            // both the generator begin and the final publish request; the
+            // only later identity read is the fail-closed owner-change
+            // check inside publishSealed. On the legacy path (no bridge)
+            // nothing is read here and publishSealed behaves exactly as
+            // before.
+            val capturedSender = if (generatorBridgeProvider != null && generatorBridge != null) {
+                identityProvider() ?: run {
+                    failPublishing("local identity is unavailable; recovery required", generation)
+                    return
+                }
+            } else {
+                null
+            }
+            if (!beginGeneratorSession(generation, inputs, capturedSender)) return
+            publishSealed(generation, inputs, capturedSender)
         } catch (superseded: PublishSuperseded) {
             // The owning session is gone: ITS staging dies, nothing is
             // published, and no newer session's artifacts are touched. Its
@@ -930,7 +950,11 @@ class CreateViewModel(
         }
     }
 
-    private suspend fun publishSealed(generation: Long, inputs: PublishInputs) {
+    private suspend fun publishSealed(
+        generation: Long,
+        inputs: PublishInputs,
+        capturedSender: SenderIdentitySnapshot?,
+    ) {
         fun ensureCurrent() {
             if (!isPublishCurrent(generation)) throw PublishSuperseded()
         }
@@ -938,12 +962,14 @@ class CreateViewModel(
         // recipient encryption public keyset come ONLY from the explicitly
         // confirmed immutable [ResolvedHandleSnapshot] captured into
         // [PublishInputs] before any suspend boundary. The sender identity
-        // (user id, signing key, handle, owner) remains the authenticated
-        // local account. A self-send is a valid publication because the user
-        // may confirm their own handle - the request builder then receives
-        // EQUAL VALUES for sender and recipient, not a default.
+        // (user id, signing key, handle, owner) is the single snapshot
+        // captured per publication ([capturedSender]); on the legacy path
+        // it is read here exactly as before. A self-send is a valid
+        // publication because the user may confirm their own handle - the
+        // request builder then receives EQUAL VALUES for sender and
+        // recipient, not a default.
         val snapshot = inputs.recipient
-        val sender = identityProvider()
+        val sender = capturedSender ?: identityProvider()
         ensureCurrent()
         if (sender == null) {
             failPublishing("local identity is unavailable; recovery required", generation)

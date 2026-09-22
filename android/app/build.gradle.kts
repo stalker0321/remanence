@@ -84,6 +84,8 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     implementation(libs.androidx.work.runtime)
+    // C2 generator wiring: real EXIF-upright decoder (GeneratorExifDecoder).
+    implementation(libs.androidx.exifinterface)
 
     testImplementation(platform(libs.androidx.compose.bom))
     testImplementation(libs.compose.ui.test.junit4)

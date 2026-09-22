@@ -278,6 +278,14 @@ class CreateViewModel(
 
     private var generatorBound: GeneratorBoundSession? = null
 
+    /**
+     * C3-prep: the publish generation that owns [generatorBound]. Lets
+     * failure/cancel/supersede paths revoke exactly their own binding and
+     * lets a retry revoke a leftover before re-beginning — never a newer
+     * session's binding. Null exactly when [generatorBound] is null.
+     */
+    private var generatorBoundGeneration: Long? = null
+
     /** One pre-read original for bridge session-sync (D2: pre-read allowed). */
     private data class PrereadOriginal(val bytes: ByteArray, val widthPx: Int, val heightPx: Int)
 
@@ -743,6 +751,7 @@ class CreateViewModel(
     ) {
         val bound = generatorBound ?: return
         generatorBound = null
+        generatorBoundGeneration = null
         try {
             invalidator(bound.bridge, bound.context, bound.sessionId)
         } catch (_: Exception) {
@@ -754,6 +763,23 @@ class CreateViewModel(
         dropGeneratorBound { bridge, context, sessionId ->
             bridge.onPhotoEdit(context, sessionId)
         }
+    }
+
+    /**
+     * Revokes the bound session only when it still belongs to
+     * [generation]. A stale failure of a superseded job must never drop a
+     * newer session's binding.
+     */
+    private fun dropGeneratorBoundForGeneration(
+        generation: Long,
+        invalidator: (
+            GeneratorCreateBridge.Bridge,
+            GeneratorCreateBridge.GenerationContext,
+            String,
+        ) -> Unit,
+    ) {
+        if (generatorBound == null || generatorBoundGeneration != generation) return
+        dropGeneratorBound(invalidator)
     }
 
     /**
@@ -815,6 +841,15 @@ class CreateViewModel(
             }
         }
         if (preread == null) return true
+        // Retry/re-begin must never orphan a previous binding: revoke any
+        // leftover from this or an older generation on its exact context
+        // before opening a new G3 session. A newer generation's binding (a
+        // stale job racing a live session) is never touched.
+        if (generatorBoundGeneration?.let { it <= generation } == true) {
+            dropGeneratorBound { bridge, context, sessionId ->
+                bridge.cancel(context, sessionId)
+            }
+        }
         try {
             val input = GeneratorExpression.GeneratorInput(
                 ownerId = inputs.owner.toRestString(),
@@ -847,6 +882,7 @@ class CreateViewModel(
                 throw PublishSuperseded()
             }
             generatorBound = GeneratorBoundSession(bridge, begun.context, begun.sessionId)
+            generatorBoundGeneration = generation
             return true
         } finally {
             preread.forEach { it.bytes.fill(0) }
@@ -869,14 +905,24 @@ class CreateViewModel(
             publishSealed(generation, inputs)
         } catch (superseded: PublishSuperseded) {
             // The owning session is gone: ITS staging dies, nothing is
-            // published, and no newer session's artifacts are touched.
+            // published, and no newer session's artifacts are touched. Its
+            // bridge binding dies too, but only when still ours.
+            dropGeneratorBoundForGeneration(generation) { bridge, context, sessionId ->
+                bridge.cancel(context, sessionId)
+            }
             clearStagedPhotosGuarded(inputs.owner, inputs.capsuleId)
         } catch (cancelled: CancellationException) {
             // Session teardown: staged plaintext dies with this scope below.
+            dropGeneratorBoundForGeneration(generation) { bridge, context, sessionId ->
+                bridge.cancel(context, sessionId)
+            }
             clearStagedPhotosGuarded(inputs.owner, inputs.capsuleId)
             throw cancelled
         } catch (failure: Exception) {
             if (!isPublishCurrent(generation)) return
+            dropGeneratorBoundForGeneration(generation) { bridge, context, sessionId ->
+                bridge.cancel(context, sessionId)
+            }
             _publishError.value = failure.message ?: "publishing failed"
             _step.value = Step.CONTENT
         } finally {

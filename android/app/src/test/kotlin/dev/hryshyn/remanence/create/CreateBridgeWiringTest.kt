@@ -465,4 +465,41 @@ class CreateBridgeWiringTest {
         assertTrue(vm.noteEditor.onChange("still legacy"))
         vm.endSession()
     }
+
+    @Test
+    fun retryAfterPipelineFailureReBeginsWithoutOrphaningTheFirstBinding() = runBlocking {
+        val vm = contentStage()
+        // Sabotage the legacy photo staging root: attempt 1 fails AFTER
+        // the bridge binding is stored but BEFORE any outbox row exists,
+        // so a retry stays viable on the legacy path too.
+        stagingDir.deleteRecursively()
+        stagingDir.writeText("staging root is unavailable")
+        vm.startPublishing()
+        awaitTerminalPublish(vm)
+
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        assertEquals(0, liveBridgeSessions())
+
+        stagingDir.delete()
+        stagingDir.mkdirs()
+        vm.startPublishing()
+        awaitTerminalPublish(vm)
+
+        assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
+        assertEquals(OutboxCapsuleState.ENCRYPTED, outboxRow(vm.capsuleId)!!.state)
+        // Exactly one live session: the failed attempt's binding was
+        // revoked before the retry re-began, never orphaned.
+        assertEquals(1, liveBridgeSessions())
+    }
+
+    @Test
+    fun publishFailureAfterBeginRevokesTheBoundSession() = runBlocking {
+        val vm = contentStage()
+        outboxDir.writeText("outbox root is unavailable")
+        vm.startPublishing()
+        awaitTerminalPublish(vm)
+
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        assertEquals(0, liveBridgeSessions())
+    }
 }

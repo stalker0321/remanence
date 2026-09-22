@@ -247,13 +247,14 @@ class CreateBridgeWiringTest {
     /** Builds a ViewModel parked at CONTENT with real-JPEG photos + note ready. */
     private fun contentStage(
         bridgeProvider: ((UserId) -> GeneratorCreateBridge.Bridge)? = memoryBridgeProvider,
+        identity: suspend () -> SenderIdentitySnapshot = { senderIdentity() },
     ): CreateViewModel {
         val persistence = RecordingPersistence()
         val retryStore = SenderRetryMaterialStore(AccountScopedFileRoots(outboxDir))
         val vm = CreateViewModel(
             directory = StaticDirectory(),
             accessTokenProvider = { null },
-            identityProvider = { senderIdentity() },
+            identityProvider = identity,
             persistence = persistence,
             outboxStager = CapsuleOutboxStager(database, AccountScopedFileRoots(outboxDir), retryStore),
             profile = RecognitionProfile.postcardSiftRootSiftV1(),
@@ -501,5 +502,23 @@ class CreateBridgeWiringTest {
 
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         assertEquals(0, liveBridgeSessions())
+    }
+
+    @Test
+    fun wiredPublishReadsLocalIdentityExactlyTwice() = runBlocking {
+        var identityReads = 0
+        val vm = contentStage(identity = {
+            identityReads++
+            senderIdentity()
+        })
+        vm.startPublishing()
+        awaitTerminalPublish(vm)
+
+        assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
+        // Exactly once for the publication (generator begin + final
+        // request share the captured snapshot), plus the required
+        // fail-closed owner-change re-check. Three reads would mean the
+        // bridge and the publisher snapshotted independently.
+        assertEquals(2, identityReads)
     }
 }

@@ -78,6 +78,8 @@ class RemanenceViewModelFactory(
             },
             recipientLookupBoundaryEpoch = container.sessionBoundary::currentEpoch,
             registerRecipientLookupBoundary = container.sessionBoundary::register,
+            // C2: the per-owner C1 bridge provider for VM session-sync.
+            generatorBridgeProvider = generatorBridgeProvider,
             identityProvider = {
                 val row = container.currentAccountStore.loadEntity() ?: return@CreateViewModel null
                 when (val loaded = container.identityRepository.load()) {

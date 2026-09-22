@@ -53,6 +53,16 @@ fun interface LogoutCredentialSink {
     fun clear()
 }
 
+/**
+ * C2 port over per-owner generator bridge revocation: all G3 staging
+ * sessions of [owner] die with the account. Called exactly once per
+ * logout (step 4.5); may throw, which is recorded without blocking
+ * teardown — same guarantees as the other account-scoped ports.
+ */
+fun interface GeneratorBridgeLogoutPort {
+    fun revokeOwnerSessions(owner: UserId)
+}
+
 /** Observable result of [LogoutUseCase.logout]. */
 data class LogoutOutcome(
     /** Failure while proving the owner for account-scoped cleanup. */
@@ -77,6 +87,8 @@ data class LogoutOutcome(
     val localAccountClearFailure: Exception? = null,
     /** Failure invalidating the owner-independent scan grant state. */
     val scanGrantInvalidationFailure: Exception? = null,
+    /** Failure revoking the snapshotted owner's generator bridge sessions. */
+    val generatorBridgeLogoutFailure: Exception? = null,
 )
 
 /**
@@ -100,6 +112,10 @@ data class LogoutOutcome(
  *    5 and 6;
  * 5. clear LOCAL state: the `local_account` Room row;
  * 6. invalidate any SCAN GRANT held by the running session.
+ *
+ * C2 adds step 4.5 between 4 and 5: revoke the snapshotted owner's
+ * generator bridge sessions through [GeneratorBridgeLogoutPort], exactly
+ * once, strictly against the same snapshot.
  *
  * The bounded sequence runs in [NonCancellable], and each operational local
  * [Exception] is recorded independently so a later local step is still
@@ -127,6 +143,7 @@ class LogoutUseCase(
     private val logoutOwnerSnapshot: LogoutOwnerSnapshotPort? = null,
     private val tempStorageCleanup: LogoutTempCleanupPort? = null,
     private val workCancellation: LogoutWorkCancellationPort? = null,
+    private val generatorBridgeLogout: GeneratorBridgeLogoutPort? = null,
     private val invalidateSessionLease: () -> Unit = {},
 ) {
 
@@ -226,6 +243,22 @@ class LogoutUseCase(
                 }
             }
 
+            // 4.5. Generator bridge sessions of the snapshot owner die with
+            // the account, exactly once, strictly against the snapshot —
+            // after temp cleanup, before the local row clears. A failure is
+            // recorded but never blocks steps 5 and 6.
+            var generatorBridgeFailure: Exception? = null
+            val generatorLogout = generatorBridgeLogout
+            if (generatorLogout != null && cancelTarget != null) {
+                try {
+                    generatorLogout.revokeOwnerSessions(cancelTarget)
+                } catch (cancelled: CancellationException) {
+                    rememberCancellation(cancelled)
+                } catch (failure: Exception) {
+                    generatorBridgeFailure = failure
+                }
+            }
+
             // 5. Local account row.
             var accountFailure: Exception? = null
             try {
@@ -254,6 +287,7 @@ class LogoutUseCase(
                 refreshTokenClearFailure = refreshTokenFailure,
                 localAccountClearFailure = accountFailure,
                 scanGrantInvalidationFailure = grantsFailure,
+                generatorBridgeLogoutFailure = generatorBridgeFailure,
             )
         }
 

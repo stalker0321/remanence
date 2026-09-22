@@ -63,6 +63,7 @@ private fun lifetimeSynthetic(side: FingerprintSide): ProcessedStill.Accepted {
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
+@org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
 class CreatePublishLifetimeTest {
 
     private val testDispatcher = UnconfinedTestDispatcher()
@@ -78,6 +79,8 @@ class CreatePublishLifetimeTest {
     private val testKekBoundary = SoftwareKekBoundary()
     private val testAlias = "test-sender-retry-${java.util.UUID.randomUUID()}"
     private lateinit var testWrapper: SenderRetryKeysetWrapper
+
+    private val bridge = dev.hryshyn.remanence.create.MemoryGeneratorBridge()
 
     @Before
     fun setUp() {
@@ -204,7 +207,6 @@ class CreatePublishLifetimeTest {
     /** Builds a ViewModel parked at CONTENT with photos + note ready. */
     private fun contentStage(
         identityGate: CompletableDeferred<SenderIdentitySnapshot>,
-        normalizerGate: CompletableDeferred<Unit>? = null,
         enqueueUpload: suspend (UserId, CapsuleId) -> Unit = { _, _ -> },
         revoke: CapsuleRevokePort? = null,
         networkConnected: () -> Boolean = { true },
@@ -222,14 +224,15 @@ class CreatePublishLifetimeTest {
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir),
             openPhotoSource = { id ->
                 dev.hryshyn.remanence.create.PhotoSource {
-                    java.io.ByteArrayInputStream("photo-$id".toByteArray())
+                    java.io.ByteArrayInputStream(
+                        dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(id),
+                    )
                 }
             },
             frontProcessor = Accepting(FingerprintSide.FRONT),
-            photoNormalizer = { input ->
-                if (normalizerGate != null) normalizerGate.await()
-                dev.hryshyn.remanence.create.NormalizedPhotoDto(input.copyOf(), 800, 600)
-            },
+            // C3 authoritative cutover: normalization runs once inside the
+            // G4B bind; the publisher consumes bind results through the bridge.
+            generatorBridgeProvider = bridge.provider,
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
             senderRetryKeysetWrapper = testWrapper,
@@ -328,15 +331,14 @@ class CreatePublishLifetimeTest {
 
     @Test
     fun exitDuringNormalizationLeavesNoOutboxRowAndNoLateMutation() {
-        val normalizerGate = CompletableDeferred<Unit>()
         val identityGate = CompletableDeferred<SenderIdentitySnapshot>()
         val enqueued = mutableListOf<CapsuleId>()
-        val vm = contentStage(identityGate, normalizerGate, enqueueUpload = { _, capsule -> enqueued += capsule })
+        val vm = contentStage(identityGate, enqueueUpload = { _, capsule -> enqueued += capsule })
         val oldCapsuleId = vm.capsuleId
 
         vm.startPublishing()
         assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value)
-        // Parked INSIDE normalization before any file was written.
+        // Parked at the single identity capture before any file was written.
         assertTrue(createStagingRoot().listFiles()?.isEmpty() ?: true)
 
         // FIX-STATE-13: a plaintext artifact exists INSIDE the owning
@@ -348,7 +350,6 @@ class CreatePublishLifetimeTest {
         vm.endSession()
 
         // Whatever the cancelled job does afterwards must not resurrect state.
-        normalizerGate.complete(Unit)
         identityGate.complete(senderIdentity())
 
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)

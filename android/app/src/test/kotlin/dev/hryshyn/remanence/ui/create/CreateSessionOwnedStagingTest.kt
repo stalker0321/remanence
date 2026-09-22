@@ -160,46 +160,36 @@ class CreateSessionOwnedStagingTest {
     )
 
     /**
-     * Non-cooperative normalization stand-in for the real CPU pipeline: the
-     * SECOND old-session photo blocks the calling worker on a plain
-     * [CountDownLatch] (invisible to coroutine cancellation), and the THIRD
-     * new-session photo blocks on [newGate]. Everything else passes through.
+     * Non-cooperative G4B normalization stand-in: the FIRST bind blocks the
+     * calling worker on a plain [CountDownLatch] (invisible to coroutine
+     * cancellation, mirroring the old CPU pipeline), and the FOURTH bind
+     * (the new session's third photo) blocks on [newGate]. Everything else
+     * passes through with the shared 32-byte fake output.
      */
-    private class GatedNormalizer(
+    private class GatedBinderNormalizer(
         private val oldPark: CountDownLatch,
         private val newGate: CompletableDeferred<Unit>,
     ) : dev.hryshyn.remanence.create.PhotoNormalizerPort {
-        val oldCalls = AtomicInteger(0)
-        val newCalls = AtomicInteger(0)
+        private val calls = AtomicInteger(0)
+        val enteredPark = CountDownLatch(1)
 
         override suspend fun normalize(inputJpeg: ByteArray): dev.hryshyn.remanence.create.NormalizedPhotoDto {
-            val text = inputJpeg.toString(Charsets.US_ASCII)
-            return when {
-                text.startsWith("old-") -> {
-                    if (oldCalls.incrementAndGet() == 2) {
-                        // Non-cooperative park: coroutine cancellation cannot
-                        // interrupt this; the job only unwinds afterwards.
-                        assertTrue(oldPark.await(30, TimeUnit.SECONDS))
-                    }
-                    dto(text)
+            when (calls.incrementAndGet()) {
+                1 -> {
+                    // Non-cooperative park: coroutine cancellation cannot
+                    // interrupt this; the job only unwinds afterwards.
+                    enteredPark.countDown()
+                    assertTrue(oldPark.await(30, TimeUnit.SECONDS))
                 }
-                text.startsWith("new-") -> {
-                    if (newCalls.incrementAndGet() == 3) newGate.await()
-                    dto(text)
-                }
-                else -> error("unexpected photo payload $text")
+                4 -> newGate.await()
+                else -> Unit
             }
+            return dev.hryshyn.remanence.create.NormalizedPhotoDto(ByteArray(32) { 5 }, 120, 213)
         }
-
-        private fun dto(marker: String) = dev.hryshyn.remanence.create.NormalizedPhotoDto(
-            "normalized-$marker".toByteArray(),
-            800,
-            600,
-        )
     }
 
     private fun newViewModel(
-        normalizer: dev.hryshyn.remanence.create.PhotoNormalizerPort,
+        bridge: dev.hryshyn.remanence.create.MemoryGeneratorBridge,
         identityGate: CompletableDeferred<SenderIdentitySnapshot>,
         identityCalls: AtomicInteger,
         laterOwner: UUID = userUuid,
@@ -221,13 +211,17 @@ class CreateSessionOwnedStagingTest {
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingRoot),
             openPhotoSource = { id ->
                 dev.hryshyn.remanence.create.PhotoSource {
-                    java.io.ByteArrayInputStream(id.toByteArray(Charsets.US_ASCII))
+                    java.io.ByteArrayInputStream(
+                        dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(id),
+                    )
                 }
             },
             frontProcessor = Accepting(FingerprintSide.FRONT),
             cpuDispatcher = Dispatchers.Default,
             ioDispatcher = Dispatchers.IO,
-            photoNormalizer = normalizer,
+            // C3 authoritative cutover: normalization runs once inside the
+            // G4B bind; the publisher consumes bind results through the bridge.
+            generatorBridgeProvider = bridge.provider,
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
             enqueueUpload = enqueueUpload,
@@ -265,22 +259,24 @@ class CreateSessionOwnedStagingTest {
     // ------------------------------------------------------------------
 
     @Test
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
     fun accountSwitchDuringSuspendedPublishCleansOnlyTheCapturedOwner() {
         val oldPark = CountDownLatch(1)
         val newGate = CompletableDeferred<Unit>()
-        val normalizer = GatedNormalizer(oldPark, newGate)
+        val gatedNormalizer = GatedBinderNormalizer(oldPark, newGate)
+        val bridge = dev.hryshyn.remanence.create.MemoryGeneratorBridge(normalizer = gatedNormalizer)
         val identityGate = CompletableDeferred<SenderIdentitySnapshot>()
         val identityCalls = AtomicInteger(0)
         val enqueued = mutableListOf<Pair<UserId, CapsuleId>>()
         val vm = newViewModel(
-            normalizer,
+            bridge,
             identityGate,
             identityCalls,
             switchedUserUuid,
             enqueueUpload = { owner, capsule -> enqueued += owner to capsule },
         )
 
-        // --- Account A: publish and park inside non-cooperative normalization.
+        // --- Account A: publish and park inside the first G4B bind.
         vm.beginSession(1L, userUuid.toString())
         driveToReadyContent(vm, listOf("old-1", "old-2", "old-3"))
         val oldCapsuleId = vm.capsuleId
@@ -290,20 +286,20 @@ class CreateSessionOwnedStagingTest {
         vm.startPublishing()
         assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value)
         identityGate.complete(senderIdentity(userUuid))
-        // First old photo staged into ITS OWN directory; second one parked.
-        awaitCondition("first staged file in $oldDir") {
-            oldDir.listFiles()?.map { it.name } == listOf("photo-00.jpg")
-        }
+        // First bind parked before staging anything into G3.
+        assertTrue(gatedNormalizer.enteredPark.await(30, TimeUnit.SECONDS))
 
-        // --- Teardown while the stale job is blocked mid-normalization.
+        // --- Teardown while the stale job is blocked mid-bind.
         vm.endSession()
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
         assertNull(vm.confirmedRecipient.value)
         assertTrue(vm.photoSelection.selectedIds.isEmpty())
         assertTrue(vm.noteEditor.isEmpty)
         assertNull(vm.frontAttempt.phase)
-        // The directory belongs to the still-running publication: untouched.
-        assertTrue(oldDir.isDirectory)
+        // A's G3 session is revoked exactly; nothing was ever staged and no
+        // legacy photo directory is created on the wired path at all.
+        assertTrue(bridge.stores[userUuid.toString()]?.data?.isEmpty() ?: true)
+        assertTrue(!oldDir.exists())
 
         // --- Account switch: a fresh B session REALLY publishes.
         val bMarker = File(
@@ -316,37 +312,26 @@ class CreateSessionOwnedStagingTest {
         vm.beginSession(2L, switchedUserUuid.toString())
         val newCapsuleId = vm.capsuleId
         assertTrue(newCapsuleId != oldCapsuleId)
-        // The sweep is B-scoped and cannot touch A's in-flight directory.
-        assertTrue(oldDir.isDirectory)
-        assertEquals(listOf("photo-00.jpg"), oldDir.listFiles()?.map { it.name })
+        // The sweep is B-scoped and cannot touch A's (already revoked)
+        // session; the marker survives.
+        assertTrue(bridge.stores[userUuid.toString()]?.data?.isEmpty() ?: true)
+        assertEquals("B must survive", bMarker.readText())
 
         driveToReadyContent(vm, listOf("new-1", "new-2", "new-3"))
         val newDir = File(roots.createStagingRoot(UserId(switchedUserUuid)), newCapsuleId)
 
         vm.startPublishing()
         assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value)
-        // New session stages two photos, then parks on its third: both files
-        // exist as REAL artifacts of a live publication.
-        awaitCondition("two staged files in $newDir") {
-            newDir.listFiles()?.map { it.name }?.sorted() == listOf("photo-00.jpg", "photo-01.jpg")
+        // New session stages two G3 leases, then parks on its third.
+        val bKey = switchedUserUuid.toString()
+        awaitCondition("two staged leases for B") {
+            bridge.stores[bKey]?.data?.size == 2
         }
-        val newFile0 = File(newDir, "photo-00.jpg").readBytes()
-        val newFile1 = File(newDir, "photo-01.jpg").readBytes()
-        assertEquals("normalized-new-1", newFile0.toString(Charsets.US_ASCII))
-        assertEquals("normalized-new-2", newFile1.toString(Charsets.US_ASCII))
 
-        // --- THE race: the stale job wakes and runs its cancellation cleanup.
+        // --- THE race: the stale job wakes and unwinds via Stale (its G3
+        // record is gone) without touching B's leases.
         oldPark.countDown()
-        awaitCondition("stale session directory removed") { !oldDir.exists() }
-
-        // The stale cleanup touched ONLY A's captured directory.
-        assertTrue(newDir.isDirectory)
-        assertEquals(
-            listOf("photo-00.jpg", "photo-01.jpg"),
-            newDir.listFiles()?.map { it.name }?.sorted(),
-        )
-        assertEquals(newFile0.toList(), File(newDir, "photo-00.jpg").readBytes().toList())
-        assertEquals(newFile1.toList(), File(newDir, "photo-01.jpg").readBytes().toList())
+        assertEquals(2, bridge.stores[bKey]?.data?.size)
         assertEquals("B must survive", bMarker.readText())
 
         // --- The new publication finishes with exactly its own outbox row.
@@ -366,14 +351,15 @@ class CreateSessionOwnedStagingTest {
             assertTrue(database.outboxBlobDao().getAllByCapsuleIdAndOwner(newCapsuleId, switchedUserUuid.toString()).size >= 5)
         }
 
-        // Own-directory cleanup after SUCCESS too: no plaintext survives.
-        awaitCondition("own directory removed after success") { !newDir.exists() }
+        // No legacy plaintext staging ever existed for either session.
+        assertTrue(!oldDir.exists())
+        assertTrue(!newDir.exists())
     }
 
     @Test
     fun sameEpochRotationPreservesInProgressSessionStaging() {
         val vm = newViewModel(
-            GatedNormalizer(CountDownLatch(1), CompletableDeferred(Unit)),
+            dev.hryshyn.remanence.create.MemoryGeneratorBridge(),
             CompletableDeferred(),
             AtomicInteger(0),
         )
@@ -398,7 +384,7 @@ class CreateSessionOwnedStagingTest {
     @Test
     fun routeExitCleansOwnedStagingExactlyOnceAndLeavesForeignAccountUntouched() {
         val vm = newViewModel(
-            GatedNormalizer(CountDownLatch(1), CompletableDeferred(Unit)),
+            dev.hryshyn.remanence.create.MemoryGeneratorBridge(),
             CompletableDeferred(),
             AtomicInteger(0),
         )
@@ -427,7 +413,7 @@ class CreateSessionOwnedStagingTest {
     @Test
     fun accountSwitchCleansPreviousOwnerStagingAndStartsAFreshSession() {
         val vm = newViewModel(
-            GatedNormalizer(CountDownLatch(1), CompletableDeferred(Unit)),
+            dev.hryshyn.remanence.create.MemoryGeneratorBridge(),
             CompletableDeferred(),
             AtomicInteger(0),
             switchedUserUuid,
@@ -452,7 +438,7 @@ class CreateSessionOwnedStagingTest {
     fun beginSessionRemovesOnlyTheReplacedSessionsOwnDirectory() {
         val identityGate = CompletableDeferred<SenderIdentitySnapshot>()
         val vm = newViewModel(
-            GatedNormalizer(CountDownLatch(1), CompletableDeferred(Unit)),
+            dev.hryshyn.remanence.create.MemoryGeneratorBridge(),
             identityGate,
             AtomicInteger(0),
         )
@@ -503,7 +489,7 @@ class CreateSessionOwnedStagingTest {
     @Test
     fun endSessionTearsDownTransientFieldsAndSameEpochBeginAfterEndStartsFresh() {
         val vm = newViewModel(
-            GatedNormalizer(CountDownLatch(1), CompletableDeferred(Unit)),
+            dev.hryshyn.remanence.create.MemoryGeneratorBridge(),
             CompletableDeferred(),
             AtomicInteger(0),
         )
@@ -548,7 +534,7 @@ class CreateSessionOwnedStagingTest {
     @Test
     fun endSessionUnlinksLeafSymlinkAndLeavesTheTargetUntouched() {
         val vm = newViewModel(
-            GatedNormalizer(CountDownLatch(1), CompletableDeferred(Unit)),
+            dev.hryshyn.remanence.create.MemoryGeneratorBridge(),
             CompletableDeferred(),
             AtomicInteger(0),
         )
@@ -614,7 +600,7 @@ class CreateSessionOwnedStagingTest {
     @Test
     fun missingOwnerFailsClosedWithoutCreatingGlobalOrAccountStaging() {
         val vm = newViewModel(
-            GatedNormalizer(CountDownLatch(1), CompletableDeferred(Unit)),
+            dev.hryshyn.remanence.create.MemoryGeneratorBridge(),
             CompletableDeferred(),
             AtomicInteger(0),
         )

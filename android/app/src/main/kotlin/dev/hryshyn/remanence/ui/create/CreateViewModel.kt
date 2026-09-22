@@ -102,21 +102,6 @@ class CreateViewModel(
     private val cpuDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     /**
-     * FIX-STATE-03/08: the photo normalization step is a port; production
-     * keeps the real OpenCV normalizer on the CPU dispatcher, tests inject a
-     * deterministic one so publishing stays fully exercisable off-hardware.
-     */
-    private val photoNormalizer: dev.hryshyn.remanence.create.PhotoNormalizerPort = { jpeg ->
-        val normalized = withContext(cpuDispatcher) {
-            dev.hryshyn.remanence.core.recognition.PhotoNormalizer().normalize(jpeg)
-        }
-        dev.hryshyn.remanence.create.NormalizedPhotoDto(
-            normalized.jpegBytes,
-            normalized.width,
-            normalized.height,
-        )
-    },
-    /**
      * M2-P08: the sender-retry keyset wrapper and dedicated KEK alias.
      * The publisher wraps the freshly generated capsule keyset through
      * these; the wrapper MUST be injected, not created internally, so
@@ -137,8 +122,8 @@ class CreateViewModel(
     registerRecipientLookupBoundary: (((() -> Unit)) -> (() -> Unit))? = null,
     /**
      * C2 generator seam: per-owner C1 bridge provider from the factory.
-     * Null (tests, legacy fixtures) means a legacy-only session: every
-     * hook below is a no-op and publishing behaves exactly as before.
+     * Null means publishing fails closed (no bridge, no fallback); every
+     * invalidation hook below is then a no-op.
      */
     private val generatorBridgeProvider: ((UserId) -> GeneratorCreateBridge.Bridge)? = null,
 ) : ViewModel() {
@@ -262,7 +247,7 @@ class CreateViewModel(
 
     /**
      * C2 bridge session-sync: the bridge resolved for the session owner in
-     * [beginSession] (null = legacy-only session) plus the epoch retained
+     * [beginSession] (null fails publishing closed) plus the epoch retained
      * for the bridge context. The bridge owns the monotonic content
      * revision; [createSessionGeneration] never substitutes for it.
      */
@@ -362,8 +347,8 @@ class CreateViewModel(
         _capsuleId = UUID.randomUUID().toString()
         sessionOwner = nextOwner
         // C2: session-sync for the bridge — the epoch is retained for the
-        // context and the bridge is resolved per session owner (null owner
-        // or null provider means a legacy-only session).
+        // context and the bridge is resolved per session owner (a null
+        // owner or null provider fails publishing closed at publish).
         generatorSessionEpoch = epoch
         generatorBridge = nextOwner?.let { owner -> generatorBridgeProvider?.invoke(owner) }
         _step.value = Step.RECIPIENT_LOOKUP
@@ -738,7 +723,7 @@ class CreateViewModel(
     /**
      * Revokes the bound bridge session through [invalidator] on its exact
      * immutable context, then drops it. A missing bound session is a no-op,
-     * so legacy-only sessions and teardown ordering never matter here.
+     * so missing sessions and teardown ordering never matter here.
      * Revocation is best-effort cleanup: authoring must never break because
      * teardown of a dead session failed.
      */
@@ -797,39 +782,41 @@ class CreateViewModel(
         MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 
     /**
-     * C2 session-sync: binds one bridge generation for THIS publication,
+     * C3 session-sync: binds one bridge generation for THIS publication,
      * synchronizing the bridge context (canonical owner, session epoch,
-     * monotonic content revision) with the legacy publish inputs.
+     * monotonic content revision) with the publish inputs. There is no
+     * legacy fallback: a missing bridge, epoch, sender, or unreadable
+     * source fails closed to CONTENT.
      *
      * Owner rulings applied: `generationId` is the session capsule id; the
      * sender snapshot arrives captured exactly once per publication (see
      * [publish]) and is used here for begin; the input carries opaque-UUID
      * content ids with SHA-256 pre-reads of the selected originals
      * (pre-read/hash at selection allowed) and the authored note. No
-     * bind/freeze happens here — that is the C3 publisher cutover; the
+     * bind/freeze happens here — binds run in [bindGeneratorPhotos]; the
      * begun session holds no staged bytes and dies by revocation below or
      * by G3 TTL/sweep.
      *
-     * Returns false (fail closed, back at CONTENT) only when the sources
-     * pre-read cleanly yet the bridge rejects the session. A pre-read
-     * failure skips the bridge silently so the legacy pipeline fails
-     * exactly as it does today. Cancellation propagates.
+     * Returns false (fail closed, back at CONTENT) when the bridge is
+     * absent, the sources pre-read cleanly yet the bridge rejects the
+     * session, or the pre-read itself fails. Cancellation propagates.
      */
     private suspend fun beginGeneratorSession(
         generation: Long,
         inputs: PublishInputs,
-        capturedSender: SenderIdentitySnapshot?,
+        capturedSender: SenderIdentitySnapshot,
     ): Boolean {
         val bridge = generatorBridge
-        if (generatorBridgeProvider == null || bridge == null) return true
+        if (generatorBridgeProvider == null || bridge == null) {
+            failPublishing("generator bridge is unavailable; publishing cancelled", generation)
+            return false
+        }
         val epoch = generatorSessionEpoch
         if (epoch == null) {
             failPublishing("generator session has no epoch; publishing cancelled", generation)
             return false
         }
-        // The sender arrives captured once per publication; a missing value
-        // here is a backstop that preserves the old skip-legacy behavior.
-        val sender = capturedSender ?: return true
+        val sender = capturedSender
         val preread: List<PrereadOriginal>? = withContext(ioDispatcher) {
             try {
                 inputs.photoIds.map { pickerId ->
@@ -845,7 +832,10 @@ class CreateViewModel(
                 null
             }
         }
-        if (preread == null) return true
+        if (preread == null) {
+            failPublishing("generator photo sources are unreadable; publishing cancelled", generation)
+            return false
+        }
         // Retry/re-begin must never orphan a previous binding: revoke any
         // leftover from this or an older generation on its exact context
         // before opening a new G3 session. A newer generation's binding (a
@@ -962,20 +952,12 @@ class CreateViewModel(
     private suspend fun publish(generation: Long, inputs: PublishInputs) {
         _publishError.value = null
         try {
-            // C3-prep single sender snapshot: the local identity is read
-            // exactly once per publication here. The captured value feeds
-            // both the generator begin and the final publish request; the
-            // only later identity read is the fail-closed owner-change
-            // check inside publishSealed. On the legacy path (no bridge)
-            // nothing is read here and publishSealed behaves exactly as
-            // before.
-            val capturedSender = if (generatorBridgeProvider != null && generatorBridge != null) {
-                identityProvider() ?: run {
-                    failPublishing("local identity is unavailable; recovery required", generation)
-                    return
-                }
-            } else {
-                null
+            // C3 authoritative cutover: the single sender snapshot is read
+            // unconditionally here. There is no legacy fallback left: every
+            // later step requires the bridge below.
+            val capturedSender = identityProvider() ?: run {
+                failPublishing("local identity is unavailable; recovery required", generation)
+                return
             }
             if (!beginGeneratorSession(generation, inputs, capturedSender)) return
             publishSealed(generation, inputs, capturedSender)
@@ -1009,7 +991,7 @@ class CreateViewModel(
     private suspend fun publishSealed(
         generation: Long,
         inputs: PublishInputs,
-        capturedSender: SenderIdentitySnapshot?,
+        capturedSender: SenderIdentitySnapshot,
     ) {
         fun ensureCurrent() {
             if (!isPublishCurrent(generation)) throw PublishSuperseded()
@@ -1019,18 +1001,13 @@ class CreateViewModel(
         // confirmed immutable [ResolvedHandleSnapshot] captured into
         // [PublishInputs] before any suspend boundary. The sender identity
         // (user id, signing key, handle, owner) is the single snapshot
-        // captured per publication ([capturedSender]); on the legacy path
-        // it is read here exactly as before. A self-send is a valid
-        // publication because the user may confirm their own handle - the
-        // request builder then receives EQUAL VALUES for sender and
+        // captured per publication ([capturedSender]). A self-send is a
+        // valid publication because the user may confirm their own handle -
+        // the request builder then receives EQUAL VALUES for sender and
         // recipient, not a default.
         val snapshot = inputs.recipient
-        val sender = capturedSender ?: identityProvider()
+        val sender = capturedSender
         ensureCurrent()
-        if (sender == null) {
-            failPublishing("local identity is unavailable; recovery required", generation)
-            return
-        }
         val senderOwner = runCatching { UserId.parseRest(sender.userId) }.getOrNull()
         if (senderOwner != inputs.owner) {
             failPublishing("authenticated owner changed; publishing cancelled", generation)
@@ -1057,43 +1034,26 @@ class CreateViewModel(
                 return
             }
 
-            // FIX-STATE-13/LUNA-01: normalized plaintext photos live ONLY
-            // inside this call. On the legacy path they live ONLY inside
-            // THIS publication's own account-scoped directory; every staged
-            // artifact is deleted before this method returns or throws, and
-            // no other account or session's directory is ever touched. On
-            // the C3 generator path no legacy staging directory is created
-            // at all: the normalized bytes arrive in memory from the bridge
-            // binds below.
-            // C3 generator path: a bridge session bound for THIS publication
-            // binds every authored source in order through the frozen
-            // bridge; the normalized derived bytes/dims come from those
-            // same bind results (no second normalize). Without a bound
-            // session the legacy pipeline runs (null-provider compatibility
-            // path for the next removal task).
-            val boundForPublish = generatorBound
-            val photoJpegs: List<ByteArray>
-            val photoWidthsPx: List<Int>
-            val photoHeightsPx: List<Int>
-            if (boundForPublish != null) {
-                val boundPhotos = bindGeneratorPhotos(generation, inputs, boundForPublish) ?: return
-                photoJpegs = boundPhotos.map { it.bytes }
-                photoWidthsPx = boundPhotos.map { it.widthPx }
-                photoHeightsPx = boundPhotos.map { it.heightPx }
-            } else {
-                val pipeline = dev.hryshyn.remanence.create.PhotoStagingPipeline(
-                    stagingDirectoryFor(inputs.owner, inputs.capsuleId),
-                    // The port owns its dispatcher hop; stageAll below adds IO.
-                    normalizer = photoNormalizer,
-                )
-                val staged = withContext(ioDispatcher) {
-                    pipeline.stageAll(inputs.photoIds.map(openPhotoSource))
-                }
-                ensureCurrent()
-                photoJpegs = staged.map { withContext(ioDispatcher) { it.file.readBytes() } }
-                photoWidthsPx = staged.map { it.width }
-                photoHeightsPx = staged.map { it.height }
+            // FIX-STATE-13/LUNA-01: normalized plaintext lives ONLY inside
+            // this call and is deleted before it returns or throws; no other
+            // account or session's material is ever touched. The C3
+            // generator path stages no legacy photo directory at all: the
+            // normalized bytes arrive in memory from the bridge binds, and
+            // only the G3 staging leases (revoked on invalidation, logout,
+            // or TTL) hold bytes outside this call.
+            // C3 authoritative cutover: a bridge session bound for THIS
+            // publication binds every authored source in order through the
+            // frozen bridge; the normalized derived bytes/dims come from
+            // those same bind results (no second normalize). A lost binding
+            // fails closed — there is no legacy fallback and no shadow.
+            val boundForPublish = generatorBound ?: run {
+                failPublishing("generator session was lost; publishing cancelled", generation)
+                return
             }
+            val boundPhotos = bindGeneratorPhotos(generation, inputs, boundForPublish) ?: return
+            val photoJpegs: List<ByteArray> = boundPhotos.map { it.bytes }
+            val photoWidthsPx: List<Int> = boundPhotos.map { it.widthPx }
+            val photoHeightsPx: List<Int> = boundPhotos.map { it.heightPx }
             ensureCurrent()
             try {
                 ensureCurrent()

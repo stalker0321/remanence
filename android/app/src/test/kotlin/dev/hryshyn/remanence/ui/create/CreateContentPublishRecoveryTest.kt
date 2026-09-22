@@ -117,6 +117,8 @@ class CreateContentPublishRecoveryTest {
     private val testAlias = "test-sender-retry-${java.util.UUID.randomUUID()}"
     private lateinit var testWrapper: SenderRetryKeysetWrapper
 
+    private val bridge = dev.hryshyn.remanence.create.MemoryGeneratorBridge()
+
     @Before
     fun setUp() {
         testKekBoundary.createAes256GcmKey(testAlias)
@@ -240,11 +242,15 @@ class CreateContentPublishRecoveryTest {
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir()),
             openPhotoSource = { id ->
                 dev.hryshyn.remanence.create.PhotoSource {
-                    java.io.ByteArrayInputStream("photo-$id".toByteArray())
+                    java.io.ByteArrayInputStream(
+                        dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(id),
+                    )
                 }
             },
             frontProcessor = ScriptedProcessor(synthetic(FingerprintSide.FRONT)),
-            photoNormalizer = { input -> dev.hryshyn.remanence.create.NormalizedPhotoDto(input.copyOf(), 800, 600) },
+            // C3 authoritative cutover: normalization runs once inside the
+            // G4B bind; the publisher consumes bind results through the bridge.
+            generatorBridgeProvider = bridge.provider,
             cpuDispatcher = testDispatcher,
             ioDispatcher = ioDispatcher,
             senderRetryKeysetWrapper = testWrapper,
@@ -452,6 +458,7 @@ class CreateContentPublishRecoveryTest {
     }
 
     @Test
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
     fun cancellationAtFrontDecryptReturnWipesOwnedBuffer() = runBlocking {
         val gate = CompletableDeferred<SenderIdentitySnapshot>().apply { complete(senderIdentity()) }
         val ioDispatcher = CancelAfterRunDispatcher()
@@ -479,6 +486,7 @@ class CreateContentPublishRecoveryTest {
     }
 
     @Test
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
     fun publishedScreenConfirmsAndRendersHonestRevokeSuccess() = runBlocking {
         val capsuleId = CapsuleId.parseRest("0198f0a0-0000-7000-8000-00000000ca01")
         val revoke = RecordingRevokePort(

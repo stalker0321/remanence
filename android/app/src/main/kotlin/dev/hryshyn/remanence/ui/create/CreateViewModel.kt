@@ -894,6 +894,62 @@ class CreateViewModel(
         }
     }
 
+    /** One bound authored photo for the publish request (derived bytes/dims). */
+    private data class BoundPhotoForPublish(val bytes: ByteArray, val widthPx: Int, val heightPx: Int)
+
+    /**
+     * C3 generator path: binds every selected source in authored order
+     * through the frozen bridge and reuses the normalized derived
+     * bytes/dims from those same bind results (no second normalize).
+     *
+     * Any non-Bound result fails closed: the bridge already revoked the
+     * whole session fail-closed internally, so our slot is dropped on the
+     * exact context (idempotent) and publishing returns to CONTENT with no
+     * partial handoff. On success the one-shot handoff is frozen and
+     * verified (same context, generationId == capsuleId, inputHash matches
+     * the canonical hash) before the ordered photos are returned.
+     * Cancellation propagates (the bridge revokes the matched session
+     * first, then our catch in [publish] drops the slot).
+     *
+     * Returns null after failPublishing (the caller returns immediately).
+     */
+    private suspend fun bindGeneratorPhotos(
+        generation: Long,
+        inputs: PublishInputs,
+        bound: GeneratorBoundSession,
+    ): List<BoundPhotoForPublish>? {
+        val bridge = bound.bridge
+        val photos = ArrayList<BoundPhotoForPublish>(inputs.photoIds.size)
+        for ((ordinal, pickerId) in inputs.photoIds.withIndex()) {
+            val result = try {
+                bridge.bindSlot(bound.context, bound.sessionId, ordinal, openPhotoSource(pickerId))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            }
+            val slot = result as? GeneratorCreateBridge.SlotResult.Bound
+            if (slot == null) {
+                dropGeneratorBoundForGeneration(generation) { b, c, s -> b.cancel(c, s) }
+                failPublishing("generator bind rejected slot $ordinal; publishing cancelled", generation)
+                return null
+            }
+            photos += BoundPhotoForPublish(slot.normalized.bytes, slot.normalized.widthPx, slot.normalized.heightPx)
+        }
+        val frozen = bridge.freeze(bound.context, bound.sessionId)
+        val handoff = (frozen as? GeneratorCreateBridge.FreezeResult.Frozen)?.handoff
+        if (handoff == null ||
+            handoff.context != bound.context ||
+            handoff.context.generationId != inputs.capsuleId ||
+            handoff.inputHash != GeneratorExpression.canonicalHash(handoff.input)
+        ) {
+            dropGeneratorBoundForGeneration(generation) { b, c, s -> b.cancel(c, s) }
+            failPublishing("generator freeze rejected; publishing cancelled", generation)
+            return null
+        }
+        return photos
+    }
+
     private suspend fun clearStagedPhotosGuarded(owner: UserId, capsuleId: String) {
         // FIX-STATE-11: guaranteed plaintext removal even on cancellation -
         // but NEVER any state publication from this path.
@@ -1002,21 +1058,44 @@ class CreateViewModel(
             }
 
             // FIX-STATE-13/LUNA-01: normalized plaintext photos live ONLY
-            // inside this call and ONLY inside THIS publication's own
-            // account-scoped directory; every staged artifact is deleted
-            // before this method returns or throws, and no other account or
-            // session's directory is ever touched.
-            val pipeline = dev.hryshyn.remanence.create.PhotoStagingPipeline(
-                stagingDirectoryFor(inputs.owner, inputs.capsuleId),
-                // The port owns its dispatcher hop; stageAll below adds IO.
-                normalizer = photoNormalizer,
-            )
-            val staged = withContext(ioDispatcher) {
-                pipeline.stageAll(inputs.photoIds.map(openPhotoSource))
+            // inside this call. On the legacy path they live ONLY inside
+            // THIS publication's own account-scoped directory; every staged
+            // artifact is deleted before this method returns or throws, and
+            // no other account or session's directory is ever touched. On
+            // the C3 generator path no legacy staging directory is created
+            // at all: the normalized bytes arrive in memory from the bridge
+            // binds below.
+            // C3 generator path: a bridge session bound for THIS publication
+            // binds every authored source in order through the frozen
+            // bridge; the normalized derived bytes/dims come from those
+            // same bind results (no second normalize). Without a bound
+            // session the legacy pipeline runs (null-provider compatibility
+            // path for the next removal task).
+            val boundForPublish = generatorBound
+            val photoJpegs: List<ByteArray>
+            val photoWidthsPx: List<Int>
+            val photoHeightsPx: List<Int>
+            if (boundForPublish != null) {
+                val boundPhotos = bindGeneratorPhotos(generation, inputs, boundForPublish) ?: return
+                photoJpegs = boundPhotos.map { it.bytes }
+                photoWidthsPx = boundPhotos.map { it.widthPx }
+                photoHeightsPx = boundPhotos.map { it.heightPx }
+            } else {
+                val pipeline = dev.hryshyn.remanence.create.PhotoStagingPipeline(
+                    stagingDirectoryFor(inputs.owner, inputs.capsuleId),
+                    // The port owns its dispatcher hop; stageAll below adds IO.
+                    normalizer = photoNormalizer,
+                )
+                val staged = withContext(ioDispatcher) {
+                    pipeline.stageAll(inputs.photoIds.map(openPhotoSource))
+                }
+                ensureCurrent()
+                photoJpegs = staged.map { withContext(ioDispatcher) { it.file.readBytes() } }
+                photoWidthsPx = staged.map { it.width }
+                photoHeightsPx = staged.map { it.height }
             }
             ensureCurrent()
             try {
-                val photoBytes = staged.map { withContext(ioDispatcher) { it.file.readBytes() } }
                 ensureCurrent()
                 val prepared = withContext(cpuDispatcher) {
                 CapsulePublisher(
@@ -1039,9 +1118,9 @@ class CreateViewModel(
                         ownerUserId = inputs.owner.toRestString(),
                         senderHandleSnapshot = sender.handle,
                         createdAtEpochSeconds = clockMillis() / 1000L,
-                        photoJpegs = photoBytes,
-                        photoWidthsPx = staged.map { it.width },
-                        photoHeightsPx = staged.map { it.height },
+                        photoJpegs = photoJpegs,
+                        photoWidthsPx = photoWidthsPx,
+                        photoHeightsPx = photoHeightsPx,
                         noteUtf8 = inputs.noteText,
                         frontFingerprintBytes = frontForPublish,
                         frontFingerprintProfileId = RecognitionProfile.SIFT_ROOTSIFT_V1_ID,

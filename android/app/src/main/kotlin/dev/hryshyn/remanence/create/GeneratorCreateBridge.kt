@@ -73,10 +73,35 @@ object GeneratorCreateBridge {
 
     /** Outcome of one slot bind (no exceptions except cancellation). */
     sealed interface SlotResult {
-        data class Bound(val lease: GeneratorStaging.Lease) : SlotResult
+        data class Bound(val lease: GeneratorStaging.Lease, val normalized: NormalizedPhoto) : SlotResult
         data class Stale(val reason: String) : SlotResult
         data class Duplicate(val ordinal: Int) : SlotResult
         data class Failed(val reason: String) : SlotResult
+    }
+
+    /**
+     * Normalized derived bytes/dims from the SAME G4B bind that produced
+     * the lease (single normalization, no second pass): the lease stages
+     * ORIGINAL bytes per the G3 contract while this carries the derived
+     * artifact the publisher consumes. Bytes use content equality.
+     */
+    data class NormalizedPhoto(
+        val bytes: ByteArray,
+        val widthPx: Int,
+        val heightPx: Int,
+    ) {
+        override fun equals(other: Any?): Boolean =
+            other is NormalizedPhoto &&
+                bytes.contentEquals(other.bytes) &&
+                widthPx == other.widthPx &&
+                heightPx == other.heightPx
+
+        override fun hashCode(): Int {
+            var result = bytes.contentHashCode()
+            result = 31 * result + widthPx
+            result = 31 * result + heightPx
+            return result
+        }
     }
 
     /** Outcome of freezing (no exceptions except cancellation). */
@@ -147,7 +172,9 @@ object GeneratorCreateBridge {
         /**
          * Binds one authored slot: reads the source once (bounded),
          * verifies + normalizes through G4B on a one-shot memory source,
-         * then stages the SAME bytes into G3. The stale/duplicate/order
+         * then stages the SAME bytes into G3. The bound result carries both
+         * the G3 lease (ORIGINAL bytes) and the normalized derived
+         * bytes/dims from that same single G4B bind. The stale/duplicate/order
          * gates plus an in-flight ordinal reservation are atomic under the
          * bridge lock and evaluated before any IO, so two concurrent binds
          * of one ordinal cannot both pass and at most one ever opens its
@@ -240,7 +267,14 @@ object GeneratorCreateBridge {
                 }
                 record.inFlight -= ordinal
                 record.done += ordinal
-                return SlotResult.Bound(staged.lease)
+                return SlotResult.Bound(
+                    staged.lease,
+                    NormalizedPhoto(
+                        bound.bound.normalizedBytes,
+                        bound.bound.normalizedWidthPx,
+                        bound.bound.normalizedHeightPx,
+                    ),
+                )
             }
         }
 

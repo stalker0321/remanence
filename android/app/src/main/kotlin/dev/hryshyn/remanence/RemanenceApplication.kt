@@ -249,6 +249,88 @@ class AppContainer private constructor(
         dev.hryshyn.remanence.core.data.storage.AccountStorageRetention(accountScopedFileRoots)
     }
 
+    /**
+     * C2 generator wiring (container lazies ONLY): production dependencies
+     * for the frozen C1 bridge (`GeneratorCreateBridge.Bridge` over the G3
+     * `GeneratorStaging.Manager` and the G4B `SourceBinder`), using the
+     * HB.md production choices — G4A owner-scoped filesystem store,
+     * `elapsedRealtime` monotonic clock, real EXIF decoder. No ViewModel,
+     * factory, publisher, protocol, renderer, UI or legacy-path changes
+     * here; nothing here calls into the bridge.
+     *
+     * Owner scoping: the G4A store is bound to exactly one owner, so the
+     * Manager/Bridge pair is cached per canonical owner. The binder
+     * (normalizer + decoder) is owner-agnostic and shared. Every member
+     * stays lazy so plain unit contexts never need Android clocks,
+     * Bitmaps, or filesystem roots until accessed.
+     */
+    val generatorPhotoNormalizer: dev.hryshyn.remanence.create.PhotoNormalizerPort by lazy {
+        val normalizer = dev.hryshyn.remanence.core.recognition.PhotoNormalizer()
+        dev.hryshyn.remanence.create.PhotoNormalizerPort { jpeg ->
+            val normalized = normalizer.normalize(jpeg)
+            dev.hryshyn.remanence.create.NormalizedPhotoDto(
+                normalized.jpegBytes,
+                normalized.width,
+                normalized.height,
+            )
+        }
+    }
+
+    /** Real EXIF-upright decoder (bounds-only, never allocates pixels). */
+    val generatorPhotoDecoder: dev.hryshyn.remanence.create.GeneratorSourceBinding.PhotoDecoderPort by lazy {
+        dev.hryshyn.remanence.create.GeneratorExifDecoder
+    }
+
+    /** Owner-agnostic G4B binder over the production normalizer + decoder. */
+    val generatorSourceBinder: dev.hryshyn.remanence.create.GeneratorSourceBinding.SourceBinder by lazy {
+        dev.hryshyn.remanence.create.GeneratorSourceBinding.SourceBinder(
+            generatorPhotoNormalizer,
+            generatorPhotoDecoder,
+        )
+    }
+
+    /** Per-owner G3 staging managers (sessions live in the Manager). */
+    private val generatorStagingManagers =
+        ConcurrentHashMap<String, dev.hryshyn.remanence.core.model.GeneratorStaging.Manager>()
+
+    /** Per-owner G4-C1 bridges (each owns its monotonic content revision). */
+    private val generatorCreateBridges =
+        ConcurrentHashMap<String, dev.hryshyn.remanence.create.GeneratorCreateBridge.Bridge>()
+
+    /**
+     * Production G3 staging manager for [owner]: G4A owner-scoped
+     * filesystem store driven by the `elapsedRealtime` monotonic clock
+     * (G3 fail-closed on rollback: sessions are kept, never wrongly
+     * expired). Cached per canonical owner; construction is pure.
+     */
+    fun generatorStagingManager(
+        owner: UserId,
+    ): dev.hryshyn.remanence.core.model.GeneratorStaging.Manager =
+        generatorStagingManagers.computeIfAbsent(owner.toRestString()) {
+            dev.hryshyn.remanence.core.model.GeneratorStaging.Manager(
+                store = dev.hryshyn.remanence.core.data.storage.GeneratorStagingFileStore(
+                    accountScopedFileRoots,
+                    accountStorageRetention,
+                    owner,
+                ),
+                nowMillis = { android.os.SystemClock.elapsedRealtime() },
+            )
+        }
+
+    /**
+     * Production C1 bridge for [owner] over that owner's staging manager
+     * and the shared production binder. Cached per canonical owner.
+     */
+    fun generatorCreateBridge(
+        owner: UserId,
+    ): dev.hryshyn.remanence.create.GeneratorCreateBridge.Bridge =
+        generatorCreateBridges.computeIfAbsent(owner.toRestString()) {
+            dev.hryshyn.remanence.create.GeneratorCreateBridge.Bridge(
+                generatorStagingManager(owner),
+                generatorSourceBinder,
+            )
+        }
+
     /** Per-process, per-owner Create plaintext recovery completion ledger. */
     private val createStagingSweepOwners = ConcurrentHashMap.newKeySet<String>()
     private val createStagingSweepMutex = Mutex()

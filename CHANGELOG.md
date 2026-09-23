@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.2.0-rc.2 — Generator C3 integration
+
+Android `versionCode` is **23** (`22` was used for an unpublished owner test
+APK and will not be reused). The debug candidate targets
+`https://remanence.hryshyn.dev/` with V2 line localization enabled. The
+intended prerelease tag is `v0.2.0-rc.2`; artifact naming is
+`Remanence-android-v0.2.0-rc.2-code23-g<release-sha>-debug.apk`.
+
+- Generator C1–C3: typed generator expression/discovery, owner-scoped
+  original-byte staging, source binding, serialized create bridge, and the
+  authoritative capsule publisher cutover. The legacy publisher fallback is
+  removed; missing bridge, stale session, or source/binding failure fails
+  closed instead of publishing through the old path.
+- No recovery/Block Store probe, protocol, renderer, or backend change in this
+  candidate. RV-01 remains a separate throwaway app and physical evidence is
+  still pending.
+- Generator final local unit gate on the merged code tree: **975 tests**, 0
+  failures/errors, 2 documented environment skips. APK assembly and signing
+  are verified separately for this version; phone install-over, capture,
+  create/publish, and other physical checks remain OPEN.
+
 ## 0.2.0-rc.1 — Astra motion, self-open fix, in-app language switch
 
 Android `versionCode` is **21**. Debug candidate targets

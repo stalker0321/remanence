@@ -137,17 +137,74 @@ enum class BlockStoreLockState {
 
 class AndroidQualifyingLockStateProvider(
     private val context: Context,
+    private val confirmation: OperatorConfirmedP1Inputs = OperatorConfirmedP1Inputs(),
 ) {
+    /**
+     * Physical-only state. Secure-lock presence alone never yields QUALIFIED;
+     * a secure device without operator-confirmed kind stays UNKNOWN.
+     */
     fun current(): BlockStoreLockState = try {
         val keyguard = context.getSystemService(KeyguardManager::class.java)
-        when {
-            keyguard == null -> BlockStoreLockState.UNKNOWN
-            !keyguard.isDeviceSecure -> BlockStoreLockState.INSECURE
-            else -> BlockStoreLockState.UNKNOWN
+        if (keyguard == null) {
+            BlockStoreLockState.UNKNOWN
+        } else {
+            classifyPhysicalLockState(
+                keyguardPresent = true,
+                isDeviceSecure = keyguard.isDeviceSecure,
+            )
         }
     } catch (_: RuntimeException) {
         BlockStoreLockState.UNKNOWN
     }
+
+    /**
+     * G1 P1 gate for the eligibility port only: QUALIFIED requires physical
+     * secure plus operator-confirmed PIN/PATTERN/PASSWORD. The Block Store
+     * UStore keeps using physical [current] and therefore stays fail-closed
+     * in this step; no store gating change is made here.
+     */
+    fun confirmedState(): BlockStoreLockState = try {
+        val keyguard = context.getSystemService(KeyguardManager::class.java)
+        resolveGatedQualifyingState(
+            keyguardPresent = keyguard != null,
+            isDeviceSecure = keyguard?.isDeviceSecure,
+            confirmed = confirmation.snapshot().lockKind,
+        )
+    } catch (_: RuntimeException) {
+        BlockStoreLockState.UNKNOWN
+    }
+
+    /**
+     * Operator-confirmed screen-lock kind. Returns PIN/PATTERN/PASSWORD only
+     * when the device reports secure AND the operator confirmed that exact
+     * kind; insecure maps to ABSENT; everything else stays UNKNOWN.
+     */
+    fun confirmedScreenLock(): ScreenLockState = try {
+        val keyguard = context.getSystemService(KeyguardManager::class.java)
+            ?: return ScreenLockState.UNKNOWN
+        resolveConfirmedScreenLock(
+            isDeviceSecure = keyguard.isDeviceSecure,
+            confirmed = confirmation.snapshot().lockKind,
+        )
+    } catch (_: RuntimeException) {
+        ScreenLockState.UNKNOWN
+    }
+
+    /**
+     * Operator-confirmed backup eligibility. ELIGIBLE requires confirmed
+     * eligible plus confirmed Backup Now completion; confirmed INELIGIBLE
+     * passes through; everything else stays UNKNOWN.
+     */
+    fun confirmedBackupEligibility(): BackupEligibility {
+        val snap = confirmation.snapshot()
+        return resolveConfirmedBackupEligibility(
+            confirmed = snap.backupEligibility,
+            backupNowCompleted = snap.backupNowCompleted,
+        )
+    }
+
+    /** Test/operator seam; production UI calls the same explicit methods. */
+    fun operatorInputs(): OperatorConfirmedP1Inputs = confirmation
 }
 
 /**

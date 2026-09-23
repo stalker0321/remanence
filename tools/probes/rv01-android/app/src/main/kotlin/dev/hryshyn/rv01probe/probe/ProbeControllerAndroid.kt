@@ -18,10 +18,11 @@ import java.util.concurrent.atomic.AtomicReference
 /** Real Block Store eligibility gate; no client is created before Play passes. */
 class AndroidProbeEligibilityPort(
     context: Context,
+    confirmation: OperatorConfirmedP1Inputs = OperatorConfirmedP1Inputs(),
 ) : ProbeEligibilityPort {
     private val appContext = context.applicationContext
     private val clientFactory = GoogleBlockStoreClientFactory(appContext)
-    private val lockProvider = AndroidQualifyingLockStateProvider(appContext)
+    private val lockProvider = AndroidQualifyingLockStateProvider(appContext, confirmation)
 
     override fun detect(onSettled: (TaskResult<ProbeEligibility>) -> Unit): ProbeControllerOperation {
         val playAvailable = try {
@@ -36,9 +37,23 @@ class AndroidProbeEligibilityPort(
         }
 
         val lockState = try {
-            lockProvider.current()
+            lockProvider.confirmedState()
         } catch (_: RuntimeException) {
             BlockStoreLockState.UNKNOWN
+        }
+        // Truthful P1 input: only physical-secure plus operator-confirmed
+        // PIN/PATTERN/PASSWORD reaches QUALIFIED. Confirmed screen-lock kind
+        // is reported when known; backup stays UNKNOWN unless the operator
+        // confirmed eligibility AND Backup Now completion.
+        val confirmedScreenLock = try {
+            lockProvider.confirmedScreenLock()
+        } catch (_: RuntimeException) {
+            ScreenLockState.UNKNOWN
+        }
+        val confirmedBackup = try {
+            lockProvider.confirmedBackupEligibility()
+        } catch (_: RuntimeException) {
+            BackupEligibility.UNKNOWN
         }
         if (lockState != BlockStoreLockState.QUALIFIED) {
             onSettled(
@@ -52,7 +67,12 @@ class AndroidProbeEligibilityPort(
                         screenLock = if (lockState == BlockStoreLockState.INSECURE) {
                             ScreenLockState.ABSENT
                         } else {
-                            ScreenLockState.UNKNOWN
+                            confirmedScreenLock
+                        },
+                        backupEligibility = if (lockState == BlockStoreLockState.INSECURE) {
+                            BackupEligibility.UNKNOWN
+                        } else {
+                            confirmedBackup
                         },
                     ),
                 ),
@@ -81,12 +101,13 @@ class AndroidProbeEligibilityPort(
                             ProbeEligibility(
                                 capability = CapabilityStatus.AVAILABLE,
                                 placement = CapabilityPlacement.SYNCED_PROVIDER,
-                                // E2EE availability does not independently
-                                // prove cloud-backup eligibility.
-                                backupEligibility = BackupEligibility.UNKNOWN,
-                                // The current Android lock probe deliberately
-                                // cannot identify PIN/pattern/password.
-                                screenLock = ScreenLockState.UNKNOWN,
+                                // Qualifying only via operator confirmation:
+                                // ELIGIBLE requires confirmed eligible plus
+                                // confirmed Backup Now; else UNKNOWN/INELIGIBLE.
+                                backupEligibility = confirmedBackup,
+                                // PIN/PATTERN/PASSWORD only via secure plus
+                                // operator-confirmed kind; else UNKNOWN.
+                                screenLock = confirmedScreenLock,
                                 e2ee = E2eeState.AVAILABLE,
                                 restorePath = RestorePath.BLOCK_STORE_CLOUD,
                             ),
@@ -95,6 +116,8 @@ class AndroidProbeEligibilityPort(
                         TaskResult.Completed(
                             unknownEligibility(
                                 capability = CapabilityStatus.UNAVAILABLE,
+                                screenLock = confirmedScreenLock,
+                                backupEligibility = confirmedBackup,
                                 e2ee = E2eeState.UNAVAILABLE,
                             ),
                         )
@@ -113,11 +136,12 @@ class AndroidProbeEligibilityPort(
     private fun unknownEligibility(
         capability: CapabilityStatus,
         screenLock: ScreenLockState = ScreenLockState.UNKNOWN,
+        backupEligibility: BackupEligibility = BackupEligibility.UNKNOWN,
         e2ee: E2eeState = E2eeState.UNKNOWN,
     ) = ProbeEligibility(
         capability = capability,
         placement = CapabilityPlacement.SYNCED_PROVIDER,
-        backupEligibility = BackupEligibility.UNKNOWN,
+        backupEligibility = backupEligibility,
         screenLock = screenLock,
         e2ee = e2ee,
         restorePath = RestorePath.BLOCK_STORE_CLOUD,

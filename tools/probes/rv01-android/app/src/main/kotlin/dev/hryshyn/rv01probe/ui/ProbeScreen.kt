@@ -133,7 +133,12 @@ fun ProbeScreen(
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onSelectD2File) { Text("Select D2 P file") }
-            Button(onClick = onRunD2Resume) { Text("Run D2 resume") }
+            Button(
+                onClick = onRunD2Resume,
+                enabled = d2FileChosen && d2State.status != D2ResumeStatus.RUNNING,
+            ) {
+                Text("Run D2 resume")
+            }
             if (d2State.status == D2ResumeStatus.RUNNING) {
                 Button(onClick = onCancelD2Resume) { Text("Cancel D2 resume") }
             }
@@ -151,6 +156,11 @@ fun ProbeScreen(
             Button(onClick = onRetry) { Text("Retry same bounded case") }
         }
         if (state.canCleanup) {
+            Text(
+                "Warning: D1 cleanup deletes the exact provider U. " +
+                    "Run it only after all D2 checks finish.",
+                color = MaterialTheme.colorScheme.error,
+            )
             Button(onClick = onCleanup) { Text("Prepare cleanup: delete exact provider slot") }
         }
         Text("Redacted evidence JSON: ${state.evidenceJson}")

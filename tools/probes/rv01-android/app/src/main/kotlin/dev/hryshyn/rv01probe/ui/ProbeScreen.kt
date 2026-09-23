@@ -8,10 +8,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.hryshyn.rv01probe.probe.BackupEligibility
+import dev.hryshyn.rv01probe.probe.D2ResumeState
+import dev.hryshyn.rv01probe.probe.D2ResumeStatus
 import dev.hryshyn.rv01probe.probe.OperatorConfirmedLockKind
 import dev.hryshyn.rv01probe.probe.OperatorP1Confirmation
 import dev.hryshyn.rv01probe.probe.ProbeControllerPhase
@@ -32,6 +35,13 @@ fun ProbeScreen(
     onClearBackupNow: () -> Unit,
     onExport: () -> Unit,
     onExportD2: () -> Unit,
+    d2State: D2ResumeState,
+    handoffText: String,
+    onHandoffTextChange: (String) -> Unit,
+    d2FileChosen: Boolean,
+    onSelectD2File: () -> Unit,
+    onRunD2Resume: () -> Unit,
+    onCancelD2Resume: () -> Unit,
     onImportAndVerify: () -> Unit,
     onRetry: () -> Unit,
     onCancel: () -> Unit,
@@ -114,6 +124,24 @@ fun ProbeScreen(
             Text("D1→D2 handoff (copy to D2; never evidence):")
             Text(handoff.copyText())
         }
+        Text("D2 resume (fresh install; carry the D1 handoff line and P_D2 file here).")
+        Text("Paste the RV01-D2-HANDOFF-V1 line exactly; context is built from it, never from P.")
+        TextField(
+            value = handoffText,
+            onValueChange = onHandoffTextChange,
+            label = { Text("D1 handoff line") },
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onSelectD2File) { Text("Select D2 P file") }
+            Button(onClick = onRunD2Resume) { Text("Run D2 resume") }
+            if (d2State.status == D2ResumeStatus.RUNNING) {
+                Button(onClick = onCancelD2Resume) { Text("Cancel D2 resume") }
+            }
+        }
+        Text("D2 file selected: $d2FileChosen")
+        Text("D2 result: ${d2State.status.name} ${d2State.reason.name}")
+        d2State.successLabel?.let { Text("D2 result: ${it.name}") }
+        Text("D2 evidence class: ${d2State.evidenceClass.name}")
         if (state.canVerify) {
             Button(onClick = onImportAndVerify) {
                 Text("Choose SAF file and verify before wipe")

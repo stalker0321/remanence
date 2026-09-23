@@ -17,6 +17,7 @@ import dev.hryshyn.rv01probe.probe.AndroidProbeScheduler
 import dev.hryshyn.rv01probe.probe.AndroidProbeUStorePort
 import dev.hryshyn.rv01probe.probe.AndroidProbeEligibilityPort
 import dev.hryshyn.rv01probe.probe.BackupEligibility
+import dev.hryshyn.rv01probe.probe.D2ResumeController
 import dev.hryshyn.rv01probe.probe.OperatorConfirmedLockKind
 import dev.hryshyn.rv01probe.probe.OperatorConfirmedP1Inputs
 import dev.hryshyn.rv01probe.probe.ProbeController
@@ -27,6 +28,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var controller: ProbeController
     private lateinit var pTransport: AndroidProbePTransportPort
     private lateinit var eligibilityPort: AndroidProbeEligibilityPort
+    private lateinit var uStorePort: AndroidProbeUStorePort
+    private lateinit var d2PTransport: AndroidProbePTransportPort
+    private lateinit var d2Resume: D2ResumeController
     private val p1Confirmation = OperatorConfirmedP1Inputs()
     private val safExecutor = Executors.newSingleThreadExecutor()
 
@@ -57,25 +61,52 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val selectD2Document = registerForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            d2PTransport.select(uri)
+            d2FileChosenState.value = true
+        }
+    }
+
+    /** Compose-observed D2 file selection; set only by the SAF callback. */
+    private val d2FileChosenState = mutableStateOf(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         pTransport = AndroidProbePTransportPort(this, safExecutor)
         eligibilityPort = AndroidProbeEligibilityPort(this, p1Confirmation)
+        uStorePort = AndroidProbeUStorePort(this, p1Confirmation)
+        d2PTransport = AndroidProbePTransportPort(this, safExecutor)
+        d2Resume = D2ResumeController(
+            uStore = uStorePort,
+            pTransport = d2PTransport,
+            scheduler = AndroidProbeScheduler(Handler(Looper.getMainLooper())),
+        )
         controller = ProbeController(
             eligibilityPort = eligibilityPort,
-            uStore = AndroidProbeUStorePort(this, p1Confirmation),
+            uStore = uStorePort,
             pTransport = pTransport,
             scheduler = AndroidProbeScheduler(Handler(Looper.getMainLooper())),
         )
         setContent {
             var state by remember { mutableStateOf(controller.state) }
             var p1Snapshot by remember { mutableStateOf(p1Confirmation.snapshot()) }
+            var d2State by remember { mutableStateOf(d2Resume.state) }
+            var handoffText by remember { mutableStateOf("") }
             fun refreshP1() {
                 p1Snapshot = p1Confirmation.snapshot()
             }
             DisposableEffect(controller) {
                 val removeListener = controller.addListener { updated ->
                     runOnUiThread { state = updated }
+                }
+                onDispose { removeListener() }
+            }
+            DisposableEffect(d2Resume) {
+                val removeListener = d2Resume.addListener { updated ->
+                    runOnUiThread { d2State = updated }
                 }
                 onDispose { removeListener() }
             }
@@ -111,6 +142,15 @@ class MainActivity : ComponentActivity() {
                     },
                     onExport = { exportDocument.launch("rv01-sidecar.bin") },
                     onExportD2 = { exportD2Document.launch("rv01-sidecar-d2.bin") },
+                    d2State = d2State,
+                    handoffText = handoffText,
+                    onHandoffTextChange = { handoffText = it },
+                    d2FileChosen = d2FileChosenState.value,
+                    onSelectD2File = {
+                        selectD2Document.launch(arrayOf("application/octet-stream"))
+                    },
+                    onRunD2Resume = { d2Resume.resume(handoffText) },
+                    onCancelD2Resume = { d2Resume.cancel() },
                     onImportAndVerify = {
                         importDocument.launch(arrayOf("application/octet-stream"))
                     },
@@ -125,6 +165,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         controller.processRecreated()
         controller.close()
+        d2Resume.close()
         safExecutor.shutdownNow()
         super.onDestroy()
     }

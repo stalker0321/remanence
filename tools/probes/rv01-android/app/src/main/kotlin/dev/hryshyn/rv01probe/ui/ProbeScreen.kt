@@ -31,6 +31,7 @@ fun ProbeScreen(
     onConfirmBackupNow: () -> Unit,
     onClearBackupNow: () -> Unit,
     onExport: () -> Unit,
+    onExportD2: () -> Unit,
     onImportAndVerify: () -> Unit,
     onRetry: () -> Unit,
     onCancel: () -> Unit,
@@ -101,7 +102,17 @@ fun ProbeScreen(
             Button(onClick = onCancel) { Text("Cancel bounded operation") }
         }
         if (state.canExport) {
-            Button(onClick = onExport) { Text("Choose SAF file and export opaque P") }
+            Button(onClick = onExport) { Text("Choose SAF file and export opaque P (D1, pre-wipe check)") }
+        }
+        if (state.canExportD2 &&
+            (state.phase == ProbeControllerPhase.WAITING_FOR_SAF_EXPORT ||
+                state.phase == ProbeControllerPhase.READY_TO_VERIFY)
+        ) {
+            Button(onClick = onExportD2) { Text("Choose SAF file and export D2 handoff P") }
+        }
+        state.d2Handoff?.let { handoff ->
+            Text("D1→D2 handoff (copy to D2; never evidence):")
+            Text(handoff.copyText())
         }
         if (state.canVerify) {
             Button(onClick = onImportAndVerify) {

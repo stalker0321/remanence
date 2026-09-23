@@ -198,6 +198,10 @@ data class ProbeControllerState(
     val eligibility: ProbeEligibility = ProbeEligibility.UNKNOWN,
     val evidence: ProbeEvidenceSnapshot = ProbeEvidenceSnapshot(),
     val canExport: Boolean = false,
+    /** D1 P_D2 handoff export; gated in UI to WAITING_FOR_SAF_EXPORT/READY_TO_VERIFY. */
+    val canExportD2: Boolean = false,
+    /** Non-secret D1→D2 operator handoff; screen surface only, never evidence. */
+    val d2Handoff: D2HandoffDisplay? = null,
     val canVerify: Boolean = false,
     val canCleanup: Boolean = false,
     val canRetry: Boolean = false,
@@ -260,11 +264,19 @@ private class LiveProbeCase(
 ) : AutoCloseable {
     var providerEntryMayRemain = false
 
+    /** D1-retained D2 handoff sealed after P2; null until then. Bounded. */
+    var d2Sidecar: ByteArray? = null
+    var d2Context: ExpectedContext? = null
+
     override fun close() {
         canary.fill(0)
         unwrapMaterial.fill(0)
         sidecar.fill(0)
         expectedContext.wipeRunId()
+        d2Sidecar?.fill(0)
+        d2Sidecar = null
+        d2Context?.wipeRunId()
+        d2Context = null
     }
 }
 
@@ -439,6 +451,34 @@ class ProbeController(
         return true
     }
 
+    /**
+     * Reachable D1 P_D2 handoff export. Allowed from WAITING_FOR_SAF_EXPORT
+     * or READY_TO_VERIFY while a sealed handoff is retained; completion
+     * restores the originating phase so P_D1 flow is undisturbed. A failed
+     * attempt also restores the origin with its reason, so the operator can
+     * re-attempt or clean up. Never derives context from P.
+     */
+    fun exportD2Sidecar(): Boolean {
+        val origin = synchronized(lock) {
+            val live = liveCase
+            val phase = currentState.phase
+            if (activeFlight != null || live == null) return@synchronized null
+            if (phase != ProbeControllerPhase.WAITING_FOR_SAF_EXPORT &&
+                phase != ProbeControllerPhase.READY_TO_VERIFY
+            ) {
+                return@synchronized null
+            }
+            if (live.d2Sidecar == null || live.d2Context == null) return@synchronized null
+            phase
+        } ?: return false
+        val reserved = reserveCaseAction(
+            allowedPhase = origin,
+            phase = ProbeControllerPhase.EXPORT_P,
+        ) ?: return false
+        launchD2Export(reserved.case, reserved.token, origin)
+        return true
+    }
+
     fun verifyBeforeWipe(): Boolean {
         val reserved = reserveCaseAction(
             allowedPhase = ProbeControllerPhase.READY_TO_VERIFY,
@@ -531,6 +571,8 @@ class ProbeController(
                     ProbeControllerReason.PROCESS_RECREATED_INCOMPLETE
                 },
                 canExport = false,
+                canExportD2 = false,
+                d2Handoff = null,
                 canVerify = false,
                 canCleanup = false,
                 canRetry = false,
@@ -687,12 +729,29 @@ class ProbeController(
             retryAction = null
             addEvent(flight, ProbeEvidenceResult.PASS, ProbeTuple.P2_WRAP)
             if (!isLifecycleGenerationCurrent(flight)) return
+            // D1 handoff: seal the distinct P_D2 under an independently built
+            // D2_TARGET context now that P2 holds provider U. P_D1 is retained
+            // untouched for pre-wipe P3. Any seal failure fails closed.
+            val live = synchronized(lock) { liveCase }
+            val d2 = if (live == null) {
+                null
+            } else {
+                sealD2Handoff(live.key, live.canary, live.unwrapMaterial, live.expectedContext)
+            }
+            if (live == null || d2 == null) {
+                setTerminal(flight, ProbeEvidenceResult.FAIL_CLOSED, ProbeControllerReason.FAIL_CLOSED)
+                return
+            }
             synchronized(lock) {
+                live.d2Sidecar = d2.sidecar
+                live.d2Context = d2.context
                 currentState = currentState.copy(
                     status = ProbeControllerStatus.BLOCKED,
                     phase = ProbeControllerPhase.WAITING_FOR_SAF_EXPORT,
                     reason = ProbeControllerReason.SAF_NOT_SELECTED,
                     canExport = true,
+                    canExportD2 = true,
+                    d2Handoff = d2.display,
                     canVerify = false,
                     canCleanup = true,
                     canRetry = false,
@@ -747,6 +806,76 @@ class ProbeController(
             addEvent(flight, evidenceResult(result), null)
             if (!isLifecycleGenerationCurrent(flight)) return
             setBlockedOrFailed(flight, result, reasonFor(result), cleanup = true)
+        }
+    }
+
+    private fun launchD2Export(
+        case: LiveProbeCase,
+        reservedToken: Long? = null,
+        returnPhase: ProbeControllerPhase,
+    ) {
+        val token = reservedToken ?: startFlight(ProbeControllerPhase.EXPORT_P)
+        invokeAndInstall(token) {
+            pTransport.exportP(
+                checkNotNull(case.d2Sidecar).copyOf(),
+                checkNotNull(case.d2Context),
+            ) { result ->
+                settleOrDefer(token) { flight -> handleD2Export(flight, result, returnPhase) }
+            }
+        }
+    }
+
+    private fun handleD2Export(
+        flight: ActiveFlight,
+        result: TaskResult<Unit>,
+        returnPhase: ProbeControllerPhase,
+    ) {
+        if (result is TaskResult.Completed) {
+            addEvent(flight, ProbeEvidenceResult.PASS, null)
+            if (!isLifecycleGenerationCurrent(flight)) return
+            synchronized(lock) {
+                currentState = currentState.copy(
+                    status = ProbeControllerStatus.BLOCKED,
+                    phase = returnPhase,
+                    reason = if (returnPhase == ProbeControllerPhase.WAITING_FOR_SAF_EXPORT) {
+                        ProbeControllerReason.SAF_NOT_SELECTED
+                    } else {
+                        ProbeControllerReason.NONE
+                    },
+                    canExport = returnPhase == ProbeControllerPhase.WAITING_FOR_SAF_EXPORT,
+                    canExportD2 = true,
+                    canVerify = returnPhase == ProbeControllerPhase.READY_TO_VERIFY,
+                    canCleanup = true,
+                    canRetry = false,
+                    canCancel = false,
+                )
+            }
+            emit()
+        } else {
+            addEvent(flight, evidenceResult(result), null)
+            if (!isLifecycleGenerationCurrent(flight)) return
+            val blocked = result is TaskResult.Unavailable ||
+                result is TaskResult.RetryableUnavailable ||
+                result is TaskResult.Incomplete
+            synchronized(lock) {
+                currentState = currentState.copy(
+                    status = if (blocked) {
+                        ProbeControllerStatus.BLOCKED
+                    } else {
+                        ProbeControllerStatus.FAIL
+                    },
+                    phase = returnPhase,
+                    reason = reasonFor(result),
+                    canExport = returnPhase == ProbeControllerPhase.WAITING_FOR_SAF_EXPORT,
+                    canExportD2 = true,
+                    canVerify = returnPhase == ProbeControllerPhase.READY_TO_VERIFY,
+                    canCleanup = liveCase != null,
+                    canRetry = false,
+                    canCancel = false,
+                )
+                postCleanupStatus = currentState.status
+            }
+            emit()
         }
     }
 
@@ -932,6 +1061,8 @@ class ProbeController(
                     phase = ProbeControllerPhase.TERMINAL,
                     reason = ProbeControllerReason.CLEANUP_COMPLETE,
                     canExport = false,
+                    canExportD2 = false,
+                    d2Handoff = null,
                     canVerify = false,
                     canCleanup = false,
                     canRetry = false,

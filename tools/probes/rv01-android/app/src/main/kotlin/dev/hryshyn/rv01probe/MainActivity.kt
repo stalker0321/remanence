@@ -39,6 +39,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val exportD2Document = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream"),
+    ) { uri ->
+        if (uri != null) {
+            pTransport.select(uri)
+            controller.exportD2Sidecar()
+        }
+    }
+
     private val importDocument = registerForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
@@ -101,6 +110,7 @@ class MainActivity : ComponentActivity() {
                         refreshP1()
                     },
                     onExport = { exportDocument.launch("rv01-sidecar.bin") },
+                    onExportD2 = { exportD2Document.launch("rv01-sidecar-d2.bin") },
                     onImportAndVerify = {
                         importDocument.launch(arrayOf("application/octet-stream"))
                     },

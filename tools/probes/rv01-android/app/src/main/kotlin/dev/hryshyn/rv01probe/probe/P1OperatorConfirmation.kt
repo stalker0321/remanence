@@ -157,3 +157,56 @@ fun resolveGatedQualifyingState(
         OperatorConfirmedLockKind.UNCONFIRMED -> BlockStoreLockState.UNKNOWN
     }
 }
+
+/**
+ * Pure P1 detect decision mirroring [AndroidProbeEligibilityPort.detect] pre-E2EE
+ * logic. The port calls this with live Keyguard values plus the shared
+ * [OperatorConfirmedP1Inputs.snapshot]; unit tests drive the same function
+ * through shared-instance mutations, so helper-only coverage cannot drift
+ * from app behavior.
+ */
+data class P1DetectDecision(
+    val gatedState: BlockStoreLockState,
+    val screenLock: ScreenLockState,
+    val backupEligibility: BackupEligibility,
+    val qualified: Boolean,
+)
+
+fun decideP1Detect(
+    keyguardPresent: Boolean,
+    isDeviceSecure: Boolean?,
+    confirmation: OperatorP1Confirmation,
+): P1DetectDecision {
+    val gated = resolveGatedQualifyingState(
+        keyguardPresent = keyguardPresent,
+        isDeviceSecure = isDeviceSecure,
+        confirmed = confirmation.lockKind,
+    )
+    if (gated == BlockStoreLockState.INSECURE) {
+        return P1DetectDecision(
+            gatedState = gated,
+            screenLock = ScreenLockState.ABSENT,
+            backupEligibility = BackupEligibility.UNKNOWN,
+            qualified = false,
+        )
+    }
+    val secure = keyguardPresent && isDeviceSecure == true
+    val screenLock = if (!secure) {
+        ScreenLockState.UNKNOWN
+    } else {
+        resolveConfirmedScreenLock(
+            isDeviceSecure = true,
+            confirmed = confirmation.lockKind,
+        )
+    }
+    val backup = resolveConfirmedBackupEligibility(
+        confirmed = confirmation.backupEligibility,
+        backupNowCompleted = confirmation.backupNowCompleted,
+    )
+    return P1DetectDecision(
+        gatedState = gated,
+        screenLock = screenLock,
+        backupEligibility = backup,
+        qualified = gated == BlockStoreLockState.QUALIFIED,
+    )
+}

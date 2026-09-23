@@ -16,6 +16,9 @@ import dev.hryshyn.rv01probe.probe.AndroidProbePTransportPort
 import dev.hryshyn.rv01probe.probe.AndroidProbeScheduler
 import dev.hryshyn.rv01probe.probe.AndroidProbeUStorePort
 import dev.hryshyn.rv01probe.probe.AndroidProbeEligibilityPort
+import dev.hryshyn.rv01probe.probe.BackupEligibility
+import dev.hryshyn.rv01probe.probe.OperatorConfirmedLockKind
+import dev.hryshyn.rv01probe.probe.OperatorConfirmedP1Inputs
 import dev.hryshyn.rv01probe.probe.ProbeController
 import java.util.concurrent.Executors
 import dev.hryshyn.rv01probe.ui.ProbeScreen
@@ -23,6 +26,8 @@ import dev.hryshyn.rv01probe.ui.ProbeScreen
 class MainActivity : ComponentActivity() {
     private lateinit var controller: ProbeController
     private lateinit var pTransport: AndroidProbePTransportPort
+    private lateinit var eligibilityPort: AndroidProbeEligibilityPort
+    private val p1Confirmation = OperatorConfirmedP1Inputs()
     private val safExecutor = Executors.newSingleThreadExecutor()
 
     private val exportDocument = registerForActivityResult(
@@ -46,14 +51,19 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         pTransport = AndroidProbePTransportPort(this, safExecutor)
+        eligibilityPort = AndroidProbeEligibilityPort(this, p1Confirmation)
         controller = ProbeController(
-            eligibilityPort = AndroidProbeEligibilityPort(this),
+            eligibilityPort = eligibilityPort,
             uStore = AndroidProbeUStorePort(this),
             pTransport = pTransport,
             scheduler = AndroidProbeScheduler(Handler(Looper.getMainLooper())),
         )
         setContent {
             var state by remember { mutableStateOf(controller.state) }
+            var p1Snapshot by remember { mutableStateOf(p1Confirmation.snapshot()) }
+            fun refreshP1() {
+                p1Snapshot = p1Confirmation.snapshot()
+            }
             DisposableEffect(controller) {
                 val removeListener = controller.addListener { updated ->
                     runOnUiThread { state = updated }
@@ -63,7 +73,33 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 ProbeScreen(
                     state = state,
+                    confirmation = p1Snapshot,
                     onStart = { controller.begin() },
+                    onRecheck = { controller.recheckEligibility() },
+                    onConfirmLock = {
+                        p1Confirmation.confirmLockKind(it)
+                        refreshP1()
+                    },
+                    onClearLock = {
+                        p1Confirmation.clearLockKind()
+                        refreshP1()
+                    },
+                    onConfirmBackup = {
+                        p1Confirmation.confirmBackupEligibility(it)
+                        refreshP1()
+                    },
+                    onClearBackup = {
+                        p1Confirmation.clearBackupEligibility()
+                        refreshP1()
+                    },
+                    onConfirmBackupNow = {
+                        p1Confirmation.confirmBackupNowCompleted()
+                        refreshP1()
+                    },
+                    onClearBackupNow = {
+                        p1Confirmation.clearBackupNowCompleted()
+                        refreshP1()
+                    },
                     onExport = { exportDocument.launch("rv01-sidecar.bin") },
                     onImportAndVerify = {
                         importDocument.launch(arrayOf("application/octet-stream"))

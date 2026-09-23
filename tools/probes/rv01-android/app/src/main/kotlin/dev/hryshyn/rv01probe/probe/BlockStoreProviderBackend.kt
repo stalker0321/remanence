@@ -203,6 +203,28 @@ class AndroidQualifyingLockStateProvider(
         )
     }
 
+    /**
+     * Single-read P1 decision for the eligibility port: one Keyguard lookup
+     * plus the shared confirmation snapshot, resolved by [decideP1Detect].
+     * Unit tests drive the same pure function through shared-instance
+     * mutations.
+     */
+    fun detectDecision(): P1DetectDecision = try {
+        val keyguard = context.getSystemService(KeyguardManager::class.java)
+        decideP1Detect(
+            keyguardPresent = keyguard != null,
+            isDeviceSecure = keyguard?.isDeviceSecure,
+            confirmation = confirmation.snapshot(),
+        )
+    } catch (_: RuntimeException) {
+        P1DetectDecision(
+            gatedState = BlockStoreLockState.UNKNOWN,
+            screenLock = ScreenLockState.UNKNOWN,
+            backupEligibility = BackupEligibility.UNKNOWN,
+            qualified = false,
+        )
+    }
+
     /** Test/operator seam; production UI calls the same explicit methods. */
     fun operatorInputs(): OperatorConfirmedP1Inputs = confirmation
 }

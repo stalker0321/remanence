@@ -24,6 +24,9 @@ class AndroidProbeEligibilityPort(
     private val clientFactory = GoogleBlockStoreClientFactory(appContext)
     private val lockProvider = AndroidQualifyingLockStateProvider(appContext, confirmation)
 
+    /** Shared instance the port reads on every detect; UI mutates this same object. */
+    fun operatorInputs(): OperatorConfirmedP1Inputs = lockProvider.operatorInputs()
+
     override fun detect(onSettled: (TaskResult<ProbeEligibility>) -> Unit): ProbeControllerOperation {
         val playAvailable = try {
             GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(appContext) ==
@@ -36,26 +39,24 @@ class AndroidProbeEligibilityPort(
             return NoopProbeControllerOperation
         }
 
-        val lockState = try {
-            lockProvider.confirmedState()
+        val decision = try {
+            lockProvider.detectDecision()
         } catch (_: RuntimeException) {
-            BlockStoreLockState.UNKNOWN
+            P1DetectDecision(
+                gatedState = BlockStoreLockState.UNKNOWN,
+                screenLock = ScreenLockState.UNKNOWN,
+                backupEligibility = BackupEligibility.UNKNOWN,
+                qualified = false,
+            )
         }
         // Truthful P1 input: only physical-secure plus operator-confirmed
         // PIN/PATTERN/PASSWORD reaches QUALIFIED. Confirmed screen-lock kind
         // is reported when known; backup stays UNKNOWN unless the operator
         // confirmed eligibility AND Backup Now completion.
-        val confirmedScreenLock = try {
-            lockProvider.confirmedScreenLock()
-        } catch (_: RuntimeException) {
-            ScreenLockState.UNKNOWN
-        }
-        val confirmedBackup = try {
-            lockProvider.confirmedBackupEligibility()
-        } catch (_: RuntimeException) {
-            BackupEligibility.UNKNOWN
-        }
-        if (lockState != BlockStoreLockState.QUALIFIED) {
+        val lockState = decision.gatedState
+        val confirmedScreenLock = decision.screenLock
+        val confirmedBackup = decision.backupEligibility
+        if (!decision.qualified || lockState != BlockStoreLockState.QUALIFIED) {
             onSettled(
                 TaskResult.Completed(
                     unknownEligibility(

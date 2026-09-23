@@ -2,6 +2,7 @@ package dev.hryshyn.rv01probe.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
@@ -10,6 +11,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import dev.hryshyn.rv01probe.probe.BackupEligibility
+import dev.hryshyn.rv01probe.probe.OperatorConfirmedLockKind
+import dev.hryshyn.rv01probe.probe.OperatorP1Confirmation
 import dev.hryshyn.rv01probe.probe.ProbeControllerPhase
 import dev.hryshyn.rv01probe.probe.ProbeControllerReason
 import dev.hryshyn.rv01probe.probe.ProbeControllerState
@@ -17,7 +21,15 @@ import dev.hryshyn.rv01probe.probe.ProbeControllerState
 @Composable
 fun ProbeScreen(
     state: ProbeControllerState,
+    confirmation: OperatorP1Confirmation,
     onStart: () -> Unit,
+    onRecheck: () -> Unit,
+    onConfirmLock: (OperatorConfirmedLockKind) -> Unit,
+    onClearLock: () -> Unit,
+    onConfirmBackup: (BackupEligibility) -> Unit,
+    onClearBackup: () -> Unit,
+    onConfirmBackupNow: () -> Unit,
+    onClearBackupNow: () -> Unit,
     onExport: () -> Unit,
     onImportAndVerify: () -> Unit,
     onRetry: () -> Unit,
@@ -40,11 +52,49 @@ fun ProbeScreen(
         Text("This throwaway app never contacts Remanence and never handles an ARK or user data.")
         Text("A PASS is only pre-wipe local U/P verification; it is not provider evidence.")
 
+        Text(
+            "P1 physical inputs (UNKNOWN unless you confirm on this device): " +
+                "lock=${confirmation.lockKind.name} " +
+                "backup=${confirmation.backupEligibility.name} " +
+                "backupNow=${confirmation.backupNowCompleted}",
+        )
+        Text("Confirm only what you verified on this device; secure lock alone proves nothing.")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { onConfirmLock(OperatorConfirmedLockKind.PIN) }) {
+                Text("Lock: PIN")
+            }
+            Button(onClick = { onConfirmLock(OperatorConfirmedLockKind.PATTERN) }) {
+                Text("Lock: Pattern")
+            }
+            Button(onClick = { onConfirmLock(OperatorConfirmedLockKind.PASSWORD) }) {
+                Text("Lock: Password")
+            }
+            Button(onClick = onClearLock) { Text("Clear lock") }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { onConfirmBackup(BackupEligibility.ELIGIBLE) }) {
+                Text("Backup: eligible")
+            }
+            Button(onClick = { onConfirmBackup(BackupEligibility.INELIGIBLE) }) {
+                Text("Backup: ineligible")
+            }
+            Button(onClick = onClearBackup) { Text("Clear backup") }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onConfirmBackupNow) { Text("Backup Now: done") }
+            Button(onClick = onClearBackupNow) { Text("Clear Backup Now") }
+        }
+
         if (state.phase == ProbeControllerPhase.NOT_RUN ||
             state.phase == ProbeControllerPhase.TERMINAL
         ) {
             Button(onClick = onStart) {
                 Text("Start new pre-wipe run")
+            }
+        }
+        if (state.phase == ProbeControllerPhase.CHECK_ENVIRONMENT && !state.canCancel) {
+            Button(onClick = onRecheck) {
+                Text("Re-check eligibility with current inputs")
             }
         }
         if (state.canCancel) {

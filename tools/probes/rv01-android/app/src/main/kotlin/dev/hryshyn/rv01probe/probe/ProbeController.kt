@@ -390,6 +390,46 @@ class ProbeController(
         return true
     }
 
+    /**
+     * Bounded P1 recheck after blocked eligibility. Allowed only when no
+     * flight is active, no case material exists, and the settled phase is
+     * CHECK_ENVIRONMENT (P1 blocked). Existing evidence events are preserved;
+     * the new detect appends its P1 tuple. Returns false otherwise.
+     */
+    fun recheckEligibility(): Boolean {
+        val token: Long
+        synchronized(lock) {
+            if (activeFlight != null || liveCase != null) return false
+            if (currentState.phase != ProbeControllerPhase.CHECK_ENVIRONMENT) return false
+            if (currentState.status != ProbeControllerStatus.BLOCKED &&
+                currentState.status != ProbeControllerStatus.FAIL
+            ) {
+                return false
+            }
+            lifecycleGeneration += 1
+            token = nextToken++
+            activeFlight = ActiveFlight(
+                token,
+                ProbeControllerPhase.CHECK_ENVIRONMENT,
+                clock.nowMs(),
+                lifecycleGeneration,
+            )
+            currentState = currentState.copy(
+                status = ProbeControllerStatus.RUNNING,
+                phase = ProbeControllerPhase.CHECK_ENVIRONMENT,
+                reason = ProbeControllerReason.NONE,
+                canExport = false,
+                canVerify = false,
+                canCleanup = false,
+                canRetry = false,
+                canCancel = true,
+            )
+        }
+        emit()
+        launchEligibility(token)
+        return true
+    }
+
     fun exportSidecar(): Boolean {
         val reserved = reserveCaseAction(
             allowedPhase = ProbeControllerPhase.WAITING_FOR_SAF_EXPORT,

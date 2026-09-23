@@ -150,8 +150,11 @@ class AndroidProbeEligibilityPort(
 }
 
 /** Adapts the reviewed exact-key Block Store bridge to the controller port. */
-class AndroidProbeUStorePort(context: Context) : ProbeUStorePort {
-    private val delegate = GoogleBlockStoreUStore(context.applicationContext)
+class AndroidProbeUStorePort(
+    context: Context,
+    confirmation: OperatorConfirmedP1Inputs = OperatorConfirmedP1Inputs(),
+) : ProbeUStorePort {
+    private val delegate = GoogleBlockStoreUStore(context.applicationContext, confirmation)
 
     override fun storeU(
         key: String,

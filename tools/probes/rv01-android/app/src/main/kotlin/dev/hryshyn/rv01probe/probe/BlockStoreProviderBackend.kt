@@ -158,10 +158,10 @@ class AndroidQualifyingLockStateProvider(
     }
 
     /**
-     * G1 P1 gate for the eligibility port only: QUALIFIED requires physical
-     * secure plus operator-confirmed PIN/PATTERN/PASSWORD. The Block Store
-     * UStore keeps using physical [current] and therefore stays fail-closed
-     * in this step; no store gating change is made here.
+     * G1 P1/P2 gate shared by the eligibility port and the real storeU gate:
+     * QUALIFIED requires physical secure plus operator-confirmed
+     * PIN/PATTERN/PASSWORD. Unconfirmed, insecure, or null Keyguard stay
+     * non-qualified; callers block before any provider call.
      */
     fun confirmedState(): BlockStoreLockState = try {
         val keyguard = context.getSystemService(KeyguardManager::class.java)
@@ -762,13 +762,19 @@ class GoogleBlockStoreUStore(
 
     constructor(
         context: Context,
+        confirmation: OperatorConfirmedP1Inputs = OperatorConfirmedP1Inputs(),
     ) : this(
         clientFactory = GoogleBlockStoreClientFactory(context),
         playServicesAvailable = {
             GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(context) ==
                 ConnectionResult.SUCCESS
         },
-        lockState = AndroidQualifyingLockStateProvider(context)::current,
+        // Same shared P1 decision as the eligibility port: P2 store is
+        // attempted only when physical isDeviceSecure plus
+        // operator-confirmed PIN/PATTERN/PASSWORD qualify. Unconfirmed,
+        // insecure, or null Keyguard stay blocked before any provider call.
+        // Default is a fresh unconfirmed holder, hence fail-closed.
+        lockState = AndroidQualifyingLockStateProvider(context, confirmation)::confirmedState,
         tombstone = BlockStoreDeleteTombstone(
             PersistentAbandonedKeyRegistry.forFilesDir(context.filesDir),
         ),

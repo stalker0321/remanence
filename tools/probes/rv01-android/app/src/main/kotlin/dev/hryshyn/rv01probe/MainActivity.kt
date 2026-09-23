@@ -54,7 +54,7 @@ class MainActivity : ComponentActivity() {
         eligibilityPort = AndroidProbeEligibilityPort(this, p1Confirmation)
         controller = ProbeController(
             eligibilityPort = eligibilityPort,
-            uStore = AndroidProbeUStorePort(this),
+            uStore = AndroidProbeUStorePort(this, p1Confirmation),
             pTransport = pTransport,
             scheduler = AndroidProbeScheduler(Handler(Looper.getMainLooper())),
         )

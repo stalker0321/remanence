@@ -52,6 +52,12 @@ class MusicPickerStateMachine(
     scope: CoroutineScope,
     private val debounceMs: Long = DEBOUNCE_MS,
     private val pageLimit: Int = PAGE_LIMIT,
+    /**
+     * S4: seeds the display selection (e.g. the ViewModel-owned value on
+     * UI recreation). The machine never writes back on its own — selection
+     * reaches the owner only through explicit select/clear calls.
+     */
+    initialSelection: MusicTrackHit? = null,
 ) {
     private val queryFlow = MutableStateFlow("")
     val query: StateFlow<String> = queryFlow
@@ -61,7 +67,7 @@ class MusicPickerStateMachine(
     private val mutableUiState = MutableStateFlow<MusicPickerUiState>(MusicPickerUiState.Idle)
     val uiState: StateFlow<MusicPickerUiState> = mutableUiState
 
-    private val mutableSelection = MutableStateFlow<MusicTrackHit?>(null)
+    private val mutableSelection = MutableStateFlow<MusicTrackHit?>(initialSelection)
     val selection: StateFlow<MusicTrackHit?> = mutableSelection
 
     private val collector: Job = scope.launch {

@@ -110,4 +110,3 @@ replay. Implementation is staged: (1) proto + projection + codec + tests;
 (2) publisher/statement binding; (3) sender G2 selection + publish gate;
 (4) receiver parse/validate/render or typed unsupported; (5) preview
 zeroization + round-trip/tamper/mismatch/retry tests.
-

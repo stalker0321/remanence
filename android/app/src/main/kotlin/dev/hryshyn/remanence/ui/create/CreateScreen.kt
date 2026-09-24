@@ -30,12 +30,18 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.hryshyn.remanence.BuildConfig
+import dev.hryshyn.remanence.RemanenceApplication
 import dev.hryshyn.remanence.capture.CaptureAttemptSurface
+import dev.hryshyn.remanence.ui.create.music.MusicPickerDebugSection
+import dev.hryshyn.remanence.ui.create.music.MusicPickerStateMachine
 import dev.hryshyn.remanence.ui.motion.AstraStepArrival
 import dev.hryshyn.remanence.ui.motion.rememberAstraMotion
 
@@ -353,6 +359,24 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
             enabled = viewModel.photoSelection.canProceed && viewModel.noteEditor.canIncludeInCapsule,
             modifier = Modifier.fillMaxWidth().testTag("create_publish"),
         ) { Text(stringResource(R.string.hold_publish)) }
+
+        // S1: DEBUG-only music picker preview. Release builds strip this
+        // branch entirely (BuildConfig.DEBUG is a compile-time constant);
+        // the selection lives only in the picker state and is never read
+        // by the publish path, so release can never claim a track attached.
+        if (BuildConfig.DEBUG) {
+            Spacer(Modifier.height(12.dp))
+            val debugContext = LocalContext.current
+            val musicRepository = remember {
+                (debugContext.applicationContext as RemanenceApplication)
+                    .container.apiStack.musicSearchRepository
+            }
+            val debugScope = rememberCoroutineScope()
+            val musicPicker = remember {
+                MusicPickerStateMachine(musicRepository::search, debugScope)
+            }
+            MusicPickerDebugSection(state = musicPicker)
+        }
     }
 }
 

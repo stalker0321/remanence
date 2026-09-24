@@ -150,6 +150,9 @@ internal fun CapsuleRoute(
                         loadPhoto = { ordinal ->
                             source.loadPhoto(binding.capsuleId, ordinal).jpegBytes
                         },
+                        // S2b-receiver: sealed snapshot (or null) rides the
+                        // same grant-guarded source; LegacyV1 never has one.
+                        track = source.trackSnapshot(binding.capsuleId),
                     )
                     ber1.load()
                     CapsuleRouteState.Ready(CapsulePresentation.Ber1(ber1))

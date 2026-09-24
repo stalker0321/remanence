@@ -20,6 +20,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.hryshyn.remanence.R
+import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
 import dev.hryshyn.remanence.core.model.GeneratorExpression
 import dev.hryshyn.remanence.ui.create.GeneratorBer1Preview
 import dev.hryshyn.remanence.ui.create.GeneratorBer1Renderer
@@ -46,6 +47,11 @@ class Ber1PresentationState(
     val expression: GeneratorExpression.ResolvedExpression,
     private val loadPhoto: suspend (ordinal: Int) -> ByteArray,
     private val decoder: Ber1PhotoDecoder = DefaultBer1PhotoDecoder,
+    /**
+     * S2b-receiver: the sealed v2-only track snapshot, or null when the
+     * manifest carries none. Null renders exactly the pre-S2 layout.
+     */
+    val track: CapsuleTrackSnapshotV1? = null,
 ) : AutoCloseable {
 
     var bitmaps: Map<String, ImageBitmap> by mutableStateOf(emptyMap())
@@ -102,11 +108,49 @@ internal fun Ber1PresentationHost(
                 modifier = Modifier.align(Alignment.Center).testTag("capsule_ber1_blocked"),
             )
         }
+        state.track?.let { track ->
+            TrackSnapshotCard(
+                track = track,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
+            )
+        }
         HoldTextButton(
             onClick = { state.close(); onClose() },
             modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
                 .testTag("capsule_ber1_close"),
         ) { Text(stringResource(R.string.hold_close)) }
+    }
+}
+
+/**
+ * S2b-receiver: compact offline card for the sealed track snapshot.
+ * Pure text from the already-decrypted manifest — no network, no links,
+ * no streaming (S3 later). Hidden entirely when the manifest carries no
+ * snapshot.
+ */
+@Composable
+internal fun TrackSnapshotCard(
+    track: CapsuleTrackSnapshotV1,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier.testTag("capsule_track_card")) {
+        Text(
+            text = track.title,
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.testTag("capsule_track_title"),
+        )
+        Text(
+            text = track.artistDisplay,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.testTag("capsule_track_artist"),
+        )
+        track.version?.let { version ->
+            Text(
+                text = version,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.testTag("capsule_track_version"),
+            )
+        }
     }
 }
 

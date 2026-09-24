@@ -1,5 +1,6 @@
 package dev.hryshyn.remanence.ui.capsule
 
+import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
 import dev.hryshyn.remanence.core.model.GeneratorExpression
 
 /**
@@ -31,6 +32,16 @@ interface CapsuleContentReader {
     suspend fun loadPhoto(capsuleId: String, ordinal: Int): DecryptedPhoto
 
     suspend fun noteText(capsuleId: String): String?
+
+    /**
+     * S2b-receiver: the sealed v2-only track snapshot, or null when the
+     * manifest carries none.
+     *
+     * Default: a reader with no content-manifest view reports null, so
+     * every existing reader/test is unchanged (mirrors the
+     * [presentationAdmission] default below).
+     */
+    suspend fun trackSnapshot(capsuleId: String): CapsuleTrackSnapshotV1? = null
 
     /**
      * Default: a reader that has no content-manifest view is treated as the
@@ -87,6 +98,15 @@ class GrantGuardedCapsuleContentSource(
         val note = delegate.noteText(capsuleId)
         validateLiveGrant()
         return note
+    }
+
+    override suspend fun trackSnapshot(capsuleId: String): CapsuleTrackSnapshotV1? {
+        validateLiveGrant()
+        // Immutable validated data like the note: refused on a dead grant,
+        // no scrub needed (no mutable plaintext bytes).
+        val snapshot = delegate.trackSnapshot(capsuleId)
+        validateLiveGrant()
+        return snapshot
     }
 
     override suspend fun presentationAdmission(capsuleId: String): CapsulePresentationAdmission {

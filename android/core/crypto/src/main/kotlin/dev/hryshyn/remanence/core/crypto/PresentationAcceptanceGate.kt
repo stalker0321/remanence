@@ -5,6 +5,7 @@ import dev.hryshyn.remanence.core.model.BlobId
 import dev.hryshyn.remanence.core.model.ArtifactAadInput
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
 import dev.hryshyn.remanence.core.model.CapsuleId
+import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.protocol.v1.ArtifactKind
@@ -93,6 +94,9 @@ class PreparedPresentationMaterial internal constructor(
         ExpressionReceiverAdmission.admit(requireOpen())
 
     fun noteText(): String? = requireOpen().note
+
+    /** S2b-receiver: the sealed v2-only track snapshot, or null when absent. */
+    fun trackSnapshot(): CapsuleTrackSnapshotV1? = requireOpen().trackSnapshot
 
     /** Decrypts one verified photo from the exact snapshot captured at prepare time. */
     fun loadPhoto(ordinal: Int): ByteArray {

@@ -20,6 +20,7 @@ import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.data.storage.TrustedPathSafety
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
 import dev.hryshyn.remanence.core.model.CapsuleId
+import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.LocalMaterialState
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
@@ -123,6 +124,9 @@ internal class PreparedIncomingPresentation internal constructor(
         material.expressionAdmission()
 
     internal fun noteText(): String? = material.noteText()
+
+    /** S2b-receiver: the sealed v2-only track snapshot, or null when absent. */
+    internal fun trackSnapshot(): CapsuleTrackSnapshotV1? = material.trackSnapshot()
 
     internal fun loadPhoto(ordinal: Int): ByteArray = material.loadPhoto(ordinal)
 

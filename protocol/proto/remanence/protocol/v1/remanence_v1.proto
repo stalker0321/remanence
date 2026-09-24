@@ -93,11 +93,62 @@ message TrackAttachment {
 }
 
 message ContentManifest {
-  uint32 protocol_version = 1; // exactly 1
+  uint32 protocol_version = 1; // exactly 1 (v1) or 2 (v2, ADR-018)
   bytes capsule_id = 2; // UUID bytes exactly 16
   repeated PhotoEntry photos = 3; // 3..5, sorted ordinal
   optional string note = 4;
   optional TrackAttachment track = 5; // MUST be absent in MVP
+  // ADR-018: v2-only authenticated BER1 resolved-expression artifact. Absent
+  // in v1; v1 decoders never set or read it. Present iff protocol_version == 2.
+  optional ExpressionV1 expression = 6;
+}
+
+// ADR-018: one authored source binding (expression content-id -> manifest
+// photo ordinal and exact encrypted photo blob).
+message ExpressionSource {
+  uint32 ordinal = 1;   // manifest photo ordinal (0..4)
+  bytes blob_id = 2;    // UUID bytes exactly 16
+  string content_id = 3;
+  string content_hash = 4; // lowercase hex SHA-256 of ORIGINAL bytes (64)
+  uint32 width_px = 5;     // G1 upright width
+  uint32 height_px = 6;    // G1 upright height
+}
+
+// ADR-018: one resolved placement (canvas units; v2 BER1 layout).
+message ExpressionPlacement {
+  string content_id = 1;
+  sint32 x = 2;
+  sint32 y = 3;
+  sint32 width = 4;
+  sint32 height = 5;
+  bool has_content_rect = 6;
+  sint32 rect_x = 7;
+  sint32 rect_y = 8;
+  sint32 rect_width = 9;
+  sint32 rect_height = 10;
+}
+
+// ADR-018: signed/encrypted resolved-expression artifact (inside v2
+// ContentManifest). The declared hash MUST equal the canonical hash of the
+// reconstructed expression; receivers reconstruct and cross-check.
+message ExpressionV1 {
+  uint32 expression_version = 1; // exactly 1
+  string candidate_id = 2;       // <= 256 chars
+  string expression_hash = 3;    // lowercase hex SHA-256 (64 chars)
+  uint32 canvas_version = 4;
+  string grammar_id = 5;
+  uint32 grammar_version = 6;
+  string branch_id = 7;
+  string note_treatment = 8;
+  uint32 font_version = 9;
+  uint32 palette_version = 10;
+  bool has_note_region = 11;
+  sint32 nr_x = 12;
+  sint32 nr_y = 13;
+  sint32 nr_width = 14;
+  sint32 nr_height = 15;
+  repeated ExpressionSource sources = 16;
+  repeated ExpressionPlacement placements = 17;
 }
 
 // M2-P08: the bounded purpose of a sender-owned wrapped retry keyset.

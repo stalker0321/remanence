@@ -6,12 +6,17 @@ import dev.hryshyn.remanence.capture.CaptureAttemptController
 import dev.hryshyn.remanence.capture.FrontCaptureFlow
 import dev.hryshyn.remanence.capture.FrontCaptureOutcome
 import dev.hryshyn.remanence.create.RealStillFingerprintProcessor
+import dev.hryshyn.remanence.create.CapsuleExpressionArtifact
 import dev.hryshyn.remanence.create.CapsulePublisher
 import dev.hryshyn.remanence.create.CapsulePublishRequest
 import dev.hryshyn.remanence.create.GeneratorCreateBridge
 import dev.hryshyn.remanence.create.GeneratorExifDecoder
+import dev.hryshyn.remanence.create.GeneratorPreviewLoader
 import dev.hryshyn.remanence.create.PhotoStagingPipeline
 import dev.hryshyn.remanence.core.crypto.readBoundedBytes
+import dev.hryshyn.remanence.core.model.CapsulePhotoIdentity
+import dev.hryshyn.remanence.core.model.GeneratorBer1Provider
+import dev.hryshyn.remanence.core.model.GeneratorDiscovery
 import dev.hryshyn.remanence.core.model.GeneratorExpression
 import dev.hryshyn.remanence.core.model.GeneratorStaging
 import java.security.MessageDigest
@@ -126,6 +131,11 @@ class CreateViewModel(
      * invalidation hook below is then a no-op.
      */
     private val generatorBridgeProvider: ((UserId) -> GeneratorCreateBridge.Bridge)? = null,
+    /**
+     * Stage1-C preview loader. Null disables preview with a typed
+     * Unavailable state; a preview is never faked from a placeholder.
+     */
+    private val generatorPreviewLoader: GeneratorPreviewLoader? = null,
 ) : ViewModel() {
 
     /** Current-send state; deliberately contains no history or inbox projection. */
@@ -242,6 +252,13 @@ class CreateViewModel(
     private val _revokeStatus = MutableStateFlow<CapsuleRevokeStatus>(CapsuleRevokeStatus.Idle)
     val revokeStatus: StateFlow<CapsuleRevokeStatus> = _revokeStatus.asStateFlow()
 
+    /** Stage1-C CONTENT preview: pure planner over loaded, bounded sources. */
+    private val generatorPreviewCoordinator = GeneratorPreviewCoordinator(generatorPreviewLoader)
+    private val _generatorPreview = MutableStateFlow<GeneratorPreviewState>(GeneratorPreviewState.Idle)
+    val generatorPreview: StateFlow<GeneratorPreviewState> = _generatorPreview.asStateFlow()
+    private var previewJob: Job? = null
+    private var previewGeneration: Long = 0L
+
     /** Owner captured synchronously at session entry, before publish suspends. */
     private var sessionOwner: UserId? = null
 
@@ -270,6 +287,45 @@ class CreateViewModel(
      * session's binding. Null exactly when [generatorBound] is null.
      */
     private var generatorBoundGeneration: Long? = null
+
+    /**
+     * ADR-018 session-frozen G2 selection: the exact candidate id, v2 BER1
+     * expression, and the receiver-recomputable `BEXPR01` projection hash that
+     * binds candidateId + geometry + the ORIGINAL source descriptors and the
+     * encrypted photo blob ids. Computed once from the SAME pre-read originals
+     * that seed the bridge session, then re-verified against the frozen
+     * handoff before the expression is handed to the publisher. Cleared by
+     * [dropGeneratorBound] (every photo/note/owner/epoch invalidation path).
+     */
+    private data class GeneratorFrozenSelection(
+        val candidateId: String,
+        val expression: GeneratorExpression.ResolvedExpression,
+        val projectedHash: String,
+    )
+
+    private var generatorFrozenSelection: GeneratorFrozenSelection? = null
+
+    /**
+     * ADR-018 measured-note selection: the REAL on-device measured BER1 plan
+     * reported by the preview host for the current selection. Retained only
+     * while the exact input is unchanged; any photo/note/owner/epoch edit
+     * clears it. This is the only source of a fitted note region — the
+     * port-less provider path never fabricates a note fit.
+     */
+    private data class MeasuredNoteSelection(
+        val input: GeneratorExpression.GeneratorInput,
+        val candidateId: String,
+        val expression: GeneratorExpression.ResolvedExpression,
+        val projectedHash: String,
+    )
+
+    private var generatorMeasuredNoteSelection: MeasuredNoteSelection? = null
+
+    /** Typed result of resolving the session's G2 selection. */
+    private sealed interface SelectionResolution {
+        data class Selected(val selection: GeneratorFrozenSelection) : SelectionResolution
+        data class Unsupported(val reason: String) : SelectionResolution
+    }
 
     /** One pre-read original for bridge session-sync (D2: pre-read allowed). */
     private data class PrereadOriginal(val bytes: ByteArray, val widthPx: Int, val heightPx: Int)
@@ -351,6 +407,7 @@ class CreateViewModel(
         // owner or null provider fails publishing closed at publish).
         generatorSessionEpoch = epoch
         generatorBridge = nextOwner?.let { owner -> generatorBridgeProvider?.invoke(owner) }
+        resetGeneratorPreview()
         _step.value = Step.RECIPIENT_LOOKUP
         // FIX-M1-ONDEVICE-01: pending and confirmed recipient material both die.
         recipientFlow.clearTransientMaterial()
@@ -558,6 +615,7 @@ class CreateViewModel(
         }
         photoSelection.clear()
         ids.forEach { id -> photoSelection.toggle(id) }
+        refreshGeneratorPreview()
     }
 
     // ---------------------------------------------------------------------
@@ -734,6 +792,10 @@ class CreateViewModel(
             String,
         ) -> Unit,
     ) {
+        // Every invalidation path (photo/note edit, owner/epoch change,
+        // retry, cancel, teardown) drops the frozen selection too.
+        generatorFrozenSelection = null
+        generatorMeasuredNoteSelection = null
         val bound = generatorBound ?: return
         generatorBound = null
         generatorBoundGeneration = null
@@ -748,6 +810,7 @@ class CreateViewModel(
         dropGeneratorBound { bridge, context, sessionId ->
             bridge.onPhotoEdit(context, sessionId)
         }
+        refreshGeneratorPreview()
     }
 
     /**
@@ -776,6 +839,83 @@ class CreateViewModel(
         dropGeneratorBound { bridge, context, sessionId ->
             bridge.onNoteEdit(context, sessionId)
         }
+        refreshGeneratorPreview()
+    }
+
+    /**
+     * Stage1-C CONTENT preview refresh: cancels any in-flight load, then
+     * recomputes the typed preview from the current selection + note. Empty
+     * selection returns to [GeneratorPreviewState.Idle]; a stale async result
+     * can never overwrite a newer one (monotonic generation).
+     */
+    private fun refreshGeneratorPreview() {
+        // Any refresh invalidates a previously measured note plan; the host
+        // must re-measure the current selection before it can be published.
+        generatorMeasuredNoteSelection = null
+        val ids = photoSelection.selectedIds
+        previewJob?.cancel()
+        previewJob = null
+        val generation = ++previewGeneration
+        if (ids.isEmpty()) {
+            _generatorPreview.value = GeneratorPreviewState.Idle
+            generatorPreviewCoordinator.zeroize()
+            return
+        }
+        if (ids.size !in 3..5) {
+            _generatorPreview.value = GeneratorPreviewState.Rejected(listOf("select 3..5 photos"))
+            return
+        }
+        _generatorPreview.value = GeneratorPreviewState.Loading
+        val ownerId = sessionOwner?.toRestString()
+        val epoch = generatorSessionEpoch ?: 0L
+        val note = if (noteEditor.isEmpty) null else noteEditor.text
+        previewJob = viewModelScope.launch {
+            val result = generatorPreviewCoordinator.compute(ownerId, epoch, ids, note)
+            if (generation == previewGeneration) {
+                _generatorPreview.value = result
+            }
+        }
+    }
+
+    /** Drops all preview ownership (sources + in-flight load) on any change. */
+    private fun resetGeneratorPreview() {
+        previewJob?.cancel()
+        previewJob = null
+        previewGeneration += 1
+        generatorMeasuredNoteSelection = null
+        _generatorPreview.value = GeneratorPreviewState.Idle
+        generatorPreviewCoordinator.zeroize()
+    }
+
+    /**
+     * ADR-018 measured-note report from the BER1 preview host. The host
+     * performs the REAL on-device text measurement; the VM accepts only a
+     * measured plan whose exact input equals the CURRENT pending preview input
+     * (freshness), and only for a non-empty note. Any other report is ignored,
+     * and every edit clears the stored plan. A published note region can
+     * therefore only come from a genuine measured fit.
+     */
+    fun onPreviewMeasured(expression: GeneratorExpression.ResolvedExpression) {
+        val pending = _generatorPreview.value as? GeneratorPreviewState.NotePending ?: return
+        if (expression.input != pending.input) return
+        if (expression.input.note.isNullOrEmpty()) return
+        if (GeneratorExpression.validateResolved(expression) !is GeneratorExpression.InputValidation.Valid) {
+            return
+        }
+        val capsuleId = runCatching { CapsuleId(UUID.fromString(_capsuleId)) }.getOrNull() ?: return
+        val candidateId = GeneratorBer1Provider.candidateIdFor(expression)
+        val projectedHash = CapsulePhotoIdentity.projectedHash(
+            expression = expression,
+            candidateId = candidateId,
+            capsuleId = capsuleId,
+            contentIds = expression.input.photos.map { it.contentId },
+        )
+        generatorMeasuredNoteSelection = MeasuredNoteSelection(
+            input = pending.input,
+            candidateId = candidateId,
+            expression = expression,
+            projectedHash = projectedHash,
+        )
     }
 
     private fun sha256Hex(bytes: ByteArray): String =
@@ -850,17 +990,40 @@ class CreateViewModel(
                 ownerId = inputs.owner.toRestString(),
                 epoch = epoch,
                 photos = preread.mapIndexed { index, original ->
+                    val contentHash = sha256Hex(original.bytes)
                     GeneratorExpression.PhotoRef(
-                        contentId = UUID.randomUUID().toString(),
+                        contentId = CapsulePhotoIdentity.contentIdFor(contentHash),
                         ordinal = index,
                         widthPx = original.widthPx,
                         heightPx = original.heightPx,
-                        contentHash = sha256Hex(original.bytes),
+                        contentHash = contentHash,
                     )
                 },
                 note = inputs.noteText,
                 music = null,
             )
+            // ADR-018: freeze the exact G2 selection from the SAME original
+            // descriptors before opening the bridge session. An absent/empty
+            // note resolves through the port-less provider; a NON-EMPTY note
+            // requires the host's real on-device measured fit for this exact
+            // input. A missing/stale measurement (or an unsupported mix) yields
+            // a typed unsupported result — the capsule is NEVER published as a
+            // silent v1 fallback "as if generator".
+            val resolution = if (input.note.isNullOrEmpty()) {
+                resolveFrozenSelection(input, inputs.capsuleId)
+            } else {
+                resolveMeasuredNoteSelection(input, inputs.capsuleId)
+            }
+            val selection = when (resolution) {
+                is SelectionResolution.Selected -> resolution.selection
+                is SelectionResolution.Unsupported -> {
+                    failPublishing(
+                        "the generator can't publish this content yet: ${resolution.reason}",
+                        generation,
+                    )
+                    return false
+                }
+            }
             val begun = bridge.begin(
                 owner = inputs.owner,
                 sessionEpoch = epoch,
@@ -878,14 +1041,104 @@ class CreateViewModel(
             }
             generatorBound = GeneratorBoundSession(bridge, begun.context, begun.sessionId)
             generatorBoundGeneration = generation
+            generatorFrozenSelection = selection
             return true
         } finally {
             preread.forEach { it.bytes.fill(0) }
         }
     }
 
+    /**
+     * Resolves the session's frozen G2 candidate for an ABSENT/EMPTY note from
+     * the exact original descriptors. Incompatible mixes surface as a typed
+     * unsupported reason instead of a silent v1 publication.
+     */
+    private suspend fun resolveFrozenSelection(
+        input: GeneratorExpression.GeneratorInput,
+        capsuleId: String,
+    ): SelectionResolution {
+        val outcome = GeneratorBer1Provider.Ber1Provider().generate(
+            GeneratorDiscovery.GenerationRequest(
+                input = input,
+                generationId = capsuleId,
+                seed = 0L,
+                maxCandidates = 1,
+            ),
+        )
+        val candidate = (outcome as? GeneratorDiscovery.ProviderOutcome.Candidates)
+            ?.candidates?.firstOrNull()
+            ?: return SelectionResolution.Unsupported(
+                when (outcome) {
+                    is GeneratorDiscovery.ProviderOutcome.NotApplicable -> outcome.reason
+                    is GeneratorDiscovery.ProviderOutcome.Incompatible -> outcome.reason
+                    is GeneratorDiscovery.ProviderOutcome.Unsupported -> outcome.reason
+                    is GeneratorDiscovery.ProviderOutcome.Failed -> outcome.error
+                    else -> "no generator candidate"
+                },
+            )
+        val projectedHash = CapsulePhotoIdentity.projectedHash(
+            expression = candidate.expression,
+            candidateId = candidate.candidateId,
+            capsuleId = CapsuleId(UUID.fromString(capsuleId)),
+            contentIds = candidate.expression.input.photos.map { it.contentId },
+        )
+        return SelectionResolution.Selected(
+            GeneratorFrozenSelection(
+                candidateId = candidate.candidateId,
+                expression = candidate.expression,
+                projectedHash = projectedHash,
+            ),
+        )
+    }
+
+    /**
+     * Resolves a NON-EMPTY note from the host's real measured fit. The stored
+     * measured plan must match this exact publish input (fresh) and still
+     * validate; its candidateId and `BEXPR01` projection are recomputed purely
+     * and must match the stored values. A missing or stale measurement is a
+     * typed unsupported reason — never an assumed note fit.
+     */
+    private fun resolveMeasuredNoteSelection(
+        input: GeneratorExpression.GeneratorInput,
+        capsuleId: String,
+    ): SelectionResolution {
+        val measured = generatorMeasuredNoteSelection
+            ?: return SelectionResolution.Unsupported(
+                "the note hasn't been measured on this device yet",
+            )
+        if (measured.input != input) {
+            return SelectionResolution.Unsupported("the note measurement is stale for this selection")
+        }
+        if (GeneratorExpression.validateResolved(measured.expression) !is GeneratorExpression.InputValidation.Valid) {
+            return SelectionResolution.Unsupported("the measured note layout is invalid")
+        }
+        val candidateId = GeneratorBer1Provider.candidateIdFor(measured.expression)
+        val projectedHash = CapsulePhotoIdentity.projectedHash(
+            expression = measured.expression,
+            candidateId = candidateId,
+            capsuleId = CapsuleId(UUID.fromString(capsuleId)),
+            contentIds = measured.expression.input.photos.map { it.contentId },
+        )
+        if (candidateId != measured.candidateId || projectedHash != measured.projectedHash) {
+            return SelectionResolution.Unsupported("the note measurement changed since it was captured")
+        }
+        return SelectionResolution.Selected(
+            GeneratorFrozenSelection(
+                candidateId = measured.candidateId,
+                expression = measured.expression,
+                projectedHash = measured.projectedHash,
+            ),
+        )
+    }
+
     /** One bound authored photo for the publish request (derived bytes/dims). */
     private data class BoundPhotoForPublish(val bytes: ByteArray, val widthPx: Int, val heightPx: Int)
+
+    /** The frozen bound photos plus the verified session-frozen G2 selection. */
+    private data class BoundPhotosForPublish(
+        val photos: List<BoundPhotoForPublish>,
+        val selection: GeneratorFrozenSelection,
+    )
 
     /**
      * C3 generator path: binds every selected source in authored order
@@ -907,7 +1160,7 @@ class CreateViewModel(
         generation: Long,
         inputs: PublishInputs,
         bound: GeneratorBoundSession,
-    ): List<BoundPhotoForPublish>? {
+    ): BoundPhotosForPublish? {
         val bridge = bound.bridge
         val photos = ArrayList<BoundPhotoForPublish>(inputs.photoIds.size)
         for ((ordinal, pickerId) in inputs.photoIds.withIndex()) {
@@ -937,7 +1190,42 @@ class CreateViewModel(
             failPublishing("generator freeze rejected; publishing cancelled", generation)
             return null
         }
-        return photos
+        // ADR-018 exact-descriptor publish gate: the session-frozen selection
+        // was computed from the pre-read ORIGINALS (and, for a note, from the
+        // host's measured fit); require the frozen handoff descriptors to be
+        // byte-identical, then recompute candidateId + BEXPR01 projection from
+        // the frozen expression and require exact equality. A mismatch (picker
+        // content changed between pre-read and bind, dims diverged, stale
+        // measurement, etc.) is a typed rejection — never a different layout.
+        val selection = generatorFrozenSelection
+        val exactInputs = selection != null && handoff.input == selection.expression.input
+        val recomputed = if (selection == null) {
+            null
+        } else {
+            val expression = selection.expression
+            val candidateId = GeneratorBer1Provider.candidateIdFor(expression)
+            val projectedHash = CapsulePhotoIdentity.projectedHash(
+                expression = expression,
+                candidateId = candidateId,
+                capsuleId = CapsuleId(UUID.fromString(inputs.capsuleId)),
+                contentIds = expression.input.photos.map { it.contentId },
+            )
+            candidateId to projectedHash
+        }
+        if (selection == null ||
+            !exactInputs ||
+            recomputed == null ||
+            recomputed.first != selection.candidateId ||
+            recomputed.second != selection.projectedHash
+        ) {
+            dropGeneratorBoundForGeneration(generation) { b, c, s -> b.cancel(c, s) }
+            failPublishing(
+                "generator projection changed since the session began; publishing cancelled",
+                generation,
+            )
+            return null
+        }
+        return BoundPhotosForPublish(photos, selection)
     }
 
     private suspend fun clearStagedPhotosGuarded(owner: UserId, capsuleId: String) {
@@ -1051,9 +1339,10 @@ class CreateViewModel(
                 return
             }
             val boundPhotos = bindGeneratorPhotos(generation, inputs, boundForPublish) ?: return
-            val photoJpegs: List<ByteArray> = boundPhotos.map { it.bytes }
-            val photoWidthsPx: List<Int> = boundPhotos.map { it.widthPx }
-            val photoHeightsPx: List<Int> = boundPhotos.map { it.heightPx }
+            val frozenSelection = boundPhotos.selection
+            val photoJpegs: List<ByteArray> = boundPhotos.photos.map { it.bytes }
+            val photoWidthsPx: List<Int> = boundPhotos.photos.map { it.widthPx }
+            val photoHeightsPx: List<Int> = boundPhotos.photos.map { it.heightPx }
             ensureCurrent()
             try {
                 ensureCurrent()
@@ -1087,6 +1376,13 @@ class CreateViewModel(
                         signingKeyset = sender.signingPrivateHandle,
                         recipientEncryptionPublicKeyset =
                             parsePublicHandle(snapshot.encryptionPublicKeysetB64Url),
+                        // ADR-018: only the session-frozen, projection-verified
+                        // selection is sealed; contentIds are authored order.
+                        expression = CapsuleExpressionArtifact(
+                            candidateId = frozenSelection.candidateId,
+                            contentIds = frozenSelection.expression.input.photos.map { it.contentId },
+                            expression = frozenSelection.expression,
+                        ),
                     ),
                 )
                 }
@@ -1211,6 +1507,7 @@ class CreateViewModel(
         sessionOwner = null
         generatorBridge = null
         generatorSessionEpoch = null
+        resetGeneratorPreview()
         _uploadStatus.value = CreateUploadStatus.NotStarted
         _revokeStatus.value = CapsuleRevokeStatus.Idle
     }

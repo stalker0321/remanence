@@ -23,6 +23,7 @@ import dev.hryshyn.remanence.core.model.ArtifactSlot
 import dev.hryshyn.remanence.core.model.BlobId
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
 import dev.hryshyn.remanence.core.model.CapsuleId
+import dev.hryshyn.remanence.core.model.CapsulePhotoIdentity
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.PublishStatementBuildResult
 import dev.hryshyn.remanence.core.model.PublishStatementBuilder
@@ -81,7 +82,35 @@ data class CapsulePublishRequest(
     val signingKeyset: KeysetHandle,
     /** Recipient HPKE public keyset; same account means our own public half. */
     val recipientEncryptionPublicKeyset: KeysetHandle,
-)
+    /**
+     * ADR-018 v2: optional authenticated BER1 expression artifact. Null = v1
+     * (byte-frozen). When present the content manifest becomes v2 and the
+     * expression is bound by the same signed manifest ciphertext hash.
+     */
+    val expression: CapsuleExpressionArtifact? = null,
+) {
+    /** Redacted so note text / photo bytes / keys can never reach logs. */
+    override fun toString(): String =
+        "CapsulePublishRequest(capsuleId=$capsuleId, senderUserId=$senderUserId, " +
+            "recipientUserId=$recipientUserId, senderKeyBundleId=$senderKeyBundleId, " +
+            "recipientKeyBundleId=$recipientKeyBundleId, ownerUserId=$ownerUserId, " +
+            "senderHandleSnapshot=<redacted>, createdAtEpochSeconds=$createdAtEpochSeconds, " +
+            "photoCount=${photoJpegs.size}, notePresent=${noteUtf8 != null}, " +
+            "expression=${if (expression == null) "v1" else "v2"}, " +
+            "frontFingerprintProfileId=$frontFingerprintProfileId)"
+}
+
+/** ADR-018 v2 expression payload; [contentIds] are authored order, one per photoJpeg. */
+data class CapsuleExpressionArtifact(
+    val candidateId: String,
+    val contentIds: List<String>,
+    val expression: dev.hryshyn.remanence.core.model.GeneratorExpression.ResolvedExpression,
+) {
+    /** Redacted: the expression may contain the authored note text. */
+    override fun toString(): String =
+        "CapsuleExpressionArtifact(candidateId=$candidateId, contentCount=${contentIds.size}, " +
+            "contentIds=<redacted>, expression=<redacted>)"
+}
 
 /** A06: rebinds only recipient-facing material to a newly resolved bundle. */
 internal data class RecipientRewrapRequest(
@@ -191,14 +220,39 @@ class CapsulePublisher(
         // 2. Content manifest over the exact photo set.
         val contentBlob = blob(CONTENT_BLOB_BYTE)
         val manifestPhotos = request.photoJpegs.mapIndexed { index, _ ->
-            ManifestPhoto(blob(PHOTO_BLOB_BASE + index).value, index, request.photoWidthsPx[index], request.photoHeightsPx[index])
+            ManifestPhoto(CapsulePhotoIdentity.photoBlobId(request.capsuleId, index).value, index, request.photoWidthsPx[index], request.photoHeightsPx[index])
         }
-        val contentCiphertext = ContentManifestCodec().buildAndEncrypt(
-            capsuleKeyset,
-            routing(request.capsuleId, contentBlob),
-            manifestPhotos,
-            request.noteUtf8,
-        )
+        val contentCiphertext = if (request.expression != null) {
+            val artifact = request.expression
+            require(artifact.contentIds.size == request.photoJpegs.size) {
+                "expression content ids must match the photo set"
+            }
+            require(artifact.contentIds.toSet().size == artifact.contentIds.size) {
+                "expression content ids must be unique"
+            }
+            require(artifact.expression.input.photos.map { it.contentId } == artifact.contentIds) {
+                "expression photos must be authored order matching contentIds"
+            }
+            val blobIdByContentId = artifact.contentIds.mapIndexed { index, contentId ->
+                contentId to CapsulePhotoIdentity.photoBlobBytes(request.capsuleId, index)
+            }.toMap()
+            ContentManifestCodec().buildAndEncryptV2(
+                capsuleKeyset,
+                routing(request.capsuleId, contentBlob),
+                manifestPhotos,
+                request.noteUtf8,
+                artifact.candidateId,
+                artifact.expression,
+                blobIdByContentId,
+            )
+        } else {
+            ContentManifestCodec().buildAndEncrypt(
+                capsuleKeyset,
+                routing(request.capsuleId, contentBlob),
+                manifestPhotos,
+                request.noteUtf8,
+            )
+        }
         artifacts += PreparedOutboxArtifact(
             contentBlob.value, OutboxArtifactKind.CONTENT_MANIFEST, NON_PHOTO_ORDINAL, contentCiphertext,
         )
@@ -211,7 +265,7 @@ class CapsulePublisher(
         // 3. Photos, each under its own PHOTO-ordinal AAD.
         val encryptor = PhotoArtifactEncryptor()
         request.photoJpegs.forEachIndexed { index, jpeg ->
-            val photoBlob = blob(PHOTO_BLOB_BASE + index)
+            val photoBlob = CapsulePhotoIdentity.photoBlobId(request.capsuleId, index)
             val encrypted = encryptor.encryptPhoto(
                 capsuleKeyset,
                 routingFor(request.capsuleId, photoBlob, senderUser, recipientUser),

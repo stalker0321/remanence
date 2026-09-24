@@ -36,11 +36,29 @@ import dev.hryshyn.remanence.core.model.ProtocolV1Limits
  * is either [Loading], [Ready] with an open presentation, or [Failed] with a
  * display-safe message - it can NEVER spin forever on an identity, photoCount,
  * note, or decrypt error, and every state exposes a working Close/Back.
+ *
+ * ADR-018: [Ready] carries exactly one of three presentations - the unchanged
+ * v1 photo pager, the exact sealed BER1 expression, or a typed unsupported
+ * notice that renders NOTHING.
  */
+sealed interface CapsulePresentation : AutoCloseable {
+    class Photos(val state: CapsulePresentationState) : CapsulePresentation {
+        override fun close() = state.close()
+    }
+
+    class Ber1(val state: Ber1PresentationState) : CapsulePresentation {
+        override fun close() = state.close()
+    }
+
+    data class Unsupported(val reason: String) : CapsulePresentation {
+        override fun close() = Unit
+    }
+}
+
 sealed interface CapsuleRouteState {
     data object Loading : CapsuleRouteState
 
-    data class Ready(val presentation: CapsulePresentationState) : CapsuleRouteState
+    data class Ready(val presentation: CapsulePresentation) : CapsuleRouteState
 
     data class Failed(val message: String) : CapsuleRouteState
 }
@@ -113,16 +131,32 @@ internal fun CapsuleRoute(
                 delegate = binding.reader,
                 validateLiveGrant = validateLiveGrant,
             )
-            val declaredCount = source.photoCount(binding.capsuleId)
-            if (declaredCount !in ProtocolV1Limits.PHOTO_COUNT_MIN..ProtocolV1Limits.PHOTO_COUNT_MAX) {
-                throw IllegalStateException("capsule photo layout is invalid")
+            state = when (val admission = source.presentationAdmission(binding.capsuleId)) {
+                CapsulePresentationAdmission.LegacyV1 -> {
+                    val declaredCount = source.photoCount(binding.capsuleId)
+                    if (declaredCount !in ProtocolV1Limits.PHOTO_COUNT_MIN..ProtocolV1Limits.PHOTO_COUNT_MAX) {
+                        throw IllegalStateException("capsule photo layout is invalid")
+                    }
+                    val note = source.noteText(binding.capsuleId)
+                    val presentation = CapsulePresentationState(
+                        photoLoader = { ordinal -> source.loadPhoto(binding.capsuleId, ordinal) },
+                    )
+                    presentation.open(declaredCount, note)
+                    CapsuleRouteState.Ready(CapsulePresentation.Photos(presentation))
+                }
+                is CapsulePresentationAdmission.Ber1 -> {
+                    val ber1 = Ber1PresentationState(
+                        expression = admission.expression,
+                        loadPhoto = { ordinal ->
+                            source.loadPhoto(binding.capsuleId, ordinal).jpegBytes
+                        },
+                    )
+                    ber1.load()
+                    CapsuleRouteState.Ready(CapsulePresentation.Ber1(ber1))
+                }
+                is CapsulePresentationAdmission.Unsupported ->
+                    CapsuleRouteState.Ready(CapsulePresentation.Unsupported(admission.reason))
             }
-            val note = source.noteText(binding.capsuleId)
-            val presentation = CapsulePresentationState(
-                photoLoader = { ordinal -> source.loadPhoto(binding.capsuleId, ordinal) },
-            )
-            presentation.open(declaredCount, note)
-            state = CapsuleRouteState.Ready(presentation)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
@@ -141,8 +175,18 @@ internal fun CapsuleRoute(
             onClose = onClose,
         )
 
-        is CapsuleRouteState.Ready ->
-            CapsuleScreen(state = current.presentation, onClose = onClose, modifier = modifier)
+        is CapsuleRouteState.Ready -> when (val presentation = current.presentation) {
+            is CapsulePresentation.Photos ->
+                CapsuleScreen(state = presentation.state, onClose = onClose, modifier = modifier)
+            is CapsulePresentation.Ber1 ->
+                Ber1PresentationHost(state = presentation.state, onClose = onClose, modifier = modifier)
+            is CapsulePresentation.Unsupported ->
+                Ber1UnsupportedPresentation(
+                    reason = presentation.reason,
+                    onClose = onClose,
+                    modifier = modifier,
+                )
+        }
     }
 }
 

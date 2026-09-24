@@ -217,6 +217,25 @@ class CreateViewModel(
     val photoSelection = PhotoSelectionState().also { it.onEdit = { invalidateGeneratorForPhotoEdit() } }
     val noteEditor = NoteEditorState().also { it.onEdit = { invalidateGeneratorForNoteEdit() } }
 
+    /**
+     * S2b-sender: the DEBUG-only picker selection that becomes the sealed
+     * track snapshot at publish time. Null = no snapshot (v1 and
+     * snapshot-less v2 flows unchanged). Written only from the debug
+     * picker bridge until end-to-end works; release can never select.
+     */
+    private val _musicSelection =
+        MutableStateFlow<dev.hryshyn.remanence.core.data.network.MusicTrackHit?>(null)
+    val musicSelection: StateFlow<dev.hryshyn.remanence.core.data.network.MusicTrackHit?> =
+        _musicSelection.asStateFlow()
+
+    fun setMusicSelection(hit: dev.hryshyn.remanence.core.data.network.MusicTrackHit?) {
+        _musicSelection.value = hit
+    }
+
+    fun clearMusicSelection() {
+        _musicSelection.value = null
+    }
+
     // ---------------------------------------------------------------------
     // Authoritative capture attempt (FIX-STATE-01).
     // ---------------------------------------------------------------------
@@ -414,6 +433,13 @@ class CreateViewModel(
         pickerVm.reset()
         photoSelection.clear()
         noteEditor.reset()
+        // S2b-sender: a DEBUG picker selection belongs to exactly one
+        // session; a new epoch/owner must never inherit it (placed after
+        // the same-epoch early return above, so rotation keeps it).
+        // Photo/note edits intentionally do NOT clear it: music is
+        // independent of photos/note, and clearing on keystrokes would
+        // destroy the selection with zero safety benefit.
+        _musicSelection.value = null
         frontAttempt.reset()
         frontFingerprintId = null
         _flowError.value = null
@@ -1344,6 +1370,17 @@ class CreateViewModel(
             val photoWidthsPx: List<Int> = boundPhotos.photos.map { it.widthPx }
             val photoHeightsPx: List<Int> = boundPhotos.photos.map { it.heightPx }
             ensureCurrent()
+            // S2b-sender: the DEBUG-only picker selection becomes the sealed
+            // snapshot. An invalid selection fails publishing — never a
+            // silent drop and never an unsealed attachment.
+            val trackSnapshot = musicSelection.value?.let { hit ->
+                try {
+                    dev.hryshyn.remanence.create.mapMusicSelectionToSnapshot(hit)
+                } catch (_: IllegalArgumentException) {
+                    failPublishing("selected track is invalid; publishing cancelled", generation)
+                    return
+                }
+            }
             try {
                 ensureCurrent()
                 val prepared = withContext(cpuDispatcher) {
@@ -1378,11 +1415,14 @@ class CreateViewModel(
                             parsePublicHandle(snapshot.encryptionPublicKeysetB64Url),
                         // ADR-018: only the session-frozen, projection-verified
                         // selection is sealed; contentIds are authored order.
+                        // S2b-sender: plus the validated track snapshot, if
+                        // the DEBUG picker selected one (null otherwise).
                         expression = CapsuleExpressionArtifact(
                             candidateId = frozenSelection.candidateId,
                             contentIds = frozenSelection.expression.input.photos.map { it.contentId },
                             expression = frozenSelection.expression,
                         ),
+                        trackSnapshot = trackSnapshot,
                     ),
                 )
                 }
@@ -1495,6 +1535,9 @@ class CreateViewModel(
         pickerVm.reset()
         photoSelection.clear()
         noteEditor.reset()
+        // S2b-sender: leaving the surface drops the DEBUG picker selection
+        // with every other content state (see beginSession for the rationale).
+        _musicSelection.value = null
         frontAttempt.reset()
         frontFingerprintId = null
         _step.value = Step.RECIPIENT_LOOKUP

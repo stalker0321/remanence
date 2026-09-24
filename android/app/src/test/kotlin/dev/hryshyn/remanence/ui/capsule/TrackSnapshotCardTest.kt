@@ -6,6 +6,7 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
 import dev.hryshyn.remanence.core.model.GeneratorEditorialRows
@@ -247,5 +248,100 @@ class TrackSnapshotCardTest {
             override suspend fun noteText(capsuleId: String): String? = null
         }
         assertNull(plain.trackSnapshot("capsule"))
+    }
+
+    @Test
+    fun preS3CardWithoutLauncherHasNoListenAction() {
+        composeRule.setContent {
+            MaterialTheme {
+                TrackSnapshotCard(track = snapshot())
+            }
+        }
+
+        composeRule.onNodeWithTag("capsule_track_card").assertIsDisplayed()
+        composeRule.onAllNodesWithTag("capsule_track_open").fetchSemanticsNodes().isEmpty().let {
+            assertTrue("Listen action must be absent without a launcher", it)
+        }
+    }
+
+    @Test
+    fun tappingServiceFiresExactSearchUrl() {
+        val opened = mutableListOf<String>()
+        composeRule.setContent {
+            MaterialTheme {
+                TrackSnapshotCard(
+                    track = snapshot(),
+                    onOpenService = { service ->
+                        opened.add(
+                            service.searchUrl("505", "Arctic Monkeys"),
+                        )
+                        true
+                    },
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("capsule_track_open").performClick()
+        composeRule.onNodeWithTag("capsule_track_open_spotify").performClick()
+
+        assertEquals(
+            listOf("https://open.spotify.com/search/505%20Arctic%20Monkeys"),
+            opened,
+        )
+    }
+
+    @Test
+    fun failedLaunchShowsInlineErrorAndKeepsCard() {
+        composeRule.setContent {
+            MaterialTheme {
+                TrackSnapshotCard(
+                    track = snapshot(),
+                    onOpenService = { false },
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("capsule_track_open").performClick()
+        composeRule.onNodeWithTag("capsule_track_open_apple").performClick()
+
+        composeRule.onNodeWithTag("capsule_track_no_browser").assertIsDisplayed()
+        composeRule.onNodeWithTag("capsule_track_card").assertIsDisplayed()
+    }
+
+    @Test
+    fun pickerDismissesWithoutFiring() {
+        var calls = 0
+        composeRule.setContent {
+            MaterialTheme {
+                TrackSnapshotCard(
+                    track = snapshot(),
+                    onOpenService = { calls += 1; true },
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("capsule_track_open").performClick()
+        composeRule.onNodeWithTag("capsule_track_open_dismiss").performClick()
+
+        assertEquals(0, calls)
+        composeRule.onNodeWithTag("capsule_track_card").assertIsDisplayed()
+    }
+
+    @Test
+    fun throwingLauncherBecomesInlineErrorInsteadOfCrash() {
+        composeRule.setContent {
+            MaterialTheme {
+                TrackSnapshotCard(
+                    track = snapshot(),
+                    onOpenService = { throw IllegalArgumentException("oversized") },
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("capsule_track_open").performClick()
+        composeRule.onNodeWithTag("capsule_track_open_spotify").performClick()
+
+        composeRule.onNodeWithTag("capsule_track_no_browser").assertIsDisplayed()
+        composeRule.onNodeWithTag("capsule_track_card").assertIsDisplayed()
     }
 }

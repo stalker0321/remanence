@@ -16,8 +16,14 @@ import dev.hryshyn.remanence.ui.hold.HoldSecondaryButton as OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -25,6 +31,7 @@ import dev.hryshyn.remanence.capture.CaptureAttemptSurface
 import dev.hryshyn.remanence.scan.ScanSessionState
 import dev.hryshyn.remanence.sync.IncomingAcceptanceDiagnostics
 import dev.hryshyn.remanence.ui.motion.AstraEnterTransition
+import dev.hryshyn.remanence.ui.motion.AstraMotionSpec
 import dev.hryshyn.remanence.ui.motion.rememberAstraMotion
 
 /**
@@ -56,6 +63,14 @@ fun ScanScreen(
         onDispose(onScreenDispose)
     }
 
+    // Single route arrival: the root already carries Home -> Scan, so the
+    // capture entry snaps on this screen's first mount instead of stacking
+    // a second fade on top. Later returns to capture (recapture) arrive
+    // with the live regime. Waiting/chooser/result branches mount only via
+    // in-Scan transitions, after the root arrival is done, so they keep
+    // their own entries. The camera lifecycle below is untouched.
+    val entryMotion = rememberScanEntryMotion(rememberAstraMotion())
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -69,13 +84,27 @@ fun ScanScreen(
         Spacer(Modifier.height(16.dp))
 
         when (val current = matchState) {
-            // ASTRA-FIDELITY: entry arrives with the routine transition.
+            // ASTRA-FIDELITY: entry snaps on first mount (root arrival
+            // covers it) and arrives routinely on later returns.
             // The FRONT camera lifecycle (adapter bind/release, permission,
             // controller) is untouched — only the arrival is wrapped.
             is ScanMatchUiState.AwaitingCapture -> AstraEnterTransition(
-                motion = rememberAstraMotion(),
+                motion = entryMotion,
             ) {
-                FrontCapture(viewModel, Modifier.fillMaxWidth(), adapterFactory, requestPermissionOnAttach)
+                // Capture-once display frame: shares the delivered pixels
+                // (no copy) and converts on change only. Null until the
+                // current delivery decodes — and always null again once the
+                // attempt leaves Processing (terminal/retake/reset paths in
+                // the ViewModel clear it).
+                val displayStill by viewModel.frontDisplayStill.collectAsStateWithLifecycle()
+                val displayImage = remember(displayStill) { displayStill?.asImageBitmap() }
+                FrontCapture(
+                    viewModel,
+                    Modifier.fillMaxWidth(),
+                    adapterFactory,
+                    requestPermissionOnAttach,
+                    processingStill = displayImage,
+                )
             }
             // ASTRA-FIDELITY: post-scan waiting states share one waiting
             // group — the drawn postcard carries the wait while only the
@@ -148,6 +177,24 @@ fun ScanScreen(
     }
 }
 
+/**
+ * Single-arrival gate for the capture entry: the first mount of this Scan
+ * screen composes under the root Home -> Scan boundary arrival, so the
+ * entry reports INSTANT (snap, no stacked fade). Once entered, the live
+ * regime applies — including later returns to capture after recapture.
+ */
+@Composable
+internal fun rememberScanEntryMotion(
+    liveMotion: AstraMotionSpec.Resolved,
+): AstraMotionSpec.Resolved {
+    // First mount rides the root Home -> Scan boundary arrival: report
+    // INSTANT so the entry snaps instead of doubling the fade. Rotation
+    // keeps the latched value, so rotation never replays the arrival.
+    var entered by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { entered = true }
+    return if (entered) liveMotion else AstraMotionSpec.Resolved.INSTANT
+}
+
 /** The FRONT capture, rendered from its authoritative controller. */
 @Composable
 private fun FrontCapture(
@@ -155,6 +202,7 @@ private fun FrontCapture(
     modifier: Modifier = Modifier,
     adapterFactory: (() -> dev.hryshyn.remanence.capture.StillCameraAdapter)? = null,
     requestPermissionOnAttach: Boolean = true,
+    processingStill: ImageBitmap? = null,
 ) {
     when (viewModel.captureSession.state) {
         ScanSessionState.AWAITING_FRONT -> CaptureAttemptSurface(
@@ -167,6 +215,7 @@ private fun FrontCapture(
             modifier = modifier,
             adapterFactory = adapterFactory,
             requestPermissionOnAttach = requestPermissionOnAttach,
+            processingStill = processingStill,
         )
 
         ScanSessionState.CONSUMED -> Unit

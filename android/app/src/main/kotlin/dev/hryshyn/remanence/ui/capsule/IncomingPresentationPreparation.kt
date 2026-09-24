@@ -1,6 +1,7 @@
 package dev.hryshyn.remanence.ui.capsule
 
 import dev.hryshyn.remanence.core.crypto.DeliveredCiphertext
+import dev.hryshyn.remanence.core.crypto.ExpressionReceiverAdmission
 import dev.hryshyn.remanence.core.crypto.PresentationAcceptanceGate
 import dev.hryshyn.remanence.core.crypto.PresentationAcceptanceInput
 import dev.hryshyn.remanence.core.crypto.PresentationAcceptancePreparationResult
@@ -113,6 +114,13 @@ internal class PreparedIncomingPresentation internal constructor(
 
     internal val photoCount: Int
         get() = material.photoCount
+
+    internal val protocolVersion: Int
+        get() = material.protocolVersion
+
+    /** ADR-018 receiver admission over the authenticated manifest. */
+    internal fun expressionAdmission(): ExpressionReceiverAdmission.Result =
+        material.expressionAdmission()
 
     internal fun noteText(): String? = material.noteText()
 

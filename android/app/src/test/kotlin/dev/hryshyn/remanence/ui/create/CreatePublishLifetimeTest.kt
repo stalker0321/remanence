@@ -251,7 +251,7 @@ class CreatePublishLifetimeTest {
         vm.deliverFrontJpeg("f".toByteArray())
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         vm.onPhotosPicked(listOf("p1", "p2", "p3"))
-        assertTrue(vm.noteEditor.onChange("lifetime note"))
+        // ADR-018: publish with no note (non-empty notes are typed unsupported).
         return vm
     }
 

@@ -78,6 +78,20 @@ class PreparedPresentationMaterial internal constructor(
     val photoCount: Int
         get() = requireOpen().photos.size
 
+    /** ADR-018: the authenticated content-manifest protocol version (1 or 2). */
+    val protocolVersion: Int
+        get() = requireOpen().protocolVersion
+
+    /**
+     * ADR-018 receiver admission over the authenticated manifest: v2 with a
+     * structurally valid, note/order/source-consistent expression is
+     * [ExpressionReceiverAdmission.Result.Supported]; everything else is a
+     * typed [ExpressionReceiverAdmission.Result.Unsupported] so the caller
+     * renders NOTHING rather than a wrong layout.
+     */
+    fun expressionAdmission(): ExpressionReceiverAdmission.Result =
+        ExpressionReceiverAdmission.admit(requireOpen())
+
     fun noteText(): String? = requireOpen().note
 
     /** Decrypts one verified photo from the exact snapshot captured at prepare time. */

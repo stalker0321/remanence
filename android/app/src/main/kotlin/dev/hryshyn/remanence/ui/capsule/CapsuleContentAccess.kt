@@ -1,5 +1,24 @@
 package dev.hryshyn.remanence.ui.capsule
 
+import dev.hryshyn.remanence.core.model.GeneratorExpression
+
+/**
+ * ADR-018 receiver presentation admission for one authenticated capsule:
+ * - [LegacyV1] keeps the existing individual-photo path unchanged;
+ * - [Ber1] renders the sealed exact BER1 expression;
+ * - [Unsupported] renders NOTHING plus a typed notice (never a fallback
+ *   photo layout over a v2-intended capsule).
+ */
+sealed interface CapsulePresentationAdmission {
+    data object LegacyV1 : CapsulePresentationAdmission
+
+    data class Ber1(
+        val expression: GeneratorExpression.ResolvedExpression,
+    ) : CapsulePresentationAdmission
+
+    data class Unsupported(val reason: String) : CapsulePresentationAdmission
+}
+
 /**
  * FIX-REVIEW2-03: the UI-facing surface of on-demand capsule decryption.
  * Production routes may only reach [CapsuleContentSource] through
@@ -12,6 +31,13 @@ interface CapsuleContentReader {
     suspend fun loadPhoto(capsuleId: String, ordinal: Int): DecryptedPhoto
 
     suspend fun noteText(capsuleId: String): String?
+
+    /**
+     * Default: a reader that has no content-manifest view is treated as the
+     * legacy v1 photo path, so every existing reader/test is unchanged.
+     */
+    suspend fun presentationAdmission(capsuleId: String): CapsulePresentationAdmission =
+        CapsulePresentationAdmission.LegacyV1
 }
 
 /** Opaque route-local binding; navigation itself carries only a grant ID. */
@@ -61,5 +87,12 @@ class GrantGuardedCapsuleContentSource(
         val note = delegate.noteText(capsuleId)
         validateLiveGrant()
         return note
+    }
+
+    override suspend fun presentationAdmission(capsuleId: String): CapsulePresentationAdmission {
+        validateLiveGrant()
+        val admission = delegate.presentationAdmission(capsuleId)
+        validateLiveGrant()
+        return admission
     }
 }

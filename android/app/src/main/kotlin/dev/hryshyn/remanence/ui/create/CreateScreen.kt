@@ -36,6 +36,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.hryshyn.remanence.capture.CaptureAttemptSurface
+import dev.hryshyn.remanence.ui.motion.AstraStepArrival
+import dev.hryshyn.remanence.ui.motion.rememberAstraMotion
 
 /**
  * FIX-M1-007-11: the production Create surface. Every control is bound to the
@@ -67,6 +69,7 @@ fun CreateScreen(
     val flowError by viewModel.flowError.collectAsStateWithLifecycle()
     val revokeStatus by viewModel.revokeStatus.collectAsStateWithLifecycle()
     var showRevokeConfirmation by remember { mutableStateOf(false) }
+    val motion = rememberAstraMotion()
 
     // The caller distinguishes true route exit from activity recreation. This
     // effect is intentionally not keyed by configuration so rotation does not
@@ -75,6 +78,10 @@ fun CreateScreen(
         onDispose(onScreenDispose)
     }
 
+    // Motion ownership: the root owns the single boundary arrival
+    // (Home <-> Create). Steps arrive via AstraStepArrival, which snaps on
+    // the first mount (no stacked root alpha) and animates only on step
+    // changes; the outgoing step is dropped synchronously.
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -82,93 +89,97 @@ fun CreateScreen(
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp, vertical = 16.dp),
     ) {
-        Text(
-            text = when (step) {
-                CreateViewModel.Step.RECIPIENT_LOOKUP -> stringResource(R.string.hold_recipient_title)
-                CreateViewModel.Step.RECIPIENT_CONFIRM -> stringResource(R.string.hold_confirm_title)
-                CreateViewModel.Step.FRONT -> stringResource(R.string.hold_capture_title)
-                CreateViewModel.Step.CONTENT -> stringResource(R.string.hold_content_title)
-                CreateViewModel.Step.PUBLISHING -> stringResource(R.string.hold_preparing_title)
-                CreateViewModel.Step.UPLOAD_PENDING -> stringResource(R.string.hold_publishing_title)
-                CreateViewModel.Step.PUBLISHED -> stringResource(R.string.hold_ready_title)
-            },
-            style = MaterialTheme.typography.headlineSmall,
-            modifier = Modifier.testTag("create_step_label"),
-        )
-        Spacer(Modifier.height(12.dp))
-
-        when (step) {
-            CreateViewModel.Step.RECIPIENT_LOOKUP -> RecipientLookupContent(viewModel)
-            CreateViewModel.Step.RECIPIENT_CONFIRM -> RecipientConfirmContent(viewModel)
-            CreateViewModel.Step.FRONT -> CaptureAttemptSurface(
-                controller = viewModel.frontAttempt,
-                shutterTag = "capture_shutter_front",
-                retakeTag = "capture_retake_front",
-                onBeginAttempt = viewModel::beginFrontCapture,
-                onDelivered = viewModel::deliverFrontJpeg,
-                onRetake = viewModel::retakeFront,
-                adapterFactory = adapterFactory,
-                requestPermissionOnAttach = requestPermissionOnAttach,
-            )
-
-            CreateViewModel.Step.CONTENT -> ContentStepContent(viewModel)
-            CreateViewModel.Step.PUBLISHING -> Column {
-                androidx.compose.material3.CircularProgressIndicator(
-                    strokeWidth = 2.dp,
-                    modifier = Modifier.testTag("create_publishing_spinner"),
-                )
-                Spacer(Modifier.height(8.dp))
-                Text("Encrypting locally...", modifier = Modifier.testTag("create_publishing"))
-            }
-            CreateViewModel.Step.UPLOAD_PENDING -> when (val status = uploadStatus) {
-                is CreateViewModel.CreateUploadStatus.RetryableFailure -> Text(
-                    createUploadPendingCopy(status),
-                    modifier = Modifier.testTag("create_upload_retryable_failure"),
-                )
-                is CreateViewModel.CreateUploadStatus.TerminalFailure -> Text(
-                    createUploadPendingCopy(status),
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.testTag("create_upload_terminal_failure"),
-                )
-                else -> Text(
-                    createUploadPendingCopy(status),
-                    modifier = Modifier.testTag("create_upload_pending"),
-                )
-            }
-            CreateViewModel.Step.PUBLISHED -> Column {
+        AstraStepArrival(motion = motion, stepKey = step, modifier = Modifier.fillMaxWidth()) {
+            Column {
                 Text(
-                    "Capsule sealed. Send the physical postcard.",
-                    modifier = Modifier.testTag("create_published"),
+                    text = when (step) {
+                        CreateViewModel.Step.RECIPIENT_LOOKUP -> stringResource(R.string.hold_recipient_title)
+                        CreateViewModel.Step.RECIPIENT_CONFIRM -> stringResource(R.string.hold_confirm_title)
+                        CreateViewModel.Step.FRONT -> stringResource(R.string.hold_capture_title)
+                        CreateViewModel.Step.CONTENT -> stringResource(R.string.hold_content_title)
+                        CreateViewModel.Step.PUBLISHING -> stringResource(R.string.hold_preparing_title)
+                        CreateViewModel.Step.UPLOAD_PENDING -> stringResource(R.string.hold_publishing_title)
+                        CreateViewModel.Step.PUBLISHED -> stringResource(R.string.hold_ready_title)
+                    },
+                    style = MaterialTheme.typography.headlineSmall,
+                    modifier = Modifier.testTag("create_step_label"),
                 )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Cancellation stops future delivery when possible. A copy already received or decrypted by the recipient cannot be removed.",
-                    modifier = Modifier.testTag("create_revoke_disclaimer"),
-                )
-                Spacer(Modifier.height(8.dp))
-                when (val status = revokeStatus) {
-                    CreateViewModel.CapsuleRevokeStatus.Idle -> Unit
-                    CreateViewModel.CapsuleRevokeStatus.InFlight -> Text(
-                        "Cancelling capsule...",
-                        modifier = Modifier.testTag("create_revoke_in_flight"),
+                Spacer(Modifier.height(12.dp))
+
+                when (step) {
+                    CreateViewModel.Step.RECIPIENT_LOOKUP -> RecipientLookupContent(viewModel)
+                    CreateViewModel.Step.RECIPIENT_CONFIRM -> RecipientConfirmContent(viewModel)
+                    CreateViewModel.Step.FRONT -> CaptureAttemptSurface(
+                        controller = viewModel.frontAttempt,
+                        shutterTag = "capture_shutter_front",
+                        retakeTag = "capture_retake_front",
+                        onBeginAttempt = viewModel::beginFrontCapture,
+                        onDelivered = viewModel::deliverFrontJpeg,
+                        onRetake = viewModel::retakeFront,
+                        adapterFactory = adapterFactory,
+                        requestPermissionOnAttach = requestPermissionOnAttach,
                     )
-                    is CreateViewModel.CapsuleRevokeStatus.Succeeded -> Text(
-                        "Capsule cancelled for future delivery. A copy already received or decrypted by the recipient is not removed.",
-                        modifier = Modifier.testTag("create_revoke_success"),
-                    )
-                    is CreateViewModel.CapsuleRevokeStatus.Failed -> Text(
-                        createRevokeCopy(status),
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.testTag("create_revoke_error"),
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-                HoldDestructiveButton(
-                    onClick = { showRevokeConfirmation = true },
-                    enabled = revokeActionEnabled(revokeStatus),
-                    modifier = Modifier.testTag("create_revoke_button"),
-                ) {
-                    Text("Cancel capsule")
+
+                    CreateViewModel.Step.CONTENT -> ContentStepContent(viewModel)
+                    CreateViewModel.Step.PUBLISHING -> Column {
+                        androidx.compose.material3.CircularProgressIndicator(
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.testTag("create_publishing_spinner"),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text("Encrypting locally...", modifier = Modifier.testTag("create_publishing"))
+                    }
+                    CreateViewModel.Step.UPLOAD_PENDING -> when (val status = uploadStatus) {
+                        is CreateViewModel.CreateUploadStatus.RetryableFailure -> Text(
+                            createUploadPendingCopy(status),
+                            modifier = Modifier.testTag("create_upload_retryable_failure"),
+                        )
+                        is CreateViewModel.CreateUploadStatus.TerminalFailure -> Text(
+                            createUploadPendingCopy(status),
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.testTag("create_upload_terminal_failure"),
+                        )
+                        else -> Text(
+                            createUploadPendingCopy(status),
+                            modifier = Modifier.testTag("create_upload_pending"),
+                        )
+                    }
+                    CreateViewModel.Step.PUBLISHED -> Column {
+                        Text(
+                            "Capsule sealed. Send the physical postcard.",
+                            modifier = Modifier.testTag("create_published"),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Cancellation stops future delivery when possible. A copy already received or decrypted by the recipient cannot be removed.",
+                            modifier = Modifier.testTag("create_revoke_disclaimer"),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        when (val status = revokeStatus) {
+                            CreateViewModel.CapsuleRevokeStatus.Idle -> Unit
+                            CreateViewModel.CapsuleRevokeStatus.InFlight -> Text(
+                                "Cancelling capsule...",
+                                modifier = Modifier.testTag("create_revoke_in_flight"),
+                            )
+                            is CreateViewModel.CapsuleRevokeStatus.Succeeded -> Text(
+                                "Capsule cancelled for future delivery. A copy already received or decrypted by the recipient is not removed.",
+                                modifier = Modifier.testTag("create_revoke_success"),
+                            )
+                            is CreateViewModel.CapsuleRevokeStatus.Failed -> Text(
+                                createRevokeCopy(status),
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.testTag("create_revoke_error"),
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        HoldDestructiveButton(
+                            onClick = { showRevokeConfirmation = true },
+                            enabled = revokeActionEnabled(revokeStatus),
+                            modifier = Modifier.testTag("create_revoke_button"),
+                        ) {
+                            Text("Cancel capsule")
+                        }
+                    }
                 }
             }
         }
@@ -327,6 +338,14 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
                 modifier = Modifier.testTag("create_note_limit_error"),
             )
         }
+
+        Spacer(Modifier.height(12.dp))
+        val generatorPreview by viewModel.generatorPreview.collectAsStateWithLifecycle()
+        GeneratorBer1PreviewHost(
+            state = generatorPreview,
+            modifier = Modifier.fillMaxWidth(),
+            onMeasured = viewModel::onPreviewMeasured,
+        )
 
         Spacer(Modifier.height(12.dp))
         Button(

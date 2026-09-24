@@ -8,6 +8,8 @@ import kotlinx.coroutines.withContext
 import dev.hryshyn.remanence.core.crypto.CapsuleArtifactCryptor
 import dev.hryshyn.remanence.core.crypto.CapsuleKeysetParser
 import dev.hryshyn.remanence.core.crypto.ContentManifestCodec
+import dev.hryshyn.remanence.core.crypto.ContentManifestContent
+import dev.hryshyn.remanence.core.crypto.ExpressionReceiverAdmission
 import dev.hryshyn.remanence.core.crypto.RecipientEnvelopeCryptor
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.outbox.OutboxArtifactKind
@@ -134,25 +136,45 @@ class CapsuleContentSource(
             DecryptedPhoto(ordinal = ordinal, jpegBytes = plaintext)
         }
 
+    /** Decrypts the authenticated content manifest (v1 or v2), or null if absent. */
+    private suspend fun decryptContent(capsuleId: String): ContentManifestContent? =
+        withContext(Dispatchers.IO) {
+            val uuid = UUID.fromString(capsuleId)
+            val blobs = database.outboxBlobDao()
+                .getAllByCapsuleIdAndOwner(capsuleId, requireOwnerUserId())
+            val contentRow = blobs.firstOrNull { it.kind == OutboxArtifactKind.CONTENT_MANIFEST.name }
+                ?: return@withContext null
+            val keyset = capsuleKeyset(capsuleId)
+            val ciphertext = java.io.File(contentRow.localCiphertextPath).readBytes()
+            val manifestRouting = routing(capsuleId)
+            ContentManifestCodec().decryptAndParse(
+                keyset,
+                dev.hryshyn.remanence.core.crypto.RecognitionManifestCodec.RoutingContext(
+                    CapsuleId(uuid),
+                    BlobId(UUID.fromString(contentRow.blobId)),
+                    manifestRouting.senderUserId,
+                    manifestRouting.recipientUserId,
+                ),
+                ciphertext,
+            )
+        }
+
     /** Decrypts the optional note from the content manifest. */
-    override suspend fun noteText(capsuleId: String): String? = withContext(Dispatchers.IO) {
-        val uuid = UUID.fromString(capsuleId)
-        val blobs = database.outboxBlobDao()
-            .getAllByCapsuleIdAndOwner(capsuleId, requireOwnerUserId())
-        val contentRow = blobs.firstOrNull { it.kind == OutboxArtifactKind.CONTENT_MANIFEST.name }
-            ?: return@withContext null
-        val keyset = capsuleKeyset(capsuleId)
-        val ciphertext = java.io.File(contentRow.localCiphertextPath).readBytes()
-        val manifestRouting = routing(capsuleId)
-        ContentManifestCodec().decryptAndParse(
-            keyset,
-            dev.hryshyn.remanence.core.crypto.RecognitionManifestCodec.RoutingContext(
-                CapsuleId(uuid),
-                BlobId(UUID.fromString(contentRow.blobId)),
-                manifestRouting.senderUserId,
-                manifestRouting.recipientUserId,
-            ),
-            ciphertext,
-        ).note
+    override suspend fun noteText(capsuleId: String): String? = decryptContent(capsuleId)?.note
+
+    /**
+     * ADR-018: a v2 outbox capsule (e.g. a self-send) renders its sealed
+     * exact BER1 expression; v1 keeps the existing photo path; an
+     * unadmittable v2 renders NOTHING.
+     */
+    override suspend fun presentationAdmission(capsuleId: String): CapsulePresentationAdmission {
+        val content = decryptContent(capsuleId) ?: return CapsulePresentationAdmission.LegacyV1
+        if (content.protocolVersion == 1) return CapsulePresentationAdmission.LegacyV1
+        return when (val admitted = ExpressionReceiverAdmission.admit(content)) {
+            is ExpressionReceiverAdmission.Result.Supported ->
+                CapsulePresentationAdmission.Ber1(admitted.expression)
+            is ExpressionReceiverAdmission.Result.Unsupported ->
+                CapsulePresentationAdmission.Unsupported(admitted.reason)
+        }
     }
 }

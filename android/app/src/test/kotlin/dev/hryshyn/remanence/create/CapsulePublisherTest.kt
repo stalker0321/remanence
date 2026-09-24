@@ -862,8 +862,14 @@ class CapsulePublisherTest {
             "CapsulePublishRequest.toString must surface ownerUserId as a named property",
             "ownerUserId=" in asString,
         )
+        // ADR-018 redaction hardening: the request toString deliberately
+        // surfaces the profile id only and never the raw fingerprint bytes.
         assertTrue(
-            "CapsulePublishRequest.toString must surface frontFingerprintBytes as a named property",
+            "CapsulePublishRequest.toString must surface frontFingerprintProfileId as a named property",
+            "frontFingerprintProfileId=" in asString,
+        )
+        assertFalse(
+            "CapsulePublishRequest.toString must not leak raw front fingerprint bytes",
             "frontFingerprintBytes=" in asString,
         )
         assertFalse(

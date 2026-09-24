@@ -48,7 +48,6 @@
     <string name="hold_collapse">назад ↓</string>
     <string name="hold_inside">у цій remanence</string>
     <string name="hold_photo_summary">%1$d фото разом</string>
-    <string name="hold_ack">Це та людина, якій я хочу надіслати</string>
     <string name="hold_for_handle">для %1$s</string>
     <string name="hold_handle">нік</string>
     <string name="hold_capture_guide_instruction">усі чотири краї мають бути всередині рамки.</string>
@@ -82,6 +81,7 @@
     <string name="hold_scan_again">сканувати знову</string>
     <string name="hold_scan_stop">зупинити сканування</string>
     <string name="hold_scan_recognizing_body">поки залиште листівку поруч.</string>
+    <string name="hold_scan_still_hold">знято — телефон можна прибрати.</string>
     <string name="hold_scan_opening_body">перевіряємо, чи можна відкрити вкладення.</string>
     <string name="hold_scan_material_online_body">завантажуємо вкладення.</string>
     <string name="hold_chooser_title">яка це листівка?</string>

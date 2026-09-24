@@ -54,6 +54,15 @@ class HomeCapabilityViewModelTest {
     }
 
     @Test
+    fun resolvingStaysDisabledUntilTheSessionIsProven() {
+        val vm = viewModel(FakeIdentity())
+
+        vm.onAuthStateChanged(AuthUiState.Resolving)
+
+        assertEquals(AccountCapabilityState.NotAuthenticated, vm.capability.value)
+    }
+
+    @Test
     fun requiresConnectivityStaysDisabledUntilTheSessionIsProven() {
         val vm = viewModel(FakeIdentity())
 

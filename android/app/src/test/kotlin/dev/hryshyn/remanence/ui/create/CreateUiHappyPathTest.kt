@@ -189,6 +189,20 @@ class CreateUiHappyPathTest {
             },
             frontProcessor = AcceptingProcessor(),
             generatorBridgeProvider = bridge.provider,
+            // ADR-018: the real preview host measures the note on-device and
+            // reports the fitted plan to the VM through onPreviewMeasured.
+            generatorPreviewLoader = dev.hryshyn.remanence.create.GeneratorPreviewLoader { pickerId ->
+                val bytes = dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(pickerId)
+                val upright = dev.hryshyn.remanence.create.GeneratorExifDecoder.decodeUpright(bytes)
+                dev.hryshyn.remanence.create.LoadedPreviewSource(
+                    originalHash = sha256Hex(bytes),
+                    uprightWidthPx = upright.widthPx,
+                    uprightHeightPx = upright.heightPx,
+                    previewJpegBytes = bytes,
+                    previewWidthPx = upright.widthPx,
+                    previewHeightPx = upright.heightPx,
+                )
+            },
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
             senderRetryKeysetWrapper = testWrapper,
@@ -227,8 +241,8 @@ class CreateUiHappyPathTest {
         composeRule.waitForIdle()
 
         // 2) Explicit confirmation of the resolved snapshot.
-        composeRule.onNodeWithTag("confirm_ack_checkbox").performClick()
         composeRule.onNodeWithTag("confirm_button").performClick()
+        composeRule.waitUntil(timeoutMillis = 2_000) { vm.step.value == CreateViewModel.Step.FRONT }
 
         // 3) FRONT capture through the camera seam.
         composeRule.runOnIdle {
@@ -244,6 +258,8 @@ class CreateUiHappyPathTest {
         scroll("create_pick_photos")
         composeRule.runOnIdle { vm.onPhotosPicked(listOf("u1", "u2", "u3")) }
         composeRule.onNodeWithTag("create_note_input").performTextInput("dear mama")
+        // Let the preview host measure the note and report the fitted plan.
+        composeRule.waitForIdle()
 
         // 5) Publish.
         scroll("create_publish")
@@ -283,4 +299,8 @@ class CreateUiHappyPathTest {
             ApplicationProvider.getApplicationContext<Context>().filesDir,
             "ui-happy-staging",
         )
+
+    private fun sha256Hex(bytes: ByteArray): String =
+        java.security.MessageDigest.getInstance("SHA-256")
+            .digest(bytes).joinToString("") { "%02x".format(it) }
 }

@@ -2,12 +2,15 @@ package dev.hryshyn.remanence.ui.create
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
@@ -51,33 +54,61 @@ class RecipientConfirmationScreenTest {
     }
 
     @Test
-    fun showsHandleAndImmutableAccountCue() {
+    fun showsHandleAndNonIdAccountCue() {
         setContent()
         composeRule.onNodeWithTag("confirm_handle_text", useUnmergedTree = true).assertIsDisplayed()
-        composeRule
-            .onNodeWithTag("confirm_account_cue_text")
-            .assertIsDisplayed()
-        // The cue carries the immutable ID, not just the mutable handle.
-        composeRule.onNodeWithTag("confirm_account_cue_text")
+        // The cue is handle-anchored, never a raw user/key UUID: the
+        // immutable binding travels in the confirmed snapshot, not UI text.
+        composeRule.onNodeWithTag("confirm_account_cue_text").assertTextEquals("For @mykola")
+        val cue = composeRule.onNodeWithTag("confirm_account_cue_text")
             .fetchSemanticsNode().let { node ->
-                val text = node.config.toString()
-                org.junit.Assert.assertTrue(text.isNotEmpty())
+                node.config.toString()
             }
+        assertTrue(cue.isNotEmpty())
+        assertFalse(
+            "raw account ID must not render: $cue",
+            cue.contains(snapshot.userId.toRestString()),
+        )
     }
 
     @Test
-    fun confirmationRequiresExplicitAcknowledgment() {
+    fun wholeActionSurfaceIsTheExplicitConfirmation() {
         val confirmations = mutableListOf<Int>()
         val cancellations = mutableListOf<Int>()
         setContent(confirmations, cancellations)
 
-        // Confirm stays disabled until the explicit checkbox is checked.
-        composeRule.onNodeWithTag("confirm_button").assertIsNotEnabled()
-        composeRule.onNodeWithTag("confirm_ack_checkbox").performClick()
-        composeRule.onNodeWithTag("confirm_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("confirm_ack_checkbox").assertDoesNotExist()
+        composeRule.onNodeWithTag("confirm_button").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("confirm_button").performClick()
+        // Navigation fires immediately: no 110 ms gate may delay the action.
+        assertEquals(listOf(1), confirmations)
+        composeRule.waitUntil(timeoutMillis = 2_000) { confirmations.isNotEmpty() }
 
         assertEquals(listOf(1), confirmations)
+        assertEquals(emptyList<Int>(), cancellations)
+    }
+
+    @Test
+    fun actionSurfaceReleasesAfterConfirmSoItStaysUsable() {
+        val confirmations = mutableListOf<Int>()
+        val cancellations = mutableListOf<Int>()
+        setContent(confirmations, cancellations)
+
+        // First press runs the 110 ms press hold, fires, and must release
+        // the internal activating state — otherwise the surface stays
+        // disabled (e.g. when a callback throws; see HoldActionObject).
+        composeRule.onNodeWithTag("confirm_button").assertIsDisplayed().assertIsEnabled()
+        composeRule.onNodeWithTag("confirm_button").performClick()
+        composeRule.waitUntil(timeoutMillis = 2_000) { confirmations.size == 1 }
+
+        // The 110 ms press hold is visual only: clear it deterministically
+        // before the second press instead of racing it.
+        composeRule.mainClock.advanceTimeBy(300L)
+        composeRule.onNodeWithTag("confirm_button").assertIsDisplayed().assertIsEnabled()
+        composeRule.onNodeWithTag("confirm_button").performClick()
+        composeRule.waitUntil(timeoutMillis = 2_000) { confirmations.size == 2 }
+
+        assertEquals(listOf(1, 1), confirmations)
         assertEquals(emptyList<Int>(), cancellations)
     }
 

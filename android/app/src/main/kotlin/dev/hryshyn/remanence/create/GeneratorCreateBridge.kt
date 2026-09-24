@@ -113,8 +113,12 @@ object GeneratorCreateBridge {
     /**
      * Bridge instance. Owns the monotonic content-revision counter and
      * per-handle completion state; G3 owns sessions/bytes/time.
+     *
+     * `open`/`freeze` is `open` only so a test can inject a tampered frozen
+     * handoff and prove the VM's exact-descriptor publish gate aborts before
+     * any expression is sealed. Production never overrides it.
      */
-    class Bridge(
+    open class Bridge(
         private val staging: GeneratorStaging.Manager,
         private val binder: GeneratorSourceBinding.SourceBinder,
     ) {
@@ -288,7 +292,7 @@ object GeneratorCreateBridge {
          * in-flight bind observes either the pre-bind (incomplete) or the
          * post-bind state, never a torn one.
          */
-        fun freeze(context: GenerationContext, sessionId: String): FreezeResult {
+        open fun freeze(context: GenerationContext, sessionId: String): FreezeResult {
             synchronized(lock) {
                 val record = records[sessionId] ?: return FreezeResult.Rejected("unknown session")
                 if (context != record.context) return FreezeResult.Rejected("stale context")

@@ -2,7 +2,7 @@ package dev.hryshyn.remanence.ui.create
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -66,18 +66,38 @@ class RecipientConfirmationScreenTest {
     }
 
     @Test
-    fun confirmationRequiresExplicitAcknowledgment() {
+    fun wholeActionSurfaceIsTheExplicitConfirmation() {
         val confirmations = mutableListOf<Int>()
         val cancellations = mutableListOf<Int>()
         setContent(confirmations, cancellations)
 
-        // Confirm stays disabled until the explicit checkbox is checked.
-        composeRule.onNodeWithTag("confirm_button").assertIsNotEnabled()
-        composeRule.onNodeWithTag("confirm_ack_checkbox").performClick()
-        composeRule.onNodeWithTag("confirm_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("confirm_ack_checkbox").assertDoesNotExist()
+        composeRule.onNodeWithTag("confirm_button").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("confirm_button").performClick()
+        composeRule.waitUntil(timeoutMillis = 2_000) { confirmations.isNotEmpty() }
 
         assertEquals(listOf(1), confirmations)
+        assertEquals(emptyList<Int>(), cancellations)
+    }
+
+    @Test
+    fun actionSurfaceReleasesAfterConfirmSoItStaysUsable() {
+        val confirmations = mutableListOf<Int>()
+        val cancellations = mutableListOf<Int>()
+        setContent(confirmations, cancellations)
+
+        // First press runs the 110 ms press hold, fires, and must release
+        // the internal activating state — otherwise the surface stays
+        // disabled (e.g. when a callback throws; see HoldActionObject).
+        composeRule.onNodeWithTag("confirm_button").assertIsDisplayed().assertIsEnabled()
+        composeRule.onNodeWithTag("confirm_button").performClick()
+        composeRule.waitUntil(timeoutMillis = 2_000) { confirmations.size == 1 }
+
+        composeRule.onNodeWithTag("confirm_button").assertIsDisplayed().assertIsEnabled()
+        composeRule.onNodeWithTag("confirm_button").performClick()
+        composeRule.waitUntil(timeoutMillis = 2_000) { confirmations.size == 2 }
+
+        assertEquals(listOf(1, 1), confirmations)
         assertEquals(emptyList<Int>(), cancellations)
     }
 

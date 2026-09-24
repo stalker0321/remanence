@@ -16,11 +16,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Alignment
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import dev.hryshyn.remanence.ui.navigation.AppDestination
 import dev.hryshyn.remanence.ui.navigation.AuthUiState
+import dev.hryshyn.remanence.ui.motion.AstraContextArrival
+import dev.hryshyn.remanence.ui.motion.rememberAstraMotion
 
 /**
  * I03/FIX-M1-007-10 root renderer: picks exactly one surface from the guarded
@@ -68,22 +71,32 @@ fun RootScreen(
         onBack = onExitFlow,
     )
 
+    val motion = rememberAstraMotion()
+
     when (destination) {
         // FIX-STATE-12: the root owns the FULL available size; the header is
         // laid out first and the flow body receives the REMAINING height via
         // weight(1f), so a full-size flow screen can never push the header's
         // controls out of reach or measure itself against the whole window.
-        AppDestination.Create -> Column(modifier = modifier.fillMaxSize()) {
-            FlowHeader(title = "Create", onExit = onExitFlow)
-            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
-                createContent()
+        AppDestination.Create -> key(destination) {
+            AstraContextArrival(motion = motion, modifier = modifier.fillMaxSize(), contentKey = destination) {
+                Column(Modifier.fillMaxSize()) {
+                    FlowHeader(title = "Create", onExit = onExitFlow)
+                    Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                        createContent()
+                    }
+                }
             }
         }
 
-        AppDestination.Scan -> Column(modifier = modifier.fillMaxSize()) {
-            FlowHeader(title = "Scan", onExit = onExitFlow)
-            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
-                scanContent()
+        AppDestination.Scan -> key(destination) {
+            AstraContextArrival(motion = motion, modifier = modifier.fillMaxSize(), contentKey = destination) {
+                Column(Modifier.fillMaxSize()) {
+                    FlowHeader(title = "Scan", onExit = onExitFlow)
+                    Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                        scanContent()
+                    }
+                }
             }
         }
 
@@ -91,7 +104,13 @@ fun RootScreen(
             capsuleContent(destination.grantId)
 
         // Until a live grant exists, Home remains the fallback surface.
-        else -> homeContent()
+        // Home owns the return arrival so Back to Home carries like any
+        // other boundary; the outgoing flow is dropped synchronously.
+        else -> key(destination) {
+            AstraContextArrival(motion = motion, modifier = modifier.fillMaxSize(), contentKey = destination) {
+                homeContent()
+            }
+        }
     }
 }
 

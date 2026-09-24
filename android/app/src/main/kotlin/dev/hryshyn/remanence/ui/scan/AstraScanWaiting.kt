@@ -18,6 +18,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
@@ -88,7 +89,9 @@ fun ScanWaitingGroup(
     }
 
     AstraEnterTransition(motion = motion, modifier = modifier) {
-        Column {
+        // The column must fill the waiting width: otherwise it wraps the
+        // 76%-width postcard and CenterHorizontally has nothing to center in.
+        Column(Modifier.fillMaxWidth()) {
             val density = LocalDensity.current
             val carryShiftPx = with(density) { 8.dp.toPx() }
 
@@ -133,7 +136,12 @@ fun ScanWaitingGroup(
             val fullMotion = motion == AstraMotionSpec.Resolved.FULL
             AstraPostcard(
                 Modifier
-                    .fillMaxWidth()
+                    // Design study styles.css `.postcard{width:76%}`: the
+                    // waiting card is 76% of the content width and centered.
+                    // The side room absorbs the -7° rotated corners and the
+                    // card shadow, so no horizontal inset is needed.
+                    .fillMaxWidth(0.76f)
+                    .align(Alignment.CenterHorizontally)
                     .graphicsLayer {
                         alpha = presence.value
                         val entryScale = if (fullMotion) {

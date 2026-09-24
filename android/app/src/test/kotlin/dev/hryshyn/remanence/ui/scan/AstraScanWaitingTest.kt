@@ -1,14 +1,19 @@
 package dev.hryshyn.remanence.ui.scan
 
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hryshyn.remanence.ui.hold.HoldTheme
@@ -19,6 +24,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import kotlin.math.abs
 
 /**
  * State-to-visual contract for the post-scan waiting group:
@@ -294,5 +300,45 @@ class AstraScanWaitingTest {
         composeRule.onAllNodesWithTag("astra_postcard").assertCountEquals(0)
         composeRule.onAllNodesWithTag("scan_matching").assertCountEquals(0)
         composeRule.onAllNodesWithTag("scan_stop_scanning").assertCountEquals(0)
+    }
+
+    @Test
+    @Config(qualifiers = "w390dp-h844dp-xhdpi")
+    fun postcardIsSeventySixPercentCenteredWithSafeBounds() {
+        composeRule.setContent {
+            HoldTheme {
+                ScanWaitingGroup(
+                    state = ScanMatchUiState.Matching,
+                    motion = AstraMotionSpec.Resolved.FULL,
+                    onStopScanning = {},
+                    modifier = Modifier.fillMaxSize().testTag("waiting_group"),
+                )
+            }
+        }
+        composeRule.mainClock.advanceTimeBy(1_000L)
+
+        val parent = composeRule.onNodeWithTag("waiting_group").getUnclippedBoundsInRoot()
+        val card = composeRule.onNodeWithTag("astra_postcard").getUnclippedBoundsInRoot()
+        val parentWidth = (parent.right - parent.left).value
+        val cardWidth = (card.right - card.left).value
+        val ratio = cardWidth / parentWidth
+        // styles.css `.postcard{width:76%}`: the unrotated layout width is
+        // exactly 76%; a rotated bounding box may read up to ~82% (7° tilt).
+        assertTrue("postcard must be ~76% of waiting width: ratio=$ratio", ratio in 0.70f..0.86f)
+        // Centered: card center matches parent center.
+        val parentCx = ((parent.left + parent.right) / 2f).value
+        val cardCx = ((card.left + card.right) / 2f).value
+        assertTrue("postcard must be centered: parentCx=$parentCx cardCx=$cardCx", abs(cardCx - parentCx) < 8f)
+        // Safe bounds: rotated corners + card shadow stay inside the group
+        // (the 12% side room absorbs them), with a small measuring slack.
+        assertTrue(
+            "card left inside group: ${card.left.value} vs ${parent.left.value}",
+            card.left.value >= parent.left.value - 16f,
+        )
+        assertTrue(
+            "card right inside group: ${card.right.value} vs ${parent.right.value}",
+            card.right.value <= parent.right.value + 16f,
+        )
+        assertTrue("card top inside group: ${card.top.value}", card.top.value >= parent.top.value - 16f)
     }
 }

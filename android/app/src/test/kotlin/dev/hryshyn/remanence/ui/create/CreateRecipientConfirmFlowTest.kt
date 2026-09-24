@@ -199,16 +199,15 @@ class CreateRecipientConfirmFlowTest {
         // The confirmation controls are REALLY rendered (was: blank screen).
         composeRule.onNodeWithTag("confirm_handle_text", useUnmergedTree = true).assertIsDisplayed()
         composeRule.onNodeWithTag("confirm_account_cue_text").assertIsDisplayed()
-        composeRule.onNodeWithTag("confirm_ack_checkbox").assertIsDisplayed()
-        composeRule.onNodeWithTag("confirm_button").assertIsDisplayed().assertIsNotEnabled()
+        composeRule.onNodeWithTag("confirm_ack_checkbox").assertDoesNotExist()
+        composeRule.onNodeWithTag("confirm_button").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("cancel_button").assertIsDisplayed()
 
-        // Nothing is bound until the user explicitly acknowledges.
+        // Nothing is bound until the user presses the whole confirmation object.
         assertNull("no binding may exist before explicit confirmation", vm.confirmedRecipient.value)
 
-        composeRule.onNodeWithTag("confirm_ack_checkbox").performClick()
-        composeRule.onNodeWithTag("confirm_button").assertIsEnabled()
         composeRule.onNodeWithTag("confirm_button").performClick()
+        composeRule.waitUntil(timeoutMillis = 2_000) { vm.step.value == CreateViewModel.Step.FRONT }
 
         // The SAME immutable snapshot instance moved into the session store;
         // the pending copy is gone with it.
@@ -291,8 +290,8 @@ class CreateRecipientConfirmFlowTest {
         resolveThroughUi("friend")
         val otherResolved = vm.pendingRecipient.value
         assertNotNull(otherResolved)
-        composeRule.onNodeWithTag("confirm_ack_checkbox").performClick()
         composeRule.onNodeWithTag("confirm_button").performClick()
+        composeRule.waitUntil(timeoutMillis = 2_000) { vm.step.value == CreateViewModel.Step.FRONT }
 
         // Confirming another recipient binds THEIR snapshot - never silently
         // rewritten to self - so the publication will be addressed to that

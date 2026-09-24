@@ -26,6 +26,9 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private fun Modifier.holdPressShift(pressed: Boolean, enabled: Boolean): Modifier =
     graphicsLayer { translationY = if (pressed && enabled) 4f else 0f }
@@ -125,15 +128,20 @@ fun HoldActionObject(
     titleModifier: Modifier = Modifier,
     compact: Boolean = false,
     expand: Boolean = false,
+    minSurfaceHeight: Dp? = null,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val focused by interaction.collectIsFocusedAsState()
+    var activating by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val currentOnClick by rememberUpdatedState(onClick)
+    val pressureVisible = pressed || activating
     // Guide: 6.dp edge, 3–4.dp travel (~110ms), pressed edge 1–2.dp.
     // Snap on contact so animator-duration 0 still shows press.
     val travel by animateDpAsState(
-        targetValue = if (pressed && enabled) 4.dp else 0.dp,
-        animationSpec = if (pressed) snap() else tween(110),
+        targetValue = if (pressureVisible && enabled) 4.dp else 0.dp,
+        animationSpec = if (pressureVisible) snap() else tween(110),
         label = "Hold pressure",
     )
     val shape = RoundedCornerShape(if (secondary) 19.dp else 24.dp)
@@ -141,7 +149,20 @@ fun HoldActionObject(
         modifier = modifier
             .padding(bottom = 6.dp)
             .then(if (expand) Modifier.fillMaxSize() else Modifier)
-            .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick),
+            .clickable(interactionSource = interaction, indication = null, enabled = enabled && !activating, role = Role.Button) {
+                // A quick tap otherwise replaces this screen before a single pressed frame appears.
+                activating = true
+                scope.launch {
+                    delay(110)
+                    try {
+                        currentOnClick()
+                    } finally {
+                        // The callback may throw: the press hold must always
+                        // release or the surface stays disabled forever.
+                        activating = false
+                    }
+                }
+            },
     ) {
         Box(Modifier.matchParentSize().offset(y = 6.dp).background(
             if (!enabled) HoldColors.Field else if (secondary) HoldColors.SandEdge else HoldColors.LilacEdge, shape,
@@ -149,11 +170,16 @@ fun HoldActionObject(
         Column(
             Modifier.fillMaxWidth()
                 .then(if (expand) Modifier.fillMaxSize() else Modifier)
+                // A floored surface also stretches to the height its parent
+                // offers (Home weights), so the card background fills the
+                // whole share. fillMaxHeight is a no-op in an unbounded
+                // scrolling column, so compact mode still wraps content.
+                .then(if (minSurfaceHeight != null) Modifier.fillMaxHeight().heightIn(min = minSurfaceHeight) else Modifier)
                 .offset(y = travel).clip(shape)
                 .background(if (!enabled) HoldColors.Field else if (secondary) HoldColors.Sand else HoldColors.Lilac)
                 .then(if (focused) Modifier.border(2.dp, HoldColors.Accent, shape) else Modifier)
                 .padding(if (compact) 18.dp else 24.dp),
-            verticalArrangement = if (expand) Arrangement.SpaceBetween else Arrangement.spacedBy(if (compact) 8.dp else 16.dp),
+            verticalArrangement = if (expand || minSurfaceHeight != null) Arrangement.SpaceBetween else Arrangement.spacedBy(if (compact) 8.dp else 16.dp),
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 16.dp)) {
                 Text(title, modifier = titleModifier, style = if (compact) MaterialTheme.typography.headlineSmall else if (secondary) MaterialTheme.typography.displaySmall else MaterialTheme.typography.displayLarge, color = HoldColors.Ink)

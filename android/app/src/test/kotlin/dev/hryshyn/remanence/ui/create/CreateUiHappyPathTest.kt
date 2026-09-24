@@ -227,8 +227,8 @@ class CreateUiHappyPathTest {
         composeRule.waitForIdle()
 
         // 2) Explicit confirmation of the resolved snapshot.
-        composeRule.onNodeWithTag("confirm_ack_checkbox").performClick()
         composeRule.onNodeWithTag("confirm_button").performClick()
+        composeRule.waitUntil(timeoutMillis = 2_000) { vm.step.value == CreateViewModel.Step.FRONT }
 
         // 3) FRONT capture through the camera seam.
         composeRule.runOnIdle {

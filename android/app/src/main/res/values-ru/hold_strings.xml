@@ -48,7 +48,6 @@
     <string name="hold_collapse">назад ↓</string>
     <string name="hold_inside">в этой remanence</string>
     <string name="hold_photo_summary">%1$d фото вместе</string>
-    <string name="hold_ack">Это тот человек, которому я хочу отправить</string>
     <string name="hold_for_handle">для %1$s</string>
     <string name="hold_handle">ник</string>
     <string name="hold_capture_guide_instruction">все четыре края должны быть внутри рамки.</string>

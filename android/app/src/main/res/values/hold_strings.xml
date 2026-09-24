@@ -48,7 +48,6 @@
     <string name="hold_collapse">back ↓</string>
     <string name="hold_inside">inside this remanence</string>
     <string name="hold_photo_summary">%1$d photographs, kept together</string>
-    <string name="hold_ack">This is the person I intend to send to</string>
     <string name="hold_for_handle">for %1$s</string>
     <string name="hold_handle">handle</string>
     <string name="hold_capture_guide_instruction">keep all four edges inside the frame.</string>

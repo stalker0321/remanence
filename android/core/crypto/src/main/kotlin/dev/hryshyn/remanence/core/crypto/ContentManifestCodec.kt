@@ -1,6 +1,7 @@
 package dev.hryshyn.remanence.core.crypto
 
 import dev.hryshyn.remanence.protocol.v1.ContentManifest
+import dev.hryshyn.remanence.protocol.v1.CapsuleTrackSnapshotV1 as ProtoTrackSnapshot
 import dev.hryshyn.remanence.protocol.v1.ExpressionPlacement
 import dev.hryshyn.remanence.protocol.v1.ExpressionSource
 import dev.hryshyn.remanence.protocol.v1.ExpressionV1
@@ -11,6 +12,7 @@ import java.security.MessageDigest
 import java.util.UUID
 import dev.hryshyn.remanence.core.model.ArtifactAadInput
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
+import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
 import dev.hryshyn.remanence.core.model.CryptoContextEncoder
 import dev.hryshyn.remanence.core.model.GeneratorExpression
 import dev.hryshyn.remanence.core.model.GeneratorExpressionProjection
@@ -36,6 +38,8 @@ data class ContentManifestContent(
     val photos: List<ManifestPhoto>,
     val note: String?,
     val expression: ContentExpression? = null,
+    /** S2 v2-only own-catalog track snapshot; always null on v1 frames. */
+    val trackSnapshot: CapsuleTrackSnapshotV1? = null,
 )
 
 /**
@@ -66,6 +70,26 @@ class ContentManifestCodec {
         candidateId: String,
         expression: GeneratorExpression.ResolvedExpression,
         blobIdByContentId: Map<String, ByteArray>,
+    ): ByteArray = buildAndEncryptV2(
+        capsuleKeyset, routingContext, photos, note,
+        candidateId, expression, blobIdByContentId, null,
+    )
+
+    /**
+     * S2: v2 overload carrying the optional own-catalog track snapshot
+     * (proto field 7). The snapshot is independent of the expression —
+     * no extra hash; integrity comes from the sealed manifest. Existing
+     * callers keep the snapshot-less overload untouched.
+     */
+    fun buildAndEncryptV2(
+        capsuleKeyset: KeysetHandle,
+        routingContext: RecognitionManifestCodec.RoutingContext,
+        photos: List<ManifestPhoto>,
+        note: String?,
+        candidateId: String,
+        expression: GeneratorExpression.ResolvedExpression,
+        blobIdByContentId: Map<String, ByteArray>,
+        trackSnapshot: CapsuleTrackSnapshotV1?,
     ): ByteArray {
         require(expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V2) {
             "expression artifact requires a v2 expression"
@@ -80,6 +104,7 @@ class ContentManifestCodec {
         return build(
             capsuleKeyset, routingContext, photos, note,
             Triple(candidateId, projectionHash, expression), blobIdByContentId,
+            trackSnapshot,
         )
     }
 
@@ -90,9 +115,13 @@ class ContentManifestCodec {
         note: String?,
         expression: Triple<String, String, GeneratorExpression.ResolvedExpression>?,
         blobIdByContentId: Map<String, ByteArray>?,
+        trackSnapshot: CapsuleTrackSnapshotV1? = null,
     ): ByteArray {
         validatePhotos(photos)
         validateNote(note)
+        require(trackSnapshot == null || expression != null) {
+            "track snapshot requires the v2 expression frame"
+        }
 
         val builder = ContentManifest.newBuilder()
             .setProtocolVersion(if (expression == null) PROTOCOL_VERSION else PROTOCOL_VERSION_V2)
@@ -119,6 +148,16 @@ class ContentManifestCodec {
             )
         }
         // TrackAttachment is deliberately left unset in MVP.
+        trackSnapshot?.let { snapshot ->
+            val snapshotBuilder = ProtoTrackSnapshot.newBuilder()
+                .setSnapshotVersion(CapsuleTrackSnapshotV1.SCHEMA_VERSION)
+                .setTrackId(snapshot.trackId.toString())
+                .setTitle(snapshot.title)
+                .setArtistDisplay(snapshot.artistDisplay)
+            snapshot.version?.let(snapshotBuilder::setVersion)
+            snapshot.durationMs?.let(snapshotBuilder::setDurationMs)
+            builder.setTrackSnapshot(snapshotBuilder.build())
+        }
 
         return CapsuleArtifactCryptor().encrypt(
             capsuleKeyset = capsuleKeyset,
@@ -197,6 +236,10 @@ class ContentManifestCodec {
             if (manifest.hasExpression()) {
                 throw GeneralSecurityException("v1 content manifest must not carry an expression artifact")
             }
+            // S2: same rule for the v2-only track snapshot (field 7).
+            if (manifest.hasTrackSnapshot()) {
+                throw GeneralSecurityException("v1 content manifest must not carry a track snapshot")
+            }
             ContentManifestContent(protocolVersion = manifest.protocolVersion, photos = parsed, note = note)
         } else {
             if (!manifest.hasExpression()) {
@@ -207,6 +250,11 @@ class ContentManifestCodec {
                 photos = parsed,
                 note = note,
                 expression = parseExpression(manifest.expression, parsed, note),
+                trackSnapshot = if (manifest.hasTrackSnapshot()) {
+                    parseTrackSnapshot(manifest.trackSnapshot)
+                } else {
+                    null
+                },
             )
         }
     } catch (failure: GeneralSecurityException) {
@@ -369,6 +417,25 @@ class ContentManifestCodec {
             throw GeneralSecurityException("expression projection hash mismatch")
         }
         return ContentExpression(candidateId = candidateId, projectionHash = proto.expressionHash, expression = expression)
+    }
+
+    private fun parseTrackSnapshot(proto: ProtoTrackSnapshot): CapsuleTrackSnapshotV1 {
+        if (proto.snapshotVersion != CapsuleTrackSnapshotV1.SCHEMA_VERSION) {
+            throw GeneralSecurityException("unsupported track snapshot version")
+        }
+        return try {
+            CapsuleTrackSnapshotV1.parse(
+                trackId = proto.trackId,
+                title = proto.title,
+                artistDisplay = proto.artistDisplay,
+                version = if (proto.hasVersion()) proto.version else null,
+                durationMs = if (proto.hasDurationMs()) proto.durationMs else null,
+            )
+        } catch (failure: IllegalArgumentException) {
+            throw GeneralSecurityException("content manifest track snapshot invalid").apply {
+                initCause(failure)
+            }
+        }
     }
 
     private fun validatePhotos(photos: List<ManifestPhoto>) {

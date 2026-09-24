@@ -92,6 +92,21 @@ message TrackAttachment {
   uint32 start_ms = 5;
 }
 
+// S2: additive own-catalog track snapshot (sample slice). Frozen
+// TrackAttachment (field 5) stays unset — MVP MUST absent is unchanged.
+// Field 7 is v2-only: present iff protocol_version == 2; v1 frames
+// carrying field 7 are rejected (version-confusion guard, mirrors the
+// expression field 6 rule). Independent of the generator expression, no
+// extra hash: the snapshot rides inside the authenticated manifest.
+message CapsuleTrackSnapshotV1 {
+  uint32 snapshot_version = 1; // exactly 1
+  string track_id = 2;         // own RemanenceTrackId UUID string (36 chars)
+  string title = 3;            // 1..100 chars
+  string artist_display = 4;   // 1..200 chars, pre-joined display string
+  optional string version = 5; // <= 100 chars when present
+  optional int64 duration_ms = 6; // > 0 when present
+}
+
 message ContentManifest {
   uint32 protocol_version = 1; // exactly 1 (v1) or 2 (v2, ADR-018)
   bytes capsule_id = 2; // UUID bytes exactly 16
@@ -101,6 +116,9 @@ message ContentManifest {
   // ADR-018: v2-only authenticated BER1 resolved-expression artifact. Absent
   // in v1; v1 decoders never set or read it. Present iff protocol_version == 2.
   optional ExpressionV1 expression = 6;
+  // S2: v2-only authenticated track snapshot. Absent in v1; v1 decoders
+  // never set or read it. Optional even in v2 (expression stays required).
+  optional CapsuleTrackSnapshotV1 track_snapshot = 7;
 }
 
 // ADR-018: one authored source binding (expression content-id -> manifest

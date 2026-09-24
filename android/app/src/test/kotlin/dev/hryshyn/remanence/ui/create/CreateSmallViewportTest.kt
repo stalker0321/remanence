@@ -8,6 +8,7 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.hasTestTag
@@ -374,6 +375,64 @@ class CreateSmallViewportTest {
             "retake must be inside the viewport",
             retakeBounds.bottom <= viewportHeight + 1f,
         )
+    }
+
+    @Test
+    fun musicPickerSitsDirectlyAbovePublishAndBothAreReachable() {
+        val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(context().filesDir, "small-vp-order")))
+        val vm = CreateViewModel(
+            directory = StaticDirectory(),
+            accessTokenProvider = { null },
+            identityProvider = { null },
+            persistence = NoPersistence(),
+            outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(
+                database,
+                dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(File(context().filesDir, "small-vp-order")),
+                retryStore,
+            ),
+            profile = RecognitionProfile.postcardSiftRootSiftV1(),
+            accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(
+                File(context().filesDir, "small-vp-order-staging"),
+            ),
+            openPhotoSource = { error("unused") },
+            frontProcessor = StillProcessor {
+                ProcessedStill.Accepted(
+                    "postcard-sift-rootsift-v1",
+                    dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture.bytes(seed = 11),
+                )
+            },
+            cpuDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher,
+            senderRetryKeysetWrapper = testWrapper,
+            senderRetryKekAlias = testAlias,
+            enqueueUpload = { _, _ -> },
+        )
+        vm.beginSession(1L)
+
+        // Land directly on CONTENT through the production gates.
+        vm.onResolved(selfSnapshot())
+        vm.confirmRecipient()
+        vm.frontAttempt.onPermissionResult(true, false)
+        vm.frontAttempt.onPreviewBound()
+        assertTrue(vm.beginFrontCapture())
+        vm.deliverFrontJpeg("f".toByteArray())
+        vm.onPhotosPicked(listOf("a", "b", "c"))
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+
+        composeRule.setContent {
+            MaterialTheme { CreateScreen(viewModel = vm) }
+        }
+        composeRule.waitForIdle()
+
+        // S4 polish: the picker sits immediately above the publish button
+        // in one Column (source order, read-only audited) so select-then-
+        // publish needs no scrolling back. Both stay reachable by scrolling
+        // on tiny screens; no relative-coordinate assertion (off-screen
+        // bounds are brittle across separate scroll positions).
+        composeRule.scrollToTag("music_section")
+        composeRule.onNodeWithTag("music_section").assertIsDisplayed()
+        composeRule.scrollToTag("create_publish")
+        composeRule.onNodeWithTag("create_publish").assertIsDisplayed()
     }
 
     private fun androidx.compose.ui.test.junit4.ComposeTestRule.scrollToTag(tag: String) {

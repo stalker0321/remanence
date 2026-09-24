@@ -505,7 +505,7 @@ class CreateContentPublishRecoveryTest {
             accessToken = "test-token",
         )
         vm.onPhotosPicked(listOf("p1", "p2", "p3"))
-        assertTrue(vm.noteEditor.onChange("honest copy"))
+        // ADR-018: publish with no note (non-empty notes are typed unsupported).
         vm.startPublishing()
         awaitStep(vm, CreateViewModel.Step.UPLOAD_PENDING)
         promoteToPublished(vm)

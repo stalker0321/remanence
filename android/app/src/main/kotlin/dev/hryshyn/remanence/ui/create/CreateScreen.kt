@@ -340,6 +340,14 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
         }
 
         Spacer(Modifier.height(12.dp))
+        val generatorPreview by viewModel.generatorPreview.collectAsStateWithLifecycle()
+        GeneratorBer1PreviewHost(
+            state = generatorPreview,
+            modifier = Modifier.fillMaxWidth(),
+            onMeasured = viewModel::onPreviewMeasured,
+        )
+
+        Spacer(Modifier.height(12.dp))
         Button(
             onClick = viewModel::startPublishing,
             enabled = viewModel.photoSelection.canProceed && viewModel.noteEditor.canIncludeInCapsule,

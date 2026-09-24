@@ -239,7 +239,7 @@ class CreateSessionOwnedStagingTest {
         vm.deliverFrontJpeg("front".toByteArray())
         awaitStep(vm, CreateViewModel.Step.CONTENT)
         vm.onPhotosPicked(photoIds)
-        assertTrue(vm.noteEditor.onChange("owned staging note"))
+        // ADR-018: publish with no note (non-empty notes are typed unsupported).
     }
 
     private fun awaitStep(vm: CreateViewModel, expected: CreateViewModel.Step) {
@@ -500,6 +500,7 @@ class CreateSessionOwnedStagingTest {
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         assertNotNull(vm.confirmedRecipient.value)
         assertTrue(vm.photoSelection.canProceed)
+        assertTrue(vm.noteEditor.onChange("owned staging note"))
         assertEquals("owned staging note", vm.noteEditor.text)
         assertNotNull(vm.frontAttempt.phase)
 

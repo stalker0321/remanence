@@ -19,11 +19,25 @@ import dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot
 import dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
+import dev.hryshyn.remanence.core.model.GeneratorExpression
 import dev.hryshyn.remanence.core.model.GeneratorStaging
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.core.crypto.ContentManifestCodec
+import dev.hryshyn.remanence.core.crypto.ExpressionReceiverAdmission
+import dev.hryshyn.remanence.core.crypto.RecipientEnvelopeCryptor
+import dev.hryshyn.remanence.core.crypto.RecognitionManifestCodec
+import dev.hryshyn.remanence.core.data.outbox.OutboxArtifactKind
+import dev.hryshyn.remanence.core.model.BlobId
+import dev.hryshyn.remanence.core.model.CapsuleId
+import dev.hryshyn.remanence.core.model.CapsulePhotoIdentity
+import dev.hryshyn.remanence.core.model.GeneratorBer1Provider
+import dev.hryshyn.remanence.protocol.v1.RecipientEnvelopePlaintext
+import com.google.crypto.tink.InsecureSecretKeyAccess
+import com.google.crypto.tink.TinkProtoKeysetFormat
+import java.security.MessageDigest
 import dev.hryshyn.remanence.ui.create.CreateViewModel
 import dev.hryshyn.remanence.ui.create.RecipientDirectoryPort
 import dev.hryshyn.remanence.ui.create.SenderIdentitySnapshot
@@ -235,6 +249,7 @@ class CreateBridgeWiringTest {
             enqueueUpload = { _, _ -> },
             outboxCapsuleDao = database.outboxCapsuleDao(),
             generatorBridgeProvider = bridgeProvider,
+            generatorPreviewLoader = previewLoader,
         )
         vm.beginSession(1L, userUuid.toString())
         vm.onResolved(selfSnapshot())
@@ -245,7 +260,9 @@ class CreateBridgeWiringTest {
         vm.deliverFrontJpeg("f".toByteArray())
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         vm.onPhotosPicked(listOf("w1", "w2", "w3"))
-        assertTrue(vm.noteEditor.onChange("wiring note"))
+        // ADR-018 note policy: a non-empty note is a typed unsupported publish
+        // until on-device text measurement is wired, so the happy path here
+        // publishes with an absent/empty note.
         return vm
     }
 
@@ -461,6 +478,257 @@ class CreateBridgeWiringTest {
         assertEquals(OutboxCapsuleState.ENCRYPTED, outboxRow(vm.capsuleId)!!.state)
         // Exactly one live session: the failed attempt left nothing behind.
         assertEquals(1, bridge.liveSessions())
+    }
+
+    /** The exact original bytes `defaultSource` yields for a picker id. */
+    private fun expectedOriginalBytes(id: String): ByteArray = when (id) {
+        "w2" -> memoryTestJpeg(80, 40)
+        "w3" -> memoryTestJpeg(96, 48)
+        else -> memoryTestJpeg(64, 32)
+    }
+
+    private fun sha256Hex(bytes: ByteArray): String =
+        MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+
+    /**
+     * Preview loader over the SAME originals the publish pre-read opens, so the
+     * preview input and the publish input are descriptor-identical.
+     */
+    private val previewLoader = dev.hryshyn.remanence.create.GeneratorPreviewLoader { pickerId ->
+        val bytes = expectedOriginalBytes(pickerId)
+        val upright = dev.hryshyn.remanence.create.GeneratorExifDecoder.decodeUpright(bytes)
+        dev.hryshyn.remanence.create.LoadedPreviewSource(
+            originalHash = sha256Hex(bytes),
+            uprightWidthPx = upright.widthPx,
+            uprightHeightPx = upright.heightPx,
+            previewJpegBytes = bytes,
+            previewWidthPx = upright.widthPx,
+            previewHeightPx = upright.heightPx,
+        )
+    }
+
+    private val fitsPort = dev.hryshyn.remanence.core.model.GeneratorEditorialRows.NoteMeasurementPort {
+        dev.hryshyn.remanence.core.model.GeneratorEditorialRows.NoteMeasurement.Fits(
+            dev.hryshyn.remanence.core.model.GeneratorEditorialRows.NOTE_REGION,
+        )
+    }
+
+    /** Opens the published outbox capsule and returns its decrypted manifest. */
+    private suspend fun decryptedContent(vm: CreateViewModel): dev.hryshyn.remanence.core.crypto.ContentManifestContent {
+        val row = outboxRow(vm.capsuleId)!!
+        val opened = RecipientEnvelopeCryptor().open(
+            identity.encryptionPrivateHandle,
+            dev.hryshyn.remanence.core.model.RecipientEnvelopeContextInput(
+                CapsuleId(UUID.fromString(vm.capsuleId)),
+                UserId(userUuid),
+                UserId(userUuid),
+                KeyBundleId(UUID.fromString(row.recipientKeyBundleId)),
+            ),
+            File(requireNotNull(row.envelopePath)).readBytes(),
+        )
+        val capsuleKeyset = TinkProtoKeysetFormat.parseKeyset(
+            RecipientEnvelopePlaintext.parseFrom(opened).capsuleAeadKeyset.toByteArray(),
+            InsecureSecretKeyAccess.get(),
+        )
+        val contentRow = database.outboxBlobDao()
+            .getAllByCapsuleIdAndOwner(vm.capsuleId, userUuid.toString())
+            .single { it.kind == OutboxArtifactKind.CONTENT_MANIFEST.name }
+        return ContentManifestCodec().decryptAndParse(
+            capsuleKeyset,
+            RecognitionManifestCodec.RoutingContext(
+                CapsuleId(UUID.fromString(vm.capsuleId)),
+                BlobId(UUID.fromString(contentRow.blobId)),
+                UserId(userUuid),
+                UserId(userUuid),
+            ),
+            File(contentRow.localCiphertextPath).readBytes(),
+        )
+    }
+
+    /**
+     * VM-level publish→receive proof: a real CreateViewModel publication seals
+     * a v2 BER1 expression whose source descriptors are the EXACT pre-read
+     * originals, and the receiver admits it with a recomputed `BEXPR01`
+     * projection equal to the sealed one.
+     */
+    @Test
+    fun publishedCapsuleSealsV2ExpressionAdmittedByTheReceiver() = runBlocking {
+        val vm = contentStage()
+        vm.startPublishing()
+        awaitTerminalPublish(vm)
+        assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
+
+        val parsed = decryptedContent(vm)
+        assertEquals(2, parsed.protocolVersion)
+        val admitted = ExpressionReceiverAdmission.admit(parsed)
+        assertTrue("expected Supported, got $admitted", admitted is ExpressionReceiverAdmission.Result.Supported)
+        val expression = (admitted as ExpressionReceiverAdmission.Result.Supported).expression
+
+        // Exact original-descriptor identity, authored order.
+        val expectedIds = listOf("w1", "w2", "w3").map { id ->
+            CapsulePhotoIdentity.contentIdFor(sha256Hex(expectedOriginalBytes(id)))
+        }
+        assertEquals(expectedIds, expression.input.photos.map { it.contentId })
+        assertEquals(
+            listOf("w1", "w2", "w3").map { sha256Hex(expectedOriginalBytes(it)) },
+            expression.input.photos.map { it.contentHash },
+        )
+
+        // Receiver-recomputable projection == sealed projection. The sealed
+        // candidateId is the sender's frozen one (it binds owner/epoch-free
+        // geometry + original descriptors + encrypted blob ids).
+        assertEquals(
+            CapsulePhotoIdentity.projectedHash(
+                expression = expression,
+                candidateId = parsed.expression!!.candidateId,
+                capsuleId = CapsuleId(UUID.fromString(vm.capsuleId)),
+                contentIds = expression.input.photos.map { it.contentId },
+            ),
+            parsed.expression!!.projectionHash,
+        )
+    }
+
+    @Test
+    fun measuredNoteSelectionPublishesV2ExpressionWithNoteRegion() = runBlocking {
+        val vm = contentStage()
+        assertTrue(vm.noteEditor.onChange("dear mama"))
+        val pending = vm.generatorPreview.value as? dev.hryshyn.remanence.ui.create.GeneratorPreviewState.NotePending
+            ?: error("expected NotePending, got ${vm.generatorPreview.value}")
+        val measured = (
+            dev.hryshyn.remanence.core.model.GeneratorEditorialRows.plan(pending.input, fitsPort)
+                as dev.hryshyn.remanence.core.model.GeneratorEditorialRows.PlanResult.Planned
+            ).expression
+        vm.onPreviewMeasured(measured)
+
+        vm.startPublishing()
+        awaitTerminalPublish(vm)
+
+        assertEquals("publishError=${vm.publishError.value}", CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
+        assertEquals(OutboxCapsuleState.ENCRYPTED, outboxRow(vm.capsuleId)!!.state)
+        val parsed = decryptedContent(vm)
+        val admitted = ExpressionReceiverAdmission.admit(parsed)
+        assertTrue("expected Supported, got $admitted", admitted is ExpressionReceiverAdmission.Result.Supported)
+        val expression = (admitted as ExpressionReceiverAdmission.Result.Supported).expression
+        assertEquals("dear mama", expression.input.note)
+        assertEquals(
+            dev.hryshyn.remanence.core.model.GeneratorEditorialRows.NOTE_REGION,
+            expression.noteRegion,
+        )
+    }
+
+    @Test
+    fun unmeasuredNoteIsTypedRejectedAndStagesNothing() = runBlocking {
+        val vm = contentStage()
+        assertTrue(vm.noteEditor.onChange("dear mama"))
+        // No onPreviewMeasured: the host never measured this note.
+        vm.startPublishing()
+        awaitTerminalPublish(vm)
+
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        assertNotNull(vm.publishError.value)
+        assertTrue(
+            "expected a note-measurement rejection, was ${vm.publishError.value}",
+            vm.publishError.value!!.contains("measure"),
+        )
+        assertNull(outboxRow(vm.capsuleId))
+        assertEquals(0, bridge.liveSessions())
+    }
+
+    @Test
+    fun editedNoteAfterMeasurementIsTypedRejected() = runBlocking {
+        val vm = contentStage()
+        assertTrue(vm.noteEditor.onChange("dear mama"))
+        val pending = vm.generatorPreview.value as? dev.hryshyn.remanence.ui.create.GeneratorPreviewState.NotePending
+            ?: error("expected NotePending, got ${vm.generatorPreview.value}")
+        val measured = (
+            dev.hryshyn.remanence.core.model.GeneratorEditorialRows.plan(pending.input, fitsPort)
+                as dev.hryshyn.remanence.core.model.GeneratorEditorialRows.PlanResult.Planned
+            ).expression
+        vm.onPreviewMeasured(measured)
+        // Editing the note invalidates the measurement for the old text.
+        assertTrue(vm.noteEditor.onChange("dear mama edited"))
+
+        vm.startPublishing()
+        awaitTerminalPublish(vm)
+
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        assertNotNull(vm.publishError.value)
+        assertNull(outboxRow(vm.capsuleId))
+        assertEquals(0, bridge.liveSessions())
+    }
+
+    @Test
+    fun tamperedBindDescriptorIsTypedRejectedAndStagesNothing() = runBlocking {
+        // The pre-read originals are authoritative; a bind-time decoder that
+        // reports different upright dims is a tampered original descriptor and
+        // must fail closed (the exact-descriptor gate can never publish it).
+        val tamperDecoder = object : GeneratorSourceBinding.PhotoDecoderPort {
+            override suspend fun decodeUpright(jpeg: ByteArray) =
+                GeneratorSourceBinding.UprightPhoto(999, 999)
+        }
+        val tamperBinder = GeneratorSourceBinding.SourceBinder(
+            MemoryGeneratorBridge.FakeNormalizer(),
+            tamperDecoder,
+        )
+        val tamperStore = MemoryGeneratorBridge.FakeStore()
+        val tamperBridge = GeneratorCreateBridge.Bridge(
+            GeneratorStaging.Manager(tamperStore, nowMillis = { 1_000L }),
+            tamperBinder,
+        )
+        val vm = contentStage(bridgeProvider = { tamperBridge })
+        vm.startPublishing()
+        awaitTerminalPublish(vm)
+
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        assertNotNull(vm.publishError.value)
+        assertTrue(
+            "expected a bind rejection, was ${vm.publishError.value}",
+            vm.publishError.value!!.contains("bind rejected"),
+        )
+        assertNull(outboxRow(vm.capsuleId))
+        assertTrue(tamperStore.data.isEmpty())
+    }
+
+    @Test
+    fun tamperedFrozenHandoffIsTypedRejectedAndSealsNoExpression() = runBlocking {
+        // A bridge whose frozen handoff descriptors differ from the session's
+        // pre-read originals must abort BEFORE any expression is sealed.
+        val tamperStore = MemoryGeneratorBridge.FakeStore()
+        val tamperStaging = GeneratorStaging.Manager(tamperStore, nowMillis = { 1_000L })
+        val tamperBinder = GeneratorSourceBinding.SourceBinder(
+            MemoryGeneratorBridge.FakeNormalizer(),
+            GeneratorExifDecoder,
+        )
+        val tampering = object : GeneratorCreateBridge.Bridge(tamperStaging, tamperBinder) {
+            override fun freeze(
+                context: GeneratorCreateBridge.GenerationContext,
+                sessionId: String,
+            ): GeneratorCreateBridge.FreezeResult {
+                val real = super.freeze(context, sessionId)
+                val handoff = (real as? GeneratorCreateBridge.FreezeResult.Frozen)?.handoff
+                    ?: return real
+                val tampered = handoff.input.copy(
+                    photos = handoff.input.photos.map { it.copy(widthPx = it.widthPx + 1) },
+                )
+                return GeneratorCreateBridge.FreezeResult.Frozen(
+                    handoff.copy(
+                        input = tampered,
+                        inputHash = GeneratorExpression.canonicalHash(tampered),
+                    ),
+                )
+            }
+        }
+        val vm = contentStage(bridgeProvider = { tampering })
+        vm.startPublishing()
+        awaitTerminalPublish(vm)
+
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        assertNotNull(vm.publishError.value)
+        assertTrue(
+            "expected the exact-descriptor gate to abort, was ${vm.publishError.value}",
+            vm.publishError.value!!.contains("projection changed"),
+        )
+        assertNull(outboxRow(vm.capsuleId))
     }
 
     @Test

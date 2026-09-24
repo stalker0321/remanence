@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.2.0-rc.3 — BER1 expression artifact (ContentManifest v2)
+
+Android `versionCode` is **24** (`23` was consumed by `v0.2.0-rc.2` and is
+never reused). The debug candidate targets `https://remanence.hryshyn.dev/`
+with V2 line localization enabled. The intended prerelease tag is
+`v0.2.0-rc.3`; artifact naming is
+`Remanence-android-v0.2.0-rc.3-code24-g<release-sha>-debug.apk`. This is
+release preparation only: no device PASS and no server deploy.
+
+- Generator BER1 (ADR-017) is now a real end-to-end vertical. The on-device
+  preview measures a non-empty note with the bundled font at canvas scale and
+  reports the exact fitted plan to `CreateViewModel`; an absent/empty note
+  resolves through the port-less provider. A missing/stale measurement, an
+  incompatible photo mix, or an unsupported input is a typed publish rejection
+  back at CONTENT — never a silent v1 publication "as if generator".
+- Additive authenticated `ContentManifest` v2 (ADR-018): the resolved BER1
+  expression travels as `optional ExpressionV1 expression = 6` inside the same
+  AEAD-sealed content manifest and is bound by the signed statement's manifest
+  ciphertext hash. No new artifact kind and no server/AAD/statement change. A
+  v1 manifest that carries field 6 is rejected; v1 bytes/hash/goldens are
+  byte-identical and v1 decode/render is unchanged.
+- Sender publish gate: the session-frozen `candidateId`/expression is computed
+  from the exact pre-read ORIGINALS and re-verified against the frozen handoff
+  via the receiver-recomputable `BEXPR01` projection hash (candidateId + exact
+  geometry + original descriptors + encrypted photo blob ids). Photo/note/
+  owner/epoch edits invalidate the selection; any descriptor/candidate/
+  projection mismatch is a typed rejection and no expression is sealed.
+- Receiver fail-closed: `Supported` renders the exact sealed BER1 layout;
+  `Unsupported`/invalid/unknown renders **NOTHING** with a typed notice and no
+  individual-photo fallback. `protocolVersion == 1` keeps the existing photo
+  pager unchanged; a malformed/unknown v2 fails closed at preparation.
+- Unit gates on the release tree: `:core:model` **191/22**,
+  `:core:crypto` **248/27**, `:app` **1039/146** (2 documented environment
+  skips, 0 failures/errors), server `pytest` **470 passed / 318 skipped /
+  0 failed**. `:app:assembleDebug` BUILD SUCCESSFUL; APK identity
+  `dev.hryshyn.remanence`, versionCode 24, versionName `0.2.0-rc.3`; the
+  matching SHA-256 is recorded beside the artifact and in the PR.
+- OPEN / unverified: physical install-over, create/publish of the measured
+  BER1 layout, receiver render, and the device font/pixel gate. ADR-017 and
+  ADR-018 remain Proposed; no `main` merge, tag, release, or production/DB
+  deploy is included in this preparation.
+
 ## 0.2.0-rc.2 — Generator C3 integration
 
 Android `versionCode` is **23** (`22` was used for an unpublished owner test

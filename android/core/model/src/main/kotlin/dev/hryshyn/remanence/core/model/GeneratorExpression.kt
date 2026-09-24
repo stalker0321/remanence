@@ -47,8 +47,9 @@ import java.security.MessageDigest
  *   are recorded in these units for identity; shell fitting is out of
  *   scope and never affects the hash.
  *
- * Canonical serialization (all integers big-endian, all strings as
- * int32-BE length + UTF-8 bytes, fields in declaration order):
+ * Canonical serialization v1 (expressionContractVersion == 1; all integers
+ * big-endian, all strings as int32-BE length + UTF-8 bytes, fields in
+ * declaration order):
  * ```
  * magic      "GENEX01" (7 bytes, no length prefix)
  * versions   canvasVersion:i32 grammarId:str grammarVersion:i32 branchId:str
@@ -64,12 +65,36 @@ import java.security.MessageDigest
  * noteTreatment:str diagnosticsCount:i32 then each:str
  * deps       fontVersion:i32 paletteVersion:i32
  * ```
+ * The v1 path is frozen: its bytes, hashes, and goldens are BYTE-IDENTICAL
+ * before and after the v2 addition. Canonical serialization v2
+ * (expressionContractVersion == 2) is framed by the distinct magic
+ * `"GENEX02"` (a v1 parser matching `"GENEX01"` rejects v2 bytes before it
+ * could misread the version marker as `canvasVersion = 2`), followed by the
+ * unchanged global CONTRACT_VERSION, then `expressionContractVersion:i32`,
+ * then the v1 fields in v1 order except each placement gains a trailing
+ * `contentRectPresent:byte then x:y:w:h:i32×4 iff present`, and a trailing
+ * `noteRegionPresent:byte then x:y:w:h:i32×4 iff present` after
+ * paletteVersion. v1 decoders reject any non-null new field; any version
+ * other than 1 or 2 fails closed in [validateResolved].
  * `canonicalHash()` is lowercase-hex SHA-256 over exactly these bytes.
  */
 object GeneratorExpression {
 
     /** Canonical contract version pinned by every hash in this file. */
     const val CONTRACT_VERSION = 1
+
+    /**
+     * Expression layout version: legacy frozen layout (v1 canonical bytes).
+     * The default of every [ResolvedExpression]; existing constructors are
+     * unaffected.
+     */
+    const val EXPRESSION_CONTRACT_V1 = 1
+
+    /**
+     * Expression layout version: BER1 noteRegion + per-placement contentRect
+     * layout (ADR-017). Opt-in per expression; never the default.
+     */
+    const val EXPRESSION_CONTRACT_V2 = 2
 
     /** Reference canvas units (arch §2, provisional 9:16 360×640). */
     const val CANVAS_WIDTH_UNITS = 360
@@ -79,6 +104,14 @@ object GeneratorExpression {
     const val CROP_UNIT_MAX = 1000
 
     private const val MAGIC = "GENEX01"
+
+    /**
+     * v2 frame discriminator (ADR-017 Stage1-B): a v1 parser matching on
+     * magic rejects v2 bytes before it can misread the version marker as
+     * `canvasVersion = 2`. No v2 bytes exist on any wire, so this marker
+     * is still cheap to own.
+     */
+    private const val MAGIC_V2 = "GENEX02"
     private val UTF8 = Charsets.UTF_8
 
     /** One ordered original photograph (authored input side). */
@@ -112,6 +145,19 @@ object GeneratorExpression {
     /** Normalized crop window in [CROP_UNIT_MAX] units. */
     data class CropWindow(val x: Int, val y: Int, val width: Int, val height: Int)
 
+    /**
+     * Frozen note band in canvas units (v2 only, ADR-017 BER1 noteRegion).
+     * Null iff the note is absent or empty.
+     */
+    data class NoteRegion(val x: Int, val y: Int, val width: Int, val height: Int)
+
+    /**
+     * Letterboxed content rect inside its placement cell, in canvas units
+     * (v2 only). Unlike [CropWindow], coordinates are canvas-absolute, not
+     * normalized source units.
+     */
+    data class ContentRect(val x: Int, val y: Int, val width: Int, val height: Int)
+
     /** Resolved placement of one authored photo on the reference canvas. */
     data class Placement(
         val contentId: String,
@@ -121,6 +167,8 @@ object GeneratorExpression {
         val height: Int,
         val crop: CropWindow?,
         val maskId: String?,
+        /** v2 only; v1 expressions must leave this null. */
+        val contentRect: ContentRect? = null,
     )
 
     /** Frozen resolved expression (arch §2–§3 `ResolvedExpression`). */
@@ -136,6 +184,14 @@ object GeneratorExpression {
         val diagnostics: List<String>,
         val fontVersion: Int,
         val paletteVersion: Int,
+        /**
+         * Expression layout version ([EXPRESSION_CONTRACT_V1] default).
+         * Trailing default: every existing constructor call compiles
+         * unchanged and keeps legacy v1 bytes/hashes.
+         */
+        val expressionContractVersion: Int = EXPRESSION_CONTRACT_V1,
+        /** v2 only; v1 expressions must leave this null. */
+        val noteRegion: NoteRegion? = null,
     )
 
     /** Immutable frozen snapshot (boundary `Freeze`). */
@@ -170,6 +226,19 @@ object GeneratorExpression {
         data object ShellOnlyChange : ExpressionChange
     }
 
+    /**
+     * Rejects picker URIs / platform handles in authored content ids. Content
+     * ids are opaque tokens only; no `content:`/`file:`/`android.resource:`
+     * scheme, no `://`, no absolute path may ever enter G1 identity or the
+     * BEXPR01 projection.
+     */
+    fun looksLikeUriOrHandle(value: String): Boolean =
+        value.contains("://") ||
+            value.startsWith("content:") ||
+            value.startsWith("file:") ||
+            value.startsWith("android.resource:") ||
+            value.startsWith("/")
+
     /** Validates structural boundaries; never touches bytes or providers. */
     fun validate(input: GeneratorInput): InputValidation {
         val reasons = mutableListOf<String>()
@@ -181,6 +250,9 @@ object GeneratorExpression {
         input.photos.forEachIndexed { index, photo ->
             if (photo.ordinal != index) reasons += "photos[$index].ordinal must equal $index, got ${photo.ordinal}"
             if (photo.contentId.isBlank()) reasons += "photos[$index].contentId must not be blank"
+            if (looksLikeUriOrHandle(photo.contentId)) {
+                reasons += "photos[$index].contentId must be an opaque id, not a URI/handle"
+            }
             if (photo.widthPx <= 0 || photo.heightPx <= 0) {
                 reasons += "photos[$index] dimensions must be positive, got ${photo.widthPx}x${photo.heightPx}"
             }
@@ -213,6 +285,27 @@ object GeneratorExpression {
         if (expression.grammarId.isBlank()) reasons += "grammarId must not be blank"
         if (expression.branchId.isBlank()) reasons += "branchId must not be blank"
         if (expression.noteTreatment.isBlank()) reasons += "noteTreatment must not be blank"
+        val version = expression.expressionContractVersion
+        if (version != EXPRESSION_CONTRACT_V1 && version != EXPRESSION_CONTRACT_V2) {
+            reasons += "expressionContractVersion must be 1 or 2, got $version"
+        }
+        if (version == EXPRESSION_CONTRACT_V1) {
+            if (expression.noteRegion != null) reasons += "v1 expression must not carry noteRegion"
+        }
+        if (version == EXPRESSION_CONTRACT_V2) {
+            val note = expression.input.note
+            val region = expression.noteRegion
+            if (note.isNullOrEmpty()) {
+                if (region != null) reasons += "v2 noteRegion must be absent when note is absent or empty"
+            } else if (region == null) {
+                reasons += "v2 requires noteRegion for non-empty note"
+            } else if (region.x < 0 || region.y < 0 || region.width <= 0 || region.height <= 0 ||
+                region.x.toLong() + region.width > CANVAS_WIDTH_UNITS ||
+                region.y.toLong() + region.height > CANVAS_HEIGHT_UNITS
+            ) {
+                reasons += "v2 noteRegion must fit 360x640 with positive size"
+            }
+        }
         val photoIds = expression.input.photos.map { it.contentId }.toSet()
         val placedIds = expression.placements.map { it.contentId }
         if (placedIds != expression.input.photos.map { it.contentId }) {
@@ -224,21 +317,37 @@ object GeneratorExpression {
                 reasons += "placements[$index] size must be positive"
             }
             if (placement.x < 0 || placement.y < 0 ||
-                placement.x + placement.width > CANVAS_WIDTH_UNITS ||
-                placement.y + placement.height > CANVAS_HEIGHT_UNITS
+                placement.x.toLong() + placement.width > CANVAS_WIDTH_UNITS ||
+                placement.y.toLong() + placement.height > CANVAS_HEIGHT_UNITS
             ) {
                 reasons += "placements[$index] must fit 360x640, got (${placement.x},${placement.y},${placement.width},${placement.height})"
             }
             val crop = placement.crop
             if (crop != null) {
                 if (crop.x < 0 || crop.y < 0 || crop.width <= 0 || crop.height <= 0 ||
-                    crop.x + crop.width > CROP_UNIT_MAX || crop.y + crop.height > CROP_UNIT_MAX
+                    crop.x.toLong() + crop.width > CROP_UNIT_MAX ||
+                    crop.y.toLong() + crop.height > CROP_UNIT_MAX
                 ) {
                     reasons += "placements[$index].crop must fit 0..1000"
                 }
             }
             if (placement.maskId != null && placement.maskId.isBlank()) {
                 reasons += "placements[$index].maskId must not be blank"
+            }
+            if (version == EXPRESSION_CONTRACT_V1 && placement.contentRect != null) {
+                reasons += "placements[$index] v1 must not carry contentRect"
+            }
+            if (version == EXPRESSION_CONTRACT_V2) {
+                val rect = placement.contentRect
+                if (rect == null) {
+                    reasons += "placements[$index] v2 requires contentRect"
+                } else if (rect.width <= 0 || rect.height <= 0 ||
+                    rect.x < placement.x || rect.y < placement.y ||
+                    rect.x.toLong() + rect.width > placement.x.toLong() + placement.width ||
+                    rect.y.toLong() + rect.height > placement.y.toLong() + placement.height
+                ) {
+                    reasons += "placements[$index] v2 contentRect must be positive and inside its placement"
+                }
             }
         }
         return if (reasons.isEmpty()) InputValidation.Valid else InputValidation.Invalid(reasons)
@@ -260,8 +369,33 @@ object GeneratorExpression {
         return out.toByteArray()
     }
 
-    /** Deterministic canonical bytes of a resolved expression. */
+    /**
+     * Deterministic canonical bytes of a resolved expression, dispatched on
+     * [ResolvedExpression.expressionContractVersion]. Fail-closed: invalid
+     * expressions (including v1 values carrying v2-only fields, and any
+     * unsupported version) throw instead of aliasing a legal encoding. The
+     * v1 path is frozen byte-identical; v2 uses the `GENEX02` frame with the
+     * trailing contentRects and noteRegion per the format KDoc above.
+     */
     fun canonicalBytes(expression: ResolvedExpression): ByteArray {
+        when (val valid = validateResolved(expression)) {
+            is InputValidation.Valid -> Unit
+            is InputValidation.Invalid ->
+                throw IllegalArgumentException(
+                    "cannot encode invalid expression: ${valid.reasons.joinToString("; ")}",
+                )
+        }
+        return when (expression.expressionContractVersion) {
+            EXPRESSION_CONTRACT_V1 -> legacyExpressionBytes(expression)
+            EXPRESSION_CONTRACT_V2 -> v2ExpressionBytes(expression)
+            else -> throw IllegalArgumentException(
+                "unsupported expressionContractVersion: ${expression.expressionContractVersion}",
+            )
+        }
+    }
+
+    /** Frozen v1 expression encoding (see format KDoc; do not modify). */
+    private fun legacyExpressionBytes(expression: ResolvedExpression): ByteArray {
         val out = CanonicalWriter()
         out.putAscii(MAGIC)
         out.putInt(CONTRACT_VERSION)
@@ -303,16 +437,87 @@ object GeneratorExpression {
         return out.toByteArray()
     }
 
+    /** v2 expression encoding (see format KDoc; v1 field order preserved). */
+    private fun v2ExpressionBytes(expression: ResolvedExpression): ByteArray {
+        val out = CanonicalWriter()
+        out.putAscii(MAGIC_V2)
+        out.putInt(CONTRACT_VERSION)
+        out.putInt(expression.expressionContractVersion)
+        out.putInt(expression.canvasVersion)
+        out.putString(expression.grammarId)
+        out.putInt(expression.grammarVersion)
+        out.putString(expression.branchId)
+        out.writeInputBody(expression.input)
+        out.putInt(expression.placements.size)
+        for (placement in expression.placements) {
+            out.putString(placement.contentId)
+            out.putInt(placement.x)
+            out.putInt(placement.y)
+            out.putInt(placement.width)
+            out.putInt(placement.height)
+            val crop = placement.crop
+            if (crop == null) {
+                out.putByte(0)
+            } else {
+                out.putByte(1)
+                out.putInt(crop.x)
+                out.putInt(crop.y)
+                out.putInt(crop.width)
+                out.putInt(crop.height)
+            }
+            val mask = placement.maskId
+            if (mask == null) {
+                out.putByte(0)
+            } else {
+                out.putByte(1)
+                out.putString(mask)
+            }
+            val rect = placement.contentRect
+            if (rect == null) {
+                out.putByte(0)
+            } else {
+                out.putByte(1)
+                out.putInt(rect.x)
+                out.putInt(rect.y)
+                out.putInt(rect.width)
+                out.putInt(rect.height)
+            }
+        }
+        out.putString(expression.noteTreatment)
+        out.putInt(expression.diagnostics.size)
+        for (diagnostic in expression.diagnostics) out.putString(diagnostic)
+        out.putInt(expression.fontVersion)
+        out.putInt(expression.paletteVersion)
+        val region = expression.noteRegion
+        if (region == null) {
+            out.putByte(0)
+        } else {
+            out.putByte(1)
+            out.putInt(region.x)
+            out.putInt(region.y)
+            out.putInt(region.width)
+            out.putInt(region.height)
+        }
+        return out.toByteArray()
+    }
+
     /** Lowercase-hex SHA-256 over [canonicalBytes] of an input. */
     fun canonicalHash(input: GeneratorInput): String = sha256Hex(canonicalBytes(input))
 
     /** Lowercase-hex SHA-256 over [canonicalBytes] of an expression. */
     fun canonicalHash(expression: ResolvedExpression): String = sha256Hex(canonicalBytes(expression))
 
-    /** Freezes a validated expression; callers must check validity first. */
+    /** Freezes a validated expression; invalid expressions throw, never hash. */
     fun freeze(expression: ResolvedExpression, contentRevision: Long, frozenAtEpoch: Long): FrozenSnapshot {
         require(contentRevision >= 0) { "contentRevision must be >= 0" }
         require(frozenAtEpoch >= 0) { "frozenAtEpoch must be >= 0" }
+        when (val valid = validateResolved(expression)) {
+            is InputValidation.Valid -> Unit
+            is InputValidation.Invalid ->
+                throw IllegalArgumentException(
+                    "cannot freeze invalid expression: ${valid.reasons.joinToString("; ")}",
+                )
+        }
         return FrozenSnapshot(
             expression = expression,
             expressionHash = canonicalHash(expression),

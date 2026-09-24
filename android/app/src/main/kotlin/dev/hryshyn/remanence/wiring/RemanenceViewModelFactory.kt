@@ -80,6 +80,18 @@ class RemanenceViewModelFactory(
             registerRecipientLookupBoundary = container.sessionBoundary::register,
             // C2: the per-owner C1 bridge provider for VM session-sync.
             generatorBridgeProvider = generatorBridgeProvider,
+            // Stage1-C CONTENT preview: bounded upright in-memory sources.
+            generatorPreviewLoader = dev.hryshyn.remanence.create.DefaultGeneratorPreviewLoader(
+                openSource = { pickerId ->
+                    val uri = android.net.Uri.parse(pickerId)
+                    dev.hryshyn.remanence.create.PhotoSource {
+                        container.appContext.contentResolver.openInputStream(uri)
+                            ?: throw java.io.IOException("photo picker stream unavailable")
+                    }
+                },
+                decoder = container.generatorPhotoDecoder,
+                normalizer = container.generatorPhotoNormalizer,
+            ),
             identityProvider = {
                 val row = container.currentAccountStore.loadEntity() ?: return@CreateViewModel null
                 when (val loaded = container.identityRepository.load()) {

@@ -276,7 +276,7 @@ class CreateTransitionTableTest {
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
 
         repeat(3) { index -> assertTrue(vm.photoSelection.toggle("content://photo/$index").let { true }) }
-        assertTrue(vm.noteEditor.onChange("dear mama"))
+        // ADR-018: publish with no note (non-empty notes are typed unsupported).
         vm.startPublishing()
         awaitTerminalPublish(vm)
 
@@ -291,6 +291,42 @@ class CreateTransitionTableTest {
         assertNotNull(row)
         assertEquals(OutboxCapsuleState.ENCRYPTED, row!!.state)
         assertTrue(persistence.stored.isNotEmpty())
+        Unit
+    }
+
+    @Test
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    fun nonEmptyNoteIsTypedUnsupportedAtPublishAndStagesNothing() = runBlocking {
+        val front = ScriptedProcessor(ScriptedProcessor.Scripted.Accept(syntheticFingerprint(11, FingerprintSide.FRONT)))
+        val (vm, _) = viewModel(
+            front,
+            openPhotoSource = { id ->
+                dev.hryshyn.remanence.create.PhotoSource {
+                    java.io.ByteArrayInputStream(
+                        dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(id),
+                    )
+                }
+            },
+            bridgeProvider = bridge.provider,
+        )
+        confirmRecipient(vm)
+        deliverFront(vm)
+        repeat(3) { vm.photoSelection.toggle("content://note/$it") }
+        assertTrue(vm.noteEditor.onChange("dear mama"))
+
+        vm.startPublishing()
+        awaitTerminalPublish(vm)
+
+        // Explicit typed unsupported: back at CONTENT with a visible error,
+        // never a silent v1 publication "as if generator".
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        assertNotNull(vm.publishError.value)
+        assertTrue(
+            "publishError must describe the generator note limitation, was ${vm.publishError.value}",
+            vm.publishError.value!!.contains("generator"),
+        )
+        assertNull(database.outboxCapsuleDao().getByCapsuleIdAndOwner(vm.capsuleId, userUuid.toString()))
+        assertEquals(0, bridge.liveSessions())
         Unit
     }
 

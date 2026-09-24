@@ -270,7 +270,7 @@ class CreateRecipientBindingFailClosedTest {
         vm.deliverFrontJpeg("f".toByteArray())
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         vm.onPhotosPicked(listOf("p1", "p2", "p3"))
-        assertTrue(vm.noteEditor.onChange("lifecycle note"))
+        // ADR-018: publish with no note (non-empty notes are typed unsupported).
     }
 
     private fun awaitTerminalPublish(vm: CreateViewModel) {

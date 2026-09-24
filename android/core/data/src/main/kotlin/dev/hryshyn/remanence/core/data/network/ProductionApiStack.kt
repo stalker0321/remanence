@@ -121,6 +121,14 @@ class ProductionApiStack private constructor(
     val keyBundleByIdRepository: KeyBundleByIdRepository =
         KeyBundleByIdRepository(authenticatedClient, baseUrl, requestLeaseProvider)
 
+    /**
+     * S1 sample-catalog music search shares the authenticated refreshing
+     * client. Wired but never referenced from the release capsule flow
+     * until S2 defines the encrypted attachment; DEBUG-only UI only.
+     */
+    val musicSearchRepository: MusicSearchRepository =
+        MusicSearchRepository(authenticatedClient, baseUrl, requestLeaseProvider)
+
     companion object {
         fun create(
             baseUrl: ApiBaseUrl,

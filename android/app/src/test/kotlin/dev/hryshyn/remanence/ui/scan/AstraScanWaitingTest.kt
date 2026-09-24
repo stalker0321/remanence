@@ -9,6 +9,7 @@ import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -303,6 +304,46 @@ class AstraScanWaitingTest {
     }
 
     @Test
+    fun statusCopyReservesDesignMinimumSoStopNeverMoves() {
+        val state = mutableStateOf<ScanMatchUiState>(ScanMatchUiState.Matching)
+        composeRule.setContent {
+            HoldTheme {
+                ScanWaitingGroup(
+                    state = state.value,
+                    motion = AstraMotionSpec.Resolved.FULL,
+                    onStopScanning = {},
+                    modifier = Modifier.fillMaxSize().testTag("waiting_group"),
+                )
+            }
+        }
+        composeRule.mainClock.advanceTimeBy(1_000L)
+
+        // Design motion shell `.status-copy{min-height:105px}`: the copy
+        // block holds its reserve even for the one-line offline state, so
+        // the stop action below can never shift when copy arrives late.
+        val stopTops = mutableListOf<Float>()
+        val copyHeights = mutableListOf<Float>()
+        val states: List<ScanMatchUiState> = listOf(
+            ScanMatchUiState.Matching,
+            ScanMatchUiState.MaterialPending("capsule-id", connected = false),
+            ScanMatchUiState.Accepted("candidate-id", viaSenderFallback = false),
+        )
+        for (next in states) {
+            composeRule.runOnIdle { state.value = next }
+            composeRule.mainClock.advanceTimeBy(1_000L)
+            val copy = composeRule.onNodeWithTag("scan_status_copy").getUnclippedBoundsInRoot()
+            copyHeights += (copy.bottom - copy.top).value
+            val stop = composeRule.onNodeWithTag("scan_stop_scanning").getUnclippedBoundsInRoot()
+            stopTops += stop.top.value
+        }
+        for (height in copyHeights) {
+            assertTrue("status copy must reach design 105dp minimum: $height", height >= 105f)
+        }
+        val travel = stopTops.max() - stopTops.min()
+        assertTrue("stop action must not move across waiting states: tops=$stopTops", travel < 1f)
+    }
+
+    @Test
     @Config(qualifiers = "w390dp-h844dp-xhdpi")
     fun postcardIsSeventySixPercentCenteredWithSafeBounds() {
         composeRule.setContent {
@@ -340,5 +381,34 @@ class AstraScanWaitingTest {
             card.right.value <= parent.right.value + 16f,
         )
         assertTrue("card top inside group: ${card.top.value}", card.top.value >= parent.top.value - 16f)
+    }
+
+    @Test
+    @Config(qualifiers = "w390dp-h844dp-xhdpi")
+    fun rotatedPostcardIsNotClippedByAnyParent() {
+        composeRule.setContent {
+            HoldTheme {
+                ScanWaitingGroup(
+                    state = ScanMatchUiState.Matching,
+                    motion = AstraMotionSpec.Resolved.FULL,
+                    onStopScanning = {},
+                    modifier = Modifier.fillMaxSize().testTag("waiting_group"),
+                )
+            }
+        }
+        composeRule.mainClock.advanceTimeBy(1_000L)
+
+        // getBoundsInRoot applies ancestor clipping, getUnclippedBoundsInRoot
+        // does not: equality proves no parent clips the rotated card. The
+        // internal band clip lives inside the artwork Canvas and is unaffected.
+        val clipped = composeRule.onNodeWithTag("astra_postcard").getBoundsInRoot()
+        val unclipped = composeRule.onNodeWithTag("astra_postcard").getUnclippedBoundsInRoot()
+        assertTrue(
+            "rotated postcard must not be clipped: clipped=$clipped unclipped=$unclipped",
+            abs((clipped.left - unclipped.left).value) < 1f &&
+                abs((clipped.right - unclipped.right).value) < 1f &&
+                abs((clipped.top - unclipped.top).value) < 1f &&
+                abs((clipped.bottom - unclipped.bottom).value) < 1f,
+        )
     }
 }

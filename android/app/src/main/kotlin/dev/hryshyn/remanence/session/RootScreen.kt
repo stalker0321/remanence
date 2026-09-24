@@ -45,6 +45,14 @@ fun RootScreen(
     onExitFlow: () -> Unit = {},
     showPublicHome: Boolean = false,
 ) {
+    if (authState is AuthUiState.Resolving) {
+        // Cold-start session check still in flight: hold a neutral frame so
+        // neither the auth form nor any home surface flashes for a frame.
+        // Replaced wholesale the moment the first terminal state publishes
+        // (no timers); holds no private content by construction.
+        Box(modifier.fillMaxSize().testTag("root_resolving_frame"))
+        return
+    }
     if (authState == AuthUiState.SignedOut && showPublicHome) {
         homeContent()
         return
@@ -101,7 +109,14 @@ fun RootScreen(
         }
 
         is AppDestination.Capsule ->
-            capsuleContent(destination.grantId)
+            // A capsule opening carries like any other route boundary; the
+            // arrival is incoming-only, so no private outgoing node is ever
+            // retained. Keyed by grant: each grant arrives exactly once.
+            key(destination) {
+                AstraContextArrival(motion = motion, modifier = modifier.fillMaxSize(), contentKey = destination) {
+                    capsuleContent(destination.grantId)
+                }
+            }
 
         // Until a live grant exists, Home remains the fallback surface.
         // Home owns the return arrival so Back to Home carries like any

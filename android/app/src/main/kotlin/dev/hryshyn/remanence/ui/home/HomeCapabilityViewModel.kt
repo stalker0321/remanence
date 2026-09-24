@@ -24,6 +24,7 @@ class HomeCapabilityViewModel(
     /** Called whenever the root auth state reaches a new terminal value. */
     fun onAuthStateChanged(authState: AuthUiState) {
         _capability.value = when (authState) {
+            AuthUiState.Resolving,
             AuthUiState.SignedOut, AuthUiState.RequiresConnectivity ->
                 AccountCapabilityState.NotAuthenticated
 

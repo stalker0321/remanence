@@ -15,6 +15,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -81,6 +82,10 @@ fun AstraPostcard(modifier: Modifier = Modifier) {
                 radius = diameter / 2f,
                 center = Offset(width * 0.14f + diameter / 2f, height * 0.11f + diameter / 2f),
             )
+            // Study `overflow:hidden`: the band is drawn 120% wide from -10%
+            // but must clip to the card itself. clipRect keeps the shadow,
+            // rotation and outer layout untouched.
+            clipRect(left = 0f, top = 0f, right = width, bottom = height) {
             // Navy band: 30% tall with its top at 58% (12% bottom margin),
             // 120% wide from -10%, tilted -13deg around the band center.
             // Below it the paper gap and the thin navy echo stripe, in the
@@ -103,6 +108,7 @@ fun AstraPostcard(modifier: Modifier = Modifier) {
                     topLeft = Offset(-width * 0.10f, bandTop + bandHeight + height * 0.03f),
                     size = Size(width * 1.20f, height * 0.02f),
                 )
+            }
             }
         }
         // Vertical mark, reading top-to-bottom like `writing-mode: vertical-rl`.

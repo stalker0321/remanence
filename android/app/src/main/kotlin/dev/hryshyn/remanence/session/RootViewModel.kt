@@ -108,7 +108,7 @@ class RootViewModel internal constructor(
     private var logoutInProgress = false
     private val refreshWaiters = mutableListOf<CompletableDeferred<Unit>>()
 
-    private val controller = AppNavigationController(AuthUiState.SignedOut)
+    private val controller = AppNavigationController(AuthUiState.Resolving)
 
     /**
      * FIX-REVIEW2-03: the one pending exact-expiry timer for the presented
@@ -133,7 +133,7 @@ class RootViewModel internal constructor(
     private val _capsuleRevocations = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val capsuleRevocations: SharedFlow<String> = _capsuleRevocations.asSharedFlow()
 
-    private val _authState = MutableStateFlow<AuthUiState>(AuthUiState.SignedOut)
+    private val _authState = MutableStateFlow<AuthUiState>(AuthUiState.Resolving)
     val authState: StateFlow<AuthUiState> = _authState.asStateFlow()
 
     private val _destination = MutableStateFlow<AppDestination>(AppDestination.Authentication)
@@ -605,6 +605,15 @@ class RootViewModel internal constructor(
             failRefreshWaiters(cancelled)
             throw cancelled
         } catch (failure: Exception) {
+            // A terminal result must always land: if a resolve dies outside
+            // performResolveNow's own fallbacks (e.g. in post-publication
+            // bookkeeping), degrade fail-closed instead of stranding a fresh
+            // install on the resolving frame forever. Only the initial-proof
+            // window is touched — a later failure never overwrites the last
+            // terminal state, and logout still owns its own terminal.
+            if (_authState.value is AuthUiState.Resolving && !logoutInProgress) {
+                runCatching { publish(AuthUiState.RequiresConnectivity) }
+            }
             failRefreshWaiters(failure)
             throw failure
         }

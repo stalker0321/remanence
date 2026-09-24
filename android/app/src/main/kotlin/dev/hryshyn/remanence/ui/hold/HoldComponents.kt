@@ -150,15 +150,17 @@ fun HoldActionObject(
             .padding(bottom = 6.dp)
             .then(if (expand) Modifier.fillMaxSize() else Modifier)
             .clickable(interactionSource = interaction, indication = null, enabled = enabled && !activating, role = Role.Button) {
-                // A quick tap otherwise replaces this screen before a single pressed frame appears.
+                // Navigation fires immediately: the press state below only
+                // keeps the touch visible and debounces, never gates action.
                 activating = true
                 scope.launch {
-                    delay(110)
                     try {
                         currentOnClick()
                     } finally {
-                        // The callback may throw: the press hold must always
-                        // release or the surface stays disabled forever.
+                        // The visible press outlives the tap by one beat, and
+                        // the hold always releases — even if the callback
+                        // throws — so the surface never sticks disabled.
+                        delay(110)
                         activating = false
                     }
                 }

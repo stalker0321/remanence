@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -166,8 +167,18 @@ fun ScanWaitingGroup(
                     },
             )
             Spacer(Modifier.height(16.dp))
+            // Design motion shell `.status-copy{min-height:105px}`: the copy
+            // block reserves its full two-line height even when a state
+            // carries only one line (offline pending), so late text can
+            // never move the indicator/stop action below it.
             key(state::class.simpleName) {
-                when (state) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 105.dp)
+                        .testTag("scan_status_copy"),
+                ) {
+                    when (state) {
                     is ScanMatchUiState.Matching -> {
                         Text(
                             stringResource(R.string.hold_recognizing),
@@ -223,6 +234,7 @@ fun ScanWaitingGroup(
                         }
                     }
                     else -> Unit
+                    }
                 }
             }
             Spacer(Modifier.height(12.dp))

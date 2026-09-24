@@ -88,6 +88,13 @@ data class CapsulePublishRequest(
      * expression is bound by the same signed manifest ciphertext hash.
      */
     val expression: CapsuleExpressionArtifact? = null,
+    /**
+     * S2b-sender: optional own-catalog track snapshot. Null = absent (v1
+     * and snapshot-less v2 unchanged). When present the manifest becomes
+     * v2 via [expression]; a snapshot without an expression is refused
+     * fail-closed in [CapsulePublisher.publish], never silently dropped.
+     */
+    val trackSnapshot: dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1? = null,
 ) {
     /** Redacted so note text / photo bytes / keys can never reach logs. */
     override fun toString(): String =
@@ -97,6 +104,7 @@ data class CapsulePublishRequest(
             "senderHandleSnapshot=<redacted>, createdAtEpochSeconds=$createdAtEpochSeconds, " +
             "photoCount=${photoJpegs.size}, notePresent=${noteUtf8 != null}, " +
             "expression=${if (expression == null) "v1" else "v2"}, " +
+            "trackSnapshot=${if (trackSnapshot == null) "absent" else "present"}, " +
             "frontFingerprintProfileId=$frontFingerprintProfileId)"
 }
 
@@ -169,6 +177,12 @@ class CapsulePublisher(
             profileId = request.frontFingerprintProfileId,
             bytes = request.frontFingerprintBytes,
         )
+        // S2b-sender: a track snapshot rides only the v2 expression frame.
+        // A snapshot without an expression is refused before any crypto
+        // work — never silently dropped into a v1 manifest.
+        require(request.trackSnapshot == null || request.expression != null) {
+            "track snapshot requires the v2 expression frame"
+        }
         // M2-P08: the current sender owns the retry key; ownerUserId
         // must equal senderUserId before any crypto work begins.
         require(request.ownerUserId == request.senderUserId.value.toString()) {
@@ -244,6 +258,7 @@ class CapsulePublisher(
                 artifact.candidateId,
                 artifact.expression,
                 blobIdByContentId,
+                request.trackSnapshot,
             )
         } else {
             ContentManifestCodec().buildAndEncrypt(

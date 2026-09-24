@@ -376,6 +376,13 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
                 MusicPickerStateMachine(musicRepository::search, debugScope)
             }
             MusicPickerDebugSection(state = musicPicker)
+            // S2b-sender bridge (DEBUG-only): the picker selection becomes
+            // the ViewModel-owned selection sealed at publish time. Release
+            // builds strip this whole block with the section above.
+            val pickerSelection by musicPicker.selection.collectAsStateWithLifecycle()
+            LaunchedEffect(pickerSelection) {
+                viewModel.setMusicSelection(pickerSelection)
+            }
         }
     }
 }

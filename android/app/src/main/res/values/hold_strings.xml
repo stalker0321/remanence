@@ -81,6 +81,7 @@
     <string name="hold_scan_again">scan again</string>
     <string name="hold_scan_stop">stop scanning</string>
     <string name="hold_scan_recognizing_body">keep the postcard nearby.</string>
+    <string name="hold_scan_still_hold">captured — you can move your phone now.</string>
     <string name="hold_scan_opening_body">checking it\'s ready to open.</string>
     <string name="hold_scan_material_online_body">getting what\'s attached.</string>
     <string name="hold_chooser_title">which postcard is this?</string>

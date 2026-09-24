@@ -4,7 +4,10 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -28,7 +31,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -130,6 +135,14 @@ fun CaptureAttemptSurface(
     modifier: Modifier = Modifier,
     adapterFactory: (() -> StillCameraAdapter)? = null,
     /**
+     * Capture-once display frame for the Processing phase. When non-null the
+     * surface holds THIS still; when null a neutral fallback shows the same
+     * status with no live preview. Either way the camera releases on accept
+     * and no second capture can fire. Defaults to null so callers without a
+     * decoded frame keep a safe fallback.
+     */
+    processingStill: ImageBitmap? = null,
+    /**
      * FIX-STATE-08: when true (production), the surface resolves the system
      * camera permission itself on attach; tests set false and resolve the
      * controller's permission explicitly.
@@ -216,6 +229,7 @@ fun CaptureAttemptSurface(
                 onDelivered = onDelivered,
                 onRetake = onRetake,
                 adapterFactory = adapterFactory,
+                processingStill = processingStill,
             )
         }
     }
@@ -230,6 +244,7 @@ private fun GrantedAttemptContent(
     onDelivered: (ByteArray) -> Unit,
     onRetake: () -> Unit,
     adapterFactory: (() -> StillCameraAdapter)?,
+    processingStill: ImageBitmap?,
 ) {
     when (val phase = controller.phase) {
         is CaptureAttemptPhase.Rejected -> TerminalPanel(
@@ -253,6 +268,14 @@ private fun GrantedAttemptContent(
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.testTag("capture_accepted_status"),
         )
+
+        // Capture-once: the accepted frame is held while the pipeline runs.
+        // LivePreviewContent is NOT composed here, so its adapter disposes
+        // and the camera releases the moment capture is accepted — also when
+        // the frame proved undecodable (neutral fallback, same release). No
+        // shutter action exists in this state, so no second capture can fire.
+        CaptureAttemptPhase.Processing ->
+            ProcessingContent(still = processingStill, shutterTag = shutterTag)
 
         else -> LivePreviewContent(
             controller = controller,
@@ -310,51 +333,21 @@ private fun LivePreviewContent(
     }
 
     Column {
-        // FIX-STATE-09: the viewfinder area is DETERMINISTIC - it follows the
-        // display orientation, preserves its 3:4 portrait (or 4:3 landscape)
-        // shape when the height cap binds, and keeps the shutter reachable on
-        // short phones.
-        val configuration = LocalConfiguration.current
-        val screenHeight = configuration.screenHeightDp.dp
-        val effectiveMax = capturePreviewMaxHeight(screenHeight)
-        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-            val targetAspectRatio = if (configuration.screenWidthDp < configuration.screenHeightDp) {
-                PORTRAIT_PREVIEW_ASPECT_RATIO
-            } else {
-                LANDSCAPE_PREVIEW_ASPECT_RATIO
-            }
-            val preview = capturePreviewSize(
-                maxWidth = maxWidth,
-                effectiveMaxHeight = effectiveMax,
-                targetAspectRatio = targetAspectRatio,
+        CaptureFrame(frameTag = "capture_preview") {
+            // Composed in the SAME commit that created the adapter, before
+            // the bind effect runs, so the hosted PreviewView always exists.
+            adapter.preview(Modifier.matchParentSize())
+            PostcardGuideOverlay(Modifier.matchParentSize())
+            Text(
+                stringResource(R.string.hold_capture_guide_instruction),
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .background(Color.Black.copy(alpha = 0.70f))
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                    .testTag("postcard_guide_instruction"),
             )
-            Box(
-                modifier = Modifier.fillMaxWidth(),
-                contentAlignment = Alignment.TopCenter,
-            ) {
-                Box(
-                    modifier = Modifier
-                        .width(preview.width)
-                        .height(preview.height)
-                        .testTag("capture_preview"),
-                ) {
-                    // Fills the guaranteed area exactly; the hosted surface can
-                    // never measure to zero height. Composed in the SAME commit
-                    // that created the adapter, before the bind effect runs.
-                    adapter.preview(Modifier.matchParentSize())
-                    PostcardGuideOverlay(modifier = Modifier.matchParentSize())
-                    Text(
-                        stringResource(R.string.hold_capture_guide_instruction),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.White,
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .background(Color.Black.copy(alpha = 0.70f))
-                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                            .testTag("postcard_guide_instruction"),
-                    )
-                }
-            }
         }
         Spacer(Modifier.height(8.dp))
         when (phase) {
@@ -386,10 +379,90 @@ private fun LivePreviewContent(
                 ShutterButton(tag = shutterTag, enabled = false, onClick = {})
             }
 
-            CaptureAttemptPhase.Processing -> ProcessingStatus(shutterTag)
-
+            // Processing never reaches the live preview: GrantedAttemptContent
+            // routes it to ProcessingContent (still or neutral fallback).
             else -> Unit
         }
+    }
+}
+
+/**
+ * FIX-STATE-09: the viewfinder area is DETERMINISTIC - it follows the
+ * display orientation, preserves its 3:4 portrait (or 4:3 landscape)
+ * shape when the height cap binds, and keeps the shutter reachable on
+ * short phones. Shared by the live preview and the capture-once still so
+ * both fill the exact same frame. [frameTag] identifies the frame node;
+ * the still passes null so preview-absence assertions stay meaningful.
+ */
+@Composable
+private fun CaptureFrame(
+    frameTag: String?,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    val configuration = LocalConfiguration.current
+    val screenHeight = configuration.screenHeightDp.dp
+    val effectiveMax = capturePreviewMaxHeight(screenHeight)
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val targetAspectRatio = if (configuration.screenWidthDp < configuration.screenHeightDp) {
+            PORTRAIT_PREVIEW_ASPECT_RATIO
+        } else {
+            LANDSCAPE_PREVIEW_ASPECT_RATIO
+        }
+        val preview = capturePreviewSize(
+            maxWidth = maxWidth,
+            effectiveMaxHeight = effectiveMax,
+            targetAspectRatio = targetAspectRatio,
+        )
+        Box(
+            modifier = Modifier.fillMaxWidth(),
+            contentAlignment = Alignment.TopCenter,
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(preview.width)
+                    .height(preview.height)
+                    .then(if (frameTag != null) Modifier.testTag(frameTag) else Modifier),
+                content = content,
+            )
+        }
+    }
+}
+
+/**
+ * Capture-once Processing surface: when the accepted still decoded, it is
+ * held in the same frame the viewfinder used; otherwise a neutral fallback
+ * shows the same status with no live preview at all. Either way the camera
+ * is released (the preview is not composed), the phone-may-move copy shows,
+ * and no capture action exists, so exactly one still was taken. The bitmap
+ * is display-only: it never reaches the recognition pipeline, which keeps
+ * using the delivered JPEG bytes from the same capture.
+ */
+@Composable
+private fun ProcessingContent(
+    still: ImageBitmap?,
+    shutterTag: String,
+) {
+    Column {
+        if (still != null) {
+            CaptureFrame(frameTag = null) {
+                // Fills the guaranteed area exactly like the live preview did.
+                Image(
+                    bitmap = still,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.matchParentSize().testTag("capture_processing_still"),
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+        Text(
+            stringResource(R.string.hold_scan_still_hold),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("capture_still_hold_copy"),
+        )
+        Spacer(Modifier.height(8.dp))
+        ProcessingStatus(shutterTag)
     }
 }
 

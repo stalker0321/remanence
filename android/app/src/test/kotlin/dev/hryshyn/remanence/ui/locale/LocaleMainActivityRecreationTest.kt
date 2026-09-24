@@ -160,6 +160,10 @@ class LocaleMainActivityRecreationTest {
     }
 
     private fun realRecreationExactlyOnce() {
+        // The production bootstrap resolves asynchronously: wait for the
+        // terminal proof before asserting the surface, so a slow first
+        // resolve is never mistaken for a missing one.
+        composeRule.waitForIdle()
         composeRule.onNodeWithTag("scan_action").assertIsDisplayed()
         val first = created.lastOrNull() ?: composeRule.activity
 
@@ -171,6 +175,8 @@ class LocaleMainActivityRecreationTest {
         assertNotSame(first, created.single())
         // The recreated production activity boots functionally with the
         // persisted locale: same public-home surface, chosen option selected.
+        // Wait for the fresh session proof again: same race as cold start.
+        composeRule.waitForIdle()
         composeRule.onNodeWithTag("language_option_russian").assertIsSelected()
         composeRule.onNodeWithTag("scan_action").assertIsDisplayed()
         composeRule.onNodeWithTag("create_action").performScrollTo().assertIsDisplayed()
@@ -234,6 +240,9 @@ class LocaleMainActivityRecreationTest {
     }
 
     private fun viewModelStoreRetainedAcrossRealRecreation() {
+        // Cold start with a real async bootstrap: wait for the terminal
+        // proof — reading mid-resolve would see the honest Resolving state.
+        composeRule.waitForIdle()
         val before = productionViewModel(composeRule.activity)
         assertEquals(AuthUiState.SignedOut, before.authState.value)
         assertEquals(0L, before.createSessionEpoch.value)
@@ -242,6 +251,9 @@ class LocaleMainActivityRecreationTest {
         selectRussian()
 
         assertEquals(1, destroyed.size)
+        // Same wait after recreation: a fresh store re-proves the session
+        // before any terminal assertion.
+        composeRule.waitForIdle()
         val after = productionViewModel(created.single())
         assertSame(before, after)
         assertEquals(AuthUiState.SignedOut, after.authState.value)

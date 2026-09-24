@@ -127,4 +127,43 @@ class HomeScreenTest {
             createBounds.top.value >= scanBounds.bottom.value - 1f,
         )
     }
+
+    @Test
+    @Config(qualifiers = "w390dp-h844dp-xhdpi")
+    fun recoveryNoteShowsWithoutShiftingActions() {
+        composeRule.setContent {
+            HoldTheme {
+                HomeScreen(
+                    BackendHealthUiState.AVAILABLE,
+                    accountCapability = AccountCapabilityState.RecoveryRequired,
+                    publicEntry = true,
+                )
+            }
+        }
+        // The note is decided on the same frame the surface appears, so the
+        // cards lay out with it from the start: no late shift, no dead band.
+        composeRule.onNodeWithTag("home_recovery_note").assertIsDisplayed()
+        composeRule.onNodeWithTag("scan_action").assertIsDisplayed()
+        composeRule.onNodeWithTag("create_action").assertIsDisplayed()
+        val rootBounds = composeRule.onRoot().getUnclippedBoundsInRoot()
+        val langBounds = composeRule.onNodeWithTag("language_switch_row").getUnclippedBoundsInRoot()
+        val deadBand = (rootBounds.bottom - langBounds.bottom).value
+        assertTrue("no dead band may sit under the language row: $deadBand", deadBand < 48f)
+    }
+
+    @Test
+    fun healthyHomeHasNoRecoveryNote() {
+        composeRule.setContent {
+            HoldTheme {
+                HomeScreen(
+                    BackendHealthUiState.AVAILABLE,
+                    accountCapability = AccountCapabilityState.CryptoReady(userId = "u", handle = "mykola"),
+                    publicEntry = true,
+                )
+            }
+        }
+        composeRule.onNodeWithTag("home_recovery_note").assertDoesNotExist()
+        composeRule.onNodeWithTag("scan_action").assertIsDisplayed().assertIsEnabled()
+        composeRule.onNodeWithTag("create_action").assertIsDisplayed().assertIsEnabled()
+    }
 }

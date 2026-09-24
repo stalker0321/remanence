@@ -1,9 +1,12 @@
 package dev.hryshyn.remanence.ui.scan
 
+import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.hryshyn.remanence.capture.CaptureAttemptController
+import dev.hryshyn.remanence.capture.CaptureDisplayDecoder
 import dev.hryshyn.remanence.capture.ProcessedStill
+import dev.hryshyn.remanence.capture.clearCaptureDisplayStill
 import dev.hryshyn.remanence.create.RealStillFingerprintProcessor
 import dev.hryshyn.remanence.scan.ScanCaptureSession
 import dev.hryshyn.remanence.scan.ScannedSide
@@ -147,6 +150,15 @@ class ScanViewModel internal constructor(
     private val presentationGrants: PresentationGrantAuthority,
     frontProcessor: dev.hryshyn.remanence.capture.StillProcessor =
         RealStillFingerprintProcessor(profile, FingerprintSide.FRONT),
+    /**
+     * Capture-once display frame: decodes a bounded in-memory still for the
+     * Processing surface. The recognition pipeline keeps using the delivered
+     * JPEG bytes; this frame never enters it, storage, logs, or payloads.
+     */
+    private val captureDisplayDecoder: CaptureDisplayDecoder =
+        CaptureDisplayDecoder { bytes ->
+            dev.hryshyn.remanence.capture.decodeCaptureDisplayStill(bytes)
+        },
     private val matcher: SiftRootSiftMatcherPort = SiftRootSiftMatcherPort { query, reference ->
         SiftRootSiftMatcher().match(query, reference)
     },
@@ -182,6 +194,18 @@ class ScanViewModel internal constructor(
      * failures, processing, and retakes all render from this controller.
      */
     val frontAttempt = CaptureAttemptController()
+
+    /**
+     * Capture-once display frame: a bounded downsampled copy of the
+     * delivered JPEG, shown while the pipeline runs so the user sees their
+     * still and knows the phone may move. Published only for the current
+     * delivery while its attempt is Processing; cleared (pixels zeroed, never
+     * recycled while composed) on every terminal, stale, cancel, retake,
+     * reset, boundary, and teardown path — it never survives into
+     * Matching/MaterialPending/Capsule, storage, or payloads.
+     */
+    private val _frontDisplayStill = MutableStateFlow<Bitmap?>(null)
+    val frontDisplayStill: StateFlow<Bitmap?> = _frontDisplayStill.asStateFlow()
 
     private val _matchState = MutableStateFlow<ScanMatchUiState>(ScanMatchUiState.AwaitingCapture)
     val matchState: StateFlow<ScanMatchUiState> = _matchState.asStateFlow()
@@ -280,6 +304,7 @@ class ScanViewModel internal constructor(
         presentationGrants.clearAll()
         frontAttempt.reset()
         clearQueuedStill()
+        clearDisplayStill()
         _matchState.value = ScanMatchUiState.AwaitingCapture
         _terminal.value = ScanTerminalState.Idle
         _initializedEpoch.value = epoch
@@ -355,8 +380,34 @@ class ScanViewModel internal constructor(
         // moment the session handoff owns the buffer.
         var untransferredAccepted: ByteArray? = null
         return try {
+            var displayStill: Bitmap? = null
             val processed =
                 withContext(cpuDispatcher) {
+                    // Bounded display frame from the same bytes, published
+                    // BEFORE processing begins so it is visible while the
+                    // pipeline runs (not after it ends). Decode stays here
+                    // so Main never janks; undecodable input simply yields
+                    // no still. Current-only: a reset race drops the frame
+                    // unpublished instead of showing a stale capture.
+                    displayStill = captureDisplayDecoder.decode(jpegBytes)
+                    if (deliveryIsCurrent(generation)) {
+                        clearDisplayStill()
+                        _frontDisplayStill.value = displayStill
+                        // Recheck: a reset/account-boundary may have landed
+                        // between the check and the set on another thread.
+                        // Retract only our own frame (compare-and-set) so a
+                        // newer delivery's frame is never touched; our pixels
+                        // are erased either way. The post-block stale path
+                        // below is the second net for the same race.
+                        if (!deliveryIsCurrent(generation)) {
+                            _frontDisplayStill.compareAndSet(displayStill, null)
+                            displayStill?.let { clearCaptureDisplayStill(it) }
+                            displayStill = null
+                        }
+                    } else {
+                        displayStill?.let { clearCaptureDisplayStill(it) }
+                        displayStill = null
+                    }
                     when (val result = processor.process(jpegBytes)) {
                         is ProcessedStill.Rejected -> result
                         is ProcessedStill.Accepted -> {
@@ -371,12 +422,21 @@ class ScanViewModel internal constructor(
             if (!deliveryIsCurrent(generation)) {
                 untransferredAccepted?.fill(0)
                 untransferredAccepted = null
+                // Our frame only (compare-and-set): a newer delivery may
+                // have published since — never wipe its frame, only erase
+                // our own superseded pixels.
+                val mine = displayStill
+                if (mine != null) {
+                    _frontDisplayStill.compareAndSet(mine, null)
+                    clearCaptureDisplayStill(mine)
+                }
                 return false
             }
 
             when (processed) {
                 is ProcessedStill.Rejected -> {
                     attempt.reject(processed.reasons, processed.diagnostic)
+                    clearDisplayStill()
                     false
                 }
                 is ProcessedStill.Accepted -> {
@@ -397,6 +457,9 @@ class ScanViewModel internal constructor(
                         throw failure
                     }
                     attempt.accept()
+                    // The attempt is terminal: the display frame must not
+                    // survive into Matching/MaterialPending/Capsule.
+                    clearDisplayStill()
                     true
                 }
             }
@@ -409,12 +472,14 @@ class ScanViewModel internal constructor(
             // Teardown touches state only while this delivery still owns it.
             if (deliveryIsCurrent(generation)) {
                 clearQueuedStill()
+                clearDisplayStill()
                 attempt.cancelActiveAttempt()
             }
             throw cancelled
         } catch (failure: Exception) {
             if (deliveryIsCurrent(generation)) {
                 clearQueuedStill()
+                clearDisplayStill()
                 attempt.fail(failure.message ?: "capture failed")
             }
             false
@@ -423,6 +488,7 @@ class ScanViewModel internal constructor(
             untransferredAccepted = null
             if (deliveryIsCurrent(generation)) {
                 clearQueuedStill()
+                clearDisplayStill()
                 attempt.fail(failure.message ?: "capture failed")
             }
             throw failure
@@ -436,11 +502,24 @@ class ScanViewModel internal constructor(
         queuedStill.getAndSet(null)?.serializedBytes?.fill(0)
     }
 
+    /**
+     * Drops the capture-once display frame, zeroing its pixels first. Never
+     * recycles (see [clearCaptureDisplayStill]): the frame may still be
+     * composed while its terminal transition lands.
+     */
+    private fun clearDisplayStill() {
+        val still = _frontDisplayStill.value
+        _frontDisplayStill.value = null
+        clearCaptureDisplayStill(still)
+    }
+
     /** Module-internal view of THE delivery generation (tests only). */
     internal fun deliveryGenerationForDiagnostics(): Long = deliveryGeneration
 
     /** Explicit Retake after Rejected/Failed on the FRONT. */
     fun retakeFront() {
+        // A fresh viewfinder must never show the previous attempt's frame.
+        clearDisplayStill()
         runCatchingRetake(frontAttempt)
     }
 
@@ -467,6 +546,7 @@ class ScanViewModel internal constructor(
         // terminal callbacks are structurally inert afterwards.
         frontAttempt.restartCapture()
         clearQueuedStill()
+        clearDisplayStill()
         captureSession.reset()
         _matchState.value = ScanMatchUiState.AwaitingCapture
         _terminal.value = ScanTerminalState.Idle
@@ -1386,6 +1466,7 @@ class ScanViewModel internal constructor(
         cancelIncomingSyncSchedule()
         unregisterSessionBoundary?.invoke()
         clearQueuedStill()
+        clearDisplayStill()
         captureSession.consume()
         super.onCleared()
     }

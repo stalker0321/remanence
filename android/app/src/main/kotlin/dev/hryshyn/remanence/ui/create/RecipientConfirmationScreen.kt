@@ -19,8 +19,9 @@ import dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot
 
 /**
  * Explicit recipient confirmation (docs/security.md section 8). Shows the
- * resolved handle plus the immutable account identifier so the sender binds
- * the capsule to stable IDs, never to a mutable handle string alone.
+ * resolved handle plus a non-ID account cue. The immutable binding itself
+ * travels in the confirmed snapshot (ViewModel/store), never in displayed
+ * raw IDs — no user/key UUID is rendered here.
  */
 @Composable
 fun RecipientConfirmationScreen(
@@ -35,7 +36,7 @@ fun RecipientConfirmationScreen(
             .padding(vertical = 8.dp),
     ) {
         Text(
-            text = "Account ${snapshot.userId.toRestString()}",
+            text = "For ${snapshot.handle.toDisplayString()}",
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.testTag("confirm_account_cue_text"),
         )

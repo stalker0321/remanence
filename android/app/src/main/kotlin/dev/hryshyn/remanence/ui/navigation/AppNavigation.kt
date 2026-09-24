@@ -8,6 +8,15 @@ import dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource
  * authenticate but stay out of creation/scan flows until keys exist again.
  */
 sealed interface AuthUiState {
+    /**
+     * Cold-start session check still in flight: no terminal outcome is
+     * known yet. Never renders a real surface — the UI holds a neutral
+     * frame until the first terminal state publishes, so neither the auth
+     * form nor home flashes for a frame. Fail-closed everywhere guards
+     * check authentication.
+     */
+    data object Resolving : AuthUiState
+
     data object SignedOut : AuthUiState
 
     /** Password accepted by the server, but local private identity is absent. */
@@ -82,6 +91,7 @@ object RouteGuard {
         requested: AppDestination,
         access: CapsuleAccess,
     ): AppDestination = when (authState) {
+        AuthUiState.Resolving,
         AuthUiState.SignedOut,
         AuthUiState.RecoveryRequired,
         AuthUiState.RequiresConnectivity,
@@ -126,7 +136,7 @@ object RouteGuard {
  * process restart). The grant lives here exactly as long as the scan flow;
  * leaving the capsule screen or logging out drops it.
  */
-class AppNavigationController(initialAuth: AuthUiState = AuthUiState.SignedOut) {
+class AppNavigationController(initialAuth: AuthUiState = AuthUiState.Resolving) {
 
     var authState: AuthUiState = initialAuth
         private set

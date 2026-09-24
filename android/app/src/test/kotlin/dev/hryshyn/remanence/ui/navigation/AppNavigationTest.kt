@@ -51,6 +51,28 @@ class AppNavigationTest {
     }
 
     @Test
+    fun resolvingStartsNeutralAndGuardsEveryDestination() {
+        val controller = AppNavigationController()
+        assertEquals(AuthUiState.Resolving, controller.authState)
+        assertEquals(AppDestination.Authentication, controller.current)
+        for (requested in listOf(
+            AppDestination.Home,
+            AppDestination.Create,
+            AppDestination.Scan,
+            AppDestination.Capsule("grant-x"),
+        )) {
+            controller.navigate(requested)
+            assertEquals(AppDestination.Authentication, controller.current)
+        }
+        // The first terminal publish unlocks normal navigation.
+        controller.updateAuth(
+            AuthUiState.Authenticated(userId = owner, handle = "mykola"),
+        )
+        controller.navigate(AppDestination.Home)
+        assertEquals(AppDestination.Home, controller.current)
+    }
+
+    @Test
     fun destinationInventoryAllowsOnlyAuthHomeCreateScanAndGrantGatedCapsule() {
         val inventory = RouteGuard.allDestinations().map { it.javaClass.simpleName }.toSet()
         assertEquals(setOf("Authentication", "Home", "Create", "Scan", "Capsule"), inventory)

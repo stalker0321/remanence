@@ -81,6 +81,7 @@
     <string name="hold_scan_again">сканировать ещё раз</string>
     <string name="hold_scan_stop">остановить сканирование</string>
     <string name="hold_scan_recognizing_body">пока оставьте открытку под рукой.</string>
+    <string name="hold_scan_still_hold">снято — телефон можно убрать.</string>
     <string name="hold_scan_opening_body">проверяем, можно ли открыть вложение.</string>
     <string name="hold_scan_material_online_body">загружаем вложение.</string>
     <string name="hold_chooser_title">какая это открытка?</string>

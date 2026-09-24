@@ -64,6 +64,13 @@ fun HomeScreen(
     publicEntry: Boolean = false,
     appLocale: AppLocale = AppLocale.SYSTEM,
     onLocaleSelected: (AppLocale) -> Unit = {},
+    /**
+     * Whether the recovery note shows. Defaults to the capability, but the
+     * caller passes the union with the synchronous auth state so the note is
+     * decided on the same frame the home surface appears — never popping in
+     * a frame later and shifting the action cards.
+     */
+    showRecoveryNote: Boolean = accountCapability == AccountCapabilityState.RecoveryRequired,
 ) {
     val enabled = accountCapability.actionsEnabled ||
         (publicEntry && accountCapability == AccountCapabilityState.NotAuthenticated)
@@ -72,7 +79,7 @@ fun HomeScreen(
     val narrowHome = LocalConfiguration.current.screenWidthDp < 330
     val scanFloor = if (narrowHome) 253.dp else 245.dp
     val createFloor = if (narrowHome) 237.dp else 222.dp
-    val recoveryRequired = accountCapability == AccountCapabilityState.RecoveryRequired
+    val recoveryRequired = showRecoveryNote
     if (compactHome) {
         Column(
             modifier = Modifier

@@ -50,6 +50,7 @@ import dev.hryshyn.remanence.ui.auth.RegistrationFormScreen
 import dev.hryshyn.remanence.ui.auth.RegistrationSubmitState
 import dev.hryshyn.remanence.ui.auth.RegistrationViewModel
 import dev.hryshyn.remanence.ui.home.BackendHealthUiState
+import dev.hryshyn.remanence.ui.home.AccountCapabilityState
 import dev.hryshyn.remanence.ui.home.HomeCapabilityViewModel
 import dev.hryshyn.remanence.ui.home.HomeScreen
 import dev.hryshyn.remanence.wiring.RemanenceViewModelFactory
@@ -214,6 +215,12 @@ private fun RootSurface(
         },
         homeContent = {
             val authenticated = authState as? AuthUiState.Authenticated
+            // The recovery note is decided on the same frame this surface
+            // appears: auth state is synchronous, capability resolves a
+            // frame later. Without the union the note would pop in late and
+            // shift the action cards after first paint.
+            val showRecoveryNote = authState == AuthUiState.RecoveryRequired ||
+                accountCapability == AccountCapabilityState.RecoveryRequired
             val home: @Composable () -> Unit = {
                 HomeScreen(
                     state = healthState, accountCapability = accountCapability,
@@ -222,6 +229,7 @@ private fun RootSurface(
                     onScan = { rootViewModel.requestHomeIntent(HomeIntent.OPEN) },
                     appLocale = appLocale,
                     onLocaleSelected = onLocaleSelected,
+                    showRecoveryNote = showRecoveryNote,
                 )
             }
             if (authenticated != null) {

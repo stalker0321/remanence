@@ -123,6 +123,48 @@ class RootViewModelTest {
     }
 
     @Test
+    fun coldRestoreHoldsResolvingUntilTerminalResultLands() = runTest {
+        val gate = CompletableDeferred<SessionState>()
+        val resolver = object : SessionStateResolver {
+            override suspend fun bootstrap(): SessionState = gate.await()
+            override suspend fun logout(): SessionState = SessionState.SignedOut
+        }
+        val vm = RootViewModel(resolver)
+
+        // While the session check is in flight: explicit resolving state on
+        // the guarded authentication surface — never a wrong terminal UI.
+        assertEquals(AuthUiState.Resolving, vm.authState.value)
+        assertEquals(AppDestination.Authentication, vm.destination.value)
+
+        gate.complete(SessionState.Active("user-9", "mykola", true, true))
+        advanceUntilIdle()
+
+        assertEquals(AuthUiState.Authenticated(userId = "user-9", handle = "mykola"), vm.authState.value)
+        assertEquals(AppDestination.Home, vm.destination.value)
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+    }
+
+    @Test
+    fun coldStartWithoutSessionResolvesFromResolvingToSignedOut() = runTest {
+        val gate = CompletableDeferred<SessionState>()
+        val resolver = object : SessionStateResolver {
+            override suspend fun bootstrap(): SessionState = gate.await()
+            override suspend fun logout(): SessionState = SessionState.SignedOut
+        }
+        val vm = RootViewModel(resolver)
+
+        assertEquals(AuthUiState.Resolving, vm.authState.value)
+
+        gate.complete(SessionState.SignedOut)
+        advanceUntilIdle()
+
+        // Logged-out startup lands on the auth surface with no home flash.
+        assertEquals(AuthUiState.SignedOut, vm.authState.value)
+        assertEquals(AppDestination.Authentication, vm.destination.value)
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+    }
+
+    @Test
     fun missingKeysOnColdStartSurfacesRecoveryRequired() = runTest {
         val vm = RootViewModel(FixedOutcomeResolver(SessionState.RecoveryRequired))
 
@@ -233,7 +275,11 @@ class RootViewModelTest {
         assertTrue(resolver.secondEntered.isCompleted)
         assertEquals(2, resolver.calls)
         assertEquals(1, resolver.maxConcurrent)
-        assertEquals(AuthUiState.SignedOut, vm.authState.value)
+        // The stale first iteration published nothing: initial proof is
+        // still pending, so the explicit resolving state (never a wrong
+        // terminal) shows on the guarded authentication surface.
+        assertEquals(AuthUiState.Resolving, vm.authState.value)
+        assertEquals(AppDestination.Authentication, vm.destination.value)
 
         resolver.secondGate.complete(Unit)
         advanceUntilIdle()

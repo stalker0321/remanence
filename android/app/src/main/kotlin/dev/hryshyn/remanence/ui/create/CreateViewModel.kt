@@ -218,8 +218,8 @@ class CreateViewModel(
     val noteEditor = NoteEditorState().also { it.onEdit = { invalidateGeneratorForNoteEdit() } }
 
     /**
-     * S2b-sender: the DEBUG-only picker selection that becomes the sealed
-     * track snapshot at publish time. Null = no snapshot (v1 and
+     * S2b-sender: the picker selection that becomes the sealed
+     * track snapshot at publish time (release flow since S4). Null = no snapshot (v1 and
      * snapshot-less v2 flows unchanged). Written only from the debug
      * picker bridge until end-to-end works; release can never select.
      */
@@ -433,7 +433,7 @@ class CreateViewModel(
         pickerVm.reset()
         photoSelection.clear()
         noteEditor.reset()
-        // S2b-sender: a DEBUG picker selection belongs to exactly one
+        // S2b-sender: a picker selection belongs to exactly one
         // session; a new epoch/owner must never inherit it (placed after
         // the same-epoch early return above, so rotation keeps it).
         // Photo/note edits intentionally do NOT clear it: music is
@@ -1370,7 +1370,7 @@ class CreateViewModel(
             val photoWidthsPx: List<Int> = boundPhotos.photos.map { it.widthPx }
             val photoHeightsPx: List<Int> = boundPhotos.photos.map { it.heightPx }
             ensureCurrent()
-            // S2b-sender: the DEBUG-only picker selection becomes the sealed
+            // S2b-sender: the picker selection becomes the sealed
             // snapshot. An invalid selection fails publishing — never a
             // silent drop and never an unsealed attachment.
             val trackSnapshot = musicSelection.value?.let { hit ->
@@ -1416,7 +1416,7 @@ class CreateViewModel(
                         // ADR-018: only the session-frozen, projection-verified
                         // selection is sealed; contentIds are authored order.
                         // S2b-sender: plus the validated track snapshot, if
-                        // the DEBUG picker selected one (null otherwise).
+                        // the picker selected one (null otherwise).
                         expression = CapsuleExpressionArtifact(
                             candidateId = frozenSelection.candidateId,
                             contentIds = frozenSelection.expression.input.photos.map { it.contentId },
@@ -1535,7 +1535,7 @@ class CreateViewModel(
         pickerVm.reset()
         photoSelection.clear()
         noteEditor.reset()
-        // S2b-sender: leaving the surface drops the DEBUG picker selection
+        // S2b-sender: leaving the surface drops the picker selection
         // with every other content state (see beginSession for the rationale).
         _musicSelection.value = null
         frontAttempt.reset()

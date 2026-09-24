@@ -18,6 +18,7 @@ from remanence.music.search.meilisearch import (
     MeilisearchMusicSearch,
     build_search_request_payload,
 )
+from remanence.music.search.staging import PostgresStagingSearch
 
 __all__ = [
     "CANONICAL_RANK_DEFAULT",
@@ -29,6 +30,7 @@ __all__ = [
     "InMemoryMusicSearch",
     "MeilisearchConfig",
     "MeilisearchMusicSearch",
+    "PostgresStagingSearch",
     "build_search_document",
     "build_search_request_payload",
     "canonical_rank",

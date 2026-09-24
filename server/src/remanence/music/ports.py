@@ -16,6 +16,10 @@ from remanence.music.domain import TrackSearchResult
 SEARCH_QUERY_MAX_LENGTH = 100
 SEARCH_LIMIT_DEFAULT = 10
 SEARCH_LIMIT_MAX = 20
+# Offset-after-ranking pages are O(n log n) per query: fine for the
+# staging-sample scale, revisit (keyset/cursor) before 1M+ rows.
+SEARCH_OFFSET_DEFAULT = 0
+SEARCH_OFFSET_MAX = 200
 
 
 class MusicSearchError(RuntimeError):
@@ -27,6 +31,22 @@ class MusicSearchUnavailableError(MusicSearchError):
 
 
 class MusicSearchPort(Protocol):
-    def search(self, query: str, limit: int) -> list[TrackSearchResult]:
-        """Return up to ``limit`` hits for ``query`` (sync, thread-safe)."""
+    def search(
+        self, query: str, limit: int, offset: int = 0
+    ) -> list[TrackSearchResult]:
+        """Return one ranked page: up to ``limit`` hits past ``offset``.
+
+        ``offset`` defaults to 0, so existing two-argument callers are
+        unaffected. Ranking (and therefore page boundaries) must be
+        deterministic for stable pagination.
+        """
+
+    def search_with_total(
+        self, query: str, limit: int, offset: int = 0
+    ) -> tuple[list[TrackSearchResult], int]:
+        """Ranked page plus exact total match count (for endpoint pagination).
+
+        Same bounds and errors as :meth:`search`. ``total`` counts every
+        match, not just the returned page.
+        """
         ...

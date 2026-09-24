@@ -32,7 +32,12 @@ import urllib.request
 from dataclasses import dataclass
 
 from remanence.music.domain import TrackSearchResult, normalize_text
-from remanence.music.ports import SEARCH_LIMIT_MAX, MusicSearchError, MusicSearchUnavailableError
+from remanence.music.ports import (
+    SEARCH_LIMIT_MAX,
+    SEARCH_OFFSET_MAX,
+    MusicSearchError,
+    MusicSearchUnavailableError,
+)
 from remanence.music.search.document import (
     MEILISEARCH_INDEX_UID,
     SEARCH_ATTRIBUTES_TO_RETRIEVE,
@@ -89,22 +94,25 @@ def _names_variant(query: str) -> bool:
     return any(tok in tokens for tok in VARIANT_TOKENS)
 
 
-def build_search_request_payload(query: str, limit: int) -> dict:
+def build_search_request_payload(query: str, limit: int, offset: int = 0) -> dict:
     """Build the live Meilisearch search request body (R1 contract).
 
     Always requests the explicit field allow-list. Applies
     ``canonicalRank:asc`` sort for bare queries so canonical/default
     recordings outrank live/remix/cover variants; lifts the sort when the
-    query names an explicit variant.
+    query names an explicit variant. ``offset`` is passed through natively.
     """
     if type(query) is not str or not query.strip():
         raise MusicSearchError("invalid query")
     if type(limit) is not int or not 1 <= limit <= SEARCH_LIMIT_MAX:
         raise MusicSearchError("invalid limit")
+    if type(offset) is not int or not 0 <= offset <= SEARCH_OFFSET_MAX:
+        raise MusicSearchError("invalid offset")
     cleaned = query.strip()
     payload: dict = {
         "q": cleaned,
         "limit": limit,
+        "offset": offset,
         "attributesToRetrieve": list(SEARCH_ATTRIBUTES_TO_RETRIEVE),
     }
     if not _names_variant(cleaned):
@@ -167,10 +175,20 @@ class MeilisearchMusicSearch:
             raise MusicSearchError("music search failed")
         return decoded
 
-    def search(self, query: str, limit: int) -> list[TrackSearchResult]:
-        payload = build_search_request_payload(query, limit)
+    def search(self, query: str, limit: int, offset: int = 0) -> list[TrackSearchResult]:
+        """Port contract: one ranked page (see ``search_with_total``)."""
+        hits, _total = self.search_with_total(query, limit, offset)
+        return hits
+
+    def search_with_total(
+        self, query: str, limit: int, offset: int = 0
+    ) -> tuple[list[TrackSearchResult], int]:
+        payload = build_search_request_payload(query, limit, offset)
         decoded = self._post(self._search_url(), payload)
-        return self.parse_search_response(decoded, limit=limit)
+        total = decoded.get("estimatedTotalHits")
+        if type(total) is not int or total < 0:
+            raise MusicSearchError("music search failed")
+        return self.parse_search_response(decoded, limit=limit), total
 
     # -- Test/ops index helpers (push only; ingestion itself is deferred) --
 

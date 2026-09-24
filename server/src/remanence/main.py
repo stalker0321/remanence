@@ -18,6 +18,7 @@ from remanence.api.dependencies import (
 from remanence.api.directory import router as directory_router
 from remanence.api.health import router as health_router
 from remanence.api.capsules import router as capsules_router
+from remanence.api.music import router as music_router
 from remanence.api.problems import RequestIdMiddleware, problem_response
 from remanence.api.users import router as users_router
 from remanence.capsules.upload_reservations import (
@@ -25,6 +26,7 @@ from remanence.capsules.upload_reservations import (
     build_upload_reservation_manager,
 )
 from remanence.db.session import build_engine, build_session_factory
+from remanence.music.search.in_memory import InMemoryMusicSearch
 from remanence.settings import AppMode, Settings
 from remanence.storage import BlobStore, CiphertextStager, LocalFileBlobStore
 
@@ -35,9 +37,17 @@ def create_app(
     blob_store: BlobStore | None = None,
     ciphertext_stager: CiphertextStager | None = None,
     upload_reservations: UploadReservationManager | None = None,
+    music_search=None,
 ) -> FastAPI:
     resolved = Settings() if settings is None else settings
     engine: Engine | None = None
+    if resolved.mode is AppMode.PROD and isinstance(music_search, InMemoryMusicSearch):
+        # R2: close the fixture bypass at the single choke point. Neither
+        # build_fixture_music_search() with a forgotten mode nor a directly
+        # constructed InMemoryMusicSearch may silently serve fixture tracks
+        # in production. Unwired PROD (None) stays fail-closed 503 at the
+        # endpoint; only a real port (e.g. MeilisearchMusicSearch) is allowed.
+        raise ValueError("fixture music search must never be wired in PROD")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> Iterator[None]:
@@ -71,6 +81,8 @@ def create_app(
         app.state.blob_store = blob_store
     if ciphertext_stager is not None:
         app.state.ciphertext_stager = ciphertext_stager
+    if music_search is not None:
+        app.state.music_search = music_search
 
     @app.exception_handler(DatabaseUnavailableError)
     def _database_unavailable(request: Request, exc: DatabaseUnavailableError) -> JSONResponse:
@@ -111,4 +123,5 @@ def create_app(
     app.include_router(users_router)
     app.include_router(directory_router)
     app.include_router(capsules_router)
+    app.include_router(music_router)
     return app

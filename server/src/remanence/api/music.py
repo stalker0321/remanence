@@ -10,13 +10,21 @@ carries the ranked page plus the exact ``total`` match count and the
 echoed ``offset``; omitting ``offset`` preserves the previous
 offset-0 behavior. Backend outages — including a search backend that was
 never wired (F1 fail-closed: no ``200 []`` mislead) — yield
-``INTERNAL_UNAVAILABLE`` (503, retryable).
+``INTERNAL_UNAVAILABLE`` (503, retryable). Authenticated per-user rate
+limit (60/min, burst 10) yields ``RATE_LIMITED`` (429, retryable,
+``Retry-After``); unauthenticated requests fail 401 before rate limiting.
+Overly broad staging queries fail closed 503 rather than materializing
+unbounded candidate sets.
 """
 
 from __future__ import annotations
 
+import math
 import re
+import threading
+import time
 import urllib.parse
+import uuid
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
@@ -41,6 +49,82 @@ router = APIRouter()
 
 _ALLOWED_QUERY_KEYS = frozenset({"q", "limit", "offset"})
 _LIMIT_RE = re.compile(r"^[0-9]+$")
+
+# Narrow per-user rate limit for the public authenticated search route.
+# Token bucket: 60 requests/minute sustained, burst 10. Process-local only
+# (no Redis); keyed on the authenticated principal (no IP fallback — the
+# route is authenticated, so unauthenticated requests fail 401 in the auth
+# dependency before ever reaching the limiter). Invalid queries and unwired
+# backends (422/503) do not consume budget: the limiter runs after query
+# parsing and the disabled check, so only valid requests to a wired backend
+# are counted. Bounded memory: at most _RATE_LIMIT_MAX_USERS entries;
+# idle/oldest entries are evicted (see _evict_if_needed).
+_RATE_LIMIT_PER_MINUTE = 60
+_RATE_LIMIT_BURST = 10
+_RATE_LIMIT_MAX_USERS = 10_000
+_RATE_LIMIT_IDLE_EVICT_SECONDS = 600.0
+_RATE_LIMIT_REFILL_PER_SECOND = _RATE_LIMIT_PER_MINUTE / 60.0
+
+_rate_limit_lock = threading.Lock()
+# user_id -> [tokens, last_refill_monotonic, last_seen_monotonic]
+_rate_limit_buckets: dict[uuid.UUID, list[float]] = {}
+
+
+def reset_music_search_rate_limiter() -> None:
+    """Clear all rate-limit state (tests only)."""
+    with _rate_limit_lock:
+        _rate_limit_buckets.clear()
+
+
+def _evict_if_needed(now: float) -> None:
+    """Bound memory: drop idle entries first, then oldest-seen."""
+    if len(_rate_limit_buckets) <= _RATE_LIMIT_MAX_USERS:
+        return
+    idle_cutoff = now - _RATE_LIMIT_IDLE_EVICT_SECONDS
+    idle = [
+        key for key, bucket in _rate_limit_buckets.items() if bucket[2] < idle_cutoff
+    ]
+    for key in idle:
+        del _rate_limit_buckets[key]
+    if len(_rate_limit_buckets) <= _RATE_LIMIT_MAX_USERS:
+        return
+    overflow = len(_rate_limit_buckets) - _RATE_LIMIT_MAX_USERS
+    oldest = sorted(_rate_limit_buckets.items(), key=lambda item: item[1][2])
+    for key, _ in oldest[:overflow]:
+        del _rate_limit_buckets[key]
+
+
+def check_music_search_rate_limit(user_id: uuid.UUID) -> tuple[bool, int]:
+    """Consume one token for ``user_id``.
+
+    Returns ``(allowed, retry_after_seconds)``. ``retry_after`` is 0 when
+    allowed, otherwise >= 1 (ceiled time until one token refills).
+    """
+    now = time.monotonic()
+    with _rate_limit_lock:
+        bucket = _rate_limit_buckets.get(user_id)
+        if bucket is None:
+            _rate_limit_buckets[user_id] = [
+                float(_RATE_LIMIT_BURST - 1),
+                now,
+                now,
+            ]
+            _evict_if_needed(now)
+            return True, 0
+        tokens, last_refill, _ = bucket
+        elapsed = max(0.0, now - last_refill)
+        tokens = min(float(_RATE_LIMIT_BURST), tokens + elapsed * _RATE_LIMIT_REFILL_PER_SECOND)
+        if tokens >= 1.0:
+            bucket[0] = tokens - 1.0
+            bucket[1] = now
+            bucket[2] = now
+            return True, 0
+        deficit = 1.0 - tokens
+        retry_after = max(1, math.ceil(deficit / _RATE_LIMIT_REFILL_PER_SECOND))
+        bucket[1] = now
+        bucket[2] = now
+        _evict_if_needed(now)
+        return False, retry_after
 
 
 def get_music_search(request: Request):
@@ -113,13 +197,19 @@ def search_music(
     principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
     search=Depends(get_music_search),
 ) -> MusicSearchResponse | JSONResponse:
-    _ = principal
     try:
         query, limit, offset = parse_music_search_query(request)
     except ValueError:
         return problem_response(request, "VALIDATION_FAILED")
     if search is None:
         return problem_response(request, "INTERNAL_UNAVAILABLE")
+    allowed, retry_after = check_music_search_rate_limit(principal.user_id)
+    if not allowed:
+        return problem_response(
+            request,
+            "RATE_LIMITED",
+            extra_headers={"Retry-After": str(retry_after)},
+        )
     try:
         hits, total = search.search_with_total(query, limit, offset)
     except MusicSearchUnavailableError:

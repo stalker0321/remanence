@@ -12,10 +12,11 @@ deterministic. MBID-safe by construction: one track row yields exactly
 one hit; external identities are never read, so ISRC collisions cannot
 merge or duplicate results.
 
-Scale note: SQL prefilters candidates, Python ranks them — O(n log n)
-per query, ample for the ~10k-row sample. Production scale (1M+ rows)
-wants keyset pagination and/or full-text search instead; offset is
-capped accordingly.
+Scale note: SQL prefilters candidates (at most STAGING_SEARCH_CANDIDATE_CAP
+IDs — broader queries fail closed 503 instead of materializing unbounded
+sets), Python ranks them — O(n log n) per query, ample for the ~10k-row
+sample. Production scale (1M+ rows) wants keyset pagination and/or
+full-text search instead; offset is capped accordingly.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from remanence.music.ports import (
     SEARCH_LIMIT_MAX,
     SEARCH_OFFSET_MAX,
     MusicSearchError,
+    MusicSearchUnavailableError,
 )
 from remanence.music.search.document import VARIANT_TOKENS
 from remanence.music.staging.models import (
@@ -38,6 +40,14 @@ from remanence.music.staging.models import (
     StagedTrack,
     StagedTrackArtist,
 )
+
+# Public-endpoint safety gate for the 111k-row staging sample: the ranker
+# materializes candidates in Python (O(n log n)), so the SQL prefilter may
+# return at most this many IDs per query. More matches → fail closed with
+# MusicSearchUnavailableError (endpoint 503, retryable), never a misleading
+# truncated page/total. Fetch one extra row to detect overflow exactly.
+STAGING_SEARCH_CANDIDATE_CAP = 5000
+_STAGING_SEARCH_FETCH_LIMIT = STAGING_SEARCH_CANDIDATE_CAP + 1
 
 
 def _tokens(query: str) -> tuple[str, ...]:
@@ -80,6 +90,11 @@ class PostgresStagingSearch:
             raise MusicSearchError("invalid query")
         with self._sessions() as session:
             candidate_ids = self._prefilter_ids(session, tokens)
+            if len(candidate_ids) > STAGING_SEARCH_CANDIDATE_CAP:
+                # Too broad (e.g. q='a' over 111k rows): refuse rather than
+                # materialize/rank an unbounded set or return a truncated
+                # total. Caller narrows the query and retries.
+                raise MusicSearchUnavailableError("candidate set too broad")
             if not candidate_ids:
                 return [], 0
             tracks = self._load_tracks(session, candidate_ids)
@@ -120,6 +135,7 @@ class PostgresStagingSearch:
             )
             .join(StagedArtist, StagedArtist.id == StagedTrackArtist.artist_id)
             .where(and_(*clauses))
+            .limit(_STAGING_SEARCH_FETCH_LIMIT)
         )
         return list(session.scalars(statement).all())
 

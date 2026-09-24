@@ -26,8 +26,10 @@ from remanence.capsules.upload_reservations import (
     build_upload_reservation_manager,
 )
 from remanence.db.session import build_engine, build_session_factory
+from remanence.music.search.composition import build_music_search
 from remanence.music.search.in_memory import InMemoryMusicSearch
-from remanence.settings import AppMode, Settings
+from remanence.music.search.staging import PostgresStagingSearch
+from remanence.settings import AppMode, MusicSearchBackend, Settings
 from remanence.storage import BlobStore, CiphertextStager, LocalFileBlobStore
 
 
@@ -48,15 +50,60 @@ def create_app(
         # in production. Unwired PROD (None) stays fail-closed 503 at the
         # endpoint; only a real port (e.g. MeilisearchMusicSearch) is allowed.
         raise ValueError("fixture music search must never be wired in PROD")
+    if resolved.mode is AppMode.PROD and isinstance(
+        music_search, PostgresStagingSearch
+    ):
+        # M-S1: staging is a DEV/TEST sample harness, never a PROD catalog.
+        raise ValueError("staging music search must never be wired in PROD")
+    if (
+        resolved.mode is AppMode.PROD
+        and resolved.music_search_backend is MusicSearchBackend.POSTGRES_STAGING
+    ):
+        # M-S1: explicit refusal even when unwired — PROD config must fail
+        # at startup, never silently serve staging or fall back to 503.
+        raise ValueError("staging music search backend is DEV/TEST only, never PROD")
+    if (
+        music_search is None
+        and resolved.music_search_backend is MusicSearchBackend.POSTGRES_STAGING
+        and session_factory is not None
+    ):
+        # M-S1 opt-in composition (explicit factory, e.g. tests): DEV/TEST
+        # only, PROD already refused above. DISABLED (default) stays unwired
+        # → endpoint fail-closed 503. Live DEV (create_app() with no factory
+        # param) defers to lifespan below, which wires from the newly built
+        # app.state.session_factory.
+        music_search = build_music_search(resolved, session_factory)
+    if (
+        music_search is None
+        and resolved.music_search_backend is MusicSearchBackend.POSTGRES_STAGING
+        and session_factory is None
+        and resolved.mode is AppMode.TEST
+    ):
+        # TEST without a factory is invalid config: fail closed now rather
+        # than serving a silent 503. DEV defers to lifespan (live entrypoint
+        # builds its factory there); PROD already refused above.
+        build_music_search(resolved, None)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> Iterator[None]:
-        nonlocal engine
+        nonlocal engine, music_search
         if session_factory is not None:
             app.state.session_factory = session_factory
         elif resolved.mode is not AppMode.TEST:
             engine = build_engine(resolved)
             app.state.session_factory = build_session_factory(engine)
+        if (
+            music_search is None
+            and resolved.music_search_backend is MusicSearchBackend.POSTGRES_STAGING
+        ):
+            # DEV runtime composition for the live entrypoint
+            # (uvicorn remanence.main:create_app --factory, no factory param):
+            # wire from the newly built app.state.session_factory only.
+            # PROD stays refused; missing factory fails closed (no listen
+            # with half-wired search).
+            live_factory = getattr(app.state, "session_factory", None)
+            music_search = build_music_search(resolved, live_factory)
+            app.state.music_search = music_search
         if blob_store is not None:
             app.state.blob_store = blob_store
         elif resolved.mode is not AppMode.TEST and resolved.blob_root is not None:

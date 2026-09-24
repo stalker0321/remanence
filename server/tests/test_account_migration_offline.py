@@ -154,13 +154,14 @@ def offline_config(monkeypatch: pytest.MonkeyPatch) -> Iterator[Config]:
 
 def test_revision_chain_reachable() -> None:
     script = ScriptDirectory(str(MIGRATIONS_DIR))
-    assert script.get_heads() == ["0007_m2_f3_first_open_claim"]
+    assert script.get_heads() == ["0008_music_staging"]
     assert script.get_revision("0001_m0_baseline").revision == "0001_m0_baseline"
     assert script.get_revision("0002_m1_accounts").down_revision == "0001_m0_baseline"
     assert script.get_revision("0003_m2_capsule_routing").down_revision == "0002_m1_accounts"
     assert script.get_revision("0004_r1_publication_order").down_revision == "0003_m2_capsule_routing"
     assert script.get_revision("0005_m2_f3_capsule_revocation").down_revision == "0004_r1_publication_order"
     assert script.get_revision("0007_m2_f3_first_open_claim").down_revision == "0006_m2_f3_tombstone_feed"
+    assert script.get_revision("0008_music_staging").down_revision == "0007_m2_f3_first_open_claim"
 
 
 def test_upgrade_emits_full_schema_sql(offline_config: Config) -> None:

@@ -126,7 +126,8 @@ def test_search_maps_hits_to_own_ids(monkeypatch) -> None:
                 "durationMs": 253000,
                 "hasArtwork": True,
             }
-        ]
+        ],
+        "estimatedTotalHits": 1,
     }
     _stub_urlopen(monkeypatch, payload, captured)
     adapter = MeilisearchMusicSearch(MeilisearchConfig(api_key="test-key"))
@@ -143,11 +144,58 @@ def test_search_maps_hits_to_own_ids(monkeypatch) -> None:
     assert str(hits[0].id) == "be30e36b-1111-4111-8111-000000000001"
 
 
+def test_search_with_total_returns_estimated_total(monkeypatch) -> None:
+    captured: dict = {}
+    _stub_urlopen(
+        monkeypatch,
+        {
+            "hits": [
+                {
+                    "id": "be30e36b-1111-4111-8111-000000000001",
+                    "title": "505",
+                    "artists": ["Arctic Monkeys"],
+                }
+            ],
+            "estimatedTotalHits": 42,
+        },
+        captured,
+    )
+    adapter = MeilisearchMusicSearch()
+    hits, total = adapter.search_with_total("505", 10, 2)
+    assert captured["payload"]["offset"] == 2
+    assert len(hits) == 1 and total == 42
+
+
+def test_missing_or_invalid_total_rejected(monkeypatch) -> None:
+    captured: dict = {}
+    hit = {
+        "id": "be30e36b-1111-4111-8111-000000000001",
+        "title": "505",
+        "artists": ["Arctic Monkeys"],
+    }
+    _stub_urlopen(monkeypatch, {"hits": [hit]}, captured)
+    with pytest.raises(MusicSearchError):
+        MeilisearchMusicSearch().search_with_total("505", 10)
+    _stub_urlopen(monkeypatch, {"hits": [hit], "estimatedTotalHits": -1}, captured)
+    with pytest.raises(MusicSearchError):
+        MeilisearchMusicSearch().search_with_total("505", 10)
+    _stub_urlopen(monkeypatch, {"hits": [hit], "estimatedTotalHits": "7"}, captured)
+    with pytest.raises(MusicSearchError):
+        MeilisearchMusicSearch().search_with_total("505", 10)
+    with pytest.raises(MusicSearchError):
+        build_search_request_payload("505", 10, offset=201)
+    with pytest.raises(MusicSearchError):
+        build_search_request_payload("505", 10, offset=-1)
+
+
 def test_search_rejects_provider_id_in_id_slot(monkeypatch) -> None:
     captured: dict = {}
     _stub_urlopen(
         monkeypatch,
-        {"hits": [{"id": "not-a-uuid", "title": "505", "artists": ["Arctic Monkeys"]}]},
+        {
+            "hits": [{"id": "not-a-uuid", "title": "505", "artists": ["Arctic Monkeys"]}],
+            "estimatedTotalHits": 1,
+        },
         captured,
     )
     adapter = MeilisearchMusicSearch()

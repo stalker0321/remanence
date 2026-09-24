@@ -12,7 +12,7 @@ from sqlalchemy.engine import make_url
 
 _ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 _BASELINE = "0001_m0_baseline"
-_HEAD = "0007_m2_f3_first_open_claim"
+_HEAD = "0008_music_staging"
 _HEAD_TABLES = {
     "alembic_version",
     "users",

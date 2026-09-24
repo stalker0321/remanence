@@ -14,6 +14,7 @@ from remanence.music.domain import MusicTrack, TrackSearchResult, normalize_text
 from remanence.music.ports import (
     SEARCH_LIMIT_DEFAULT,
     SEARCH_LIMIT_MAX,
+    SEARCH_OFFSET_MAX,
     MusicSearchError,
 )
 from remanence.music.search.document import VARIANT_TOKENS
@@ -39,11 +40,20 @@ class InMemoryMusicSearch:
     def __len__(self) -> int:
         return len(self._tracks)
 
-    def search(self, query: str, limit: int) -> list[TrackSearchResult]:
+    def search(self, query: str, limit: int, offset: int = 0) -> list[TrackSearchResult]:
+        """Port contract: one ranked page (see ``search_with_total``)."""
+        hits, _total = self.search_with_total(query, limit, offset)
+        return hits
+
+    def search_with_total(
+        self, query: str, limit: int, offset: int = 0
+    ) -> tuple[list[TrackSearchResult], int]:
         if type(query) is not str or not query.strip():
             raise MusicSearchError("invalid query")
         if type(limit) is not int or not 1 <= limit <= SEARCH_LIMIT_MAX:
             raise MusicSearchError("invalid limit")
+        if type(offset) is not int or not 0 <= offset <= SEARCH_OFFSET_MAX:
+            raise MusicSearchError("invalid offset")
         wants_variant = any(tok in _tokens(query) for tok in _VARIANT_TOKENS)
         scored: list[tuple[tuple[int, int, int, int], MusicTrack]] = []
         for track in self._tracks:
@@ -57,7 +67,8 @@ class InMemoryMusicSearch:
             scored.append(((exact, prefix, canonical_boost, variant_penalty), track))
         # Higher is better for the first three; variant_penalty is negative.
         scored.sort(key=lambda item: item[0], reverse=True)
-        return [TrackSearchResult.from_track(t) for _, t in scored[:limit]]
+        ranked = [TrackSearchResult.from_track(t) for _, t in scored]
+        return ranked[offset : offset + limit], len(ranked)
 
 
 def _score(track: MusicTrack, query: str) -> tuple[int, int, int, int] | None:

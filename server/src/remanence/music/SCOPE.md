@@ -31,6 +31,37 @@ Authoritative architecture: `ARCHITECTURE-v1.md` in
   capsule `TrackSnapshot` wiring (sections 14–15), service registry,
   observability (section 36).
 
+## Importer sample stage (uncommitted slice on top of the above)
+
+- `music/ingestion/`: streaming `mbdump.tar.bz2` COPY parser (allowlisted
+  members only, single tar pass per call, hard read + retention caps),
+  join + normalize (`recording` -> `artist_credit_name` -> `artist`, ISRC
+  attach), deterministic `RemanenceTrackId = UUIDv5(namespace,
+  "musicbrainz:recording:<mbid>")`, and five-pass `run_sample`
+  (hash-ranked artist top-N -> candidate credits (capped count/bytes) ->
+  full candidate rows -> selected-credit recordings -> kept-id ISRCs,
+  each filtered while streaming) with explicit `SampleCoverage`
+  metadata (`sample_method: hash-sha256-ascending`, uniform over the id
+  keyspace, NOT claimed representative). Member byte caps stay mandatory:
+  raise only to a `probe_member_sizes` measured value (guarded raise),
+  never disable.
+- Synthetic COPY text fixtures + tar built in-test only. No Postgres
+  schema, no Meili writes, no API/proto/capsule changes, no real download.
+- Sample JSONL v2 (`ingestion/sample_jsonl.py`, uncommitted): strict
+  superset adding `artist_mbids` parallel to `artists` plus nullable
+  `duration_ms`; deterministic encoding, atomic budgeted writes, no
+  name-derived identity anywhere on the path.
+- Staging schema + loader (`music/staging/`, uncommitted, repaired):
+  artist rows keyed by authoritative `artist_mbids` via
+  `UUIDv5(namespace, "musicbrainz:artist:<mbid>")` — never by display
+  name. Homonyms stay separate rows; credits ordered by position;
+  duration nullable (never 0); ISRC collisions stored unmerged; v1 rows
+  lacking `artist_mbids` are explicitly rejected. Migration
+  `0008_music_staging` authored code-only (never applied); loader CLI
+  `scripts/music_load_staging.py` defaults to dry-run, verifies the v2
+  bundle, and only writes with explicit `--execute` + Postgres URL.
+  No live DB touched.
+
 ## Non-claim: NOT a working real catalog
 
 This slice MUST NOT be described as a working real catalog. DoD scenario

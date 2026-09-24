@@ -43,3 +43,12 @@ class MusicSearchResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     results: list[MusicSearchResultItem]
+    total: int
+    offset: int
+
+    @field_validator("total", "offset")
+    @classmethod
+    def _non_negative_page(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("invalid page")
+        return value

@@ -6,22 +6,27 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.hryshyn.remanence.R
 import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
 import dev.hryshyn.remanence.core.model.GeneratorExpression
+import dev.hryshyn.remanence.ui.capsule.music.StreamingService
+import dev.hryshyn.remanence.ui.capsule.music.openTrackUrl
 import dev.hryshyn.remanence.ui.create.GeneratorBer1Preview
 import dev.hryshyn.remanence.ui.create.GeneratorBer1Renderer
 import dev.hryshyn.remanence.ui.hold.HoldTextButton
@@ -109,9 +114,13 @@ internal fun Ber1PresentationHost(
             )
         }
         state.track?.let { track ->
+            val context = LocalContext.current
             TrackSnapshotCard(
                 track = track,
                 modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
+                onOpenService = { service ->
+                    context.openTrackUrl(service.searchUrl(track.title, track.artistDisplay))
+                },
             )
         }
         HoldTextButton(
@@ -132,7 +141,15 @@ internal fun Ber1PresentationHost(
 internal fun TrackSnapshotCard(
     track: CapsuleTrackSnapshotV1,
     modifier: Modifier = Modifier,
+    /**
+     * S3: null hides the Listen action (pre-S3 card shape). Non-null opens
+     * the service picker; the boolean result reports whether an external
+     * handler was found.
+     */
+    onOpenService: ((StreamingService) -> Boolean)? = null,
 ) {
+    var pickerOpen by remember { mutableStateOf(false) }
+    var noHandler by remember { mutableStateOf(false) }
     Column(modifier = modifier.testTag("capsule_track_card")) {
         Text(
             text = track.title,
@@ -151,6 +168,51 @@ internal fun TrackSnapshotCard(
                 modifier = Modifier.testTag("capsule_track_version"),
             )
         }
+        if (onOpenService != null) {
+            HoldTextButton(
+                onClick = { pickerOpen = true; noHandler = false },
+                modifier = Modifier.testTag("capsule_track_open"),
+            ) { Text("Listen") }
+        }
+        if (noHandler) {
+            Text(
+                text = "No app can open streaming links on this device.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.testTag("capsule_track_no_browser"),
+            )
+        }
+    }
+    if (pickerOpen && onOpenService != null) {
+        AlertDialog(
+            onDismissRequest = { pickerOpen = false },
+            title = { Text("Open track search in") },
+            text = {
+                Column {
+                    StreamingService.entries.forEach { service ->
+                        HoldTextButton(
+                            onClick = {
+                                // Fail-closed bridge: any builder/launcher
+                                // throw (e.g. oversized text) becomes the
+                                // inline no-handler notice, never a crash in
+                                // the click handler.
+                                val opened = runCatching { onOpenService(service) }.getOrDefault(false)
+                                pickerOpen = false
+                                noHandler = !opened
+                            },
+                            modifier = Modifier.testTag(service.testTag),
+                        ) { Text(service.displayName) }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                HoldTextButton(
+                    onClick = { pickerOpen = false },
+                    modifier = Modifier.testTag("capsule_track_open_dismiss"),
+                ) { Text(stringResource(R.string.hold_close)) }
+            },
+        )
     }
 }
 

@@ -1,6 +1,7 @@
 package dev.hryshyn.remanence.ui.capsule
 
 import dev.hryshyn.remanence.core.crypto.ExpressionReceiverAdmission
+import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
 
 /**
  * Reader over the exact snapshot retained by the incoming presentation
@@ -23,6 +24,11 @@ internal class IncomingPresentationContentSource(
     override suspend fun noteText(capsuleId: String): String? {
         require(capsuleId == prepared.capsuleId.toRestString()) { "capsule binding mismatch" }
         return prepared.noteText()
+    }
+
+    override suspend fun trackSnapshot(capsuleId: String): CapsuleTrackSnapshotV1? {
+        require(capsuleId == prepared.capsuleId.toRestString()) { "capsule binding mismatch" }
+        return prepared.trackSnapshot()
     }
 
     override suspend fun presentationAdmission(capsuleId: String): CapsulePresentationAdmission {

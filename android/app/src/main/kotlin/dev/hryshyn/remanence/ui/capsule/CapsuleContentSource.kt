@@ -17,6 +17,7 @@ import dev.hryshyn.remanence.core.model.ArtifactAadInput
 import dev.hryshyn.remanence.core.model.BlobId
 import dev.hryshyn.remanence.core.model.CapsuleArtifactKind
 import dev.hryshyn.remanence.core.model.CapsuleId
+import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.RecipientEnvelopeContextInput
 import dev.hryshyn.remanence.core.model.UserId
@@ -161,6 +162,10 @@ class CapsuleContentSource(
 
     /** Decrypts the optional note from the content manifest. */
     override suspend fun noteText(capsuleId: String): String? = decryptContent(capsuleId)?.note
+
+    /** Decrypts the optional sealed track snapshot (v2-only) from the content manifest. */
+    override suspend fun trackSnapshot(capsuleId: String): CapsuleTrackSnapshotV1? =
+        decryptContent(capsuleId)?.trackSnapshot
 
     /**
      * ADR-018: a v2 outbox capsule (e.g. a self-send) renders its sealed

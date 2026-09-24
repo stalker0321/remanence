@@ -14,6 +14,11 @@ class AppMode(StrEnum):
     PROD = "prod"
 
 
+class MusicSearchBackend(StrEnum):
+    DISABLED = "disabled"
+    POSTGRES_STAGING = "postgres_staging"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="REMANENCE_",
@@ -27,6 +32,7 @@ class Settings(BaseSettings):
     port: int = Field(default=8000, ge=1, le=65535)
     database_url: SecretStr | None = None
     blob_root: Path | None = None
+    music_search_backend: MusicSearchBackend = MusicSearchBackend.DISABLED
 
     @model_validator(mode="after")
     def require_datastore_for_non_test(self) -> Self:

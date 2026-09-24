@@ -1,5 +1,6 @@
 """Meilisearch-backed search layer (ARCHITECTURE-v1 sections 10-12)."""
 
+from remanence.music.search.composition import build_music_search
 from remanence.music.search.document import (
     CANONICAL_RANK_DEFAULT,
     CANONICAL_RANK_VARIANT,
@@ -31,6 +32,7 @@ __all__ = [
     "MeilisearchConfig",
     "MeilisearchMusicSearch",
     "PostgresStagingSearch",
+    "build_music_search",
     "build_search_document",
     "build_search_request_payload",
     "canonical_rank",

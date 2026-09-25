@@ -26,6 +26,10 @@ from remanence.music.staging.loader import (
     load_staged_jsonl,
     validate_row,
 )
+from remanence.music.search.revision_store import (  # noqa: F401
+    IndexActivation,
+    IndexRevision,
+)
 from remanence.music.staging.models import (
     MUSIC_SCHEMA,
     MusicBase,
@@ -98,6 +102,8 @@ def test_schema_contract_matches_architecture() -> None:
         "music.music_artist",
         "music.music_track_artist",
         "music.music_external_id",
+        "music.music_index_revision",
+        "music.music_index_activation",
     }
     assert [c.name for c in tables["music.music_track"].columns] == [
         "id", "title", "normalized_title", "duration_ms", "variant",

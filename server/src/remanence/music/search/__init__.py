@@ -20,6 +20,14 @@ from remanence.music.search.meilisearch import (
     MeilisearchMusicSearch,
     build_search_request_payload,
 )
+from remanence.music.search.revisions import (
+    MusicIndexRevision,
+    MusicIndexRevisionManager,
+    RevisionBuildError,
+    RevisionStatus,
+    build_revision_manager,
+    revision_index_uid,
+)
 from remanence.music.search.staging import PostgresStagingSearch
 
 __all__ = [
@@ -32,12 +40,18 @@ __all__ = [
     "InMemoryMusicSearch",
     "MeilisearchConfig",
     "MeilisearchMusicSearch",
+    "MusicIndexRevision",
+    "MusicIndexRevisionManager",
     "PostgresStagingSearch",
+    "RevisionBuildError",
+    "RevisionStatus",
     "StagingSearchDocumentSource",
     "build_music_search",
+    "build_revision_manager",
     "build_search_document",
     "build_search_request_payload",
     "canonical_rank",
     "meilisearch_index_settings",
     "parse_search_document_id",
+    "revision_index_uid",
 ]

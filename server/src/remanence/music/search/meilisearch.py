@@ -92,6 +92,11 @@ def _validate_search_document(document: object) -> None:
     """
     if type(document) is not dict:
         raise MusicSearchError("invalid search document")
+    # Wire JSON carries string ids only: a UUID object here would pass
+    # parsing yet explode later as a raw TypeError inside json.dumps.
+    # Require the string up front so every failure is a typed error.
+    if type(document.get("id")) is not str:
+        raise MusicSearchError("invalid search document")
     try:
         parse_search_document_id(document)
     except ValueError as exc:
@@ -326,6 +331,48 @@ class MeilisearchMusicSearch:
         except Exception as exc:
             raise MusicSearchError("music search failed") from exc
 
+    def index_exists(self, index_uid: str) -> bool:
+        """Probe whether an index UID already exists (read-only check)."""
+        target = validate_index_uid(index_uid)
+        request = urllib.request.Request(
+            self._index_url_for(target), headers=self._headers(), method="GET"
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self._config.timeout_s) as response:
+                response.read(MEILI_MAX_RESPONSE_BYTES + 1)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return False
+            if 400 <= exc.code < 500:
+                raise MusicSearchError("music search failed") from exc
+            if 500 <= exc.code < 600:
+                raise MusicSearchUnavailableError("music search unavailable") from exc
+            raise MusicSearchError("music search failed") from exc
+        except TimeoutError as exc:
+            raise MusicSearchUnavailableError("music search unavailable") from exc
+        except urllib.error.URLError as exc:
+            raise MusicSearchUnavailableError("music search unavailable") from exc
+        except (MusicSearchError, MusicSearchUnavailableError):
+            raise
+        except Exception as exc:
+            raise MusicSearchError("music search failed") from exc
+        return True
+
+    def create_index_for(self, index_uid: str, primary_key: str = "id") -> int:
+        """Create an explicit empty index; returns the task UID.
+
+        Refuses to touch an already-existing UID (fail-closed before any
+        write): a revision build must never reuse a dirty candidate.
+        """
+        target = validate_index_uid(index_uid)
+        if type(primary_key) is not str or not primary_key.strip():
+            raise MusicSearchError("invalid primary key")
+        if self.index_exists(target):
+            raise MusicSearchError("index already exists")
+        url = f"{self._config.base_url.rstrip('/')}/indexes"
+        decoded = self._post(url, {"uid": target, "primaryKey": primary_key})
+        return self._task_uid(decoded)
+
     def index_document_count(self, index_uid: str) -> int:
         """Read an explicit index's document count (build-vs-source check)."""
         target = validate_index_uid(index_uid)
@@ -368,6 +415,12 @@ class MeilisearchMusicSearch:
                     raw = response.read(MEILI_MAX_RESPONSE_BYTES + 1)
             except TimeoutError as exc:
                 raise MusicSearchUnavailableError("music search unavailable") from exc
+            except urllib.error.HTTPError as exc:
+                if 400 <= exc.code < 500:
+                    raise MusicSearchError("music search failed") from exc
+                if 500 <= exc.code < 600:
+                    raise MusicSearchUnavailableError("music search unavailable") from exc
+                raise MusicSearchError("music search failed") from exc
             except urllib.error.URLError as exc:
                 raise MusicSearchUnavailableError("music search unavailable") from exc
             except (MusicSearchError, MusicSearchUnavailableError):

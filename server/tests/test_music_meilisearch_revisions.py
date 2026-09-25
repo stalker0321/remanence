@@ -62,11 +62,13 @@ class _FakeTransport:
         task_status: str = "succeeded",
         number_of_documents: int = 5,
         fail_with: Exception | None = None,
+        existing: set[str] | None = None,
     ) -> None:
         self.requests: list[urllib.request.Request] = []
         self.task_status = task_status
         self.number_of_documents = number_of_documents
         self.fail_with = fail_with
+        self.existing = existing if existing is not None else set()
 
     def __call__(self, request, timeout=None):
         self.requests.append(request)
@@ -77,12 +79,19 @@ class _FakeTransport:
             return _FakeResponse(json.dumps({"taskUid": 9}).encode())
         if url.endswith("/settings") or url.endswith("/documents"):
             return _FakeResponse(json.dumps({"taskUid": 7}).encode())
+        if request.get_method() == "POST" and url.rstrip("/").endswith("/indexes"):
+            return _FakeResponse(json.dumps({"taskUid": 7}).encode())
         if url.endswith("/stats"):
             return _FakeResponse(
                 json.dumps({"numberOfDocuments": self.number_of_documents}).encode()
             )
         if "/tasks/" in url:
             return _FakeResponse(json.dumps({"status": self.task_status}).encode())
+        if request.get_method() == "GET" and "/indexes/" in url:
+            uid = url.rsplit("/indexes/", 1)[1]
+            if uid in self.existing:
+                return _FakeResponse(b"{}")
+            raise urllib.error.HTTPError(url, 404, "missing", {}, io.BytesIO(b"{}"))
         return _FakeResponse(b"{}")
 
     def bodies(self) -> list[object]:
@@ -294,3 +303,85 @@ def test_canceled_task_is_terminal_failure(monkeypatch) -> None:
     _install(monkeypatch, _FakeTransport(task_status="canceled"))
     with pytest.raises(MusicSearchError):
         _search().wait_for_task(7, timeout_s=5.0)
+
+
+def test_uuid_object_id_rejected_before_http(monkeypatch) -> None:
+    import uuid as uuid_module
+
+    transport = _install(monkeypatch, _FakeTransport())
+    doc = _doc()
+    doc["id"] = uuid_module.uuid4()
+    with pytest.raises(MusicSearchError):
+        _search().put_documents_to("rev_a", [doc])
+    assert transport.requests == []
+
+
+def test_wait_task_splits_http_4xx_and_5xx(monkeypatch) -> None:
+    def http_error(code: int):
+        import io as io_module
+
+        return urllib.error.HTTPError(
+            "http://127.0.0.1:17770/tasks/7", code, "e", {}, io_module.BytesIO(b"{}")
+        )
+
+    class _Status(_FakeTransport):
+        def __init__(self, code: int) -> None:
+            super().__init__()
+            self.code = code
+
+        def __call__(self, request, timeout=None):
+            self.requests.append(request)
+            raise http_error(self.code)
+
+    _install(monkeypatch, _Status(404))
+    with pytest.raises(MusicSearchError):
+        _search().wait_for_task(7, timeout_s=5.0)
+    _install(monkeypatch, _Status(503))
+    with pytest.raises(MusicSearchUnavailableError):
+        _search().wait_for_task(7, timeout_s=5.0)
+
+
+def test_index_exists_probes_without_writes(monkeypatch) -> None:
+    transport = _install(monkeypatch, _FakeTransport(existing={"rev_a"}))
+    assert _search().index_exists("rev_a") is True
+    (request,) = transport.requests
+    assert request.full_url == "http://127.0.0.1:17770/indexes/rev_a"
+    assert request.get_method() == "GET"
+    with pytest.raises(MusicSearchError):
+        _search().index_exists("rev a")
+
+
+def test_index_exists_false_on_404(monkeypatch) -> None:
+    import io as io_module
+
+    class _Missing(_FakeTransport):
+        def __call__(self, request, timeout=None):
+            self.requests.append(request)
+            raise urllib.error.HTTPError(
+                request.full_url, 404, "missing", {}, io_module.BytesIO(b"{}")
+            )
+
+    _install(monkeypatch, _Missing())
+    assert _search().index_exists("rev_absent") is False
+
+
+def test_create_index_posts_uid_and_primary_key(monkeypatch) -> None:
+    transport = _install(monkeypatch, _FakeTransport())
+    assert _search().create_index_for("rev_new") == 7
+    exists_req, create_req = transport.requests
+    assert exists_req.full_url == "http://127.0.0.1:17770/indexes/rev_new"
+    assert exists_req.get_method() == "GET"
+    assert create_req.full_url == "http://127.0.0.1:17770/indexes"
+    assert create_req.get_method() == "POST"
+    assert json.loads(create_req.data.decode()) == {"uid": "rev_new", "primaryKey": "id"}
+    with pytest.raises(MusicSearchError):
+        _search().create_index_for("rev_new", primary_key="  ")
+    with pytest.raises(MusicSearchError):
+        _search().create_index_for("rev bad")
+
+
+def test_create_index_refuses_existing_without_post(monkeypatch) -> None:
+    transport = _install(monkeypatch, _FakeTransport(existing={"rev_a"}))
+    with pytest.raises(MusicSearchError):
+        _search().create_index_for("rev_a")
+    assert [req.get_method() for req in transport.requests] == ["GET"]

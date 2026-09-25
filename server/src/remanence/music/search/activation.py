@@ -78,32 +78,28 @@ def _is_cyrillic(text: str) -> bool:
     return any("\u0400" <= char <= "\u04ff" for char in text)
 
 
-def derive_query_probes(session_factory: Callable[[], Session]) -> list[QueryProbe]:
-    """Derive deterministic probes from staging (read-only, bounded).
+# Hard cap on the staged rows a probe derivation may consider. Above
+# this the GROUP BY scan is too expensive for a per-activation read and
+# the 0010 prefix-index slice takes over; the derivation refuses
+# fail-closed instead of silently falling back to sample-only counts.
+MAX_PROBE_SOURCE_ROWS = 1_000_000
 
-    One session, at most 1000 title rows in keyset order. To keep every
-    probe unambiguous, exact and Cyrillic probes use only normalized
-    titles that are unique within the sample (duplicate bare titles are
-    skipped — they cannot identify one track). The variant probe names
-    its kind explicitly (``"<title> <variant-token>"``), matching the
-    variant-aware ranking path; variants without a known token are
-    skipped. Empty staging — or no qualifying row at all — fails
-    closed: an activation with nothing to verify against is refused.
+# Bounded candidate window for probe picking (deterministic ID order).
+MAX_PROBE_CANDIDATES = 1000
+
+
+def _select_probes(
+    candidates: list[tuple[object, str, str | None]],
+    global_counts: dict[str, int],
+) -> list[QueryProbe]:
+    """Pick exact/Cyrillic/variant probes from globally-unique titles.
+
+    Pure selection over one candidate window plus whole-table counts:
+    a title qualifies only when its global normalized count is exactly
+    1, so duplicates beyond the candidate window are seen and skipped.
+    The variant query names its kind (``"<title> <variant-token>"``),
+    matching the variant-aware ranking path.
     """
-    if not callable(session_factory):
-        raise MusicActivationError("probe derivation requires a session factory")
-    with session_factory() as session:
-        from sqlalchemy import select as sa_select
-
-        rows = session.execute(
-            sa_select(StagedTrack.id, StagedTrack.title, StagedTrack.variant)
-            .order_by(StagedTrack.id)
-            .limit(1000)
-        ).all()
-    normalized_counts: dict[str, int] = {}
-    for _track_id, title, _variant in rows:
-        key = normalize_text(title)
-        normalized_counts[key] = normalized_counts.get(key, 0) + 1
     probes: list[QueryProbe] = []
     seen: set[str] = set()
 
@@ -114,19 +110,64 @@ def derive_query_probes(session_factory: Callable[[], Session]) -> list[QueryPro
                 QueryProbe(query=query, expected_top_id=str(track_id), min_total=1)
             )
 
-    for track_id, title, _variant in rows:
-        if normalized_counts.get(normalize_text(title), 0) == 1:
+    for track_id, title, _variant in candidates:
+        if global_counts.get(normalize_text(title), 0) == 1:
             _add(title, track_id)
             break
-    for track_id, title, _variant in rows:
-        if _is_cyrillic(title) and normalized_counts.get(normalize_text(title), 0) == 1:
+    for track_id, title, _variant in candidates:
+        if _is_cyrillic(title) and global_counts.get(normalize_text(title), 0) == 1:
             _add(title, track_id)
             break
-    for track_id, title, variant in rows:
+    for track_id, title, variant in candidates:
         tokens = [tok for tok in VARIANT_TOKENS if tok in normalize_text(variant or "")]
-        if tokens:
+        if tokens and global_counts.get(normalize_text(title), 0) == 1:
             _add(f"{title} {tokens[0]}", track_id)
             break
+    return probes
+
+
+def derive_query_probes(session_factory: Callable[[], Session]) -> list[QueryProbe]:
+    """Derive deterministic probes from staging (read-only, bounded).
+
+    Counts ALL staged rows first (refuses empty staging and anything
+    above ``MAX_PROBE_SOURCE_ROWS`` — no sample-only fallback), then
+    reads at most ``MAX_PROBE_CANDIDATES`` title rows in keyset order
+    and resolves their global normalized-title counts with ONE
+    whole-table GROUP BY restricted to the candidate titles (duplicates
+    beyond the window are seen without returning a million groups).
+    Yields exact/Cyrillic/variant probes only for globally unique
+    titles; no qualifying probe fails closed.
+    """
+    if not callable(session_factory):
+        raise MusicActivationError("probe derivation requires a session factory")
+    with session_factory() as session:
+        from sqlalchemy import func as sa_func
+        from sqlalchemy import select as sa_select
+
+        total = int(
+            session.scalar(sa_select(sa_func.count()).select_from(StagedTrack)) or 0
+        )
+        if total <= 0:
+            raise MusicActivationError("staging yields no probe rows")
+        if total > MAX_PROBE_SOURCE_ROWS:
+            raise MusicActivationError("staging exceeds the probe source cap")
+        candidates = session.execute(
+            sa_select(StagedTrack.id, StagedTrack.title, StagedTrack.variant)
+            .order_by(StagedTrack.id)
+            .limit(MAX_PROBE_CANDIDATES)
+        ).all()
+        wanted = {normalize_text(title) for _track_id, title, _variant in candidates}
+        counts = dict(
+            session.execute(
+                sa_select(StagedTrack.normalized_title, sa_func.count())
+                .where(StagedTrack.normalized_title.in_(wanted))
+                .group_by(StagedTrack.normalized_title)
+            ).all()
+        )
+    probes = _select_probes(
+        [(track_id, title, variant) for track_id, title, variant in candidates],
+        counts,
+    )
     if not probes:
         raise MusicActivationError("staging yields no probe rows")
     return probes

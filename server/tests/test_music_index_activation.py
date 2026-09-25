@@ -364,6 +364,60 @@ def test_swap_task_failed_leaves_failed_without_confirm() -> None:
         engine.dispose()
 
 
+def test_select_probes_sees_duplicates_beyond_window() -> None:
+    from remanence.music.search.activation import _select_probes
+
+    candidates = [
+        ("id-1", "Song", None),
+        ("id-2", "Abyss", None),
+        ("id-3", "505", "Live"),
+    ]
+    # "song" collides 42 times outside the candidate window: skipped even
+    # though it leads the window; the rest still qualify.
+    probes = _select_probes(candidates, {"song": 42, "abyss": 1, "505": 1})
+    by_query = {probe.query: probe.expected_top_id for probe in probes}
+    assert "Song" not in by_query
+    assert by_query["Abyss"] == "id-2"
+    assert by_query["505 live"] == "id-3"
+
+
+def test_select_probes_variant_collision_and_tokenless_skip() -> None:
+    from remanence.music.search.activation import _select_probes
+
+    candidates = [
+        ("id-1", "Song", None),
+        ("id-2", "Song", "Deluxe Edition"),
+        ("id-3", "Song", "Live"),
+    ]
+    probes = _select_probes(candidates, {"song": 3})
+    assert probes == []
+    candidates = [
+        ("id-1", "Alone", None),
+        ("id-2", "Alone", "Remix"),
+    ]
+    probes = _select_probes(candidates, {"alone": 2})
+    assert probes == []
+
+
+def test_derive_refuses_over_cap_without_sample_fallback(monkeypatch) -> None:
+    import remanence.music.search.activation as activation_module
+    from remanence.music.search.activation import derive_query_probes
+
+    monkeypatch.setattr(activation_module, "MAX_PROBE_SOURCE_ROWS", 2)
+    engine = _engine()
+    try:
+        session = Session(engine)
+        _staging_track(session, "Abyss", ["KSLV"])
+        _staging_track(session, "Song", ["Kate"])
+        _staging_track(session, "505", ["Arctic Monkeys"])
+        session.commit()
+        session.close()
+        with pytest.raises(MusicActivationError):
+            derive_query_probes(lambda: Session(engine))
+    finally:
+        engine.dispose()
+
+
 def _staging_track(
     session, title: str, artists: list[str], variant: str | None = None, track_id=None
 ):
@@ -445,6 +499,45 @@ def test_derive_query_probes_exact_cyrillic_variant() -> None:
         engine.dispose()
 
 
+def test_derive_sees_duplicates_beyond_window(monkeypatch) -> None:
+    import remanence.music.search.activation as activation_module
+    from remanence.music.search.activation import derive_query_probes
+
+    monkeypatch.setattr(activation_module, "MAX_PROBE_CANDIDATES", 2)
+    engine = _engine()
+    try:
+        session = Session(engine)
+        _staging_track(
+            session,
+            "Abyss",
+            ["KSLV"],
+            track_id=uuid.UUID("11111111-1111-4111-8111-111111111111"),
+        )
+        zephyr = _staging_track(
+            session,
+            "Zephyr",
+            ["W Sailor"],
+            track_id=uuid.UUID("22222222-2222-4222-8222-222222222222"),
+        )
+        _staging_track(
+            session,
+            "Abyss",
+            ["Cover Band"],
+            track_id=uuid.UUID("33333333-3333-4333-8333-333333333333"),
+        )
+        session.commit()
+        session.close()
+        # Window holds [Abyss, Zephyr]; the second Abyss sits beyond it.
+        # The SQL global GROUP BY must still see the duplicate and refuse
+        # the ambiguous title while keeping the unique one.
+        probes = derive_query_probes(lambda: Session(engine))
+        by_query = {probe.query: probe.expected_top_id for probe in probes}
+        assert "Abyss" not in by_query
+        assert by_query["Zephyr"] == str(zephyr)
+    finally:
+        engine.dispose()
+
+
 def test_derive_skips_duplicate_bare_titles() -> None:
     from remanence.music.search.activation import derive_query_probes
 
@@ -484,28 +577,37 @@ def test_derive_canonical_vs_variant_pair() -> None:
     engine = _engine()
     try:
         session = Session(engine)
-        studio = _staging_track(
+        _staging_track(
             session,
             "505",
             ["Arctic Monkeys"],
             track_id=uuid.UUID("11111111-1111-4111-8111-111111111111"),
         )
-        live = _staging_track(
+        _staging_track(
             session,
             "505",
             ["Arctic Monkeys"],
             variant="Live at the Apollo",
             track_id=uuid.UUID("22222222-2222-4222-8222-222222222222"),
         )
+        remix = _staging_track(
+            session,
+            "Café del Mar",
+            ["Energy 52"],
+            variant="Three N One Remix",
+            track_id=uuid.UUID("33333333-3333-4333-8333-333333333333"),
+        )
         session.commit()
         session.close()
         probes = derive_query_probes(lambda: Session(engine))
         by_query = {probe.query: probe.expected_top_id for probe in probes}
         # Bare "505" is ambiguous (two rows share it) and must not be an
-        # exact probe; the variant probe names its kind for the ranking.
+        # exact probe; the only variant probe names a globally-unique
+        # title plus its kind token.
         assert "505" not in by_query
-        assert by_query["505 live"] == str(live)
-        assert studio is not None
+        assert "505 live" not in by_query
+        assert by_query["Café del Mar"] == str(remix)
+        assert by_query["Café del Mar remix"] == str(remix)
     finally:
         engine.dispose()
 

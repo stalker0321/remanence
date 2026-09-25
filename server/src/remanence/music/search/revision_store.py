@@ -399,6 +399,37 @@ class RevisionStateStore:
                 state=row.state,
             )
 
+    def latest_confirmation(
+        self, stable_uid: str, to_rev: int
+    ) -> ActivationRecord | None:
+        """Latest CONFIRMED activation for one stable UID and revision.
+
+        Read-only lookup for the idempotent same-content path: only a
+        previously recorded confirmation is ever returned, never a
+        synthesized one.
+        """
+        with self._sessions() as session:
+            row = session.scalars(
+                select(IndexActivation)
+                .where(IndexActivation.stable_uid == _require_uid(stable_uid, "stable_uid"))
+                .where(IndexActivation.to_rev == _require_rev(to_rev, "to_rev"))
+                .where(IndexActivation.state == "CONFIRMED")
+                .order_by(IndexActivation.id.desc())
+                .limit(1)
+            ).first()
+            if row is None:
+                return None
+            return ActivationRecord(
+                id=row.id,
+                stable_uid=row.stable_uid,
+                partner_uid=row.partner_uid,
+                from_rev=row.from_rev,
+                to_rev=row.to_rev,
+                post_attempted=row.post_attempted,
+                task_uid=row.task_uid,
+                state=row.state,
+            )
+
     def find_active_revision(self) -> RevisionRecord | None:
         """Return the single ACTIVE revision, fail closed on multiples.
 

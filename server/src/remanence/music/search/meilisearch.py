@@ -39,6 +39,7 @@ from remanence.music.ports import (
     MusicSearchUnavailableError,
 )
 from remanence.music.search.document import (
+    DOCUMENT_FIELDS,
     MEILISEARCH_INDEX_UID,
     SEARCH_ATTRIBUTES_TO_RETRIEVE,
     VARIANT_TOKENS,
@@ -56,6 +57,48 @@ _PRODUCTION_DEFAULT_MEILI_PORT = 7700
 # returns at most SEARCH_LIMIT_MAX mapped hits; anything larger is a
 # misbehaving backend, not a larger catalog page.
 MEILI_MAX_RESPONSE_BYTES = 256 * 1024
+
+# Upper bound for one document-push batch. Aligns with the staging
+# document source batch cap so revision builds stream bounded pages.
+MEILI_MAX_DOCUMENTS_PER_PUSH = 1000
+
+# Explicit index UIDs travel in URL paths: strict charset blocks path
+# injection (``../``, whitespace, percent tricks). Revision UIDs issued
+# by the future revision manager fit this shape by construction.
+_INDEX_UID_RE = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+MAX_INDEX_UID_LENGTH = 64
+
+
+def validate_index_uid(index_uid: object) -> str:
+    """Strictly validate an explicit target index UID (fail-closed)."""
+    if type(index_uid) is not str or not index_uid:
+        raise MusicSearchError("invalid index uid")
+    if len(index_uid) > MAX_INDEX_UID_LENGTH:
+        raise MusicSearchError("invalid index uid")
+    if index_uid[0] == "-" or index_uid[0] == "_":
+        raise MusicSearchError("invalid index uid")
+    for char in index_uid:
+        if char not in _INDEX_UID_RE:
+            raise MusicSearchError("invalid index uid")
+    return index_uid
+
+
+def _validate_search_document(document: object) -> None:
+    """Validate one outgoing search document before any HTTP (fail-closed).
+
+    Foreign shapes (non-dict), provider identifiers in ``id`` position,
+    and fields outside :data:`DOCUMENT_FIELDS` are all refused: a
+    revision build must never index a leaked or malformed document.
+    """
+    if type(document) is not dict:
+        raise MusicSearchError("invalid search document")
+    try:
+        parse_search_document_id(document)
+    except ValueError as exc:
+        raise MusicSearchError("invalid search document") from exc
+    for key in document:
+        if key not in DOCUMENT_FIELDS:
+            raise MusicSearchError("invalid search document")
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +122,10 @@ class MeilisearchConfig:
             raise ValueError("refusing production-default Meilisearch port 7700; use the isolated port")
         if not parsed.hostname:
             raise ValueError("base_url must include a hostname")
+        try:
+            validate_index_uid(self.index_uid)
+        except MusicSearchError as exc:
+            raise ValueError(f"invalid index_uid: {exc}") from exc
         if type(self.index_uid) is not str or not self.index_uid.strip():
             raise ValueError("index_uid must be non-empty")
         if self.api_key is not None and type(self.api_key) is not str:
@@ -134,13 +181,22 @@ class MeilisearchMusicSearch:
         return f"{self._config.base_url.rstrip('/')}/indexes/{self._config.index_uid}/search"
 
     def _documents_url(self) -> str:
-        return f"{self._config.base_url.rstrip('/')}/indexes/{self._config.index_uid}/documents"
+        return self._documents_url_for(self._config.index_uid)
 
     def _settings_url(self) -> str:
-        return f"{self._config.base_url.rstrip('/')}/indexes/{self._config.index_uid}/settings"
+        return self._settings_url_for(self._config.index_uid)
 
     def _index_url(self) -> str:
-        return f"{self._config.base_url.rstrip('/')}/indexes/{self._config.index_uid}"
+        return self._index_url_for(self._config.index_uid)
+
+    def _documents_url_for(self, index_uid: str) -> str:
+        return f"{self._config.base_url.rstrip('/')}/indexes/{index_uid}/documents"
+
+    def _settings_url_for(self, index_uid: str) -> str:
+        return f"{self._config.base_url.rstrip('/')}/indexes/{index_uid}/settings"
+
+    def _index_url_for(self, index_uid: str) -> str:
+        return f"{self._config.base_url.rstrip('/')}/indexes/{index_uid}"
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -159,6 +215,16 @@ class MeilisearchMusicSearch:
                 raw = response.read(MEILI_MAX_RESPONSE_BYTES + 1)
         except TimeoutError as exc:
             raise MusicSearchUnavailableError("music search unavailable") from exc
+        except urllib.error.HTTPError as exc:
+            # Client errors (bad index UID, malformed payload, auth) are
+            # configuration/caller faults, never backend outages. Server
+            # errors stay retryable outages. Bodies are never logged or
+            # echoed (may carry key material or catalog internals).
+            if 400 <= exc.code < 500:
+                raise MusicSearchError("music search failed") from exc
+            if 500 <= exc.code < 600:
+                raise MusicSearchUnavailableError("music search unavailable") from exc
+            raise MusicSearchError("music search failed") from exc
         except urllib.error.URLError as exc:
             raise MusicSearchUnavailableError("music search unavailable") from exc
         except MusicSearchUnavailableError:
@@ -193,11 +259,16 @@ class MeilisearchMusicSearch:
     # -- Test/ops index helpers (push only; ingestion itself is deferred) --
 
     def update_settings(self, settings: dict) -> int:
-        """Push index settings; returns the Meilisearch task UID."""
+        """Push index settings to the configured index; returns the task UID."""
+        return self.update_settings_for(self._config.index_uid, settings)
+
+    def update_settings_for(self, index_uid: str, settings: dict) -> int:
+        """Push index settings to an explicit target index (revision builds)."""
+        target = validate_index_uid(index_uid)
         if type(settings) is not dict or not settings:
             raise MusicSearchError("invalid settings")
         request = urllib.request.Request(
-            self._settings_url(),
+            self._settings_url_for(target),
             data=json.dumps(settings).encode("utf-8"),
             headers=self._headers(),
             method="PATCH",
@@ -206,16 +277,38 @@ class MeilisearchMusicSearch:
         return self._task_uid(decoded)
 
     def put_documents(self, documents: list[dict]) -> int:
-        """Push search documents; returns the Meilisearch task UID."""
-        if type(documents) is not list or not documents:
+        """Push search documents to the configured index; returns the task UID."""
+        return self.put_documents_to(self._config.index_uid, documents)
+
+    def put_documents_to(self, index_uid: str, documents: list[dict]) -> int:
+        """Push a bounded document batch to an explicit target index.
+
+        Every document is validated before any HTTP leaves the process:
+        dict shape, own-UUID ``id`` (provider IDs rejected), and keys
+        within the :data:`DOCUMENT_FIELDS` allow-list. No request is made
+        on the first invalid document.
+        """
+        target = validate_index_uid(index_uid)
+        if (
+            type(documents) is not list
+            or not documents
+            or len(documents) > MEILI_MAX_DOCUMENTS_PER_PUSH
+        ):
             raise MusicSearchError("invalid documents")
-        decoded = self._post(self._documents_url(), documents)
+        for document in documents:
+            _validate_search_document(document)
+        decoded = self._post(self._documents_url_for(target), documents)
         return self._task_uid(decoded)
 
     def delete_index(self) -> None:
-        """Delete the whole index (test isolation only)."""
+        """Delete the whole configured index (test isolation only)."""
+        self.delete_index_named(self._config.index_uid)
+
+    def delete_index_named(self, index_uid: str) -> None:
+        """Delete an explicit index (superseded-revision cleanup only)."""
+        target = validate_index_uid(index_uid)
         request = urllib.request.Request(
-            self._index_url(), headers=self._headers(), method="DELETE"
+            self._index_url_for(target), headers=self._headers(), method="DELETE"
         )
         try:
             with urllib.request.urlopen(request, timeout=self._config.timeout_s) as response:
@@ -232,6 +325,35 @@ class MeilisearchMusicSearch:
             raise
         except Exception as exc:
             raise MusicSearchError("music search failed") from exc
+
+    def index_document_count(self, index_uid: str) -> int:
+        """Read an explicit index's document count (build-vs-source check)."""
+        target = validate_index_uid(index_uid)
+        request = urllib.request.Request(
+            f"{self._index_url_for(target)}/stats",
+            headers=self._headers(),
+            method="GET",
+        )
+        decoded = self._read_json(request)
+        count = decoded.get("numberOfDocuments")
+        if type(count) is not int or count < 0:
+            raise MusicSearchError("music search failed")
+        return count
+
+    def swap_indexes(self, uid_a: str, uid_b: str) -> int:
+        """Atomically swap two indexes server-side; returns the task UID.
+
+        The revision manager swaps the standby build with the active
+        index (and swaps back to roll back). Both UIDs must exist and
+        differ; traffic never observes a half-switched state.
+        """
+        first = validate_index_uid(uid_a)
+        second = validate_index_uid(uid_b)
+        if first == second:
+            raise MusicSearchError("swap requires two distinct index uids")
+        url = f"{self._config.base_url.rstrip('/')}/swap-indexes"
+        decoded = self._post(url, [{"indexes": [first, second]}])
+        return self._task_uid(decoded)
 
     def wait_for_task(self, task_uid: int, *, timeout_s: float = 10.0) -> None:
         """Poll a Meilisearch task until succeeded/failed (test helper)."""
@@ -259,7 +381,7 @@ class MeilisearchMusicSearch:
             status = task.get("status") if type(task) is dict else None
             if status == "succeeded":
                 return
-            if status == "failed":
+            if status in ("failed", "canceled"):
                 raise MusicSearchError("music search failed")
             if time.monotonic() >= deadline:
                 raise MusicSearchError("music search failed")

@@ -243,3 +243,196 @@ def test_partial_unique_index_exists_in_ddl() -> None:
         assert "WHERE" in row and "PENDING" in row and "SWAPPED" in row and "UNKNOWN" in row
     finally:
         engine.dispose()
+
+
+def _rev_row(store, rev: int, uid: str) -> None:
+    store.create_revision(
+        rev=rev, candidate_uid=uid, doc_count=10, settings_hash="d" * 64
+    )
+
+
+def _open(store, stable: str, partner: str, from_rev, to_rev: int):
+    return store.open_activation(
+        stable_uid=stable, partner_uid=partner, from_rev=from_rev, to_rev=to_rev
+    )
+
+
+def _fresh(engine):
+    from remanence.music.search.revision_store import RevisionStateStore
+
+    return RevisionStateStore(lambda: Session(engine))
+
+
+def test_confirm_happy_flips_all_rows_atomically() -> None:
+    engine = _engine()
+    try:
+        store = _store(engine)
+        _rev_row(store, 6, "remanence_tracks_v1_rev0006")
+        _rev_row(store, 7, "remanence_tracks_v1_rev0007")
+        assert store.find_active_revision() is None
+        boot = _open(store, "remanence_tracks_v1", "remanence_tracks_v1_rev0006", None, 6)
+        store.transition(boot.id, "PENDING", "SWAPPED")
+        store.confirm_activation(boot.id)
+        record = _open(store, "remanence_tracks_v1", "remanence_tracks_v1_rev0007", 6, 7)
+        store.mark_attempted(record.id)
+        store.transition(record.id, "PENDING", "SWAPPED")
+        done = store.confirm_activation(record.id)
+        assert done.state == "CONFIRMED"
+        fresh = _fresh(engine)
+        assert fresh.read_open_activation("remanence_tracks_v1") is None
+        active = fresh.find_active_revision()
+        assert active is not None and active.rev == 7
+        assert fresh.get_revision(6).status == "SUPERSEDED"  # type: ignore[union-attr]
+        assert fresh.get_revision(7).status == "ACTIVE"  # type: ignore[union-attr]
+    finally:
+        engine.dispose()
+
+
+def test_confirm_rolls_back_when_from_rev_not_active() -> None:
+    engine = _engine()
+    try:
+        store = _store(engine)
+        _rev_row(store, 6, "remanence_tracks_v1_rev0006")
+        _rev_row(store, 7, "remanence_tracks_v1_rev0007")
+        record = _open(store, "remanence_tracks_v1", "remanence_tracks_v1_rev0007", 6, 7)
+        store.transition(record.id, "PENDING", "SWAPPED")
+        with pytest.raises(RevisionStoreConflictError):
+            store.confirm_activation(record.id)
+        fresh = _fresh(engine)
+        assert fresh.read_open_activation("remanence_tracks_v1") is not None
+        assert fresh.read_open_activation("remanence_tracks_v1").state == "SWAPPED"  # type: ignore[union-attr]
+        assert fresh.get_revision(7).status == "READY"  # type: ignore[union-attr]
+        assert fresh.get_revision(6).status == "READY"  # type: ignore[union-attr]
+    finally:
+        engine.dispose()
+
+
+def test_confirm_bootstrap_and_duplicate_and_active_guard() -> None:
+    engine = _engine()
+    try:
+        store = _store(engine)
+        _rev_row(store, 0, "remanence_tracks_v1_rev0000")
+        record = _open(store, "remanence_tracks_v1", "remanence_tracks_v1_rev0000", None, 0)
+        store.transition(record.id, "PENDING", "SWAPPED")
+        done = store.confirm_activation(record.id)
+        assert done.state == "CONFIRMED"
+        assert _fresh(engine).find_active_revision().rev == 0  # type: ignore[union-attr]
+        _rev_row(store, 1, "remanence_tracks_v1_rev0001")
+        clash = _open(store, "remanence_tracks_v1", "remanence_tracks_v1_rev0001", 1, 1)
+        store.transition(clash.id, "PENDING", "SWAPPED")
+        with pytest.raises(RevisionStoreConflictError):
+            store.confirm_activation(clash.id)
+        store.transition(clash.id, "SWAPPED", "UNKNOWN")
+        store.transition(clash.id, "UNKNOWN", "FAILED")
+        other = _open(store, "remanence_tracks_v1", "remanence_tracks_v1_rev0001", None, 1)
+        store.transition(other.id, "PENDING", "SWAPPED")
+        with pytest.raises(RevisionStoreConflictError):
+            store.confirm_activation(other.id)
+    finally:
+        engine.dispose()
+
+
+def test_confirm_idempotent_only_when_statuses_match() -> None:
+    engine = _engine()
+    try:
+        store = _store(engine)
+        _rev_row(store, 6, "remanence_tracks_v1_rev0006")
+        _rev_row(store, 7, "remanence_tracks_v1_rev0007")
+        boot = _open(store, "remanence_tracks_v1", "remanence_tracks_v1_rev0006", None, 6)
+        store.transition(boot.id, "PENDING", "SWAPPED")
+        store.confirm_activation(boot.id)
+        record = _open(store, "remanence_tracks_v1", "remanence_tracks_v1_rev0007", 6, 7)
+        store.transition(record.id, "PENDING", "SWAPPED")
+        first = store.confirm_activation(record.id)
+        second = store.confirm_activation(record.id)
+        assert first == second
+        with pytest.raises(RevisionStoreConflictError):
+            store.confirm_activation(999999)
+        pending = _open(store, "remanence_tracks_v1", "remanence_tracks_v1_rev0007", 7, 7)
+        with pytest.raises(RevisionStoreConflictError):
+            store.confirm_activation(pending.id)
+    finally:
+        engine.dispose()
+
+
+def test_scoped_and_global_open_reads_and_active_lookup() -> None:
+    engine = _engine()
+    try:
+        store = _store(engine)
+        assert store.find_active_revision() is None
+        first = _open(store, "stable_a", "stable_a_rev0001", None, 1)
+        second = _open(store, "stable_b", "stable_b_rev0002", None, 2)
+        assert store.read_open_activation("stable_a") == first
+        assert store.read_open_activation("stable_b") == second
+        assert store.read_open_activation() == second
+        assert store.read_open_activation("stable_absent") is None
+        with pytest.raises(ValueError):
+            store.read_open_activation("")
+        _rev_row(store, 1, "x_rev0001")
+        _rev_row(store, 2, "x_rev0002")
+        assert store.find_active_revision() is None
+        from sqlalchemy import update as sa_update
+        from remanence.music.search.revision_store import IndexRevision
+
+        with Session(engine) as session:
+            session.execute(
+                sa_update(IndexRevision)
+                .where(IndexRevision.rev.in_([1, 2]))
+                .values(status="ACTIVE")
+            )
+            session.commit()
+        with pytest.raises(RevisionStoreConflictError):
+            store.find_active_revision()
+    finally:
+        engine.dispose()
+
+
+def test_find_active_rejects_unsettled_flight_but_tolerates_pending() -> None:
+    engine = _engine()
+    try:
+        store = _store(engine)
+        pending = _open(store, "remanence_tracks_v1", "remanence_tracks_v1_rev0007", None, 7)
+        assert store.find_active_revision() is None
+        store.transition(pending.id, "PENDING", "SWAPPED")
+        with pytest.raises(RevisionStoreConflictError):
+            store.find_active_revision()
+        store.transition(pending.id, "SWAPPED", "UNKNOWN")
+        with pytest.raises(RevisionStoreConflictError):
+            store.find_active_revision()
+        store.transition(pending.id, "UNKNOWN", "FAILED")
+        assert store.find_active_revision() is None
+    finally:
+        engine.dispose()
+
+
+def test_confirm_rejects_extra_active_with_no_writes() -> None:
+    engine = _engine()
+    try:
+        store = _store(engine)
+        _rev_row(store, 6, "remanence_tracks_v1_rev0006")
+        _rev_row(store, 7, "remanence_tracks_v1_rev0007")
+        _rev_row(store, 8, "remanence_tracks_v1_rev0008")
+        boot = _open(store, "remanence_tracks_v1", "remanence_tracks_v1_rev0006", None, 6)
+        store.transition(boot.id, "PENDING", "SWAPPED")
+        store.confirm_activation(boot.id)
+        from sqlalchemy import update as sa_update
+        from remanence.music.search.revision_store import IndexRevision
+
+        with Session(engine) as session:
+            session.execute(
+                sa_update(IndexRevision)
+                .where(IndexRevision.rev == 8)
+                .values(status="ACTIVE")
+            )
+            session.commit()
+        record = _open(store, "remanence_tracks_v1", "remanence_tracks_v1_rev0007", 6, 7)
+        store.transition(record.id, "PENDING", "SWAPPED")
+        with pytest.raises(RevisionStoreConflictError):
+            store.confirm_activation(record.id)
+        fresh = _fresh(engine)
+        assert fresh.read_open_activation("remanence_tracks_v1").state == "SWAPPED"  # type: ignore[union-attr]
+        assert fresh.get_revision(7).status == "READY"  # type: ignore[union-attr]
+        assert fresh.get_revision(6).status == "ACTIVE"  # type: ignore[union-attr]
+        assert fresh.get_revision(8).status == "ACTIVE"  # type: ignore[union-attr]
+    finally:
+        engine.dispose()

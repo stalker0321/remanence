@@ -367,15 +367,25 @@ class RevisionStateStore:
                 state=row.state,
             )
 
-    def read_open_activation(self) -> ActivationRecord | None:
-        """Read the latest open flight, if any (read-only, no commit)."""
+    def read_open_activation(self, stable_uid: str | None = None) -> ActivationRecord | None:
+        """Read the latest open flight, optionally scoped to one stable UID.
+
+        ``None`` preserves the legacy global read (latest open flight
+        across all stable UIDs, for operator diagnostics). Activation
+        logic must always pass an explicit UID.
+        """
         with self._sessions() as session:
-            row = session.scalars(
+            statement = (
                 select(IndexActivation)
                 .where(IndexActivation.state.in_(OPEN_FLIGHT_STATES))
                 .order_by(IndexActivation.id.desc())
                 .limit(1)
-            ).first()
+            )
+            if stable_uid is not None:
+                statement = statement.where(
+                    IndexActivation.stable_uid == _require_uid(stable_uid, "stable_uid")
+                )
+            row = session.scalars(statement).first()
             if row is None:
                 return None
             return ActivationRecord(
@@ -388,3 +398,169 @@ class RevisionStateStore:
                 task_uid=row.task_uid,
                 state=row.state,
             )
+
+    def find_active_revision(self) -> RevisionRecord | None:
+        """Return the single ACTIVE revision, fail closed on multiples.
+
+        Rejects when a SWAPPED/UNKNOWN activation row is open in the same
+        read session: served content may already have moved, so any ACTIVE
+        answer would be unreliable. A PENDING flight is tolerated (no swap
+        could have been sent yet).
+        """
+        with self._sessions() as session:
+            unsettled = session.scalars(
+                select(IndexActivation.id)
+                .where(IndexActivation.state.in_(("SWAPPED", "UNKNOWN")))
+                .limit(1)
+            ).first()
+            if unsettled is not None:
+                raise RevisionStoreConflictError(
+                    "unsettled activation flight: ACTIVE revision unreliable"
+                )
+            rows = session.scalars(
+                select(IndexRevision).where(IndexRevision.status == "ACTIVE")
+            ).all()
+            if len(rows) > 1:
+                raise RevisionStoreConflictError("multiple ACTIVE revisions")
+            if not rows:
+                return None
+            row = rows[0]
+            return RevisionRecord(
+                rev=row.rev,
+                candidate_uid=row.candidate_uid,
+                doc_count=row.doc_count,
+                settings_hash=row.settings_hash,
+                status=row.status,
+            )
+
+    def confirm_activation(self, activation_id: int) -> ActivationRecord:
+        """Atomically confirm one activation and flip revision statuses.
+
+        Exactly one short transaction: CAS activation SWAPPED->CONFIRMED,
+        CAS to_rev READY->ACTIVE, CAS from_rev ACTIVE->SUPERSEDED (when
+        non-null), a single commit at the end. Any conflict rolls back
+        all rows — a crash can never leave a half-confirmed state.
+
+        Bootstrap (``from_rev`` NULL) is rejected when any ACTIVE
+        revision already exists; ``to_rev == from_rev`` is rejected.
+        A repeated call is idempotent only when the activation is
+        already CONFIRMED *and* the revision statuses already match
+        (no writes in that case).
+        """
+        activation_id = _require_rev(activation_id, "activation_id")
+        with self._sessions() as session:
+            row = session.get(IndexActivation, activation_id)
+            if row is None:
+                raise RevisionStoreConflictError(
+                    f"activation {activation_id} not found"
+                )
+            if row.state == "CONFIRMED":
+                return self._confirmed_snapshot(session, row)
+            if row.state != "SWAPPED":
+                raise RevisionStoreConflictError(
+                    f"activation {activation_id} is {row.state}, not SWAPPED"
+                )
+            if row.to_rev == row.from_rev:
+                raise RevisionStoreConflictError(
+                    f"activation {activation_id} has to_rev == from_rev"
+                )
+            if row.from_rev is None:
+                if self._count_active(session) > 0:
+                    raise RevisionStoreConflictError(
+                        f"activation {activation_id} bootstraps over an ACTIVE revision"
+                    )
+            else:
+                # Non-bootstrap must see exactly one ACTIVE revision and it
+                # must be from_rev: merely finding from_rev ACTIVE while
+                # another ACTIVE exists would bless a forked catalog.
+                active_revs = session.scalars(
+                    select(IndexRevision.rev).where(
+                        IndexRevision.status == "ACTIVE"
+                    )
+                ).all()
+                if len(active_revs) != 1 or active_revs[0] != row.from_rev:
+                    raise RevisionStoreConflictError(
+                        f"activation {activation_id} has no single ACTIVE from_rev"
+                    )
+            updated = session.execute(
+                update(IndexActivation)
+                .where(IndexActivation.id == activation_id)
+                .where(IndexActivation.state == "SWAPPED")
+                .values(state="CONFIRMED")
+            ).rowcount
+            if updated != 1:
+                raise RevisionStoreConflictError(
+                    f"activation {activation_id} not in SWAPPED"
+                )
+            if (
+                session.execute(
+                    update(IndexRevision)
+                    .where(IndexRevision.rev == row.to_rev)
+                    .where(IndexRevision.status == "READY")
+                    .values(status="ACTIVE")
+                ).rowcount
+                != 1
+            ):
+                raise RevisionStoreConflictError(
+                    f"revision {row.to_rev} not READY"
+                )
+            if row.from_rev is not None and (
+                session.execute(
+                    update(IndexRevision)
+                    .where(IndexRevision.rev == row.from_rev)
+                    .where(IndexRevision.status == "ACTIVE")
+                    .values(status="SUPERSEDED")
+                ).rowcount
+                != 1
+            ):
+                raise RevisionStoreConflictError(
+                    f"revision {row.from_rev} not ACTIVE"
+                )
+            session.commit()
+            return self._activation_snapshot(
+                session.get(IndexActivation, activation_id)
+            )
+
+    @staticmethod
+    def _activation_snapshot(row: IndexActivation | None) -> ActivationRecord:
+        assert row is not None
+        return ActivationRecord(
+            id=row.id,
+            stable_uid=row.stable_uid,
+            partner_uid=row.partner_uid,
+            from_rev=row.from_rev,
+            to_rev=row.to_rev,
+            post_attempted=row.post_attempted,
+            task_uid=row.task_uid,
+            state=row.state,
+        )
+
+    def _confirmed_snapshot(
+        self, session: Session, row: IndexActivation
+    ) -> ActivationRecord:
+        """Idempotent re-confirm: succeed only if statuses already match."""
+        to_row = session.get(IndexRevision, row.to_rev)
+        from_ok = row.from_rev is None or (
+            (from_row := session.get(IndexRevision, row.from_rev)) is not None
+            and from_row.status == "SUPERSEDED"
+        )
+        if (
+            to_row is not None
+            and to_row.status == "ACTIVE"
+            and from_ok
+        ):
+            return self._activation_snapshot(row)
+        raise RevisionStoreConflictError(
+            f"activation {row.id} CONFIRMED but statuses diverge"
+        )
+
+    @staticmethod
+    def _count_active(session: Session) -> int:
+        return int(
+            session.scalar(
+                select(func.count())
+                .select_from(IndexRevision)
+                .where(IndexRevision.status == "ACTIVE")
+            )
+            or 0
+        )

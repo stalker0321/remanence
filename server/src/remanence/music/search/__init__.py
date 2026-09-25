@@ -11,6 +11,7 @@ from remanence.music.search.document import (
     meilisearch_index_settings,
     parse_search_document_id,
 )
+from remanence.music.search.document_source import StagingSearchDocumentSource
 from remanence.music.search.fixtures import FIXTURE_TRACKS
 from remanence.music.search.in_memory import InMemoryMusicSearch
 from remanence.music.search.meilisearch import (
@@ -32,6 +33,7 @@ __all__ = [
     "MeilisearchConfig",
     "MeilisearchMusicSearch",
     "PostgresStagingSearch",
+    "StagingSearchDocumentSource",
     "build_music_search",
     "build_search_document",
     "build_search_request_payload",

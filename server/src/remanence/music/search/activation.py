@@ -15,6 +15,7 @@ No rollback, reconciliation, migration, or live calls live here.
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -204,8 +205,9 @@ def _require_interval(value: object, label: str) -> float:
         type(value) is bool
         or not isinstance(value, (int, float))
         or not value >= 0
+        or not math.isfinite(value)
     ):
-        raise MusicActivationError(f"{label} must be non-negative")
+        raise MusicActivationError(f"{label} must be a finite non-negative number")
     assert isinstance(value, (int, float))
     return float(value)
 

@@ -63,12 +63,18 @@ class _FakeTransport:
         number_of_documents: int = 5,
         fail_with: Exception | None = None,
         existing: set[str] | None = None,
+        settings_payload: object = "default",
     ) -> None:
         self.requests: list[urllib.request.Request] = []
         self.task_status = task_status
         self.number_of_documents = number_of_documents
         self.fail_with = fail_with
         self.existing = existing if existing is not None else set()
+        self.settings_payload = (
+            {"rankingRules": ["words"], "searchableAttributes": ["title"]}
+            if settings_payload == "default"
+            else settings_payload
+        )
 
     def __call__(self, request, timeout=None):
         self.requests.append(request)
@@ -77,6 +83,8 @@ class _FakeTransport:
         url = request.full_url
         if url.endswith("/swap-indexes"):
             return _FakeResponse(json.dumps({"taskUid": 9}).encode())
+        if url.endswith("/settings") and request.get_method() == "GET":
+            return _FakeResponse(json.dumps(self.settings_payload).encode())
         if url.endswith("/settings") or url.endswith("/documents"):
             return _FakeResponse(json.dumps({"taskUid": 7}).encode())
         if request.get_method() == "POST" and url.rstrip("/").endswith("/indexes"):
@@ -219,9 +227,14 @@ def test_transport_timeout_maps_to_unavailable(monkeypatch) -> None:
 
 
 def test_wait_deadline_exceeded_is_not_retryable_success(monkeypatch) -> None:
+    from remanence.music.search.meilisearch import TaskTimeoutError
+
     _install(monkeypatch, _FakeTransport(task_status="enqueued"))
+    with pytest.raises(TaskTimeoutError):
+        _search().wait_for_task(7, timeout_s=0.0)
     with pytest.raises(MusicSearchError):
         _search().wait_for_task(7, timeout_s=0.0)
+    assert issubclass(TaskTimeoutError, MusicSearchError)
     _install(monkeypatch, _FakeTransport(task_status="succeeded"))
     _search().wait_for_task(7, timeout_s=5.0)
 
@@ -385,3 +398,109 @@ def test_create_index_refuses_existing_without_post(monkeypatch) -> None:
     with pytest.raises(MusicSearchError):
         _search().create_index_for("rev_a")
     assert [req.get_method() for req in transport.requests] == ["GET"]
+
+
+def test_get_settings_for_reads_target_index(monkeypatch) -> None:
+    transport = _install(monkeypatch, _FakeTransport())
+    settings = _search().get_settings_for("rev_a")
+    assert settings == {"rankingRules": ["words"], "searchableAttributes": ["title"]}
+    (request,) = transport.requests
+    assert request.full_url == "http://127.0.0.1:17770/indexes/rev_a/settings"
+    assert request.get_method() == "GET"
+    with pytest.raises(MusicSearchError):
+        _search().get_settings_for("rev a")
+    assert len(transport.requests) == 1
+
+
+def test_get_settings_for_classifies_transport_errors(monkeypatch) -> None:
+    def http_error(code: int):
+        return urllib.error.HTTPError(
+            "http://127.0.0.1:17770/indexes/rev_a/settings",
+            code,
+            "e",
+            {},
+            io.BytesIO(b"{}"),
+        )
+
+    class _Status(_FakeTransport):
+        def __init__(self, code: int) -> None:
+            super().__init__()
+            self.code = code
+
+        def __call__(self, request, timeout=None):
+            self.requests.append(request)
+            raise http_error(self.code)
+
+    for code in (401, 403, 404):
+        _install(monkeypatch, _Status(code))
+        with pytest.raises(MusicSearchError):
+            _search().get_settings_for("rev_a")
+    for code in (500, 503):
+        _install(monkeypatch, _Status(code))
+        with pytest.raises(MusicSearchUnavailableError):
+            _search().get_settings_for("rev_a")
+
+
+def test_get_settings_for_rejects_malformed_and_oversize(monkeypatch) -> None:
+    transport = _install(monkeypatch, _FakeTransport())
+    transport.settings_payload = ["not", "a", "dict"]
+    with pytest.raises(MusicSearchError):
+        _search().get_settings_for("rev_a")
+
+    class _Big(_FakeTransport):
+        def __call__(self, request, timeout=None):
+            self.requests.append(request)
+            return _FakeResponse(b'{"k": "' + b"x" * (256 * 1024) + b'"}')
+
+    _install(monkeypatch, _Big())
+    with pytest.raises(MusicSearchError):
+        _search().get_settings_for("rev_a")
+
+
+def test_task_status_reads_terminal_and_live_states(monkeypatch) -> None:
+    for status in ("succeeded", "failed", "canceled", "enqueued", "processing"):
+        _install(monkeypatch, _FakeTransport(task_status=status))
+        assert _search().task_status(7) == status
+    _install(monkeypatch, _FakeTransport(task_status="succeeded"))
+    with pytest.raises(MusicSearchError):
+        _search().task_status(-1)
+    with pytest.raises(MusicSearchError):
+        _search().task_status("7")  # type: ignore[arg-type]
+
+
+def test_task_status_rejects_malformed_and_transport_errors(monkeypatch) -> None:
+    transport = _install(monkeypatch, _FakeTransport(task_status="succeeded"))
+    transport.task_status = 7  # type: ignore[assignment]
+    with pytest.raises(MusicSearchError):
+        _search().task_status(7)
+    _install(monkeypatch, _FakeTransport(fail_with=TimeoutError("t")))
+    with pytest.raises(MusicSearchUnavailableError):
+        _search().task_status(7)
+
+
+def test_canonical_settings_hash_is_deterministic() -> None:
+    from remanence.music.search.meilisearch import canonical_settings_hash
+
+    assert (
+        canonical_settings_hash({"a": 1, "b": [2, 3]})
+        == "efbd0040190fb0871831e606c581f8a66db79d8e2bb836745a70051306956070"
+    )
+    assert canonical_settings_hash({"b": [2, 3], "a": 1}) == canonical_settings_hash(
+        {"a": 1, "b": [2, 3]}
+    )
+    assert (
+        canonical_settings_hash(json.loads('{ "a" : 1 , "b" : [ 2 , 3 ] }'))
+        == canonical_settings_hash({"a": 1, "b": [2, 3]})
+    )
+    with pytest.raises(MusicSearchError):
+        canonical_settings_hash(["not-a-dict"])  # type: ignore[arg-type]
+
+
+def test_hash_differs_between_write_payload_and_read_back() -> None:
+    from remanence.music.search.meilisearch import canonical_settings_hash
+
+    write_payload = {"rankingRules": ["words"]}
+    read_back = dict(write_payload)
+    read_back["typoTolerance"] = {"enabled": True}
+    assert canonical_settings_hash(write_payload) != canonical_settings_hash(read_back)
+    assert canonical_settings_hash(read_back) == canonical_settings_hash(dict(read_back))

@@ -24,6 +24,7 @@ touch production containers.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 import urllib.error
@@ -81,6 +82,26 @@ def validate_index_uid(index_uid: object) -> str:
         if char not in _INDEX_UID_RE:
             raise MusicSearchError("invalid index uid")
     return index_uid
+
+
+def canonical_settings_hash(settings: object) -> str:
+    """Canonical sha256 over index settings (revision fingerprinting).
+
+    Canonical JSON (sorted keys, compact separators, UTF-8) so equal
+    settings hash equally regardless of key order or whitespace.
+
+    Fingerprint rule (activation gate): hash the full READ-BACK settings
+    snapshot from :meth:`MeilisearchMusicSearch.get_settings_for`, never
+    the write payload — the backend adds defaults, so hashing the write
+    payload would pin an incomplete picture.
+    """
+    if type(settings) is not dict:
+        raise MusicSearchError("invalid settings")
+    try:
+        canonical = json.dumps(settings, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError) as exc:
+        raise MusicSearchError("invalid settings") from exc
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _validate_search_document(document: object) -> None:
@@ -170,6 +191,15 @@ def build_search_request_payload(query: str, limit: int, offset: int = 0) -> dic
     if not _names_variant(cleaned):
         payload["sort"] = ["canonicalRank:asc"]
     return payload
+
+
+class TaskTimeoutError(MusicSearchError):
+    """A task poll exceeded its deadline (outcome unknown, not failure).
+
+    Distinct from terminal ``failed``/``canceled``: a timeout means the
+    swap may have applied, so callers must reconcile (UNKNOWN path),
+    never treat it as known-untouched.
+    """
 
 
 class MeilisearchMusicSearch:
@@ -373,6 +403,35 @@ class MeilisearchMusicSearch:
         decoded = self._post(url, {"uid": target, "primaryKey": primary_key})
         return self._task_uid(decoded)
 
+    def get_settings_for(self, index_uid: str) -> dict:
+        """Read an explicit index's settings (revision fingerprint check)."""
+        target = validate_index_uid(index_uid)
+        request = urllib.request.Request(
+            self._settings_url_for(target), headers=self._headers(), method="GET"
+        )
+        decoded = self._read_json(request)
+        if type(decoded) is not dict:
+            raise MusicSearchError("music search failed")
+        return decoded
+
+    def task_status(self, task_uid: int) -> str:
+        """Read one task's status string (shared poll/resume/reconcile reader).
+
+        Terminal interpretation stays with the caller: ``succeeded``,
+        ``failed`` and ``canceled`` are terminal, anything else is still
+        in flight. Transport problems keep the existing split
+        (timeout/5xx unavailable, 4xx error); malformed bodies are errors.
+        """
+        if type(task_uid) is not int or task_uid < 0:
+            raise MusicSearchError("invalid task")
+        url = f"{self._config.base_url.rstrip('/')}/tasks/{task_uid}"
+        request = urllib.request.Request(url, headers=self._headers(), method="GET")
+        decoded = self._read_json(request)
+        status = decoded.get("status")
+        if type(status) is not str or not status:
+            raise MusicSearchError("music search failed")
+        return status
+
     def index_document_count(self, index_uid: str) -> int:
         """Read an explicit index's document count (build-vs-source check)."""
         target = validate_index_uid(index_uid)
@@ -437,7 +496,7 @@ class MeilisearchMusicSearch:
             if status in ("failed", "canceled"):
                 raise MusicSearchError("music search failed")
             if time.monotonic() >= deadline:
-                raise MusicSearchError("music search failed")
+                raise TaskTimeoutError("music search task timed out")
             time.sleep(0.1)
 
     @staticmethod

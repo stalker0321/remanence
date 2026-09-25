@@ -33,6 +33,7 @@ from remanence.music.search.revisions import (
     RevisionBuildError,
     RevisionStatus,
     build_revision_manager,
+    persist_validated_revision,
     revision_index_uid,
 )
 from remanence.music.search.staging import PostgresStagingSearch
@@ -65,5 +66,6 @@ __all__ = [
     "derive_query_probes",
     "meilisearch_index_settings",
     "parse_search_document_id",
+    "persist_validated_revision",
     "revision_index_uid",
 ]

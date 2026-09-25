@@ -23,8 +23,10 @@ from remanence.music.search.document import meilisearch_index_settings
 from remanence.music.search.document_source import StagingSearchDocumentSource
 from remanence.music.search.meilisearch import (
     MeilisearchMusicSearch,
+    canonical_settings_hash,
     validate_index_uid,
 )
+from remanence.music.search.revision_store import RevisionRecord, RevisionStateStore
 from remanence.music.ports import MusicSearchError
 
 
@@ -69,6 +71,7 @@ class RevisionIndexOps(Protocol):
     def create_index_for(self, index_uid: str, primary_key: str = ...) -> int: ...
     def update_settings_for(self, index_uid: str, settings: dict) -> int: ...
     def put_documents_to(self, index_uid: str, documents: list[dict]) -> int: ...
+    def get_settings_for(self, index_uid: str) -> dict: ...
     def index_document_count(self, index_uid: str) -> int: ...
     def wait_for_task(self, task_uid: int, *, timeout_s: float = ...) -> None: ...
 
@@ -170,4 +173,63 @@ def build_revision_manager(
         document_source,
         task_timeout_s,
         active_uid=active if type(active) is str else None,
+    )
+
+
+def persist_validated_revision(
+    store: RevisionStateStore,
+    ops: RevisionIndexOps,
+    built: MusicIndexRevision,
+    base_uid: str,
+) -> RevisionRecord:
+    """Persist one B2a-built revision into the ledger (exactly one row).
+
+    Requires a VALIDATED build whose UID is exactly
+    ``revision_index_uid(base_uid, rev)`` — checked before any I/O or
+    ledger write, so a mismatched rev/UID pair can never be recorded.
+    Then re-reads the candidate document count and FULL settings via
+    read-back and requires
+    ``count == built.documents_pushed == built.expected_count > 0``.
+    The stored hash is canonical over the read-back snapshot (which
+    includes backend defaults), never over the write payload. Any
+    transport/count/hash failure, non-VALIDATED input, or duplicate
+    rev/UID fails closed with zero new ledger rows (duplicates surface
+    as the store's typed conflict).
+    """
+    if not isinstance(built, MusicIndexRevision):
+        raise RevisionBuildError("persist requires a MusicIndexRevision")
+    if built.status != RevisionStatus.VALIDATED:
+        raise RevisionBuildError(f"revision {built.rev} is {built.status}, not VALIDATED")
+    try:
+        expected_uid = revision_index_uid(base_uid, built.rev)
+    except RevisionBuildError as exc:
+        raise RevisionBuildError(f"persist refuses mismatched base uid: {exc}") from exc
+    if built.index_uid != expected_uid:
+        raise RevisionBuildError(
+            f"revision {built.rev} uid {built.index_uid!r} != {expected_uid!r}"
+        )
+    if not isinstance(store, RevisionStateStore):
+        raise TypeError("persist requires a RevisionStateStore")
+    for capability in ("index_document_count", "get_settings_for"):
+        if not callable(getattr(ops, capability, None)):
+            raise TypeError(f"persist requires ops.{capability}")
+    live_count = ops.index_document_count(built.index_uid)
+    live_settings = ops.get_settings_for(built.index_uid)
+    if (
+        type(live_count) is not int
+        or isinstance(live_count, bool)
+        or live_count != built.documents_pushed
+        or live_count != built.expected_count
+        or live_count <= 0
+    ):
+        raise RevisionBuildError(
+            f"revision {built.rev} count mismatch: "
+            f"live={live_count!r} pushed={built.documents_pushed} "
+            f"expected={built.expected_count}"
+        )
+    return store.create_revision(
+        rev=built.rev,
+        candidate_uid=built.index_uid,
+        doc_count=live_count,
+        settings_hash=canonical_settings_hash(live_settings),
     )

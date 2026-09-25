@@ -90,8 +90,8 @@ fun ScanWaitingGroup(
     }
 
     AstraEnterTransition(motion = motion, modifier = modifier) {
-        // The column must fill the waiting width: otherwise it wraps the
-        // 76%-width postcard and CenterHorizontally has nothing to center in.
+        // The column fills the waiting width so CenterHorizontally has a
+        // full-width scope to center the height-led portrait card in.
         Column(Modifier.fillMaxWidth()) {
             val density = LocalDensity.current
             val carryShiftPx = with(density) { 8.dp.toPx() }
@@ -137,12 +137,15 @@ fun ScanWaitingGroup(
             val fullMotion = motion == AstraMotionSpec.Resolved.FULL
             AstraPostcard(
                 Modifier
-                    // Design study styles.css `.postcard{width:76%}`: the
-                    // waiting card is 76% of the content width and centered.
-                    // The side room absorbs the -7° rotated corners and the
-                    // card shadow, so no horizontal inset is needed.
-                    .fillMaxWidth(0.76f)
+                    // Final portrait waiting
+                    // (`validation.css:.wait-presentation .postcard-portrait
+                    // {width:auto;height:83%;max-height:275px}`, upright):
+                    // the card is height-led (180..275dp slot), portrait
+                    // 3:4, and centered. The Canvas shrinks its width to
+                    // preserve 3:4 under the height cap instead of
+                    // stretching, so no width fraction is hardcoded here.
                     .align(Alignment.CenterHorizontally)
+                    .heightIn(min = 180.dp, max = 275.dp)
                     .graphicsLayer {
                         alpha = presence.value
                         val entryScale = if (fullMotion) {

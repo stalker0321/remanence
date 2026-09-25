@@ -345,7 +345,7 @@ class AstraScanWaitingTest {
 
     @Test
     @Config(qualifiers = "w390dp-h844dp-xhdpi")
-    fun postcardIsSeventySixPercentCenteredWithSafeBounds() {
+    fun postcardIsPortraitHeightLedCentered() {
         composeRule.setContent {
             HoldTheme {
                 ScanWaitingGroup(
@@ -362,16 +362,22 @@ class AstraScanWaitingTest {
         val card = composeRule.onNodeWithTag("astra_postcard").getUnclippedBoundsInRoot()
         val parentWidth = (parent.right - parent.left).value
         val cardWidth = (card.right - card.left).value
-        val ratio = cardWidth / parentWidth
-        // styles.css `.postcard{width:76%}`: the unrotated layout width is
-        // exactly 76%; a rotated bounding box may read up to ~82% (7° tilt).
-        assertTrue("postcard must be ~76% of waiting width: ratio=$ratio", ratio in 0.70f..0.86f)
+        val cardHeight = (card.bottom - card.top).value
+        val aspect = cardWidth / cardHeight
+        // Final portrait reference (`validation.css:.postcard-portrait
+        // {aspect-ratio:3/4}`, waiting `{height:83%;max-height:275px}`,
+        // upright): w/h must read ~0.75, never landscape.
+        assertTrue("postcard must be 3:4 portrait: aspect=$aspect", aspect in 0.70f..0.80f)
+        assertTrue("postcard must be taller than wide: ${cardWidth}x$cardHeight", cardHeight > cardWidth)
+        // Height-led: under the 275dp cap the width shrinks to preserve
+        // 3:4, so the card is strictly narrower than the waiting group.
+        assertTrue("portrait card must be narrower than group: $cardWidth vs $parentWidth", cardWidth < parentWidth)
         // Centered: card center matches parent center.
         val parentCx = ((parent.left + parent.right) / 2f).value
         val cardCx = ((card.left + card.right) / 2f).value
         assertTrue("postcard must be centered: parentCx=$parentCx cardCx=$cardCx", abs(cardCx - parentCx) < 8f)
-        // Safe bounds: rotated corners + card shadow stay inside the group
-        // (the 12% side room absorbs them), with a small measuring slack.
+        // Safe bounds: upright card + shadow stay inside the group,
+        // with a small measuring slack.
         assertTrue(
             "card left inside group: ${card.left.value} vs ${parent.left.value}",
             card.left.value >= parent.left.value - 16f,
@@ -385,7 +391,7 @@ class AstraScanWaitingTest {
 
     @Test
     @Config(qualifiers = "w390dp-h844dp-xhdpi")
-    fun rotatedPostcardIsNotClippedByAnyParent() {
+    fun uprightPostcardIsNotClippedByAnyParent() {
         composeRule.setContent {
             HoldTheme {
                 ScanWaitingGroup(
@@ -399,12 +405,12 @@ class AstraScanWaitingTest {
         composeRule.mainClock.advanceTimeBy(1_000L)
 
         // getBoundsInRoot applies ancestor clipping, getUnclippedBoundsInRoot
-        // does not: equality proves no parent clips the rotated card. The
+        // does not: equality proves no parent clips the upright card. The
         // internal band clip lives inside the artwork Canvas and is unaffected.
         val clipped = composeRule.onNodeWithTag("astra_postcard").getBoundsInRoot()
         val unclipped = composeRule.onNodeWithTag("astra_postcard").getUnclippedBoundsInRoot()
         assertTrue(
-            "rotated postcard must not be clipped: clipped=$clipped unclipped=$unclipped",
+            "upright postcard must not be clipped: clipped=$clipped unclipped=$unclipped",
             abs((clipped.left - unclipped.left).value) < 1f &&
                 abs((clipped.right - unclipped.right).value) < 1f &&
                 abs((clipped.top - unclipped.top).value) < 1f &&

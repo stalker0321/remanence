@@ -289,3 +289,7 @@ def main(argv: list[str] | None = None) -> int:
     except PlanError:
         print("bootstrap refused", flush=True)
         return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -9,6 +9,8 @@ appear in argv or output.
 from __future__ import annotations
 
 import importlib.util
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -314,3 +316,31 @@ def test_secret_bearing_failures_stay_silent(monkeypatch, capsys) -> None:
         _drain()
     finally:
         capsys.readouterr()
+
+
+def test_cli_runs_as_subprocess_dry_run(tmp_path) -> None:
+    """The module must be executable as a real process (entrypoint guard).
+
+    No live DB/Meili: the dry-run opens no connection; hostile/unreachable
+    env (loopback port 1) is never contacted and the Meili key is absent.
+    """
+    env = {k: v for k, v in os.environ.items() if not k.startswith("REMANENCE_")}
+    env.update(
+        {
+            "REMANENCE_MODE": "dev",
+            "REMANENCE_DATABASE_URL": "postgresql+psycopg://u:p@127.0.0.1:1/db",
+            "REMANENCE_BLOB_ROOT": str(tmp_path / "blobs"),
+            "REMANENCE_MUSIC_SEARCH_BACKEND": "postgres_staging",
+        }
+    )
+    result = subprocess.run(
+        [sys.executable, str(_CLI_PATH), "--stable-uid", "remanence_tracks_v1"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "plan:" in result.stdout
+    assert "dry-run" in result.stdout
+    assert "remanence_tracks_v1" in result.stdout

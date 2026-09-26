@@ -14,6 +14,7 @@ import dev.hryshyn.remanence.ui.collage.CollageRenderer
 import dev.hryshyn.remanence.ui.collage.FontRegistry
 import dev.hryshyn.remanence.ui.collage.StyleRegistry
 import java.io.ByteArrayOutputStream
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableSharedFlow
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -212,5 +213,61 @@ class CollageRouteTest {
 
         composeRule.onNodeWithTag("capsule_page_indicator").assertIsDisplayed()
         composeRule.onNodeWithTag("collage_canvas").assertDoesNotExist()
+    }
+
+    private fun gatedSource(
+        gate: CompletableDeferred<Unit>,
+        admission: CapsulePresentationAdmission,
+    ) = object : CapsuleContentReader {
+        override suspend fun photoCount(capsuleId: String): Int = 3
+
+        override suspend fun loadPhoto(capsuleId: String, ordinal: Int): DecryptedPhoto {
+            gate.await()
+            return DecryptedPhoto(ordinal, realCollageJpeg(0xFF336699L + ordinal))
+        }
+
+        override suspend fun noteText(capsuleId: String): String? = null
+
+        override suspend fun trackSnapshot(capsuleId: String): CapsuleTrackSnapshotV1? = null
+
+        override suspend fun presentationAdmission(capsuleId: String): CapsulePresentationAdmission = admission
+    }
+
+    @Test
+    fun revokeBeforeCollagePublicationNeverShowsCanvas() {
+        val gate = CompletableDeferred<Unit>()
+        val revocations = MutableSharedFlow<String>(extraBufferCapacity = 8)
+        setContent(
+            gatedSource(gate, CapsulePresentationAdmission.Ber1(v3Expression())),
+            revocations = revocations,
+        )
+        composeRule.waitForIdle()
+
+        revocations.tryEmit("grant-1")
+        composeRule.waitForIdle()
+        gate.complete(Unit)
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("capsule_route_failed_message").assertIsDisplayed()
+        composeRule.onNodeWithTag("collage_canvas").assertDoesNotExist()
+    }
+
+    @Test
+    fun revokeBeforeBer1PublicationNeverShowsCanvas() {
+        val gate = CompletableDeferred<Unit>()
+        val revocations = MutableSharedFlow<String>(extraBufferCapacity = 8)
+        setContent(
+            gatedSource(gate, CapsulePresentationAdmission.Ber1(v2Expression())),
+            revocations = revocations,
+        )
+        composeRule.waitForIdle()
+
+        revocations.tryEmit("grant-1")
+        composeRule.waitForIdle()
+        gate.complete(Unit)
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("capsule_route_failed_message").assertIsDisplayed()
+        composeRule.onNodeWithTag("capsule_ber1_canvas").assertDoesNotExist()
     }
 }

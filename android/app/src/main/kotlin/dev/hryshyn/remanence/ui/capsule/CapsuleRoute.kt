@@ -28,7 +28,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.google.crypto.tink.KeysetHandle
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.isActive
 import kotlin.coroutines.cancellation.CancellationException
 import dev.hryshyn.remanence.R
 import dev.hryshyn.remanence.core.model.GeneratorExpression
@@ -103,6 +105,10 @@ internal fun CapsuleRoute(
     }
     // Retry re-runs the whole load exactly once per tap.
     var loadEpoch by remember(grantId) { mutableIntStateOf(0) }
+    // Authoritative revocation is terminal for this grant. It is set BEFORE
+    // any published state is closed/overwritten, so a loader suspended in
+    // decrypt/decode can never publish Ready afterwards.
+    val revoked = remember(grantId) { mutableStateOf(false) }
 
     // The route owns the presentation state while it is mounted. System Back
     // must release it before delegating the navigation/authority revocation.
@@ -122,8 +128,9 @@ internal fun CapsuleRoute(
 
     // Authoritative revocation releases every decrypted reference immediately.
     LaunchedEffect(grantId) {
-        revocations.collect { revoked ->
-            if (revoked == grantId) {
+        revocations.collect { revokedId ->
+            if (revokedId == grantId) {
+                revoked.value = true
                 (state as? CapsuleRouteState.Ready)?.presentation?.close()
                 state = CapsuleRouteState.Failed("This capsule was closed automatically.")
             }
@@ -131,6 +138,10 @@ internal fun CapsuleRoute(
     }
 
     LaunchedEffect(grantId, loadEpoch) {
+        if (revoked.value) {
+            state = CapsuleRouteState.Failed("This capsule was closed automatically.")
+            return@LaunchedEffect
+        }
         state = CapsuleRouteState.Loading
         try {
             val binding = contentFactory()
@@ -139,7 +150,7 @@ internal fun CapsuleRoute(
                 delegate = binding.reader,
                 validateLiveGrant = validateLiveGrant,
             )
-            state = when (val admission = source.presentationAdmission(binding.capsuleId)) {
+            val loaded: CapsuleRouteState = when (val admission = source.presentationAdmission(binding.capsuleId)) {
                 CapsulePresentationAdmission.LegacyV1 -> {
                     val declaredCount = source.photoCount(binding.capsuleId)
                     if (declaredCount !in ProtocolV1Limits.PHOTO_COUNT_MIN..ProtocolV1Limits.PHOTO_COUNT_MAX) {
@@ -190,6 +201,13 @@ internal fun CapsuleRoute(
                 is CapsulePresentationAdmission.Unsupported ->
                     CapsuleRouteState.Ready(CapsulePresentation.Unsupported(admission.reason))
             }
+            // Revocation or route disposal won while decrypt/decode was
+            // suspended: release the newly loaded state and never publish it.
+            if (revoked.value || !currentCoroutineContext().isActive) {
+                (loaded as? CapsuleRouteState.Ready)?.presentation?.close()
+                return@LaunchedEffect
+            }
+            state = loaded
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {

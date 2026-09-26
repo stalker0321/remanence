@@ -14,6 +14,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hryshyn.remanence.R
 import dev.hryshyn.remanence.core.model.GeneratorExpression
+import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -24,14 +26,16 @@ import org.robolectric.annotation.GraphicsMode
 /**
  * Robolectric Compose coverage for [CollageCanvas]: root/content tags, one
  * merged accessibility node with the caller description + [Role.Image],
- * fail-closed no-content on missing images or overflowing text, and agreement
+ * fail-closed no-content on missing images, too-small bitmaps, or overflowing
+ * text, the sealed text-op colour reaching the draw calls, and agreement
  * between the real Compose measurer used by [CollageRenderer.prepare] and by
  * the painter.
  *
  * Environment note: Robolectric does not assert rendered pixels here; the
  * no-content cases are pinned by composition (the content node is absent),
- * and the exact scale/order/crop math is pinned by [CollagePainterTest]. Real
- * font metrics require `@GraphicsMode(NATIVE)` (used below).
+ * the colour binding by a source-level assertion, and the exact
+ * scale/order/crop math by [CollagePainterTest]. Real font metrics require
+ * `@GraphicsMode(NATIVE)` (used below).
  */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35])
@@ -45,14 +49,16 @@ class CollageCanvasTest {
 
     private fun rect(x: Int, y: Int, w: Int, h: Int) = CollageRenderer.RectI(x, y, w, h)
 
-    private fun image(): ImageBitmap =
-        Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888).asImageBitmap()
+    private fun image(size: Int = 4): ImageBitmap =
+        Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).asImageBitmap()
 
-    private fun images(vararg ids: String): Map<String, ImageBitmap> = ids.associateWith { image() }
+    private fun images(vararg ids: String, size: Int = 4): Map<String, ImageBitmap> =
+        ids.associateWith { image(size) }
 
     private fun scene(
         note: CollageRenderer.SceneText? = null,
         music: CollageRenderer.SceneMusic? = null,
+        source: CollageRenderer.RectI = rect(0, 0, 4, 4),
     ) = CollageRenderer.Scene(
         canvasWidth = 360,
         canvasHeight = 640,
@@ -61,7 +67,7 @@ class CollageCanvasTest {
         ink = 0xFF191B19.toInt(),
         sound = 0xFF191B19.toInt(),
         soundInk = 0xFFF2F3B0.toInt(),
-        photos = contentIds.map { CollageRenderer.ScenePhoto(it, rect(0, 0, 120, 213), rect(0, 0, 4, 4)) },
+        photos = contentIds.map { CollageRenderer.ScenePhoto(it, rect(0, 0, 120, 213), source) },
         note = note,
         music = music,
     )
@@ -76,6 +82,14 @@ class CollageCanvasTest {
     @Test
     fun missingImageRendersRootWithoutContent() {
         composeRule.setContent { CollageCanvas(scene(), images("p0", "p1"), "collage") }
+        composeRule.onNodeWithTag("collage_canvas").assertExists()
+        composeRule.onNodeWithTag("collage_canvas_content", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun tooSmallBitmapRendersRootWithoutContent() {
+        // Sealed source rect is 4x4 but the decoded bitmap is only 2x2.
+        composeRule.setContent { CollageCanvas(scene(), images("p0", "p1", "p2", size = 2), "collage") }
         composeRule.onNodeWithTag("collage_canvas").assertExists()
         composeRule.onNodeWithTag("collage_canvas_content", useUnmergedTree = true).assertDoesNotExist()
     }
@@ -104,6 +118,15 @@ class CollageCanvasTest {
         composeRule.onNodeWithTag("collage_canvas").assertContentDescriptionEquals("Коллаж")
         composeRule.onNodeWithTag("collage_canvas")
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Image))
+    }
+
+    @Test
+    fun textDrawCallsUseTheSealedOpColor() {
+        val source = moduleFile("src/main/kotlin/dev/hryshyn/remanence/ui/collage/CollageCanvas.kt")
+            .readText()
+            .replace(Regex("\\s+"), " ")
+        val needle = "drawText( textLayoutResult = layout, color = Color(op.color),"
+        assertEquals(2, source.split(needle).size - 1)
     }
 
     @Test
@@ -185,5 +208,21 @@ class CollageCanvasTest {
     )
 
     private fun sourceMap(): Map<String, CollageRenderer.SourcePhoto> =
-        contentIds.associateWith { CollageRenderer.SourcePhoto(1000, 1000) }
+        contentIds.associateWith { CollageRenderer.SourcePhoto(4, 4) }
+
+    private fun moduleFile(relative: String): File {
+        val prefixes = listOf("", "app/", "android/app/")
+        var directory: File? = File("").absoluteFile
+        repeat(6) {
+            val base = directory
+            if (base != null) {
+                for (prefix in prefixes) {
+                    val candidate = File(base, prefix + relative)
+                    if (candidate.exists()) return candidate
+                }
+            }
+            directory = directory?.parentFile
+        }
+        return File(relative)
+    }
 }

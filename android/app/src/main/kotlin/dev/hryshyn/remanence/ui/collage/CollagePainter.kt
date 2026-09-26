@@ -67,16 +67,24 @@ object CollagePainter {
     }
 
     /**
-     * True only when every authored photo has a decoded image and every sealed
-     * source/destination rect is positive. The painter refuses to draw
-     * otherwise (no partial sheet, no silent omission).
+     * True only when every authored photo id binds to a decoded image of the
+     * exact bound dimensions and every sealed source/destination rect is
+     * positive and contained by that image. The painter refuses to draw
+     * otherwise (no partial sheet, no silent omission, no out-of-bounds crop).
      */
-    fun isDrawable(scene: CollageRenderer.Scene, imageIds: Set<String>): Boolean {
+    fun isDrawable(scene: CollageRenderer.Scene, images: Map<String, CollageRenderer.SourcePhoto>): Boolean {
         if (scene.photos.isEmpty()) return false
-        if (scene.photos.map { it.contentId }.toSet() != imageIds) return false
-        return scene.photos.all {
-            it.source.width > 0 && it.source.height > 0 &&
-                it.destination.width > 0 && it.destination.height > 0
+        if (scene.photos.map { it.contentId }.toSet() != images.keys) return false
+        return scene.photos.all { photo ->
+            val image = images.getValue(photo.contentId)
+            val source = photo.source
+            val destination = photo.destination
+            image.width > 0 && image.height > 0 &&
+                source.x >= 0 && source.y >= 0 &&
+                source.width > 0 && source.height > 0 &&
+                source.x.toLong() + source.width <= image.width &&
+                source.y.toLong() + source.height <= image.height &&
+                destination.width > 0 && destination.height > 0
         }
     }
 
@@ -85,8 +93,8 @@ object CollagePainter {
      * Source/destination rects are the sealed [CollageRenderer.ScenePhoto]
      * values verbatim; the painter never recomputes crops.
      */
-    fun drawList(scene: CollageRenderer.Scene, imageIds: Set<String>): List<Op>? {
-        if (!isDrawable(scene, imageIds)) return null
+    fun drawList(scene: CollageRenderer.Scene, images: Map<String, CollageRenderer.SourcePhoto>): List<Op>? {
+        if (!isDrawable(scene, images)) return null
         val ops = ArrayList<Op>(scene.photos.size + 3)
         ops += Op.Paper(scene.paper, CollageRenderer.RectI(0, 0, scene.canvasWidth, scene.canvasHeight))
         scene.photos.forEach { ops += Op.Photo(it.contentId, it.source, it.destination) }

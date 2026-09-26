@@ -113,7 +113,10 @@ fun CollageCanvas(
     modifier: Modifier = Modifier,
     textMeasurer: CollageTextMeasurer = rememberCollageTextMeasurer(),
 ) {
-    val drawOps = remember(scene, images.keys) { CollagePainter.drawList(scene, images.keys) }
+    val imageSizes = remember(images) {
+        images.mapValues { CollageRenderer.SourcePhoto(it.value.width, it.value.height) }
+    }
+    val drawOps = remember(scene, imageSizes) { CollagePainter.drawList(scene, imageSizes) }
     val note = scene.note
     val music = scene.music
     val noteLayout = note?.let { remember(it, textMeasurer) { textMeasurer.layout(it.toMeasureRequest()) } }
@@ -158,7 +161,7 @@ fun CollageCanvas(
                             )
 
                             is CollagePainter.Op.Photo -> {
-                                val image = images[op.contentId] ?: return@Canvas
+                                val image = images.getValue(op.contentId)
                                 drawImage(
                                     image = image,
                                     srcOffset = IntOffset(op.source.x, op.source.y),
@@ -179,6 +182,7 @@ fun CollageCanvas(
                                 ) {
                                     drawText(
                                         textLayoutResult = layout,
+                                        color = Color(op.color),
                                         topLeft = Offset(op.region.x.toFloat(), op.region.y.toFloat()),
                                     )
                                 }
@@ -200,6 +204,7 @@ fun CollageCanvas(
                                 ) {
                                     drawText(
                                         textLayoutResult = layout,
+                                        color = Color(op.color),
                                         topLeft = Offset(op.region.x.toFloat(), op.region.y.toFloat()),
                                     )
                                 }

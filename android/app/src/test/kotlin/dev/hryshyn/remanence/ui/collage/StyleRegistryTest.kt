@@ -1,64 +1,115 @@
 package dev.hryshyn.remanence.ui.collage
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * Pins the three bundled collage styles to the capsule-engine V5 freeze
  * `runtime/styles.js` (grammar group 5) and to hardcoded STYD01 v1 golden
- * bytes/digests. The goldens were derived independently from the record
- * grammar in [StyleRegistry]; they are not recomputed from the production
- * encoder here.
+ * bytes/digests in the accepted `V5 contract` section 7 order. The goldens
+ * were derived independently from that byte order; they are not recomputed
+ * from the production encoder here.
  */
 class StyleRegistryTest {
 
     private fun hex(bytes: ByteArray): String = bytes.joinToString("") { "%02x".format(it) }
 
+    private fun style(id: String): StyleRegistry.Style = requireNotNull(StyleRegistry.style(id))
+
     @Test
     fun bundledStylesAreExactlyPressBlueLetterPoster() {
         assertEquals(setOf("press", "blue-letter", "poster"), StyleRegistry.ids)
         for (id in listOf("press", "blue-letter", "poster")) {
-            assertEquals("style-study-1", StyleRegistry.style(id)?.version)
+            assertEquals("style-study-1", style(id).version)
+            assertEquals(StyleRegistry.GRAMMAR, style(id).grammar)
+            assertEquals("flat", style(id).surfaceMode)
         }
     }
 
     @Test
-    fun colorsMatchTheFreezeExactly() {
-        val press = requireNotNull(StyleRegistry.style("press"))
-        assertEquals(0xFFF2F3B0.toInt(), press.paper)
-        assertEquals(0xFF191B19.toInt(), press.ink)
-        assertEquals(0xFF191B19.toInt(), press.sound)
-        assertEquals(0xFFF2F3B0.toInt(), press.soundInk)
+    fun paletteMatchesTheFreezeExactly() {
+        val press = style("press").palette
+        assertEquals("#f2f3b0", press.paper)
+        assertEquals("#191b19", press.ink)
+        assertEquals("#191b19", press.sound)
+        assertEquals("#f2f3b0", press.soundInk)
+        assertEquals("#f2f3b0", press.surface)
+        assertEquals("#191b19", press.edge)
 
-        val blueLetter = requireNotNull(StyleRegistry.style("blue-letter"))
-        assertEquals(0xFF1525A0.toInt(), blueLetter.paper)
-        assertEquals(0xFFF9EDD8.toInt(), blueLetter.ink)
-        assertEquals(0xFFF9EDD8.toInt(), blueLetter.sound)
-        assertEquals(0xFF1525A0.toInt(), blueLetter.soundInk)
+        val blueLetter = style("blue-letter").palette
+        assertEquals("#1525a0", blueLetter.paper)
+        assertEquals("#f9edd8", blueLetter.ink)
+        assertEquals("#f9edd8", blueLetter.sound)
+        assertEquals("#1525a0", blueLetter.soundInk)
+        assertEquals("#1525a0", blueLetter.surface)
+        assertEquals("#f9edd8", blueLetter.edge)
 
-        val poster = requireNotNull(StyleRegistry.style("poster"))
-        assertEquals(0xFFF4C4C2.toInt(), poster.paper)
-        assertEquals(0xFF521719.toInt(), poster.ink)
-        assertEquals(0xFFB82025.toInt(), poster.sound)
-        assertEquals(0xFFFFF6DE.toInt(), poster.soundInk)
+        val poster = style("poster").palette
+        assertEquals("#f4c4c2", poster.paper)
+        assertEquals("#521719", poster.ink)
+        assertEquals("#b82025", poster.sound)
+        assertEquals("#fff6de", poster.soundInk)
+        assertEquals("#f4c4c2", poster.surface)
+        assertEquals("#521719", poster.edge)
+    }
+
+    @Test
+    fun textRolesMatchTheFreezeExactly() {
+        val press = style("press")
+        assertEquals(StyleRegistry.TextStyle("StudySans", 59, 700, false), press.brand)
+        assertEquals(StyleRegistry.TextStyle("StudyMono", 16, 400, false), press.sender)
+        assertEquals(StyleRegistry.TextStyle("StudySans", 22, 400, false), press.note)
+        assertEquals(StyleRegistry.TextStyle("StudySans", 20, 400, false), press.music)
+        assertEquals(-0.065, press.tracking, 0.0)
+
+        val blueLetter = style("blue-letter")
+        assertEquals(StyleRegistry.TextStyle("StudySerif", 67, 400, false), blueLetter.brand)
+        assertEquals(StyleRegistry.TextStyle("StudySerif", 20, 400, true), blueLetter.sender)
+        assertEquals(StyleRegistry.TextStyle("StudySerif", 26, 400, false), blueLetter.note)
+        assertEquals(StyleRegistry.TextStyle("StudySerif", 22, 400, true), blueLetter.music)
+        assertEquals(-0.045, blueLetter.tracking, 0.0)
+
+        val poster = style("poster")
+        assertEquals(StyleRegistry.TextStyle("Narrow", 78, 700, false), poster.brand)
+        assertEquals(StyleRegistry.TextStyle("StudySans", 17, 700, false), poster.sender)
+        assertEquals(StyleRegistry.TextStyle("StudySans", 23, 400, false), poster.note)
+        assertEquals(StyleRegistry.TextStyle("Narrow", 24, 700, false), poster.music)
+        assertEquals(-0.01, poster.tracking, 0.0)
     }
 
     @Test
     fun canonicalRecordBytesMatchGolden() {
         assertEquals(
-            "535459443031000000010000000570726573730000000d7374796c652d73747564792d31" +
-                "f2f3b0191b19191b19f2f3b0",
+            "5354594430310000000d7374796c652d73747564792d3100000005707265737300000005" +
+                "000000057061706572000000072366326633623000000003696e6b0000000723313931623139" +
+                "00000005736f756e64000000072331393162313900000008736f756e64496e6b0000000723663266336230" +
+                "0000000773757266616365000000072366326633623000000004656467650000000723313931623139" +
+                "00000009537475647953616e730000003b000002bc000000000953747564794d6f6e6f0000001000000190" +
+                "0000000009537475647953616e7300000016000001900000000009537475647953616e73000000140000019000" +
+                "ffffffbf00000004666c6174",
             hex(requireNotNull(StyleRegistry.canonicalBytes("press"))),
         )
         assertEquals(
-            "535459443031000000010000000b626c75652d6c65747465720000000d7374796c652d73747564792d31" +
-                "1525a0f9edd8f9edd81525a0",
+            "5354594430310000000d7374796c652d73747564792d310000000b626c75652d6c657474657200000005" +
+                "000000057061706572000000072331353235613000000003696e6b0000000723663965646438" +
+                "00000005736f756e64000000072366396564643800000008736f756e64496e6b0000000723313532356130" +
+                "0000000773757266616365000000072331353235613000000004656467650000000723663965646438" +
+                "0000000a537475647953657269660000004300000190000000000a53747564795365726966000000140000019001" +
+                "0000000a537475647953657269660000001a00000190000000000a53747564795365726966000000160000019001" +
+                "ffffffd300000004666c6174",
             hex(requireNotNull(StyleRegistry.canonicalBytes("blue-letter"))),
         )
         assertEquals(
-            "5354594430310000000100000006706f737465720000000d7374796c652d73747564792d31" +
-                "f4c4c2521719b82025fff6de",
+            "5354594430310000000d7374796c652d73747564792d3100000006706f7374657200000005" +
+                "000000057061706572000000072366346334633200000003696e6b0000000723353231373139" +
+                "00000005736f756e64000000072362383230323500000008736f756e64496e6b0000000723666666366465" +
+                "0000000773757266616365000000072366346334633200000004656467650000000723353231373139" +
+                "000000064e6172726f770000004e000002bc0000000009537475647953616e7300000011000002bc" +
+                "0000000009537475647953616e73000000170000019000000000064e6172726f7700000018000002bc00" +
+                "fffffff600000004666c6174",
             hex(requireNotNull(StyleRegistry.canonicalBytes("poster"))),
         )
     }
@@ -66,15 +117,15 @@ class StyleRegistryTest {
     @Test
     fun digestsMatchGoldenSha256() {
         assertEquals(
-            "fc3df54a496ab6f7fe55e8d28ff0d532b44b088c6c85f3c8890c1e1d17f72d94",
+            "1f68610fa70b5210a72643d58f795c777d7a0e1eae262c522426d4b79a9a9a93",
             hex(requireNotNull(StyleRegistry.digest("press"))),
         )
         assertEquals(
-            "72ca2076a07a4c9e5e0d6ef96d35aa7f07e80f8cd50b1aad108061ec92460c83",
+            "da2d58fba44cb343a7020a8598d559d89d5e59a55f3651334b5c5647ef1872c3",
             hex(requireNotNull(StyleRegistry.digest("blue-letter"))),
         )
         assertEquals(
-            "622aa63144843c5e4e5a044b7e34de4fc20fe0ea9ee23decb1fa5ab3ea81cb08",
+            "628aec674a6d38afda3029e690f7a8b8ac13db90ed3bf3b2bb6bcadceccce5d4",
             hex(requireNotNull(StyleRegistry.digest("poster"))),
         )
     }
@@ -87,11 +138,22 @@ class StyleRegistryTest {
     }
 
     @Test
+    fun recordExcludesEditorialKeys() {
+        for (id in StyleRegistry.ids) {
+            val text = String(requireNotNull(StyleRegistry.canonicalBytes(id)), Charsets.ISO_8859_1)
+            assertFalse("$id must not encode name", text.contains("name"))
+            assertFalse("$id must not encode idea", text.contains("idea"))
+            assertFalse("$id must not encode baseline", text.contains("baseline"))
+        }
+    }
+
+    @Test
     fun unknownAndOtherFreezeStylesFailClosed() {
         for (id in listOf("signal", "night-air", "plum", "proof", "v4", "unknown", "")) {
             assertNull("expected $id to be absent", StyleRegistry.style(id))
             assertNull("expected $id to be absent", StyleRegistry.canonicalBytes(id))
             assertNull("expected $id to be absent", StyleRegistry.digest(id))
         }
+        assertTrue(StyleRegistry.PALETTE_KEYS == listOf("paper", "ink", "sound", "soundInk", "surface", "edge"))
     }
 }

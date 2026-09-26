@@ -138,6 +138,30 @@ class ExpressionReceiverAdmissionTest {
         return result.reason
     }
 
+    private fun capability(
+        digest: ByteArray? = ByteArray(32) { 7 },
+        face: Int? = 1,
+        fontVersionPin: Int = GeneratorEditorialRows.FONT_VERSION,
+        paletteVersionPin: Int = GeneratorEditorialRows.PALETTE_VERSION,
+        maskSupported: Boolean = false,
+        artworkSupported: Boolean = false,
+    ) = object : CollageRenderCapability {
+        override val enabled: Boolean = true
+        override fun styleDigest(styleId: String, styleVersion: String): ByteArray? =
+            if (styleId == "press" && styleVersion == "style-study-1") digest else null
+        override fun fontResource(family: String, weight: Int, italic: Boolean): Int? = face
+        override val fontVersion: Int = fontVersionPin
+        override val paletteVersion: Int = paletteVersionPin
+        override val maskSupported: Boolean = maskSupported
+        override val artworkSupported: Boolean = artworkSupported
+    }
+
+    private fun unsupportedReason(content: ContentManifestContent, capability: CollageRenderCapability): String {
+        val result = ExpressionReceiverAdmission.admit(content, capability)
+        assertTrue(result is ExpressionReceiverAdmission.Result.Unsupported, "expected Unsupported, got $result")
+        return result.reason
+    }
+
     @Test
     fun legacyV1PathUnchanged() {
         assertEquals(
@@ -238,6 +262,86 @@ class ExpressionReceiverAdmissionTest {
         assertEquals(
             "expression artifact failed validation",
             unsupportedReason(contentOf(expressionV3Base().copy(style = null))),
+        )
+    }
+
+    @Test
+    fun disabledCapabilityKeepsTheBlanketV3Refusal() {
+        assertEquals(
+            "finished collage rendering is not supported",
+            unsupportedReason(contentOf(expressionV3Base()), CollageRenderCapability.Disabled),
+        )
+        assertEquals(
+            "finished collage rendering is not supported",
+            unsupportedReason(contentOf(expressionV3TextMusic(), snapshot()), CollageRenderCapability.Disabled),
+        )
+        assertEquals(
+            "finished collage rendering is not supported",
+            unsupportedReason(contentOf(expressionV3Artwork(), snapshot()), CollageRenderCapability.Disabled),
+        )
+    }
+
+    @Test
+    fun enablingCapabilityAdmitsAValidTextOnlyV3() {
+        val result = ExpressionReceiverAdmission.admit(contentOf(expressionV3Base()), capability())
+        assertTrue(result is ExpressionReceiverAdmission.Result.Supported, "got $result")
+    }
+
+    @Test
+    fun wrongStyleDigestOrUnknownStyleVersionIsRejected() {
+        assertEquals(
+            "expression style is not supported",
+            unsupportedReason(contentOf(expressionV3Base()), capability(digest = ByteArray(32) { 9 })),
+        )
+        assertEquals(
+            "expression style is not supported",
+            unsupportedReason(contentOf(expressionV3Base()), capability(digest = null)),
+        )
+        assertEquals(
+            "expression style is not supported",
+            unsupportedReason(
+                contentOf(expressionV3Base().copy(style = style().copy(styleVersion = "style-study-2"))),
+                capability(),
+            ),
+        )
+    }
+
+    @Test
+    fun unbundledFaceIsRejected() {
+        assertEquals(
+            "expression style is not supported",
+            unsupportedReason(contentOf(expressionV3Base()), capability(face = null)),
+        )
+    }
+
+    @Test
+    fun fontOrPaletteVersionMismatchIsRejected() {
+        assertEquals(
+            "expression font or palette version is not supported",
+            unsupportedReason(contentOf(expressionV3Base()), capability(fontVersionPin = 2)),
+        )
+        assertEquals(
+            "expression font or palette version is not supported",
+            unsupportedReason(contentOf(expressionV3Base()), capability(paletteVersionPin = 2)),
+        )
+    }
+
+    @Test
+    fun thumbnailArtworkIsRejectedWhenArtworkIsUnsupported() {
+        assertEquals(
+            "music artwork rendering is not supported",
+            unsupportedReason(contentOf(expressionV3Artwork(), snapshot()), capability()),
+        )
+    }
+
+    @Test
+    fun maskIsRejectedWhenMaskIsUnsupported() {
+        val masked = expressionV3Base().copy(
+            placements = contentIds.map { placementV3(it).copy(maskId = "rect") },
+        )
+        assertEquals(
+            "expression mask is not supported",
+            unsupportedReason(contentOf(masked), capability()),
         )
     }
 }

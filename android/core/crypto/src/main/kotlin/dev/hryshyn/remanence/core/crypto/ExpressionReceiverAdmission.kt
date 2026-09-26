@@ -1,6 +1,52 @@
 package dev.hryshyn.remanence.core.crypto
 
 import dev.hryshyn.remanence.core.model.GeneratorExpression
+import java.security.MessageDigest
+
+/**
+ * Narrow receiver render capability for the V5 finished collage (contract V3).
+ *
+ * The authoritative style/font registries live in the app/UI layer, so
+ * [ExpressionReceiverAdmission] accepts this port instead of depending on
+ * `:app`. [Disabled] preserves the current blanket refusal at every existing
+ * call site (the default).
+ */
+interface CollageRenderCapability {
+
+    /** False keeps the blanket V3 refusal; true enables the capability gates. */
+    val enabled: Boolean
+
+    /** Canonical STYD01 v1 digest for (styleId, styleVersion), or null when not bundled. */
+    fun styleDigest(styleId: String, styleVersion: String): ByteArray?
+
+    /** Bundled font resource id for a face, or null when the face is not shipped. */
+    fun fontResource(family: String, weight: Int, italic: Boolean): Int?
+
+    /** Bundled font registry contract version. */
+    val fontVersion: Int
+
+    /** Bundled palette registry contract version. */
+    val paletteVersion: Int
+
+    /** Slice-1 ships no mask renderer. */
+    val maskSupported: Boolean
+
+    /** Slice-1 ships no cover-art fetcher/renderer. */
+    val artworkSupported: Boolean
+
+    companion object {
+        /** Blanket fail-closed capability; the default for every existing caller. */
+        val Disabled: CollageRenderCapability = object : CollageRenderCapability {
+            override val enabled: Boolean = false
+            override fun styleDigest(styleId: String, styleVersion: String): ByteArray? = null
+            override fun fontResource(family: String, weight: Int, italic: Boolean): Int? = null
+            override val fontVersion: Int = -1
+            override val paletteVersion: Int = -1
+            override val maskSupported: Boolean = false
+            override val artworkSupported: Boolean = false
+        }
+    }
+}
 
 /**
  * ADR-018 step 3 (receiver): decides whether a decrypted content manifest may
@@ -11,14 +57,15 @@ import dev.hryshyn.remanence.core.model.GeneratorExpression
  * presentation can render NOTHING instead of a wrong/fallback layout.
  *
  * Structural rules A1-A9 live in [GeneratorExpression.validateResolved] and
- * are deliberately not duplicated here. The note <-> noteRegion equivalence
- * rule is a legacy v2 (BER1) rule and is scoped to
- * [GeneratorExpression.EXPRESSION_CONTRACT_V2]; v1 has no noteRegion slot.
+ * run first, unchanged. The note <-> noteRegion equivalence rule is a legacy
+ * v2 (BER1) rule scoped to [GeneratorExpression.EXPRESSION_CONTRACT_V2]; v1 has
+ * no noteRegion slot.
  *
- * V5 finished collage (contract V3, artifact expression_version 2) fails
- * closed unconditionally until the shared collage renderer and the receiver
- * registries land: no V3 expression can be rendered today, so admitting one
- * would report readiness that does not exist.
+ * V3 additionally requires a [CollageRenderCapability]: exact style
+ * id/version/digest (constant-time), font/palette registry versions, every
+ * sealed note/music face bundled, no mask, and text-only (no artwork) music.
+ * With the default [CollageRenderCapability.Disabled] the V3 result is the
+ * existing blanket `"finished collage rendering is not supported"`.
  */
 object ExpressionReceiverAdmission {
 
@@ -30,7 +77,10 @@ object ExpressionReceiverAdmission {
         data class Unsupported(val reason: String) : Result
     }
 
-    fun admit(content: ContentManifestContent): Result {
+    /** Legacy call sites: no V3 capability, blanket fail-closed. */
+    fun admit(content: ContentManifestContent): Result = admit(content, CollageRenderCapability.Disabled)
+
+    fun admit(content: ContentManifestContent, capability: CollageRenderCapability): Result {
         if (content.protocolVersion != 2) {
             return Result.Unsupported("content manifest carries no v2 expression artifact")
         }
@@ -40,12 +90,45 @@ object ExpressionReceiverAdmission {
             return Result.Unsupported("expression artifact failed validation")
         }
         if (expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V3) {
-            // Temporary fail-closed until the shared collage renderer and the
-            // receiver registries land. Detail gates (artwork, style record,
-            // font/palette, mask) are intentionally not restated: no V3
-            // expression can reach a renderer today, so there is no readiness
-            // policy to pretend to.
-            return Result.Unsupported("finished collage rendering is not supported")
+            if (!capability.enabled) {
+                // Blanket fail-closed until the caller supplies the registries.
+                return Result.Unsupported("finished collage rendering is not supported")
+            }
+            val style = expression.style
+                ?: return Result.Unsupported("expression style is not supported")
+            val expectedDigest = capability.styleDigest(style.styleId, style.styleVersion)
+                ?: return Result.Unsupported("expression style is not supported")
+            if (!MessageDigest.isEqual(style.digest, expectedDigest)) {
+                return Result.Unsupported("expression style is not supported")
+            }
+            if (expression.fontVersion != capability.fontVersion ||
+                expression.paletteVersion != capability.paletteVersion
+            ) {
+                return Result.Unsupported("expression font or palette version is not supported")
+            }
+            val noteType = expression.noteType
+            if (noteType == null ||
+                capability.fontResource(noteType.family, noteType.weight, noteType.italic) == null
+            ) {
+                return Result.Unsupported("expression style is not supported")
+            }
+            expression.musicRegion?.let { music ->
+                val type = music.type
+                if (type == null ||
+                    capability.fontResource(type.family, type.weight, type.italic) == null
+                ) {
+                    return Result.Unsupported("expression style is not supported")
+                }
+                val textOnly = music.mode == "text" && music.artwork == null
+                val artworkOk = capability.artworkSupported &&
+                    music.mode == "thumbnail" && music.artwork != null
+                if (!textOnly && !artworkOk) {
+                    return Result.Unsupported("music artwork rendering is not supported")
+                }
+            }
+            if (!capability.maskSupported && expression.placements.any { it.maskId != null }) {
+                return Result.Unsupported("expression mask is not supported")
+            }
         }
         if (expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V2) {
             val note = content.note?.takeIf { it.isNotEmpty() }

@@ -133,6 +133,10 @@ message ExpressionSource {
 }
 
 // ADR-018: one resolved placement (canvas units; v2 BER1 layout).
+// v1 artifacts MUST NOT set the v2-only crop (11) or mask_id (12) fields;
+// version-2 (expression_version == 2 / GENEX03) requires crop on every
+// placement. mask_id uses proto3 explicit presence; message fields (crop)
+// already carry presence.
 message ExpressionPlacement {
   string content_id = 1;
   sint32 x = 2;
@@ -144,13 +148,72 @@ message ExpressionPlacement {
   sint32 rect_y = 8;
   sint32 rect_width = 9;
   sint32 rect_height = 10;
+  ExpressionCrop crop = 11;
+  optional string mask_id = 12;
+}
+
+// V5 finished collage: resolved style binding (v2 artifact only).
+message ExpressionStyle {
+  string style_id = 1;
+  string style_version = 2;
+  bytes style_digest = 3;
+}
+
+// V5 finished collage: frozen resolved type (v2 artifact only). Receivers
+// render these integers and MUST NOT re-derive line height.
+message ExpressionTextType {
+  string family = 1;
+  uint32 size = 2;
+  uint32 weight = 3;
+  bool italic = 4;
+  uint32 line = 5;
+}
+
+// V5 finished collage: quantized crop window in 0..10000 units (v2 artifact
+// only). No engine/policy/safety fields: bypassed candidates are never sealed.
+message ExpressionCrop {
+  uint32 x = 1;
+  uint32 y = 2;
+  uint32 width = 3;
+  uint32 height = 4;
+}
+
+// Client-only cover-art descriptor (owner decision 2026-09-26). Image bytes
+// are NEVER carried in this message or anywhere in the manifest; clients
+// fetch and verify bytes directly from the provider. Provider keys:
+// ARTWORK_PROVIDERS (widening-only). Host allowlist is enforced at fetch
+// time only — see handoff section 7.
+message ExpressionArtwork {
+  string provider = 1;
+  string url = 2;
+  bytes sha256 = 3;
+  string mime_type = 4;
+  uint32 width = 5;
+  uint32 height = 6;
+}
+
+// V5 finished collage: music rectangle inside the canvas (v2 artifact only).
+// mode 'text' | 'thumbnail'; artwork present iff mode is 'thumbnail'
+// (rule A1); slice-1 receivers reject 'thumbnail' (admission AD1).
+// Slice-1 encoders never write artwork (no descriptor source yet).
+message ExpressionMusic {
+  sint32 x = 1;
+  sint32 y = 2;
+  sint32 width = 3;
+  sint32 height = 4;
+  string mode = 5;
+  ExpressionTextType type = 6;
+  ExpressionArtwork artwork = 7;
 }
 
 // ADR-018: signed/encrypted resolved-expression artifact (inside v2
 // ContentManifest). The declared hash MUST equal the canonical hash of the
 // reconstructed expression; receivers reconstruct and cross-check.
+// Name frozen; field 1 (expression_version) is the artifact discriminator;
+// v1 artifacts MUST NOT set fields 18..20 or any new ExpressionPlacement
+// field; never retype ContentManifest.expression = 6.
 message ExpressionV1 {
-  uint32 expression_version = 1; // exactly 1
+  uint32 expression_version = 1; // exactly 1 (v1) or 2 (v2 finished collage)
   string candidate_id = 2;       // <= 256 chars
   string expression_hash = 3;    // lowercase hex SHA-256 (64 chars)
   uint32 canvas_version = 4;
@@ -167,6 +230,9 @@ message ExpressionV1 {
   sint32 nr_height = 15;
   repeated ExpressionSource sources = 16;
   repeated ExpressionPlacement placements = 17;
+  ExpressionStyle style = 18;
+  ExpressionTextType note_type = 19;
+  ExpressionMusic music = 20;
 }
 
 // M2-P08: the bounded purpose of a sender-owned wrapped retry keyset.

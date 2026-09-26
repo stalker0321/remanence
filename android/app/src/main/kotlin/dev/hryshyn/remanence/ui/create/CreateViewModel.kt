@@ -13,12 +13,9 @@ import dev.hryshyn.remanence.create.CapsuleExpressionArtifact
 import dev.hryshyn.remanence.create.CapsulePublisher
 import dev.hryshyn.remanence.create.CapsulePublishRequest
 import dev.hryshyn.remanence.create.GeneratorCreateBridge
-import dev.hryshyn.remanence.create.GeneratorExifDecoder
 import dev.hryshyn.remanence.create.GeneratorPreviewLoader
 import dev.hryshyn.remanence.create.OriginalRetainSinkHost
-import dev.hryshyn.remanence.create.PhotoStagingPipeline
 import dev.hryshyn.remanence.ui.collage.AndroidCollageCropSource
-import dev.hryshyn.remanence.core.crypto.readBoundedBytes
 import dev.hryshyn.remanence.core.model.CapsulePhotoIdentity
 import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
 import dev.hryshyn.remanence.core.model.GeneratorBer1Provider
@@ -428,9 +425,6 @@ class CreateViewModel(
 
     /** Exact explicitly chosen V5 selection accepted for the active bridge session. */
     private var generatorFrozenSelection: CollageFrozenSelection? = null
-
-    /** One pre-read original for bridge session-sync (D2: pre-read allowed). */
-    private data class PrereadOriginal(val bytes: ByteArray, val widthPx: Int, val heightPx: Int)
 
     /**
      * FIX-STATE-13: capsule ids whose publication job is still alive and
@@ -1097,19 +1091,7 @@ class CreateViewModel(
         generatorFrozenSelection = null
         val sender = capturedSender
         val preread: List<PrereadOriginal>? = withContext(ioDispatcher) {
-            try {
-                inputs.photoIds.map { pickerId ->
-                    val bytes = openPhotoSource(pickerId).openInputStream().use { stream ->
-                        stream.readBoundedBytes(PhotoStagingPipeline.MAX_SOURCE_BYTES)
-                    }
-                    val upright = GeneratorExifDecoder.decodeUpright(bytes)
-                    PrereadOriginal(bytes, upright.widthPx, upright.heightPx)
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                null
-            }
+            prereadGeneratorOriginals(inputs.photoIds, openPhotoSource)
         }
         if (preread == null) {
             failPublishing("generator photo sources are unreadable; publishing cancelled", generation)

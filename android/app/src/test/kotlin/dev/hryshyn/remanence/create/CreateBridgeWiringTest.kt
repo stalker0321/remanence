@@ -39,8 +39,13 @@ import com.google.crypto.tink.InsecureSecretKeyAccess
 import com.google.crypto.tink.TinkProtoKeysetFormat
 import java.security.MessageDigest
 import dev.hryshyn.remanence.ui.create.CreateViewModel
+import dev.hryshyn.remanence.ui.create.CollageFrozenSelection
 import dev.hryshyn.remanence.ui.create.RecipientDirectoryPort
 import dev.hryshyn.remanence.ui.create.SenderIdentitySnapshot
+import dev.hryshyn.remanence.ui.collage.CollageCandidateProvider
+import dev.hryshyn.remanence.ui.collage.CollageCropSource
+import dev.hryshyn.remanence.ui.collage.CollageProviderResult
+import dev.hryshyn.remanence.ui.collage.CollageRenderer
 import dev.hryshyn.remanence.wiring.RemanenceViewModelFactory
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -144,6 +149,7 @@ class CreateBridgeWiringTest {
     private class RecordingPersistence : dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence {
         val stored = mutableMapOf<String, ByteArray>()
         var counter = 0
+        var decryptGate: CompletableDeferred<Unit>? = null
 
         override suspend fun persist(
             capsuleId: String,
@@ -159,8 +165,10 @@ class CreateBridgeWiringTest {
         override suspend fun hasBaseline(capsuleId: String, origin: FingerprintOrigin): Boolean =
             stored.isNotEmpty()
 
-        override suspend fun decrypt(fingerprintId: String): ByteArray =
-            requireNotNull(stored[fingerprintId]).copyOf()
+        override suspend fun decrypt(fingerprintId: String): ByteArray {
+            decryptGate?.await()
+            return requireNotNull(stored[fingerprintId]).copyOf()
+        }
 
         override suspend fun setPreferredOrigin(capsuleId: String, origin: FingerprintOrigin) = Unit
 
@@ -223,12 +231,13 @@ class CreateBridgeWiringTest {
     }
 
     /** Builds a ViewModel parked at CONTENT with real-JPEG photos + note ready. */
-    private fun contentStage(
+    private suspend fun contentStage(
         bridgeProvider: ((UserId) -> GeneratorCreateBridge.Bridge)? = bridge.provider,
         identity: suspend () -> SenderIdentitySnapshot = { senderIdentity() },
         sources: ((String) -> PhotoSource)? = null,
+        persistence: RecordingPersistence = RecordingPersistence(),
+        freezeSelection: Boolean = true,
     ): CreateViewModel {
-        val persistence = RecordingPersistence()
         val retryStore = SenderRetryMaterialStore(AccountScopedFileRoots(outboxDir))
         val vm = CreateViewModel(
             directory = StaticDirectory(),
@@ -260,10 +269,37 @@ class CreateBridgeWiringTest {
         vm.deliverFrontJpeg("f".toByteArray())
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         vm.onPhotosPicked(listOf("w1", "w2", "w3"))
-        // ADR-018 note policy: a non-empty note is a typed unsupported publish
-        // until on-device text measurement is wired, so the happy path here
-        // publishes with an absent/empty note.
+        if (freezeSelection) freezeCurrentV5(vm)
         return vm
+    }
+
+    private suspend fun freezeCurrentV5(vm: CreateViewModel) {
+        val ready = vm.generatorPreview.value as? dev.hryshyn.remanence.ui.create.GeneratorPreviewState.Ready
+            ?: error("expected Ready, got ${vm.generatorPreview.value}")
+        val provider = CollageCandidateProvider(
+            CollageCropSource { requests ->
+                requests.associate { request ->
+                    request.contentId to GeneratorExpression.CropWindow(0, 0, 10_000, 10_000)
+                }
+            },
+            CollageRenderer.TextMeasurer { request ->
+                CollageRenderer.TextMeasurement(1, request.line.coerceAtLeast(1), false)
+            },
+        )
+        val result = provider.candidates(ready.expression.input, null, null)
+        val candidates = (result as? CollageProviderResult.Candidates)?.candidates
+            ?: error("expected collage candidates, got $result")
+        vm.collageChoices.replaceCandidates(candidates)
+        assertTrue(vm.selectCollageCandidate(0))
+        assertTrue(vm.freezeCollageSelection())
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun tamperFrozenCandidateId(vm: CreateViewModel) {
+        val field = CreateViewModel::class.java.getDeclaredField("frozenCollageSelection\$delegate")
+        field.isAccessible = true
+        val state = field.get(vm) as androidx.compose.runtime.MutableState<CollageFrozenSelection?>
+        state.value = requireNotNull(state.value).copy(candidateId = "ber1-tampered")
     }
 
     private suspend fun outboxRow(capsuleId: String) =
@@ -437,13 +473,74 @@ class CreateBridgeWiringTest {
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         assertEquals("generator bridge is unavailable; publishing cancelled", vm.publishError.value)
         assertNull(outboxRow(vm.capsuleId))
-        assertTrue(bridge.requestedOwners.isEmpty())
+        assertEquals(0, bridge.liveSessions())
         assertTrue(bridge.stores.isEmpty())
 
         // Hooks stay no-ops without a provider.
         vm.onPhotosPicked(listOf("w1", "w2", "w3"))
         assertTrue(vm.noteEditor.onChange("no bridge either"))
         vm.endSession()
+    }
+
+    @Test
+    fun missingFrozenSelectionRefusesBeforeBridgeOrPublisher() = runBlocking {
+        val vm = contentStage(freezeSelection = false)
+        vm.startPublishing()
+        awaitTerminalPublish(vm)
+
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        assertTrue(vm.publishError.value.orEmpty().contains("no collage has been frozen"))
+        assertEquals(0, bridge.liveSessions())
+        assertNull(outboxRow(vm.capsuleId))
+    }
+
+    @Test
+    fun stalePrereadRefusesBeforeBridgeOrPublisher() = runBlocking {
+        var stale = false
+        val vm = contentStage(sources = { id ->
+            if (stale && id == "w2") {
+                PhotoSource { ByteArrayInputStream(memoryTestJpeg(81, 40)) }
+            } else {
+                defaultSource(id)
+            }
+        })
+        stale = true
+        vm.startPublishing()
+        awaitTerminalPublish(vm)
+
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        assertTrue(vm.publishError.value.orEmpty().contains("stale for this content"))
+        assertEquals(0, bridge.liveSessions())
+        assertNull(outboxRow(vm.capsuleId))
+    }
+
+    @Test
+    fun tamperedFrozenIdentityRefusesBeforeBridgeOrPublisher() = runBlocking {
+        val vm = contentStage()
+        tamperFrozenCandidateId(vm)
+        vm.startPublishing()
+        awaitTerminalPublish(vm)
+
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        assertTrue(vm.publishError.value.orEmpty().contains("identity changed"))
+        assertEquals(0, bridge.liveSessions())
+        assertNull(outboxRow(vm.capsuleId))
+    }
+
+    @Test
+    fun supersededAfterBeginCancelsOnlyItsExactContext() = runBlocking {
+        val persistence = RecordingPersistence().also {
+            it.decryptGate = CompletableDeferred()
+        }
+        val vm = contentStage(persistence = persistence)
+        vm.startPublishing()
+        assertEquals(listOf(UserId(userUuid)), bridge.requestedOwners)
+
+        vm.beginSession(2L, userUuid.toString())
+        persistence.decryptGate!!.complete(Unit)
+
+        assertEquals(0, bridge.liveSessions())
+        assertNull(outboxRow(vm.capsuleId))
     }
 
     @Test
@@ -726,9 +823,10 @@ class CreateBridgeWiringTest {
         assertNotNull(vm.publishError.value)
         assertTrue(
             "expected the exact-descriptor gate to abort, was ${vm.publishError.value}",
-            vm.publishError.value!!.contains("projection changed"),
+            vm.publishError.value!!.contains("freeze rejected"),
         )
         assertNull(outboxRow(vm.capsuleId))
+        assertTrue(tamperStore.data.isEmpty())
     }
 
     @Test

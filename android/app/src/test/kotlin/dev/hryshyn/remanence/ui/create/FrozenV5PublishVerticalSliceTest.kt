@@ -165,7 +165,14 @@ class FrozenV5PublishVerticalSliceTest {
                 FrozenPublishAcceptance.Refused,
         )
         val artworkInput = input().copy(music = GeneratorExpression.MusicRef(trackUuid.toString(), "artwork"))
-        assertTrue(refused(preread = artworkInput))
+        val artworkFrozen = frozen.copy(expression = frozen.expression.copy(input = artworkInput))
+        val artworkRefusal = acceptFrozenForPublish(
+            artworkFrozen, artworkInput, snapshot, capsuleUuid.toString(),
+        )
+        assertEquals(
+            FrozenPublishAcceptance.Refused("music artwork is not supported"),
+            artworkRefusal,
+        )
     }
 
     @Test
@@ -262,6 +269,19 @@ class FrozenV5PublishVerticalSliceTest {
             recipientExpression, parsed.note, parsed.trackSnapshot, sources, measurer,
         ) as CollageRenderer.SceneResult.Ready
         assertEquals(senderScene.scene, recipientScene.scene)
+
+        val firstPlacement = recipientExpression.placements.first()
+        val crop = requireNotNull(firstPlacement.crop)
+        val tamperedExpression = recipientExpression.copy(
+            placements = recipientExpression.placements.toMutableList().also { placements ->
+                placements[0] = firstPlacement.copy(crop = crop.copy(x = 9_999))
+            },
+        )
+        assertTrue(
+            CollageRenderer.prepare(
+                tamperedExpression, parsed.note, parsed.trackSnapshot, sources, measurer,
+            ) is CollageRenderer.SceneResult.Rejected,
+        )
     }
 
     private class MemoryStore : GeneratorStaging.BlobStore {

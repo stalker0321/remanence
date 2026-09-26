@@ -47,6 +47,9 @@ internal fun acceptFrozenForPublish(
     if (expression.input != prereadInput) {
         return FrozenPublishAcceptance.Refused("the frozen collage is stale for this content")
     }
+    if (expression.input.music?.artworkId != null) {
+        return FrozenPublishAcceptance.Refused("music artwork is not supported")
+    }
     if (GeneratorExpression.validateResolved(expression) !is GeneratorExpression.InputValidation.Valid) {
         return FrozenPublishAcceptance.Refused("the frozen collage is invalid")
     }
@@ -78,9 +81,6 @@ internal fun acceptFrozenForPublish(
         return FrozenPublishAcceptance.Refused("the frozen collage music input is inconsistent")
     }
     if (music != null) {
-        if (music.artworkId != null) {
-            return FrozenPublishAcceptance.Refused("music artwork is not supported")
-        }
         if (music.trackId != trackSnapshot?.trackId?.toString()) {
             return FrozenPublishAcceptance.Refused("the frozen collage names a different track")
         }

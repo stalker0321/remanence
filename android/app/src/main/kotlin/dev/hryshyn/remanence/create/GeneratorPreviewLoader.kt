@@ -3,6 +3,8 @@ package dev.hryshyn.remanence.create
 import dev.hryshyn.remanence.core.crypto.readBoundedBytes
 import java.security.MessageDigest
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 /**
  * Stage1-C preview source: one bounded, EXIF-upright original adapted
@@ -48,6 +50,15 @@ fun interface GeneratorPreviewLoader {
 }
 
 /**
+ * Host for an optional diagnostic original-bytes retain callback. The Create
+ * session installs a generation-gated sink here; `null` (default) disables
+ * retaining entirely and preserves existing behavior exactly.
+ */
+interface OriginalRetainSinkHost {
+    var retainOriginal: ((bytes: ByteArray, hash: String) -> Unit)?
+}
+
+/**
  * Production loader: bounded original read ([PhotoStagingPipeline.MAX_SOURCE_BYTES]),
  * EXIF-upright dimension check, normalization for the on-screen JPEG, and the
  * original SHA-256 for G1 identity. Mirrors G4B's original-vs-derived split
@@ -58,7 +69,15 @@ class DefaultGeneratorPreviewLoader(
     private val decoder: GeneratorSourceBinding.PhotoDecoderPort,
     private val normalizer: PhotoNormalizerPort,
     private val maxSourceBytes: Int = PhotoStagingPipeline.MAX_SOURCE_BYTES,
-) : GeneratorPreviewLoader {
+    /**
+     * Diagnostic retain sink, invoked synchronously with the live ORIGINAL
+     * bytes and their SHA-256 after the hash is computed and only once
+     * cancellation is rechecked — never the derived preview bytes, never a
+     * reopened URI. A throwing sink never breaks preview; stale (cancelled)
+     * loads never reach it. Null disables retaining.
+     */
+    override var retainOriginal: ((bytes: ByteArray, hash: String) -> Unit)? = null,
+) : GeneratorPreviewLoader, OriginalRetainSinkHost {
 
     override suspend fun load(pickerId: String): LoadedPreviewSource? {
         val original = try {
@@ -81,8 +100,21 @@ class DefaultGeneratorPreviewLoader(
                 return null
             }
             if (normalized.jpegBytes.isEmpty()) return null
+            val hash = sha256Hex(original)
+            // Cancellation recheck: a cancel landing after the last suspend
+            // port must not produce a stale retain.
+            currentCoroutineContext().ensureActive()
+            retainOriginal?.let { sink ->
+                try {
+                    sink(original, hash)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // Diagnostic only: a sink failure never breaks preview.
+                }
+            }
             return LoadedPreviewSource(
-                originalHash = sha256Hex(original),
+                originalHash = hash,
                 uprightWidthPx = upright.widthPx,
                 uprightHeightPx = upright.heightPx,
                 previewJpegBytes = normalized.jpegBytes,

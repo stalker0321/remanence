@@ -12,7 +12,9 @@ import dev.hryshyn.remanence.create.CapsulePublishRequest
 import dev.hryshyn.remanence.create.GeneratorCreateBridge
 import dev.hryshyn.remanence.create.GeneratorExifDecoder
 import dev.hryshyn.remanence.create.GeneratorPreviewLoader
+import dev.hryshyn.remanence.create.OriginalRetainSinkHost
 import dev.hryshyn.remanence.create.PhotoStagingPipeline
+import dev.hryshyn.remanence.ui.collage.AndroidCollageCropSource
 import dev.hryshyn.remanence.core.crypto.readBoundedBytes
 import dev.hryshyn.remanence.core.model.CapsulePhotoIdentity
 import dev.hryshyn.remanence.core.model.GeneratorBer1Provider
@@ -136,6 +138,13 @@ class CreateViewModel(
      * Unavailable state; a preview is never faked from a placeholder.
      */
     private val generatorPreviewLoader: GeneratorPreviewLoader? = null,
+    /**
+     * Diagnostic-only collage analysis gate (A4B6). Null (default release)
+     * disables everything: no retain sink, no runners, no chooser source,
+     * no candidate population. Gate ON is only host-testable diagnostic
+     * context; it never touches publish, capability, or admission.
+     */
+    private val collageDiagnosticGate: CollageDiagnosticGate? = null,
 ) : ViewModel() {
 
     /** Current-send state; deliberately contains no history or inbox projection. */
@@ -289,6 +298,31 @@ class CreateViewModel(
     val generatorPreview: StateFlow<GeneratorPreviewState> = _generatorPreview.asStateFlow()
     private var previewJob: Job? = null
     private var previewGeneration: Long = 0L
+
+    /**
+     * Create-session retained ORIGINAL bytes for the diagnostic collage path
+     * (A4B4 holder). Empty unless the diagnostic gate installed a retain
+     * sink; cleared (zeroized) on every ownership reset. Single-confined to
+     * the preview coroutine context documented on the holder.
+     */
+    private val retainedOriginals = RetainedOriginalHolder()
+
+    /**
+     * Diagnostic crop source, built on preview Ready only when the gate is
+     * on; null otherwise (in particular always null when the gate is off).
+     * Closed and nulled on every ownership reset and on teardown.
+     */
+    var collageDiagnosticSource: AndroidCollageCropSource? = null
+        private set
+
+    /**
+     * Photo set the diagnostic source was built for. Cache-hit refreshes
+     * recompute the same Ready state without reloading; rebuilding the
+     * source for them would leak the previous instance, so exactly one
+     * source exists per photo set. Cleared with the rest of the diagnostic
+     * state.
+     */
+    private var diagnosticBuiltIds: List<String>? = null
 
     /** Owner captured synchronously at session entry, before publish suspends. */
     private var sessionOwner: UserId? = null
@@ -651,6 +685,9 @@ class CreateViewModel(
         dropGeneratorBound { bridge, context, sessionId ->
             bridge.onPhotoEdit(context, sessionId)
         }
+        // Fresh selection supersedes all retained originals: clear BEFORE the
+        // toggles below, whose inline refreshes may already retain anew.
+        clearCollageDiagnostics()
         photoSelection.clear()
         ids.forEach { id -> photoSelection.toggle(id) }
         refreshGeneratorPreview()
@@ -848,6 +885,7 @@ class CreateViewModel(
         dropGeneratorBound { bridge, context, sessionId ->
             bridge.onPhotoEdit(context, sessionId)
         }
+        clearCollageDiagnostics()
         refreshGeneratorPreview()
     }
 
@@ -896,6 +934,19 @@ class CreateViewModel(
         previewJob?.cancel()
         previewJob = null
         val generation = ++previewGeneration
+        if (collageDiagnosticGate != null) {
+            // Diagnostic retain sink for THIS preview generation only. A
+            // stale async completion (older generation) cannot retain; the
+            // loader additionally rechecks cancellation and never lets a
+            // throwing sink break preview. The result is ignored: a retain
+            // rejection must not break ordinary preview and yields no
+            // candidate.
+            (generatorPreviewLoader as? OriginalRetainSinkHost)?.retainOriginal = { bytes, hash ->
+                if (generation == previewGeneration) {
+                    retainedOriginals.retain(CapsulePhotoIdentity.contentIdFor(hash), bytes, hash)
+                }
+            }
+        }
         if (ids.isEmpty()) {
             _generatorPreview.value = GeneratorPreviewState.Idle
             generatorPreviewCoordinator.zeroize()
@@ -913,8 +964,32 @@ class CreateViewModel(
             val result = generatorPreviewCoordinator.compute(ownerId, epoch, ids, note)
             if (generation == previewGeneration) {
                 _generatorPreview.value = result
+                if (result is GeneratorPreviewState.Ready) maybeBuildDiagnosticSource(ids)
             }
         }
+    }
+
+    /**
+     * Diagnostic-only: builds the crop source on a current Ready preview
+     * when the gate is on. Never runs the provider and never populates
+     * candidates; host tests mount the exposed source into the chooser host
+     * themselves. Gate off (or a null factory result) leaves it absent.
+     */
+    private fun maybeBuildDiagnosticSource(photoIds: List<String>) {
+        val gate = collageDiagnosticGate ?: return
+        if (collageDiagnosticSource != null) return
+        if (diagnosticBuiltIds == photoIds) return
+        diagnosticBuiltIds = photoIds.toList()
+        collageDiagnosticSource = gate.create(retainedOriginals)
+    }
+
+    /** Drops diagnostic holder/source ownership (zeroized/closed). */
+    private fun clearCollageDiagnostics() {
+        (generatorPreviewLoader as? OriginalRetainSinkHost)?.retainOriginal = null
+        collageDiagnosticSource?.close()
+        collageDiagnosticSource = null
+        diagnosticBuiltIds = null
+        retainedOriginals.clear()
     }
 
     /** Drops all preview ownership (sources + in-flight load) on any change. */
@@ -925,6 +1000,7 @@ class CreateViewModel(
         generatorMeasuredNoteSelection = null
         _generatorPreview.value = GeneratorPreviewState.Idle
         generatorPreviewCoordinator.zeroize()
+        clearCollageDiagnostics()
     }
 
     /**

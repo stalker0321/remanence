@@ -1,0 +1,410 @@
+package dev.hryshyn.remanence.ui.create
+
+import android.content.Context
+import androidx.room.Room
+import androidx.test.core.app.ApplicationProvider
+import dev.hryshyn.remanence.auth.SoftwareKekBoundary
+import dev.hryshyn.remanence.core.crypto.SenderRetryKeysetWrapper
+import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
+import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
+import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
+import dev.hryshyn.remanence.core.data.network.DirectoryLookupResult
+import dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager
+import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
+import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
+import dev.hryshyn.remanence.core.recognition.RecognitionProfile
+import dev.hryshyn.remanence.create.DefaultGeneratorPreviewLoader
+import dev.hryshyn.remanence.create.GeneratorPreviewLoader
+import dev.hryshyn.remanence.create.GeneratorSourceBinding
+import dev.hryshyn.remanence.create.NormalizedPhotoDto
+import dev.hryshyn.remanence.create.PhotoNormalizerPort
+import dev.hryshyn.remanence.create.PhotoSource
+import dev.hryshyn.remanence.ui.collage.AndroidCollageCropSource
+import dev.hryshyn.remanence.ui.collage.CollageAnalysis
+import dev.hryshyn.remanence.ui.collage.analysis.FieldStageImage
+import dev.hryshyn.remanence.ui.collage.analysis.FieldStageMaps
+import dev.hryshyn.remanence.ui.collage.analysis.FieldStageRunner
+import dev.hryshyn.remanence.ui.collage.analysis.FieldStageRuntime
+import dev.hryshyn.remanence.ui.collage.analysis.ModelAssetSource
+import dev.hryshyn.remanence.ui.collage.analysis.NanoDetImage
+import dev.hryshyn.remanence.ui.collage.analysis.NanoDetRunner
+import dev.hryshyn.remanence.ui.collage.analysis.NanoDetRuntime
+import dev.hryshyn.remanence.ui.collage.analysis.YuNetConfig
+import dev.hryshyn.remanence.ui.collage.analysis.YuNetImage
+import dev.hryshyn.remanence.ui.collage.analysis.YuNetPass
+import dev.hryshyn.remanence.ui.collage.analysis.YuNetRunner
+import dev.hryshyn.remanence.ui.collage.analysis.YuNetRuntime
+import java.io.ByteArrayInputStream
+import java.io.File
+import java.io.InputStream
+import java.nio.file.Files
+import java.security.MessageDigest
+import java.util.UUID
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.setMain
+import kotlinx.coroutines.test.runTest
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+
+/**
+ * Focused tests for the A4B6 diagnostic retain + mount in the production
+ * [CreateViewModel]: the loader retain callback carries live ORIGINAL bytes
+ * (never preview bytes, never a reopened URI); generation-gated sinks make
+ * stale async completions inert; retain rejection preserves ordinary preview
+ * with no candidates; ownership resets clear/zeroize the holder and close
+ * the source; the default release gate exposes no chooser and forced
+ * selection keeps publishing fail-closed.
+ *
+ * Holder zeroization itself is pinned by `RetainedOriginalHolderTest`; here
+ * the lifecycle calls are pinned (source closed/nulled, sink cleared).
+ * `onCleared` delegates to `endSession`, so the end-session test covers both.
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
+class CreateCollageDiagnosticsTest {
+
+    private val testDispatcher = UnconfinedTestDispatcher()
+
+    private val senderUserUuid = UUID.fromString("ae111111-2222-4333-8444-555555555555")
+
+    private lateinit var database: RemanenceLocalDatabase
+    private lateinit var stagingDir: File
+    private lateinit var outboxDir: File
+
+    private val testKekBoundary = SoftwareKekBoundary()
+    private val testAlias = "test-collage-diag-${UUID.randomUUID()}"
+    private lateinit var testWrapper: SenderRetryKeysetWrapper
+
+    @Before
+    fun setUp() {
+        testKekBoundary.createAes256GcmKey(testAlias)
+        testWrapper = SenderRetryKeysetWrapper(testKekBoundary)
+        Dispatchers.setMain(testDispatcher)
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, RemanenceLocalDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        stagingDir = File(context.filesDir, "collage-diag-staging").apply { mkdirs() }
+        outboxDir = File(context.filesDir, "collage-diag-outbox")
+    }
+
+    @After
+    fun tearDown() {
+        Dispatchers.resetMain()
+        if (::database.isInitialized) database.close()
+        stagingDir.deleteRecursively()
+        outboxDir.deleteRecursively()
+    }
+
+    private fun sha256Hex(bytes: ByteArray): String =
+        MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+
+    private fun originalFor(pickerId: String, size: Int = 64): ByteArray =
+        ByteArray(size) { ((it * 31 + pickerId.hashCode()) and 0xFF).toByte() }
+
+    private class StubPersistence : SealedFingerprintPersistence {
+        override suspend fun persist(
+            capsuleId: String,
+            origin: FingerprintOrigin,
+            profileId: String,
+            plaintextBytes: ByteArray,
+        ): String = "fp-1"
+
+        override suspend fun hasBaseline(capsuleId: String, origin: FingerprintOrigin): Boolean = false
+
+        override suspend fun decrypt(fingerprintId: String): ByteArray = ByteArray(0)
+
+        override suspend fun setPreferredOrigin(capsuleId: String, origin: FingerprintOrigin) = Unit
+
+        override suspend fun deleteBaseline(capsuleId: String, origin: FingerprintOrigin) = Unit
+    }
+
+    private class FakeAsset(val bytes: ByteArray) : ModelAssetSource {
+        override val sha256: String = sha256Hex(bytes)
+        override val byteSize: Long = bytes.size.toLong()
+        override val maxBytes: Long = bytes.size.toLong() + 16
+        override fun open(): InputStream = ByteArrayInputStream(bytes)
+
+        companion object {
+            fun sha256Hex(bytes: ByteArray): String =
+                MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+        }
+    }
+
+    private class FakeFieldRuntime(var closeCount: Int = 0) : FieldStageRuntime {
+        override fun analyze(image: FieldStageImage): FieldStageMaps {
+            val cells = CollageAnalysis.GRID_SIZE * CollageAnalysis.GRID_SIZE
+            return FieldStageMaps(
+                sourceWidth = image.width,
+                sourceHeight = image.height,
+                saliency = DoubleArray(cells) { 1.0 },
+                edgeEnergy = DoubleArray(cells) { 1.0 },
+                contrast = DoubleArray(cells) { 1.0 },
+                tips = DoubleArray(cells) { 1.0 },
+                tipBoxes = emptyList(),
+            )
+        }
+
+        override fun close() {
+            closeCount += 1
+        }
+    }
+
+    private class FakeNanoRuntime(var closeCount: Int = 0) : NanoDetRuntime {
+        override fun load(modelPath: String) = Unit
+
+        override fun forward(image: NanoDetImage): List<dev.hryshyn.remanence.ui.collage.NanoDetHead> =
+            emptyList()
+
+        override fun close() {
+            closeCount += 1
+        }
+    }
+
+    private class FakeYuNetRuntime(var closeCount: Int = 0) : YuNetRuntime {
+        override fun load(modelPath: String, config: YuNetConfig) = Unit
+
+        override fun detect(image: YuNetImage, longEdge: Int): YuNetPass =
+            YuNetPass(image.width, image.height, 15, emptyList())
+
+        override fun close() {
+            closeCount += 1
+        }
+    }
+
+    /**
+     * Real default loader over scripted ports. `parkDecodeCall` parks the
+     * given decode call on [gate] (1-based) for stale-completion tests.
+     */
+    private fun previewLoader(
+        originals: Map<String, ByteArray>,
+        decoderDims: Pair<Int, Int> = 1000 to 1000,
+        parkDecodeCall: Int? = null,
+        gate: CompletableDeferred<Unit>? = null,
+    ): DefaultGeneratorPreviewLoader {
+        var decodeCalls = 0
+        return DefaultGeneratorPreviewLoader(
+            openSource = { pickerId ->
+                PhotoSource { ByteArrayInputStream(originals.getValue(pickerId)) }
+            },
+            decoder = GeneratorSourceBinding.PhotoDecoderPort { _ ->
+                decodeCalls += 1
+                if (parkDecodeCall != null && decodeCalls == parkDecodeCall) {
+                    gate?.await()
+                }
+                GeneratorSourceBinding.UprightPhoto(decoderDims.first, decoderDims.second)
+            },
+            normalizer = PhotoNormalizerPort { _ ->
+                NormalizedPhotoDto(byteArrayOf(9, 8, 7), 100, 100)
+            },
+        )
+    }
+
+    private fun viewModel(
+        loader: GeneratorPreviewLoader?,
+        gate: CollageDiagnosticGate? = null,
+    ): CreateViewModel {
+        val retryStore = SenderRetryMaterialStore(AccountScopedFileRoots(outboxDir))
+        return CreateViewModel(
+            directory = RecipientDirectoryPort { DirectoryLookupResult.NotFound },
+            accessTokenProvider = { null },
+            identityProvider = { null },
+            persistence = StubPersistence(),
+            outboxStager = CapsuleOutboxStager(
+                database,
+                AccountScopedFileRoots(outboxDir),
+                retryStore,
+            ),
+            profile = RecognitionProfile.postcardSiftRootSiftV1(),
+            accountScopedFileRoots = AccountScopedFileRoots(stagingDir),
+            openPhotoSource = { id ->
+                dev.hryshyn.remanence.create.PhotoSource {
+                    ByteArrayInputStream(ByteArray(8))
+                }
+            },
+            frontProcessor = dev.hryshyn.remanence.capture.StillProcessor {
+                dev.hryshyn.remanence.capture.ProcessedStill.Rejected(emptySet())
+            },
+            generatorPreviewLoader = loader,
+            cpuDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher,
+            senderRetryKeysetWrapper = testWrapper,
+            senderRetryKekAlias = testAlias,
+            enqueueUpload = { _, _ -> },
+            collageDiagnosticGate = gate,
+        )
+    }
+
+    private fun drivePhotos(vm: CreateViewModel, ids: List<String>): GeneratorPreviewState.Ready {
+        vm.onPhotosPicked(ids)
+        val state = vm.generatorPreview.value
+        assertTrue("expected Ready, got $state", state is GeneratorPreviewState.Ready)
+        return state as GeneratorPreviewState.Ready
+    }
+
+    @Test
+    fun retainCallbackUsesLiveOriginalBytesNotPreviewBytes() = runTest {
+        val original = ByteArray(64) { it.toByte() }
+        var seen: Pair<ByteArray, String>? = null
+        val loader = DefaultGeneratorPreviewLoader(
+            openSource = { PhotoSource { ByteArrayInputStream(original) } },
+            decoder = GeneratorSourceBinding.PhotoDecoderPort {
+                GeneratorSourceBinding.UprightPhoto(1000, 1000)
+            },
+            normalizer = PhotoNormalizerPort {
+                NormalizedPhotoDto(byteArrayOf(9, 8, 7), 100, 100)
+            },
+        )
+        loader.retainOriginal = { bytes, hash -> seen = bytes.copyOf() to hash }
+        val loaded = loader.load("u1")
+        assertTrue("expected loaded source", loaded != null)
+        val (seenBytes, seenHash) = requireNotNull(seen) { "sink must fire" }
+        // Live ORIGINAL bytes (non-zeroed at call time), never preview bytes.
+        assertTrue(seenBytes.contentEquals(original))
+        assertTrue(seenBytes.any { it != 0.toByte() })
+        assertFalse(seenBytes.contentEquals(byteArrayOf(9, 8, 7)))
+        assertEquals(sha256Hex(original), seenHash)
+        assertEquals(sha256Hex(original), loaded!!.originalHash)
+        // The holder-style copy survives the loader's own zeroization.
+        assertTrue(seenBytes.contentEquals(original))
+    }
+
+    @Test
+    fun staleCompletionCannotRetain() {
+        val ids1 = listOf("u1", "u2", "u3")
+        val ids2 = listOf("d1", "d2", "d3")
+        val originals = (ids1 + ids2).associateWith { originalFor(it) }
+        val gate = CompletableDeferred<Unit>()
+        // Park the third decode (u3 of round one); round two never parks.
+        val loader = previewLoader(originals, parkDecodeCall = 3, gate = gate)
+        val seenSizes = mutableListOf<Map<String, Int>>()
+        val vm = viewModel(loader, CollageDiagnosticGate { holder ->
+            seenSizes += holder.retainedSizesForTests()
+            null
+        })
+        vm.beginSession(1L, senderUserUuid.toString())
+        vm.onPhotosPicked(ids1)
+        // Round one is parked mid-load; a fresh selection supersedes it.
+        vm.onPhotosPicked(ids2)
+        gate.complete(Unit)
+        val state = vm.generatorPreview.value
+        assertTrue("expected Ready, got $state", state is GeneratorPreviewState.Ready)
+        val ready = state as GeneratorPreviewState.Ready
+        // Round-one partial retains were cleared as stale, parked u3 never
+        // retained, and round two retained fully: exactly two builds.
+        assertEquals("builds=$seenSizes", 2, seenSizes.size)
+        assertEquals(3, seenSizes.first().size)
+        assertEquals(3, seenSizes.last().size)
+        val readyIds = ready.expression.input.photos.map { it.contentId }
+        assertEquals(readyIds.toSet(), seenSizes.last().keys)
+        assertTrue(vm.collageChoices.candidates.isEmpty())
+    }
+
+    @Test
+    fun retainRejectionPreservesPreviewAndYieldsNoCandidate() {
+        // Three 22 MiB originals: two retain (44 MiB), the third exceeds the
+        // 64 MiB aggregate and is rejected — preview must stay Ready.
+        val ids = listOf("w1", "w2", "w3")
+        val big = 22L * 1024L * 1024L
+        val originals = ids.associateWith { id ->
+            ByteArray(big.toInt()) { ((it + id.hashCode()) and 0xFF).toByte() }
+        }
+        val loader = previewLoader(originals)
+        val seenSizes = mutableListOf<Map<String, Int>>()
+        val vm = viewModel(loader, CollageDiagnosticGate { holder ->
+            seenSizes += holder.retainedSizesForTests()
+            null
+        })
+        vm.beginSession(1L, senderUserUuid.toString())
+        val ready = drivePhotos(vm, ids)
+        assertEquals(3, ready.sources.size)
+        assertEquals(2, seenSizes.single().size)
+        assertTrue(vm.collageChoices.candidates.isEmpty())
+        assertNull(vm.collageDiagnosticSource)
+    }
+
+    @Test
+    fun sessionResetClearsHolderAndClosesSource() {
+        val ids = listOf("u1", "u2", "u3")
+        val next = listOf("d1", "d2", "d3")
+        val originals = (ids + next).associateWith { originalFor(it) }
+        val loader = previewLoader(originals)
+        val field = FakeFieldRuntime()
+        val nano = FakeNanoRuntime()
+        val yunet = FakeYuNetRuntime()
+        val builds = mutableListOf<Map<String, Int>>()
+        val vm = viewModel(loader, CollageDiagnosticGate { holder ->
+            builds += holder.retainedSizesForTests()
+            AndroidCollageCropSource(
+                bytesSource = holder.asUprightBytesSource(),
+                imageDecoder = { null },
+                fieldRunner = FieldStageRunner(field),
+                nanoDetRunner = NanoDetRunner(
+                    FakeAsset(ByteArray(32) { 1 }),
+                    nano,
+                    Files.createTempDirectory("diag-nano").toFile(),
+                ),
+                yuNetRunner = YuNetRunner(
+                    FakeAsset(ByteArray(32) { 2 }),
+                    yunet,
+                    Files.createTempDirectory("diag-yunet").toFile(),
+                ),
+            )
+        })
+        vm.beginSession(1L, senderUserUuid.toString())
+        drivePhotos(vm, ids)
+        assertTrue("source must be built on Ready", vm.collageDiagnosticSource != null)
+        assertEquals(3, builds.single().size)
+        vm.beginSession(2L, senderUserUuid.toString())
+        assertNull("reset must close and drop the source", vm.collageDiagnosticSource)
+        assertEquals(1, field.closeCount)
+        assertEquals(1, nano.closeCount)
+        assertEquals(1, yunet.closeCount)
+        // A fresh round after reset retains only the new set: stale bytes
+        // were cleared, not carried over.
+        drivePhotos(vm, next)
+        assertEquals(2, builds.size)
+        assertEquals(3, builds.last().size)
+    }
+
+    @Test
+    fun endSessionClosesSourceAndClearsHolder() {
+        val ids = listOf("u1", "u2", "u3")
+        val vm = viewModel(previewLoader(ids.associateWith { originalFor(it) }))
+        vm.beginSession(1L, senderUserUuid.toString())
+        drivePhotos(vm, ids)
+        vm.endSession()
+        assertNull(vm.collageDiagnosticSource)
+        assertTrue(vm.generatorPreview.value is GeneratorPreviewState.Idle)
+    }
+
+    @Test
+    fun releaseGateOffHasNoChooserAndPublishStaysFailClosed() {
+        val ids = listOf("u1", "u2", "u3")
+        val vm = viewModel(previewLoader(ids.associateWith { originalFor(it) }))
+        vm.beginSession(1L, senderUserUuid.toString())
+        drivePhotos(vm, ids)
+        assertNull("gate OFF must not build a source", vm.collageDiagnosticSource)
+        assertTrue(vm.collageChoices.candidates.isEmpty())
+        assertNull(vm.collageChoices.selected)
+        assertFalse(vm.selectCollageCandidate(0))
+        vm.startPublishing()
+        assertTrue(
+            "publish must stay fail-closed without a CONTENT session",
+            vm.uploadStatus.value is CreateViewModel.CreateUploadStatus.NotStarted,
+        )
+    }
+}

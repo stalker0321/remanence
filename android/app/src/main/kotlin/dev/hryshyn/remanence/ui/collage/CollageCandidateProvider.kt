@@ -6,13 +6,32 @@ import dev.hryshyn.remanence.core.model.GeneratorExpression
 import kotlin.math.ceil
 
 /**
- * Authoritative per-photo grammar-5 crop input (normalized 0..10000). Returns
- * `null` when the on-device analysis that produces the freeze `envelope-50`
- * crops is not available; the provider then fails closed rather than
- * fabricating a center crop.
+ * One placement's crop request: the sealed content id plus the exact target
+ * slot geometry the crop must be computed for. Crops are per (photo, slot), so
+ * a single global per-photo map must never be reused across differing slots.
+ */
+data class CollageCropRequest(
+    val contentId: String,
+    val slotWidth: Int,
+    val slotHeight: Int,
+    val shape: String = "rect",
+    val zooms: List<Double> = DEFAULT_SLOT_ZOOMS,
+) {
+    companion object {
+        /** Freeze grammar-5 `bands(..., zooms:[1.05,1])`. */
+        val DEFAULT_SLOT_ZOOMS: List<Double> = listOf(1.05, 1.0)
+    }
+}
+
+/**
+ * Authoritative crop port. Returns the normalized 0..10000
+ * [GeneratorExpression.CropWindow] for every request, or `null` when the
+ * on-device analysis that produces the freeze `envelope-50` crops is not
+ * available; the provider then fails closed rather than fabricating a center
+ * crop.
  */
 fun interface CollageCropSource {
-    fun cropsFor(photos: List<GeneratorExpression.PhotoRef>): Map<String, GeneratorExpression.CropWindow>?
+    fun cropsFor(requests: List<CollageCropRequest>): Map<String, GeneratorExpression.CropWindow>?
 }
 
 /** One complete, styled, text-only contract-V3 collage candidate. */
@@ -39,12 +58,13 @@ sealed interface CollageProviderResult {
  * [GeneratorExpression.GeneratorInput].
  *
  * Pure: it consumes grammar-5 cell geometry, the authoritative crops from
- * [CollageCropSource], the style registry (real STYD01 digest) and the shared
- * text measurer to seal explicit `noteRegion` / text-mode `musicRegion`. No
- * artwork, no mask. Candidate identity is exactly the existing
- * `GeneratorBer1Provider.candidateIdFor` (GENEX03 hash prefix); callers compute
- * the BEXPR02 projection with the existing `CapsulePhotoIdentity` /
- * `GeneratorExpressionProjection` helpers.
+ * [CollageCropSource] (requested per placement slot, because each style's note
+ * type changes the grid), the style registry (real STYD01 digest) and the
+ * shared text measurer to seal explicit `noteRegion` / text-mode
+ * `musicRegion`. No artwork, no mask. Candidate identity is exactly the
+ * existing `GeneratorBer1Provider.candidateIdFor` (GENEX03 hash prefix);
+ * callers compute the BEXPR02 projection with the existing
+ * `CapsulePhotoIdentity` / `GeneratorExpressionProjection` helpers.
  *
  * When [CollageCropSource] returns `null`, the whole result is
  * [CollageProviderResult.Unavailable]: this build has no authoritative
@@ -63,29 +83,26 @@ class CollageCandidateProvider(
         if (input.photos.size !in MIN_PHOTOS..MAX_PHOTOS) {
             return CollageProviderResult.Rejected("select 3..5 photos")
         }
-        val crops = cropSource.cropsFor(input.photos)
-            ?: return CollageProviderResult.Unavailable(NO_ANALYSIS_REASON)
-        val cropByContentId = LinkedHashMap<String, GeneratorExpression.CropWindow>(input.photos.size)
-        for (photo in input.photos) {
-            val crop = crops[photo.contentId]
-                ?: return CollageProviderResult.Rejected("crop analysis is incomplete for ${photo.contentId}")
-            if (!validCrop(crop)) {
-                return CollageProviderResult.Rejected("crop analysis is invalid for ${photo.contentId}")
-            }
-            cropByContentId[photo.contentId] = crop
-        }
-
         val noteText = note?.takeIf { it.isNotBlank() }
         val sealedInput = input.copy(note = noteText)
         val built = ArrayList<CollageCandidate>(STYLE_ORDER.size)
         for (styleId in STYLE_ORDER) {
             val style = StyleRegistry.style(styleId)
                 ?: return CollageProviderResult.Rejected("style $styleId is not bundled")
-            val candidate = buildCandidate(sealedInput, noteText, track, style, cropByContentId)
-                ?: return CollageProviderResult.Rejected("the note or music does not fit the grammar-5 grid")
-            built += candidate
+            when (val result = buildCandidate(sealedInput, noteText, track, style)) {
+                is BuildResult.Built -> built += result.candidate
+                BuildResult.Unavailable -> return CollageProviderResult.Unavailable(NO_ANALYSIS_REASON)
+                BuildResult.Invalid ->
+                    return CollageProviderResult.Rejected("the note, music, or crop does not fit the grammar-5 grid")
+            }
         }
         return CollageProviderResult.Candidates(built)
+    }
+
+    private sealed interface BuildResult {
+        data class Built(val candidate: CollageCandidate) : BuildResult
+        data object Unavailable : BuildResult
+        data object Invalid : BuildResult
     }
 
     private fun buildCandidate(
@@ -93,8 +110,7 @@ class CollageCandidateProvider(
         noteText: String?,
         track: CapsuleTrackSnapshotV1?,
         style: StyleRegistry.Style,
-        crops: Map<String, GeneratorExpression.CropWindow>,
-    ): CollageCandidate? {
+    ): BuildResult {
         val noteType = style.note.toTextType()
         val musicType = style.music.toTextType()
 
@@ -113,7 +129,7 @@ class CollageCandidateProvider(
                     maxHeight = MAX_TEXT_BOX,
                 ),
             )
-            if (!fits(measured)) return null
+            if (!fits(measured)) return BuildResult.Invalid
             measured.height
         }
 
@@ -121,11 +137,11 @@ class CollageCandidateProvider(
             photoCount = input.photos.size,
             noteHeight = noteHeight,
             music = track != null,
-        ) ?: return null
+        ) ?: return BuildResult.Invalid
 
         val musicRegion = grid.musicRegion
         if (track != null) {
-            if (musicRegion == null) return null
+            if (musicRegion == null) return BuildResult.Invalid
             val measured = measurer.measure(
                 CollageRenderer.TextMeasureRequest(
                     text = track.title + "\n" + track.artistDisplay,
@@ -138,22 +154,40 @@ class CollageCandidateProvider(
                     maxHeight = musicRegion.height,
                 ),
             )
-            if (!fits(measured, maxHeight = musicRegion.height)) return null
+            if (!fits(measured, maxHeight = musicRegion.height)) return BuildResult.Invalid
         }
 
-        if (input.photos.size != grid.cells.size) return null
+        if (input.photos.size != grid.cells.size) return BuildResult.Invalid
+
+        // Aspect-aware crop request: one request per placement, using THIS
+        // style's exact cell geometry. A global per-photo crop map must not be
+        // reused when candidate slots differ.
+        val requests = input.photos.mapIndexed { index, photo ->
+            CollageCropRequest(
+                contentId = photo.contentId,
+                slotWidth = grid.cells[index].width,
+                slotHeight = grid.cells[index].height,
+            )
+        }
+        val crops = cropSource.cropsFor(requests) ?: return BuildResult.Unavailable
+        val cropByContentId = LinkedHashMap<String, GeneratorExpression.CropWindow>(requests.size)
+        for (request in requests) {
+            val crop = crops[request.contentId] ?: return BuildResult.Invalid
+            if (!validCrop(crop)) return BuildResult.Invalid
+            cropByContentId[request.contentId] = crop
+        }
 
         val placements = input.photos.mapIndexed { index, photo ->
             val cell = grid.cells[index]
             GeneratorExpression.Placement(
                 contentId = photo.contentId,
                 x = cell.x, y = cell.y, width = cell.width, height = cell.height,
-                crop = crops.getValue(photo.contentId),
+                crop = cropByContentId.getValue(photo.contentId),
                 maskId = null,
                 contentRect = null,
             )
         }
-        val styleDigest = StyleRegistry.digest(style.id) ?: return null
+        val styleDigest = StyleRegistry.digest(style.id) ?: return BuildResult.Invalid
         val expression = GeneratorExpression.ResolvedExpression(
             canvasVersion = 1,
             grammarId = GRAMMAR_ID,
@@ -186,13 +220,15 @@ class CollageCandidateProvider(
             },
         )
         if (GeneratorExpression.validateResolved(expression) !is GeneratorExpression.InputValidation.Valid) {
-            return null
+            return BuildResult.Invalid
         }
-        return CollageCandidate(
-            candidateId = GeneratorBer1Provider.candidateIdFor(expression),
-            styleId = style.id,
-            branchId = grid.branchId,
-            expression = expression,
+        return BuildResult.Built(
+            CollageCandidate(
+                candidateId = GeneratorBer1Provider.candidateIdFor(expression),
+                styleId = style.id,
+                branchId = grid.branchId,
+                expression = expression,
+            ),
         )
     }
 

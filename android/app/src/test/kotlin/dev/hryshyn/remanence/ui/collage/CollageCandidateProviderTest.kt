@@ -31,10 +31,10 @@ class CollageCandidateProviderTest {
         )
     }
 
-    private fun cropSource(): CollageCropSource = CollageCropSource { photos ->
-        photos.associate { photo ->
-            photo.contentId to GeneratorExpression.CropWindow(photo.ordinal * 100, 0, 5000, 10000)
-        }
+    private fun cropSource(): CollageCropSource = CollageCropSource { requests ->
+        requests.mapIndexed { index, request ->
+            request.contentId to GeneratorExpression.CropWindow(index * 100, 0, 5000, 10000)
+        }.toMap()
     }
 
     private fun input(note: String? = null) = GeneratorExpression.GeneratorInput(
@@ -164,6 +164,31 @@ class CollageCandidateProviderTest {
         val blobs = expression.input.photos.associate { it.contentId to ByteArray(16) { 1 } }
         val bytes = GeneratorExpressionProjection.canonicalBytes(expression, candidate.candidateId, blobs)
         assertEquals("BEXPR02", String(bytes.copyOfRange(0, 7), StandardCharsets.US_ASCII))
+    }
+
+    @Test
+    fun requestsCropsPerPlacementSlotAndNeverMixesCandidates() {
+        val requestsSeen = mutableListOf<List<CollageCropRequest>>()
+        val source = CollageCropSource { requests ->
+            requestsSeen += requests
+            requests.mapIndexed { index, request ->
+                request.contentId to GeneratorExpression.CropWindow(index * 100, 0, 5000, 10000)
+            }.toMap()
+        }
+        val result = provider(source).candidates(input(note = "hi"), "hi", snapshot())
+        assertTrue("expected Candidates, got $result", result is CollageProviderResult.Candidates)
+
+        // One aspect-aware request per style candidate.
+        assertEquals(3, requestsSeen.size)
+        requestsSeen.forEach { requests ->
+            assertEquals(contentIds, requests.map { it.contentId })
+            assertTrue("slot geometry must be positive", requests.all { it.slotWidth > 0 && it.slotHeight > 0 })
+            assertEquals(CollageCropRequest.DEFAULT_SLOT_ZOOMS, requests.first().zooms)
+        }
+        // The per-style note type changes the grid, so the slots (and therefore
+        // the requested crops) must not be a single reused per-photo map.
+        val slotGeometry = requestsSeen.map { requests -> requests.map { it.slotWidth to it.slotHeight } }
+        assertTrue("different candidate slots must be requested separately", slotGeometry.toSet().size > 1)
     }
 
     @Test

@@ -49,10 +49,10 @@ class CollageChoiceHostTest {
 
     private fun sources() = contentIds.map { GeneratorPreviewSource(it, collageChoiceJpeg(), 8, 8) }
 
-    private fun cropSource() = CollageCropSource { photos ->
-        photos.associate { photo ->
-            photo.contentId to GeneratorExpression.CropWindow(photo.ordinal * 100, 0, 5000, 10000)
-        }
+    private fun cropSource() = CollageCropSource { requests ->
+        requests.mapIndexed { index, request ->
+            request.contentId to GeneratorExpression.CropWindow(index * 100, 0, 5000, 10000)
+        }.toMap()
     }
 
     @Test

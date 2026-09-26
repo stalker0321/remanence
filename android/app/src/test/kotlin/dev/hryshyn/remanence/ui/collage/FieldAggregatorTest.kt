@@ -65,6 +65,12 @@ class FieldAggregatorTest {
 
     private fun box(x: Double, y: Double, w: Double, h: Double) = NormBox(x, y, w, h)
 
+    // Row-major probe order (y * 48 + x, matching np.flatten C order):
+    // 0 = top-left, 47 = top-right (row 0, col 47), 47 * 48 = bottom-left
+    // (row 47, col 0), 47 * 48 + 47 = bottom-right, 24 * 48 + 24 = near-center.
+    // The mixed-corner fixture anchors this: the full-height face-context box
+    // boosts the left column, so the stdlib oracle gives bottom-left 0.4365
+    // and top-right 0.4066 — the two must never be swapped.
     private fun probs(values: DoubleArray): List<Double> =
         listOf(values[0], values[47], values[47 * 48], values[47 * 48 + 47], values[24 * 48 + 24])
 

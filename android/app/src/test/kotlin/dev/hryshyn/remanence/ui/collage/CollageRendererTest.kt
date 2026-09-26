@@ -374,6 +374,35 @@ class CollageRendererTest {
     }
 
     @Test
+    fun manifestNoteMustMatchTheSealedNote() {
+        val sealed = expressionV3(styleId = "press", note = "dear mama")
+        assertEquals(
+            "manifest note does not match the sealed expression note",
+            rejected(sealed, note = null),
+        )
+        assertEquals(
+            "manifest note does not match the sealed expression note",
+            rejected(sealed, note = "different"),
+        )
+        assertTrue(ready(sealed, note = "dear mama").note != null)
+    }
+
+    @Test
+    fun blankNoteNormalizesToAbsent() {
+        val blank = expressionV3(styleId = "press", note = "   ", noteRegion = null)
+        assertNull(ready(blank, note = "   ").note)
+    }
+
+    @Test
+    fun noteRegionRequiresANonEmptyNote() {
+        val regionWithoutNote = expressionV3(styleId = "press").copy(noteRegion = noteRegion)
+        assertEquals(
+            "sealed note region requires a non-empty note",
+            rejected(regionWithoutNote, note = null),
+        )
+    }
+
+    @Test
     fun sourceMetadataRejections() {
         val missing = CollageRenderer.prepare(
             expressionV3(styleId = "press"), null, null,

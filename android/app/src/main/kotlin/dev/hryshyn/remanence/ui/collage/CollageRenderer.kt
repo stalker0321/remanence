@@ -177,6 +177,25 @@ object CollageRenderer {
             return SceneResult.Rejected("expression artifact failed validation")
         }
 
+        // Authenticity: the manifest note argument must be the sealed note,
+        // normalized identically (blank => absent). Rejected before any scene
+        // construction so a mismatched note can never paint, and note presence
+        // must agree with noteRegion presence in both directions.
+        val noteText = note?.takeIf { it.isNotBlank() }
+        val sealedNote = expression.input.note?.takeIf { it.isNotBlank() }
+        if (noteText != sealedNote) {
+            return SceneResult.Rejected("manifest note does not match the sealed expression note")
+        }
+        if ((noteText != null) != (expression.noteRegion != null)) {
+            return SceneResult.Rejected(
+                if (noteText != null) {
+                    "non-empty note requires a sealed note region"
+                } else {
+                    "sealed note region requires a non-empty note"
+                },
+            )
+        }
+
         val styleBinding = expression.style
             ?: return SceneResult.Rejected("v3 expression is missing its style binding")
         val style = StyleRegistry.style(styleBinding.styleId)
@@ -195,7 +214,6 @@ object CollageRenderer {
             return SceneResult.Rejected("unsupported paletteVersion ${expression.paletteVersion}")
         }
 
-        val noteText = note?.takeIf { it.isNotEmpty() }
         val noteType = expression.noteType
             ?: return SceneResult.Rejected("v3 expression is missing its note type")
         val noteFont = FontRegistry.resourceFor(noteType.family, noteType.weight, noteType.italic)
@@ -214,9 +232,6 @@ object CollageRenderer {
             null
         }
 
-        if (noteText != null && expression.noteRegion == null) {
-            return SceneResult.Rejected("non-empty note requires a sealed note region")
-        }
         if ((musicRegion != null) != (trackSnapshot != null)) {
             return SceneResult.Rejected("music region and track snapshot must match")
         }

@@ -79,4 +79,148 @@ class GeneratorExpressionProjectionTest {
             GeneratorExpressionProjection.hash(expression, "cand-1", missing)
         }
     }
+
+    // ---- BEXPR02 (finished collage, contract v3) ----
+
+    private fun v3expression(): GeneratorExpression.ResolvedExpression {
+        val photos = listOf(
+            photo("p1", 0, "a".repeat(64)),
+            photo("p2", 1, "b".repeat(64)),
+            photo("p3", 2, "c".repeat(64)),
+        )
+        val input = GeneratorExpression.GeneratorInput(
+            ownerId = "owner-1",
+            epoch = 7L,
+            photos = photos,
+            note = "hello",
+            music = null,
+        )
+        return GeneratorExpression.ResolvedExpression(
+            canvasVersion = 1,
+            grammarId = "g-collage",
+            grammarVersion = 5,
+            branchId = "b-sheet",
+            input = input,
+            placements = photos.map {
+                GeneratorExpression.Placement(
+                    contentId = it.contentId,
+                    x = 0,
+                    y = 0,
+                    width = 120,
+                    height = 213,
+                    crop = GeneratorExpression.CropWindow(100, 200, 5000, 6000),
+                    maskId = null,
+                    contentRect = GeneratorExpression.ContentRect(0, 0, 120, 213),
+                )
+            },
+            noteTreatment = "regular-region",
+            diagnostics = listOf("ok"),
+            fontVersion = 1,
+            paletteVersion = 1,
+            expressionContractVersion = GeneratorExpression.EXPRESSION_CONTRACT_V3,
+            noteRegion = null,
+            style = GeneratorExpression.StyleBinding(
+                styleId = "press",
+                styleVersion = "style-study-1",
+                digest = ByteArray(32) { 7 },
+            ),
+            noteType = GeneratorExpression.TextType(
+                family = "StudySans",
+                size = 16,
+                weight = 400,
+                italic = false,
+                line = 18,
+            ),
+            musicRegion = null,
+        )
+    }
+
+    private fun magicOf(bytes: ByteArray): String {
+        val buf = java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN)
+        return ByteArray(7).also { buf.get(it) }.toString(Charsets.US_ASCII)
+    }
+
+    @Test
+    fun bexpr02MagicAndVersion() {
+        val expression = v3expression()
+        assertIsValid(expression)
+        val bytes = GeneratorExpressionProjection.canonicalBytes(expression, "cand-1", blobs(expression))
+        assertEquals("BEXPR02", magicOf(bytes))
+        val buf = java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN)
+        buf.position(7)
+        assertEquals(GeneratorExpressionProjection.PROJECTION_VERSION_2, buf.int)
+    }
+
+    @Test
+    fun bexpr02IsDeterministicHexAndExcludesOwner() {
+        val expression = v3expression()
+        val first = GeneratorExpressionProjection.hash(expression, "cand-1", blobs(expression))
+        val second = GeneratorExpressionProjection.hash(expression, "cand-1", blobs(expression))
+        assertEquals(first, second)
+        assertTrue(first.matches(Regex("[0-9a-f]{64}")), first)
+        val moved = expression.copy(
+            input = expression.input.copy(ownerId = "owner-2", epoch = 99L),
+        )
+        assertEquals(
+            first,
+            GeneratorExpressionProjection.hash(moved, "cand-1", blobs(moved)),
+            "projection must not expose sender owner/epoch",
+        )
+    }
+
+    @Test
+    fun bexpr02BindsCropMusicAndStyle() {
+        val expression = v3expression()
+        val base = GeneratorExpressionProjection.hash(expression, "cand-1", blobs(expression))
+        val shiftedCrop = expression.copy(
+            placements = expression.placements.mapIndexed { index, p ->
+                if (index == 0) p.copy(crop = GeneratorExpression.CropWindow(101, 200, 5000, 6000)) else p
+            },
+        )
+        val withMusic = expression.copy(
+            musicRegion = GeneratorExpression.MusicRegion(
+                16, 480, 328, 64, "text",
+                GeneratorExpression.TextType("StudySans", 14, 400, false, 16),
+            ),
+        )
+        val restyled = expression.copy(
+            style = expression.style!!.copy(styleId = "blue-letter"),
+        )
+        for (variant in listOf(shiftedCrop, withMusic, restyled)) {
+            assertIsValid(variant)
+            assertNotEquals(
+                base,
+                GeneratorExpressionProjection.hash(variant, "cand-1", blobs(variant)),
+            )
+        }
+    }
+
+    @Test
+    fun bexpr02FailsClosedWithoutStyle() {
+        val expression = v3expression().copy(style = null)
+        assertFailsWith<IllegalArgumentException> {
+            GeneratorExpressionProjection.hash(expression, "cand-1", blobs(expression))
+        }
+    }
+
+    @Test
+    fun v1FixtureStaysBexpr01() {
+        val expression = expression(input())
+        val bytes = GeneratorExpressionProjection.canonicalBytes(expression, "cand-1", blobs(expression))
+        assertEquals("BEXPR01", magicOf(bytes))
+        val buf = java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN)
+        buf.position(7)
+        assertEquals(GeneratorExpressionProjection.PROJECTION_VERSION, buf.int)
+        assertNotEquals(
+            GeneratorExpressionProjection.hash(expression, "cand-1", blobs(expression)),
+            GeneratorExpressionProjection.hash(v3expression(), "cand-1", blobs(v3expression())),
+        )
+    }
+
+    private fun assertIsValid(expression: GeneratorExpression.ResolvedExpression) {
+        assertTrue(
+            GeneratorExpression.validateResolved(expression) is GeneratorExpression.InputValidation.Valid,
+            "expected Valid, got ${GeneratorExpression.validateResolved(expression)}",
+        )
+    }
 }

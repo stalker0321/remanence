@@ -230,11 +230,16 @@ class CreateViewModel(
 
     fun setMusicSelection(hit: dev.hryshyn.remanence.core.data.network.MusicTrackHit?) {
         _musicSelection.value = hit
+        collageChoices.clear()
     }
 
     fun clearMusicSelection() {
         _musicSelection.value = null
+        collageChoices.clear()
     }
+
+    /** Explicit sender collage selection; refused if no such candidate. */
+    fun selectCollageCandidate(index: Int): Boolean = collageChoices.select(index)
 
     // ---------------------------------------------------------------------
     // Authoritative capture attempt (FIX-STATE-01).
@@ -270,6 +275,13 @@ class CreateViewModel(
 
     private val _revokeStatus = MutableStateFlow<CapsuleRevokeStatus>(CapsuleRevokeStatus.Idle)
     val revokeStatus: StateFlow<CapsuleRevokeStatus> = _revokeStatus.asStateFlow()
+
+    /**
+     * Sender collage chooser state (pre-publish foundation). Candidates are
+     * built by the collage host and held here; publish is NOT wired to it yet
+     * (see the fail-closed guard in beginGeneratorSession).
+     */
+    val collageChoices = CollageChoiceSession()
 
     /** Stage1-C CONTENT preview: pure planner over loaded, bounded sources. */
     private val generatorPreviewCoordinator = GeneratorPreviewCoordinator(generatorPreviewLoader)
@@ -878,6 +890,8 @@ class CreateViewModel(
         // Any refresh invalidates a previously measured note plan; the host
         // must re-measure the current selection before it can be published.
         generatorMeasuredNoteSelection = null
+        // A source/note edit invalidates the built collage candidates too.
+        collageChoices.clear()
         val ids = photoSelection.selectedIds
         previewJob?.cancel()
         previewJob = null
@@ -980,6 +994,12 @@ class CreateViewModel(
         val epoch = generatorSessionEpoch
         if (epoch == null) {
             failPublishing("generator session has no epoch; publishing cancelled", generation)
+            return false
+        }
+        // Collage freezing is not wired yet: a chosen collage candidate must
+        // fail closed rather than silently seal the V2 placeholder.
+        if (collageChoices.hasSelection) {
+            failPublishing("collage freezing is not available yet", generation)
             return false
         }
         val sender = capturedSender

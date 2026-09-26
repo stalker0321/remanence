@@ -230,7 +230,9 @@ class GeneratorExpressionContractV2Test {
 
     @Test
     fun unknownVersionsThrowOnHashAndFreeze() {
-        for (version in listOf(0, 3, -1)) {
+        // Contract 3 (GENEX03 finished collage) is a known version since
+        // 1c93891, so the unknown pin moves to 4.
+        for (version in listOf(0, 4, -1)) {
             val bad = expressionV1().copy(expressionContractVersion = version)
             assertIs<GeneratorExpression.InputValidation.Invalid>(
                 GeneratorExpression.validateResolved(bad),

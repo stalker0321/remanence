@@ -2,8 +2,13 @@ package dev.hryshyn.remanence.core.crypto
 
 import dev.hryshyn.remanence.protocol.v1.ContentManifest
 import dev.hryshyn.remanence.protocol.v1.CapsuleTrackSnapshotV1 as ProtoTrackSnapshot
+import dev.hryshyn.remanence.protocol.v1.ExpressionArtwork
+import dev.hryshyn.remanence.protocol.v1.ExpressionCrop
+import dev.hryshyn.remanence.protocol.v1.ExpressionMusic
 import dev.hryshyn.remanence.protocol.v1.ExpressionPlacement
 import dev.hryshyn.remanence.protocol.v1.ExpressionSource
+import dev.hryshyn.remanence.protocol.v1.ExpressionStyle
+import dev.hryshyn.remanence.protocol.v1.ExpressionTextType
 import dev.hryshyn.remanence.protocol.v1.ExpressionV1
 import dev.hryshyn.remanence.protocol.v1.PhotoEntry
 import com.google.crypto.tink.KeysetHandle
@@ -91,7 +96,10 @@ class ContentManifestCodec {
         blobIdByContentId: Map<String, ByteArray>,
         trackSnapshot: CapsuleTrackSnapshotV1?,
     ): ByteArray {
-        require(expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V2) {
+        require(
+            expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V2 ||
+                expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V3,
+        ) {
             "expression artifact requires a v2 expression"
         }
         require(candidateId.isNotBlank() && candidateId.length <= MAX_CANDIDATE_ID_CHARS) {
@@ -245,6 +253,11 @@ class ContentManifestCodec {
             if (!manifest.hasExpression()) {
                 throw GeneralSecurityException("v2 content manifest is missing its expression artifact")
             }
+            if (manifest.expression.expressionVersion == EXPRESSION_VERSION_V3 &&
+                manifest.expression.hasMusic() != manifest.hasTrackSnapshot()
+            ) {
+                throw GeneralSecurityException("expression music region and track snapshot must match")
+            }
             ContentManifestContent(
                 protocolVersion = manifest.protocolVersion,
                 photos = parsed,
@@ -272,7 +285,13 @@ class ContentManifestCodec {
         blobIdByContentId: Map<String, ByteArray>,
     ): ExpressionV1 {
         val builder = ExpressionV1.newBuilder()
-            .setExpressionVersion(EXPRESSION_VERSION)
+            .setExpressionVersion(
+                if (expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V3) {
+                    EXPRESSION_VERSION_V3
+                } else {
+                    EXPRESSION_VERSION
+                },
+            )
             .setCandidateId(candidateId)
             .setExpressionHash(projectionHash)
             .setCanvasVersion(expression.canvasVersion)
@@ -312,18 +331,94 @@ class ContentManifestCodec {
                     .setRectX(rect.x).setRectY(rect.y)
                     .setRectWidth(rect.width).setRectHeight(rect.height)
             }
+            if (expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V3) {
+                val crop = requireNotNull(placement.crop) {
+                    "v3 expression must carry crop on ${placement.contentId}"
+                }
+                p.setCrop(
+                    ExpressionCrop.newBuilder()
+                        .setX(crop.x).setY(crop.y)
+                        .setWidth(crop.width).setHeight(crop.height),
+                )
+                placement.maskId?.let(p::setMaskId)
+            }
             builder.addPlacements(p)
+        }
+        if (expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V3) {
+            val style = requireNotNull(expression.style) { "v3 expression must carry style" }
+            builder.setStyle(
+                ExpressionStyle.newBuilder()
+                    .setStyleId(style.styleId)
+                    .setStyleVersion(style.styleVersion)
+                    .setStyleDigest(com.google.protobuf.ByteString.copyFrom(style.digest)),
+            )
+            val noteType = requireNotNull(expression.noteType) { "v3 expression must carry noteType" }
+            builder.setNoteType(toProtoTextType(noteType))
+            expression.musicRegion?.let { music ->
+                val musicBuilder = ExpressionMusic.newBuilder()
+                    .setX(music.x).setY(music.y)
+                    .setWidth(music.width).setHeight(music.height)
+                    .setMode(music.mode)
+                    .setType(toProtoTextType(music.type))
+                music.artwork?.let { artwork ->
+                    musicBuilder.setArtwork(
+                        ExpressionArtwork.newBuilder()
+                            .setProvider(artwork.provider)
+                            .setUrl(artwork.url)
+                            .setSha256(com.google.protobuf.ByteString.copyFrom(artwork.sha256))
+                            .setMimeType(artwork.mimeType)
+                            .setWidth(artwork.width)
+                            .setHeight(artwork.height),
+                    )
+                }
+                builder.setMusic(musicBuilder.build())
+            }
         }
         return builder.build()
     }
+
+    private fun toProtoTextType(type: GeneratorExpression.TextType): ExpressionTextType =
+        ExpressionTextType.newBuilder()
+            .setFamily(type.family)
+            .setSize(type.size)
+            .setWeight(type.weight)
+            .setItalic(type.italic)
+            .setLine(type.line)
+            .build()
+
+    private fun fromProtoTextType(type: ExpressionTextType): GeneratorExpression.TextType =
+        GeneratorExpression.TextType(
+            family = type.family,
+            size = type.size,
+            weight = type.weight,
+            italic = type.italic,
+            line = type.line,
+        )
 
     private fun parseExpression(
         proto: ExpressionV1,
         photos: List<ManifestPhoto>,
         note: String?,
     ): ContentExpression {
-        if (proto.expressionVersion != EXPRESSION_VERSION) {
+        if (proto.expressionVersion !in setOf(EXPRESSION_VERSION, EXPRESSION_VERSION_V3)) {
             throw GeneralSecurityException("unsupported expression artifact version")
+        }
+        if (proto.expressionVersion == EXPRESSION_VERSION &&
+            (proto.hasStyle() || proto.hasNoteType() || proto.hasMusic() ||
+                proto.placementsList.any { it.hasCrop() || it.hasMaskId() })
+        ) {
+            throw GeneralSecurityException("expression artifact version 1 must not carry version 2 fields")
+        }
+        val isArtifactV2 = proto.expressionVersion == EXPRESSION_VERSION_V3
+        if (isArtifactV2) {
+            if (!proto.hasStyle() || !proto.hasNoteType() ||
+                proto.placementsList.any { !it.hasCrop() }
+            ) {
+                throw GeneralSecurityException("expression artifact version 2 requires style, note type, and per-placement crop")
+            }
+            if (proto.hasMusic() && !proto.music.hasType()) {
+                throw GeneralSecurityException("expression music region requires its resolved type")
+            }
         }
         val candidateId = proto.candidateId
         if (candidateId.isBlank() || candidateId.length > MAX_CANDIDATE_ID_CHARS) {
@@ -370,10 +465,16 @@ class ContentManifestCodec {
             } else {
                 null
             }
+            val crop = if (isArtifactV2) {
+                GeneratorExpression.CropWindow(p.crop.x, p.crop.y, p.crop.width, p.crop.height)
+            } else {
+                null
+            }
+            val maskId = if (isArtifactV2 && p.hasMaskId()) p.maskId else null
             GeneratorExpression.Placement(
                 contentId = p.contentId,
                 x = p.x, y = p.y, width = p.width, height = p.height,
-                crop = null, maskId = null, contentRect = rect,
+                crop = crop, maskId = maskId, contentRect = rect,
             )
         }
         if (placements.map { it.contentId } != sourcePhotos.map { it.contentId }) {
@@ -391,6 +492,44 @@ class ContentManifestCodec {
         } else {
             null
         }
+        val style = if (isArtifactV2) {
+            val s = proto.style
+            GeneratorExpression.StyleBinding(
+                styleId = s.styleId,
+                styleVersion = s.styleVersion,
+                digest = s.styleDigest.toByteArray(),
+            )
+        } else {
+            null
+        }
+        val noteType = if (isArtifactV2) {
+            fromProtoTextType(proto.noteType)
+        } else {
+            null
+        }
+        val musicRegion = if (isArtifactV2 && proto.hasMusic()) {
+            val m = proto.music
+            GeneratorExpression.MusicRegion(
+                x = m.x, y = m.y, width = m.width, height = m.height,
+                mode = m.mode,
+                type = fromProtoTextType(m.type),
+                artwork = if (m.hasArtwork()) {
+                    val a = m.artwork
+                    GeneratorExpression.ArtworkRef(
+                        provider = a.provider,
+                        url = a.url,
+                        sha256 = a.sha256.toByteArray(),
+                        mimeType = a.mimeType,
+                        width = a.width,
+                        height = a.height,
+                    )
+                } else {
+                    null
+                },
+            )
+        } else {
+            null
+        }
         val expression = GeneratorExpression.ResolvedExpression(
             canvasVersion = proto.canvasVersion,
             grammarId = proto.grammarId,
@@ -402,8 +541,15 @@ class ContentManifestCodec {
             diagnostics = emptyList(),
             fontVersion = proto.fontVersion,
             paletteVersion = proto.paletteVersion,
-            expressionContractVersion = GeneratorExpression.EXPRESSION_CONTRACT_V2,
+            expressionContractVersion = if (isArtifactV2) {
+                GeneratorExpression.EXPRESSION_CONTRACT_V3
+            } else {
+                GeneratorExpression.EXPRESSION_CONTRACT_V2
+            },
             noteRegion = region,
+            style = style,
+            noteType = noteType,
+            musicRegion = musicRegion,
         )
         if (GeneratorExpression.validateResolved(expression) !is GeneratorExpression.InputValidation.Valid) {
             throw GeneralSecurityException("expression artifact failed validation")
@@ -483,6 +629,7 @@ class ContentManifestCodec {
         const val PROTOCOL_VERSION = 1
         const val PROTOCOL_VERSION_V2 = 2
         const val EXPRESSION_VERSION = 1
+        const val EXPRESSION_VERSION_V3 = 2
         const val MEDIA_TYPE_JPEG = "image/jpeg"
         const val MIN_PHOTOS = 3
         const val MAX_PHOTOS = 5

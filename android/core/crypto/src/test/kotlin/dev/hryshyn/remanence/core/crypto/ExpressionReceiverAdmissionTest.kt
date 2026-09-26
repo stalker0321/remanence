@@ -9,11 +9,11 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * V5-P2 slice section 9 T6 (landed in P3): V3 admission readiness
- * (R6/R7/R8) plus the artwork capability gates (AD1/AD2) with exact stable
- * reasons. Legacy/V1/V2 paths are asserted unchanged (R10); structural
- * rules A1-A9 stay in `validateResolved` and surface here only through the
- * generic `:29` reason.
+ * V5-P3B: V3 admission is temporarily fail-closed with one stable reason until
+ * the shared collage renderer and the receiver registries land. Structural
+ * rules A1-A9 stay in `validateResolved` and surface through the generic reason.
+ * Legacy/V1/V2 behavior is unchanged, including the V2-only note <-> noteRegion
+ * rule (V1 is exempt because it has no noteRegion slot).
  */
 class ExpressionReceiverAdmissionTest {
 
@@ -24,10 +24,14 @@ class ExpressionReceiverAdmissionTest {
         UUID.fromString("af0a1234-5678-4abc-9def-aabbccdd0003"),
     )
 
+    private val fitsPort = GeneratorEditorialRows.NoteMeasurementPort {
+        GeneratorEditorialRows.NoteMeasurement.Fits(GeneratorEditorialRows.NOTE_REGION)
+    }
+
     private fun manifestPhotos(): List<ManifestPhoto> =
         blobUuids.mapIndexed { index, id -> ManifestPhoto(blobId = id, ordinal = index, width = 1000, height = 1000) }
 
-    private fun input() = GeneratorExpression.GeneratorInput(
+    private fun input(note: String? = null) = GeneratorExpression.GeneratorInput(
         ownerId = "owner-1",
         epoch = 7L,
         photos = contentIds.mapIndexed { index, id ->
@@ -36,7 +40,7 @@ class ExpressionReceiverAdmissionTest {
                 contentHash = ('a' + index).toString().repeat(64),
             )
         },
-        note = null,
+        note = note,
         music = null,
     )
 
@@ -118,11 +122,12 @@ class ExpressionReceiverAdmissionTest {
     private fun contentOf(
         expression: GeneratorExpression.ResolvedExpression,
         trackSnapshot: CapsuleTrackSnapshotV1? = null,
+        note: String? = null,
         protocolVersion: Int = 2,
     ) = ContentManifestContent(
         protocolVersion = protocolVersion,
         photos = manifestPhotos(),
-        note = null,
+        note = note,
         expression = ContentExpression("cand-1", "a".repeat(64), expression),
         trackSnapshot = trackSnapshot,
     )
@@ -158,94 +163,65 @@ class ExpressionReceiverAdmissionTest {
     }
 
     @Test
-    fun v3TextOnlyWithoutMusicIsSupported() {
-        val result = ExpressionReceiverAdmission.admit(contentOf(expressionV3Base()))
-        assertTrue(result is ExpressionReceiverAdmission.Result.Supported, "got $result")
-    }
-
-    @Test
-    fun v3TextMusicWithSnapshotIsSupported() {
-        val result = ExpressionReceiverAdmission.admit(contentOf(expressionV3TextMusic(), snapshot()))
-        assertTrue(result is ExpressionReceiverAdmission.Result.Supported, "got $result")
-    }
-
-    @Test
-    fun ad1ArtworkBearingV3FailsClosedWithExactReason() {
+    fun contractV2NoteRegionMismatchRemainsUnsupported() {
+        // The expression carries a measured note region, but the manifest note
+        // is absent: the legacy v2 equivalence rule must still reject it.
+        val planned = GeneratorEditorialRows.plan(input(note = "hi"), fitsPort)
+        assertTrue(planned is GeneratorEditorialRows.PlanResult.Planned, "got $planned")
+        val expression = planned.expression
         assertEquals(
-            "music artwork rendering is not supported",
+            "expression note region does not match the manifest note",
+            unsupportedReason(contentOf(expression, note = null)),
+        )
+    }
+
+    @Test
+    fun contractV1ExpressionIsExemptFromTheV2NoteRegionRule() {
+        // v1 has no noteRegion slot, so the legacy v2 note <-> region rule
+        // deliberately does not apply: a v1 note without a region is admitted.
+        val v1 = expressionV3Base().copy(
+            expressionContractVersion = GeneratorExpression.EXPRESSION_CONTRACT_V1,
+            input = input(note = "hi"),
+            placements = contentIds.map { id ->
+                GeneratorExpression.Placement(
+                    contentId = id, x = 0, y = 0, width = 120, height = 213,
+                    crop = GeneratorExpression.CropWindow(100, 200, 500, 600),
+                    maskId = null, contentRect = null,
+                )
+            },
+            noteRegion = null,
+            style = null,
+            noteType = null,
+            musicRegion = null,
+        )
+        assertTrue(
+            GeneratorExpression.validateResolved(v1) is GeneratorExpression.InputValidation.Valid,
+            "fixture must be structurally valid",
+        )
+        val result = ExpressionReceiverAdmission.admit(contentOf(v1, note = "hi"))
+        assertTrue(result is ExpressionReceiverAdmission.Result.Supported, "got $result")
+    }
+
+    @Test
+    fun everyV3ShapeFailsClosedUntilRendererLands() {
+        assertEquals(
+            "finished collage rendering is not supported",
+            unsupportedReason(contentOf(expressionV3Base())),
+        )
+        assertEquals(
+            "finished collage rendering is not supported",
+            unsupportedReason(contentOf(expressionV3TextMusic(), snapshot())),
+        )
+        assertEquals(
+            "finished collage rendering is not supported",
             unsupportedReason(contentOf(expressionV3Artwork(), snapshot())),
         )
     }
 
     @Test
-    fun ad2MusicSnapshotMismatchIsUnsupported() {
-        assertEquals(
-            "expression music region and track snapshot must match",
-            unsupportedReason(contentOf(expressionV3TextMusic(), null)),
-        )
-        assertEquals(
-            "expression music region and track snapshot must match",
-            unsupportedReason(contentOf(expressionV3Base(), snapshot())),
-        )
-    }
-
-    @Test
-    fun r7MaskIdIsUnsupported() {
-        val masked = expressionV3Base().copy(
-            placements = contentIds.map { placementV3(it).copy(maskId = "rect") },
-        )
-        assertEquals(
-            "expression mask is not supported",
-            unsupportedReason(contentOf(masked)),
-        )
-    }
-
-    @Test
-    fun r8UnknownFontOrPaletteVersionIsUnsupported() {
-        assertEquals(
-            "expression font or palette version is not supported",
-            unsupportedReason(contentOf(expressionV3Base().copy(fontVersion = 2))),
-        )
-        assertEquals(
-            "expression font or palette version is not supported",
-            unsupportedReason(contentOf(expressionV3Base().copy(paletteVersion = 2))),
-        )
-    }
-
-    @Test
-    fun r6UnbundledTypefaceIsUnsupported() {
-        // Narrow ships 700-only: Narrow @400 passes seal-time validation but
-        // the slice-1 receiver has no such face, so admission refuses it.
-        val narrow = expressionV3Base().copy(
-            noteType = noteType().copy(family = "Narrow", weight = 400),
-        )
-        assertTrue(
-            GeneratorExpression.validateResolved(narrow) is GeneratorExpression.InputValidation.Valid,
-            "fixture must stay sealable so the failure pins R6, not :29",
-        )
-        assertEquals(
-            "expression style is not supported",
-            unsupportedReason(contentOf(narrow)),
-        )
-        // StudyMono ships 400-only.
-        val mono = expressionV3TextMusic().copy(
-            musicRegion = expressionV3TextMusic().musicRegion!!.copy(
-                type = noteType().copy(family = "StudyMono", weight = 700),
-            ),
-        )
-        assertTrue(
-            GeneratorExpression.validateResolved(mono) is GeneratorExpression.InputValidation.Valid,
-            "fixture must stay sealable so the failure pins R6, not :29",
-        )
-        assertEquals(
-            "expression style is not supported",
-            unsupportedReason(contentOf(mono, snapshot())),
-        )
-    }
-
-    @Test
     fun structuralFailuresStillSurfaceThroughTheGenericReason() {
-        // A1 thumbnail-without-artwork never reaches AD1: :29 rejects first.
+        // A1 thumbnail-without-artwork is rejected by validateResolved before
+        // the temporary V3 fail-closed gate.
         val dangling = expressionV3Base().copy(
             musicRegion = GeneratorExpression.MusicRegion(
                 x = 16, y = 480, width = 328, height = 64,
@@ -258,7 +234,7 @@ class ExpressionReceiverAdmissionTest {
             "expression artifact failed validation",
             unsupportedReason(contentOf(dangling, snapshot())),
         )
-        // R3 twin at admission: style missing.
+        // Missing style is likewise structural.
         assertEquals(
             "expression artifact failed validation",
             unsupportedReason(contentOf(expressionV3Base().copy(style = null))),

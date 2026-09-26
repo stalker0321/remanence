@@ -7,7 +7,12 @@ import dev.hryshyn.remanence.core.model.GeneratorExpression
 import dev.hryshyn.remanence.ui.collage.CollageRenderer
 import dev.hryshyn.remanence.ui.collage.FontRegistry
 import dev.hryshyn.remanence.ui.collage.StyleRegistry
+import java.util.concurrent.CountDownLatch
+import kotlin.concurrent.thread
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -180,5 +185,73 @@ class CollagePresentationStateTest {
         }
         assertTrue("load after close must be refused", refused)
         assertFalse(state.status is CollagePresentationState.Status.Ready)
+    }
+
+    @Test
+    fun closeDuringFirstLoadPreventsSecondIdAndReady() = runBlocking {
+        val firstStarted = CompletableDeferred<Unit>()
+        val releaseFirst = CompletableDeferred<Unit>()
+        val loadedIds = mutableListOf<String>()
+        val buffers = mutableListOf<ByteArray>()
+        val state = CollagePresentationState(
+            expression = expressionV3(),
+            loadPhoto = { contentId ->
+                loadedIds += contentId
+                if (contentId == "p0") {
+                    firstStarted.complete(Unit)
+                    releaseFirst.await()
+                }
+                contentId.toByteArray().also { buffers += it }
+            },
+            decoder = okDecoder(),
+        )
+        val job = launch(Dispatchers.Default) { state.load() }
+        firstStarted.await()
+        state.close()
+        releaseFirst.complete(Unit)
+        job.join()
+
+        assertEquals(listOf("p0"), loadedIds)
+        assertEquals(CollagePresentationState.Status.Loading, state.status)
+        assertTrue(state.bitmaps.isEmpty())
+        assertTrue("the in-flight buffer must be zeroized", buffers.isNotEmpty())
+        assertTrue(buffers.all { bytes -> bytes.all { it == 0.toByte() } })
+    }
+
+    @Test
+    fun closeBetweenDecodeAndPublicationCannotResurrectContent() {
+        val decodeEntered = CountDownLatch(1)
+        val releaseDecode = CountDownLatch(1)
+        val decodedBitmap = Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888).asImageBitmap()
+        var buffer: ByteArray? = null
+        val state = CollagePresentationState(
+            expression = expressionV3(),
+            loadPhoto = { contentId -> contentId.toByteArray().also { buffer = it } },
+            decoder = Ber1PhotoDecoder {
+                decodeEntered.countDown()
+                releaseDecode.await()
+                decodedBitmap
+            },
+        )
+        val loader = thread { runBlocking { state.load() } }
+        decodeEntered.await()
+        state.close()
+        releaseDecode.countDown()
+        loader.join()
+
+        assertEquals(CollagePresentationState.Status.Loading, state.status)
+        assertTrue(state.bitmaps.isEmpty())
+        assertTrue(requireNotNull(buffer).all { it == 0.toByte() })
+    }
+
+    @Test
+    fun repeatedCloseAfterLoadIsANoOp() = runBlocking {
+        val state = state(okDecoder())
+        state.load()
+        state.close()
+        state.close()
+        state.close()
+        assertEquals(CollagePresentationState.Status.Loading, state.status)
+        assertTrue(state.bitmaps.isEmpty())
     }
 }

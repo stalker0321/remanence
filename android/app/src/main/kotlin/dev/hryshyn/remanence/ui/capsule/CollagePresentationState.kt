@@ -63,55 +63,97 @@ class CollagePresentationState(
     val bitmaps: Map<String, ImageBitmap>
         get() = (status as? Status.Ready)?.bitmaps ?: emptyMap()
 
+    /**
+     * Single lock guarding [closed], the load-start/duplicate guard, every
+     * iteration-start decision, Ready/Unsupported publication, the
+     * owned-resource swap/clear, and [close]. Never held across the suspending
+     * [loadPhoto] or the decode.
+     */
+    private val lock = Any()
     private var closed = false
+    private var started = false
 
     /**
      * Decrypts (via [loadPhoto]) and decodes every sealed content id exactly
      * once. Never throws on decode failure: it releases the partial decode and
      * publishes [Status.Unsupported]. Cancellation rethrows after release.
+     *
+     * If [close] wins while a load is in flight, the loader zeroizes its
+     * current buffer, drops every local reference, invokes no further content
+     * id, publishes nothing, and returns; after [close] returns, [status]
+     * cannot become Ready or Unsupported.
      */
     suspend fun load() {
-        check(!closed) { "collage presentation is closed" }
-        check(status === Status.Loading) { "collage presentation already loaded" }
+        synchronized(lock) {
+            check(!closed) { "collage presentation is closed" }
+            check(!started) { "collage presentation already loaded" }
+            started = true
+        }
         val decoded = LinkedHashMap<String, ImageBitmap>(expression.input.photos.size)
         try {
             for (photo in expression.input.photos) {
+                synchronized(lock) {
+                    if (closed) {
+                        decoded.clear()
+                        return
+                    }
+                }
                 val bytes = loadPhoto(photo.contentId)
+                val bitmap: ImageBitmap?
                 try {
-                    val bitmap = decoder.decode(bytes)
-                        ?: throw IllegalStateException("a collage photo could not be decoded")
-                    decoded[photo.contentId] = bitmap
+                    bitmap = decoder.decode(bytes)
                 } finally {
                     bytes.fill(0)
                 }
+                synchronized(lock) {
+                    if (closed) {
+                        decoded.clear()
+                        return
+                    }
+                    if (bitmap == null) {
+                        decoded.clear()
+                        status = Status.Unsupported(DECODE_FAILURE_REASON)
+                        return
+                    }
+                    decoded[photo.contentId] = bitmap
+                }
+            }
+            synchronized(lock) {
+                if (closed) {
+                    decoded.clear()
+                    return
+                }
+                status = Status.Ready(decoded)
             }
         } catch (cancelled: CancellationException) {
-            decoded.clear()
+            synchronized(lock) { decoded.clear() }
             throw cancelled
         } catch (_: Exception) {
-            decoded.clear()
-            status = Status.Unsupported(DECODE_FAILURE_REASON)
-            return
+            synchronized(lock) {
+                decoded.clear()
+                if (!closed) status = Status.Unsupported(DECODE_FAILURE_REASON)
+            }
         }
-        if (closed) {
-            decoded.clear()
-            return
-        }
-        status = Status.Ready(decoded)
     }
 
     /**
      * Whole-sheet refusal (e.g. a [CollageRenderer.prepare] rejection): drops
-     * every decoded reference and publishes the reason.
+     * every decoded reference and publishes the reason. A no-op once closed, so
+     * no publication can follow [close].
      */
     fun unsupported(reason: String) {
-        status = Status.Unsupported(reason)
+        synchronized(lock) {
+            if (closed) return
+            status = Status.Unsupported(reason)
+        }
     }
 
     override fun close() {
-        if (closed) return
-        closed = true
-        status = Status.Loading
+        synchronized(lock) {
+            if (closed) return
+            closed = true
+            status = Status.Loading
+        }
     }
 
     companion object {

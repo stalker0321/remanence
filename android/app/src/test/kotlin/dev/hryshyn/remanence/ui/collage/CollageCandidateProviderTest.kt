@@ -9,6 +9,7 @@ import dev.hryshyn.remanence.core.model.GeneratorExpressionProjection
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 import kotlin.math.ceil
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -60,14 +61,14 @@ class CollageCandidateProviderTest {
 
     @Test
     fun unavailableWithoutAuthoritativeAnalysis() {
-        val result = provider(CollageCropSource { null }).candidates(input(), null, null)
+        val result = runBlocking { provider(CollageCropSource { null }).candidates(input(), null, null) }
         assertTrue("expected Unavailable, got $result", result is CollageProviderResult.Unavailable)
         assertTrue((result as CollageProviderResult.Unavailable).reason.contains("not available"))
     }
 
     @Test
     fun buildsOneTextOnlyCandidatePerBundledStyleWithExplicitCrops() {
-        val result = provider().candidates(input(), null, null)
+        val result = runBlocking { provider().candidates(input(), null, null) }
         assertTrue("expected Candidates, got $result", result is CollageProviderResult.Candidates)
         val candidates = (result as CollageProviderResult.Candidates).candidates
         assertEquals(listOf("press", "blue-letter", "poster"), candidates.map { it.styleId })
@@ -115,7 +116,7 @@ class CollageCandidateProviderTest {
 
     @Test
     fun sealsNoteRegionAndTextModeMusicWhenPresent() {
-        val result = provider().candidates(input(note = "dear mama"), "dear mama", snapshot())
+        val result = runBlocking { provider().candidates(input(note = "dear mama"), "dear mama", snapshot()) }
         val candidate = (result as CollageProviderResult.Candidates).candidates.first()
         val expression = candidate.expression
         assertEquals("editorial-1+2-equal-1", candidate.branchId)
@@ -137,8 +138,9 @@ class CollageCandidateProviderTest {
 
     @Test
     fun candidateIdentityUsesGenex03AndBexpr02Exactly() {
-        val candidate = (provider().candidates(input(), null, null) as CollageProviderResult.Candidates)
-            .candidates.first()
+        val candidate = runBlocking { provider().candidates(input(), null, null) }.let {
+            (it as CollageProviderResult.Candidates).candidates.first()
+        }
         val expression = candidate.expression
         assertEquals(GeneratorBer1Provider.candidateIdFor(expression), candidate.candidateId)
         assertTrue(candidate.candidateId.startsWith("ber1-"))
@@ -175,7 +177,7 @@ class CollageCandidateProviderTest {
                 request.contentId to GeneratorExpression.CropWindow(index * 100, 0, 5000, 10000)
             }.toMap()
         }
-        val result = provider(source).candidates(input(note = "hi"), "hi", snapshot())
+        val result = runBlocking { provider(source).candidates(input(note = "hi"), "hi", snapshot()) }
         assertTrue("expected Candidates, got $result", result is CollageProviderResult.Candidates)
 
         // One aspect-aware request per style candidate.
@@ -193,8 +195,12 @@ class CollageCandidateProviderTest {
 
     @Test
     fun candidateSetIsDeterministicAcrossRuns() {
-        val first = (provider().candidates(input(note = "hi"), "hi", snapshot()) as CollageProviderResult.Candidates).candidates
-        val second = (provider().candidates(input(note = "hi"), "hi", snapshot()) as CollageProviderResult.Candidates).candidates
+        val first = runBlocking {
+            (provider().candidates(input(note = "hi"), "hi", snapshot()) as CollageProviderResult.Candidates).candidates
+        }
+        val second = runBlocking {
+            (provider().candidates(input(note = "hi"), "hi", snapshot()) as CollageProviderResult.Candidates).candidates
+        }
         assertEquals(first.map { it.candidateId }, second.map { it.candidateId })
         assertEquals(first.map { it.expression }, second.map { it.expression })
     }

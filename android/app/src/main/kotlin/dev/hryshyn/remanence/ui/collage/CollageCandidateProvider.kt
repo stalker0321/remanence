@@ -28,10 +28,11 @@ data class CollageCropRequest(
  * [GeneratorExpression.CropWindow] for every request, or `null` when the
  * on-device analysis that produces the freeze `envelope-50` crops is not
  * available; the provider then fails closed rather than fabricating a center
- * crop.
+ * crop. Suspend: analysis may run detectors; callers provide the structured
+ * cancellation scope (the Compose host uses its `LaunchedEffect`).
  */
 fun interface CollageCropSource {
-    fun cropsFor(requests: List<CollageCropRequest>): Map<String, GeneratorExpression.CropWindow>?
+    suspend fun cropsFor(requests: List<CollageCropRequest>): Map<String, GeneratorExpression.CropWindow>?
 }
 
 /** One complete, styled, text-only contract-V3 collage candidate. */
@@ -75,7 +76,7 @@ class CollageCandidateProvider(
     private val measurer: CollageRenderer.TextMeasurer,
 ) {
 
-    fun candidates(
+    suspend fun candidates(
         input: GeneratorExpression.GeneratorInput,
         note: String?,
         track: CapsuleTrackSnapshotV1?,
@@ -105,7 +106,7 @@ class CollageCandidateProvider(
         data object Invalid : BuildResult
     }
 
-    private fun buildCandidate(
+    private suspend fun buildCandidate(
         input: GeneratorExpression.GeneratorInput,
         noteText: String?,
         track: CapsuleTrackSnapshotV1?,

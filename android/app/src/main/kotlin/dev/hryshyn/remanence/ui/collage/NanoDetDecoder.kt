@@ -1,6 +1,7 @@
 package dev.hryshyn.remanence.ui.collage
 
 import kotlin.math.exp
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 
@@ -83,8 +84,9 @@ object NanoDetDecoder {
     fun letterbox(sourceWidth: Int, sourceHeight: Int): Letterbox {
         require(sourceWidth > 0 && sourceHeight > 0) { "source dimensions must be positive" }
         val k = INPUT_SIZE.toDouble() / max(sourceWidth, sourceHeight)
-        val rw = Math.round(sourceWidth * k).toInt()
-        val rh = Math.round(sourceHeight * k).toInt()
+        // Python `round` is round-half-to-even; Kotlin `Math.round` is half-up.
+        val rw = halfEvenRound(sourceWidth * k)
+        val rh = halfEvenRound(sourceHeight * k)
         return Letterbox(
             sourceWidth = sourceWidth,
             sourceHeight = sourceHeight,
@@ -212,7 +214,8 @@ object NanoDetDecoder {
         val kept = ArrayList<Candidate>()
         for (i in order) {
             if (removed[i]) continue
-            if (candidates[i].score < PROB_THRESHOLD) continue
+            // Freeze/OpenCV acceptance is exclusive: score == threshold is rejected.
+            if (candidates[i].score <= PROB_THRESHOLD) continue
             kept += candidates[i]
             for (j in order) {
                 if (j == i || removed[j]) continue
@@ -259,6 +262,24 @@ object NanoDetDecoder {
         val inter = iw * ih
         val union = (a.x2 - a.x1) * (a.y2 - a.y1) + (b.x2 - b.x1) * (b.y2 - b.y1) - inter
         return if (union > 0f) inter / union else 0f
+    }
+
+    /**
+     * Deterministic round-half-to-even for finite nonnegative values, matching
+     * Python `round` used by the frozen letterbox resize computation.
+     */
+    internal fun halfEvenRound(value: Double): Int {
+        require(value.isFinite() && value >= 0.0) {
+            "half-even rounding requires a finite nonnegative value"
+        }
+        val lower = floor(value)
+        val fraction = value - lower
+        val rounded = when {
+            fraction < 0.5 -> lower
+            fraction > 0.5 -> lower + 1.0
+            else -> if (lower % 2.0 == 0.0) lower else lower + 1.0
+        }
+        return rounded.toInt()
     }
 
     private fun perfectSide(spatial: Int): Int? {

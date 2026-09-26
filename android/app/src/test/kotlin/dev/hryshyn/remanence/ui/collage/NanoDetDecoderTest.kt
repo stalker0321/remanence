@@ -21,8 +21,10 @@ import org.junit.Test
  *   groups (`reg[g*8 + d[g]] = 20`), all other values 0.
  *
  * Declared tolerances: normalized box coordinates 1e-4, confidence 1e-6,
- * classId/order exact. The real ONNX forward pass and cv2 parity is the next
- * (inference) step; this slice is the pure decoder.
+ * classId/order exact. The decoder also mirrors Python `round` half-to-even
+ * for the letterbox resize and OpenCV's exclusive acceptance
+ * (`score <= 0.35` rejected). The real ONNX forward pass and cv2 parity is the
+ * next (inference) step; this slice is the pure decoder.
  */
 class NanoDetDecoderTest {
 
@@ -74,6 +76,46 @@ class NanoDetDecoderTest {
         assertEquals(416, portrait.rh)
         assertEquals(41, portrait.padX)
         assertEquals(0, portrait.padY)
+    }
+
+    @Test
+    fun letterboxUsesPythonHalfEvenRounding() {
+        // 665 * 416/832 == 332.5 exactly -> Python round half-to-even -> 332
+        // (Kotlin Math.round half-up would give 333).
+        val even = NanoDetDecoder.letterbox(665, 832)
+        assertEquals(332, even.rw)
+        assertEquals(416, even.rh)
+        assertEquals(42, even.padX)
+
+        // 667 * 416/832 == 333.5 -> 334.
+        val odd = NanoDetDecoder.letterbox(667, 832)
+        assertEquals(334, odd.rw)
+        assertEquals(416, odd.rh)
+        assertEquals(41, odd.padX)
+    }
+
+    @Test
+    fun halfEvenHelperMatchesPythonRound() {
+        assertEquals(0, NanoDetDecoder.halfEvenRound(0.5))
+        assertEquals(2, NanoDetDecoder.halfEvenRound(1.5))
+        assertEquals(2, NanoDetDecoder.halfEvenRound(2.5))
+        assertEquals(332, NanoDetDecoder.halfEvenRound(332.5))
+        assertEquals(334, NanoDetDecoder.halfEvenRound(333.5))
+    }
+
+    @Test
+    fun confidenceThresholdIsExclusive() {
+        val atThreshold = makeHeads(
+            listOf(Det(0, 0, NanoDetDecoder.PROB_THRESHOLD, listOf(0, 0, 1, 1))),
+            side = 6,
+        )
+        assertTrue("score == threshold must be rejected", detections(atThreshold, 1000, 1000).isEmpty())
+
+        val justAbove = Math.nextUp(NanoDetDecoder.PROB_THRESHOLD)
+        val aboveThreshold = makeHeads(listOf(Det(0, 0, justAbove, listOf(0, 0, 1, 1))), side = 6)
+        val objects = detections(aboveThreshold, 1000, 1000)
+        assertEquals(1, objects.size)
+        assertEquals(justAbove.toDouble(), objects.first().confidence, 1e-7)
     }
 
     @Test

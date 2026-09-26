@@ -1035,12 +1035,15 @@ class CreateViewModel(
         previewJob = viewModelScope.launch {
             val result = generatorPreviewCoordinator.compute(ownerId, epoch, ids, note)
             if (generation == previewGeneration) {
-                _generatorPreview.value = result
                 // A non-empty note previews as NotePending before any Ready;
                 // the same retained originals and photo-id cache serve both.
+                // Install the non-observable crop source before publishing the
+                // observable preview state, so composition can never mount the
+                // chooser once with the fail-closed source and miss the real one.
                 if (result is GeneratorPreviewState.Ready || result is GeneratorPreviewState.NotePending) {
                     maybeBuildCropSource(ids)
                 }
+                _generatorPreview.value = result
             }
         }
     }

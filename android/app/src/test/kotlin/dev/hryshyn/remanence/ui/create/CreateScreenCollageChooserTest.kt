@@ -335,6 +335,12 @@ class CreateScreenCollageChooserTest {
                 requestPermissionOnAttach = false,
             )
         }
+        // Preview readiness and provider analysis are separate asynchronous
+        // boundaries. Wait for the chooser's candidate-ready state rather
+        // than assuming one Compose idle observation covers both.
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            vm.collageChoices.candidates.isNotEmpty()
+        }
         composeRule.waitForIdle()
 
         // The chooser is mounted; no BER1 preview semantics remain.

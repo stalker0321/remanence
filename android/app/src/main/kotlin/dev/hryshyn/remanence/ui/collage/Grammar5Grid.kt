@@ -20,24 +20,26 @@ internal object Grammar5Grid {
 
     fun place(photoCount: Int, noteHeight: Int?, music: Boolean): Grid? {
         val recipe = recipe(photoCount) ?: return null
-        var bottom = SHEET_BOTTOM
+        var top = SHEET_BOTTOM
         val noteRegion = if (noteHeight != null && noteHeight > 0) {
-            val top = bottom - noteHeight
-            if (top < PHOTO_TOP + MIN_PHOTO_HEIGHT) return null
-            bottom = top - BLOCK_GAP
-            CollageRenderer.RectI(CONTENT_X, top, CONTENT_WIDTH, noteHeight)
+            val noteTop = top - noteHeight
+            if (noteTop < PHOTO_TOP + MIN_PHOTO_HEIGHT) return null
+            // Freeze closing: the music (or the photo field) sits NOTE_GAP above the note.
+            top = noteTop - NOTE_GAP
+            CollageRenderer.RectI(CONTENT_X, noteTop, CONTENT_WIDTH, noteHeight)
         } else {
             null
         }
         val musicRegion = if (music) {
-            val top = bottom - MUSIC_HEIGHT
-            if (top < PHOTO_TOP + MIN_PHOTO_HEIGHT) return null
-            bottom = top - BLOCK_GAP
-            CollageRenderer.RectI(CONTENT_X, top, CONTENT_WIDTH, MUSIC_HEIGHT)
+            val musicTop = top - MUSIC_HEIGHT
+            if (musicTop < PHOTO_TOP + MIN_PHOTO_HEIGHT) return null
+            // Freeze closing: the photo field ends MUSIC_GAP above the music box.
+            top = musicTop - MUSIC_GAP
+            CollageRenderer.RectI(CONTENT_X, musicTop, CONTENT_WIDTH, MUSIC_HEIGHT)
         } else {
             null
         }
-        val photoArea = CollageRenderer.RectI(PHOTO_X, PHOTO_TOP, PHOTO_WIDTH, bottom - PHOTO_TOP)
+        val photoArea = CollageRenderer.RectI(PHOTO_X, PHOTO_TOP, PHOTO_WIDTH, top - PHOTO_TOP)
         if (photoArea.height <= 0) return null
         val cells = bands(recipe, photoArea) ?: return null
         if (cells.size != photoCount) return null
@@ -45,7 +47,8 @@ internal object Grammar5Grid {
             cells = cells,
             noteRegion = noteRegion,
             musicRegion = musicRegion,
-            branchId = "editorial-" + recipe.joinToString("+") + "-equal",
+            // Authoritative grammar-5 equal branch id: `editorial-<recipe>-equal-1`.
+            branchId = "editorial-" + recipe.joinToString("+") + "-equal-1",
         )
     }
 
@@ -82,7 +85,8 @@ internal object Grammar5Grid {
     private const val CONTENT_X = 16
     private const val CONTENT_WIDTH = 328
     private const val MUSIC_HEIGHT = 48
-    private const val BLOCK_GAP = 10
+    private const val NOTE_GAP = 10
+    private const val MUSIC_GAP = 8
     private const val BAND_GAP = 5
     private const val MIN_PHOTO_HEIGHT = 80
 }

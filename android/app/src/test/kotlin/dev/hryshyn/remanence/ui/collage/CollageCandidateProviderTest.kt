@@ -73,6 +73,8 @@ class CollageCandidateProviderTest {
         assertEquals(listOf("press", "blue-letter", "poster"), candidates.map { it.styleId })
         for (candidate in candidates) {
             val expression = candidate.expression
+            assertEquals("editorial-1+2-equal-1", candidate.branchId)
+            assertEquals("editorial-1+2-equal-1", expression.branchId)
             assertEquals(GeneratorExpression.EXPRESSION_CONTRACT_V3, expression.expressionContractVersion)
             assertEquals(
                 StyleRegistry.digest(candidate.styleId)?.toList(),
@@ -91,6 +93,24 @@ class CollageCandidateProviderTest {
             assertNull(expression.musicRegion)
             assertEquals(listOf(1, 2), expression.placements.groupingBy { it.y }.eachCount().values.sorted())
         }
+        // Exact grammar-5 cells for the 3-photo equal branch (no closing bands).
+        assertEquals(
+            listOf(
+                GeneratorExpression.Placement(
+                    "p0", 10, 101, 340, 248,
+                    GeneratorExpression.CropWindow(0, 0, 5000, 10000), null, null,
+                ),
+                GeneratorExpression.Placement(
+                    "p1", 10, 354, 167, 248,
+                    GeneratorExpression.CropWindow(100, 0, 5000, 10000), null, null,
+                ),
+                GeneratorExpression.Placement(
+                    "p2", 182, 354, 167, 248,
+                    GeneratorExpression.CropWindow(200, 0, 5000, 10000), null, null,
+                ),
+            ),
+            candidates.first().expression.placements,
+        )
     }
 
     @Test
@@ -98,14 +118,19 @@ class CollageCandidateProviderTest {
         val result = provider().candidates(input(note = "dear mama"), "dear mama", snapshot())
         val candidate = (result as CollageProviderResult.Candidates).candidates.first()
         val expression = candidate.expression
+        assertEquals("editorial-1+2-equal-1", candidate.branchId)
         assertEquals("dear mama", expression.input.note)
-        val noteRegion = expression.noteRegion
-        assertTrue(noteRegion != null)
+        // Exact sealed bands: music ends 8px above the photo field and the note
+        // sits 10px above the music (press note size 22 -> line 25).
+        assertEquals(GeneratorExpression.NoteRegion(16, 578, 328, 25), expression.noteRegion)
+        assertEquals(16, expression.musicRegion?.x)
+        assertEquals(520, expression.musicRegion?.y)
+        assertEquals(328, expression.musicRegion?.width)
+        assertEquals(48, expression.musicRegion?.height)
         val noteType = expression.noteType!!
         assertEquals(ceil(noteType.size * 1.12).toInt(), noteType.line)
-        val music = expression.musicRegion
-        assertTrue(music != null)
-        assertEquals("text", music!!.mode)
+        val music = expression.musicRegion!!
+        assertEquals("text", music.mode)
         assertNull(music.artwork)
         assertEquals(ceil(music.type.size * 1.12).toInt(), music.type.line)
     }

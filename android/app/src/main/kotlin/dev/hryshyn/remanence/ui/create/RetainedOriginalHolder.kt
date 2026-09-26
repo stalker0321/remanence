@@ -116,14 +116,6 @@ class RetainedOriginalHolder : AutoCloseable {
     /** A4B3 adapter: serves defensive caller-owned copies per content ID. */
     fun asUprightBytesSource(): UprightBytesSource = UprightBytesSource { bytesFor(it) }
 
-    /**
-     * Test-only live view of the retained array (same module only, never
-     * public API surface). Lets tests prove zeroization of the exact array
-     * the holder owns without weakening encapsulation.
-     */
-    internal fun peekRetainedBytesForTests(contentId: String): ByteArray? =
-        entries[contentId]?.bytes
-
     /** Test-only retained sizes, proving atomic add/remove/clear/close. */
     internal fun retainedSizesForTests(): Map<String, Int> =
         entries.mapValues { it.value.bytes.size }

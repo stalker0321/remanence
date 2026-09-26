@@ -33,7 +33,25 @@ class RetainedOriginalHolderTest {
         val served = holder.bytesFor(id)
         assertTrue("expected bytes for $id", served != null)
         assertTrue(served!!.contentEquals(bytes))
-        assertTrue("must be a copy, not the live array", served !== holder.peekRetainedBytesForTests(id))
+        assertTrue("must be a copy, not the caller input", served !== bytes)
+    }
+
+    /**
+     * Bounded test-source reflection: captures the exact live retained array
+     * for [contentId] BEFORE a lifecycle action, so zeroization of the
+     * holder-owned array is proven without any main-source accessor,
+     * callback, or visibility change. Touches only the private `entries` map
+     * and the private entry's `bytes` field; nothing is modified.
+     */
+    private fun liveRetainedBytes(holder: RetainedOriginalHolder, contentId: String): ByteArray {
+        val entriesField = RetainedOriginalHolder::class.java.getDeclaredField("entries")
+        entriesField.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val entries = entriesField.get(holder) as LinkedHashMap<*, *>
+        val entry = entries[contentId] ?: error("no retained entry for $contentId")
+        val bytesField = entry.javaClass.getDeclaredField("bytes")
+        bytesField.isAccessible = true
+        return bytesField.get(entry) as ByteArray
     }
 
     @Test
@@ -241,7 +259,7 @@ class RetainedOriginalHolderTest {
         try {
             val (id, bytes, hash) = triple(12)
             assertTrue(holder.retain(id, bytes, hash) is RetainedOriginalHolder.RetainResult.Retained)
-            val live = holder.peekRetainedBytesForTests(id)!!
+            val live = liveRetainedBytes(holder, id)
             assertTrue(live.contentEquals(bytes))
             assertTrue(holder.remove(id))
             assertTrue("removed array must be zeroized", live.all { it == 0.toByte() })
@@ -260,8 +278,8 @@ class RetainedOriginalHolderTest {
             val second = triple(14)
             holder.retain(first.first, first.second, first.third)
             holder.retain(second.first, second.second, second.third)
-            val liveFirst = holder.peekRetainedBytesForTests(first.first)!!
-            val liveSecond = holder.peekRetainedBytesForTests(second.first)!!
+            val liveFirst = liveRetainedBytes(holder, first.first)
+            val liveSecond = liveRetainedBytes(holder, second.first)
             holder.clear()
             holder.clear()
             assertTrue(liveFirst.all { it == 0.toByte() })
@@ -277,7 +295,7 @@ class RetainedOriginalHolderTest {
         val holder = RetainedOriginalHolder()
         val (id, bytes, hash) = triple(15)
         assertTrue(holder.retain(id, bytes, hash) is RetainedOriginalHolder.RetainResult.Retained)
-        val live = holder.peekRetainedBytesForTests(id)!!
+        val live = liveRetainedBytes(holder, id)
         holder.close()
         assertTrue("closed array must be zeroized", live.all { it == 0.toByte() })
         assertTrue(holder.retainedSizesForTests().isEmpty())

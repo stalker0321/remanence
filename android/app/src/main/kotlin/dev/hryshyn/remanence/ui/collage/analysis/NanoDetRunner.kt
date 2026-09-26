@@ -7,6 +7,7 @@ import java.io.File
 import java.io.InputStream
 import java.security.MessageDigest
 import java.util.concurrent.Executors
+import java.util.concurrent.locks.ReentrantLock
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -65,8 +66,13 @@ sealed interface NanoDetResult {
  * calls, and redacted typed failures. It is never wired to production
  * `CollageCropSource`/Create.
  *
- * Diagnostics carry only elapsed time, head shapes and detection count — never
- * a path, image bytes, or exception message.
+ * Lifecycle: a short-held [ReentrantLock] guards the `closed`/`active` state.
+ * `detect` takes it only to register/deregister itself (never across the
+ * forward pass), and `close` takes it to mark closed, wait for any active
+ * detect to finish, then clear the runtime/cache and gracefully
+ * `executor.shutdown()` (never `shutdownNow`). A [Mutex] still serializes the
+ * work of concurrent `detect` calls. Diagnostics carry only elapsed time, head
+ * shapes and detection count — never a path, image bytes, or exception message.
  */
 class NanoDetRunner(
     private val assetSource: NanoDetModelAssetSource,
@@ -74,7 +80,9 @@ class NanoDetRunner(
     private val cacheDir: File,
 ) : AutoCloseable {
 
-    private val mutex = Mutex()
+    private val workMutex = Mutex()
+    private val lifecycle = ReentrantLock()
+    private val idle = lifecycle.newCondition()
     private val executor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "collage-nanodet").apply { isDaemon = true }
     }
@@ -82,10 +90,37 @@ class NanoDetRunner(
 
     private var modelFile: File? = null
     private var loaded = false
+    private var active = false
     private var closed = false
 
-    suspend fun detect(image: NanoDetImage): NanoDetResult = mutex.withLock {
-        if (closed) return@withLock NanoDetResult.Unavailable("runner is closed")
+    suspend fun detect(image: NanoDetImage): NanoDetResult = workMutex.withLock {
+        lifecycle.lock()
+        val alreadyClosed = try {
+            if (closed) {
+                true
+            } else {
+                active = true
+                false
+            }
+        } finally {
+            lifecycle.unlock()
+        }
+        if (alreadyClosed) return@withLock NanoDetResult.Unavailable("runner is closed")
+
+        try {
+            detectInternal(image)
+        } finally {
+            lifecycle.lock()
+            try {
+                active = false
+                idle.signalAll()
+            } finally {
+                lifecycle.unlock()
+            }
+        }
+    }
+
+    private suspend fun detectInternal(image: NanoDetImage): NanoDetResult {
         currentCoroutineContext().ensureActive()
 
         val file = try {
@@ -93,7 +128,7 @@ class NanoDetRunner(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            return@withLock NanoDetResult.Unavailable(simpleName(failure))
+            return NanoDetResult.Unavailable(simpleName(failure))
         }
         currentCoroutineContext().ensureActive()
 
@@ -104,7 +139,7 @@ class NanoDetRunner(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
-                return@withLock NanoDetResult.Unavailable(simpleName(failure))
+                return NanoDetResult.Unavailable(simpleName(failure))
             }
         }
         currentCoroutineContext().ensureActive()
@@ -119,12 +154,12 @@ class NanoDetRunner(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            return@withLock NanoDetResult.Unavailable(simpleName(failure))
+            return NanoDetResult.Unavailable(simpleName(failure))
         }
         currentCoroutineContext().ensureActive()
 
         val elapsedMs = (System.nanoTime() - start) / 1_000_000
-        return@withLock when (val decoded = NanoDetDecoder.decode(heads, letterbox)) {
+        return when (val decoded = NanoDetDecoder.decode(heads, letterbox)) {
             is NanoDetDecoder.Result.Detections ->
                 NanoDetResult.Detections(decoded.objects, elapsedMs, heads.map { it.shape.toList() })
 
@@ -168,13 +203,27 @@ class NanoDetRunner(
     }
 
     override fun close() {
-        if (closed) return
-        closed = true
-        runCatching { runtime.close() }
-        modelFile?.delete()
-        modelFile = null
-        loaded = false
-        runCatching { executor.shutdownNow() }
+        lifecycle.lock()
+        try {
+            if (closed) return
+            closed = true
+            var interrupted = false
+            while (active) {
+                try {
+                    idle.await()
+                } catch (_: InterruptedException) {
+                    interrupted = true
+                }
+            }
+            if (interrupted) Thread.currentThread().interrupt()
+            runCatching { runtime.close() }
+            modelFile?.delete()
+            modelFile = null
+            loaded = false
+            runCatching { executor.shutdown() }
+        } finally {
+            lifecycle.unlock()
+        }
     }
 
     private fun simpleName(failure: Exception): String = failure::class.simpleName ?: "Exception"

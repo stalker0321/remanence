@@ -7,6 +7,9 @@ import java.io.File
 import java.io.InputStream
 import java.nio.file.Files
 import java.security.MessageDigest
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
@@ -38,10 +41,13 @@ class NanoDetRunnerTest {
     private class FakeRuntime : NanoDetRuntime {
         var loads = 0
         var closed = false
+        var closeCount = 0
         var maxConcurrent = 0
         var failure: Exception? = null
         var delayMs = 0L
         var heads: List<NanoDetHead> = zeroHeads()
+        var forwardEntered: CountDownLatch? = null
+        var releaseForward: CountDownLatch? = null
         private var active = 0
 
         override fun load(modelPath: String) {
@@ -52,6 +58,8 @@ class NanoDetRunnerTest {
             active += 1
             maxConcurrent = maxOf(maxConcurrent, active)
             try {
+                forwardEntered?.countDown()
+                releaseForward?.await()
                 if (delayMs > 0) Thread.sleep(delayMs)
                 failure?.let { throw it }
                 return heads
@@ -62,6 +70,7 @@ class NanoDetRunnerTest {
 
         override fun close() {
             closed = true
+            closeCount += 1
         }
     }
 
@@ -186,7 +195,45 @@ class NanoDetRunnerTest {
     }
 
     @Test
-    fun closeIsIdempotentAndDeletesCache() {
+    fun closeDuringGatedForwardWaitsAndDoesNotInterrupt() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val runtime = FakeRuntime().apply {
+            forwardEntered = entered
+            releaseForward = release
+        }
+        val dir = tempDir()
+        val runner = NanoDetRunner(FakeAsset(ByteArray(1024) { 20 }), runtime, dir)
+
+        var detected: NanoDetResult? = null
+        val detectThread = thread { detected = runBlocking { runner.detect(image()) } }
+        assertTrue("forward must be reached", entered.await(2, TimeUnit.SECONDS))
+
+        val closeReturned = CountDownLatch(1)
+        val closeThread = thread {
+            runner.close()
+            closeReturned.countDown()
+        }
+        assertFalse(
+            "close must wait for the active forward",
+            closeReturned.await(300, TimeUnit.MILLISECONDS),
+        )
+
+        release.countDown()
+        detectThread.join(2_000)
+        closeThread.join(2_000)
+
+        assertTrue("in-flight detect must complete, not be interrupted", detected is NanoDetResult.Detections)
+        assertTrue(runtime.closed)
+        assertEquals(1, runtime.closeCount)
+        assertFalse("cache must be deleted by close", dir.resolve("nanodet.onnx").exists())
+
+        assertEquals("runner is closed", assertUnavailable(runBlocking { runner.detect(image()) }))
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun closeIsIdempotentAndClosesRuntimeCacheOnce() {
         val dir = tempDir()
         val runtime = FakeRuntime()
         val runner = NanoDetRunner(FakeAsset(ByteArray(1024) { 8 }), runtime, dir)
@@ -196,7 +243,7 @@ class NanoDetRunnerTest {
         runner.close()
         runner.close()
 
-        assertTrue(runtime.closed)
+        assertEquals(1, runtime.closeCount)
         assertFalse(dir.resolve("nanodet.onnx").exists())
         dir.deleteRecursively()
     }

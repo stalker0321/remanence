@@ -12,11 +12,56 @@ import org.opencv.dnn.Net
 import org.opencv.imgproc.Imgproc
 
 /**
+ * Deterministic ownership ledger for native resources, keyed by identity. The
+ * real runtime registers every Mat header it creates (including `submat` ROI
+ * views and `reshape` views) and releases each exactly once. The ledger is
+ * OpenCV-free so the release policy is unit-testable without natives.
+ */
+internal class MatReleaseLedger {
+    private val live = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Any, Boolean>())
+    private val order = ArrayList<Any>()
+
+    var releasedCount: Int = 0
+        private set
+
+    var doubleReleaseCount: Int = 0
+        private set
+
+    val liveCount: Int
+        get() = live.size
+
+    fun <T : Any> register(token: T): T {
+        live.add(token)
+        order += token
+        return token
+    }
+
+    /** Releases in reverse registration order; a released token is a no-op. */
+    fun releaseAll(release: (Any) -> Unit) {
+        order.asReversed().forEach { token ->
+            if (live.remove(token)) {
+                release(token)
+                releasedCount += 1
+            } else {
+                doubleReleaseCount += 1
+            }
+        }
+        order.clear()
+    }
+}
+
+/**
  * The single OpenCV touch point for the NanoDet runner. It reproduces the
  * frozen `import-field-3.3` preprocessing exactly — upright input, letterbox
  * resize (Python half-even), pad 114, RGB→BGR, per-channel mean/std — runs the
  * model once (one reused [Net]), and converts the named output tensors to
- * bounded [NanoDetHead]s. Every [Mat] is released in `finally`.
+ * bounded [NanoDetHead]s.
+ *
+ * Ownership: the [MatOwner] registers every Mat header it creates (including
+ * the `submat` ROI and every `reshape` view); the ROI is registered on
+ * creation and each reshape header is released immediately in `finally` after
+ * the bounded copy. Releasing a view only drops the header reference, so the
+ * underlying `canvas`/output Mat stays owned until [MatOwner.releaseAll].
  *
  * Not production-wired; exercised only by the A3B androidTest probe.
  */
@@ -50,9 +95,12 @@ internal class OpenCvNanoDetRuntime : NanoDetRuntime {
                 Size(letterbox.rw.toDouble(), letterbox.rh.toDouble()),
                 0.0, 0.0, Imgproc.INTER_LINEAR,
             )
-            val roi = canvas.submat(
-                letterbox.padY, letterbox.padY + letterbox.rh,
-                letterbox.padX, letterbox.padX + letterbox.rw,
+            // The submat ROI is a distinct Mat header: register it immediately.
+            val roi = owner.own(
+                canvas.submat(
+                    letterbox.padY, letterbox.padY + letterbox.rh,
+                    letterbox.padX, letterbox.padX + letterbox.rw,
+                ),
             )
             resized.copyTo(roi)
 
@@ -97,7 +145,14 @@ internal class OpenCvNanoDetRuntime : NanoDetRuntime {
             check(total in 1..MAX_TENSOR_ELEMENTS) { "NanoDet head exceeds element bound" }
             val name = names.getOrNull(index) ?: "out$index"
             val values = FloatArray(total.toInt())
-            mat.reshape(1, 1).get(0, 0, values)
+            // A reshape header shares the output data; release it immediately
+            // after the bounded copy and never register it as an owned source.
+            val flat = mat.reshape(1, 1)
+            try {
+                flat.get(0, 0, values)
+            } finally {
+                flat.release()
+            }
             when (shape.last()) {
                 NanoDetDecoder.CLASS_COUNT -> cls += shape[shape.size - 2] to NanoDetHead(name, shape, values)
                 NanoDetDecoder.REG_CHANNELS -> {
@@ -131,16 +186,17 @@ internal class OpenCvNanoDetRuntime : NanoDetRuntime {
         return out
     }
 
+    /** Owner for the ROI/output Mat sources; each is released exactly once. */
     private class MatOwner {
-        private val mats = ArrayList<Mat>()
+        private val ledger = MatReleaseLedger()
+
         fun <T : Mat> own(mat: T): T {
-            mats += mat
+            ledger.register(mat)
             return mat
         }
 
         fun releaseAll() {
-            mats.asReversed().forEach { runCatching { it.release() } }
-            mats.clear()
+            ledger.releaseAll { (it as Mat).release() }
         }
     }
 

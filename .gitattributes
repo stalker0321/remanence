@@ -1,0 +1,4 @@
+# Vendored, byte-exact V5 freeze assets (models, licenses, provenance) keep
+# their upstream whitespace. Do not flag it in `git diff --check`; normalizing
+# them would change the pinned SHA-256 in CollageModelAssetsTest.
+android/app/src/main/assets/collage/** -whitespace

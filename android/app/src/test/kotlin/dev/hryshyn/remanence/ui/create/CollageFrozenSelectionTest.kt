@@ -423,6 +423,19 @@ class CollageFrozenSelectionTest {
     }
 
     @Test
+    fun clearFrozenCollageSelectionDropsFrozenOnly() = runTest {
+        val ids = listOf("u1", "u2", "u3")
+        val vm = viewModel(previewLoader(ids.associateWith { originalFor(it) }))
+        val ready = readyPreview(vm, ids)
+        frozenAfterSelect(vm, ready.expression.input)
+        vm.clearFrozenCollageSelection()
+        assertNull(vm.frozenCollageSelection)
+        // Navigation clears the frozen id; the highlighted candidates stay.
+        assertEquals(3, vm.collageChoices.candidates.size)
+        assertEquals(0, vm.collageChoices.selectedIndex)
+    }
+
+    @Test
     fun tamperedRebuildYieldsNoFrozenAndRejectsFreeze() = runTest {
         val ids = listOf("u1", "u2", "u3")
         val vm = viewModel(previewLoader(ids.associateWith { originalFor(it) }))

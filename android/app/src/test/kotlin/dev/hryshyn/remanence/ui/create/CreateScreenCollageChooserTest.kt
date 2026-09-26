@@ -343,7 +343,12 @@ class CreateScreenCollageChooserTest {
         composeRule.onAllNodesWithTag("generator_preview_notice").assertCountEquals(0)
         composeRule.onAllNodesWithTag("generator_preview_canvas").assertCountEquals(0)
 
-        // One explicit tap selects and freezes the displayed candidate.
+        // Highlight the first variant, then one explicit tap selects and
+        // freezes exactly the displayed candidate.
+        composeRule.onNodeWithTag("create_screen_scroll")
+            .performScrollToNode(hasTestTag("collage_next"))
+        composeRule.onNodeWithTag("collage_next").performClick()
+        composeRule.waitForIdle()
         composeRule.onNodeWithTag("create_screen_scroll")
             .performScrollToNode(hasTestTag("collage_select"))
         composeRule.onNodeWithTag("collage_select").assertIsDisplayed()
@@ -354,6 +359,13 @@ class CreateScreenCollageChooserTest {
         assertEquals(vm.collageChoices.selected?.candidateId, frozen!!.candidateId)
         composeRule.onNodeWithTag("collage_canvas").assertExists()
         composeRule.onNodeWithTag("collage_frozen").assertExists()
+        // Navigation moves the highlight and invalidates the older freeze.
+        composeRule.onNodeWithTag("create_screen_scroll")
+            .performScrollToNode(hasTestTag("collage_next"))
+        composeRule.onNodeWithTag("collage_next").performClick()
+        composeRule.waitForIdle()
+        assertEquals(1, vm.collageChoices.selectedIndex)
+        assertNull("navigation must invalidate the frozen selection", vm.frozenCollageSelection)
         vm.endSession()
     }
 

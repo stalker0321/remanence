@@ -1,5 +1,8 @@
 package dev.hryshyn.remanence.ui.create
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.hryshyn.remanence.capture.CaptureAttemptController
@@ -17,6 +20,7 @@ import dev.hryshyn.remanence.create.PhotoStagingPipeline
 import dev.hryshyn.remanence.ui.collage.AndroidCollageCropSource
 import dev.hryshyn.remanence.core.crypto.readBoundedBytes
 import dev.hryshyn.remanence.core.model.CapsulePhotoIdentity
+import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
 import dev.hryshyn.remanence.core.model.GeneratorBer1Provider
 import dev.hryshyn.remanence.core.model.GeneratorDiscovery
 import dev.hryshyn.remanence.core.model.GeneratorExpression
@@ -252,6 +256,16 @@ class CreateViewModel(
     /** Explicit sender collage selection; refused if no such candidate. */
     fun selectCollageCandidate(index: Int): Boolean = collageChoices.select(index)
 
+    /**
+     * Drops a frozen collage choice without touching candidates, preview, or
+     * retained analysis. The chooser host calls this on every Previous/Next
+     * navigation so a frozen id can never name a sheet the canvas no longer
+     * shows.
+     */
+    fun clearFrozenCollageSelection() {
+        frozenCollageSelection = null
+    }
+
     // ---------------------------------------------------------------------
     // Authoritative capture attempt (FIX-STATE-01).
     // ---------------------------------------------------------------------
@@ -302,19 +316,20 @@ class CreateViewModel(
      * every photo/note/track edit, on ownership resets, and whenever a fresh
      * candidate set is built. Never consulted by publish (still fail-closed).
      */
-    var frozenCollageSelection: CollageFrozenSelection? = null
+    var frozenCollageSelection: CollageFrozenSelection? by mutableStateOf(null)
         private set
 
     /**
-     * Freezes the currently selected collage candidate against the current
-     * preview input. Returns false (leaving any previously valid frozen
-     * selection untouched) when nothing is selected, the preview holds no
-     * current input, or revalidation fails.
+     * Freezes the currently selected collage candidate against the chooser
+     * input (current preview input plus the mapped text-mode music ref).
+     * Returns false (leaving any previously valid frozen selection untouched)
+     * when nothing is selected, the preview holds no current input, or
+     * revalidation fails.
      */
     fun freezeCollageSelection(): Boolean {
         val frozen = buildFrozenSelection(
             candidate = collageChoices.selected,
-            currentInput = currentPreviewInput(),
+            currentInput = collageChooserInput(),
             capsuleId = _capsuleId,
         ) ?: return false
         frozenCollageSelection = frozen
@@ -327,6 +342,30 @@ class CreateViewModel(
             is GeneratorPreviewState.NotePending -> preview.input
             else -> null
         }
+
+    /**
+     * Chooser music: the current mapped text-mode snapshot, or null without
+     * a valid selection. An invalid hit maps to null here (photo-only
+     * variants); publish re-maps strictly and fails closed on it, so nothing
+     * can seal a bad track silently.
+     */
+    internal val collageChooserTrack: CapsuleTrackSnapshotV1?
+        get() = _musicSelection.value?.let { hit ->
+            runCatching { dev.hryshyn.remanence.create.mapMusicSelectionToSnapshot(hit) }.getOrNull()
+        }
+
+    /**
+     * Chooser input: the current preview input plus the mapped text-mode
+     * music ref (`artworkId = null`). Null when no current preview input.
+     * The content step builds displayed candidates from exactly this object
+     * and [freezeCollageSelection] validates against it, so a selected track
+     * always describes the same capsule as the frozen sheet.
+     */
+    internal fun collageChooserInput(): GeneratorExpression.GeneratorInput? {
+        val base = currentPreviewInput() ?: return null
+        val track = collageChooserTrack ?: return base
+        return base.copy(music = GeneratorExpression.MusicRef(track.trackId.toString(), null))
+    }
 
     /** Stage1-C CONTENT preview: pure planner over loaded, bounded sources. */
     private val generatorPreviewCoordinator = GeneratorPreviewCoordinator(generatorPreviewLoader)
@@ -997,7 +1036,11 @@ class CreateViewModel(
             val result = generatorPreviewCoordinator.compute(ownerId, epoch, ids, note)
             if (generation == previewGeneration) {
                 _generatorPreview.value = result
-                if (result is GeneratorPreviewState.Ready) maybeBuildCropSource(ids)
+                // A non-empty note previews as NotePending before any Ready;
+                // the same retained originals and photo-id cache serve both.
+                if (result is GeneratorPreviewState.Ready || result is GeneratorPreviewState.NotePending) {
+                    maybeBuildCropSource(ids)
+                }
             }
         }
     }

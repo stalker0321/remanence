@@ -30,11 +30,14 @@ import dev.hryshyn.remanence.ui.hold.HoldTextButton
  * is no white-grid fallback: an unavailable analysis or a failed prepare
  * renders typed copy, never a fabricated layout.
  *
- * Selection is explicit-only: nothing auto-selects. The [onSelect] action
- * freezes the exact displayed candidate (the current selection, or the first
- * variant when nothing is highlighted yet); callers select then freeze
- * against the same input object this host built from. [frozenCandidateId] is
- * read fresh on every recomposition (the host already recomposes when the
+ * Selection is explicit-only: nothing auto-selects. The [onSelect] action is
+ * enabled only while a candidate is highlighted and freezes exactly that
+ * displayed candidate; callers select then freeze against the same input
+ * object this host built from. Previous/Next highlight a candidate (from an
+ * unhighlighted list they start at an end) and always invoke [onNavigate]
+ * first, so navigation invalidates an older freeze instead of silently
+ * showing a different sheet under a frozen id. [frozenCandidateId] is read
+ * fresh on every recomposition (the host already recomposes when the
  * selection moves), so no key-reset may dispose this subtree: that would
  * relaunch the provider effect and wipe the fresh selection. For
  * note-carrying inputs the shared
@@ -54,6 +57,7 @@ internal fun CollageChoiceHost(
     modifier: Modifier = Modifier,
     frozenCandidateId: () -> String? = { null },
     onSelect: (Int) -> Unit = {},
+    onNavigate: () -> Unit = {},
     onMeasured: (GeneratorExpression.ResolvedExpression) -> Unit = {},
 ) {
     val measurer = rememberCollageTextMeasurer()
@@ -73,18 +77,33 @@ internal fun CollageChoiceHost(
         }
         if (session.candidates.size > 1) {
             HoldTextButton(
-                onClick = { session.previous() },
+                onClick = {
+                    if (session.selectedIndex == null) {
+                        session.select(session.candidates.lastIndex)
+                    } else {
+                        session.previous()
+                    }
+                    onNavigate()
+                },
                 modifier = Modifier.testTag("collage_previous"),
             ) { Text("Previous") }
             HoldTextButton(
-                onClick = { session.next() },
+                onClick = {
+                    if (session.selectedIndex == null) {
+                        session.select(0)
+                    } else {
+                        session.next()
+                    }
+                    onNavigate()
+                },
                 modifier = Modifier.testTag("collage_next"),
             ) { Text("Next") }
         }
 
         if (session.candidates.isNotEmpty()) {
             Button(
-                onClick = { onSelect(session.selectedIndex ?: 0) },
+                onClick = { onSelect(session.selectedIndex ?: return@Button) },
+                enabled = session.selectedIndex != null,
                 modifier = Modifier.testTag("collage_select"),
             ) { Text("Select") }
         }

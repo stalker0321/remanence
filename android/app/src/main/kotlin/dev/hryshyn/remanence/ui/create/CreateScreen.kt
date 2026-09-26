@@ -390,10 +390,10 @@ private fun CollageStepChooser(viewModel: CreateViewModel, modifier: Modifier = 
         is GeneratorPreviewState.Ready ->
             CollageChoiceHost(
                 session = viewModel.collageChoices,
-                input = preview.expression.input,
+                input = viewModel.collageChooserInput() ?: preview.expression.input,
                 sources = preview.sources,
                 note = viewModel.noteEditor.text.takeIf { it.isNotEmpty() },
-                track = null,
+                track = viewModel.collageChooserTrack,
                 cropSource = viewModel.collageCropSource
                     ?: dev.hryshyn.remanence.ui.collage.CollageCropSource { null },
                 frozenCandidateId = { viewModel.frozenCollageSelection?.candidateId },
@@ -402,16 +402,17 @@ private fun CollageStepChooser(viewModel: CreateViewModel, modifier: Modifier = 
                         viewModel.freezeCollageSelection()
                     }
                 },
+                onNavigate = viewModel::clearFrozenCollageSelection,
                 onMeasured = viewModel::onPreviewMeasured,
                 modifier = modifier,
             )
         is GeneratorPreviewState.NotePending ->
             CollageChoiceHost(
                 session = viewModel.collageChoices,
-                input = preview.input,
+                input = viewModel.collageChooserInput() ?: preview.input,
                 sources = preview.sources,
                 note = viewModel.noteEditor.text.takeIf { it.isNotEmpty() },
-                track = null,
+                track = viewModel.collageChooserTrack,
                 cropSource = viewModel.collageCropSource
                     ?: dev.hryshyn.remanence.ui.collage.CollageCropSource { null },
                 frozenCandidateId = { viewModel.frozenCollageSelection?.candidateId },
@@ -420,6 +421,7 @@ private fun CollageStepChooser(viewModel: CreateViewModel, modifier: Modifier = 
                         viewModel.freezeCollageSelection()
                     }
                 },
+                onNavigate = viewModel::clearFrozenCollageSelection,
                 onMeasured = viewModel::onPreviewMeasured,
                 modifier = modifier,
             )

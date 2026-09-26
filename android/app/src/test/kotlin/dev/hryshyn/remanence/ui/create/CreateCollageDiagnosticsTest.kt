@@ -9,6 +9,7 @@ import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
 import dev.hryshyn.remanence.core.data.network.DirectoryLookupResult
+import dev.hryshyn.remanence.core.data.network.MusicTrackHit
 import dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
@@ -21,6 +22,9 @@ import dev.hryshyn.remanence.create.PhotoNormalizerPort
 import dev.hryshyn.remanence.create.PhotoSource
 import dev.hryshyn.remanence.ui.collage.AndroidCollageCropSource
 import dev.hryshyn.remanence.ui.collage.CollageAnalysis
+import dev.hryshyn.remanence.ui.collage.CollageCandidateProvider
+import dev.hryshyn.remanence.ui.collage.CollageProviderResult
+import dev.hryshyn.remanence.ui.collage.CollageRenderer
 import dev.hryshyn.remanence.ui.collage.analysis.FieldStageImage
 import dev.hryshyn.remanence.ui.collage.analysis.FieldStageMaps
 import dev.hryshyn.remanence.ui.collage.analysis.FieldStageRunner
@@ -43,6 +47,7 @@ import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -406,5 +411,117 @@ class CreateCollageDiagnosticsTest {
             "publish must stay fail-closed without a CONTENT session",
             vm.uploadStatus.value is CreateViewModel.CreateUploadStatus.NotStarted,
         )
+    }
+
+    private fun hit() = MusicTrackHit(
+        id = "be30e36b-1111-4111-8111-000000000001",
+        title = "505",
+        artists = listOf("Arctic Monkeys"),
+        version = null,
+        release = "Favourite Worst Nightmare",
+        year = 2007,
+        durationMs = 253000L,
+        artworkAvailable = true,
+    )
+
+    private fun sourceFactory(
+        builds: MutableList<Int>,
+        field: FakeFieldRuntime = FakeFieldRuntime(),
+        nano: FakeNanoRuntime = FakeNanoRuntime(),
+        yunet: FakeYuNetRuntime = FakeYuNetRuntime(),
+    ) = CollageCropSourceFactory { _ ->
+        builds += 1
+        AndroidCollageCropSource(
+            bytesSource = { null },
+            imageDecoder = { null },
+            fieldRunner = FieldStageRunner(field),
+            nanoDetRunner = NanoDetRunner(
+                FakeAsset(ByteArray(32) { 1 }),
+                nano,
+                Files.createTempDirectory("b2-nano").toFile(),
+            ),
+            yuNetRunner = YuNetRunner(
+                FakeAsset(ByteArray(32) { 2 }),
+                yunet,
+                Files.createTempDirectory("b2-yunet").toFile(),
+            ),
+        )
+    }
+
+    @Test
+    fun notePendingBuildsSourceAndReadyReusesIt() {
+        val ids = listOf("u1", "u2", "u3")
+        val vm = viewModel(
+            previewLoader(ids.associateWith { originalFor(it) }),
+            factory = sourceFactory(mutableListOf()),
+        )
+        vm.beginSession(1L, senderUserUuid.toString())
+        assertTrue(vm.noteEditor.onChange("dear mama"))
+        vm.onPhotosPicked(ids)
+        // First preview carries the note: NotePending, never Ready — yet the
+        // production source must still be built exactly once.
+        val pending = vm.generatorPreview.value
+        assertTrue("expected NotePending, got $pending", pending is GeneratorPreviewState.NotePending)
+        val first = vm.collageCropSource
+        assertTrue("NotePending must build the source", first != null)
+        // Clearing the note recomputes Ready for the same photo set: the open
+        // source is reused, never duplicated.
+        assertTrue(vm.noteEditor.onChange(""))
+        val ready = vm.generatorPreview.value
+        assertTrue("expected Ready, got $ready", ready is GeneratorPreviewState.Ready)
+        assertTrue("Ready must reuse the open source", vm.collageCropSource === first)
+        vm.endSession()
+    }
+
+    @Test
+    fun trackEntersChooserInputFreezeAndInvalidates() {
+        val ids = listOf("u1", "u2", "u3")
+        val vm = viewModel(previewLoader(ids.associateWith { originalFor(it) }))
+        vm.beginSession(1L, senderUserUuid.toString())
+        drivePhotos(vm, ids)
+        assertNull(vm.collageChooserTrack)
+        assertNull(vm.collageChooserInput()!!.music)
+
+        vm.setMusicSelection(hit())
+        val track = vm.collageChooserTrack
+        assertTrue("expected mapped track", track != null)
+        assertEquals(hit().id, track!!.trackId.toString())
+        val musicInput = vm.collageChooserInput()!!
+        assertEquals(
+            dev.hryshyn.remanence.core.model.GeneratorExpression.MusicRef(hit().id, null),
+            musicInput.music,
+        )
+
+        // Candidates built from the track-carrying input seal a music region,
+        // and freezing succeeds against that same input.
+        val measurer = CollageRenderer.TextMeasurer { request ->
+            CollageRenderer.TextMeasurement(
+                width = (request.text.length * 8).coerceIn(1, request.maxWidth),
+                height = request.line.coerceIn(1, request.maxHeight),
+                hasVisualOverflow = false,
+            )
+        }
+        val crops = dev.hryshyn.remanence.ui.collage.CollageCropSource { requests ->
+            requests.associate { it.contentId to dev.hryshyn.remanence.core.model.GeneratorExpression.CropWindow(0, 0, 5000, 10000) }
+        }
+        val built = runBlocking {
+            CollageCandidateProvider(crops, measurer).candidates(musicInput, null, track)
+        }
+        assertTrue("expected Candidates, got $built", built is CollageProviderResult.Candidates)
+        val candidates = (built as CollageProviderResult.Candidates).candidates
+        assertTrue(candidates.first().expression.musicRegion != null)
+        vm.collageChoices.replaceCandidates(candidates)
+        assertTrue(vm.selectCollageCandidate(0))
+        assertTrue("expected freeze with track", vm.freezeCollageSelection())
+        assertEquals(
+            dev.hryshyn.remanence.core.model.GeneratorExpression.MusicRef(hit().id, null),
+            vm.frozenCollageSelection!!.expression.input.music,
+        )
+
+        // A track edit invalidates the frozen selection.
+        vm.clearMusicSelection()
+        assertNull(vm.frozenCollageSelection)
+        assertNull(vm.collageChooserTrack)
+        assertNull(vm.collageChooserInput()!!.music)
     }
 }

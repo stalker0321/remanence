@@ -2,6 +2,7 @@ package dev.hryshyn.remanence.ui.create
 
 import android.graphics.Bitmap
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -9,6 +10,7 @@ import dev.hryshyn.remanence.core.model.GeneratorExpression
 import dev.hryshyn.remanence.ui.collage.CollageCropSource
 import java.io.ByteArrayOutputStream
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -106,23 +108,36 @@ class CollageChoiceHostTest {
     }
 
     @Test
-    fun selectActionReportsDisplayedCandidateIndex() {
+    fun selectRequiresHighlightAndReportsIt() {
         val session = CollageChoiceSession()
         val selected = mutableListOf<Int>()
+        val navigated = mutableListOf<Unit>()
         composeRule.setContent {
             CollageChoiceHost(
                 session, input(), sources(), null, null, cropSource(),
                 onSelect = { selected += it },
+                onNavigate = { navigated += Unit },
             )
         }
         composeRule.waitForIdle()
 
-        // Nothing highlighted yet: the explicit action freezes the first variant.
+        // Nothing highlighted: Select is disabled and reports nothing.
+        composeRule.onNodeWithTag("collage_select").assertIsNotEnabled()
+        assertTrue(selected.isEmpty())
+        // Browsing from null highlights the first variant and reports navigation.
+        composeRule.onNodeWithTag("collage_next").performClick()
+        composeRule.waitForIdle()
+        assertEquals(0, session.selectedIndex)
+        assertEquals(1, navigated.size)
+        // The explicit action freezes exactly the highlighted candidate.
         composeRule.onNodeWithTag("collage_select").performClick()
         composeRule.waitForIdle()
-        // Browsing moves the highlight; Select reports the displayed index.
-        composeRule.runOnIdle { session.select(1) }
+        assertEquals(listOf(0), selected)
+        // Moving highlights another candidate and reports navigation again.
+        composeRule.onNodeWithTag("collage_next").performClick()
         composeRule.waitForIdle()
+        assertEquals(1, session.selectedIndex)
+        assertEquals(2, navigated.size)
         composeRule.onNodeWithTag("collage_select").performClick()
         composeRule.waitForIdle()
         assertEquals(listOf(0, 1), selected)

@@ -65,17 +65,17 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * Host-testable diagnostic context for gate ON: with the diagnostic gate
- * enabled, a Ready preview builds a real crop source (fake runners), the
+ * Host coverage for the production crop-source mount: with the factory
+ * present, a Ready preview builds a real source (fake runners here), the
  * test mounts it into [CollageChoiceHost] with the VM's chooser session, and
- * the shared canvas renders after explicit selection. Release (gate OFF)
- * never reaches this composition. No publish wiring; no capability change.
+ * the shared canvas renders after explicit selection. Without the factory
+ * the chooser stays absent. No publish wiring; no capability change.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-class CollageDiagnosticHostTest {
+class CollageCropSourceHostTest {
 
     @get:Rule
     val composeRule = createComposeRule()
@@ -238,7 +238,7 @@ class CollageDiagnosticHostTest {
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
             enqueueUpload = { _, _ -> },
-            collageDiagnosticGate = CollageDiagnosticGate { holder ->
+            collageSourceFactory = CollageCropSourceFactory { holder ->
                 AndroidCollageCropSource(
                     bytesSource = holder.asUprightBytesSource(),
                     imageDecoder = { _ ->
@@ -261,7 +261,7 @@ class CollageDiagnosticHostTest {
     }
 
     @Test
-    fun diagnosticMountRendersSharedCanvasAfterExplicitSelection() {
+    fun productionMountRendersSharedCanvasAfterExplicitSelection() {
         val ids = listOf("u1", "u2", "u3")
         val originals = ids.associateWith { id ->
             ByteArray(64) { ((it * 31 + id.hashCode()) and 0xFF).toByte() }
@@ -273,8 +273,8 @@ class CollageDiagnosticHostTest {
         assertTrue("expected Ready, got $ready", ready is GeneratorPreviewState.Ready)
         ready as GeneratorPreviewState.Ready
 
-        val source = vm.collageDiagnosticSource
-        assertTrue("gate ON must build the diagnostic source", source != null)
+        val source = vm.collageCropSource
+        assertTrue("factory must build the production source", source != null)
         // Note/music are absent in preview Ready, so measurement is never
         // invoked; the erroring measurer proves it.
         val provider = CollageCandidateProvider(source!!, CollageRenderer.TextMeasurer {

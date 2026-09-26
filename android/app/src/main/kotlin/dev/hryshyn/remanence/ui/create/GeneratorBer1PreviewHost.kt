@@ -10,9 +10,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Constraints
 import dev.hryshyn.remanence.core.model.GeneratorEditorialRows
 import dev.hryshyn.remanence.core.model.GeneratorExpression
 
@@ -83,32 +80,7 @@ private fun NotePendingPreview(
     modifier: Modifier = Modifier,
     onMeasured: (GeneratorExpression.ResolvedExpression) -> Unit,
 ) {
-    val measurer = rememberCanvasNoteMeasurer()
-    val style = rememberCanvasNoteStyle()
-    val region = GeneratorEditorialRows.NOTE_REGION
-    val measurement = remember(measurer, style) {
-        GeneratorEditorialRows.NoteMeasurementPort { note ->
-            val layout = measurer.measure(
-                text = AnnotatedString(note),
-                style = style,
-                overflow = TextOverflow.Clip,
-                softWrap = true,
-                maxLines = Int.MAX_VALUE,
-                constraints = Constraints(maxWidth = region.width, maxHeight = region.height),
-            )
-            val fits = !layout.hasVisualOverflow &&
-                layout.size.width in 1..region.width &&
-                layout.size.height in 1..region.height
-            if (fits) {
-                GeneratorEditorialRows.NoteMeasurement.Fits(region)
-            } else {
-                GeneratorEditorialRows.NoteMeasurement.DoesNotFit("note overflows the preview region")
-            }
-        }
-    }
-    val plan = remember(state.input, measurement) {
-        GeneratorEditorialRows.plan(state.input, measurement)
-    }
+    val plan = rememberBer1NotePlan(state.input)
     // Report the real measured fit to the VM (freshness-checked there) so the
     // exact measured plan can be frozen for publish. Never reported during
     // composition: this runs after a successful measured plan exists.

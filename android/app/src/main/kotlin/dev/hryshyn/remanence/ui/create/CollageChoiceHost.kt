@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.ui.create
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -29,6 +30,17 @@ import dev.hryshyn.remanence.ui.hold.HoldTextButton
  * is no white-grid fallback: an unavailable analysis or a failed prepare
  * renders typed copy, never a fabricated layout.
  *
+ * Selection is explicit-only: nothing auto-selects. The [onSelect] action
+ * freezes the exact displayed candidate (the current selection, or the first
+ * variant when nothing is highlighted yet); callers select then freeze
+ * against the same input object this host built from. [frozenCandidateId] is
+ * read fresh on every recomposition (the host already recomposes when the
+ * selection moves), so no key-reset may dispose this subtree: that would
+ * relaunch the provider effect and wipe the fresh selection. For
+ * note-carrying inputs the shared
+ * BER1 note reporter keeps note publication byte-identical without rendering
+ * the BER1 preview.
+ *
  * Publish is intentionally not wired here.
  */
 @Composable
@@ -40,6 +52,9 @@ internal fun CollageChoiceHost(
     track: CapsuleTrackSnapshotV1?,
     cropSource: CollageCropSource,
     modifier: Modifier = Modifier,
+    frozenCandidateId: () -> String? = { null },
+    onSelect: (Int) -> Unit = {},
+    onMeasured: (GeneratorExpression.ResolvedExpression) -> Unit = {},
 ) {
     val measurer = rememberCollageTextMeasurer()
     LaunchedEffect(input, note, track, cropSource) {
@@ -51,6 +66,11 @@ internal fun CollageChoiceHost(
     }
 
     Column(modifier.fillMaxWidth()) {
+        if (input.note?.isNotEmpty() == true) {
+            // Note publication still resolves through the BER1 measured plan;
+            // report it without rendering the BER1 preview.
+            Ber1NoteMeasureReporter(input, onMeasured)
+        }
         if (session.candidates.size > 1) {
             HoldTextButton(
                 onClick = { session.previous() },
@@ -60,6 +80,17 @@ internal fun CollageChoiceHost(
                 onClick = { session.next() },
                 modifier = Modifier.testTag("collage_next"),
             ) { Text("Next") }
+        }
+
+        if (session.candidates.isNotEmpty()) {
+            Button(
+                onClick = { onSelect(session.selectedIndex ?: 0) },
+                modifier = Modifier.testTag("collage_select"),
+            ) { Text("Select") }
+        }
+        val frozenId = frozenCandidateId()
+        if (frozenId != null) {
+            Text(frozenId, modifier = Modifier.testTag("collage_frozen"))
         }
 
         val selected = session.selected

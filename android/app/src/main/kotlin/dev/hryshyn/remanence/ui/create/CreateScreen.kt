@@ -343,12 +343,7 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
         }
 
         Spacer(Modifier.height(12.dp))
-        val generatorPreview by viewModel.generatorPreview.collectAsStateWithLifecycle()
-        GeneratorBer1PreviewHost(
-            state = generatorPreview,
-            modifier = Modifier.fillMaxWidth(),
-            onMeasured = viewModel::onPreviewMeasured,
-        )
+        CollageStepChooser(viewModel, modifier = Modifier.fillMaxWidth())
 
         // S4: release music picker directly above publish, so select-then-
         // publish needs no scrolling back. Selection ownership is explicit:
@@ -379,9 +374,75 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
 }
 
 /**
+ * Production collage chooser for the generator content step (T002 cutover).
+ * A Ready (or note-pending) preview mounts the real [CollageChoiceHost] with
+ * the session input, preview sources, and the production crop source; any
+ * other preview state renders a typed notice. Never mounts
+ * `GeneratorBer1PreviewHost` and never exposes `generator_preview_*`
+ * semantics for this flow. Selection is explicit-only: the Select action
+ * selects the displayed candidate and freezes it against the exact input
+ * object the host built from (publish stays fail-closed on its own guard).
+ */
+@Composable
+private fun CollageStepChooser(viewModel: CreateViewModel, modifier: Modifier = Modifier) {
+    val generatorPreview by viewModel.generatorPreview.collectAsStateWithLifecycle()
+    when (val preview = generatorPreview) {
+        is GeneratorPreviewState.Ready ->
+            CollageChoiceHost(
+                session = viewModel.collageChoices,
+                input = preview.expression.input,
+                sources = preview.sources,
+                note = viewModel.noteEditor.text.takeIf { it.isNotEmpty() },
+                track = null,
+                cropSource = viewModel.collageCropSource
+                    ?: dev.hryshyn.remanence.ui.collage.CollageCropSource { null },
+                frozenCandidateId = { viewModel.frozenCollageSelection?.candidateId },
+                onSelect = { index ->
+                    if (viewModel.selectCollageCandidate(index)) {
+                        viewModel.freezeCollageSelection()
+                    }
+                },
+                onMeasured = viewModel::onPreviewMeasured,
+                modifier = modifier,
+            )
+        is GeneratorPreviewState.NotePending ->
+            CollageChoiceHost(
+                session = viewModel.collageChoices,
+                input = preview.input,
+                sources = preview.sources,
+                note = viewModel.noteEditor.text.takeIf { it.isNotEmpty() },
+                track = null,
+                cropSource = viewModel.collageCropSource
+                    ?: dev.hryshyn.remanence.ui.collage.CollageCropSource { null },
+                frozenCandidateId = { viewModel.frozenCollageSelection?.candidateId },
+                onSelect = { index ->
+                    if (viewModel.selectCollageCandidate(index)) {
+                        viewModel.freezeCollageSelection()
+                    }
+                },
+                onMeasured = viewModel::onPreviewMeasured,
+                modifier = modifier,
+            )
+        else -> androidx.compose.material3.Text(
+            text = collageStepNotice(preview),
+            modifier = modifier.testTag("collage_notice"),
+        )
+    }
+}
+
+private fun collageStepNotice(preview: GeneratorPreviewState): String = when (preview) {
+    GeneratorPreviewState.Idle -> "Select 3–5 photos to see collage variants."
+    GeneratorPreviewState.Loading -> "Preparing collage variants…"
+    is GeneratorPreviewState.Rejected -> "Collage unavailable: ${preview.reasons.joinToString("; ")}"
+    is GeneratorPreviewState.Incompatible -> "This photo mix can't be previewed: ${preview.reason}"
+    is GeneratorPreviewState.Unavailable -> "Collage unavailable: ${preview.reason}"
+    else -> "Collage unavailable."
+}
+
+/**
  * Fixed user-facing copy for the mounted Create send state. Typed
- * [CreateViewModel.CreateUploadStatus] error codes stay on the status
- * object for logic and diagnostics and must never be interpolated here.
+ * [CreateViewModel.CreateUploadStatus] error codes stay on the status object
+ * for logic and diagnostics and must never be interpolated here.
  */
 internal fun createUploadPendingCopy(status: CreateViewModel.CreateUploadStatus): String =
     when (status) {

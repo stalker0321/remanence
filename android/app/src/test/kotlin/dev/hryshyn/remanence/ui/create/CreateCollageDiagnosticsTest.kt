@@ -59,13 +59,13 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * Focused tests for the A4B6 diagnostic retain + mount in the production
+ * Focused tests for the production collage retain + mount in the
  * [CreateViewModel]: the loader retain callback carries live ORIGINAL bytes
  * (never preview bytes, never a reopened URI); generation-gated sinks make
  * stale async completions inert; retain rejection preserves ordinary preview
  * with no candidates; ownership resets clear/zeroize the holder and close
- * the source; the default release gate exposes no chooser and forced
- * selection keeps publishing fail-closed.
+ * the source; without the factory there is no chooser and forced selection
+ * keeps publishing fail-closed.
  *
  * Holder zeroization itself is pinned by `RetainedOriginalHolderTest`; here
  * the lifecycle calls are pinned (source closed/nulled, sink cleared).
@@ -215,7 +215,7 @@ class CreateCollageDiagnosticsTest {
 
     private fun viewModel(
         loader: GeneratorPreviewLoader?,
-        gate: CollageDiagnosticGate? = null,
+        factory: CollageCropSourceFactory? = null,
     ): CreateViewModel {
         val retryStore = SenderRetryMaterialStore(AccountScopedFileRoots(outboxDir))
         return CreateViewModel(
@@ -244,7 +244,7 @@ class CreateCollageDiagnosticsTest {
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
             enqueueUpload = { _, _ -> },
-            collageDiagnosticGate = gate,
+            collageSourceFactory = factory,
         )
     }
 
@@ -291,7 +291,7 @@ class CreateCollageDiagnosticsTest {
         // Park the third decode (u3 of round one); round two never parks.
         val loader = previewLoader(originals, parkDecodeCall = 3, gate = gate)
         val seenSizes = mutableListOf<Map<String, Int>>()
-        val vm = viewModel(loader, CollageDiagnosticGate { holder ->
+        val vm = viewModel(loader, CollageCropSourceFactory { holder ->
             seenSizes += holder.retainedSizesForTests()
             null
         })
@@ -324,7 +324,7 @@ class CreateCollageDiagnosticsTest {
         }
         val loader = previewLoader(originals)
         val seenSizes = mutableListOf<Map<String, Int>>()
-        val vm = viewModel(loader, CollageDiagnosticGate { holder ->
+        val vm = viewModel(loader, CollageCropSourceFactory { holder ->
             seenSizes += holder.retainedSizesForTests()
             null
         })
@@ -333,7 +333,7 @@ class CreateCollageDiagnosticsTest {
         assertEquals(3, ready.sources.size)
         assertEquals(2, seenSizes.single().size)
         assertTrue(vm.collageChoices.candidates.isEmpty())
-        assertNull(vm.collageDiagnosticSource)
+        assertNull(vm.collageCropSource)
     }
 
     @Test
@@ -346,7 +346,7 @@ class CreateCollageDiagnosticsTest {
         val nano = FakeNanoRuntime()
         val yunet = FakeYuNetRuntime()
         val builds = mutableListOf<Map<String, Int>>()
-        val vm = viewModel(loader, CollageDiagnosticGate { holder ->
+        val vm = viewModel(loader, CollageCropSourceFactory { holder ->
             builds += holder.retainedSizesForTests()
             AndroidCollageCropSource(
                 bytesSource = holder.asUprightBytesSource(),
@@ -366,10 +366,10 @@ class CreateCollageDiagnosticsTest {
         })
         vm.beginSession(1L, senderUserUuid.toString())
         drivePhotos(vm, ids)
-        assertTrue("source must be built on Ready", vm.collageDiagnosticSource != null)
+        assertTrue("source must be built on Ready", vm.collageCropSource != null)
         assertEquals(3, builds.single().size)
         vm.beginSession(2L, senderUserUuid.toString())
-        assertNull("reset must close and drop the source", vm.collageDiagnosticSource)
+        assertNull("reset must close and drop the source", vm.collageCropSource)
         assertEquals(1, field.closeCount)
         assertEquals(1, nano.closeCount)
         assertEquals(1, yunet.closeCount)
@@ -387,17 +387,17 @@ class CreateCollageDiagnosticsTest {
         vm.beginSession(1L, senderUserUuid.toString())
         drivePhotos(vm, ids)
         vm.endSession()
-        assertNull(vm.collageDiagnosticSource)
+        assertNull(vm.collageCropSource)
         assertTrue(vm.generatorPreview.value is GeneratorPreviewState.Idle)
     }
 
     @Test
-    fun releaseGateOffHasNoChooserAndPublishStaysFailClosed() {
+    fun withoutFactoryHasNoChooserAndPublishStaysFailClosed() {
         val ids = listOf("u1", "u2", "u3")
         val vm = viewModel(previewLoader(ids.associateWith { originalFor(it) }))
         vm.beginSession(1L, senderUserUuid.toString())
         drivePhotos(vm, ids)
-        assertNull("gate OFF must not build a source", vm.collageDiagnosticSource)
+        assertNull("without factory must not build a source", vm.collageCropSource)
         assertTrue(vm.collageChoices.candidates.isEmpty())
         assertNull(vm.collageChoices.selected)
         assertFalse(vm.selectCollageCandidate(0))

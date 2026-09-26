@@ -3,10 +3,12 @@ package dev.hryshyn.remanence.ui.create
 import android.graphics.Bitmap
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hryshyn.remanence.core.model.GeneratorExpression
 import dev.hryshyn.remanence.ui.collage.CollageCropSource
 import java.io.ByteArrayOutputStream
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -101,5 +103,41 @@ class CollageChoiceHostTest {
         composeRule.onNodeWithTag("collage_notice").assertExists()
         composeRule.onNodeWithTag("collage_canvas").assertDoesNotExist()
         composeRule.onNodeWithTag("collage_select_hint").assertDoesNotExist()
+    }
+
+    @Test
+    fun selectActionReportsDisplayedCandidateIndex() {
+        val session = CollageChoiceSession()
+        val selected = mutableListOf<Int>()
+        composeRule.setContent {
+            CollageChoiceHost(
+                session, input(), sources(), null, null, cropSource(),
+                onSelect = { selected += it },
+            )
+        }
+        composeRule.waitForIdle()
+
+        // Nothing highlighted yet: the explicit action freezes the first variant.
+        composeRule.onNodeWithTag("collage_select").performClick()
+        composeRule.waitForIdle()
+        // Browsing moves the highlight; Select reports the displayed index.
+        composeRule.runOnIdle { session.select(1) }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("collage_select").performClick()
+        composeRule.waitForIdle()
+        assertEquals(listOf(0, 1), selected)
+    }
+
+    @Test
+    fun frozenCandidateIdRendersWhenProvided() {
+        val session = CollageChoiceSession()
+        composeRule.setContent {
+            CollageChoiceHost(
+                session, input(), sources(), null, null, cropSource(),
+                frozenCandidateId = { "ber1-frozen" },
+            )
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("collage_frozen").assertExists()
     }
 }

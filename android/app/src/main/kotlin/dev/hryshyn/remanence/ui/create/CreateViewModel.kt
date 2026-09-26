@@ -139,12 +139,12 @@ class CreateViewModel(
      */
     private val generatorPreviewLoader: GeneratorPreviewLoader? = null,
     /**
-     * Diagnostic-only collage analysis gate (A4B6). Null (default release)
-     * disables everything: no retain sink, no runners, no chooser source,
-     * no candidate population. Gate ON is only host-testable diagnostic
-     * context; it never touches publish, capability, or admission.
+     * Production collage analysis factory (T002 cutover). Null disables the
+     * chooser source: no runners, no chooser, no candidate population. This
+     * replaces the removed diagnostic-only gate; there is no parallel
+     * diagnostic engine path.
      */
-    private val collageDiagnosticGate: CollageDiagnosticGate? = null,
+    private val collageSourceFactory: CollageCropSourceFactory? = null,
 ) : ViewModel() {
 
     /** Current-send state; deliberately contains no history or inbox projection. */
@@ -336,29 +336,28 @@ class CreateViewModel(
     private var previewGeneration: Long = 0L
 
     /**
-     * Create-session retained ORIGINAL bytes for the diagnostic collage path
-     * (A4B4 holder). Empty unless the diagnostic gate installed a retain
-     * sink; cleared (zeroized) on every ownership reset. Single-confined to
-     * the preview coroutine context documented on the holder.
+     * Create-session retained ORIGINAL bytes for the collage path (A4B4
+     * holder). Empty unless the retain sink is installed; cleared (zeroized)
+     * on every ownership reset. Single-confined to the preview coroutine
+     * context documented on the holder.
      */
     private val retainedOriginals = RetainedOriginalHolder()
 
     /**
-     * Diagnostic crop source, built on preview Ready only when the gate is
-     * on; null otherwise (in particular always null when the gate is off).
-     * Closed and nulled on every ownership reset and on teardown.
+     * Production crop source, built on preview Ready when the factory is
+     * present; null otherwise. Closed and nulled on every ownership reset
+     * and on teardown.
      */
-    var collageDiagnosticSource: AndroidCollageCropSource? = null
+    var collageCropSource: AndroidCollageCropSource? = null
         private set
 
     /**
-     * Photo set the diagnostic source was built for. Cache-hit refreshes
-     * recompute the same Ready state without reloading; rebuilding the
-     * source for them would leak the previous instance, so exactly one
-     * source exists per photo set. Cleared with the rest of the diagnostic
-     * state.
+     * Photo set the crop source was built for. Cache-hit refreshes recompute
+     * the same Ready state without reloading; rebuilding the source for them
+     * would leak the previous instance, so exactly one source exists per
+     * photo set. Cleared with the rest of the collage state.
      */
-    private var diagnosticBuiltIds: List<String>? = null
+    private var cropSourceBuiltIds: List<String>? = null
 
     /** Owner captured synchronously at session entry, before publish suspends. */
     private var sessionOwner: UserId? = null
@@ -971,17 +970,14 @@ class CreateViewModel(
         previewJob?.cancel()
         previewJob = null
         val generation = ++previewGeneration
-        if (collageDiagnosticGate != null) {
-            // Diagnostic retain sink for THIS preview generation only. A
-            // stale async completion (older generation) cannot retain; the
-            // loader additionally rechecks cancellation and never lets a
-            // throwing sink break preview. The result is ignored: a retain
-            // rejection must not break ordinary preview and yields no
-            // candidate.
-            (generatorPreviewLoader as? OriginalRetainSinkHost)?.retainOriginal = { bytes, hash ->
-                if (generation == previewGeneration) {
-                    retainedOriginals.retain(CapsulePhotoIdentity.contentIdFor(hash), bytes, hash)
-                }
+        // Retained-original sink for THIS preview generation only. A stale
+        // async completion (older generation) cannot retain; the loader
+        // additionally rechecks cancellation and never lets a throwing sink
+        // break preview. The result is ignored: a retain rejection must not
+        // break ordinary preview and yields no candidate.
+        (generatorPreviewLoader as? OriginalRetainSinkHost)?.retainOriginal = { bytes, hash ->
+            if (generation == previewGeneration) {
+                retainedOriginals.retain(CapsulePhotoIdentity.contentIdFor(hash), bytes, hash)
             }
         }
         if (ids.isEmpty()) {
@@ -1001,31 +997,32 @@ class CreateViewModel(
             val result = generatorPreviewCoordinator.compute(ownerId, epoch, ids, note)
             if (generation == previewGeneration) {
                 _generatorPreview.value = result
-                if (result is GeneratorPreviewState.Ready) maybeBuildDiagnosticSource(ids)
+                if (result is GeneratorPreviewState.Ready) maybeBuildCropSource(ids)
             }
         }
     }
 
     /**
-     * Diagnostic-only: builds the crop source on a current Ready preview
-     * when the gate is on. Never runs the provider and never populates
-     * candidates; host tests mount the exposed source into the chooser host
-     * themselves. Gate off (or a null factory result) leaves it absent.
+     * Builds the production crop source on a current Ready preview when the
+     * factory is present. Never runs the provider and never populates
+     * candidates; the content step mounts the exposed source into the
+     * chooser host. Absent factory (or a null factory result) leaves it
+     * absent and the chooser shows the typed notice.
      */
-    private fun maybeBuildDiagnosticSource(photoIds: List<String>) {
-        val gate = collageDiagnosticGate ?: return
-        if (collageDiagnosticSource != null) return
-        if (diagnosticBuiltIds == photoIds) return
-        diagnosticBuiltIds = photoIds.toList()
-        collageDiagnosticSource = gate.create(retainedOriginals)
+    private fun maybeBuildCropSource(photoIds: List<String>) {
+        val factory = collageSourceFactory ?: return
+        if (collageCropSource != null) return
+        if (cropSourceBuiltIds == photoIds) return
+        cropSourceBuiltIds = photoIds.toList()
+        collageCropSource = factory.create(retainedOriginals)
     }
 
-    /** Drops diagnostic holder/source ownership (zeroized/closed). */
+    /** Drops collage holder/source ownership (zeroized/closed). */
     private fun clearCollageDiagnostics() {
         (generatorPreviewLoader as? OriginalRetainSinkHost)?.retainOriginal = null
-        collageDiagnosticSource?.close()
-        collageDiagnosticSource = null
-        diagnosticBuiltIds = null
+        collageCropSource?.close()
+        collageCropSource = null
+        cropSourceBuiltIds = null
         retainedOriginals.clear()
     }
 

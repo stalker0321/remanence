@@ -44,9 +44,6 @@ object YuNetFacePostProcessor {
     /** `x, y, w, h` + 5 `(x, y)` landmarks + score. */
     const val MIN_COLUMNS = 15
 
-    /** Reject boxes whose normalized width or height does not exceed this. */
-    const val MIN_BOX_FRACTION = 0.01f
-
     private const val LANDMARK_FIRST = 4
     private const val LANDMARK_COUNT = 5
 
@@ -81,7 +78,7 @@ object YuNetFacePostProcessor {
             val y1 = ((row[1] + row[3]) / pass.passHeight).coerceIn(0f, 1f)
             val width = x1 - x0
             val height = y1 - y0
-            if (width <= MIN_BOX_FRACTION || height <= MIN_BOX_FRACTION) continue
+            if (width <= 0f || height <= 0f) continue
             out += AnalysisFace(
                 box = NormBox(x0.toDouble(), y0.toDouble(), width.toDouble(), height.toDouble()),
                 confidence = row[pass.columns - 1].toDouble(),

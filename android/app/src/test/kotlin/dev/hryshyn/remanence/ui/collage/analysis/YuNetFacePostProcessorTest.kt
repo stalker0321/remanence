@@ -47,8 +47,12 @@ class YuNetFacePostProcessorTest {
 
     @Test
     fun normalizeDropsDegenerateBoxes() {
-        val pass = YuNetPass(640, 480, 15, listOf(row(10f, 10f, 2f, 96f, 0.99f)))
-        assertTrue(YuNetFacePostProcessor.normalize(pass).isEmpty())
+        val narrow = YuNetPass(640, 480, 15, listOf(row(10f, 10f, 2f, 96f, 0.99f)))
+        assertEquals(1, YuNetFacePostProcessor.normalize(narrow).size)
+        val zeroWidth = YuNetPass(640, 480, 15, listOf(row(10f, 10f, 0f, 96f, 0.99f)))
+        assertTrue(YuNetFacePostProcessor.normalize(zeroWidth).isEmpty())
+        val clampedEmpty = YuNetPass(640, 480, 15, listOf(row(800f, 10f, 100f, 96f, 0.99f)))
+        assertTrue(YuNetFacePostProcessor.normalize(clampedEmpty).isEmpty())
     }
 
     @Test

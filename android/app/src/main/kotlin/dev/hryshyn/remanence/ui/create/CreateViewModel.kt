@@ -240,11 +240,13 @@ class CreateViewModel(
     fun setMusicSelection(hit: dev.hryshyn.remanence.core.data.network.MusicTrackHit?) {
         _musicSelection.value = hit
         collageChoices.clear()
+        frozenCollageSelection = null
     }
 
     fun clearMusicSelection() {
         _musicSelection.value = null
         collageChoices.clear()
+        frozenCollageSelection = null
     }
 
     /** Explicit sender collage selection; refused if no such candidate. */
@@ -290,7 +292,41 @@ class CreateViewModel(
      * built by the collage host and held here; publish is NOT wired to it yet
      * (see the fail-closed guard in beginGeneratorSession).
      */
-    val collageChoices = CollageChoiceSession()
+    val collageChoices = CollageChoiceSession().also { session ->
+        session.onCandidatesReplaced = { frozenCollageSelection = null }
+    }
+
+    /**
+     * Explicitly frozen collage choice (T001 pre-publish foundation). Set
+     * only by [freezeCollageSelection] after full revalidation; cleared on
+     * every photo/note/track edit, on ownership resets, and whenever a fresh
+     * candidate set is built. Never consulted by publish (still fail-closed).
+     */
+    var frozenCollageSelection: CollageFrozenSelection? = null
+        private set
+
+    /**
+     * Freezes the currently selected collage candidate against the current
+     * preview input. Returns false (leaving any previously valid frozen
+     * selection untouched) when nothing is selected, the preview holds no
+     * current input, or revalidation fails.
+     */
+    fun freezeCollageSelection(): Boolean {
+        val frozen = buildFrozenSelection(
+            candidate = collageChoices.selected,
+            currentInput = currentPreviewInput(),
+            capsuleId = _capsuleId,
+        ) ?: return false
+        frozenCollageSelection = frozen
+        return true
+    }
+
+    private fun currentPreviewInput(): GeneratorExpression.GeneratorInput? =
+        when (val preview = _generatorPreview.value) {
+            is GeneratorPreviewState.Ready -> preview.expression.input
+            is GeneratorPreviewState.NotePending -> preview.input
+            else -> null
+        }
 
     /** Stage1-C CONTENT preview: pure planner over loaded, bounded sources. */
     private val generatorPreviewCoordinator = GeneratorPreviewCoordinator(generatorPreviewLoader)
@@ -930,6 +966,7 @@ class CreateViewModel(
         generatorMeasuredNoteSelection = null
         // A source/note edit invalidates the built collage candidates too.
         collageChoices.clear()
+        frozenCollageSelection = null
         val ids = photoSelection.selectedIds
         previewJob?.cancel()
         previewJob = null
@@ -1000,6 +1037,7 @@ class CreateViewModel(
         generatorMeasuredNoteSelection = null
         _generatorPreview.value = GeneratorPreviewState.Idle
         generatorPreviewCoordinator.zeroize()
+        frozenCollageSelection = null
         clearCollageDiagnostics()
     }
 

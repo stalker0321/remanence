@@ -21,6 +21,13 @@ class CollageChoiceSession {
     var selectedIndex: Int? by mutableStateOf(null)
         private set
 
+    /**
+     * Fired after every fresh candidate build ([replaceCandidates]); the
+     * creation session uses it to drop its frozen selection even when IDs
+     * happen to overlap. Null by default (no-op).
+     */
+    var onCandidatesReplaced: (() -> Unit)? = null
+
     /** Typed invalidation/unavailability copy; non-null means no candidates. */
     var notice: String? by mutableStateOf(null)
         private set
@@ -36,6 +43,7 @@ class CollageChoiceSession {
         candidates = built
         selectedIndex = null
         notice = null
+        onCandidatesReplaced?.invoke()
     }
 
     fun showNotice(reason: String) {

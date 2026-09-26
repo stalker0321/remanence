@@ -93,6 +93,15 @@ class PreparedPresentationMaterial internal constructor(
     fun expressionAdmission(): ExpressionReceiverAdmission.Result =
         ExpressionReceiverAdmission.admit(requireOpen())
 
+    /**
+     * Capability-aware receiver admission (V5 collage). The app layer supplies
+     * its registry-backed [CollageRenderCapability]; the no-arg overload keeps
+     * the blanket [CollageRenderCapability.Disabled] behavior for every
+     * existing caller.
+     */
+    fun expressionAdmission(capability: CollageRenderCapability): ExpressionReceiverAdmission.Result =
+        ExpressionReceiverAdmission.admit(requireOpen(), capability)
+
     fun noteText(): String? = requireOpen().note
 
     /** S2b-receiver: the sealed v2-only track snapshot, or null when absent. */

@@ -25,6 +25,7 @@
     <string name="hold_nomatch">не вдалося відкрити. помістіть лицьовий бік повністю в рамку без відблисків. якщо листівку відкликали, тут вона більше не відкриється.</string>
     <string name="hold_back">назад</string>
     <string name="hold_close">закрити</string>
+    <string name="hold_collage_content_description">колаж-листівка</string>
     <string name="hold_retry">спробувати ще раз</string>
     <string name="hold_find">знайти людину</string>
     <string name="hold_email">пошта</string>

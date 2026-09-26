@@ -2,6 +2,7 @@ package dev.hryshyn.remanence.ui.capsule
 
 import dev.hryshyn.remanence.core.crypto.ExpressionReceiverAdmission
 import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
+import dev.hryshyn.remanence.ui.collage.BundledCollageRenderCapability
 
 /**
  * Reader over the exact snapshot retained by the incoming presentation
@@ -34,7 +35,7 @@ internal class IncomingPresentationContentSource(
     override suspend fun presentationAdmission(capsuleId: String): CapsulePresentationAdmission {
         require(capsuleId == prepared.capsuleId.toRestString()) { "capsule binding mismatch" }
         if (prepared.protocolVersion == 1) return CapsulePresentationAdmission.LegacyV1
-        return when (val admitted = prepared.expressionAdmission()) {
+        return when (val admitted = prepared.expressionAdmission(BundledCollageRenderCapability)) {
             is ExpressionReceiverAdmission.Result.Supported ->
                 CapsulePresentationAdmission.Ber1(admitted.expression)
             is ExpressionReceiverAdmission.Result.Unsupported ->

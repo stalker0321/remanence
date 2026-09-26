@@ -1,5 +1,6 @@
 package dev.hryshyn.remanence.ui.capsule
 
+import dev.hryshyn.remanence.core.crypto.CollageRenderCapability
 import dev.hryshyn.remanence.core.crypto.DeliveredCiphertext
 import dev.hryshyn.remanence.core.crypto.ExpressionReceiverAdmission
 import dev.hryshyn.remanence.core.crypto.PresentationAcceptanceGate
@@ -122,6 +123,10 @@ internal class PreparedIncomingPresentation internal constructor(
     /** ADR-018 receiver admission over the authenticated manifest. */
     internal fun expressionAdmission(): ExpressionReceiverAdmission.Result =
         material.expressionAdmission()
+
+    /** Capability-aware admission (V5 collage); registries supplied by the reader. */
+    internal fun expressionAdmission(capability: CollageRenderCapability): ExpressionReceiverAdmission.Result =
+        material.expressionAdmission(capability)
 
     internal fun noteText(): String? = material.noteText()
 

@@ -25,6 +25,7 @@
     <string name="hold_nomatch">не удалось открыть. поместите лицевую сторону целиком в рамку без бликов. если открытку отозвали, здесь она больше не откроется.</string>
     <string name="hold_back">назад</string>
     <string name="hold_close">закрыть</string>
+    <string name="hold_collage_content_description">коллаж-открытка</string>
     <string name="hold_retry">попробовать снова</string>
     <string name="hold_find">найти человека</string>
     <string name="hold_email">почта</string>

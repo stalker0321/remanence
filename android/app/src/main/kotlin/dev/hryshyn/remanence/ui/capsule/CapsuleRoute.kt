@@ -25,10 +25,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.google.crypto.tink.KeysetHandle
 import kotlinx.coroutines.flow.Flow
 import kotlin.coroutines.cancellation.CancellationException
+import dev.hryshyn.remanence.R
+import dev.hryshyn.remanence.core.model.GeneratorExpression
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 
 /**
@@ -47,6 +50,11 @@ sealed interface CapsulePresentation : AutoCloseable {
     }
 
     class Ber1(val state: Ber1PresentationState) : CapsulePresentation {
+        override fun close() = state.close()
+    }
+
+    /** V5 finished collage (contract V3); shares the same close/release contract. */
+    class Collage(val state: CollagePresentationState) : CapsulePresentation {
         override fun close() = state.close()
     }
 
@@ -145,17 +153,39 @@ internal fun CapsuleRoute(
                     CapsuleRouteState.Ready(CapsulePresentation.Photos(presentation))
                 }
                 is CapsulePresentationAdmission.Ber1 -> {
-                    val ber1 = Ber1PresentationState(
-                        expression = admission.expression,
-                        loadPhoto = { ordinal ->
-                            source.loadPhoto(binding.capsuleId, ordinal).jpegBytes
-                        },
-                        // S2b-receiver: sealed snapshot (or null) rides the
-                        // same grant-guarded source; LegacyV1 never has one.
-                        track = source.trackSnapshot(binding.capsuleId),
-                    )
-                    ber1.load()
-                    CapsuleRouteState.Ready(CapsulePresentation.Ber1(ber1))
+                    val expression = admission.expression
+                    if (expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V3) {
+                        // V5 finished collage: the sealed contract decides the
+                        // arm. A decode/prepare failure renders the shared
+                        // typed notice, never the BER1 host, v1 pager, or a
+                        // track card.
+                        val collage = CollagePresentationState(
+                            expression = expression,
+                            loadPhoto = { contentId ->
+                                val ordinal = expression.input.photos
+                                    .first { it.contentId == contentId }.ordinal
+                                source.loadPhoto(binding.capsuleId, ordinal).jpegBytes
+                            },
+                            // Authenticated manifest note and sealed snapshot
+                            // ride the same grant-guarded source.
+                            note = source.noteText(binding.capsuleId),
+                            track = source.trackSnapshot(binding.capsuleId),
+                        )
+                        collage.load()
+                        CapsuleRouteState.Ready(CapsulePresentation.Collage(collage))
+                    } else {
+                        val ber1 = Ber1PresentationState(
+                            expression = expression,
+                            loadPhoto = { ordinal ->
+                                source.loadPhoto(binding.capsuleId, ordinal).jpegBytes
+                            },
+                            // S2b-receiver: sealed snapshot (or null) rides the
+                            // same grant-guarded source; LegacyV1 never has one.
+                            track = source.trackSnapshot(binding.capsuleId),
+                        )
+                        ber1.load()
+                        CapsuleRouteState.Ready(CapsulePresentation.Ber1(ber1))
+                    }
                 }
                 is CapsulePresentationAdmission.Unsupported ->
                     CapsuleRouteState.Ready(CapsulePresentation.Unsupported(admission.reason))
@@ -183,6 +213,13 @@ internal fun CapsuleRoute(
                 CapsuleScreen(state = presentation.state, onClose = onClose, modifier = modifier)
             is CapsulePresentation.Ber1 ->
                 Ber1PresentationHost(state = presentation.state, onClose = onClose, modifier = modifier)
+            is CapsulePresentation.Collage ->
+                CollagePresentationHost(
+                    state = presentation.state,
+                    contentDescription = stringResource(R.string.hold_collage_content_description),
+                    onClose = onClose,
+                    modifier = modifier,
+                )
             is CapsulePresentation.Unsupported ->
                 Ber1UnsupportedPresentation(
                     reason = presentation.reason,

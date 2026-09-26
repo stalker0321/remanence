@@ -25,6 +25,7 @@
     <string name="hold_nomatch">we couldn\'t open this. keep the whole picture side in the frame, away from glare. if they withdrew it, it will not open.</string>
     <string name="hold_back">back</string>
     <string name="hold_close">close</string>
+    <string name="hold_collage_content_description">collage postcard</string>
     <string name="hold_retry">try again</string>
     <string name="hold_find">find this person</string>
     <string name="hold_email">email</string>

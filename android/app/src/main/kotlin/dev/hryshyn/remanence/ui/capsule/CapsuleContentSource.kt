@@ -21,6 +21,7 @@ import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.RecipientEnvelopeContextInput
 import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.ui.collage.BundledCollageRenderCapability
 
 /**
  * FIX-M1-007-13 / FIX-REVIEW-04 / FIX-REVIEW2-01: the REAL capsule content
@@ -175,7 +176,7 @@ class CapsuleContentSource(
     override suspend fun presentationAdmission(capsuleId: String): CapsulePresentationAdmission {
         val content = decryptContent(capsuleId) ?: return CapsulePresentationAdmission.LegacyV1
         if (content.protocolVersion == 1) return CapsulePresentationAdmission.LegacyV1
-        return when (val admitted = ExpressionReceiverAdmission.admit(content)) {
+        return when (val admitted = ExpressionReceiverAdmission.admit(content, BundledCollageRenderCapability)) {
             is ExpressionReceiverAdmission.Result.Supported ->
                 CapsulePresentationAdmission.Ber1(admitted.expression)
             is ExpressionReceiverAdmission.Result.Unsupported ->

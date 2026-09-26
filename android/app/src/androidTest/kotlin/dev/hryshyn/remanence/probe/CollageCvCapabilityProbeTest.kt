@@ -3,11 +3,16 @@ package dev.hryshyn.remanence.probe
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import dev.hryshyn.remanence.ui.collage.analysis.ModelAssetSource
 import dev.hryshyn.remanence.ui.collage.analysis.NanoDetImage
 import dev.hryshyn.remanence.ui.collage.analysis.NanoDetModelAssetSource
 import dev.hryshyn.remanence.ui.collage.analysis.NanoDetResult
 import dev.hryshyn.remanence.ui.collage.analysis.NanoDetRunner
 import dev.hryshyn.remanence.ui.collage.analysis.OpenCvNanoDetRuntime
+import dev.hryshyn.remanence.ui.collage.analysis.OpenCvYuNetRuntime
+import dev.hryshyn.remanence.ui.collage.analysis.YuNetImage
+import dev.hryshyn.remanence.ui.collage.analysis.YuNetResult
+import dev.hryshyn.remanence.ui.collage.analysis.YuNetRunner
 import java.io.File
 import java.io.InputStream
 import kotlinx.coroutines.runBlocking
@@ -196,6 +201,42 @@ class CollageCvCapabilityProbeTest {
         }
     }
 
+    /**
+     * V5-A3C: exercise the real [YuNetRunner] wrapper end to end (two passes,
+     * 640 then 960). Still diagnostic only; reports timings/pass shapes/face
+     * count, never paths or bytes. Any unavailable/invalid result is an explicit
+     * failure.
+     */
+    @Test
+    fun yuNetRunnerDetectsRealModelDiagnostics() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val source = object : ModelAssetSource {
+            override val sha256: String = YUNET_SHA256
+            override val byteSize: Long = YUNET_BYTES
+            override val maxBytes: Long = MAX_ASSET_BYTES
+            override fun open(): InputStream = context.assets.open("collage/yunet.onnx")
+        }
+        val runner = YuNetRunner(
+            assetSource = source,
+            runtime = OpenCvYuNetRuntime(),
+            cacheDir = File(context.cacheDir, "collage_cv_gate"),
+        )
+        try {
+            val image = YuNetImage(640, 640, deterministicArgb(640, 640))
+            when (val result = runBlocking { runner.detect(image) }) {
+                is YuNetResult.Faces -> Log.i(
+                    TAG,
+                    "runner passes=${result.passShapes} faces=${result.faces.size} " +
+                        "${result.elapsedMs}ms",
+                )
+                is YuNetResult.Unavailable -> fail("runner unavailable: ${result.reason}")
+                is YuNetResult.Invalid -> fail("runner invalid: ${result.reason}")
+            }
+        } finally {
+            runner.close()
+        }
+    }
+
     private fun deterministicArgb(width: Int, height: Int): IntArray {
         val pixels = IntArray(width * height) { 0xFF202020.toInt() }
         for (y in height / 4 until height / 2) {
@@ -215,5 +256,8 @@ class CollageCvCapabilityProbeTest {
         const val NANODET_BYTES = 3_800_954L
         const val NANODET_SHA256 =
             "4b82da9944b88577175ee23a459dce2e26e6e4be573def65b1055dc2d9720186"
+        const val YUNET_BYTES = 232_589L
+        const val YUNET_SHA256 =
+            "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
     }
 }

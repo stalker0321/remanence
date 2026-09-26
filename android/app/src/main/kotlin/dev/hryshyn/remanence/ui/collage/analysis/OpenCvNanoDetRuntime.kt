@@ -50,6 +50,20 @@ internal class MatReleaseLedger {
     }
 }
 
+/** Owner for Mat sources; registers each header and releases it exactly once. */
+internal class MatOwner {
+    private val ledger = MatReleaseLedger()
+
+    fun <T : Mat> own(mat: T): T {
+        ledger.register(mat)
+        return mat
+    }
+
+    fun releaseAll() {
+        ledger.releaseAll { (it as Mat).release() }
+    }
+}
+
 /**
  * The single OpenCV touch point for the NanoDet runner. It reproduces the
  * frozen `import-field-3.3` preprocessing exactly — upright input, letterbox
@@ -184,20 +198,6 @@ internal class OpenCvNanoDetRuntime : NanoDetRuntime {
             out[i * 4 + 3] = ((c ushr 24) and 0xFF).toByte() // A
         }
         return out
-    }
-
-    /** Owner for the ROI/output Mat sources; each is released exactly once. */
-    private class MatOwner {
-        private val ledger = MatReleaseLedger()
-
-        fun <T : Mat> own(mat: T): T {
-            ledger.register(mat)
-            return mat
-        }
-
-        fun releaseAll() {
-            ledger.releaseAll { (it as Mat).release() }
-        }
     }
 
     private companion object {

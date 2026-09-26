@@ -4,8 +4,6 @@ import dev.hryshyn.remanence.ui.collage.AnalysisObject
 import dev.hryshyn.remanence.ui.collage.NanoDetDecoder
 import dev.hryshyn.remanence.ui.collage.NanoDetHead
 import java.io.File
-import java.io.InputStream
-import java.security.MessageDigest
 import java.util.concurrent.Executors
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.coroutines.cancellation.CancellationException
@@ -35,14 +33,6 @@ interface NanoDetRuntime : AutoCloseable {
     fun forward(image: NanoDetImage): List<NanoDetHead>
 
     override fun close()
-}
-
-/** Bundled-model source with pinned integrity metadata (A1 assets). */
-interface NanoDetModelAssetSource {
-    val sha256: String
-    val byteSize: Long
-    val maxBytes: Long
-    fun open(): InputStream
 }
 
 sealed interface NanoDetResult {
@@ -75,11 +65,12 @@ sealed interface NanoDetResult {
  * shapes and detection count — never a path, image bytes, or exception message.
  */
 class NanoDetRunner(
-    private val assetSource: NanoDetModelAssetSource,
+    assetSource: ModelAssetSource,
     private val runtime: NanoDetRuntime,
-    private val cacheDir: File,
+    cacheDir: File,
 ) : AutoCloseable {
 
+    private val cache = ModelAssetCache(assetSource, cacheDir, MODEL_FILE_NAME)
     private val workMutex = Mutex()
     private val lifecycle = ReentrantLock()
     private val idle = lifecycle.newCondition()
@@ -88,7 +79,6 @@ class NanoDetRunner(
     }
     private val dispatcher: CoroutineDispatcher = executor.asCoroutineDispatcher()
 
-    private var modelFile: File? = null
     private var loaded = false
     private var active = false
     private var closed = false
@@ -124,7 +114,7 @@ class NanoDetRunner(
         currentCoroutineContext().ensureActive()
 
         val file = try {
-            ensureModel()
+            cache.materialize()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
@@ -168,40 +158,6 @@ class NanoDetRunner(
         }
     }
 
-    private fun ensureModel(): File {
-        modelFile?.let { return it }
-        cacheDir.mkdirs()
-        val target = File(cacheDir, MODEL_FILE_NAME)
-        val partial = File(cacheDir, "$MODEL_FILE_NAME.part")
-        try {
-            assetSource.open().use { input ->
-                partial.outputStream().use { output ->
-                    val digest = MessageDigest.getInstance("SHA-256")
-                    val buffer = ByteArray(COPY_BUFFER_BYTES)
-                    var total = 0L
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read < 0) break
-                        total += read
-                        check(total <= assetSource.maxBytes) { "model asset exceeds bound" }
-                        digest.update(buffer, 0, read)
-                        output.write(buffer, 0, read)
-                    }
-                    check(total == assetSource.byteSize) { "model asset size mismatch" }
-                    val hex = digest.digest().joinToString("") { "%02x".format(it) }
-                    check(hex == assetSource.sha256) { "model asset checksum mismatch" }
-                }
-            }
-            check(partial.renameTo(target)) { "model promote failed" }
-            modelFile = target
-            return target
-        } catch (failure: Exception) {
-            partial.delete()
-            target.delete()
-            throw failure
-        }
-    }
-
     override fun close() {
         lifecycle.lock()
         try {
@@ -217,8 +173,7 @@ class NanoDetRunner(
             }
             if (interrupted) Thread.currentThread().interrupt()
             runCatching { runtime.close() }
-            modelFile?.delete()
-            modelFile = null
+            cache.delete()
             loaded = false
             runCatching { executor.shutdown() }
         } finally {
@@ -230,6 +185,5 @@ class NanoDetRunner(
 
     private companion object {
         const val MODEL_FILE_NAME = "nanodet.onnx"
-        const val COPY_BUFFER_BYTES = 64 * 1024
     }
 }

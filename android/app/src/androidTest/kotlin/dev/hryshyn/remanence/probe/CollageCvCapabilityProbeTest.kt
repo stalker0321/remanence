@@ -3,10 +3,18 @@ package dev.hryshyn.remanence.probe
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import dev.hryshyn.remanence.ui.collage.analysis.NanoDetImage
+import dev.hryshyn.remanence.ui.collage.analysis.NanoDetModelAssetSource
+import dev.hryshyn.remanence.ui.collage.analysis.NanoDetResult
+import dev.hryshyn.remanence.ui.collage.analysis.NanoDetRunner
+import dev.hryshyn.remanence.ui.collage.analysis.OpenCvNanoDetRuntime
 import java.io.File
+import java.io.InputStream
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -153,11 +161,59 @@ class CollageCvCapabilityProbeTest {
         }
     }
 
+    /**
+     * V5-A3B: exercise the real [NanoDetRunner] wrapper end to end. Still
+     * diagnostic only; reports timings/head shapes/detection count, never
+     * paths or bytes. Any unavailable/invalid result is an explicit failure.
+     */
+    @Test
+    fun nanoDetRunnerDecodesRealModelDiagnostics() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val source = object : NanoDetModelAssetSource {
+            override val sha256: String = NANODET_SHA256
+            override val byteSize: Long = NANODET_BYTES
+            override val maxBytes: Long = MAX_ASSET_BYTES
+            override fun open(): InputStream = context.assets.open("collage/nanodet.onnx")
+        }
+        val runner = NanoDetRunner(
+            assetSource = source,
+            runtime = OpenCvNanoDetRuntime(),
+            cacheDir = File(context.cacheDir, "collage_cv_gate"),
+        )
+        try {
+            val image = NanoDetImage(416, 416, deterministicArgb(416, 416))
+            when (val result = runBlocking { runner.detect(image) }) {
+                is NanoDetResult.Detections -> Log.i(
+                    TAG,
+                    "runner heads=${result.headShapes} detections=${result.objects.size} " +
+                        "${result.elapsedMs}ms",
+                )
+                is NanoDetResult.Unavailable -> fail("runner unavailable: ${result.reason}")
+                is NanoDetResult.Invalid -> fail("runner invalid: ${result.reason}")
+            }
+        } finally {
+            runner.close()
+        }
+    }
+
+    private fun deterministicArgb(width: Int, height: Int): IntArray {
+        val pixels = IntArray(width * height) { 0xFF202020.toInt() }
+        for (y in height / 4 until height / 2) {
+            for (x in width / 4 until width / 2) {
+                pixels[y * width + x] = 0xFFC08050.toInt()
+            }
+        }
+        return pixels
+    }
+
     private companion object {
         const val TAG = "CollageCvProbe"
         const val MAX_ASSET_BYTES = 8L * 1024 * 1024
         const val SCORE_THRESHOLD = 0.65f
         const val NMS_THRESHOLD = 0.3f
         const val TOP_K = 5000
+        const val NANODET_BYTES = 3_800_954L
+        const val NANODET_SHA256 =
+            "4b82da9944b88577175ee23a459dce2e26e6e4be573def65b1055dc2d9720186"
     }
 }

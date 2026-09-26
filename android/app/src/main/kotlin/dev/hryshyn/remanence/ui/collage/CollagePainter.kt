@@ -1,0 +1,100 @@
+package dev.hryshyn.remanence.ui.collage
+
+import kotlin.math.min
+
+/**
+ * Pure deterministic draw plan for an already-[CollageRenderer.Scene]-Ready
+ * collage. No UI-toolkit types: integer rects, colours, and ordered [Op]s that
+ * the Compose painter ([CollageCanvas]) consumes. Kept host-neutral so the
+ * sender preview and the recipient presentation render the identical order.
+ */
+object CollagePainter {
+
+    /** Uniform viewport scale plus centered origin, both in viewport pixels. */
+    data class Transform(val scale: Float, val dx: Float, val dy: Float)
+
+    /** Ordered drawing layers: paper, then photos, then note, then music. */
+    enum class Layer { PAPER, PHOTOS, NOTE, MUSIC }
+
+    val LAYER_ORDER: List<Layer> = listOf(Layer.PAPER, Layer.PHOTOS, Layer.NOTE, Layer.MUSIC)
+
+    /** One ordered draw instruction. Text ops carry the sealed layout inputs. */
+    sealed interface Op {
+        data class Paper(val color: Int, val rect: CollageRenderer.RectI) : Op
+
+        data class Photo(
+            val contentId: String,
+            val source: CollageRenderer.RectI,
+            val destination: CollageRenderer.RectI,
+        ) : Op
+
+        data class Note(
+            val text: String,
+            val region: CollageRenderer.RectI,
+            val color: Int,
+        ) : Op
+
+        data class MusicBackground(val color: Int, val region: CollageRenderer.RectI) : Op
+
+        data class MusicText(
+            val title: String,
+            val artist: String,
+            val text: String,
+            val region: CollageRenderer.RectI,
+            val color: Int,
+        ) : Op
+    }
+
+    /**
+     * `scale = min(vw/360, vh/640)` with the canvas centered in the viewport.
+     * Returns `null` for a non-positive viewport or canvas, in which case the
+     * painter draws nothing.
+     */
+    fun transform(
+        viewportWidth: Float,
+        viewportHeight: Float,
+        canvasWidth: Int,
+        canvasHeight: Int,
+    ): Transform? {
+        if (viewportWidth <= 0f || viewportHeight <= 0f || canvasWidth <= 0 || canvasHeight <= 0) return null
+        val scale = min(viewportWidth / canvasWidth, viewportHeight / canvasHeight)
+        if (scale <= 0f) return null
+        return Transform(
+            scale = scale,
+            dx = (viewportWidth - canvasWidth * scale) / 2f,
+            dy = (viewportHeight - canvasHeight * scale) / 2f,
+        )
+    }
+
+    /**
+     * True only when every authored photo has a decoded image and every sealed
+     * source/destination rect is positive. The painter refuses to draw
+     * otherwise (no partial sheet, no silent omission).
+     */
+    fun isDrawable(scene: CollageRenderer.Scene, imageIds: Set<String>): Boolean {
+        if (scene.photos.isEmpty()) return false
+        if (scene.photos.map { it.contentId }.toSet() != imageIds) return false
+        return scene.photos.all {
+            it.source.width > 0 && it.source.height > 0 &&
+                it.destination.width > 0 && it.destination.height > 0
+        }
+    }
+
+    /**
+     * Ordered, complete draw list for [scene], or `null` when not drawable.
+     * Source/destination rects are the sealed [CollageRenderer.ScenePhoto]
+     * values verbatim; the painter never recomputes crops.
+     */
+    fun drawList(scene: CollageRenderer.Scene, imageIds: Set<String>): List<Op>? {
+        if (!isDrawable(scene, imageIds)) return null
+        val ops = ArrayList<Op>(scene.photos.size + 3)
+        ops += Op.Paper(scene.paper, CollageRenderer.RectI(0, 0, scene.canvasWidth, scene.canvasHeight))
+        scene.photos.forEach { ops += Op.Photo(it.contentId, it.source, it.destination) }
+        scene.note?.let { ops += Op.Note(it.text, it.region, it.color) }
+        scene.music?.let {
+            ops += Op.MusicBackground(it.background, it.region)
+            ops += Op.MusicText(it.title, it.artist, it.text, it.region, it.color)
+        }
+        return ops
+    }
+}

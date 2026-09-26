@@ -29,6 +29,7 @@ import java.io.InputStream
 import java.security.MessageDigest
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -38,14 +39,20 @@ import org.opencv.android.OpenCVLoader
 /**
  * V5-A4B5 real-runner seam probe — DIAGNOSTIC FUNCTIONAL PROBE ONLY.
  *
- * It builds a deterministic encoded JPEG fixture in-test (gradient plus
- * high-contrast bars; no downloads, no real photo), retains it through the
- * real [RetainedOriginalHolder] under its verified hash/contentId binding,
- * feeds `holder.asUprightBytesSource()` into a real [AndroidCollageCropSource]
- * (real [FieldUprightDecoder], [FieldStageRunner], [NanoDetRunner],
- * [YuNetRunner] with the pinned bundled models), requests one valid slot,
- * and accepts either outcome deterministically: fail-closed `null` (logged)
- * or a valid in-bounds crop window. Timings are logged, never asserted.
+ * Positive test builds a deterministic encoded JPEG fixture in-test
+ * (gradient plus high-contrast bars; no downloads, no real photo), retains
+ * it through the real [RetainedOriginalHolder] under its verified
+ * hash/contentId binding, feeds `holder.asUprightBytesSource()` into a real
+ * [AndroidCollageCropSource] (real [FieldUprightDecoder], [FieldStageRunner],
+ * [NanoDetRunner], [YuNetRunner] with the pinned bundled models), requests
+ * one valid slot, and REQUIRES a non-null result keyed by the requested
+ * content ID with a valid in-bounds crop window. Null, `Unavailable`, or
+ * `Invalid` at any stage fails loudly — a missing crop is never logged
+ * as a pass. Timings are logged, never asserted.
+ *
+ * A second, deterministic negative test requests an absent content ID and
+ * REQUIRES fail-closed `null` without invoking or claiming any runner
+ * success.
  *
  * This is NOT Python/cv2 parity and requires a physical arm64 run plus a
  * separate second-ABI run before any claim; a single emulator pass proves
@@ -59,7 +66,7 @@ import org.opencv.android.OpenCVLoader
 class RealRunnerSeamProbeTest {
 
     @Test
-    fun realRunnerSeamResolvesOrFailsClosedOnSyntheticUpright() {
+    fun realRunnerSeamResolvesValidCropOnSyntheticUpright() {
         assertTrue("OpenCV native runtime failed to initialise", OpenCVLoader.initDebug())
         Log.i(TAG, "abis=${Build.SUPPORTED_ABIS.joinToString(",")}")
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -158,19 +165,15 @@ class RealRunnerSeamProbeTest {
                 requireNotNull(seam).cropsFor(listOf(CollageCropRequest(contentId, 340, 248)))
             }
             Log.i(TAG, "seam totalMs=${(System.nanoTime() - start) / 1_000_000}")
-            if (crops == null) {
-                Log.i(TAG, "seam fail-closed null (no safe window); accepted diagnostic outcome")
-            } else {
-                val window = crops[contentId]
-                assertNotNull("seam must key the requested content", window)
-                window!!
-                assertTrue("x non-negative", window.x >= 0)
-                assertTrue("y non-negative", window.y >= 0)
-                assertTrue("positive size", window.width > 0 && window.height > 0)
-                assertTrue("x + width in range", window.x.toLong() + window.width <= 10_000L)
-                assertTrue("y + height in range", window.y.toLong() + window.height <= 10_000L)
-                Log.i(TAG, "crop x=${window.x} y=${window.y} w=${window.width} h=${window.height}")
-            }
+            assertNotNull("seam must resolve a crop for the synthetic upright", crops)
+            assertTrue("seam must key the requested content", crops!!.containsKey(contentId))
+            val window = crops.getValue(contentId)
+            assertTrue("x non-negative", window.x >= 0)
+            assertTrue("y non-negative", window.y >= 0)
+            assertTrue("positive size", window.width > 0 && window.height > 0)
+            assertTrue("x + width in range", window.x.toLong() + window.width <= 10_000L)
+            assertTrue("y + height in range", window.y.toLong() + window.height <= 10_000L)
+            Log.i(TAG, "crop x=${window.x} y=${window.y} w=${window.width} h=${window.height}")
         } finally {
             runCatching { seam?.close() }
             runCatching { fieldRunner?.close() }
@@ -180,6 +183,51 @@ class RealRunnerSeamProbeTest {
             jpeg?.fill(0)
             uprightPixels?.fill(0)
             runCatching { bitmap?.recycle() }
+            probeDir.deleteRecursively()
+        }
+    }
+
+    /**
+     * Deterministic negative: an absent content ID must fail closed to
+     * `null`. No runner invocation or success is claimed — the bytes source
+     * answers absent before any runner runs. Runners are still constructed
+     * (real types, never driven) and released to prove the seam's fail-closed
+     * path leaves nothing owned.
+     */
+    @Test
+    fun absentContentIdFailsClosedNullWithoutRunnerSuccess() {
+        assertTrue("OpenCV native runtime failed to initialise", OpenCVLoader.initDebug())
+        Log.i(TAG, "abis=${Build.SUPPORTED_ABIS.joinToString(",")}")
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val probeDir = File(context.cacheDir, "a4b5-seam-absent").apply { mkdirs() }
+
+        val holder = RetainedOriginalHolder()
+        var seam: AndroidCollageCropSource? = null
+        var fieldRunner: FieldStageRunner? = null
+        var nanoRunner: NanoDetRunner? = null
+        var yuNetRunner: YuNetRunner? = null
+        try {
+            fieldRunner = FieldStageRunner(OpenCvFieldStage())
+            nanoRunner = NanoDetRunner(nanoAsset(), OpenCvNanoDetRuntime(), File(probeDir, "nano"))
+            yuNetRunner = YuNetRunner(yuNetAsset(), OpenCvYuNetRuntime(), File(probeDir, "yunet"))
+            seam = AndroidCollageCropSource(
+                bytesSource = holder.asUprightBytesSource(),
+                imageDecoder = UprightImageDecoder { FieldUprightDecoder.decodeUpright(it) },
+                fieldRunner = requireNotNull(fieldRunner),
+                nanoDetRunner = requireNotNull(nanoRunner),
+                yuNetRunner = requireNotNull(yuNetRunner),
+            )
+            val crops = runBlocking {
+                requireNotNull(seam).cropsFor(listOf(CollageCropRequest("c" + "0".repeat(64), 340, 248)))
+            }
+            assertNull("absent content must fail closed to null", crops)
+            Log.i(TAG, "absent contentId fail-closed null; no runner claim")
+        } finally {
+            runCatching { seam?.close() }
+            runCatching { fieldRunner?.close() }
+            runCatching { nanoRunner?.close() }
+            runCatching { yuNetRunner?.close() }
+            runCatching { holder.close() }
             probeDir.deleteRecursively()
         }
     }

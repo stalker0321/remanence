@@ -24,10 +24,12 @@ import org.opencv.imgproc.Imgproc
  *   [Core.DFT_COMPLEX_OUTPUT] (numpy `fft2` convention), `log(|F| + 1e-8)`,
  *   `blur((3, 3))`, residual `log - smooth`, `exp`, phase, `polarToCart`
  *   reconstruction, `idft` with [Core.DFT_SCALE] (numpy `ifft2` 1/N
- *   convention), `|.|^2`, `GaussianBlur((7, 7), 0)`, then `normal()`.
+ *   convention), `|.|^2`, `GaussianBlur((7, 7), 0)`, then `normal()` at 96x96.
  * - 56: local contrast. `GaussianBlur((0, 0), 5)`, per-pixel channel L2 norm
- *   (`split`/square/add/`sqrt`, exactly `linalg.norm(..., axis=2)`), `normal()`.
- * - 57-58: Sobel `CV_32F` `dx`/`dy` (ksize 3), `magnitude`, `normal()`.
+ *   (`split`/square/add/`sqrt`, exactly `linalg.norm(..., axis=2)`),
+ *   `normal()` at 96x96.
+ * - 57-58: Sobel `CV_32F` `dx`/`dy` (ksize 3), `magnitude`, `normal()` at
+ *   96x96.
  * - 60-70: `resize(rgb, 192x192)` default linear, `RGB2GRAY`, `Canny(20, 60)`,
  *   `findContours(RETR_LIST, CHAIN_APPROX_SIMPLE)`, `boundingRect` filter
  *   `ch > 12 && cw > 2 && ch > cw * 1.2 && y > 4 && y < 140`, topmost point
@@ -36,9 +38,11 @@ import org.opencv.imgproc.Imgproc
  *   analytic 48x48 gaussian (`expand = 0.4`). The merge runs for EVERY
  *   qualifying contour while only novel boxes become tip regions — exactly as
  *   lines 68-69 order the statements.
- * - 71-72: `edge`/`sal`/`contrast` to 48x48 with `INTER_AREA` (`tips` is
- *   already 48x48); `normal()` is evaluated on the JVM through
- *   [FieldPixelMath.normalizeField] so the quantile contract is unit-tested.
+ * - 71-72: the already-normalized `edge`/`sal`/`contrast` maps down to
+ *   48x48 with `INTER_AREA` (`tips` is already 48x48), with NO second
+ *   normalization after the resize. `normal()` is evaluated on the JVM
+ *   through [FieldPixelMath.normalizeField] so the quantile contract is
+ *   unit-tested.
  * - 11: `setNumThreads(2)` once per instance.
  *
  * Known, explicitly non-bit-exact points (functional equivalence only; the
@@ -141,9 +145,10 @@ internal class OpenCvFieldStage : FieldStageRuntime {
         Core.multiply(salMag, salMag, salPow)
         val salBlur = owner.own(Mat())
         Imgproc.GaussianBlur(salPow, salBlur, Size(7.0, 7.0), 0.0)
+        val salNormal96 = normalize96ToOwned(owner, salBlur)
         val sal48 = owner.own(Mat())
-        Imgproc.resize(salBlur, sal48, Size(48.0, 48.0), 0.0, 0.0, Imgproc.INTER_AREA)
-        return normalized48(sal48)
+        Imgproc.resize(salNormal96, sal48, Size(48.0, 48.0), 0.0, 0.0, Imgproc.INTER_AREA)
+        return readback48(sal48)
     }
 
     /** Line 56 + 72: local-contrast norm down to normalized 48x48. */
@@ -164,9 +169,10 @@ internal class OpenCvFieldStage : FieldStageRuntime {
         Core.add(acc, tmp, acc)
         val norm = owner.own(Mat())
         Core.sqrt(acc, norm)
+        val conNormal96 = normalize96ToOwned(owner, norm)
         val con48 = owner.own(Mat())
-        Imgproc.resize(norm, con48, Size(48.0, 48.0), 0.0, 0.0, Imgproc.INTER_AREA)
-        return normalized48(con48)
+        Imgproc.resize(conNormal96, con48, Size(48.0, 48.0), 0.0, 0.0, Imgproc.INTER_AREA)
+        return readback48(con48)
     }
 
     /** Lines 57-58 + 72: Sobel edge energy down to normalized 48x48. */
@@ -177,9 +183,10 @@ internal class OpenCvFieldStage : FieldStageRuntime {
         Imgproc.Sobel(grey, gy, CvType.CV_32F, 0, 1, 3, 1.0, 0.0)
         val edgeMag = owner.own(Mat())
         Core.magnitude(gx, gy, edgeMag)
+        val edgeNormal96 = normalize96ToOwned(owner, edgeMag)
         val edge48 = owner.own(Mat())
-        Imgproc.resize(edgeMag, edge48, Size(48.0, 48.0), 0.0, 0.0, Imgproc.INTER_AREA)
-        return normalized48(edge48)
+        Imgproc.resize(edgeNormal96, edge48, Size(48.0, 48.0), 0.0, 0.0, Imgproc.INTER_AREA)
+        return readback48(edge48)
     }
 
     /**
@@ -228,10 +235,35 @@ internal class OpenCvFieldStage : FieldStageRuntime {
         return tips to tipBoxes.toList()
     }
 
-    /** Bounded 48x48 float readback, then the JVM-tested `normal()`. */
-    private fun normalized48(mat: Mat): DoubleArray {
-        check(mat.rows() == 48 && mat.cols() == 48) { "field map is not 48x48" }
-        val floats = FloatArray(48 * 48)
+    /**
+     * Freeze lines 55-58 order: `normal()` runs on the 96x96 float32 map.
+     * Bounded readback preserves the float32 source values, the JVM-tested
+     * [FieldPixelMath.normalizeField] normalizes, and the normalized map is
+     * written to an owned `CV_32F` Mat for the 48x48 `INTER_AREA` step.
+     */
+    private fun normalize96ToOwned(owner: MatOwner, map96: Mat): Mat {
+        check(map96.rows() == 96 && map96.cols() == 96 && map96.channels() == 1) {
+            "field map is not 96x96"
+        }
+        val floats = readbackFloats(map96)
+        val normalized = FieldPixelMath.normalizeField(DoubleArray(floats.size) { floats[it].toDouble() })
+        val out = owner.own(Mat(96, 96, CvType.CV_32FC1))
+        out.put(0, 0, FloatArray(normalized.size) { normalized[it].toFloat() })
+        return out
+    }
+
+    /** Bounded 48x48 readback with NO second normalization (lines 71-72). */
+    private fun readback48(map48: Mat): DoubleArray {
+        check(map48.rows() == 48 && map48.cols() == 48 && map48.channels() == 1) {
+            "field map is not 48x48"
+        }
+        val floats = readbackFloats(map48)
+        return DoubleArray(floats.size) { floats[it].toDouble() }
+    }
+
+    /** Bounded float readback via an immediately-released reshape header. */
+    private fun readbackFloats(mat: Mat): FloatArray {
+        val floats = FloatArray(mat.rows() * mat.cols() * mat.channels())
         // A reshape header shares the map data; release it immediately after
         // the bounded copy and never register it as an owned source.
         val flat = mat.reshape(1, 1)
@@ -240,7 +272,7 @@ internal class OpenCvFieldStage : FieldStageRuntime {
         } finally {
             flat.release()
         }
-        return FieldPixelMath.normalizeField(DoubleArray(floats.size) { floats[it].toDouble() })
+        return floats
     }
 
     private fun argbToRgbaBytes(argb: IntArray): ByteArray {

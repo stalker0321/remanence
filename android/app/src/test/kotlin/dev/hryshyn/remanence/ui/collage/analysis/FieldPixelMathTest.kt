@@ -126,6 +126,45 @@ class FieldPixelMathTest {
         assertTrue((degenerate.maxOrNull() ?: 0.0) <= 1.0)
     }
 
+    @Test
+    fun normalizeBeforeDownsampleDiffersFromDownsampleBeforeNormalize() {
+        // 4x4 fixture with one hot cell. The 2x2 box average stands in for the
+        // integer 96->48 INTER_AREA factor (exact averaging on an integer
+        // scale), purely to discriminate the two orders — not to port the
+        // resampler.
+        val raw = doubleArrayOf(
+            0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 100.0,
+        )
+        // Freeze order (lines 55-58, then 71-72): normalize at full scale,
+        // then average. q.98 = 70, so the hot cell clips to 1 and its block
+        // averages to 0.25.
+        val freezeOrder = boxDownsample2(FieldPixelMath.normalizeField(raw))
+        assertEquals(listOf(0.0, 0.0, 0.0, 0.25), freezeOrder.toList())
+        // Swapped order averages first (hot block = 25), then normalizes
+        // (q.98 = 23.5, clips to 1): a different field.
+        val swappedOrder = FieldPixelMath.normalizeField(boxDownsample2(raw))
+        assertEquals(listOf(0.0, 0.0, 0.0, 1.0), swappedOrder.toList())
+        assertTrue(
+            "fixture must discriminate the two orders",
+            swappedOrder[3] - freezeOrder[3] > 0.5,
+        )
+    }
+
+    private fun boxDownsample2(values: DoubleArray): DoubleArray {
+        val n = kotlin.math.sqrt(values.size.toDouble()).toInt()
+        require(n * n == values.size && n % 2 == 0) { "fixture must be an even square" }
+        val m = n / 2
+        return DoubleArray(m * m) { k ->
+            val by = (k / m) * 2
+            val bx = (k % m) * 2
+            (values[by * n + bx] + values[by * n + bx + 1] +
+                values[(by + 1) * n + bx] + values[(by + 1) * n + bx + 1]) / 4.0
+        }
+    }
+
     private fun assertThrows(block: () -> Unit) {
         try {
             block()

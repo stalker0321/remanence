@@ -1,6 +1,7 @@
 package dev.hryshyn.remanence.session
 
 import androidx.compose.ui.res.stringResource
+import androidx.annotation.StringRes
 import dev.hryshyn.remanence.R
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
@@ -89,7 +90,7 @@ fun RootScreen(
         AppDestination.Create -> key(destination) {
             AstraContextArrival(motion = motion, modifier = modifier.fillMaxSize(), contentKey = destination) {
                 Column(Modifier.fillMaxSize()) {
-                    FlowHeader(title = "Create", onExit = onExitFlow)
+                    FlowHeader(title = R.string.hold_make, testKey = "create", onExit = onExitFlow)
                     Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
                         createContent()
                     }
@@ -100,7 +101,7 @@ fun RootScreen(
         AppDestination.Scan -> key(destination) {
             AstraContextArrival(motion = motion, modifier = modifier.fillMaxSize(), contentKey = destination) {
                 Column(Modifier.fillMaxSize()) {
-                    FlowHeader(title = "Scan", onExit = onExitFlow)
+                    FlowHeader(title = R.string.hold_scan, testKey = "scan", onExit = onExitFlow)
                     Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
                         scanContent()
                     }
@@ -131,15 +132,19 @@ fun RootScreen(
 
 /** Shared exit chrome for the two reachable flows; leaving drops flow state. */
 @Composable
-private fun FlowHeader(title: String, onExit: () -> Unit) {
+private fun FlowHeader(
+    @StringRes title: Int,
+    testKey: String,
+    onExit: () -> Unit,
+) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        OutlinedButton(onClick = onExit, modifier = Modifier.testTag("flow_exit_${title.lowercase()}")) {
-            Text("Back to Home")
+        OutlinedButton(onClick = onExit, modifier = Modifier.testTag("flow_exit_$testKey")) {
+            Text(stringResource(R.string.hold_back_to_home))
         }
         Spacer(Modifier.weight(1f))
-        Text(if (title == "Create") stringResource(R.string.hold_make) else stringResource(R.string.hold_scan),
+        Text(stringResource(title),
             style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.padding(end = 12.dp).testTag("flow_title_${title.lowercase()}"))
+            modifier = Modifier.padding(end = 12.dp).testTag("flow_title_$testKey"))
     }
 }
 

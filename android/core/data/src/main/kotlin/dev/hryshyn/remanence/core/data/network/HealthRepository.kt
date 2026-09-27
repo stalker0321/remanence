@@ -12,7 +12,6 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.ResponseBody
-import okhttp3.coroutines.executeAsync
 
 enum class HealthFailure {
     NETWORK,
@@ -41,7 +40,7 @@ class HealthRepository internal constructor(
             .get()
             .build()
         return try {
-            client.newCall(request).executeAsync().use { response ->
+            client.executeResponseWithCallLifetime(request) { response ->
                 interpret(response)
             }
         } catch (cancelled: CancellationException) {

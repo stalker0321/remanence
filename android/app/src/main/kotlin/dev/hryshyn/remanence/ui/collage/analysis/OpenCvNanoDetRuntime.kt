@@ -149,10 +149,13 @@ internal class OpenCvNanoDetRuntime : NanoDetRuntime {
         net = null
     }
 
-    /** Exactly four cls (80ch) + four reg (32ch), paired by spatial count. */
+    /**
+     * The bundled NanoDet ONNX exports exactly three scales: 52x52, 26x26,
+     * and 13x13. Pair its cls (80ch) and reg (32ch) heads by spatial count;
+     * OpenCV does not guarantee that the six outputs arrive interleaved.
+     */
     private fun normalizeHeads(names: List<String>, outputs: List<Mat>): List<NanoDetHead> {
-        val cls = ArrayList<Pair<Int, NanoDetHead>>()
-        val reg = HashMap<Int, NanoDetHead>()
+        val raw = ArrayList<NanoDetHead>(outputs.size)
         outputs.forEachIndexed { index, mat ->
             val shape = IntArray(mat.dims()) { mat.size(it) }
             val total = shape.fold(1L) { acc, v -> acc * v }
@@ -167,25 +170,9 @@ internal class OpenCvNanoDetRuntime : NanoDetRuntime {
             } finally {
                 flat.release()
             }
-            when (shape.last()) {
-                NanoDetDecoder.CLASS_COUNT -> cls += shape[shape.size - 2] to NanoDetHead(name, shape, values)
-                NanoDetDecoder.REG_CHANNELS -> {
-                    check(reg.put(shape[shape.size - 2], NanoDetHead(name, shape, values)) == null) {
-                        "duplicate NanoDet reg head"
-                    }
-                }
-                else -> error("unexpected NanoDet head shape")
-            }
+            raw += NanoDetHead(name, shape, values)
         }
-        check(cls.size == 4 && reg.size == 4) { "expected four cls and four reg heads" }
-        val ordered = cls.sortedByDescending { it.first }
-        val heads = ArrayList<NanoDetHead>(8)
-        for ((spatial, clsHead) in ordered) {
-            val regHead = reg[spatial] ?: error("unpaired NanoDet head")
-            heads += clsHead
-            heads += regHead
-        }
-        return heads
+        return orderBundledNanoDetHeads(raw)
     }
 
     private fun argbToRgbaBytes(argb: IntArray): ByteArray {
@@ -207,3 +194,35 @@ internal class OpenCvNanoDetRuntime : NanoDetRuntime {
         val STD_BGR = Scalar(57.375, 57.12, 58.395)
     }
 }
+
+/**
+ * Validates and orders the exact six outputs exported by the bundled model.
+ * Kept OpenCV-free so the installed model/runtime contract has focused JVM
+ * regression coverage instead of depending only on a device probe.
+ */
+internal fun orderBundledNanoDetHeads(outputs: List<NanoDetHead>): List<NanoDetHead> {
+    val cls = HashMap<Int, NanoDetHead>()
+    val reg = HashMap<Int, NanoDetHead>()
+    for (head in outputs) {
+        check(head.shape.size in 2..3) { "unexpected NanoDet head rank" }
+        if (head.shape.size == 3) check(head.shape[0] == 1) { "unexpected NanoDet batch" }
+        val total = head.shape.fold(1L) { acc, value -> acc * value }
+        check(total == head.values.size.toLong()) { "NanoDet head size mismatch" }
+        val spatial = head.shape[head.shape.size - 2]
+        when (head.shape.last()) {
+            NanoDetDecoder.CLASS_COUNT ->
+                check(cls.put(spatial, head) == null) { "duplicate NanoDet cls head" }
+            NanoDetDecoder.REG_CHANNELS ->
+                check(reg.put(spatial, head) == null) { "duplicate NanoDet reg head" }
+            else -> error("unexpected NanoDet head shape")
+        }
+    }
+    check(cls.keys == BUNDLED_NANODET_SPATIAL_COUNTS && reg.keys == BUNDLED_NANODET_SPATIAL_COUNTS) {
+        "unexpected bundled NanoDet scales"
+    }
+    return BUNDLED_NANODET_SPATIAL_COUNTS.sortedDescending().flatMap { spatial ->
+        listOf(cls.getValue(spatial), reg.getValue(spatial))
+    }
+}
+
+private val BUNDLED_NANODET_SPATIAL_COUNTS = setOf(52 * 52, 26 * 26, 13 * 13)

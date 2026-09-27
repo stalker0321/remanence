@@ -86,27 +86,7 @@ class RemanenceViewModelFactory(
             // owns fresh runners (the seam closes them); model loads happen
             // lazily on first analysis. Removal (null factory) keeps the
             // chooser on its typed notice path.
-            collageSourceFactory = dev.hryshyn.remanence.ui.create.CollageCropSourceFactory { holder ->
-                val appContext = container.appContext
-                val cacheBase = java.io.File(appContext.cacheDir, "collage")
-                dev.hryshyn.remanence.ui.collage.AndroidCollageCropSource(
-                    bytesSource = holder.asUprightBytesSource(),
-                    imageDecoder = dev.hryshyn.remanence.ui.collage.analysis.FieldUprightDecoder::decodeUpright,
-                    fieldRunner = dev.hryshyn.remanence.ui.collage.analysis.FieldStageRunner(
-                        dev.hryshyn.remanence.ui.collage.analysis.OpenCvFieldStage(),
-                    ),
-                    nanoDetRunner = dev.hryshyn.remanence.ui.collage.analysis.NanoDetRunner(
-                        collageModelAsset(appContext, "collage/nanodet.onnx", NANODET_BYTES, NANODET_SHA256),
-                        dev.hryshyn.remanence.ui.collage.analysis.OpenCvNanoDetRuntime(),
-                        java.io.File(cacheBase, "nano"),
-                    ),
-                    yuNetRunner = dev.hryshyn.remanence.ui.collage.analysis.YuNetRunner(
-                        collageModelAsset(appContext, "collage/yunet.onnx", YUNET_BYTES, YUNET_SHA256),
-                        dev.hryshyn.remanence.ui.collage.analysis.OpenCvYuNetRuntime(),
-                        java.io.File(cacheBase, "yunet"),
-                    ),
-                )
-            },
+            collageSourceFactory = productionCollageCropSourceFactory(container.appContext),
             // Stage1-C CONTENT preview: bounded upright in-memory sources.
             generatorPreviewLoader = dev.hryshyn.remanence.create.DefaultGeneratorPreviewLoader(
                 openSource = { pickerId ->
@@ -220,32 +200,4 @@ class RemanenceViewModelFactory(
         else -> throw IllegalArgumentException("unknown ViewModel: ${modelClass.name}")
     }
 
-    /**
-     * Bundled collage model asset pinned to the shipped bytes (same
-     * provenance as the androidTest capability probe). Opened lazily from
-     * app assets; size/SHA-256 verified by the runner cache on
-     * materialization.
-     */
-    private fun collageModelAsset(
-        appContext: android.content.Context,
-        assetPath: String,
-        byteSize: Long,
-        sha256: String,
-    ): dev.hryshyn.remanence.ui.collage.analysis.ModelAssetSource =
-        object : dev.hryshyn.remanence.ui.collage.analysis.ModelAssetSource {
-            override val sha256: String = sha256
-            override val byteSize: Long = byteSize
-            override val maxBytes: Long = MAX_COLLAGE_ASSET_BYTES
-            override fun open(): java.io.InputStream = appContext.assets.open(assetPath)
-        }
-
-    private companion object {
-        const val MAX_COLLAGE_ASSET_BYTES = 8L * 1024 * 1024
-        const val NANODET_BYTES = 3_800_954L
-        const val NANODET_SHA256 =
-            "4b82da9944b88577175ee23a459dce2e26e6e4be573def65b1055dc2d9720186"
-        const val YUNET_BYTES = 232_589L
-        const val YUNET_SHA256 =
-            "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
-    }
 }

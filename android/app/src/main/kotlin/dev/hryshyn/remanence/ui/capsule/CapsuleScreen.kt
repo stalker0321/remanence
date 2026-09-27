@@ -28,6 +28,8 @@ import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.platform.LocalDensity
@@ -53,6 +55,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
+import dev.hryshyn.remanence.ui.motion.AstraMotionSpec
+import dev.hryshyn.remanence.ui.motion.rememberAstraMotion
 
 /** One decrypted photo page held ONLY in memory while the screen is open. */
 data class DecryptedPhoto(
@@ -252,6 +256,17 @@ internal class CapsulePager(
 }
 
 /**
+ * T012: underlayer reveal settle for one Astra motion regime.
+ *
+ * FULL keeps the existing 280 ms tween; REDUCED_SHORT and INSTANT snap
+ * to the end state with no tween/travel. Drag thresholds, underlayer
+ * geometry and reveal end states are identical in every regime — only
+ * the settle animation differs.
+ */
+internal fun capsuleUnderlayerSettleSpec(motion: AstraMotionSpec.Resolved): FiniteAnimationSpec<Float> =
+    if (motion == AstraMotionSpec.Resolved.FULL) tween(280) else snap()
+
+/**
  * Fullscreen capsule presentation bound to an already-open
  * [CapsulePresentationState]. Pages are decoded on demand into [ImageBitmap]s
  * with a bounded JPEG decode and released when the state closes. No
@@ -262,6 +277,11 @@ internal class CapsulePager(
  * holds no recycle path at all. Navigating pages (and leaving the screen)
  * only DROPS references - the previously displayed bitmap stays valid for
  * any frame still drawing it and is reclaimed by GC afterwards.
+ *
+ * T012: [motion] selects the underlayer reveal settle via
+ * [capsuleUnderlayerSettleSpec] and defaults to the live system regime
+ * from [rememberAstraMotion]. FULL settles with the existing 280 ms
+ * tween; any other regime snaps instantly to the same end state.
  */
 @Composable
 fun CapsuleScreen(
@@ -269,6 +289,7 @@ fun CapsuleScreen(
     modifier: Modifier = Modifier,
     decoder: CapsulePageDecoder = DefaultCapsulePageDecoder,
     underlayerEnabled: Boolean = true,
+    motion: AstraMotionSpec.Resolved = rememberAstraMotion(),
     onClose: () -> Unit,
 ) {
     var currentIndex by remember { mutableIntStateOf(0) }
@@ -290,7 +311,7 @@ fun CapsuleScreen(
     if (!state.isOpen) return
     var reveal by remember(state) { mutableFloatStateOf(0f) }
     var dragging by remember(state) { mutableStateOf(false) }
-    val settled by animateFloatAsState(reveal, tween(280), label = "capsule underlayer")
+    val settled by animateFloatAsState(reveal, capsuleUnderlayerSettleSpec(motion), label = "capsule underlayer")
     val progress = if (dragging) reveal else settled
     val density = LocalDensity.current
 

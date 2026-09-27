@@ -15,6 +15,42 @@ internal data class PrereadOriginal(
 )
 
 /**
+ * Caller-owned preread custody. It is allocated before the dispatcher hop so
+ * prompt cancellation while returning from `withContext` cannot discard the
+ * only references to original bytes.
+ */
+internal class GeneratorPrereadOwner(
+    private val ownedObserver: (ByteArray) -> Unit = {},
+) {
+    private val completed = ArrayList<PrereadOriginal>()
+    private var current: ByteArray? = null
+
+    @Synchronized
+    fun ownCurrent(bytes: ByteArray) {
+        current = bytes
+        ownedObserver(bytes)
+    }
+
+    @Synchronized
+    fun completeCurrent(bytes: ByteArray, widthPx: Int, heightPx: Int) {
+        check(current === bytes) { "completed preread is not the current owned buffer" }
+        completed += PrereadOriginal(bytes, widthPx, heightPx)
+        current = null
+    }
+
+    @Synchronized
+    fun originals(): List<PrereadOriginal> = completed.toList()
+
+    @Synchronized
+    fun wipe() {
+        current?.fill(0)
+        current = null
+        completed.forEach { it.bytes.fill(0) }
+        completed.clear()
+    }
+}
+
+/**
  * Reads originals in authored order while retaining ownership of every byte
  * array as soon as it is allocated. A partial open/read/decode failure wipes
  * both completed buffers and the current decode buffer; cancellation does the
@@ -27,25 +63,15 @@ internal data class PrereadOriginal(
 internal suspend fun prereadGeneratorOriginals(
     photoIds: List<String>,
     openPhotoSource: (String) -> PhotoSource,
+    owner: GeneratorPrereadOwner,
     decoder: suspend (ByteArray) -> GeneratorSourceBinding.UprightPhoto = GeneratorExifDecoder::decodeUpright,
-    ownedObserver: (ByteArray) -> Unit = {},
     limitBytes: Int = PhotoStagingPipeline.MAX_SOURCE_BYTES,
-): List<PrereadOriginal>? {
-    val completed = ArrayList<PrereadOriginal>(photoIds.size)
-    var current: ByteArray? = null
-
-    fun wipeOwned() {
-        current?.fill(0)
-        current = null
-        completed.forEach { it.bytes.fill(0) }
-    }
-
+): Boolean {
     try {
         for (pickerId in photoIds) {
             require(limitBytes >= 0) { "negative plaintext budget: $limitBytes" }
             val scratch = ByteArray(limitBytes)
-            current = scratch
-            ownedObserver(scratch)
+            owner.ownCurrent(scratch)
             val size = openPhotoSource(pickerId).openInputStream().use { stream ->
                 var total = 0
                 while (total < limitBytes) {
@@ -61,18 +87,16 @@ internal suspend fun prereadGeneratorOriginals(
             }
             val bytes = scratch.copyOf(size)
             scratch.fill(0)
-            current = bytes
-            ownedObserver(bytes)
+            owner.ownCurrent(bytes)
             val upright = decoder(bytes)
-            completed += PrereadOriginal(bytes, upright.widthPx, upright.heightPx)
-            current = null
+            owner.completeCurrent(bytes, upright.widthPx, upright.heightPx)
         }
-        return completed
+        return true
     } catch (cancelled: CancellationException) {
-        wipeOwned()
+        owner.wipe()
         throw cancelled
     } catch (_: Exception) {
-        wipeOwned()
-        return null
+        owner.wipe()
+        return false
     }
 }

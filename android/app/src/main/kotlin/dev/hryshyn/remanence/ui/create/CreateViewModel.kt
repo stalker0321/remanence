@@ -1090,23 +1090,25 @@ class CreateViewModel(
         // A prior accepted selection can never satisfy a new attempt.
         generatorFrozenSelection = null
         val sender = capturedSender
-        val preread: List<PrereadOriginal>? = withContext(ioDispatcher) {
-            prereadGeneratorOriginals(inputs.photoIds, openPhotoSource)
-        }
-        if (preread == null) {
-            failPublishing("generator photo sources are unreadable; publishing cancelled", generation)
-            return false
-        }
-        // Retry/re-begin must never orphan a previous binding: revoke any
-        // leftover from this or an older generation on its exact context
-        // before opening a new G3 session. A newer generation's binding (a
-        // stale job racing a live session) is never touched.
-        if (generatorBoundGeneration?.let { it <= generation } == true) {
-            dropGeneratorBound { bridge, context, sessionId ->
-                bridge.cancel(context, sessionId)
-            }
-        }
+        val prereadOwner = GeneratorPrereadOwner()
         try {
+            val prereadAvailable = withContext(ioDispatcher) {
+                prereadGeneratorOriginals(inputs.photoIds, openPhotoSource, prereadOwner)
+            }
+            if (!prereadAvailable) {
+                failPublishing("generator photo sources are unreadable; publishing cancelled", generation)
+                return false
+            }
+            val preread = prereadOwner.originals()
+            // Retry/re-begin must never orphan a previous binding: revoke any
+            // leftover from this or an older generation on its exact context
+            // before opening a new G3 session. A newer generation's binding (a
+            // stale job racing a live session) is never touched.
+            if (generatorBoundGeneration?.let { it <= generation } == true) {
+                dropGeneratorBound { bridge, context, sessionId ->
+                    bridge.cancel(context, sessionId)
+                }
+            }
             val input = GeneratorExpression.GeneratorInput(
                 ownerId = inputs.owner.toRestString(),
                 epoch = epoch,
@@ -1155,7 +1157,7 @@ class CreateViewModel(
             generatorFrozenSelection = selection
             return true
         } finally {
-            preread.forEach { it.bytes.fill(0) }
+            prereadOwner.wipe()
         }
     }
 

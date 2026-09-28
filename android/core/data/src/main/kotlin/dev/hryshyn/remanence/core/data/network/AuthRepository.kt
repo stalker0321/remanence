@@ -16,7 +16,6 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.ResponseBody
-import okhttp3.coroutines.executeAsync
 import okio.Buffer
 
 enum class AuthFailure {
@@ -91,7 +90,7 @@ class AuthRepository internal constructor(
             .post(ByteArray(0).toRequestBody("application/json".toMediaTypeOrNull()))
             .build()
         return try {
-            client.newCall(request).executeAsync().use { response ->
+            client.executeResponseWithCallLifetime(request) { response ->
                 if (response.code == 204) {
                     AuthResult.Success(Unit, 204)
                 } else {
@@ -119,7 +118,7 @@ class AuthRepository internal constructor(
             .post(requestBody)
             .build()
         return try {
-            client.newCall(request).executeAsync().use { response ->
+            client.executeResponseWithCallLifetime(request) { response ->
                 interpret(response, successStatus, allowedProblemCodes, decode)
             }
         } catch (cancelled: CancellationException) {

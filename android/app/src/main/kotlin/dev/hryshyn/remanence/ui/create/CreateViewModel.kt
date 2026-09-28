@@ -238,6 +238,7 @@ class CreateViewModel(
         _musicSelection.asStateFlow()
 
     fun setMusicSelection(hit: dev.hryshyn.remanence.core.data.network.MusicTrackHit?) {
+        if (_musicSelection.value == hit) return
         _musicSelection.value = hit
         collageChoices.clear()
         frozenCollageSelection = null
@@ -346,9 +347,14 @@ class CreateViewModel(
      * can seal a bad track silently.
      */
     internal val collageChooserTrack: CapsuleTrackSnapshotV1?
-        get() = _musicSelection.value?.let { hit ->
-            runCatching { dev.hryshyn.remanence.create.mapMusicSelectionToSnapshot(hit) }.getOrNull()
-        }
+        get() = collageChooserTrackFor(_musicSelection.value)
+
+    /** [collageChooserTrack] for an explicitly observed [musicSelection] value. */
+    internal fun collageChooserTrackFor(
+        hit: dev.hryshyn.remanence.core.data.network.MusicTrackHit?,
+    ): CapsuleTrackSnapshotV1? = hit?.let {
+        runCatching { dev.hryshyn.remanence.create.mapMusicSelectionToSnapshot(it) }.getOrNull()
+    }
 
     /**
      * Chooser input: the current preview input plus the mapped text-mode
@@ -357,9 +363,15 @@ class CreateViewModel(
      * and [freezeCollageSelection] validates against it, so a selected track
      * always describes the same capsule as the frozen sheet.
      */
-    internal fun collageChooserInput(): GeneratorExpression.GeneratorInput? {
+    internal fun collageChooserInput(): GeneratorExpression.GeneratorInput? =
+        collageChooserInputFor(_musicSelection.value)
+
+    /** [collageChooserInput] for an explicitly observed [musicSelection] value. */
+    internal fun collageChooserInputFor(
+        hit: dev.hryshyn.remanence.core.data.network.MusicTrackHit?,
+    ): GeneratorExpression.GeneratorInput? {
         val base = currentPreviewInput() ?: return null
-        val track = collageChooserTrack ?: return base
+        val track = collageChooserTrackFor(hit) ?: return base
         return base.copy(music = GeneratorExpression.MusicRef(track.trackId.toString(), null))
     }
 

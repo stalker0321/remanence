@@ -386,14 +386,17 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
 @Composable
 private fun CollageStepChooser(viewModel: CreateViewModel, modifier: Modifier = Modifier) {
     val generatorPreview by viewModel.generatorPreview.collectAsStateWithLifecycle()
+    val musicSelection by viewModel.musicSelection.collectAsStateWithLifecycle()
+    val chooserInput = viewModel.collageChooserInputFor(musicSelection)
+    val chooserTrack = viewModel.collageChooserTrackFor(musicSelection)
     when (val preview = generatorPreview) {
         is GeneratorPreviewState.Ready ->
             CollageChoiceHost(
                 session = viewModel.collageChoices,
-                input = viewModel.collageChooserInput() ?: preview.expression.input,
+                input = chooserInput ?: preview.expression.input,
                 sources = preview.sources,
                 note = viewModel.noteEditor.text.takeIf { it.isNotEmpty() },
-                track = viewModel.collageChooserTrack,
+                track = chooserTrack,
                 cropSource = viewModel.collageCropSource
                     ?: dev.hryshyn.remanence.ui.collage.CollageCropSource { null },
                 frozenCandidateId = { viewModel.frozenCollageSelection?.candidateId },
@@ -409,10 +412,10 @@ private fun CollageStepChooser(viewModel: CreateViewModel, modifier: Modifier = 
         is GeneratorPreviewState.NotePending ->
             CollageChoiceHost(
                 session = viewModel.collageChoices,
-                input = viewModel.collageChooserInput() ?: preview.input,
+                input = chooserInput ?: preview.input,
                 sources = preview.sources,
                 note = viewModel.noteEditor.text.takeIf { it.isNotEmpty() },
-                track = viewModel.collageChooserTrack,
+                track = chooserTrack,
                 cropSource = viewModel.collageCropSource
                     ?: dev.hryshyn.remanence.ui.collage.CollageCropSource { null },
                 frozenCandidateId = { viewModel.frozenCollageSelection?.candidateId },

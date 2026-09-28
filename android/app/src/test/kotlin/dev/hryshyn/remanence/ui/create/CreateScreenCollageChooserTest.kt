@@ -21,10 +21,12 @@ import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
 import dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence
 import dev.hryshyn.remanence.core.data.network.DirectoryLookupResult
+import dev.hryshyn.remanence.core.data.network.MusicTrackHit
 import dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot
 import dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager
 import dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots
 import dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore
+import dev.hryshyn.remanence.core.model.GeneratorExpression
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.core.model.UserId
@@ -396,6 +398,87 @@ class CreateScreenCollageChooserTest {
         composeRule.onNodeWithTag("collage_notice").assertExists()
         composeRule.onNodeWithTag("collage_canvas").assertDoesNotExist()
         composeRule.onAllNodesWithTag("collage_select").assertCountEquals(0)
+        vm.endSession()
+    }
+
+    private fun musicHit() = MusicTrackHit(
+        id = "be30e36b-1111-4111-8111-000000000001",
+        title = "505",
+        artists = listOf("Arctic Monkeys"),
+        version = null,
+        release = "Favourite Worst Nightmare",
+        year = 2007,
+        durationMs = 253000L,
+        artworkAvailable = true,
+    )
+
+    /**
+     * T026 reactivity: a music attach or clear invalidates the chooser, so
+     * the production chooser must observe the selection and restart the
+     * provider cycle instead of leaving `Select a collage` with neither
+     * candidates nor a notice (the T023 finding-2 symptom). A repeat select of
+     * the identical hit must not empty the chooser either, because no state
+     * change exists that could restart the cycle for it.
+     */
+    @Test
+    fun musicAttachAndClearEachRestartTheProviderCycleWithCurrentTrack() {
+        val ids = listOf("u1", "u2", "u3")
+        val originals = ids.associateWith { id ->
+            ByteArray(64) { ((it * 31 + id.hashCode()) and 0xFF).toByte() }
+        }
+        val vm = viewModel(originals, withFactory = true)
+        driveToContent(vm, ids)
+        composeRule.setContent {
+            CreateScreen(
+                viewModel = vm,
+                adapterFactory = null,
+                requestPermissionOnAttach = false,
+            )
+        }
+        composeRule.waitUntil(timeoutMillis = 10_000) { vm.collageChoices.candidates.isNotEmpty() }
+        composeRule.waitForIdle()
+        assertNull(vm.collageChooserTrack)
+
+        composeRule.onNodeWithTag("create_screen_scroll")
+            .performScrollToNode(hasTestTag("collage_next"))
+        composeRule.onNodeWithTag("collage_next").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("create_screen_scroll")
+            .performScrollToNode(hasTestTag("collage_select"))
+        composeRule.onNodeWithTag("collage_select").performClick()
+        composeRule.waitForIdle()
+        assertTrue("expected a frozen selection", vm.frozenCollageSelection != null)
+
+        vm.setMusicSelection(musicHit())
+        assertTrue("attach must invalidate candidates", vm.collageChoices.candidates.isEmpty())
+        assertNull("attach must invalidate the notice", vm.collageChoices.notice)
+        assertNull("attach must drop the frozen selection", vm.frozenCollageSelection)
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            vm.collageChoices.candidates.isNotEmpty() || vm.collageChoices.notice != null
+        }
+        composeRule.waitForIdle()
+        assertEquals(musicHit().id, vm.collageChooserTrack?.trackId?.toString())
+        assertEquals(
+            GeneratorExpression.MusicRef(musicHit().id, null),
+            vm.collageChooserInputFor(vm.musicSelection.value)?.music,
+        )
+
+        vm.setMusicSelection(musicHit())
+        composeRule.waitForIdle()
+        assertTrue(
+            "re-selecting the identical hit must leave the chooser built",
+            vm.collageChoices.candidates.isNotEmpty() || vm.collageChoices.notice != null,
+        )
+
+        vm.clearMusicSelection()
+        assertTrue("clear must invalidate candidates", vm.collageChoices.candidates.isEmpty())
+        assertNull("clear must invalidate the notice", vm.collageChoices.notice)
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            vm.collageChoices.candidates.isNotEmpty() || vm.collageChoices.notice != null
+        }
+        composeRule.waitForIdle()
+        assertNull(vm.collageChooserTrack)
+        assertNull(vm.collageChooserInputFor(vm.musicSelection.value)?.music)
         vm.endSession()
     }
 }

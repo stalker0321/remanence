@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.ui.create
 import android.graphics.BitmapFactory
 import android.util.Log
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
@@ -138,7 +139,12 @@ internal fun CollageChoiceHost(
                         scene = prepared.scene,
                         images = images,
                         contentDescription = "collage candidate",
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(
+                                CollageRenderer.CANVAS_WIDTH.toFloat() /
+                                    CollageRenderer.CANVAS_HEIGHT.toFloat(),
+                            ),
                         textMeasurer = measurer,
                     )
 

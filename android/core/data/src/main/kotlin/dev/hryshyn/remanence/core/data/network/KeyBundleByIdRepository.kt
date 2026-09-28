@@ -5,7 +5,6 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.serialization.SerializationException
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.coroutines.executeAsync
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.UserId
 
@@ -80,7 +79,7 @@ class KeyBundleByIdRepository internal constructor(
             .build()
         return try {
             val boundRequest = requestLeaseProvider?.tag(request, requestLease!!) ?: request
-            client.newCall(boundRequest).executeAsync().use { response ->
+            client.executeResponseWithCallLifetime(boundRequest) { response ->
                 interpret(response)
             }
         } catch (cancelled: CancellationException) {

@@ -7,7 +7,6 @@ import kotlinx.serialization.SerializationException
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
-import okhttp3.coroutines.executeAsync
 import okio.Buffer
 
 enum class RecipientUserLookupFailure {
@@ -55,7 +54,7 @@ class RecipientUserLookupRepository internal constructor(
         }
         return try {
             val request = requestLeaseProvider?.tag(requestBuilder.build(), requestLease!!) ?: requestBuilder.build()
-            client.newCall(request).executeAsync().use { response ->
+            client.executeResponseWithCallLifetime(request) { response ->
                 interpret(response, userId)
             }
         } catch (cancelled: CancellationException) {

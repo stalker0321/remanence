@@ -1,11 +1,24 @@
 package dev.hryshyn.remanence.core.data.network
 
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
+import okhttp3.ResponseBody
+import okio.Buffer
+import okio.BufferedSource
+import okio.ForwardingSource
+import okio.buffer
 
 class KeyBundleByIdRepositoryTest {
 
@@ -103,6 +116,71 @@ class KeyBundleByIdRepositoryTest {
         }
     }
 
+    @Test
+    fun successfulResponseBodyIsReadOffCallerThread() = runBlocking {
+        val callerExecutor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "key-bundle-by-id-caller")
+        }
+        val callerDispatcher = callerExecutor.asCoroutineDispatcher()
+        try {
+            withServer { server ->
+                server.enqueue(json(bundleJson("ACTIVE")))
+                val callerThread = AtomicReference<Thread?>()
+                val bodyReadThread = AtomicReference<Thread?>()
+                val client = HttpClientFactory.create().newBuilder()
+                    .addInterceptor { chain ->
+                        val response = chain.proceed(chain.request())
+                        response.newBuilder()
+                            .body(
+                                ReadThreadTrackingResponseBody(response.body) { thread ->
+                                    bodyReadThread.compareAndSet(null, thread)
+                                },
+                            )
+                            .build()
+                    }
+                    .build()
+                val repository = KeyBundleByIdRepository(
+                    client,
+                    ApiBaseUrl.parse(server.url("/").toString()),
+                )
+
+                val result = withContext(callerDispatcher) {
+                    callerThread.set(Thread.currentThread())
+                    repository.fetch(keyBundleId, accessToken = "pm_at_live")
+                }
+
+                val found = assertIs<KeyBundleByIdResult.Found>(result)
+                assertEquals("ACTIVE", found.bundle.status)
+                val caller = assertNotNull(callerThread.get())
+                // Prefix match: kotlinx-coroutines may decorate the pool
+                // thread name with " @coroutine#N" while the block runs.
+                assertTrue(
+                    caller.name.startsWith("key-bundle-by-id-caller"),
+                    "caller ran on unexpected thread: ${caller.name}",
+                )
+                assertNotEquals(caller, assertNotNull(bodyReadThread.get()))
+            }
+        } finally {
+            callerDispatcher.close()
+        }
+    }
+
     private fun json(body: String): MockResponse =
         MockResponse.Builder().code(200).setHeader("Content-Type", "application/json").body(body).build()
+
+    private class ReadThreadTrackingResponseBody(
+        private val delegate: ResponseBody,
+        private val onRead: (Thread) -> Unit,
+    ) : ResponseBody() {
+        override fun contentType() = delegate.contentType()
+
+        override fun contentLength(): Long = delegate.contentLength()
+
+        override fun source(): BufferedSource = object : ForwardingSource(delegate.source()) {
+            override fun read(sink: Buffer, byteCount: Long): Long {
+                onRead(Thread.currentThread())
+                return super.read(sink, byteCount)
+            }
+        }.buffer()
+    }
 }

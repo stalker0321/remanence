@@ -1,17 +1,29 @@
 package dev.hryshyn.remanence.core.data.network
 
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import mockwebserver3.Dispatcher
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import mockwebserver3.RecordedRequest
+import okhttp3.ResponseBody
+import okio.Buffer
+import okio.BufferedSource
+import okio.ForwardingSource
+import okio.buffer
 import dev.hryshyn.remanence.core.model.UserId
 
 class RecipientUserLookupRepositoryTest {
@@ -301,6 +313,55 @@ class RecipientUserLookupRepositoryTest {
         }
     }
 
+    @Test
+    fun successfulResponseBodyIsReadOffCallerThread() = runBlocking {
+        val callerExecutor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "recipient-user-lookup-caller")
+        }
+        val callerDispatcher = callerExecutor.asCoroutineDispatcher()
+        try {
+            withServer { server ->
+                server.enqueue(json(200, successJson()))
+                val callerThread = AtomicReference<Thread?>()
+                val bodyReadThread = AtomicReference<Thread?>()
+                val client = HttpClientFactory.create().newBuilder()
+                    .addInterceptor { chain ->
+                        val response = chain.proceed(chain.request())
+                        response.newBuilder()
+                            .body(
+                                ReadThreadTrackingResponseBody(response.body) { thread ->
+                                    bodyReadThread.compareAndSet(null, thread)
+                                },
+                            )
+                            .build()
+                    }
+                    .build()
+                val repository = RecipientUserLookupRepository(
+                    client,
+                    ApiBaseUrl.parse(server.url("/").toString()),
+                )
+
+                val result = withContext(callerDispatcher) {
+                    callerThread.set(Thread.currentThread())
+                    repository.lookup(userId, ACCESS_TOKEN)
+                }
+
+                val found = assertIs<RecipientUserLookupResult.Found>(result)
+                assertEquals(userId, found.snapshot.userId)
+                val caller = assertNotNull(callerThread.get())
+                // Prefix match: kotlinx-coroutines may decorate the pool
+                // thread name with " @coroutine#N" while the block runs.
+                assertTrue(
+                    caller.name.startsWith("recipient-user-lookup-caller"),
+                    "caller ran on unexpected thread: ${caller.name}",
+                )
+                assertNotEquals(caller, assertNotNull(bodyReadThread.get()))
+            }
+        } finally {
+            callerDispatcher.close()
+        }
+    }
+
     private fun repository(server: MockWebServer): RecipientUserLookupRepository =
         RecipientUserLookupRepository(
             client = HttpClientFactory.create(),
@@ -390,5 +451,21 @@ class RecipientUserLookupRepositoryTest {
               "refresh_expires_at": "2026-09-22T04:00:00Z"
             }
             """
+    }
+
+    private class ReadThreadTrackingResponseBody(
+        private val delegate: ResponseBody,
+        private val onRead: (Thread) -> Unit,
+    ) : ResponseBody() {
+        override fun contentType() = delegate.contentType()
+
+        override fun contentLength(): Long = delegate.contentLength()
+
+        override fun source(): BufferedSource = object : ForwardingSource(delegate.source()) {
+            override fun read(sink: Buffer, byteCount: Long): Long {
+                onRead(Thread.currentThread())
+                return super.read(sink, byteCount)
+            }
+        }.buffer()
     }
 }

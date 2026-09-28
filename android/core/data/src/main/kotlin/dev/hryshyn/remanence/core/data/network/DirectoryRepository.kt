@@ -3,7 +3,6 @@ package dev.hryshyn.remanence.core.data.network
 import dev.hryshyn.remanence.core.model.KeyBundleId
 import dev.hryshyn.remanence.core.model.NormalizedHandle
 import dev.hryshyn.remanence.core.model.UserId
-import okhttp3.coroutines.executeAsync
 
 /**
  * Immutable snapshot bound at recipient-confirmation time. Carries the exact
@@ -61,7 +60,7 @@ class DirectoryRepository internal constructor(
             .build()
         return try {
             val boundRequest = requestLeaseProvider?.tag(request, requestLease!!) ?: request
-            client.newCall(boundRequest).executeAsync().use { response ->
+            client.executeResponseWithCallLifetime(boundRequest) { response ->
                 interpret(response)
             }
         } catch (cancelled: kotlin.coroutines.cancellation.CancellationException) {

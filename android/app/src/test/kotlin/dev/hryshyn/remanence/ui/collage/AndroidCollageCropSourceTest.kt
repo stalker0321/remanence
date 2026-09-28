@@ -318,6 +318,29 @@ class AndroidCollageCropSourceTest {
     }
 
     @Test
+    fun rejectedSlotRecordsFrozenReasonAndStaysOmitted() {
+        // A 100x100 source with the 340x248 slot fails only the frozen
+        // resolution floor, so the slot is omitted (fail-closed) and the
+        // dominant reason is preserved for diagnostics.
+        val small = FieldStageImage(100, 100, IntArray(10_000) { 0xFF336699.toInt() })
+        val yunet = FakeYuNetRuntime().apply { pass = { YuNetPass(640, 640, 15, emptyList()) } }
+        val seam = seam(decoder = FakeDecoder(small), yunet = yunet)
+        try {
+            val crops = runBlocking {
+                seam.source.cropsFor(listOf(CollageCropRequest("p0", 340, 248)))
+            }
+            assertTrue("rejected slot must be omitted", crops != null && crops.isEmpty())
+            assertEquals(
+                listOf(CollageSlotRejection("p0", 340, 248, "rect", CropRejectReason.RESOLUTION_TOO_LOW)),
+                seam.source.lastCropRejections,
+            )
+        } finally {
+            seam.source.close()
+        }
+        assertTrue("close must clear the diagnostic surface", seam.source.lastCropRejections.isEmpty())
+    }
+
+    @Test
     fun closeIsIdempotentAndReleasesAllRunners() {
         val seam = seam()
         runBlocking { seam.source.cropsFor(styleSlots("p0")) }

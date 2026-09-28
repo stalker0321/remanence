@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.ui.collage
 import dev.hryshyn.remanence.core.model.GeneratorExpression
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -53,6 +54,41 @@ class Envelope50CropSolverTest {
     )
 
     private fun box(x: Double, y: Double, w: Double, h: Double) = NormBox(x, y, w, h)
+
+    private fun zeros() = DoubleArray(grid * grid)
+
+    /** Value `1.0` in the selected cells, `0.0` elsewhere (mass outside a rect). */
+    private fun band(predicate: (x: Int, y: Int) -> Boolean): DoubleArray {
+        val out = DoubleArray(grid * grid)
+        for (y in 0 until grid) for (x in 0 until grid) if (predicate(x, y)) out[y * grid + x] = 1.0
+        return out
+    }
+
+    private fun customAnalysis(
+        width: Int = 1000,
+        height: Int = 1000,
+        faces: List<AnalysisFace> = emptyList(),
+        objects: List<AnalysisObject> = emptyList(),
+        protectedRegions: List<AnalysisProtectedRegion> = emptyList(),
+        importance: DoubleArray = zeros(),
+        baselineField: DoubleArray = zeros(),
+        objectField: DoubleArray = zeros(),
+        saliency: DoubleArray = zeros(),
+        edgeEnergy: DoubleArray = zeros(),
+        structureField: DoubleArray = zeros(),
+    ) = CollageAnalysis(
+        width = width,
+        height = height,
+        faces = faces,
+        objects = objects,
+        protectedRegions = protectedRegions,
+        importance = importance,
+        baselineField = baselineField,
+        objectField = objectField,
+        saliency = saliency,
+        edgeEnergy = edgeEnergy,
+        structureField = structureField,
+    )
 
     private val slotLandscape = Envelope50CropSolver.Slot(340.0, 248.0, zooms = listOf(1.05, 1.0))
     private val slotPortrait = Envelope50CropSolver.Slot(167.0, 248.0, zooms = listOf(1.05, 1.0))
@@ -135,5 +171,161 @@ class Envelope50CropSolverTest {
         val first = Envelope50CropSolver.solve(photo, slotLandscape)
         val second = Envelope50CropSolver.solve(photo, slotLandscape)
         assertEquals(first, second)
+    }
+
+    // --- Typed rejection cause coverage: each frozen family is reachable ---
+
+    @Test
+    fun retainedWindowIsTyped() {
+        assertEquals(
+            CropRejectReason.LESS_THAN_25_PERCENT_REMAINS,
+            Envelope50CropSolver.rejectionReason(analysis(), slotLandscape, box(0.0, 0.0, 0.4, 0.4)),
+        )
+    }
+
+    @Test
+    fun faceCrossingIsTyped() {
+        val photo = customAnalysis(faces = listOf(AnalysisFace(box(0.4, 0.4, 0.3, 0.3), 0.9)))
+        assertEquals(
+            CropRejectReason.FACE_CROSSES_CROP_OR_MASK,
+            Envelope50CropSolver.rejectionReason(photo, slotLandscape, box(0.0, 0.0, 0.5, 0.5)),
+        )
+    }
+
+    @Test
+    fun closeGroupLosesContextIsTyped() {
+        val photo = customAnalysis(
+            faces = listOf(
+                AnalysisFace(box(0.10, 0.10, 0.20, 0.20), 0.9),
+                AnalysisFace(box(0.60, 0.10, 0.20, 0.20), 0.9),
+            ),
+            objects = listOf(AnalysisObject(box(0.60, 0.05, 0.80, 0.50), 0.70, 0)),
+        )
+        assertEquals(
+            CropRejectReason.CLOSE_GROUP_LOSES_CONTEXT,
+            Envelope50CropSolver.rejectionReason(photo, slotLandscape, box(0.0, 0.0, 1.0, 0.5)),
+        )
+    }
+
+    @Test
+    fun destructiveObjectIsTyped() {
+        val photo = customAnalysis(
+            objects = listOf(AnalysisObject(box(0.60, 0.20, 0.80, 0.40), 0.80, 1)),
+        )
+        assertEquals(
+            CropRejectReason.OBJECT_LOSES_SUPPORTING_CONTEXT,
+            Envelope50CropSolver.rejectionReason(photo, slotLandscape, box(0.0, 0.0, 1.0, 1.0)),
+        )
+    }
+
+    @Test
+    fun smallIsolatedPersonIsTyped() {
+        val photo = customAnalysis(
+            faces = listOf(AnalysisFace(box(0.10, 0.10, 0.15, 0.15), 0.9)),
+            objects = listOf(AnalysisObject(box(0.40, 0.408, 0.15, 0.10), 0.60, 0)),
+        )
+        assertEquals(
+            CropRejectReason.SMALL_ISOLATED_PERSON_CROSSES,
+            Envelope50CropSolver.rejectionReason(photo, slotLandscape, box(0.0, 0.0, 1.0, 0.5)),
+        )
+    }
+
+    @Test
+    fun contourEndpointIsTyped() {
+        val photo = customAnalysis(
+            protectedRegions = listOf(
+                AnalysisProtectedRegion("structure-tip", box(0.60, 0.40, 0.80, 0.50), 0.4, critical = true),
+            ),
+        )
+        assertEquals(
+            CropRejectReason.CONTOUR_ENDPOINT_SEVERED,
+            Envelope50CropSolver.rejectionReason(photo, slotLandscape, box(0.0, 0.0, 1.0, 1.0)),
+        )
+    }
+
+    @Test
+    fun protectionFieldLowIsTyped() {
+        val photo = customAnalysis(importance = band { _, y -> y >= grid / 2 })
+        assertEquals(
+            CropRejectReason.PROTECTION_FIELD_LOW,
+            Envelope50CropSolver.rejectionReason(photo, slotLandscape, box(0.0, 0.0, 1.0, 0.5)),
+        )
+    }
+
+    @Test
+    fun structuralEvidenceLowIsTyped() {
+        val photo = customAnalysis(
+            importance = band { _, y -> y < grid / 2 },
+            edgeEnergy = band { _, y -> y >= grid / 2 },
+        )
+        assertEquals(
+            CropRejectReason.STRUCTURAL_EVIDENCE_LOW,
+            Envelope50CropSolver.rejectionReason(photo, slotLandscape, box(0.0, 0.0, 1.0, 0.5)),
+        )
+    }
+
+    @Test
+    fun salientDetailLowIsTyped() {
+        val photo = customAnalysis(
+            importance = band { _, y -> y < grid / 2 },
+            edgeEnergy = band { _, y -> y < grid / 2 },
+            saliency = band { _, y -> y >= grid / 2 },
+        )
+        assertEquals(
+            CropRejectReason.SALIENT_DETAIL_LOW,
+            Envelope50CropSolver.rejectionReason(photo, slotLandscape, box(0.0, 0.0, 1.0, 0.5)),
+        )
+    }
+
+    @Test
+    fun importantRegionDisappearsIsTyped() {
+        val top = band { _, y -> y < grid / 2 }
+        val photo = customAnalysis(
+            importance = top,
+            edgeEnergy = top,
+            saliency = top,
+            baselineField = band { x, y -> x < grid / 2 && y >= grid / 2 },
+        )
+        assertEquals(
+            CropRejectReason.IMPORTANT_REGION_DISAPPEARS,
+            Envelope50CropSolver.rejectionReason(photo, slotLandscape, box(0.0, 0.0, 1.0, 0.5)),
+        )
+    }
+
+    @Test
+    fun resolutionTooLowIsTyped() {
+        val big = Envelope50CropSolver.Slot(2000.0, 2000.0)
+        assertEquals(
+            CropRejectReason.RESOLUTION_TOO_LOW,
+            Envelope50CropSolver.rejectionReason(analysis(), big, box(0.0, 0.0, 1.0, 1.0)),
+        )
+    }
+
+    @Test
+    fun dominantRejectionMatchesFrozenReductionAndKeepsNullSolve() {
+        // Every full-width slab window (height 0.7294) captures at most one of
+        // the two end bands, so the dominant frozen reason is the protection
+        // field floor for all of them.
+        val photo = customAnalysis(importance = band { _, y -> y < 2 || y >= grid - 2 })
+        val result = Envelope50CropSolver.solveDetailed(photo, slotLandscape)
+        assertEquals(CropRejectReason.PROTECTION_FIELD_LOW, (result as CropSolveResult.Rejected).reason)
+
+        val impossible = Envelope50CropSolver.Slot(3400.0, 248.0, zooms = listOf(1.05, 1.0))
+        assertNull(Envelope50CropSolver.solve(analysis(), impossible))
+        assertEquals(
+            CropSolveResult.Rejected(CropRejectReason.LESS_THAN_25_PERCENT_REMAINS),
+            Envelope50CropSolver.solveDetailed(analysis(), impossible),
+        )
+    }
+
+    @Test
+    fun solvedDetailedMatchesLegacySolveExactly() {
+        val photo = analysis(faces = listOf(AnalysisFace(box(0.10, 0.20, 0.15, 0.15), 0.9)))
+        val detailed = Envelope50CropSolver.solveDetailed(photo, slotLandscape)
+        assertTrue(detailed is CropSolveResult.Solved)
+        assertEquals(
+            Envelope50CropSolver.solve(photo, slotLandscape),
+            (detailed as CropSolveResult.Solved).crop,
+        )
     }
 }

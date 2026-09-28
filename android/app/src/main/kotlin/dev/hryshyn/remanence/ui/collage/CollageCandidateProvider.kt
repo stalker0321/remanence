@@ -35,6 +35,46 @@ fun interface CollageCropSource {
     suspend fun cropsFor(requests: List<CollageCropRequest>): Map<String, GeneratorExpression.CropWindow>?
 }
 
+/** One requested slot the crop source could not solve, with its frozen cause. */
+data class CollageSlotRejection(
+    val contentId: String,
+    val slotWidth: Int,
+    val slotHeight: Int,
+    val shape: String,
+    val reason: CropRejectReason,
+)
+
+/**
+ * Optional diagnostic capability a [CollageCropSource] may also implement. It
+ * never participates in the fail-closed crop contract: a source that does not
+ * implement it, or reports nothing for a slot, leaves the provider on its typed
+ * `NO_CROP_CANDIDATE` fallback. The returned crops, omission and substitution
+ * behavior are unchanged.
+ */
+interface CollageCropDiagnostics {
+    /** Rejections recorded by the most recent [CollageCropSource.cropsFor] call. */
+    val lastCropRejections: List<CollageSlotRejection>
+}
+
+/**
+ * Typed, stable diagnostic for the dominant frozen solver rejection on one
+ * (style, photo, slot). [safeSummary] is bounded debug evidence; it carries no
+ * image bytes and never replaces the user-facing rejection copy.
+ */
+data class CollageRejection(
+    val styleId: String,
+    val contentId: String,
+    val slotIndex: Int,
+    val slotWidth: Int,
+    val slotHeight: Int,
+    val cause: CropRejectReason,
+) {
+    fun safeSummary(): String =
+        "style=$styleId slot=$slotIndex photo=$contentId " +
+            "size=${slotWidth}x${slotHeight} cause=${cause.name} " +
+            "frozen=\"${cause.frozenReason}\""
+}
+
 /** One complete, styled, text-only contract-V3 collage candidate. */
 data class CollageCandidate(
     val candidateId: String,
@@ -49,7 +89,16 @@ sealed interface CollageProviderResult {
     /** Authoritative analysis is missing; nothing is fabricated. */
     data class Unavailable(val reason: String) : CollageProviderResult
 
-    data class Rejected(val reason: String) : CollageProviderResult
+    /**
+     * Fail-closed rejection. [reason] is the unchanged user-facing copy;
+     * [rejection] is the optional typed cause. It is present for a solver crop
+     * omission (the source's cause, or the `NO_CROP_CANDIDATE` fallback) and
+     * null for the non-crop gates (note/music/grid/validation).
+     */
+    data class Rejected(
+        val reason: String,
+        val rejection: CollageRejection? = null,
+    ) : CollageProviderResult
 }
 
 /**
@@ -93,8 +142,10 @@ class CollageCandidateProvider(
             when (val result = buildCandidate(sealedInput, noteText, track, style)) {
                 is BuildResult.Built -> built += result.candidate
                 BuildResult.Unavailable -> return CollageProviderResult.Unavailable(NO_ANALYSIS_REASON)
-                BuildResult.Invalid ->
-                    return CollageProviderResult.Rejected("the note, music, or crop does not fit the grammar-5 grid")
+                is BuildResult.Invalid -> return CollageProviderResult.Rejected(
+                    "the note, music, or crop does not fit the grammar-5 grid",
+                    result.rejection,
+                )
             }
         }
         return CollageProviderResult.Candidates(built)
@@ -103,7 +154,7 @@ class CollageCandidateProvider(
     private sealed interface BuildResult {
         data class Built(val candidate: CollageCandidate) : BuildResult
         data object Unavailable : BuildResult
-        data object Invalid : BuildResult
+        data class Invalid(val rejection: CollageRejection? = null) : BuildResult
     }
 
     private suspend fun buildCandidate(
@@ -130,7 +181,7 @@ class CollageCandidateProvider(
                     maxHeight = MAX_TEXT_BOX,
                 ),
             )
-            if (!fits(measured)) return BuildResult.Invalid
+            if (!fits(measured)) return BuildResult.Invalid()
             measured.height
         }
 
@@ -138,11 +189,11 @@ class CollageCandidateProvider(
             photoCount = input.photos.size,
             noteHeight = noteHeight,
             music = track != null,
-        ) ?: return BuildResult.Invalid
+        ) ?: return BuildResult.Invalid()
 
         val musicRegion = grid.musicRegion
         if (track != null) {
-            if (musicRegion == null) return BuildResult.Invalid
+            if (musicRegion == null) return BuildResult.Invalid()
             val measured = measurer.measure(
                 CollageRenderer.TextMeasureRequest(
                     text = track.title + "\n" + track.artistDisplay,
@@ -155,10 +206,10 @@ class CollageCandidateProvider(
                     maxHeight = musicRegion.height,
                 ),
             )
-            if (!fits(measured, maxHeight = musicRegion.height)) return BuildResult.Invalid
+            if (!fits(measured, maxHeight = musicRegion.height)) return BuildResult.Invalid()
         }
 
-        if (input.photos.size != grid.cells.size) return BuildResult.Invalid
+        if (input.photos.size != grid.cells.size) return BuildResult.Invalid()
 
         // Aspect-aware crop request: one request per placement, using THIS
         // style's exact cell geometry. A global per-photo crop map must not be
@@ -171,10 +222,32 @@ class CollageCandidateProvider(
             )
         }
         val crops = cropSource.cropsFor(requests) ?: return BuildResult.Unavailable
+        val diagnostics = cropSource as? CollageCropDiagnostics
         val cropByContentId = LinkedHashMap<String, GeneratorExpression.CropWindow>(requests.size)
-        for (request in requests) {
-            val crop = crops[request.contentId] ?: return BuildResult.Invalid
-            if (!validCrop(crop)) return BuildResult.Invalid
+        for ((index, request) in requests.withIndex()) {
+            val crop = crops[request.contentId]
+            if (crop == null) {
+                val cause = diagnostics?.lastCropRejections
+                    ?.firstOrNull {
+                        it.contentId == request.contentId &&
+                            it.slotWidth == request.slotWidth &&
+                            it.slotHeight == request.slotHeight &&
+                            it.shape == request.shape
+                    }
+                    ?.reason
+                    ?: CropRejectReason.NO_CROP_CANDIDATE
+                return BuildResult.Invalid(
+                    CollageRejection(
+                        styleId = style.id,
+                        contentId = request.contentId,
+                        slotIndex = index,
+                        slotWidth = request.slotWidth,
+                        slotHeight = request.slotHeight,
+                        cause = cause,
+                    ),
+                )
+            }
+            if (!validCrop(crop)) return BuildResult.Invalid()
             cropByContentId[request.contentId] = crop
         }
 
@@ -188,7 +261,7 @@ class CollageCandidateProvider(
                 contentRect = null,
             )
         }
-        val styleDigest = StyleRegistry.digest(style.id) ?: return BuildResult.Invalid
+        val styleDigest = StyleRegistry.digest(style.id) ?: return BuildResult.Invalid()
         val expression = GeneratorExpression.ResolvedExpression(
             canvasVersion = 1,
             grammarId = GRAMMAR_ID,
@@ -221,7 +294,7 @@ class CollageCandidateProvider(
             },
         )
         if (GeneratorExpression.validateResolved(expression) !is GeneratorExpression.InputValidation.Valid) {
-            return BuildResult.Invalid
+            return BuildResult.Invalid()
         }
         return BuildResult.Built(
             CollageCandidate(

@@ -204,4 +204,78 @@ class CollageCandidateProviderTest {
         assertEquals(first.map { it.candidateId }, second.map { it.candidateId })
         assertEquals(first.map { it.expression }, second.map { it.expression })
     }
+
+    private class DiagnosticCropSource(
+        private val crops: Map<String, GeneratorExpression.CropWindow>,
+        override val lastCropRejections: List<CollageSlotRejection>,
+    ) : CollageCropSource, CollageCropDiagnostics {
+        override suspend fun cropsFor(requests: List<CollageCropRequest>) = crops
+    }
+
+    @Test
+    fun missingCropRejectionNamesPreciseStylePhotoSlotAndCause() = runBlocking {
+        // p1's crop is omitted (fail-closed) and the source reports the exact
+        // frozen cause for that slot.
+        val source = DiagnosticCropSource(
+            crops = mapOf(
+                "p0" to GeneratorExpression.CropWindow(0, 0, 5000, 10000),
+                "p2" to GeneratorExpression.CropWindow(9000, 0, 1000, 10000),
+            ),
+            lastCropRejections = listOf(
+                CollageSlotRejection("p1", 167, 248, "rect", CropRejectReason.PROTECTION_FIELD_LOW),
+            ),
+        )
+        val result = provider(source).candidates(input(), null, null)
+        assertTrue("expected Rejected, got $result", result is CollageProviderResult.Rejected)
+        val rejected = result as CollageProviderResult.Rejected
+        // The user-facing copy is unchanged.
+        assertEquals("the note, music, or crop does not fit the grammar-5 grid", rejected.reason)
+        val rejection = requireNotNull(rejected.rejection)
+        assertEquals("press", rejection.styleId)
+        assertEquals("p1", rejection.contentId)
+        assertEquals(1, rejection.slotIndex)
+        assertEquals(167, rejection.slotWidth)
+        assertEquals(248, rejection.slotHeight)
+        assertEquals(CropRejectReason.PROTECTION_FIELD_LOW, rejection.cause)
+        assertTrue(rejection.safeSummary().contains("style=press"))
+        assertTrue(rejection.safeSummary().contains("cause=PROTECTION_FIELD_LOW"))
+        assertTrue(
+            rejection.safeSummary().contains(
+                "frozen=\"Combined protection field loses more than its permitted mass\"",
+            ),
+        )
+    }
+
+    @Test
+    fun missingCropWithoutDiagnosticsFallsBackToNoCandidate() = runBlocking {
+        val source = CollageCropSource { requests ->
+            requests
+                .filter { it.contentId != "p1" }
+                .associate { it.contentId to GeneratorExpression.CropWindow(0, 0, 5000, 10000) }
+        }
+        val result = provider(source).candidates(input(), null, null)
+        val rejected = result as CollageProviderResult.Rejected
+        val rejection = requireNotNull(rejected.rejection)
+        assertEquals("p1", rejection.contentId)
+        assertEquals(1, rejection.slotIndex)
+        assertEquals(CropRejectReason.NO_CROP_CANDIDATE, rejection.cause)
+    }
+
+    @Test
+    fun mismatchedDiagnosticSlotFallsBackToNoCandidate() = runBlocking {
+        // The source reports a reason for a different slot, so the provider
+        // must not mis-attribute it.
+        val source = DiagnosticCropSource(
+            crops = mapOf(
+                "p0" to GeneratorExpression.CropWindow(0, 0, 5000, 10000),
+                "p2" to GeneratorExpression.CropWindow(9000, 0, 1000, 10000),
+            ),
+            lastCropRejections = listOf(
+                CollageSlotRejection("p1", 340, 248, "rect", CropRejectReason.FACE_CROSSES_CROP_OR_MASK),
+            ),
+        )
+        val result = provider(source).candidates(input(), null, null)
+        val rejection = requireNotNull((result as CollageProviderResult.Rejected).rejection)
+        assertEquals(CropRejectReason.NO_CROP_CANDIDATE, rejection.cause)
+    }
 }

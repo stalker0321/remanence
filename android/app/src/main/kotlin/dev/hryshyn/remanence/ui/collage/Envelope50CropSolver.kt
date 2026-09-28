@@ -79,6 +79,37 @@ class CollageAnalysis(
 }
 
 /**
+ * Stable typed cause for a frozen V5 crop rejection. The [frozenReason] string
+ * is the exact copy `runtime/crop.js` reports; the enum name is the durable,
+ * log-friendly identity. Diagnostic only: it never changes fail-closed
+ * selection.
+ */
+enum class CropRejectReason(val frozenReason: String) {
+    LESS_THAN_25_PERCENT_REMAINS("Less than 25% of source window remains"),
+    FACE_CROSSES_CROP_OR_MASK("Detected face would cross crop or mask"),
+    CLOSE_GROUP_LOSES_CONTEXT("Close group loses lateral person / gesture context"),
+    OBJECT_LOSES_SUPPORTING_CONTEXT("High-confidence object/person loses too much supporting context"),
+    SMALL_ISOLATED_PERSON_CROSSES("Small isolated person/gesture envelope crosses crop or mask"),
+    CONTOUR_ENDPOINT_SEVERED("Thin contour endpoint would be severed"),
+    PROTECTION_FIELD_LOW("Combined protection field loses more than its permitted mass"),
+    STRUCTURAL_EVIDENCE_LOW("Too little structural evidence survives"),
+    SALIENT_DETAIL_LOW("Salient detail field is cut too strongly"),
+    IMPORTANT_REGION_DISAPPEARS("A separate important region would disappear"),
+    RESOLUTION_TOO_LOW("Insufficient source pixels for this slot"),
+    NO_CROP_CANDIDATE("No crop candidate"),
+}
+
+/**
+ * Detailed solver result: the exact normalized crop, or the dominant frozen
+ * rejection reason already computed by `runtime/crop.js` but discarded by the
+ * previous `NormalizedCrop?` return.
+ */
+sealed interface CropSolveResult {
+    data class Solved(val crop: NormalizedCrop) : CropSolveResult
+    data class Rejected(val reason: CropRejectReason) : CropSolveResult
+}
+
+/**
  * Deterministic, model-independent port of the freeze V5 crop stage
  * (`runtime/crop.js` base + `runtime/crop-experiment.js` `envelope-50`,
  * evaluated with `runtime/safety.js`). No OpenCV, no inference.
@@ -98,20 +129,53 @@ object Envelope50CropSolver {
         val zooms: List<Double> = listOf(1.0),
     )
 
-    fun solve(analysis: CollageAnalysis, slot: Slot): NormalizedCrop? {
+    fun solve(analysis: CollageAnalysis, slot: Slot): NormalizedCrop? =
+        (solveDetailed(analysis, slot) as? CropSolveResult.Solved)?.crop
+
+    /**
+     * Detailed solve. On failure the reason is the dominant frozen rejection
+     * (`runtime/crop.js`: flatten every zoom family's reject counts, sum by
+     * reason, sort by count, take the first). Equal counts keep the
+     * first-encountered reason, matching the reference's stable sort.
+     */
+    fun solveDetailed(analysis: CollageAnalysis, slot: Slot): CropSolveResult {
         val maps = AnalysisMaps(analysis)
-        val base = baseCrop(analysis, maps, slot) ?: return null
-        return envelope50(analysis, maps, slot, base)
+        return when (val base = baseCrop(analysis, maps, slot)) {
+            is BaseOutcome.Safe ->
+                CropSolveResult.Solved(envelope50(analysis, maps, slot, base.box))
+            is BaseOutcome.Rejected -> CropSolveResult.Rejected(base.reason)
+        }
+    }
+
+    /**
+     * One-window evaluation seam for deterministic per-reason coverage: the
+     * first frozen check [rect] fails, or null when it is safe. Diagnostic
+     * only; the search calls [classifyWindow] directly.
+     */
+    internal fun rejectionReason(
+        analysis: CollageAnalysis,
+        slot: Slot,
+        rect: NormBox,
+        shape: String = "rect",
+    ): CropRejectReason? =
+        when (val verdict = classifyWindow(analysis, AnalysisMaps(analysis), slot, rect, shape)) {
+            is WindowVerdict.Safe -> null
+            is WindowVerdict.Rejected -> verdict.reason
+        }
+
+    private sealed interface BaseOutcome {
+        data class Safe(val box: NormBox) : BaseOutcome
+        data class Rejected(val reason: CropRejectReason) : BaseOutcome
     }
 
     /** Deterministic base safe window (`crop.js`). */
-    private fun baseCrop(analysis: CollageAnalysis, maps: AnalysisMaps, slot: Slot): NormBox? {
+    private fun baseCrop(analysis: CollageAnalysis, maps: AnalysisMaps, slot: Slot): BaseOutcome {
         val shape = slot.shape
         val ratio = slot.width / slot.height
         val ar = analysis.width.toDouble() / analysis.height
         val bw = min(1.0, ratio / ar)
         val bh = min(1.0, ar / ratio)
-        var best: Pair<NormBox, Double>? = null
+        val reasons = LinkedHashMap<CropRejectReason, Int>()
         for (zoom in slot.zooms.ifEmpty { listOf(1.0) }) {
             val cw = bw / zoom
             val ch = bh / zoom
@@ -142,23 +206,29 @@ object Envelope50CropSolver {
                 val key = String.format(Locale.ROOT, "%.4f:%.4f", x, y)
                 if (!seen.add(key)) continue
                 val rect = NormBox(x, y, cw, ch)
-                val evaluation = evaluate(analysis, maps, slot, rect, shape) ?: continue
-                val score = evaluation.coverage.importance * 0.52 +
-                    evaluation.coverage.saliency * 0.18 +
-                    evaluation.coverage.structure * 0.12 +
-                    evaluation.objectKeep * 0.18 -
-                    0.012 * (abs(x + cw / 2 - 0.5) + abs(y + ch / 2 - 0.5))
-                val previous = bestThis
-                if (previous == null || score > previous.second) {
-                    bestThis = rect to score
+                when (val verdict = classifyWindow(analysis, maps, slot, rect, shape)) {
+                    is WindowVerdict.Rejected ->
+                        reasons[verdict.reason] = (reasons[verdict.reason] ?: 0) + 1
+
+                    is WindowVerdict.Safe -> {
+                        val score = verdict.coverage.importance * 0.52 +
+                            verdict.coverage.saliency * 0.18 +
+                            verdict.coverage.structure * 0.12 +
+                            verdict.objectKeep * 0.18 -
+                            0.012 * (abs(x + cw / 2 - 0.5) + abs(y + ch / 2 - 0.5))
+                        val previous = bestThis
+                        if (previous == null || score > previous.second) {
+                            bestThis = rect to score
+                        }
+                    }
                 }
             }
             if (bestThis != null) {
-                best = bestThis
-                break
+                return BaseOutcome.Safe(bestThis.first)
             }
         }
-        return best?.first
+        val dominant = reasons.entries.maxByOrNull { it.value }?.key ?: CropRejectReason.NO_CROP_CANDIDATE
+        return BaseOutcome.Rejected(dominant)
     }
 
     /** Envelope-50 shift + safety re-check (`crop-experiment.js` predict). */
@@ -174,7 +244,7 @@ object Envelope50CropSolver {
         val x = base.x + (targetX - base.x) * ENVELOPE_STRENGTH
         val y = base.y + (targetY - base.y) * ENVELOPE_STRENGTH
         val shifted = NormBox(x, y, base.width, base.height)
-        val safe = evaluate(analysis, maps, slot, shifted, slot.shape) != null
+        val safe = classifyWindow(analysis, maps, slot, shifted, slot.shape) is WindowVerdict.Safe
         return if (safe) {
             NormalizedCrop(x, y, base.width, base.height)
         } else {
@@ -196,20 +266,28 @@ object Envelope50CropSolver {
         return ((left + right) / 2) to ((top + bottom) / 2)
     }
 
-    private data class Evaluation(val coverage: Coverage, val objectKeep: Double)
+    private sealed interface WindowVerdict {
+        data class Safe(val coverage: Coverage, val objectKeep: Double) : WindowVerdict
+        data class Rejected(val reason: CropRejectReason) : WindowVerdict
+    }
 
-    /** Exact safety evaluation for one window; null = rejected. */
-    private fun evaluate(
+    /**
+     * Exact safety evaluation for one window: safe coverage, or the first
+     * frozen check it fails, in the exact `runtime/crop.js` order.
+     */
+    private fun classifyWindow(
         analysis: CollageAnalysis,
         maps: AnalysisMaps,
         slot: Slot,
         rect: NormBox,
         shape: String,
-    ): Evaluation? {
+    ): WindowVerdict {
         val faces = analysis.faces
         val retained = rect.width * rect.height
-        if (retained < 0.25) return null
-        if (!faces.all { inside(it.box, rect, shape, 0.12) }) return null
+        if (retained < 0.25) return WindowVerdict.Rejected(CropRejectReason.LESS_THAN_25_PERCENT_REMAINS)
+        if (!faces.all { inside(it.box, rect, shape, 0.12) }) {
+            return WindowVerdict.Rejected(CropRejectReason.FACE_CROSSES_CROP_OR_MASK)
+        }
 
         val important = analysis.objects.filter {
             it.confidence >= 0.55 && it.box.width * it.box.height >= 0.015 && !isContextual(it)
@@ -223,7 +301,7 @@ object Envelope50CropSolver {
                 val overlap = max(0.0, min(o.box.x + o.box.width, rect.x + rect.width) - max(o.box.x, rect.x))
                 overlap / o.box.width < 0.96 || rect.y > o.box.y + 0.05
             }
-            if (loses) return null
+            if (loses) return WindowVerdict.Rejected(CropRejectReason.CLOSE_GROUP_LOSES_CONTEXT)
         }
 
         val objectKeep = if (important.isEmpty()) 1.0 else important.minOf { regionCoverage(it.box, rect, shape) }
@@ -238,23 +316,27 @@ object Envelope50CropSolver {
             }
             coverage < threshold
         }
-        if (destructive) return null
+        if (destructive) return WindowVerdict.Rejected(CropRejectReason.OBJECT_LOSES_SUPPORTING_CONTEXT)
 
         if (faces.size == 1 && important.any {
                 it.classId == 0 && it.confidence >= 0.60 &&
                     it.box.width * it.box.height < 0.2 && !inside(it.box, rect, shape, 0.015)
             }
         ) {
-            return null
+            return WindowVerdict.Rejected(CropRejectReason.SMALL_ISOLATED_PERSON_CROSSES)
         }
 
         val tips = analysis.protectedRegions.filter { it.kind == "structure-tip" && it.critical }
-        if (tips.any { regionCoverage(it.box, rect, shape) < 0.65 }) return null
+        if (tips.any { regionCoverage(it.box, rect, shape) < 0.65 }) {
+            return WindowVerdict.Rejected(CropRejectReason.CONTOUR_ENDPOINT_SEVERED)
+        }
 
         val coverage = coverage(analysis, maps, rect, shape)
-        if (coverage.importance < (if (shape == "ellipse") 0.57 else 0.60)) return null
-        if (coverage.edge < 0.48) return null
-        if (coverage.saliency < 0.40) return null
+        if (coverage.importance < (if (shape == "ellipse") 0.57 else 0.60)) {
+            return WindowVerdict.Rejected(CropRejectReason.PROTECTION_FIELD_LOW)
+        }
+        if (coverage.edge < 0.48) return WindowVerdict.Rejected(CropRejectReason.STRUCTURAL_EVIDENCE_LOW)
+        if (coverage.saliency < 0.40) return WindowVerdict.Rejected(CropRejectReason.SALIENT_DETAIL_LOW)
 
         for (half in HALVES) {
             val mass = coverage(analysis, maps, half, "rect").baseline
@@ -268,16 +350,18 @@ object Envelope50CropSolver {
             } else {
                 0.0
             }
-            if (retainedMass / mass < 0.32) return null
+            if (retainedMass / mass < 0.32) {
+                return WindowVerdict.Rejected(CropRejectReason.IMPORTANT_REGION_DISAPPEARS)
+            }
         }
 
         val resolution = min(
             analysis.width * rect.width / slot.width,
             analysis.height * rect.height / slot.height,
         )
-        if (resolution < 1) return null
+        if (resolution < 1) return WindowVerdict.Rejected(CropRejectReason.RESOLUTION_TOO_LOW)
 
-        return Evaluation(coverage, objectKeep)
+        return WindowVerdict.Safe(coverage, objectKeep)
     }
 
     private fun isContextual(obj: AnalysisObject): Boolean =

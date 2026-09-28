@@ -1,6 +1,7 @@
 package dev.hryshyn.remanence.ui.create
 
 import android.graphics.BitmapFactory
+import android.util.Log
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.Button
@@ -12,12 +13,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.testTag
+import dev.hryshyn.remanence.BuildConfig
 import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
 import dev.hryshyn.remanence.core.model.GeneratorExpression
 import dev.hryshyn.remanence.ui.collage.CollageCanvas
 import dev.hryshyn.remanence.ui.collage.CollageCandidateProvider
 import dev.hryshyn.remanence.ui.collage.CollageCropSource
 import dev.hryshyn.remanence.ui.collage.CollageProviderResult
+import dev.hryshyn.remanence.ui.collage.CollageRejection
 import dev.hryshyn.remanence.ui.collage.CollageRenderer
 import dev.hryshyn.remanence.ui.collage.rememberCollageTextMeasurer
 import dev.hryshyn.remanence.ui.hold.HoldTextButton
@@ -65,7 +68,10 @@ internal fun CollageChoiceHost(
         when (val result = CollageCandidateProvider(cropSource, measurer).candidates(input, note, track)) {
             is CollageProviderResult.Candidates -> session.replaceCandidates(result.candidates)
             is CollageProviderResult.Unavailable -> session.showNotice(result.reason)
-            is CollageProviderResult.Rejected -> session.showNotice(result.reason)
+            is CollageProviderResult.Rejected -> {
+                session.showNotice(result.reason)
+                result.rejection?.let(::reportCollageRejection)
+            }
         }
     }
 
@@ -141,6 +147,17 @@ internal fun CollageChoiceHost(
                 }
             }
         }
+    }
+}
+
+/**
+ * Bounded DEBUG evidence for the next immutable Android reproduction: the
+ * exact failed style/photo/slot and dominant frozen cause. It logs no bytes
+ * and never changes the displayed rejection copy.
+ */
+private fun reportCollageRejection(rejection: CollageRejection) {
+    if (BuildConfig.DEBUG) {
+        Log.d("CollageRejection", rejection.safeSummary())
     }
 }
 

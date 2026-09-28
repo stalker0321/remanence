@@ -48,7 +48,9 @@ fun interface UprightImageDecoder {
  * source, undecodable bytes, or any runner `Unavailable`/`Invalid` yields
  * `null` (the provider reports `Unavailable`); a slot the solver rejects is
  * omitted from the map (the provider reports `Rejected` on the missing key
- * or invalid crop). No new result type is added.
+ * or invalid crop) and its dominant frozen reason is additionally recorded in
+ * [lastCropRejections] (diagnostic only, never a substitute crop). No success
+ * or `null` behavior changes.
  *
  * Cancellation propagates untouched and never caches: only a fully computed
  * analysis is stored. [close] is idempotent and releases all three owned
@@ -62,7 +64,7 @@ class AndroidCollageCropSource(
     private val fieldRunner: FieldStageRunner,
     private val nanoDetRunner: NanoDetRunner,
     private val yuNetRunner: YuNetRunner,
-) : CollageCropSource, AutoCloseable {
+) : CollageCropSource, CollageCropDiagnostics, AutoCloseable {
 
     private val mutex = Mutex()
     private val analyses = LinkedHashMap<String, CollageAnalysis>()
@@ -70,24 +72,44 @@ class AndroidCollageCropSource(
     @Volatile
     private var closed = false
 
+    @Volatile
+    private var rejections: List<CollageSlotRejection> = emptyList()
+
+    /** Dominant frozen solver reason per slot rejected by the last call. */
+    override val lastCropRejections: List<CollageSlotRejection>
+        get() = rejections
+
     override suspend fun cropsFor(requests: List<CollageCropRequest>): Map<String, GeneratorExpression.CropWindow>? =
         mutex.withLock {
+            rejections = emptyList()
             if (closed) return@withLock null
             val crops = LinkedHashMap<String, GeneratorExpression.CropWindow>(requests.size)
+            val rejected = ArrayList<CollageSlotRejection>()
             for (request in requests) {
                 val analysis = analysisFor(request.contentId) ?: return@withLock null
                 if (closed) return@withLock null
-                val crop = Envelope50CropSolver.solve(
-                    analysis,
-                    Envelope50CropSolver.Slot(
-                        width = request.slotWidth.toDouble(),
-                        height = request.slotHeight.toDouble(),
+                when (
+                    val solved = Envelope50CropSolver.solveDetailed(
+                        analysis,
+                        Envelope50CropSolver.Slot(
+                            width = request.slotWidth.toDouble(),
+                            height = request.slotHeight.toDouble(),
+                            shape = request.shape,
+                            zooms = request.zooms,
+                        ),
+                    )
+                ) {
+                    is CropSolveResult.Solved -> crops[request.contentId] = solved.crop.toCropWindow()
+                    is CropSolveResult.Rejected -> rejected += CollageSlotRejection(
+                        contentId = request.contentId,
+                        slotWidth = request.slotWidth,
+                        slotHeight = request.slotHeight,
                         shape = request.shape,
-                        zooms = request.zooms,
-                    ),
-                )?.toCropWindow() ?: continue
-                crops[request.contentId] = crop
+                        reason = solved.reason,
+                    )
+                }
             }
+            rejections = rejected.toList()
             crops
         }
 
@@ -156,5 +178,6 @@ class AndroidCollageCropSource(
         runCatching { nanoDetRunner.close() }
         runCatching { yuNetRunner.close() }
         analyses.clear()
+        rejections = emptyList()
     }
 }

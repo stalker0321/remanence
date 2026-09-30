@@ -1,0 +1,101 @@
+package dev.hryshyn.remanence.ui.motion
+
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * Pins the Opening Carry derived contract (freeze `motion.mjs:78–108`,
+ * `guide.mjs` motion row "Verified front → whole capsule"): opening budget,
+ * front-release/capsule keyframes, easing identity, inscribed scale, travel
+ * endpoints and the reduced-motion ghost policy.
+ *
+ * Pure JVM like `AstraMotionSpecTest`: [AstraOpeningSpec] and the geometry
+ * holders have no Android dependency.
+ */
+class AstraOpeningSpecTest {
+
+    @Test
+    fun openingBudgetMatchesTheFreeze() {
+        assertEquals(680, AstraMotionSpec.openingMs(AstraMotionSpec.Resolved.FULL))
+        assertEquals(80, AstraMotionSpec.openingMs(AstraMotionSpec.Resolved.REDUCED_SHORT))
+        assertEquals(0, AstraMotionSpec.openingMs(AstraMotionSpec.Resolved.INSTANT))
+    }
+
+    @Test
+    fun frontReleaseEndsAtSixtyPercent() {
+        assertEquals(408, AstraOpeningSpec.frontReleaseMs(680))
+    }
+
+    @Test
+    fun capsuleIsFullyPresentAtSeventyTwoPercent() {
+        assertEquals(490, AstraOpeningSpec.capsulePresentMs(680))
+        assertEquals(81, AstraOpeningSpec.capsuleFirstVisibleMs(680))
+        assertEquals(0f, AstraOpeningSpec.capsuleAlphaAt(0f), 0f)
+        assertEquals(0f, AstraOpeningSpec.capsuleAlphaAt(0.12f), 0f)
+        assertEquals(1f, AstraOpeningSpec.capsuleAlphaAt(0.72f), 0f)
+        assertEquals(1f, AstraOpeningSpec.capsuleAlphaAt(1f), 0f)
+        assertTrue(AstraOpeningSpec.capsuleAlphaAt(0.5f) in 0f..1f)
+    }
+
+    @Test
+    fun geometryUsesTravelAndOpacityUsesDissolve() {
+        assertSame(AstraMotionSpec.EASING_TRAVEL, AstraOpeningSpec.GEOMETRY_EASING)
+        assertSame(AstraMotionSpec.EASING_DISSOLVE, AstraOpeningSpec.OPACITY_EASING)
+        assertArrayEquals(floatArrayOf(0.22f, 0.64f, 0.2f, 1f), AstraMotionSpec.EASING_TRAVEL, 0f)
+        assertArrayEquals(floatArrayOf(0.32f, 0f, 0.28f, 1f), AstraMotionSpec.EASING_DISSOLVE, 0f)
+    }
+
+    @Test
+    fun uniformScaleIsTheInscribedRatio() {
+        val a = OpeningRect(0f, 0f, 90f, 120f)
+        val b = OpeningRect(0f, 0f, 360f, 640f)
+        assertEquals(minOf(a.width / b.width, a.height / b.height), AstraOpeningSpec.scaleOf(a, b), 0f)
+        assertEquals(1f, AstraOpeningSpec.scaleOf(b, b), 0f)
+    }
+
+    @Test
+    fun travelStartsAtFrontCenterEndsAtCapsuleCenter() {
+        val a = OpeningRect(36f, 120f, 180f, 312f)
+        val b = OpeningRect(0f, 0f, 360f, 640f)
+        val start = AstraOpeningSpec.translateAt(a, b, 0f)
+        assertEquals(a.centerX - b.centerX, start.x, 0f)
+        assertEquals(a.centerY - b.centerY, start.y, 0f)
+        val end = AstraOpeningSpec.translateAt(a, b, 1f)
+        assertEquals(0f, end.x, 0f)
+        assertEquals(0f, end.y, 0f)
+    }
+
+    @Test
+    fun reducedRegimesHaveNoTravel() {
+        assertFalse(AstraOpeningSpec.hasGhosts(AstraMotionSpec.Resolved.REDUCED_SHORT))
+        assertFalse(AstraOpeningSpec.hasGhosts(AstraMotionSpec.Resolved.INSTANT))
+        assertTrue(AstraOpeningSpec.hasGhosts(AstraMotionSpec.Resolved.FULL))
+        val a = OpeningRect(36f, 120f, 180f, 312f)
+        val settled = AstraOpeningSpec.translateAt(a, a, 1f)
+        assertEquals(0f, settled.x, 0f)
+        assertEquals(0f, settled.y, 0f)
+        assertEquals(1f, AstraOpeningSpec.scaleOf(a, a), 0f)
+    }
+
+    @Test
+    fun carryFrontConsumesOnceAndClearsOnLeave() {
+        val holder = AstraCarryFront()
+        assertNull(holder.consumeIf(true))
+        val rect = OpeningRect(36f, 120f, 180f, 312f)
+        holder.publish(rect)
+        assertEquals(rect, holder.consumeIf(true))
+        // Second read after the handoff sees nothing: no replay.
+        assertNull(holder.consumeIf(true))
+        // Inactive reads never expose the rect.
+        holder.publish(rect)
+        assertNull(holder.consumeIf(false))
+        // Leaving to a neutral destination drops a stale rect.
+        holder.clear()
+        assertNull(holder.consumeIf(true))
+    }
+}

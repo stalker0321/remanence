@@ -18,6 +18,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -26,6 +28,8 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.hryshyn.remanence.ui.motion.LocalAstraCarryFront
+import dev.hryshyn.remanence.ui.motion.toOpeningRect
 
 private val PostcardPaper = Color(0xFFEFF1E2)
 private val PostcardVermilion = Color(0xFFE95033)
@@ -62,6 +66,12 @@ private val PostcardNavy = Color(0xFF25377D)
  */
 @Composable
 fun AstraPostcard(modifier: Modifier = Modifier) {
+    // Opening-Carry source: publish the laid-out postcard bounds for a later
+    // Capsule entry. Read during composition (CompositionLocal reads are
+    // illegal inside layout callbacks); publishing into the holder is the
+    // standard onGloballyPositioned state pattern and cannot loop: equal
+    // rects do not notify, and the Capsule entry consumes once.
+    val carryFront = LocalAstraCarryFront.current
     // Waiting portrait is upright (`transform:none`): the old -7deg
     // landscape tilt is deliberately not ported. The Canvas is the
     // sizing child (height-led portrait 3:4 within the 180..275dp
@@ -77,6 +87,9 @@ fun AstraPostcard(modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .testTag("astra_postcard")
+            .onGloballyPositioned { coordinates ->
+                carryFront?.publish(coordinates.boundsInRoot().toOpeningRect())
+            }
             .semantics(mergeDescendants = true) {
                 contentDescription = "graphic postcard front"
                 role = Role.Image

@@ -17,10 +17,17 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Alignment
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import dev.hryshyn.remanence.ui.motion.AstraCarryFront
+import dev.hryshyn.remanence.ui.motion.AstraOpeningCarry
+import dev.hryshyn.remanence.ui.motion.LocalAstraCarryFront
+import dev.hryshyn.remanence.ui.scan.AstraPostcard
 import dev.hryshyn.remanence.ui.navigation.AppDestination
 import dev.hryshyn.remanence.ui.navigation.AuthUiState
 import dev.hryshyn.remanence.ui.motion.AstraContextArrival
@@ -82,6 +89,19 @@ fun RootScreen(
 
     val motion = rememberAstraMotion()
 
+    // Opening-Carry front holder: remembered outside key(destination) so the
+    // Scan branch's disposal cannot wipe the published postcard bounds before
+    // the Capsule entry consumes them.
+    val carryFront = remember { AstraCarryFront() }
+    // Stop-scan and other non-scan/non-capsule destinations must not leave a
+    // stale rect behind for a later opening.
+    SideEffect {
+        if (destination != AppDestination.Scan && destination !is AppDestination.Capsule) {
+            carryFront.clear()
+        }
+    }
+
+    CompositionLocalProvider(LocalAstraCarryFront provides carryFront) {
     when (destination) {
         // FIX-STATE-12: the root owns the FULL available size; the header is
         // laid out first and the flow body receives the REMAINING height via
@@ -110,12 +130,31 @@ fun RootScreen(
         }
 
         is AppDestination.Capsule ->
-            // A capsule opening carries like any other route boundary; the
-            // arrival is incoming-only, so no private outgoing node is ever
-            // retained. Keyed by grant: each grant arrives exactly once.
+            // Scan-accepted opening: the published postcard rect carries into
+            // the capsule through one overlapping movement. Without a rect
+            // (rotation, restart, direct entry) this falls back to the plain
+            // boundary arrival. A capsule opening carries like any other route
+            // boundary; the arrival is incoming-only, so no private outgoing
+            // node is ever retained. Keyed by grant: each grant arrives
+            // exactly once.
             key(destination) {
-                AstraContextArrival(motion = motion, modifier = modifier.fillMaxSize(), contentKey = destination) {
-                    capsuleContent(destination.grantId)
+                val front = remember(destination) {
+                    carryFront.consumeIf(destination is AppDestination.Capsule)
+                }
+                if (front != null) {
+                    AstraOpeningCarry(
+                        motion = motion,
+                        modifier = modifier.fillMaxSize(),
+                        front = front,
+                        backdropColor = MaterialTheme.colorScheme.background,
+                        frontContent = { AstraPostcard(Modifier.fillMaxSize()) },
+                    ) {
+                        capsuleContent(destination.grantId)
+                    }
+                } else {
+                    AstraContextArrival(motion = motion, modifier = modifier.fillMaxSize(), contentKey = destination) {
+                        capsuleContent(destination.grantId)
+                    }
                 }
             }
 
@@ -127,6 +166,7 @@ fun RootScreen(
                 homeContent()
             }
         }
+    }
     }
 }
 

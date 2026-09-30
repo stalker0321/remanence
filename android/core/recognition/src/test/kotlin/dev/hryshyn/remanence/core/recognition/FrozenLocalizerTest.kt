@@ -1,6 +1,9 @@
 package dev.hryshyn.remanence.core.recognition
 
 import java.io.File
+import org.opencv.core.CvType
+import org.opencv.core.Mat
+import org.opencv.core.Scalar
 import java.security.MessageDigest
 import java.util.concurrent.CancellationException
 import kotlin.math.abs
@@ -310,5 +313,93 @@ class FrozenLocalizerTest {
     @Test
     fun emptyModelBytesAreRejectedBeforeRuntime() {
         assertFailsWith<IllegalArgumentException> { OrtLocalizerRuntime.open(ByteArray(0)) }
+    }
+
+    @Test
+    fun rank4Batch0Channel0SurvivesFlattening() {
+        val nested = arrayOf(
+            arrayOf(
+                arrayOf(
+                    floatArrayOf(1f, 2f, 3f),
+                    floatArrayOf(4f, 5f, 6f),
+                ),
+            ),
+        )
+        val parsed = FrozenLocalizer.parseRank4Logits(nested)
+        assertEquals(2, parsed.height)
+        assertEquals(3, parsed.width)
+        assertEquals(listOf(1f, 2f, 3f, 4f, 5f, 6f), parsed.data.toList())
+    }
+
+    @Test
+    fun nonRank4SingleChannelFormsAreRejected() {
+        val rows = arrayOf(floatArrayOf(1f, 2f), floatArrayOf(3f, 4f))
+        val rank3 = arrayOf(rows)
+        val batch2 = arrayOf(rows, rows)
+        val channels2 = arrayOf(arrayOf(rows[0]), arrayOf(rows[1]))
+        val ragged = arrayOf(arrayOf(arrayOf(floatArrayOf(1f), floatArrayOf(2f, 3f))))
+        val emptyBatch = arrayOf<Array<*>>()
+        val emptyRows = arrayOf(arrayOf(arrayOf<FloatArray>()))
+        val notArray = "logits"
+        val flatDirect = floatArrayOf(1f, 2f, 3f, 4f)
+        for (bad in listOf<Any?>(rank3, batch2, channels2, ragged, emptyBatch, emptyRows, notArray, flatDirect, null)) {
+            assertFailsWith<IllegalArgumentException>("$bad") {
+                FrozenLocalizer.parseRank4Logits(bad)
+            }
+        }
+    }
+
+    @Test
+    fun onePixelForegroundHasNoProposal() {
+        val mask = ByteArray(25)
+        mask[12] = 1
+        assertEquals(null, FrozenLocalizer.foregroundWindow(mask, 5, 5))
+    }
+
+    @Test
+    fun oneDimensionalSliversHaveNoProposal() {
+        val horizontal = ByteArray(5 * 5)
+        horizontal[2 * 5 + 0] = 1
+        horizontal[2 * 5 + 1] = 1
+        horizontal[2 * 5 + 2] = 1
+        assertEquals(null, FrozenLocalizer.foregroundWindow(horizontal, 5, 5))
+        val vertical = ByteArray(5 * 5)
+        vertical[0 * 5 + 3] = 1
+        vertical[1 * 5 + 3] = 1
+        assertEquals(null, FrozenLocalizer.foregroundWindow(vertical, 5, 5))
+    }
+
+    @Test
+    fun twoByTwoForegroundIsTheSmallestProposal() {
+        val mask = ByteArray(5 * 5)
+        mask[1 * 5 + 1] = 1
+        mask[1 * 5 + 2] = 1
+        mask[2 * 5 + 1] = 1
+        mask[2 * 5 + 2] = 1
+        assertEquals(
+            FrozenLocalizer.ImageWindow(1, 1, 3, 3),
+            FrozenLocalizer.foregroundWindow(mask, 5, 5),
+        )
+    }
+
+    @Test
+    fun letterboxPasteIsOwnedPlacedAndReleased() {
+        var tracked = 0
+        val owner = NativeMatOwner(NativeMatAllocator { factory -> tracked++; factory() })
+        val small = Mat(2, 2, CvType.CV_8UC3, Scalar(9.0, 8.0, 7.0))
+        val canvas = Mat.zeros(320, 320, CvType.CV_8UC3)
+        try {
+            FrozenLocalizer.pasteLetterboxed(
+                owner, small, canvas,
+                FrozenLocalizer.LetterboxPlan(1.0, 2, 2, 40, 0),
+            )
+            assertEquals(1, tracked)
+            assertEquals(listOf(9.0, 8.0, 7.0), canvas.get(0, 40).toList())
+            assertEquals(listOf(0.0, 0.0, 0.0), canvas.get(0, 0).toList())
+            owner.releaseAll()
+        } finally {
+            small.release()
+            canvas.release()
+        }
     }
 }

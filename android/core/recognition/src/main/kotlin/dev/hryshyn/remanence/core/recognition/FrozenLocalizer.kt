@@ -190,7 +190,23 @@ object FrozenLocalizer {
             }
         }
         if (xmax < 0) return null
+        // Frozen mask_to_roi (margin=0.0): windows narrower than 2 px in
+        // either dimension are rejected; the caller fails closed on null.
+        if (xmax + 1 - xmin < 2 || ymax + 1 - ymin < 2) return null
         return ImageWindow(xmin, ymin, xmax + 1, ymax + 1)
+    }
+
+    /**
+     * Paste the letterboxed content into the zero canvas through an
+     * owner-tracked submat view, so `NativeMatOwner.releaseAll` releases the
+     * view before its parent (reverse allocation order).
+     */
+    internal fun pasteLetterboxed(owner: NativeMatOwner, small: Mat, canvas: Mat, plan: LetterboxPlan) {
+        small.copyTo(
+            owner.allocate {
+                canvas.submat(plan.padY, plan.padY + plan.newHeight, plan.padX, plan.padX + plan.newWidth)
+            },
+        )
     }
 
     /**
@@ -206,6 +222,34 @@ object FrozenLocalizer {
             val y = pyRound(p.y.toDouble())
             x in 0 until width && y in 0 until height && mask[y * width + x] > 0
         }
+    }
+
+    /**
+     * Unpack the pinned model's rank-4 `float[1][1][H][W]` output value
+     * (graph tail dims `batch`, `Resizelogits_dim_1..3`; frozen
+     * `benchmark.py` consumes `logits[0, 0]`): batch 0, channel 0 rows,
+     * flattened row-major. Any other rank, batch count, channel count,
+     * ragged/empty shape, or non-float leaf is `BAD_LOGITS`.
+     */
+    internal fun parseRank4Logits(value: Any?): MaskLogits {
+        fun bad(): Nothing = throw IllegalArgumentException(Reasons.BAD_LOGITS)
+        val batch = value as? Array<*> ?: bad()
+        if (batch.size != 1) bad()
+        val channels = batch[0] as? Array<*> ?: bad()
+        if (channels.size != 1) bad()
+        val rows = channels[0] as? Array<*> ?: bad()
+        if (rows.isEmpty()) bad()
+        val first = rows[0] as? FloatArray ?: bad()
+        if (first.isEmpty()) bad()
+        rows.forEach { row ->
+            val typed = row as? FloatArray ?: bad()
+            if (typed.size != first.size) bad()
+        }
+        val flat = FloatArray(rows.size * first.size)
+        rows.forEachIndexed { y, row ->
+            System.arraycopy(row as FloatArray, 0, flat, y * first.size, first.size)
+        }
+        return MaskLogits(flat, rows.size, first.size)
     }
 
     /**
@@ -248,22 +292,7 @@ class OrtLocalizerRuntime private constructor(
             longArrayOf(1, 3, FrozenLocalizer.LOCALIZER_SIZE.toLong(), FrozenLocalizer.LOCALIZER_SIZE.toLong()),
         ).use { input ->
             session.run(mapOf(inputName to input)).use { outputs ->
-                val outer = outputs[0].value as? Array<*>
-                    ?: throw IllegalStateException(FrozenLocalizer.Reasons.BAD_LOGITS)
-                val middle = outer.getOrNull(0) as? Array<*>
-                    ?: throw IllegalStateException(FrozenLocalizer.Reasons.BAD_LOGITS)
-                @Suppress("UNCHECKED_CAST")
-                val rows = middle as? Array<FloatArray>
-                    ?: throw IllegalStateException(FrozenLocalizer.Reasons.BAD_LOGITS)
-                require(rows.isNotEmpty() && rows[0].isNotEmpty()) {
-                    FrozenLocalizer.Reasons.BAD_LOGITS
-                }
-                val flat = FloatArray(rows.size * rows[0].size)
-                rows.forEachIndexed { y, row ->
-                    require(row.size == rows[0].size) { FrozenLocalizer.Reasons.BAD_LOGITS }
-                    System.arraycopy(row, 0, flat, y * rows[0].size, row.size)
-                }
-                return FrozenLocalizer.MaskLogits(flat, rows.size, rows[0].size)
+                return FrozenLocalizer.parseRank4Logits(outputs[0].value)
             }
         }
     }
@@ -342,7 +371,7 @@ class FrozenLocalizerSession(
                         CvType.CV_8UC3,
                     )
                 }
-                small.copyTo(canvas.submat(plan.padY, plan.padY + plan.newHeight, plan.padX, plan.padX + plan.newWidth))
+                FrozenLocalizer.pasteLetterboxed(owner, small, canvas, plan)
                 val canvasBytes = ByteArray(3 * FrozenLocalizer.LOCALIZER_SIZE * FrozenLocalizer.LOCALIZER_SIZE)
                 canvas.get(0, 0, canvasBytes)
                 val chw = FrozenLocalizer.normalizeBgrToChw(

@@ -25,10 +25,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.invisibleToUser
-import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTag
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import kotlin.math.min
@@ -60,11 +62,17 @@ object AstraOpeningSpec {
     /** Front release duration: 60% of the opening budget (408 ms at 680). */
     fun frontReleaseMs(d: Int): Int = (d * 0.6f).toInt()
 
-    /** Capsule fully present: the 0.72 keyframe (490 ms at 680). */
-    fun capsulePresentMs(d: Int): Int = Math.round(d * 0.72f)
+    /**
+     * Capsule first visible: the raw clock instant where the *dissolve-eased*
+     * progress reaches the 0.12 opacity keyframe (`≈114 ms` at 680).
+     */
+    fun capsuleFirstVisibleMs(d: Int): Int = (rawProgressAtEased(0.12f) * d).roundToInt()
 
-    /** Capsule first visible: the 0.12 keyframe (81 ms at 680). */
-    fun capsuleFirstVisibleMs(d: Int): Int = (d * 0.12f).toInt()
+    /**
+     * Capsule fully present: the raw clock instant where the *dissolve-eased*
+     * progress reaches the 0.72 opacity keyframe (`≈324 ms` at 680).
+     */
+    fun capsulePresentMs(d: Int): Int = (rawProgressAtEased(0.72f) * d).roundToInt()
 
     /** Geometry channels use the pinned travel easing; identical array reference. */
     val GEOMETRY_EASING: FloatArray = AstraMotionSpec.EASING_TRAVEL
@@ -89,11 +97,30 @@ object AstraOpeningSpec {
     /** Neutral support bridge fill (`motion.mjs:98–101` `#e4e2ed`). */
     const val BRIDGE_COLOR: Int = 0xFFE4E2ED.toInt()
 
-    /** Capsule opacity from the authored keyframes (0@0.00, 0@0.12, 1@0.72, 1@1.00). */
-    fun capsuleAlphaAt(fraction: Float): Float = when {
-        fraction <= 0.12f -> 0f
-        fraction >= 0.72f -> 1f
-        else -> (fraction - 0.12f) / (0.72f - 0.12f)
+    /**
+     * Raw clock progress at which the dissolve easing reaches [eased]. The
+     * frozen `element.animate` carries `easing: dissolve` on the *options*, so
+     * the easing transforms the whole iteration before the authored
+     * `0@0.00 / 0@0.12 / 1@0.72 / 1@1.00` opacity offsets are resolved; the
+     * derived instants are therefore the inverse of the easing at 0.12/0.72.
+     */
+    private fun rawProgressAtEased(eased: Float): Float =
+        cubicBezierInverse(AstraMotionSpec.EASING_DISSOLVE, eased)
+
+    /**
+     * Capsule opacity from the authored keyframes sampled on the
+     * **dissolve-eased** progress (0 until eased 0.12, 1 from eased 0.72).
+     */
+    fun capsuleAlphaAt(progress: Float): Float {
+        val eased = cubicBezierTransform(
+            AstraMotionSpec.EASING_DISSOLVE,
+            progress.coerceIn(0f, 1f),
+        )
+        return when {
+            eased <= 0.12f -> 0f
+            eased >= 0.72f -> 1f
+            else -> (eased - 0.12f) / (0.72f - 0.12f)
+        }
     }
 }
 
@@ -175,8 +202,23 @@ fun AstraOpeningCarry(
     }
     val done = progress >= 1f
     val density = LocalDensity.current
-    BoxWithConstraints(modifier) {
-        val capsule = OpeningRect(0f, 0f, constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat())
+    // Capsule rect in the SAME root space as the published postcard rect
+    // (`boundsInRoot()`), so one `a`/`b` pair drives both scale and
+    // translation. `Modifier.offset` is parent-local, so the carry box's root
+    // top-left is subtracted for the absolutely-placed ghost layers only.
+    var capsuleRoot by remember { mutableStateOf<OpeningRect?>(null) }
+    BoxWithConstraints(
+        modifier.onGloballyPositioned { coordinates ->
+            val measured = coordinates.boundsInRoot().toOpeningRect()
+            if (capsuleRoot != measured) capsuleRoot = measured
+        },
+    ) {
+        val capsule = capsuleRoot ?: OpeningRect(
+            0f,
+            0f,
+            constraints.maxWidth.toFloat(),
+            constraints.maxHeight.toFloat(),
+        )
         val travel = cubicBezierTransform(AstraMotionSpec.EASING_TRAVEL, progress)
         // Backdrop: full-bleed, constant alpha, whole budget.
         Box(
@@ -185,7 +227,8 @@ fun AstraOpeningCarry(
                 .background(backdropColor),
         )
         if (!done) {
-            // Neutral support bridge: rect a → b, elevation 14dp → 0dp.
+            // Neutral support bridge: root rect a → b, placed parent-local by
+            // subtracting the carry box's root top-left. Elevation 14dp → 0dp.
             // Shadow tint #24273d20 has no Compose equivalent (known
             // approximation, device-check only).
             val bridge = OpeningRect(
@@ -197,7 +240,10 @@ fun AstraOpeningCarry(
             Box(
                 Modifier
                     .offset {
-                        IntOffset(bridge.left.roundToInt(), bridge.top.roundToInt())
+                        IntOffset(
+                            (bridge.left - capsule.left).roundToInt(),
+                            (bridge.top - capsule.top).roundToInt(),
+                        )
                     }
                     .size(
                         width = with(density) { bridge.width.toDp() },
@@ -209,11 +255,14 @@ fun AstraOpeningCarry(
                         clip = false,
                     )
                     .background(Color(AstraOpeningSpec.BRIDGE_COLOR))
-                    .semantics { invisibleToUser() }
-                    .testTag("astra_opening_bridge"),
+                    .clearAndSetSemantics {
+                        invisibleToUser()
+                        testTag = "astra_opening_bridge"
+                    },
             )
             // Front (postcard) release: opacity 1 → 0 with dissolve easing,
             // drifting 25% toward the capsule center, over frontReleaseMs.
+            // Root rect a, placed parent-local.
             val frontFraction = (progress * d / AstraOpeningSpec.frontReleaseMs(d)).coerceIn(0f, 1f)
             val frontEased = cubicBezierTransform(AstraMotionSpec.EASING_DISSOLVE, frontFraction)
             val driftX = (capsule.centerX - front.centerX) * 0.25f * frontEased
@@ -222,8 +271,8 @@ fun AstraOpeningCarry(
                 Modifier
                     .offset {
                         IntOffset(
-                            (front.left + driftX).roundToInt(),
-                            (front.top + driftY).roundToInt(),
+                            (front.left + driftX - capsule.left).roundToInt(),
+                            (front.top + driftY - capsule.top).roundToInt(),
                         )
                     }
                     .size(
@@ -231,15 +280,18 @@ fun AstraOpeningCarry(
                         height = with(density) { front.height.toDp() },
                     )
                     .graphicsLayer { alpha = 1f - frontEased }
-                    .semantics { invisibleToUser() }
-                    .testTag("astra_opening_front"),
+                    .clearAndSetSemantics {
+                        invisibleToUser()
+                        testTag = "astra_opening_front"
+                    },
             ) {
                 frontContent()
             }
         }
         // Capsule transform: translate(a.center − b.center) scale(min) →
         // translate(0,0) scale(1), uniform, origin 50%/50% (graphicsLayer
-        // default), on top of the ghosts.
+        // default), on top of the ghosts. Translation is a delta, so the same
+        // root-space `a`/`b` pair is correct without a local conversion.
         val offset = AstraOpeningSpec.translateAt(front, capsule, travel)
         val minScale = AstraOpeningSpec.scaleOf(front, capsule)
         val scale = minScale + (1f - minScale) * travel
@@ -277,4 +329,29 @@ internal fun cubicBezierTransform(control: FloatArray, x: Float): Float {
     }
     t = t.coerceIn(0f, 1f)
     return ((ay * t + by) * t + cy) * t
+}
+
+/**
+ * Inverse of [cubicBezierTransform]'s x → y curve: the raw x whose eased value
+ * is [eased]. Bisection over the (monotonic) bezier parameter, then the x
+ * polynomial — used to derive the clock instants of the eased opacity
+ * keyframes. Pure Kotlin, no Compose types.
+ */
+internal fun cubicBezierInverse(control: FloatArray, eased: Float): Float {
+    val target = eased.coerceIn(0f, 1f)
+    val cy = 3f * control[1]
+    val by = 3f * (control[3] - control[1]) - cy
+    val ay = 1f - cy - by
+    var lo = 0f
+    var hi = 1f
+    repeat(40) {
+        val mid = (lo + hi) / 2f
+        val y = ((ay * mid + by) * mid + cy) * mid
+        if (y < target) lo = mid else hi = mid
+    }
+    val t = (lo + hi) / 2f
+    val cx = 3f * control[0]
+    val bx = 3f * (control[2] - control[0]) - cx
+    val ax = 1f - cx - bx
+    return ((ax * t + bx) * t + cx) * t
 }

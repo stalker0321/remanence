@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.ui.motion
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -32,14 +33,42 @@ class AstraOpeningSpecTest {
     }
 
     @Test
-    fun capsuleIsFullyPresentAtSeventyTwoPercent() {
-        assertEquals(490, AstraOpeningSpec.capsulePresentMs(680))
-        assertEquals(81, AstraOpeningSpec.capsuleFirstVisibleMs(680))
+    fun capsuleOpacitySamplesTheDissolveEasedKeyframes() {
+        // Instants of the authored 0 / 0.12 / 0.72 / 1 opacity keyframes in the
+        // *eased* domain. The dissolve option easing moves them off the raw
+        // 81 ms / 490 ms that a raw-linear implementation would report.
+        assertEquals(114, AstraOpeningSpec.capsuleFirstVisibleMs(680))
+        assertEquals(324, AstraOpeningSpec.capsulePresentMs(680))
+        assertNotEquals(81, AstraOpeningSpec.capsuleFirstVisibleMs(680))
+        assertNotEquals(490, AstraOpeningSpec.capsulePresentMs(680))
+
         assertEquals(0f, AstraOpeningSpec.capsuleAlphaAt(0f), 0f)
-        assertEquals(0f, AstraOpeningSpec.capsuleAlphaAt(0.12f), 0f)
-        assertEquals(1f, AstraOpeningSpec.capsuleAlphaAt(0.72f), 0f)
+        assertEquals(0f, AstraOpeningSpec.capsuleAlphaAt(114f / 680f), 1e-2f)
+        assertEquals(1f, AstraOpeningSpec.capsuleAlphaAt(324f / 680f), 1e-2f)
         assertEquals(1f, AstraOpeningSpec.capsuleAlphaAt(1f), 0f)
-        assertTrue(AstraOpeningSpec.capsuleAlphaAt(0.5f) in 0f..1f)
+
+        // Mid-flight alpha is the eased remap, not the raw-linear remap: pick a
+        // raw fraction whose eased progress is strictly between the keyframes.
+        val rawMid = cubicBezierInverse(AstraMotionSpec.EASING_DISSOLVE, 0.4f)
+        assertEquals(0.4f, cubicBezierTransform(AstraMotionSpec.EASING_DISSOLVE, rawMid), 1e-3f)
+        assertEquals(
+            (0.4f - 0.12f) / 0.6f,
+            AstraOpeningSpec.capsuleAlphaAt(rawMid),
+            1e-3f,
+        )
+        assertNotEquals(
+            (rawMid - 0.12f) / 0.6f,
+            AstraOpeningSpec.capsuleAlphaAt(rawMid),
+            1e-2f,
+        )
+    }
+
+    @Test
+    fun cubicBezierInverseRoundTripsTheDissolveCurve() {
+        for (target in listOf(0.12f, 0.5f, 0.72f)) {
+            val raw = cubicBezierInverse(AstraMotionSpec.EASING_DISSOLVE, target)
+            assertEquals(target, cubicBezierTransform(AstraMotionSpec.EASING_DISSOLVE, raw), 1e-3f)
+        }
     }
 
     @Test

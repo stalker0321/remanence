@@ -4,7 +4,9 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -19,6 +21,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
@@ -27,6 +30,7 @@ import dev.hryshyn.remanence.session.RootScreen
 import dev.hryshyn.remanence.ui.navigation.AppDestination
 import dev.hryshyn.remanence.ui.navigation.AuthUiState
 import dev.hryshyn.remanence.ui.scan.AstraPostcard
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -142,11 +146,12 @@ class AstraOpeningCarryTest {
             }
         }
         composeRule.waitForIdle()
-        // The decorative front carries the postcard art and no capsule content.
-        // Existence (not displayedness) is asserted here: the ghost node exists
-        // exactly when the handoff consumed bounds; pixel visibility of ghosts
-        // is pinned by ghostsExistDuringOpeningAndAreGoneWhenItEnds.
-        composeRule.onAllNodesWithTag("astra_postcard").assertCountEquals(1)
+        // The ghost keeps its own tag (set inside clearAndSetSemantics) while
+        // the nested decorative postcard description/role is cleared from the
+        // merged tree: only the capsule surface stays exposed.
+        composeRule.onAllNodesWithTag("astra_opening_front").assertCountEquals(1)
+        composeRule.onAllNodesWithTag("astra_postcard").assertCountEquals(0)
+        composeRule.onAllNodesWithContentDescription("graphic postcard front").assertCountEquals(0)
         // Concrete capsule-page tags from CapsuleScreen: none may appear in
         // the decorative front subtree.
         for (tag in listOf(
@@ -158,6 +163,61 @@ class AstraOpeningCarryTest {
         )) {
             composeRule.onAllNodesWithTag(tag).assertCountEquals(0)
         }
+    }
+
+    @Test
+    fun rootGeometryIsSharedWhenTheCarryParentHasANonZeroOrigin() {
+        // Deliberately non-zero parent origin (a safeDrawing/IME-like inset):
+        // the published postcard rect is root-space, so the ghosts and the
+        // capsule transform must share one root `a`/`b` pair. The old
+        // local-capsule implementation shifts both by the parent origin.
+        composeRule.mainClock.autoAdvance = false
+        composeRule.setContent {
+            MaterialTheme {
+                Box(Modifier.size(420.dp, 700.dp)) {
+                    Box(
+                        Modifier
+                            .padding(start = 20.dp, top = 30.dp)
+                            .size(360.dp, 640.dp),
+                    ) {
+                        AstraOpeningCarry(
+                            motion = AstraMotionSpec.Resolved.FULL,
+                            front = front,
+                            backdropColor = Color.Gray,
+                            frontContent = {
+                                Text("front probe", modifier = Modifier.testTag("front_probe"))
+                            },
+                        ) {
+                            Box(Modifier.fillMaxSize().testTag("capsule_probe"))
+                        }
+                    }
+                }
+            }
+        }
+        composeRule.waitForIdle()
+        // The carry measures its own root box during layout; with the clock
+        // frozen, one frame pumps that measurement's recomposition (same
+        // pattern as frontBoundsAreConsumedOnceAndClearedOnLeave). The dissolve
+        // easing has zero initial slope, so the one-frame ghost drift is
+        // sub-pixel; the travel drift is bounded below.
+        composeRule.mainClock.advanceTimeByFrame()
+        composeRule.waitForIdle()
+
+        // Placed in root space: the front ghost coincides with the published
+        // postcard rect, not shifted by the carry box's origin.
+        val ghost = composeRule.onNodeWithTag("astra_opening_front")
+            .fetchSemanticsNode().boundsInRoot
+        assertEquals(front.left, ghost.left, 0.5f)
+        assertEquals(front.top, ghost.top, 0.5f)
+        assertEquals(front.right, ghost.right, 0.5f)
+        assertEquals(front.bottom, ghost.bottom, 0.5f)
+
+        // The same root `a`/`b` pair drives translation: the capsule center
+        // starts on the postcard center (within one animation frame).
+        val capsule = composeRule.onNodeWithTag("capsule_probe")
+            .fetchSemanticsNode().boundsInRoot
+        assertEquals(front.centerX, capsule.center.x, 12f)
+        assertEquals(front.centerY, capsule.center.y, 12f)
     }
 
     @Test

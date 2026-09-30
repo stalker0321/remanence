@@ -398,6 +398,44 @@ class GeneratorExpressionContractV3Test {
         assertIs<GeneratorExpression.InputValidation.Valid>(GeneratorExpression.validateResolved(expressionV3()))
     }
 
+    /**
+     * T086: the accepted T062 descriptor (provider `coverartarchive`, sealed
+     * origin `archive.org`) must pass seal-time admission, the reserved sample
+     * key/host must still work, and neither a backend host nor a rotating
+     * Archive.org node host may become a sealed host.
+     */
+    @Test
+    fun acceptedCoverArtArchiveDescriptorAdmitsAtSealTime() {
+        val caaUrl = "https://archive.org/download/mbid-275a9c54-8862-46dd-bcd3-1658a39c310b/" +
+            "mbid-275a9c54-8862-46dd-bcd3-1658a39c310b-31543211403_thumb500.jpg"
+        val base = expressionV3Artwork()
+        val sealed = base.copy(
+            musicRegion = base.musicRegion!!.copy(
+                artwork = artwork().copy(provider = "coverartarchive", url = caaUrl),
+            ),
+        )
+        assertIs<GeneratorExpression.InputValidation.Valid>(
+            GeneratorExpression.validateResolved(sealed),
+        )
+        // The reserved sample still admits (fixtures and existing suites).
+        assertIs<GeneratorExpression.InputValidation.Valid>(
+            GeneratorExpression.validateResolved(base),
+        )
+
+        assertTrue("coverartarchive" in GeneratorExpression.ARTWORK_PROVIDERS)
+        assertTrue("catalog-sample" in GeneratorExpression.ARTWORK_PROVIDERS)
+        assertTrue("archive.org" in GeneratorExpression.ARTWORK_HOSTS)
+        assertTrue("art.example.org" in GeneratorExpression.ARTWORK_HOSTS)
+        // Contract T2: a backend/loopback host can never be an artwork host.
+        for (banned in listOf("127.0.0.1", "localhost", "::1")) {
+            assertTrue(banned !in GeneratorExpression.ARTWORK_HOSTS, banned)
+        }
+        // Rotating node hosts are accepted only as the single re-validated
+        // redirect hop by the fetcher, never as sealed origins.
+        assertTrue("dn721806.ca.archive.org" !in GeneratorExpression.ARTWORK_HOSTS)
+        assertTrue("ia801506.us.archive.org" !in GeneratorExpression.ARTWORK_HOSTS)
+    }
+
     @Test
     fun n6UnstableUrlsRejected() {
         val base = expressionV3Artwork()

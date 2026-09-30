@@ -299,16 +299,12 @@ object GeneratorExpression {
     val ARTWORK_MIME_TYPES: Set<String> = setOf("image/jpeg", "image/png", "image/webp")
 
     /**
-     * Allowlisted artwork provider keys. Seeded with the S1 sample-catalog
-     * key used by fixtures; the S1 catalog slice owns extending it. It must
-     * never contain a backend host: cover bytes are fetched client <->
-     * provider only. Host-allowlist enforcement for the fetcher (one fetch
-     * host per descriptor) belongs to that later slice, not to seal-time
-     * validation.
-     *
-     * `coverartarchive` is the sender-side MusicBrainz/CAA descriptor source
-     * (T062): the key names the provider that owns the sealed URL, never a
-     * Remanence host, and it carries no URL, digest or byte of its own.
+     * Allowlisted artwork provider keys. `catalog-sample` is the reserved
+     * fixture key; `coverartarchive` is the accepted T062 sender descriptor
+     * source (its URL is an `archive.org/download/...` address, never a
+     * backend host). It must never contain a backend host: cover bytes are
+     * fetched client <-> provider only. Host-allowlist enforcement for the
+     * fetcher lives in [ARTWORK_HOSTS], not here.
      */
     val ARTWORK_PROVIDERS: Set<String> = setOf("catalog-sample", "coverartarchive")
 
@@ -316,12 +312,15 @@ object GeneratorExpression {
      * Allowlisted fetch hosts for cover art (contract T2). This is the
      * fetch-time companion to [ARTWORK_PROVIDERS] and must never contain a
      * backend `ApiBaseUrl` host, so the backend can never be asked to serve or
-     * proxy covers. Seeded with the reserved sample-catalog host; the S1
-     * catalog slice owns extending it. The fetcher re-validates the sealed URL
-     * and enforces membership before every request (and never follows a
-     * redirect to a non-member).
+     * proxy covers. Members are **sealed-origin** hosts and must be exact: the
+     * reserved sample host plus `archive.org`, the stable content-addressing
+     * origin the accepted T062 sender seals. Archive.org's rotating download
+     * nodes (`dn721806.ca.archive.org`, `ia801506.us.archive.org`, ...) are
+     * never sealed and are accepted only as a single re-validated redirect hop
+     * by the fetcher's suffix rule. The fetcher re-validates the sealed URL
+     * and enforces exact membership before every request.
      */
-    val ARTWORK_HOSTS: Set<String> = setOf("art.example.org")
+    val ARTWORK_HOSTS: Set<String> = setOf("art.example.org", "archive.org")
 
     /** Maximum artwork URL length in chars (rule A4). */
     const val ARTWORK_URL_MAX = 512

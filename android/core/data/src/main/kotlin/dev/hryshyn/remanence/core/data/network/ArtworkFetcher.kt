@@ -67,8 +67,15 @@ sealed interface ArtworkFetchResult {
  * redirects disabled (the shared [HttpClientFactory]), the body is bounded
  * before it is read, the exact bytes are compared to the sealed SHA-256 with
  * [MessageDigest.isEqual] (constant time), and the decoded pixel bounds must
- * equal the sealed size. No credentials, cookies, or query are ever sent, and
- * no URL, host, or image byte is ever logged. Every failure returns a typed
+ * equal the sealed size. The shared client keeps redirects disabled, so **at
+ * most one** 3xx is followed manually: `Location` is resolved, then re-validated
+ * in full (https, no userinfo/query/fragment, default-or-443 port, bounded
+ * length) and its host must satisfy the rotating Archive.org node policy
+ * (exact member or exact sub-domain of a member of [allowedHosts]); a second
+ * redirect, a missing `Location`, any other host or any other shape is
+ * rejected, and every body/digest/mime/size gate then applies unchanged to the
+ * final response. No credentials, cookies, or query are ever sent, and no URL,
+ * host, or image byte is ever logged. Every failure returns a typed
  * [ArtworkFetchResult.Failed]; the caller renders the no-art layout.
  *
  * The backend is never contacted: host allowlisting and the direct GET keep the
@@ -93,25 +100,86 @@ internal class HttpArtworkFetcher(
 ) : ArtworkFetcher {
 
     override suspend fun fetch(descriptor: GeneratorExpression.ArtworkRef): ArtworkFetchResult {
+        // Sealed origin: exact host membership only — node hosts are never
+        // sealed, so they can never be the origin.
         val host = validatedHost(descriptor.url)
             ?: return ArtworkFetchResult.Failed(ArtworkFetchFailure.INVALID_URL)
         if (host !in allowedHosts) {
             return ArtworkFetchResult.Failed(ArtworkFetchFailure.HOST_NOT_ALLOWED)
         }
-        val request = Request.Builder()
-            .url(descriptor.url)
-            .header("Accept", descriptor.mimeType)
-            .get()
-            .build()
         return try {
-            client.executeResponseWithCallLifetime(request) { response ->
-                interpret(response, descriptor)
+            when (val first = getHop(descriptor.url, descriptor)) {
+                is Hop.Finished -> first.result
+                is Hop.Redirect -> followSingleRedirect(first, descriptor)
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: IOException) {
             ArtworkFetchResult.Failed(ArtworkFetchFailure.NETWORK)
         }
+    }
+
+    /**
+     * Follow exactly one redirect hop and reject everything else.
+     *
+     * The sealed origin (`archive.org`) answers `302` to a rotating download
+     * node, so a redirecting origin must be tolerated — but only one hop, and
+     * only after the target re-passes the full A4 shape and the rotating
+     * node-host policy. A second `3xx` is refused rather than followed.
+     */
+    private suspend fun followSingleRedirect(
+        first: Hop.Redirect,
+        descriptor: GeneratorExpression.ArtworkRef,
+    ): ArtworkFetchResult {
+        if (first.location.isBlank()) {
+            return ArtworkFetchResult.Failed(ArtworkFetchFailure.INVALID_URL)
+        }
+        val target = resolveRedirect(descriptor.url, first.location)
+            ?: return ArtworkFetchResult.Failed(ArtworkFetchFailure.INVALID_URL)
+        val hopHost = validatedHost(target)
+            ?: return ArtworkFetchResult.Failed(ArtworkFetchFailure.INVALID_URL)
+        if (!allowedRedirectHost(hopHost)) {
+            return ArtworkFetchResult.Failed(ArtworkFetchFailure.HOST_NOT_ALLOWED)
+        }
+        return when (val second = getHop(target, descriptor)) {
+            is Hop.Finished -> second.result
+            is Hop.Redirect -> ArtworkFetchResult.Failed(ArtworkFetchFailure.HTTP)
+        }
+    }
+
+    /** One GET through the redirect-disabled shared client. */
+    private suspend fun getHop(
+        url: String,
+        descriptor: GeneratorExpression.ArtworkRef,
+    ): Hop {
+        val request = Request.Builder()
+            .url(url)
+            .header("Accept", descriptor.mimeType)
+            .get()
+            .build()
+        return client.executeResponseWithCallLifetime(request) { response ->
+            if (response.code in REDIRECT_STATUSES) {
+                Hop.Redirect(response.header("Location") ?: "")
+            } else {
+                Hop.Finished(interpret(response, descriptor))
+            }
+        }
+    }
+
+    /**
+     * Rotating Archive.org node hosts (`dn721806.ca.archive.org`,
+     * `ia801506.us.archive.org`, ...) are accepted as the single hop only when
+     * the host is a member of [allowedHosts] or an exact sub-domain of one —
+     * the same suffix rule the accepted T062 sender policy applies. The sealed
+     * origin itself is checked with exact membership above.
+     */
+    private fun allowedRedirectHost(host: String): Boolean =
+        allowedHosts.any { member -> host == member || host.endsWith(".$member") }
+
+    private fun resolveRedirect(from: String, location: String): String? = try {
+        URI(from).resolve(location.trim()).toString()
+    } catch (_: Exception) {
+        null
     }
 
     private fun interpret(
@@ -122,7 +190,11 @@ internal class HttpArtworkFetcher(
             return ArtworkFetchResult.Failed(ArtworkFetchFailure.HTTP)
         }
         val body = response.body
-        val contentType = body.contentType()?.toString()?.substringBefore(';')?.trim()
+        // Normalize the response side (parameters stripped, lowercased) and
+        // compare against the already-normalized sealed MIME (T062 seals a
+        // lowercase member of ARTWORK_MIME_TYPES).
+        val contentType = body.contentType()?.toString()
+            ?.substringBefore(';')?.trim()?.lowercase()
         if (contentType != descriptor.mimeType) {
             return ArtworkFetchResult.Failed(ArtworkFetchFailure.MIME_MISMATCH)
         }
@@ -189,8 +261,16 @@ internal class HttpArtworkFetcher(
         return host.lowercase()
     }
 
+    /** Outcome of a single GET: either a redirect hint or a final response. */
+    private sealed interface Hop {
+        data class Redirect(val location: String) : Hop
+        data class Finished(val result: ArtworkFetchResult) : Hop
+    }
+
     private companion object {
-        const val MAX_BODY_BYTES = 8L * 1024 * 1024
+        /** Aligned to the sender's sealing ceiling (T062 `MAX_IMAGE_BYTES`). */
+        const val MAX_BODY_BYTES = 10L * 1024 * 1024
         const val READ_CHUNK_BYTES = 8 * 1024
+        val REDIRECT_STATUSES = setOf(301, 302, 303, 307, 308)
     }
 }

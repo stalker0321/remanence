@@ -27,8 +27,10 @@ import okhttp3.ResponseBody.Companion.toResponseBody
  * Fully hermetic [HttpArtworkFetcher] coverage: the fake OkHttp interceptor
  * returns synthetic responses and never opens a socket, so no test performs a
  * network or backend call. Verifies URL/host re-validation, the single GET,
- * redirect refusal, bounded body, constant-time digest, mime and decoded-size
- * checks, and cancellation.
+ * the one validated redirect hop (allowed node, disallowed host, invalid
+ * shape, missing Location, second redirect), the 10 MiB ceiling, normalized
+ * mime comparison, constant-time digest, decoded-size checks, and
+ * cancellation.
  */
 class ArtworkFetcherTest {
 
@@ -58,7 +60,7 @@ class ArtworkFetcherTest {
     private fun fetcher(
         hosts: Set<String> = setOf(host),
         imageInfo: ArtworkImageInfo = ArtworkImageInfo { ArtworkDimensions(640, 640) },
-        maxBytes: Long = 8L * 1024 * 1024,
+        maxBytes: Long = 10L * 1024 * 1024,
         respond: (Request) -> Response,
     ): ArtworkFetcher {
         val client = OkHttpClient.Builder()
@@ -85,6 +87,17 @@ class ArtworkFetcherTest {
         return builder.build()
     }
 
+    private fun redirectResponse(request: Request, location: String?): Response {
+        val builder = Response.Builder()
+            .request(request)
+            .protocol(Protocol.HTTP_1_1)
+            .code(302)
+            .message("Found")
+            .body(ByteArray(0).toResponseBody(null))
+        if (location != null) builder.header("Location", location)
+        return builder.build()
+    }
+
     private fun failure(result: ArtworkFetchResult): ArtworkFetchFailure {
         val failed = assertIs<ArtworkFetchResult.Failed>(result)
         return failed.reason
@@ -107,18 +120,105 @@ class ArtworkFetcherTest {
     }
 
     @Test
-    fun redirectIsNotFollowed() = runBlocking {
-        val fetcher = fetcher { request ->
-            Response.Builder()
-                .request(request)
-                .protocol(Protocol.HTTP_1_1)
-                .code(302)
-                .message("Found")
-                .header("Location", "https://art.example.org/cover/other.webp")
-                .body(ByteArray(0).toResponseBody(null))
-                .build()
+    fun redirectToAllowedArchiveNodeIsFollowedOnceAndVerifies() = runBlocking {
+        var calls = 0
+        val fetcher = fetcher(hosts = setOf("archive.org")) { request ->
+            calls++
+            if (calls == 1) redirectResponse(request, NODE_URL) else imageResponse(request)
         }
-        assertEquals(ArtworkFetchFailure.HTTP, failure(fetcher.fetch(descriptor())))
+        val result = fetcher.fetch(descriptor(urlValue = ORIGIN_URL))
+        assertIs<ArtworkFetchResult.Verified>(result)
+        assertEquals(2, calls, "origin GET plus exactly one hop")
+    }
+
+    @Test
+    fun secondRedirectIsRejectedNotFollowed() = runBlocking {
+        var calls = 0
+        val fetcher = fetcher(hosts = setOf("archive.org")) { request ->
+            calls++
+            redirectResponse(request, NODE_URL)
+        }
+        assertEquals(
+            ArtworkFetchFailure.HTTP,
+            failure(fetcher.fetch(descriptor(urlValue = ORIGIN_URL))),
+        )
+        assertEquals(2, calls, "exactly one hop is attempted; the second 3xx is refused")
+    }
+
+    @Test
+    fun redirectToDisallowedHostIsRejectedWithoutFollowing() = runBlocking {
+        var calls = 0
+        val fetcher = fetcher(hosts = setOf("archive.org")) { request ->
+            calls++
+            redirectResponse(request, "https://evil.example.invalid/cover.jpg")
+        }
+        assertEquals(
+            ArtworkFetchFailure.HOST_NOT_ALLOWED,
+            failure(fetcher.fetch(descriptor(urlValue = ORIGIN_URL))),
+        )
+        assertEquals(1, calls, "a non-member hop host must not be requested")
+    }
+
+    @Test
+    fun redirectWithInvalidShapeIsRejectedWithoutFollowing() = runBlocking {
+        for (bad in listOf(
+            "http://archive.org/download/mbid-x/cover.jpg",
+            "https://archive.org/download/mbid-x/cover.jpg?sig=abc",
+            "https://archive.org/download/mbid-x/cover.jpg#frag",
+            "https://archive.org:8443/download/mbid-x/cover.jpg",
+        )) {
+            var calls = 0
+            val fetcher = fetcher(hosts = setOf("archive.org")) { request ->
+                calls++
+                redirectResponse(request, bad)
+            }
+            assertEquals(
+                ArtworkFetchFailure.INVALID_URL,
+                failure(fetcher.fetch(descriptor(urlValue = ORIGIN_URL))),
+                "expected INVALID_URL for $bad",
+            )
+            assertEquals(1, calls, "no request may follow an invalid hop for $bad")
+        }
+    }
+
+    @Test
+    fun missingLocationIsRejectedWithoutFollowing() = runBlocking {
+        var calls = 0
+        val fetcher = fetcher(hosts = setOf("archive.org")) { request ->
+            calls++
+            redirectResponse(request, null)
+        }
+        assertEquals(
+            ArtworkFetchFailure.INVALID_URL,
+            failure(fetcher.fetch(descriptor(urlValue = ORIGIN_URL))),
+        )
+        assertEquals(1, calls)
+    }
+
+    @Test
+    fun tenMiBCeilingBoundaryMatchesTheSenderSealingCeiling() = runBlocking {
+        val atCeiling = ByteArray(10 * 1024 * 1024) { 7 }
+        val overCeiling = ByteArray(atCeiling.size + 1) { 7 }
+
+        val ok = fetcher { request -> imageResponse(request, bytes = atCeiling) }
+            .fetch(descriptor(digest = sha(atCeiling)))
+        assertIs<ArtworkFetchResult.Verified>(ok)
+
+        val tooBig = fetcher { request -> imageResponse(request, bytes = overCeiling) }
+            .fetch(descriptor(digest = sha(overCeiling)))
+        assertEquals(ArtworkFetchFailure.OVERSIZE, failure(tooBig))
+    }
+
+    @Test
+    fun mixedCaseParameterisedResponseMimeIsAccepted() {
+        // Block body (not `= runBlocking`): a Jupiter test method must return
+        // Unit, and `assertIs` would otherwise leak its typed result.
+        runBlocking {
+            val fetcher = fetcher { request ->
+                imageResponse(request, contentType = "Image/WebP; charset=binary")
+            }
+            assertIs<ArtworkFetchResult.Verified>(fetcher.fetch(descriptor()))
+        }
     }
 
     @Test
@@ -194,6 +294,15 @@ class ArtworkFetcherTest {
     fun transportFailureIsNetwork() = runBlocking {
         val fetcher = fetcher { throw IOException("no socket") }
         assertEquals(ArtworkFetchFailure.NETWORK, failure(fetcher.fetch(descriptor())))
+    }
+
+    private companion object {
+        const val ORIGIN_URL =
+            "https://archive.org/download/mbid-275a9c54-8862-46dd-bcd3-1658a39c310b/" +
+                "mbid-275a9c54-8862-46dd-bcd3-1658a39c310b-31543211403_thumb500.jpg"
+        const val NODE_URL =
+            "https://dn721806.ca.archive.org/0/items/mbid-275a9c54-8862-46dd-bcd3-1658a39c310b/" +
+                "mbid-275a9c54-8862-46dd-bcd3-1658a39c310b-31543211403_thumb500.jpg"
     }
 
     @Test

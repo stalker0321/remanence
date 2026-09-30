@@ -33,6 +33,9 @@ dependencies {
     implementation(project(":core:model"))
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.androidx.exifinterface)
+    // Frozen postcard-matcher localizer runtime (S2): OrtSession wrapper lives
+    // in FrozenLocalizer.kt; unit tests exercise a fake runtime instead.
+    implementation(libs.onnxruntime.android)
     testImplementation(kotlin("test-junit5"))
     testImplementation(libs.junit.vintage.engine)
     testImplementation(libs.robolectric)

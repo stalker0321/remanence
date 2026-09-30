@@ -43,6 +43,13 @@ object CollagePainter {
             val region: CollageRenderer.RectI,
             val color: Int,
         ) : Op
+
+        /**
+         * Verified cover-art layer: the `sound` background behind a contained
+         * image drawn from the host's verified bitmap. The bytes never enter
+         * the op; only the sealed rectangle and the background colour do.
+         */
+        data class MusicArtwork(val region: CollageRenderer.RectI, val background: Int) : Op
     }
 
     /**
@@ -102,6 +109,9 @@ object CollagePainter {
         scene.music?.let {
             ops += Op.MusicBackground(it.background, it.region)
             ops += Op.MusicText(it.title, it.artist, it.text, it.region, it.color)
+        }
+        scene.artwork?.let {
+            ops += Op.MusicArtwork(it.region, it.background)
         }
         return ops
     }

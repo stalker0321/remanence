@@ -35,6 +35,8 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.sp
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 /**
  * Compose-backed text measurement for the collage contract. Built at
@@ -99,8 +101,8 @@ fun rememberCollageTextMeasurer(): CollageTextMeasurer {
  * text layout that does not fit its sealed region draw **no** content at all —
  * never a partial sheet, shrink, reflow, or dropped line. Draw order is
  * [CollagePainter.LAYER_ORDER]: paper, photos (sealed source/destination
- * rects), note clipped to its region, then music background + title/artist
- * clipped to the music region.
+ * rects), note clipped to its region, then music background + title/artist (or
+ * the verified cover) clipped to the music region.
  *
  * The whole composition is one accessibility node: [contentDescription] and
  * [Role.Image]. Internal layers are not separate accessibility nodes.
@@ -112,6 +114,12 @@ fun CollageCanvas(
     contentDescription: String,
     modifier: Modifier = Modifier,
     textMeasurer: CollageTextMeasurer = rememberCollageTextMeasurer(),
+    /**
+     * Verified thumbnail cover bitmap, or null. When the scene carries a
+     * [CollageRenderer.SceneArtwork] this must be present; the canvas draws
+     * nothing otherwise (fail-closed, never a placeholder).
+     */
+    artwork: ImageBitmap? = null,
 ) {
     val imageSizes = remember(images) {
         images.mapValues { CollageRenderer.SourcePhoto(it.value.width, it.value.height) }
@@ -124,7 +132,8 @@ fun CollageCanvas(
 
     val drawable = drawOps != null &&
         (note == null || noteLayout?.fitsRegion(note.region) == true) &&
-        (music == null || musicLayout?.fitsRegion(music.region) == true)
+        (music == null || musicLayout?.fitsRegion(music.region) == true) &&
+        (scene.artwork == null || artwork != null)
 
     Box(
         modifier = modifier
@@ -208,6 +217,33 @@ fun CollageCanvas(
                                         topLeft = Offset(op.region.x.toFloat(), op.region.y.toFloat()),
                                     )
                                 }
+                            }
+
+                            is CollagePainter.Op.MusicArtwork -> {
+                                drawRect(
+                                    color = Color(op.background),
+                                    topLeft = Offset(op.region.x.toFloat(), op.region.y.toFloat()),
+                                    size = Size(op.region.width.toFloat(), op.region.height.toFloat()),
+                                )
+                                val image = artwork ?: return@Canvas
+                                val scale = min(
+                                    op.region.width.toFloat() / image.width,
+                                    op.region.height.toFloat() / image.height,
+                                )
+                                val width = (image.width * scale).roundToInt()
+                                val height = (image.height * scale).roundToInt()
+                                if (width < 1 || height < 1) return@Canvas
+                                drawImage(
+                                    image = image,
+                                    srcOffset = IntOffset.Zero,
+                                    srcSize = IntSize(image.width, image.height),
+                                    dstOffset = IntOffset(
+                                        op.region.x + (op.region.width - width) / 2,
+                                        op.region.y + (op.region.height - height) / 2,
+                                    ),
+                                    dstSize = IntSize(width, height),
+                                    filterQuality = FilterQuality.High,
+                                )
                             }
                         }
                     }

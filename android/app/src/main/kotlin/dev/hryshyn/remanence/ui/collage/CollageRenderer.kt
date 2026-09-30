@@ -17,9 +17,11 @@ import java.security.MessageDigest
  * own viewport scale and draws. Colour roles are authoritative: [Scene.paper]
  * is the paper fill, [Scene.ink] is the note (ordinary ink), the music region
  * carries [SceneMusic.background] (`sound`) and [SceneMusic.color]
- * (`soundInk`). Text is measured only through [TextMeasurer]; a measured block
- * that overflows its sealed rectangle rejects the whole scene, with no
- * implicit shrink, reflow, or line dropping.
+ * (`soundInk`). A sealed `mode == "thumbnail"` region with verified artwork
+ * instead carries [SceneArtwork]; a missing or mismatched cover degrades to the
+ * text/no-art layout, never a placeholder. Text is measured only through
+ * [TextMeasurer]; a measured block that overflows its sealed rectangle rejects
+ * the whole scene, with no implicit shrink, reflow, or line dropping.
  *
  * This file deliberately has no UI-toolkit, image, or planner dependency:
  * only core model types, [StyleRegistry], and [FontRegistry].
@@ -73,6 +75,15 @@ object CollageRenderer {
         val color: Int,
     )
 
+    /**
+     * Verified cover-art layer for a `mode == "thumbnail"` music region. It is
+     * emitted only when the caller supplied decoded artwork whose bounds equal
+     * the sealed descriptor size; the region is the sealed music rectangle and
+     * [background] is the `sound` role. The bitmap itself is owned by the host
+     * and never enters the scene.
+     */
+    data class SceneArtwork(val region: RectI, val background: Int)
+
     /** Immutable integer draw plan derived only from a validated expression. */
     data class Scene(
         val canvasWidth: Int,
@@ -85,6 +96,8 @@ object CollageRenderer {
         val photos: List<ScenePhoto>,
         val note: SceneText?,
         val music: SceneMusic?,
+        /** Verified thumbnail cover, or null for the text/no-art layout. */
+        val artwork: SceneArtwork? = null,
     )
 
     /** Typed prepare outcome; never a fabricated success. */
@@ -166,6 +179,13 @@ object CollageRenderer {
         trackSnapshot: CapsuleTrackSnapshotV1?,
         sources: Map<String, SourcePhoto>,
         measurer: TextMeasurer,
+        /**
+         * Decoded bounds of the fetched-and-verified cover, or null. Required
+         * only for a sealed `mode == "thumbnail"` music region; when it is
+         * absent or does not match the sealed descriptor size the renderer
+         * degrades to the text/no-art layout and never draws a placeholder.
+         */
+        artwork: SourcePhoto? = null,
     ): SceneResult {
         if (expression.expressionContractVersion != GeneratorExpression.EXPRESSION_CONTRACT_V3) {
             return SceneResult.Rejected(
@@ -234,9 +254,6 @@ object CollageRenderer {
 
         if ((musicRegion != null) != (trackSnapshot != null)) {
             return SceneResult.Rejected("music region and track snapshot must match")
-        }
-        if (musicRegion != null && (musicRegion.mode != "text" || musicRegion.artwork != null)) {
-            return SceneResult.Rejected("music artwork rendering is not supported")
         }
 
         val placements = expression.placements
@@ -321,41 +338,59 @@ object CollageRenderer {
             )
         }
 
-        val musicScene = if (musicRegion == null || musicType == null) {
-            null
+        val musicScene: SceneMusic?
+        val artworkScene: SceneArtwork?
+        if (musicRegion == null || musicType == null) {
+            musicScene = null
+            artworkScene = null
         } else {
             val snapshot = requireNotNull(trackSnapshot)
             val regionRect = RectI(musicRegion.x, musicRegion.y, musicRegion.width, musicRegion.height)
-            val text = snapshot.title + "\n" + snapshot.artistDisplay
-            val measurement = measurer.measure(
-                TextMeasureRequest(
+            val descriptor = musicRegion.artwork
+            val verified = descriptor != null &&
+                artwork != null &&
+                artwork.width == descriptor.width &&
+                artwork.height == descriptor.height
+            if (verified) {
+                // A1 guarantees `mode == "thumbnail"` whenever artwork is sealed.
+                musicScene = null
+                artworkScene = SceneArtwork(regionRect, parseColor(style.palette.sound))
+            } else {
+                // `mode == "text"`, or a thumbnail whose cover could not be
+                // fetched/verified: render the sealed words (the no-art
+                // layout). Never a placeholder cover.
+                val text = snapshot.title + "\n" + snapshot.artistDisplay
+                val measurement = measurer.measure(
+                    TextMeasureRequest(
+                        text = text,
+                        family = musicType.family,
+                        size = musicType.size,
+                        weight = musicType.weight,
+                        italic = musicType.italic,
+                        line = musicType.line,
+                        maxWidth = musicRegion.width,
+                        maxHeight = musicRegion.height,
+                    ),
+                )
+                if (!fits(measurement, regionRect)) {
+                    return SceneResult.Rejected("music does not fit its sealed region")
+                }
+                musicScene = SceneMusic(
+                    title = snapshot.title,
+                    artist = snapshot.artistDisplay,
                     text = text,
+                    region = regionRect,
                     family = musicType.family,
                     size = musicType.size,
                     weight = musicType.weight,
                     italic = musicType.italic,
                     line = musicType.line,
-                    maxWidth = musicRegion.width,
-                    maxHeight = musicRegion.height,
-                ),
-            )
-            if (!fits(measurement, regionRect)) {
-                return SceneResult.Rejected("music does not fit its sealed region")
+                    fontResourceId = requireNotNull(musicFont),
+                    background = parseColor(style.palette.sound),
+                    color = parseColor(style.palette.soundInk),
+                )
+                artworkScene = null
             }
-            SceneMusic(
-                title = snapshot.title,
-                artist = snapshot.artistDisplay,
-                text = text,
-                region = regionRect,
-                family = musicType.family,
-                size = musicType.size,
-                weight = musicType.weight,
-                italic = musicType.italic,
-                line = musicType.line,
-                fontResourceId = requireNotNull(musicFont),
-                background = parseColor(style.palette.sound),
-                color = parseColor(style.palette.soundInk),
-            )
         }
 
         return SceneResult.Ready(
@@ -370,6 +405,7 @@ object CollageRenderer {
                 photos = photos,
                 note = noteScene,
                 music = musicScene,
+                artwork = artworkScene,
             ),
         )
     }

@@ -91,7 +91,7 @@ class BundledCollageRenderCapabilityTest {
         assertEquals(FontRegistry.VERSION, BundledCollageRenderCapability.fontVersion)
         assertEquals(CollageRenderer.PALETTE_REGISTRY_VERSION, BundledCollageRenderCapability.paletteVersion)
         assertEquals(false, BundledCollageRenderCapability.maskSupported)
-        assertEquals(false, BundledCollageRenderCapability.artworkSupported)
+        assertEquals(true, BundledCollageRenderCapability.artworkSupported)
         assertEquals(
             StyleRegistry.digest("press")?.toList(),
             BundledCollageRenderCapability.styleDigest("press", "style-study-1")?.toList(),
@@ -107,6 +107,22 @@ class BundledCollageRenderCapabilityTest {
         for (styleId in listOf("press", "blue-letter", "poster")) {
             val result = ExpressionReceiverAdmission.admit(contentOf(expression(styleId)), BundledCollageRenderCapability)
             assertTrue("$styleId must be Supported, got $result", result is ExpressionReceiverAdmission.Result.Supported)
+        }
+    }
+
+    @Test
+    fun thumbnailArtworkIsAdmittedForAllThreeBundledStyles() {
+        for (styleId in listOf("press", "blue-letter", "poster")) {
+            val thumbnail = expression(styleId).copy(
+                musicRegion = GeneratorExpression.MusicRegion(
+                    x = 0, y = 220, width = 360, height = 60,
+                    mode = "thumbnail",
+                    type = GeneratorExpression.TextType("StudySans", 14, 400, false, 16),
+                    artwork = artwork(),
+                ),
+            )
+            val result = ExpressionReceiverAdmission.admit(contentOf(thumbnail), BundledCollageRenderCapability)
+            assertTrue("$styleId thumbnail must be Supported, got $result", result is ExpressionReceiverAdmission.Result.Supported)
         }
     }
 
@@ -164,8 +180,8 @@ class BundledCollageRenderCapabilityTest {
     }
 
     @Test
-    fun thumbnailArtworkIsRejected() {
-        val tampered = expression("press").copy(
+    fun thumbnailArtworkIsAdmittedWhenArtworkIsSupported() {
+        val thumbnail = expression("press").copy(
             musicRegion = GeneratorExpression.MusicRegion(
                 x = 0, y = 220, width = 360, height = 60,
                 mode = "thumbnail",
@@ -173,6 +189,7 @@ class BundledCollageRenderCapabilityTest {
                 artwork = artwork(),
             ),
         )
-        assertEquals("music artwork rendering is not supported", reason(tampered))
+        val result = ExpressionReceiverAdmission.admit(contentOf(thumbnail), BundledCollageRenderCapability)
+        assertTrue("expected Supported, got $result", result is ExpressionReceiverAdmission.Result.Supported)
     }
 }

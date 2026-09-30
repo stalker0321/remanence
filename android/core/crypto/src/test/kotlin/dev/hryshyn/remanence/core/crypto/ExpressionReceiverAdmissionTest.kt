@@ -335,6 +335,15 @@ class ExpressionReceiverAdmissionTest {
     }
 
     @Test
+    fun thumbnailArtworkIsAdmittedWhenArtworkIsSupported() {
+        val result = ExpressionReceiverAdmission.admit(
+            contentOf(expressionV3Artwork(), snapshot()),
+            capability(artworkSupported = true),
+        )
+        assertTrue(result is ExpressionReceiverAdmission.Result.Supported, "expected Supported, got $result")
+    }
+
+    @Test
     fun maskIsRejectedWhenMaskIsUnsupported() {
         val masked = expressionV3Base().copy(
             placements = contentIds.map { placementV3(it).copy(maskId = "rect") },

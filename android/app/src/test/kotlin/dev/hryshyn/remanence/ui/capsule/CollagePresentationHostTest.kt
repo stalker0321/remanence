@@ -6,6 +6,8 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import dev.hryshyn.remanence.core.data.network.ArtworkFetchResult
+import dev.hryshyn.remanence.core.data.network.ArtworkFetcher
 import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
 import dev.hryshyn.remanence.core.model.GeneratorExpression
 import dev.hryshyn.remanence.ui.collage.CollageRenderer
@@ -54,8 +56,8 @@ class CollagePresentationHostTest {
         url = "https://art.example.org/cover/ab12.webp",
         sha256 = ByteArray(32) { it.toByte() },
         mimeType = "image/webp",
-        width = 640,
-        height = 640,
+        width = 4,
+        height = 4,
     )
 
     private fun expressionV3(
@@ -107,6 +109,7 @@ class CollagePresentationHostTest {
         note: String? = null,
         track: CapsuleTrackSnapshotV1? = null,
         decoder: Ber1PhotoDecoder = okDecoder(),
+        artworkFetcher: ArtworkFetcher? = null,
     ): CollagePresentationState {
         val state = CollagePresentationState(
             expression = expression,
@@ -114,6 +117,7 @@ class CollagePresentationHostTest {
             note = note,
             track = track,
             decoder = decoder,
+            artworkFetcher = artworkFetcher,
         )
         runBlocking { state.load() }
         return state
@@ -169,6 +173,23 @@ class CollagePresentationHostTest {
 
     @Test
     fun prepareRejectionRendersNoticeAndReleasesPixels() {
+        val music = GeneratorExpression.MusicRegion(
+            x = 0, y = 220, width = 360, height = 60,
+            mode = "text",
+            type = GeneratorExpression.TextType("StudySans", 14, 400, false, 16),
+            artwork = null,
+        )
+        // A sealed music region with no track snapshot is a prepare rejection.
+        val state = loadedState(expressionV3(musicRegion = music))
+        composeRule.setContent { CollagePresentationHost(state, "collage", onClose = {}) }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("capsule_unsupported_notice").assertExists()
+        composeRule.onNodeWithTag("collage_canvas").assertDoesNotExist()
+        assertTrue("prepare rejection must release decoded pixels", state.bitmaps.isEmpty())
+    }
+
+    @Test
+    fun thumbnailWithoutVerifiedCoverPaintsDegradedTextLayout() {
         val thumbnail = GeneratorExpression.MusicRegion(
             x = 0, y = 220, width = 360, height = 60,
             mode = "thumbnail",
@@ -178,9 +199,29 @@ class CollagePresentationHostTest {
         val state = loadedState(expressionV3(musicRegion = thumbnail), track = snapshot())
         composeRule.setContent { CollagePresentationHost(state, "collage", onClose = {}) }
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("capsule_unsupported_notice").assertExists()
-        composeRule.onNodeWithTag("collage_canvas").assertDoesNotExist()
-        assertTrue("prepare rejection must release decoded pixels", state.bitmaps.isEmpty())
+        composeRule.onNodeWithTag("collage_canvas").assertExists()
+        composeRule.onNodeWithTag("capsule_unsupported_notice").assertDoesNotExist()
+        composeRule.onNodeWithTag("capsule_track_card").assertDoesNotExist()
+    }
+
+    @Test
+    fun verifiedArtworkPaintsCanvas() {
+        val thumbnail = GeneratorExpression.MusicRegion(
+            x = 0, y = 220, width = 360, height = 60,
+            mode = "thumbnail",
+            type = GeneratorExpression.TextType("StudySans", 14, 400, false, 16),
+            artwork = artwork(),
+        )
+        val state = loadedState(
+            expressionV3(musicRegion = thumbnail),
+            track = snapshot(),
+            artworkFetcher = ArtworkFetcher { ArtworkFetchResult.Verified(ByteArray(4)) },
+        )
+        composeRule.setContent { CollagePresentationHost(state, "collage", onClose = {}) }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("collage_canvas", useUnmergedTree = true).assertExists()
+        composeRule.onNodeWithTag("collage_canvas_content", useUnmergedTree = true).assertExists()
+        composeRule.onNodeWithTag("capsule_unsupported_notice").assertDoesNotExist()
     }
 
     @Test

@@ -6,6 +6,7 @@ import dev.hryshyn.remanence.core.model.GeneratorExpression
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -133,8 +134,9 @@ class CollageRendererTest {
         note: String? = null,
         trackSnapshot: CapsuleTrackSnapshotV1? = null,
         measurer: CollageRenderer.TextMeasurer = FakeMeasurer(),
+        artwork: CollageRenderer.SourcePhoto? = null,
     ): CollageRenderer.Scene {
-        val result = CollageRenderer.prepare(expression, note, trackSnapshot, sources(), measurer)
+        val result = CollageRenderer.prepare(expression, note, trackSnapshot, sources(), measurer, artwork)
         assertTrue("expected Ready, got $result", result is CollageRenderer.SceneResult.Ready)
         return (result as CollageRenderer.SceneResult.Ready).scene
     }
@@ -144,8 +146,9 @@ class CollageRendererTest {
         note: String? = null,
         trackSnapshot: CapsuleTrackSnapshotV1? = null,
         measurer: CollageRenderer.TextMeasurer = FakeMeasurer(),
+        artwork: CollageRenderer.SourcePhoto? = null,
     ): String {
-        val result = CollageRenderer.prepare(expression, note, trackSnapshot, sources(), measurer)
+        val result = CollageRenderer.prepare(expression, note, trackSnapshot, sources(), measurer, artwork)
         assertTrue("expected Rejected, got $result", result is CollageRenderer.SceneResult.Rejected)
         return (result as CollageRenderer.SceneResult.Rejected).reason
     }
@@ -290,6 +293,60 @@ class CollageRendererTest {
         )
     }
 
+    private fun artworkRef() = GeneratorExpression.ArtworkRef(
+        provider = "catalog-sample",
+        url = "https://art.example.org/cover/ab12.webp",
+        sha256 = ByteArray(32) { it.toByte() },
+        mimeType = "image/webp",
+        width = 640,
+        height = 640,
+    )
+
+    private fun thumbnailMusicRegion() = GeneratorExpression.MusicRegion(
+        x = 0,
+        y = 220,
+        width = 360,
+        height = 60,
+        mode = "thumbnail",
+        type = GeneratorExpression.TextType("StudySerif", 14, 400, true, 16),
+        artwork = artworkRef(),
+    )
+
+    @Test
+    fun thumbnailWithVerifiedCoverEmitsArtworkLayerInsteadOfText() {
+        val scene = ready(
+            expressionV3(styleId = "press", musicRegion = thumbnailMusicRegion()),
+            trackSnapshot = snapshot(),
+            artwork = CollageRenderer.SourcePhoto(640, 640),
+        )
+        assertNull(scene.music)
+        assertNotNull(scene.artwork)
+        val artwork = requireNotNull(scene.artwork)
+        assertEquals(CollageRenderer.RectI(0, 220, 360, 60), artwork.region)
+        assertEquals(0xFF191B19.toInt(), artwork.background)
+    }
+
+    @Test
+    fun thumbnailWithoutVerifiedCoverDegradesToTextLayout() {
+        val scene = ready(
+            expressionV3(styleId = "press", musicRegion = thumbnailMusicRegion()),
+            trackSnapshot = snapshot(),
+        )
+        assertNull(scene.artwork)
+        assertNotNull(scene.music)
+    }
+
+    @Test
+    fun thumbnailWithMismatchedCoverSizeDegradesToTextLayout() {
+        val scene = ready(
+            expressionV3(styleId = "press", musicRegion = thumbnailMusicRegion()),
+            trackSnapshot = snapshot(),
+            artwork = CollageRenderer.SourcePhoto(100, 100),
+        )
+        assertNull(scene.artwork)
+        assertNotNull(scene.music)
+    }
+
     @Test
     fun structuralAndCapabilityRejections() {
         assertEquals(
@@ -342,10 +399,14 @@ class CollageRendererTest {
             rejected(expressionV3(styleId = "press"), trackSnapshot = snapshot()),
         )
         val thumbnail = musicRegion.copy(mode = "thumbnail", artwork = artwork())
-        assertEquals(
-            "music artwork rendering is not supported",
-            rejected(expressionV3(styleId = "press", musicRegion = thumbnail), trackSnapshot = snapshot()),
+        // A1-consistent thumbnail with no supplied verified cover degrades to
+        // the text/no-art layout instead of rejecting the whole scene.
+        val degraded = ready(
+            expressionV3(styleId = "press", musicRegion = thumbnail),
+            trackSnapshot = snapshot(),
         )
+        assertNull(degraded.artwork)
+        assertNotNull(degraded.music)
         assertEquals(
             "placement 0 carries a mask",
             rejected(

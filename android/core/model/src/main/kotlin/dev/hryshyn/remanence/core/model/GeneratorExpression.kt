@@ -312,6 +312,17 @@ object GeneratorExpression {
      */
     val ARTWORK_PROVIDERS: Set<String> = setOf("catalog-sample", "coverartarchive")
 
+    /**
+     * Allowlisted fetch hosts for cover art (contract T2). This is the
+     * fetch-time companion to [ARTWORK_PROVIDERS] and must never contain a
+     * backend `ApiBaseUrl` host, so the backend can never be asked to serve or
+     * proxy covers. Seeded with the reserved sample-catalog host; the S1
+     * catalog slice owns extending it. The fetcher re-validates the sealed URL
+     * and enforces membership before every request (and never follows a
+     * redirect to a non-member).
+     */
+    val ARTWORK_HOSTS: Set<String> = setOf("art.example.org")
+
     /** Maximum artwork URL length in chars (rule A4). */
     const val ARTWORK_URL_MAX = 512
 

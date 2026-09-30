@@ -3,6 +3,10 @@ package dev.hryshyn.remanence.ui.capsule
 import android.graphics.Bitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import dev.hryshyn.remanence.core.data.network.ArtworkCache
+import dev.hryshyn.remanence.core.data.network.ArtworkFetchFailure
+import dev.hryshyn.remanence.core.data.network.ArtworkFetchResult
+import dev.hryshyn.remanence.core.data.network.ArtworkFetcher
 import dev.hryshyn.remanence.core.model.GeneratorExpression
 import dev.hryshyn.remanence.ui.collage.CollageRenderer
 import dev.hryshyn.remanence.ui.collage.FontRegistry
@@ -12,10 +16,13 @@ import kotlin.concurrent.thread
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -253,5 +260,123 @@ class CollagePresentationStateTest {
         state.close()
         assertEquals(CollagePresentationState.Status.Loading, state.status)
         assertTrue(state.bitmaps.isEmpty())
+    }
+
+    private fun artworkRef() = GeneratorExpression.ArtworkRef(
+        provider = "catalog-sample",
+        url = "https://art.example.org/cover/ab12.webp",
+        sha256 = ByteArray(32) { it.toByte() },
+        mimeType = "image/webp",
+        width = 4,
+        height = 4,
+    )
+
+    private fun expressionV3Thumbnail() = expressionV3().copy(
+        musicRegion = GeneratorExpression.MusicRegion(
+            x = 0, y = 220, width = 360, height = 60,
+            mode = "thumbnail",
+            type = GeneratorExpression.TextType("StudySans", 14, 400, false, 16),
+            artwork = artworkRef(),
+        ),
+    )
+
+    private fun artworkState(
+        fetcher: ArtworkFetcher?,
+        cache: ArtworkCache? = null,
+        timeoutMs: Long = CollagePresentationState.DEFAULT_ARTWORK_TIMEOUT_MS,
+    ) = CollagePresentationState(
+        expression = expressionV3Thumbnail(),
+        loadPhoto = { contentId -> contentId.toByteArray().also { owned += it } },
+        decoder = okDecoder(),
+        artworkFetcher = fetcher,
+        artworkCache = cache,
+        artworkTimeoutMs = timeoutMs,
+    )
+
+    @Test
+    fun verifiedArtworkIsFetchedDecodedPublishedAndCached() = runBlocking {
+        val cache = ArtworkCache()
+        val state = artworkState(
+            fetcher = ArtworkFetcher { ArtworkFetchResult.Verified("cover".toByteArray()) },
+            cache = cache,
+        )
+        state.load()
+        val ready = state.status as? CollagePresentationState.Status.Ready
+            ?: error("expected Ready, got ${state.status}")
+        assertNotNull("a verified cover must publish a bitmap", ready.artwork)
+        assertEquals(1, cache.size)
+        assertOwnedBytesZeroed()
+    }
+
+    @Test
+    fun artworkFetchFailureDegradesToTheNoArtLayout() = runBlocking {
+        val state = artworkState(
+            fetcher = ArtworkFetcher { ArtworkFetchResult.Failed(ArtworkFetchFailure.NETWORK) },
+        )
+        state.load()
+        val ready = state.status as? CollagePresentationState.Status.Ready
+            ?: error("expected Ready, got ${state.status}")
+        assertNull("a failed fetch must degrade to no art", ready.artwork)
+        assertEquals(setOf("p0", "p1", "p2"), ready.bitmaps.keys)
+    }
+
+    @Test
+    fun artworkCacheHitSkipsTheFetcher() = runBlocking {
+        var fetches = 0
+        val cache = ArtworkCache()
+        cache.put(requireNotNull(expressionV3Thumbnail().musicRegion?.artwork).sha256, "cached".toByteArray())
+        val state = artworkState(
+            fetcher = ArtworkFetcher {
+                fetches++
+                ArtworkFetchResult.Failed(ArtworkFetchFailure.NETWORK)
+            },
+            cache = cache,
+        )
+        state.load()
+        val ready = state.status as? CollagePresentationState.Status.Ready
+            ?: error("expected Ready, got ${state.status}")
+        assertNotNull(ready.artwork)
+        assertEquals("a cache hit must not fetch", 0, fetches)
+    }
+
+    @Test
+    fun nullFetcherCannotProduceArtwork() = runBlocking {
+        val state = artworkState(fetcher = null)
+        state.load()
+        val ready = state.status as? CollagePresentationState.Status.Ready
+            ?: error("expected Ready, got ${state.status}")
+        assertNull(ready.artwork)
+    }
+
+    @Test
+    fun slowArtworkFetchDegradesToTheNoArtLayout() = runBlocking {
+        val state = artworkState(
+            fetcher = ArtworkFetcher {
+                delay(5_000)
+                ArtworkFetchResult.Verified("cover".toByteArray())
+            },
+            timeoutMs = 50,
+        )
+        state.load()
+        val ready = state.status as? CollagePresentationState.Status.Ready
+            ?: error("expected Ready, got ${state.status}")
+        assertNull("a slow fetch must degrade to no art", ready.artwork)
+    }
+
+    @Test
+    fun cancellationDuringArtworkFetchRethrowsAndReleasesPhotos() {
+        val state = artworkState(
+            fetcher = ArtworkFetcher { throw CancellationException("artwork cancelled") },
+        )
+        var cancelled = false
+        try {
+            runBlocking { state.load() }
+        } catch (_: CancellationException) {
+            cancelled = true
+        }
+        assertTrue("artwork cancellation must propagate", cancelled)
+        assertEquals(CollagePresentationState.Status.Loading, state.status)
+        assertTrue(state.bitmaps.isEmpty())
+        assertOwnedBytesZeroed()
     }
 }

@@ -17,6 +17,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.hryshyn.remanence.R
+import dev.hryshyn.remanence.core.data.network.ArtworkCache
+import dev.hryshyn.remanence.core.data.network.ArtworkFetchResult
+import dev.hryshyn.remanence.core.data.network.ArtworkFetcher
 import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
 import dev.hryshyn.remanence.core.model.GeneratorExpression
 import dev.hryshyn.remanence.ui.collage.CollageCanvas
@@ -24,6 +27,7 @@ import dev.hryshyn.remanence.ui.collage.CollageRenderer
 import dev.hryshyn.remanence.ui.collage.rememberCollageTextMeasurer
 import dev.hryshyn.remanence.ui.hold.HoldTextButton
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Direct-testable recipient presentation for one already-parsed contract-V3
@@ -48,11 +52,26 @@ class CollagePresentationState(
     val note: String? = null,
     val track: CapsuleTrackSnapshotV1? = null,
     private val decoder: Ber1PhotoDecoder = DefaultBer1PhotoDecoder,
+    /**
+     * Direct client-only cover fetcher. Null (or a fetch failure) degrades a
+     * sealed thumbnail to the text/no-art layout; it never blocks capsule open
+     * and never paints unverified bytes.
+     */
+    private val artworkFetcher: ArtworkFetcher? = null,
+    /** Optional bounded in-memory verified-artwork cache. */
+    private val artworkCache: ArtworkCache? = null,
+    /** Hard ceiling on the cover fetch; a slower provider degrades to no art. */
+    private val artworkTimeoutMs: Long = DEFAULT_ARTWORK_TIMEOUT_MS,
 ) : AutoCloseable {
 
     sealed interface Status {
         data object Loading : Status
-        data class Ready(val bitmaps: Map<String, ImageBitmap>) : Status
+        data class Ready(
+            val bitmaps: Map<String, ImageBitmap>,
+            /** Verified cover bitmap for a sealed thumbnail, else null. */
+            val artwork: ImageBitmap? = null,
+        ) : Status
+
         data class Unsupported(val reason: String) : Status
     }
 
@@ -118,12 +137,13 @@ class CollagePresentationState(
                     decoded[photo.contentId] = bitmap
                 }
             }
+            val artworkBitmap = loadArtwork()
             synchronized(lock) {
                 if (closed) {
                     decoded.clear()
                     return
                 }
-                status = Status.Ready(decoded)
+                status = Status.Ready(decoded, artworkBitmap)
             }
         } catch (cancelled: CancellationException) {
             synchronized(lock) { decoded.clear() }
@@ -133,6 +153,33 @@ class CollagePresentationState(
                 decoded.clear()
                 if (!closed) status = Status.Unsupported(DECODE_FAILURE_REASON)
             }
+        }
+    }
+
+    /**
+     * Fetches and decodes the sealed thumbnail cover after the photos are
+     * decoded (contract T8: after admission, off the open path). A cache hit by
+     * the sealed digest skips the fetch. Any fetch/verify/decode failure
+     * returns null so the host renders the text/no-art layout; the verified
+     * bytes are zeroized on every path. Cancellation propagates and cancels the
+     * fetcher's OkHttp call with this coroutine.
+     */
+    private suspend fun loadArtwork(): ImageBitmap? {
+        val descriptor = expression.musicRegion?.artwork ?: return null
+        val fetcher = artworkFetcher ?: return null
+        val bytes = artworkCache?.get(descriptor.sha256) ?: run {
+            val result = withTimeoutOrNull(artworkTimeoutMs) { fetcher.fetch(descriptor) }
+            when (result) {
+                is ArtworkFetchResult.Verified -> result.bytes
+                else -> return null
+            }
+        }
+        return try {
+            val bitmap = decoder.decode(bytes)
+            if (bitmap != null) artworkCache?.put(descriptor.sha256, bytes)
+            bitmap
+        } finally {
+            bytes.fill(0)
         }
     }
 
@@ -158,6 +205,9 @@ class CollagePresentationState(
 
     companion object {
         const val DECODE_FAILURE_REASON = "the collage photos could not be decoded"
+
+        /** Bounded cover-fetch budget; a slower provider degrades to no art. */
+        const val DEFAULT_ARTWORK_TIMEOUT_MS = 5_000L
     }
 }
 
@@ -187,11 +237,17 @@ internal fun CollagePresentationHost(
         is CollagePresentationState.Status.Ready -> {
             val measurer = rememberCollageTextMeasurer()
             val images = status.bitmaps
+            val artwork = status.artwork
             val sizes = remember(images) {
                 images.mapValues { CollageRenderer.SourcePhoto(it.value.width, it.value.height) }
             }
-            val result = remember(state.expression, state.note, state.track, sizes, measurer) {
-                CollageRenderer.prepare(state.expression, state.note, state.track, sizes, measurer)
+            val artworkSize = remember(artwork) {
+                artwork?.let { CollageRenderer.SourcePhoto(it.width, it.height) }
+            }
+            val result = remember(state.expression, state.note, state.track, sizes, measurer, artworkSize) {
+                CollageRenderer.prepare(
+                    state.expression, state.note, state.track, sizes, measurer, artworkSize,
+                )
             }
             LaunchedEffect(result) {
                 if (result is CollageRenderer.SceneResult.Rejected) state.unsupported(result.reason)
@@ -204,6 +260,7 @@ internal fun CollagePresentationHost(
                         contentDescription = contentDescription,
                         modifier = Modifier.fillMaxSize(),
                         textMeasurer = measurer,
+                        artwork = artwork,
                     )
                     HoldTextButton(
                         onClick = { state.close(); onClose() },

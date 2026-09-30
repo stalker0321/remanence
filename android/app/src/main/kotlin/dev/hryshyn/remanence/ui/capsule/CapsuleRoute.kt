@@ -33,6 +33,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.isActive
 import kotlin.coroutines.cancellation.CancellationException
 import dev.hryshyn.remanence.R
+import dev.hryshyn.remanence.core.data.network.ArtworkCache
+import dev.hryshyn.remanence.core.data.network.ArtworkFetcher
 import dev.hryshyn.remanence.core.model.GeneratorExpression
 import dev.hryshyn.remanence.core.model.ProtocolV1Limits
 
@@ -110,6 +112,10 @@ internal fun CapsuleRoute(
     // decrypt/decode can never publish Ready afterwards.
     val revoked = remember(grantId) { mutableStateOf(false) }
 
+    // Bounded in-memory verified-cover cache shared across this route's opens.
+    // Never on disk, keyed by the sealed digest, never logged.
+    val artworkCache = remember { ArtworkCache() }
+
     // The route owns the presentation state while it is mounted. System Back
     // must release it before delegating the navigation/authority revocation.
     BackHandler {
@@ -181,6 +187,10 @@ internal fun CapsuleRoute(
                             // ride the same grant-guarded source.
                             note = source.noteText(binding.capsuleId),
                             track = source.trackSnapshot(binding.capsuleId),
+                            // Client-only verified cover fetch; failure degrades
+                            // to the text/no-art layout.
+                            artworkFetcher = ArtworkFetcher.Default,
+                            artworkCache = artworkCache,
                         )
                         collage.load()
                         CapsuleRouteState.Ready(CapsulePresentation.Collage(collage))

@@ -63,7 +63,11 @@ interface CollageRenderCapability {
  *
  * V3 additionally requires a [CollageRenderCapability]: exact style
  * id/version/digest (constant-time), font/palette registry versions, every
- * sealed note/music face bundled, no mask, and text-only (no artwork) music.
+ * sealed note/music face bundled, no mask, and music that is either text-only
+ * (`mode == "text"`, no artwork) or a thumbnail descriptor
+ * (`mode == "thumbnail"`, artwork present) when the capability advertises
+ * artwork support. The descriptor's URL/host/digest are re-verified at fetch
+ * time, never here, so admission itself performs no network work.
  * With the default [CollageRenderCapability.Disabled] the V3 result is the
  * existing blanket `"finished collage rendering is not supported"`.
  */

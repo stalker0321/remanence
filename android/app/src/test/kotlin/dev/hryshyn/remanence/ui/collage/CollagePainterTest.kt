@@ -28,6 +28,7 @@ class CollagePainterTest {
     private fun scene(
         note: CollageRenderer.SceneText? = null,
         music: CollageRenderer.SceneMusic? = null,
+        artwork: CollageRenderer.SceneArtwork? = null,
     ) = CollageRenderer.Scene(
         canvasWidth = 360,
         canvasHeight = 640,
@@ -39,6 +40,7 @@ class CollagePainterTest {
         photos = photos,
         note = note,
         music = music,
+        artwork = artwork,
     )
 
     private fun imageSizes() =
@@ -99,6 +101,17 @@ class CollagePainterTest {
             ),
             ops.map { it::class.simpleName },
         )
+    }
+
+    @Test
+    fun artworkSceneEmitsMusicArtworkInsteadOfMusicText() {
+        val artwork = CollageRenderer.SceneArtwork(rect(0, 220, 360, 60), 0xFF040506.toInt())
+        val ops = CollagePainter.drawList(scene(artwork = artwork), imageSizes())
+            ?: error("expected a draw list")
+        val artworkOp = ops.filterIsInstance<CollagePainter.Op.MusicArtwork>().single()
+        assertEquals(rect(0, 220, 360, 60), artworkOp.region)
+        assertEquals(0xFF040506.toInt(), artworkOp.background)
+        assertTrue("a thumbnail scene must not also draw music text", ops.none { it is CollagePainter.Op.MusicText })
     }
 
     @Test

@@ -129,6 +129,16 @@ class ProductionApiStack private constructor(
     val musicSearchRepository: MusicSearchRepository =
         MusicSearchRepository(authenticatedClient, baseUrl, requestLeaseProvider)
 
+    /**
+     * T062 sender artwork descriptor source: a direct, unauthenticated
+     * MusicBrainz/CAA client on a **bare** client (no bearer, no
+     * authenticator, redirects disabled so every hop is re-validated by the
+     * resolver itself). The Remanence backend is never asked for artwork
+     * bytes, URLs or digests (V5 invariant I1).
+     */
+    val musicArtworkResolver: MusicArtworkResolver =
+        MusicBrainzCoverArtResolver(HttpClientFactory.create()).asMusicArtworkResolver()
+
     companion object {
         fun create(
             baseUrl: ApiBaseUrl,

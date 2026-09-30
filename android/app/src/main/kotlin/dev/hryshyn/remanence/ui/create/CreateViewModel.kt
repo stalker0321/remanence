@@ -145,6 +145,12 @@ class CreateViewModel(
      * diagnostic engine path.
      */
     private val collageSourceFactory: CollageCropSourceFactory? = null,
+    /**
+     * T062: sender-side descriptor source (direct MusicBrainz/CAA client).
+     * Null/absent keeps the pre-T062 behaviour exactly: every selection seals
+     * `mode = "text"`, `artwork = null`. No placeholder, no provider guess.
+     */
+    private val musicArtworkResolver: dev.hryshyn.remanence.core.data.network.MusicArtworkResolver? = null,
 ) : ViewModel() {
 
     /** Current-send state; deliberately contains no history or inbox projection. */
@@ -237,17 +243,56 @@ class CreateViewModel(
     val musicSelection: StateFlow<dev.hryshyn.remanence.core.data.network.MusicTrackHit?> =
         _musicSelection.asStateFlow()
 
+    /**
+     * T062: descriptor resolved for the *current* selection only. It is
+     * cleared synchronously on every selection change, so a slow provider
+     * response can never be sealed under a different track; a response whose
+     * epoch has moved on is dropped.
+     */
+    private val _musicArtwork = MutableStateFlow<GeneratorExpression.ArtworkRef?>(null)
+    val musicArtwork: StateFlow<GeneratorExpression.ArtworkRef?> = _musicArtwork.asStateFlow()
+
+    private var musicArtworkEpoch = 0
+
     fun setMusicSelection(hit: dev.hryshyn.remanence.core.data.network.MusicTrackHit?) {
         if (_musicSelection.value == hit) return
         _musicSelection.value = hit
         collageChoices.clear()
         frozenCollageSelection = null
+        startMusicArtworkResolution(hit)
     }
 
     fun clearMusicSelection() {
         _musicSelection.value = null
         collageChoices.clear()
         frozenCollageSelection = null
+        startMusicArtworkResolution(null)
+    }
+
+    /**
+     * Resolve the selected recording to a sealable descriptor, or leave the
+     * artwork absent (text mode). Failures are swallowed by design: artwork
+     * must never block or fail the music flow.
+     */
+    private fun startMusicArtworkResolution(
+        hit: dev.hryshyn.remanence.core.data.network.MusicTrackHit?,
+    ) {
+        val epoch = ++musicArtworkEpoch
+        _musicArtwork.value = null
+        val resolver = musicArtworkResolver ?: return
+        val recordingMbid = hit?.recordingMbid?.takeIf { it.isNotBlank() } ?: return
+        viewModelScope.launch {
+            val descriptor = try {
+                resolver.resolve(recordingMbid)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            }
+            if (epoch == musicArtworkEpoch) {
+                _musicArtwork.value = descriptor
+            }
+        }
     }
 
     /** Explicit sender collage selection; refused if no such candidate. */
@@ -530,6 +575,7 @@ class CreateViewModel(
         // independent of photos/note, and clearing on keystrokes would
         // destroy the selection with zero safety benefit.
         _musicSelection.value = null
+        startMusicArtworkResolution(null)
         frontAttempt.reset()
         frontFingerprintId = null
         _flowError.value = null
@@ -1553,6 +1599,7 @@ class CreateViewModel(
         // S2b-sender: leaving the surface drops the picker selection
         // with every other content state (see beginSession for the rationale).
         _musicSelection.value = null
+        startMusicArtworkResolution(null)
         frontAttempt.reset()
         frontFingerprintId = null
         _step.value = Step.RECIPIENT_LOOKUP

@@ -175,16 +175,20 @@ def validate_row(payload: object) -> ValidatedRow:
     duration = payload.get("duration_ms")
     if duration is not None and (type(duration) is not int or duration <= 0):
         raise RowInvalid("bad_duration")
+    recording_mbid = _valid_mbid(payload["recording_mbid"])
     try:
         track = MusicTrack.create(
             title=payload["title"],
             artists=[name.strip() for name in artists],
             track_id=track_id,
             duration_ms=duration,
+            # Canonical recording MBID rides on the in-memory track so the
+            # index document and the public hit carry it (T062 metadata
+            # only; the external-id row is still written below unchanged).
+            recording_mbid=recording_mbid,
         )
     except (ValueError, TypeError):
         raise RowInvalid("bad_track_fields") from None
-    recording_mbid = _valid_mbid(payload["recording_mbid"])
     try:
         artist_mbid_list = tuple(str(uuid.UUID(value)).lower() for value in artist_mbids)
     except (ValueError, AttributeError, TypeError):

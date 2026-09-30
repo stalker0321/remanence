@@ -229,6 +229,7 @@ def search_music(
                 year=hit.year,
                 durationMs=hit.duration_ms,
                 artworkAvailable=bool(hit.artwork_available),
+                recordingMbid=hit.recording_mbid,
             )
             for hit in hits
         ]

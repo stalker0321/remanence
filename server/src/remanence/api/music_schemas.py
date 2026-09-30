@@ -1,8 +1,14 @@
 """Public music search response schemas (ARCHITECTURE-v1 sections 26-27).
 
-The client sees only own track data: id (own RemanenceTrackId), title,
-artists, version, release, year, durationMs, artworkAvailable. Provider
-metadata (MBID, Spotify ID, ...) is never exposed here.
+The client sees own track data: id (own RemanenceTrackId), title, artists,
+version, release, year, durationMs, artworkAvailable — plus exactly one
+provider identifier, ``recordingMbid`` (T062).
+
+``recordingMbid`` is the canonical MusicBrainz *recording* id the catalog
+already stores. It is metadata only: it lets the sender client resolve and
+fetch cover art itself. No artwork URL, artwork digest, artwork byte, release
+id, release-group id or any other provider identifier is ever exposed here, and
+the backend never fetches, proxies, caches or stores artwork (V5 invariant I1).
 """
 
 from __future__ import annotations
@@ -10,6 +16,8 @@ from __future__ import annotations
 import uuid
 
 from pydantic import BaseModel, ConfigDict, field_validator
+
+from remanence.music.domain import parse_optional_recording_mbid
 
 
 class MusicSearchResultItem(BaseModel):
@@ -23,6 +31,15 @@ class MusicSearchResultItem(BaseModel):
     year: int | None = None
     durationMs: int | None = None
     artworkAvailable: bool = False
+    recordingMbid: str | None = None
+
+    @field_validator("recordingMbid", mode="after")
+    @classmethod
+    def _canonical_recording_mbid(cls, value: str | None) -> str | None:
+        try:
+            return parse_optional_recording_mbid(value)
+        except ValueError:
+            raise ValueError("invalid recordingMbid") from None
 
     @field_validator("title")
     @classmethod

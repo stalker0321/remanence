@@ -30,6 +30,10 @@ CANONICAL_RANK_VARIANT = 1
 
 # Explicit allow-list of fields the live adapter requests back. The index
 # must never leak provider-internal fields to the API layer (D12).
+# ``recordingMbid`` is the single sanctioned provider identifier (T062): the
+# sender client needs the canonical recording MBID to address cover art
+# itself. Release / release-group ids, artwork URLs and digests are still
+# never indexed and never returned.
 SEARCH_ATTRIBUTES_TO_RETRIEVE = (
     "id",
     "title",
@@ -41,6 +45,7 @@ SEARCH_ATTRIBUTES_TO_RETRIEVE = (
     "isCanonical",
     "canonicalRank",
     "hasArtwork",
+    "recordingMbid",
 )
 
 DOCUMENT_FIELDS = frozenset(
@@ -57,6 +62,7 @@ DOCUMENT_FIELDS = frozenset(
         "isCanonical",
         "canonicalRank",
         "hasArtwork",
+        "recordingMbid",
     }
 )
 
@@ -87,6 +93,7 @@ def build_search_document(track: MusicTrack) -> dict[str, Any]:
         "isCanonical": bool(track.is_canonical),
         "canonicalRank": canonical_rank(track),
         "hasArtwork": bool(track.has_artwork),
+        "recordingMbid": track.recording_mbid,
     }
 
 

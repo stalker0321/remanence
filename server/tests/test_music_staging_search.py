@@ -257,3 +257,51 @@ def test_credit_positions_preserved() -> None:
     assert rows == [(artist_id_for_mbid(_M1), 0)]
     hits, _ = search.search_with_total("arctic monkeys 505", 1)
     assert hits[0].artists == ("Arctic Monkeys",)
+
+
+def test_recording_mbid_attached_from_active_external_ids_only() -> None:
+    """T062: the one provider id reaches the hit as plain metadata.
+
+    Attached only from an *active* ``musicbrainz_recording`` row; an inactive
+    row and an ISRC-only track both stay null. Ranking, matching and the hit
+    count are unchanged by the lookup.
+    """
+    engine = create_engine(
+        "sqlite://", execution_options={"schema_translate_map": {"music": None}}
+    )
+    MusicBase.metadata.create_all(engine)
+    session = Session(engine)
+    _seed(session)
+    session.add(
+        StagedExternalId(
+            track_id=_tid("t1-505-studio"),
+            namespace="musicbrainz_recording",
+            external_id=_M1,
+            source="musicbrainz",
+            confidence="exact",
+            active=True,
+        )
+    )
+    session.add(
+        StagedExternalId(
+            track_id=_tid("t3-505-cover"),
+            namespace="musicbrainz_recording",
+            external_id=_M3,
+            source="musicbrainz",
+            confidence="exact",
+            active=False,
+        )
+    )
+    session.commit()
+
+    search = PostgresStagingSearch(lambda: Session(engine))
+    hits, total = search.search_with_total("505", 10)
+    assert total == 3
+    by_id = {hit.id: hit for hit in hits}
+    assert by_id[_tid("t1-505-studio")].recording_mbid == _M1
+    assert by_id[_tid("t2-505-live")].recording_mbid is None
+    assert by_id[_tid("t3-505-cover")].recording_mbid is None  # inactive row
+    # The lookup never merges or reorders rows.
+    assert _ids(hits)[:2] == sorted(
+        [str(_tid("t1-505-studio")), str(_tid("t3-505-cover"))]
+    )

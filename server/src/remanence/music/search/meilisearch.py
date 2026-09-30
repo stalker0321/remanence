@@ -31,7 +31,11 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
-from remanence.music.domain import TrackSearchResult, normalize_text
+from remanence.music.domain import (
+    TrackSearchResult,
+    normalize_text,
+    parse_optional_recording_mbid,
+)
 from remanence.music.ports import (
     SEARCH_LIMIT_MAX,
     SEARCH_OFFSET_MAX,
@@ -311,6 +315,14 @@ class MeilisearchMusicSearch:
                 type(duration_ms) is not int or duration_ms <= 0
             ):
                 raise MusicSearchError("music search failed")
+            try:
+                # Canonical recording MBID (T062): the one provider id the
+                # sender needs. Malformed values fail closed, never partial.
+                recording_mbid = parse_optional_recording_mbid(
+                    hit.get("recordingMbid")
+                )
+            except ValueError as exc:
+                raise MusicSearchError("music search failed") from exc
             results.append(
                 TrackSearchResult(
                     id=track_id,
@@ -321,6 +333,7 @@ class MeilisearchMusicSearch:
                     year=year,
                     duration_ms=duration_ms,
                     artwork_available=bool(artwork),
+                    recording_mbid=recording_mbid,
                 )
             )
         return results

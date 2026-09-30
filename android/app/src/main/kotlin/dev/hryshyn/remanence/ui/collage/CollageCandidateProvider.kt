@@ -111,8 +111,10 @@ sealed interface CollageProviderResult {
  * Pure: it consumes grammar-5 cell geometry, the authoritative crops from
  * [CollageCropSource] (requested per placement slot, because each style's note
  * type changes the grid), the style registry (real STYD01 digest) and the
- * shared text measurer to seal explicit `noteRegion` / text-mode
- * `musicRegion`. No artwork, no mask. Candidate identity is exactly the
+ * shared text measurer to seal explicit `noteRegion` and a `musicRegion` whose
+ * `mode`/`artwork` follow rule A1 (a supplied descriptor ⇒ `thumbnail`, its
+ * absence ⇒ `text`; a missing descriptor never blocks a candidate). No mask.
+ * Candidate identity is exactly the
  * existing `GeneratorBer1Provider.candidateIdFor` (GENEX03 hash prefix);
  * callers compute the BEXPR02 projection with the existing
  * `CapsulePhotoIdentity` / `GeneratorExpressionProjection` helpers.
@@ -130,6 +132,7 @@ class CollageCandidateProvider(
         input: GeneratorExpression.GeneratorInput,
         note: String?,
         track: CapsuleTrackSnapshotV1?,
+        artwork: GeneratorExpression.ArtworkRef? = null,
     ): CollageProviderResult {
         if (input.photos.size !in MIN_PHOTOS..MAX_PHOTOS) {
             return CollageProviderResult.Rejected("select 3..5 photos")
@@ -140,7 +143,7 @@ class CollageCandidateProvider(
         for (styleId in STYLE_ORDER) {
             val style = StyleRegistry.style(styleId)
                 ?: return CollageProviderResult.Rejected("style $styleId is not bundled")
-            when (val result = buildCandidate(sealedInput, noteText, track, style)) {
+            when (val result = buildCandidate(sealedInput, noteText, track, style, artwork)) {
                 is BuildResult.Built -> built += result.candidate
                 BuildResult.Unavailable -> return CollageProviderResult.Unavailable(NO_ANALYSIS_REASON)
                 BuildResult.Omitted -> Unit
@@ -187,6 +190,7 @@ class CollageCandidateProvider(
         noteText: String?,
         track: CapsuleTrackSnapshotV1?,
         style: StyleRegistry.Style,
+        artwork: GeneratorExpression.ArtworkRef?,
     ): BuildResult {
         val noteType = style.note.toTextType()
         val musicType = style.music.toTextType()
@@ -312,9 +316,12 @@ class CollageCandidateProvider(
                     y = musicRegion.y,
                     width = musicRegion.width,
                     height = musicRegion.height,
-                    mode = "text",
+                    // A1 biconditional: thumbnail exactly when a verified
+                    // descriptor is present; otherwise the words-only music
+                    // line. Absence of artwork never blocks the candidate.
+                    mode = if (artwork != null) "thumbnail" else "text",
                     type = musicType,
-                    artwork = null,
+                    artwork = artwork,
                 )
             },
         )

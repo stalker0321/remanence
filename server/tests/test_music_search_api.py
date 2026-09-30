@@ -69,7 +69,12 @@ def test_search_returns_architecture_shaped_results() -> None:
         "year",
         "durationMs",
         "artworkAvailable",
+        "recordingMbid",
     }
+    # Fixtures carry no stored recording MBID; the field is present but null,
+    # never substituted with a derived or guessed value.
+    assert first["recordingMbid"] is None
+    assert "artworkUrl" not in first and "sha256" not in first
     assert first["title"] == "505"
     assert first["artists"] == ["Arctic Monkeys"]
     assert first["release"] == "Favourite Worst Nightmare"
@@ -77,9 +82,15 @@ def test_search_returns_architecture_shaped_results() -> None:
     assert first["durationMs"] == 253000
     assert first["artworkAvailable"] is True
     serialized = json.dumps(body).lower()
-    assert "musicbrainz" not in serialized
-    assert "spotify" not in serialized
-    assert "mbid" not in serialized
+    # T062: the shape now carries the sanctioned `recordingMbid` key, so the
+    # old blanket "mbid" substring ban would false-positive on the key name.
+    # What must never leak is a provider id *value* or any artwork address:
+    # these fixtures store no recording id, so every wire value is null.
+    assert all(item["recordingMbid"] is None for item in body["results"])
+    for token in ("musicbrainz", "spotify", "deezer", "coverartarchive", "archive.org"):
+        assert token not in serialized
+    for banned_key in ("url", "sha256", "mimeType", "artworkUrl", "releaseMbid"):
+        assert banned_key not in serialized
 
 
 def test_search_requires_authentication() -> None:

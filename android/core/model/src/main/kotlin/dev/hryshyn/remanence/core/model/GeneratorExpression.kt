@@ -305,8 +305,12 @@ object GeneratorExpression {
      * provider only. Host-allowlist enforcement for the fetcher (one fetch
      * host per descriptor) belongs to that later slice, not to seal-time
      * validation.
+     *
+     * `coverartarchive` is the sender-side MusicBrainz/CAA descriptor source
+     * (T062): the key names the provider that owns the sealed URL, never a
+     * Remanence host, and it carries no URL, digest or byte of its own.
      */
-    val ARTWORK_PROVIDERS: Set<String> = setOf("catalog-sample")
+    val ARTWORK_PROVIDERS: Set<String> = setOf("catalog-sample", "coverartarchive")
 
     /** Maximum artwork URL length in chars (rule A4). */
     const val ARTWORK_URL_MAX = 512

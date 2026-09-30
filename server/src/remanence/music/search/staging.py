@@ -9,8 +9,15 @@ Matching mirrors the in-memory intent ranking: normalized AND-tokens
 against title/artist, exact > prefix > substring, variant-aware
 canonical preference, stable ``track_id``-hex tiebreak so pages are
 deterministic. MBID-safe by construction: one track row yields exactly
-one hit; external identities are never read, so ISRC collisions cannot
-merge or duplicate results.
+one hit, so ISRC collisions cannot merge or duplicate results.
+
+External identities are read for exactly one purpose (T062): after
+ranking, the canonical MusicBrainz *recording* id of each returned track
+is attached as plain metadata so the sender client can address cover art
+itself. The lookup is a single bounded ``IN`` select over
+``music_external_id``, it never joins into the match/rank path, it never
+merges rows, and no release / release-group id, URL or artwork byte is
+read or stored anywhere.
 
 Scale note: SQL prefilters candidates (at most STAGING_SEARCH_CANDIDATE_CAP
 IDs — broader queries fail closed 503 instead of materializing unbounded
@@ -27,7 +34,11 @@ from uuid import UUID
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
-from remanence.music.domain import TrackSearchResult, normalize_text
+from remanence.music.domain import (
+    EXTERNAL_NAMESPACE_MUSICBRAINZ_RECORDING,
+    TrackSearchResult,
+    normalize_text,
+)
 from remanence.music.ports import (
     SEARCH_LIMIT_MAX,
     SEARCH_OFFSET_MAX,
@@ -37,6 +48,7 @@ from remanence.music.ports import (
 from remanence.music.search.document import VARIANT_TOKENS
 from remanence.music.staging.models import (
     StagedArtist,
+    StagedExternalId,
     StagedTrack,
     StagedTrackArtist,
 )
@@ -99,7 +111,8 @@ class PostgresStagingSearch:
                 return [], 0
             tracks = self._load_tracks(session, candidate_ids)
             credits = self._load_credits(session, candidate_ids)
-        ranked = self._rank(tracks, credits, tokens)
+            recording_mbids = self._load_recording_mbids(session, candidate_ids)
+        ranked = self._rank(tracks, credits, tokens, recording_mbids)
         total = len(ranked)
         return ranked[offset : offset + limit], total
 
@@ -165,10 +178,37 @@ class PostgresStagingSearch:
         return credits
 
     @staticmethod
+    def _load_recording_mbids(
+        session: Session, track_ids: list[UUID]
+    ) -> dict[UUID, str]:
+        """Track id -> canonical recording MBID (metadata only, T062).
+
+        A track may in principle carry more than one active row; the lowest
+        external id is chosen so the exposed identifier is deterministic.
+        """
+        rows = session.execute(
+            select(
+                StagedExternalId.track_id,
+                StagedExternalId.external_id,
+            )
+            .where(
+                StagedExternalId.track_id.in_(track_ids),
+                StagedExternalId.namespace == EXTERNAL_NAMESPACE_MUSICBRAINZ_RECORDING,
+                StagedExternalId.active.is_(True),
+            )
+            .order_by(StagedExternalId.track_id, StagedExternalId.external_id)
+        ).all()
+        mbids: dict[UUID, str] = {}
+        for track_id, external_id in rows:
+            mbids.setdefault(track_id, external_id)
+        return mbids
+
+    @staticmethod
     def _rank(
         tracks: dict[UUID, StagedTrack],
         credits: dict[UUID, list[str]],
         tokens: tuple[str, ...],
+        recording_mbids: dict[UUID, str] | None = None,
     ) -> list[TrackSearchResult]:
         """Intent ranking identical in spirit to the in-memory ranker.
 
@@ -213,6 +253,7 @@ class PostgresStagingSearch:
                 year=track.first_release_year,
                 duration_ms=track.duration_ms,
                 artwork_available=False,
+                recording_mbid=(recording_mbids or {}).get(track_id),
             )
             scored.append(((-exact, -prefix, demotion, str(track_id)), hit))
         scored.sort(key=lambda item: item[0])

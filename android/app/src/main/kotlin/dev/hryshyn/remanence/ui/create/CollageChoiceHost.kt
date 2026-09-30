@@ -59,14 +59,18 @@ internal fun CollageChoiceHost(
     track: CapsuleTrackSnapshotV1?,
     cropSource: CollageCropSource,
     modifier: Modifier = Modifier,
+    artwork: GeneratorExpression.ArtworkRef? = null,
     frozenCandidateId: () -> String? = { null },
     onSelect: (Int) -> Unit = {},
     onNavigate: () -> Unit = {},
     onMeasured: (GeneratorExpression.ResolvedExpression) -> Unit = {},
 ) {
     val measurer = rememberCollageTextMeasurer()
-    LaunchedEffect(input, note, track, cropSource) {
-        when (val result = CollageCandidateProvider(cropSource, measurer).candidates(input, note, track)) {
+    LaunchedEffect(input, note, track, cropSource, artwork) {
+        when (
+            val result = CollageCandidateProvider(cropSource, measurer)
+                .candidates(input, note, track, artwork)
+        ) {
             is CollageProviderResult.Candidates -> session.replaceCandidates(result.candidates)
             is CollageProviderResult.Unavailable -> session.showNotice(result.reason)
             is CollageProviderResult.Rejected -> {

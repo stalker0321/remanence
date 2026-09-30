@@ -82,6 +82,9 @@ def test_normalize_and_document_shape_match_architecture() -> None:
     assert doc["hasArtwork"] is True
     result = TrackSearchResult.from_track(track)
     public = result.public_dict()
+    # T062: the public shape gains exactly one provider field, the canonical
+    # recording MBID, and nothing else. This track carries none, so the wire
+    # value is null rather than an inferred/derived identifier.
     assert set(public) == {
         "id",
         "title",
@@ -91,10 +94,26 @@ def test_normalize_and_document_shape_match_architecture() -> None:
         "year",
         "durationMs",
         "artworkAvailable",
+        "recordingMbid",
     }
-    assert "musicBrainzId" not in public
-    assert "spotifyId" not in public
-    assert "mbid" not in str(public).lower()
+    assert public["recordingMbid"] is None
+    # No artwork descriptor (URL/digest/mime/size), no release or
+    # release-group id, and no other provider id may appear on this shape:
+    # the sender fetches cover art itself from the recording MBID.
+    for banned in (
+        "musicBrainzId",
+        "spotifyId",
+        "url",
+        "sha256",
+        "mimeType",
+        "width",
+        "height",
+        "provider",
+        "releaseMbid",
+        "releaseGroupMbid",
+        "artworkUrl",
+    ):
+        assert banned not in public
 
 
 def test_index_settings_are_intent_oriented() -> None:

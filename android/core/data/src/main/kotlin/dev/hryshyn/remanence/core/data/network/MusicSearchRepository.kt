@@ -22,6 +22,15 @@ import okio.Buffer
  * closed without a network call. Nothing sensitive is ever logged: result
  * types redact display strings and the query is never stored.
  */
+/**
+ * One search hit.
+ *
+ * [recordingMbid] is the canonical MusicBrainz *recording* id the catalog
+ * already stores (T062). It is the only provider identifier on this DTO and
+ * exists solely so the sender can address cover art itself; it is never an
+ * identity, never logged, and it carries no artwork URL, digest or byte. Null
+ * means the catalog has no stored id for the track — it is never derived.
+ */
 data class MusicTrackHit(
     val id: String,
     val title: String,
@@ -31,6 +40,7 @@ data class MusicTrackHit(
     val year: Int?,
     val durationMs: Long?,
     val artworkAvailable: Boolean,
+    val recordingMbid: String? = null,
 ) {
     override fun toString(): String =
         "MusicTrackHit(id=$id, artists=${artists.size}, version=${version != null})"
@@ -79,6 +89,7 @@ private data class MusicSearchResultItemDto(
     val year: Int? = null,
     val durationMs: Long? = null,
     val artworkAvailable: Boolean = false,
+    val recordingMbid: String? = null,
 )
 
 @Serializable
@@ -169,6 +180,13 @@ class MusicSearchRepository internal constructor(
                         year = item.year,
                         durationMs = item.durationMs,
                         artworkAvailable = item.artworkAvailable,
+                        recordingMbid = item.recordingMbid?.let { raw ->
+                            val parsed = UUID.fromString(raw)
+                            require(parsed.toString() == raw) {
+                                "recording mbid must be canonical"
+                            }
+                            parsed.toString()
+                        },
                     )
                 }
             } catch (_: IllegalArgumentException) {

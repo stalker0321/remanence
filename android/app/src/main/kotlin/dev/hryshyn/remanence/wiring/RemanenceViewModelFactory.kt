@@ -63,6 +63,9 @@ class RemanenceViewModelFactory(
                 container.apiStack.sessionRefreshCoordinator.openDomainAccessToken()
             },
             capsuleRevoke = container.apiStack.capsuleRevokeRepository,
+            // T062: direct MusicBrainz/CAA descriptor source for the selected
+            // recording; never the backend, never a placeholder provider.
+            musicArtworkResolver = container.apiStack.musicArtworkResolver,
             networkConnected = {
                 val manager = container.appContext.getSystemService(
                     android.net.ConnectivityManager::class.java,

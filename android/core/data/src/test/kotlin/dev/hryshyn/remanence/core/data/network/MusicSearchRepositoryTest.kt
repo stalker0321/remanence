@@ -277,6 +277,52 @@ class MusicSearchRepositoryTest {
             )
             .build()
 
+    @Test
+    fun recordingMbidIsCarriedFromTheResponseAndNeverLogged() = runTest {
+        withServer { server ->
+            server.enqueue(json(200, recordingMbidJson(RECORDING_MBID)))
+
+            val result = repository(server).search("505", accessToken = ACCESS_TOKEN)
+
+            val hits = assertIs<MusicSearchResult.Hits>(result)
+            assertEquals(RECORDING_MBID, hits.page.hits[0].recordingMbid)
+            // T062: the provider id is metadata for the sender, never a log
+            // field — the redacting toString must not print it.
+            assertFalse(hits.page.hits[0].toString().contains(RECORDING_MBID))
+        }
+    }
+
+    @Test
+    fun absentRecordingMbidStaysNullInsteadOfBeingDerived() = runTest {
+        withServer { server ->
+            server.enqueue(json(200, recordingMbidJson(null)))
+
+            val result = repository(server).search("505", accessToken = ACCESS_TOKEN)
+
+            val hits = assertIs<MusicSearchResult.Hits>(result)
+            assertNull(hits.page.hits[0].recordingMbid)
+        }
+    }
+
+    @Test
+    fun nonCanonicalRecordingMbidFailsClosedAsInvalidResponse() = runTest {
+        for (bad in listOf(
+            "46FE768C-7B38-4147-9F02-815B9F0759E2",
+            "46fe768c7b3841479f02815b9f0759e2",
+            "not-a-uuid",
+        )) {
+            withServer { server ->
+                server.enqueue(json(200, recordingMbidJson(bad)))
+
+                val result = repository(server).search("505", accessToken = ACCESS_TOKEN)
+
+                val failure = assertIs<MusicSearchResult.Failure>(result)
+                assertEquals(MusicSearchFailure.INVALID_RESPONSE, failure.reason, bad)
+                assertFalse(failure.retryable)
+            }
+        }
+    }
+
     private fun successJson(
         title: String = "505",
         artistsJson: String = "[\"Arctic Monkeys\"]",
@@ -311,7 +357,34 @@ class MusicSearchRepositoryTest {
         }
         """.trimIndent()
 
+    private fun recordingMbidJson(recordingMbid: String?): String {
+        val mbidLine = if (recordingMbid != null) {
+            ",\n              \"recordingMbid\": \"$recordingMbid\""
+        } else {
+            ""
+        }
+        return """
+        {
+          "results": [
+            {
+              "id": "be30e36b-1111-4111-8111-000000000001",
+              "title": "505",
+              "artists": ["Arctic Monkeys"],
+              "version": null,
+              "release": "Favourite Worst Nightmare",
+              "year": 2007,
+              "durationMs": 253000,
+              "artworkAvailable": true$mbidLine
+            }
+          ],
+          "total": 1,
+          "offset": 0
+        }
+        """.trimIndent()
+    }
+
     private companion object {
+        const val RECORDING_MBID = "46fe768c-7b38-4147-9f02-815b9f0759e2"
         const val ACCESS_TOKEN = "pm_at_live"
         const val PRIVATE_DETAIL = "private-request-detail-secret"
     }

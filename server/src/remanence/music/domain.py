@@ -54,6 +54,21 @@ def parse_remanence_track_id(value: object) -> uuid.UUID:
     return parsed
 
 
+def parse_optional_recording_mbid(value: object) -> str | None:
+    """Parse an optional canonical MusicBrainz *recording* MBID.
+
+    Returns ``None`` for ``None``; otherwise requires canonical lowercase
+    UUID text. Used at every boundary that carries the identifier (domain
+    construction, index document parsing, staging search, API schema) so a
+    malformed provider id fails closed instead of reaching the sender.
+    """
+    if value is None:
+        return None
+    if type(value) is not str or _CANONICAL_UUID_RE.fullmatch(value) is None:
+        raise ValueError("recording_mbid must be canonical UUID text or None")
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class MusicArtist:
     id: uuid.UUID
@@ -100,7 +115,14 @@ class ExternalIdentifier:
 
 @dataclass(frozen=True, slots=True)
 class MusicTrack:
-    """Own catalog track. ``id`` is always a Remanence UUID, never an MBID."""
+    """Own catalog track. ``id`` is always a Remanence UUID, never an MBID.
+
+    ``recording_mbid`` is the canonical MusicBrainz *recording* identifier the
+    ingest already stored in ``music_external_id``. It is carried here purely
+    as client-side metadata so the sender can address a cover itself (T062);
+    it is never a domain identity, never a search key, and it never carries an
+    artwork URL or artwork bytes.
+    """
 
     id: uuid.UUID
     title: str
@@ -112,6 +134,7 @@ class MusicTrack:
     version: str | None = None
     is_canonical: bool = True
     has_artwork: bool = False
+    recording_mbid: str | None = None
 
     @classmethod
     def create(
@@ -126,6 +149,7 @@ class MusicTrack:
         version: str | None = None,
         is_canonical: bool = True,
         has_artwork: bool = False,
+        recording_mbid: str | None = None,
     ) -> "MusicTrack":
         if type(title) is not str or not title.strip():
             raise ValueError("title must be a non-empty string")
@@ -152,12 +176,22 @@ class MusicTrack:
             version=version.strip() if isinstance(version, str) else None,
             is_canonical=bool(is_canonical),
             has_artwork=bool(has_artwork),
+            recording_mbid=parse_optional_recording_mbid(recording_mbid),
         )
 
 
 @dataclass(frozen=True, slots=True)
 class TrackSearchResult:
-    """Public search hit (section 27). No provider metadata by design."""
+    """Public search hit (section 27).
+
+    Provider metadata exposure is deliberately narrow: the only provider
+    identifier on the wire is the canonical MusicBrainz *recording* MBID
+    (``recording_mbid`` → ``recordingMbid``), exposed so the sender client can
+    address cover art itself without the backend fetching, proxying, caching or
+    storing artwork (T062 / V5 artwork invariant I1). No artwork URL, no
+    digest, no image bytes, and no other provider id (Spotify/Apple/Deezer,
+    release or release-group ids) is ever exposed here.
+    """
 
     id: uuid.UUID
     title: str
@@ -167,6 +201,7 @@ class TrackSearchResult:
     year: int | None = None
     duration_ms: int | None = None
     artwork_available: bool = False
+    recording_mbid: str | None = None
 
     @classmethod
     def from_track(cls, track: MusicTrack) -> "TrackSearchResult":
@@ -181,10 +216,16 @@ class TrackSearchResult:
             year=track.year,
             duration_ms=track.duration_ms,
             artwork_available=bool(track.has_artwork),
+            recording_mbid=track.recording_mbid,
         )
 
     def public_dict(self) -> dict:
-        """Allow-listed API shape; never includes MBID/Spotify/provider fields."""
+        """Allow-listed API shape.
+
+        Carries own fields plus ``recordingMbid`` only; never a release /
+        release-group id, provider URL, artwork digest or any other provider
+        metadata (see the class docstring).
+        """
         return {
             "id": str(self.id),
             "title": self.title,
@@ -194,4 +235,5 @@ class TrackSearchResult:
             "year": self.year,
             "durationMs": self.duration_ms,
             "artworkAvailable": bool(self.artwork_available),
+            "recordingMbid": self.recording_mbid,
         }

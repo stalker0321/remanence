@@ -11,6 +11,7 @@ import java.util.UUID
 import kotlin.math.ceil
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -135,6 +136,87 @@ class CollageCandidateProviderTest {
         assertNull(music.artwork)
         assertEquals(ceil(music.type.size * 1.12).toInt(), music.type.line)
     }
+
+    private fun artworkRef(
+        url: String = "https://archive.org/download/mbid-275a9c54-8862-46dd-bcd3-1658a39c310b/cover_thumb500.jpg",
+    ) = GeneratorExpression.ArtworkRef(
+        provider = "coverartarchive",
+        url = url,
+        sha256 = ByteArray(32) { index -> index.toByte() },
+        mimeType = "image/jpeg",
+        width = 500,
+        height = 500,
+    )
+
+    /**
+     * T062 seal: a descriptor flips the music region to `thumbnail` and is
+     * written verbatim; its absence keeps the exact pre-T062 text seal.
+     * Reaching [CollageProviderResult.Candidates] at all proves
+     * `validateResolved` accepted the expression, i.e. rules A1 and A3–A7 hold
+     * for the sealed descriptor (a violation would surface as `Rejected`).
+     */
+    @Test
+    fun descriptorSealsThumbnailModeAndItsAbsenceSealsText() {
+        val withDescriptor = runBlocking {
+            provider().candidates(input(note = "dear mama"), "dear mama", snapshot(), artworkRef())
+        }
+        val sealed = (withDescriptor as CollageProviderResult.Candidates).candidates.first()
+        val music = sealed.expression.musicRegion!!
+        assertEquals("thumbnail", music.mode)
+        assertEquals("coverartarchive", music.artwork?.provider)
+        assertEquals(
+            "https://archive.org/download/mbid-275a9c54-8862-46dd-bcd3-1658a39c310b/cover_thumb500.jpg",
+            music.artwork?.url,
+        )
+        assertEquals("image/jpeg", music.artwork?.mimeType)
+        assertEquals(500, music.artwork?.width)
+        assertEquals(500, music.artwork?.height)
+        assertTrue(music.artwork!!.sha256.contentEquals(ByteArray(32) { it.toByte() }))
+
+        val withoutDescriptor = runBlocking {
+            provider().candidates(input(note = "dear mama"), "dear mama", snapshot())
+        }
+        val plain = (withoutDescriptor as CollageProviderResult.Candidates).candidates.first()
+        assertEquals("text", plain.expression.musicRegion?.mode)
+        assertNull(plain.expression.musicRegion?.artwork)
+    }
+
+    @Test
+    fun descriptorIsPartOfCandidateIdentityAndIsDeterministic() {
+        val none = (runBlocking {
+            provider().candidates(input(note = "dear mama"), "dear mama", snapshot())
+        } as CollageProviderResult.Candidates).candidates.first()
+        val first = (runBlocking {
+            provider().candidates(input(note = "dear mama"), "dear mama", snapshot(), artworkRef())
+        } as CollageProviderResult.Candidates).candidates.first()
+        val second = (runBlocking {
+            provider().candidates(input(note = "dear mama"), "dear mama", snapshot(), artworkRef())
+        } as CollageProviderResult.Candidates).candidates.first()
+        val otherUrl = (runBlocking {
+            provider().candidates(
+                input(note = "dear mama"),
+                "dear mama",
+                snapshot(),
+                artworkRef(url = "https://archive.org/download/other/file_thumb500.jpg"),
+            )
+        } as CollageProviderResult.Candidates).candidates.first()
+
+        assertNotEquals(none.candidateId, first.candidateId)
+        assertEquals(first.candidateId, second.candidateId)
+        assertNotEquals(first.candidateId, otherUrl.candidateId)
+        // BEXPR02 projection sees the descriptor too (contract S2): identity
+        // must move with it, and must not move for an identical descriptor.
+        assertNotEquals(projectedHash(first), projectedHash(otherUrl))
+        assertEquals(projectedHash(first), projectedHash(second))
+    }
+
+    private fun projectedHash(candidate: CollageCandidate): String =
+        CapsulePhotoIdentity.projectedHash(
+            candidate.expression,
+            candidate.candidateId,
+            CapsuleId(UUID.fromString("1f0a1234-5678-4abc-9def-aabbccdd2001")),
+            candidate.expression.input.photos.map { it.contentId },
+        )
 
     @Test
     fun candidateIdentityUsesGenex03AndBexpr02Exactly() {

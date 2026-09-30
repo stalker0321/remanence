@@ -387,6 +387,7 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
 private fun CollageStepChooser(viewModel: CreateViewModel, modifier: Modifier = Modifier) {
     val generatorPreview by viewModel.generatorPreview.collectAsStateWithLifecycle()
     val musicSelection by viewModel.musicSelection.collectAsStateWithLifecycle()
+    val musicArtwork by viewModel.musicArtwork.collectAsStateWithLifecycle()
     val chooserInput = viewModel.collageChooserInputFor(musicSelection)
     val chooserTrack = viewModel.collageChooserTrackFor(musicSelection)
     when (val preview = generatorPreview) {
@@ -399,6 +400,7 @@ private fun CollageStepChooser(viewModel: CreateViewModel, modifier: Modifier = 
                 track = chooserTrack,
                 cropSource = viewModel.collageCropSource
                     ?: dev.hryshyn.remanence.ui.collage.CollageCropSource { null },
+                artwork = musicArtwork,
                 frozenCandidateId = { viewModel.frozenCollageSelection?.candidateId },
                 onSelect = { index ->
                     if (viewModel.selectCollageCandidate(index)) {
@@ -418,6 +420,7 @@ private fun CollageStepChooser(viewModel: CreateViewModel, modifier: Modifier = 
                 track = chooserTrack,
                 cropSource = viewModel.collageCropSource
                     ?: dev.hryshyn.remanence.ui.collage.CollageCropSource { null },
+                artwork = musicArtwork,
                 frozenCandidateId = { viewModel.frozenCollageSelection?.candidateId },
                 onSelect = { index ->
                     if (viewModel.selectCollageCandidate(index)) {

@@ -205,6 +205,44 @@ class CollageCandidateProviderTest {
         assertEquals(first.map { it.expression }, second.map { it.expression })
     }
 
+    @Test
+    fun musicTextFitOmissionIsPerStyleAndFailsClosedWhenNoStyleFits() {
+        // A two-line music block that overflows the frozen region for the
+        // tallest bundled music type (poster, size 24) but not for
+        // press/blue-letter: poster is omitted per style, the others stay.
+        val posterOverflow = CollageRenderer.TextMeasurer { request ->
+            val overflow = request.text.contains("\n") && request.size >= 24
+            CollageRenderer.TextMeasurement(
+                width = request.text.length * 8,
+                height = if (overflow) request.maxHeight + 1 else request.line,
+                hasVisualOverflow = overflow,
+            )
+        }
+        val partial = runBlocking {
+            CollageCandidateProvider(cropSource(), posterOverflow).candidates(input(), null, snapshot())
+        }
+        assertTrue("expected Candidates, got $partial", partial is CollageProviderResult.Candidates)
+        assertEquals(
+            listOf("press", "blue-letter"),
+            (partial as CollageProviderResult.Candidates).candidates.map { it.styleId },
+        )
+
+        // When every style's music text overflows, the result stays fail-closed
+        // rather than returning an empty candidate set.
+        val everyStyleOverflows = CollageRenderer.TextMeasurer { request ->
+            val overflow = request.text.contains("\n")
+            CollageRenderer.TextMeasurement(
+                width = request.text.length * 8,
+                height = if (overflow) request.maxHeight + 1 else request.line,
+                hasVisualOverflow = overflow,
+            )
+        }
+        val none = runBlocking {
+            CollageCandidateProvider(cropSource(), everyStyleOverflows).candidates(input(), null, snapshot())
+        }
+        assertTrue("expected Rejected, got $none", none is CollageProviderResult.Rejected)
+    }
+
     private class DiagnosticCropSource(
         private val crops: Map<String, GeneratorExpression.CropWindow>,
         override val lastCropRejections: List<CollageSlotRejection>,

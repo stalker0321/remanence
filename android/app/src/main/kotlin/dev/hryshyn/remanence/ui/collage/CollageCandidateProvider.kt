@@ -104,7 +104,8 @@ sealed interface CollageProviderResult {
 /**
  * Deterministic sender-side V5 provider for the authoritative grammar-5 /
  * text-only subset: one finished sheet per bundled style (`press`,
- * `blue-letter`, `poster`) built on the already-resolved
+ * `blue-letter`, `poster`) that can seal the requested note/music into its own
+ * frozen regions, built on the already-resolved
  * [GeneratorExpression.GeneratorInput].
  *
  * Pure: it consumes grammar-5 cell geometry, the authoritative crops from
@@ -142,11 +143,20 @@ class CollageCandidateProvider(
             when (val result = buildCandidate(sealedInput, noteText, track, style)) {
                 is BuildResult.Built -> built += result.candidate
                 BuildResult.Unavailable -> return CollageProviderResult.Unavailable(NO_ANALYSIS_REASON)
+                BuildResult.Omitted -> Unit
                 is BuildResult.Invalid -> return CollageProviderResult.Rejected(
                     "the note, music, or crop does not fit the grammar-5 grid",
                     result.rejection,
                 )
             }
+        }
+        // Per-style fit omissions are only skipped while another style can still
+        // seal; when no style survives, the result stays fail-closed with the
+        // unchanged user-facing copy and no fabricated candidate.
+        if (built.isEmpty()) {
+            return CollageProviderResult.Rejected(
+                "the note, music, or crop does not fit the grammar-5 grid",
+            )
         }
         return CollageProviderResult.Candidates(built)
     }
@@ -154,6 +164,21 @@ class CollageCandidateProvider(
     private sealed interface BuildResult {
         data class Built(val candidate: CollageCandidate) : BuildResult
         data object Unavailable : BuildResult
+
+        /**
+         * This style's sealed note or music text cannot fit its own frozen
+         * regions (the measured block overflows, or the closing bands leave no
+         * photo field). The frozen engine records exactly this per-style
+         * `Type does not fit` and still resolves the styles that fit, so the
+         * provider omits only this style; it never weakens a crop/solver rule.
+         */
+        data object Omitted : BuildResult
+
+        /**
+         * Fail-closed whole-result rejection. [rejection] is present for a
+         * solver crop omission (the typed cause) and absent for the remaining
+         * structural/style-integrity failures, which are never skipped.
+         */
         data class Invalid(val rejection: CollageRejection? = null) : BuildResult
     }
 
@@ -181,7 +206,7 @@ class CollageCandidateProvider(
                     maxHeight = MAX_TEXT_BOX,
                 ),
             )
-            if (!fits(measured)) return BuildResult.Invalid()
+            if (!fits(measured)) return BuildResult.Omitted
             measured.height
         }
 
@@ -189,7 +214,7 @@ class CollageCandidateProvider(
             photoCount = input.photos.size,
             noteHeight = noteHeight,
             music = track != null,
-        ) ?: return BuildResult.Invalid()
+        ) ?: return BuildResult.Omitted
 
         val musicRegion = grid.musicRegion
         if (track != null) {
@@ -206,7 +231,7 @@ class CollageCandidateProvider(
                     maxHeight = musicRegion.height,
                 ),
             )
-            if (!fits(measured, maxHeight = musicRegion.height)) return BuildResult.Invalid()
+            if (!fits(measured, maxHeight = musicRegion.height)) return BuildResult.Omitted
         }
 
         if (input.photos.size != grid.cells.size) return BuildResult.Invalid()

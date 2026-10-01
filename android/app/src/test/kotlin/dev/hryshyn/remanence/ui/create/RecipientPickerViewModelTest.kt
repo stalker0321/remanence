@@ -191,4 +191,122 @@ class RecipientPickerViewModelTest {
         assertEquals("", vm.handle.value)
         assertEquals(RecipientLookupUiState.Idle, vm.state.value)
     }
+
+    @Test
+    fun nullTokenRecoversThroughOneRefreshAndResolves() = runTest {
+        var token: String? = null
+        var refreshCalls = 0
+        val fake = FakeDirectory(DirectoryLookupResult.Found(snapshot))
+        val vm = RecipientPickerViewModel(
+            fake,
+            { token },
+            CoroutineScope(UnconfinedTestDispatcher(testScheduler)),
+            sessionRefresh = {
+                refreshCalls++
+                token = "pm_at_recovered"
+                RecipientPickerViewModel.SessionRecovery.RECOVERED
+            },
+        )
+        vm.onHandleChange("@mykola")
+        vm.lookup()
+
+        assertEquals(1, refreshCalls)
+        assertEquals(listOf("@mykola"), fake.handles)
+        val state = vm.state.value
+        assertTrue(state is RecipientLookupUiState.Resolved)
+        assertEquals(snapshot.userId, (state as RecipientLookupUiState.Resolved).snapshot.userId)
+    }
+
+    @Test
+    fun nullTokenWithFailedRefreshReportsSignedOut() = runTest {
+        var refreshCalls = 0
+        val fake = FakeDirectory(DirectoryLookupResult.Found(snapshot))
+        val vm = RecipientPickerViewModel(
+            fake,
+            { null },
+            CoroutineScope(UnconfinedTestDispatcher(testScheduler)),
+            sessionRefresh = {
+                refreshCalls++
+                RecipientPickerViewModel.SessionRecovery.NO_SESSION
+            },
+        )
+        vm.onHandleChange("@mykola")
+        vm.lookup()
+
+        assertEquals(1, refreshCalls)
+        assertEquals(0, fake.handles.size)
+        assertEquals(RecipientLookupUiState.Failed("Sign in first."), vm.state.value)
+    }
+
+    @Test
+    fun nullTokenWithUnreachableRefreshReportsNetwork() = runTest {
+        var refreshCalls = 0
+        val fake = FakeDirectory(DirectoryLookupResult.Found(snapshot))
+        val vm = RecipientPickerViewModel(
+            fake,
+            { null },
+            CoroutineScope(UnconfinedTestDispatcher(testScheduler)),
+            sessionRefresh = {
+                refreshCalls++
+                RecipientPickerViewModel.SessionRecovery.NETWORK_FAILED
+            },
+        )
+        vm.onHandleChange("@mykola")
+        vm.lookup()
+
+        assertEquals(1, refreshCalls)
+        assertEquals(0, fake.handles.size)
+        assertEquals(
+            RecipientLookupUiState.Failed("Network unreachable. Try again later."),
+            vm.state.value,
+        )
+    }
+
+    @Test
+    fun cancelDuringRefreshRecoveryCannotPublish() = runTest {
+        val gate = CompletableDeferred<RecipientPickerViewModel.SessionRecovery>()
+        var token: String? = null
+        val fake = FakeDirectory(DirectoryLookupResult.Found(snapshot))
+        val vm = RecipientPickerViewModel(
+            fake,
+            { token },
+            CoroutineScope(UnconfinedTestDispatcher(testScheduler)),
+            sessionRefresh = { gate.await() },
+        )
+        vm.onHandleChange("mykola")
+        vm.lookup()
+
+        vm.reset()
+        token = "pm_at_late"
+        gate.complete(RecipientPickerViewModel.SessionRecovery.RECOVERED)
+
+        assertEquals("", vm.handle.value)
+        assertEquals(RecipientLookupUiState.Idle, vm.state.value)
+        assertEquals(0, fake.handles.size)
+    }
+
+    @Test
+    fun ownerFlipDuringRefreshRecoveryResolvesFreshContext() = runTest {
+        val gate = CompletableDeferred<RecipientPickerViewModel.SessionRecovery>()
+        var token: String? = null
+        var owner: String? = "owner-a"
+        val fake = FakeDirectory(DirectoryLookupResult.Found(snapshot))
+        val vm = RecipientPickerViewModel(
+            fake,
+            { token },
+            CoroutineScope(UnconfinedTestDispatcher(testScheduler)),
+            sessionOwnerProvider = { owner },
+            sessionRefresh = { gate.await() },
+        )
+        vm.onHandleChange("mykola")
+        vm.lookup()
+
+        owner = "owner-b"
+        token = "pm_at_b"
+        gate.complete(RecipientPickerViewModel.SessionRecovery.RECOVERED)
+
+        val state = vm.state.value
+        assertTrue(state is RecipientLookupUiState.Resolved)
+        assertEquals(listOf("mykola"), fake.handles)
+    }
 }

@@ -128,6 +128,13 @@ class CreateViewModel(
     recipientLookupBoundaryEpoch: () -> Long = { 0L },
     registerRecipientLookupBoundary: (((() -> Unit)) -> (() -> Unit))? = null,
     /**
+     * BUG-014: bounded single session recovery for null-token lookup starts,
+     * invoked by the recipient picker. Defaults to no recovery (historical
+     * immediate failure); production wires the session coordinator refresh.
+     */
+    recipientLookupSessionRefresh: suspend () -> RecipientPickerViewModel.SessionRecovery =
+        { RecipientPickerViewModel.SessionRecovery.NO_SESSION },
+    /**
      * C2 generator seam: per-owner C1 bridge provider from the factory.
      * Null means publishing fails closed (no bridge, no fallback); every
      * invalidation hook below is then a no-op.
@@ -188,6 +195,7 @@ class CreateViewModel(
         sessionOwnerProvider = recipientLookupOwnerProvider,
         sessionBoundaryEpoch = recipientLookupBoundaryEpoch,
         registerSessionBoundary = registerRecipientLookupBoundary,
+        sessionRefresh = recipientLookupSessionRefresh,
         scope = viewModelScope,
     )
 

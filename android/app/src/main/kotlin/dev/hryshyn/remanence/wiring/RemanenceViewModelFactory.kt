@@ -5,10 +5,12 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.work.WorkManager
 import androidx.work.await
 import dev.hryshyn.remanence.AppContainer
+import dev.hryshyn.remanence.core.data.network.CoordinatedRefreshOutcome
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.create.GeneratorCreateBridge
 import dev.hryshyn.remanence.session.RootViewModel
 import dev.hryshyn.remanence.ui.create.CreateViewModel
+import dev.hryshyn.remanence.ui.create.RecipientPickerViewModel
 import dev.hryshyn.remanence.ui.scan.ScanViewModel
 import dev.hryshyn.remanence.ui.home.HomeCapabilityViewModel
 import dev.hryshyn.remanence.ui.auth.LoginViewModel
@@ -61,6 +63,36 @@ class RemanenceViewModelFactory(
             directory = { rawHandle -> container.directoryRepository.lookup(rawHandle) },
             accessTokenProvider = {
                 container.apiStack.sessionRefreshCoordinator.openDomainAccessToken()
+            },
+            // BUG-014: bounded single session recovery for null-token lookup
+            // starts, through the existing coordinator path (the same
+            // refreshForBootstrap entry SessionBootstrap uses). No new
+            // component, timer or listener; unexpected failures degrade to
+            // the network copy rather than a false auth claim.
+            recipientLookupSessionRefresh = {
+                val ownerId = container.currentAccountStore.load()?.userId?.let { raw ->
+                    runCatching { UserId.parseRest(raw) }.getOrNull()
+                }
+                if (ownerId == null) {
+                    RecipientPickerViewModel.SessionRecovery.NO_SESSION
+                } else {
+                    try {
+                        when (container.sessionRefreshCoordinator.refreshForBootstrap(ownerId)) {
+                            is CoordinatedRefreshOutcome.Rotated,
+                            is CoordinatedRefreshOutcome.Reused,
+                            -> RecipientPickerViewModel.SessionRecovery.RECOVERED
+                            is CoordinatedRefreshOutcome.NoToken,
+                            is CoordinatedRefreshOutcome.Rejected,
+                            is CoordinatedRefreshOutcome.Invalidated,
+                            -> RecipientPickerViewModel.SessionRecovery.NO_SESSION
+                            is CoordinatedRefreshOutcome.Unreachable,
+                            is CoordinatedRefreshOutcome.Unavailable,
+                            -> RecipientPickerViewModel.SessionRecovery.NETWORK_FAILED
+                        }
+                    } catch (_: Exception) {
+                        RecipientPickerViewModel.SessionRecovery.NETWORK_FAILED
+                    }
+                }
             },
             capsuleRevoke = container.apiStack.capsuleRevokeRepository,
             // T062: direct MusicBrainz/CAA descriptor source for the selected

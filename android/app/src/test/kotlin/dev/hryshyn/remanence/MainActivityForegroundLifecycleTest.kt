@@ -6,6 +6,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import dev.hryshyn.remanence.core.data.network.HealthCheckResult
+import dev.hryshyn.remanence.core.data.network.HealthFailure
+import dev.hryshyn.remanence.ui.home.BackendHealthUiState
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -59,5 +63,19 @@ class MainActivityForegroundLifecycleTest {
 
         override val lifecycle: Lifecycle
             get() = registry
+    }
+
+    @Test
+    fun unavailableHealthBecomesAvailableAfterRecheck() = runTest {
+        var result: HealthCheckResult =
+            HealthCheckResult.Unavailable(HealthFailure.NETWORK)
+        val monitor = BackendHealthMonitor { result }
+
+        monitor.recheck()
+        assertEquals(BackendHealthUiState.UNAVAILABLE, monitor.state)
+
+        result = HealthCheckResult.Available
+        monitor.recheck()
+        assertEquals(BackendHealthUiState.AVAILABLE, monitor.state)
     }
 }

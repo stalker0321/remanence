@@ -42,8 +42,22 @@ class RecipientPickerViewModel(
     private val scope: CoroutineScope,
     private val sessionOwnerProvider: suspend () -> String? = { accessTokenProvider() },
     private val sessionBoundaryEpoch: () -> Long = { 0L },
-    registerSessionBoundary: (((() -> Unit)) -> (() -> Unit))? = null,
+    private val registerSessionBoundary: (((() -> Unit)) -> (() -> Unit))? = null,
+    /**
+     * BUG-014: bounded single recovery attempt when a lookup starts with a
+     * null in-memory token. Defaults to [SessionRecovery.NO_SESSION], which
+     * preserves the historical immediate failure. Production wires one refresh
+     * through the existing session coordinator path (see CreateViewModel).
+     */
+    private val sessionRefresh: suspend () -> SessionRecovery = { SessionRecovery.NO_SESSION },
 ) {
+
+    /**
+     * Outcome of the single bounded session recovery attempt. Only
+     * [RECOVERED] re-reads the token and performs the lookup; the other two
+     * keep the failure bounded with the correct copy.
+     */
+    enum class SessionRecovery { RECOVERED, NO_SESSION, NETWORK_FAILED }
 
     private var lookupJob: Job? = null
     private var generation: Long = 0
@@ -81,10 +95,39 @@ class RecipientPickerViewModel(
     }
 
     fun lookup() {
-        val token = accessTokenProvider() ?: run {
-            _state.value = RecipientLookupUiState.Failed("Sign in first.")
+        val token = accessTokenProvider()
+        if (token == null) {
+            // BUG-014: a transient outage can empty the in-memory token while
+            // the local session is intact. Cancel any in-flight attempt, run
+            // exactly one bounded recovery, then re-read the provider and
+            // perform that same lookup only if recovery succeeded.
+            lookupJob?.cancel()
+            if (_state.value is RecipientLookupUiState.LookingUp) {
+                _state.value = RecipientLookupUiState.Idle
+            }
+            lookupJob = scope.launch {
+                val recovery = try {
+                    sessionRefresh()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    SessionRecovery.NETWORK_FAILED
+                }
+                val fresh = accessTokenProvider()
+                if (recovery == SessionRecovery.RECOVERED && fresh != null) {
+                    startLookup()
+                } else if (recovery == SessionRecovery.NETWORK_FAILED) {
+                    _state.value = RecipientLookupUiState.Failed("Network unreachable. Try again later.")
+                } else {
+                    _state.value = RecipientLookupUiState.Failed("Sign in first.")
+                }
+            }
             return
         }
+        startLookup()
+    }
+
+    private fun startLookup() {
         if (!canLookup) return
         val rawHandle = _handle.value
         val lookupGeneration = ++generation

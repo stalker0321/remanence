@@ -25,6 +25,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -113,6 +114,28 @@ internal fun ForegroundResumeEffect(onResume: () -> Unit) {
 }
 
 /**
+ * BUG-014: backend-health ownership for the root surface. The check itself is
+ * the existing `HealthRepository.check()`; this holder only owns the current
+ * UI state plus re-running it. It is deliberately re-runnable (unlike the old
+ * `LaunchedEffect(Unit)` single shot) so a transient outage at cold start no
+ * longer latches `UNAVAILABLE` for the process lifetime. Plain state holder:
+ * single-flight comes from the restarting effect, not from here.
+ */
+internal class BackendHealthMonitor(
+    private val checkHealth: suspend () -> HealthCheckResult,
+) {
+    var state: BackendHealthUiState by mutableStateOf(BackendHealthUiState.CHECKING)
+        private set
+
+    suspend fun recheck() {
+        state = when (checkHealth()) {
+            is HealthCheckResult.Available -> BackendHealthUiState.AVAILABLE
+            else -> BackendHealthUiState.UNAVAILABLE
+        }
+    }
+}
+
+/**
  * FIX-M1-007-08: every ViewModel is lifecycle-scoped, every state is
  * collected with [collectAsStateWithLifecycle], and the root surface changes
  * ONLY after an async auth flow reaches its terminal result - submit clicks
@@ -128,17 +151,24 @@ private fun RootSurface(
 
     // I02/I03: cold-start session bootstrap decides the first surface.
     val rootViewModel: RootViewModel = viewModel(factory = factory)
-    ForegroundResumeEffect(rootViewModel::onAppForegrounded)
+    // BUG-014: the health epoch advances on every real foreground/resume
+    // transition alongside the session refresh, so the check below re-runs.
+    var healthCheckEpoch by remember { mutableIntStateOf(0) }
+    ForegroundResumeEffect {
+        rootViewModel.onAppForegrounded()
+        healthCheckEpoch++
+    }
     val loginViewModel: LoginViewModel = viewModel(factory = factory)
     val registrationViewModel: RegistrationViewModel = viewModel(factory = factory)
     val capabilityViewModel: HomeCapabilityViewModel = viewModel(factory = factory)
 
-    var healthState by remember { mutableStateOf(BackendHealthUiState.CHECKING) }
-    LaunchedEffect(Unit) {
-        healthState = when (container.healthRepository.check()) {
-            is HealthCheckResult.Available -> BackendHealthUiState.AVAILABLE
-            else -> BackendHealthUiState.UNAVAILABLE
-        }
+    val healthMonitor = remember { BackendHealthMonitor(container.healthRepository::check) }
+    // BUG-014: backend health is re-checked on every real foreground/resume
+    // transition, not just once at cold start. Restarting the effect on the
+    // epoch cancels any in-flight check, so at most one runs (single-flight);
+    // no timer, no connectivity listener.
+    LaunchedEffect(healthCheckEpoch) {
+        healthMonitor.recheck()
     }
 
     // The root re-resolves after a terminal submit flow and on foreground.
@@ -223,7 +253,7 @@ private fun RootSurface(
                 accountCapability == AccountCapabilityState.RecoveryRequired
             val home: @Composable () -> Unit = {
                 HomeScreen(
-                    state = healthState, accountCapability = accountCapability,
+                    state = healthMonitor.state, accountCapability = accountCapability,
                     publicEntry = authState == AuthUiState.SignedOut,
                     onCreate = { rootViewModel.requestHomeIntent(HomeIntent.MAKE) },
                     onScan = { rootViewModel.requestHomeIntent(HomeIntent.OPEN) },

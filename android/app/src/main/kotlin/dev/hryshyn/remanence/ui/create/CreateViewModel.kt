@@ -3,8 +3,12 @@ package dev.hryshyn.remanence.ui.create
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import android.graphics.BitmapFactory
+import android.util.Log
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import dev.hryshyn.remanence.BuildConfig
 import dev.hryshyn.remanence.capture.CaptureAttemptController
 import dev.hryshyn.remanence.capture.FrontCaptureFlow
 import dev.hryshyn.remanence.capture.FrontCaptureOutcome
@@ -260,6 +264,25 @@ class CreateViewModel(
     private val _musicArtwork = MutableStateFlow<GeneratorExpression.ArtworkRef?>(null)
     val musicArtwork: StateFlow<GeneratorExpression.ArtworkRef?> = _musicArtwork.asStateFlow()
 
+    /**
+     * T144: bounded public outcome of the latest completed artwork resolution
+     * (`RESOLVED` or exactly one failure reason). Lets the next device run
+     * distinguish null MBID (H1) from a specific resolver/fetch failure (H2).
+     */
+    private val _musicArtworkReason =
+        MutableStateFlow<dev.hryshyn.remanence.core.data.network.MusicArtworkReason?>(null)
+    val musicArtworkReason: StateFlow<dev.hryshyn.remanence.core.data.network.MusicArtworkReason?> =
+        _musicArtworkReason.asStateFlow()
+
+    /**
+     * T144: preview bitmap decoded from the verified resolved bytes only.
+     * Held in active create state, never persisted; null means the text band.
+     */
+    private val _musicArtworkBitmap =
+        MutableStateFlow<androidx.compose.ui.graphics.ImageBitmap?>(null)
+    val musicArtworkBitmap: StateFlow<androidx.compose.ui.graphics.ImageBitmap?> =
+        _musicArtworkBitmap.asStateFlow()
+
     private var musicArtworkEpoch = 0
 
     fun setMusicSelection(hit: dev.hryshyn.remanence.core.data.network.MusicTrackHit?) {
@@ -280,26 +303,80 @@ class CreateViewModel(
     /**
      * Resolve the selected recording to a sealable descriptor, or leave the
      * artwork absent (text mode). Failures are swallowed by design: artwork
-     * must never block or fail the music flow.
+     * must never block or fail the music flow. T144: every finish publishes
+     * the bounded public reason (DEBUG log carries only the reason token),
+     * and a resolved finish additionally publishes the preview bitmap decoded
+     * from the verified bytes. Stale epochs publish nothing.
      */
     private fun startMusicArtworkResolution(
         hit: dev.hryshyn.remanence.core.data.network.MusicTrackHit?,
     ) {
         val epoch = ++musicArtworkEpoch
         _musicArtwork.value = null
+        _musicArtworkReason.value = null
+        _musicArtworkBitmap.value = null
         val resolver = musicArtworkResolver ?: return
-        val recordingMbid = hit?.recordingMbid?.takeIf { it.isNotBlank() } ?: return
+        if (hit == null) return
+        // A selected hit without a recording id completes synchronously as
+        // NO_RECORDING_ID with zero requests — this is the H1 signal.
+        val recordingMbid = hit.recordingMbid?.takeIf { it.isNotBlank() }
+            ?: run {
+                _musicArtworkReason.value =
+                    dev.hryshyn.remanence.core.data.network.MusicArtworkReason.NO_RECORDING_ID
+                reportArtworkOutcome(
+                    dev.hryshyn.remanence.core.data.network.MusicArtworkReason.NO_RECORDING_ID,
+                )
+                return
+            }
         viewModelScope.launch {
-            val descriptor = try {
-                resolver.resolve(recordingMbid)
+            val outcome = try {
+                resolver.resolveOutcome(recordingMbid)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                null
+                dev.hryshyn.remanence.core.data.network.MusicArtworkResolution.Unavailable(
+                    dev.hryshyn.remanence.core.data.network.MusicArtworkReason.NETWORK,
+                )
             }
             if (epoch == musicArtworkEpoch) {
-                _musicArtwork.value = descriptor
+                when (outcome) {
+                    is dev.hryshyn.remanence.core.data.network.MusicArtworkResolution.Resolved -> {
+                        _musicArtwork.value = outcome.artwork
+                        _musicArtworkReason.value =
+                            dev.hryshyn.remanence.core.data.network.MusicArtworkReason.RESOLVED
+                        _musicArtworkBitmap.value = decodeArtworkBitmap(outcome.bytes)
+                        reportArtworkOutcome(
+                            dev.hryshyn.remanence.core.data.network.MusicArtworkReason.RESOLVED,
+                        )
+                    }
+                    is dev.hryshyn.remanence.core.data.network.MusicArtworkResolution.Unavailable -> {
+                        _musicArtworkReason.value = outcome.reason
+                        reportArtworkOutcome(outcome.reason)
+                    }
+                }
             }
+        }
+    }
+
+    /** Decodes verified resolved bytes; null keeps the text band. */
+    private fun decodeArtworkBitmap(bytes: ByteArray): androidx.compose.ui.graphics.ImageBitmap? =
+        runCatching {
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+        }.getOrNull()
+
+    /**
+     * Exactly one bounded reason-token line per completed resolution, DEBUG
+     * builds only. The formatted string is allowlisted to `reason=<NAME>`: no
+     * MBID, title, URL, digest, bytes, identity or exception text can pass.
+     */
+    private fun reportArtworkOutcome(
+        reason: dev.hryshyn.remanence.core.data.network.MusicArtworkReason,
+    ) {
+        if (BuildConfig.DEBUG) {
+            Log.d(
+                "ArtworkResolve",
+                dev.hryshyn.remanence.core.data.network.artworkResolveDiagnostic(reason),
+            )
         }
     }
 

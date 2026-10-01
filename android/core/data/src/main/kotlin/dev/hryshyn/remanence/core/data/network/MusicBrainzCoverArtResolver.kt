@@ -122,7 +122,15 @@ fun hasStableSealableShape(url: HttpUrl): Boolean {
 }
 
 sealed interface CoverArtResolution {
-    data class Resolved(val artwork: GeneratorExpression.ArtworkRef) : CoverArtResolution
+    /**
+     * Validated descriptor plus the exact fetched, verified image bytes
+     * (sha256/mime/bounds already checked). Callers needing preview pixels
+     * must decode these bytes; they are never persisted by this class.
+     */
+    data class Resolved(
+        val artwork: GeneratorExpression.ArtworkRef,
+        val bytes: ByteArray,
+    ) : CoverArtResolution
 
     data class Unavailable(val reason: Reason) : CoverArtResolution
 
@@ -281,6 +289,7 @@ class MusicBrainzCoverArtResolver(
                 width = size.width,
                 height = size.height,
             ),
+            bytes,
         )
     }
 

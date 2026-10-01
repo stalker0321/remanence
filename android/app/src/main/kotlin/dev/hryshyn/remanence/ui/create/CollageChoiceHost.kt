@@ -60,6 +60,12 @@ internal fun CollageChoiceHost(
     cropSource: CollageCropSource,
     modifier: Modifier = Modifier,
     artwork: GeneratorExpression.ArtworkRef? = null,
+    /**
+     * T144: verified thumbnail cover bitmap decoded from the resolved bytes.
+     * Forwarded to the shared renderer/canvas so the frozen sender candidate
+     * shows the real cover; null preserves the text band. Never persisted.
+     */
+    artworkBitmap: ImageBitmap? = null,
     frozenCandidateId: () -> String? = { null },
     onSelect: (Int) -> Unit = {},
     onNavigate: () -> Unit = {},
@@ -135,8 +141,17 @@ internal fun CollageChoiceHost(
                 val images = remember(selected, sources) { decodeSources(sources) }
                 val noteArg = note?.takeIf { it.isNotBlank() }
                 val sizes = images.mapValues { CollageRenderer.SourcePhoto(it.value.width, it.value.height) }
-                val prepared = remember(selected, images, noteArg, track, measurer) {
-                    CollageRenderer.prepare(selected.expression, noteArg, track, sizes, measurer)
+                val prepared = remember(selected, images, noteArg, track, measurer, artworkBitmap) {
+                    CollageRenderer.prepare(
+                        selected.expression,
+                        noteArg,
+                        track,
+                        sizes,
+                        measurer,
+                        artwork = artworkBitmap?.let {
+                            CollageRenderer.SourcePhoto(it.width, it.height)
+                        },
+                    )
                 }
                 when (prepared) {
                     is CollageRenderer.SceneResult.Ready -> CollageCanvas(
@@ -150,6 +165,7 @@ internal fun CollageChoiceHost(
                                     CollageRenderer.CANVAS_HEIGHT.toFloat(),
                             ),
                         textMeasurer = measurer,
+                        artwork = artworkBitmap,
                     )
 
                     is CollageRenderer.SceneResult.Rejected ->

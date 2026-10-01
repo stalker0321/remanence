@@ -67,6 +67,8 @@ import dev.hryshyn.remanence.sync.IncomingSyncSchedulingOutcome
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import dev.hryshyn.remanence.scan.matcher.MatcherShadowInput
+import dev.hryshyn.remanence.scan.matcher.MatcherShadowRunner
 
 /**
  * One chooser row carrying ONLY locally decrypted minimal hints plus score
@@ -183,6 +185,15 @@ class ScanViewModel internal constructor(
     private val sessionBoundary: SessionBoundary? = null,
     private val cpuDispatcher: kotlinx.coroutines.CoroutineDispatcher = kotlinx.coroutines.Dispatchers.Default,
     private val ioDispatcher: kotlinx.coroutines.CoroutineDispatcher = kotlinx.coroutines.Dispatchers.IO,
+    /**
+     * T118 telemetry-only frozen matcher S1-S4 shadow (T081/T116 approved).
+     * When null or disabled the scan flow does nothing extra - no byte copy,
+     * no job, byte-for-byte v1 behavior. When enabled the accepted S1->S4
+     * path runs BESIDE the v1 chain behind this local injectable switch,
+     * records only bounded scalar diagnostics, and every shadow decision is
+     * discarded before it can reach state, grants, chooser, or recapture.
+     */
+    private val matcherShadow: MatcherShadowRunner? = null,
 ) : ViewModel() {
 
     val captureSession = ScanCaptureSession(ScanSideExtractor {
@@ -271,6 +282,8 @@ class ScanViewModel internal constructor(
     private var incomingIndexReadinessAttempt: Long? = null
     /** The owning job for CPU/native matching; cancellation waits for its finally. */
     private var matchingJob: Job? = null
+    /** The owning job for the telemetry-only matcher shadow; never authoritative. */
+    private var matcherShadowJob: Job? = null
     private var sessionBoundaryEpoch: Long = sessionBoundary?.currentEpoch() ?: 0L
     private val unregisterSessionBoundary: (() -> Unit)? = sessionBoundary?.register {
         invalidateForAccountBoundary()
@@ -297,6 +310,7 @@ class ScanViewModel internal constructor(
         sessionBoundaryEpoch = sessionBoundary?.currentEpoch() ?: sessionBoundaryEpoch
         matchGeneration++
         cancelMatchingJob()
+        cancelMatcherShadow()
         chooserContext = null
         pendingIncoming = null
         deliveryGeneration++
@@ -332,10 +346,20 @@ class ScanViewModel internal constructor(
             jpegBytes.fill(0)
             return
         }
+        // T118: bounded shadow snapshot taken BEFORE v1 processing touches the
+        // bytes; null while the local switch is off, so v1 ownership below is
+        // untouched either way. Ownership of the copy transfers to the shadow
+        // job (run path) or is wiped here (reject/stale path).
+        val shadowInput = matcherShadow?.snapshot(jpegBytes)
         val generation = deliveryGeneration
         viewModelScope.launch {
             val accepted = acceptProcessed(jpegBytes, frontProcessor, generation)
-            if (accepted && captureSession.readyForMatching) evaluateMatch()
+            if (accepted && captureSession.readyForMatching) {
+                evaluateMatch()
+                startMatcherShadow(generation, shadowInput)
+            } else {
+                shadowInput?.wipe()
+            }
         }
     }
 
@@ -537,6 +561,7 @@ class ScanViewModel internal constructor(
         cancelIncomingSyncSchedule()
         matchGeneration++
         cancelMatchingJob()
+        cancelMatcherShadow()
         chooserContext = null
         pendingIncoming = null
         deliveryGeneration++
@@ -1758,6 +1783,53 @@ class ScanViewModel internal constructor(
 
     private fun cancelMatchingJob() {
         matchingJob?.cancel()
+    }
+
+    /**
+     * T118: the telemetry-only S1-S4 shadow launched BESIDE the v1 chain for
+     * one delivery. It writes nothing v1-visible: no match state, no terminal,
+     * no grant, no chooser, no recapture, no diagnostics phase. The shadow
+     * outcome is bounded scalar telemetry, and its owned input copy is wiped
+     * on run, reject, stale drop, cancellation, and teardown.
+     */
+    private fun startMatcherShadow(deliveryGenerationAtLaunch: Long, input: MatcherShadowInput?) {
+        val shadow = matcherShadow
+        if (shadow == null || input == null) {
+            input?.wipe()
+            return
+        }
+        matcherShadowJob?.cancel()
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                // Stale deliveries are dropped on the floor exactly like v1
+                // results (FIX-STATE-10): no telemetry, no work, no residue.
+                if (deliveryGenerationAtLaunch == deliveryGeneration) {
+                    withContext(cpuDispatcher) {
+                        val shadowContext = currentCoroutineContext()
+                        shadow.runOwned(input) { shadowContext.ensureActive() }
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                // Bounded: a shadow failure never surfaces into the scan flow.
+            } finally {
+                input.wipe()
+            }
+        }
+        matcherShadowJob = job
+        // If lifecycle cancellation wins before the coroutine body starts,
+        // its finally block cannot run; completion owns the snapshot then.
+        // Idempotent with the in-body wipe (MatcherShadowInput.wipe).
+        job.invokeOnCompletion {
+            input.wipe()
+            if (matcherShadowJob === job) matcherShadowJob = null
+        }
+        job.start()
+    }
+
+    private fun cancelMatcherShadow() {
+        matcherShadowJob?.cancel()
     }
 
     private fun sessionBoundaryIsCurrent(

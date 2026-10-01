@@ -231,6 +231,30 @@ class RemanenceViewModelFactory(
                 ) == true
             },
             sessionBoundary = container.sessionBoundary,
+            // T118 telemetry-only frozen matcher shadow: the accepted S1->S4
+            // path beside the v1 chain, local injectable switch, bounded
+            // scalar diagnostics only, every decision discarded. The catalog
+            // seam stays null until the lead delivers provenance-valid S5
+            // bytes (T017/T081/T116: never fabricated here), so today the
+            // shadow reports a bounded unavailable outcome without touching v1.
+            matcherShadow = dev.hryshyn.remanence.scan.matcher.MatcherShadowRunner(
+                config = dev.hryshyn.remanence.scan.matcher.MatcherShadowConfig.telemetryOnly(),
+                stages = dev.hryshyn.remanence.scan.matcher.AndroidMatcherShadowStages(
+                    modelBytes = {
+                        try {
+                            container.appContext.assets
+                                .open(
+                                    dev.hryshyn.remanence.core.recognition.FrozenLocalizer
+                                        .MODEL_ASSET_PATH,
+                                ).use { it.readBytes() }
+                        } catch (_: Throwable) {
+                            null
+                        }
+                    },
+                    catalogIndex = { null },
+                ),
+                sink = dev.hryshyn.remanence.scan.matcher.MatcherShadowTelemetry.sink,
+            ),
         ) as T
         else -> throw IllegalArgumentException("unknown ViewModel: ${modelClass.name}")
     }

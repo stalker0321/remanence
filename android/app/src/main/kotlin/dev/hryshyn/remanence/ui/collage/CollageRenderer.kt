@@ -518,7 +518,7 @@ object CollageRenderer {
                 // the text is measured with swapped axes, like a vertical
                 // provenance mark. Spine never carries artwork (frozen DOM
                 // gate; validation forbids it).
-                val layout = V5Decor.bandLayout(expression.grammarId, "spine")
+                val layout = V5Decor.bandLayout(expression.grammarId, "spine", musicRegion.height)
                 val text = snapshot.title + "\n" + snapshot.artistDisplay
                 val measurement = measurer.measure(
                     TextMeasureRequest(

@@ -104,18 +104,34 @@ object V5Decor {
     }
 
     /**
-     * Exact frozen band layout per (grammar, mode): flex `column` only for
-     * the tile modes (`.g11 .music{flex-direction:column}`,
-     * `.g24 .music-tile-art,.g24 .music-tile-text{...column...}`); every
-     * other band is a row. `gap`/`padTop`/`padSide`/`padBottom` are the
-     * exact paddings (base `.music{padding:7px 4px}` with per-mode
-     * overrides; g11 tile keeps the V3 `padding:12px` sides with the
-     * tile `padding-top:10px`).
+     * Exact frozen band layout per (grammar, mode, region height): flex
+     * `column` only for the tile modes (`.g11 .music{flex-direction:column}`
+     * survives the later padding-only override; `.g24
+     * .music-tile-art,.g24 .music-tile-text{...column...}`); every other
+     * band is a row.
      *
-     * `verticalText` is true only for the spine: `.g6
-     * .music-spine .music-copy{writing-mode:vertical-rl}` (label 21px
-     * nowrap). Pulse has no vertical rule anywhere and stays horizontal
-     * (interface R2 corrected accordingly).
+     * Padding/gap cascade (`v4.css`, later equal-specificity rules win;
+     * higher specificity wins outright):
+     * - base `.music{padding:7px 4px}` with per-mode `gap:9px`.
+     * - compact (`regionHeight < 65`, `grammars.js:182` class):
+     *   `.capsule .music-compact{padding:3px 5px;gap:7px}` — outranks
+     *   every grammar rule below; preserves `column`/`verticalText`.
+     * - g11 tile-art/tile-text: line-12 `.g11 .music{padding:9px;gap:7px}`
+     *   supersedes BOTH the line-4 `padding:12px;gap:6px` AND the
+     *   line-4 `.g11 .music-tile-art{padding-top:10px}` (equal
+     *   specificity, later shorthand wins) → 9/9/9, gap 7.
+     * - g24 tile-art/tile-text: `padding:7px`, gap 5.
+     * - sleeve: `padding:9px 0`, gap 14; sleeve-empty matches NO sleeve
+     *   rule (class `music-sleeve-empty`) → base 7/4, gap 9.
+     * - pulse: `padding:9px`, gap 10. inline: `padding:4px 0`, gap 8.
+     * - text/thumbnail grammar pads: g6 5/8, g12 3/6, g18 4/5, g21 3/3,
+     *   g23 inline 5/7 (`.g23 .music` outranks `.music-inline`); else
+     *   base 7/4.
+     * - spine: `padding:8px 3px`, gap 10.
+     *
+     * `verticalText` is true only for the spine: `.g6 .music-spine
+     * .music-copy{writing-mode:vertical-rl}` (label 21px nowrap). Pulse
+     * has no vertical rule anywhere and stays horizontal (interface R2).
      */
     data class BandLayout(
         val column: Boolean,
@@ -126,26 +142,49 @@ object V5Decor {
         val verticalText: Boolean,
     )
 
-    fun bandLayout(grammar: String, mode: String): BandLayout {        val g = grammar.removePrefix("g")
+    fun bandLayout(grammar: String, mode: String, regionHeight: Int): BandLayout {
+        val g = grammar.removePrefix("g")
+        if (regionHeight < 65) {
+            return when {
+                mode == "spine" -> BandLayout(
+                    column = false, gap = 7, padTop = 3, padSide = 5, padBottom = 3,
+                    verticalText = true,
+                )
+                g == "11" && (mode == "tile-art" || mode == "tile-text") ||
+                    g == "24" && (mode == "tile-art" || mode == "tile-text") ->
+                    BandLayout(
+                        column = true, gap = 7, padTop = 3, padSide = 5, padBottom = 3,
+                        verticalText = false,
+                    )
+                else -> BandLayout(
+                    column = false, gap = 7, padTop = 3, padSide = 5, padBottom = 3,
+                    verticalText = false,
+                )
+            }
+        }
         return when {
             mode == "spine" -> BandLayout(
                 column = false, gap = 10, padTop = 8, padSide = 3, padBottom = 8,
                 verticalText = true,
             )
-            g == "11" && mode == "tile-art" -> BandLayout(
-                column = true, gap = 9, padTop = 10, padSide = 12, padBottom = 12,
+            g == "11" && (mode == "tile-art" || mode == "tile-text") -> BandLayout(
+                column = true, gap = 7, padTop = 9, padSide = 9, padBottom = 9,
                 verticalText = false,
             )
             g == "24" && (mode == "tile-art" || mode == "tile-text") -> BandLayout(
                 column = true, gap = 5, padTop = 7, padSide = 7, padBottom = 7,
                 verticalText = false,
             )
-            mode == "sleeve" || mode == "sleeve-empty" -> BandLayout(
+            mode == "sleeve" -> BandLayout(
                 column = false, gap = 14, padTop = 9, padSide = 0, padBottom = 9,
                 verticalText = false,
             )
             mode == "pulse" -> BandLayout(
                 column = false, gap = 10, padTop = 9, padSide = 9, padBottom = 9,
+                verticalText = false,
+            )
+            mode == "inline" && g == "23" -> BandLayout(
+                column = false, gap = 8, padTop = 5, padSide = 7, padBottom = 5,
                 verticalText = false,
             )
             mode == "inline" -> BandLayout(
@@ -154,6 +193,18 @@ object V5Decor {
             )
             mode == "thumbnail" && g == "6" -> BandLayout(
                 column = false, gap = 9, padTop = 5, padSide = 8, padBottom = 5,
+                verticalText = false,
+            )
+            (mode == "text" || mode == "thumbnail") && g == "12" -> BandLayout(
+                column = false, gap = 9, padTop = 3, padSide = 6, padBottom = 3,
+                verticalText = false,
+            )
+            (mode == "text" || mode == "thumbnail") && g == "18" -> BandLayout(
+                column = false, gap = 9, padTop = 4, padSide = 5, padBottom = 4,
+                verticalText = false,
+            )
+            (mode == "text" || mode == "thumbnail") && g == "21" -> BandLayout(
+                column = false, gap = 9, padTop = 3, padSide = 3, padBottom = 3,
                 verticalText = false,
             )
             else -> BandLayout(
@@ -210,11 +261,15 @@ object V5Decor {
     /**
      * Exact cover+text subdivision of a sealed music region for a verified
      * cover mode, shared by prepare (text measurement) and Canvas (pixels)
-     * so both use one frozen-derived geometry. Row bands put the cover at
-     * the leading edge, vertically centered (`align-items:center`); column
-     * bands (tile modes) put it at the top, left-aligned
-     * (`justify-content:flex-start`, `align-items:start`). The copy takes
-     * the remainder after cover + gap. Returns null when the remainder
+     * so both use one frozen-derived geometry. The first flex child (the
+     * artwork; `grammars.js:182` appends it first) starts at the padded
+     * content box (`region + padding`), never at the region edge: row bands
+     * put the cover at content-left, vertically centered in the content box
+     * (`align-items:center`); column bands (tile modes) put it at the
+     * content-top-left (`justify-content:flex-start`,
+     * `align-items:start`). `FILL` width is 100% of the content box
+     * (`regionWidth − 2·padSide`), not the border box. The copy takes the
+     * remainder after cover + gap. Returns null when the remainder
      * collapses (prepare rejects fail-closed; frozen would flag overflow).
      */
     data class CoverPlacement(
@@ -232,35 +287,31 @@ object V5Decor {
         mode: String,
     ): CoverPlacement? {
         val spec = coverSpec(grammar, mode, regionWidth, regionHeight) ?: return null
-        val layout = bandLayout(grammar, mode)
+        val layout = bandLayout(grammar, mode, regionHeight)
+        val contentX = regionX + layout.padSide
+        val contentY = regionY + layout.padTop
+        val contentW = regionWidth - 2 * layout.padSide
+        val contentH = regionHeight - layout.padTop - layout.padBottom
+        if (contentW < 1 || contentH < 1) return null
         return if (layout.column) {
-            val coverW = spec.width ?: regionWidth
-            val coverX = regionX
-            val coverY = regionY + layout.padTop
-            val textY = coverY + spec.height + layout.gap
+            val coverW = spec.width ?: contentW
+            val textY = contentY + spec.height + layout.gap
             val textH = regionY + regionHeight - layout.padBottom - textY
             if (coverW < 1 || textH < 1) return null
             CoverPlacement(
-                cover = CollageRenderer.RectI(coverX, coverY, coverW, spec.height),
-                text = CollageRenderer.RectI(
-                    regionX + layout.padSide, textY,
-                    regionWidth - 2 * layout.padSide, textH,
-                ),
+                cover = CollageRenderer.RectI(contentX, contentY, coverW, spec.height),
+                text = CollageRenderer.RectI(contentX, textY, contentW, textH),
                 fit = spec.fit,
             )
         } else {
             val coverW = spec.width ?: return null
-            val coverX = regionX
-            val coverY = regionY + (regionHeight - spec.height) / 2
-            val textX = coverX + coverW + layout.gap
-            val textW = regionX + regionWidth - textX
-            val textH = regionHeight - layout.padTop - layout.padBottom
-            if (textW < 1 || textH < 1) return null
+            val coverY = contentY + (contentH - spec.height) / 2
+            val textX = contentX + coverW + layout.gap
+            val textW = regionX + regionWidth - layout.padSide - textX
+            if (textW < 1 || contentH < 1) return null
             CoverPlacement(
-                cover = CollageRenderer.RectI(coverX, coverY, coverW, spec.height),
-                text = CollageRenderer.RectI(
-                    textX, regionY + layout.padTop, textW, textH,
-                ),
+                cover = CollageRenderer.RectI(contentX, coverY, coverW, spec.height),
+                text = CollageRenderer.RectI(textX, contentY, textW, contentH),
                 fit = spec.fit,
             )
         }

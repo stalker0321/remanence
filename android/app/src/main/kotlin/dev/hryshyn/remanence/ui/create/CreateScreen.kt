@@ -13,8 +13,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import dev.hryshyn.remanence.ui.hold.HoldButton as Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
@@ -431,15 +433,42 @@ private fun ComposeStepContent(viewModel: CreateViewModel) {
         val openSlot = cropSlot
         val source = openSlot?.let { slot -> sources.firstOrNull { it.contentId == slot } }
         val geometry = openSlot?.let { viewModel.cropSlotGeometry(it) }
-        if (openSlot != null && source != null && geometry != null) {
-            val corrections by viewModel.cropCorrections.collectAsStateWithLifecycle()
-            val scope = rememberCoroutineScope()
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .testTag("compose_art_space"),
-            ) {
+        // R1 crop lifecycle: the chooser/host stays mounted across crop
+        // open/close so its build effect never refires a rebuild (which
+        // would wipe frozen + corrections via onCandidatesReplaced). While
+        // the stage is open the chooser takes zero size (no draw, no hit
+        // interception, no extra layout) with cleared semantics, and the
+        // stage paints alone on top — exactly one stage is visible and
+        // tappable, from one composition.
+        val staged = openSlot != null && source != null && geometry != null
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .testTag("compose_art_space"),
+        ) {
+            CollageStepChooser(
+                viewModel,
+                modifier = Modifier.fillMaxWidth()
+                    .then(
+                        if (staged) {
+                            Modifier
+                                .size(0.dp)
+                                .clearAndSetSemantics {}
+                        } else {
+                            Modifier
+                        },
+                    ),
+                onSlotTap = { contentId ->
+                    viewModel.openCrop(contentId)
+                    Unit
+                },
+            )
+            if (staged) {
+                requireNotNull(source)
+                requireNotNull(geometry)
+                val corrections by viewModel.cropCorrections.collectAsStateWithLifecycle()
+                val scope = rememberCoroutineScope()
                 CropStageContent(
                     source = source,
                     slotAspect = geometry.slotAspect,
@@ -454,22 +483,7 @@ private fun ComposeStepContent(viewModel: CreateViewModel) {
                         .verticalScroll(rememberScrollState()),
                 )
             }
-        } else {
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .testTag("compose_art_space"),
-            ) {
-                CollageStepChooser(
-                    viewModel,
-                    modifier = Modifier.fillMaxWidth(),
-                    onSlotTap = { contentId ->
-                        viewModel.openCrop(contentId)
-                        Unit
-                    },
-                )
-            }
+        }
             Spacer(Modifier.height(12.dp))
             val corrections by viewModel.cropCorrections.collectAsStateWithLifecycle()
             if (sources.isNotEmpty()) {
@@ -491,7 +505,6 @@ private fun ComposeStepContent(viewModel: CreateViewModel) {
                 enabled = viewModel.frozenCollageSelection != null,
                 modifier = Modifier.fillMaxWidth().testTag("create_publish"),
             ) { Text(stringResource(R.string.hold_publish)) }
-        }
     }
 }
 

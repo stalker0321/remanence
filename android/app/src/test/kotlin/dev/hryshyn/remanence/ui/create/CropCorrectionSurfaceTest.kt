@@ -241,6 +241,27 @@ class CropCorrectionSurfaceTest {
     }
 
     @Test
+    fun stageControlsDeliverToCallbacks() {
+        val updates = mutableListOf<Triple<Float, Float, Float>>()
+        val resets = mutableListOf<Int>()
+        val dones = mutableListOf<Int>()
+        val backs = mutableListOf<Int>()
+        stage(null, updates, resets, dones, backs)
+        composeRule.onNodeWithTag("crop_pan_right").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("crop_reset").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("crop_back").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("crop_done").performClick()
+        composeRule.waitForIdle()
+        assertEquals(listOf(Triple(1f, 1f, 0f)), updates)
+        assertEquals(listOf(1), resets)
+        assertEquals(listOf(1), backs)
+        assertEquals(listOf(1), dones)
+    }
+
+    @Test
     fun slotPickerOpensSelectedSlot() {
         var opened: String? = null
         val second = GeneratorPreviewSource("photo-1", jpeg(), 1000, 1000)

@@ -277,6 +277,7 @@ class CreateTransitionTableTest {
 
         repeat(3) { index -> assertTrue(vm.photoSelection.toggle("content://photo/$index").let { true }) }
         // ADR-018: publish with no note (non-empty notes are typed unsupported).
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)
 
@@ -314,6 +315,7 @@ class CreateTransitionTableTest {
         repeat(3) { vm.photoSelection.toggle("content://note/$it") }
         assertTrue(vm.noteEditor.onChange("dear mama"))
 
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)
 
@@ -410,10 +412,12 @@ class CreateTransitionTableTest {
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
         assertNotNull(vm.flowError.value)
 
-        // Publishing requires CONTENT.
+        // Publishing requires COMPOSE (reached only through CONTENT).
+        assertFalse(vm.goToCompose())
+        assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
         vm.startPublishing()
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
-        assertTrue(vm.flowError.value!!.contains("CONTENT"))
+        assertTrue(vm.flowError.value!!.contains("COMPOSE"))
 
         // Walk to FRONT; stray capture calls are refused visibly.
         confirmRecipient(vm)
@@ -443,6 +447,8 @@ class CreateTransitionTableTest {
         assertNotNull(vm.frontAttempt.phase as CaptureAttemptPhase.Rejected)
 
         // A guard violation leaves a message; the successful retry clears it.
+        // Still at FRONT with no photos: composition is refused.
+        assertFalse(vm.goToCompose())
         vm.startPublishing()
         assertNotNull(vm.flowError.value)
         vm.retakeFront()
@@ -462,6 +468,7 @@ class CreateTransitionTableTest {
         repeat(3) { vm.photoSelection.toggle("content://keep/$it") }
         assertTrue(vm.noteEditor.onChange("still here"))
 
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)
 

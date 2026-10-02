@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.ui.create
 import android.content.Context
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -261,7 +262,20 @@ class CreateUiHappyPathTest {
         // Let the preview host measure the note and report the fitted plan.
         composeRule.waitForIdle()
 
-        // 5) Publish.
+        // 5) Explicitly select and freeze the displayed candidate, then
+        // continue to the COMPOSE surface and publish the frozen choice.
+        composeRule.waitUntil(timeoutMillis = 10_000) { vm.collageChoices.candidates.isNotEmpty() }
+        composeRule.runOnIdle {
+            assertTrue(vm.selectCollageCandidate(0))
+            assertTrue(vm.freezeCollageSelection())
+        }
+        scroll("create_next")
+        composeRule.onNodeWithTag("create_next")
+            .assertIsEnabled()
+            .performClick()
+        composeRule.runOnIdle { assertEquals(CreateViewModel.Step.COMPOSE, vm.step.value) }
+
+        // 6) Publish the frozen choice.
         scroll("create_publish")
         composeRule.onNodeWithTag("create_publish")
             .assertIsDisplayed()

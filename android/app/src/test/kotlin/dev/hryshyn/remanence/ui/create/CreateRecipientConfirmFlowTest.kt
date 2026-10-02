@@ -22,6 +22,7 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertNotSame
@@ -302,9 +303,12 @@ class CreateRecipientConfirmFlowTest {
 
         // Without captured sides nothing can be published: FIX-STATE-02
         // fails CLOSED with a visible recovery message instead of crashing.
+        // Still at FRONT with no photos: composition is refused, and
+        // publishing still requires the COMPOSE screen.
+        assertFalse(vm.goToCompose())
         vm.startPublishing()
         assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
-        assertTrue(vm.flowError.value!!.contains("publishing requires step CONTENT"))
+        assertTrue(vm.flowError.value!!.contains("publishing requires step COMPOSE"))
         runBlocking {
             assertTrue(database.outboxBlobDao().getAllByCapsuleIdAndOwner(vm.capsuleId, "0198f0a0-0000-7000-8000-00000000ow01").isEmpty())
         }

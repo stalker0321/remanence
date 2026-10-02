@@ -100,6 +100,15 @@ fun CreateScreen(
                         CreateViewModel.Step.RECIPIENT_CONFIRM -> stringResource(R.string.hold_confirm_title)
                         CreateViewModel.Step.FRONT -> stringResource(R.string.hold_capture_title)
                         CreateViewModel.Step.CONTENT -> stringResource(R.string.hold_content_title)
+                        // Spec `selected`: the same surface keeps its frozen
+                        // choice visible through the title.
+                        CreateViewModel.Step.COMPOSE -> stringResource(
+                            if (viewModel.frozenCollageSelection != null) {
+                                R.string.hold_selected_title
+                            } else {
+                                R.string.hold_compose_title
+                            },
+                        )
                         CreateViewModel.Step.PUBLISHING -> stringResource(R.string.hold_preparing_title)
                         CreateViewModel.Step.UPLOAD_PENDING -> stringResource(R.string.hold_publishing_title)
                         CreateViewModel.Step.PUBLISHED -> stringResource(R.string.hold_ready_title)
@@ -124,6 +133,7 @@ fun CreateScreen(
                     )
 
                     CreateViewModel.Step.CONTENT -> ContentStepContent(viewModel)
+                    CreateViewModel.Step.COMPOSE -> ComposeStepContent(viewModel)
                     CreateViewModel.Step.PUBLISHING -> Column {
                         androidx.compose.material3.CircularProgressIndicator(
                             strokeWidth = 2.dp,
@@ -366,10 +376,74 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
 
         Spacer(Modifier.height(12.dp))
         Button(
-            onClick = viewModel::startPublishing,
+            onClick = viewModel::goToCompose,
             enabled = viewModel.photoSelection.canProceed && viewModel.noteEditor.canIncludeInCapsule,
-            modifier = Modifier.fillMaxWidth().testTag("create_publish"),
-        ) { Text(stringResource(R.string.hold_publish)) }
+            modifier = Modifier.fillMaxWidth().testTag("create_next"),
+        ) { Text(stringResource(R.string.hold_next)) }
+    }
+}
+
+/**
+ * T150 explicit composition browsing surface (spec `expression`/`selected`):
+ * the whole-capsule chooser fills this distinct screen — never embedded in
+ * the content form. Select freezes the displayed candidate; publish needs a
+ * frozen choice; back returns to the form with every input retained.
+ */
+@Composable
+private fun ComposeStepContent(viewModel: CreateViewModel) {
+    Column {
+        val recipient by viewModel.confirmedRecipient.collectAsStateWithLifecycle()
+        recipient?.let { HoldInformation(stringResource(R.string.hold_for_handle, it.handle.toDisplayString())) }
+        TextButton(
+            onClick = viewModel::backToContent,
+            modifier = Modifier.testTag("create_compose_back"),
+        ) { Text(stringResource(R.string.hold_back)) }
+        Spacer(Modifier.height(8.dp))
+        val cropSlot by viewModel.cropSlot.collectAsStateWithLifecycle()
+        val preview = viewModel.generatorPreview.collectAsStateWithLifecycle().value
+        val sources = when (preview) {
+            is GeneratorPreviewState.Ready -> preview.sources
+            is GeneratorPreviewState.NotePending -> preview.sources
+            else -> emptyList()
+        }
+        val openSlot = cropSlot
+        if (openSlot != null) {
+            val source = sources.firstOrNull { it.contentId == openSlot }
+            val corrections by viewModel.cropCorrections.collectAsStateWithLifecycle()
+            if (source != null) {
+                CropStageContent(
+                    source = source,
+                    correction = corrections[openSlot],
+                    onUpdate = viewModel::updateCrop,
+                    onReset = viewModel::resetCrop,
+                    onDone = { viewModel.closeCrop() },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        } else {
+            CollageStepChooser(viewModel, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(12.dp))
+            val corrections by viewModel.cropCorrections.collectAsStateWithLifecycle()
+            if (sources.isNotEmpty()) {
+                Text(
+                    stringResource(R.string.hold_crop_hint),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.testTag("crop_hint"),
+                )
+                Spacer(Modifier.height(4.dp))
+                CropSlotPicker(
+                    sources = sources,
+                    corrections = corrections,
+                    onOpen = { viewModel.openCrop(it) },
+                )
+                Spacer(Modifier.height(12.dp))
+            }
+            Button(
+                onClick = viewModel::startPublishing,
+                enabled = viewModel.frozenCollageSelection != null,
+                modifier = Modifier.fillMaxWidth().testTag("create_publish"),
+            ) { Text(stringResource(R.string.hold_publish)) }
+        }
     }
 }
 

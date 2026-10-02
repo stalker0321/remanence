@@ -102,6 +102,9 @@ class MusicPickerSectionTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("music_hit_be30e36b-1111-4111-8111-000000000001").performClick()
         composeRule.onNodeWithText("Attached on publish: 505").assertIsDisplayed()
+        // The selection collapses the results: replacing it needs one
+        // explicit new search first.
+        composeRule.onNodeWithTag("music_change").performClick()
         composeRule.onNodeWithTag("music_hit_be30e36b-2222-4222-8222-000000000002").performClick()
         composeRule.onNodeWithText("Attached on publish: Do I Wanna Know?").assertIsDisplayed()
     }

@@ -18,6 +18,14 @@
     <string name="hold_capture_title">какую открытку отправим?</string>
     <string name="hold_scan_title">покажите лицевую сторону</string>
     <string name="hold_content_title">немного из вашей жизни</string>
+    <string name="hold_compose_title">какой вариант ближе?</string>
+    <string name="hold_selected_title">пусть будет этот</string>
+    <string name="hold_crop_hint">нажмите на фотографию, чтобы поправить кадр.</string>
+    <string name="hold_crop_stage_hint">двигайте фотографию внутри рамки.</string>
+    <string name="hold_crop_title">поправьте кадр</string>
+    <string name="hold_next">дальше</string>
+    <string name="hold_track_change">изменить</string>
+    <string name="hold_remove">убрать музыку</string>
     <string name="hold_recognizing">ищем вашу открытку</string>
     <string name="hold_ready_title">теперь отправьте открытку</string>
     <string name="hold_preparing_title">готовим вложение</string>

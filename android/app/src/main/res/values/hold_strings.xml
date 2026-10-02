@@ -18,6 +18,14 @@
     <string name="hold_capture_title">the postcard you’ll send</string>
     <string name="hold_scan_title">show us the front</string>
     <string name="hold_content_title">a little of your world</string>
+    <string name="hold_compose_title">which feels right?</string>
+    <string name="hold_selected_title">this one feels right</string>
+    <string name="hold_crop_hint">tap a photograph to adjust its crop.</string>
+    <string name="hold_crop_stage_hint">move the photograph under its frame.</string>
+    <string name="hold_crop_title">adjust the crop</string>
+    <string name="hold_next">continue</string>
+    <string name="hold_track_change">change</string>
+    <string name="hold_remove">remove music</string>
     <string name="hold_recognizing">finding your postcard</string>
     <string name="hold_ready_title">now, the postcard</string>
     <string name="hold_preparing_title">getting it ready</string>

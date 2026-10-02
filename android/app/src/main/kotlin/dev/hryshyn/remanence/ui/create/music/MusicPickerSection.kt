@@ -1,6 +1,7 @@
 package dev.hryshyn.remanence.ui.create.music
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -8,10 +9,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.hryshyn.remanence.R
 import dev.hryshyn.remanence.core.data.network.MusicTrackHit
 import dev.hryshyn.remanence.ui.hold.HoldInformation
 import dev.hryshyn.remanence.ui.hold.HoldInput as OutlinedTextField
@@ -45,6 +51,45 @@ fun MusicPickerSection(
     Column(modifier = modifier.fillMaxWidth().testTag("music_section")) {
         HoldInformation("Optional: search the sample catalog and attach a track to this capsule.")
         Spacer(Modifier.height(8.dp))
+        // T150 explicit search state: a confirmed selection collapses the
+        // query field and results; Change reveals one explicit new search and
+        // Remove drops the selection. Late results never touch the selection.
+        var searching by remember(selection) { mutableStateOf(selection == null) }
+        val selected = selection
+        if (selected != null && !searching) {
+            Text(
+                "Attached on publish: ${selected.title}",
+                modifier = Modifier.testTag("music_selection"),
+            )
+            Text(
+                selected.artists.joinToString(),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("music_selection_artist"),
+            )
+            Spacer(Modifier.height(4.dp))
+            Row {
+                TextButton(
+                    onClick = { searching = true },
+                    modifier = Modifier.testTag("music_change"),
+                ) { Text(stringResource(R.string.hold_track_change)) }
+                TextButton(
+                    onClick = onClearSelection,
+                    modifier = Modifier.testTag("music_clear"),
+                ) { Text(stringResource(R.string.hold_remove)) }
+            }
+            return@Column
+        }
+        if (selected != null) {
+            Text(
+                "Selected: ${selected.title} — ${selected.artists.joinToString()}",
+                modifier = Modifier.testTag("music_selection"),
+            )
+            TextButton(
+                onClick = onClearSelection,
+                modifier = Modifier.testTag("music_clear"),
+            ) { Text(stringResource(R.string.hold_remove)) }
+            Spacer(Modifier.height(4.dp))
+        }
         OutlinedTextField(
             value = query,
             onValueChange = state::onQueryChange,
@@ -115,17 +160,6 @@ fun MusicPickerSection(
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.testTag("music_error"),
             )
-        }
-        selection?.let { selected ->
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Attached on publish: ${selected.title}",
-                modifier = Modifier.testTag("music_selection"),
-            )
-            TextButton(
-                onClick = onClearSelection,
-                modifier = Modifier.testTag("music_clear"),
-            ) { Text("Clear selection") }
         }
     }
 }

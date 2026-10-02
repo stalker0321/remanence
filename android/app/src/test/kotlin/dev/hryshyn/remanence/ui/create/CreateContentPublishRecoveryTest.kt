@@ -350,7 +350,8 @@ class CreateContentPublishRecoveryTest {
             errNodes > 0,
         )
         composeRule.onNodeWithTag("create_note_limit_error").assertIsDisplayed()
-        composeRule.onNodeWithTag("create_publish").assertIsNotEnabled()
+        // No photos yet: the explicit Next gate stays closed.
+        composeRule.onNodeWithTag("create_next").assertIsNotEnabled()
         assertEquals("dear mama", vm.noteEditor.text)
 
         // Valid input clears the error again.
@@ -378,15 +379,15 @@ class CreateContentPublishRecoveryTest {
             assertEquals("Selected: 2 of 3-5", countText())
             assertFalse(vm.photoSelection.canProceed)
         }
-        composeRule.scrollToTag("create_publish")
-        composeRule.onNodeWithTag("create_publish").assertIsNotEnabled()
+        composeRule.scrollToTag("create_next")
+        composeRule.onNodeWithTag("create_next").assertIsNotEnabled()
 
         composeRule.runOnIdle { vm.onPhotosPicked(listOf("a", "b", "c")) }
         composeRule.runOnIdle {
             assertEquals("Selected: 3 of 3-5", countText())
             assertTrue(vm.photoSelection.canProceed)
         }
-        composeRule.onNodeWithTag("create_publish").assertIsEnabled()
+        composeRule.onNodeWithTag("create_next").assertIsEnabled()
 
         // Six picked ids cannot exceed five; the gate stays inside 3..5.
         composeRule.runOnIdle { vm.onPhotosPicked(listOf("1", "2", "3", "4", "5", "6")) }
@@ -419,10 +420,15 @@ class CreateContentPublishRecoveryTest {
             assertTrue(vm.noteEditor.onChange("recover me"))
         }
         composeRule.waitForIdle()
-        composeRule.scrollToTag("create_publish")
-        composeRule.onNodeWithTag("create_publish")
+        // Explicit Next first: publishing lives on the COMPOSE screen now.
+        composeRule.scrollToTag("create_next")
+        composeRule.onNodeWithTag("create_next")
             .assertIsEnabled()
             .performClick()
+        composeRule.runOnIdle { assertEquals(CreateViewModel.Step.COMPOSE, vm.step.value) }
+        // No frozen choice here, so the test drives the VM gate directly;
+        // the publish job still reaches PUBLISHING before the identity fails.
+        composeRule.runOnIdle { vm.startPublishing() }
 
         composeRule.waitForIdle()
         assertEquals(
@@ -469,6 +475,7 @@ class CreateContentPublishRecoveryTest {
         vm.onPhotosPicked(listOf("p1", "p2", "p3"))
 
         ioDispatcher.armed = true
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         val deadline = System.currentTimeMillis() + 10_000
         while (persistence.decryptedBuffers.isEmpty() && System.currentTimeMillis() < deadline) {
@@ -506,6 +513,7 @@ class CreateContentPublishRecoveryTest {
         )
         vm.onPhotosPicked(listOf("p1", "p2", "p3"))
         // ADR-018: publish with no note (non-empty notes are typed unsupported).
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitStep(vm, CreateViewModel.Step.UPLOAD_PENDING)
         promoteToPublished(vm)

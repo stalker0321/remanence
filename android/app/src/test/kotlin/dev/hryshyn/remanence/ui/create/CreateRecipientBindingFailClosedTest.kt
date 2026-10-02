@@ -32,6 +32,7 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -328,6 +329,8 @@ class CreateRecipientBindingFailClosedTest {
         )
 
         val capsuleId = vm.capsuleId
+        // Off CONTENT after teardown: composition is refused too.
+        assertFalse(vm.goToCompose())
         vm.startPublishing()
 
         // Fail-closed: teardown left the flow off CONTENT with no recipient,
@@ -372,6 +375,7 @@ class CreateRecipientBindingFailClosedTest {
 
         // The publication reads the captured snapshot, not the second
         // resolution attempt.
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)
         assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
@@ -401,6 +405,7 @@ class CreateRecipientBindingFailClosedTest {
         driveToContent(vm, selfSnapshot())
         val selfCapsuleId = vm.capsuleId
 
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         // The publish is parked at the single identity capture (before
         // any artifact is written). The directory is now mutated: a
@@ -444,6 +449,7 @@ class CreateRecipientBindingFailClosedTest {
         val capsuleId = vm.capsuleId
         assertNotNull(vm.confirmedRecipient.value)
 
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)
 
@@ -487,6 +493,8 @@ class CreateRecipientBindingFailClosedTest {
 
         // Publishing from the new session is impossible: there is no
         // confirmed recipient and the step table blocks CONTENT access.
+        // Composition is refused off CONTENT as well.
+        assertFalse(vm.goToCompose())
         vm.startPublishing()
         assertNotNull(vm.flowError.value)
         assertTrue(

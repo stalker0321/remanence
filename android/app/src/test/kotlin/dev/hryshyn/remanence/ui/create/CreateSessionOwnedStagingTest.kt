@@ -283,6 +283,7 @@ class CreateSessionOwnedStagingTest {
         val roots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingRoot)
         val oldDir = File(roots.createStagingRoot(UserId(userUuid)), oldCapsuleId)
 
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value)
         identityGate.complete(senderIdentity(userUuid))
@@ -320,6 +321,7 @@ class CreateSessionOwnedStagingTest {
         driveToReadyContent(vm, listOf("new-1", "new-2", "new-3"))
         val newDir = File(roots.createStagingRoot(UserId(switchedUserUuid)), newCapsuleId)
 
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value)
         // New session stages two G3 leases, then parks on its third.
@@ -608,6 +610,7 @@ class CreateSessionOwnedStagingTest {
         vm.beginSession(1L)
         driveToReadyContent(vm, listOf("photo-1", "photo-2", "photo-3"))
 
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
 
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)

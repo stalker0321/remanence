@@ -406,9 +406,12 @@ class CreateCollageDiagnosticsTest {
         assertTrue(vm.collageChoices.candidates.isEmpty())
         assertNull(vm.collageChoices.selected)
         assertFalse(vm.selectCollageCandidate(0))
+        // No recipient/front/session steps here: composition is refused and
+        // publishing stays fail-closed off the COMPOSE screen.
+        assertFalse(vm.goToCompose())
         vm.startPublishing()
         assertTrue(
-            "publish must stay fail-closed without a CONTENT session",
+            "publish must stay fail-closed off the COMPOSE screen",
             vm.uploadStatus.value is CreateViewModel.CreateUploadStatus.NotStarted,
         )
     }

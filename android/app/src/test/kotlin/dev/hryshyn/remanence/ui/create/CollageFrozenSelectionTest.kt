@@ -508,6 +508,7 @@ class CollageFrozenSelectionTest {
         assertTrue(vm.selectCollageCandidate(0))
         assertTrue(vm.freezeCollageSelection())
 
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         val deadline = System.currentTimeMillis() + 10_000
         while (vm.step.value == CreateViewModel.Step.PUBLISHING) {

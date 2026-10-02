@@ -18,6 +18,14 @@
     <string name="hold_capture_title">яку листівку надішлемо?</string>
     <string name="hold_scan_title">покажіть лицьовий бік</string>
     <string name="hold_content_title">трохи з вашого життя</string>
+    <string name="hold_compose_title">який варіант ближчий?</string>
+    <string name="hold_selected_title">нехай буде цей</string>
+    <string name="hold_crop_hint">натисніть на фотографію, щоб поправити кадр.</string>
+    <string name="hold_crop_stage_hint">рухайте фотографію всередині рамки.</string>
+    <string name="hold_crop_title">поправте кадр</string>
+    <string name="hold_next">далі</string>
+    <string name="hold_track_change">змінити</string>
+    <string name="hold_remove">прибрати музику</string>
     <string name="hold_recognizing">шукаємо вашу листівку</string>
     <string name="hold_ready_title">тепер надішліть листівку</string>
     <string name="hold_preparing_title">готуємо вкладення</string>

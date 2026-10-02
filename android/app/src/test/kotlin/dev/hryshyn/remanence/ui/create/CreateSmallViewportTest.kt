@@ -424,15 +424,18 @@ class CreateSmallViewportTest {
         }
         composeRule.waitForIdle()
 
-        // S4 polish: the picker sits immediately above the publish button
-        // in one Column (source order, read-only audited) so select-then-
-        // publish needs no scrolling back. Both stay reachable by scrolling
-        // on tiny screens; no relative-coordinate assertion (off-screen
-        // bounds are brittle across separate scroll positions).
+        // S4 polish: the picker sits immediately above the explicit Next
+        // action in one Column (source order, read-only audited) so
+        // select-then-continue needs no scrolling back. Publishing lives on
+        // the COMPOSE screen; both stay reachable by scrolling on tiny
+        // screens; no relative-coordinate assertion (off-screen bounds are
+        // brittle across separate scroll positions). This fixture has no
+        // session owner, so Next is displayed but not traversed here;
+        // traversal is covered by CreateComposeFlowTest and the happy path.
         composeRule.scrollToTag("music_section")
         composeRule.onNodeWithTag("music_section").assertIsDisplayed()
-        composeRule.scrollToTag("create_publish")
-        composeRule.onNodeWithTag("create_publish").assertIsDisplayed()
+        composeRule.scrollToTag("create_next")
+        composeRule.onNodeWithTag("create_next").assertIsDisplayed()
     }
 
     private fun androidx.compose.ui.test.junit4.ComposeTestRule.scrollToTag(tag: String) {

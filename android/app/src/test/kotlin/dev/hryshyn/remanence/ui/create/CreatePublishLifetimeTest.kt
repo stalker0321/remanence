@@ -286,6 +286,7 @@ class CreatePublishLifetimeTest {
             },
         )
 
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)
 
@@ -301,6 +302,7 @@ class CreatePublishLifetimeTest {
             enqueueUpload = { _, _ -> throw IllegalStateException("work unavailable") },
         )
 
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)
 
@@ -321,6 +323,7 @@ class CreatePublishLifetimeTest {
             enqueueUpload = { _, capsule -> enqueued += capsule },
         )
 
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)
 
@@ -336,6 +339,7 @@ class CreatePublishLifetimeTest {
         val vm = contentStage(identityGate, enqueueUpload = { _, capsule -> enqueued += capsule })
         val oldCapsuleId = vm.capsuleId
 
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value)
         // Parked at the single identity capture before any file was written.
@@ -373,6 +377,7 @@ class CreatePublishLifetimeTest {
         val vm = contentStage(identityGate, enqueueUpload = { _, capsule -> enqueued += capsule })
         val oldCapsuleId = vm.capsuleId
 
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value)
 
@@ -398,8 +403,10 @@ class CreatePublishLifetimeTest {
         val vm = contentStage(identityGate)
         val capsuleId = vm.capsuleId
 
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         // Second tap during PUBLISHING: refused visibly, no second job.
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         assertNotNull(vm.flowError.value)
         assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value)
@@ -429,6 +436,7 @@ class CreatePublishLifetimeTest {
         assertTrue("expected full artifact set", blobCount >= 5)
 
         // The worker has not completed yet: staging is still one encrypted row.
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
         runBlockingNullable {
@@ -444,6 +452,7 @@ class CreatePublishLifetimeTest {
         val identityGate = CompletableDeferred<SenderIdentitySnapshot>()
         val vm = contentStage(identityGate)
         val capsuleId = vm.capsuleId
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         identityGate.complete(senderIdentity())
         awaitTerminalPublish(vm)
@@ -489,6 +498,7 @@ class CreatePublishLifetimeTest {
             networkConnected = { true },
             accessToken = "revoke-token",
         )
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)
         val publishedId = CapsuleId.parseRest(vm.capsuleId)
@@ -531,6 +541,7 @@ class CreatePublishLifetimeTest {
             networkConnected = { false },
             accessToken = "revoke-token",
         )
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)
         promoteToPublished(vm)
@@ -553,6 +564,7 @@ class CreatePublishLifetimeTest {
             revoke = revoke,
             accessToken = "revoke-token",
         )
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)
         promoteToPublished(vm)
@@ -579,6 +591,7 @@ class CreatePublishLifetimeTest {
         val identityGate = CompletableDeferred<SenderIdentitySnapshot>()
         val vm = contentStage(identityGate)
         val capsuleId = vm.capsuleId
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         identityGate.complete(senderIdentity())
         awaitTerminalPublish(vm)

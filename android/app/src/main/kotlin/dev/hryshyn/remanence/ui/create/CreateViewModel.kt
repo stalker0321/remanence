@@ -188,6 +188,7 @@ class CreateViewModel(
         RECIPIENT_CONFIRM,
         FRONT,
         CONTENT,
+        COMPOSE,
         PUBLISHING,
         UPLOAD_PENDING,
         PUBLISHED,
@@ -290,6 +291,8 @@ class CreateViewModel(
         _musicSelection.value = hit
         collageChoices.clear()
         frozenCollageSelection = null
+        // Music changes the chooser input: drop per-photo corrections too.
+        clearCropState()
         startMusicArtworkResolution(hit)
     }
 
@@ -297,6 +300,7 @@ class CreateViewModel(
         _musicSelection.value = null
         collageChoices.clear()
         frozenCollageSelection = null
+        clearCropState()
         startMusicArtworkResolution(null)
     }
 
@@ -391,6 +395,87 @@ class CreateViewModel(
      */
     fun clearFrozenCollageSelection() {
         frozenCollageSelection = null
+        // T157 §6: a correction is keyed (expression, slot, contentId); the
+        // VM stores per-photo values only, so any navigation to another sheet
+        // drops them fail-closed instead of reusing them cross-slot.
+        clearCropState()
+    }
+
+    // ---------------------------------------------------------------------
+    // T150 crop seam (Astra guide rows 29/41): per-photo fixed-frame
+    // corrections owned by create state. Values edit the DISPLAY transform
+    // only; sealed geometry is untouched until T154 consumes them through
+    // the model/renderer API under T155's safe contract. Absent == identity.
+    // ---------------------------------------------------------------------
+
+    /** Fixed-frame correction for one photo: zoom with bounded pan. */
+    data class CropCorrection(
+        val contentId: String,
+        val zoom: Float,
+        val panX: Float,
+        val panY: Float,
+    )
+
+    private val _cropCorrections = MutableStateFlow<Map<String, CropCorrection>>(emptyMap())
+    val cropCorrections: StateFlow<Map<String, CropCorrection>> = _cropCorrections.asStateFlow()
+
+    /** Open crop stage slot (preview-source contentId), or null when closed. */
+    private val _cropSlot = MutableStateFlow<String?>(null)
+    val cropSlot: StateFlow<String?> = _cropSlot.asStateFlow()
+
+    private fun previewSourceIds(): List<String> = when (val preview = _generatorPreview.value) {
+        is GeneratorPreviewState.Ready -> preview.sources.map { it.contentId }
+        is GeneratorPreviewState.NotePending -> preview.sources.map { it.contentId }
+        else -> emptyList()
+    }
+
+    /** Opens the crop stage for one preview photo; correction preserved. */
+    fun openCrop(contentId: String): Boolean {
+        if (_step.value != Step.COMPOSE) return false
+        if (contentId !in previewSourceIds()) {
+            failGuard("crop needs a current preview photo")
+            return false
+        }
+        _cropSlot.value = contentId
+        return true
+    }
+
+    /**
+     * Edits the open slot's correction through the accepted T157 clamp
+     * ([FixedFrameCropCorrection.clampTransform]: zoom 1..1.25, pan within
+     * (zoom-1)*50; non-finite input is dropped). Silent no-op unless a slot
+     * is open. Never touches sealed geometry.
+     */
+    fun updateCrop(zoom: Float, panX: Float, panY: Float) {
+        val slot = _cropSlot.value ?: return
+        val clamped = dev.hryshyn.remanence.ui.collage.FixedFrameCropCorrection
+            .clampTransform(zoom.toDouble(), panX.toDouble(), panY.toDouble()) ?: return
+        _cropCorrections.value = _cropCorrections.value + (
+            slot to CropCorrection(
+                contentId = slot,
+                zoom = clamped.z.toFloat(),
+                panX = clamped.xPercent.toFloat(),
+                panY = clamped.yPercent.toFloat(),
+            )
+            )
+    }
+
+    /** Resets the open slot to identity (entry removed). */
+    fun resetCrop() {
+        val slot = _cropSlot.value ?: return
+        _cropCorrections.value = _cropCorrections.value - slot
+    }
+
+    /** Closes the crop stage; the correction is preserved. */
+    fun closeCrop(): Boolean {
+        if (_cropSlot.value == null) return false
+        _cropSlot.value = null
+        return true
+    }
+
+    private fun clearCropState() {
+        _cropSlot.value = null
+        _cropCorrections.value = emptyMap()
     }
 
     // ---------------------------------------------------------------------
@@ -433,7 +518,10 @@ class CreateViewModel(
      * only an explicitly frozen and publish-gate-accepted candidate can seal.
      */
     val collageChoices = CollageChoiceSession().also { session ->
-        session.onCandidatesReplaced = { frozenCollageSelection = null }
+        session.onCandidatesReplaced = {
+            frozenCollageSelection = null
+            clearCropState()
+        }
     }
 
     /**
@@ -661,6 +749,7 @@ class CreateViewModel(
         // destroy the selection with zero safety benefit.
         _musicSelection.value = null
         startMusicArtworkResolution(null)
+        clearCropState()
         frontAttempt.reset()
         frontFingerprintId = null
         _flowError.value = null
@@ -863,6 +952,7 @@ class CreateViewModel(
         // Fresh selection supersedes all retained originals: clear BEFORE the
         // toggles below, whose inline refreshes may already retain anew.
         clearCollageDiagnostics()
+        clearCropState()
         photoSelection.clear()
         ids.forEach { id -> photoSelection.toggle(id) }
         refreshGeneratorPreview()
@@ -872,8 +962,51 @@ class CreateViewModel(
     // Sealing: the ONE production path - publisher → ciphertext outbox.
     // ---------------------------------------------------------------------
 
+    /**
+     * T150 explicit Next: CONTENT form → COMPOSE browsing surface. Same
+     * readiness guards as publishing (front, 3..5 photos, note, confirmed
+     * recipient, owner); all inputs are VM state and survive the transition.
+     * Off-step calls are refused with a visible error.
+     */
+    fun goToCompose(): Boolean {
+        if (!requireStep(Step.CONTENT, "composition")) return false
+        if (frontFingerprintId == null) {
+            failGuard("front must be captured before composition")
+            return false
+        }
+        if (!photoSelection.canProceed) {
+            failGuard("3..5 photos required")
+            return false
+        }
+        if (!noteEditor.canIncludeInCapsule) {
+            failGuard("the note exceeds its byte limit")
+            return false
+        }
+        if (confirmedRecipient.value == null) {
+            failGuard("a recipient must be confirmed before composition")
+            return false
+        }
+        if (sessionOwner == null) {
+            failGuard("authenticated owner is unavailable; composition disabled")
+            return false
+        }
+        clearGuardError()
+        _step.value = Step.COMPOSE
+        return true
+    }
+
+    /**
+     * T150 explicit Back: COMPOSE → CONTENT with every input retained
+     * (photos, note, music, frozen choice untouched). Silent no-op elsewhere.
+     */
+    fun backToContent(): Boolean {
+        if (_step.value != Step.COMPOSE) return false
+        _step.value = Step.CONTENT
+        return true
+    }
+
     fun startPublishing() {
-        if (!requireStep(Step.CONTENT, "publishing")) return
+        if (!requireStep(Step.COMPOSE, "publishing")) return
         if (frontFingerprintId == null) {
             failGuard("front must be captured before publishing")
             return
@@ -1111,6 +1244,9 @@ class CreateViewModel(
         // A source/note edit invalidates the built collage candidates too.
         collageChoices.clear()
         frozenCollageSelection = null
+        // T157 §6: photo/note edits change the expression identity, so
+        // per-photo corrections are dropped fail-closed (no cross-slot reuse).
+        clearCropState()
         val ids = photoSelection.selectedIds
         previewJob?.cancel()
         previewJob = null
@@ -1186,6 +1322,7 @@ class CreateViewModel(
         _generatorPreview.value = GeneratorPreviewState.Idle
         generatorPreviewCoordinator.zeroize()
         frozenCollageSelection = null
+        clearCropState()
         clearCollageDiagnostics()
     }
 
@@ -1687,6 +1824,7 @@ class CreateViewModel(
         startMusicArtworkResolution(null)
         frontAttempt.reset()
         frontFingerprintId = null
+        clearCropState()
         _step.value = Step.RECIPIENT_LOOKUP
         _flowError.value = null
         _publishError.value = null

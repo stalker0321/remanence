@@ -56,6 +56,7 @@ class CreateGoldenTransitionTableTest {
     private val RECIPIENT_CONFIRM = CreateViewModel.Step.RECIPIENT_CONFIRM
     private val FRONT = CreateViewModel.Step.FRONT
     private val CONTENT = CreateViewModel.Step.CONTENT
+    private val COMPOSE = CreateViewModel.Step.COMPOSE
     private val PUBLISHING = CreateViewModel.Step.PUBLISHING
 
     private val testKekBoundary = SoftwareKekBoundary()
@@ -186,6 +187,15 @@ class CreateGoldenTransitionTableTest {
                 // Content readiness belongs to reaching CONTENT legally.
                 repeat(3) { vm.photoSelection.toggle("content://$it") }
             }
+            CreateViewModel.Step.COMPOSE -> {
+                vm.onResolved(selfSnapshot())
+                vm.confirmRecipient()
+                bind(vm.frontAttempt)
+                assertTrue(vm.beginFrontCapture())
+                vm.deliverFrontJpeg("f".toByteArray())
+                repeat(3) { vm.photoSelection.toggle("content://$it") }
+                assertTrue(vm.goToCompose())
+            }
             else -> error("state $step has no synchronous path")
         }
         return vm
@@ -227,10 +237,19 @@ class CreateGoldenTransitionTableTest {
         Row(FRONT, "beginFront", Outcome.UNCHANGED_OK), // attempt begins (phase-level)
         Row(FRONT, "publish", Outcome.UNCHANGED_VISIBLE_ERROR),
         // CONTENT
-        Row(CONTENT, "publish", Outcome.TRANSITION_TO_TARGET, PUBLISHING),
+        Row(CONTENT, "next", Outcome.TRANSITION_TO_TARGET, COMPOSE),
+        Row(CONTENT, "back", Outcome.UNCHANGED_OK),
+        Row(CONTENT, "publish", Outcome.UNCHANGED_VISIBLE_ERROR),
         Row(CONTENT, "beginFront", Outcome.UNCHANGED_VISIBLE_ERROR),
         Row(CONTENT, "confirm", Outcome.UNCHANGED_VISIBLE_ERROR),
         Row(CONTENT, "resolve", Outcome.UNCHANGED_VISIBLE_ERROR),
+        // COMPOSE
+        Row(COMPOSE, "publish", Outcome.TRANSITION_TO_TARGET, PUBLISHING),
+        Row(COMPOSE, "back", Outcome.TRANSITION_TO_TARGET, CONTENT),
+        Row(COMPOSE, "next", Outcome.UNCHANGED_VISIBLE_ERROR),
+        Row(COMPOSE, "beginFront", Outcome.UNCHANGED_VISIBLE_ERROR),
+        Row(COMPOSE, "confirm", Outcome.UNCHANGED_VISIBLE_ERROR),
+        Row(COMPOSE, "resolve", Outcome.UNCHANGED_VISIBLE_ERROR),
     )
 
 
@@ -246,6 +265,8 @@ class CreateGoldenTransitionTableTest {
                 "confirm" -> vm.confirmRecipient()
                 "restartLookup" -> vm.restartLookup()
                 "beginFront" -> vm.beginFrontCapture()
+                "next" -> vm.goToCompose()
+                "back" -> vm.backToContent()
                 "publish" -> vm.startPublishing()
                 else -> error("unknown event ${row.event}")
             }

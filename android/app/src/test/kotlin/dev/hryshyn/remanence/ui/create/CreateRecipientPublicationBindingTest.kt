@@ -251,6 +251,7 @@ class CreateRecipientPublicationBindingTest {
         val vm = contentStageForRecipient(recipientSnapshot())
         val capsuleId = vm.capsuleId
 
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)
 
@@ -284,6 +285,7 @@ class CreateRecipientPublicationBindingTest {
         val vm = contentStageForRecipient(recipientSnapshot())
         val capsuleId = vm.capsuleId
 
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)
         assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
@@ -373,6 +375,7 @@ class CreateRecipientPublicationBindingTest {
         val vm = contentStageForRecipient(selfSnapshot)
         val capsuleId = vm.capsuleId
 
+        assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)
 

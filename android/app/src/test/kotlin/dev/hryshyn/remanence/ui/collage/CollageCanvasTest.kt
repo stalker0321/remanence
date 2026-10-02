@@ -125,8 +125,19 @@ class CollageCanvasTest {
         val source = moduleFile("src/main/kotlin/dev/hryshyn/remanence/ui/collage/CollageCanvas.kt")
             .readText()
             .replace(Regex("\\s+"), " ")
-        val needle = "drawText( textLayoutResult = layout, color = Color(op.color),"
-        assertEquals(2, source.split(needle).size - 1)
+        // Every text draw site must use a sealed color: note/music ops carry
+        // `op.color`, provenance marks carry `mark.color`. No hardcoded color
+        // may appear in a drawText call; the count is derived from the file so
+        // new sites stay covered without a hardcoded number.
+        val drawSites = source.split("drawText(").size - 1
+        assertTrue("expected text draw sites, found none", drawSites >= 1)
+        val sealedOpSites = source.split("drawText( textLayoutResult = layout, color = Color(op.color),").size - 1
+        val sealedMarkSites = source.split("drawText( textLayoutResult = layout, color = Color(mark.color),").size - 1
+        assertEquals(
+            "every drawText site must use a sealed op/mark color",
+            drawSites,
+            sealedOpSites + sealedMarkSites,
+        )
     }
 
     @Test

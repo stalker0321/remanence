@@ -259,4 +259,78 @@ class CollageRendererV4Test {
         )
         assertTrue(result is CollageRenderer.SceneResult.Rejected)
     }
+
+    @Test
+    fun v4SpineCopyIsVerticalWithSwappedMeasure() {
+        val music = GeneratorExpression.MusicRegion(
+            x = 156, y = 0, width = 48, height = 590,
+            mode = "spine",
+            type = GeneratorExpression.TextType("Narrow", 24, 700, false, 26),
+            artwork = null,
+        )
+        val scene = ready(expressionV4(musicRegion = music), trackSnapshot = snapshot())
+        assertTrue(scene.music!!.vertical)
+        assertEquals("spine", scene.music.mode)
+        assertNull(scene.artwork)
+    }
+
+    @Test
+    fun v4CoverTooSmallForBandRejects() {
+        val music = GeneratorExpression.MusicRegion(
+            x = 10, y = 500, width = 60, height = 76,
+            mode = "pulse",
+            type = GeneratorExpression.TextType("Narrow", 24, 700, false, 26),
+            artwork = artworkRef(),
+        )
+        assertEquals(
+            "music cover does not fit its sealed region",
+            rejected(
+                expressionV4(styleId = "ember", grammarId = "24", musicRegion = music),
+                trackSnapshot = snapshot(),
+                artwork = CollageRenderer.SourcePhoto(640, 640),
+            ),
+        )
+    }
+
+    @Test
+    fun v4DecorShadowAndBorderRules() {
+        val plane = GeneratorExpression.SceneDecor(GeneratorExpression.DecorKind.PRINT_PLANE, 10, 480, 300, 100)
+        val shadowed = ready(
+            expressionV4(styleId = "darkroom", grammarId = "25", provenance = null, decor = listOf(plane)),
+        )
+        assertTrue(shadowed.decor.single().shadow)
+        assertNull(shadowed.decor.single().border)
+        val edged = ready(
+            expressionV4(styleId = "registration", grammarId = "25", provenance = null, decor = listOf(plane)),
+        )
+        assertTrue(!edged.decor.single().shadow)
+        assertNotNull(edged.decor.single().border)
+        assertEquals(1, edged.decor.single().borderWidth)
+        val carrier = GeneratorExpression.SceneDecor(GeneratorExpression.DecorKind.CARRIER, 6, 5, 349, 627)
+        val proof = ready(
+            expressionV4(styleId = "proof", grammarId = "18", provenance = null, decor = listOf(carrier)),
+        )
+        assertEquals(2, proof.decor.single().borderWidth)
+        val ochre = ready(
+            expressionV4(styleId = "ochre", grammarId = "18", provenance = null, decor = listOf(carrier)),
+        )
+        assertEquals(1, ochre.decor.single().borderWidth)
+    }
+
+    @Test
+    fun v4SceneCarriesGrammarAndMode() {
+        val music = GeneratorExpression.MusicRegion(
+            x = 10, y = 500, width = 340, height = 76,
+            mode = "pulse",
+            type = GeneratorExpression.TextType("Narrow", 24, 700, false, 26),
+            artwork = artworkRef(),
+        )
+        val scene = ready(
+            expressionV4(grammarId = "24", musicRegion = music),
+            trackSnapshot = snapshot(),
+            artwork = CollageRenderer.SourcePhoto(640, 640),
+        )
+        assertEquals("24", scene.grammarId)
+        assertEquals("pulse", scene.music!!.mode)
+    }
 }

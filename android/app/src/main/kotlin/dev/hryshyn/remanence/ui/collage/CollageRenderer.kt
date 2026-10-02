@@ -93,6 +93,14 @@ object CollageRenderer {
          * `ink` foreground, and a top border. Always false on v3.
          */
         val transparentBackground: Boolean = false,
+        /** Sealed frozen mode (v4 only; v3 scenes carry "text"/"thumbnail"). */
+        val mode: String = "text",
+        /**
+         * True only for the spine band: the copy reads vertically
+         * (`.g6 .music-spine .music-copy{writing-mode:vertical-rl}`),
+         * measured with swapped axes. Always false on v3.
+         */
+        val vertical: Boolean = false,
     )
 
     /**
@@ -141,6 +149,14 @@ object CollageRenderer {
         val region: RectI,
         val background: Int,
         val border: Int?,
+        /**
+         * Print-plane soft shadow (v4 only; `styles.css` 2/4/8px
+         * `#151f2330`). False for the g25 edge-surface variant, which
+         * renders the 1px edge border instead.
+         */
+        val shadow: Boolean = false,
+        /** Border stroke width in canvas px (carrier: 2 on edge styles). */
+        val borderWidth: Int = 1,
     )
 
     /** Immutable integer draw plan derived only from a validated expression. */
@@ -148,6 +164,8 @@ object CollageRenderer {
         val canvasWidth: Int,
         val canvasHeight: Int,
         val styleId: String,
+        /** Sealed grammar id (`"g23"` form); drives grammar-exact paint rules. */
+        val grammarId: String = "",
         val paper: Int,
         val ink: Int,
         val sound: Int,
@@ -448,12 +466,19 @@ object CollageRenderer {
                 // A1 guarantees `mode == "thumbnail"` whenever artwork is sealed.
                 musicScene = null
                 artworkScene = SceneArtwork(regionRect, parseColor(style.palette.sound))
-            } else if (verified && musicRegion.mode in V5Decor.COVER_IMAGE_MODES) {
+            } else if (isV4 && verified && musicRegion.mode in V5Decor.COVER_IMAGE_MODES) {
                 // Frozen cover + text composition (`musicNode` artwork gate):
                 // the verified cover plus the sealed title/artist words in
                 // the same region. `spine` is text-only in the frozen DOM
                 // and never reaches this arm. A missing bitmap on a cover
-                // mode keeps the fail-closed text behavior below.
+                // mode keeps the fail-closed text behavior below. The copy
+                // is measured in the exact remainder rect (cover + gap +
+                // padding per `V5Decor.placeCover`), matching the frozen
+                // flex shrink; the same rect drives Canvas pixels.
+                val placement = V5Decor.placeCover(
+                    musicRegion.x, musicRegion.y, musicRegion.width, musicRegion.height,
+                    expression.grammarId, musicRegion.mode,
+                ) ?: return SceneResult.Rejected("music cover does not fit its sealed region")
                 val text = snapshot.title + "\n" + snapshot.artistDisplay
                 val measurement = measurer.measure(
                     TextMeasureRequest(
@@ -463,11 +488,11 @@ object CollageRenderer {
                         weight = musicType.weight,
                         italic = musicType.italic,
                         line = musicType.line,
-                        maxWidth = musicRegion.width,
-                        maxHeight = musicRegion.height,
+                        maxWidth = placement.text.width,
+                        maxHeight = placement.text.height,
                     ),
                 )
-                if (!fits(measurement, regionRect)) {
+                if (!fits(measurement, placement.text)) {
                     return SceneResult.Rejected("music does not fit its sealed region")
                 }
                 musicScene = SceneMusic(
@@ -484,8 +509,58 @@ object CollageRenderer {
                     background = bandBackground,
                     color = bandColor,
                     transparentBackground = transparentBand,
+                    mode = musicRegion.mode,
                 )
                 artworkScene = SceneArtwork(regionRect, parseColor(style.palette.sound))
+            } else if (isV4 && musicRegion.mode == "spine") {
+                // Spine copy reads vertically (`.g6 .music-spine
+                // .music-copy{writing-mode:vertical-rl}`, label nowrap), so
+                // the text is measured with swapped axes, like a vertical
+                // provenance mark. Spine never carries artwork (frozen DOM
+                // gate; validation forbids it).
+                val layout = V5Decor.bandLayout(expression.grammarId, "spine")
+                val text = snapshot.title + "\n" + snapshot.artistDisplay
+                val measurement = measurer.measure(
+                    TextMeasureRequest(
+                        text = text,
+                        family = musicType.family,
+                        size = musicType.size,
+                        weight = musicType.weight,
+                        italic = musicType.italic,
+                        line = musicType.line,
+                        maxWidth = musicRegion.height - layout.padTop - layout.padBottom,
+                        maxHeight = musicRegion.width - 2 * layout.padSide,
+                    ),
+                )
+                if (measurement.hasVisualOverflow ||
+                    measurement.width < 1 || measurement.height < 1 ||
+                    measurement.width > musicRegion.height - layout.padTop - layout.padBottom ||
+                    measurement.height > musicRegion.width - 2 * layout.padSide ||
+                    // Frozen label is `white-space:nowrap`: a wrapped
+                    // (multi-line) measurement never matches the sealed
+                    // single line.
+                    measurement.height > musicType.line
+                ) {
+                    return SceneResult.Rejected("music does not fit its sealed region")
+                }
+                musicScene = SceneMusic(
+                    title = snapshot.title,
+                    artist = snapshot.artistDisplay,
+                    text = text,
+                    region = regionRect,
+                    family = musicType.family,
+                    size = musicType.size,
+                    weight = musicType.weight,
+                    italic = musicType.italic,
+                    line = musicType.line,
+                    fontResourceId = requireNotNull(musicFont),
+                    background = bandBackground,
+                    color = bandColor,
+                    transparentBackground = transparentBand,
+                    mode = musicRegion.mode,
+                    vertical = true,
+                )
+                artworkScene = null
             } else {
                 // `mode == "text"`, a text-only v4 band, or a cover mode
                 // whose cover could not be fetched/verified: render the
@@ -520,6 +595,7 @@ object CollageRenderer {
                     background = bandBackground,
                     color = bandColor,
                     transparentBackground = transparentBand,
+                    mode = musicRegion.mode,
                 )
                 artworkScene = null
             }
@@ -592,6 +668,13 @@ object CollageRenderer {
             val fill = V5Decor.fillFor(
                 plane.kind.name.lowercase().replace('_', '-'),
             )
+            // Print-plane shadow, except the g25 edge-surface variant
+            // (shadow off, 1px edge border); carrier border is 2px on
+            // edge-surface styles, else 1px.
+            val printShadow = plane.kind == GeneratorExpression.DecorKind.PRINT_PLANE &&
+                V5Decor.printPlaneShadow(expression.grammarId, style.surfaceMode)
+            val edgeBorder = plane.kind == GeneratorExpression.DecorKind.PRINT_PLANE &&
+                !printShadow
             decorScenes += SceneDecor(
                 kind = plane.kind,
                 region = RectI(plane.x, plane.y, plane.width, plane.height),
@@ -600,11 +683,20 @@ object CollageRenderer {
                     V5Decor.FillRole.SOUND -> parseColor(style.palette.sound)
                     V5Decor.FillRole.EDGE -> parseColor(style.palette.edge)
                 },
-                border = when (fill.border) {
-                    null -> null
-                    V5Decor.FillRole.SURFACE -> parseColor(style.palette.surface)
-                    V5Decor.FillRole.SOUND -> parseColor(style.palette.sound)
-                    V5Decor.FillRole.EDGE -> parseColor(style.palette.edge)
+                border = when {
+                    edgeBorder -> parseColor(style.palette.edge)
+                    else -> when (fill.border) {
+                        null -> null
+                        V5Decor.FillRole.SURFACE -> parseColor(style.palette.surface)
+                        V5Decor.FillRole.SOUND -> parseColor(style.palette.sound)
+                        V5Decor.FillRole.EDGE -> parseColor(style.palette.edge)
+                    }
+                },
+                shadow = printShadow,
+                borderWidth = if (plane.kind == GeneratorExpression.DecorKind.CARRIER) {
+                    V5Decor.carrierBorderWidthPx(style.surfaceMode)
+                } else {
+                    1
                 },
             )
         }
@@ -614,6 +706,7 @@ object CollageRenderer {
                 canvasWidth = CANVAS_WIDTH,
                 canvasHeight = CANVAS_HEIGHT,
                 styleId = style.id,
+                grammarId = expression.grammarId,
                 paper = parseColor(style.palette.paper),
                 ink = parseColor(style.palette.ink),
                 sound = parseColor(style.palette.sound),

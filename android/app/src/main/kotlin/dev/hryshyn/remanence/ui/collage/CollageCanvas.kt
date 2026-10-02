@@ -89,6 +89,38 @@ class CollageTextMeasurer(
     }
 
     /**
+     * Layout for a vertical spine music copy: swapped axes (reading
+     * direction is the region height), single line
+     * (`.g6 .music-spine .music-label{...white-space:nowrap}`), centered
+     * in the band (`.g6 .music-spine{align-items:center}`).
+     */
+    fun layoutSpine(music: CollageRenderer.SceneMusic): TextLayoutResult {
+        val weight = FontWeight(music.weight)
+        val fontStyle = if (music.italic) FontStyle.Italic else FontStyle.Normal
+        val style = TextStyle(
+            fontFamily = FontFamily(
+                Font(music.fontResourceId, weight, fontStyle),
+            ),
+            fontSize = music.size.sp,
+            fontWeight = weight,
+            fontStyle = fontStyle,
+            lineHeight = music.line.sp,
+            textAlign = TextAlign.Center,
+        )
+        return measurer.measure(
+            text = AnnotatedString(music.text),
+            style = style,
+            overflow = TextOverflow.Clip,
+            softWrap = false,
+            maxLines = 1,
+            constraints = Constraints(
+                maxWidth = music.region.height,
+                maxHeight = music.region.width,
+            ),
+        )
+    }
+
+    /**
      * Layout for one authored provenance mark: the sealed face with brand
      * tracking (`tracking * size` sp; sender 0). Constraints are the long
      * side (reading direction) by the short side, matching
@@ -179,14 +211,24 @@ fun CollageCanvas(
     val note = scene.note
     val music = scene.music
     val noteLayout = note?.let { remember(it, textMeasurer) { textMeasurer.layout(it.toMeasureRequest()) } }
-    val musicLayout = music?.let { remember(it, textMeasurer) { textMeasurer.layout(it.toMeasureRequest()) } }
+    val musicLayout = music?.takeIf { !it.vertical }?.let {
+        remember(it, textMeasurer) { textMeasurer.layout(it.toMeasureRequest()) }
+    }
+    val spineLayout = music?.takeIf { it.vertical }?.let {
+        remember(it, textMeasurer) { textMeasurer.layoutSpine(it) }
+    }
     val provenanceLayouts = remember(scene.provenance, textMeasurer) {
         scene.provenance.map { textMeasurer.layoutProvenance(it) }
     }
 
+    val musicFits = when {
+        music == null -> true
+        music.vertical -> spineLayout?.fitsSpine(music) == true
+        else -> musicLayout?.fitsRegion(music.region) == true
+    }
     val drawable = drawOps != null &&
         (note == null || noteLayout?.fitsRegion(note.region) == true) &&
-        (music == null || musicLayout?.fitsRegion(music.region) == true) &&
+        musicFits &&
         (scene.artwork == null || artwork != null) &&
         scene.provenance.zip(provenanceLayouts).all { (mark, layout) -> layout.fitsProvenance(mark) }
 
@@ -226,6 +268,14 @@ fun CollageCanvas(
 
                             is CollagePainter.Op.Decor -> {
                                 val decor = scene.decor[op.index]
+                                // NOTE: `decor.shadow` (exact 2/4/8px
+                                // `#151f2330` print-plane shadow) is carried
+                                // on the op but not painted here: the public
+                                // Compose `Canvas` in this BOM has no shadow
+                                // API (`nativeCanvas` is absent), and
+                                // framework shadow layers are ignored on
+                                // hardware canvases. Fill + edge border below
+                                // are exact.
                                 drawRect(
                                     color = Color(decor.background),
                                     topLeft = Offset(decor.region.x.toFloat(), decor.region.y.toFloat()),
@@ -236,7 +286,7 @@ fun CollageCanvas(
                                         color = Color(decor.border),
                                         topLeft = Offset(decor.region.x.toFloat(), decor.region.y.toFloat()),
                                         size = Size(decor.region.width.toFloat(), decor.region.height.toFloat()),
-                                        style = Stroke(width = 1f),
+                                        style = Stroke(width = decor.borderWidth.toFloat()),
                                     )
                                 }
                             }
@@ -255,6 +305,11 @@ fun CollageCanvas(
                                             filterQuality = FilterQuality.High,
                                         )
                                     dev.hryshyn.remanence.core.model.GeneratorExpression.PhotoShape.ROUND -> {
+                                        // g11 interlock uses the asymmetric
+                                        // 4/26/4/4 radii; every other grammar
+                                        // uses 12% per axis (== the frozen
+                                        // safety mask, so clip and crop agree).
+                                        val radii = V5Decor.roundRadiiPx(scene.grammarId, dst.width, dst.height)
                                         val path = Path().apply {
                                             addRoundRect(
                                                 RoundRect(
@@ -262,10 +317,10 @@ fun CollageCanvas(
                                                     top = dst.y.toFloat(),
                                                     right = (dst.x + dst.width).toFloat(),
                                                     bottom = (dst.y + dst.height).toFloat(),
-                                                    cornerRadius = CornerRadius(
-                                                        V5Decor.ROUND_CORNER_FRACTION.toFloat() * dst.width,
-                                                        V5Decor.ROUND_CORNER_FRACTION.toFloat() * dst.height,
-                                                    ),
+                                                    topLeftCornerRadius = CornerRadius(radii[0], radii[1]),
+                                                    topRightCornerRadius = CornerRadius(radii[2], radii[3]),
+                                                    bottomRightCornerRadius = CornerRadius(radii[4], radii[5]),
+                                                    bottomLeftCornerRadius = CornerRadius(radii[6], radii[7]),
                                                 ),
                                             )
                                         }
@@ -340,53 +395,54 @@ fun CollageCanvas(
                             }
 
                             is CollagePainter.Op.MusicText -> {
+                                val track = scene.music
+                                if (track?.vertical == true) {
+                                    // Spine copy reads vertically
+                                    // (`.g6 .music-spine
+                                    // .music-copy{writing-mode:vertical-rl}`):
+                                    // +90° rotation, same translation as a
+                                    // vertical-down provenance mark.
+                                    val layout = spineLayout ?: return@Canvas
+                                    withTransform({
+                                        translate(
+                                            (op.region.x + op.region.width).toFloat(),
+                                            op.region.y.toFloat(),
+                                        )
+                                        rotate(90f, pivot = Offset.Zero)
+                                    }) {
+                                        drawText(
+                                            textLayoutResult = layout,
+                                            color = Color(op.color),
+                                            topLeft = Offset.Zero,
+                                        )
+                                    }
+                                    return@forEach
+                                }
                                 val layout = musicLayout ?: return@Canvas
-                                // V4 cover + text composition: the cover
-                                // occupies the leading square (row) or the top
-                                // square (narrow/column regions); the words
-                                // take the remainder. This subdivision is a
-                                // Canvas presentation projection: the sealed
-                                // region stays exact and prepare measured the
-                                // full region, so the remainder clip is honest.
+                                // V4 cover + text composition: the cover box
+                                // and copy rect come from the shared exact
+                                // helper (same rects prepare measured), so
+                                // pixels and gate agree. Legacy scenes keep
+                                // the full-region layout.
                                 val cover = scene.artwork
                                 if (cover != null && scene.music != null) {
-                                    val region = op.region
-                                    val side = min(region.width, region.height)
-                                    val gap = 9
-                                    if (region.width > region.height) {
-                                        val textX = region.x + side + gap
-                                        val textW = region.x + region.width - textX
-                                        if (textW >= 1) {
-                                            clipRect(
-                                                left = textX.toFloat(),
-                                                top = region.y.toFloat(),
-                                                right = (region.x + region.width).toFloat(),
-                                                bottom = (region.y + region.height).toFloat(),
-                                            ) {
-                                                drawText(
-                                                    textLayoutResult = layout,
-                                                    color = Color(op.color),
-                                                    topLeft = Offset(textX.toFloat(), region.y.toFloat()),
-                                                )
-                                            }
-                                        }
-                                    } else {
-                                        val textY = region.y + side + gap
-                                        val textH = region.y + region.height - textY
-                                        if (textH >= 1) {
-                                            clipRect(
-                                                left = region.x.toFloat(),
-                                                top = textY.toFloat(),
-                                                right = (region.x + region.width).toFloat(),
-                                                bottom = (region.y + region.height).toFloat(),
-                                            ) {
-                                                drawText(
-                                                    textLayoutResult = layout,
-                                                    color = Color(op.color),
-                                                    topLeft = Offset(region.x.toFloat(), textY.toFloat()),
-                                                )
-                                            }
-                                        }
+                                    val placement = V5Decor.placeCover(
+                                        op.region.x, op.region.y,
+                                        op.region.width, op.region.height,
+                                        scene.grammarId, scene.music.mode,
+                                    ) ?: return@Canvas
+                                    val text = placement.text
+                                    clipRect(
+                                        left = text.x.toFloat(),
+                                        top = text.y.toFloat(),
+                                        right = (text.x + text.width).toFloat(),
+                                        bottom = (text.y + text.height).toFloat(),
+                                    ) {
+                                        drawText(
+                                            textLayoutResult = layout,
+                                            color = Color(op.color),
+                                            topLeft = Offset(text.x.toFloat(), text.y.toFloat()),
+                                        )
                                     }
                                 } else {
                                     clipRect(
@@ -406,8 +462,8 @@ fun CollageCanvas(
 
                             is CollagePainter.Op.MusicArtwork -> {
                                 val coverRegion = op.region
-                                val composed = scene.music != null
-                                if (!composed) {
+                                val track = scene.music
+                                if (track == null) {
                                     drawRect(
                                         color = Color(op.background),
                                         topLeft = Offset(coverRegion.x.toFloat(), coverRegion.y.toFloat()),
@@ -439,35 +495,51 @@ fun CollageCanvas(
                                         size = Size(coverRegion.width.toFloat(), coverRegion.height.toFloat()),
                                     )
                                     val image = artwork ?: return@Canvas
-                                    val side = min(coverRegion.width, coverRegion.height)
-                                    if (side < 1) return@Canvas
-                                    val dstX: Int
-                                    val dstY: Int
-                                    if (coverRegion.width > coverRegion.height) {
-                                        dstX = coverRegion.x
-                                        dstY = coverRegion.y + (coverRegion.height - side) / 2
+                                    val placement = V5Decor.placeCover(
+                                        coverRegion.x, coverRegion.y,
+                                        coverRegion.width, coverRegion.height,
+                                        scene.grammarId, track.mode,
+                                    ) ?: return@Canvas
+                                    val box = placement.cover
+                                    if (placement.fit == V5Decor.CoverFit.COVER) {
+                                        val scale = maxOf(
+                                            box.width.toFloat() / image.width,
+                                            box.height.toFloat() / image.height,
+                                        )
+                                        val srcW = (box.width / scale).roundToInt().coerceAtMost(image.width)
+                                        val srcH = (box.height / scale).roundToInt().coerceAtMost(image.height)
+                                        if (srcW < 1 || srcH < 1) return@Canvas
+                                        drawImage(
+                                            image = image,
+                                            srcOffset = IntOffset(
+                                                (image.width - srcW) / 2,
+                                                (image.height - srcH) / 2,
+                                            ),
+                                            srcSize = IntSize(srcW, srcH),
+                                            dstOffset = IntOffset(box.x, box.y),
+                                            dstSize = IntSize(box.width, box.height),
+                                            filterQuality = FilterQuality.High,
+                                        )
                                     } else {
-                                        dstX = coverRegion.x + (coverRegion.width - side) / 2
-                                        dstY = coverRegion.y
+                                        val scale = min(
+                                            box.width.toFloat() / image.width,
+                                            box.height.toFloat() / image.height,
+                                        )
+                                        val width = (image.width * scale).roundToInt()
+                                        val height = (image.height * scale).roundToInt()
+                                        if (width < 1 || height < 1) return@Canvas
+                                        drawImage(
+                                            image = image,
+                                            srcOffset = IntOffset.Zero,
+                                            srcSize = IntSize(image.width, image.height),
+                                            dstOffset = IntOffset(
+                                                box.x + (box.width - width) / 2,
+                                                box.y + (box.height - height) / 2,
+                                            ),
+                                            dstSize = IntSize(width, height),
+                                            filterQuality = FilterQuality.High,
+                                        )
                                     }
-                                    val scale = min(
-                                        side.toFloat() / image.width,
-                                        side.toFloat() / image.height,
-                                    )
-                                    val width = (image.width * scale).roundToInt()
-                                    val height = (image.height * scale).roundToInt()
-                                    if (width < 1 || height < 1) return@Canvas
-                                    drawImage(
-                                        image = image,
-                                        srcOffset = IntOffset.Zero,
-                                        srcSize = IntSize(image.width, image.height),
-                                        dstOffset = IntOffset(
-                                            dstX + (side - width) / 2,
-                                            dstY + (side - height) / 2,
-                                        ),
-                                        dstSize = IntSize(width, height),
-                                        filterQuality = FilterQuality.High,
-                                    )
                                 }
                             }
 
@@ -544,6 +616,11 @@ private fun TextLayoutResult.fitsProvenance(mark: CollageRenderer.SceneProvenanc
     val maxWidth = if (horizontal) mark.region.width else mark.region.height
     val maxHeight = if (horizontal) mark.region.height else mark.region.width
     return size.width in 1..maxWidth && size.height in 1..maxHeight
+}
+
+private fun TextLayoutResult.fitsSpine(music: CollageRenderer.SceneMusic): Boolean {
+    if (hasVisualOverflow) return false
+    return size.width in 1..music.region.height && size.height in 1..music.region.width
 }
 
 private fun CollageRenderer.SceneText.toMeasureRequest() = CollageRenderer.TextMeasureRequest(

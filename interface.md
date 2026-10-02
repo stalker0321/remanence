@@ -110,7 +110,12 @@ without a traced rule is flagged R below, never invented silently.
 - text/inline/tile-text → title/artist text in region (existing primitive;
   frozen `sound()` geometry already distinguishes them).
 - thumbnail/tile-art/sleeve/inline/pulse → cover + text composition when
-  the cover verifies (frozen `musicNode` artwork gate); spine/text/
+  the cover verifies (frozen `musicNode` artwork gate); cover boxes are
+  exact per `V5Decor.coverSpec` (40×40 default incl. thumbnails, 36 compact
+  h<65, inline 39 / g23 37, g11 tile-art FILL×60 cover-fit, g24 tile-art
+  50, g20 sleeve 120, g24 pulse 57) with the frozen band gaps/padding
+  (`V5Decor.bandLayout`) shared by prepare (copy measurement) and Canvas
+  (pixels) via `V5Decor.placeCover`. spine/text/
   tile-text/sleeve-empty → text-only bands (spine never carries an image
   in the frozen DOM). Missing bitmap on a cover-family mode keeps the
   existing fail-closed text behavior.
@@ -127,8 +132,12 @@ without a traced rule is flagged R below, never invented silently.
 - R1 decor fill colors: NO fill rule exists in frozen code/CSS (`plan.decor`
   carries kind+region only). Geometry is exact; fills follow a documented
   provisional kind→role map pending specimen grounding.
-- R2 spine/pulse text orientation: horizontal (no vertical-music evidence
-  anywhere); region-exact, orientation-unverified against specimens.
+- R2 spine/pulse text orientation: spine reads VERTICALLY (`.g6
+  .music-spine .music-copy{writing-mode:vertical-rl}`, label 21px nowrap;
+  implemented as +90° rotation with swapped-axes measure + single-line
+  gate); pulse stays horizontal (no vertical-music rule anywhere for
+  pulse). Region-exact; orientation now CSS-traced, still unverified
+  against specimens.
 - R3 dynamic mark boxes: seam only — T151's pure plan port computes them
   (this interface does NOT port branch geometry; the static table above is
   reference transcription for T151, not implementation).

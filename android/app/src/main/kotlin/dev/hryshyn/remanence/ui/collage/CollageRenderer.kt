@@ -1,5 +1,7 @@
 package dev.hryshyn.remanence.ui.collage
 
+import android.util.Log
+import dev.hryshyn.remanence.BuildConfig
 import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
 import dev.hryshyn.remanence.core.model.GeneratorExpression
 import java.security.MessageDigest
@@ -32,7 +34,9 @@ import java.security.MessageDigest
  * transparent bands (grammar 5 `blue-letter`, grammar 27 `porcelain`).
  *
  * This file deliberately has no UI-toolkit, image, or planner dependency:
- * only core model types, [StyleRegistry], and [FontRegistry].
+ * only core model types, [StyleRegistry], and [FontRegistry]. The one
+ * platform touch is a bounded `BuildConfig.DEBUG`-only, reason/numeric
+ * music-fit log (`runCatching`, never affecting a verdict).
  */
 object CollageRenderer {
 
@@ -197,6 +201,13 @@ object CollageRenderer {
         val line: Int,
         val maxWidth: Int,
         val maxHeight: Int,
+        /**
+         * `true` (default) wraps like `.text-measure`/note layout. `false`
+         * is the nowrap single-line run the frozen copy uses
+         * (`.g6 .music-spine .music-label{white-space:nowrap}`): the run
+         * either fits the given box or reports visual overflow.
+         */
+        val softWrap: Boolean = true,
     )
 
     /** Measured layout metrics. Units are reference-canvas pixels. */
@@ -219,6 +230,143 @@ object CollageRenderer {
         !measurement.hasVisualOverflow &&
             measurement.width in 1..region.width &&
             measurement.height in 1..region.height
+
+    // ------------------------------------------------------------------
+    // Frozen V4 spine copy (v4.css line 16): `.g6 .music-spine` is a
+    // column with `padding:8px 3px; gap:10px` (`.music-compact` 3/5, gap 7
+    // below 65px), a 34px play button, then `.music-copy` — a `vertical-rl`
+    // flex row with `gap:6px` holding TWO nowrap nodes: `.music-label` at
+    // the sealed music face and `.music .track` at its own 11px face
+    // (`font-size:11px`, `line-height:1.15`). Duration is
+    // `display:none`. The single shared budget/placement math below gates
+    // prepare, the canvas drawable check, and the Canvas draw — never a
+    // prepare-only or draw-only patch.
+    // ------------------------------------------------------------------
+
+    /** `.g6 .music-spine .play{width:34px;height:34px}` (compact line 20 too). */
+    const val SPINE_PLAY = 34
+
+    /** `.g6 .music-spine .music-copy{gap:6px}` — label→track copy gap. */
+    const val SPINE_COPY_GAP = 6
+
+    /** `.music .track{line-height:1.15}` at the spine override's 11px. */
+    const val SPINE_ARTIST_FAMILY = "StudySans"
+    const val SPINE_ARTIST_SIZE = 11
+    const val SPINE_ARTIST_WEIGHT = 400
+    const val SPINE_ARTIST_ITALIC = false
+    const val SPINE_ARTIST_LINE = 13 // ceil(11 * 1.15)
+
+    /** Verdict + numeric budgets of one spine copy fit (diagnostics-friendly). */
+    data class SpineCopyFit(
+        val fits: Boolean,
+        val readingBudget: Int,
+        val crossBudget: Int,
+        val usedReading: Int,
+    )
+
+    /** Reading-axis budget: copy box after both pads, play, and band gap. */
+    fun spineReadingBudget(region: RectI, band: V5Decor.BandLayout): Int =
+        region.height - band.padTop - band.padBottom - SPINE_PLAY - band.gap
+
+    /** Cross-axis budget: band width after the 3px side padding each edge. */
+    fun spineCrossBudget(region: RectI, band: V5Decor.BandLayout): Int =
+        region.width - 2 * band.padSide
+
+    /**
+     * The one spine fit decision. A present run must be a nowrap single
+     * line inside the cross budget with an advance of at least 1px; the
+     * reading axis must hold every advance plus the 6px copy gap. A blank
+     * field contributes no run and never fabricates an empty line; with no
+     * run at all the fit fails closed. Both prepare and the canvas gate
+     * call this with their own measurement of the same runs.
+     */
+    fun spineCopyFit(
+        region: RectI,
+        band: V5Decor.BandLayout,
+        title: TextMeasurement?,
+        artist: TextMeasurement?,
+    ): SpineCopyFit {
+        val reading = spineReadingBudget(region, band)
+        val cross = spineCrossBudget(region, band)
+        if (reading < 1 || cross < 1 || (title == null && artist == null)) {
+            return SpineCopyFit(fits = false, readingBudget = reading, crossBudget = cross, usedReading = 0)
+        }
+        var used = if (title != null && artist != null) SPINE_COPY_GAP else 0
+        for (run in listOfNotNull(title, artist)) {
+            used += run.width
+            if (run.hasVisualOverflow || run.width < 1 || run.height < 1 || run.height > cross) {
+                return SpineCopyFit(fits = false, readingBudget = reading, crossBudget = cross, usedReading = used)
+            }
+        }
+        return SpineCopyFit(fits = used <= reading, readingBudget = reading, crossBudget = cross, usedReading = used)
+    }
+
+    /** One run's paint anchor: absolute canvas x of the line box's right edge. */
+    data class SpineRunPlacement(val right: Int, val top: Int)
+
+    /** Both spine runs' paint anchors on the reference canvas. */
+    data class SpineCopyPlacements(val title: SpineRunPlacement, val artist: SpineRunPlacement)
+
+    /**
+     * Where the canvas paints each run — the same geometry [spineCopyFit]
+     * budgets. Reading starts after `padTop + play + band gap`; in
+     * `vertical-rl` the copy is centered by `.g6 .music-spine` and each
+     * item hugs the copy's block-start (right) edge, so both line boxes
+     * end at the copy's right and the artist follows the title advance
+     * plus the 6px copy gap.
+     */
+    fun spineCopyPlacements(
+        region: RectI,
+        band: V5Decor.BandLayout,
+        titleAdvance: Int,
+        titleLineBox: Int,
+        artistLineBox: Int,
+    ): SpineCopyPlacements {
+        val readingTop = region.y + band.padTop + SPINE_PLAY + band.gap
+        val contentWidth = spineCrossBudget(region, band)
+        val copyCross = maxOf(titleLineBox, artistLineBox, 0)
+        val copyLeft = region.x + band.padSide + (contentWidth - copyCross) / 2
+        val copyRight = copyLeft + copyCross
+        return SpineCopyPlacements(
+            title = SpineRunPlacement(right = copyRight, top = readingTop),
+            artist = SpineRunPlacement(
+                right = copyRight,
+                top = readingTop + titleAdvance + SPINE_COPY_GAP,
+            ),
+        )
+    }
+
+    /**
+     * Bounded DEBUG music-fit rejection diagnostic: reason-only numbers so
+     * the next QA run can name the rejecting arm without another
+     * diagnostics build. Carries contract/grammar/branch/mode, the sealed
+     * region, the sealed type, and the measured numbers — never note,
+     * title, artist, image bytes, ids, or payload. Debug builds only, and
+     * the log can never change a prepare verdict (local JVM tests have no
+     * Android logger; see `IncomingAcceptanceDiagnostics` convention).
+     */
+    private fun reportMusicFit(
+        arm: String,
+        expression: GeneratorExpression.ResolvedExpression,
+        region: GeneratorExpression.MusicRegion,
+        measured: String,
+    ) {
+        if (!BuildConfig.DEBUG) return
+        val type = region.type
+        runCatching {
+            Log.d(
+                "CollageMusicFit",
+                "reject arm=$arm " +
+                    "contract=${expression.expressionContractVersion} " +
+                    "grammar=${expression.grammarId} branch=${expression.branchId} " +
+                    "mode=${region.mode} " +
+                    "region=${region.x},${region.y},${region.width},${region.height} " +
+                    "type=${type.family}/${type.size}/${type.weight}/" +
+                    "${if (type.italic) "italic" else "roman"}/line${type.line} " +
+                    "measured=$measured",
+            )
+        }
+    }
 
     /** Convert a `#rrggbb` palette string to an opaque `0xFFRRGGBB` int. */
     private fun parseColor(hex: String): Int {
@@ -493,6 +641,13 @@ object CollageRenderer {
                     ),
                 )
                 if (!fits(measurement, placement.text)) {
+                    reportMusicFit(
+                        arm = "cover-remainder",
+                        expression = expression,
+                        region = musicRegion,
+                        measured = "joined=${measurement.width}x${measurement.height} " +
+                            "box=${placement.text.width}x${placement.text.height}",
+                    )
                     return SceneResult.Rejected("music does not fit its sealed region")
                 }
                 musicScene = SceneMusic(
@@ -514,35 +669,63 @@ object CollageRenderer {
                 artworkScene = SceneArtwork(regionRect, parseColor(style.palette.sound))
             } else if (isV4 && musicRegion.mode == "spine") {
                 // Spine copy reads vertically (`.g6 .music-spine
-                // .music-copy{writing-mode:vertical-rl}`, label nowrap), so
-                // the text is measured with swapped axes, like a vertical
-                // provenance mark. Spine never carries artwork (frozen DOM
-                // gate; validation forbids it).
-                val layout = V5Decor.bandLayout(expression.grammarId, "spine", musicRegion.height)
-                val text = snapshot.title + "\n" + snapshot.artistDisplay
-                val measurement = measurer.measure(
-                    TextMeasureRequest(
-                        text = text,
-                        family = musicType.family,
-                        size = musicType.size,
-                        weight = musicType.weight,
-                        italic = musicType.italic,
-                        line = musicType.line,
-                        maxWidth = musicRegion.height - layout.padTop - layout.padBottom,
-                        maxHeight = musicRegion.width - 2 * layout.padSide,
-                    ),
-                )
-                if (measurement.hasVisualOverflow ||
-                    measurement.width < 1 || measurement.height < 1 ||
-                    measurement.width > musicRegion.height - layout.padTop - layout.padBottom ||
-                    measurement.height > musicRegion.width - 2 * layout.padSide ||
-                    // Frozen label is `white-space:nowrap`: a wrapped
-                    // (multi-line) measurement never matches the sealed
-                    // single line.
-                    measurement.height > musicType.line
-                ) {
+                // .music-copy{writing-mode:vertical-rl}`) as TWO nowrap
+                // nodes stacked on the reading axis: the sealed label and
+                // the 11px track — never one joined two-line run, whose
+                // height always exceeded the one-line/cross budget and
+                // rejected every normal track. The exact runs and budgets
+                // shared with the canvas are [spineCopyFit] /
+                // [spineCopyPlacements]; spine never carries artwork
+                // (frozen DOM gate; validation forbids it).
+                val band = V5Decor.bandLayout(expression.grammarId, "spine", musicRegion.height)
+                val readingBudget = spineReadingBudget(regionRect, band).coerceAtLeast(0)
+                val crossBudget = spineCrossBudget(regionRect, band).coerceAtLeast(0)
+                val titleMeasurement = snapshot.title.takeIf { it.isNotBlank() }?.let {
+                    measurer.measure(
+                        TextMeasureRequest(
+                            text = it,
+                            family = musicType.family,
+                            size = musicType.size,
+                            weight = musicType.weight,
+                            italic = musicType.italic,
+                            line = musicType.line,
+                            maxWidth = readingBudget,
+                            maxHeight = crossBudget,
+                            softWrap = false,
+                        ),
+                    )
+                }
+                val artistMeasurement = snapshot.artistDisplay.takeIf { it.isNotBlank() }?.let {
+                    measurer.measure(
+                        TextMeasureRequest(
+                            text = it,
+                            family = SPINE_ARTIST_FAMILY,
+                            size = SPINE_ARTIST_SIZE,
+                            weight = SPINE_ARTIST_WEIGHT,
+                            italic = SPINE_ARTIST_ITALIC,
+                            line = SPINE_ARTIST_LINE,
+                            maxWidth = readingBudget,
+                            maxHeight = crossBudget,
+                            softWrap = false,
+                        ),
+                    )
+                }
+                val fit = spineCopyFit(regionRect, band, titleMeasurement, artistMeasurement)
+                if (!fit.fits) {
+                    reportMusicFit(
+                        arm = "spine",
+                        expression = expression,
+                        region = musicRegion,
+                        measured = "title=${titleMeasurement?.let { "${it.width}x${it.height}" } ?: "absent"} " +
+                            "artist=${artistMeasurement?.let { "${it.width}x${it.height}" } ?: "absent"} " +
+                            "budget=reading:${fit.readingBudget},cross:${fit.crossBudget} " +
+                            "used=${fit.usedReading}",
+                    )
                     return SceneResult.Rejected("music does not fit its sealed region")
                 }
+                // Scene record stays "title then artist"; the spine draw
+                // paints the two runs separately via [spineCopyPlacements].
+                val text = snapshot.title + "\n" + snapshot.artistDisplay
                 musicScene = SceneMusic(
                     title = snapshot.title,
                     artist = snapshot.artistDisplay,
@@ -579,6 +762,13 @@ object CollageRenderer {
                     ),
                 )
                 if (!fits(measurement, regionRect)) {
+                    reportMusicFit(
+                        arm = "full-region",
+                        expression = expression,
+                        region = musicRegion,
+                        measured = "joined=${measurement.width}x${measurement.height} " +
+                            "box=${musicRegion.width}x${musicRegion.height}",
+                    )
                     return SceneResult.Rejected("music does not fit its sealed region")
                 }
                 musicScene = SceneMusic(

@@ -73,8 +73,8 @@ class CollageTextMeasurer(
             text = AnnotatedString(request.text),
             style = style,
             overflow = TextOverflow.Clip,
-            softWrap = true,
-            maxLines = Int.MAX_VALUE,
+            softWrap = request.softWrap,
+            maxLines = if (request.softWrap) Int.MAX_VALUE else 1,
             constraints = Constraints(maxWidth = request.maxWidth, maxHeight = request.maxHeight),
         )
     }
@@ -89,34 +89,96 @@ class CollageTextMeasurer(
     }
 
     /**
-     * Layout for a vertical spine music copy: swapped axes (reading
-     * direction is the region height), single line
-     * (`.g6 .music-spine .music-label{...white-space:nowrap}`), centered
-     * in the band (`.g6 .music-spine{align-items:center}`).
+     * The two nowrap spine runs measured exactly like
+     * [CollageRenderer.prepare] measures them: the label at the sealed
+     * music face and the artist at the frozen 11px track face, each one
+     * line inside the shared spine budgets. Null only for a blank field
+     * ([dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1] requires
+     * both fields, so production scenes always carry both).
      */
-    fun layoutSpine(music: CollageRenderer.SceneMusic): TextLayoutResult {
-        val weight = FontWeight(music.weight)
-        val fontStyle = if (music.italic) FontStyle.Italic else FontStyle.Normal
+    data class SpineCopyLayouts(
+        val title: TextLayoutResult?,
+        val artist: TextLayoutResult?,
+    )
+
+    /**
+     * Layout for a vertical spine music copy: two separate nowrap runs
+     * (`.g6 .music-spine .music-label{white-space:nowrap}` plus the
+     * `.music .track` node), reading down the band
+     * (`.music-copy{writing-mode:vertical-rl}`), constrained by the same
+     * budgets [CollageRenderer.spineCopyFit] gates with — never the joined
+     * two-line run that always overflowed the one-line cap.
+     */
+    fun layoutSpine(music: CollageRenderer.SceneMusic, grammar: String): SpineCopyLayouts {
+        val band = V5Decor.bandLayout(grammar, "spine", music.region.height)
+        val reading = CollageRenderer.spineReadingBudget(music.region, band).coerceAtLeast(0)
+        val cross = CollageRenderer.spineCrossBudget(music.region, band).coerceAtLeast(0)
+        return SpineCopyLayouts(
+            title = music.title.takeIf { it.isNotBlank() }?.let {
+                measureSpineRun(
+                    text = it,
+                    family = music.family,
+                    size = music.size,
+                    weight = music.weight,
+                    italic = music.italic,
+                    line = music.line,
+                    fontResourceId = music.fontResourceId,
+                    reading = reading,
+                    cross = cross,
+                )
+            },
+            artist = music.artist.takeIf { it.isNotBlank() }?.let {
+                measureSpineRun(
+                    text = it,
+                    family = CollageRenderer.SPINE_ARTIST_FAMILY,
+                    size = CollageRenderer.SPINE_ARTIST_SIZE,
+                    weight = CollageRenderer.SPINE_ARTIST_WEIGHT,
+                    italic = CollageRenderer.SPINE_ARTIST_ITALIC,
+                    line = CollageRenderer.SPINE_ARTIST_LINE,
+                    fontResourceId = FontRegistry.resourceFor(
+                        CollageRenderer.SPINE_ARTIST_FAMILY,
+                        CollageRenderer.SPINE_ARTIST_WEIGHT,
+                        CollageRenderer.SPINE_ARTIST_ITALIC,
+                    ) ?: error(
+                        "unbundled collage face " +
+                            "${CollageRenderer.SPINE_ARTIST_FAMILY}/" +
+                            "${CollageRenderer.SPINE_ARTIST_WEIGHT}/false",
+                    ),
+                    reading = reading,
+                    cross = cross,
+                )
+            },
+        )
+    }
+
+    private fun measureSpineRun(
+        text: String,
+        family: String,
+        size: Int,
+        weight: Int,
+        italic: Boolean,
+        line: Int,
+        fontResourceId: Int,
+        reading: Int,
+        cross: Int,
+    ): TextLayoutResult {
+        val fontWeight = FontWeight(weight)
+        val fontStyle = if (italic) FontStyle.Italic else FontStyle.Normal
         val style = TextStyle(
-            fontFamily = FontFamily(
-                Font(music.fontResourceId, weight, fontStyle),
-            ),
-            fontSize = music.size.sp,
-            fontWeight = weight,
+            fontFamily = FontFamily(Font(fontResourceId, fontWeight, fontStyle)),
+            fontSize = size.sp,
+            fontWeight = fontWeight,
             fontStyle = fontStyle,
-            lineHeight = music.line.sp,
-            textAlign = TextAlign.Center,
+            lineHeight = line.sp,
+            textAlign = TextAlign.Start,
         )
         return measurer.measure(
-            text = AnnotatedString(music.text),
+            text = AnnotatedString(text),
             style = style,
             overflow = TextOverflow.Clip,
             softWrap = false,
             maxLines = 1,
-            constraints = Constraints(
-                maxWidth = music.region.height,
-                maxHeight = music.region.width,
-            ),
+            constraints = Constraints(maxWidth = reading, maxHeight = cross),
         )
     }
 
@@ -214,8 +276,8 @@ fun CollageCanvas(
     val musicLayout = music?.takeIf { !it.vertical }?.let {
         remember(it, textMeasurer) { textMeasurer.layout(it.toMeasureRequest()) }
     }
-    val spineLayout = music?.takeIf { it.vertical }?.let {
-        remember(it, textMeasurer) { textMeasurer.layoutSpine(it) }
+    val spineLayouts = music?.takeIf { it.vertical }?.let {
+        remember(it, textMeasurer) { textMeasurer.layoutSpine(it, scene.grammarId) }
     }
     val provenanceLayouts = remember(scene.provenance, textMeasurer) {
         scene.provenance.map { textMeasurer.layoutProvenance(it) }
@@ -223,7 +285,7 @@ fun CollageCanvas(
 
     val musicFits = when {
         music == null -> true
-        music.vertical -> spineLayout?.fitsSpine(music) == true
+        music.vertical -> spineLayouts?.let { fitsSpine(music, scene.grammarId, it) } == true
         else -> musicLayout?.fitsRegion(music.region) == true
     }
     val drawable = drawOps != null &&
@@ -398,23 +460,44 @@ fun CollageCanvas(
                                 val track = scene.music
                                 if (track?.vertical == true) {
                                     // Spine copy reads vertically
-                                    // (`.g6 .music-spine
-                                    // .music-copy{writing-mode:vertical-rl}`):
-                                    // +90° rotation, same translation as a
-                                    // vertical-down provenance mark.
-                                    val layout = spineLayout ?: return@Canvas
-                                    withTransform({
-                                        translate(
-                                            (op.region.x + op.region.width).toFloat(),
-                                            op.region.y.toFloat(),
-                                        )
-                                        rotate(90f, pivot = Offset.Zero)
-                                    }) {
-                                        drawText(
-                                            textLayoutResult = layout,
-                                            color = Color(op.color),
-                                            topLeft = Offset.Zero,
-                                        )
+                                    // (`.g6 .music-spine .music-copy{
+                                    // writing-mode:vertical-rl}`): each
+                                    // nowrap run gets its own +90° pass at
+                                    // the shared [CollageRenderer.spineCopyPlacements]
+                                    // anchors (title, 6px copy gap, artist),
+                                    // so prepare, the canvas fit gate, and
+                                    // these pixels use one geometry.
+                                    val runs = spineLayouts ?: return@Canvas
+                                    val title = runs.title
+                                    val artist = runs.artist
+                                    if (title == null && artist == null) return@Canvas
+                                    val band = V5Decor.bandLayout(
+                                        scene.grammarId,
+                                        track.mode,
+                                        track.region.height,
+                                    )
+                                    val place = CollageRenderer.spineCopyPlacements(
+                                        region = track.region,
+                                        band = band,
+                                        titleAdvance = title?.size?.width ?: 0,
+                                        titleLineBox = title?.size?.height ?: 0,
+                                        artistLineBox = artist?.size?.height ?: 0,
+                                    )
+                                    for ((run, at) in listOfNotNull(
+                                        title?.let { it to place.title },
+                                        artist?.let { it to place.artist },
+                                    )) {
+                                        val layout = run
+                                        withTransform({
+                                            translate(at.right.toFloat(), at.top.toFloat())
+                                            rotate(90f, pivot = Offset.Zero)
+                                        }) {
+                                            drawText(
+                                                textLayoutResult = layout,
+                                                color = Color(op.color),
+                                                topLeft = Offset.Zero,
+                                            )
+                                        }
                                     }
                                     return@forEach
                                 }
@@ -618,10 +701,27 @@ private fun TextLayoutResult.fitsProvenance(mark: CollageRenderer.SceneProvenanc
     return size.width in 1..maxWidth && size.height in 1..maxHeight
 }
 
-private fun TextLayoutResult.fitsSpine(music: CollageRenderer.SceneMusic): Boolean {
-    if (hasVisualOverflow) return false
-    return size.width in 1..music.region.height && size.height in 1..music.region.width
+private fun fitsSpine(
+    music: CollageRenderer.SceneMusic,
+    grammar: String,
+    layouts: CollageTextMeasurer.SpineCopyLayouts,
+): Boolean {
+    // The canvas gate is the SAME decision as prepare: same runs, same
+    // frozen budgets ([CollageRenderer.spineCopyFit]).
+    val band = V5Decor.bandLayout(grammar, "spine", music.region.height)
+    return CollageRenderer.spineCopyFit(
+        region = music.region,
+        band = band,
+        title = layouts.title?.asMeasurement(),
+        artist = layouts.artist?.asMeasurement(),
+    ).fits
 }
+
+private fun TextLayoutResult.asMeasurement() = CollageRenderer.TextMeasurement(
+    width = size.width,
+    height = size.height,
+    hasVisualOverflow = hasVisualOverflow,
+)
 
 private fun CollageRenderer.SceneText.toMeasureRequest() = CollageRenderer.TextMeasureRequest(
     text = text,

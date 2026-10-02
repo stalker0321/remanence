@@ -99,4 +99,13 @@ class AndroidCollageCropMatrixSourceTest {
         val result = runBlocking { source.matrix(photos, listOf(CropMatrixRequest("c0", 340.0, 248.0))) }
         assertNull("absent authoritative analysis must not be fabricated", result)
     }
+
+    @Test
+    fun mismatchedAnalysisDimensionsFailClosed() {
+        // Analysis says 1000x1000 but the verified photo is 800x600: reading its
+        // normalized boxes would be in the wrong space, so the matrix fails closed.
+        val photos = listOf(CropMatrixPhoto("c0", 800, 600, analysis(1000, 1000)))
+        val result = runBlocking { source.matrix(photos, listOf(CropMatrixRequest("c0", 340.0, 248.0))) }
+        assertNull("dimension mismatch must fail closed", result)
+    }
 }

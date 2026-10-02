@@ -26,6 +26,10 @@ class AndroidCollageCropMatrixSource : CollageCropMatrixSource {
         for (request in requests) {
             val photo = byId[request.contentId] ?: return null
             val analysis = photo.analysis ?: return null
+            // Identity guard: the analysis must describe the verified photo's
+            // exact pixel dimensions, otherwise every normalized box would be
+            // read in the wrong space. Fail closed, never score it.
+            if (analysis.width != photo.widthPx || analysis.height != photo.heightPx) return null
             out[request] = evaluate(analysis, anyObject, request)
         }
         return out

@@ -67,10 +67,29 @@ internal sealed interface AllFamilyOutcome {
         val perGrammar: Map<Int, List<String>>,
         /** Every applicable grammar that was actually enumerated (all 14 when applicable). */
         val attempted: Set<Int>,
+        /** Branches dropped before becoming candidates, each with a typed cause. */
+        val omissions: List<AllFamilyOmission> = emptyList(),
     ) : AllFamilyOutcome
 
     data class Unavailable(val reason: String) : AllFamilyOutcome
 }
+
+/** Why one enumerated branch did not become a candidate. */
+internal enum class OmissionKind { ASSIGNMENT_FAILED, VALIDATE_FAILED, PLACEMENT_CROP_REJECTED, ANALYSIS_MISSING }
+
+/**
+ * One omitted branch with its typed cause. A crop omission carries the frozen
+ * [CropRejectReason]; assignment/validation omissions carry the kind. This is
+ * the producer-side counterpart of the frozen per-branch typed reject.
+ */
+internal data class AllFamilyOmission(
+    val grammarId: Int,
+    val branchId: String,
+    val kind: OmissionKind,
+    val slotIndex: Int? = null,
+    val contentId: String? = null,
+    val cropReason: CropRejectReason? = null,
+)
 
 /**
  * T151 production mount — enumerates **all 14 frozen families**, matches photos
@@ -80,10 +99,11 @@ internal sealed interface AllFamilyOutcome {
  *
  * Crop feasibility and cost come from the real Android matrix source
  * ([CollageCropMatrixSource], backed by the authoritative [CollageAnalysis]
- * cache); the sealed placements use the authoritative crop source
- * ([CollageCropSource]). No JS oracle. Provenance/decor/shape/music payloads are
- * carried on the [plan]/[verdict] for the T154 V4 expression mapping; nothing is
- * silently dropped.
+ * cache); sealed placements are solved by the same real Android solver at the
+ * exact frozen `Double` tile geometry. No JS oracle. Every dropped branch is
+ * recorded as a typed [AllFamilyOmission]. Provenance/decor/shape/music payloads
+ * are carried on the [plan]/[verdict] for the T154 V4 expression mapping;
+ * nothing is silently dropped.
  *
  * Verified inputs: blank sender omits the sender mark; blank/absent note and
  * absent artwork are distinct states and are passed through exactly.
@@ -145,6 +165,7 @@ internal class AllFamilyCandidateProducer(
         val photos = input.photos.map { FrozenResolve.Photo(it.contentId, it.widthPx.toDouble(), it.heightPx.toDouble()) }
         val selectedPerGrammar = LinkedHashMap<Int, MutableList<SelectedBranch>>()
         val buckets = ArrayList<Pair<Int, List<String>>>()
+        val omissions = ArrayList<AllFamilyOmission>()
         for ((gid, plans) in plansByGrammar) {
             val matrices = plans.map { plan -> plan.tiles.map { tile -> input.photos.map { photo ->
                 val cell = cells[CropMatrixRequest(photo.contentId, tile.rect.w, tile.rect.h, tile.shape, tile.zooms, tile.assignmentRole)]
@@ -155,8 +176,14 @@ internal class AllFamilyCandidateProducer(
             for (index in plans.indices) {
                 if (chosen.size >= FrozenCandidatePolicy.MAX_PER_GRAMMAR) break
                 val assignment = FrozenResolve.assign(plans[index], photos, matrices[index], lockOrder = false)
-                if (!assignment.ok) continue
-                if (!FrozenResolve.validate(plans[index])) continue
+                if (!assignment.ok) {
+                    omissions += AllFamilyOmission(gid, plans[index].branch, OmissionKind.ASSIGNMENT_FAILED)
+                    continue
+                }
+                if (!FrozenResolve.validate(plans[index])) {
+                    omissions += AllFamilyOmission(gid, plans[index].branch, OmissionKind.VALIDATE_FAILED)
+                    continue
+                }
                 val key = geometryKey(plans[index])
                 if (!seen.add(key)) continue
                 chosen += SelectedBranch(gid, index, plans[index], assignment)
@@ -184,6 +211,9 @@ internal class AllFamilyCandidateProducer(
                 val contentId = branch.assignment.compositionOrder[slot]
                 val analysis = photoById[contentId]?.analysis
                 if (analysis == null) {
+                    omissions += AllFamilyOmission(
+                        selection.grammarId, branch.plan.branch, OmissionKind.ANALYSIS_MISSING, slot, contentId,
+                    )
                     missingCrop = true
                     break
                 }
@@ -193,6 +223,14 @@ internal class AllFamilyCandidateProducer(
                 )
                 val crop = (solved as? CropSolveResult.Solved)?.crop
                 if (crop == null) {
+                    omissions += AllFamilyOmission(
+                        selection.grammarId,
+                        branch.plan.branch,
+                        OmissionKind.PLACEMENT_CROP_REJECTED,
+                        slot,
+                        contentId,
+                        (solved as? CropSolveResult.Rejected)?.reason ?: CropRejectReason.NO_CROP_CANDIDATE,
+                    )
                     missingCrop = true
                     break
                 }
@@ -222,6 +260,7 @@ internal class AllFamilyCandidateProducer(
             candidates,
             selectedPerGrammar.mapValues { (_, v) -> v.map { it.plan.branch } },
             plansByGrammar.keys.toSet(),
+            omissions,
         )
     }
 
@@ -245,7 +284,9 @@ internal class AllFamilyCandidateProducer(
         /**
          * Fill [AllFamilyPhoto]s from the shared authoritative analysis cache so
          * each photo's detectors run exactly once per session; `null` fails
-         * closed when any analysis is unavailable.
+         * closed when any analysis is unavailable **or its pixel dimensions do
+         * not match the verified descriptor** (a stale/mismatched analysis must
+         * never be read in the wrong coordinate space).
          */
         suspend fun loadPhotos(
             descriptors: List<PhotoDescriptor>,
@@ -254,6 +295,7 @@ internal class AllFamilyCandidateProducer(
             val out = ArrayList<AllFamilyPhoto>(descriptors.size)
             for (descriptor in descriptors) {
                 val analysis = analyses.analysisFor(descriptor.contentId) ?: return null
+                if (analysis.width != descriptor.widthPx || analysis.height != descriptor.heightPx) return null
                 out += AllFamilyPhoto(
                     contentId = descriptor.contentId,
                     widthPx = descriptor.widthPx,

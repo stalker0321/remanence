@@ -25,6 +25,7 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -226,8 +227,41 @@ class AndroidCollageCropSourceTest {
     }
 
     @Test
-    fun missingBytesReturnNull() {
-        val seam = seam(mutableMapOf())
+    fun producerMatrixAndPlacementsShareOneAnalysisPerPhoto() {
+        val store = mutableMapOf(
+            "p0" to ByteArray(64) { 7 },
+            "p1" to ByteArray(64) { 8 },
+            "p2" to ByteArray(64) { 9 },
+        )
+        val keyed = seam(store)
+        try {
+            val descriptors = listOf(
+                PhotoDescriptor("p0", 1000, 1000, true),
+                PhotoDescriptor("p1", 1000, 1000, true),
+                PhotoDescriptor("p2", 1000, 1000, true),
+            )
+            val loaded = runBlocking {
+                AllFamilyCandidateProducer.loadPhotos(descriptors, keyed.source.analysisSource())
+            }
+            assertNotNull("shared analysis feeder must load every photo", loaded)
+            val input = AllFamilyInput("cache", "Alice", "a short note", true, true, loaded!!)
+            val outcome = runBlocking {
+                AllFamilyCandidateProducer(AndroidCollageCropMatrixSource()).produce(input)
+            }
+            assertTrue("must return a candidate outcome", outcome is AllFamilyOutcome.Candidates)
+            // The feasibility matrix and every placement solve reused the single
+            // cached analysis per photo: exactly one detector run each.
+            assertEquals(3, keyed.field.analyzes)
+            assertEquals(3, keyed.nano.forwards)
+            assertEquals(6, keyed.yunet.detects)
+            assertEquals(listOf("p0", "p1", "p2"), keyed.bytes.calls)
+        } finally {
+            keyed.source.close()
+        }
+    }
+
+    @Test
+    fun missingBytesReturnNull() {        val seam = seam(mutableMapOf())
         try {
             assertNull(runBlocking { seam.source.cropsFor(styleSlots("p0")) })
             assertEquals(0, seam.field.analyzes)

@@ -133,6 +133,51 @@ class AllFamilyCandidateProducerTest {
         val result = outcome as AllFamilyOutcome.Candidates
         assertTrue("every candidate lacked a safe placement crop", result.candidates.isEmpty())
         assertTrue("the enumerated families still report their valid layouts", result.perGrammar.isNotEmpty())
+        assertTrue("omitted branches must carry a typed cause", result.omissions.isNotEmpty())
+        assertTrue(
+            "at least one omitted crop branch must record the frozen reason",
+            result.omissions.any { it.kind == OmissionKind.PLACEMENT_CROP_REJECTED && it.cropReason != null },
+        )
+        assertTrue(
+            "omitted crop branches must name the slot/content",
+            result.omissions.filter { it.kind == OmissionKind.PLACEMENT_CROP_REJECTED }
+                .all { it.slotIndex != null && it.contentId != null },
+        )
+    }
+
+    @Test
+    fun loadPhotosRejectsMismatchedAnalysisDimensions() = runBlocking {
+        val source = CollageAnalysisSource { analysis(900, 900) }
+        assertNull(
+            "an analysis whose dimensions differ from the verified photo must fail closed",
+            AllFamilyCandidateProducer.loadPhotos(listOf(PhotoDescriptor("c0", 1000, 1000, true)), source),
+        )
+    }
+
+    @Test
+    fun sharedAnalysisSourceIsFetchedOncePerPhotoAcrossMatrixAndPlacements() = runBlocking {
+        val calls = LinkedHashMap<String, Int>()
+        val byId = mapOf(
+            "c0" to analysis(1500, 1000),
+            "c1" to analysis(1000, 1500),
+            "c2" to analysis(1000, 1000),
+        )
+        val source = CollageAnalysisSource { contentId ->
+            calls[contentId] = (calls[contentId] ?: 0) + 1
+            byId[contentId]
+        }
+        val descriptors = listOf(
+            PhotoDescriptor("c0", 1500, 1000, true),
+            PhotoDescriptor("c1", 1000, 1500, true),
+            PhotoDescriptor("c2", 1000, 1000, true),
+        )
+        val loaded = requireNotNull(AllFamilyCandidateProducer.loadPhotos(descriptors, source))
+        val outcome = AllFamilyCandidateProducer(fakeMatrix()).produce(
+            AllFamilyInput("cache", "Alice", "a short note", true, true, loaded),
+        )
+        assertTrue(outcome is AllFamilyOutcome.Candidates)
+        assertEquals(setOf("c0", "c1", "c2"), calls.keys)
+        assertTrue("exactly one analysis fetch per photo, got $calls", calls.values.all { it == 1 })
     }
 
     @Test

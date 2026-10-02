@@ -115,8 +115,16 @@ class Grammar5BranchesTest {
         assertEquals(18, Grammar5Branches.grids(List(5) { 1.0 }, null, false).size)
     }
 
+    /**
+     * Consistency check only: [Grammar5Grid.place] delegates to
+     * [Grammar5Branches.grids], so for the `note=null, music=false` case it must
+     * resolve the same `-equal-1` grid. This does **not** establish byte-identity
+     * with the pre-stage-1 integer-division legacy cells for the 3-row recipes
+     * (n=4/5) with a note — the frozen floor can shift the third-row `y` by ≤1 px
+     * (`tasks/T151/stage1-erratum.md`).
+     */
     @Test
-    fun legacyEqualOneBranchIsPreservedPerCount() {
+    fun legacyAccessorMatchesEnumerationGridForNoNoteNoMusic() {
         for (n in 3..5) {
             val legacy = requireNotNull(Grammar5Grid.place(n, null, false)) { "legacy place must resolve for n=$n" }
             val fromEnumeration = Grammar5Branches.grids(List(n) { 1.0 }, null, false)

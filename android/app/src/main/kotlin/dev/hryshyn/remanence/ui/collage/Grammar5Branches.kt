@@ -15,11 +15,15 @@ import kotlin.math.floor
  * set so the provider can attempt each one independently.
  *
  * Geometry is computed with the frozen `Double` arithmetic and projected to the
- * Android integer canvas by flooring each rect (the accepted Android convention;
- * byte-identical to the legacy single `-equal-1` branch for 3 photos and for the
- * tracked coordinate axes). Provenance/brand/sender marks, decor and non-rect
- * shapes are not representable in the current sealed expression (see
- * `tasks/T151/parity.md` §5) and are deliberately absent here.
+ * Android integer canvas by flooring each rect, i.e. the frozen `Math.floor`
+ * values. The `-equal-1` branch is **not** byte-identical to the pre-stage-1
+ * integer-division path for the 3-row recipes (n=4/5) with a note: the
+ * accumulated fractional row offset can shift the third-row `y` by ≤1 px
+ * (`tasks/T151/stage1-erratum.md`, T156 review B1). `noteRegion`/`musicRegion`
+ * are unchanged and the frozen floor geometry is authoritative. Provenance/
+ * brand/sender marks, decor and non-rect shapes are not representable in the
+ * current sealed expression (see `tasks/T151/parity.md` §5) and are deliberately
+ * absent here.
  */
 internal object Grammar5Branches {
 

@@ -110,6 +110,18 @@ sealed interface CropSolveResult {
 }
 
 /**
+ * Frozen V4 baseline crop (`runtime/crop.js` `V4_CROP.crop`) plus the two fields
+ * the frozen `assignPhotos` cost model reads (`grammars.js:147`:
+ * `fit+(1-c.importance)*.4+roleCost+…`). Read-only: no behavior change to
+ * [Envelope50CropSolver.solve] / [Envelope50CropSolver.solveDetailed].
+ */
+data class BaseCropMetrics(
+    val rect: NormBox,
+    val importance: Double,
+    val retained: Double,
+)
+
+/**
  * Deterministic, model-independent port of the freeze V5 crop stage
  * (`runtime/crop.js` base + `runtime/crop-experiment.js` `envelope-50`,
  * evaluated with `runtime/safety.js`). No OpenCV, no inference.
@@ -131,6 +143,17 @@ object Envelope50CropSolver {
 
     fun solve(analysis: CollageAnalysis, slot: Slot): NormalizedCrop? =
         (solveDetailed(analysis, slot) as? CropSolveResult.Solved)?.crop
+
+    /**
+     * Frozen V4 baseline crop + cost inputs, or null when the baseline crop is
+     * rejected. This is the read-only Android counterpart of the frozen
+     * `V4_CROP.crop` result used by the complete-safe assignment cost matrix.
+     */
+    fun baseMetrics(analysis: CollageAnalysis, slot: Slot): BaseCropMetrics? =
+        when (val base = baseCrop(analysis, AnalysisMaps(analysis), slot)) {
+            is BaseOutcome.Safe -> BaseCropMetrics(base.box, base.coverage.importance, base.retained)
+            is BaseOutcome.Rejected -> null
+        }
 
     /**
      * Detailed solve. On failure the reason is the dominant frozen rejection
@@ -164,9 +187,11 @@ object Envelope50CropSolver {
         }
 
     private sealed interface BaseOutcome {
-        data class Safe(val box: NormBox) : BaseOutcome
+        data class Safe(val box: NormBox, val coverage: Coverage, val retained: Double) : BaseOutcome
         data class Rejected(val reason: CropRejectReason) : BaseOutcome
     }
+
+    private data class BestWindow(val box: NormBox, val score: Double, val coverage: Coverage)
 
     /** Deterministic base safe window (`crop.js`). */
     private fun baseCrop(analysis: CollageAnalysis, maps: AnalysisMaps, slot: Slot): BaseOutcome {
@@ -201,7 +226,7 @@ object Envelope50CropSolver {
             }
 
             val seen = HashSet<String>()
-            var bestThis: Pair<NormBox, Double>? = null
+            var bestThis: BestWindow? = null
             for ((x, y) in points) {
                 val key = String.format(Locale.ROOT, "%.4f:%.4f", x, y)
                 if (!seen.add(key)) continue
@@ -217,14 +242,14 @@ object Envelope50CropSolver {
                             verdict.objectKeep * 0.18 -
                             0.012 * (abs(x + cw / 2 - 0.5) + abs(y + ch / 2 - 0.5))
                         val previous = bestThis
-                        if (previous == null || score > previous.second) {
-                            bestThis = rect to score
+                        if (previous == null || score > previous.score) {
+                            bestThis = BestWindow(rect, score, verdict.coverage)
                         }
                     }
                 }
             }
             if (bestThis != null) {
-                return BaseOutcome.Safe(bestThis.first)
+                return BaseOutcome.Safe(bestThis.box, bestThis.coverage, bestThis.box.width * bestThis.box.height)
             }
         }
         val dominant = reasons.entries.maxByOrNull { it.value }?.key ?: CropRejectReason.NO_CROP_CANDIDATE

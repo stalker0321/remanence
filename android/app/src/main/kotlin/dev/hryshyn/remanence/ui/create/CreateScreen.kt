@@ -30,6 +30,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -353,13 +355,15 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
         }
 
         Spacer(Modifier.height(12.dp))
-        CollageStepChooser(viewModel, modifier = Modifier.fillMaxWidth())
+        // The whole-composition chooser lives ONLY on the COMPOSE screen
+        // (no-inline-chooser rule); the form keeps photos/note/music/Next.
 
-        // S4: release music picker directly above publish, so select-then-
-        // publish needs no scrolling back. Selection ownership is explicit:
-        // user taps flow into the ViewModel sealed at publish time, and a
-        // recreated picker seeds its display from the VM value — no flow
-        // bridge can silently wipe a chosen track (rotation/step/retry).
+        // S4: release music picker directly above the explicit Next action,
+        // so select-then-continue needs no scrolling back. Selection
+        // ownership is explicit: user taps flow into the ViewModel sealed
+        // at publish time, and a recreated picker seeds its display from
+        // the VM value — no flow bridge can silently wipe a chosen track
+        // (rotation/step/retry).
         Spacer(Modifier.height(12.dp))
         val musicContext = LocalContext.current
         val musicRepository = remember {
@@ -407,21 +411,31 @@ private fun ComposeStepContent(viewModel: CreateViewModel) {
             else -> emptyList()
         }
         val openSlot = cropSlot
-        if (openSlot != null) {
-            val source = sources.firstOrNull { it.contentId == openSlot }
+        val source = openSlot?.let { slot -> sources.firstOrNull { it.contentId == slot } }
+        val geometry = openSlot?.let { viewModel.cropSlotGeometry(it) }
+        if (openSlot != null && source != null && geometry != null) {
             val corrections by viewModel.cropCorrections.collectAsStateWithLifecycle()
-            if (source != null) {
-                CropStageContent(
-                    source = source,
-                    correction = corrections[openSlot],
-                    onUpdate = viewModel::updateCrop,
-                    onReset = viewModel::resetCrop,
-                    onDone = { viewModel.closeCrop() },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
+            val scope = rememberCoroutineScope()
+            CropStageContent(
+                source = source,
+                slotAspect = geometry.slotAspect,
+                baseCrop = geometry.baseCrop,
+                correction = corrections[openSlot],
+                onUpdate = viewModel::updateCrop,
+                onReset = viewModel::resetCrop,
+                onDone = { scope.launch { viewModel.applyCropAndClose() } },
+                onBack = { viewModel.closeCrop() },
+                modifier = Modifier.fillMaxWidth(),
+            )
         } else {
-            CollageStepChooser(viewModel, modifier = Modifier.fillMaxWidth())
+            CollageStepChooser(
+                viewModel,
+                modifier = Modifier.fillMaxWidth(),
+                onSlotTap = { contentId ->
+                    viewModel.openCrop(contentId)
+                    Unit
+                },
+            )
             Spacer(Modifier.height(12.dp))
             val corrections by viewModel.cropCorrections.collectAsStateWithLifecycle()
             if (sources.isNotEmpty()) {
@@ -458,7 +472,11 @@ private fun ComposeStepContent(viewModel: CreateViewModel) {
  * object the host built from (publish stays fail-closed on its own guard).
  */
 @Composable
-private fun CollageStepChooser(viewModel: CreateViewModel, modifier: Modifier = Modifier) {
+private fun CollageStepChooser(
+    viewModel: CreateViewModel,
+    modifier: Modifier = Modifier,
+    onSlotTap: ((String) -> Unit)? = null,
+) {
     val generatorPreview by viewModel.generatorPreview.collectAsStateWithLifecycle()
     val musicSelection by viewModel.musicSelection.collectAsStateWithLifecycle()
     val musicArtwork by viewModel.musicArtwork.collectAsStateWithLifecycle()
@@ -485,6 +503,8 @@ private fun CollageStepChooser(viewModel: CreateViewModel, modifier: Modifier = 
                 },
                 onNavigate = viewModel::clearFrozenCollageSelection,
                 onMeasured = viewModel::onPreviewMeasured,
+                onSlotTap = onSlotTap,
+                candidateBuilder = { viewModel.buildAllFamilySealedCandidates() },
                 modifier = modifier,
             )
         is GeneratorPreviewState.NotePending ->
@@ -506,6 +526,8 @@ private fun CollageStepChooser(viewModel: CreateViewModel, modifier: Modifier = 
                 },
                 onNavigate = viewModel::clearFrozenCollageSelection,
                 onMeasured = viewModel::onPreviewMeasured,
+                onSlotTap = onSlotTap,
+                candidateBuilder = { viewModel.buildAllFamilySealedCandidates() },
                 modifier = modifier,
             )
         else -> androidx.compose.material3.Text(

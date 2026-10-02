@@ -70,9 +70,35 @@ internal fun CollageChoiceHost(
     onSelect: (Int) -> Unit = {},
     onNavigate: () -> Unit = {},
     onMeasured: (GeneratorExpression.ResolvedExpression) -> Unit = {},
+    /**
+     * T150 photo hotspots (Astra `render.mjs:11` capsule-slot buttons):
+     * tapping a photograph opens the crop stage for its content id.
+     * Null renders the canvas alone (content form preview).
+     */
+    onSlotTap: ((String) -> Unit)? = null,
+    /**
+     * T150 integration: sealed all-family V4 candidates from the producer +
+     * `AllFamilyV4Adapter.seal` (T151 stage 7 on the committed T154 schema).
+     * Returning `null`/empty keeps the V3 provider path — never a fake
+     * candidate.
+     */
+    candidateBuilder: (suspend () -> List<dev.hryshyn.remanence.ui.collage.CollageCandidate>?)? = null,
 ) {
     val measurer = rememberCollageTextMeasurer()
     LaunchedEffect(input, note, track, cropSource, artwork) {
+        val sealed = try {
+            candidateBuilder?.invoke()
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
+            // Fail-safe: an unsealed build falls back to the V3 provider path
+            // (typed notice when even that is unavailable).
+            null
+        }
+        if (!sealed.isNullOrEmpty()) {
+            session.replaceCandidates(sealed)
+            return@LaunchedEffect
+        }
         when (
             val result = CollageCandidateProvider(cropSource, measurer)
                 .candidates(input, note, track, artwork)
@@ -154,19 +180,34 @@ internal fun CollageChoiceHost(
                     )
                 }
                 when (prepared) {
-                    is CollageRenderer.SceneResult.Ready -> CollageCanvas(
-                        scene = prepared.scene,
-                        images = images,
-                        contentDescription = "collage candidate",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(
-                                CollageRenderer.CANVAS_WIDTH.toFloat() /
-                                    CollageRenderer.CANVAS_HEIGHT.toFloat(),
-                            ),
-                        textMeasurer = measurer,
-                        artwork = artworkBitmap,
-                    )
+                    is CollageRenderer.SceneResult.Ready -> {
+                        val tap = onSlotTap
+                        if (tap == null) {
+                            CollageCanvas(
+                                scene = prepared.scene,
+                                images = images,
+                                contentDescription = "collage candidate",
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .aspectRatio(
+                                        CollageRenderer.CANVAS_WIDTH.toFloat() /
+                                            CollageRenderer.CANVAS_HEIGHT.toFloat(),
+                                    ),
+                                textMeasurer = measurer,
+                                artwork = artworkBitmap,
+                            )
+                        } else {
+                            CollageHotspotCanvas(
+                                scene = prepared.scene,
+                                images = images,
+                                placements = selected.expression.placements,
+                                onSlotTap = tap,
+                                modifier = Modifier.fillMaxWidth(),
+                                textMeasurer = measurer,
+                                artwork = artworkBitmap,
+                            )
+                        }
+                    }
 
                     is CollageRenderer.SceneResult.Rejected ->
                         Text(prepared.reason, modifier = Modifier.testTag("collage_preview_blocked"))

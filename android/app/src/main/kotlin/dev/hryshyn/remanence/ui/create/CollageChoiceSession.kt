@@ -59,6 +59,18 @@ class CollageChoiceSession {
         return true
     }
 
+    /**
+     * Integration rebuild: replaces one entry in place (corrected-crop
+     * application), keeping the browse position and selection. Unlike
+     * [replaceCandidates] this is not a fresh build, so
+     * [onCandidatesReplaced] is not fired.
+     */
+    fun replaceCandidate(index: Int, candidate: CollageCandidate): Boolean {
+        if (index !in candidates.indices) return false
+        candidates = candidates.toMutableList().also { it[index] = candidate }
+        return true
+    }
+
     fun previous() {
         selectedIndex = selectedIndex?.let { if (it > 0) it - 1 else it }
     }

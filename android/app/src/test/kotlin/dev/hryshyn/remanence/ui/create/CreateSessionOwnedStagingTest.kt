@@ -224,6 +224,11 @@ class CreateSessionOwnedStagingTest {
             generatorBridgeProvider = bridge.provider,
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
+            // Real preview so a candidate can be built and frozen before
+            // publishing (the COMPOSE/frozen gate is the production path).
+            generatorPreviewLoader = CollageFreezeFixture.previewLoader { id ->
+                dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(id)
+            },
             enqueueUpload = enqueueUpload,
         )
     }
@@ -283,6 +288,7 @@ class CreateSessionOwnedStagingTest {
         val roots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingRoot)
         val oldDir = File(roots.createStagingRoot(UserId(userUuid)), oldCapsuleId)
 
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
         vm.startPublishing()
         assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value)
@@ -321,6 +327,7 @@ class CreateSessionOwnedStagingTest {
         driveToReadyContent(vm, listOf("new-1", "new-2", "new-3"))
         val newDir = File(roots.createStagingRoot(UserId(switchedUserUuid)), newCapsuleId)
 
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
         vm.startPublishing()
         assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value)
@@ -610,8 +617,9 @@ class CreateSessionOwnedStagingTest {
         vm.beginSession(1L)
         driveToReadyContent(vm, listOf("photo-1", "photo-2", "photo-3"))
 
-        assertTrue(vm.goToCompose())
-        vm.startPublishing()
+        // The sessionOwner guard refuses composition outright (and with it
+        // any staging): no publish machinery may run for a missing owner.
+        assertFalse(vm.goToCompose())
 
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         assertTrue(vm.flowError.value?.contains("owner", ignoreCase = true) == true)

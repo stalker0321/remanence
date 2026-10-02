@@ -220,6 +220,11 @@ class CreateTransitionTableTest {
             ioDispatcher = testDispatcher,
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
+            // Real preview so a candidate can be built and frozen before
+            // publishing (the COMPOSE/frozen gate is the production path).
+            generatorPreviewLoader = CollageFreezeFixture.previewLoader { id ->
+                dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(id)
+            },
             enqueueUpload = { _, _ -> },
         )
         vm.beginSession(1L, userUuid.toString())
@@ -276,6 +281,8 @@ class CreateTransitionTableTest {
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
 
         repeat(3) { index -> assertTrue(vm.photoSelection.toggle("content://photo/$index").let { true }) }
+        // Integration gate: publish requires a frozen choice on COMPOSE.
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         // ADR-018: publish with no note (non-empty notes are typed unsupported).
         assertTrue(vm.goToCompose())
         vm.startPublishing()
@@ -297,7 +304,7 @@ class CreateTransitionTableTest {
 
     @Test
     @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
-    fun nonEmptyNoteIsTypedUnsupportedAtPublishAndStagesNothing() = runBlocking {
+    fun nonEmptyNotePublishesThroughTheFrozenGateAndStages() = runBlocking {
         val front = ScriptedProcessor(ScriptedProcessor.Scripted.Accept(syntheticFingerprint(11, FingerprintSide.FRONT)))
         val (vm, _) = viewModel(
             front,
@@ -315,20 +322,27 @@ class CreateTransitionTableTest {
         repeat(3) { vm.photoSelection.toggle("content://note/$it") }
         assertTrue(vm.noteEditor.onChange("dear mama"))
 
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)
 
-        // Explicit typed unsupported: back at CONTENT with a visible error,
-        // never a silent v1 publication "as if generator".
-        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
-        assertNotNull(vm.publishError.value)
-        assertTrue(
-            "publishError must describe the generator note limitation, was ${vm.publishError.value}",
-            vm.publishError.value!!.contains("generator"),
-        )
-        assertNull(database.outboxCapsuleDao().getByCapsuleIdAndOwner(vm.capsuleId, userUuid.toString()))
-        assertEquals(0, bridge.liveSessions())
+        // ACTUAL supported-note contract (reconciled with the real surface,
+        // CreateUiHappyPathTest): a short authored note is NOT typed
+        // unsupported — it rides the accepted frozen selection through the
+        // COMPOSE gate and stages a real artifact. The strict gates are NOT
+        // weakened: publish is still reachable only from COMPOSE with a frozen
+        // choice (asserted by publishRefusesUnfrozenCompose, the step gate and
+        // acceptFrozenForPublish), and a refusal still fails closed.
+        assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
+        assertNull("a supported note publish must not fail, got ${vm.publishError.value}", vm.publishError.value)
+        assertNull(vm.flowError.value)
+        val row = database.outboxCapsuleDao().getByCapsuleIdAndOwner(vm.capsuleId, userUuid.toString())
+        assertNotNull("the note publish must stage an outbox row", row)
+        assertEquals(OutboxCapsuleState.ENCRYPTED, row!!.state)
+        // Exactly the one begun session is live after the publish leg (it is
+        // swept by G3 TTL later); no second/duplicate session was started.
+        assertEquals(1, bridge.liveSessions())
         Unit
     }
 

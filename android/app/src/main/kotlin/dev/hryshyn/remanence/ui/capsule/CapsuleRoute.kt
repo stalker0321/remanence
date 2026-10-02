@@ -171,7 +171,15 @@ internal fun CapsuleRoute(
                 }
                 is CapsulePresentationAdmission.Ber1 -> {
                     val expression = admission.expression
-                    if (expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V3) {
+                    // R7 (tasks/T154/gate-patches.md): contract V3 and V4
+                    // share the one collage presentation path. V4 must never
+                    // fall through to the BER1 arm — that would silently drop
+                    // provenance/decor/shape/music-mode slots (R8: the BER1
+                    // fallback is NOT safe). Admission already ran in front,
+                    // so an Unsupported expression renders the typed notice.
+                    if (expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V3 ||
+                        expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V4
+                    ) {
                         // V5 finished collage: the sealed contract decides the
                         // arm. A decode/prepare failure renders the shared
                         // typed notice, never the BER1 host, v1 pager, or a

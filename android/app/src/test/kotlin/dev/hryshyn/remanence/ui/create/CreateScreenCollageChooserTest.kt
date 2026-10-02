@@ -323,7 +323,7 @@ class CreateScreenCollageChooserTest {
     }
 
     @Test
-    fun contentStepMountsChooserAndSelectFreezesDisplayedCandidate() {
+    fun composeStepMountsChooserAndSelectFreezesDisplayedCandidate() {
         val ids = listOf("u1", "u2", "u3")
         val originals = ids.associateWith { id ->
             ByteArray(64) { ((it * 31 + id.hashCode()) and 0xFF).toByte() }
@@ -337,6 +337,12 @@ class CreateScreenCollageChooserTest {
                 requestPermissionOnAttach = false,
             )
         }
+        // The chooser lives on the COMPOSE screen only (no-inline-chooser
+        // rule): navigate with the explicit Next before waiting for candidates.
+        composeRule.onNodeWithTag("create_screen_scroll")
+            .performScrollToNode(hasTestTag("create_next"))
+        composeRule.onNodeWithTag("create_next").performClick()
+        composeRule.waitForIdle()
         // Preview readiness and provider analysis are separate asynchronous
         // boundaries. Wait for the chooser's candidate-ready state rather
         // than assuming one Compose idle observation covers both.
@@ -393,7 +399,15 @@ class CreateScreenCollageChooserTest {
                 requestPermissionOnAttach = false,
             )
         }
+        // The chooser lives on the COMPOSE screen only (no-inline-chooser
+        // rule): navigate with the explicit Next before waiting for candidates.
+        composeRule.onNodeWithTag("create_screen_scroll")
+            .performScrollToNode(hasTestTag("create_next"))
+        composeRule.onNodeWithTag("create_next").performClick()
         composeRule.waitForIdle()
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            vm.collageChoices.notice != null || vm.collageChoices.candidates.isNotEmpty()
+        }
 
         composeRule.onNodeWithTag("collage_notice").assertExists()
         composeRule.onNodeWithTag("collage_canvas").assertDoesNotExist()
@@ -435,6 +449,12 @@ class CreateScreenCollageChooserTest {
                 requestPermissionOnAttach = false,
             )
         }
+        // The chooser lives on the COMPOSE screen only (no-inline-chooser
+        // rule): navigate with the explicit Next before waiting for candidates.
+        composeRule.onNodeWithTag("create_screen_scroll")
+            .performScrollToNode(hasTestTag("create_next"))
+        composeRule.onNodeWithTag("create_next").performClick()
+        composeRule.waitForIdle()
         composeRule.waitUntil(timeoutMillis = 10_000) { vm.collageChoices.candidates.isNotEmpty() }
         composeRule.waitForIdle()
         assertNull(vm.collageChooserTrack)

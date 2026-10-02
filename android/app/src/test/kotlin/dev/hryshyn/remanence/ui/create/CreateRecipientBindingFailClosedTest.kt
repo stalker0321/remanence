@@ -247,6 +247,11 @@ class CreateRecipientBindingFailClosedTest {
         ioDispatcher = testDispatcher,
         senderRetryKeysetWrapper = testWrapper,
         senderRetryKekAlias = testAlias,
+        // Real preview so a candidate can be built and frozen before
+        // publishing (the COMPOSE/frozen gate is the production path).
+        generatorPreviewLoader = CollageFreezeFixture.previewLoader { id ->
+            dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(id)
+        },
         enqueueUpload = { _, _ -> },
         )
     }
@@ -375,6 +380,7 @@ class CreateRecipientBindingFailClosedTest {
 
         // The publication reads the captured snapshot, not the second
         // resolution attempt.
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)
@@ -405,6 +411,7 @@ class CreateRecipientBindingFailClosedTest {
         driveToContent(vm, selfSnapshot())
         val selfCapsuleId = vm.capsuleId
 
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
         vm.startPublishing()
         // The publish is parked at the single identity capture (before

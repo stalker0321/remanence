@@ -20,6 +20,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -237,6 +238,11 @@ class CreatePublishLifetimeTest {
             ioDispatcher = testDispatcher,
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
+            // Real preview so a candidate can be built and frozen before
+            // publishing (the COMPOSE/frozen gate is the production path).
+            generatorPreviewLoader = CollageFreezeFixture.previewLoader { id ->
+                dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(id)
+            },
             enqueueUpload = enqueueUpload,
             outboxCapsuleDao = database.outboxCapsuleDao(),
             capsuleRevoke = revoke,
@@ -286,6 +292,7 @@ class CreatePublishLifetimeTest {
             },
         )
 
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)
@@ -302,6 +309,7 @@ class CreatePublishLifetimeTest {
             enqueueUpload = { _, _ -> throw IllegalStateException("work unavailable") },
         )
 
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)
@@ -323,6 +331,7 @@ class CreatePublishLifetimeTest {
             enqueueUpload = { _, capsule -> enqueued += capsule },
         )
 
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)
@@ -339,6 +348,7 @@ class CreatePublishLifetimeTest {
         val vm = contentStage(identityGate, enqueueUpload = { _, capsule -> enqueued += capsule })
         val oldCapsuleId = vm.capsuleId
 
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
         vm.startPublishing()
         assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value)
@@ -377,6 +387,7 @@ class CreatePublishLifetimeTest {
         val vm = contentStage(identityGate, enqueueUpload = { _, capsule -> enqueued += capsule })
         val oldCapsuleId = vm.capsuleId
 
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
         vm.startPublishing()
         assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value)
@@ -403,10 +414,11 @@ class CreatePublishLifetimeTest {
         val vm = contentStage(identityGate)
         val capsuleId = vm.capsuleId
 
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
         vm.startPublishing()
         // Second tap during PUBLISHING: refused visibly, no second job.
-        assertTrue(vm.goToCompose())
+        assertFalse(vm.goToCompose())
         vm.startPublishing()
         assertNotNull(vm.flowError.value)
         assertEquals(CreateViewModel.Step.PUBLISHING, vm.step.value)
@@ -436,7 +448,9 @@ class CreatePublishLifetimeTest {
         assertTrue("expected full artifact set", blobCount >= 5)
 
         // The worker has not completed yet: staging is still one encrypted row.
-        assertTrue(vm.goToCompose())
+        // A replay from UPLOAD_PENDING is refused by the terminal step gate
+        // (never a second job): composition is only reachable from CONTENT.
+        assertFalse(vm.goToCompose())
         vm.startPublishing()
         assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
         runBlockingNullable {
@@ -452,6 +466,7 @@ class CreatePublishLifetimeTest {
         val identityGate = CompletableDeferred<SenderIdentitySnapshot>()
         val vm = contentStage(identityGate)
         val capsuleId = vm.capsuleId
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
         vm.startPublishing()
         identityGate.complete(senderIdentity())
@@ -498,6 +513,7 @@ class CreatePublishLifetimeTest {
             networkConnected = { true },
             accessToken = "revoke-token",
         )
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)
@@ -541,6 +557,7 @@ class CreatePublishLifetimeTest {
             networkConnected = { false },
             accessToken = "revoke-token",
         )
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)
@@ -564,6 +581,7 @@ class CreatePublishLifetimeTest {
             revoke = revoke,
             accessToken = "revoke-token",
         )
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)
@@ -591,6 +609,7 @@ class CreatePublishLifetimeTest {
         val identityGate = CompletableDeferred<SenderIdentitySnapshot>()
         val vm = contentStage(identityGate)
         val capsuleId = vm.capsuleId
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
         vm.startPublishing()
         identityGate.complete(senderIdentity())

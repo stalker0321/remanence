@@ -114,6 +114,15 @@ class CollageRouteTest {
         musicRegion = null,
     )
 
+    /**
+     * R7 (tasks/T154/gate-patches.md, integration owner): contract V4 rides
+     * the SAME collage arm. Falling into the BER1 arm would silently drop the
+     * V4 provenance/decor/shape/music-mode slots, which the interface marks as
+     * NOT safe (R8).
+     */
+    private fun v4Expression(): GeneratorExpression.ResolvedExpression =
+        v3Expression().copy(expressionContractVersion = GeneratorExpression.EXPRESSION_CONTRACT_V4)
+
     private fun v2Expression(): GeneratorExpression.ResolvedExpression {
         val plan = GeneratorEditorialRows.plan(photosInput(null))
         check(plan is GeneratorEditorialRows.PlanResult.Planned) { "expected Planned, got $plan" }
@@ -149,6 +158,20 @@ class CollageRouteTest {
         composeRule.onNodeWithTag("capsule_underlayer").assertDoesNotExist()
         composeRule.onNodeWithTag("capsule_track_card").assertDoesNotExist()
         composeRule.onNodeWithTag("capsule_ber1_canvas").assertDoesNotExist()
+    }
+
+    @Test
+    fun v4CollageRendersTheSharedCanvasWithoutBer1Fallback() {
+        setContent(FakeSource(admission = CapsulePresentationAdmission.Ber1(v4Expression())))
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("collage_canvas").assertExists()
+        composeRule.onNodeWithTag("capsule_collage_close").assertExists()
+        // No silent V4 -> BER1 fallback (R8: the BER1 arm ignores V4 slots).
+        composeRule.onNodeWithTag("capsule_ber1_canvas").assertDoesNotExist()
+        composeRule.onNodeWithTag("capsule_page_0").assertDoesNotExist()
+        composeRule.onNodeWithTag("capsule_underlayer").assertDoesNotExist()
+        composeRule.onNodeWithTag("capsule_track_card").assertDoesNotExist()
     }
 
     @Test

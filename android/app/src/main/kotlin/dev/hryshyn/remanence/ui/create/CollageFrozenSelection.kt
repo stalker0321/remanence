@@ -41,7 +41,12 @@ internal fun acceptFrozenForPublish(
 ): FrozenPublishAcceptance {
     frozen ?: return FrozenPublishAcceptance.Refused("no collage has been frozen")
     val expression = frozen.expression
-    if (expression.expressionContractVersion != GeneratorExpression.EXPRESSION_CONTRACT_V3) {
+    // S5 (tasks/T154/gate-patches.md): contract V4 is the same sealed V5
+    // expression; every check below is version-agnostic and binds the V4
+    // bytes too (candidateIdFor = GENEX04 hash, projectedHash = BEXPR03).
+    if (expression.expressionContractVersion != GeneratorExpression.EXPRESSION_CONTRACT_V3 &&
+        expression.expressionContractVersion != GeneratorExpression.EXPRESSION_CONTRACT_V4
+    ) {
         return FrozenPublishAcceptance.Refused("the frozen collage is not a V5 expression")
     }
     if (expression.input != prereadInput) {

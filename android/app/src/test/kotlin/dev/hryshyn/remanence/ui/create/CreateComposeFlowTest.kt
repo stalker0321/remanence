@@ -44,7 +44,10 @@ import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.create.DefaultGeneratorPreviewLoader
 import dev.hryshyn.remanence.create.MemoryGeneratorBridge
 import dev.hryshyn.remanence.create.memoryTestJpegForPhotoId
+import dev.hryshyn.remanence.core.model.GeneratorBer1Provider
 import dev.hryshyn.remanence.core.model.GeneratorExpression
+import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertNotEquals
 import dev.hryshyn.remanence.create.GeneratorSourceBinding
 import dev.hryshyn.remanence.create.NormalizedPhotoDto
 import dev.hryshyn.remanence.create.PhotoNormalizerPort
@@ -167,7 +170,7 @@ class CreateComposeFlowTest {
 
     private fun originalFor(pickerId: String): ByteArray = memoryTestJpegForPhotoId(pickerId)
 
-    private fun newViewModel(): CreateViewModel {
+    private fun newViewModel(withCropSource: Boolean = false, cornerFace: Boolean = false): CreateViewModel {
         val roots = AccountScopedFileRoots(stagingDir)
         val retryStore = SenderRetryMaterialStore(roots)
         return CreateViewModel(
@@ -187,6 +190,7 @@ class CreateComposeFlowTest {
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
             enqueueUpload = { _, _ -> },
+            collageSourceFactory = if (withCropSource) testCollageSourceFactory(cornerFace) else null,
         ).also { it.beginSession(1L, ownerUuid.toString()) }
     }
 
@@ -418,6 +422,7 @@ class CreateComposeFlowTest {
         assertFalse(vm.openCrop(ids.first()))
         assertNull(vm.cropSlot.value)
 
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
         assertFalse(vm.openCrop("unknown-content-id"))
         assertNull(vm.cropSlot.value)
@@ -432,6 +437,7 @@ class CreateComposeFlowTest {
         val vm = newViewModel()
         driveToContent(vm)
         val ids = previewContentIds(vm)
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
         assertTrue(vm.openCrop(ids.first()))
 
@@ -448,6 +454,7 @@ class CreateComposeFlowTest {
         val vm = newViewModel()
         driveToContent(vm)
         val ids = previewContentIds(vm)
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
         assertTrue(vm.openCrop(ids.first()))
         vm.updateCrop(1.1f, 2f, 3f)
@@ -467,6 +474,7 @@ class CreateComposeFlowTest {
     fun cropUpdateWithoutSlotIsNoop() {
         val vm = newViewModel()
         driveToContent(vm)
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
 
         vm.updateCrop(1.2f, 5f, 5f)
@@ -481,6 +489,7 @@ class CreateComposeFlowTest {
         val vm = newViewModel()
         driveToContent(vm)
         val ids = previewContentIds(vm)
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
         assertTrue(vm.openCrop(ids.first()))
         vm.updateCrop(1.2f, 5f, 5f)
@@ -494,20 +503,136 @@ class CreateComposeFlowTest {
     }
 
     @Test
-    fun candidateNavigationClearsCropCorrections() {
-        // T157 §6: the VM stores per-photo values only, so moving to another
-        // sheet drops them fail-closed instead of reusing them cross-slot.
+    fun candidateNavigationPreservesKeyedCropCorrections() {
+        // Integration contract: entries are keyed (candidateId, slot,
+        // contentId), so browsing away and back keeps them; only the display
+        // for the newly displayed candidate is shown. Content/owner edits
+        // still drop the whole store (photoEditClearsCropState).
         val vm = newViewModel()
         driveToContent(vm)
         val ids = previewContentIds(vm)
+        val frozenId = CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
         assertTrue(vm.openCrop(ids.first()))
         vm.updateCrop(1.2f, 5f, 5f)
         assertNotNull(vm.cropCorrections.value[ids.first()])
 
+        // Browse away: the display follows the newly shown candidate, the
+        // keyed store keeps the entry for candidate 1.
+        vm.collageChoices.next()
         vm.clearFrozenCollageSelection()
+        assertNull(vm.cropSlot.value)
+        assertTrue(vm.cropCorrections.value.isEmpty())
+
+        // Browse back to the same candidate: the correction is still there.
+        vm.collageChoices.previous()
+        vm.clearFrozenCollageSelection()
+        assertNotNull(vm.cropCorrections.value[ids.first()])
+        assertEquals(1.2f, vm.cropCorrections.value.getValue(ids.first()).zoom)
+
+        // A content edit (new photo set) drops the whole store fail-closed.
+        vm.backToContent()
+        vm.onPhotosPicked(listOf("content://0", "content://1", "content://9"))
+        assertTrue(vm.cropCorrections.value.isEmpty())
+        assertNotEquals(frozenId, vm.frozenCollageSelection?.candidateId)
+    }
+
+    @Test
+    fun cropApplySealsNewWindowAndFrozenHash() = runBlocking {
+        // Real safe crop: production crop source + its OWN cached analysis
+        // (shared instance), T157 correct() gate, quantized window, new
+        // authored expression and a new frozen candidate id/hash.
+        val vm = newViewModel(withCropSource = true)
+        driveToContent(vm)
+        val ids = previewContentIds(vm)
+        val beforeId = CollageFreezeFixture.freezeFirstCandidateWithProductionSource(vm)
+        assertTrue(vm.goToCompose())
+        assertTrue(vm.openCrop(ids.first()))
+        val beforeCrop = requireNotNull(
+            requireNotNull(vm.collageChoices.selected).expression.placements
+                .first { it.contentId == ids.first() }.crop,
+        )
+
+        // A modest zoom: the corrected window must stay above the frozen
+        // protection-field floor (PROTECTION_FIELD_LOW) for the narrow slot —
+        // the classifier is never waived to make the test pass.
+        vm.updateCrop(1.02f, 0f, 0f)
+        // Evaluate first: the message must report the POST-apply state.
+        val applied = vm.applyCropAndClose()
+        assertTrue(
+            "apply must succeed, applied=$applied slot=${vm.cropSlot.value} " +
+                "selected=${vm.collageChoices.selected?.candidateId} " +
+                "flowError=${vm.flowError.value}",
+            applied,
+        )
 
         assertNull(vm.cropSlot.value)
         assertTrue(vm.cropCorrections.value.isEmpty())
+        val frozen = requireNotNull(vm.frozenCollageSelection)
+        assertNotEquals("the frozen identity must change with the corrected window", beforeId, frozen.candidateId)
+        val expression = frozen.expression
+        assertTrue(
+            GeneratorExpression.validateResolved(expression) is GeneratorExpression.InputValidation.Valid,
+        )
+        val afterCrop = requireNotNull(
+            expression.placements.first { it.contentId == ids.first() }.crop,
+        )
+        assertNotEquals("the sealed window must move with the zoom", beforeCrop, afterCrop)
+        // The corrected window is strictly inside the approved one (zoom in).
+        assertTrue(afterCrop.width < beforeCrop.width)
+        assertTrue(afterCrop.height < beforeCrop.height)
+        assertEquals(
+            "candidate id is the canonical hash of the corrected expression",
+            GeneratorBer1Provider.candidateIdFor(expression),
+            frozen.candidateId,
+        )
+        assertTrue(ids.first() in expression.placements.map { it.contentId })
+    }
+
+    /**
+     * F1 wiring regression (peer-crop-integration): `applyCropAndClose` must
+     * re-classify the corrected window under the placement's OWN
+     * [GeneratorExpression.PhotoShape]. With a face parked in the extreme
+     * corner of the analysis:
+     * - the identical RECT placement applies (the frozen rect mask keeps it);
+     * - a ROUND V4 placement of the same window is refused with the frozen
+     *   `FACE_CROSSES_CROP_OR_MASK` reason, and the frozen selection is left
+     *   untouched — the round/ellipse mask safety is never waived.
+     */
+    @Test
+    fun roundedApertureCorrectionIsRefusedByTheFrozenMask() = runBlocking {
+        val rectVm = newViewModel(withCropSource = true, cornerFace = true)
+        driveToContent(rectVm)
+        val rectIds = previewContentIds(rectVm)
+        CollageFreezeFixture.freezeFirstCandidate(rectVm, aspectMatchedSlots = true)
+        assertTrue(rectVm.goToCompose())
+        assertTrue(rectVm.openCrop(rectIds.first()))
+        rectVm.updateCrop(1f, 0f, 0f)
+        assertTrue(
+            "RECT control must apply, flowError=${rectVm.flowError.value}",
+            rectVm.applyCropAndClose(),
+        )
+
+        val roundVm = newViewModel(withCropSource = true, cornerFace = true)
+        driveToContent(roundVm)
+        val roundIds = previewContentIds(roundVm)
+        val frozenBefore = CollageFreezeFixture.freezeRoundCandidate(roundVm, aspectMatchedSlots = true)
+        assertTrue(roundVm.goToCompose())
+        assertTrue(roundVm.openCrop(roundIds.first()))
+        roundVm.updateCrop(1f, 0f, 0f)
+        assertFalse(
+            "a ROUND aperture must be re-checked under the round mask",
+            roundVm.applyCropAndClose(),
+        )
+        val refusal = requireNotNull(roundVm.flowError.value)
+        assertTrue(
+            "the typed frozen mask reason must surface, got $refusal",
+            refusal.contains("FACE_CROSSES_CROP_OR_MASK"),
+        )
+        assertEquals(
+            "the frozen selection must stay untouched when the correction is refused",
+            frozenBefore,
+            roundVm.frozenCollageSelection?.candidateId,
+        )
     }
 }

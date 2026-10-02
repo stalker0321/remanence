@@ -192,23 +192,41 @@ class CreateUiHappyPathTest {
             generatorBridgeProvider = bridge.provider,
             // ADR-018: the real preview host measures the note on-device and
             // reports the fitted plan to the VM through onPreviewMeasured.
-            generatorPreviewLoader = dev.hryshyn.remanence.create.GeneratorPreviewLoader { pickerId ->
-                val bytes = dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(pickerId)
-                val upright = dev.hryshyn.remanence.create.GeneratorExifDecoder.decodeUpright(bytes)
-                dev.hryshyn.remanence.create.LoadedPreviewSource(
-                    originalHash = sha256Hex(bytes),
-                    uprightWidthPx = upright.widthPx,
-                    uprightHeightPx = upright.heightPx,
-                    previewJpegBytes = bytes,
-                    previewWidthPx = upright.widthPx,
-                    previewHeightPx = upright.heightPx,
-                )
-            },
+            // Production preview loader (not the lambda form): it retains the
+            // originals through OriginalRetainSinkHost, which is what the
+            // shared AndroidCollageCropSource analysis cache reads. Without
+            // retention the chooser gets the typed "crop analysis is not
+            // available" notice instead of candidates. Dimensions come from the
+            // same GeneratorExifDecoder the publish preread uses.
+            generatorPreviewLoader = dev.hryshyn.remanence.create.DefaultGeneratorPreviewLoader(
+                openSource = { id ->
+                    dev.hryshyn.remanence.create.PhotoSource {
+                        java.io.ByteArrayInputStream(
+                            dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(id),
+                        )
+                    }
+                },
+                decoder = dev.hryshyn.remanence.create.GeneratorSourceBinding.PhotoDecoderPort { bytes ->
+                    val upright = dev.hryshyn.remanence.create.GeneratorExifDecoder.decodeUpright(bytes)
+                    dev.hryshyn.remanence.create.GeneratorSourceBinding.UprightPhoto(
+                        upright.widthPx,
+                        upright.heightPx,
+                    )
+                },
+                normalizer = dev.hryshyn.remanence.create.PhotoNormalizerPort { bytes ->
+                    val upright = dev.hryshyn.remanence.create.GeneratorExifDecoder.decodeUpright(bytes)
+                    dev.hryshyn.remanence.create.NormalizedPhotoDto(bytes, upright.widthPx, upright.heightPx)
+                },
+            ),
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
             enqueueUpload = { _, _ -> },
+            // Real production crop source (fake detector runtimes): without a
+            // factory the chooser receives the fail-closed null source and
+            // never materialises candidates for the real surface to freeze.
+            collageSourceFactory = testCollageSourceFactory(),
         )
         vm.beginSession(1L, userUuid.toString())
 
@@ -262,18 +280,25 @@ class CreateUiHappyPathTest {
         // Let the preview host measure the note and report the fitted plan.
         composeRule.waitForIdle()
 
-        // 5) Explicitly select and freeze the displayed candidate, then
-        // continue to the COMPOSE surface and publish the frozen choice.
-        composeRule.waitUntil(timeoutMillis = 10_000) { vm.collageChoices.candidates.isNotEmpty() }
-        composeRule.runOnIdle {
-            assertTrue(vm.selectCollageCandidate(0))
-            assertTrue(vm.freezeCollageSelection())
-        }
+        // 5) The chooser mounts on the COMPOSE surface only: cross Next
+        // first, wait for the real candidates, then select and freeze.
         scroll("create_next")
         composeRule.onNodeWithTag("create_next")
             .assertIsEnabled()
             .performClick()
         composeRule.runOnIdle { assertEquals(CreateViewModel.Step.COMPOSE, vm.step.value) }
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            vm.collageChoices.candidates.isNotEmpty() || vm.collageChoices.notice != null
+        }
+        assertTrue(
+            "candidates must arrive on COMPOSE, notice=${vm.collageChoices.notice} " +
+                "preview=${vm.generatorPreview.value} cropSource=${vm.collageCropSource != null}",
+            vm.collageChoices.candidates.isNotEmpty(),
+        )
+        composeRule.runOnIdle {
+            assertTrue(vm.selectCollageCandidate(0))
+            assertTrue(vm.freezeCollageSelection())
+        }
 
         // 6) Publish the frozen choice.
         scroll("create_publish")

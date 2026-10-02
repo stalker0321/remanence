@@ -213,6 +213,11 @@ class CreateRecipientPublicationBindingTest {
             ioDispatcher = testDispatcher,
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
+            // Real preview so a candidate can be built and frozen before
+            // publishing (the COMPOSE/frozen gate is the production path).
+            generatorPreviewLoader = CollageFreezeFixture.previewLoader { id ->
+                dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(id)
+            },
             enqueueUpload = { _, _ -> },
         )
         vm.beginSession(1L, senderUserUuid.toString())
@@ -251,6 +256,7 @@ class CreateRecipientPublicationBindingTest {
         val vm = contentStageForRecipient(recipientSnapshot())
         val capsuleId = vm.capsuleId
 
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)
@@ -285,6 +291,7 @@ class CreateRecipientPublicationBindingTest {
         val vm = contentStageForRecipient(recipientSnapshot())
         val capsuleId = vm.capsuleId
 
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)
@@ -375,6 +382,7 @@ class CreateRecipientPublicationBindingTest {
         val vm = contentStageForRecipient(selfSnapshot)
         val capsuleId = vm.capsuleId
 
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)

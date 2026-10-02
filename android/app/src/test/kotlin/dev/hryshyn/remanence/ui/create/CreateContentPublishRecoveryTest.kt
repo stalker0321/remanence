@@ -255,6 +255,11 @@ class CreateContentPublishRecoveryTest {
             ioDispatcher = ioDispatcher,
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
+            // Real preview so a candidate can be built and frozen before
+            // publishing (the COMPOSE/frozen gate is the production path).
+            generatorPreviewLoader = CollageFreezeFixture.previewLoader { id ->
+                dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(id)
+            },
             enqueueUpload = enqueueUpload,
             outboxCapsuleDao = database.outboxCapsuleDao(),
             capsuleRevoke = revoke,
@@ -473,6 +478,7 @@ class CreateContentPublishRecoveryTest {
             ioDispatcher = ioDispatcher,
         )
         vm.onPhotosPicked(listOf("p1", "p2", "p3"))
+        CollageFreezeFixture.freezeFirstCandidate(vm)
 
         ioDispatcher.armed = true
         assertTrue(vm.goToCompose())
@@ -512,6 +518,7 @@ class CreateContentPublishRecoveryTest {
             accessToken = "test-token",
         )
         vm.onPhotosPicked(listOf("p1", "p2", "p3"))
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         // ADR-018: publish with no note (non-empty notes are typed unsupported).
         assertTrue(vm.goToCompose())
         vm.startPublishing()

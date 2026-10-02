@@ -2,6 +2,7 @@ package dev.hryshyn.remanence.ui.create
 
 import android.graphics.BitmapFactory
 import android.util.Log
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -10,11 +11,17 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
@@ -124,6 +131,19 @@ internal fun CollageChoiceHost(
      * candidate.
      */
     candidateBuilder: (suspend () -> List<dev.hryshyn.remanence.ui.collage.CollageCandidate>?)? = null,
+    /**
+     * Frozen sibling layout hook (render.mjs expression case: art-space
+     * THEN expression-nav as siblings). The host always invokes it exactly
+     * once with the canvas parcel and the nav row; the caller arranges
+     * them. Default preserves the historical nav-then-canvas order for
+     * existing callers. Single host mount and single build effect either
+     * way — this only rearranges emitted subtrees, never session, prepare
+     * reporting, or effects.
+     */
+    contentWrapper: @Composable (CanvasParcel, NavParcel) -> Unit = { canvasContent, navContent ->
+        navContent()
+        canvasContent()
+    },
 ) {
     val measurer = rememberCollageTextMeasurer()
     LaunchedEffect(input, note, track, cropSource, artwork) {
@@ -202,55 +222,17 @@ internal fun CollageChoiceHost(
                     modifier = Modifier.testTag("collage_selected_label"),
                 )
             }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (session.candidates.size > 1) {
-                    HoldTextButton(
-                        onClick = {
-                            session.previous()
-                            onNavigate()
-                        },
-                        modifier = Modifier.testTag("collage_previous"),
-                    ) { Text("Previous") }
-                    if (session.selected == null) {
-                        Text(
-                            "${session.displayIndex + 1} / ${session.candidates.size}",
-                            modifier = Modifier.testTag("collage_nav_counter"),
-                        )
-                    }
-                    HoldTextButton(
-                        onClick = {
-                            session.next()
-                            onNavigate()
-                        },
-                        modifier = Modifier.testTag("collage_next"),
-                    ) { Text("Next") }
-                }
-                Button(
-                    onClick = { onSelect(session.displayIndex) },
-                    enabled = session.displayed != null && preparedReady,
-                    modifier = Modifier.testTag("collage_select"),
-                ) { Text("Select") }
-            }
         }
-        if (frozenCandidateId() != null) {
-            // The frozen candidate hash is internal identity, not product copy:
-            // keep only a zero-cost marker so selection can be asserted without
-            // showing a raw `ber1-…` string.
-            Box(Modifier.testTag("collage_frozen").size(1.dp))
-        }
+        contentWrapper(
+            {
+                when {
+                    session.notice != null ->
+                        Text(session.notice!!, modifier = Modifier.testTag("collage_notice"))
 
-        when {
-            session.notice != null ->
-                Text(session.notice!!, modifier = Modifier.testTag("collage_notice"))
+                    displayed == null ->
+                        Text("Select a collage", modifier = Modifier.testTag("collage_select_hint"))
 
-            displayed == null ->
-                Text("Select a collage", modifier = Modifier.testTag("collage_select_hint"))
-
-            else -> {
+                    else -> {
                 val sizes = images.mapValues { CollageRenderer.SourcePhoto(it.value.width, it.value.height) }
                 when (val result = prepared) {
                     is CollageRenderer.SceneResult.Ready -> {
@@ -302,6 +284,107 @@ internal fun CollageChoiceHost(
                     // for which a prepare result always exists.
                     null -> Unit
                 }
+            }
+        }
+        },
+            {
+                if (session.candidates.isNotEmpty()) {
+                    CollageBrowseNav(
+                        session = session,
+                        onSelect = onSelect,
+                        onNavigate = onNavigate,
+                        preparedReady = preparedReady,
+                    )
+                }
+            },
+        )
+        if (frozenCandidateId() != null) {
+            // The frozen candidate hash is internal identity, not product copy:
+            // keep only a zero-cost marker so selection can be asserted without
+            // showing a raw `ber1-…` string.
+            Box(Modifier.testTag("collage_frozen").size(1.dp))
+        }
+    }
+}
+
+/**
+ * Canvas parcel / nav row content slots for [CollageChoiceHost]'s
+ * [contentWrapper] hook.
+ */
+internal typealias CanvasParcel = @Composable () -> Unit
+internal typealias NavParcel = @Composable () -> Unit
+
+/**
+ * Frozen sibling expression-nav (render.mjs expression case): Previous /
+ * counter / Next + Select with unchanged copy, order and actions.
+ *
+ * Native overflow adaptation (frozen buttons stay min-48 and never
+ * shrink/wrap: handoff buttons are flex-shrink:0): natural widths are
+ * measured first and the row scrolls horizontally ONLY when they exceed
+ * the viewport (photo-row pattern). A fitting row stays a plain Row, so
+ * taps behave exactly as before — a scrollable with nothing to scroll
+ * swallowed taps in test. Labels stay one line; min-48 targets unchanged.
+ */
+@Composable
+internal fun CollageBrowseNav(
+    session: CollageChoiceSession,
+    onSelect: (Int) -> Unit,
+    onNavigate: () -> Unit,
+    preparedReady: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val maxWidthPx = with(LocalDensity.current) { maxWidth.toPx() }
+        // Start scrolling (safe superset: inner measures natural widths),
+        // relax to a plain Row when everything fits. Keyed on structure
+        // so shrink/growth re-measures; the guard below prevents feedback
+        // once relaxed.
+        var overflow by remember(session.candidates.size, session.selected != null) {
+            mutableStateOf(true)
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(if (overflow) Modifier.horizontalScroll(rememberScrollState()) else Modifier),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(
+                modifier = Modifier.onGloballyPositioned { coords ->
+                    if (overflow) {
+                        overflow = coords.size.width > maxWidthPx
+                    }
+                },
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (session.candidates.size > 1) {
+                    HoldTextButton(
+                        onClick = {
+                            session.previous()
+                            onNavigate()
+                        },
+                        modifier = Modifier.testTag("collage_previous"),
+                    ) { Text("Previous", maxLines = 1, softWrap = false) }
+                    if (session.selected == null) {
+                        Text(
+                            "${session.displayIndex + 1} / ${session.candidates.size}",
+                            modifier = Modifier.testTag("collage_nav_counter"),
+                        )
+                    }
+                    HoldTextButton(
+                        onClick = {
+                            session.next()
+                            onNavigate()
+                        },
+                        modifier = Modifier.testTag("collage_next"),
+                    ) { Text("Next", maxLines = 1, softWrap = false) }
+                }
+                Button(
+                    onClick = { onSelect(session.displayIndex) },
+                    enabled = session.displayed != null && preparedReady,
+                    modifier = Modifier.testTag("collage_select"),
+                ) { Text("Select", maxLines = 1, softWrap = false) }
             }
         }
     }

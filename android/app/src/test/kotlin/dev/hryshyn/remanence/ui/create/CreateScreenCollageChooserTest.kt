@@ -8,6 +8,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.layout.boundsInRoot
@@ -16,6 +17,7 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.dp
 import androidx.room.Room
@@ -379,6 +381,9 @@ class CreateScreenCollageChooserTest {
         composeRule.onNodeWithTag("collage_next").assertIsDisplayed()
         composeRule.onNodeWithTag("collage_next").performClick()
         composeRule.waitForIdle()
+        // The nav row scrolls horizontally on narrow screens (native
+        // overflow adaptation): reveal Select before asserting/clicking it.
+        composeRule.onNodeWithTag("collage_select").performScrollTo()
         composeRule.onNodeWithTag("collage_select").assertIsDisplayed()
         composeRule.onNodeWithTag("collage_select").performClick()
         composeRule.waitForIdle()
@@ -397,8 +402,27 @@ class CreateScreenCollageChooserTest {
         vm.endSession()
     }
 
+    private fun driveToComposeCandidates(vm: CreateViewModel) {
+        // The chooser lives on the COMPOSE screen only (no-inline-chooser
+        // rule): navigate with the explicit Next before waiting for candidates.
+        composeRule.onNodeWithTag("create_screen_scroll")
+            .performScrollToNode(hasTestTag("create_next"))
+        composeRule.onNodeWithTag("create_next").performClick()
+        composeRule.waitForIdle()
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            vm.collageChoices.candidates.isNotEmpty()
+        }
+        composeRule.waitForIdle()
+    }
+
     @Test
-    fun smallViewportKeepsEntireCanvasAndFooterInsideRealScreen() {
+    fun crowdedViewportFixesArtSpaceAndKeepsFooterReachable() {
+        // 320x568 is crowded (height<=640, frozen handoff frame/data-crowded
+        // rule): the expression scrolls and the art-space is a fixed 280.dp
+        // (handoff crowded art-space), replacing the tiny weight remainder
+        // (62px canvas on the 320x640 device). This replaces the old
+        // no-scroll entire-viewport expectation, which contradicts the
+        // frozen crowded CSS (lead disposition, not a product decision).
         val ids = listOf("u1", "u2", "u3")
         val originals = ids.associateWith { id ->
             ByteArray(64) { ((it * 31 + id.hashCode()) and 0xFF).toByte() }
@@ -416,33 +440,75 @@ class CreateScreenCollageChooserTest {
                 )
             }
         }
-        composeRule.onNodeWithTag("create_screen_scroll")
-            .performScrollToNode(hasTestTag("create_next"))
-        composeRule.onNodeWithTag("create_next").performClick()
-        composeRule.waitForIdle()
-        composeRule.waitUntil(timeoutMillis = 10_000) {
-            vm.collageChoices.candidates.isNotEmpty()
-        }
-        composeRule.waitForIdle()
+        driveToComposeCandidates(vm)
 
-        // Bounded COMPOSE viewport: the whole sheet canvas AND the publish
-        // footer are inside the root bounds together — no clipping, no
-        // scroll workaround standing in for the fit.
-        val root = composeRule.onRoot().fetchSemanticsNode().boundsInRoot
-        val canvas = composeRule.onNodeWithTag("collage_canvas").fetchSemanticsNode().boundsInRoot
-        assertTrue("canvas height must be > 0, was ${canvas.height}", canvas.height > 0f)
+        // Measure from the top: scroll offset carries across steps on the
+        // shared root state, so reset to the header before asserting sizes.
+        composeRule.onNodeWithTag("create_screen_scroll")
+            .performScrollToNode(hasTestTag("create_compose_back"))
+        composeRule.waitForIdle()
+        // Fixed art-space holds the canvas alone (frozen sibling order:
+        // art-space THEN expression-nav): 280 * 9/16 = 157.5 wide.
+        // (boundsInRoot is px; test density is 1, so px == dp here.)
+        val art = composeRule.onNodeWithTag("compose_art_space")
+            .fetchSemanticsNode().boundsInRoot
+        assertEquals(280f, art.height)
+        val canvas = composeRule.onNodeWithTag("collage_canvas")
+            .fetchSemanticsNode().boundsInRoot
         assertTrue(
-            "canvas must be fully inside the viewport: $canvas not in $root",
-            canvas.left >= root.left - 1f && canvas.top >= root.top - 1f &&
-                canvas.right <= root.right + 1f && canvas.bottom <= root.bottom + 1f,
+            "canvas must clear 150px in the sibling art-space (device gave 62 with nav inside), was ${canvas.width}",
+            canvas.width >= 150f,
         )
-        val footer = composeRule.onNodeWithTag("create_publish").fetchSemanticsNode().boundsInRoot
+
+        // Footer reachable by expression scroll (not pinned in view).
+        composeRule.onNodeWithTag("create_screen_scroll")
+            .performScrollToNode(hasTestTag("create_publish"))
+        composeRule.onNodeWithTag("create_publish").assertIsDisplayed()
+
+        // Nav row overflow adaptation: every control reachable, and the
+        // Select label stays one line (no letter stacking).
+        for (tag in listOf("collage_previous", "collage_nav_counter", "collage_next", "collage_select")) {
+            composeRule.onNodeWithTag(tag).performScrollTo()
+            composeRule.onNodeWithTag(tag).assertIsDisplayed()
+        }
+        val selectBox = composeRule.onNodeWithTag("collage_select")
+            .fetchSemanticsNode().boundsInRoot
         assertTrue(
-            "publish footer must be inside the viewport: $footer not in $root",
-            footer.left >= root.left - 1f && footer.top >= root.top - 1f &&
-                footer.right <= root.right + 1f && footer.bottom <= root.bottom + 1f,
+            "Select must keep its natural width (unwrapped label), was ${selectBox.width}",
+            selectBox.width >= 80f,
         )
+        assertTrue(
+            "Select must stay one line tall, was ${selectBox.height}",
+            selectBox.height < 80f,
+        )
+
+        // Typed guard reachable inside the same scroll: opening crop with
+        // no selection fails closed with a guard and the stage stays shut.
+        assertTrue(!vm.openCrop("u1"))
+        assertTrue(vm.cropSlot.value == null)
+        composeRule.onNodeWithTag("create_screen_scroll")
+            .performScrollToNode(hasTestTag("create_guard_error"))
+        composeRule.onNodeWithTag("create_guard_error").assertIsDisplayed()
+        composeRule.onNodeWithTag("create_guard_error")
+            .assertTextContains("selected candidate", substring = true)
         vm.endSession()
+    }
+
+    @Test
+    fun crowdedBranchDecisionMatrix() {
+        // The crowded predicate (frozen frame/data-crowded rule) as a pure
+        // decision matrix. Tall viewports (>640dp) are unreachable under
+        // the Robolectric window cap (320x470 observed), so the tall and
+        // fontScale-on-tall branches are proven here, not via Box sizes;
+        // the crowded UI rendering itself is proven by the 320x568 test.
+        // Tall screens keep the original bounded weight pane (!crowded).
+        assertTrue(!isCrowdedExpression(900.dp, 1.0f))
+        assertTrue(!isCrowdedExpression(641.dp, 1.0f))
+        assertTrue(isCrowdedExpression(640.dp, 1.0f))
+        assertTrue(isCrowdedExpression(470.dp, 1.0f))
+        assertTrue(isCrowdedExpression(900.dp, 1.6f))
+        assertTrue(isCrowdedExpression(900.dp, 2.0f))
+        assertTrue(isCrowdedExpression(320.dp, 1.0f))
     }
 
     @Test
@@ -470,6 +536,9 @@ class CreateScreenCollageChooserTest {
         composeRule.waitForIdle()
 
         // Select + freeze the displayed candidate through the real host.
+        // The nav row scrolls horizontally on narrow screens (native
+        // overflow adaptation): reveal Select before asserting/clicking it.
+        composeRule.onNodeWithTag("collage_select").performScrollTo()
         composeRule.onNodeWithTag("collage_select").assertIsDisplayed()
         composeRule.onNodeWithTag("collage_select").performClick()
         composeRule.waitForIdle()
@@ -516,6 +585,9 @@ class CreateScreenCollageChooserTest {
             vm.collageChoices.candidates.isNotEmpty()
         }
         composeRule.waitForIdle()
+        // The nav row scrolls horizontally on narrow screens (native
+        // overflow adaptation): reveal Select before clicking it.
+        composeRule.onNodeWithTag("collage_select").performScrollTo()
         composeRule.onNodeWithTag("collage_select").performClick()
         composeRule.waitForIdle()
         val frozenId = requireNotNull(vm.frozenCollageSelection?.candidateId)
@@ -600,6 +672,9 @@ class CreateScreenCollageChooserTest {
             vm.collageChoices.candidates.isNotEmpty()
         }
         composeRule.waitForIdle()
+        // The nav row scrolls horizontally on narrow screens (native
+        // overflow adaptation): reveal Select before clicking it.
+        composeRule.onNodeWithTag("collage_select").performScrollTo()
         composeRule.onNodeWithTag("collage_select").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("crop_hotspot_0").performClick()
@@ -716,6 +791,9 @@ class CreateScreenCollageChooserTest {
         composeRule.onNodeWithTag("collage_next").assertIsDisplayed()
         composeRule.onNodeWithTag("collage_next").performClick()
         composeRule.waitForIdle()
+        // The nav row scrolls horizontally on narrow screens (native
+        // overflow adaptation): reveal Select before asserting/clicking it.
+        composeRule.onNodeWithTag("collage_select").performScrollTo()
         composeRule.onNodeWithTag("collage_select").assertIsDisplayed()
         composeRule.onNodeWithTag("collage_select").performClick()
         composeRule.waitForIdle()

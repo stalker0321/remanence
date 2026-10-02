@@ -13,10 +13,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import dev.hryshyn.remanence.ui.hold.HoldButton as Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
@@ -39,6 +37,7 @@ import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -92,23 +91,31 @@ fun CreateScreen(
     // the first mount (no stacked root alpha) and animates only on step
     // changes; the outgoing step is dropped synchronously.
     //
-    // COMPOSE is a bounded viewport (frozen `.expression{overflow:hidden}`
-    // pane): no root scroll, so the chooser art-space measures real
-    // remaining space and the whole sheet + footer fit. Every other step
-    // keeps the scrollable root for small phones (FIX-STATE-04).
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .testTag("create_screen_scroll")
-            .then(
-                if (step == CreateViewModel.Step.COMPOSE) {
-                    Modifier
-                } else {
-                    Modifier.verticalScroll(rememberScrollState())
-                },
-            )
-            .padding(horizontal = 24.dp, vertical = 16.dp),
-    ) {
+    // COMPOSE is a bounded viewport on tall screens (frozen
+    // `.expression{overflow:hidden}` pane): no root scroll, so the chooser
+    // art-space measures real remaining space and the whole sheet + footer
+    // fit. On crowded screens (height<=640dp or fontScale>=1.6, frozen
+    // handoff frame/data-crowded rule) the expression scrolls and the
+    // art-space is a fixed 280.dp (handoff crowded art-space) instead of
+    // the tiny weight remainder. Every other step keeps the scrollable
+    // root for small phones (FIX-STATE-04). The typed guard stays a
+    // direct child of this scrolling column, so it is reachable by
+    // scroll on crowded screens instead of clipped off-column.
+    BoxWithConstraints(modifier.fillMaxSize()) {
+        val crowded = isCrowdedExpression(maxHeight, LocalDensity.current.fontScale)
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .testTag("create_screen_scroll")
+                .then(
+                    if (step == CreateViewModel.Step.COMPOSE && !crowded) {
+                        Modifier
+                    } else {
+                        Modifier.verticalScroll(rememberScrollState())
+                    },
+                )
+                .padding(horizontal = 24.dp, vertical = 16.dp),
+        ) {
         AstraStepArrival(motion = motion, stepKey = step, modifier = Modifier.fillMaxWidth()) {
             Column {
                 Text(
@@ -150,7 +157,7 @@ fun CreateScreen(
                     )
 
                     CreateViewModel.Step.CONTENT -> ContentStepContent(viewModel)
-                    CreateViewModel.Step.COMPOSE -> ComposeStepContent(viewModel)
+                    CreateViewModel.Step.COMPOSE -> ComposeStepContent(viewModel, crowded)
                     CreateViewModel.Step.PUBLISHING -> Column {
                         androidx.compose.material3.CircularProgressIndicator(
                             strokeWidth = 2.dp,
@@ -226,6 +233,7 @@ fun CreateScreen(
             Spacer(Modifier.height(8.dp))
             Text(text = error, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("create_error"))
         }
+    }
     }
 
     if (showRevokeConfirmation && step == CreateViewModel.Step.PUBLISHED) {
@@ -403,13 +411,31 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
 }
 
 /**
+ * Frozen crowded-expression predicate (handoff frame/data-crowded rule):
+ * height<=640dp or fontScale>=1.6. Extracted pure so the full decision
+ * matrix (including tall viewports unreachable under the Robolectric
+ * window cap) is JVM-testable; [CreateScreen] calls exactly this.
+ *
+ * Native measurement note (peer F4): this measures the Compose content
+ * box (available height at the screen root), not the full device height
+ * frame.mjs uses — on inset-less phones they agree (the 320x640 QA device
+ * is crowded under both). Devices at 641–~690dp total height with content
+ * ≤640dp take the crowded branch in-app while frozen data-crowded would
+ * not; that narrow band is a documented measurement choice, not a
+ * product blocker. The fontScale arm matches frame.mjs data-largeType
+ * exactly.
+ */
+internal fun isCrowdedExpression(maxHeight: androidx.compose.ui.unit.Dp, fontScale: Float): Boolean =
+    maxHeight <= 640.dp || fontScale >= 1.6f
+
+/**
  * T150 explicit composition browsing surface (spec `expression`/`selected`):
  * the whole-capsule chooser fills this distinct screen — never embedded in
  * the content form. Select freezes the displayed candidate; publish needs a
  * frozen choice; back returns to the form with every input retained.
  */
 @Composable
-private fun ComposeStepContent(viewModel: CreateViewModel) {
+private fun ComposeStepContent(viewModel: CreateViewModel, crowded: Boolean) {
     // Bounded COMPOSE pane (frozen `.expression{overflow:hidden}`): header,
     // then the art-space takes the remaining height (`flex:1;min-height:0`
     // equivalent), then the reserved slot-picker/footer controls. The sheet
@@ -433,57 +459,63 @@ private fun ComposeStepContent(viewModel: CreateViewModel) {
         val openSlot = cropSlot
         val source = openSlot?.let { slot -> sources.firstOrNull { it.contentId == slot } }
         val geometry = openSlot?.let { viewModel.cropSlotGeometry(it) }
-        // R1 crop lifecycle: the chooser/host stays mounted across crop
+        // R1 crop lifecycle: the single host stays mounted across crop
         // open/close so its build effect never refires a rebuild (which
-        // would wipe frozen + corrections via onCandidatesReplaced). While
-        // the stage is open the chooser takes zero size (no draw, no hit
-        // interception, no extra layout) with cleared semantics, and the
-        // stage paints alone on top — exactly one stage is visible and
-        // tappable, from one composition.
+        // would wipe frozen + corrections via onCandidatesReplaced). The
+        // frozen sibling order (render.mjs expression case: art-space THEN
+        // expression-nav) is arranged through the host's contentWrapper:
+        // the art-space parcel holds the canvas (full 280.dp crowded) or
+        // the stage, and the nav row renders below it — never consuming
+        // art height. While staged, the canvas parcel shows the stage and
+        // the nav is withheld, so the stage paints alone; the host itself
+        // is never unmounted and no effect refires. The selected label
+        // stays visible above as honest state.
         val staged = openSlot != null && source != null && geometry != null
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .testTag("compose_art_space"),
-        ) {
-            CollageStepChooser(
-                viewModel,
-                modifier = Modifier.fillMaxWidth()
-                    .then(
-                        if (staged) {
-                            Modifier
-                                .size(0.dp)
-                                .clearAndSetSemantics {}
-                        } else {
-                            Modifier
-                        },
-                    ),
-                onSlotTap = { contentId ->
-                    viewModel.openCrop(contentId)
-                    Unit
-                },
-            )
-            if (staged) {
-                requireNotNull(source)
-                requireNotNull(geometry)
-                val corrections by viewModel.cropCorrections.collectAsStateWithLifecycle()
-                val scope = rememberCoroutineScope()
-                CropStageContent(
-                    source = source,
-                    slotAspect = geometry.slotAspect,
-                    baseCrop = geometry.baseCrop,
-                    correction = corrections[openSlot],
-                    onUpdate = viewModel::updateCrop,
-                    onReset = viewModel::resetCrop,
-                    onDone = { scope.launch { viewModel.applyCropAndClose() } },
-                    onBack = { viewModel.closeCrop() },
+        // Frozen crowded branch (handoff.css crowded art-space): a fixed
+        // 280.dp instead of the weight remainder that collapses to ~110px
+        // on short screens (62px canvas on the 320x640 device). Tall
+        // screens keep the bounded weight pane unchanged.
+        CollageStepChooser(
+            viewModel,
+            modifier = Modifier.fillMaxWidth(),
+            onSlotTap = { contentId ->
+                viewModel.openCrop(contentId)
+                Unit
+            },
+            contentWrapper = { canvasContent, navContent ->
+                Box(
                     modifier = Modifier
+                        .then(if (crowded) Modifier.height(280.dp) else Modifier.weight(1f))
                         .fillMaxWidth()
-                        .verticalScroll(rememberScrollState()),
-                )
-            }
-        }
+                        .testTag("compose_art_space"),
+                ) {
+                    if (staged) {
+                        requireNotNull(source)
+                        requireNotNull(geometry)
+                        val corrections by viewModel.cropCorrections.collectAsStateWithLifecycle()
+                        val scope = rememberCoroutineScope()
+                        CropStageContent(
+                            source = source,
+                            slotAspect = geometry.slotAspect,
+                            baseCrop = geometry.baseCrop,
+                            correction = corrections[openSlot],
+                            onUpdate = viewModel::updateCrop,
+                            onReset = viewModel::resetCrop,
+                            onDone = { scope.launch { viewModel.applyCropAndClose() } },
+                            onBack = { viewModel.closeCrop() },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .verticalScroll(rememberScrollState()),
+                        )
+                    } else {
+                        canvasContent()
+                    }
+                }
+                if (!staged) {
+                    navContent()
+                }
+            },
+        )
             Spacer(Modifier.height(12.dp))
             val corrections by viewModel.cropCorrections.collectAsStateWithLifecycle()
             if (sources.isNotEmpty()) {
@@ -523,6 +555,10 @@ private fun CollageStepChooser(
     viewModel: CreateViewModel,
     modifier: Modifier = Modifier,
     onSlotTap: ((String) -> Unit)? = null,
+    contentWrapper: @Composable (CanvasParcel, NavParcel) -> Unit = { canvasContent, navContent ->
+        navContent()
+        canvasContent()
+    },
 ) {
     val generatorPreview by viewModel.generatorPreview.collectAsStateWithLifecycle()
     val musicSelection by viewModel.musicSelection.collectAsStateWithLifecycle()
@@ -554,6 +590,7 @@ private fun CollageStepChooser(
                 prepareInputs = viewModel.prepareInputs(),
                 onSlotTap = onSlotTap,
                 candidateBuilder = { viewModel.buildAllFamilySealedCandidates() },
+                contentWrapper = contentWrapper,
                 modifier = modifier,
             )
         is GeneratorPreviewState.NotePending ->
@@ -579,6 +616,7 @@ private fun CollageStepChooser(
                 prepareInputs = viewModel.prepareInputs(),
                 onSlotTap = onSlotTap,
                 candidateBuilder = { viewModel.buildAllFamilySealedCandidates() },
+                contentWrapper = contentWrapper,
                 modifier = modifier,
             )
         else -> androidx.compose.material3.Text(

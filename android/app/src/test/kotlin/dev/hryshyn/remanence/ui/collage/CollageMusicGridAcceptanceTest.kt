@@ -78,7 +78,7 @@ class CollageMusicGridAcceptanceTest {
     private fun offeredStyles(note: String?, track: CapsuleTrackSnapshotV1?): List<String> {
         val result = provide(note, track)
         assertTrue("expected Candidates, got $result", result is CollageProviderResult.Candidates)
-        return (result as CollageProviderResult.Candidates).candidates.map { it.styleId }
+        return (result as CollageProviderResult.Candidates).candidates.map { it.styleId }.distinct()
     }
 
     @Test

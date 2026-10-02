@@ -102,26 +102,33 @@ sealed interface CollageProviderResult {
 }
 
 /**
- * Deterministic sender-side V5 provider for the authoritative grammar-5 /
- * text-only subset: one finished sheet per bundled style (`press`,
- * `blue-letter`, `poster`) that can seal the requested note/music into its own
- * frozen regions, built on the already-resolved
- * [GeneratorExpression.GeneratorInput].
+ * Deterministic sender-side V5 provider for the representable grammar-5
+ * ("Editorial Rows") subset: every frozen `recipes(N) × power × weightSet`
+ * branch for each bundled style (`press`, `blue-letter`, `poster`) built on the
+ * already-resolved [GeneratorExpression.GeneratorInput].
+ *
+ * Frozen parity (T151): the branch enumeration is ported from the V5 freeze
+ * `grammars.js` (`Grammar5Branches`). Each style × branch is attempted
+ * independently, exactly as the frozen `resolve()` loop tries the next branch
+ * when one fails. A branch whose crop is rejected, whose note/music text cannot
+ * fit its sealed region, or that fails expression validation is **omitted with
+ * its typed cause**; the healthy branches from the same or another style are
+ * still returned. The whole result is `Rejected` only when every style × branch
+ * fails, and `Unavailable` only when the crop source reports no authoritative
+ * analysis.
  *
  * Pure: it consumes grammar-5 cell geometry, the authoritative crops from
- * [CollageCropSource] (requested per placement slot, because each style's note
- * type changes the grid), the style registry (real STYD01 digest) and the
- * shared text measurer to seal explicit `noteRegion` and a `musicRegion` whose
- * `mode`/`artwork` follow rule A1 (a supplied descriptor ⇒ `thumbnail`, its
- * absence ⇒ `text`; a missing descriptor never blocks a candidate). No mask.
- * Candidate identity is exactly the
- * existing `GeneratorBer1Provider.candidateIdFor` (GENEX03 hash prefix);
- * callers compute the BEXPR02 projection with the existing
- * `CapsulePhotoIdentity` / `GeneratorExpressionProjection` helpers.
+ * [CollageCropSource] (requested per placement slot), the style registry (real
+ * STYD01 digest) and the shared text measurer to seal explicit `noteRegion` and
+ * a `musicRegion` whose `mode`/`artwork` follow rule A1. The frozen provenance/
+ * brand/sender marks, decor and non-rect shapes are not representable in the
+ * current sealed expression (see `tasks/T151/parity.md` §5) and are absent here;
+ * they are a named seam, not silently claimed as ported.
  *
- * When [CollageCropSource] returns `null`, the whole result is
- * [CollageProviderResult.Unavailable]: this build has no authoritative
- * grammar-5 analysis, so there is nothing honest to preview.
+ * Candidate identity is exactly the existing
+ * `GeneratorBer1Provider.candidateIdFor` (GENEX03 hash prefix); callers compute
+ * the BEXPR02 projection with the existing `CapsulePhotoIdentity` /
+ * `GeneratorExpressionProjection` helpers.
  */
 class CollageCandidateProvider(
     private val cropSource: CollageCropSource,
@@ -139,62 +146,55 @@ class CollageCandidateProvider(
         }
         val noteText = note?.takeIf { it.isNotBlank() }
         val sealedInput = input.copy(note = noteText)
-        val built = ArrayList<CollageCandidate>(STYLE_ORDER.size)
+        // Source width/height drive the frozen `power=1` proportional widths.
+        val aspects = input.photos.map { photo ->
+            if (photo.heightPx > 0) photo.widthPx.toDouble() / photo.heightPx.toDouble() else 1.0
+        }
+        val built = ArrayList<CollageCandidate>()
+        var firstRejection: CollageRejection? = null
         for (styleId in STYLE_ORDER) {
             val style = StyleRegistry.style(styleId)
                 ?: return CollageProviderResult.Rejected("style $styleId is not bundled")
-            when (val result = buildCandidate(sealedInput, noteText, track, style, artwork)) {
-                is BuildResult.Built -> built += result.candidate
-                BuildResult.Unavailable -> return CollageProviderResult.Unavailable(NO_ANALYSIS_REASON)
-                BuildResult.Omitted -> Unit
-                is BuildResult.Invalid -> return CollageProviderResult.Rejected(
-                    "the note, music, or crop does not fit the grammar-5 grid",
-                    result.rejection,
-                )
+            when (val outcome = buildStyle(sealedInput, noteText, track, style, artwork, aspects)) {
+                StyleOutcome.Unavailable -> return CollageProviderResult.Unavailable(NO_ANALYSIS_REASON)
+                is StyleOutcome.Built -> built += outcome.candidates
+                is StyleOutcome.Failed -> if (firstRejection == null) firstRejection = outcome.rejection
             }
         }
-        // Per-style fit omissions are only skipped while another style can still
-        // seal; when no style survives, the result stays fail-closed with the
-        // unchanged user-facing copy and no fabricated candidate.
+        // Every style × branch was omitted/rejected: fail closed with the first
+        // typed crop cause when one exists, else the unchanged generic copy.
         if (built.isEmpty()) {
-            return CollageProviderResult.Rejected(
-                "the note, music, or crop does not fit the grammar-5 grid",
-            )
+            return CollageProviderResult.Rejected(REJECT_COPY, firstRejection)
         }
         return CollageProviderResult.Candidates(built)
     }
 
-    private sealed interface BuildResult {
-        data class Built(val candidate: CollageCandidate) : BuildResult
-        data object Unavailable : BuildResult
+    private sealed interface StyleOutcome {
+        data class Built(val candidates: List<CollageCandidate>) : StyleOutcome
+        data object Unavailable : StyleOutcome
 
-        /**
-         * This style's sealed note or music text cannot fit its own frozen
-         * regions (the measured block overflows, or the closing bands leave no
-         * photo field). The frozen engine records exactly this per-style
-         * `Type does not fit` and still resolves the styles that fit, so the
-         * provider omits only this style; it never weakens a crop/solver rule.
-         */
-        data object Omitted : BuildResult
-
-        /**
-         * Fail-closed whole-result rejection. [rejection] is present for a
-         * solver crop omission (the typed cause) and absent for the remaining
-         * structural/style-integrity failures, which are never skipped.
-         */
-        data class Invalid(val rejection: CollageRejection? = null) : BuildResult
+        /** No branch of this style could seal; [rejection] is the first typed cause. */
+        data class Failed(val rejection: CollageRejection?) : StyleOutcome
     }
 
-    private suspend fun buildCandidate(
+    private sealed interface BranchOutcome {
+        data class Built(val candidate: CollageCandidate) : BranchOutcome
+        data class Rejected(val rejection: CollageRejection?) : BranchOutcome
+
+        /** This branch's note/music text cannot fit its sealed region: skip it. */
+        data object Skipped : BranchOutcome
+        data object Unavailable : BranchOutcome
+    }
+
+    private suspend fun buildStyle(
         input: GeneratorExpression.GeneratorInput,
         noteText: String?,
         track: CapsuleTrackSnapshotV1?,
         style: StyleRegistry.Style,
         artwork: GeneratorExpression.ArtworkRef?,
-    ): BuildResult {
+        aspects: List<Double>,
+    ): StyleOutcome {
         val noteType = style.note.toTextType()
-        val musicType = style.music.toTextType()
-
         val noteHeight: Int? = if (noteText == null) {
             null
         } else {
@@ -210,19 +210,47 @@ class CollageCandidateProvider(
                     maxHeight = MAX_TEXT_BOX,
                 ),
             )
-            if (!fits(measured)) return BuildResult.Omitted
+            if (!fits(measured)) return StyleOutcome.Failed(null)
             measured.height
         }
+        val grids = Grammar5Branches.grids(aspects, noteHeight, track != null)
+        if (grids.isEmpty()) return StyleOutcome.Failed(null)
+        val styleCandidates = ArrayList<CollageCandidate>(grids.size)
+        var styleRejection: CollageRejection? = null
+        // Frozen selection policy is "geometrically distinct layouts": when two
+        // branch variants share the exact cell layout (e.g. `power` does not
+        // change widths because every source has the same aspect ratio) only the
+        // first is offered, so navigation never lands on a duplicate rendering.
+        val seenGeometry = HashSet<List<CollageRenderer.RectI>>()
+        for (grid in grids) {
+            if (!seenGeometry.add(grid.cells)) continue
+            when (val branch = buildBranch(input, noteText, track, style, artwork, noteType, grid)) {
+                BranchOutcome.Unavailable -> return StyleOutcome.Unavailable
+                is BranchOutcome.Built -> styleCandidates += branch.candidate
+                is BranchOutcome.Rejected -> if (styleRejection == null) styleRejection = branch.rejection
+                BranchOutcome.Skipped -> Unit
+            }
+        }
+        return if (styleCandidates.isNotEmpty()) {
+            StyleOutcome.Built(styleCandidates)
+        } else {
+            StyleOutcome.Failed(styleRejection)
+        }
+    }
 
-        val grid = Grammar5Grid.place(
-            photoCount = input.photos.size,
-            noteHeight = noteHeight,
-            music = track != null,
-        ) ?: return BuildResult.Omitted
-
+    private suspend fun buildBranch(
+        input: GeneratorExpression.GeneratorInput,
+        noteText: String?,
+        track: CapsuleTrackSnapshotV1?,
+        style: StyleRegistry.Style,
+        artwork: GeneratorExpression.ArtworkRef?,
+        noteType: GeneratorExpression.TextType,
+        grid: Grammar5Branches.Grid,
+    ): BranchOutcome {
+        val musicType = style.music.toTextType()
         val musicRegion = grid.musicRegion
         if (track != null) {
-            if (musicRegion == null) return BuildResult.Invalid()
+            if (musicRegion == null) return BranchOutcome.Rejected(null)
             val measured = measurer.measure(
                 CollageRenderer.TextMeasureRequest(
                     text = track.title + "\n" + track.artistDisplay,
@@ -235,14 +263,13 @@ class CollageCandidateProvider(
                     maxHeight = musicRegion.height,
                 ),
             )
-            if (!fits(measured, maxHeight = musicRegion.height)) return BuildResult.Omitted
+            if (!fits(measured, maxHeight = musicRegion.height)) return BranchOutcome.Skipped
         }
-
-        if (input.photos.size != grid.cells.size) return BuildResult.Invalid()
+        if (input.photos.size != grid.cells.size) return BranchOutcome.Rejected(null)
 
         // Aspect-aware crop request: one request per placement, using THIS
-        // style's exact cell geometry. A global per-photo crop map must not be
-        // reused when candidate slots differ.
+        // branch's exact cell geometry, so a global per-photo crop map is never
+        // reused across differing branches.
         val requests = input.photos.mapIndexed { index, photo ->
             CollageCropRequest(
                 contentId = photo.contentId,
@@ -250,7 +277,7 @@ class CollageCandidateProvider(
                 slotHeight = grid.cells[index].height,
             )
         }
-        val crops = cropSource.cropsFor(requests) ?: return BuildResult.Unavailable
+        val crops = cropSource.cropsFor(requests) ?: return BranchOutcome.Unavailable
         val diagnostics = cropSource as? CollageCropDiagnostics
         val cropByContentId = LinkedHashMap<String, GeneratorExpression.CropWindow>(requests.size)
         for ((index, request) in requests.withIndex()) {
@@ -265,7 +292,7 @@ class CollageCandidateProvider(
                     }
                     ?.reason
                     ?: CropRejectReason.NO_CROP_CANDIDATE
-                return BuildResult.Invalid(
+                return BranchOutcome.Rejected(
                     CollageRejection(
                         styleId = style.id,
                         contentId = request.contentId,
@@ -276,7 +303,7 @@ class CollageCandidateProvider(
                     ),
                 )
             }
-            if (!validCrop(crop)) return BuildResult.Invalid()
+            if (!validCrop(crop)) return BranchOutcome.Rejected(null)
             cropByContentId[request.contentId] = crop
         }
 
@@ -290,7 +317,7 @@ class CollageCandidateProvider(
                 contentRect = null,
             )
         }
-        val styleDigest = StyleRegistry.digest(style.id) ?: return BuildResult.Invalid()
+        val styleDigest = StyleRegistry.digest(style.id) ?: return BranchOutcome.Rejected(null)
         val expression = GeneratorExpression.ResolvedExpression(
             canvasVersion = 1,
             grammarId = GRAMMAR_ID,
@@ -326,9 +353,9 @@ class CollageCandidateProvider(
             },
         )
         if (GeneratorExpression.validateResolved(expression) !is GeneratorExpression.InputValidation.Valid) {
-            return BuildResult.Invalid()
+            return BranchOutcome.Rejected(null)
         }
-        return BuildResult.Built(
+        return BranchOutcome.Built(
             CollageCandidate(
                 candidateId = GeneratorBer1Provider.candidateIdFor(expression),
                 styleId = style.id,
@@ -369,6 +396,7 @@ class CollageCandidateProvider(
         const val GRAMMAR_VERSION = 1
         const val LINE_FACTOR = 1.12
         val STYLE_ORDER = listOf("press", "blue-letter", "poster")
+        const val REJECT_COPY = "the note, music, or crop does not fit the grammar-5 grid"
         const val NO_ANALYSIS_REASON =
             "authoritative grammar-5 crop analysis is not available on this build"
     }

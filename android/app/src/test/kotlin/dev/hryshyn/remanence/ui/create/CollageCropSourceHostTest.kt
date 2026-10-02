@@ -283,7 +283,9 @@ class CollageCropSourceHostTest {
         val built = runBlocking { provider.candidates(ready.expression.input, null, null) }
         assertTrue("expected Candidates, got $built", built is CollageProviderResult.Candidates)
         vm.collageChoices.replaceCandidates((built as CollageProviderResult.Candidates).candidates)
-        assertEquals(3, vm.collageChoices.candidates.size)
+        // T151: the frozen grammar-5 branch enumeration yields many candidates
+        // (branch × style) rather than exactly one per style.
+        assertTrue("expected enumerated candidates, got ${vm.collageChoices.candidates.size}", vm.collageChoices.candidates.size > 3)
 
         composeRule.setContent {
             CollageChoiceHost(vm.collageChoices, ready.expression.input, ready.sources, null, null, source)

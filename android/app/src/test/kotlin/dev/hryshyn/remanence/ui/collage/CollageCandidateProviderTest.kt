@@ -72,8 +72,16 @@ class CollageCandidateProviderTest {
         val result = runBlocking { provider().candidates(input(), null, null) }
         assertTrue("expected Candidates, got $result", result is CollageProviderResult.Candidates)
         val candidates = (result as CollageProviderResult.Candidates).candidates
-        assertEquals(listOf("press", "blue-letter", "poster"), candidates.map { it.styleId })
-        for (candidate in candidates) {
+        // T151: every geometrically distinct grammar-5 branch is enumerated
+        // (recipe × weight; `power` collapses when all sources share an aspect
+        // ratio), with the legacy `-equal-1` branch first and one candidate per
+        // style. The fake sources are square, so 2 recipes × 3 weights = 6 per
+        // style.
+        assertEquals(6 * 3, candidates.size)
+        assertEquals(listOf("press", "blue-letter", "poster"), candidates.map { it.styleId }.distinct())
+        val legacy = candidates.filter { it.branchId == "editorial-1+2-equal-1" }
+        assertEquals(listOf("press", "blue-letter", "poster"), legacy.map { it.styleId })
+        for (candidate in legacy) {
             val expression = candidate.expression
             assertEquals("editorial-1+2-equal-1", candidate.branchId)
             assertEquals("editorial-1+2-equal-1", expression.branchId)
@@ -262,8 +270,8 @@ class CollageCandidateProviderTest {
         val result = runBlocking { provider(source).candidates(input(note = "hi"), "hi", snapshot()) }
         assertTrue("expected Candidates, got $result", result is CollageProviderResult.Candidates)
 
-        // One aspect-aware request per style candidate.
-        assertEquals(3, requestsSeen.size)
+        // One aspect-aware request per style × branch (T151 enumeration).
+        assertTrue("expected many branch requests, got ${requestsSeen.size}", requestsSeen.size > 3)
         requestsSeen.forEach { requests ->
             assertEquals(contentIds, requests.map { it.contentId })
             assertTrue("slot geometry must be positive", requests.all { it.slotWidth > 0 && it.slotHeight > 0 })
@@ -306,7 +314,7 @@ class CollageCandidateProviderTest {
         assertTrue("expected Candidates, got $partial", partial is CollageProviderResult.Candidates)
         assertEquals(
             listOf("press", "blue-letter"),
-            (partial as CollageProviderResult.Candidates).candidates.map { it.styleId },
+            (partial as CollageProviderResult.Candidates).candidates.map { it.styleId }.distinct(),
         )
 
         // When every style's music text overflows, the result stays fail-closed
@@ -330,6 +338,55 @@ class CollageCandidateProviderTest {
         override val lastCropRejections: List<CollageSlotRejection>,
     ) : CollageCropSource, CollageCropDiagnostics {
         override suspend fun cropsFor(requests: List<CollageCropRequest>) = crops
+    }
+
+    /**
+     * T153 `f2` analog: the frozen engine rejects the legacy
+     * `editorial-1+2-equal-1` hero slot while healthy sibling branches stay
+     * `Valid`, so the provider must continue enumeration instead of returning a
+     * whole-set rejection. Only the legacy branch's p0 slot (340x248) is
+     * omitted; every other branch solves.
+     */
+    @Test
+    fun singleBranchCropRejectKeepsHealthyAlternativeBranches() = runBlocking {
+        val rejection = CollageSlotRejection(
+            contentId = "p0",
+            slotWidth = 340,
+            slotHeight = 248,
+            shape = "rect",
+            reason = CropRejectReason.CONTOUR_ENDPOINT_SEVERED,
+        )
+        val source = object : CollageCropSource, CollageCropDiagnostics {
+            override val lastCropRejections: List<CollageSlotRejection> = listOf(rejection)
+            override suspend fun cropsFor(
+                requests: List<CollageCropRequest>,
+            ): Map<String, GeneratorExpression.CropWindow> {
+                val crops = LinkedHashMap<String, GeneratorExpression.CropWindow>(requests.size)
+                requests.forEachIndexed { index, request ->
+                    if (request.contentId == "p0" &&
+                        request.slotWidth == 340 &&
+                        request.slotHeight == 248
+                    ) {
+                        return@forEachIndexed
+                    }
+                    crops[request.contentId] =
+                        GeneratorExpression.CropWindow(index * 100, 0, 5000, 10000)
+                }
+                return crops
+            }
+        }
+        val result = provider(source).candidates(input(), null, null)
+        assertTrue("expected Candidates, got $result", result is CollageProviderResult.Candidates)
+        val candidates = (result as CollageProviderResult.Candidates).candidates
+        assertTrue("healthy siblings must survive", candidates.isNotEmpty())
+        assertTrue(
+            "the rejected legacy branch must be omitted",
+            candidates.none { it.branchId == "editorial-1+2-equal-1" },
+        )
+        assertTrue(
+            "a healthy sibling branch must remain",
+            candidates.any { it.branchId == "editorial-1+2-equal-1.3" },
+        )
     }
 
     @Test

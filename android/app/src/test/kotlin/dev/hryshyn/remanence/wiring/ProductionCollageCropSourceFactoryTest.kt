@@ -86,7 +86,12 @@ class ProductionCollageCropSourceFactoryTest {
                 )
             }
             assertTrue("expected candidates, got $result", result is CollageProviderResult.Candidates)
-            assertEquals(3, (result as CollageProviderResult.Candidates).candidates.size)
+            val candidates = (result as CollageProviderResult.Candidates).candidates
+            // T151: the provider enumerates every grammar-5 branch per style;
+            // the real solver decides how many survive, but all three styles are
+            // offered and the analysis runners still run exactly once per photo.
+            assertTrue("expected enumerated candidates, got ${candidates.size}", candidates.size > 3)
+            assertEquals(3, candidates.map { it.styleId }.distinct().size)
             assertEquals(3, field.analyzes)
             assertEquals(3, nano.forwards)
             assertEquals(6, yunet.detects)

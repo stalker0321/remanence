@@ -124,7 +124,10 @@ class FrozenV5PublishVerticalSliceTest {
         val result = CollageCandidateProvider(crops, measurer)
             .candidates(sourceInput, sourceInput.note, track)
         assertTrue("expected Candidates, got $result", result is CollageProviderResult.Candidates)
-        return (result as CollageProviderResult.Candidates).candidates.single { it.styleId == "press" }
+        // T151: every grammar-5 branch is enumerated; use the legacy equal
+        // branch for the publish-slice fixtures.
+        return (result as CollageProviderResult.Candidates).candidates
+            .single { it.styleId == "press" && it.branchId == "editorial-1+2-equal-1" }
     }
 
     private suspend fun frozen(

@@ -431,7 +431,10 @@ class CollageFrozenSelectionTest {
         vm.clearFrozenCollageSelection()
         assertNull(vm.frozenCollageSelection)
         // Navigation clears the frozen id; the highlighted candidates stay.
-        assertEquals(3, vm.collageChoices.candidates.size)
+        // T151: the provider enumerates every grammar-5 branch (12 for 3 photos)
+        // per style, so more than one candidate per style remains.
+        assertTrue(vm.collageChoices.candidates.size > 3)
+        assertEquals(3, vm.collageChoices.candidates.map { it.styleId }.distinct().size)
         assertEquals(0, vm.collageChoices.selectedIndex)
     }
 

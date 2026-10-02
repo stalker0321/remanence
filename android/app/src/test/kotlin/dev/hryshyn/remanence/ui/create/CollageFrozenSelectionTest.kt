@@ -354,6 +354,7 @@ class CollageFrozenSelectionTest {
     ): CollageFrozenSelection {
         val candidates = candidatesFor(input)
         vm.collageChoices.replaceCandidates(candidates)
+        CollageFreezeFixture.reportDrawable(vm, vm.collageChoices.candidates[0].candidateId)
         assertTrue(vm.selectCollageCandidate(0))
         assertTrue("expected freeze to succeed", vm.freezeCollageSelection())
         return requireNotNull(vm.frozenCollageSelection) { "expected frozen selection" }
@@ -415,6 +416,7 @@ class CollageFrozenSelectionTest {
         val ready = readyPreview(vm, ids)
         val candidates = candidatesFor(ready.expression.input)
         vm.collageChoices.replaceCandidates(candidates)
+        CollageFreezeFixture.reportDrawable(vm, vm.collageChoices.candidates[0].candidateId)
         assertTrue(vm.selectCollageCandidate(0))
         assertTrue(vm.freezeCollageSelection())
         vm.collageChoices.replaceCandidates(candidates)
@@ -445,6 +447,7 @@ class CollageFrozenSelectionTest {
         val ready = readyPreview(vm, ids)
         val candidates = candidatesFor(ready.expression.input)
         vm.collageChoices.replaceCandidates(candidates)
+        CollageFreezeFixture.reportDrawable(vm, vm.collageChoices.candidates[0].candidateId)
         assertTrue(vm.selectCollageCandidate(0))
         assertTrue(vm.freezeCollageSelection())
         // A rebuild drops the previously valid frozen selection first (even
@@ -454,6 +457,7 @@ class CollageFrozenSelectionTest {
             listOf(candidates[0].copy(candidateId = "ber1-tampered")),
         )
         assertNull(vm.frozenCollageSelection)
+        CollageFreezeFixture.reportDrawable(vm, vm.collageChoices.candidates[0].candidateId)
         assertTrue(vm.selectCollageCandidate(0))
         assertFalse("tampered freeze must fail", vm.freezeCollageSelection())
         assertNull(vm.frozenCollageSelection)
@@ -508,6 +512,7 @@ class CollageFrozenSelectionTest {
 
         val candidates = candidatesFor(preview.expression.input)
         vm.collageChoices.replaceCandidates(candidates)
+        CollageFreezeFixture.reportDrawable(vm, vm.collageChoices.candidates[0].candidateId)
         assertTrue(vm.selectCollageCandidate(0))
         assertTrue(vm.freezeCollageSelection())
 

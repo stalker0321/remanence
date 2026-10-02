@@ -308,6 +308,7 @@ class CreateComposeFlowTest {
         val candidates = (result as? CollageProviderResult.Candidates)?.candidates
             ?: error("expected candidates, got $result")
         vm.collageChoices.replaceCandidates(candidates)
+        CollageFreezeFixture.reportDrawable(vm, vm.collageChoices.candidates[0].candidateId)
         assertTrue(vm.selectCollageCandidate(0))
         assertTrue(vm.freezeCollageSelection())
     }
@@ -393,11 +394,15 @@ class CreateComposeFlowTest {
         vm.startPublishing()
         awaitTerminalPublish(vm)
 
-        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
-        assertNotNull(vm.publishError.value)
+        // Refusing before entering PUBLISHING leaves the COMPOSE step (never
+        // entered publishing); the typed pre-publish guard names freezing,
+        // like the photo/note/recipient guards above it (publishError stays
+        // for async publish failures).
+        assertEquals(CreateViewModel.Step.COMPOSE, vm.step.value)
+        assertNotNull(vm.flowError.value)
         assertTrue(
-            "publishError=" + vm.publishError.value,
-            vm.publishError.value!!.contains("frozen"),
+            "flowError=" + vm.flowError.value,
+            vm.flowError.value!!.contains("frozen"),
         )
     }
 
@@ -509,6 +514,7 @@ class CreateComposeFlowTest {
         assertTrue(vm.goToCompose())
 
         // Reference ordering works: select, then open the stage.
+        CollageFreezeFixture.reportDrawable(vm, vm.collageChoices.candidates[0].candidateId)
         assertTrue(vm.selectCollageCandidate(0))
         assertTrue(vm.freezeCollageSelection())
         assertTrue(vm.openCrop(ids.first()))
@@ -522,6 +528,56 @@ class CreateComposeFlowTest {
         vm.clearFrozenCollageSelection()
         assertFalse(vm.openCrop(ids.first()))
         assertNull(vm.cropSlot.value)
+    }
+
+    @Test
+    fun unknownCandidateCannotSelectOrFreeze() {
+        val vm = newViewModel()
+        driveToContent(vm)
+        previewContentIds(vm)
+        CollageFreezeFixture.freezeFirstCandidate(vm)
+        assertTrue(vm.goToCompose())
+        // Browse to a candidate that was never reported drawable (mimics
+        // the host path where its prepare never succeeded).
+        vm.collageChoices.next()
+        vm.clearFrozenCollageSelection()
+        assertFalse(vm.selectCollageCandidate(1))
+        assertFalse(vm.freezeCollageSelection())
+        assertNull(vm.frozenCollageSelection)
+        // A report for an unknown id approves nothing either.
+        vm.onCandidatePrepared("ber1-unknown", true, vm.prepareInputs())
+        assertFalse(vm.selectCollageCandidate(1))
+    }
+
+    @Test
+    fun staleProofCannotSelect() {
+        val vm = newViewModel()
+        driveToContent(vm)
+        previewContentIds(vm)
+        CollageFreezeFixture.freezeFirstCandidate(vm)
+        val id = vm.collageChoices.candidates[0].candidateId
+        // Tampered note content must not match the live key.
+        val stale = vm.prepareInputs().copy(note = "stale-note")
+        vm.onCandidatePrepared(id, true, stale)
+        assertFalse(vm.selectCollageCandidate(0))
+        // The exact current key recovers.
+        vm.onCandidatePrepared(id, true, vm.prepareInputs())
+        assertTrue(vm.selectCollageCandidate(0))
+    }
+
+    @Test
+    fun readyToRejectedClearsFrozenAndBlocksPublish() {        val vm = newViewModel()
+        driveToContent(vm)
+        previewContentIds(vm)
+        val frozenId = CollageFreezeFixture.freezeFirstCandidate(vm)
+        assertTrue(vm.goToCompose())
+        // The sheet flips Ready -> Rejected under identical inputs
+        // (e.g. late artwork changing the measured band).
+        vm.onCandidatePrepared(frozenId, false, vm.prepareInputs())
+        assertNull(vm.frozenCollageSelection)
+        vm.startPublishing()
+        assertEquals(CreateViewModel.Step.COMPOSE, vm.step.value)
+        assertTrue(vm.flowError.value!!.contains("frozen"))
     }
 
     @Test

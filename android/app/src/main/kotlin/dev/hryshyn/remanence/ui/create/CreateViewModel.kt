@@ -296,6 +296,7 @@ class CreateViewModel(
         _musicSelection.value = hit
         collageChoices.clear()
         frozenCollageSelection = null
+        frozenDrawableInputs = null
         // Music changes the chooser input: drop per-photo corrections too.
         clearCropState()
         startMusicArtworkResolution(hit)
@@ -305,6 +306,7 @@ class CreateViewModel(
         _musicSelection.value = null
         collageChoices.clear()
         frozenCollageSelection = null
+        frozenDrawableInputs = null
         clearCropState()
         startMusicArtworkResolution(null)
     }
@@ -389,8 +391,65 @@ class CreateViewModel(
         }
     }
 
+    /**
+     * Real-prepare drawable evidence keyed to the CURRENT candidate identity
+     * and content/note/music/crop lifetime. The host reports the exact inputs
+     * it measured (pass-through bundle, captured at composition); the VM
+     * accepts them only on equality with live state, so asynchronous or stale
+     * reports can never approve a different candidate or outdated
+     * note/music/crop state. Unknown (never reported) is NOT eligible.
+     */
+    internal fun prepareInputs(): PrepareInputs = PrepareInputs(
+        note = noteEditor.text.takeIf { it.isNotEmpty() },
+        trackId = collageChooserTrackFor(_musicSelection.value)?.trackId?.toString(),
+        artworkSize = _musicArtworkBitmap.value?.let { "${it.width}x${it.height}" },
+    )
+
+    /** Positive Ready inputs by candidate id (equality-checked on every use). */
+    private val drawableInputs = mutableMapOf<String, PrepareInputs>()
+
+    /** Drawable inputs recorded alongside the frozen selection, if any. */
+    private var frozenDrawableInputs: PrepareInputs? = null
+
+    /** Current positive drawable evidence for [candidateId], if any. */
+    private fun drawableMatches(candidateId: String): Boolean =
+        drawableInputs[candidateId]?.let { it == prepareInputs() } == true
+
+    /**
+     * Lifecycle-safe report of the host's measured prepare for one
+     * candidate. Stored keyed by id; validated against live state at every
+     * use. A Rejected report whose inputs match the frozen proof clears it
+     * fail-closed: the sheet flipped Ready→Rejected (e.g. late artwork
+     * changing the measured band).
+     */
+    internal fun onCandidatePrepared(candidateId: String, ready: Boolean, inputs: PrepareInputs) {        if (ready) {
+            drawableInputs[candidateId] = inputs
+        } else {
+            drawableInputs.remove(candidateId)
+            if (frozenCollageSelection?.candidateId == candidateId &&
+                frozenDrawableInputs == inputs
+            ) {
+                frozenCollageSelection = null
+                frozenDrawableInputs = null
+            }
+        }
+    }
+
+    /** Drops every drawable proof (session/content reset boundary). */
+    private fun clearDrawableProofs() {
+        drawableInputs.clear()
+        frozenDrawableInputs = null
+    }
+
     /** Explicit sender collage selection; refused if no such candidate. */
     fun selectCollageCandidate(index: Int): Boolean {
+        val candidate = collageChoices.candidates.getOrNull(index) ?: return false
+        // Drawable gate: the candidate must carry a matching positive Ready
+        // proof from the host's real prepare (never a stale or unknown state).
+        if (!drawableMatches(candidate.candidateId)) {
+            failGuard("candidate is not drawable")
+            return false
+        }
         val selected = collageChoices.select(index)
         // The display follows the newly displayed candidate's keyed entries.
         if (selected) refreshCropDisplay()
@@ -406,6 +465,7 @@ class CreateViewModel(
      */
     fun clearFrozenCollageSelection() {
         frozenCollageSelection = null
+        frozenDrawableInputs = null
         refreshCropDisplay()
     }
 
@@ -772,6 +832,18 @@ class CreateViewModel(
             failGuard("crop needs a displayed candidate")
             return false
         }
+        // Drawable carry-over: the corrected expression differs from the
+        // selected one ONLY by solver-approved crop windows (photo source
+        // rects). Every text-measurement input (regions, types, note, track,
+        // artwork) is identical, so the prior positive proof transfers to
+        // the new id — but only when it still matches live inputs; a changed
+        // note/track/artwork since the proof fails closed below instead.
+        val priorProof = drawableInputs[candidate.candidateId]
+        if (priorProof == null || priorProof != prepareInputs()) {
+            failGuard("candidate is not drawable")
+            return false
+        }
+        drawableInputs[correctedId] = priorProof
         collageChoices.select(index)
         refreshCropDisplay()
         if (!freezeCollageSelection()) {
@@ -833,6 +905,8 @@ class CreateViewModel(
     val collageChoices = CollageChoiceSession().also { session ->
         session.onCandidatesReplaced = {
             frozenCollageSelection = null
+            frozenDrawableInputs = null
+            clearDrawableProofs()
             clearCropState()
         }
     }
@@ -860,7 +934,14 @@ class CreateViewModel(
             currentInput = collageChooserInput(),
             capsuleId = _capsuleId,
         ) ?: return false
+        // Drawable gate: freeze only a positively-Ready candidate under the
+        // current key; a stale or unknown proof leaves prior state untouched.
+        if (!drawableMatches(frozen.candidateId)) {
+            failGuard("candidate is not drawable")
+            return false
+        }
         frozenCollageSelection = frozen
+        frozenDrawableInputs = prepareInputs()
         return true
     }
 
@@ -1348,6 +1429,18 @@ class CreateViewModel(
             return
         }
         clearGuardError()
+        // Drawable gate: publish only a frozen candidate with matching
+        // positive Ready evidence under the current key. Stale, unknown,
+        // or flipped-to-Rejected proofs refuse here; the S5 identity gates
+        // downstream are untouched.
+        val frozenForPublish = frozenCollageSelection
+        if (frozenForPublish == null ||
+            frozenDrawableInputs == null ||
+            frozenDrawableInputs != prepareInputs()
+        ) {
+            failGuard("frozen candidate is not drawable")
+            return
+        }
         // FIX-STATE-11: immutable inputs of THIS session, captured before any
         // suspend boundary.
         val trackSnapshot = _musicSelection.value?.let { hit ->
@@ -1557,6 +1650,8 @@ class CreateViewModel(
         // A source/note edit invalidates the built collage candidates too.
         collageChoices.clear()
         frozenCollageSelection = null
+        frozenDrawableInputs = null
+        clearDrawableProofs()
         // T157 §6: photo/note edits change the expression identity, so
         // per-photo corrections are dropped fail-closed (no cross-slot reuse).
         clearCropState()
@@ -1635,6 +1730,8 @@ class CreateViewModel(
         _generatorPreview.value = GeneratorPreviewState.Idle
         generatorPreviewCoordinator.zeroize()
         frozenCollageSelection = null
+        frozenDrawableInputs = null
+        clearDrawableProofs()
         clearCropState()
         clearCollageDiagnostics()
     }

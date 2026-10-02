@@ -296,6 +296,7 @@ class CreateUiHappyPathTest {
             vm.collageChoices.candidates.isNotEmpty(),
         )
         composeRule.runOnIdle {
+            CollageFreezeFixture.reportDrawable(vm, vm.collageChoices.candidates[0].candidateId)
             assertTrue(vm.selectCollageCandidate(0))
             assertTrue(vm.freezeCollageSelection())
         }

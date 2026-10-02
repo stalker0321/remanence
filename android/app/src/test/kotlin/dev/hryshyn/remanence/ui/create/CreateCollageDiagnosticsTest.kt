@@ -514,6 +514,7 @@ class CreateCollageDiagnosticsTest {
         val candidates = (built as CollageProviderResult.Candidates).candidates
         assertTrue(candidates.first().expression.musicRegion != null)
         vm.collageChoices.replaceCandidates(candidates)
+        CollageFreezeFixture.reportDrawable(vm, vm.collageChoices.candidates[0].candidateId)
         assertTrue(vm.selectCollageCandidate(0))
         assertTrue("expected freeze with track", vm.freezeCollageSelection())
         assertEquals(

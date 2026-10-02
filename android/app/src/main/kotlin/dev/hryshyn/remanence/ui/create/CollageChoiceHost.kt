@@ -35,6 +35,24 @@ import dev.hryshyn.remanence.ui.collage.rememberCollageTextMeasurer
 import dev.hryshyn.remanence.ui.hold.HoldTextButton
 
 /**
+ * Real-prepare drawable inputs the host measured (pass-through bundle).
+ * The VM supplies the current value as [prepareInputs] and the effect
+ * echoes it back in [onPrepared]; equality against live state at every
+ * gate is what makes stale reports harmless. Crop transforms ride OUTSIDE
+ * this key on purpose: sealed crop windows change photo source rects only
+ * and never enter text measurement (regions, types, note, track, artwork
+ * are identical), so a crop edit cannot change a drawable verdict; cross-
+ * candidate correction misuse stays prevented by the keyed store and the
+ * stage-close checks. Artwork is a dimension marker (bytes never enter
+ * identity here, matching the sealed contract).
+ */
+internal data class PrepareInputs(
+    val note: String?,
+    val trackId: String?,
+    val artworkSize: String?,
+)
+
+/**
  * Sender collage chooser/preview host. Builds the grammar-5 candidates once
  * per (input, note, track, analysis) and renders the DISPLAYED candidate
  * (browse cursor, first visible as soon as ready) through the SAME
@@ -80,6 +98,19 @@ internal fun CollageChoiceHost(
     onSelect: (Int) -> Unit = {},
     onNavigate: () -> Unit = {},
     onMeasured: (GeneratorExpression.ResolvedExpression) -> Unit = {},
+    /**
+     * Lifecycle-safe report of the measured prepare for the displayed
+     * candidate: (candidateId, ready, measured inputs). The VM accepts the
+     * inputs only on equality with live state at every gate, so stale
+     * reports can never approve another candidate. Fires from an effect,
+     * never during composition.
+     */
+    onPrepared: (candidateId: String, ready: Boolean, inputs: PrepareInputs) -> Unit = { _, _, _ -> },
+    /**
+     * The drawable inputs the VM computed for the current state; echoed
+     * back in [onPrepared]. Null disables reporting (preview-only hosts).
+     */
+    prepareInputs: PrepareInputs? = null,
     /**
      * T150 photo hotspots (Astra `render.mjs:11` capsule-slot buttons):
      * tapping a photograph opens the crop stage for its content id.
@@ -128,6 +159,37 @@ internal fun CollageChoiceHost(
             // report it without rendering the BER1 preview.
             Ber1NoteMeasureReporter(input, onMeasured)
         }
+        // The displayed candidate's prepare is computed BEFORE the controls
+        // so Select is enabled only on a positively-Ready sheet (never on
+        // unknown or rejected), and so the drawable proof effect below
+        // reports exactly what the user sees.
+        val displayed = session.displayed
+        val images = remember(displayed, sources) { decodeSources(sources) }
+        val noteArg = note?.takeIf { it.isNotBlank() }
+        val prepared = remember(displayed, images, noteArg, track, measurer, artworkBitmap) {
+            displayed?.let { shown ->
+                val sizes = images.mapValues { CollageRenderer.SourcePhoto(it.value.width, it.value.height) }
+                CollageRenderer.prepare(
+                    shown.expression,
+                    noteArg,
+                    track,
+                    sizes,
+                    measurer,
+                    artwork = artworkBitmap?.let {
+                        CollageRenderer.SourcePhoto(it.width, it.height)
+                    },
+                )
+            }
+        }
+        val preparedReady = prepared is CollageRenderer.SceneResult.Ready
+        val reportedInputs = prepareInputs
+        if (displayed != null && reportedInputs != null) {
+            // Effect, not render: reports the measured outcome tied to the
+            // exact prepared inputs; the VM equality-checks them on arrival.
+            LaunchedEffect(displayed.candidateId, displayed.expression, noteArg, track, artworkBitmap, reportedInputs) {
+                onPrepared(displayed.candidateId, preparedReady, reportedInputs)
+            }
+        }
         if (session.candidates.isNotEmpty()) {
             // Browse vs selected frame (frozen `.expression-nav` /
             // `.selected-label`): browse shows the N/total counter between
@@ -169,7 +231,7 @@ internal fun CollageChoiceHost(
                 }
                 Button(
                     onClick = { onSelect(session.displayIndex) },
-                    enabled = session.displayed != null,
+                    enabled = session.displayed != null && preparedReady,
                     modifier = Modifier.testTag("collage_select"),
                 ) { Text("Select") }
             }
@@ -181,7 +243,6 @@ internal fun CollageChoiceHost(
             Box(Modifier.testTag("collage_frozen").size(1.dp))
         }
 
-        val displayed = session.displayed
         when {
             session.notice != null ->
                 Text(session.notice!!, modifier = Modifier.testTag("collage_notice"))
@@ -190,22 +251,8 @@ internal fun CollageChoiceHost(
                 Text("Select a collage", modifier = Modifier.testTag("collage_select_hint"))
 
             else -> {
-                val images = remember(displayed, sources) { decodeSources(sources) }
-                val noteArg = note?.takeIf { it.isNotBlank() }
                 val sizes = images.mapValues { CollageRenderer.SourcePhoto(it.value.width, it.value.height) }
-                val prepared = remember(displayed, images, noteArg, track, measurer, artworkBitmap) {
-                    CollageRenderer.prepare(
-                        displayed.expression,
-                        noteArg,
-                        track,
-                        sizes,
-                        measurer,
-                        artwork = artworkBitmap?.let {
-                            CollageRenderer.SourcePhoto(it.width, it.height)
-                        },
-                    )
-                }
-                when (prepared) {
+                when (val result = prepared) {
                     is CollageRenderer.SceneResult.Ready -> {
                         // Whole composition fits the available bounded height
                         // (frozen 9:16 canvas), centred; controls stay outside.
@@ -227,7 +274,7 @@ internal fun CollageChoiceHost(
                             val tap = onSlotTap
                             if (tap == null) {
                                 CollageCanvas(
-                                    scene = prepared.scene,
+                                    scene = result.scene,
                                     images = images,
                                     contentDescription = "collage candidate",
                                     modifier = canvasModifier,
@@ -236,7 +283,7 @@ internal fun CollageChoiceHost(
                                 )
                             } else {
                                 CollageHotspotCanvas(
-                                    scene = prepared.scene,
+                                    scene = result.scene,
                                     images = images,
                                     placements = displayed.expression.placements,
                                     onSlotTap = tap,
@@ -249,7 +296,11 @@ internal fun CollageChoiceHost(
                     }
 
                     is CollageRenderer.SceneResult.Rejected ->
-                        Text(prepared.reason, modifier = Modifier.testTag("collage_preview_blocked"))
+                        Text(result.reason, modifier = Modifier.testTag("collage_preview_blocked"))
+
+                    // Unreachable: this arm requires a displayed candidate,
+                    // for which a prepare result always exists.
+                    null -> Unit
                 }
             }
         }

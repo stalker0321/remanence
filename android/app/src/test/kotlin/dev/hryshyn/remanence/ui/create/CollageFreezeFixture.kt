@@ -53,6 +53,18 @@ internal object CollageFreezeFixture {
             normalizer = PhotoNormalizerPort { NormalizedPhotoDto(byteArrayOf(9, 8, 7), 100, 100) },
         )
 
+    /**
+     * Reports the VM's own current drawable inputs as a positive Ready
+     * proof, mirroring what the host effect reports after a successful real
+     * prepare. This is not a bypass: [CreateViewModel.onCandidatePrepared]
+     * stores it keyed by candidate, and every gate revalidates equality
+     * against live state, so stale or mismatched reports are refused
+     * exactly as in production.
+     */
+    fun reportDrawable(vm: CreateViewModel, candidateId: String) {
+        vm.onCandidatePrepared(candidateId, true, vm.prepareInputs())
+    }
+
     /** Waits until the preview exposes a chooser input (Ready or NotePending). */
     fun awaitChooserInput(vm: CreateViewModel, timeoutMs: Long = 10_000): GeneratorExpression.GeneratorInput {
         val deadline = System.currentTimeMillis() + timeoutMs
@@ -100,6 +112,8 @@ internal object CollageFreezeFixture {
             ?: error("expected frozen-eligible candidates, got $result")
         assertTrue("candidate list must not be empty", candidates.isNotEmpty())
         vm.collageChoices.replaceCandidates(candidates)
+        reportDrawable(vm, candidates[0].candidateId)
+        CollageFreezeFixture.reportDrawable(vm, vm.collageChoices.candidates[0].candidateId)
         assertTrue("candidate must be selectable", vm.selectCollageCandidate(0))
         assertTrue("candidate must freeze", vm.freezeCollageSelection())
         return requireNotNull(vm.frozenCollageSelection).candidateId
@@ -152,6 +166,8 @@ internal object CollageFreezeFixture {
             expression = expression,
         )
         vm.collageChoices.replaceCandidates(listOf(round))
+        reportDrawable(vm, round.candidateId)
+        CollageFreezeFixture.reportDrawable(vm, vm.collageChoices.candidates[0].candidateId)
         assertTrue("round candidate must be selectable", vm.selectCollageCandidate(0))
         assertTrue("round candidate must freeze (V4 gate)", vm.freezeCollageSelection())
         return round.candidateId
@@ -180,6 +196,8 @@ internal object CollageFreezeFixture {
             ?: error("expected production candidates, got $result")
         assertTrue("candidate list must not be empty", candidates.isNotEmpty())
         vm.collageChoices.replaceCandidates(candidates)
+        reportDrawable(vm, candidates[0].candidateId)
+        CollageFreezeFixture.reportDrawable(vm, vm.collageChoices.candidates[0].candidateId)
         assertTrue("candidate must be selectable", vm.selectCollageCandidate(0))
         assertTrue("candidate must freeze", vm.freezeCollageSelection())
         return requireNotNull(vm.frozenCollageSelection).candidateId

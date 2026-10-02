@@ -8,8 +8,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -216,6 +218,87 @@ class CollageChoiceHostTest {
         // Selected state: counter replaced by the selected label.
         composeRule.onNodeWithTag("collage_selected_label").assertExists()
         composeRule.onNodeWithTag("collage_nav_counter").assertDoesNotExist()
+    }
+
+    @Test
+    fun rejectedPrepareDisablesSelectAndShowsBlockedCopy() {
+        // Hand-sealed V4 pulse band too narrow for its 57px cover: prepare
+        // rejects deterministically with real fonts; Select must stay
+        // disabled and onSelect must never fire.
+        val style = requireNotNull(StyleRegistry.style("signal"))
+        val expression = GeneratorExpression.ResolvedExpression(
+            canvasVersion = 1,
+            grammarId = "6",
+            grammarVersion = 3,
+            branchId = "hinge",
+            input = input(),
+            placements = contentIds.mapIndexed { index, id ->
+                GeneratorExpression.Placement(
+                    id, index * 120, 0, 120, 213,
+                    GeneratorExpression.CropWindow(0, 0, 10000, 10000),
+                    null, null,
+                )
+            },
+            noteTreatment = "regular-region",
+            diagnostics = emptyList(),
+            fontVersion = dev.hryshyn.remanence.ui.collage.FontRegistry.VERSION,
+            paletteVersion = dev.hryshyn.remanence.ui.collage.CollageRenderer.PALETTE_REGISTRY_VERSION,
+            expressionContractVersion = GeneratorExpression.EXPRESSION_CONTRACT_V4,
+            noteRegion = null,
+            style = GeneratorExpression.StyleBinding(
+                style.id, style.version, requireNotNull(StyleRegistry.digest(style.id)),
+            ),
+            noteType = GeneratorExpression.TextType("StudySans", 22, 400, false, 25),
+            musicRegion = GeneratorExpression.MusicRegion(
+                x = 10, y = 500, width = 60, height = 76,
+                mode = "pulse",
+                type = GeneratorExpression.TextType("Narrow", 24, 700, false, 26),
+                artwork = GeneratorExpression.ArtworkRef(
+                    provider = "catalog-sample",
+                    url = "https://art.example.org/cover/ab12.webp",
+                    sha256 = ByteArray(32) { it.toByte() },
+                    mimeType = "image/webp",
+                    width = 8,
+                    height = 8,
+                ),
+            ),
+            provenance = null,
+            decor = null,
+        )
+        val candidate = dev.hryshyn.remanence.ui.collage.CollageCandidate(
+            candidateId = dev.hryshyn.remanence.core.model.GeneratorBer1Provider.candidateIdFor(expression),
+            styleId = "signal",
+            branchId = "hinge",
+            expression = expression,
+        )
+        val session = CollageChoiceSession()
+        val selected = mutableListOf<Int>()
+        val coverBytes = collageChoiceJpeg()
+        val coverBitmap = android.graphics.BitmapFactory
+            .decodeByteArray(coverBytes, 0, coverBytes.size).asImageBitmap()
+        val track = dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1.parse(
+            trackId = "be30e36b-1111-4111-8111-000000000001",
+            title = "Love",
+            artistDisplay = "MowMowMow",
+            version = null,
+            durationMs = 253000L,
+        )
+        composeRule.setContent {
+            CollageChoiceHost(
+                session, input(), sources(), null, track, cropSource(),
+                artworkBitmap = coverBitmap,
+                onSelect = { selected += it },
+            )
+        }
+        composeRule.waitForIdle()
+        composeRule.runOnIdle { session.replaceCandidates(listOf(candidate)) }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("collage_preview_blocked").assertExists()
+        composeRule.onNodeWithTag("collage_select").assertIsNotEnabled()
+        composeRule.onNodeWithTag("collage_select").performClick()
+        composeRule.waitForIdle()
+        assertTrue(selected.isEmpty())
     }
 
     @Test

@@ -635,4 +635,111 @@ class CreateComposeFlowTest {
             roundVm.frozenCollageSelection?.candidateId,
         )
     }
+
+    // ------------------------------------------------------------------
+    // F1 source-dimension repair (preview vs authoritative analysis dims).
+    // ------------------------------------------------------------------
+
+    /**
+     * Same VM wiring as [newViewModel], but the preview loader reports reduced
+     * preview dims while the upright/G1 dims (and optionally the authoritative
+     * analysis dims) are full resolution. Used to pin the caller fix:
+     * `loadAllFamilyPhotos` must take descriptor dims from
+     * `GeneratorInput.photos` (upright), not `previewWidthPx/HeightPx`.
+     */
+    private fun newViewModelWithDims(
+        uprightWidth: Int,
+        uprightHeight: Int,
+        previewWidth: Int,
+        previewHeight: Int,
+        analysisWidth: Int,
+        analysisHeight: Int,
+    ): CreateViewModel {
+        val roots = AccountScopedFileRoots(stagingDir)
+        val retryStore = SenderRetryMaterialStore(roots)
+        return CreateViewModel(
+            directory = StaticDirectory(),
+            accessTokenProvider = { null },
+            identityProvider = { senderIdentity() },
+            persistence = NoPersistence(),
+            outboxStager = CapsuleOutboxStager(database, roots, retryStore),
+            profile = RecognitionProfile.postcardSiftRootSiftV1(),
+            accountScopedFileRoots = roots,
+            openPhotoSource = { pickerId -> PhotoSource { ByteArrayInputStream(originalFor(pickerId)) } },
+            frontProcessor = Accepting(goldenSynthetic()),
+            cpuDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher,
+            generatorPreviewLoader = DefaultGeneratorPreviewLoader(
+                openSource = { pickerId -> PhotoSource { ByteArrayInputStream(originalFor(pickerId)) } },
+                decoder = GeneratorSourceBinding.PhotoDecoderPort {
+                    GeneratorSourceBinding.UprightPhoto(uprightWidth, uprightHeight)
+                },
+                normalizer = PhotoNormalizerPort {
+                    NormalizedPhotoDto(byteArrayOf(9, 8, 7), previewWidth, previewHeight)
+                },
+            ),
+            generatorBridgeProvider = bridge.provider,
+            senderRetryKeysetWrapper = testWrapper,
+            senderRetryKekAlias = testAlias,
+            enqueueUpload = { _, _ -> },
+            collageSourceFactory = testCollageSourceFactoryWithAnalysisDims(analysisWidth, analysisHeight),
+        ).also { it.beginSession(1L, ownerUuid.toString()) }
+    }
+
+    @Test
+    fun allFamilySealsV4WhenPreviewDimsDifferFromUprightAndAnalysisMatchesUpright() = runBlocking {
+        // preview 2560x1920 (normalized), upright + analysis 4000x3000: the
+        // descriptor must carry the upright dims so the identity guard passes
+        // and the real all-family V4 producer yields sealed candidates.
+        val vm = newViewModelWithDims(
+            uprightWidth = 4000,
+            uprightHeight = 3000,
+            previewWidth = 2560,
+            previewHeight = 1920,
+            analysisWidth = 4000,
+            analysisHeight = 3000,
+        )
+        driveToContent(vm, photos = 3)
+        awaitReadyPreview(vm)
+        val sealed = requireNotNull(vm.buildAllFamilySealedCandidates()) {
+            "all-family producer must seal V4 when descriptor dims come from the upright input"
+        }
+        assertTrue("must yield candidates", sealed.isNotEmpty())
+        sealed.forEach { candidate ->
+            assertEquals(
+                GeneratorExpression.EXPRESSION_CONTRACT_V4,
+                candidate.expression.expressionContractVersion,
+            )
+            assertTrue(
+                "sealed expression must validate",
+                GeneratorExpression.validateResolved(candidate.expression) is
+                    GeneratorExpression.InputValidation.Valid,
+            )
+            assertEquals(
+                "candidate identity must be the canonical expression hash",
+                GeneratorBer1Provider.candidateIdFor(candidate.expression),
+                candidate.candidateId,
+            )
+        }
+    }
+
+    @Test
+    fun allFamilyFailsClosedWhenAnalysisDimsDoNotMatchUpright() = runBlocking {
+        // Analysis 2000x1500 != upright descriptor 4000x3000: the strict
+        // analysis-dimension guard must still fail closed (no spoofed resize).
+        val vm = newViewModelWithDims(
+            uprightWidth = 4000,
+            uprightHeight = 3000,
+            previewWidth = 2560,
+            previewHeight = 1920,
+            analysisWidth = 2000,
+            analysisHeight = 1500,
+        )
+        driveToContent(vm, photos = 3)
+        awaitReadyPreview(vm)
+        assertNull(
+            "a mismatched analysis must not be scored",
+            vm.buildAllFamilySealedCandidates(),
+        )
+    }
 }

@@ -528,17 +528,25 @@ class CreateViewModel(
      * `AllFamilyV4Adapter.seal` on the committed T154 schema this tree carries.
      */
     internal suspend fun loadAllFamilyPhotos(): List<dev.hryshyn.remanence.ui.collage.AllFamilyPhoto>? {
-        val sources = when (val preview = _generatorPreview.value) {
-            is GeneratorPreviewState.Ready -> preview.sources
-            is GeneratorPreviewState.NotePending -> preview.sources
+        val (sources, inputPhotos) = when (val preview = _generatorPreview.value) {
+            is GeneratorPreviewState.Ready -> preview.sources to preview.expression.input.photos
+            is GeneratorPreviewState.NotePending -> preview.sources to preview.input.photos
             else -> return null
         }
         val cropSource = collageCropSource ?: return null
-        val descriptors = sources.map {
+        // The authoritative analysis decodes the retained full-res upright
+        // original bytes, so its dimensions are the GeneratorInput upright
+        // dims, NOT the reduced preview dims (`previewWidthPx/HeightPx`). Match
+        // by content id (both lists come from the same loaded sources) and fail
+        // closed if a source has no upright photo; never feed preview dims to
+        // the producer/matrix identity guard, and never resize to bypass it.
+        val uprightByContentId = inputPhotos.associateBy { it.contentId }
+        val descriptors = sources.map { source ->
+            val upright = uprightByContentId[source.contentId] ?: return null
             dev.hryshyn.remanence.ui.collage.PhotoDescriptor(
-                contentId = it.contentId,
-                widthPx = it.widthPx,
-                heightPx = it.heightPx,
+                contentId = source.contentId,
+                widthPx = upright.widthPx,
+                heightPx = upright.heightPx,
                 hasProminentFace = false,
             )
         }

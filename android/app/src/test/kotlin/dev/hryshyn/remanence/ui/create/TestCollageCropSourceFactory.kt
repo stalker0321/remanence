@@ -53,6 +53,40 @@ internal fun testCollageSourceFactory(cornerFace: Boolean = false): CollageCropS
         )
     }
 
+/**
+ * Same production [AndroidCollageCropSource] seam, but with a caller-supplied
+ * analysis image size, so the authoritative `CollageAnalysis.width/height` can
+ * differ from the preview dims. One shared read-only image is reused for every
+ * content id to keep the fixture cheap.
+ */
+internal fun testCollageSourceFactoryWithAnalysisDims(
+    analysisWidth: Int,
+    analysisHeight: Int,
+): CollageCropSourceFactory {
+    val image = FieldStageImage(
+        analysisWidth,
+        analysisHeight,
+        IntArray(analysisWidth * analysisHeight) { 0xFF336699.toInt() },
+    )
+    return CollageCropSourceFactory {
+        AndroidCollageCropSource(
+            bytesSource = it.asUprightBytesSource(),
+            imageDecoder = { image },
+            fieldRunner = FieldStageRunner(FakeFieldRuntime()),
+            nanoDetRunner = NanoDetRunner(
+                FakeAsset(ByteArray(32) { 1 }),
+                FakeNanoRuntime(),
+                Files.createTempDirectory("t150-nano").toFile(),
+            ),
+            yuNetRunner = YuNetRunner(
+                FakeAsset(ByteArray(32) { 2 }),
+                FakeYuNetRuntime(false),
+                Files.createTempDirectory("t150-yunet").toFile(),
+            ),
+        )
+    }
+}
+
 private const val FIXTURE_SOURCE_PX = 1000
 
 private class FakeAsset(val bytes: ByteArray) : ModelAssetSource {

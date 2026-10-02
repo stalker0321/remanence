@@ -206,7 +206,10 @@ internal object FrozenResolve {
  * as a grammar-breadth round-robin: one layout from each grammar, then the
  * second layout, until [MAX_TOTAL] is reached
  * (`orderPolicy:'grammar-breadth-then-second-layout-seeded'`,
- * `maxLayoutsPerGrammar:2`, `TARGET_EXPRESSIONS=12`).
+ * `maxLayoutsPerGrammar:2`, `TARGET_EXPRESSIONS=12`). This object uses the same
+ * structure with a deterministic identity grammar order (the playground also
+ * shuffles the grammar keys and bucket layouts by the session seed, which does
+ * not change the breadth-first/cap invariants).
  */
 internal object FrozenCandidatePolicy {
 

@@ -209,6 +209,11 @@ object FrozenGrammarPlans {
      * two geometrically distinct layouts per grammar and up to twelve
      * expressions total, in enumeration order. This is the stated selection
      * policy, not a function in the runtime code.
+     *
+     * Superseded for the production mount by [FrozenCandidatePolicy.rank], which
+     * uses the playground's grammar-breadth round-robin (breadth first, then
+     * second layout). Retained only as the stage-2 enumeration helper; do not
+     * wire this one into the provider.
      */
     fun selectExpressions(branches: List<Branch>, maxPerFamily: Int = 2, maxTotal: Int = 12): List<Branch> {
         val perFamily = HashMap<Int, MutableSet<String>>()

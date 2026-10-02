@@ -12,6 +12,14 @@ internal data class AllFamilyPhoto(
     val analysis: CollageAnalysis?,
 )
 
+/** Verified photo identity/dimensions; analysis is supplied by the shared cache. */
+internal data class PhotoDescriptor(
+    val contentId: String,
+    val widthPx: Int,
+    val heightPx: Int,
+    val hasProminentFace: Boolean,
+)
+
 /** Verified sender/note/music inputs plus the analysed photos. */
 internal data class AllFamilyInput(
     val id: String,
@@ -175,11 +183,21 @@ internal class AllFamilyCandidateProducer(
                     zooms = tile.zooms,
                 )
             }
+            // A missing `cropsFor` map is a global authoritative-analysis
+            // failure; a missing per-slot key is a rejected branch that must be
+            // omitted with its healthy siblings still offered (frozen
+            // `resolve()` semantics), never a whole-run abort.
             val crops = cropSource.cropsFor(placementRequests) ?: return AllFamilyOutcome.Unavailable(NO_ANALYSIS)
-            val placements = branch.plan.tiles.mapIndexed { slot, tile ->
+            val placements = ArrayList<MountedPlacement>(branch.plan.tiles.size)
+            var missingCrop = false
+            for (slot in branch.plan.tiles.indices) {
+                val tile = branch.plan.tiles[slot]
                 val window = crops[placementRequests[slot].contentId]
-                    ?: return AllFamilyOutcome.Unavailable(NO_PLACEMENT_CROP)
-                MountedPlacement(
+                if (window == null) {
+                    missingCrop = true
+                    break
+                }
+                placements += MountedPlacement(
                     slotIndex = slot,
                     contentId = branch.assignment.compositionOrder[slot],
                     x = floor(tile.rect.x).toInt(),
@@ -190,6 +208,7 @@ internal class AllFamilyCandidateProducer(
                     crop = window,
                 )
             }
+            if (missingCrop) continue
             candidates += AllFamilyCandidate(
                 grammarId = selection.grammarId,
                 branchId = branch.plan.branch,
@@ -219,10 +238,32 @@ internal class AllFamilyCandidateProducer(
             listOf(tile.rect.x, tile.rect.y, tile.rect.w, tile.rect.h, tile.shape).joinToString(",")
         }
 
-    private companion object {
+    companion object {
         const val MIN_PHOTOS = 3
         const val MAX_PHOTOS = 5
         const val NO_ANALYSIS = "authoritative collage analysis is not available on this build"
-        const val NO_PLACEMENT_CROP = "authoritative envelope-50 crop is not available for a matched slot"
+
+        /**
+         * Fill [AllFamilyPhoto]s from the shared authoritative analysis cache so
+         * each photo's detectors run exactly once per session; `null` fails
+         * closed when any analysis is unavailable.
+         */
+        suspend fun loadPhotos(
+            descriptors: List<PhotoDescriptor>,
+            analyses: CollageAnalysisSource,
+        ): List<AllFamilyPhoto>? {
+            val out = ArrayList<AllFamilyPhoto>(descriptors.size)
+            for (descriptor in descriptors) {
+                val analysis = analyses.analysisFor(descriptor.contentId) ?: return null
+                out += AllFamilyPhoto(
+                    contentId = descriptor.contentId,
+                    widthPx = descriptor.widthPx,
+                    heightPx = descriptor.heightPx,
+                    hasProminentFace = descriptor.hasProminentFace,
+                    analysis = analysis,
+                )
+            }
+            return out
+        }
     }
 }

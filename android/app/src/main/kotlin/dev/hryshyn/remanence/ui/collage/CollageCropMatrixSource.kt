@@ -49,3 +49,13 @@ fun interface CollageCropMatrixSource {
         requests: List<CropMatrixRequest>,
     ): Map<CropMatrixRequest, CropMatrixCell>?
 }
+
+/**
+ * Shared authoritative-analysis feeder. One instance (backed by the same
+ * `AndroidCollageCropSource` cache) must feed both the all-family producer and
+ * its placement `CollageCropSource` so a photo's detectors run exactly once per
+ * session.
+ */
+fun interface CollageAnalysisSource {
+    suspend fun analysisFor(contentId: String): CollageAnalysis?
+}

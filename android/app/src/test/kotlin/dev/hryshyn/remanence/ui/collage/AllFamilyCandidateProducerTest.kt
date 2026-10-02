@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.ui.collage
 import dev.hryshyn.remanence.core.model.GeneratorExpression
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -109,6 +110,36 @@ class AllFamilyCandidateProducerTest {
         assertTrue(
             "blank sender must never fabricate a sender mark",
             result.candidates.all { candidate -> candidate.plan.provenance.none { it.role == "sender" } },
+        )
+    }
+
+    @Test
+    fun missingPlacementCropOmitsTheBranchNotTheWholeRun() = runBlocking {
+        val noPlacements = CollageCropSource { emptyMap<String, GeneratorExpression.CropWindow>() }
+        val outcome = AllFamilyCandidateProducer(fakeMatrix(), noPlacements).produce(input())
+        assertTrue(
+            "a missing per-slot crop must not abort the whole run",
+            outcome is AllFamilyOutcome.Candidates,
+        )
+        val result = outcome as AllFamilyOutcome.Candidates
+        assertTrue("every candidate lacked a placement crop", result.candidates.isEmpty())
+        assertTrue("the enumerated families still report their valid layouts", result.perGrammar.isNotEmpty())
+    }
+
+    @Test
+    fun loadPhotosUsesTheSharedAnalysisSourceAndFailsClosed() = runBlocking {
+        val analysed = analysis(1000, 1000)
+        val source = CollageAnalysisSource { contentId -> if (contentId == "c0") analysed else null }
+        val loaded = AllFamilyCandidateProducer.loadPhotos(
+            listOf(PhotoDescriptor("c0", 1000, 1000, true)),
+            source,
+        )
+        assertEquals(1, loaded!!.size)
+        assertEquals("c0", loaded[0].contentId)
+        assertEquals(analysed, loaded[0].analysis)
+        assertNull(
+            "missing analysis must fail closed",
+            AllFamilyCandidateProducer.loadPhotos(listOf(PhotoDescriptor("gone", 1, 1, false)), source),
         )
     }
 }

@@ -172,6 +172,13 @@ class AndroidCollageCropSource(
         }
     }
 
+    /**
+     * Shared authoritative-analysis feeder for the T151 all-family producer:
+     * the same contentId-keyed cache, so the assignment matrix and the
+     * placement [cropsFor] share one detector run per photo.
+     */
+    fun analysisSource(): CollageAnalysisSource = CollageAnalysisSource { contentId -> analysisFor(contentId) }
+
     override fun close() {
         closed = true
         runCatching { fieldRunner.close() }

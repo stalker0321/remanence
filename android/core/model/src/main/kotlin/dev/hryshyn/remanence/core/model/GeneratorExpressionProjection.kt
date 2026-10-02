@@ -43,6 +43,14 @@ import java.security.MessageDigest
  * The artwork slot is byte-for-byte the GENEX03 shape; no-art seals as
  * mode "text" with artwork present:byte 0. The descriptor rides here;
  * artwork bytes never do — the projection never carries image content.
+ *
+ * v4 trailer (magic "BEXPR03", projectionVersion:i32=3; full frozen V5):
+ * the v3 shape through the music trailer, then per placement a trailing
+ * shape:str, then provenance present:byte [count:i32 { kind:str text:str
+ * x:y:w:h:i32×4 family:str size:i32 weight:i32 italic:byte line:i32
+ * orientation:str align:str }] and decor present:byte [count:i32 {
+ * kind:str x:y:w:h:i32×4 }]. Mark texts join the projection digest
+ * (lead checkpoint); the v1/v2/v3 paths stay frozen byte-identical.
  */
 object GeneratorExpressionProjection {
 
@@ -51,6 +59,9 @@ object GeneratorExpressionProjection {
 
     const val PROJECTION_VERSION_2 = 2
     private const val MAGIC_2 = "BEXPR02"
+
+    const val PROJECTION_VERSION_3 = 3
+    private const val MAGIC_3 = "BEXPR03"
     private val UTF8 = Charsets.UTF_8
 
     fun canonicalBytes(
@@ -65,6 +76,8 @@ object GeneratorExpressionProjection {
             -> v1ProjectionBytes(expression, candidateId, blobIdByContentId)
             GeneratorExpression.EXPRESSION_CONTRACT_V3 ->
                 v3ProjectionBytes(expression, candidateId, blobIdByContentId)
+            GeneratorExpression.EXPRESSION_CONTRACT_V4 ->
+                v4ProjectionBytes(expression, candidateId, blobIdByContentId)
             else -> throw IllegalArgumentException(
                 "unsupported expressionContractVersion: ${expression.expressionContractVersion}",
             )
@@ -211,6 +224,127 @@ object GeneratorExpressionProjection {
             out.str(music.mode)
             out.writeArtwork(music.artwork)
             out.writeTextType(music.type)
+        }
+        return out.toByteArray()
+    }
+
+    /**
+     * v4 projection encoding (full frozen V5). The v3 shape is preserved
+     * through the music trailer; each placement gains its trailing shape,
+     * then the authored provenance marks (texts join the digest) and decor
+     * planes. Fail-closed: a v4 expression missing its required style,
+     * note type, or per-placement crop throws instead of emitting bytes
+     * that alias a weaker binding.
+     */
+    private fun v4ProjectionBytes(
+        expression: GeneratorExpression.ResolvedExpression,
+        candidateId: String,
+        blobIdByContentId: Map<String, ByteArray>,
+    ): ByteArray {
+        val out = Writer()
+        out.ascii(MAGIC_3)
+        out.int(PROJECTION_VERSION_3)
+        out.int(expression.canvasVersion)
+        out.str(expression.grammarId)
+        out.int(expression.grammarVersion)
+        out.str(expression.branchId)
+        out.str(expression.noteTreatment)
+        out.int(expression.fontVersion)
+        out.int(expression.paletteVersion)
+        val region = expression.noteRegion
+        if (region == null) {
+            out.byte(0)
+        } else {
+            out.byte(1)
+            out.int(region.x); out.int(region.y); out.int(region.width); out.int(region.height)
+        }
+        out.str(candidateId)
+        val photos = expression.input.photos
+        out.int(photos.size)
+        for (photo in photos) {
+            val blobId = blobIdByContentId[photo.contentId]
+                ?: throw IllegalArgumentException("missing blob id for ${photo.contentId}")
+            require(blobId.size == PHOTO_BLOB_ID_BYTES) { "blob id must be 16 bytes" }
+            out.int(photo.ordinal)
+            out.str(photo.contentId)
+            out.str(photo.contentHash)
+            out.int(photo.widthPx)
+            out.int(photo.heightPx)
+            out.bytes(blobId)
+        }
+        out.int(expression.placements.size)
+        for (placement in expression.placements) {
+            out.str(placement.contentId)
+            out.int(placement.x); out.int(placement.y)
+            out.int(placement.width); out.int(placement.height)
+            val rect = placement.contentRect
+            if (rect == null) {
+                out.byte(0)
+            } else {
+                out.byte(1)
+                out.int(rect.x); out.int(rect.y); out.int(rect.width); out.int(rect.height)
+            }
+            val crop = placement.crop
+                ?: throw IllegalArgumentException("v4 expression must carry crop on ${placement.contentId}")
+            out.byte(1)
+            out.int(crop.x); out.int(crop.y); out.int(crop.width); out.int(crop.height)
+            val mask = placement.maskId
+            if (mask == null) {
+                out.byte(0)
+            } else {
+                out.byte(1)
+                out.str(mask)
+            }
+            out.str(placement.shape.name.lowercase())
+        }
+        val style = expression.style
+            ?: throw IllegalArgumentException("v4 expression must carry style")
+        out.str(style.styleId)
+        out.str(style.styleVersion)
+        require(style.digest.size == 32) { "v4 style.digest must be exactly 32 bytes" }
+        out.bytes(style.digest)
+        val noteType = expression.noteType
+            ?: throw IllegalArgumentException("v4 expression must carry noteType")
+        out.writeTextType(noteType)
+        val music = expression.musicRegion
+        if (music == null) {
+            out.byte(0)
+        } else {
+            out.byte(1)
+            out.int(music.x); out.int(music.y); out.int(music.width); out.int(music.height)
+            out.str(music.mode)
+            out.writeArtwork(music.artwork)
+            out.writeTextType(music.type)
+        }
+        val provenance = expression.provenance
+        if (provenance == null) {
+            out.byte(0)
+        } else {
+            out.byte(1)
+            out.int(provenance.size)
+            for (mark in provenance) {
+                out.str(mark.kind.name.lowercase())
+                out.str(mark.text)
+                out.int(mark.x); out.int(mark.y); out.int(mark.width); out.int(mark.height)
+                out.str(mark.family)
+                out.int(mark.size)
+                out.int(mark.weight)
+                out.byte(if (mark.italic) 1 else 0)
+                out.int(mark.line)
+                out.str(mark.orientation.name.lowercase().replace('_', '-'))
+                out.str(mark.align.name.lowercase())
+            }
+        }
+        val decor = expression.decor
+        if (decor == null) {
+            out.byte(0)
+        } else {
+            out.byte(1)
+            out.int(decor.size)
+            for (plane in decor) {
+                out.str(plane.kind.name.lowercase().replace('_', '-'))
+                out.int(plane.x); out.int(plane.y); out.int(plane.width); out.int(plane.height)
+            }
         }
         return out.toByteArray()
     }

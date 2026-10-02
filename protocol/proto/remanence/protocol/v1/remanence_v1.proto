@@ -136,7 +136,9 @@ message ExpressionSource {
 // v1 artifacts MUST NOT set the v2-only crop (11) or mask_id (12) fields;
 // version-2 (expression_version == 2 / GENEX03) requires crop on every
 // placement. mask_id uses proto3 explicit presence; message fields (crop)
-// already carry presence.
+// already carry presence. shape (13) is v3-artifact only (full frozen V5,
+// GENEX04): "rect" | "round" | "ellipse"; v1/v2 artifacts MUST NOT set it
+// and v3 artifacts MUST always set it explicitly (never rely on default).
 message ExpressionPlacement {
   string content_id = 1;
   sint32 x = 2;
@@ -150,6 +152,11 @@ message ExpressionPlacement {
   sint32 rect_height = 10;
   ExpressionCrop crop = 11;
   optional string mask_id = 12;
+  // v3-artifact only (full frozen V5, GENEX04): "rect" | "round" | "ellipse".
+  // Explicit presence: a v3 artifact placement without shape is a decode
+  // error, never a silent RECT (mirrors BEXPR03, which writes shape
+  // unconditionally). v1/v2 artifacts MUST NOT set it.
+  optional string shape = 13;
 }
 
 // V5 finished collage: resolved style binding (v2 artifact only).
@@ -192,10 +199,13 @@ message ExpressionArtwork {
   uint32 height = 6;
 }
 
-// V5 finished collage: music rectangle inside the canvas (v2 artifact only).
-// mode 'text' | 'thumbnail'; artwork present iff mode is 'thumbnail'
-// (rule A1); slice-1 receivers reject 'thumbnail' (admission AD1).
-// Slice-1 encoders never write artwork (no descriptor source yet).
+// V5 finished collage: music rectangle inside the canvas (v2/v3 artifact
+// only). v2 artifact modes: 'text' | 'thumbnail'; artwork present iff mode
+// is 'thumbnail' (rule A1); slice-1 receivers reject 'thumbnail' (admission
+// AD1). v3 artifact modes: the frozen nine ('text', 'thumbnail', 'inline',
+// 'tile-art', 'tile-text', 'sleeve', 'sleeve-empty', 'spine', 'pulse') with
+// the frozen artwork compatibility matrix. Slice-1 encoders never write
+// artwork (no descriptor source yet).
 message ExpressionMusic {
   sint32 x = 1;
   sint32 y = 2;
@@ -206,14 +216,48 @@ message ExpressionMusic {
   ExpressionArtwork artwork = 7;
 }
 
+// Full frozen V5: one authored provenance mark (v3 artifact only).
+// kind "brand" | "sender"; text is the literal 'Remanence' for brand and
+// 'From <verified handle>' for sender (<= 128 chars). Mark colour is never
+// carried: receivers resolve ink (brand in grammars 23/24: soundInk).
+message ExpressionProvenance {
+  string kind = 1;
+  string text = 2;
+  sint32 x = 3;
+  sint32 y = 4;
+  sint32 width = 5;
+  sint32 height = 6;
+  string family = 7;
+  uint32 size = 8;
+  uint32 weight = 9;
+  bool italic = 10;
+  uint32 line = 11;
+  string orientation = 12; // "horizontal" | "vertical-up" | "vertical-down"
+  string align = 13;       // "left" | "center" | "right"
+}
+
+// Full frozen V5: one authored decor plane (v3 artifact only).
+// kind "carrier" | "acid-ribbon" | "print-plane"; geometry only, fills
+// resolve at render time from the documented kind-to-role map.
+message ExpressionDecor {
+  string kind = 1;
+  sint32 x = 2;
+  sint32 y = 3;
+  sint32 width = 4;
+  sint32 height = 5;
+}
+
 // ADR-018: signed/encrypted resolved-expression artifact (inside v2
 // ContentManifest). The declared hash MUST equal the canonical hash of the
 // reconstructed expression; receivers reconstruct and cross-check.
-// Name frozen; field 1 (expression_version) is the artifact discriminator;
-// v1 artifacts MUST NOT set fields 18..20 or any new ExpressionPlacement
-// field; never retype ContentManifest.expression = 6.
+// Name frozen; field 1 (expression_version) is the artifact discriminator:
+// exactly 1 (v1 / GENEX01+GENEX02 input shapes), 2 (v2 finished collage /
+// GENEX03), or 3 (v3 full frozen V5 / GENEX04); v1 artifacts MUST NOT set
+// fields 18..22 or any new ExpressionPlacement field; v2 artifacts MUST NOT
+// set fields 21..22 or ExpressionPlacement.shape; never retype
+// ContentManifest.expression = 6.
 message ExpressionV1 {
-  uint32 expression_version = 1; // exactly 1 (v1) or 2 (v2 finished collage)
+  uint32 expression_version = 1; // exactly 1 (v1), 2 (v2 finished collage), or 3 (v3 full V5)
   string candidate_id = 2;       // <= 256 chars
   string expression_hash = 3;    // lowercase hex SHA-256 (64 chars)
   uint32 canvas_version = 4;
@@ -233,6 +277,8 @@ message ExpressionV1 {
   ExpressionStyle style = 18;
   ExpressionTextType note_type = 19;
   ExpressionMusic music = 20;
+  repeated ExpressionProvenance provenance = 21;
+  repeated ExpressionDecor decor = 22;
 }
 
 // M2-P08: the bounded purpose of a sender-owned wrapped retry keyset.

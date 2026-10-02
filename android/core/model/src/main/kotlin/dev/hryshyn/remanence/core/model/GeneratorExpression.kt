@@ -122,6 +122,21 @@ object GeneratorExpression {
      */
     const val EXPRESSION_CONTRACT_V3 = 3
 
+    /**
+     * Expression layout version: full frozen V5 (T154; V5 freeze 2026-09-25
+     * `runtime/grammars.js` + `runtime/expansion.js` + `runtime/styles.js` +
+     * `runtime/styles-extension.js`).
+     *
+     * Additive over v3: per-placement photo [PhotoShape] (default RECT, so
+     * every legacy placement decodes unchanged), the nine frozen music
+     * [MUSIC_MODES_V4] values in [MusicRegion.mode], and the trailing
+     * authored [ProvenanceMark] / [SceneDecor] lists. v1, v2, and v3 bytes,
+     * hashes, and goldens stay byte-identical: v1/v2/v3 arms reject any
+     * v4-only field fail-closed, and v4 is framed by its own magic
+     * `"GENEX04"`.
+     */
+    const val EXPRESSION_CONTRACT_V4 = 4
+
     /** Reference canvas units (arch §2, provisional 9:16 360×640). */
     const val CANVAS_WIDTH_UNITS = 360
     const val CANVAS_HEIGHT_UNITS = 640
@@ -152,6 +167,13 @@ object GeneratorExpression {
      * No v3 bytes exist on any wire, so this marker is still cheap to own.
      */
     private const val MAGIC_V3 = "GENEX03"
+
+    /**
+     * v4 frame discriminator (full frozen V5): a v1/v2/v3 parser matching
+     * on its own magic rejects v4 bytes before misreading the version
+     * marker. No v4 bytes exist on any wire, so this marker is cheap to own.
+     */
+    private const val MAGIC_V4 = "GENEX04"
     private val UTF8 = Charsets.UTF_8
 
     /** One ordered original photograph (authored input side). */
@@ -295,6 +317,124 @@ object GeneratorExpression {
     /** Music treatments a sealed collage may carry. */
     val MUSIC_MODES: Set<String> = setOf("text", "thumbnail")
 
+    /**
+     * Frozen music presentation modes (v4 only).
+     *
+     * Verbatim from the freeze: `sound(d,r,mode)` (`expansion.js:21`) and
+     * `grammars.js` `closing` / branch plans. No-artwork maps to `text`,
+     * except `sleeve` which maps to `sleeve-empty`. Cover bytes render only
+     * for `thumbnail`, `tile-art`, `sleeve`, `inline`, and `pulse`
+     * (`grammars.js` `musicNode` artwork gate); `text`, `tile-text`,
+     * `sleeve-empty`, and `spine` are text-only bands.
+     */
+    val MUSIC_MODES_V4: Set<String> =
+        setOf("text", "thumbnail", "inline", "tile-art", "tile-text", "sleeve", "sleeve-empty", "spine", "pulse")
+
+    /** Music modes whose frozen DOM carries a cover image when artwork is present. */
+    val MUSIC_COVER_MODES_V4: Set<String> = setOf("thumbnail", "inline", "tile-art", "sleeve", "pulse")
+
+    /**
+     * Single source of truth for the frozen artwork compatibility matrix
+     * (`grammars.js` `musicNode` gate; `expansion.js:21` `sound()`):
+     * required-artwork modes always seal a descriptor (no-art maps to
+     * `text`, `sleeve` maps to `sleeve-empty`); text-only bands never do;
+     * `inline`/`pulse` ride either path. The renderer, admission, and
+     * validation all read these sets; nothing copies them.
+     */
+    val MUSIC_ARTWORK_REQUIRED_MODES_V4: Set<String> = setOf("thumbnail", "tile-art", "sleeve")
+    val MUSIC_TEXT_ONLY_MODES_V4: Set<String> = setOf("text", "tile-text", "sleeve-empty", "spine")
+    val MUSIC_BARE_TEXT_OK_MODES_V4: Set<String> = setOf("inline", "pulse")
+
+    /** Maximum sealed provenance mark text length in chars (frozen maximum is far below). */
+    const val MAX_PROVENANCE_TEXT_CHARS = 128
+
+    /** Maximum sealed decor planes (frozen maximum: one carrier/ribbon, or per-tile print planes). */
+    const val MAX_DECOR_PLANES = 8
+
+    /**
+     * Authored brand text: the code-constant literal `'Remanence'`
+     * (`grammars.js:32`). Never a seal input, never a recipient claim.
+     */
+    const val BRAND_TEXT = "Remanence"
+
+    /** Authored sender prefix: sender text is always `'From ' + handle` (`grammars.js:33`). */
+    const val SENDER_PREFIX = "From "
+
+    /**
+     * Composes sealed sender text from a verified sender snapshot handle.
+     * A null/blank handle yields null: the sender mark is omitted, never
+     * fabricated from input/recipient/manifest claims.
+     */
+    fun senderMarkText(verifiedHandle: String?): String? {
+        if (verifiedHandle.isNullOrBlank()) return null
+        return SENDER_PREFIX + verifiedHandle
+    }
+
+    /**
+     * Frozen mark line height: `ceil(size * 1.02)` (`grammars.js:31`
+     * `mark()`). Receivers render this integer; they never re-derive it.
+     */
+    fun markLine(size: Int): Int = kotlin.math.ceil(size * 1.02).toInt()
+
+    /** Photo aperture shape (`tile()` shape slot; `crop.js` `maskPoint`). */
+    enum class PhotoShape { RECT, ROUND, ELLIPSE }
+
+    /** Authored mark kind: `brand()` vs `sender()` (`grammars.js:32-33`). */
+    enum class ProvenanceKind { BRAND, SENDER }
+
+    /**
+     * Mark orientation (`grammars.js:31`): `'horizontal'`, `'vertical-up'`
+     * (-90°), `'vertical-down'` (+90°).
+     */
+    enum class MarkOrientation { HORIZONTAL, VERTICAL_UP, VERTICAL_DOWN }
+
+    /** Mark alignment as authored (`align` style slot; default left). */
+    enum class MarkAlign { LEFT, CENTER, RIGHT }
+
+    /**
+     * One authored provenance mark (v4 only): brand or sender text with its
+     * frozen box, resolved type, orientation, and alignment.
+     *
+     * `line` is `ceil(size * 1.02)` per [markLine], except the recorded V4
+     * editorial yield (brand size 64 with line 70, `expansion.js:30`).
+     * `text` is [BRAND_TEXT] for [ProvenanceKind.BRAND] and [senderMarkText]
+     * output for [ProvenanceKind.SENDER]. Mark colour is absent from frozen
+     * output by design and resolved at render time to the style `ink` role
+     * (brand in grammars 23/24 resolves to `soundInk` per `styles.css`;
+     * see the renderer).
+     */
+    data class ProvenanceMark(
+        val kind: ProvenanceKind,
+        val text: String,
+        val x: Int,
+        val y: Int,
+        val width: Int,
+        val height: Int,
+        val family: String,
+        val size: Int,
+        val weight: Int,
+        val italic: Boolean,
+        val line: Int,
+        val orientation: MarkOrientation,
+        val align: MarkAlign,
+    )
+
+    /** Frozen decor kind (`plan.decor` kind slot; geometry only, no colour field). */
+    enum class DecorKind { CARRIER, ACID_RIBBON, PRINT_PLANE }
+
+    /**
+     * One authored decor plane (v4 only): kind plus its frozen canvas box.
+     * Fills resolve at render time from the documented kind-to-role map
+     * (explicitly provisional: no fill rule exists in frozen code/CSS).
+     */
+    data class SceneDecor(
+        val kind: DecorKind,
+        val x: Int,
+        val y: Int,
+        val width: Int,
+        val height: Int,
+    )
+
     /** Cover-art media types a sealed descriptor may name. */
     val ARTWORK_MIME_TYPES: Set<String> = setOf("image/jpeg", "image/png", "image/webp")
 
@@ -345,6 +485,13 @@ object GeneratorExpression {
         val maskId: String?,
         /** v2/v3; v1 expressions must leave this null. */
         val contentRect: ContentRect? = null,
+        /**
+         * Photo aperture shape (v4 only; default RECT keeps every legacy
+         * placement byte-identical). `round` is active (grammar 11
+         * interlock); `ellipse` is schema-supported with no active producer
+         * (grammar 19 is spliced inactive).
+         */
+        val shape: PhotoShape = PhotoShape.RECT,
     )
 
     /** Frozen resolved expression (arch §2–§3 `ResolvedExpression`). */
@@ -374,6 +521,19 @@ object GeneratorExpression {
         val noteType: TextType? = null,
         /** v3 only; v1/v2 expressions must leave this null. */
         val musicRegion: MusicRegion? = null,
+        /**
+         * v4 only; v1/v2/v3 expressions must leave this null. Authored
+         * brand/sender marks with frozen boxes. `null` means the expression
+         * carries no provenance layer (legacy grammars); an empty list is
+         * never sealed.
+         */
+        val provenance: List<ProvenanceMark>? = null,
+        /**
+         * v4 only; v1/v2/v3 expressions must leave this null. Authored
+         * decor planes (`carrier`, `acid-ribbon`, `print-plane`) with
+         * frozen geometry.
+         */
+        val decor: List<SceneDecor>? = null,
     )
 
     /** Immutable frozen snapshot (boundary `Freeze`). */
@@ -470,17 +630,22 @@ object GeneratorExpression {
         val version = expression.expressionContractVersion
         if (version != EXPRESSION_CONTRACT_V1 &&
             version != EXPRESSION_CONTRACT_V2 &&
-            version != EXPRESSION_CONTRACT_V3
+            version != EXPRESSION_CONTRACT_V3 &&
+            version != EXPRESSION_CONTRACT_V4
         ) {
-            reasons += "expressionContractVersion must be 1, 2, or 3, got $version"
+            reasons += "expressionContractVersion must be 1, 2, 3, or 4, got $version"
         }
         if (version == EXPRESSION_CONTRACT_V1) {
             if (expression.noteRegion != null) reasons += "v1 expression must not carry noteRegion"
             if (expression.style != null) reasons += "v1 expression must not carry style"
             if (expression.noteType != null) reasons += "v1 expression must not carry noteType"
             if (expression.musicRegion != null) reasons += "v1 expression must not carry musicRegion"
+            if (expression.provenance != null) reasons += "v1 expression must not carry provenance"
+            if (expression.decor != null) reasons += "v1 expression must not carry decor"
         }
         if (version == EXPRESSION_CONTRACT_V3) {
+            if (expression.provenance != null) reasons += "v3 expression must not carry provenance"
+            if (expression.decor != null) reasons += "v3 expression must not carry decor"
             val style = expression.style
             if (style == null) {
                 reasons += "v3 requires style"
@@ -540,6 +705,8 @@ object GeneratorExpression {
             if (expression.style != null) reasons += "v2 expression must not carry style"
             if (expression.noteType != null) reasons += "v2 expression must not carry noteType"
             if (expression.musicRegion != null) reasons += "v2 expression must not carry musicRegion"
+            if (expression.provenance != null) reasons += "v2 expression must not carry provenance"
+            if (expression.decor != null) reasons += "v2 expression must not carry decor"
             val note = expression.input.note
             val region = expression.noteRegion
             if (note.isNullOrEmpty()) {
@@ -571,18 +738,26 @@ object GeneratorExpression {
             }
             val crop = placement.crop
             // The crop unit rides the contract: v1/v2 stay on the frozen
-            // 0..1000 bound; v3 quantizes the V5 envelope-50 policy at
-            // 0..10000 and requires a crop on every placement.
-            val cropBound = if (version == EXPRESSION_CONTRACT_V3) CROP_UNIT_MAX_V3 else CROP_UNIT_MAX
-            if (version == EXPRESSION_CONTRACT_V3 && crop == null) {
-                reasons += "placements[$index] v3 requires crop"
+            // 0..1000 bound; v3/v4 quantize the V5 envelope-50 policy at
+            // 0..10000 and require a crop on every placement.
+            val cropBound = if (version == EXPRESSION_CONTRACT_V3 ||
+                version == EXPRESSION_CONTRACT_V4
+            ) {
+                CROP_UNIT_MAX_V3
+            } else {
+                CROP_UNIT_MAX
+            }
+            if ((version == EXPRESSION_CONTRACT_V3 || version == EXPRESSION_CONTRACT_V4) && crop == null) {
+                reasons += "placements[$index] v${version} requires crop"
             }
             if (crop != null) {
                 if (crop.x < 0 || crop.y < 0 || crop.width <= 0 || crop.height <= 0 ||
                     crop.x.toLong() + crop.width > cropBound ||
                     crop.y.toLong() + crop.height > cropBound
                 ) {
-                    reasons += if (version == EXPRESSION_CONTRACT_V3) {
+                    reasons += if (version == EXPRESSION_CONTRACT_V3 ||
+                        version == EXPRESSION_CONTRACT_V4
+                    ) {
                         "placements[$index].crop must fit 0..10000"
                     } else {
                         "placements[$index].crop must fit 0..1000"
@@ -591,6 +766,9 @@ object GeneratorExpression {
             }
             if (placement.maskId != null && placement.maskId.isBlank()) {
                 reasons += "placements[$index].maskId must not be blank"
+            }
+            if (version != EXPRESSION_CONTRACT_V4 && placement.shape != PhotoShape.RECT) {
+                reasons += "placements[$index] v1/v2/v3 must not carry a non-rect shape"
             }
             if (version == EXPRESSION_CONTRACT_V1 && placement.contentRect != null) {
                 reasons += "placements[$index] v1 must not carry contentRect"
@@ -611,6 +789,106 @@ object GeneratorExpression {
                     reasons += checkContentRectInside(rect, placement, index, "v3")
                 }
             }
+            if (version == EXPRESSION_CONTRACT_V4) {
+                // Unlike v2, v4 placements use the crop window — not a
+                // second letterbox — so the rect stays optional here.
+                val rect = placement.contentRect
+                if (rect != null) {
+                    reasons += checkContentRectInside(rect, placement, index, "v4")
+                }
+            }
+        }
+        if (version == EXPRESSION_CONTRACT_V4) {
+            if (expression.input.photos.isEmpty() || expression.placements.isEmpty()) {
+                reasons += "v4 requires at least one photo and placement"
+            }
+            val style = expression.style
+            if (style == null) {
+                reasons += "v4 requires style"
+            } else {
+                reasons += validateStyleBinding(style)
+            }
+            val noteType = expression.noteType
+            if (noteType == null) {
+                reasons += "v4 requires noteType"
+            } else {
+                reasons += validateTextType(noteType, "noteType")
+            }
+            val v4region = expression.noteRegion
+            if (v4region != null &&
+                (v4region.x < 0 || v4region.y < 0 || v4region.width <= 0 || v4region.height <= 0 ||
+                    v4region.x.toLong() + v4region.width > CANVAS_WIDTH_UNITS ||
+                    v4region.y.toLong() + v4region.height > CANVAS_HEIGHT_UNITS)
+            ) {
+                reasons += "v4 noteRegion must fit 360x640 with positive size"
+            }
+            val v4music = expression.musicRegion
+            if (v4music != null) {
+                if (v4music.width <= 0 || v4music.height <= 0 ||
+                    v4music.x < 0 || v4music.y < 0 ||
+                    v4music.x.toLong() + v4music.width > CANVAS_WIDTH_UNITS ||
+                    v4music.y.toLong() + v4music.height > CANVAS_HEIGHT_UNITS
+                ) {
+                    reasons += "v4 musicRegion must fit 360x640 with positive size"
+                }
+                if (v4music.mode !in MUSIC_MODES_V4) {
+                    reasons += "v4 musicRegion.mode must be one of $MUSIC_MODES_V4, got ${v4music.mode}"
+                }
+                reasons += validateTextType(v4music.type, "musicRegion.type")
+                // Frozen artwork gate (`grammars.js` musicNode): only
+                // thumbnail/inline/tile-art/sleeve/pulse ever carry a cover
+                // (see MUSIC_*_MODES_V4).
+                if (v4music.mode in MUSIC_ARTWORK_REQUIRED_MODES_V4 && v4music.artwork == null) {
+                    reasons += "v4 musicRegion mode ${v4music.mode} requires artwork"
+                }
+                if (v4music.mode in MUSIC_TEXT_ONLY_MODES_V4 && v4music.artwork != null) {
+                    reasons += "v4 musicRegion mode ${v4music.mode} must not carry artwork"
+                }
+                if (v4music.artwork != null && v4music.mode !in MUSIC_COVER_MODES_V4) {
+                    reasons += "v4 musicRegion artwork requires a cover mode, got ${v4music.mode}"
+                }
+                val v4artwork = v4music.artwork
+                if (v4artwork != null) {
+                    reasons += validateArtworkRef(v4artwork)
+                }
+            }
+            if (expression.input.music?.artworkId != null) {
+                reasons += "v4 input.music.artworkId must be null; the expression artwork descriptor wins"
+            }
+            val provenance = expression.provenance
+            if (provenance != null) {
+                if (provenance.isEmpty()) {
+                    reasons += "v4 provenance must not be empty when present"
+                }
+                if (provenance.size > 2) {
+                    reasons += "v4 provenance carries at most brand + sender, got ${provenance.size}"
+                }
+                val kinds = provenance.map { it.kind }
+                if (kinds.toSet().size != kinds.size) {
+                    reasons += "v4 provenance kinds must be unique"
+                }
+                provenance.forEachIndexed { index, mark ->
+                    reasons += validateProvenanceMark(mark, index)
+                }
+            }
+            val decor = expression.decor
+            if (decor != null) {
+                if (decor.isEmpty()) {
+                    reasons += "v4 decor must not be empty when present"
+                }
+                if (decor.size > MAX_DECOR_PLANES) {
+                    reasons += "v4 decor carries at most $MAX_DECOR_PLANES planes, got ${decor.size}"
+                }
+                decor.forEachIndexed { index, plane ->
+                    if (plane.width <= 0 || plane.height <= 0 ||
+                        plane.x < 0 || plane.y < 0 ||
+                        plane.x.toLong() + plane.width > CANVAS_WIDTH_UNITS ||
+                        plane.y.toLong() + plane.height > CANVAS_HEIGHT_UNITS
+                    ) {
+                        reasons += "v4 decor[$index] must fit 360x640 with positive size"
+                    }
+                }
+            }
         }
         return if (reasons.isEmpty()) InputValidation.Valid else InputValidation.Invalid(reasons)
     }
@@ -627,6 +905,55 @@ object GeneratorExpression {
         if (style.digest.size != 32) {
             reasons += "style.digest must be exactly 32 bytes, got ${style.digest.size}"
         }
+        return reasons
+    }
+
+    /** Structural checks for one v4 authored provenance mark. */
+    private fun validateProvenanceMark(mark: ProvenanceMark, index: Int): List<String> {
+        val reasons = mutableListOf<String>()
+        val prefix = "provenance[$index]"
+        when (mark.kind) {
+            ProvenanceKind.BRAND -> {
+                if (mark.text != BRAND_TEXT) {
+                    reasons += "$prefix brand text must be '$BRAND_TEXT', got ${mark.text}"
+                }
+            }
+            ProvenanceKind.SENDER -> {
+                if (!mark.text.startsWith(SENDER_PREFIX) ||
+                    mark.text.removePrefix(SENDER_PREFIX).isBlank()
+                ) {
+                    reasons += "$prefix sender text must be 'From <verified handle>'"
+                }
+            }
+        }
+        if (mark.width <= 0 || mark.height <= 0 ||
+            mark.x < 0 || mark.y < 0 ||
+            mark.x.toLong() + mark.width > CANVAS_WIDTH_UNITS ||
+            mark.y.toLong() + mark.height > CANVAS_HEIGHT_UNITS
+        ) {
+            reasons += "$prefix must fit 360x640 with positive size"
+        }
+        if (mark.text.length > MAX_PROVENANCE_TEXT_CHARS) {
+            reasons += "$prefix.text must be <= $MAX_PROVENANCE_TEXT_CHARS chars, got ${mark.text.length}"
+        }
+        if (mark.family !in TEXT_FAMILIES) {
+            reasons += "$prefix.family must be one of $TEXT_FAMILIES, got ${mark.family}"
+        }
+        if (mark.size !in 8..96) reasons += "$prefix.size must be 8..96, got ${mark.size}"
+        if (mark.weight != 400 && mark.weight != 700) {
+            reasons += "$prefix.weight must be 400 or 700, got ${mark.weight}"
+        }
+        if (mark.italic && (mark.family != "StudySerif" || mark.weight != 400)) {
+            reasons += "$prefix.italic is only available as StudySerif @400"
+        }
+        // Frozen `mark()` line is ceil(size*1.02); the single recorded
+        // exception is the V4 editorial yield (brand 64 / line 70,
+        // `expansion.js:30`).
+        val editorialYield = mark.size == 64 && mark.line == 70
+        if (mark.line != markLine(mark.size) && !editorialYield) {
+            reasons += "$prefix.line must be ceil(size*1.02) = ${markLine(mark.size)}, got ${mark.line}"
+        }
+        if (mark.line !in 8..120) reasons += "$prefix.line must be 8..120, got ${mark.line}"
         return reasons
     }
 
@@ -746,12 +1073,14 @@ object GeneratorExpression {
     /**
      * Deterministic canonical bytes of a resolved expression, dispatched on
      * [ResolvedExpression.expressionContractVersion]. Fail-closed: invalid
-     * expressions (including v1/v2 values carrying v3-only fields, and any
+     * expressions (including v1/v2/v3 values carrying v4-only fields, and any
      * unsupported version) throw instead of aliasing a legal encoding. The
      * v1 path is frozen byte-identical; v2 uses the `GENEX02` frame with the
      * trailing contentRects and noteRegion per the format KDoc above; v3
      * uses the `GENEX03` frame with per-placement crops and the global
-     * style / note-type / music trailer.
+     * style / note-type / music trailer; v4 uses the `GENEX04` frame (v3
+     * fields plus per-placement shape and the trailing provenance / decor
+     * lists, so mark texts join the sealed digest).
      */
     fun canonicalBytes(expression: ResolvedExpression): ByteArray {
         when (val valid = validateResolved(expression)) {
@@ -765,6 +1094,7 @@ object GeneratorExpression {
             EXPRESSION_CONTRACT_V1 -> legacyExpressionBytes(expression)
             EXPRESSION_CONTRACT_V2 -> v2ExpressionBytes(expression)
             EXPRESSION_CONTRACT_V3 -> v3ExpressionBytes(expression)
+            EXPRESSION_CONTRACT_V4 -> v4ExpressionBytes(expression)
             else -> throw IllegalArgumentException(
                 "unsupported expressionContractVersion: ${expression.expressionContractVersion}",
             )
@@ -950,6 +1280,125 @@ object GeneratorExpression {
             out.putString(music.mode)
             out.writeArtwork(music.artwork)
             out.writeTextType(music.type)
+        }
+        out.putString(expression.noteTreatment)
+        out.putInt(expression.diagnostics.size)
+        for (diagnostic in expression.diagnostics) out.putString(diagnostic)
+        out.putInt(expression.fontVersion)
+        out.putInt(expression.paletteVersion)
+        return out.toByteArray()
+    }
+
+    /**
+     * v4 expression encoding (full frozen V5). The v3 field order is
+     * preserved through the music trailer; each placement gains a trailing
+     * `shape:str` (`"rect"` / `"round"` / `"ellipse"`), then the v4 trailer
+     * carries the authored provenance marks (so mark texts join the sealed
+     * digest) and decor planes before `noteTreatment`. Validation
+     * guarantees the v4-required fields are present. A v4 parser matching
+     * `"GENEX04"` rejects v1/v2/v3 bytes before misreading them.
+     */
+    private fun v4ExpressionBytes(expression: ResolvedExpression): ByteArray {
+        val out = CanonicalWriter()
+        out.putAscii(MAGIC_V4)
+        out.putInt(CONTRACT_VERSION)
+        out.putInt(expression.expressionContractVersion)
+        out.putInt(expression.canvasVersion)
+        out.putString(expression.grammarId)
+        out.putInt(expression.grammarVersion)
+        out.putString(expression.branchId)
+        out.writeInputBody(expression.input)
+        out.putInt(expression.placements.size)
+        for (placement in expression.placements) {
+            out.putString(placement.contentId)
+            out.putInt(placement.x)
+            out.putInt(placement.y)
+            out.putInt(placement.width)
+            out.putInt(placement.height)
+            val crop = placement.crop
+            if (crop == null) {
+                out.putByte(0)
+            } else {
+                out.putByte(1)
+                out.putInt(crop.x)
+                out.putInt(crop.y)
+                out.putInt(crop.width)
+                out.putInt(crop.height)
+            }
+            val mask = placement.maskId
+            if (mask == null) {
+                out.putByte(0)
+            } else {
+                out.putByte(1)
+                out.putString(mask)
+            }
+            val rect = placement.contentRect
+            if (rect == null) {
+                out.putByte(0)
+            } else {
+                out.putByte(1)
+                out.putInt(rect.x)
+                out.putInt(rect.y)
+                out.putInt(rect.width)
+                out.putInt(rect.height)
+            }
+            out.putString(placement.shape.name.lowercase())
+        }
+        val style = requireNotNull(expression.style) { "v4 requires style" }
+        out.putString(style.styleId)
+        out.putString(style.styleVersion)
+        require(style.digest.size == 32) { "v4 style.digest must be exactly 32 bytes" }
+        out.putRaw(style.digest)
+        val noteType = requireNotNull(expression.noteType) { "v4 requires noteType" }
+        out.writeTextType(noteType)
+        val music = expression.musicRegion
+        if (music == null) {
+            out.putByte(0)
+        } else {
+            out.putByte(1)
+            out.putInt(music.x)
+            out.putInt(music.y)
+            out.putInt(music.width)
+            out.putInt(music.height)
+            out.putString(music.mode)
+            out.writeArtwork(music.artwork)
+            out.writeTextType(music.type)
+        }
+        val provenance = expression.provenance
+        if (provenance == null) {
+            out.putByte(0)
+        } else {
+            out.putByte(1)
+            out.putInt(provenance.size)
+            for (mark in provenance) {
+                out.putString(mark.kind.name.lowercase())
+                out.putString(mark.text)
+                out.putInt(mark.x)
+                out.putInt(mark.y)
+                out.putInt(mark.width)
+                out.putInt(mark.height)
+                out.putString(mark.family)
+                out.putInt(mark.size)
+                out.putInt(mark.weight)
+                out.putByte(if (mark.italic) 1 else 0)
+                out.putInt(mark.line)
+                out.putString(mark.orientation.name.lowercase().replace('_', '-'))
+                out.putString(mark.align.name.lowercase())
+            }
+        }
+        val decor = expression.decor
+        if (decor == null) {
+            out.putByte(0)
+        } else {
+            out.putByte(1)
+            out.putInt(decor.size)
+            for (plane in decor) {
+                out.putString(plane.kind.name.lowercase().replace('_', '-'))
+                out.putInt(plane.x)
+                out.putInt(plane.y)
+                out.putInt(plane.width)
+                out.putInt(plane.height)
+            }
         }
         out.putString(expression.noteTreatment)
         out.putInt(expression.diagnostics.size)

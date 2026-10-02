@@ -350,11 +350,11 @@ class CollageRendererTest {
     @Test
     fun structuralAndCapabilityRejections() {
         assertEquals(
-            "collage renderer requires a contract V3 expression, got 2",
+            "collage renderer requires a contract V3 or V4 expression, got 2",
             rejected(expressionV3(styleId = "press", contractVersion = GeneratorExpression.EXPRESSION_CONTRACT_V2)),
         )
         assertEquals(
-            "style signal is not a bundled collage style",
+            "style digest does not match the bundled style record",
             rejected(expressionV3(styleId = "signal", styleDigest = ByteArray(32))),
         )
         assertEquals(

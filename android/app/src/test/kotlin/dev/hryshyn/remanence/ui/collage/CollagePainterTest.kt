@@ -62,13 +62,15 @@ class CollagePainterTest {
     }
 
     @Test
-    fun layerOrderIsPaperPhotosNoteMusic() {
+    fun layerOrderIsPaperDecorPhotosNoteMusicProvenance() {
         assertEquals(
             listOf(
                 CollagePainter.Layer.PAPER,
+                CollagePainter.Layer.DECOR,
                 CollagePainter.Layer.PHOTOS,
                 CollagePainter.Layer.NOTE,
                 CollagePainter.Layer.MUSIC,
+                CollagePainter.Layer.PROVENANCE,
             ),
             CollagePainter.LAYER_ORDER,
         )

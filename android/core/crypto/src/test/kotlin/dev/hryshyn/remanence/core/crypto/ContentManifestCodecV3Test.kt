@@ -311,7 +311,7 @@ class ContentManifestCodecV3Test {
         val failure = assertFailsWith<IllegalArgumentException> {
             codec.buildAndEncryptV2(keyset, routing(), manifestPhotos(), null, "cand-1", v1, blobMap())
         }
-        assertEquals("expression artifact requires a v2 expression", failure.message)
+        assertEquals("expression artifact requires a v2, v3, or v4 expression", failure.message)
     }
 
     @Test
@@ -348,8 +348,10 @@ class ContentManifestCodecV3Test {
         val base = rawManifest(sealed).expression
         // Unknown artifact versions fail with the frozen R1 message, which
         // fires before the candidate-id check (blank candidate still reports
-        // the version failure, mirroring the rc.5 pin).
-        for (version in listOf(3, 99)) {
+        // the version failure, mirroring the rc.5 pin). Artifact 3 is the
+        // T154 full-V5 frame (contract V4), so the out-of-range examples are
+        // 4 and 99; 3 is covered positive by ContentManifestCodecV4Test.
+        for (version in listOf(4, 99)) {
             val mutated = reseal(
                 rawManifest(sealed).toBuilder()
                     .setExpression(base.toBuilder().setExpressionVersion(version).build())
@@ -362,7 +364,7 @@ class ContentManifestCodecV3Test {
         }
         val blankCandidate = reseal(
             rawManifest(sealed).toBuilder()
-                .setExpression(base.toBuilder().setExpressionVersion(3).setCandidateId("").build())
+                .setExpression(base.toBuilder().setExpressionVersion(99).setCandidateId("").build())
                 .build(),
         )
         val ordered = assertFailsWith<GeneralSecurityException> {

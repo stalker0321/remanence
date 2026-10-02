@@ -4,8 +4,10 @@ import dev.hryshyn.remanence.protocol.v1.ContentManifest
 import dev.hryshyn.remanence.protocol.v1.CapsuleTrackSnapshotV1 as ProtoTrackSnapshot
 import dev.hryshyn.remanence.protocol.v1.ExpressionArtwork
 import dev.hryshyn.remanence.protocol.v1.ExpressionCrop
+import dev.hryshyn.remanence.protocol.v1.ExpressionDecor
 import dev.hryshyn.remanence.protocol.v1.ExpressionMusic
 import dev.hryshyn.remanence.protocol.v1.ExpressionPlacement
+import dev.hryshyn.remanence.protocol.v1.ExpressionProvenance
 import dev.hryshyn.remanence.protocol.v1.ExpressionSource
 import dev.hryshyn.remanence.protocol.v1.ExpressionStyle
 import dev.hryshyn.remanence.protocol.v1.ExpressionTextType
@@ -98,9 +100,10 @@ class ContentManifestCodec {
     ): ByteArray {
         require(
             expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V2 ||
-                expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V3,
+                expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V3 ||
+                expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V4,
         ) {
-            "expression artifact requires a v2 expression"
+            "expression artifact requires a v2, v3, or v4 expression"
         }
         require(candidateId.isNotBlank() && candidateId.length <= MAX_CANDIDATE_ID_CHARS) {
             "expression candidate id invalid"
@@ -253,7 +256,8 @@ class ContentManifestCodec {
             if (!manifest.hasExpression()) {
                 throw GeneralSecurityException("v2 content manifest is missing its expression artifact")
             }
-            if (manifest.expression.expressionVersion == EXPRESSION_VERSION_V3 &&
+            if ((manifest.expression.expressionVersion == EXPRESSION_VERSION_V3 ||
+                    manifest.expression.expressionVersion == EXPRESSION_VERSION_V4) &&
                 manifest.expression.hasMusic() != manifest.hasTrackSnapshot()
             ) {
                 throw GeneralSecurityException("expression music region and track snapshot must match")
@@ -286,10 +290,10 @@ class ContentManifestCodec {
     ): ExpressionV1 {
         val builder = ExpressionV1.newBuilder()
             .setExpressionVersion(
-                if (expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V3) {
-                    EXPRESSION_VERSION_V3
-                } else {
-                    EXPRESSION_VERSION
+                when (expression.expressionContractVersion) {
+                    GeneratorExpression.EXPRESSION_CONTRACT_V4 -> EXPRESSION_VERSION_V4
+                    GeneratorExpression.EXPRESSION_CONTRACT_V3 -> EXPRESSION_VERSION_V3
+                    else -> EXPRESSION_VERSION
                 },
             )
             .setCandidateId(candidateId)
@@ -331,9 +335,11 @@ class ContentManifestCodec {
                     .setRectX(rect.x).setRectY(rect.y)
                     .setRectWidth(rect.width).setRectHeight(rect.height)
             }
-            if (expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V3) {
+            if (expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V3 ||
+                expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V4
+            ) {
                 val crop = requireNotNull(placement.crop) {
-                    "v3 expression must carry crop on ${placement.contentId}"
+                    "v3/v4 expression must carry crop on ${placement.contentId}"
                 }
                 p.setCrop(
                     ExpressionCrop.newBuilder()
@@ -342,17 +348,22 @@ class ContentManifestCodec {
                 )
                 placement.maskId?.let(p::setMaskId)
             }
+            if (expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V4) {
+                p.setShape(placement.shape.name.lowercase())
+            }
             builder.addPlacements(p)
         }
-        if (expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V3) {
-            val style = requireNotNull(expression.style) { "v3 expression must carry style" }
+        if (expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V3 ||
+            expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V4
+        ) {
+            val style = requireNotNull(expression.style) { "v3/v4 expression must carry style" }
             builder.setStyle(
                 ExpressionStyle.newBuilder()
                     .setStyleId(style.styleId)
                     .setStyleVersion(style.styleVersion)
                     .setStyleDigest(com.google.protobuf.ByteString.copyFrom(style.digest)),
             )
-            val noteType = requireNotNull(expression.noteType) { "v3 expression must carry noteType" }
+            val noteType = requireNotNull(expression.noteType) { "v3/v4 expression must carry noteType" }
             builder.setNoteType(toProtoTextType(noteType))
             expression.musicRegion?.let { music ->
                 val musicBuilder = ExpressionMusic.newBuilder()
@@ -372,6 +383,34 @@ class ContentManifestCodec {
                     )
                 }
                 builder.setMusic(musicBuilder.build())
+            }
+            if (expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V4) {
+                expression.provenance?.forEach { mark ->
+                    builder.addProvenance(
+                        ExpressionProvenance.newBuilder()
+                            .setKind(mark.kind.name.lowercase())
+                            .setText(mark.text)
+                            .setX(mark.x).setY(mark.y)
+                            .setWidth(mark.width).setHeight(mark.height)
+                            .setFamily(mark.family)
+                            .setSize(mark.size)
+                            .setWeight(mark.weight)
+                            .setItalic(mark.italic)
+                            .setLine(mark.line)
+                            .setOrientation(mark.orientation.name.lowercase().replace('_', '-'))
+                            .setAlign(mark.align.name.lowercase())
+                            .build(),
+                    )
+                }
+                expression.decor?.forEach { plane ->
+                    builder.addDecor(
+                        ExpressionDecor.newBuilder()
+                            .setKind(plane.kind.name.lowercase().replace('_', '-'))
+                            .setX(plane.x).setY(plane.y)
+                            .setWidth(plane.width).setHeight(plane.height)
+                            .build(),
+                    )
+                }
             }
         }
         return builder.build()
@@ -395,26 +434,86 @@ class ContentManifestCodec {
             line = type.line,
         )
 
+    private fun fromProtoProvenance(mark: ExpressionProvenance): GeneratorExpression.ProvenanceMark {
+        val kind = when (mark.kind) {
+            "brand" -> GeneratorExpression.ProvenanceKind.BRAND
+            "sender" -> GeneratorExpression.ProvenanceKind.SENDER
+            else -> throw GeneralSecurityException("expression provenance kind unknown")
+        }
+        val orientation = when (mark.orientation) {
+            "horizontal" -> GeneratorExpression.MarkOrientation.HORIZONTAL
+            "vertical-up" -> GeneratorExpression.MarkOrientation.VERTICAL_UP
+            "vertical-down" -> GeneratorExpression.MarkOrientation.VERTICAL_DOWN
+            else -> throw GeneralSecurityException("expression provenance orientation unknown")
+        }
+        val align = when (mark.align) {
+            "left" -> GeneratorExpression.MarkAlign.LEFT
+            "center" -> GeneratorExpression.MarkAlign.CENTER
+            "right" -> GeneratorExpression.MarkAlign.RIGHT
+            else -> throw GeneralSecurityException("expression provenance align unknown")
+        }
+        if (mark.text.length > GeneratorExpression.MAX_PROVENANCE_TEXT_CHARS) {
+            throw GeneralSecurityException("expression provenance text too long")
+        }
+        return GeneratorExpression.ProvenanceMark(
+            kind = kind,
+            text = mark.text,
+            x = mark.x, y = mark.y, width = mark.width, height = mark.height,
+            family = mark.family,
+            size = mark.size,
+            weight = mark.weight,
+            italic = mark.italic,
+            line = mark.line,
+            orientation = orientation,
+            align = align,
+        )
+    }
+
+    private fun fromProtoDecor(plane: ExpressionDecor): GeneratorExpression.SceneDecor {
+        val kind = when (plane.kind) {
+            "carrier" -> GeneratorExpression.DecorKind.CARRIER
+            "acid-ribbon" -> GeneratorExpression.DecorKind.ACID_RIBBON
+            "print-plane" -> GeneratorExpression.DecorKind.PRINT_PLANE
+            else -> throw GeneralSecurityException("expression decor kind unknown")
+        }
+        return GeneratorExpression.SceneDecor(
+            kind = kind,
+            x = plane.x, y = plane.y, width = plane.width, height = plane.height,
+        )
+    }
+
     private fun parseExpression(
         proto: ExpressionV1,
         photos: List<ManifestPhoto>,
         note: String?,
     ): ContentExpression {
-        if (proto.expressionVersion !in setOf(EXPRESSION_VERSION, EXPRESSION_VERSION_V3)) {
+        if (proto.expressionVersion !in setOf(EXPRESSION_VERSION, EXPRESSION_VERSION_V3, EXPRESSION_VERSION_V4)) {
             throw GeneralSecurityException("unsupported expression artifact version")
         }
         if (proto.expressionVersion == EXPRESSION_VERSION &&
             (proto.hasStyle() || proto.hasNoteType() || proto.hasMusic() ||
-                proto.placementsList.any { it.hasCrop() || it.hasMaskId() })
+                proto.placementsList.any { it.hasCrop() || it.hasMaskId() || it.hasShape() } ||
+                proto.provenanceCount > 0 || proto.decorCount > 0)
         ) {
             throw GeneralSecurityException("expression artifact version 1 must not carry version 2 fields")
         }
+        if (proto.expressionVersion == EXPRESSION_VERSION_V3 &&
+            (proto.provenanceCount > 0 || proto.decorCount > 0 ||
+                proto.placementsList.any { it.hasShape() })
+        ) {
+            throw GeneralSecurityException("expression artifact version 2 must not carry version 3 fields")
+        }
         val isArtifactV2 = proto.expressionVersion == EXPRESSION_VERSION_V3
-        if (isArtifactV2) {
+        val isArtifactV3 = proto.expressionVersion == EXPRESSION_VERSION_V4
+        val isFinishedCollage = isArtifactV2 || isArtifactV3
+        if (isFinishedCollage) {
             if (!proto.hasStyle() || !proto.hasNoteType() ||
                 proto.placementsList.any { !it.hasCrop() }
             ) {
                 throw GeneralSecurityException("expression artifact version 2 requires style, note type, and per-placement crop")
+            }
+            if (isArtifactV3 && proto.placementsList.any { !it.hasShape() }) {
+                throw GeneralSecurityException("expression artifact version 3 requires per-placement shape")
             }
             if (proto.hasMusic() && !proto.music.hasType()) {
                 throw GeneralSecurityException("expression music region requires its resolved type")
@@ -465,16 +564,27 @@ class ContentManifestCodec {
             } else {
                 null
             }
-            val crop = if (isArtifactV2) {
+            val crop = if (isFinishedCollage) {
                 GeneratorExpression.CropWindow(p.crop.x, p.crop.y, p.crop.width, p.crop.height)
             } else {
                 null
             }
-            val maskId = if (isArtifactV2 && p.hasMaskId()) p.maskId else null
+            val maskId = if (isFinishedCollage && p.hasMaskId()) p.maskId else null
+            val shape = if (isArtifactV3) {
+                if (!p.hasShape()) throw GeneralSecurityException("expression placement shape missing")
+                when (p.shape) {
+                    "rect" -> GeneratorExpression.PhotoShape.RECT
+                    "round" -> GeneratorExpression.PhotoShape.ROUND
+                    "ellipse" -> GeneratorExpression.PhotoShape.ELLIPSE
+                    else -> throw GeneralSecurityException("expression placement shape unknown")
+                }
+            } else {
+                GeneratorExpression.PhotoShape.RECT
+            }
             GeneratorExpression.Placement(
                 contentId = p.contentId,
                 x = p.x, y = p.y, width = p.width, height = p.height,
-                crop = crop, maskId = maskId, contentRect = rect,
+                crop = crop, maskId = maskId, contentRect = rect, shape = shape,
             )
         }
         if (placements.map { it.contentId } != sourcePhotos.map { it.contentId }) {
@@ -492,7 +602,7 @@ class ContentManifestCodec {
         } else {
             null
         }
-        val style = if (isArtifactV2) {
+        val style = if (isFinishedCollage) {
             val s = proto.style
             GeneratorExpression.StyleBinding(
                 styleId = s.styleId,
@@ -502,12 +612,12 @@ class ContentManifestCodec {
         } else {
             null
         }
-        val noteType = if (isArtifactV2) {
+        val noteType = if (isFinishedCollage) {
             fromProtoTextType(proto.noteType)
         } else {
             null
         }
-        val musicRegion = if (isArtifactV2 && proto.hasMusic()) {
+        val musicRegion = if (isFinishedCollage && proto.hasMusic()) {
             val m = proto.music
             GeneratorExpression.MusicRegion(
                 x = m.x, y = m.y, width = m.width, height = m.height,
@@ -530,6 +640,16 @@ class ContentManifestCodec {
         } else {
             null
         }
+        val provenance = if (isArtifactV3 && proto.provenanceCount > 0) {
+            proto.provenanceList.map { m -> fromProtoProvenance(m) }
+        } else {
+            null
+        }
+        val decor = if (isArtifactV3 && proto.decorCount > 0) {
+            proto.decorList.map { d -> fromProtoDecor(d) }
+        } else {
+            null
+        }
         val expression = GeneratorExpression.ResolvedExpression(
             canvasVersion = proto.canvasVersion,
             grammarId = proto.grammarId,
@@ -541,15 +661,17 @@ class ContentManifestCodec {
             diagnostics = emptyList(),
             fontVersion = proto.fontVersion,
             paletteVersion = proto.paletteVersion,
-            expressionContractVersion = if (isArtifactV2) {
-                GeneratorExpression.EXPRESSION_CONTRACT_V3
-            } else {
-                GeneratorExpression.EXPRESSION_CONTRACT_V2
+            expressionContractVersion = when {
+                isArtifactV3 -> GeneratorExpression.EXPRESSION_CONTRACT_V4
+                isArtifactV2 -> GeneratorExpression.EXPRESSION_CONTRACT_V3
+                else -> GeneratorExpression.EXPRESSION_CONTRACT_V2
             },
             noteRegion = region,
             style = style,
             noteType = noteType,
             musicRegion = musicRegion,
+            provenance = provenance,
+            decor = decor,
         )
         if (GeneratorExpression.validateResolved(expression) !is GeneratorExpression.InputValidation.Valid) {
             throw GeneralSecurityException("expression artifact failed validation")
@@ -630,6 +752,7 @@ class ContentManifestCodec {
         const val PROTOCOL_VERSION_V2 = 2
         const val EXPRESSION_VERSION = 1
         const val EXPRESSION_VERSION_V3 = 2
+        const val EXPRESSION_VERSION_V4 = 3
         const val MEDIA_TYPE_JPEG = "image/jpeg"
         const val MIN_PHOTOS = 3
         const val MAX_PHOTOS = 5

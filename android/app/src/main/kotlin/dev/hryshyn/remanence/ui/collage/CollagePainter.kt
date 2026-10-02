@@ -13,19 +13,36 @@ object CollagePainter {
     /** Uniform viewport scale plus centered origin, both in viewport pixels. */
     data class Transform(val scale: Float, val dx: Float, val dy: Float)
 
-    /** Ordered drawing layers: paper, then photos, then note, then music. */
-    enum class Layer { PAPER, PHOTOS, NOTE, MUSIC }
+    /** Ordered drawing layers: paper, decor, then photos, then note, then music, then provenance. */
+    enum class Layer { PAPER, DECOR, PHOTOS, NOTE, MUSIC, PROVENANCE }
 
-    val LAYER_ORDER: List<Layer> = listOf(Layer.PAPER, Layer.PHOTOS, Layer.NOTE, Layer.MUSIC)
+    val LAYER_ORDER: List<Layer> = listOf(
+        Layer.PAPER,
+        Layer.DECOR,
+        Layer.PHOTOS,
+        Layer.NOTE,
+        Layer.MUSIC,
+        Layer.PROVENANCE,
+    )
 
     /** One ordered draw instruction. Text ops carry the sealed layout inputs. */
     sealed interface Op {
         data class Paper(val color: Int, val rect: CollageRenderer.RectI) : Op
 
+        /**
+         * Authored decor plane (v4 only): index into
+         * [CollageRenderer.Scene.decor]. The canvas resolves the sealed
+         * region and fill from the scene.
+         */
+        data class Decor(val index: Int) : Op
+
         data class Photo(
             val contentId: String,
             val source: CollageRenderer.RectI,
             val destination: CollageRenderer.RectI,
+            /** Aperture clip (v4 only; v3 scenes are always RECT). */
+            val shape: dev.hryshyn.remanence.core.model.GeneratorExpression.PhotoShape =
+                dev.hryshyn.remanence.core.model.GeneratorExpression.PhotoShape.RECT,
         ) : Op
 
         data class Note(
@@ -34,7 +51,16 @@ object CollagePainter {
             val color: Int,
         ) : Op
 
-        data class MusicBackground(val color: Int, val region: CollageRenderer.RectI) : Op
+        data class MusicBackground(
+            val color: Int,
+            val region: CollageRenderer.RectI,
+            /**
+             * True only for the two CSS-traced transparent bands: the
+             * canvas draws no fill and a top border in [ink] instead.
+             */
+            val transparent: Boolean = false,
+            val ink: Int = color,
+        ) : Op
 
         data class MusicText(
             val title: String,
@@ -50,6 +76,13 @@ object CollagePainter {
          * the op; only the sealed rectangle and the background colour do.
          */
         data class MusicArtwork(val region: CollageRenderer.RectI, val background: Int) : Op
+
+        /**
+         * Authored provenance mark (v4 only): index into
+         * [CollageRenderer.Scene.provenance]. The canvas resolves the
+         * sealed text/region/face/orientation/alignment from the scene.
+         */
+        data class Provenance(val index: Int) : Op
     }
 
     /**
@@ -98,21 +131,26 @@ object CollagePainter {
     /**
      * Ordered, complete draw list for [scene], or `null` when not drawable.
      * Source/destination rects are the sealed [CollageRenderer.ScenePhoto]
-     * values verbatim; the painter never recomputes crops.
+     * values verbatim; the painter never recomputes crops. Frozen render
+     * order is decor, photos, music, note, then provenance
+     * (`grammars.js` `render`); decor rides behind the photos
+     * (`z-index:-1`) and provenance closes the sheet.
      */
     fun drawList(scene: CollageRenderer.Scene, images: Map<String, CollageRenderer.SourcePhoto>): List<Op>? {
         if (!isDrawable(scene, images)) return null
-        val ops = ArrayList<Op>(scene.photos.size + 3)
+        val ops = ArrayList<Op>(scene.photos.size + scene.decor.size + scene.provenance.size + 3)
         ops += Op.Paper(scene.paper, CollageRenderer.RectI(0, 0, scene.canvasWidth, scene.canvasHeight))
-        scene.photos.forEach { ops += Op.Photo(it.contentId, it.source, it.destination) }
+        scene.decor.forEachIndexed { index, _ -> ops += Op.Decor(index) }
+        scene.photos.forEach { ops += Op.Photo(it.contentId, it.source, it.destination, it.shape) }
         scene.note?.let { ops += Op.Note(it.text, it.region, it.color) }
         scene.music?.let {
-            ops += Op.MusicBackground(it.background, it.region)
+            ops += Op.MusicBackground(it.background, it.region, it.transparentBackground, it.color)
             ops += Op.MusicText(it.title, it.artist, it.text, it.region, it.color)
         }
         scene.artwork?.let {
             ops += Op.MusicArtwork(it.region, it.background)
         }
+        scene.provenance.forEachIndexed { index, _ -> ops += Op.Provenance(index) }
         return ops
     }
 }

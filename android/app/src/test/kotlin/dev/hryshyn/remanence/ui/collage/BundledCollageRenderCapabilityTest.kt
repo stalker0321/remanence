@@ -96,7 +96,11 @@ class BundledCollageRenderCapabilityTest {
             StyleRegistry.digest("press")?.toList(),
             BundledCollageRenderCapability.styleDigest("press", "style-study-1")?.toList(),
         )
-        assertEquals(null, BundledCollageRenderCapability.styleDigest("signal", "style-study-1"))
+        assertEquals(
+            StyleRegistry.digest("signal")?.toList(),
+            BundledCollageRenderCapability.styleDigest("signal", "style-study-1")?.toList(),
+        )
+        assertEquals(null, BundledCollageRenderCapability.styleDigest("signal-x", "style-study-1"))
         assertEquals(null, BundledCollageRenderCapability.styleDigest("press", "style-study-2"))
         assertEquals(FontRegistry.resourceFor("StudySans", 400, false), BundledCollageRenderCapability.fontResource("StudySans", 400, false))
         assertEquals(null, BundledCollageRenderCapability.fontResource("StudyMono", 700, false))

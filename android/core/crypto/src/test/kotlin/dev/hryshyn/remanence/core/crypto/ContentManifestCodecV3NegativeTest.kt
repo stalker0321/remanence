@@ -198,8 +198,11 @@ class ContentManifestCodecV3NegativeTest {
     @Test
     fun r1UnknownArtifactVersionRejected() {
         val raw = sealedArtworkRaw()
+        // Artifact 3 is the T154 full-V5 frame (contract V4); the
+        // out-of-range examples are 4 and 99. The frozen message and its
+        // precedence survive unchanged.
         expectParseMessage(
-            withExpression(raw) { it.expressionVersion = 3 },
+            withExpression(raw) { it.expressionVersion = 4 },
             "unsupported expression artifact version",
         )
     }

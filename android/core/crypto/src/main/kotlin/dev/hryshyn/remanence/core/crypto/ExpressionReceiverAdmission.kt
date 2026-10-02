@@ -70,6 +70,14 @@ interface CollageRenderCapability {
  * time, never here, so admission itself performs no network work.
  * With the default [CollageRenderCapability.Disabled] the V3 result is the
  * existing blanket `"finished collage rendering is not supported"`.
+ *
+ * V4 (full frozen V5) keeps every V3 gate and additionally requires every
+ * sealed provenance face bundled, a music mode in the frozen nine with the
+ * frozen artwork compatibility (text-only bands carry no artwork; cover
+ * bands with artwork require artwork support; bare `inline`/`pulse` bands
+ * without artwork ride the text path), and no mask/contentRect overrides.
+ * Decor planes and photo aperture shapes are pure canvas geometry and need
+ * no registry beyond the enabled capability.
  */
 object ExpressionReceiverAdmission {
 
@@ -131,6 +139,57 @@ object ExpressionReceiverAdmission {
                 }
             }
             if (!capability.maskSupported && expression.placements.any { it.maskId != null }) {
+                return Result.Unsupported("expression mask is not supported")
+            }
+        }
+        if (expression.expressionContractVersion == GeneratorExpression.EXPRESSION_CONTRACT_V4) {
+            if (!capability.enabled) {
+                return Result.Unsupported("finished collage rendering is not supported")
+            }
+            val style = expression.style
+                ?: return Result.Unsupported("expression style is not supported")
+            val expectedDigest = capability.styleDigest(style.styleId, style.styleVersion)
+                ?: return Result.Unsupported("expression style is not supported")
+            if (!MessageDigest.isEqual(style.digest, expectedDigest)) {
+                return Result.Unsupported("expression style is not supported")
+            }
+            if (expression.fontVersion != capability.fontVersion ||
+                expression.paletteVersion != capability.paletteVersion
+            ) {
+                return Result.Unsupported("expression font or palette version is not supported")
+            }
+            val noteType = expression.noteType
+            if (noteType == null ||
+                capability.fontResource(noteType.family, noteType.weight, noteType.italic) == null
+            ) {
+                return Result.Unsupported("expression style is not supported")
+            }
+            expression.provenance?.forEach { mark ->
+                if (capability.fontResource(mark.family, mark.weight, mark.italic) == null) {
+                    return Result.Unsupported("expression style is not supported")
+                }
+            }
+            expression.musicRegion?.let { music ->
+                val type = music.type
+                if (type == null ||
+                    capability.fontResource(type.family, type.weight, type.italic) == null
+                ) {
+                    return Result.Unsupported("expression style is not supported")
+                }
+                val textOnly = music.mode in GeneratorExpression.MUSIC_TEXT_ONLY_MODES_V4 &&
+                    music.artwork == null
+                val artworkOk = capability.artworkSupported &&
+                    music.mode in GeneratorExpression.MUSIC_COVER_MODES_V4 &&
+                    music.artwork != null
+                val bareOk = music.mode in GeneratorExpression.MUSIC_BARE_TEXT_OK_MODES_V4 &&
+                    music.artwork == null
+                if (!textOnly && !artworkOk && !bareOk) {
+                    return Result.Unsupported("music artwork rendering is not supported")
+                }
+            }
+            if (!capability.maskSupported &&
+                expression.placements.any { it.maskId != null || it.contentRect != null }
+            ) {
                 return Result.Unsupported("expression mask is not supported")
             }
         }

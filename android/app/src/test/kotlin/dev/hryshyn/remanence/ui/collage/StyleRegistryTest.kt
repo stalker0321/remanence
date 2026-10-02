@@ -7,11 +7,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Pins the three bundled collage styles to the capsule-engine V5 freeze
- * `runtime/styles.js` (grammar group 5) and to hardcoded STYD01 v1 golden
- * bytes/digests in the accepted `V5 contract` section 7 order. The goldens
- * were derived independently from that byte order; they are not recomputed
- * from the production encoder here.
+ * Pins the bundled collage styles to the capsule-engine V5 freeze
+ * `runtime/styles.js` (grammar groups 5, 6, 11, 18, 27) plus
+ * `runtime/styles-extension.js` (groups 12, 17, 20, 21, 22, 23, 24, 25,
+ * 26) and to hardcoded STYD01 v1 golden bytes/digests in the accepted
+ * `V5 contract` section 7 order. The goldens were derived independently
+ * from that byte order; they are not recomputed from the production
+ * encoder here. The slice-1 press/blue-letter/poster goldens are frozen
+ * byte-identical.
  */
 class StyleRegistryTest {
 
@@ -20,12 +23,38 @@ class StyleRegistryTest {
     private fun style(id: String): StyleRegistry.Style = requireNotNull(StyleRegistry.style(id))
 
     @Test
-    fun bundledStylesAreExactlyPressBlueLetterPoster() {
-        assertEquals(setOf("press", "blue-letter", "poster"), StyleRegistry.ids)
+    fun bundledStylesAreAllFourteenFrozenGroups() {
+        assertEquals(
+            setOf(
+                "press", "blue-letter", "poster",
+                "signal", "night-air",
+                "plum", "construction", "pool",
+                "proof", "ochre",
+                "nocturne", "porcelain",
+                "telemetry", "folio",
+                "espresso", "aubergine", "lacquer",
+                "evergreen", "studio",
+                "ink-letter", "correspondence",
+                "apricot", "mineral", "brass",
+                "glacier", "ultraviolet",
+                "orchid", "ember",
+                "darkroom", "rose-stock", "registration",
+                "saffron", "blue-hour",
+            ),
+            StyleRegistry.ids,
+        )
         for (id in listOf("press", "blue-letter", "poster")) {
             assertEquals("style-study-1", style(id).version)
             assertEquals(StyleRegistry.GRAMMAR, style(id).grammar)
             assertEquals("flat", style(id).surfaceMode)
+        }
+        // styles.js groups carry style-study-1; styles-extension.js groups
+        // carry pilot-styles-1.
+        for (id in listOf("signal", "plum", "proof", "nocturne")) {
+            assertEquals("style-study-1", style(id).version)
+        }
+        for (id in listOf("telemetry", "espresso", "evergreen", "ink-letter", "apricot", "glacier", "orchid", "darkroom", "saffron")) {
+            assertEquals("pilot-styles-1", style(id).version)
         }
     }
 
@@ -149,7 +178,7 @@ class StyleRegistryTest {
 
     @Test
     fun unknownAndOtherFreezeStylesFailClosed() {
-        for (id in listOf("signal", "night-air", "plum", "proof", "v4", "unknown", "")) {
+        for (id in listOf("v4", "unknown", "", "PRESS", "press ")) {
             assertNull("expected $id to be absent", StyleRegistry.style(id))
             assertNull("expected $id to be absent", StyleRegistry.canonicalBytes(id))
             assertNull("expected $id to be absent", StyleRegistry.digest(id))

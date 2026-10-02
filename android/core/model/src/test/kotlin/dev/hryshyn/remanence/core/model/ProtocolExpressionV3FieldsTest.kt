@@ -4,8 +4,10 @@ import com.google.protobuf.ByteString
 import dev.hryshyn.remanence.protocol.v1.ContentManifest
 import dev.hryshyn.remanence.protocol.v1.ExpressionArtwork
 import dev.hryshyn.remanence.protocol.v1.ExpressionCrop
+import dev.hryshyn.remanence.protocol.v1.ExpressionDecor
 import dev.hryshyn.remanence.protocol.v1.ExpressionMusic
 import dev.hryshyn.remanence.protocol.v1.ExpressionPlacement
+import dev.hryshyn.remanence.protocol.v1.ExpressionProvenance
 import dev.hryshyn.remanence.protocol.v1.ExpressionSource
 import dev.hryshyn.remanence.protocol.v1.ExpressionStyle
 import dev.hryshyn.remanence.protocol.v1.ExpressionTextType
@@ -152,4 +154,101 @@ class ProtocolExpressionV3FieldsTest {
         .setWidth(640)
         .setHeight(640)
         .build()
+
+    @Test
+    fun v4ArtifactFieldNumbersAreFrozen() {
+        assertEquals(21, ExpressionV1.PROVENANCE_FIELD_NUMBER)
+        assertEquals(22, ExpressionV1.DECOR_FIELD_NUMBER)
+        assertEquals(13, ExpressionPlacement.SHAPE_FIELD_NUMBER)
+
+        assertEquals(1, ExpressionProvenance.KIND_FIELD_NUMBER)
+        assertEquals(2, ExpressionProvenance.TEXT_FIELD_NUMBER)
+        assertEquals(3, ExpressionProvenance.X_FIELD_NUMBER)
+        assertEquals(4, ExpressionProvenance.Y_FIELD_NUMBER)
+        assertEquals(5, ExpressionProvenance.WIDTH_FIELD_NUMBER)
+        assertEquals(6, ExpressionProvenance.HEIGHT_FIELD_NUMBER)
+        assertEquals(7, ExpressionProvenance.FAMILY_FIELD_NUMBER)
+        assertEquals(8, ExpressionProvenance.SIZE_FIELD_NUMBER)
+        assertEquals(9, ExpressionProvenance.WEIGHT_FIELD_NUMBER)
+        assertEquals(10, ExpressionProvenance.ITALIC_FIELD_NUMBER)
+        assertEquals(11, ExpressionProvenance.LINE_FIELD_NUMBER)
+        assertEquals(12, ExpressionProvenance.ORIENTATION_FIELD_NUMBER)
+        assertEquals(13, ExpressionProvenance.ALIGN_FIELD_NUMBER)
+
+        assertEquals(1, ExpressionDecor.KIND_FIELD_NUMBER)
+        assertEquals(2, ExpressionDecor.X_FIELD_NUMBER)
+        assertEquals(3, ExpressionDecor.Y_FIELD_NUMBER)
+        assertEquals(4, ExpressionDecor.WIDTH_FIELD_NUMBER)
+        assertEquals(5, ExpressionDecor.HEIGHT_FIELD_NUMBER)
+    }
+
+    @Test
+    fun proto3PresenceForShapeAndV4Lists() {
+        val withoutShape = ExpressionPlacement.newBuilder().setContentId("p1").build()
+        assertFalse(withoutShape.hasShape())
+        assertTrue(withoutShape.toBuilder().setShape("rect").build().hasShape())
+
+        val bare = ExpressionV1.newBuilder()
+            .setExpressionVersion(3)
+            .setCandidateId("ber1-x")
+            .build()
+        assertTrue(bare.provenanceList.isEmpty())
+        assertTrue(bare.decorList.isEmpty())
+    }
+
+    @Test
+    fun provenanceMarkMapsFieldForFieldToProto() {
+        val model = GeneratorExpression.ProvenanceMark(
+            kind = GeneratorExpression.ProvenanceKind.SENDER,
+            text = "From alice",
+            x = 16, y = 613, width = 328, height = 23,
+            family = "StudySerif", size = 20, weight = 400, italic = true, line = 21,
+            orientation = GeneratorExpression.MarkOrientation.HORIZONTAL,
+            align = GeneratorExpression.MarkAlign.RIGHT,
+        )
+        val proto = ExpressionProvenance.newBuilder()
+            .setKind(model.kind.name.lowercase())
+            .setText(model.text)
+            .setX(model.x).setY(model.y).setWidth(model.width).setHeight(model.height)
+            .setFamily(model.family)
+            .setSize(model.size)
+            .setWeight(model.weight)
+            .setItalic(model.italic)
+            .setLine(model.line)
+            .setOrientation(model.orientation.name.lowercase().replace('_', '-'))
+            .setAlign(model.align.name.lowercase())
+            .build()
+        val roundTripped = ExpressionProvenance.parseFrom(proto.toByteArray())
+        assertEquals("sender", roundTripped.kind)
+        assertEquals(model.text, roundTripped.text)
+        assertEquals(model.x, roundTripped.x)
+        assertEquals(model.y, roundTripped.y)
+        assertEquals(model.width, roundTripped.width)
+        assertEquals(model.height, roundTripped.height)
+        assertEquals(model.family, roundTripped.family)
+        assertEquals(model.size, roundTripped.size)
+        assertEquals(model.weight, roundTripped.weight)
+        assertEquals(model.italic, roundTripped.italic)
+        assertEquals(model.line, roundTripped.line)
+        assertEquals("horizontal", roundTripped.orientation)
+        assertEquals("right", roundTripped.align)
+    }
+
+    @Test
+    fun sceneDecorMapsFieldForFieldToProto() {
+        val model = GeneratorExpression.SceneDecor(
+            kind = GeneratorExpression.DecorKind.ACID_RIBBON,
+            x = 0, y = 218, width = 360, height = 39,
+        )
+        val proto = ExpressionDecor.newBuilder()
+            .setKind(model.kind.name.lowercase().replace('_', '-'))
+            .setX(model.x).setY(model.y).setWidth(model.width).setHeight(model.height)
+            .build()
+        val roundTripped = ExpressionDecor.parseFrom(proto.toByteArray())
+        assertEquals("acid-ribbon", roundTripped.kind)
+        assertEquals(model.x, roundTripped.x)
+        assertEquals(model.y, roundTripped.y)
+        assertEquals(model.width, roundTripped.width)
+        assertEquals(model.height, roundTripped.height)
+    }
 }

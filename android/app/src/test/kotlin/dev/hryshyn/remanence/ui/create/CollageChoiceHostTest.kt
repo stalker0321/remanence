@@ -6,10 +6,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.onNodeWithTag
@@ -151,6 +155,71 @@ class CollageChoiceHostTest {
         val secondNonPaper = second.count { it != paperOfDisplayed(session) }
         assertTrue("candidate 1 must render photographic pixels, got $secondNonPaper", secondNonPaper >= 1000)
         assertTrue("Next must change composition pixels", !first.contentEquals(second))
+    }
+
+    @Test
+    fun nextAfterFitSurvivesResizeRearm() {
+        // B3: overflow re-arms on displayIndex and viewport width, not just
+        // structure. Wide (fits) -> Next taps keep full labels; shrink ->
+        // scroll fallback re-engages with labels intact (no clip); expand
+        // -> plain-Row taps work again.
+        val session = CollageChoiceSession()
+        var panelWidth by mutableStateOf(360.dp)
+        composeRule.setContent {
+            Column(Modifier.width(panelWidth).verticalScroll(rememberScrollState())) {
+                CollageChoiceHost(session, input(), sources(), null, null, cropSource())
+            }
+        }
+        composeRule.waitUntil(timeoutMillis = 10_000) { session.candidates.isNotEmpty() }
+        composeRule.waitForIdle()
+
+        fun selectWidth() =
+            composeRule.onNodeWithTag("collage_select").fetchSemanticsNode().boundsInRoot.width
+        val natural = selectWidth()
+        assertTrue("Select natural width, was $natural", natural >= 80f)
+
+        // Next at fit width: taps land, labels keep natural widths.
+        val steps = minOf(2, session.candidates.lastIndex)
+        repeat(steps) {
+            composeRule.onNodeWithTag("collage_next").performScrollTo()
+            composeRule.waitForIdle()
+            composeRule.onNodeWithTag("collage_next").performClick()
+            composeRule.waitForIdle()
+        }
+        assertEquals(steps, session.displayIndex)
+        val afterNext = selectWidth()
+        assertEquals(natural, afterNext, 1f)
+        val afterNextHeight = composeRule.onNodeWithTag("collage_select")
+            .fetchSemanticsNode().boundsInRoot.height
+        assertTrue(
+            "Select stays one line after Next, height $afterNextHeight",
+            afterNextHeight < 80f,
+        )
+
+        // Shrink below natural: overflow re-arms, Select reachable scrolled.
+        composeRule.runOnIdle { panelWidth = 250.dp }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("collage_select").performScrollTo()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("collage_select").assertIsDisplayed()
+        val shrunk = selectWidth()
+        assertEquals(natural, shrunk, 1f)
+        val shrunkHeight = composeRule.onNodeWithTag("collage_select")
+            .fetchSemanticsNode().boundsInRoot.height
+        assertTrue(
+            "Select stays one line when scrolled, height $shrunkHeight",
+            shrunkHeight < 80f,
+        )
+
+        // Expand back: plain Row again, direct tap works without scrolling.
+        composeRule.runOnIdle { panelWidth = 360.dp }
+        composeRule.waitForIdle()
+        if (session.displayIndex < session.candidates.lastIndex) {
+            val before = session.displayIndex
+            composeRule.onNodeWithTag("collage_next").performClick()
+            composeRule.waitForIdle()
+            assertEquals(before + 1, session.displayIndex)
+        }
     }
 
     @Test

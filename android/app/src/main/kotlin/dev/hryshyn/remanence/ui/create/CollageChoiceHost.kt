@@ -22,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import kotlin.math.roundToInt
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
@@ -336,10 +337,16 @@ internal fun CollageBrowseNav(
     BoxWithConstraints(modifier.fillMaxWidth()) {
         val maxWidthPx = with(LocalDensity.current) { maxWidth.toPx() }
         // Start scrolling (safe superset: inner measures natural widths),
-        // relax to a plain Row when everything fits. Keyed on structure
-        // so shrink/growth re-measures; the guard below prevents feedback
-        // once relaxed.
-        var overflow by remember(session.candidates.size, session.selected != null) {
+        // relax to a plain Row when everything fits. Re-armed on structure
+        // (count/selection), displayIndex (counter digits change width) and
+        // rounded viewport width (foldable/multi-window resize without
+        // recreation); the guard below prevents feedback once relaxed.
+        var overflow by remember(
+            session.candidates.size,
+            session.selected != null,
+            session.displayIndex,
+            maxWidthPx.roundToInt(),
+        ) {
             mutableStateOf(true)
         }
         Row(

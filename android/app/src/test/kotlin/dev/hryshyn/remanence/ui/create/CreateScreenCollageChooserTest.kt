@@ -3,8 +3,12 @@ package dev.hryshyn.remanence.ui.create
 import android.content.Context
 import android.graphics.Bitmap
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
@@ -19,6 +23,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -497,11 +502,8 @@ class CreateScreenCollageChooserTest {
     @Test
     fun crowdedBranchDecisionMatrix() {
         // The crowded predicate (frozen frame/data-crowded rule) as a pure
-        // decision matrix. Tall viewports (>640dp) are unreachable under
-        // the Robolectric window cap (320x470 observed), so the tall and
-        // fontScale-on-tall branches are proven here, not via Box sizes;
-        // the crowded UI rendering itself is proven by the 320x568 test.
-        // Tall screens keep the original bounded weight pane (!crowded).
+        // decision matrix, supplementing (not replacing) the UI branch
+        // tests below: tall viewports keep the bounded weight pane.
         assertTrue(!isCrowdedExpression(900.dp, 1.0f))
         assertTrue(!isCrowdedExpression(641.dp, 1.0f))
         assertTrue(isCrowdedExpression(640.dp, 1.0f))
@@ -509,6 +511,101 @@ class CreateScreenCollageChooserTest {
         assertTrue(isCrowdedExpression(900.dp, 1.6f))
         assertTrue(isCrowdedExpression(900.dp, 2.0f))
         assertTrue(isCrowdedExpression(320.dp, 1.0f))
+    }
+
+    @Test
+    fun largeFontScaleTakesCrowdedBranch() {
+        // fontScale>=1.6 takes the crowded branch (frozen frame rule):
+        // fixed 280.dp art-space with a scrolling expression. Scroll offset
+        // carries across steps on the shared root state, so reset to the
+        // header before asserting sizes (a carried offset shrinks the
+        // visible art bounds and previously masked this branch as a 210px
+        // measurement).
+        val ids = listOf("u1", "u2", "u3")
+        val originals = ids.associateWith { id ->
+            ByteArray(64) { ((it * 31 + id.hashCode()) and 0xFF).toByte() }
+        }
+        val vm = viewModel(originals, withFactory = true)
+        driveToContent(vm, ids)
+        composeRule.setContent {
+            CompositionLocalProvider(
+                LocalDensity provides Density(LocalDensity.current.density, 1.6f),
+            ) {
+                Box(
+                    modifier = Modifier.size(400.dp, 900.dp),
+                ) {
+                    CreateScreen(
+                        viewModel = vm,
+                        adapterFactory = null,
+                        requestPermissionOnAttach = false,
+                    )
+                }
+            }
+        }
+        driveToComposeCandidates(vm)
+
+        composeRule.onNodeWithTag("create_screen_scroll")
+            .performScrollToNode(hasTestTag("create_compose_back"))
+        composeRule.waitForIdle()
+        val art = composeRule.onNodeWithTag("compose_art_space")
+            .fetchSemanticsNode().boundsInRoot
+        assertEquals(280f, art.height)
+        composeRule.onNodeWithTag("create_screen_scroll")
+            .performScrollToNode(hasTestTag("create_publish"))
+        composeRule.onNodeWithTag("create_publish").assertIsDisplayed()
+        vm.endSession()
+    }
+
+    @Test
+    fun tallViewportKeepsBoundedPaneWithoutScroll() {
+        // Tall viewport via a constrained oversize parent (requiredHeight
+        // bypasses the harness window cap): the original bounded weight
+        // pane is unchanged — no root scroll on COMPOSE. All containment
+        // is art-space-relative (never onRoot-relative).
+        val ids = listOf("u1", "u2", "u3")
+        val originals = ids.associateWith { id ->
+            ByteArray(64) { ((it * 31 + id.hashCode()) and 0xFF).toByte() }
+        }
+        val vm = viewModel(originals, withFactory = true)
+        driveToContent(vm, ids)
+        composeRule.setContent {
+            Box(
+                modifier = Modifier.fillMaxWidth().requiredHeight(900.dp),
+            ) {
+                CreateScreen(
+                    viewModel = vm,
+                    adapterFactory = null,
+                    requestPermissionOnAttach = false,
+                )
+            }
+        }
+        driveToComposeCandidates(vm)
+
+        // Weight remainder on a tall screen, not the crowded fixed size.
+        val art = composeRule.onNodeWithTag("compose_art_space")
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue(
+            "tall art-space must be weight-driven (well above 280px), was ${art.height}",
+            art.height > 300f,
+        )
+        // Canvas contained in the art-space (art-relative, not root).
+        val canvas = composeRule.onNodeWithTag("collage_canvas")
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue(
+            "canvas must sit inside the art-space: $canvas not in $art",
+            canvas.left >= art.left - 1f && canvas.top >= art.top - 1f &&
+                canvas.right <= art.right + 1f && canvas.bottom <= art.bottom + 1f,
+        )
+        // Frozen sibling order: nav renders below the art-space.
+        val selectBox = composeRule.onNodeWithTag("collage_select")
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue(
+            "nav must sit below the art-space: select $selectBox vs art $art",
+            selectBox.top >= art.bottom - 1f,
+        )
+        // Publish footer present (below the window fold: exists, not shown).
+        composeRule.onNodeWithTag("create_publish").assertExists()
+        vm.endSession()
     }
 
     @Test

@@ -90,7 +90,6 @@ internal sealed interface AllFamilyOutcome {
  */
 internal class AllFamilyCandidateProducer(
     private val cropMatrix: CollageCropMatrixSource,
-    private val cropSource: CollageCropSource,
     private val measure: FrozenGrammarPlans.TextMeasurer = FrozenGrammarPlans.LINE_HEIGHT_STUB,
 ) {
 
@@ -169,43 +168,43 @@ internal class AllFamilyCandidateProducer(
         }
         val ranked = FrozenCandidatePolicy.rank(buckets)
 
-        // Phase 3 — mount the sealed envelope-50 placements for the capped set.
+        // Phase 3 — solve the sealed envelope-50 window with the real Android
+        // solver at the EXACT frozen Double geometry (no Int floor), from the
+        // same analysis the matrix used. A missing/rejected slot omits the
+        // branch (healthy siblings continue); a missing analysis fails closed.
+        val photoById = input.photos.associateBy { it.contentId }
         val byGrammar = selectedPerGrammar
         val candidates = ArrayList<AllFamilyCandidate>(ranked.size)
         for (selection in ranked) {
             val branch = byGrammar[selection.grammarId]?.firstOrNull { it.plan.branch == selection.branch } ?: continue
-            val placementRequests = branch.plan.tiles.mapIndexed { slot, tile ->
-                CollageCropRequest(
-                    contentId = branch.assignment.compositionOrder[slot],
-                    slotWidth = floor(tile.rect.w).toInt(),
-                    slotHeight = floor(tile.rect.h).toInt(),
-                    shape = tile.shape,
-                    zooms = tile.zooms,
-                )
-            }
-            // A missing `cropsFor` map is a global authoritative-analysis
-            // failure; a missing per-slot key is a rejected branch that must be
-            // omitted with its healthy siblings still offered (frozen
-            // `resolve()` semantics), never a whole-run abort.
-            val crops = cropSource.cropsFor(placementRequests) ?: return AllFamilyOutcome.Unavailable(NO_ANALYSIS)
             val placements = ArrayList<MountedPlacement>(branch.plan.tiles.size)
             var missingCrop = false
             for (slot in branch.plan.tiles.indices) {
                 val tile = branch.plan.tiles[slot]
-                val window = crops[placementRequests[slot].contentId]
-                if (window == null) {
+                val contentId = branch.assignment.compositionOrder[slot]
+                val analysis = photoById[contentId]?.analysis
+                if (analysis == null) {
+                    missingCrop = true
+                    break
+                }
+                val solved = Envelope50CropSolver.solveDetailed(
+                    analysis,
+                    Envelope50CropSolver.Slot(tile.rect.w, tile.rect.h, tile.shape, tile.zooms),
+                )
+                val crop = (solved as? CropSolveResult.Solved)?.crop
+                if (crop == null) {
                     missingCrop = true
                     break
                 }
                 placements += MountedPlacement(
                     slotIndex = slot,
-                    contentId = branch.assignment.compositionOrder[slot],
+                    contentId = contentId,
                     x = floor(tile.rect.x).toInt(),
                     y = floor(tile.rect.y).toInt(),
                     width = floor(tile.rect.w).toInt(),
                     height = floor(tile.rect.h).toInt(),
                     shape = tile.shape,
-                    crop = window,
+                    crop = crop.toCropWindow(),
                 )
             }
             if (missingCrop) continue

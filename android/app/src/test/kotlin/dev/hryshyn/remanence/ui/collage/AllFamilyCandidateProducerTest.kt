@@ -1,6 +1,5 @@
 package dev.hryshyn.remanence.ui.collage
 
-import dev.hryshyn.remanence.core.model.GeneratorExpression
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -54,10 +53,6 @@ class AllFamilyCandidateProducerTest {
         }
     }
 
-    private fun fakeCrops() = CollageCropSource { requests ->
-        requests.associate { it.contentId to GeneratorExpression.CropWindow(0, 0, 10_000, 10_000) }
-    }
-
     private fun input(sender: String = "Alice") = AllFamilyInput(
         id = "all-family",
         sender = sender,
@@ -69,7 +64,7 @@ class AllFamilyCandidateProducerTest {
 
     @Test
     fun mountsAllFamiliesWithCompleteSafeMatchingAndCap() = runBlocking {
-        val outcome = AllFamilyCandidateProducer(fakeMatrix(), fakeCrops()).produce(input())
+        val outcome = AllFamilyCandidateProducer(fakeMatrix()).produce(input())
         assertTrue("expected candidates", outcome is AllFamilyOutcome.Candidates)
         val result = outcome as AllFamilyOutcome.Candidates
 
@@ -99,13 +94,13 @@ class AllFamilyCandidateProducerTest {
     @Test
     fun unavailableWhenAuthoritativeAnalysisIsMissing() = runBlocking {
         val noAnalysis = CollageCropMatrixSource { _, _ -> null }
-        val outcome = AllFamilyCandidateProducer(noAnalysis, fakeCrops()).produce(input())
+        val outcome = AllFamilyCandidateProducer(noAnalysis).produce(input())
         assertTrue("must fail closed", outcome is AllFamilyOutcome.Unavailable)
     }
 
     @Test
     fun blankSenderOmitsSenderMarks() = runBlocking {
-        val outcome = AllFamilyCandidateProducer(fakeMatrix(), fakeCrops()).produce(input(sender = "   "))
+        val outcome = AllFamilyCandidateProducer(fakeMatrix()).produce(input(sender = "   "))
         val result = outcome as AllFamilyOutcome.Candidates
         assertTrue(
             "blank sender must never fabricate a sender mark",
@@ -114,15 +109,29 @@ class AllFamilyCandidateProducerTest {
     }
 
     @Test
-    fun missingPlacementCropOmitsTheBranchNotTheWholeRun() = runBlocking {
-        val noPlacements = CollageCropSource { emptyMap<String, GeneratorExpression.CropWindow>() }
-        val outcome = AllFamilyCandidateProducer(fakeMatrix(), noPlacements).produce(input())
+    fun rejectedPlacementCropOmitsTheBranchNotTheWholeRun() = runBlocking {
+        // The fake assignment matrix says every cell is feasible, but the real
+        // solver rejects the slot on a zero-protection analysis: the branch must
+        // be omitted while the run stays a candidate outcome.
+        val rejecting = AllFamilyInput(
+            id = "all-family",
+            sender = "Alice",
+            note = "a short note",
+            music = true,
+            artwork = true,
+            photos = listOf(
+                AllFamilyPhoto("c0", 50, 50, true, analysis(50, 50)),
+                AllFamilyPhoto("c1", 50, 50, true, analysis(50, 50)),
+                AllFamilyPhoto("c2", 50, 50, true, analysis(50, 50)),
+            ),
+        )
+        val outcome = AllFamilyCandidateProducer(fakeMatrix()).produce(rejecting)
         assertTrue(
-            "a missing per-slot crop must not abort the whole run",
+            "a rejected per-slot crop must not abort the whole run",
             outcome is AllFamilyOutcome.Candidates,
         )
         val result = outcome as AllFamilyOutcome.Candidates
-        assertTrue("every candidate lacked a placement crop", result.candidates.isEmpty())
+        assertTrue("every candidate lacked a safe placement crop", result.candidates.isEmpty())
         assertTrue("the enumerated families still report their valid layouts", result.perGrammar.isNotEmpty())
     }
 

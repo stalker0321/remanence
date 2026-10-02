@@ -150,10 +150,22 @@ object Envelope50CropSolver {
      * `V4_CROP.crop` result used by the complete-safe assignment cost matrix.
      */
     fun baseMetrics(analysis: CollageAnalysis, slot: Slot): BaseCropMetrics? =
-        when (val base = baseCrop(analysis, AnalysisMaps(analysis), slot)) {
+        when (val base = baseCrop(analysis, mapsFor(analysis), slot)) {
             is BaseOutcome.Safe -> BaseCropMetrics(base.box, base.coverage.importance, base.retained)
             is BaseOutcome.Rejected -> null
         }
+
+    /**
+     * Android counterpart of the frozen `prepared` memo (`crop.js:17-24`): the
+     * six 49×49 integral-image maps are built once per [CollageAnalysis]
+     * identity, not once per window evaluation. Weakly keyed so a released
+     * analysis does not leak.
+     */
+    private val mapsCache: MutableMap<CollageAnalysis, AnalysisMaps> =
+        java.util.Collections.synchronizedMap(java.util.WeakHashMap())
+
+    private fun mapsFor(analysis: CollageAnalysis): AnalysisMaps =
+        mapsCache[analysis] ?: AnalysisMaps(analysis).also { mapsCache[analysis] = it }
 
     /**
      * Detailed solve. On failure the reason is the dominant frozen rejection
@@ -162,7 +174,7 @@ object Envelope50CropSolver {
      * first-encountered reason, matching the reference's stable sort.
      */
     fun solveDetailed(analysis: CollageAnalysis, slot: Slot): CropSolveResult {
-        val maps = AnalysisMaps(analysis)
+        val maps = mapsFor(analysis)
         return when (val base = baseCrop(analysis, maps, slot)) {
             is BaseOutcome.Safe ->
                 CropSolveResult.Solved(envelope50(analysis, maps, slot, base.box))
@@ -181,7 +193,7 @@ object Envelope50CropSolver {
         rect: NormBox,
         shape: String = "rect",
     ): CropRejectReason? =
-        when (val verdict = classifyWindow(analysis, AnalysisMaps(analysis), slot, rect, shape)) {
+        when (val verdict = classifyWindow(analysis, mapsFor(analysis), slot, rect, shape)) {
             is WindowVerdict.Safe -> null
             is WindowVerdict.Rejected -> verdict.reason
         }

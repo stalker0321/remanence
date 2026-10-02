@@ -485,6 +485,46 @@ class CreateComposeFlowTest {
     }
 
     @Test
+    fun openCropNeedsSelectedCandidate() {
+        val vm = newViewModel()
+        driveToContent(vm)
+        CollageFreezeFixture.freezeFirstCandidate(vm)
+        assertTrue(vm.goToCompose())
+
+        // Browse clears the highlight (host also clears the freeze via
+        // onNavigate): browsing alone never opens the stage — the frozen
+        // ordering is "select one, then tap a photograph".
+        vm.collageChoices.next()
+        vm.clearFrozenCollageSelection()
+        assertFalse(vm.openCrop(previewContentIds(vm).first()))
+        assertNull(vm.cropSlot.value)
+    }
+
+    @Test
+    fun openCropRefusesAfterBrowseInvalidatesSelection() {
+        val vm = newViewModel()
+        driveToContent(vm)
+        val ids = previewContentIds(vm)
+        CollageFreezeFixture.freezeFirstCandidate(vm)
+        assertTrue(vm.goToCompose())
+
+        // Reference ordering works: select, then open the stage.
+        assertTrue(vm.selectCollageCandidate(0))
+        assertTrue(vm.freezeCollageSelection())
+        assertTrue(vm.openCrop(ids.first()))
+        assertEquals(ids.first(), vm.cropSlot.value)
+        assertTrue(vm.closeCrop())
+
+        // Browse moves the display and clears the highlight (host also
+        // clears the freeze via onNavigate): opening must refuse rather
+        // than stage another candidate's geometry.
+        vm.collageChoices.next()
+        vm.clearFrozenCollageSelection()
+        assertFalse(vm.openCrop(ids.first()))
+        assertNull(vm.cropSlot.value)
+    }
+
+    @Test
     fun photoEditClearsCropState() {
         val vm = newViewModel()
         driveToContent(vm)

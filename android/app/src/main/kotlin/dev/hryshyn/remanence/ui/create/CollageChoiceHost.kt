@@ -2,18 +2,26 @@ package dev.hryshyn.remanence.ui.create
 
 import android.graphics.BitmapFactory
 import android.util.Log
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import dev.hryshyn.remanence.BuildConfig
 import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
 import dev.hryshyn.remanence.core.model.GeneratorExpression
@@ -28,21 +36,23 @@ import dev.hryshyn.remanence.ui.hold.HoldTextButton
 
 /**
  * Sender collage chooser/preview host. Builds the grammar-5 candidates once
- * per (input, note, track, analysis) and renders ONLY the explicitly selected
- * candidate through the SAME [CollageRenderer.prepare] + [CollageCanvas] the
- * recipient uses — so sender and receiver scenes match by construction. There
- * is no white-grid fallback: an unavailable analysis or a failed prepare
- * renders typed copy, never a fabricated layout.
+ * per (input, note, track, analysis) and renders the DISPLAYED candidate
+ * (browse cursor, first visible as soon as ready) through the SAME
+ * [CollageRenderer.prepare] + [CollageCanvas] the recipient uses — so sender
+ * and receiver scenes match by construction. There is no white-grid
+ * fallback: an unavailable analysis or a failed prepare renders typed copy,
+ * never a fabricated layout.
  *
- * Selection is explicit-only: nothing auto-selects. The [onSelect] action is
- * enabled only while a candidate is highlighted and freezes exactly that
- * displayed candidate; callers select then freeze against the same input
- * object this host built from. Previous/Next highlight a candidate (from an
- * unhighlighted list they start at an end) and always invoke [onNavigate]
- * first, so navigation invalidates an older freeze instead of silently
- * showing a different sheet under a frozen id. [frozenCandidateId] is read
- * fresh on every recomposition (the host already recomposes when the
- * selection moves), so no key-reset may dispose this subtree: that would
+ * Display is separate from freezing: browsing shows a candidate without
+ * authorising anything. The [onSelect] action is enabled while a candidate
+ * is displayed and freezes exactly that candidate; callers select then
+ * freeze against the same input object this host built from.
+ * Previous/Next move the display cursor (from an empty cursor they start at
+ * the first candidate), clear any explicit highlight, and always invoke
+ * [onNavigate] first, so navigation invalidates an older freeze instead of
+ * silently showing a different sheet under a frozen id. [frozenCandidateId]
+ * is read fresh on every recomposition (the host already recomposes when the
+ * display moves), so no key-reset may dispose this subtree: that would
  * relaunch the provider effect and wipe the fresh selection. For
  * note-carrying inputs the shared
  * BER1 note reporter keeps note publication byte-identical without rendering
@@ -118,58 +128,74 @@ internal fun CollageChoiceHost(
             // report it without rendering the BER1 preview.
             Ber1NoteMeasureReporter(input, onMeasured)
         }
-        if (session.candidates.size > 1) {
-            HoldTextButton(
-                onClick = {
-                    if (session.selectedIndex == null) {
-                        session.select(session.candidates.lastIndex)
-                    } else {
-                        session.previous()
-                    }
-                    onNavigate()
-                },
-                modifier = Modifier.testTag("collage_previous"),
-            ) { Text("Previous") }
-            HoldTextButton(
-                onClick = {
-                    if (session.selectedIndex == null) {
-                        session.select(0)
-                    } else {
-                        session.next()
-                    }
-                    onNavigate()
-                },
-                modifier = Modifier.testTag("collage_next"),
-            ) { Text("Next") }
-        }
-
         if (session.candidates.isNotEmpty()) {
-            Button(
-                onClick = { onSelect(session.selectedIndex ?: return@Button) },
-                enabled = session.selectedIndex != null,
-                modifier = Modifier.testTag("collage_select"),
-            ) { Text("Select") }
+            // Browse vs selected frame (frozen `.expression-nav` /
+            // `.selected-label`): browse shows the N/total counter between
+            // the buttons; once explicitly selected, the counter is replaced
+            // by the selected label while Previous/Next stay as the
+            // browse-again affordance. Compact, outside the canvas.
+            if (session.selected != null) {
+                Text(
+                    "✓ selected expression",
+                    modifier = Modifier.testTag("collage_selected_label"),
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (session.candidates.size > 1) {
+                    HoldTextButton(
+                        onClick = {
+                            session.previous()
+                            onNavigate()
+                        },
+                        modifier = Modifier.testTag("collage_previous"),
+                    ) { Text("Previous") }
+                    if (session.selected == null) {
+                        Text(
+                            "${session.displayIndex + 1} / ${session.candidates.size}",
+                            modifier = Modifier.testTag("collage_nav_counter"),
+                        )
+                    }
+                    HoldTextButton(
+                        onClick = {
+                            session.next()
+                            onNavigate()
+                        },
+                        modifier = Modifier.testTag("collage_next"),
+                    ) { Text("Next") }
+                }
+                Button(
+                    onClick = { onSelect(session.displayIndex) },
+                    enabled = session.displayed != null,
+                    modifier = Modifier.testTag("collage_select"),
+                ) { Text("Select") }
+            }
         }
-        val frozenId = frozenCandidateId()
-        if (frozenId != null) {
-            Text(frozenId, modifier = Modifier.testTag("collage_frozen"))
+        if (frozenCandidateId() != null) {
+            // The frozen candidate hash is internal identity, not product copy:
+            // keep only a zero-cost marker so selection can be asserted without
+            // showing a raw `ber1-…` string.
+            Box(Modifier.testTag("collage_frozen").size(1.dp))
         }
 
-        val selected = session.selected
+        val displayed = session.displayed
         when {
             session.notice != null ->
                 Text(session.notice!!, modifier = Modifier.testTag("collage_notice"))
 
-            selected == null ->
+            displayed == null ->
                 Text("Select a collage", modifier = Modifier.testTag("collage_select_hint"))
 
             else -> {
-                val images = remember(selected, sources) { decodeSources(sources) }
+                val images = remember(displayed, sources) { decodeSources(sources) }
                 val noteArg = note?.takeIf { it.isNotBlank() }
                 val sizes = images.mapValues { CollageRenderer.SourcePhoto(it.value.width, it.value.height) }
-                val prepared = remember(selected, images, noteArg, track, measurer, artworkBitmap) {
+                val prepared = remember(displayed, images, noteArg, track, measurer, artworkBitmap) {
                     CollageRenderer.prepare(
-                        selected.expression,
+                        displayed.expression,
                         noteArg,
                         track,
                         sizes,
@@ -181,31 +207,44 @@ internal fun CollageChoiceHost(
                 }
                 when (prepared) {
                     is CollageRenderer.SceneResult.Ready -> {
-                        val tap = onSlotTap
-                        if (tap == null) {
-                            CollageCanvas(
-                                scene = prepared.scene,
-                                images = images,
-                                contentDescription = "collage candidate",
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .aspectRatio(
-                                        CollageRenderer.CANVAS_WIDTH.toFloat() /
-                                            CollageRenderer.CANVAS_HEIGHT.toFloat(),
-                                    ),
-                                textMeasurer = measurer,
-                                artwork = artworkBitmap,
-                            )
-                        } else {
-                            CollageHotspotCanvas(
-                                scene = prepared.scene,
-                                images = images,
-                                placements = selected.expression.placements,
-                                onSlotTap = tap,
-                                modifier = Modifier.fillMaxWidth(),
-                                textMeasurer = measurer,
-                                artwork = artworkBitmap,
-                            )
+                        // Whole composition fits the available bounded height
+                        // (frozen 9:16 canvas), centred; controls stay outside.
+                        // Unbounded callers (legacy scroll) keep full width.
+                        val ratio = CollageRenderer.CANVAS_WIDTH.toFloat() /
+                            CollageRenderer.CANVAS_HEIGHT.toFloat()
+                        BoxWithConstraints(
+                            modifier = Modifier.fillMaxWidth(),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            val maxW = maxWidth
+                            val maxH: Dp = maxHeight
+                            val side = if (maxH != Dp.Infinity) {
+                                minOf(maxW, maxH * ratio)
+                            } else {
+                                maxW
+                            }
+                            val canvasModifier = Modifier.size(side, side / ratio)
+                            val tap = onSlotTap
+                            if (tap == null) {
+                                CollageCanvas(
+                                    scene = prepared.scene,
+                                    images = images,
+                                    contentDescription = "collage candidate",
+                                    modifier = canvasModifier,
+                                    textMeasurer = measurer,
+                                    artwork = artworkBitmap,
+                                )
+                            } else {
+                                CollageHotspotCanvas(
+                                    scene = prepared.scene,
+                                    images = images,
+                                    placements = displayed.expression.placements,
+                                    onSlotTap = tap,
+                                    modifier = canvasModifier,
+                                    textMeasurer = measurer,
+                                    artwork = artworkBitmap,
+                                )
+                            }
                         }
                     }
 

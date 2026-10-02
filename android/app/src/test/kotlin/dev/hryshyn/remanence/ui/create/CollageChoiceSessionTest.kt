@@ -9,8 +9,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Chooser state: list stability, explicit-only selection, prev/next without
- * rebuild, and invalidation on edit.
+ * Chooser state: display cursor visible without freezing, explicit-only
+ * selection, prev/next move the cursor and invalidate selection without
+ * rebuilding, and invalidation on edit.
  */
 class CollageChoiceSessionTest {
 
@@ -56,21 +57,46 @@ class CollageChoiceSessionTest {
     }
 
     @Test
-    fun previousAndNextMoveIndexWithoutRebuilding() {
+    fun firstCandidateIsDisplayedWithoutFreeze() {
+        val session = CollageChoiceSession()
+        session.replaceCandidates(built())
+        assertEquals(0, session.displayIndex)
+        assertEquals("press", session.displayed?.styleId)
+        assertNull(session.selectedIndex)
+        assertFalse(session.hasSelection)
+    }
+
+    @Test
+    fun previousAndNextMoveDisplayWithoutRebuilding() {
         val session = CollageChoiceSession()
         val list = built()
         session.replaceCandidates(list)
         session.select(0)
 
         session.previous()
-        assertEquals(0, session.selectedIndex)
+        assertEquals(0, session.displayIndex)
+        assertNull(session.selectedIndex)
         session.next()
-        assertEquals(1, session.selectedIndex)
+        assertEquals(1, session.displayIndex)
+        assertNull(session.selectedIndex)
         session.next()
-        assertEquals(2, session.selectedIndex)
+        assertEquals(2, session.displayIndex)
         session.next()
-        assertEquals(2, session.selectedIndex)
+        assertEquals(2, session.displayIndex)
         assertEquals(list, session.candidates)
+    }
+
+    @Test
+    fun browseInvalidatesExplicitSelection() {
+        val session = CollageChoiceSession()
+        session.replaceCandidates(built())
+        session.select(1)
+        assertEquals("blue-letter", session.selected?.styleId)
+        session.next()
+        assertNull(session.selectedIndex)
+        assertFalse(session.hasSelection)
+        assertEquals(1, session.displayIndex)
+        assertEquals("blue-letter", session.displayed?.styleId)
     }
 
     @Test

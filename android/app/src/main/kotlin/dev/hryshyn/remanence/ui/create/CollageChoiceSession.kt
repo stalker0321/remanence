@@ -17,6 +17,14 @@ class CollageChoiceSession {
     var candidates: List<CollageCandidate> by mutableStateOf(emptyList())
         private set
 
+    /**
+     * Browse cursor: always valid (0-based) once candidates exist, so the first
+     * candidate is displayed as soon as it is ready — independent of any
+     * explicit selection. Never null while [candidates] is non-empty.
+     */
+    var displayIndex: Int by mutableStateOf(0)
+        private set
+
     /** Null until the user explicitly selects a candidate. */
     var selectedIndex: Int? by mutableStateOf(null)
         private set
@@ -32,15 +40,21 @@ class CollageChoiceSession {
     var notice: String? by mutableStateOf(null)
         private set
 
+    /** The candidate currently shown to the user (browse cursor), if any. */
+    val displayed: CollageCandidate?
+        get() = candidates.getOrNull(displayIndex)
+
     val selected: CollageCandidate?
         get() = selectedIndex?.let(candidates::getOrNull)
 
     val hasSelection: Boolean
         get() = selected != null
 
-    /** A fresh build always drops any prior selection; never auto-selects. */
+    /** A fresh build resets the browse cursor to the first candidate and drops
+     *  any explicit selection; it never auto-freezes. */
     fun replaceCandidates(built: List<CollageCandidate>) {
         candidates = built
+        displayIndex = 0
         selectedIndex = null
         notice = null
         onCandidatesReplaced?.invoke()
@@ -48,6 +62,7 @@ class CollageChoiceSession {
 
     fun showNotice(reason: String) {
         candidates = emptyList()
+        displayIndex = 0
         selectedIndex = null
         notice = reason
     }
@@ -71,17 +86,21 @@ class CollageChoiceSession {
         return true
     }
 
+    /** Browsing moves the display cursor and invalidates any explicit selection. */
     fun previous() {
-        selectedIndex = selectedIndex?.let { if (it > 0) it - 1 else it }
+        if (displayIndex > 0) displayIndex -= 1
+        selectedIndex = null
     }
 
     fun next() {
-        selectedIndex = selectedIndex?.let { if (it < candidates.lastIndex) it + 1 else it }
+        if (displayIndex < candidates.lastIndex) displayIndex += 1
+        selectedIndex = null
     }
 
     /** Source/note/music edit invalidation: drops candidates and selection. */
     fun clear() {
         candidates = emptyList()
+        displayIndex = 0
         selectedIndex = null
         notice = null
     }

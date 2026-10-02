@@ -300,8 +300,8 @@ class CreateUiHappyPathTest {
             assertTrue(vm.freezeCollageSelection())
         }
 
-        // 6) Publish the frozen choice.
-        scroll("create_publish")
+        // 6) Publish the frozen choice. On the bounded COMPOSE viewport the
+        // footer is reachable without scrolling (B1 fit requirement).
         composeRule.onNodeWithTag("create_publish")
             .assertIsDisplayed()
             .performClick()

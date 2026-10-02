@@ -5,6 +5,8 @@ import dev.hryshyn.remanence.R
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -87,11 +89,22 @@ fun CreateScreen(
     // (Home <-> Create). Steps arrive via AstraStepArrival, which snaps on
     // the first mount (no stacked root alpha) and animates only on step
     // changes; the outgoing step is dropped synchronously.
+    //
+    // COMPOSE is a bounded viewport (frozen `.expression{overflow:hidden}`
+    // pane): no root scroll, so the chooser art-space measures real
+    // remaining space and the whole sheet + footer fit. Every other step
+    // keeps the scrollable root for small phones (FIX-STATE-04).
     Column(
         modifier = modifier
             .fillMaxSize()
             .testTag("create_screen_scroll")
-            .verticalScroll(rememberScrollState())
+            .then(
+                if (step == CreateViewModel.Step.COMPOSE) {
+                    Modifier
+                } else {
+                    Modifier.verticalScroll(rememberScrollState())
+                },
+            )
             .padding(horizontal = 24.dp, vertical = 16.dp),
     ) {
         AstraStepArrival(motion = motion, stepKey = step, modifier = Modifier.fillMaxWidth()) {
@@ -395,7 +408,12 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
  */
 @Composable
 private fun ComposeStepContent(viewModel: CreateViewModel) {
-    Column {
+    // Bounded COMPOSE pane (frozen `.expression{overflow:hidden}`): header,
+    // then the art-space takes the remaining height (`flex:1;min-height:0`
+    // equivalent), then the reserved slot-picker/footer controls. The sheet
+    // canvas measures against real remaining space, so the whole composition
+    // plus footer fit the viewport instead of scrolling away.
+    Column(Modifier.fillMaxSize()) {
         val recipient by viewModel.confirmedRecipient.collectAsStateWithLifecycle()
         recipient?.let { HoldInformation(stringResource(R.string.hold_for_handle, it.handle.toDisplayString())) }
         TextButton(
@@ -416,26 +434,42 @@ private fun ComposeStepContent(viewModel: CreateViewModel) {
         if (openSlot != null && source != null && geometry != null) {
             val corrections by viewModel.cropCorrections.collectAsStateWithLifecycle()
             val scope = rememberCoroutineScope()
-            CropStageContent(
-                source = source,
-                slotAspect = geometry.slotAspect,
-                baseCrop = geometry.baseCrop,
-                correction = corrections[openSlot],
-                onUpdate = viewModel::updateCrop,
-                onReset = viewModel::resetCrop,
-                onDone = { scope.launch { viewModel.applyCropAndClose() } },
-                onBack = { viewModel.closeCrop() },
-                modifier = Modifier.fillMaxWidth(),
-            )
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .testTag("compose_art_space"),
+            ) {
+                CropStageContent(
+                    source = source,
+                    slotAspect = geometry.slotAspect,
+                    baseCrop = geometry.baseCrop,
+                    correction = corrections[openSlot],
+                    onUpdate = viewModel::updateCrop,
+                    onReset = viewModel::resetCrop,
+                    onDone = { scope.launch { viewModel.applyCropAndClose() } },
+                    onBack = { viewModel.closeCrop() },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                )
+            }
         } else {
-            CollageStepChooser(
-                viewModel,
-                modifier = Modifier.fillMaxWidth(),
-                onSlotTap = { contentId ->
-                    viewModel.openCrop(contentId)
-                    Unit
-                },
-            )
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .testTag("compose_art_space"),
+            ) {
+                CollageStepChooser(
+                    viewModel,
+                    modifier = Modifier.fillMaxWidth(),
+                    onSlotTap = { contentId ->
+                        viewModel.openCrop(contentId)
+                        Unit
+                    },
+                )
+            }
             Spacer(Modifier.height(12.dp))
             val corrections by viewModel.cropCorrections.collectAsStateWithLifecycle()
             if (sources.isNotEmpty()) {

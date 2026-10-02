@@ -6,10 +6,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
-import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.dp
@@ -36,8 +38,8 @@ private fun collageChoiceJpeg(): ByteArray {
 }
 
 /**
- * Sender collage chooser host: no canvas before an explicit selection, the
- * selected candidate renders through the shared CollageCanvas, and a missing
+ * Sender collage chooser host: the first candidate displays as soon as it is
+ * ready (no freeze), rendering through the shared CollageCanvas, and a missing
  * authoritative analysis shows typed copy instead of a grid.
  */
 @RunWith(AndroidJUnit4::class)
@@ -69,7 +71,7 @@ class CollageChoiceHostTest {
     }
 
     @Test
-    fun showsSelectHintBeforeExplicitSelection() {
+    fun firstCandidateDisplaysWithoutFreeze() {
         val session = CollageChoiceSession()
         val input = input()
         val sources = sources()
@@ -79,8 +81,13 @@ class CollageChoiceHostTest {
         }
         composeRule.waitForIdle()
 
-        composeRule.onNodeWithTag("collage_select_hint").assertExists()
-        composeRule.onNodeWithTag("collage_canvas").assertDoesNotExist()
+        // Ready candidates show the first sheet immediately; nothing is
+        // selected or frozen by displaying it.
+        composeRule.onNodeWithTag("collage_select_hint").assertDoesNotExist()
+        composeRule.onNodeWithTag("collage_canvas").assertExists()
+        composeRule.onNodeWithTag("collage_frozen").assertDoesNotExist()
+        assertEquals(0, session.displayIndex)
+        assertTrue(session.selectedIndex == null)
     }
 
     @Test
@@ -101,7 +108,7 @@ class CollageChoiceHostTest {
     }
 
     @Test
-    fun selectedCanvasHasNonZeroHeightUnderVerticalScroll() {
+    fun displayedCanvasHasNonZeroHeightUnderVerticalScroll() {
         val session = CollageChoiceSession()
         composeRule.setContent {
             Column(Modifier.width(360.dp).verticalScroll(rememberScrollState())) {
@@ -110,12 +117,8 @@ class CollageChoiceHostTest {
         }
         composeRule.waitForIdle()
 
-        // Before explicit selection no canvas is shown, even under scroll.
-        composeRule.onNodeWithTag("collage_select_hint").assertExists()
-        composeRule.onNodeWithTag("collage_canvas").assertDoesNotExist()
-
-        composeRule.runOnIdle { session.select(0) }
-        composeRule.waitForIdle()
+        // The displayed sheet is present without any explicit selection.
+        composeRule.onNodeWithTag("collage_select_hint").assertDoesNotExist()
 
         val height = composeRule.onNodeWithTag("collage_canvas").fetchSemanticsNode().size.height
         assertTrue("sealed-aspect canvas height must be > 0 under verticalScroll, was $height", height > 0)
@@ -123,7 +126,7 @@ class CollageChoiceHostTest {
     }
 
     @Test
-    fun selectedCandidateRendersNonPaperPixelsAndNextChangesThem() {
+    fun displayedCandidateRendersNonPaperPixelsAndNextChangesThem() {
         val session = CollageChoiceSession()
         composeRule.setContent {
             Column(Modifier.width(360.dp).verticalScroll(rememberScrollState())) {
@@ -132,20 +135,18 @@ class CollageChoiceHostTest {
         }
         composeRule.waitForIdle()
 
-        composeRule.runOnIdle { session.select(0) }
-        composeRule.waitForIdle()
-
         val first = renderedContentPixels()
-        val firstNonPaper = first.count { it != paperOfSelected(session) }
+        val firstNonPaper = first.count { it != paperOfDisplayed(session) }
         assertTrue("candidate 0 must render photographic pixels, got $firstNonPaper", firstNonPaper >= 1000)
 
         composeRule.onNodeWithTag("collage_next").performScrollTo()
         composeRule.onNodeWithTag("collage_next").performClick()
         composeRule.waitForIdle()
-        assertEquals(1, session.selectedIndex)
+        assertEquals(1, session.displayIndex)
+        assertTrue(session.selectedIndex == null)
 
         val second = renderedContentPixels()
-        val secondNonPaper = second.count { it != paperOfSelected(session) }
+        val secondNonPaper = second.count { it != paperOfDisplayed(session) }
         assertTrue("candidate 1 must render photographic pixels, got $secondNonPaper", secondNonPaper >= 1000)
         assertTrue("Next must change composition pixels", !first.contentEquals(second))
     }
@@ -167,7 +168,7 @@ class CollageChoiceHostTest {
     }
 
     @Test
-    fun selectRequiresHighlightAndReportsIt() {
+    fun selectFreezesDisplayedCandidateAndNavigateInvalidates() {
         val session = CollageChoiceSession()
         val selected = mutableListOf<Int>()
         val navigated = mutableListOf<Unit>()
@@ -180,26 +181,62 @@ class CollageChoiceHostTest {
         }
         composeRule.waitForIdle()
 
-        // Nothing highlighted: Select is disabled and reports nothing.
-        composeRule.onNodeWithTag("collage_select").assertIsNotEnabled()
-        assertTrue(selected.isEmpty())
-        // Browsing from null highlights the first variant and reports navigation.
-        composeRule.onNodeWithTag("collage_next").performClick()
-        composeRule.waitForIdle()
-        assertEquals(0, session.selectedIndex)
-        assertEquals(1, navigated.size)
-        // The explicit action freezes exactly the highlighted candidate.
+        // The displayed first candidate can be frozen without prior browsing.
+        composeRule.onNodeWithTag("collage_select").assertIsEnabled()
         composeRule.onNodeWithTag("collage_select").performClick()
         composeRule.waitForIdle()
         assertEquals(listOf(0), selected)
-        // Moving highlights another candidate and reports navigation again.
+        // Moving the cursor clears the highlight and reports navigation so
+        // the caller invalidates the older freeze.
         composeRule.onNodeWithTag("collage_next").performClick()
         composeRule.waitForIdle()
-        assertEquals(1, session.selectedIndex)
-        assertEquals(2, navigated.size)
+        assertEquals(1, session.displayIndex)
+        assertTrue(session.selectedIndex == null)
+        assertEquals(1, navigated.size)
         composeRule.onNodeWithTag("collage_select").performClick()
         composeRule.waitForIdle()
         assertEquals(listOf(0, 1), selected)
+    }
+
+    @Test
+    fun browseShowsCounterAndSelectedShowsLabel() {
+        val session = CollageChoiceSession()
+        composeRule.setContent {
+            CollageChoiceHost(session, input(), sources(), null, null, cropSource())
+        }
+        composeRule.waitForIdle()
+
+        // Browse state: N/total counter, no selected label.
+        composeRule.onNodeWithTag("collage_nav_counter").assertExists()
+        composeRule.onNodeWithTag("collage_selected_label").assertDoesNotExist()
+
+        composeRule.runOnIdle { session.select(0) }
+        composeRule.waitForIdle()
+
+        // Selected state: counter replaced by the selected label.
+        composeRule.onNodeWithTag("collage_selected_label").assertExists()
+        composeRule.onNodeWithTag("collage_nav_counter").assertDoesNotExist()
+    }
+
+    @Test
+    fun smallViewportKeepsEntireCanvasInsideHorizontalBounds() {
+        val session = CollageChoiceSession()
+        composeRule.setContent {
+            Column(Modifier.width(320.dp).verticalScroll(rememberScrollState())) {
+                CollageChoiceHost(session, input(), sources(), null, null, cropSource())
+            }
+        }
+        composeRule.waitForIdle()
+
+        // The whole sheet fits the bounded width: no horizontal overflow,
+        // the canvas is fully inside the root (vertical scroll, not crop).
+        val bounds = composeRule.onNodeWithTag("collage_canvas").fetchSemanticsNode().boundsInRoot
+        val root = composeRule.onRoot().fetchSemanticsNode().boundsInRoot
+        assertTrue("canvas height must be > 0, was ${bounds.height}", bounds.height > 0f)
+        assertTrue(
+            "canvas must not overflow horizontally: $bounds not in $root",
+            bounds.left >= root.left - 1f && bounds.right <= root.right + 1f,
+        )
     }
 
     @Test
@@ -237,8 +274,8 @@ class CollageChoiceHostTest {
         return pixels
     }
 
-    private fun paperOfSelected(session: CollageChoiceSession): Int {
-        val styleId = requireNotNull(session.selected).styleId
+    private fun paperOfDisplayed(session: CollageChoiceSession): Int {
+        val styleId = requireNotNull(session.displayed).styleId
         val paper = requireNotNull(StyleRegistry.style(styleId)).palette.paper
         return 0xFF000000.toInt() or paper.substring(1).toInt(16)
     }

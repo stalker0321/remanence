@@ -466,7 +466,7 @@ class CreateViewModel(
 
     /** Refreshes the display map from the keyed store for the displayed candidate. */
     private fun refreshCropDisplay() {
-        val candidate = collageChoices.selected
+        val candidate = collageChoices.displayed
         val display = LinkedHashMap<String, CropCorrection>()
         if (candidate != null) {
             for ((key, transform) in _cropTransforms.value) {
@@ -505,7 +505,10 @@ class CreateViewModel(
 
     /**
      * The displayed candidate's slot geometry for [contentId], or `null` when
-     * no candidate is displayed / the photo is not a slot of it.
+     * no candidate is displayed / the photo is not a slot of it. Reads the
+     * explicit highlight, which [openCrop] proves identical to the displayed
+     * sheet before any stage opens, so the frame can never come from another
+     * candidate.
      */
     fun cropSlotGeometry(contentId: String): CropSlotGeometry? {
         val placement = collageChoices.selected?.expression?.placements
@@ -616,7 +619,19 @@ class CreateViewModel(
         if (_step.value != Step.COMPOSE) return false
         val candidate = collageChoices.selected
         if (candidate == null) {
-            failGuard("crop needs a displayed candidate")
+            // Frozen ordering (Astra `model.mjs:15` "select one, then tap a
+            // photograph"): browsing alone never opens the stage.
+            failGuard("crop needs a selected candidate")
+            return false
+        }
+        // Same-candidate proof: the stage frame and base window below come
+        // from `selected`, so refuse unless it IS the displayed sheet.
+        // Structurally `selected != null` already implies equality (Select
+        // targets the display cursor and browse nulls the highlight), but
+        // this gate proves it instead of trusting the invariant.
+        val displayed = collageChoices.displayed
+        if (displayed == null || displayed.candidateId != candidate.candidateId) {
+            failGuard("crop needs the displayed candidate")
             return false
         }
         if (candidate.expression.placements.none { it.contentId == contentId }) {

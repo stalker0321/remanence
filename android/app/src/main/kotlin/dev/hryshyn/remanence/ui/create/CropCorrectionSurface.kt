@@ -4,10 +4,12 @@ import android.graphics.BitmapFactory
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -75,7 +77,12 @@ fun CropSlotPicker(
             modifier = Modifier.testTag("crop_slots_label"),
         )
         Spacer(Modifier.height(4.dp))
-        Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
+        // Four/five slot buttons must stay reachable on narrow screens: the
+        // row scrolls horizontally instead of clipping the trailing slots.
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+        ) {
             sources.forEachIndexed { index, source ->
                 val corrected = corrections.containsKey(source.contentId)
                 HoldTextButtonCompat(

@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.ui.create
 import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Modifier
@@ -17,6 +18,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpRect
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.height
 import androidx.compose.ui.unit.width
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -253,6 +255,29 @@ class CropCorrectionSurfaceTest {
         composeRule.onNodeWithTag("crop_slots").assertExists()
         composeRule.onNodeWithTag("crop_slot_1").performClick()
         assertEquals("photo-1", opened)
+    }
+
+    @Test
+    fun fiveSlotPickerKeepsEverySlotReachable() {
+        var opened: String? = null
+        val five = (0..4).map { GeneratorPreviewSource("photo-$it", jpeg(), 1000, 1000) }
+        composeRule.setContent {
+            Column(Modifier.width(320.dp)) {
+                CropSlotPicker(
+                    sources = five,
+                    corrections = emptyMap(),
+                    onOpen = { opened = it },
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("crop_slots").assertExists()
+        // The trailing slot of five must be reachable (scrollable row,
+        // never clipped away) and open its own content id.
+        composeRule.onNodeWithTag("crop_slot_4").performScrollTo()
+        composeRule.onNodeWithTag("crop_slot_4").assertIsDisplayed()
+        composeRule.onNodeWithTag("crop_slot_4").performClick()
+        assertEquals("photo-4", opened)
     }
 
     private fun absDp(value: Dp): Dp = if (value.value < 0f) -value else value

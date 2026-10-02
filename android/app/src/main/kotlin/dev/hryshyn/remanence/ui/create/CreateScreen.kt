@@ -517,18 +517,17 @@ private fun ComposeStepContent(viewModel: CreateViewModel, crowded: Boolean) {
             },
         )
             Spacer(Modifier.height(12.dp))
-            val corrections by viewModel.cropCorrections.collectAsStateWithLifecycle()
             if (sources.isNotEmpty()) {
+                // Frozen expression footer: the hint only. Crop opens by
+                // tapping a photograph (canvas hotspot); the duplicate
+                // Photo 1-4 slot row is not in the design (render.mjs
+                // expression case) and is intentionally absent here. The
+                // CropSlotPicker declaration itself stays for its own
+                // surface-level tests.
                 Text(
                     stringResource(R.string.hold_crop_hint),
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.testTag("crop_hint"),
-                )
-                Spacer(Modifier.height(4.dp))
-                CropSlotPicker(
-                    sources = sources,
-                    corrections = corrections,
-                    onOpen = { viewModel.openCrop(it) },
                 )
                 Spacer(Modifier.height(12.dp))
             }

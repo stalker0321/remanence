@@ -609,6 +609,43 @@ class CreateScreenCollageChooserTest {
     }
 
     @Test
+    fun expressionHasNoDuplicatePhotoRow() {
+        // Frozen expression opens crop by tapping a photograph (canvas
+        // hotspot); the duplicate Photo 1-4 slot row + heading are absent
+        // from expression semantics while the hint and hotspot entry stay.
+        val ids = listOf("u1", "u2", "u3")
+        val originals = ids.associateWith { id ->
+            ByteArray(64) { ((it * 31 + id.hashCode()) and 0xFF).toByte() }
+        }
+        val vm = viewModel(originals, withFactory = true)
+        driveToContent(vm, ids)
+        composeRule.setContent {
+            CreateScreen(
+                viewModel = vm,
+                adapterFactory = null,
+                requestPermissionOnAttach = false,
+            )
+        }
+        driveToComposeCandidates(vm)
+
+        composeRule.onNodeWithTag("crop_hint").assertExists()
+        composeRule.onNodeWithTag("crop_slots").assertDoesNotExist()
+        composeRule.onNodeWithTag("crop_slots_label").assertDoesNotExist()
+        composeRule.onNodeWithTag("crop_slot_0").assertDoesNotExist()
+
+        // Genuine hotspot entry opens the matching source crop (frozen
+        // ordering needs an explicit selection first, as in real flow).
+        composeRule.onNodeWithTag("collage_select").performScrollTo()
+        composeRule.onNodeWithTag("collage_select").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("crop_hotspot_0").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("crop_stage").assertExists()
+        assertTrue(vm.cropSlot.value != null)
+        vm.endSession()
+    }
+
+    @Test
     fun cropBackRetainsFrozenSelectionWithoutRebuild() {
         val ids = listOf("u1", "u2", "u3")
         val originals = ids.associateWith { id ->

@@ -3,8 +3,11 @@ package dev.hryshyn.remanence.create
 import dev.hryshyn.remanence.core.crypto.readBoundedBytes
 import java.security.MessageDigest
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 
 /**
  * Stage1-C preview source: one bounded, EXIF-upright original adapted
@@ -75,11 +78,65 @@ class DefaultGeneratorPreviewLoader(
      * cancellation is rechecked — never the derived preview bytes, never a
      * reopened URI. A throwing sink never breaks preview; stale (cancelled)
      * loads never reach it. Null disables retaining.
+     *
+     * The sink always runs on the ORIGINAL caller lane: worker stages below
+     * compute off-caller, then control returns here before the sink fires,
+     * so ViewModel state is never mutated from the worker.
      */
     override var retainOriginal: ((bytes: ByteArray, hash: String) -> Unit)? = null,
+    /**
+     * Lane for the read/decode/normalize/hash stages (production IO: the
+     * stages mix MediaStore reads with JPEG decode work). Injectable so
+     * hermetic tests can prove placement without real threads; the caller
+     * lane (and its Job, for cancellation) is preserved across the hop.
+     */
+    private val workerDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : GeneratorPreviewLoader, OriginalRetainSinkHost {
 
+    /**
+     * Worker-lane product of one load: the publishable preview plus the
+     * live original bytes and hash reserved for the caller-lane sink.
+     * Ownership transfers to the caller exactly once, on success only.
+     */
+    private data class PreparedOriginal(
+        val preview: LoadedPreviewSource,
+        val original: ByteArray,
+        val hash: String,
+    )
+
     override suspend fun load(pickerId: String): LoadedPreviewSource? {
+        val prepared = withContext(workerDispatcher) {
+            prepareOnWorker(pickerId)
+        } ?: return null
+        // Back on the caller lane: cancellation recheck, then the retain
+        // callback. A cancel landing across the hop must not produce a
+        // stale retain.
+        currentCoroutineContext().ensureActive()
+        retainOriginal?.let { sink ->
+            try {
+                sink(prepared.original, prepared.hash)
+            } catch (cancelled: CancellationException) {
+                prepared.original.fill(0)
+                throw cancelled
+            } catch (_: Exception) {
+                // Diagnostic only: a sink failure never breaks preview.
+            }
+        }
+        try {
+            return prepared.preview
+        } finally {
+            prepared.original.fill(0)
+        }
+    }
+
+    /**
+     * Read/decode/normalize/hash on the worker lane. Exception and
+     * cancellation semantics match the historical inline version exactly:
+     * read/sink cancellation rethrows; decode/normalize failures (of any
+     * type) fail closed to null. Partial originals are zeroized before any
+     * failure return, including worker cancellation (finally always runs).
+     */
+    private suspend fun prepareOnWorker(pickerId: String): PreparedOriginal? {
         val original = try {
             openSource(pickerId).openInputStream().use { it.readBoundedBytes(maxSourceBytes) }
         } catch (cancelled: CancellationException) {
@@ -87,6 +144,7 @@ class DefaultGeneratorPreviewLoader(
         } catch (_: Exception) {
             return null
         }
+        var prepared: PreparedOriginal? = null
         try {
             val upright = try {
                 decoder.decodeUpright(original)
@@ -101,28 +159,23 @@ class DefaultGeneratorPreviewLoader(
             }
             if (normalized.jpegBytes.isEmpty()) return null
             val hash = sha256Hex(original)
-            // Cancellation recheck: a cancel landing after the last suspend
-            // port must not produce a stale retain.
-            currentCoroutineContext().ensureActive()
-            retainOriginal?.let { sink ->
-                try {
-                    sink(original, hash)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (_: Exception) {
-                    // Diagnostic only: a sink failure never breaks preview.
-                }
-            }
-            return LoadedPreviewSource(
-                originalHash = hash,
-                uprightWidthPx = upright.widthPx,
-                uprightHeightPx = upright.heightPx,
-                previewJpegBytes = normalized.jpegBytes,
-                previewWidthPx = normalized.width,
-                previewHeightPx = normalized.height,
+            prepared = PreparedOriginal(
+                preview = LoadedPreviewSource(
+                    originalHash = hash,
+                    uprightWidthPx = upright.widthPx,
+                    uprightHeightPx = upright.heightPx,
+                    previewJpegBytes = normalized.jpegBytes,
+                    previewWidthPx = normalized.width,
+                    previewHeightPx = normalized.height,
+                ),
+                original = original,
+                hash = hash,
             )
+            return prepared
         } finally {
-            original.fill(0)
+            if (prepared == null) {
+                original.fill(0)
+            }
         }
     }
 

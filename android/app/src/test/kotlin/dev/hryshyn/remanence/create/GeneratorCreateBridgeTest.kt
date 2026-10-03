@@ -500,10 +500,15 @@ class GeneratorCreateBridgeTest {
     @Test
     fun bindRefusalTokenMapsEveryKnownLiteralDistinctly() {
         // Competing incident causes must produce distinguishable tokens.
-        val cases = mapOf(
+        // "unknown session" is intentionally listed twice: the Stale class
+        // (bridge records map) and the Failed class (staging passthrough)
+        // are different layers with different meanings.
+        val staleCases = mapOf(
             "unknown session" to "stale-unknown-session",
             "stale context" to "stale-context",
             "already consumed" to "stale-consumed",
+        )
+        val failedCases = mapOf(
             "bad content id" to "failed-bad-content-id",
             "bad ordinal" to "failed-bad-ordinal",
             "bad content hash" to "failed-bad-content-hash",
@@ -521,6 +526,7 @@ class GeneratorCreateBridgeTest {
             "normalization failed" to "failed-normalization-failed",
             "out-of-order stage" to "failed-out-of-order-stage",
             "unknown slot" to "failed-unknown-slot",
+            "unknown session" to "failed-session-missing",
             "session bytes over bound" to "failed-session-bytes-over-bound",
             "source failed" to "failed-source-failed",
             "source over 32MiB bound" to "failed-source-over-32mib-bound",
@@ -535,15 +541,19 @@ class GeneratorCreateBridgeTest {
             "expired" to "failed-expired",
             "too many leases" to "failed-too-many-leases",
         )
-        assertEquals("audited seam literal count", 33, cases.size)
+        assertEquals("audited seam literal count", 3 + 31, staleCases.size + failedCases.size)
         val seen = mutableSetOf<String>()
-        for ((reason, expected) in cases) {
-            val result = if (expected.startsWith("stale-")) {
-                GeneratorCreateBridge.SlotResult.Stale(reason)
-            } else {
-                GeneratorCreateBridge.SlotResult.Failed(reason)
-            }
-            val token = dev.hryshyn.remanence.ui.create.bindSlotRefusalToken(result)
+        for ((reason, expected) in staleCases) {
+            val token = dev.hryshyn.remanence.ui.create.bindSlotRefusalToken(
+                GeneratorCreateBridge.SlotResult.Stale(reason),
+            )
+            assertEquals("literal '$reason'", expected, token)
+            assertTrue("token must be unique: $token", seen.add(token))
+        }
+        for ((reason, expected) in failedCases) {
+            val token = dev.hryshyn.remanence.ui.create.bindSlotRefusalToken(
+                GeneratorCreateBridge.SlotResult.Failed(reason),
+            )
             assertEquals("literal '$reason'", expected, token)
             assertTrue("token must be unique: $token", seen.add(token))
         }

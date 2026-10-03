@@ -2335,6 +2335,7 @@ internal fun bindSlotRefusalToken(
                 "normalization failed" -> "failed-normalization-failed"
                 "out-of-order stage" -> "failed-out-of-order-stage"
                 "unknown slot" -> "failed-unknown-slot"
+                "unknown session" -> "failed-session-missing"
                 "session bytes over bound" -> "failed-session-bytes-over-bound"
                 "source failed" -> "failed-source-failed"
                 "source over 32MiB bound" -> "failed-source-over-32mib-bound"

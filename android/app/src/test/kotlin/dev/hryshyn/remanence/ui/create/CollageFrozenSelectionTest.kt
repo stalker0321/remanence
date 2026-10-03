@@ -307,6 +307,11 @@ class CollageFrozenSelectionTest {
         normalizer = PhotoNormalizerPort {
             NormalizedPhotoDto(byteArrayOf(9, 8, 7), 100, 100)
         },
+        // Test lane: run the loader hop on the shared test dispatcher so
+        // preview completion stays synchronous under runTest (production
+        // uses Dispatchers.IO; lane behavior itself is proven by the
+        // loader's own hermetic tests, not re-asserted here).
+        workerDispatcher = testDispatcher,
     )
 
     private fun viewModel(

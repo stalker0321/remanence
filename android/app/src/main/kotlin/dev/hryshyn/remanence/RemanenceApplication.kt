@@ -301,18 +301,20 @@ class AppContainer private constructor(
      * Production G3 staging manager for [owner]: G4A owner-scoped
      * filesystem store driven by the `elapsedRealtime` monotonic clock
      * (G3 fail-closed on rollback: sessions are kept, never wrongly
-     * expired). Cached per canonical owner; construction is pure.
+     * expired). Cached per canonical owner; construction runs the one
+     * G4 restart-recovery sweep of this owner's orphan `gen-staging`
+     * entries before the Manager is published (empty live set is
+     * truthful only here — no session can exist yet), then returns the
+     * Manager that owns the namespace.
      */
     fun generatorStagingManager(
         owner: UserId,
     ): dev.hryshyn.remanence.core.model.GeneratorStaging.Manager =
         generatorStagingManagers.computeIfAbsent(owner.toRestString()) {
-            dev.hryshyn.remanence.core.model.GeneratorStaging.Manager(
-                store = dev.hryshyn.remanence.core.data.storage.GeneratorStagingFileStore(
-                    accountScopedFileRoots,
-                    accountStorageRetention,
-                    owner,
-                ),
+            dev.hryshyn.remanence.core.data.storage.GeneratorStagingRecovery.managerForOwner(
+                accountScopedFileRoots,
+                accountStorageRetention,
+                owner,
                 nowMillis = { android.os.SystemClock.elapsedRealtime() },
             )
         }

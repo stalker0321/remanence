@@ -289,37 +289,6 @@ object GeneratorStaging {
             if (sessionBytes > MAX_SESSION_BYTES) return StageResult.Rejected("session bytes over bound")
             val hash = GeneratorExpression.sha256Hex(bytes)
             if (hash != expected.contentHash) return StageResult.Rejected("hash mismatch at stage")
-            // Restart-orphan idempotent adopt: session ids are deterministic,
-            // so a fresh process re-staging identical content meets its own
-            // persisted files with no live in-memory entry here (ordinal is
-            // absent exactly because this process never staged it). Adopt
-            // ONLY on exact content-hash match, populating the live map so
-            // the session proceeds, leases verify, and cleanup owns the
-            // bytes. Anything else falls through to the no-overwrite
-            // refusal below — foreign bytes are never replaced or deleted.
-            if (ordinal !in record.staged) {
-                val existing = try {
-                    store.get(keyFor(sessionId, ordinal))
-                } catch (_: Exception) {
-                    null
-                }
-                if (existing != null &&
-                    GeneratorExpression.sha256Hex(existing) == expected.contentHash
-                ) {
-                    record.staged[ordinal] = StagedBytes(existing.copyOf(), widthPx, heightPx)
-                    record.lastUseAt = nowMillis()
-                    return StageResult.Staged(
-                        Lease(
-                            handleId = "$sessionId#$ordinal",
-                            sessionId = sessionId,
-                            contentId = expected.contentId,
-                            ordinal = ordinal,
-                            contentHash = expected.contentHash,
-                            byteCount = existing.size.toLong(),
-                        ),
-                    )
-                }
-            }
             try {
                 store.put(keyFor(sessionId, ordinal), bytes.copyOf())
             } catch (e: Exception) {

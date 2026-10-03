@@ -21,13 +21,20 @@ import java.io.File
 import java.io.InputStream
 import java.nio.file.Files
 import java.security.MessageDigest
+import java.util.Collections
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 /**
@@ -67,11 +74,14 @@ class AndroidCollageCropSourceTest {
 
     private class FakeNanoRuntime : NanoDetRuntime {
         var forwards = 0
+        var loads = 0
         var closeCount = 0
         var failure: Exception? = null
         var heads: () -> List<dev.hryshyn.remanence.ui.collage.NanoDetHead> = ::zeroHeads
 
-        override fun load(modelPath: String) = Unit
+        override fun load(modelPath: String) {
+            loads += 1
+        }
 
         override fun forward(image: NanoDetImage): List<dev.hryshyn.remanence.ui.collage.NanoDetHead> {
             failure?.let { throw it }
@@ -86,11 +96,14 @@ class AndroidCollageCropSourceTest {
 
     private class FakeYuNetRuntime : YuNetRuntime {
         var detects = 0
+        var loads = 0
         var closeCount = 0
         var failure: Exception? = null
         var pass: () -> YuNetPass = { YuNetPass(640, 640, 15, listOf(faceRow())) }
 
-        override fun load(modelPath: String, config: dev.hryshyn.remanence.ui.collage.analysis.YuNetConfig) = Unit
+        override fun load(modelPath: String, config: dev.hryshyn.remanence.ui.collage.analysis.YuNetConfig) {
+            loads += 1
+        }
 
         override fun detect(image: YuNetImage, longEdge: Int): YuNetPass {
             failure?.let { throw it }
@@ -105,16 +118,20 @@ class AndroidCollageCropSourceTest {
 
     private class FakeBytes(val store: MutableMap<String, ByteArray>) : UprightBytesSource {
         val calls = mutableListOf<String>()
+        val threads = Collections.synchronizedList(mutableListOf<String>())
         override suspend fun bytesFor(contentId: String): ByteArray? {
             calls += contentId
+            threads += Thread.currentThread().name
             return store[contentId]
         }
     }
 
     private class FakeDecoder(var image: FieldStageImage? = uprightImage()) : UprightImageDecoder {
         val seen = mutableListOf<ByteArray>()
+        val threads = Collections.synchronizedList(mutableListOf<String>())
         override fun decode(jpeg: ByteArray): FieldStageImage? {
             seen += jpeg.copyOf()
+            threads += Thread.currentThread().name
             return image
         }
     }
@@ -138,6 +155,7 @@ class AndroidCollageCropSourceTest {
         field: FakeFieldRuntime = FakeFieldRuntime(),
         nano: FakeNanoRuntime = FakeNanoRuntime(),
         yunet: FakeYuNetRuntime = FakeYuNetRuntime(),
+        workerDispatcher: kotlinx.coroutines.CoroutineDispatcher? = null,
     ): Seam {
         val bytes = FakeBytes(store)
         val nanoDir = tempDir("seam-nanodet")
@@ -148,6 +166,7 @@ class AndroidCollageCropSourceTest {
             fieldRunner = FieldStageRunner(field),
             nanoDetRunner = NanoDetRunner(FakeAsset(ByteArray(128) { 1 }), nano, nanoDir),
             yuNetRunner = YuNetRunner(FakeAsset(ByteArray(128) { 2 }), yunet, yunetDir),
+            workerDispatcher = workerDispatcher ?: kotlinx.coroutines.Dispatchers.IO,
         )
         return Seam(bytes, decoder, field, nano, yunet, source, nanoDir, yunetDir)
     }
@@ -430,5 +449,196 @@ class AndroidCollageCropSourceTest {
 
         fun sha256Hex(bytes: ByteArray): String =
             MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+    }
+
+    @Test
+    fun decodeAndAnalysisRunOffCallerWhileFetchAndCacheStayOnCaller() {
+        // Lane proof: bytes fetch stays on the caller lane (holder map has
+        // no lock), decode + first-run materialize/load + analysis run on
+        // the injected worker, publication + result return to the caller.
+        val callerThread = Thread.currentThread().name
+        val exec = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "analysis-worker").also { it.isDaemon = true }
+        }
+        try {
+            val seam = seam(workerDispatcher = exec.asCoroutineDispatcher())
+            try {
+                val analysis = runBlocking {
+                    seam.source.analysisSource().analysisFor("p0")
+                }
+                assertTrue("expected an analysis", analysis != null)
+                assertTrue(
+                    "bytes fetch stays on caller, saw ${seam.bytes.threads}",
+                    seam.bytes.threads.isNotEmpty() &&
+                        seam.bytes.threads.all { it.substringBefore(" ") == callerThread.substringBefore(" ") },
+                )
+                assertTrue(
+                    "decode runs on worker, saw ${seam.decoder.threads}",
+                    seam.decoder.threads.isNotEmpty() &&
+                        seam.decoder.threads.all { it.startsWith("analysis-worker") },
+                )
+                assertTrue(
+                    "no worker stage runs on caller",
+                    seam.decoder.threads.none { it.substringBefore(" ") == callerThread },
+                )
+            } finally {
+                seam.source.close()
+            }
+        } finally {
+            exec.shutdownNow()
+        }
+    }
+
+    @Test
+    fun warmCacheAvoidsReloading() {
+        val seam = seam()
+        try {
+            assertTrue(
+                "expected first analysis",
+                runBlocking { seam.source.analysisSource().analysisFor("p0") } != null,
+            )
+            assertEquals(1, seam.nano.loads)
+            assertEquals(1, seam.yunet.loads)
+            val bytesCalls = seam.bytes.calls.size
+            val decodes = seam.decoder.seen.size
+            // Same content: cache serves, no re-read, no re-decode...
+            assertTrue(
+                "expected cached analysis",
+                runBlocking { seam.source.analysisSource().analysisFor("p0") } != null,
+            )
+            assertEquals(bytesCalls, seam.bytes.calls.size)
+            assertEquals(decodes, seam.decoder.seen.size)
+            // ...and a second photo reuses the loaded models.
+            val store2 = seam.bytes.store
+            store2["p1"] = ByteArray(64) { 8 }
+            assertTrue(
+                "expected second analysis",
+                runBlocking { seam.source.analysisSource().analysisFor("p1") } != null,
+            )
+            assertEquals(1, seam.nano.loads)
+            assertEquals(1, seam.yunet.loads)
+        } finally {
+            seam.source.close()
+        }
+    }
+
+    @Test
+    fun cancelMidAnalysisPropagatesWithoutCaching() {
+        // Deterministic pause: a blocking decoder holds the worker while
+        // the caller cancels; nothing may be cached and bytes are wiped.
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        var decodedBytes: ByteArray? = null
+        val gatedDecoder = object : UprightImageDecoder {
+            override fun decode(jpeg: ByteArray): FieldStageImage? {
+                decodedBytes = jpeg
+                entered.countDown()
+                release.await(10, TimeUnit.SECONDS)
+                return uprightImage()
+            }
+        }
+        val workerExec = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "analysis-cancel").also { it.isDaemon = true }
+        }
+        try {
+            val bytes = FakeBytes(mutableMapOf("p0" to ByteArray(64) { 7 }))
+            val nanoDir = tempDir("seam-nanodet-c")
+            val yunetDir = tempDir("seam-yunet-c")
+            val field = FakeFieldRuntime()
+            val nano = FakeNanoRuntime()
+            val yunet = FakeYuNetRuntime()
+            val gatedSource = AndroidCollageCropSource(
+                bytesSource = bytes,
+                imageDecoder = gatedDecoder,
+                fieldRunner = FieldStageRunner(field),
+                nanoDetRunner = NanoDetRunner(FakeAsset(ByteArray(128) { 1 }), nano, nanoDir),
+                yuNetRunner = YuNetRunner(FakeAsset(ByteArray(128) { 2 }), yunet, yunetDir),
+                workerDispatcher = workerExec.asCoroutineDispatcher(),
+            )
+            try {
+                runBlocking {
+                    val job = async(kotlinx.coroutines.Dispatchers.Default) { gatedSource.analysisSource().analysisFor("p0") }
+                    assertTrue("worker must reach decode", entered.await(10, TimeUnit.SECONDS))
+                    job.cancel()
+                    release.countDown()
+                    try {
+                        job.await()
+                        fail("expected CancellationException")
+                    } catch (_: CancellationException) {
+                        // Expected: cancellation propagates, never null.
+                    }
+                }
+                val captured = requireNotNull(decodedBytes) { "decoder must have run" }
+                assertTrue("original must be zeroized on cancel", captured.all { it == 0.toByte() })
+                val callsBefore = bytes.calls.size
+                runBlocking { gatedSource.analysisSource().analysisFor("p0") }
+                assertTrue(
+                    "cancelled analysis must not cache (refetch expected)",
+                    bytes.calls.size > callsBefore,
+                )
+            } finally {
+                gatedSource.close()
+            }
+        } finally {
+            workerExec.shutdownNow()
+        }
+    }
+
+    @Test
+    fun closeWhileWorkerSuspendedNeverPublishesNorReusesRuntime() {
+        // Close lands while the worker is gated in decode: the closed
+        // runners must fail the analysis closed (no reuse), nothing may
+        // be cached, and post-close calls stay fail-closed without crash.
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val gatedDecoder = object : UprightImageDecoder {
+            override fun decode(jpeg: ByteArray): FieldStageImage? {
+                entered.countDown()
+                release.await(10, TimeUnit.SECONDS)
+                return uprightImage()
+            }
+        }
+        val workerExec = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "analysis-close").also { it.isDaemon = true }
+        }
+        try {
+            val bytes = FakeBytes(mutableMapOf("p0" to ByteArray(64) { 7 }))
+            val nanoDir = tempDir("seam-nanodet-x")
+            val yunetDir = tempDir("seam-yunet-x")
+            val gatedSource = AndroidCollageCropSource(
+                bytesSource = bytes,
+                imageDecoder = gatedDecoder,
+                fieldRunner = FieldStageRunner(FakeFieldRuntime()),
+                nanoDetRunner = NanoDetRunner(
+                    FakeAsset(ByteArray(128) { 1 }),
+                    FakeNanoRuntime(),
+                    nanoDir,
+                ),
+                yuNetRunner = YuNetRunner(
+                    FakeAsset(ByteArray(128) { 2 }),
+                    FakeYuNetRuntime(),
+                    yunetDir,
+                ),
+                workerDispatcher = workerExec.asCoroutineDispatcher(),
+            )
+            runBlocking {
+                val job = async(kotlinx.coroutines.Dispatchers.Default) { gatedSource.analysisSource().analysisFor("p0") }
+                assertTrue("worker must reach decode", entered.await(10, TimeUnit.SECONDS))
+                gatedSource.close()
+                release.countDown()
+                assertNull("closed source must not deliver analysis", job.await())
+            }
+            val callsBefore = bytes.calls.size
+            assertNull(
+                "post-close analysis stays fail-closed without reuse",
+                runBlocking { gatedSource.analysisSource().analysisFor("p0") },
+            )
+            assertTrue(
+                "closed source must not cache (refetch expected)",
+                bytes.calls.size > callsBefore,
+            )
+        } finally {
+            workerExec.shutdownNow()
+        }
     }
 }

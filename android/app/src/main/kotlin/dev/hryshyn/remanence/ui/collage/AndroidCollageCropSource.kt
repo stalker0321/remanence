@@ -11,10 +11,13 @@ import dev.hryshyn.remanence.ui.collage.analysis.YuNetImage
 import dev.hryshyn.remanence.ui.collage.analysis.YuNetResult
 import dev.hryshyn.remanence.ui.collage.analysis.YuNetRunner
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
  * Suspend source of full-resolution EXIF-upright JPEG bytes per content ID.
@@ -64,6 +67,15 @@ class AndroidCollageCropSource(
     private val fieldRunner: FieldStageRunner,
     private val nanoDetRunner: NanoDetRunner,
     private val yuNetRunner: YuNetRunner,
+    /**
+     * Lane for the decode/analysis stages (JPEG decode, model
+     * materialize/load, detector passes, aggregation). Production IO:
+     * the stages mix disk reads with native inference. The bytes fetch
+     * stays on the caller lane (see below), and cache publication stays
+     * on the caller lane after the hop; the shared [mutex] serialization
+     * spans the hop unchanged. Injectable for hermetic lane tests.
+     */
+    private val workerDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : CollageCropSource, CollageCropDiagnostics, AutoCloseable {
 
     private val mutex = Mutex()
@@ -116,60 +128,84 @@ class AndroidCollageCropSource(
     private suspend fun analysisFor(contentId: String): CollageAnalysis? {
         analyses[contentId]?.let { return it }
         currentCoroutineContext().ensureActive()
-        try {
-            val bytes = bytesSource.bytesFor(contentId) ?: return null
-            try {
-                currentCoroutineContext().ensureActive()
-                val image = imageDecoder.decode(bytes) ?: return null
-                currentCoroutineContext().ensureActive()
-                val maps = when (val fields = fieldRunner.analyze(image)) {
-                    is FieldStageResult.Maps -> fields.maps
-                    is FieldStageResult.Unavailable,
-                    is FieldStageResult.Invalid,
-                    -> return null
-                }
-                currentCoroutineContext().ensureActive()
-                val objects = when (
-                    val detected = nanoDetRunner.detect(NanoDetImage(image.width, image.height, image.argb))
-                ) {
-                    is NanoDetResult.Detections -> detected.objects
-                    is NanoDetResult.Unavailable,
-                    is NanoDetResult.Invalid,
-                    -> return null
-                }
-                currentCoroutineContext().ensureActive()
-                val faces = when (
-                    val detected = yuNetRunner.detect(YuNetImage(image.width, image.height, image.argb))
-                ) {
-                    is YuNetResult.Faces -> detected.faces
-                    is YuNetResult.Unavailable,
-                    is YuNetResult.Invalid,
-                    -> return null
-                }
-                currentCoroutineContext().ensureActive()
-                val analysis = FieldAggregator.aggregate(
-                    ImportFieldPrimitives(
-                        sourceWidth = image.width,
-                        sourceHeight = image.height,
-                        faces = faces,
-                        objects = objects,
-                        saliency = maps.saliency,
-                        edgeEnergy = maps.edgeEnergy,
-                        contrast = maps.contrast,
-                        structureField = maps.tips,
-                        tipBoxes = maps.tipBoxes,
-                    ),
-                )
-                if (!closed) analyses[contentId] = analysis
-                return analysis
-            } finally {
-                bytes.fill(0)
-            }
+        // Holder-safety: the bytes holder (`RetainedOriginalHolder`) guards
+        // a plain map with no lock, so the fetch stays on the caller lane
+        // with the cache lookup/publication above — only decode/analysis,
+        // whose inputs are pure values or self-synchronizing runners, move.
+        val bytes = try {
+            bytesSource.bytesFor(contentId)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
             return null
+        } ?: return null
+        try {
+            val analysis = withContext(workerDispatcher) {
+                analyzeBytesOnWorker(contentId, bytes)
+            } ?: return null
+            // Caller-lane close recheck + publication (existing ownership):
+            // a close landing mid-worker must never publish a stale row.
+            if (!closed) analyses[contentId] = analysis
+            return analysis
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return null
+        } finally {
+            bytes.fill(0)
         }
+    }
+
+    /**
+     * Worker-lane decode/analysis product (no cache publication here).
+     * Failure taxonomy and cancellation behavior match the historical
+     * inline version exactly: decode/runner failures fail closed to
+     * `null`; cancellation propagates untouched (never converted).
+     * Partial originals are zeroized by the caller-side finally; this
+     * function never retains anything.
+     */
+    private suspend fun analyzeBytesOnWorker(contentId: String, bytes: ByteArray): CollageAnalysis? {
+        currentCoroutineContext().ensureActive()
+        val image = imageDecoder.decode(bytes) ?: return null
+        currentCoroutineContext().ensureActive()
+        val maps = when (val fields = fieldRunner.analyze(image)) {
+            is FieldStageResult.Maps -> fields.maps
+            is FieldStageResult.Unavailable,
+            is FieldStageResult.Invalid,
+            -> return null
+        }
+        currentCoroutineContext().ensureActive()
+        val objects = when (
+            val detected = nanoDetRunner.detect(NanoDetImage(image.width, image.height, image.argb))
+        ) {
+            is NanoDetResult.Detections -> detected.objects
+            is NanoDetResult.Unavailable,
+            is NanoDetResult.Invalid,
+            -> return null
+        }
+        currentCoroutineContext().ensureActive()
+        val faces = when (
+            val detected = yuNetRunner.detect(YuNetImage(image.width, image.height, image.argb))
+        ) {
+            is YuNetResult.Faces -> detected.faces
+            is YuNetResult.Unavailable,
+            is YuNetResult.Invalid,
+            -> return null
+        }
+        currentCoroutineContext().ensureActive()
+        return FieldAggregator.aggregate(
+            ImportFieldPrimitives(
+                sourceWidth = image.width,
+                sourceHeight = image.height,
+                faces = faces,
+                objects = objects,
+                saliency = maps.saliency,
+                edgeEnergy = maps.edgeEnergy,
+                contrast = maps.contrast,
+                structureField = maps.tips,
+                tipBoxes = maps.tipBoxes,
+            ),
+        )
     }
 
     /**

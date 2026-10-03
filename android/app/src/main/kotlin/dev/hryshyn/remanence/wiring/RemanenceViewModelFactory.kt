@@ -171,6 +171,15 @@ class RemanenceViewModelFactory(
                         ?: throw java.io.IOException("photo picker stream unavailable")
                 }
             },
+            // CONTENT selected tiles: bounded thumbnails over the already-picked
+            // URIs (picker-granted read, no new permission); off-main via the
+            // VM sink, null-safe (missing image keeps the tile check).
+            pickedThumbnailLoader = { uriString ->
+                dev.hryshyn.remanence.ui.create.PickedPhotoThumbnails.load(
+                    container.appContext.contentResolver,
+                    uriString,
+                )
+            },
             // M2-P08: sender-retry keyset wrapper + dedicated KEK alias
             // from the AppContainer-owned sender-retry boundary.
             senderRetryKeysetWrapper = container.senderRetryKeysetWrapper,

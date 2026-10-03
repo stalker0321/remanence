@@ -167,6 +167,14 @@ class CreateViewModel(
      * `mode = "text"`, `artwork = null`. No placeholder, no provider guess.
      */
     private val musicArtworkResolver: dev.hryshyn.remanence.core.data.network.MusicArtworkResolver? = null,
+    /**
+     * CONTENT selected-tiles thumbnail source: already-picked URI string to
+     * bounded tile bitmap, loaded off-main on [ioDispatcher]. Null disables
+     * image loading (tiles keep their selection checks without images); a
+     * per-URI null result is a load failure, never a choice invalidation.
+     * Production wires [PickedPhotoThumbnails] over the app ContentResolver.
+     */
+    private val pickedThumbnailLoader: (suspend (String) -> androidx.compose.ui.graphics.ImageBitmap?)? = null,
 ) : ViewModel() {
 
     /** Current-send state; deliberately contains no history or inbox projection. */
@@ -1349,7 +1357,54 @@ class CreateViewModel(
         clearCropState()
         photoSelection.clear()
         ids.forEach { id -> photoSelection.toggle(id) }
+        refreshPickedThumbnails()
         refreshGeneratorPreview()
+    }
+
+    /**
+     * CONTENT selected-tiles thumbnails, keyed by picked URI string in
+     * selection order. Loaded off-main on [ioDispatcher] through
+     * [pickedThumbnailLoader]; only missing keys load, a newer pick cancels
+     * the in-flight job (epoch guard), and load failures simply leave the
+     * key absent — the tile keeps its selection check, the valid choice is
+     * retained. Empty without a loader: tiles render check-only.
+     */
+    private val _pickedThumbnails =
+        kotlinx.coroutines.flow.MutableStateFlow<Map<String, androidx.compose.ui.graphics.ImageBitmap?>>(emptyMap())
+    val pickedThumbnails: kotlinx.coroutines.flow.StateFlow<Map<String, androidx.compose.ui.graphics.ImageBitmap?>> =
+        _pickedThumbnails.asStateFlow()
+
+    private var pickedThumbnailEpoch = 0
+    private var pickedThumbnailJob: kotlinx.coroutines.Job? = null
+
+    fun refreshPickedThumbnails() {
+        val epoch = ++pickedThumbnailEpoch
+        pickedThumbnailJob?.cancel()
+        val loader = pickedThumbnailLoader ?: run {
+            _pickedThumbnails.value = emptyMap()
+            return
+        }
+        val wanted = photoSelection.selectedIds.toList()
+        pickedThumbnailJob = viewModelScope.launch(ioDispatcher) {
+            val current = _pickedThumbnails.value.toMutableMap()
+            current.keys.retainAll(wanted.toSet())
+            for (uri in wanted) {
+                if (epoch != pickedThumbnailEpoch) return@launch
+                if (current.containsKey(uri)) continue
+                val bitmap = try {
+                    loader(uri)
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    null
+                }
+                if (epoch != pickedThumbnailEpoch) return@launch
+                if (bitmap != null) {
+                    current[uri] = bitmap
+                    _pickedThumbnails.value = current.toMap()
+                }
+            }
+        }
     }
 
     // ---------------------------------------------------------------------

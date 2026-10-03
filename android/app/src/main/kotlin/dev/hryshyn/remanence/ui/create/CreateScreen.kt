@@ -13,8 +13,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import dev.hryshyn.remanence.ui.hold.HoldButton as Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
@@ -360,6 +365,10 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
             "Selected: ${selectedIds.size} of 3-5",
             modifier = Modifier.testTag("create_selection_count"),
         )
+        PickedPhotoTiles(
+            selectedIds = selectedIds,
+            thumbnails = viewModel.pickedThumbnails.collectAsStateWithLifecycle().value,
+        )
 
         Spacer(Modifier.height(12.dp))
         OutlinedTextField(
@@ -407,6 +416,70 @@ private fun ContentStepContent(viewModel: CreateViewModel) {
             enabled = viewModel.photoSelection.canProceed && viewModel.noteEditor.canIncludeInCapsule,
             modifier = Modifier.fillMaxWidth().testTag("create_next"),
         ) { Text(stringResource(R.string.hold_next)) }
+    }
+}
+
+/**
+ * Frozen CONTENT selected-photo tiles (reference `photo-choice` visual
+ * contract): one display-only tile per actually picked URI in selection
+ * order, each with its selection check. No placeholders, no fabricated
+ * items — empty selection renders nothing. Tiles are NOT interactive: tap
+ * add/remove continues through the existing picker flow (the system picker
+ * is authoritative per attempt), never through a tile state machine, and
+ * never the Compose crop editor. Thumbnails load off-main via the VM sink;
+ * a missing image keeps the tile and its check (load failure retains the
+ * valid choice).
+ */
+@Composable
+internal fun PickedPhotoTiles(
+    selectedIds: List<String>,
+    thumbnails: Map<String, androidx.compose.ui.graphics.ImageBitmap?>,
+) {
+    if (selectedIds.isEmpty()) return
+    // Plain scrollable strip (never lazy): at most five tiles, so every
+    // tile is composed for TalkBack order and tests; the strip scrolls
+    // horizontally inside the step's vertical scroll on small viewports.
+    androidx.compose.foundation.layout.Row(
+        modifier = Modifier
+            .testTag("create_photo_tiles")
+            .horizontalScroll(androidx.compose.foundation.rememberScrollState()),
+        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+    ) {
+        selectedIds.forEachIndexed { index, uri ->
+            androidx.compose.foundation.layout.Box(
+                modifier = Modifier
+                    .testTag("create_photo_tile_$index")
+                    .semantics {
+                        selected = true
+                        contentDescription = "Selected photo ${index + 1} of ${selectedIds.size}"
+                    },
+            ) {
+                val bitmap = thumbnails[uri]
+                if (bitmap != null) {
+                    androidx.compose.foundation.Image(
+                        bitmap = bitmap,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .testTag("create_photo_tile_image_$index")
+                            .size(96.dp),
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    )
+                } else {
+                    Spacer(
+                        modifier = Modifier
+                            .testTag("create_photo_tile_pending_$index")
+                            .size(96.dp),
+                    )
+                }
+                Text(
+                    text = "✓",
+                    modifier = Modifier
+                        .testTag("create_photo_tile_check_$index")
+                        .align(androidx.compose.ui.Alignment.BottomEnd)
+                        .padding(4.dp),
+                )
+            }
+        }
     }
 }
 

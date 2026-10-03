@@ -11,6 +11,7 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -174,6 +175,54 @@ class GeneratorPreviewLoaderTest {
             // Expected: cancellation crosses the dispatch hop.
         }
         assertTrue("stale retain must never fire", !sinkRan)
+    }
+
+    @Test
+    fun cancelAfterWorkerSuccessStillZeroizesAndSkipsSink() = runTest {
+        // F1/F2: worker finishes and publishes, then the caller is
+        // cancelled BEFORE its queued continuation resumes. The produced
+        // original must still be wiped and the sink must never fire.
+        // A manual queue dispatcher gives a deterministic pause point:
+        // worker tasks run only when drained, while the caller resume
+        // stays queued on the test scheduler.
+        val workerQueue = ArrayDeque<Runnable>()
+        val manualWorker = object : CoroutineDispatcher() {
+            override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) {
+                workerQueue += block
+            }
+        }
+        var workerOriginal: ByteArray? = null
+        var sinkRan = false
+        val capturingDecoder = GeneratorSourceBinding.PhotoDecoderPort { bytes ->
+            workerOriginal = bytes
+            GeneratorSourceBinding.UprightPhoto(8, 8)
+        }
+        val loading = DefaultGeneratorPreviewLoader(
+            openSource = { PhotoSource { ByteArrayInputStream(byteArrayOf(7, 7, 7)) } },
+            decoder = capturingDecoder,
+            normalizer = normalizerOk,
+            workerDispatcher = manualWorker,
+        ).also { it.retainOriginal = { _, _ -> sinkRan = true } }
+        val job = async { loading.load("uri-1") }
+        // Run the caller up to the worker hop, then drain the worker to
+        // success; the caller resume stays queued on the test scheduler.
+        testScheduler.runCurrent()
+        while (workerQueue.isNotEmpty()) workerQueue.removeFirst().run()
+        job.cancel()
+        testScheduler.advanceUntilIdle()
+        assertTrue("cancelled handoff must not deliver", job.isCancelled)
+        try {
+            job.await()
+            fail("expected CancellationException")
+        } catch (_: kotlinx.coroutines.CancellationException) {
+            // Expected: cancellation across the dispatch handoff.
+        }
+        assertTrue("stale retain must never fire", !sinkRan)
+        val original = requireNotNull(workerOriginal) { "worker must have decoded" }
+        assertTrue(
+            "produced original must be zeroized despite resume cancellation",
+            original.all { it == 0.toByte() },
+        )
     }
 
     @Test

@@ -104,28 +104,51 @@ class DefaultGeneratorPreviewLoader(
         val hash: String,
     )
 
-    override suspend fun load(pickerId: String): LoadedPreviewSource? {
-        val prepared = withContext(workerDispatcher) {
-            prepareOnWorker(pickerId)
-        } ?: return null
-        // Back on the caller lane: cancellation recheck, then the retain
-        // callback. A cancel landing across the hop must not produce a
-        // stale retain.
-        currentCoroutineContext().ensureActive()
-        retainOriginal?.let { sink ->
-            try {
-                sink(prepared.original, prepared.hash)
-            } catch (cancelled: CancellationException) {
-                prepared.original.fill(0)
-                throw cancelled
-            } catch (_: Exception) {
-                // Diagnostic only: a sink failure never breaks preview.
-            }
+    /**
+     * Cleanup owner spanning the whole withContext/caller retain
+     * lifecycle. A cancelled caller continuation drops the withContext
+     * result (F1: prompt cancellation on dispatcher return) and the
+     * caller recheck can throw before any local cleanup (F2) — in both
+     * cases the produced original must still be wiped, so every exit
+     * path below runs through [wipe]. Volatile: the publish happens on
+     * the worker while the wipe can run on the caller after a
+     * resume-cancellation.
+     */
+    private class OriginalHandoff {
+        @Volatile
+        var prepared: PreparedOriginal? = null
+
+        fun wipe() {
+            prepared?.original?.fill(0)
+            prepared = null
         }
+    }
+
+    override suspend fun load(pickerId: String): LoadedPreviewSource? {
+        val handoff = OriginalHandoff()
         try {
-            return prepared.preview
+            val preview = withContext(workerDispatcher) {
+                val prepared = prepareOnWorker(pickerId) ?: return@withContext null
+                handoff.prepared = prepared
+                prepared.preview
+            } ?: return null
+            // Back on the caller lane: cancellation recheck, then the retain
+            // callback. A cancel landing across the hop must not produce a
+            // stale retain.
+            currentCoroutineContext().ensureActive()
+            val handed = handoff.prepared ?: return null
+            retainOriginal?.let { sink ->
+                try {
+                    sink(handed.original, handed.hash)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // Diagnostic only: a sink failure never breaks preview.
+                }
+            }
+            return preview
         } finally {
-            prepared.original.fill(0)
+            handoff.wipe()
         }
     }
 

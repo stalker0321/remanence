@@ -54,6 +54,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 /**
  * T001 explicit frozen selection: the pure [buildFrozenSelection] validator
@@ -66,6 +67,7 @@ import org.robolectric.annotation.Config
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class CollageFrozenSelectionTest {
 
     private val testDispatcher = UnconfinedTestDispatcher()
@@ -297,6 +299,23 @@ class CollageFrozenSelectionTest {
     private fun originalFor(pickerId: String): ByteArray =
         ByteArray(64) { ((it * 31 + pickerId.hashCode()) and 0xFF).toByte() }
 
+    /**
+     * Real decodable JPEG bytes (EXIF parse succeeds): preread validates
+     * through the production EXIF decoder, so publish-prerequisite
+     * fixtures must be real images, not opaque byte blobs. Distinct per
+     * id, and distinct from [originalFor] bytes, so preread input
+     * mismatch (the intended stale-frozen negative) is genuine.
+     */
+    private fun realJpegFor(pickerId: String): ByteArray {
+        val bitmap = android.graphics.Bitmap.createBitmap(8, 8, android.graphics.Bitmap.Config.ARGB_8888)
+        bitmap.eraseColor(pickerId.hashCode() or 0xFF000000.toInt())
+        return java.io.ByteArrayOutputStream().use { stream ->
+            assertTrue(bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, stream))
+            bitmap.recycle()
+            stream.toByteArray()
+        }
+    }
+
     private fun previewLoader(originals: Map<String, ByteArray>) = DefaultGeneratorPreviewLoader(
         openSource = { pickerId ->
             PhotoSource { ByteArrayInputStream(originals.getValue(pickerId)) }
@@ -319,6 +338,7 @@ class CollageFrozenSelectionTest {
         directory: RecipientDirectoryPort = SelfDirectory(),
         identity: (suspend () -> SenderIdentitySnapshot?)? = null,
         withBridge: Boolean = false,
+        openPhotoSource: ((String) -> PhotoSource)? = null,
     ): CreateViewModel {
         val retryStore = SenderRetryMaterialStore(AccountScopedFileRoots(outboxDir))
         return CreateViewModel(
@@ -333,7 +353,8 @@ class CollageFrozenSelectionTest {
             ),
             profile = RecognitionProfile.postcardSiftRootSiftV1(),
             accountScopedFileRoots = AccountScopedFileRoots(stagingDir),
-            openPhotoSource = { PhotoSource { ByteArrayInputStream(ByteArray(8)) } },
+            openPhotoSource = openPhotoSource
+                ?: { PhotoSource { ByteArrayInputStream(ByteArray(8)) } },
             frontProcessor = Accepting(FingerprintSide.FRONT),
             generatorBridgeProvider = if (withBridge) bridge.provider else null,
             generatorPreviewLoader = loader,
@@ -501,6 +522,14 @@ class CollageFrozenSelectionTest {
             directory = directory,
             identity = { senderIdentitySnapshot() },
             withBridge = true,
+            // Publish prereads the ACTUAL selected originals through the
+            // production EXIF decoder: supply valid per-id JPEGs (distinct
+            // from the preview bytes) so preread passes and the test
+            // reaches the intended stale-frozen collage guard instead of
+            // the unreadable-photo prerequisite.
+            openPhotoSource = { pickerId ->
+                PhotoSource { ByteArrayInputStream(realJpegFor(pickerId)) }
+            },
         )
         vm.beginSession(1L, senderUserUuid.toString())
         vm.onResolved(selfSnapshot())

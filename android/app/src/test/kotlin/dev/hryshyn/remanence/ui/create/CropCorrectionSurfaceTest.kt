@@ -390,13 +390,16 @@ class CropCorrectionSurfaceTest {
 
     /**
      * Independent frozen-excerpt oracle (transcribed from the frozen
-     * spec, not calling production `sourceWindow`): base excerpt fills
-     * the frame at top-left offset, then translate(x%,y%) scale(z)
-     * about the frame CENTER — i.e. content point p shows where
-     * (p − C − t)/z + C lands (translation inside the zoom division,
-     * matching graphicsLayer center-origin semantics). Returns expected
-     * (R,G,B) for a frame pixel over the 0..255 gradient, or null
-     * outside the source.
+     * spec, not calling production `sourceWindow`): the base excerpt is
+     * laid at exact size and placed top-left plus the manual offset —
+     * i.e. frame pixel (fx, fy) samples the source at the excerpted
+     * image pixel (fx − offsetX, fy − offsetY). The stage then applies
+     * the correction as translate(x%,y%) scale(z) about the frame
+     * CENTER, so the full inverse mapping is
+     * content = (framePoint − C − t)/z + C mapped into the excerpt:
+     * u = bx + ((fx − Cx − tx)/z + Cx)·bw/Wf (and likewise v).
+     * Returns expected (R,G,B) for a frame pixel over the 0..255
+     * gradient, or null outside the source.
      */
     private fun oraclePixel(
         fx: Float, fy: Float, frameW: Float, frameH: Float,

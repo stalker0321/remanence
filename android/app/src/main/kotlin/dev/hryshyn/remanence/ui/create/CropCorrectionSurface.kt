@@ -14,8 +14,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.material3.MaterialTheme
@@ -31,12 +29,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import dev.hryshyn.remanence.core.model.GeneratorExpression
 import dev.hryshyn.remanence.ui.collage.FixedFrameCropCorrection
 import dev.hryshyn.remanence.ui.collage.NormalizedCrop
@@ -181,7 +181,6 @@ fun CropStageContent(
                 val imageHeight = (frameHeight / baseHeight).toDouble()
                 val offsetX = -base.x * imageWidth
                 val offsetY = -base.y * imageHeight
-                val density = LocalDensity.current
                 // `.fragment`: fills the window and carries the frozen
                 // translate(x%,y%) scale(z) about the centre, percent of frame.
                 Box(
@@ -200,18 +199,13 @@ fun CropStageContent(
                         contentDescription = "crop source",
                         contentScale = ContentScale.FillBounds,
                         modifier = Modifier
-                            .offset(
-                                x = with(density) { offsetX.toFloat().toDp() },
-                                y = with(density) { offsetY.toFloat().toDp() },
-                            )
-                            // `requiredSize` (not `size`): like the frozen
-                            // absolutely-positioned `.fragment img`, the
-                            // excerpt may be LARGER than the window — plain
-                            // `size` would be coerced into the frame's
-                            // measured constraints and never overflow.
-                            .requiredSize(
-                                width = with(density) { imageWidth.toFloat().toDp() },
-                                height = with(density) { imageHeight.toFloat().toDp() },
+                            .excerptPlacement(
+                                frameWidthPx = frameWidth,
+                                frameHeightPx = frameHeight,
+                                imageWidthPx = imageWidth.toFloat(),
+                                imageHeightPx = imageHeight.toFloat(),
+                                offsetXPx = offsetX.toFloat(),
+                                offsetYPx = offsetY.toFloat(),
                             )
                             .testTag("crop_image"),
                     )
@@ -305,6 +299,31 @@ fun CropStageContent(
                 modifier = Modifier.fillMaxWidth().testTag("crop_done"),
             ) { Text("Done") }
         }
+    }
+}
+
+/**
+ * Frozen excerpt placement (render.mjs absolute `.fragment img`): sizes the
+ * image exactly (ignoring parent max, like `requiredSize`) but places it at
+ * the explicit offset from the parent origin — never recentered. A plain
+ * oversized `requiredSize` child is centered by placement, which shifts the
+ * shown window away from the sealed one by (image − frame)/2; this bypasses
+ * alignment entirely (`place` at exact pixels). All inputs are px floats;
+ * rounding is at most half a pixel per edge.
+ */
+private fun Modifier.excerptPlacement(
+    frameWidthPx: Float,
+    frameHeightPx: Float,
+    imageWidthPx: Float,
+    imageHeightPx: Float,
+    offsetXPx: Float,
+    offsetYPx: Float,
+): Modifier = layout { measurable, _ ->
+    val iw = imageWidthPx.roundToInt().coerceAtLeast(1)
+    val ih = imageHeightPx.roundToInt().coerceAtLeast(1)
+    val placeable = measurable.measure(Constraints.fixed(iw, ih))
+    layout(frameWidthPx.roundToInt(), frameHeightPx.roundToInt()) {
+        placeable.place(offsetXPx.roundToInt(), offsetYPx.roundToInt())
     }
 }
 

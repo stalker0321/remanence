@@ -1885,11 +1885,15 @@ class CreateViewModel(
      * values), and this token carries only the class — no private
      * content can pass.
      */
-    private fun reportBindRefusal(ordinal: Int, result: GeneratorCreateBridge.SlotResult?) {
+    private fun reportBindRefusal(
+        ordinal: Int,
+        result: GeneratorCreateBridge.SlotResult?,
+        thrown: Exception?,
+    ) {
         if (BuildConfig.DEBUG) {
             android.util.Log.d(
                 "GeneratorBind",
-                "bind slot refused: ordinal=$ordinal class=${bindSlotRefusalToken(result)}",
+                "bind slot refused: ordinal=$ordinal class=${bindSlotRefusalToken(result, thrown)}",
             )
         }
     }
@@ -1902,16 +1906,18 @@ class CreateViewModel(
         val bridge = bound.bridge
         val photos = ArrayList<BoundPhotoForPublish>(inputs.photoIds.size)
         for ((ordinal, pickerId) in inputs.photoIds.withIndex()) {
+            var thrown: Exception? = null
             val result = try {
                 bridge.bindSlot(bound.context, bound.sessionId, ordinal, openPhotoSource(pickerId))
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                thrown = e
                 null
             }
             val slot = result as? GeneratorCreateBridge.SlotResult.Bound
             if (slot == null) {
-                reportBindRefusal(ordinal, result)
+                reportBindRefusal(ordinal, result, thrown)
                 dropGeneratorBoundForGeneration(generation) { b, c, s -> b.cancel(c, s) }
                 failPublishing("generator bind rejected slot $ordinal; publishing cancelled", generation)
                 return null
@@ -2279,19 +2285,71 @@ class CreateViewModel(
 
 /**
  * Reason token for a refused bind slot (diagnostics only — the user copy
- * stays unchanged). `null` means the bind call itself threw and was
- * swallowed by the caller (never a typed refusal); otherwise the result
- * variant. Every reason string in the bridge/binder/staging seam is a
+ * stays unchanged). `thrown` (non-null) wins: only fixed allowlisted
+ * exception categories, never names/messages/stacks. Otherwise the result
+ * variant plus, for known literals, the exact static reason; anything
+ * unrecognized maps to a fixed `-other` token and raw strings are never
+ * emitted. Every reason string in the bridge/binder/staging seam is a
  * fixed literal (audited: no ids, hashes, bytes, tokens or interpolated
- * values), and this token carries only the class — no private content
- * can pass. Top-level (not a member) so the mapping is unit-testable
- * without a ViewModel instance.
+ * values), and the mapping only ever outputs allowlisted constants.
+ * Top-level (not a member) so the mapping is unit-testable without a
+ * ViewModel instance.
  */
-internal fun bindSlotRefusalToken(result: dev.hryshyn.remanence.create.GeneratorCreateBridge.SlotResult?): String =
-    when (result) {
-        null -> "thrown"
-        is dev.hryshyn.remanence.create.GeneratorCreateBridge.SlotResult.Stale -> "stale"
-        is dev.hryshyn.remanence.create.GeneratorCreateBridge.SlotResult.Duplicate -> "duplicate"
-        is dev.hryshyn.remanence.create.GeneratorCreateBridge.SlotResult.Failed -> "failed"
-        is dev.hryshyn.remanence.create.GeneratorCreateBridge.SlotResult.Bound -> "bound"
+internal fun bindSlotRefusalToken(
+    result: GeneratorCreateBridge.SlotResult?,
+    thrown: Exception? = null,
+): String {
+    if (thrown != null) {
+        return when (thrown) {
+            is SecurityException -> "thrown-security"
+            is java.io.IOException -> "thrown-io"
+            else -> "thrown-other"
+        }
     }
+    return when (result) {
+        null -> "thrown"
+        is GeneratorCreateBridge.SlotResult.Stale ->
+            when (result.reason) {
+                "unknown session" -> "stale-unknown-session"
+                "stale context" -> "stale-context"
+                "already consumed" -> "stale-consumed"
+                else -> "stale-other"
+            }
+        is GeneratorCreateBridge.SlotResult.Duplicate -> "duplicate"
+        is GeneratorCreateBridge.SlotResult.Failed ->
+            when (result.reason) {
+                "bad content id" -> "failed-bad-content-id"
+                "bad ordinal" -> "failed-bad-ordinal"
+                "bad content hash" -> "failed-bad-content-hash"
+                "bad upright dims" -> "failed-bad-upright-dims"
+                "bind failed" -> "failed-bind-failed"
+                "bytes over bound" -> "failed-bytes-over-bound"
+                "decode failed" -> "failed-decode-failed"
+                "derived over budget" -> "failed-derived-over-budget"
+                "dimension mismatch" -> "failed-dimension-mismatch"
+                "empty bytes" -> "failed-empty-bytes"
+                "hash mismatch" -> "failed-hash-mismatch"
+                "hash mismatch at stage" -> "failed-hash-mismatch-at-stage"
+                "invalid input" -> "failed-invalid-input"
+                "non-positive dims" -> "failed-non-positive-dims"
+                "normalization failed" -> "failed-normalization-failed"
+                "out-of-order stage" -> "failed-out-of-order-stage"
+                "unknown slot" -> "failed-unknown-slot"
+                "session bytes over bound" -> "failed-session-bytes-over-bound"
+                "source failed" -> "failed-source-failed"
+                "source over 32MiB bound" -> "failed-source-over-32mib-bound"
+                "source over bound" -> "failed-source-over-bound"
+                "source unreadable" -> "failed-source-unreadable"
+                "store unavailable" -> "failed-store-unavailable"
+                "session not active" -> "failed-session-not-active"
+                "non-canonical owner" -> "failed-non-canonical-owner"
+                "owner mismatch" -> "failed-owner-mismatch"
+                "stale epoch" -> "failed-stale-epoch"
+                "stale revision" -> "failed-stale-revision"
+                "expired" -> "failed-expired"
+                "too many leases" -> "failed-too-many-leases"
+                else -> "failed-other"
+            }
+        is GeneratorCreateBridge.SlotResult.Bound -> "bound"
+    }
+}

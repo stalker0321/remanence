@@ -458,7 +458,7 @@ class GeneratorCreateBridgeTest {
         )
         assertEquals("bound", dev.hryshyn.remanence.ui.create.bindSlotRefusalToken(bound))
         assertEquals(
-            "stale",
+            "stale-unknown-session",
             dev.hryshyn.remanence.ui.create.bindSlotRefusalToken(
                 GeneratorCreateBridge.SlotResult.Stale("unknown session"),
             ),
@@ -470,23 +470,150 @@ class GeneratorCreateBridgeTest {
             ),
         )
         assertEquals(
-            "failed",
+            "failed-hash-mismatch",
             dev.hryshyn.remanence.ui.create.bindSlotRefusalToken(
                 GeneratorCreateBridge.SlotResult.Failed("hash mismatch"),
             ),
         )
         assertEquals(
-            "failed",
+            "failed-store-unavailable",
             dev.hryshyn.remanence.ui.create.bindSlotRefusalToken(
                 GeneratorCreateBridge.SlotResult.Failed("store unavailable"),
             ),
         )
         assertEquals("thrown", dev.hryshyn.remanence.ui.create.bindSlotRefusalToken(null))
-        for (token in listOf("bound", "stale", "duplicate", "failed", "thrown")) {
+        for (token in listOf(
+            "bound",
+            "stale-unknown-session",
+            "duplicate",
+            "failed-hash-mismatch",
+            "failed-store-unavailable",
+            "thrown",
+        )) {
             assertTrue(
                 "token must be a fixed allowlisted word",
-                token.matches(Regex("[a-z]+")),
+                token.matches(Regex("[a-z0-9-]+")),
             )
         }
+    }
+
+    @Test
+    fun bindRefusalTokenMapsEveryKnownLiteralDistinctly() {
+        // Competing incident causes must produce distinguishable tokens.
+        val cases = mapOf(
+            "unknown session" to "stale-unknown-session",
+            "stale context" to "stale-context",
+            "already consumed" to "stale-consumed",
+            "bad content id" to "failed-bad-content-id",
+            "bad ordinal" to "failed-bad-ordinal",
+            "bad content hash" to "failed-bad-content-hash",
+            "bad upright dims" to "failed-bad-upright-dims",
+            "bind failed" to "failed-bind-failed",
+            "bytes over bound" to "failed-bytes-over-bound",
+            "decode failed" to "failed-decode-failed",
+            "derived over budget" to "failed-derived-over-budget",
+            "dimension mismatch" to "failed-dimension-mismatch",
+            "empty bytes" to "failed-empty-bytes",
+            "hash mismatch" to "failed-hash-mismatch",
+            "hash mismatch at stage" to "failed-hash-mismatch-at-stage",
+            "invalid input" to "failed-invalid-input",
+            "non-positive dims" to "failed-non-positive-dims",
+            "normalization failed" to "failed-normalization-failed",
+            "out-of-order stage" to "failed-out-of-order-stage",
+            "unknown slot" to "failed-unknown-slot",
+            "session bytes over bound" to "failed-session-bytes-over-bound",
+            "source failed" to "failed-source-failed",
+            "source over 32MiB bound" to "failed-source-over-32mib-bound",
+            "source over bound" to "failed-source-over-bound",
+            "source unreadable" to "failed-source-unreadable",
+            "store unavailable" to "failed-store-unavailable",
+            "session not active" to "failed-session-not-active",
+            "non-canonical owner" to "failed-non-canonical-owner",
+            "owner mismatch" to "failed-owner-mismatch",
+            "stale epoch" to "failed-stale-epoch",
+            "stale revision" to "failed-stale-revision",
+            "expired" to "failed-expired",
+            "too many leases" to "failed-too-many-leases",
+        )
+        assertEquals("audited seam literal count", 33, cases.size)
+        val seen = mutableSetOf<String>()
+        for ((reason, expected) in cases) {
+            val result = if (expected.startsWith("stale-")) {
+                GeneratorCreateBridge.SlotResult.Stale(reason)
+            } else {
+                GeneratorCreateBridge.SlotResult.Failed(reason)
+            }
+            val token = dev.hryshyn.remanence.ui.create.bindSlotRefusalToken(result)
+            assertEquals("literal '$reason'", expected, token)
+            assertTrue("token must be unique: $token", seen.add(token))
+        }
+        // The incident's competing causes stay distinguishable.
+        val competing = setOf(
+            dev.hryshyn.remanence.ui.create.bindSlotRefusalToken(
+                GeneratorCreateBridge.SlotResult.Failed("hash mismatch"),
+            ),
+            dev.hryshyn.remanence.ui.create.bindSlotRefusalToken(
+                GeneratorCreateBridge.SlotResult.Failed("dimension mismatch"),
+            ),
+            dev.hryshyn.remanence.ui.create.bindSlotRefusalToken(
+                GeneratorCreateBridge.SlotResult.Failed("normalization failed"),
+            ),
+            dev.hryshyn.remanence.ui.create.bindSlotRefusalToken(
+                GeneratorCreateBridge.SlotResult.Failed("store unavailable"),
+            ),
+        )
+        assertEquals(4, competing.size)
+    }
+
+    @Test
+    fun bindRefusalTokenNeverEchoesAdversarialInput() {
+        // Malicious reason strings carrying tokens, URIs, hashes and ids
+        // must map to fixed fallbacks — raw input is never emitted.
+        val hostile = listOf(
+            "hash mismatch 8a49e364-2a65-4f76-bb66-1f684d697981",
+            "failed-hash-mismatch",
+            "content://media/external/images/media/42",
+            "../../../etc/passwd",
+            "thrown-security",
+            "",
+        )
+        for (reason in hostile) {
+            assertEquals(
+                "hostile Failed must map fixed: '$reason'",
+                "failed-other",
+                dev.hryshyn.remanence.ui.create.bindSlotRefusalToken(
+                    GeneratorCreateBridge.SlotResult.Failed(reason),
+                ),
+            )
+            assertEquals(
+                "hostile Stale must map fixed: '$reason'",
+                "stale-other",
+                dev.hryshyn.remanence.ui.create.bindSlotRefusalToken(
+                    GeneratorCreateBridge.SlotResult.Stale(reason),
+                ),
+            )
+        }
+        // Exception categories never carry messages/stacks.
+        assertEquals(
+            "thrown-security",
+            dev.hryshyn.remanence.ui.create.bindSlotRefusalToken(
+                null,
+                SecurityException("secret-token abc123"),
+            ),
+        )
+        assertEquals(
+            "thrown-io",
+            dev.hryshyn.remanence.ui.create.bindSlotRefusalToken(
+                null,
+                java.io.IOException("content://private/blob"),
+            ),
+        )
+        assertEquals(
+            "thrown-other",
+            dev.hryshyn.remanence.ui.create.bindSlotRefusalToken(
+                null,
+                IllegalStateException("hash 8a49e364"),
+            ),
+        )
     }
 }

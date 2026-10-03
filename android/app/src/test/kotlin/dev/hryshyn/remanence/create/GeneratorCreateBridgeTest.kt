@@ -446,4 +446,47 @@ class GeneratorCreateBridgeTest {
         assertTrue(bridge.freeze(first.context, first.sessionId) is GeneratorCreateBridge.FreezeResult.Frozen)
         assertTrue(bridge.freeze(first.context, first.sessionId) is GeneratorCreateBridge.FreezeResult.Rejected)
     }
+
+    @Test
+    fun bindRefusalTokenNamesEachClassWithoutSecrets() {
+        // The diagnostic seam must distinguish every refusal shape with a
+        // fixed token carrying no private content (audited: all reason
+        // strings in the seam are static literals).
+        val bound = GeneratorCreateBridge.SlotResult.Bound(
+            GeneratorStaging.Lease("s#0", "s", "c", 0, "h", 1L),
+            GeneratorCreateBridge.NormalizedPhoto(ByteArray(2), 8, 8),
+        )
+        assertEquals("bound", dev.hryshyn.remanence.ui.create.bindSlotRefusalToken(bound))
+        assertEquals(
+            "stale",
+            dev.hryshyn.remanence.ui.create.bindSlotRefusalToken(
+                GeneratorCreateBridge.SlotResult.Stale("unknown session"),
+            ),
+        )
+        assertEquals(
+            "duplicate",
+            dev.hryshyn.remanence.ui.create.bindSlotRefusalToken(
+                GeneratorCreateBridge.SlotResult.Duplicate(0),
+            ),
+        )
+        assertEquals(
+            "failed",
+            dev.hryshyn.remanence.ui.create.bindSlotRefusalToken(
+                GeneratorCreateBridge.SlotResult.Failed("hash mismatch"),
+            ),
+        )
+        assertEquals(
+            "failed",
+            dev.hryshyn.remanence.ui.create.bindSlotRefusalToken(
+                GeneratorCreateBridge.SlotResult.Failed("store unavailable"),
+            ),
+        )
+        assertEquals("thrown", dev.hryshyn.remanence.ui.create.bindSlotRefusalToken(null))
+        for (token in listOf("bound", "stale", "duplicate", "failed", "thrown")) {
+            assertTrue(
+                "token must be a fixed allowlisted word",
+                token.matches(Regex("[a-z]+")),
+            )
+        }
+    }
 }

@@ -1876,6 +1876,24 @@ class CreateViewModel(
      *
      * Returns null after failPublishing (the caller returns immediately).
      */
+    /**
+     * Reason token for a refused bind slot (diagnostics only — the user
+     * copy stays unchanged). `null` means the call itself threw and was
+     * swallowed above (never a typed refusal); otherwise the variant.
+     * Every reason string in the bridge/binder/staging seam is a fixed
+     * literal (audited: no ids, hashes, bytes, tokens or interpolated
+     * values), and this token carries only the class — no private
+     * content can pass.
+     */
+    private fun reportBindRefusal(ordinal: Int, result: GeneratorCreateBridge.SlotResult?) {
+        if (BuildConfig.DEBUG) {
+            android.util.Log.d(
+                "GeneratorBind",
+                "bind slot refused: ordinal=$ordinal class=${bindSlotRefusalToken(result)}",
+            )
+        }
+    }
+
     private suspend fun bindGeneratorPhotos(
         generation: Long,
         inputs: PublishInputs,
@@ -1893,6 +1911,7 @@ class CreateViewModel(
             }
             val slot = result as? GeneratorCreateBridge.SlotResult.Bound
             if (slot == null) {
+                reportBindRefusal(ordinal, result)
                 dropGeneratorBoundForGeneration(generation) { b, c, s -> b.cancel(c, s) }
                 failPublishing("generator bind rejected slot $ordinal; publishing cancelled", generation)
                 return null
@@ -2257,3 +2276,22 @@ class CreateViewModel(
         super.onCleared()
     }
 }
+
+/**
+ * Reason token for a refused bind slot (diagnostics only — the user copy
+ * stays unchanged). `null` means the bind call itself threw and was
+ * swallowed by the caller (never a typed refusal); otherwise the result
+ * variant. Every reason string in the bridge/binder/staging seam is a
+ * fixed literal (audited: no ids, hashes, bytes, tokens or interpolated
+ * values), and this token carries only the class — no private content
+ * can pass. Top-level (not a member) so the mapping is unit-testable
+ * without a ViewModel instance.
+ */
+internal fun bindSlotRefusalToken(result: dev.hryshyn.remanence.create.GeneratorCreateBridge.SlotResult?): String =
+    when (result) {
+        null -> "thrown"
+        is dev.hryshyn.remanence.create.GeneratorCreateBridge.SlotResult.Stale -> "stale"
+        is dev.hryshyn.remanence.create.GeneratorCreateBridge.SlotResult.Duplicate -> "duplicate"
+        is dev.hryshyn.remanence.create.GeneratorCreateBridge.SlotResult.Failed -> "failed"
+        is dev.hryshyn.remanence.create.GeneratorCreateBridge.SlotResult.Bound -> "bound"
+    }

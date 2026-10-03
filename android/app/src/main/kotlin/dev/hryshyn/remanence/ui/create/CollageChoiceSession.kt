@@ -40,6 +40,17 @@ class CollageChoiceSession {
     var notice: String? by mutableStateOf(null)
         private set
 
+    /**
+     * Monotonic fresh-build generation, incremented on every
+     * [replaceCandidates] (and only there — in-place
+     * [replaceCandidate] corrections must not invalidate carry-over
+     * proofs). The host's readiness-report effect keys on this so a
+     * value-equal rebuild still forces one fresh report after the
+     * proofs were cleared.
+     */
+    var buildGeneration: Long by mutableStateOf(0L)
+        private set
+
     /** The candidate currently shown to the user (browse cursor), if any. */
     val displayed: CollageCandidate?
         get() = candidates.getOrNull(displayIndex)
@@ -57,6 +68,7 @@ class CollageChoiceSession {
         displayIndex = 0
         selectedIndex = null
         notice = null
+        buildGeneration += 1
         onCandidatesReplaced?.invoke()
     }
 

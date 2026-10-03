@@ -9,6 +9,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.CompletableDeferred
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
@@ -220,6 +221,98 @@ class CollageChoiceHostTest {
             composeRule.waitForIdle()
             assertEquals(before + 1, session.displayIndex)
         }
+    }
+
+    @Test
+    fun gatedRebuildRepostsProofForFirstSelect() {
+        // Discriminating regression for the equal-rebuild silence
+        // (scout-select-drawable): a retained candidate report fires,
+        // THEN a gated async builder completes with value-equal
+        // candidates and the proofs clear; the host must re-report
+        // (build-generation key) so the FIRST displayed Select succeeds
+        // without Next. Without the key this test fails (proof never
+        // returns, Select refused). The VM store/clear rules are mimicked
+        // faithfully (ready-only store, clear on replace); all mounting,
+        // building, reporting and clicking go through real composition.
+        val session = CollageChoiceSession()
+        val proofs = mutableMapOf<String, Unit>()
+        var accepted by mutableStateOf(false)
+        session.onCandidatesReplaced = { proofs.clear() }
+        var useGated = false
+        var gatedResult: List<dev.hryshyn.remanence.ui.collage.CollageCandidate>? = null
+        val gate = CompletableDeferred<Unit>()
+        var showHost by mutableStateOf(true)
+        composeRule.setContent {
+            if (showHost) {
+                CollageChoiceHost(
+                    session,
+                    input(),
+                    sources(),
+                    null,
+                    null,
+                    cropSource(),
+                    candidateBuilder = {
+                        if (!useGated) {
+                            null
+                        } else {
+                            gate.await()
+                            gatedResult
+                        }
+                    },
+                    onSelect = { index ->
+                        if (session.select(index) &&
+                            session.selected?.let { proofs.containsKey(it.candidateId) } == true
+                        ) {
+                            accepted = true
+                        }
+                    },
+                    onPrepared = { id, ready, _ ->
+                        if (ready) {
+                            proofs[id] = Unit
+                        }
+                    },
+                    prepareInputs = PrepareInputs(null, null, null),
+                )
+            }
+        }
+        // Phase 1: ungated V3 path builds real candidates; retained report
+        // fires before anything else can clear it.
+        composeRule.waitUntil(timeoutMillis = 10_000) { session.candidates.isNotEmpty() }
+        composeRule.waitForIdle()
+        val firstId = requireNotNull(session.displayed?.candidateId)
+        composeRule.waitUntil(timeoutMillis = 10_000) { proofs.containsKey(firstId) }
+        // Row fits at this width (plain Row, no scroller): click directly.
+        composeRule.onNodeWithTag("collage_select").performClick()
+        composeRule.waitForIdle()
+        assertTrue("baseline Select must be accepted", accepted)
+        accepted = false
+        val retained = session.candidates.toList()
+
+        // Phase 2: remount with the session retained; gated builder held.
+        composeRule.runOnIdle {
+            useGated = true
+            gatedResult = retained
+            showHost = false
+        }
+        composeRule.waitForIdle()
+        composeRule.runOnIdle { showHost = true }
+        composeRule.waitForIdle()
+        // Retained report fires again before release (proof present).
+        composeRule.waitUntil(timeoutMillis = 10_000) { proofs.containsKey(firstId) }
+
+        // Release: equal rebuild clears proofs...
+        composeRule.runOnIdle { gate.complete(Unit) }
+        composeRule.waitUntil(timeoutMillis = 10_000) { proofs.isEmpty() }
+        composeRule.waitForIdle()
+
+        // ...value-equal candidates, same first id...
+        assertEquals(retained.size, session.candidates.size)
+        assertEquals(firstId, session.displayed?.candidateId)
+        // ...then the host re-reports, so FIRST Select (no Next) succeeds.
+        composeRule.waitUntil(timeoutMillis = 10_000) { proofs.containsKey(firstId) }
+        composeRule.onNodeWithTag("collage_select").performClick()
+        composeRule.waitForIdle()
+        assertTrue("first Select after equal rebuild must be accepted", accepted)
     }
 
     @Test

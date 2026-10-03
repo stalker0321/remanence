@@ -207,7 +207,18 @@ internal fun CollageChoiceHost(
         if (displayed != null && reportedInputs != null) {
             // Effect, not render: reports the measured outcome tied to the
             // exact prepared inputs; the VM equality-checks them on arrival.
-            LaunchedEffect(displayed.candidateId, displayed.expression, noteArg, track, artworkBitmap, reportedInputs) {
+            // The build generation key forces one fresh report after every
+            // replaceCandidates — even a value-equal rebuild whose id and
+            // expression are unchanged (the proofs were just cleared).
+            LaunchedEffect(
+                displayed.candidateId,
+                displayed.expression,
+                noteArg,
+                track,
+                artworkBitmap,
+                reportedInputs,
+                session.buildGeneration,
+            ) {
                 onPrepared(displayed.candidateId, preparedReady, reportedInputs)
             }
         }

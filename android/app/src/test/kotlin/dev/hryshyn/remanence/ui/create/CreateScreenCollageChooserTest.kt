@@ -784,6 +784,119 @@ class CreateScreenCollageChooserTest {
     }
 
     @Test
+    fun remountRebuildRepostsProofForFirstSelect() {
+        // Device recipe (scout-select-drawable) as POSITIVE roundtrip
+        // coverage: proof present, back/continue remount retains the
+        // session, async rebuild fires, and the FIRST displayed Select +
+        // freeze succeed without requiring Next.
+        //
+        // Honest negative evidence (lead): this test passes WITH and
+        // WITHOUT the build-generation report key — the remount's fresh
+        // report ordering already restores the proof here — so it does
+        // NOT discriminate the equal-rebuild silence. The discriminating
+        // regression is `gatedRebuildRepostsProofForFirstSelect` in
+        // CollageChoiceHostTest, which holds the builder suspended past
+        // the retained report.
+        val ids = listOf("u1", "u2", "u3")
+        val originals = ids.associateWith { id ->
+            ByteArray(64) { ((it * 31 + id.hashCode()) and 0xFF).toByte() }
+        }
+        val vm = viewModel(originals, withFactory = true)
+        driveToContent(vm, ids)
+        composeRule.setContent {
+            CreateScreen(
+                viewModel = vm,
+                adapterFactory = null,
+                requestPermissionOnAttach = false,
+            )
+        }
+        driveToComposeCandidates(vm)
+
+        // Select + freeze the first displayed candidate (proof present).
+        composeRule.onNodeWithTag("collage_select").performScrollTo()
+        composeRule.onNodeWithTag("collage_select").performClick()
+        composeRule.waitForIdle()
+        val frozenId = requireNotNull(vm.frozenCollageSelection?.candidateId)
+        val shownId = requireNotNull(vm.collageChoices.displayed?.candidateId)
+        val shownExpression = requireNotNull(vm.collageChoices.displayed?.expression)
+        val shownCount = vm.collageChoices.candidates.size
+
+        // Remount with the session retained (back to CONTENT and continue
+        // again, exactly the device recipe): the host is disposed and
+        // remounted, and the async rebuild fires again.
+        composeRule.onNodeWithTag("create_compose_back").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("create_screen_scroll")
+            .performScrollToNode(hasTestTag("create_next"))
+        composeRule.onNodeWithTag("create_next").performClick()
+        composeRule.waitForIdle()
+        // The rebuild clears the frozen selection (VM onCandidatesReplaced).
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            vm.frozenCollageSelection == null
+        }
+        composeRule.waitForIdle()
+
+        // Value-equal rebuild: same count, same first id, same expression.
+        assertEquals(shownCount, vm.collageChoices.candidates.size)
+        assertEquals(shownId, vm.collageChoices.displayed?.candidateId)
+        assertEquals(shownExpression, vm.collageChoices.displayed?.expression)
+
+        // FIRST displayed Select + freeze succeed with NO Next in between.
+        composeRule.onNodeWithTag("collage_select").performScrollTo()
+        composeRule.onNodeWithTag("collage_select").performClick()
+        composeRule.waitForIdle()
+        val resealedId = requireNotNull(vm.frozenCollageSelection?.candidateId) {
+            "first Select after equal rebuild must freeze, flowError=${vm.flowError.value}"
+        }
+        assertEquals(shownId, resealedId)
+
+        // Next then Select also succeeds.
+        composeRule.onNodeWithTag("collage_next").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("collage_select").performScrollTo()
+        composeRule.onNodeWithTag("collage_select").performClick()
+        composeRule.waitForIdle()
+        assertTrue(vm.frozenCollageSelection != null)
+        vm.endSession()
+    }
+
+    @Test
+    fun equalRebuildClearsProofUntilRepost() {
+        // VM seam contract: a stored positive proof gates Select; an equal
+        // rebuild (same ids, equal expressions) clears it and refuses until
+        // the host re-reports.
+        val ids = listOf("u1", "u2", "u3")
+        val originals = ids.associateWith { id ->
+            ByteArray(64) { ((it * 31 + id.hashCode()) and 0xFF).toByte() }
+        }
+        val vm = viewModel(originals, withFactory = true)
+        driveToContent(vm, ids)
+        composeRule.setContent {
+            CreateScreen(
+                viewModel = vm,
+                adapterFactory = null,
+                requestPermissionOnAttach = false,
+            )
+        }
+        driveToComposeCandidates(vm)
+
+        val id0 = requireNotNull(vm.collageChoices.displayed?.candidateId)
+        vm.onCandidatePrepared(id0, true, vm.prepareInputs())
+        assertTrue("proof present: select must succeed", vm.selectCollageCandidate(0))
+
+        val count = vm.collageChoices.candidates.size
+        vm.collageChoices.replaceCandidates(vm.collageChoices.candidates.toList())
+        assertEquals(count, vm.collageChoices.candidates.size)
+        assertEquals(id0, vm.collageChoices.displayed?.candidateId)
+        assertTrue("cleared proof: select must refuse", !vm.selectCollageCandidate(0))
+        assertEquals("candidate is not drawable", vm.flowError.value)
+
+        vm.onCandidatePrepared(id0, true, vm.prepareInputs())
+        assertTrue("re-reported proof: select must succeed", vm.selectCollageCandidate(0))
+        vm.endSession()
+    }
+
+    @Test
     fun zoomOneArrowKeepsIdentityAndResetClearsCorrection() {
         val ids = listOf("u1", "u2", "u3")
         val originals = ids.associateWith { id ->

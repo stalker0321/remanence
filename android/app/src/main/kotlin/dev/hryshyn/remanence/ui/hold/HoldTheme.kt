@@ -10,6 +10,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -67,6 +68,7 @@ private val HoldFont = FontFamily(Font(R.font.hold_sans, FontWeight.Normal))
 private fun type(size: Int, line: Int, tracking: Float = 0f) = TextStyle(
     fontFamily = HoldFont, fontWeight = FontWeight.Normal,
     fontSize = size.sp, lineHeight = line.sp, letterSpacing = tracking.sp,
+    platformStyle = PlatformTextStyle(includeFontPadding = false),
 )
 private val HoldTypography = Typography(
     displayLarge = type(32, 38, -.6f), displayMedium = type(30, 36, -.2f),

@@ -14,6 +14,18 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.activity.compose.BackHandler
+import dev.hryshyn.remanence.ui.hold.HoldFlowHeader
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -29,6 +41,7 @@ import dev.hryshyn.remanence.ui.hold.HoldTextButton as TextButton
 import androidx.compose.runtime.Composable
 import dev.hryshyn.remanence.ui.hold.HoldDestructiveButton
 import dev.hryshyn.remanence.ui.hold.HoldColors
+import dev.hryshyn.remanence.ui.hold.HoldSpace
 import dev.hryshyn.remanence.ui.hold.HoldInformation
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
@@ -45,6 +58,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.hryshyn.remanence.RemanenceApplication
 import dev.hryshyn.remanence.capture.CaptureAttemptSurface
@@ -75,6 +89,7 @@ fun CreateScreen(
     adapterFactory: (() -> dev.hryshyn.remanence.capture.StillCameraAdapter)? = null,
     requestPermissionOnAttach: Boolean = true,
     onScreenDispose: () -> Unit = {},
+    onExit: () -> Unit = {},
 ) {
     val step by viewModel.step.collectAsStateWithLifecycle()
     val uploadStatus by viewModel.uploadStatus.collectAsStateWithLifecycle()
@@ -89,6 +104,11 @@ fun CreateScreen(
     // tear down an in-progress same-epoch Create session.
     DisposableEffect(Unit) {
         onDispose(onScreenDispose)
+    }
+
+    if (step == CreateViewModel.Step.CONTENT || step == CreateViewModel.Step.COMPOSE) {
+        ContentAndCompositionFlow(viewModel, onExit, modifier)
+        return
     }
 
     // Motion ownership: the root owns the single boundary arrival
@@ -106,23 +126,40 @@ fun CreateScreen(
     // root for small phones (FIX-STATE-04). The typed guard stays a
     // direct child of this scrolling column, so it is reachable by
     // scroll on crowded screens instead of clipped off-column.
-    BoxWithConstraints(modifier.fillMaxSize()) {
-        val crowded = isCrowdedExpression(maxHeight, LocalDensity.current.fontScale)
+    Column(modifier.fillMaxSize()) {
+    HoldFlowHeader(
+        onBack = {
+            if (step == CreateViewModel.Step.RECIPIENT_CONFIRM) viewModel.restartLookup() else onExit()
+        },
+        onClose = onExit,
+    )
+    BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+        val introductory = step == CreateViewModel.Step.RECIPIENT_LOOKUP ||
+            step == CreateViewModel.Step.RECIPIENT_CONFIRM || step == CreateViewModel.Step.FRONT
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .testTag("create_screen_scroll")
                 .then(
-                    if (step == CreateViewModel.Step.COMPOSE && !crowded) {
+                    if (introductory) {
                         Modifier
                     } else {
                         Modifier.verticalScroll(rememberScrollState())
                     },
                 )
-                .padding(horizontal = 24.dp, vertical = 16.dp),
+                .padding(horizontal = HoldSpace.pageGutter(), vertical = 16.dp),
         ) {
-        AstraStepArrival(motion = motion, stepKey = step, modifier = Modifier.fillMaxWidth()) {
-            Column {
+        AstraStepArrival(motion = motion, stepKey = step,
+            modifier = if (introductory) Modifier.fillMaxSize() else Modifier.fillMaxWidth()) {
+            Column(if (introductory) Modifier.fillMaxSize() else Modifier) {
+                if (introductory) {
+                    Text(stringResource(when (step) {
+                        CreateViewModel.Step.RECIPIENT_LOOKUP -> R.string.hold_make
+                        CreateViewModel.Step.RECIPIENT_CONFIRM -> R.string.create_check_recipient
+                        else -> R.string.create_your_postcard
+                    }), style = MaterialTheme.typography.bodySmall, color = HoldColors.Muted)
+                    Spacer(Modifier.height(if (step == CreateViewModel.Step.FRONT) 10.dp else 16.dp))
+                }
                 Text(
                     text = when (step) {
                         CreateViewModel.Step.RECIPIENT_LOOKUP -> stringResource(R.string.hold_recipient_title)
@@ -142,15 +179,28 @@ fun CreateScreen(
                         CreateViewModel.Step.UPLOAD_PENDING -> stringResource(R.string.hold_publishing_title)
                         CreateViewModel.Step.PUBLISHED -> stringResource(R.string.hold_ready_title)
                     },
-                    style = MaterialTheme.typography.headlineSmall,
+                    style = when {
+                        step == CreateViewModel.Step.FRONT -> MaterialTheme.typography.headlineLarge.copy(fontSize = 27.sp, lineHeight = 32.sp)
+                        introductory -> MaterialTheme.typography.headlineLarge
+                        else -> MaterialTheme.typography.headlineSmall
+                    },
                     modifier = Modifier.testTag("create_step_label"),
                 )
-                Spacer(Modifier.height(12.dp))
-
+                Spacer(Modifier.height(16.dp))
+                if (introductory) {
+                    Text(stringResource(when (step) {
+                        CreateViewModel.Step.RECIPIENT_LOOKUP -> R.string.hold_recipient_body
+                        CreateViewModel.Step.RECIPIENT_CONFIRM -> R.string.hold_confirm_body
+                        else -> R.string.create_capture_body
+                    }), style = if (step == CreateViewModel.Step.FRONT) MaterialTheme.typography.bodySmall
+                        else MaterialTheme.typography.bodyMedium, color = HoldColors.Muted)
+                    Spacer(Modifier.height(if (step == CreateViewModel.Step.FRONT) 16.dp else 24.dp))
+                }
                 when (step) {
                     CreateViewModel.Step.RECIPIENT_LOOKUP -> RecipientLookupContent(viewModel)
                     CreateViewModel.Step.RECIPIENT_CONFIRM -> RecipientConfirmContent(viewModel)
-                    CreateViewModel.Step.FRONT -> CaptureAttemptSurface(
+                    CreateViewModel.Step.FRONT -> BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                        CaptureAttemptSurface(
                         controller = viewModel.frontAttempt,
                         shutterTag = "capture_shutter_front",
                         retakeTag = "capture_retake_front",
@@ -159,10 +209,13 @@ fun CreateScreen(
                         onRetake = viewModel::retakeFront,
                         adapterFactory = adapterFactory,
                         requestPermissionOnAttach = requestPermissionOnAttach,
-                    )
+                        previewMaxHeight = (maxHeight - 72.dp).coerceAtLeast(64.dp),
+                        shutterLabel = stringResource(R.string.create_use_postcard),
+                        showGuideInstruction = false,
+                        )
+                    }
 
-                    CreateViewModel.Step.CONTENT -> ContentStepContent(viewModel)
-                    CreateViewModel.Step.COMPOSE -> ComposeStepContent(viewModel, crowded)
+                    CreateViewModel.Step.CONTENT, CreateViewModel.Step.COMPOSE -> Unit
                     CreateViewModel.Step.PUBLISHING -> Column {
                         androidx.compose.material3.CircularProgressIndicator(
                             strokeWidth = 2.dp,
@@ -240,6 +293,7 @@ fun CreateScreen(
         }
     }
     }
+    }
 
     if (showRevokeConfirmation && step == CreateViewModel.Step.PUBLISHED) {
         AlertDialog(
@@ -274,32 +328,28 @@ fun CreateScreen(
 private fun RecipientLookupContent(viewModel: CreateViewModel) {
     val handle by viewModel.pickerVm.handle.collectAsStateWithLifecycle()
     val state by viewModel.pickerVm.state.collectAsStateWithLifecycle()
-
-    Column {
-        OutlinedTextField(
-            value = handle,
-            onValueChange = viewModel::onHandleChange,
-            label = { Text(stringResource(R.string.hold_recipient_handle)) },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
-            modifier = Modifier.fillMaxWidth().testTag("create_handle_input"),
-        )
-        Spacer(Modifier.height(8.dp))
-        Button(
-            onClick = viewModel::lookupRecipient,
-            enabled = viewModel.pickerVm.canLookup,
-            modifier = Modifier.fillMaxWidth().testTag("create_lookup_button"),
-        ) { Text(if (state is RecipientLookupUiState.LookingUp) stringResource(R.string.hold_looking_up) else stringResource(R.string.hold_find)) }
-        Spacer(Modifier.height(8.dp))
-        when (val current = state) {
-            is RecipientLookupUiState.Resolved -> LaunchedEffect(current.snapshot) {
-                viewModel.onResolved(current.snapshot)
+    Column(Modifier.fillMaxSize()) {
+        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
+            OutlinedTextField(
+                value = handle, onValueChange = viewModel::onHandleChange,
+                label = { Text(stringResource(R.string.hold_recipient_handle), style = MaterialTheme.typography.bodySmall) },
+                textStyle = MaterialTheme.typography.titleLarge,
+                singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+                modifier = Modifier.fillMaxWidth().testTag("create_handle_input"),
+            )
+            Spacer(Modifier.height(8.dp))
+            when (val current = state) {
+                is RecipientLookupUiState.Resolved -> LaunchedEffect(current.snapshot) { viewModel.onResolved(current.snapshot) }
+                RecipientLookupUiState.NotFound -> Text(stringResource(R.string.hold_no_handle))
+                is RecipientLookupUiState.Failed -> Text(current.message, color = MaterialTheme.colorScheme.error)
+                else -> Unit
             }
-            RecipientLookupUiState.NotFound -> Text(stringResource(R.string.hold_no_handle))
-            is RecipientLookupUiState.Failed ->
-                Text(current.message, color = MaterialTheme.colorScheme.error)
-            else -> Unit
         }
+        Spacer(Modifier.height(16.dp))
+        ForwardAction(
+            stringResource(if (state is RecipientLookupUiState.LookingUp) R.string.hold_looking_up else R.string.hold_find),
+            "create_lookup_button", viewModel::lookupRecipient, enabled = viewModel.pickerVm.canLookup,
+        )
     }
 }
 
@@ -334,88 +384,95 @@ private fun RecipientConfirmContent(viewModel: CreateViewModel) {
 }
 
 @Composable
-private fun ContentStepContent(viewModel: CreateViewModel) {
-    // FIX-STATE-06: the selection snapshot is observable, so the count label
-    // and the 3..5 publish gate recompose immediately after a picker result.
+private fun ContentStepContent(
+    viewModel: CreateViewModel,
+    preparing: Boolean = false,
+    error: String? = null,
+    onContinue: () -> Unit = { viewModel.goToCompose() },
+) {
     val selectedIds = viewModel.photoSelection.selectedIds
-
-    val pickerContract = remember {
-        ActivityResultContracts.PickMultipleVisualMedia(PhotoSelectionState.MAX_PHOTOS)
+    val pickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia(PhotoSelectionState.MAX_PHOTOS),
+    ) { uris -> viewModel.onPhotosPicked(uris.map { it.toString() }) }
+    val pickPhotos = { pickerLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+    val recipient by viewModel.confirmedRecipient.collectAsStateWithLifecycle()
+    val thumbnails by viewModel.pickedThumbnails.collectAsStateWithLifecycle()
+    val selection by viewModel.musicSelection.collectAsStateWithLifecycle()
+    val artwork by viewModel.musicArtworkBitmap.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val repository = remember(context) {
+        (context.applicationContext as RemanenceApplication).container.apiStack.musicSearchRepository
     }
-    val pickerLauncher = rememberLauncherForActivityResult(pickerContract) { uris: List<android.net.Uri> ->
-        // FIX-STATE-06: one production sink for picker results.
-        viewModel.onPhotosPicked(uris.map { it.toString() })
-    }
-
-    Column {
-        val recipient by viewModel.confirmedRecipient.collectAsStateWithLifecycle()
-        recipient?.let { HoldInformation(stringResource(R.string.hold_for_handle, it.handle.toDisplayString())) }
-        Text(stringResource(R.string.hold_photo_count), style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(8.dp))
-        Button(
-            onClick = {
-                pickerLauncher.launch(
-                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
-                )
-            },
-            modifier = Modifier.testTag("create_pick_photos"),
-        ) { Text(stringResource(R.string.hold_choose_photos)) }
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "Selected: ${selectedIds.size} of 3-5",
-            modifier = Modifier.testTag("create_selection_count"),
-        )
-        PickedPhotoTiles(
-            selectedIds = selectedIds,
-            thumbnails = viewModel.pickedThumbnails.collectAsStateWithLifecycle().value,
-        )
-
-        Spacer(Modifier.height(12.dp))
-        OutlinedTextField(
-            value = viewModel.noteEditor.text,
-            onValueChange = viewModel.noteEditor::onChange,
-            label = { Text(stringResource(R.string.hold_note)) },
-            isError = viewModel.noteEditor.limitReached || !viewModel.noteEditor.canIncludeInCapsule,
-            modifier = Modifier.fillMaxWidth().testTag("create_note_input"),
-        )
-        if (viewModel.noteEditor.limitReached || !viewModel.noteEditor.canIncludeInCapsule) {
-            Text(
-                "That note is a little too long. Try shortening it.",
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.testTag("create_note_limit_error"),
+    Column(Modifier.fillMaxSize()) {
+        recipient?.let { PersonChip(it.handle.toDisplayString()) }
+        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
+            .testTag("create_content_scroll")) {
+            if (error != null) {
+                Text(error, color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 16.dp).testTag("create_error"))
+            }
+            Text(stringResource(R.string.create_for_one_person), color = HoldColors.Muted,
+                style = MaterialTheme.typography.bodySmall)
+            Spacer(Modifier.height(16.dp))
+            Text(stringResource(R.string.hold_content_title), style = MaterialTheme.typography.headlineLarge,
+                modifier = Modifier.testTag("create_step_label"))
+            Spacer(Modifier.height(16.dp))
+            Text(stringResource(R.string.create_choose_photographs), color = HoldColors.Muted,
+                style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(14.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.create_photographs_count, selectedIds.size),
+                    style = MaterialTheme.typography.bodySmall, color = HoldColors.Muted,
+                    modifier = Modifier.weight(1f).testTag("create_selection_count"))
+                if (selectedIds.isNotEmpty()) {
+                    TextButton(onClick = pickPhotos, modifier = Modifier.testTag("create_pick_photos")) {
+                        Text(stringResource(R.string.create_change_photographs),
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+            if (selectedIds.isEmpty()) {
+                Button(onClick = pickPhotos, modifier = Modifier.fillMaxWidth().testTag("create_pick_photos")) {
+                    Text(stringResource(R.string.hold_choose_photos))
+                }
+            } else PickedPhotoTiles(selectedIds, thumbnails)
+            Spacer(Modifier.height(18.dp))
+            OutlinedTextField(
+                value = viewModel.noteEditor.text,
+                onValueChange = viewModel.noteEditor::onChange,
+                label = { Text(stringResource(R.string.hold_note), style = MaterialTheme.typography.bodySmall) },
+                textStyle = MaterialTheme.typography.bodySmall,
+                minLines = 3,
+                isError = viewModel.noteEditor.limitReached || !viewModel.noteEditor.canIncludeInCapsule,
+                modifier = Modifier.fillMaxWidth().testTag("create_note_input"),
             )
+            if (viewModel.noteEditor.limitReached || !viewModel.noteEditor.canIncludeInCapsule) {
+                Text(stringResource(R.string.create_note_too_long), color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.testTag("create_note_limit_error"))
+            }
+            Spacer(Modifier.height(12.dp))
+            MusicPickerContent(
+                search = repository::search, vmSelection = selection, selectedArtwork = artwork,
+                onSelect = viewModel::setMusicSelection, onClearSelection = viewModel::clearMusicSelection,
+            )
+            val preview by viewModel.generatorPreview.collectAsStateWithLifecycle()
+            val notice = viewModel.collageChoices.notice ?: when (preview) {
+                is GeneratorPreviewState.Unavailable, is GeneratorPreviewState.Incompatible,
+                is GeneratorPreviewState.Rejected -> stringResource(R.string.create_no_fitting_expression)
+                else -> null
+            }
+            if (notice != null) Text(notice, color = HoldColors.Muted,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(vertical = 12.dp).testTag("collage_notice"))
         }
-
-        Spacer(Modifier.height(12.dp))
-        // The whole-composition chooser lives ONLY on the COMPOSE screen
-        // (no-inline-chooser rule); the form keeps photos/note/music/Next.
-
-        // S4: release music picker directly above the explicit Next action,
-        // so select-then-continue needs no scrolling back. Selection
-        // ownership is explicit: user taps flow into the ViewModel sealed
-        // at publish time, and a recreated picker seeds its display from
-        // the VM value — no flow bridge can silently wipe a chosen track
-        // (rotation/step/retry).
-        Spacer(Modifier.height(12.dp))
-        val musicContext = LocalContext.current
-        val musicRepository = remember {
-            (musicContext.applicationContext as RemanenceApplication)
-                .container.apiStack.musicSearchRepository
-        }
-        val vmMusicSelection by viewModel.musicSelection.collectAsStateWithLifecycle()
-        MusicPickerContent(
-            search = musicRepository::search,
-            vmSelection = vmMusicSelection,
-            onSelect = viewModel::setMusicSelection,
-            onClearSelection = viewModel::clearMusicSelection,
+        Spacer(Modifier.height(16.dp))
+        ForwardAction(
+            text = stringResource(if (preparing) R.string.create_preparing_expressions else R.string.create_continue),
+            tag = "create_next", onClick = onContinue,
+            enabled = !preparing && viewModel.photoSelection.canProceed && viewModel.noteEditor.canIncludeInCapsule,
+            busy = preparing,
         )
-
-        Spacer(Modifier.height(12.dp))
-        Button(
-            onClick = viewModel::goToCompose,
-            enabled = viewModel.photoSelection.canProceed && viewModel.noteEditor.canIncludeInCapsule,
-            modifier = Modifier.fillMaxWidth().testTag("create_next"),
-        ) { Text(stringResource(R.string.hold_next)) }
     }
 }
 
@@ -436,48 +493,43 @@ internal fun PickedPhotoTiles(
     thumbnails: Map<String, androidx.compose.ui.graphics.ImageBitmap?>,
 ) {
     if (selectedIds.isEmpty()) return
-    // Plain scrollable strip (never lazy): at most five tiles, so every
-    // tile is composed for TalkBack order and tests; the strip scrolls
-    // horizontally inside the step's vertical scroll on small viewports.
-    androidx.compose.foundation.layout.Row(
-        modifier = Modifier
-            .testTag("create_photo_tiles")
-            .horizontalScroll(androidx.compose.foundation.rememberScrollState()),
-        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
-    ) {
-        selectedIds.forEachIndexed { index, uri ->
-            androidx.compose.foundation.layout.Box(
-                modifier = Modifier
-                    .testTag("create_photo_tile_$index")
-                    .semantics {
-                        selected = true
-                        contentDescription = "Selected photo ${index + 1} of ${selectedIds.size}"
-                    },
-            ) {
-                val bitmap = thumbnails[uri]
-                if (bitmap != null) {
-                    androidx.compose.foundation.Image(
-                        bitmap = bitmap,
-                        contentDescription = null,
-                        modifier = Modifier
-                            .testTag("create_photo_tile_image_$index")
-                            .size(96.dp),
-                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                    )
-                } else {
-                    Spacer(
-                        modifier = Modifier
-                            .testTag("create_photo_tile_pending_$index")
-                            .size(96.dp),
-                    )
+    Column(Modifier.fillMaxWidth().testTag("create_photo_tiles"),
+        verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        selectedIds.chunked(3).forEachIndexed { row, ids ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                repeat(3) { column ->
+                    val uri = ids.getOrNull(column)
+                    if (uri == null) Spacer(Modifier.weight(1f)) else {
+                        val index = row * 3 + column
+                        Box(Modifier.weight(1f).aspectRatio(1f).clip(RoundedCornerShape(8.dp))
+                            .background(HoldColors.Field).testTag("create_photo_tile_$index")
+                            .semantics {
+                                selected = true
+                                contentDescription = "Selected photo ${index + 1} of ${selectedIds.size}"
+                            }) {
+                            val bitmap = thumbnails[uri]
+                            if (bitmap != null) {
+                                androidx.compose.foundation.Image(
+                                    bitmap, contentDescription = null,
+                                    modifier = Modifier.fillMaxSize().testTag("create_photo_tile_image_$index"),
+                                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                )
+                            } else {
+                                androidx.compose.material3.CircularProgressIndicator(
+                                    strokeWidth = 1.dp,
+                                    modifier = Modifier.size(20.dp).align(Alignment.Center)
+                                        .testTag("create_photo_tile_pending_$index"),
+                                )
+                            }
+                            Box(Modifier.align(Alignment.BottomEnd).padding(5.dp).size(20.dp)
+                                .background(HoldColors.Accent, RoundedCornerShape(50)),
+                                contentAlignment = Alignment.Center) {
+                                Text("✓", color = HoldColors.OnAccent, style = MaterialTheme.typography.labelSmall,
+                                    modifier = Modifier.testTag("create_photo_tile_check_$index"))
+                            }
+                        }
+                    }
                 }
-                Text(
-                    text = "✓",
-                    modifier = Modifier
-                        .testTag("create_photo_tile_check_$index")
-                        .align(androidx.compose.ui.Alignment.BottomEnd)
-                        .padding(4.dp),
-                )
             }
         }
     }
@@ -508,108 +560,151 @@ internal fun isCrowdedExpression(maxHeight: androidx.compose.ui.unit.Dp, fontSca
  * frozen choice; back returns to the form with every input retained.
  */
 @Composable
-private fun ComposeStepContent(viewModel: CreateViewModel, crowded: Boolean) {
-    // Bounded COMPOSE pane (frozen `.expression{overflow:hidden}`): header,
-    // then the art-space takes the remaining height (`flex:1;min-height:0`
-    // equivalent), then the reserved slot-picker/footer controls. The sheet
-    // canvas measures against real remaining space, so the whole composition
-    // plus footer fit the viewport instead of scrolling away.
-    Column(Modifier.fillMaxSize()) {
-        val recipient by viewModel.confirmedRecipient.collectAsStateWithLifecycle()
-        recipient?.let { HoldInformation(stringResource(R.string.hold_for_handle, it.handle.toDisplayString())) }
-        TextButton(
-            onClick = viewModel::backToContent,
-            modifier = Modifier.testTag("create_compose_back"),
-        ) { Text(stringResource(R.string.hold_back)) }
-        Spacer(Modifier.height(8.dp))
-        val cropSlot by viewModel.cropSlot.collectAsStateWithLifecycle()
-        val preview = viewModel.generatorPreview.collectAsStateWithLifecycle().value
-        val sources = when (preview) {
-            is GeneratorPreviewState.Ready -> preview.sources
-            is GeneratorPreviewState.NotePending -> preview.sources
-            else -> emptyList()
-        }
-        val openSlot = cropSlot
-        val source = openSlot?.let { slot -> sources.firstOrNull { it.contentId == slot } }
-        val geometry = openSlot?.let { viewModel.cropSlotGeometry(it) }
-        // R1 crop lifecycle: the single host stays mounted across crop
-        // open/close so its build effect never refires a rebuild (which
-        // would wipe frozen + corrections via onCandidatesReplaced). The
-        // frozen sibling order (render.mjs expression case: art-space THEN
-        // expression-nav) is arranged through the host's contentWrapper:
-        // the art-space parcel holds the canvas (full 280.dp crowded) or
-        // the stage, and the nav row renders below it — never consuming
-        // art height. While staged, the canvas parcel shows the stage and
-        // the nav is withheld, so the stage paints alone; the host itself
-        // is never unmounted and no effect refires. The selected label
-        // stays visible above as honest state.
-        val staged = openSlot != null && source != null && geometry != null
-        // Frozen crowded branch (handoff.css crowded art-space): a fixed
-        // 280.dp instead of the weight remainder that collapses to ~110px
-        // on short screens (62px canvas on the 320x640 device). Tall
-        // screens keep the bounded weight pane unchanged.
-        CollageStepChooser(
-            viewModel,
-            modifier = Modifier.fillMaxWidth(),
-            onSlotTap = { contentId ->
-                viewModel.openCrop(contentId)
-                Unit
-            },
-            contentWrapper = { canvasContent, navContent ->
-                Box(
-                    modifier = Modifier
-                        .then(if (crowded) Modifier.height(280.dp) else Modifier.weight(1f))
-                        .fillMaxWidth()
-                        .testTag("compose_art_space"),
-                ) {
-                    if (staged) {
-                        requireNotNull(source)
-                        requireNotNull(geometry)
-                        val corrections by viewModel.cropCorrections.collectAsStateWithLifecycle()
-                        val scope = rememberCoroutineScope()
-                        CropStageContent(
-                            source = source,
-                            slotAspect = geometry.slotAspect,
-                            baseCrop = geometry.baseCrop,
-                            correction = corrections[openSlot],
-                            onUpdate = viewModel::updateCrop,
-                            onReset = viewModel::resetCrop,
-                            onDone = { scope.launch { viewModel.applyCropAndClose() } },
-                            onBack = { viewModel.closeCrop() },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .verticalScroll(rememberScrollState()),
-                        )
-                    } else {
-                        canvasContent()
-                    }
-                }
-                if (!staged) {
-                    navContent()
-                }
-            },
-        )
-            Spacer(Modifier.height(12.dp))
-            if (sources.isNotEmpty()) {
-                // Frozen expression footer: the hint only. Crop opens by
-                // tapping a photograph (canvas hotspot); the duplicate
-                // Photo 1-4 slot row is not in the design (render.mjs
-                // expression case) and is intentionally absent here. The
-                // CropSlotPicker declaration itself stays for its own
-                // surface-level tests.
-                Text(
-                    stringResource(R.string.hold_crop_hint),
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.testTag("crop_hint"),
-                )
-                Spacer(Modifier.height(12.dp))
-            }
-            Button(
-                onClick = viewModel::startPublishing,
-                enabled = viewModel.frozenCollageSelection != null,
-                modifier = Modifier.fillMaxWidth().testTag("create_publish"),
-            ) { Text(stringResource(R.string.hold_publish)) }
+private fun ContentAndCompositionFlow(
+    viewModel: CreateViewModel,
+    onExit: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val step by viewModel.step.collectAsStateWithLifecycle()
+    val cropSlot by viewModel.cropSlot.collectAsStateWithLifecycle()
+    val preview by viewModel.generatorPreview.collectAsStateWithLifecycle()
+    val flowError by viewModel.flowError.collectAsStateWithLifecycle()
+    val publishError by viewModel.publishError.collectAsStateWithLifecycle()
+    var awaitingComposition by rememberSaveable { mutableStateOf(false) }
+    var reviewing by rememberSaveable { mutableStateOf(false) }
+    val session = viewModel.collageChoices
+    val frozen = viewModel.frozenCollageSelection
+    val scope = rememberCoroutineScope()
+    val sources = when (val current = preview) {
+        is GeneratorPreviewState.Ready -> current.sources
+        is GeneratorPreviewState.NotePending -> current.sources
+        else -> emptyList()
     }
+    val source = sources.firstOrNull { it.contentId == cropSlot }
+    val geometry = cropSlot?.let(viewModel::cropSlotGeometry)
+    val staged = source != null && geometry != null
+    val corrections by viewModel.cropCorrections.collectAsStateWithLifecycle()
+
+    // Stay with the user's content until there is a drawable first sheet.
+    // The chooser below remains mounted across this boundary.
+    LaunchedEffect(awaitingComposition, session.isPreparing, session.candidates, session.notice, preview,
+        viewModel.isResolvingMusicArtwork) {
+        if (awaitingComposition) {
+            if (!session.isPreparing && !viewModel.isResolvingMusicArtwork && session.candidates.isNotEmpty()) {
+                viewModel.goToCompose()
+                awaitingComposition = false
+            } else if (session.notice != null || preview is GeneratorPreviewState.Unavailable ||
+                preview is GeneratorPreviewState.Rejected || preview is GeneratorPreviewState.Incompatible) {
+                awaitingComposition = false
+            }
+        }
+    }
+    LaunchedEffect(frozen) { if (frozen == null) reviewing = false }
+    val back = {
+        when {
+            cropSlot != null -> { viewModel.closeCrop(); Unit }
+            reviewing -> reviewing = false
+            step == CreateViewModel.Step.COMPOSE && frozen != null -> viewModel.clearFrozenCollageSelection()
+            step == CreateViewModel.Step.COMPOSE -> { viewModel.backToContent(); Unit }
+            else -> { awaitingComposition = false; viewModel.backToFront(); Unit }
+        }
+    }
+    BackHandler(onBack = back)
+    Column(modifier.fillMaxSize().testTag("create_screen_scroll")) {
+        HoldFlowHeader(onBack = back, onClose = onExit)
+        Box(Modifier.weight(1f).fillMaxWidth().padding(horizontal =
+            if (step == CreateViewModel.Step.COMPOSE) 18.dp else HoldSpace.pageGutter())
+            .padding(bottom = 16.dp)) {
+            if (step == CreateViewModel.Step.CONTENT) {
+                ContentStepContent(viewModel, awaitingComposition, publishError ?: flowError) { awaitingComposition = true }
+            }
+            CollageStepChooser(
+                viewModel,
+                modifier = if (step == CreateViewModel.Step.COMPOSE) Modifier.fillMaxSize() else Modifier.size(0.dp),
+                onSlotTap = { viewModel.openCrop(it); Unit },
+                contentWrapper = { canvas, nav ->
+                    if (step == CreateViewModel.Step.COMPOSE) {
+                        if (staged) {
+                            Column(Modifier.fillMaxSize()) {
+                                CropStageContent(
+                                    source = requireNotNull(source), slotAspect = requireNotNull(geometry).slotAspect,
+                                    baseCrop = geometry.baseCrop, correction = corrections[cropSlot],
+                                    onUpdate = viewModel::updateCrop, onReset = viewModel::resetCrop,
+                                    onDone = { scope.launch { viewModel.applyCropAndClose() } },
+                                    onBack = { viewModel.closeCrop() },
+                                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                                )
+                                if (flowError != null) Text(flowError!!, color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("create_guard_error"))
+                            }
+                        } else {
+                            Column(Modifier.fillMaxSize()) {
+                                Text(
+                                    stringResource(if (reviewing) R.string.create_review_title else if (frozen != null)
+                                        R.string.hold_selected_title else R.string.hold_compose_title),
+                                    style = MaterialTheme.typography.headlineSmall,
+                                    modifier = Modifier.padding(bottom = 12.dp).testTag("create_step_label"),
+                                )
+                                Box(Modifier.weight(1f).fillMaxWidth().testTag("compose_art_space")) { canvas() }
+                                if (reviewing) {
+                                    Text(stringResource(R.string.create_review_body),
+                                        style = MaterialTheme.typography.bodyMedium, color = HoldColors.Muted,
+                                        modifier = Modifier.padding(vertical = 16.dp))
+                                    ForwardAction(stringResource(R.string.create_attach_capsule), "create_publish",
+                                        viewModel::startPublishing, enabled = frozen != null)
+                                    TextButton(onClick = { reviewing = false }, modifier = Modifier.fillMaxWidth()
+                                        .testTag("create_review_back")) { Text(stringResource(R.string.create_back_to_expression)) }
+                                } else {
+                                    nav()
+                                    Text(stringResource(R.string.hold_crop_hint), textAlign = TextAlign.Center,
+                                        color = HoldColors.Muted, style = MaterialTheme.typography.bodySmall,
+                                        modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp).testTag("crop_hint"))
+                                    ForwardAction(
+                                        stringResource(if (frozen == null) R.string.create_this_one else R.string.create_continue),
+                                        if (frozen == null) "collage_select" else "create_compose_continue",
+                                        onClick = {
+                                            if (frozen != null) reviewing = true
+                                            else if (viewModel.selectCollageCandidate(session.displayIndex))
+                                                viewModel.freezeCollageSelection()
+                                        },
+                                        enabled = !session.isPreparing && session.displayed != null,
+                                    )
+                                }
+                                val error = flowError ?: publishError
+                                if (error != null) Text(error, color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("create_guard_error"))
+                            }
+                        }
+                    }
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun ForwardAction(
+    text: String,
+    tag: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    busy: Boolean = false,
+) {
+    Button(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth().testTag(tag)) {
+        Text(text, Modifier.weight(1f), textAlign = TextAlign.Start)
+        if (busy) androidx.compose.material3.CircularProgressIndicator(
+            modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+        else Text("→", style = MaterialTheme.typography.titleLarge)
+    }
+}
+
+@Composable
+private fun PersonChip(handle: String) {
+    Text(stringResource(R.string.hold_for_handle, handle),
+        style = MaterialTheme.typography.bodySmall, color = HoldColors.Accent,
+        modifier = Modifier.padding(bottom = 17.dp)
+            .background(HoldColors.Lilac.copy(alpha = .65f), RoundedCornerShape(8.dp))
+            .padding(horizontal = 11.dp, vertical = 7.dp))
 }
 
 /**
@@ -627,73 +722,30 @@ private fun CollageStepChooser(
     viewModel: CreateViewModel,
     modifier: Modifier = Modifier,
     onSlotTap: ((String) -> Unit)? = null,
-    contentWrapper: @Composable (CanvasParcel, NavParcel) -> Unit = { canvasContent, navContent ->
-        navContent()
-        canvasContent()
-    },
+    contentWrapper: @Composable (CanvasParcel, NavParcel) -> Unit,
 ) {
-    val generatorPreview by viewModel.generatorPreview.collectAsStateWithLifecycle()
+    val preview by viewModel.generatorPreview.collectAsStateWithLifecycle()
     val musicSelection by viewModel.musicSelection.collectAsStateWithLifecycle()
-    val musicArtwork by viewModel.musicArtwork.collectAsStateWithLifecycle()
-    val musicArtworkBitmap by viewModel.musicArtworkBitmap.collectAsStateWithLifecycle()
-    val chooserInput = viewModel.collageChooserInputFor(musicSelection)
-    val chooserTrack = viewModel.collageChooserTrackFor(musicSelection)
-    when (val preview = generatorPreview) {
-        is GeneratorPreviewState.Ready ->
-            CollageChoiceHost(
-                session = viewModel.collageChoices,
-                input = chooserInput ?: preview.expression.input,
-                sources = preview.sources,
-                note = viewModel.noteEditor.text.takeIf { it.isNotEmpty() },
-                track = chooserTrack,
-                cropSource = viewModel.collageCropSource
-                    ?: dev.hryshyn.remanence.ui.collage.CollageCropSource { null },
-                artwork = musicArtwork,
-                artworkBitmap = musicArtworkBitmap,
-                frozenCandidateId = { viewModel.frozenCollageSelection?.candidateId },
-                onSelect = { index ->
-                    if (viewModel.selectCollageCandidate(index)) {
-                        viewModel.freezeCollageSelection()
-                    }
-                },
-                onNavigate = viewModel::clearFrozenCollageSelection,
-                onMeasured = viewModel::onPreviewMeasured,
-                onPrepared = viewModel::onCandidatePrepared,
-                prepareInputs = viewModel.prepareInputs(),
-                onSlotTap = onSlotTap,
-                candidateBuilder = { viewModel.buildAllFamilySealedCandidates() },
-                contentWrapper = contentWrapper,
-                modifier = modifier,
-            )
-        is GeneratorPreviewState.NotePending ->
-            CollageChoiceHost(
-                session = viewModel.collageChoices,
-                input = chooserInput ?: preview.input,
-                sources = preview.sources,
-                note = viewModel.noteEditor.text.takeIf { it.isNotEmpty() },
-                track = chooserTrack,
-                cropSource = viewModel.collageCropSource
-                    ?: dev.hryshyn.remanence.ui.collage.CollageCropSource { null },
-                artwork = musicArtwork,
-                artworkBitmap = musicArtworkBitmap,
-                frozenCandidateId = { viewModel.frozenCollageSelection?.candidateId },
-                onSelect = { index ->
-                    if (viewModel.selectCollageCandidate(index)) {
-                        viewModel.freezeCollageSelection()
-                    }
-                },
-                onNavigate = viewModel::clearFrozenCollageSelection,
-                onMeasured = viewModel::onPreviewMeasured,
-                onPrepared = viewModel::onCandidatePrepared,
-                prepareInputs = viewModel.prepareInputs(),
-                onSlotTap = onSlotTap,
-                candidateBuilder = { viewModel.buildAllFamilySealedCandidates() },
-                contentWrapper = contentWrapper,
-                modifier = modifier,
-            )
-        else -> androidx.compose.material3.Text(
-            text = collageStepNotice(preview),
-            modifier = modifier.testTag("collage_notice"),
+    val artwork by viewModel.musicArtwork.collectAsStateWithLifecycle()
+    val artworkBitmap by viewModel.musicArtworkBitmap.collectAsStateWithLifecycle()
+    val input = viewModel.collageChooserInputFor(musicSelection)
+    val sources = when (val current = preview) {
+        is GeneratorPreviewState.Ready -> current.sources
+        is GeneratorPreviewState.NotePending -> current.sources
+        else -> emptyList()
+    }
+    if (input != null && sources.isNotEmpty()) {
+        CollageChoiceHost(
+            session = viewModel.collageChoices, input = input, sources = sources,
+            note = viewModel.noteEditor.text.takeIf { it.isNotEmpty() },
+            track = viewModel.collageChooserTrackFor(musicSelection),
+            cropSource = viewModel.collageCropSource ?: remember { dev.hryshyn.remanence.ui.collage.CollageCropSource { null } },
+            artwork = artwork, artworkBitmap = artworkBitmap,
+            frozenCandidateId = { viewModel.frozenCollageSelection?.candidateId },
+            onNavigate = viewModel::clearFrozenCollageSelection, onMeasured = viewModel::onPreviewMeasured,
+            onPrepared = viewModel::onCandidatePrepared, prepareInputs = viewModel.prepareInputs(),
+            onSlotTap = onSlotTap, candidateBuilder = { viewModel.buildAllFamilySealedCandidates() },
+            showSelectInNavigation = false, contentWrapper = contentWrapper, modifier = modifier,
         )
     }
 }

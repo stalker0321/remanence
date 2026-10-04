@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
@@ -12,17 +13,15 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollTo
-import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.room.Room
@@ -75,6 +74,7 @@ import java.io.InputStream
 import java.nio.file.Files
 import java.security.MessageDigest
 import java.util.UUID
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -264,6 +264,8 @@ class CreateScreenCollageChooserTest {
     private fun viewModel(
         originals: Map<String, ByteArray>,
         withFactory: Boolean,
+        candidateBuildGate: CompletableDeferred<Unit>? = null,
+        candidateBuildEntered: CompletableDeferred<Unit>? = null,
     ): CreateViewModel {
         val loader = DefaultGeneratorPreviewLoader(
             openSource = { pickerId ->
@@ -281,6 +283,8 @@ class CreateScreenCollageChooserTest {
             directory = RecipientDirectoryPort { DirectoryLookupResult.Found(selfSnapshot()) },
             accessTokenProvider = { null },
             identityProvider = {
+                candidateBuildEntered?.complete(Unit)
+                candidateBuildGate?.await()
                 SenderIdentitySnapshot(
                     userId = senderUserUuid.toString(),
                     handle = "mykola",
@@ -360,8 +364,7 @@ class CreateScreenCollageChooserTest {
         }
         // The chooser lives on the COMPOSE screen only (no-inline-chooser
         // rule): navigate with the explicit Next before waiting for candidates.
-        composeRule.onNodeWithTag("create_screen_scroll")
-            .performScrollToNode(hasTestTag("create_next"))
+        composeRule.onNodeWithTag("create_next").assertIsDisplayed()
         composeRule.onNodeWithTag("create_next").performClick()
         composeRule.waitForIdle()
         // Preview readiness and provider analysis are separate asynchronous
@@ -388,7 +391,6 @@ class CreateScreenCollageChooserTest {
         composeRule.waitForIdle()
         // The nav row scrolls horizontally on narrow screens (native
         // overflow adaptation): reveal Select before asserting/clicking it.
-        composeRule.onNodeWithTag("collage_select").performScrollTo()
         composeRule.onNodeWithTag("collage_select").assertIsDisplayed()
         composeRule.onNodeWithTag("collage_select").performClick()
         composeRule.waitForIdle()
@@ -397,7 +399,9 @@ class CreateScreenCollageChooserTest {
         assertEquals(vm.collageChoices.selected?.candidateId, frozen!!.candidateId)
         composeRule.onNodeWithTag("collage_canvas").assertExists()
         composeRule.onNodeWithTag("collage_frozen").assertExists()
-        // Navigation moves the display cursor and invalidates the older freeze.
+        // Selected and browsing states share the frozen arrow/counter row.
+        composeRule.onNodeWithTag("collage_nav_counter")
+            .assertTextContains("✓ selected", substring = true)
         composeRule.onNodeWithTag("collage_next").assertIsDisplayed()
         composeRule.onNodeWithTag("collage_next").performClick()
         composeRule.waitForIdle()
@@ -410,8 +414,7 @@ class CreateScreenCollageChooserTest {
     private fun driveToComposeCandidates(vm: CreateViewModel) {
         // The chooser lives on the COMPOSE screen only (no-inline-chooser
         // rule): navigate with the explicit Next before waiting for candidates.
-        composeRule.onNodeWithTag("create_screen_scroll")
-            .performScrollToNode(hasTestTag("create_next"))
+        composeRule.onNodeWithTag("create_next").assertIsDisplayed()
         composeRule.onNodeWithTag("create_next").performClick()
         composeRule.waitForIdle()
         composeRule.waitUntil(timeoutMillis = 10_000) {
@@ -421,13 +424,7 @@ class CreateScreenCollageChooserTest {
     }
 
     @Test
-    fun crowdedViewportFixesArtSpaceAndKeepsFooterReachable() {
-        // 320x568 is crowded (height<=640, frozen handoff frame/data-crowded
-        // rule): the expression scrolls and the art-space is a fixed 280.dp
-        // (handoff crowded art-space), replacing the tiny weight remainder
-        // (62px canvas on the 320x640 device). This replaces the old
-        // no-scroll entire-viewport expectation, which contradicts the
-        // frozen crowded CSS (lead disposition, not a product decision).
+    fun smallViewportKeepsSelectionContinueAndReviewReachable() {
         val ids = listOf("u1", "u2", "u3")
         val originals = ids.associateWith { id ->
             ByteArray(64) { ((it * 31 + id.hashCode()) and 0xFF).toByte() }
@@ -435,133 +432,111 @@ class CreateScreenCollageChooserTest {
         val vm = viewModel(originals, withFactory = true)
         driveToContent(vm, ids)
         composeRule.setContent {
-            Box(
-                modifier = Modifier.size(320.dp, 568.dp),
-            ) {
-                CreateScreen(
-                    viewModel = vm,
-                    adapterFactory = null,
-                    requestPermissionOnAttach = false,
-                )
-            }
-        }
-        driveToComposeCandidates(vm)
-
-        // Measure from the top: scroll offset carries across steps on the
-        // shared root state, so reset to the header before asserting sizes.
-        composeRule.onNodeWithTag("create_screen_scroll")
-            .performScrollToNode(hasTestTag("create_compose_back"))
-        composeRule.waitForIdle()
-        // Fixed art-space holds the canvas alone (frozen sibling order:
-        // art-space THEN expression-nav): 280 * 9/16 = 157.5 wide.
-        // (boundsInRoot is px; test density is 1, so px == dp here.)
-        val art = composeRule.onNodeWithTag("compose_art_space")
-            .fetchSemanticsNode().boundsInRoot
-        assertEquals(280f, art.height)
-        val canvas = composeRule.onNodeWithTag("collage_canvas")
-            .fetchSemanticsNode().boundsInRoot
-        assertTrue(
-            "canvas must clear 150px in the sibling art-space (device gave 62 with nav inside), was ${canvas.width}",
-            canvas.width >= 150f,
-        )
-
-        // Footer reachable by expression scroll (not pinned in view).
-        composeRule.onNodeWithTag("create_screen_scroll")
-            .performScrollToNode(hasTestTag("create_publish"))
-        composeRule.onNodeWithTag("create_publish").assertIsDisplayed()
-
-        // Nav row overflow adaptation: every control reachable, and the
-        // Select label stays one line (no letter stacking).
-        for (tag in listOf("collage_previous", "collage_nav_counter", "collage_next", "collage_select")) {
-            composeRule.onNodeWithTag(tag).performScrollTo()
-            composeRule.onNodeWithTag(tag).assertIsDisplayed()
-        }
-        val selectBox = composeRule.onNodeWithTag("collage_select")
-            .fetchSemanticsNode().boundsInRoot
-        assertTrue(
-            "Select must keep its natural width (unwrapped label), was ${selectBox.width}",
-            selectBox.width >= 80f,
-        )
-        assertTrue(
-            "Select must stay one line tall, was ${selectBox.height}",
-            selectBox.height < 80f,
-        )
-
-        // Typed guard reachable inside the same scroll: opening crop with
-        // no selection fails closed with a guard and the stage stays shut.
-        assertTrue(!vm.openCrop("u1"))
-        assertTrue(vm.cropSlot.value == null)
-        composeRule.onNodeWithTag("create_screen_scroll")
-            .performScrollToNode(hasTestTag("create_guard_error"))
-        composeRule.onNodeWithTag("create_guard_error").assertIsDisplayed()
-        composeRule.onNodeWithTag("create_guard_error")
-            .assertTextContains("selected candidate", substring = true)
-        vm.endSession()
-    }
-
-    @Test
-    fun crowdedBranchDecisionMatrix() {
-        // The crowded predicate (frozen frame/data-crowded rule) as a pure
-        // decision matrix, supplementing (not replacing) the UI branch
-        // tests below: tall viewports keep the bounded weight pane.
-        assertTrue(!isCrowdedExpression(900.dp, 1.0f))
-        assertTrue(!isCrowdedExpression(641.dp, 1.0f))
-        assertTrue(isCrowdedExpression(640.dp, 1.0f))
-        assertTrue(isCrowdedExpression(470.dp, 1.0f))
-        assertTrue(isCrowdedExpression(900.dp, 1.6f))
-        assertTrue(isCrowdedExpression(900.dp, 2.0f))
-        assertTrue(isCrowdedExpression(320.dp, 1.0f))
-    }
-
-    @Test
-    fun largeFontScaleTakesCrowdedBranch() {
-        // fontScale>=1.6 takes the crowded branch (frozen frame rule):
-        // fixed 280.dp art-space with a scrolling expression. Scroll offset
-        // carries across steps on the shared root state, so reset to the
-        // header before asserting sizes (a carried offset shrinks the
-        // visible art bounds and previously masked this branch as a 210px
-        // measurement).
-        val ids = listOf("u1", "u2", "u3")
-        val originals = ids.associateWith { id ->
-            ByteArray(64) { ((it * 31 + id.hashCode()) and 0xFF).toByte() }
-        }
-        val vm = viewModel(originals, withFactory = true)
-        driveToContent(vm, ids)
-        composeRule.setContent {
-            CompositionLocalProvider(
-                LocalDensity provides Density(LocalDensity.current.density, 1.6f),
-            ) {
-                Box(
-                    modifier = Modifier.size(400.dp, 900.dp),
-                ) {
-                    CreateScreen(
-                        viewModel = vm,
-                        adapterFactory = null,
-                        requestPermissionOnAttach = false,
-                    )
+            dev.hryshyn.remanence.ui.hold.HoldTheme {
+                Box(Modifier.size(320.dp, 568.dp)) {
+                    CreateScreen(vm, adapterFactory = null, requestPermissionOnAttach = false)
                 }
             }
         }
         driveToComposeCandidates(vm)
+        assertWithinViewport("collage_canvas")
+        assertWithinViewport("collage_select")
+        composeRule.onNodeWithTag("create_publish").assertDoesNotExist()
 
-        composeRule.onNodeWithTag("create_screen_scroll")
-            .performScrollToNode(hasTestTag("create_compose_back"))
-        composeRule.waitForIdle()
-        val art = composeRule.onNodeWithTag("compose_art_space")
-            .fetchSemanticsNode().boundsInRoot
-        assertEquals(280f, art.height)
-        composeRule.onNodeWithTag("create_screen_scroll")
-            .performScrollToNode(hasTestTag("create_publish"))
-        composeRule.onNodeWithTag("create_publish").assertIsDisplayed()
+        // Cropping is available while browsing, before any explicit choice.
+        assertNull(vm.frozenCollageSelection)
+        composeRule.onNodeWithTag("crop_hotspot_0").performClick()
+        composeRule.onNodeWithTag("crop_stage").assertIsDisplayed()
+        assertWithinViewport("crop_done")
+        assertNull(vm.frozenCollageSelection)
+        composeRule.onNodeWithTag("crop_back").performClick()
+
+        composeRule.onNodeWithTag("collage_select").performClick()
+        composeRule.onNodeWithTag("create_compose_continue").assertIsEnabled()
+        assertWithinViewport("create_compose_continue")
+        composeRule.onNodeWithTag("create_compose_continue").performClick()
+        composeRule.onNodeWithTag("create_publish").assertIsEnabled()
+        assertWithinViewport("create_publish")
+        assertWithinViewport("collage_canvas")
         vm.endSession()
     }
 
     @Test
+    fun contentStaysVisibleUntilCandidateBuildCompletes() {
+        val gate = CompletableDeferred<Unit>()
+        val entered = CompletableDeferred<Unit>()
+        val ids = listOf("u1", "u2", "u3")
+        val originals = ids.associateWith { id ->
+            ByteArray(64) { ((it * 31 + id.hashCode()) and 0xFF).toByte() }
+        }
+        val vm = viewModel(originals, true, gate, entered)
+        driveToContent(vm, ids)
+        composeRule.setContent {
+            dev.hryshyn.remanence.ui.hold.HoldTheme {
+                CreateScreen(vm, adapterFactory = null, requestPermissionOnAttach = false)
+            }
+        }
+        composeRule.waitUntil(10_000) { entered.isCompleted }
+        composeRule.onNodeWithTag("create_next").performClick()
+        composeRule.waitForIdle()
+
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        composeRule.onNodeWithTag("create_content_scroll").assertIsDisplayed()
+        composeRule.onNodeWithTag("create_photo_tile_0").assertExists()
+        composeRule.onNodeWithTag("create_next").assertIsNotEnabled()
+        composeRule.onNodeWithTag("collage_canvas").assertDoesNotExist()
+
+        gate.complete(Unit)
+        composeRule.waitUntil(10_000) { vm.step.value == CreateViewModel.Step.COMPOSE }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("collage_canvas").assertIsDisplayed()
+        composeRule.onNodeWithTag("collage_select").assertIsEnabled()
+        composeRule.onNodeWithTag("create_content_scroll").assertDoesNotExist()
+
+        // Every browse page is real, drawable content with a usable action.
+        val count = vm.collageChoices.candidates.size
+        assertTrue(count > 0)
+        repeat(count) { index ->
+            composeRule.onNodeWithTag("collage_canvas").assertIsDisplayed()
+            composeRule.onNodeWithTag("collage_select").assertIsEnabled()
+            composeRule.onNodeWithTag("collage_notice").assertDoesNotExist()
+            assertEquals(index, vm.collageChoices.displayIndex)
+            if (index < count - 1) composeRule.onNodeWithTag("collage_next").performClick()
+        }
+        vm.endSession()
+    }
+
+    @Test
+    fun largerTextKeepsPrimaryActionsReachable() {
+        val ids = listOf("u1", "u2", "u3")
+        val originals = ids.associateWith { id ->
+            ByteArray(64) { ((it * 31 + id.hashCode()) and 0xFF).toByte() }
+        }
+        val vm = viewModel(originals, withFactory = true)
+        driveToContent(vm, ids)
+        composeRule.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, 1.6f)) {
+                dev.hryshyn.remanence.ui.hold.HoldTheme {
+                    Box(Modifier.size(400.dp, 900.dp)) {
+                        CreateScreen(vm, adapterFactory = null, requestPermissionOnAttach = false)
+                    }
+                }
+            }
+        }
+        driveToComposeCandidates(vm)
+        assertWithinViewport("collage_select")
+        composeRule.onNodeWithTag("collage_select").performClick()
+        assertWithinViewport("create_compose_continue")
+        composeRule.onNodeWithTag("create_compose_continue").performClick()
+        assertWithinViewport("create_publish")
+        vm.endSession()
+    }
+
+    @Test
+    @Config(sdk = [35], qualifiers = "w400dp-h900dp")
     fun tallViewportKeepsBoundedPaneWithoutScroll() {
-        // Tall viewport via a constrained oversize parent (requiredHeight
-        // bypasses the harness window cap): the original bounded weight
-        // pane is unchanged — no root scroll on COMPOSE. All containment
-        // is art-space-relative (never onRoot-relative).
+        // A genuinely tall window, not an oversized child whose pinned
+        // actions fall below the real display.
         val ids = listOf("u1", "u2", "u3")
         val originals = ids.associateWith { id ->
             ByteArray(64) { ((it * 31 + id.hashCode()) and 0xFF).toByte() }
@@ -570,7 +545,7 @@ class CreateScreenCollageChooserTest {
         driveToContent(vm, ids)
         composeRule.setContent {
             Box(
-                modifier = Modifier.fillMaxWidth().requiredHeight(900.dp),
+                modifier = Modifier.fillMaxSize(),
             ) {
                 CreateScreen(
                     viewModel = vm,
@@ -603,7 +578,10 @@ class CreateScreenCollageChooserTest {
             "nav must sit below the art-space: select $selectBox vs art $art",
             selectBox.top >= art.bottom - 1f,
         )
-        // Publish footer present (below the window fold: exists, not shown).
+        // Publication has its own review step after explicit selection.
+        composeRule.onNodeWithTag("create_publish").assertDoesNotExist()
+        composeRule.onNodeWithTag("collage_select").performClick()
+        composeRule.onNodeWithTag("create_compose_continue").performClick()
         composeRule.onNodeWithTag("create_publish").assertExists()
         vm.endSession()
     }
@@ -633,11 +611,8 @@ class CreateScreenCollageChooserTest {
         composeRule.onNodeWithTag("crop_slots_label").assertDoesNotExist()
         composeRule.onNodeWithTag("crop_slot_0").assertDoesNotExist()
 
-        // Genuine hotspot entry opens the matching source crop (frozen
-        // ordering needs an explicit selection first, as in real flow).
-        composeRule.onNodeWithTag("collage_select").performScrollTo()
-        composeRule.onNodeWithTag("collage_select").performClick()
-        composeRule.waitForIdle()
+        // A real photograph hotspot opens crop before selection.
+        assertNull(vm.frozenCollageSelection)
         composeRule.onNodeWithTag("crop_hotspot_0").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("crop_stage").assertExists()
@@ -660,8 +635,7 @@ class CreateScreenCollageChooserTest {
                 requestPermissionOnAttach = false,
             )
         }
-        composeRule.onNodeWithTag("create_screen_scroll")
-            .performScrollToNode(hasTestTag("create_next"))
+        composeRule.onNodeWithTag("create_next").assertIsDisplayed()
         composeRule.onNodeWithTag("create_next").performClick()
         composeRule.waitForIdle()
         composeRule.waitUntil(timeoutMillis = 10_000) {
@@ -672,7 +646,6 @@ class CreateScreenCollageChooserTest {
         // Select + freeze the displayed candidate through the real host.
         // The nav row scrolls horizontally on narrow screens (native
         // overflow adaptation): reveal Select before asserting/clicking it.
-        composeRule.onNodeWithTag("collage_select").performScrollTo()
         composeRule.onNodeWithTag("collage_select").assertIsDisplayed()
         composeRule.onNodeWithTag("collage_select").performClick()
         composeRule.waitForIdle()
@@ -692,7 +665,7 @@ class CreateScreenCollageChooserTest {
         assertEquals(0, vm.collageChoices.selectedIndex)
         assertSame(listed, vm.collageChoices.candidates)
         composeRule.onNodeWithTag("collage_selected_label", useUnmergedTree = true).assertExists()
-        composeRule.onNodeWithTag("create_publish").assertIsEnabled()
+        composeRule.onNodeWithTag("create_compose_continue").assertIsEnabled()
         vm.endSession()
     }
 
@@ -711,8 +684,7 @@ class CreateScreenCollageChooserTest {
                 requestPermissionOnAttach = false,
             )
         }
-        composeRule.onNodeWithTag("create_screen_scroll")
-            .performScrollToNode(hasTestTag("create_next"))
+        composeRule.onNodeWithTag("create_next").assertIsDisplayed()
         composeRule.onNodeWithTag("create_next").performClick()
         composeRule.waitForIdle()
         composeRule.waitUntil(timeoutMillis = 10_000) {
@@ -721,7 +693,6 @@ class CreateScreenCollageChooserTest {
         composeRule.waitForIdle()
         // The nav row scrolls horizontally on narrow screens (native
         // overflow adaptation): reveal Select before clicking it.
-        composeRule.onNodeWithTag("collage_select").performScrollTo()
         composeRule.onNodeWithTag("collage_select").performClick()
         composeRule.waitForIdle()
         val frozenId = requireNotNull(vm.frozenCollageSelection?.candidateId)
@@ -772,7 +743,7 @@ class CreateScreenCollageChooserTest {
 
         val resealedId = requireNotNull(vm.frozenCollageSelection?.candidateId)
         assertTrue(resealedId != frozenId)
-        composeRule.onNodeWithTag("create_publish").assertIsEnabled()
+        composeRule.onNodeWithTag("create_compose_continue").assertIsEnabled()
 
         // A second open/Back on the resealed candidate keeps the new freeze.
         composeRule.onNodeWithTag("crop_hotspot_0").performClick()
@@ -784,19 +755,7 @@ class CreateScreenCollageChooserTest {
     }
 
     @Test
-    fun remountRebuildRepostsProofForFirstSelect() {
-        // Device recipe (scout-select-drawable) as POSITIVE roundtrip
-        // coverage: proof present, back/continue remount retains the
-        // session, async rebuild fires, and the FIRST displayed Select +
-        // freeze succeed without requiring Next.
-        //
-        // Honest negative evidence (lead): this test passes WITH and
-        // WITHOUT the build-generation report key — the remount's fresh
-        // report ordering already restores the proof here — so it does
-        // NOT discriminate the equal-rebuild silence. The discriminating
-        // regression is `gatedRebuildRepostsProofForFirstSelect` in
-        // CollageChoiceHostTest, which holds the builder suspended past
-        // the retained report.
+    fun contentRoundtripRetainsCandidatesAndCanSelectAgain() {
         val ids = listOf("u1", "u2", "u3")
         val originals = ids.associateWith { id ->
             ByteArray(64) { ((it * 31 + id.hashCode()) and 0xFF).toByte() }
@@ -804,59 +763,27 @@ class CreateScreenCollageChooserTest {
         val vm = viewModel(originals, withFactory = true)
         driveToContent(vm, ids)
         composeRule.setContent {
-            CreateScreen(
-                viewModel = vm,
-                adapterFactory = null,
-                requestPermissionOnAttach = false,
-            )
+            CreateScreen(vm, adapterFactory = null, requestPermissionOnAttach = false)
         }
         driveToComposeCandidates(vm)
-
-        // Select + freeze the first displayed candidate (proof present).
-        composeRule.onNodeWithTag("collage_select").performScrollTo()
         composeRule.onNodeWithTag("collage_select").performClick()
-        composeRule.waitForIdle()
-        val frozenId = requireNotNull(vm.frozenCollageSelection?.candidateId)
-        val shownId = requireNotNull(vm.collageChoices.displayed?.candidateId)
-        val shownExpression = requireNotNull(vm.collageChoices.displayed?.expression)
-        val shownCount = vm.collageChoices.candidates.size
-
-        // Remount with the session retained (back to CONTENT and continue
-        // again, exactly the device recipe): the host is disposed and
-        // remounted, and the async rebuild fires again.
-        composeRule.onNodeWithTag("create_compose_back").performClick()
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag("create_screen_scroll")
-            .performScrollToNode(hasTestTag("create_next"))
-        composeRule.onNodeWithTag("create_next").performClick()
-        composeRule.waitForIdle()
-        // The rebuild clears the frozen selection (VM onCandidatesReplaced).
-        composeRule.waitUntil(timeoutMillis = 10_000) {
-            vm.frozenCollageSelection == null
-        }
-        composeRule.waitForIdle()
-
-        // Value-equal rebuild: same count, same first id, same expression.
-        assertEquals(shownCount, vm.collageChoices.candidates.size)
-        assertEquals(shownId, vm.collageChoices.displayed?.candidateId)
-        assertEquals(shownExpression, vm.collageChoices.displayed?.expression)
-
-        // FIRST displayed Select + freeze succeed with NO Next in between.
-        composeRule.onNodeWithTag("collage_select").performScrollTo()
-        composeRule.onNodeWithTag("collage_select").performClick()
-        composeRule.waitForIdle()
-        val resealedId = requireNotNull(vm.frozenCollageSelection?.candidateId) {
-            "first Select after equal rebuild must freeze, flowError=${vm.flowError.value}"
-        }
-        assertEquals(shownId, resealedId)
-
-        // Next then Select also succeeds.
-        composeRule.onNodeWithTag("collage_next").performClick()
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag("collage_select").performScrollTo()
-        composeRule.onNodeWithTag("collage_select").performClick()
-        composeRule.waitForIdle()
         assertTrue(vm.frozenCollageSelection != null)
+        val listed = vm.collageChoices.candidates
+        val firstId = requireNotNull(vm.collageChoices.displayed).candidateId
+
+        // Back leaves the chosen state first; a second Back returns to content.
+        composeRule.onNodeWithTag("flow_back_create").performClick()
+        assertNull(vm.frozenCollageSelection)
+        composeRule.onNodeWithTag("flow_back_create").performClick()
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        composeRule.onNodeWithTag("create_next").performClick()
+        composeRule.waitUntil(10_000) { vm.step.value == CreateViewModel.Step.COMPOSE }
+        composeRule.waitForIdle()
+        assertSame(listed, vm.collageChoices.candidates)
+        assertEquals(firstId, vm.collageChoices.displayed?.candidateId)
+
+        composeRule.onNodeWithTag("collage_select").performClick()
+        assertEquals(firstId, vm.frozenCollageSelection?.candidateId)
         vm.endSession()
     }
 
@@ -897,7 +824,7 @@ class CreateScreenCollageChooserTest {
     }
 
     @Test
-    fun zoomOneArrowKeepsIdentityAndResetClearsCorrection() {
+    fun movementAtBaseZoomMovesFrameAndResetRestoresIt() {
         val ids = listOf("u1", "u2", "u3")
         val originals = ids.associateWith { id ->
             ByteArray(64) { ((it * 31 + id.hashCode()) and 0xFF).toByte() }
@@ -911,8 +838,7 @@ class CreateScreenCollageChooserTest {
                 requestPermissionOnAttach = false,
             )
         }
-        composeRule.onNodeWithTag("create_screen_scroll")
-            .performScrollToNode(hasTestTag("create_next"))
+        composeRule.onNodeWithTag("create_next").assertIsDisplayed()
         composeRule.onNodeWithTag("create_next").performClick()
         composeRule.waitForIdle()
         composeRule.waitUntil(timeoutMillis = 10_000) {
@@ -921,7 +847,6 @@ class CreateScreenCollageChooserTest {
         composeRule.waitForIdle()
         // The nav row scrolls horizontally on narrow screens (native
         // overflow adaptation): reveal Select before clicking it.
-        composeRule.onNodeWithTag("collage_select").performScrollTo()
         composeRule.onNodeWithTag("collage_select").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("crop_hotspot_0").performClick()
@@ -933,22 +858,15 @@ class CreateScreenCollageChooserTest {
 
         // Identity default: no correction yet, window is the approved base.
         val identity = windowState()
-        // z=1 pan lock (VM-level; pad/slider gestures do not execute in
-        // this Robolectric environment — device QA covers the real
-        // controls): an arrow-equivalent write at z=1 keeps identity.
+        // Source-space movement is available at base zoom too: the whole
+        // source stays visible and the crop frame moves within it.
         vm.updateCrop(1.0f, 1.0f, 0.0f)
         composeRule.waitForIdle()
         assertTrue(vm.cropCorrections.value.isNotEmpty())
-        assertEquals(identity, windowState())
+        assertTrue(windowState() != identity)
 
-        // Above 1 the same write moves the window.
-        // NOTE (Robolectric): taps on the stage pad/slider/reset/done
-        // controls do not reach their handlers in this environment
-        // (verified across swipe, track-tap, SetProgress and click
-        // variants; identical-pattern taps elsewhere in the flow work,
-        // VM logic is green, and device QA proves the real controls).
-        // Values below are driven directly; every navigation/lifecycle
-        // transition in this file stays a real UI tap.
+        // Pinching changes the window size; Reset returns to the solver's
+        // original frame. Touch behavior has separate surface tests.
         vm.updateCrop(1.25f, 1.0f, 0.0f)
         composeRule.waitForIdle()
         val moved = windowState()
@@ -977,18 +895,30 @@ class CreateScreenCollageChooserTest {
         }
         // The chooser lives on the COMPOSE screen only (no-inline-chooser
         // rule): navigate with the explicit Next before waiting for candidates.
-        composeRule.onNodeWithTag("create_screen_scroll")
-            .performScrollToNode(hasTestTag("create_next"))
+        composeRule.onNodeWithTag("create_next").assertIsDisplayed()
         composeRule.onNodeWithTag("create_next").performClick()
         composeRule.waitForIdle()
         composeRule.waitUntil(timeoutMillis = 10_000) {
             vm.collageChoices.notice != null || vm.collageChoices.candidates.isNotEmpty()
         }
 
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
         composeRule.onNodeWithTag("collage_notice").assertExists()
+        composeRule.onNodeWithTag("create_next").assertIsEnabled()
         composeRule.onNodeWithTag("collage_canvas").assertDoesNotExist()
         composeRule.onAllNodesWithTag("collage_select").assertCountEquals(0)
         vm.endSession()
+    }
+
+    private fun assertWithinViewport(tag: String) {
+        val node = composeRule.onNodeWithTag(tag)
+        node.assertIsDisplayed()
+        val bounds = node.fetchSemanticsNode().boundsInRoot
+        val viewport = composeRule.onRoot().fetchSemanticsNode().boundsInRoot
+        assertTrue("$tag must remain inside $viewport, was $bounds",
+            bounds.width > 0f && bounds.height > 0f &&
+                bounds.left >= viewport.left - 1f && bounds.top >= viewport.top - 1f &&
+                bounds.right <= viewport.right + 1f && bounds.bottom <= viewport.bottom + 1f)
     }
 
     private fun musicHit() = MusicTrackHit(
@@ -1027,8 +957,7 @@ class CreateScreenCollageChooserTest {
         }
         // The chooser lives on the COMPOSE screen only (no-inline-chooser
         // rule): navigate with the explicit Next before waiting for candidates.
-        composeRule.onNodeWithTag("create_screen_scroll")
-            .performScrollToNode(hasTestTag("create_next"))
+        composeRule.onNodeWithTag("create_next").assertIsDisplayed()
         composeRule.onNodeWithTag("create_next").performClick()
         composeRule.waitForIdle()
         composeRule.waitUntil(timeoutMillis = 10_000) { vm.collageChoices.candidates.isNotEmpty() }
@@ -1040,7 +969,6 @@ class CreateScreenCollageChooserTest {
         composeRule.waitForIdle()
         // The nav row scrolls horizontally on narrow screens (native
         // overflow adaptation): reveal Select before asserting/clicking it.
-        composeRule.onNodeWithTag("collage_select").performScrollTo()
         composeRule.onNodeWithTag("collage_select").assertIsDisplayed()
         composeRule.onNodeWithTag("collage_select").performClick()
         composeRule.waitForIdle()

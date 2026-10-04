@@ -11,6 +11,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.hasTestTag
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.room.Room
@@ -335,8 +336,8 @@ class CreateSmallViewportTest {
         val previewBounds = composeRule.onNodeWithTag("capture_preview")
             .fetchSemanticsNode().boundsInRoot
         assertTrue(
-            "phase=$dbgPhase preview height must be >= MIN(${dev.hryshyn.remanence.capture.CAPTURE_PREVIEW_MIN_HEIGHT}), was ${previewBounds.height} bounds=$previewBounds",
-            previewBounds.height >= dev.hryshyn.remanence.capture.CAPTURE_PREVIEW_MIN_HEIGHT.value,
+            "phase=$dbgPhase bounded preview must remain at least 64dp high, was ${previewBounds.height} bounds=$previewBounds",
+            previewBounds.height >= 64f,
         )
 
         // Shutter sits directly BELOW the nonzero preview area after the
@@ -439,7 +440,11 @@ class CreateSmallViewportTest {
     }
 
     private fun androidx.compose.ui.test.junit4.ComposeTestRule.scrollToTag(tag: String) {
-        onNodeWithTag("create_screen_scroll").performScrollToNode(hasTestTag(tag))
+        try {
+            onNodeWithTag(tag).assertIsDisplayed()
+        } catch (_: AssertionError) {
+            onNodeWithTag(tag).performScrollTo().assertIsDisplayed()
+        }
     }
 
     private fun selfSnapshot() = ResolvedHandleSnapshot(

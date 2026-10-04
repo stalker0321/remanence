@@ -451,19 +451,20 @@ class CollageFrozenSelectionTest {
     }
 
     @Test
-    fun clearFrozenCollageSelectionDropsFrozenOnly() = runTest {
+    fun clearFrozenCollageSelectionReturnsToBrowsingWithoutRebuilding() = runTest {
         val ids = listOf("u1", "u2", "u3")
         val vm = viewModel(previewLoader(ids.associateWith { originalFor(it) }))
         val ready = readyPreview(vm, ids)
         frozenAfterSelect(vm, ready.expression.input)
         vm.clearFrozenCollageSelection()
         assertNull(vm.frozenCollageSelection)
-        // Navigation clears the frozen id; the highlighted candidates stay.
+        // Returning to browsing clears selection but keeps all candidates.
         // T151: the provider enumerates every grammar-5 branch (12 for 3 photos)
         // per style, so more than one candidate per style remains.
         assertTrue(vm.collageChoices.candidates.size > 3)
         assertEquals(3, vm.collageChoices.candidates.map { it.styleId }.distinct().size)
-        assertEquals(0, vm.collageChoices.selectedIndex)
+        assertNull(vm.collageChoices.selectedIndex)
+        assertEquals(0, vm.collageChoices.displayIndex)
     }
 
     @Test

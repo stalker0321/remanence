@@ -145,10 +145,15 @@ class CreateGoldenTransitionTableTest {
             outboxStager = dev.hryshyn.remanence.core.data.outbox.CapsuleOutboxStager(database, dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir), retryStore),
             profile = RecognitionProfile.postcardSiftRootSiftV1(),
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir),
-            openPhotoSource = { error("unused") },
+            openPhotoSource = { id -> dev.hryshyn.remanence.create.PhotoSource {
+                java.io.ByteArrayInputStream(dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(id))
+            } },
             frontProcessor = Accepting(goldenSynthetic()),
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
+            generatorPreviewLoader = CollageFreezeFixture.previewLoader { id ->
+                dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(id)
+            },
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
             enqueueUpload = { _, _ -> },
@@ -193,7 +198,8 @@ class CreateGoldenTransitionTableTest {
                 bind(vm.frontAttempt)
                 assertTrue(vm.beginFrontCapture())
                 vm.deliverFrontJpeg("f".toByteArray())
-                repeat(3) { vm.photoSelection.toggle("content://$it") }
+                vm.onPhotosPicked(listOf("content://0", "content://1", "content://2"))
+                CollageFreezeFixture.freezeFirstCandidate(vm)
                 assertTrue(vm.goToCompose())
             }
             else -> error("state $step has no synchronous path")
@@ -254,6 +260,7 @@ class CreateGoldenTransitionTableTest {
 
 
     @Test
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
     fun goldenTableEveryStateAllowsOnlyItsDocumentedEvents() {
         for (row in table) {
             val vm = reach(row.state)

@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.ui.create.music
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -70,26 +71,29 @@ class MusicPickerContentTest {
             MaterialTheme {
                 var show by remember { mutableStateOf(true) }
                 var vmSelection by remember { mutableStateOf<MusicTrackHit?>(null) }
-                TextButton(
-                    onClick = { show = !show },
-                    modifier = Modifier.testTag("music_test_toggle"),
-                ) { Text("toggle") }
-                if (show) {
-                    MusicPickerContent(
-                        search = fakeSearch(),
-                        vmSelection = vmSelection,
-                        onSelect = { ownerWrites.add("set:${it.id}"); vmSelection = it },
-                        onClearSelection = { ownerWrites.add("clear"); vmSelection = null },
-                    )
+                Column {
+                    TextButton(
+                        onClick = { show = !show },
+                        modifier = Modifier.testTag("music_test_toggle"),
+                    ) { Text("toggle") }
+                    if (show) {
+                        MusicPickerContent(
+                            search = fakeSearch(),
+                            vmSelection = vmSelection,
+                            onSelect = { ownerWrites.add("set:${it.id}"); vmSelection = it },
+                            onClearSelection = { ownerWrites.add("clear"); vmSelection = null },
+                        )
+                    }
                 }
             }
         }
 
+        composeRule.onNodeWithTag("music_add").performClick()
         composeRule.onNodeWithTag("music_query").performTextInput("505")
         composeRule.mainClock.advanceTimeBy(500L)
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("music_hit_${first.id}").performClick()
-        composeRule.onNodeWithText("Attached on publish: 505").assertIsDisplayed()
+        composeRule.onNodeWithText("505").assertIsDisplayed()
         assertEquals(listOf("set:${first.id}"), ownerWrites)
 
         // Remount (rotation/step re-entry/retry): the display re-seeds from
@@ -99,7 +103,7 @@ class MusicPickerContentTest {
         composeRule.onNodeWithTag("music_test_toggle").performClick()
         composeRule.waitForIdle()
 
-        composeRule.onNodeWithText("Attached on publish: 505").assertIsDisplayed()
+        composeRule.onNodeWithText("505").assertIsDisplayed()
         assertEquals(
             "remount must not write the owner selection",
             listOf("set:${first.id}"),
@@ -122,6 +126,7 @@ class MusicPickerContentTest {
             }
         }
 
+        composeRule.onNodeWithTag("music_add").performClick()
         composeRule.onNodeWithTag("music_query").performTextInput("505")
         composeRule.mainClock.advanceTimeBy(500L)
         composeRule.waitForIdle()
@@ -130,5 +135,28 @@ class MusicPickerContentTest {
 
         assertEquals(listOf("set:${first.id}", "clear"), ownerWrites)
         assertTrue(composeRule.onAllNodesWithTag("music_selection").fetchSemanticsNodes().isEmpty())
+    }
+
+    @Test
+    fun ownerRestorationUpdatesDisplayWithoutWritingBack() {
+        var vmSelection by mutableStateOf<MusicTrackHit?>(null)
+        val ownerWrites = mutableListOf<String>()
+        composeRule.setContent {
+            MaterialTheme {
+                MusicPickerContent(
+                    search = fakeSearch(),
+                    vmSelection = vmSelection,
+                    onSelect = { ownerWrites.add("set:${it.id}") },
+                    onClearSelection = { ownerWrites.add("clear") },
+                )
+            }
+        }
+
+        composeRule.runOnIdle { vmSelection = first }
+        composeRule.onNodeWithText("505").assertIsDisplayed()
+        composeRule.runOnIdle { vmSelection = null }
+        composeRule.onNodeWithTag("music_selection").assertDoesNotExist()
+        composeRule.onNodeWithTag("music_add").assertIsDisplayed()
+        assertTrue(ownerWrites.isEmpty())
     }
 }

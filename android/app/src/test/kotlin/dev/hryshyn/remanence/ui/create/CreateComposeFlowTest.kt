@@ -102,7 +102,8 @@ class CreateComposeFlowTest {
     }
 
     private class Accepting(private val result: ProcessedStill.Accepted) : StillProcessor {
-        override fun process(jpegBytes: ByteArray): ProcessedStill = result
+        override fun process(jpegBytes: ByteArray): ProcessedStill =
+            result.copy(serializedBytes = result.serializedBytes.copyOf())
     }
 
     private fun goldenSynthetic(): ProcessedStill.Accepted = ProcessedStill.Accepted(
@@ -170,14 +171,18 @@ class CreateComposeFlowTest {
 
     private fun originalFor(pickerId: String): ByteArray = memoryTestJpegForPhotoId(pickerId)
 
-    private fun newViewModel(withCropSource: Boolean = false, cornerFace: Boolean = false): CreateViewModel {
+    private fun newViewModel(
+        withCropSource: Boolean = false,
+        cornerFace: Boolean = false,
+        persistence: SealedFingerprintPersistence = NoPersistence(),
+    ): CreateViewModel {
         val roots = AccountScopedFileRoots(stagingDir)
         val retryStore = SenderRetryMaterialStore(roots)
         return CreateViewModel(
             directory = StaticDirectory(),
             accessTokenProvider = { null },
             identityProvider = { senderIdentity() },
-            persistence = NoPersistence(),
+            persistence = persistence,
             outboxStager = CapsuleOutboxStager(database, roots, retryStore),
             profile = RecognitionProfile.postcardSiftRootSiftV1(),
             accountScopedFileRoots = roots,
@@ -455,7 +460,7 @@ class CreateComposeFlowTest {
     }
 
     @Test
-    fun cropResetRemovesEntryAndClosePreserves() {
+    fun cancelDiscardsDraftAndResetRestoresOriginalFrame() {
         val vm = newViewModel()
         driveToContent(vm)
         val ids = previewContentIds(vm)
@@ -467,11 +472,14 @@ class CreateComposeFlowTest {
 
         assertTrue(vm.closeCrop())
         assertNull(vm.cropSlot.value)
-        assertNotNull(vm.cropCorrections.value[ids.first()])
+        assertNull(vm.cropCorrections.value[ids.first()])
 
         assertTrue(vm.openCrop(ids.first()))
         vm.resetCrop()
-        assertNull(vm.cropCorrections.value[ids.first()])
+        val reset = requireNotNull(vm.cropCorrections.value[ids.first()])
+        assertEquals(1f, reset.zoom)
+        assertEquals(0f, reset.panX)
+        assertEquals(0f, reset.panY)
         assertEquals(ids.first(), vm.cropSlot.value)
     }
 
@@ -490,23 +498,81 @@ class CreateComposeFlowTest {
     }
 
     @Test
-    fun openCropNeedsSelectedCandidate() {
+    fun returningToPostcardRestartsCameraAndRetainsTheContent() {
+        val capturedCapsules = mutableListOf<String>()
+        val persistence = object : SealedFingerprintPersistence by NoPersistence() {
+            override suspend fun persist(
+                capsuleId: String,
+                origin: dev.hryshyn.remanence.core.data.db.FingerprintOrigin,
+                profileId: String,
+                plaintextBytes: ByteArray,
+            ): String {
+                if (capsuleId in capturedCapsules) {
+                    throw dev.hryshyn.remanence.core.data.fingerprints.DuplicateFingerprintException(capsuleId, origin)
+                }
+                capturedCapsules += capsuleId
+                return "fp-${capturedCapsules.size}"
+            }
+        }
+        val vm = newViewModel(persistence = persistence)
+        driveToContent(vm)
+        val originalCapsuleId = vm.capsuleId
+        vm.noteEditor.onChange("keep this note")
+        val track = hit("8fc55a01-ccd2-4b27-bcda-8d3a9aafc512")
+        vm.setMusicSelection(track)
+        val photos = vm.photoSelection.selectedIds.toList()
+        assertTrue(vm.backToFront())
+        assertNotEquals(originalCapsuleId, vm.capsuleId)
+        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        assertEquals(dev.hryshyn.remanence.capture.CaptureAttemptPhase.Binding, vm.frontAttempt.phase)
+        assertEquals(photos, vm.photoSelection.selectedIds)
+        assertEquals("keep this note", vm.noteEditor.text)
+        assertEquals(track, vm.musicSelection.value)
+        assertFalse(vm.goToCompose())
+        vm.frontAttempt.onPreviewBound()
+        assertTrue(vm.beginFrontCapture())
+        vm.deliverFrontJpeg("replacement postcard".toByteArray())
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        assertEquals(listOf(originalCapsuleId, vm.capsuleId), capturedCapsules)
+        assertEquals(photos, vm.photoSelection.selectedIds)
+        assertEquals("keep this note", vm.noteEditor.text)
+        assertTrue(vm.goToCompose())
+    }
+
+    @Test
+    fun returningToBrowsingClearsSelectionWithoutChangingDisplayedCandidate() {
+        val vm = newViewModel()
+        driveToContent(vm)
+        CollageFreezeFixture.freezeFirstCandidate(vm)
+        assertTrue(vm.goToCompose())
+        val displayed = vm.collageChoices.displayed
+        assertNotNull(vm.collageChoices.selected)
+        vm.clearFrozenCollageSelection()
+        assertEquals(displayed, vm.collageChoices.displayed)
+        assertNull(vm.collageChoices.selected)
+        assertNull(vm.frozenCollageSelection)
+        assertTrue(vm.openCrop(previewContentIds(vm).first()))
+        assertNull(vm.frozenCollageSelection)
+    }
+
+    @Test
+    fun openCropWorksOnDisplayedCandidateBeforeSelection() {
         val vm = newViewModel()
         driveToContent(vm)
         CollageFreezeFixture.freezeFirstCandidate(vm)
         assertTrue(vm.goToCompose())
 
-        // Browse clears the highlight (host also clears the freeze via
-        // onNavigate): browsing alone never opens the stage — the frozen
-        // ordering is "select one, then tap a photograph".
+        // The displayed page is editable before an explicit selection.
         vm.collageChoices.next()
         vm.clearFrozenCollageSelection()
-        assertFalse(vm.openCrop(previewContentIds(vm).first()))
-        assertNull(vm.cropSlot.value)
+        assertTrue(vm.openCrop(previewContentIds(vm).first()))
+        assertNotNull(vm.cropSlot.value)
+        assertNull(vm.frozenCollageSelection)
+        assertNull(vm.collageChoices.selected)
     }
 
     @Test
-    fun openCropRefusesAfterBrowseInvalidatesSelection() {
+    fun openCropWorksAfterBrowsingToAnotherUnselectedCandidate() {
         val vm = newViewModel()
         driveToContent(vm)
         val ids = previewContentIds(vm)
@@ -521,13 +587,13 @@ class CreateComposeFlowTest {
         assertEquals(ids.first(), vm.cropSlot.value)
         assertTrue(vm.closeCrop())
 
-        // Browse moves the display and clears the highlight (host also
-        // clears the freeze via onNavigate): opening must refuse rather
-        // than stage another candidate's geometry.
+        // Browsing shows another candidate with its own editable geometry.
         vm.collageChoices.next()
         vm.clearFrozenCollageSelection()
-        assertFalse(vm.openCrop(ids.first()))
-        assertNull(vm.cropSlot.value)
+        assertTrue(vm.openCrop(ids.first()))
+        assertEquals(ids.first(), vm.cropSlot.value)
+        assertNull(vm.frozenCollageSelection)
+        assertNull(vm.collageChoices.selected)
     }
 
     @Test
@@ -599,38 +665,42 @@ class CreateComposeFlowTest {
     }
 
     @Test
-    fun candidateNavigationPreservesKeyedCropCorrections() {
-        // Integration contract: entries are keyed (candidateId, slot,
-        // contentId), so browsing away and back keeps them; only the display
-        // for the newly displayed candidate is shown. Content/owner edits
-        // still drop the whole store (photoEditClearsCropState).
-        val vm = newViewModel()
+    fun savedCropSurvivesBrowsingAndNeverSelectsTheCandidate() = runBlocking {
+        val vm = newViewModel(withCropSource = true)
         driveToContent(vm)
         val ids = previewContentIds(vm)
-        val frozenId = CollageFreezeFixture.freezeFirstCandidate(vm)
+        CollageFreezeFixture.freezeFirstCandidateWithProductionSource(vm)
         assertTrue(vm.goToCompose())
-        assertTrue(vm.openCrop(ids.first()))
-        vm.updateCrop(1.2f, 5f, 5f)
-        assertNotNull(vm.cropCorrections.value[ids.first()])
-
-        // Browse away: the display follows the newly shown candidate, the
-        // keyed store keeps the entry for candidate 1.
+        // Explicitly return to browsing before opening the crop.
         vm.collageChoices.next()
-        vm.clearFrozenCollageSelection()
-        assertNull(vm.cropSlot.value)
-        assertTrue(vm.cropCorrections.value.isEmpty())
-
-        // Browse back to the same candidate: the correction is still there.
         vm.collageChoices.previous()
         vm.clearFrozenCollageSelection()
-        assertNotNull(vm.cropCorrections.value[ids.first()])
-        assertEquals(1.2f, vm.cropCorrections.value.getValue(ids.first()).zoom)
+        assertNull(vm.collageChoices.selected)
+        assertTrue(vm.openCrop(ids.first()))
+        vm.updateCrop(1.02f, 0f, 0f)
+        assertTrue("crop refusal: " + vm.flowError.value, vm.applyCropAndClose())
+        val corrected = requireNotNull(vm.collageChoices.displayed)
+        val savedWindow = corrected.expression.placements.first { it.contentId == ids.first() }.crop
+        assertNull(vm.frozenCollageSelection)
+        assertNull(vm.collageChoices.selected)
+        assertNull(vm.cropSlot.value)
 
-        // A content edit (new photo set) drops the whole store fail-closed.
-        vm.backToContent()
-        vm.onPhotosPicked(listOf("content://0", "content://1", "content://9"))
+        vm.collageChoices.next()
+        vm.clearFrozenCollageSelection()
         assertTrue(vm.cropCorrections.value.isEmpty())
-        assertNotEquals(frozenId, vm.frozenCollageSelection?.candidateId)
+        vm.collageChoices.previous()
+        vm.clearFrozenCollageSelection()
+        assertEquals(corrected.candidateId, vm.collageChoices.displayed?.candidateId)
+        assertEquals(savedWindow, vm.collageChoices.displayed!!.expression.placements
+            .first { it.contentId == ids.first() }.crop)
+        assertEquals(1.02f, vm.cropCorrections.value.getValue(ids.first()).zoom)
+        assertTrue(vm.openCrop(ids.first()))
+        vm.updateCrop(1.1f, 2f, 3f)
+        assertTrue(vm.closeCrop())
+        assertEquals(1.02f, vm.cropCorrections.value.getValue(ids.first()).zoom)
+        assertEquals(savedWindow, vm.collageChoices.displayed!!.expression.placements
+            .first { it.contentId == ids.first() }.crop)
+        assertNull(vm.frozenCollageSelection)
     }
 
     @Test
@@ -663,7 +733,7 @@ class CreateComposeFlowTest {
         )
 
         assertNull(vm.cropSlot.value)
-        assertTrue(vm.cropCorrections.value.isEmpty())
+        assertEquals(1.02f, vm.cropCorrections.value.getValue(ids.first()).zoom)
         val frozen = requireNotNull(vm.frozenCollageSelection)
         assertNotEquals("the frozen identity must change with the corrected window", beforeId, frozen.candidateId)
         val expression = frozen.expression

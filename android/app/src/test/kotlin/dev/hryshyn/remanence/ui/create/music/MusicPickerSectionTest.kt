@@ -10,6 +10,9 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextClearance
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.hasTestTag
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hryshyn.remanence.core.data.network.MusicSearchPage
 import dev.hryshyn.remanence.core.data.network.MusicSearchResult
@@ -22,7 +25,7 @@ import org.robolectric.annotation.Config
 
 /**
  * S4: the picker renders in a release-compatible composition (no DEBUG
- * flag anywhere in this path), shows an honest attached-on-publish
+ * flag anywhere in this path), shows a compact optional selection
  * affordance, and supports select/replace/clear. The ViewModel bridge
  * (selection -> publish state) is covered by CreateMusicSelectionSessionTest.
  */
@@ -72,9 +75,10 @@ class MusicPickerSectionTest {
     fun pickerVisibleWithoutDebugFlag() {
         setSectionContent()
 
-        // No BuildConfig gate exists on this path anymore: the query field
-        // renders in a plain release-compatible composition.
+        // Music is optional. Searching must not expand the form until asked.
         composeRule.onNodeWithTag("music_section").assertIsDisplayed()
+        composeRule.onNodeWithTag("music_query").assertDoesNotExist()
+        composeRule.onNodeWithTag("music_add").performClick()
         composeRule.onNodeWithTag("music_query").assertIsDisplayed()
         composeRule.onNodeWithTag("music_idle").assertIsDisplayed()
     }
@@ -83,6 +87,7 @@ class MusicPickerSectionTest {
     fun searchSelectShowsAttachedAffordance() {
         setSectionContent()
 
+        composeRule.onNodeWithTag("music_add").performClick()
         composeRule.onNodeWithTag("music_query").performTextInput("505")
         composeRule.mainClock.advanceTimeBy(500L)
         composeRule.waitForIdle()
@@ -90,29 +95,38 @@ class MusicPickerSectionTest {
         composeRule.onNodeWithTag("music_hit_be30e36b-1111-4111-8111-000000000001").performClick()
 
         composeRule.onNodeWithTag("music_selection").assertIsDisplayed()
-        composeRule.onNodeWithText("Attached on publish: 505").assertIsDisplayed()
+        composeRule.onNodeWithText("505").assertIsDisplayed()
+        composeRule.onNodeWithTag("music_search_dialog").assertDoesNotExist()
     }
 
     @Test
     fun selectingAnotherHitReplacesSelection() {
         setSectionContent()
 
+        composeRule.onNodeWithTag("music_add").performClick()
         composeRule.onNodeWithTag("music_query").performTextInput("505")
         composeRule.mainClock.advanceTimeBy(500L)
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("music_hit_be30e36b-1111-4111-8111-000000000001").performClick()
-        composeRule.onNodeWithText("Attached on publish: 505").assertIsDisplayed()
+        composeRule.onNodeWithText("505").assertIsDisplayed()
         // The selection collapses the results: replacing it needs one
         // explicit new search first.
         composeRule.onNodeWithTag("music_change").performClick()
+        composeRule.onNodeWithTag("music_query").performTextClearance()
+        composeRule.onNodeWithTag("music_query").performTextInput("Arctic")
+        composeRule.mainClock.advanceTimeBy(500L)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("music_results")
+            .performScrollToNode(hasTestTag("music_hit_be30e36b-2222-4222-8222-000000000002"))
         composeRule.onNodeWithTag("music_hit_be30e36b-2222-4222-8222-000000000002").performClick()
-        composeRule.onNodeWithText("Attached on publish: Do I Wanna Know?").assertIsDisplayed()
+        composeRule.onNodeWithText("Do I Wanna Know?").assertIsDisplayed()
     }
 
     @Test
     fun clearRemovesSelection() {
         setSectionContent()
 
+        composeRule.onNodeWithTag("music_add").performClick()
         composeRule.onNodeWithTag("music_query").performTextInput("505")
         composeRule.mainClock.advanceTimeBy(500L)
         composeRule.waitForIdle()
@@ -121,5 +135,7 @@ class MusicPickerSectionTest {
         composeRule.onNodeWithTag("music_clear").performClick()
 
         assertTrue(composeRule.onAllNodesWithTag("music_selection").fetchSemanticsNodes().isEmpty())
+        composeRule.onNodeWithTag("music_add").assertIsDisplayed()
+        composeRule.onNodeWithTag("music_query").assertDoesNotExist()
     }
 }

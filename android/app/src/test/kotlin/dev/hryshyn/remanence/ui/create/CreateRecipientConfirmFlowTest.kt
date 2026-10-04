@@ -199,7 +199,7 @@ class CreateRecipientConfirmFlowTest {
 
         // The confirmation controls are REALLY rendered (was: blank screen).
         composeRule.onNodeWithTag("confirm_handle_text", useUnmergedTree = true).assertIsDisplayed()
-        composeRule.onNodeWithTag("confirm_account_cue_text").assertIsDisplayed()
+        composeRule.onNodeWithTag("confirm_account_cue_text", useUnmergedTree = true).assertIsDisplayed()
         composeRule.onNodeWithTag("confirm_ack_checkbox").assertDoesNotExist()
         composeRule.onNodeWithTag("confirm_button").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("cancel_button").assertIsDisplayed()

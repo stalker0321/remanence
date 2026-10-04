@@ -269,6 +269,7 @@ class CollageCropSourceHostTest {
         val vm = viewModel(originals)
         vm.beginSession(1L, senderUserUuid.toString())
         vm.onPhotosPicked(ids)
+        composeRule.waitUntil(10_000) { vm.generatorPreview.value is GeneratorPreviewState.Ready }
         val ready = vm.generatorPreview.value
         assertTrue("expected Ready, got $ready", ready is GeneratorPreviewState.Ready)
         ready as GeneratorPreviewState.Ready
@@ -290,8 +291,10 @@ class CollageCropSourceHostTest {
         composeRule.setContent {
             CollageChoiceHost(vm.collageChoices, ready.expression.input, ready.sources, null, null, source)
         }
+        composeRule.waitUntil(10_000) { !vm.collageChoices.isPreparing && vm.collageChoices.candidates.isNotEmpty() }
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("collage_select_hint").assertExists()
+        composeRule.onNodeWithTag("collage_select_hint").assertDoesNotExist()
+        composeRule.onNodeWithTag("collage_canvas").assertExists()
         composeRule.runOnIdle { vm.collageChoices.select(0) }
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("collage_canvas").assertExists()

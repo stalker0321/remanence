@@ -50,7 +50,7 @@ import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 
 /**
  * FIX-STATE-12 regression: THE production root hosts the REAL create surface.
- * The header (Back to Home) stays visible while the flow body receives only
+ * The flow's back/close header stays visible while its body receives only
  * the remaining height, and the body's bottom recovery actions stay reachable
  * by scrolling inside that bounded region on a small screen.
  */
@@ -151,7 +151,7 @@ class RootFlowLayoutTest {
     private fun context(): Context = ApplicationProvider.getApplicationContext()
 
     @Test
-    fun rootKeepsHeaderVisibleWhileFlowBodyScrollsItsRecoveryIntoView() {
+    fun rootKeepsHeaderAndCaptureRecoveryVisibleInBoundedViewport() {
         val vm = newCreateViewModel()
         // Straight to FRONT through legal recipient events.
         vm.onResolved(SelfSnapshots.self())
@@ -171,6 +171,7 @@ class RootFlowLayoutTest {
                             viewModel = vm,
                             adapterFactory = { FakeStillCameraAdapter().also { live.set(it) } },
                             requestPermissionOnAttach = false,
+                            onExit = { exited = true },
                         )
                     },
                     scanContent = {},
@@ -209,15 +210,11 @@ class RootFlowLayoutTest {
         composeRule.runOnIdle { live.get()?.emitReady() }
         composeRule.waitForIdle()
 
-        composeRule.scrollToTag("capture_shutter_front")
-        composeRule.onNodeWithTag("capture_shutter_front").performClick()
+        composeRule.onNodeWithTag("capture_shutter_front").assertIsDisplayed().performClick()
         composeRule.runOnIdle { live.get()!!.deliverFrame("frame".toByteArray()) }
         composeRule.waitForIdle()
 
-        // 3) The bottom recovery action is reachable by scrolling INSIDE the
-        // flow body, while the header stays visible at the same time.
-        composeRule.onNodeWithTag("create_screen_scroll")
-            .performScrollToNode(hasTestTag("capture_retake_front"))
+        // 3) Capture and recovery fit the bounded pane without scrolling.
 
         val viewportHeight = composeRule.onRoot().fetchSemanticsNode().boundsInRoot.height
         val retakeBounds = composeRule.onNodeWithTag("capture_retake_front")
@@ -230,18 +227,15 @@ class RootFlowLayoutTest {
 
         composeRule.onNodeWithTag("quality_reason_TOO_BLURRY").assertIsDisplayed()
 
-        // Header STILL displayed after all scrolling - it owns its own space,
+        // Header STILL displayed after the rejection - it owns its own space,
         // and its action actually exits the flow.
-        composeRule.onNodeWithText("Back to Home")
+        composeRule.onNodeWithTag("flow_exit_create")
             .assertIsDisplayed()
             .performClick()
         composeRule.runOnIdle { assertTrue("exit must fire", exited) }
 
     }
 
-    private fun androidx.compose.ui.test.junit4.ComposeTestRule.scrollToTag(tag: String) {
-        onNodeWithTag("create_screen_scroll").performScrollToNode(hasTestTag(tag))
-    }
 }
 
 private object SelfSnapshots {

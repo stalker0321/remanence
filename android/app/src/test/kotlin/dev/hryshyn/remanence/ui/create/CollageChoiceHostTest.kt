@@ -69,12 +69,27 @@ class CollageChoiceHostTest {
         music = null,
     )
 
-    private fun sources() = contentIds.map { GeneratorPreviewSource(it, collageChoiceJpeg(), 8, 8) }
+    // Source bytes and the crop provider have stable identities, just like
+    // the retained production preview. Recomposition must not restart work.
+    private val retainedSources by lazy {
+        contentIds.map { GeneratorPreviewSource(it, collageChoiceJpeg(), 8, 8) }
+    }
+    private fun sources() = retainedSources
 
-    private fun cropSource() = CollageCropSource { requests ->
-        requests.mapIndexed { index, request ->
-            request.contentId to GeneratorExpression.CropWindow(index * 100, 0, 5000, 10000)
-        }.toMap()
+    private val retainedCropSource by lazy {
+        CollageCropSource { requests ->
+            requests.mapIndexed { index, request ->
+                request.contentId to GeneratorExpression.CropWindow(index * 100, 0, 5000, 10000)
+            }.toMap()
+        }
+    }
+    private fun cropSource() = retainedCropSource
+
+    private fun awaitCandidates(session: CollageChoiceSession) {
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            !session.isPreparing && session.candidates.isNotEmpty()
+        }
+        composeRule.waitForIdle()
     }
 
     @Test
@@ -86,7 +101,7 @@ class CollageChoiceHostTest {
         composeRule.setContent {
             CollageChoiceHost(session, input, sources, null, null, crops)
         }
-        composeRule.waitForIdle()
+        awaitCandidates(session)
 
         // Ready candidates show the first sheet immediately; nothing is
         // selected or frozen by displaying it.
@@ -106,7 +121,7 @@ class CollageChoiceHostTest {
         composeRule.setContent {
             CollageChoiceHost(session, input, sources, null, null, crops)
         }
-        composeRule.waitForIdle()
+        awaitCandidates(session)
 
         composeRule.runOnIdle { session.select(0) }
         composeRule.waitForIdle()
@@ -122,7 +137,7 @@ class CollageChoiceHostTest {
                 CollageChoiceHost(session, input(), sources(), null, null, cropSource())
             }
         }
-        composeRule.waitForIdle()
+        awaitCandidates(session)
 
         // The displayed sheet is present without any explicit selection.
         composeRule.onNodeWithTag("collage_select_hint").assertDoesNotExist()
@@ -140,7 +155,7 @@ class CollageChoiceHostTest {
                 CollageChoiceHost(session, input(), sources(), null, null, cropSource())
             }
         }
-        composeRule.waitForIdle()
+        awaitCandidates(session)
 
         val first = renderedContentPixels()
         val firstNonPaper = first.count { it != paperOfDisplayed(session) }
@@ -297,12 +312,13 @@ class CollageChoiceHostTest {
         composeRule.waitForIdle()
         composeRule.runOnIdle { showHost = true }
         composeRule.waitForIdle()
-        // Retained report fires again before release (proof present).
-        composeRule.waitUntil(timeoutMillis = 10_000) { proofs.containsKey(firstId) }
-
-        // Release: equal rebuild clears proofs...
+        // Preparation invalidates retained candidates and proofs together.
+        assertTrue(session.isPreparing)
+        assertTrue(session.candidates.isEmpty())
+        assertTrue(proofs.isEmpty())
+        composeRule.onNodeWithTag("collage_select").assertDoesNotExist()
         composeRule.runOnIdle { gate.complete(Unit) }
-        composeRule.waitUntil(timeoutMillis = 10_000) { proofs.isEmpty() }
+        composeRule.waitUntil(timeoutMillis = 10_000) { session.candidates.isNotEmpty() }
         composeRule.waitForIdle()
 
         // ...value-equal candidates, same first id...
@@ -324,6 +340,7 @@ class CollageChoiceHostTest {
         composeRule.setContent {
             CollageChoiceHost(session, input, sources, null, null, unavailable)
         }
+        composeRule.waitUntil(timeoutMillis = 10_000) { !session.isPreparing && session.notice != null }
         composeRule.waitForIdle()
 
         composeRule.onNodeWithTag("collage_notice").assertExists()
@@ -343,7 +360,7 @@ class CollageChoiceHostTest {
                 onNavigate = { navigated += Unit },
             )
         }
-        composeRule.waitForIdle()
+        awaitCandidates(session)
 
         // The displayed first candidate can be frozen without prior browsing.
         composeRule.onNodeWithTag("collage_select").assertIsEnabled()
@@ -363,12 +380,12 @@ class CollageChoiceHostTest {
     }
 
     @Test
-    fun browseShowsCounterAndSelectedShowsLabel() {
+    fun standaloneHostKeepsBrowseCounterWhenOwnerSelects() {
         val session = CollageChoiceSession()
         composeRule.setContent {
             CollageChoiceHost(session, input(), sources(), null, null, cropSource())
         }
-        composeRule.waitForIdle()
+        awaitCandidates(session)
 
         // Browse state: N/total counter, no selected label.
         composeRule.onNodeWithTag("collage_nav_counter").assertExists()
@@ -377,16 +394,119 @@ class CollageChoiceHostTest {
         composeRule.runOnIdle { session.select(0) }
         composeRule.waitForIdle()
 
-        // Selected state: counter replaced by the selected label.
-        composeRule.onNodeWithTag("collage_selected_label").assertExists()
-        composeRule.onNodeWithTag("collage_nav_counter").assertDoesNotExist()
+        // Selection presentation belongs to the enclosing creation flow;
+        // the standalone host keeps its browse controls intact.
+        composeRule.onNodeWithTag("collage_selected_label").assertDoesNotExist()
+        composeRule.onNodeWithTag("collage_nav_counter").assertExists()
     }
 
     @Test
-    fun rejectedPrepareDisablesSelectAndShowsBlockedCopy() {
+    fun rejectedPrepareNeverEntersBrowseList() {
         // Hand-sealed V4 pulse band too narrow for its 57px cover: prepare
         // rejects deterministically with real fonts; Select must stay
         // disabled and onSelect must never fire.
+        val candidate = rejectedMusicCandidate()
+        val session = CollageChoiceSession()
+        val selected = mutableListOf<Int>()
+        val coverBytes = collageChoiceJpeg()
+        val coverBitmap = android.graphics.BitmapFactory
+            .decodeByteArray(coverBytes, 0, coverBytes.size).asImageBitmap()
+        val track = dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1.parse(
+            trackId = "be30e36b-1111-4111-8111-000000000001",
+            title = "Love",
+            artistDisplay = "MowMowMow",
+            version = null,
+            durationMs = 253000L,
+        )
+        composeRule.setContent {
+            CollageChoiceHost(
+                session, input(), sources(), null, track, cropSource(),
+                artworkBitmap = coverBitmap,
+                candidateBuilder = { listOf(candidate) },
+                onSelect = { selected += it },
+            )
+        }
+        composeRule.waitForIdle()
+        composeRule.waitUntil(10_000) { !session.isPreparing && session.notice != null }
+        assertTrue(session.candidates.isEmpty())
+        composeRule.onNodeWithTag("collage_notice").assertExists()
+        composeRule.onNodeWithTag("collage_canvas").assertDoesNotExist()
+        composeRule.onNodeWithTag("collage_select").assertDoesNotExist()
+        composeRule.waitForIdle()
+        assertTrue(selected.isEmpty())
+    }
+
+    @Test
+    fun smallViewportKeepsEntireCanvasInsideHorizontalBounds() {
+        val session = CollageChoiceSession()
+        composeRule.setContent {
+            Column(Modifier.width(320.dp).verticalScroll(rememberScrollState())) {
+                CollageChoiceHost(session, input(), sources(), null, null, cropSource())
+            }
+        }
+        awaitCandidates(session)
+
+        // The whole sheet fits the bounded width: no horizontal overflow,
+        // the canvas is fully inside the root (vertical scroll, not crop).
+        val bounds = composeRule.onNodeWithTag("collage_canvas").fetchSemanticsNode().boundsInRoot
+        val root = composeRule.onRoot().fetchSemanticsNode().boundsInRoot
+        assertTrue("canvas height must be > 0, was ${bounds.height}", bounds.height > 0f)
+        assertTrue(
+            "canvas must not overflow horizontally: $bounds not in $root",
+            bounds.left >= root.left - 1f && bounds.right <= root.right + 1f,
+        )
+    }
+
+    @Test
+    fun frozenCandidateIdRendersWhenProvided() {
+        val session = CollageChoiceSession()
+        composeRule.setContent {
+            CollageChoiceHost(
+                session, input(), sources(), null, null, cropSource(),
+                frozenCandidateId = { "ber1-frozen" },
+            )
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("collage_frozen").assertExists()
+    }
+
+    @Test
+    fun mixedBuildBrowsesOnlyCandidatesAcceptedByRealPrepare() {
+        val rejected = rejectedMusicCandidate()
+        val fittingExpression = rejected.expression.copy(
+            musicRegion = requireNotNull(rejected.expression.musicRegion).copy(width = 340),
+        )
+        val fitting = rejected.copy(
+            candidateId = dev.hryshyn.remanence.core.model.GeneratorBer1Provider.candidateIdFor(fittingExpression),
+            expression = fittingExpression,
+        )
+        val session = CollageChoiceSession()
+        val track = dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1.parse(
+            trackId = "be30e36b-1111-4111-8111-000000000001", title = "Love",
+            artistDisplay = "MowMowMow", version = null, durationMs = 253000L,
+        )
+        val cover = android.graphics.BitmapFactory.decodeByteArray(
+            collageChoiceJpeg(), 0, collageChoiceJpeg().size,
+        ).asImageBitmap()
+        val selected = mutableListOf<Int>()
+        composeRule.setContent {
+            CollageChoiceHost(
+                session, input(), sources(), null, track, cropSource(),
+                artworkBitmap = cover, candidateBuilder = { listOf(rejected, fitting) },
+                onSelect = { selected += it },
+            )
+        }
+        composeRule.waitUntil(10_000) { !session.isPreparing && session.candidates.isNotEmpty() }
+        composeRule.waitForIdle()
+        assertEquals(listOf(fitting.candidateId), session.candidates.map { it.candidateId })
+        composeRule.onNodeWithTag("collage_canvas").assertExists()
+        composeRule.onNodeWithTag("collage_notice").assertDoesNotExist()
+        composeRule.onNodeWithTag("collage_next").assertIsNotEnabled()
+        composeRule.onNodeWithTag("collage_select").assertIsEnabled().performClick()
+        assertEquals(listOf(0), selected)
+    }
+
+    private fun rejectedMusicCandidate(): dev.hryshyn.remanence.ui.collage.CollageCandidate {
         val style = requireNotNull(StyleRegistry.style("signal"))
         val expression = GeneratorExpression.ResolvedExpression(
             canvasVersion = 1,
@@ -427,74 +547,12 @@ class CollageChoiceHostTest {
             provenance = null,
             decor = null,
         )
-        val candidate = dev.hryshyn.remanence.ui.collage.CollageCandidate(
+        return dev.hryshyn.remanence.ui.collage.CollageCandidate(
             candidateId = dev.hryshyn.remanence.core.model.GeneratorBer1Provider.candidateIdFor(expression),
             styleId = "signal",
             branchId = "hinge",
             expression = expression,
         )
-        val session = CollageChoiceSession()
-        val selected = mutableListOf<Int>()
-        val coverBytes = collageChoiceJpeg()
-        val coverBitmap = android.graphics.BitmapFactory
-            .decodeByteArray(coverBytes, 0, coverBytes.size).asImageBitmap()
-        val track = dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1.parse(
-            trackId = "be30e36b-1111-4111-8111-000000000001",
-            title = "Love",
-            artistDisplay = "MowMowMow",
-            version = null,
-            durationMs = 253000L,
-        )
-        composeRule.setContent {
-            CollageChoiceHost(
-                session, input(), sources(), null, track, cropSource(),
-                artworkBitmap = coverBitmap,
-                onSelect = { selected += it },
-            )
-        }
-        composeRule.waitForIdle()
-        composeRule.runOnIdle { session.replaceCandidates(listOf(candidate)) }
-        composeRule.waitForIdle()
-
-        composeRule.onNodeWithTag("collage_preview_blocked").assertExists()
-        composeRule.onNodeWithTag("collage_select").assertIsNotEnabled()
-        composeRule.onNodeWithTag("collage_select").performClick()
-        composeRule.waitForIdle()
-        assertTrue(selected.isEmpty())
-    }
-
-    @Test
-    fun smallViewportKeepsEntireCanvasInsideHorizontalBounds() {
-        val session = CollageChoiceSession()
-        composeRule.setContent {
-            Column(Modifier.width(320.dp).verticalScroll(rememberScrollState())) {
-                CollageChoiceHost(session, input(), sources(), null, null, cropSource())
-            }
-        }
-        composeRule.waitForIdle()
-
-        // The whole sheet fits the bounded width: no horizontal overflow,
-        // the canvas is fully inside the root (vertical scroll, not crop).
-        val bounds = composeRule.onNodeWithTag("collage_canvas").fetchSemanticsNode().boundsInRoot
-        val root = composeRule.onRoot().fetchSemanticsNode().boundsInRoot
-        assertTrue("canvas height must be > 0, was ${bounds.height}", bounds.height > 0f)
-        assertTrue(
-            "canvas must not overflow horizontally: $bounds not in $root",
-            bounds.left >= root.left - 1f && bounds.right <= root.right + 1f,
-        )
-    }
-
-    @Test
-    fun frozenCandidateIdRendersWhenProvided() {
-        val session = CollageChoiceSession()
-        composeRule.setContent {
-            CollageChoiceHost(
-                session, input(), sources(), null, null, cropSource(),
-                frozenCandidateId = { "ber1-frozen" },
-            )
-        }
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag("collage_frozen").assertExists()
     }
 
     private fun renderedContentPixels(): IntArray {

@@ -283,6 +283,7 @@ private fun RootSurface(
             androidx.compose.runtime.key(createEpoch) {
                 CreateScreen(
                     viewModel = createViewModel,
+                    onExit = rootViewModel::returnToHome,
                     // Activity recreation disposes Compose while the root
                     // remains on Create. Only a stable route exit owns the
                     // Create session teardown; this preserves same-epoch

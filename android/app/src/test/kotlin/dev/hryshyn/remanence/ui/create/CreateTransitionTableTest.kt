@@ -473,6 +473,7 @@ class CreateTransitionTableTest {
     }
 
     @Test
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
     fun publishingFailureReturnsToContentPreservingInputsAndClearingStaging() = runBlocking {
         val front = ScriptedProcessor(ScriptedProcessor.Scripted.Accept(syntheticFingerprint(11, FingerprintSide.FRONT)))
         val (vm, persistence) = viewModel(front, identityProvider = { null })
@@ -481,6 +482,7 @@ class CreateTransitionTableTest {
         deliverFront(vm)
         repeat(3) { vm.photoSelection.toggle("content://keep/$it") }
         assertTrue(vm.noteEditor.onChange("still here"))
+        CollageFreezeFixture.freezeFirstCandidate(vm)
 
         assertTrue(vm.goToCompose())
         vm.startPublishing()

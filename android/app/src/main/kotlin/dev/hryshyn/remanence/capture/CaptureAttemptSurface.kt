@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -19,6 +18,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
 import dev.hryshyn.remanence.ui.hold.HoldButton as Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -30,6 +30,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -148,6 +150,12 @@ fun CaptureAttemptSurface(
      * controller's permission explicitly.
      */
     requestPermissionOnAttach: Boolean = true,
+    /** Sender layout can budget the camera from its actual remaining pane. */
+    previewMaxHeight: Dp? = null,
+    /** A caller-owned progression label; null preserves the scan shutter. */
+    shutterLabel: String? = null,
+    /** Sender instructions live above the camera in the frozen layout. */
+    showGuideInstruction: Boolean = true,
 ) {
     val context = LocalContext.current
 
@@ -230,6 +238,9 @@ fun CaptureAttemptSurface(
                 onRetake = onRetake,
                 adapterFactory = adapterFactory,
                 processingStill = processingStill,
+                previewMaxHeight = previewMaxHeight,
+                shutterLabel = shutterLabel,
+                showGuideInstruction = showGuideInstruction,
             )
         }
     }
@@ -245,6 +256,9 @@ private fun GrantedAttemptContent(
     onRetake: () -> Unit,
     adapterFactory: (() -> StillCameraAdapter)?,
     processingStill: ImageBitmap?,
+    previewMaxHeight: Dp?,
+    shutterLabel: String?,
+    showGuideInstruction: Boolean,
 ) {
     when (val phase = controller.phase) {
         is CaptureAttemptPhase.Rejected -> TerminalPanel(
@@ -275,7 +289,8 @@ private fun GrantedAttemptContent(
         // the frame proved undecodable (neutral fallback, same release). No
         // shutter action exists in this state, so no second capture can fire.
         CaptureAttemptPhase.Processing ->
-            ProcessingContent(still = processingStill, shutterTag = shutterTag)
+            ProcessingContent(still = processingStill, shutterTag = shutterTag,
+                previewMaxHeight = previewMaxHeight, shutterLabel = shutterLabel)
 
         else -> LivePreviewContent(
             controller = controller,
@@ -284,6 +299,9 @@ private fun GrantedAttemptContent(
             onBeginAttempt = onBeginAttempt,
             onDelivered = onDelivered,
             adapterFactory = adapterFactory,
+            previewMaxHeight = previewMaxHeight,
+            shutterLabel = shutterLabel,
+            showGuideInstruction = showGuideInstruction,
         )
     }
 }
@@ -296,6 +314,9 @@ private fun LivePreviewContent(
     onBeginAttempt: () -> Boolean,
     onDelivered: (ByteArray) -> Unit,
     adapterFactory: (() -> StillCameraAdapter)?,
+    previewMaxHeight: Dp?,
+    shutterLabel: String?,
+    showGuideInstruction: Boolean,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -333,12 +354,12 @@ private fun LivePreviewContent(
     }
 
     Column {
-        CaptureFrame(frameTag = "capture_preview") {
+        CaptureFrame(frameTag = "capture_preview", previewMaxHeight = previewMaxHeight) {
             // Composed in the SAME commit that created the adapter, before
             // the bind effect runs, so the hosted PreviewView always exists.
             adapter.preview(Modifier.matchParentSize())
             PostcardGuideOverlay(Modifier.matchParentSize())
-            Text(
+            if (showGuideInstruction) Text(
                 stringResource(R.string.hold_capture_guide_instruction),
                 style = MaterialTheme.typography.bodySmall,
                 color = Color.White,
@@ -349,7 +370,7 @@ private fun LivePreviewContent(
                     .testTag("postcard_guide_instruction"),
             )
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(if (shutterLabel != null) 18.dp else 8.dp))
         when (phase) {
             CaptureAttemptPhase.Binding ->
                 Text(
@@ -360,6 +381,7 @@ private fun LivePreviewContent(
             CaptureAttemptPhase.Ready -> ShutterButton(
                 tag = shutterTag,
                 enabled = true,
+                label = shutterLabel,
                 onClick = {
                     if (onBeginAttempt()) {
                         adapter.captureStill(
@@ -376,7 +398,7 @@ private fun LivePreviewContent(
                     modifier = Modifier.testTag("capture_capturing_status"),
                 )
                 Spacer(Modifier.height(8.dp))
-                ShutterButton(tag = shutterTag, enabled = false, onClick = {})
+                ShutterButton(tag = shutterTag, enabled = false, label = shutterLabel, onClick = {})
             }
 
             // Processing never reaches the live preview: GrantedAttemptContent
@@ -397,11 +419,12 @@ private fun LivePreviewContent(
 @Composable
 private fun CaptureFrame(
     frameTag: String?,
+    previewMaxHeight: Dp? = null,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val configuration = LocalConfiguration.current
     val screenHeight = configuration.screenHeightDp.dp
-    val effectiveMax = capturePreviewMaxHeight(screenHeight)
+    val effectiveMax = previewMaxHeight?.coerceAtLeast(1.dp) ?: capturePreviewMaxHeight(screenHeight)
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val targetAspectRatio = if (configuration.screenWidthDp < configuration.screenHeightDp) {
             PORTRAIT_PREVIEW_ASPECT_RATIO
@@ -414,13 +437,16 @@ private fun CaptureFrame(
             targetAspectRatio = targetAspectRatio,
         )
         Box(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(18.dp))
+                .background(Color(0xFFB0B5C4)),
             contentAlignment = Alignment.TopCenter,
         ) {
             Box(
                 modifier = Modifier
                     .width(preview.width)
                     .height(preview.height)
+                    .clip(RoundedCornerShape(18.dp))
                     .then(if (frameTag != null) Modifier.testTag(frameTag) else Modifier),
                 content = content,
             )
@@ -441,10 +467,12 @@ private fun CaptureFrame(
 private fun ProcessingContent(
     still: ImageBitmap?,
     shutterTag: String,
+    previewMaxHeight: Dp?,
+    shutterLabel: String?,
 ) {
     Column {
         if (still != null) {
-            CaptureFrame(frameTag = null) {
+            CaptureFrame(frameTag = null, previewMaxHeight = previewMaxHeight) {
                 // Fills the guaranteed area exactly like the live preview did.
                 Image(
                     bitmap = still,
@@ -462,7 +490,7 @@ private fun ProcessingContent(
             modifier = Modifier.testTag("capture_still_hold_copy"),
         )
         Spacer(Modifier.height(8.dp))
-        ProcessingStatus(shutterTag)
+        ProcessingStatus(shutterTag, shutterLabel)
     }
 }
 
@@ -478,32 +506,36 @@ private fun PostcardGuideOverlay(modifier: Modifier) {
         val top = (guide.top * size.height).toFloat()
         val right = (guide.right * size.width).toFloat()
         val bottom = (guide.bottom * size.height).toFloat()
-        // The dark under-stroke keeps the guide legible over both bright and
-        // dark camera content; the white line is the user-facing outline.
-        drawRect(
-            color = Color.Black.copy(alpha = 0.85f),
+        // Styling follows the frozen white rounded outline; its exact bounds
+        // still come from the recognition pipeline's shared guide geometry.
+        drawRoundRect(
+            color = Color.Black.copy(alpha = 0.12f),
             topLeft = androidx.compose.ui.geometry.Offset(left, top),
             size = androidx.compose.ui.geometry.Size(right - left, bottom - top),
-            style = Stroke(width = 7f),
+            cornerRadius = CornerRadius(10.dp.toPx()),
+            style = Stroke(width = 3.dp.toPx()),
         )
-        drawRect(
+        drawRoundRect(
             color = Color.White,
             topLeft = androidx.compose.ui.geometry.Offset(left, top),
             size = androidx.compose.ui.geometry.Size(right - left, bottom - top),
-            style = Stroke(width = 3f),
+            cornerRadius = CornerRadius(10.dp.toPx()),
+            style = Stroke(width = 2.dp.toPx()),
         )
     }
 }
 
 @Composable
-private fun ShutterButton(tag: String, enabled: Boolean, onClick: () -> Unit) {
+private fun ShutterButton(tag: String, enabled: Boolean, onClick: () -> Unit, label: String? = null) {
     Button(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth().testTag(tag)) {
-        Text(stringResource(R.string.hold_capture_shutter))
+        Text(label ?: stringResource(R.string.hold_capture_shutter),
+            modifier = if (label != null) Modifier.weight(1f) else Modifier)
+        if (label != null) Text("→", style = MaterialTheme.typography.titleLarge)
     }
 }
 
 @Composable
-private fun ProcessingStatus(shutterTag: String) {
+private fun ProcessingStatus(shutterTag: String, shutterLabel: String?) {
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
             CircularProgressIndicator(
@@ -514,7 +546,7 @@ private fun ProcessingStatus(shutterTag: String) {
             Text(stringResource(R.string.hold_capture_processing), modifier = Modifier.testTag("capture_processing_status"))
         }
         Spacer(Modifier.height(8.dp))
-        ShutterButton(tag = shutterTag, enabled = false, onClick = {})
+        ShutterButton(tag = shutterTag, enabled = false, label = shutterLabel, onClick = {})
     }
 }
 

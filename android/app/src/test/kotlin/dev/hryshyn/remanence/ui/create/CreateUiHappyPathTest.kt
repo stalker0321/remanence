@@ -8,8 +8,7 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollToNode
-import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.room.Room
@@ -184,7 +183,7 @@ class CreateUiHappyPathTest {
             openPhotoSource = { id ->
                 dev.hryshyn.remanence.create.PhotoSource {
                     java.io.ByteArrayInputStream(
-                        dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(id),
+                        happyPathOriginal(id),
                     )
                 }
             },
@@ -202,7 +201,7 @@ class CreateUiHappyPathTest {
                 openSource = { id ->
                     dev.hryshyn.remanence.create.PhotoSource {
                         java.io.ByteArrayInputStream(
-                            dev.hryshyn.remanence.create.memoryTestJpegForPhotoId(id),
+                            happyPathOriginal(id),
                         )
                     }
                 },
@@ -215,7 +214,7 @@ class CreateUiHappyPathTest {
                 },
                 normalizer = dev.hryshyn.remanence.create.PhotoNormalizerPort { bytes ->
                     val upright = dev.hryshyn.remanence.create.GeneratorExifDecoder.decodeUpright(bytes)
-                    dev.hryshyn.remanence.create.NormalizedPhotoDto(bytes, upright.widthPx, upright.heightPx)
+                    dev.hryshyn.remanence.create.NormalizedPhotoDto(bytes.copyOf(), upright.widthPx, upright.heightPx)
                 },
             ),
             cpuDispatcher = testDispatcher,
@@ -250,7 +249,11 @@ class CreateUiHappyPathTest {
         }
 
         fun scroll(tag: String) {
-            composeRule.onNodeWithTag("create_screen_scroll").performScrollToNode(hasTestTag(tag))
+            try {
+                composeRule.onNodeWithTag(tag).assertIsDisplayed()
+            } catch (_: AssertionError) {
+                composeRule.onNodeWithTag(tag).performScrollTo().assertIsDisplayed()
+            }
         }
 
         // 1) Lookup the recipient handle.
@@ -280,26 +283,24 @@ class CreateUiHappyPathTest {
         // Let the preview host measure the note and report the fitted plan.
         composeRule.waitForIdle()
 
-        // 5) The chooser mounts on the COMPOSE surface only: cross Next
-        // first, wait for the real candidates, then select and freeze.
+        // 5) Candidates are prepared while the content remains visible.
+        // Crossing Next must land on an already drawable expression.
         scroll("create_next")
         composeRule.onNodeWithTag("create_next")
             .assertIsEnabled()
             .performClick()
-        composeRule.runOnIdle { assertEquals(CreateViewModel.Step.COMPOSE, vm.step.value) }
         composeRule.waitUntil(timeoutMillis = 10_000) {
-            vm.collageChoices.candidates.isNotEmpty() || vm.collageChoices.notice != null
+            vm.step.value == CreateViewModel.Step.COMPOSE || vm.collageChoices.notice != null
         }
         assertTrue(
-            "candidates must arrive on COMPOSE, notice=${vm.collageChoices.notice} " +
+            "candidates must be ready before COMPOSE, notice=${vm.collageChoices.notice} " +
                 "preview=${vm.generatorPreview.value} cropSource=${vm.collageCropSource != null}",
             vm.collageChoices.candidates.isNotEmpty(),
         )
-        composeRule.runOnIdle {
-            CollageFreezeFixture.reportDrawable(vm, vm.collageChoices.candidates[0].candidateId)
-            assertTrue(vm.selectCollageCandidate(0))
-            assertTrue(vm.freezeCollageSelection())
-        }
+        composeRule.runOnIdle { assertEquals(CreateViewModel.Step.COMPOSE, vm.step.value) }
+        composeRule.onNodeWithTag("collage_select").assertIsDisplayed().performClick()
+        composeRule.runOnIdle { assertTrue(vm.frozenCollageSelection != null) }
+        composeRule.onNodeWithTag("create_compose_continue").assertIsDisplayed().performClick()
 
         // 6) Publish the frozen choice. On the bounded COMPOSE viewport the
         // footer is reachable without scrolling (B1 fit requirement).
@@ -332,6 +333,24 @@ class CreateUiHappyPathTest {
         // FRONT is the only baseline.
         assertEquals(1, persistence.stored.size)
         Unit
+    }
+
+    /** Real fixture dimensions match the shared 1000x1000 detector image. */
+    private fun happyPathOriginal(id: String): ByteArray {
+        val bitmap = android.graphics.Bitmap.createBitmap(1000, 1000, android.graphics.Bitmap.Config.ARGB_8888)
+        try {
+            bitmap.eraseColor(when (id) {
+                "u1" -> android.graphics.Color.rgb(180, 90, 60)
+                "u2" -> android.graphics.Color.rgb(60, 140, 160)
+                else -> android.graphics.Color.rgb(120, 90, 180)
+            })
+            return java.io.ByteArrayOutputStream().use { output ->
+                check(bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, output))
+                output.toByteArray()
+            }
+        } finally {
+            bitmap.recycle()
+        }
     }
 
     private fun stagingDir() =

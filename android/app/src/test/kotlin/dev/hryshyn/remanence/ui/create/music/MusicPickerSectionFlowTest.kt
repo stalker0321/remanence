@@ -66,6 +66,7 @@ class MusicPickerSectionFlowTest {
         val holder = arrayOfNulls<MusicPickerStateMachine>(1)
         show({ _, _, _ -> page(hit("id-1"), hit("id-2")) }, holder)
 
+        composeRule.onNodeWithTag("music_add").performClick()
         composeRule.onNodeWithTag("music_query").performTextInput("is this love")
         composeRule.mainClock.advanceTimeBy(1000)
         composeRule.onNodeWithTag("music_hit_id-1").performClick()
@@ -84,15 +85,19 @@ class MusicPickerSectionFlowTest {
         val holder = arrayOfNulls<MusicPickerStateMachine>(1)
         show({ _, _, _ -> page(hit("id-1")) }, holder)
 
+        composeRule.onNodeWithTag("music_add").performClick()
         composeRule.onNodeWithTag("music_query").performTextInput("is this love")
         composeRule.mainClock.advanceTimeBy(1000)
         composeRule.onNodeWithTag("music_hit_id-1").performClick()
         composeRule.onNodeWithTag("music_change").performClick()
 
         composeRule.onNodeWithTag("music_query").assertExists()
+        composeRule.onNodeWithTag("music_search_close").performClick()
+        assertEquals("id-1", holder[0]?.selection?.value?.id)
         composeRule.onNodeWithTag("music_clear").performClick()
 
-        composeRule.onNodeWithTag("music_query").assertExists()
+        composeRule.onNodeWithTag("music_query").assertDoesNotExist()
+        composeRule.onNodeWithTag("music_add").assertExists()
         composeRule.onNodeWithTag("music_selection").assertDoesNotExist()
         assertEquals(null, holder[0]?.selection?.value)
     }
@@ -105,6 +110,7 @@ class MusicPickerSectionFlowTest {
             if (query == "slow") gate.await() else page(hit("id-2"))
         }, holder)
 
+        composeRule.onNodeWithTag("music_add").performClick()
         composeRule.onNodeWithTag("music_query").performTextInput("slow")
         composeRule.mainClock.advanceTimeBy(1000)
         composeRule.onNodeWithTag("music_query").performTextClearance()

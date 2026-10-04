@@ -1,0 +1,9 @@
+<resources>
+    <string name="crop_photo_number">Фото %1$d</string>
+    <string name="crop_one_photograph">одна фотография</string>
+    <string name="crop_cancel">отмена</string>
+    <string name="crop_reset">сбросить</string>
+    <string name="crop_done">готово</string>
+    <string name="crop_original_photo">Исходное фото</string>
+    <string name="crop_gesture_hint">Перетаскивайте рамку. Меняйте масштаб щипком.</string>
+</resources>

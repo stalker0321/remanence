@@ -2,22 +2,22 @@ package dev.hryshyn.remanence.session
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hryshyn.remanence.ui.navigation.AppDestination
 import dev.hryshyn.remanence.ui.navigation.AuthUiState
+import dev.hryshyn.remanence.ui.hold.HoldFlowHeader
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 
 /**
- * T013 flow-header localization: THE production RootScreen chrome renders the
- * three header labels from `hold_*` resources in EN, RU and UK, keeps the
- * existing `flow_exit_*` / `flow_title_*` hooks, and changes no layout,
- * navigation or motion — only which locale the same labels resolve to.
+ * The frozen Create back/close controls and existing Scan chrome retain
+ * localized accessible names in EN, RU and UK.
  */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35])
@@ -30,8 +30,8 @@ class RootFlowHeaderLocalizationTest {
     fun englishCreateFlowHeaderKeepsTheAcceptedLabels() = assertHeader(
         destination = AppDestination.Create,
         testKey = "create",
-        exitLabel = "Back to Home",
-        titleLabel = "make a remanence",
+        exitLabel = "close",
+        titleLabel = "back",
     )
 
     @Test
@@ -47,8 +47,8 @@ class RootFlowHeaderLocalizationTest {
     fun russianCreateFlowHeaderRendersTranslatedLabels() = assertHeader(
         destination = AppDestination.Create,
         testKey = "create",
-        exitLabel = "Назад на главную",
-        titleLabel = "создать remanence",
+        exitLabel = "закрыть",
+        titleLabel = "назад",
     )
 
     @Test
@@ -65,8 +65,8 @@ class RootFlowHeaderLocalizationTest {
     fun ukrainianCreateFlowHeaderRendersTranslatedLabels() = assertHeader(
         destination = AppDestination.Create,
         testKey = "create",
-        exitLabel = "Назад на головну",
-        titleLabel = "створити remanence",
+        exitLabel = "закрити",
+        titleLabel = "назад",
     )
 
     @Test
@@ -91,13 +91,19 @@ class RootFlowHeaderLocalizationTest {
                     destination = destination,
                     authenticationContent = {},
                     homeContent = {},
-                    createContent = {},
+                    createContent = { HoldFlowHeader(onBack = {}, onClose = {}) },
                     scanContent = {},
                 )
             }
         }
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("flow_exit_$testKey").assertIsDisplayed()
+        if (destination == AppDestination.Create) {
+            composeRule.onNodeWithTag("flow_exit_create").assertContentDescriptionEquals(exitLabel)
+            composeRule.onNodeWithTag("flow_back_create").assertIsDisplayed().assertContentDescriptionEquals(titleLabel)
+            composeRule.onNodeWithTag("flow_title_create").assertDoesNotExist()
+            return
+        }
         composeRule.onNodeWithTag("flow_title_$testKey").assertIsDisplayed()
         composeRule.onNodeWithText(exitLabel).assertIsDisplayed()
         composeRule.onNodeWithText(titleLabel).assertIsDisplayed()

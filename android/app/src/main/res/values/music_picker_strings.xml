@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="music_picker_optional">music, if you like</string>
+    <string name="music_picker_add">add music</string>
+    <string name="music_picker_search_title">find music</string>
+    <string name="music_picker_search_hint">track or artist</string>
+    <string name="music_picker_idle">Search for a track or an artist.</string>
+    <string name="music_picker_loading">searching…</string>
+    <string name="music_picker_results">found: %1$d</string>
+    <string name="music_picker_empty">No tracks found. Try another title or artist.</string>
+    <string name="music_picker_unavailable">Music search is temporarily unavailable.</string>
+    <string name="music_picker_rate_limited">Please wait a moment before searching again.</string>
+    <string name="music_picker_auth_invalid">Sign in again to search for music.</string>
+    <string name="music_picker_validation_failed">Try a different search.</string>
+    <string name="music_picker_error">The search did not finish. Try again.</string>
+</resources>

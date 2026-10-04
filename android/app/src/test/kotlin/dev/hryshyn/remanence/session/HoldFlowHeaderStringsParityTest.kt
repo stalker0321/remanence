@@ -10,14 +10,8 @@ import org.junit.Test
 import org.w3c.dom.Element
 
 /**
- * Bounded resource-contract check for the Astra flow-header chrome (T013): the
- * three FlowHeader labels — create-flow title, scan-flow title and the exit
- * action — resolve to `hold_*` keys that exist in EN, RU and UK with non-blank
- * and actually translated values, every one of them is referenced by
- * `RootScreen.kt`, and the English literals the fidelity audit flagged are no
- * longer present there. It reads the real `hold_strings.xml` files and the real
- * source, so a dropped translation, a dead key or a reintroduced literal fails
- * here without pinning copy text.
+ * Flow controls use actual, translated resource keys in every supported
+ * locale. Create owns its arrow/close bar; Scan still uses the root bar.
  */
 class HoldFlowHeaderStringsParityTest {
 
@@ -36,12 +30,13 @@ class HoldFlowHeaderStringsParityTest {
             assertNotEquals("UK $key still carries the English value", en.getValue(key), uk.getValue(key))
         }
 
-        val source = moduleFile("src/main/kotlin/dev/hryshyn/remanence/session/RootScreen.kt").readText()
+        val source = moduleFile("src/main/kotlin/dev/hryshyn/remanence/session/RootScreen.kt").readText() +
+            moduleFile("src/main/kotlin/dev/hryshyn/remanence/ui/hold/HoldComponents.kt").readText()
         for (literal in HARDCODED_FLOW_HEADER_LABELS) {
             assertFalse("RootScreen.kt hardcodes \"$literal\"", source.contains("\"$literal\""))
         }
         for (key in FLOW_HEADER_LABEL_KEYS) {
-            assertTrue("$key is not referenced by RootScreen.kt", source.contains("R.string.$key"))
+            assertTrue("$key is not referenced by flow chrome", source.contains("R.string.$key"))
         }
     }
 
@@ -81,7 +76,7 @@ class HoldFlowHeaderStringsParityTest {
     }
 
     private companion object {
-        val FLOW_HEADER_LABEL_KEYS = listOf("hold_make", "hold_scan", "hold_back_to_home")
+        val FLOW_HEADER_LABEL_KEYS = listOf("hold_back", "hold_close", "hold_scan", "hold_back_to_home")
         val HARDCODED_FLOW_HEADER_LABELS = listOf("Create", "Scan", "Back to Home")
     }
 }

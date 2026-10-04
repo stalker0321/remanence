@@ -453,6 +453,7 @@ class CreateRecipientBindingFailClosedTest {
     fun malformedRecipientKeyMaterialFailsClosedAndCleansUpStaging() = runBlocking {
         val vm = viewModel()
         driveToContent(vm, malformedKeySnapshot())
+        CollageFreezeFixture.freezeFirstCandidate(vm)
         val capsuleId = vm.capsuleId
         assertNotNull(vm.confirmedRecipient.value)
 

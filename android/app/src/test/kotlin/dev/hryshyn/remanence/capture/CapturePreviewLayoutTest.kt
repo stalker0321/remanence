@@ -9,8 +9,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.util.concurrent.atomic.AtomicReference
@@ -93,6 +96,27 @@ class CapturePreviewLayoutTest {
         assertEquals(520f, capped.height.value, 0.001f)
     }
 
+    @Test
+    fun senderUsesRemainingHeightAndItsProgressionLabel() {
+        val bounds = mountSurface(
+            screenWidthDp = 360,
+            screenHeightDp = 800,
+            hostWidthDp = 360,
+            hostHeightDp = 400,
+            previewMaxHeight = 240.dp,
+            shutterLabel = "use this postcard",
+            showGuideInstruction = false,
+        )
+
+        composeRule.onNodeWithTag("capture_preview").assertHeightIsEqualTo(240.dp)
+        composeRule.onNodeWithTag("capture_test_shutter").assertIsDisplayed()
+        composeRule.onNodeWithText("use this postcard").assertIsDisplayed()
+        composeRule.onNodeWithTag("postcard_guide_instruction").assertDoesNotExist()
+        assertRatio(bounds.preview.width, bounds.preview.height, 3f / 4f)
+        assertSameBounds(bounds.preview, bounds.guide)
+        assertSameBounds(bounds.preview, bounds.camera)
+    }
+
     private data class SurfaceBounds(
         val preview: androidx.compose.ui.geometry.Rect,
         val guide: androidx.compose.ui.geometry.Rect,
@@ -104,6 +128,9 @@ class CapturePreviewLayoutTest {
         screenHeightDp: Int,
         hostWidthDp: Int,
         hostHeightDp: Int,
+        previewMaxHeight: Dp? = null,
+        shutterLabel: String? = null,
+        showGuideInstruction: Boolean = true,
     ): SurfaceBounds {
         val controller = CaptureAttemptController()
         val live = AtomicReference<FakeStillCameraAdapter?>(null)
@@ -129,6 +156,9 @@ class CapturePreviewLayoutTest {
                             onRetake = {},
                             adapterFactory = { FakeStillCameraAdapter().also { live.set(it) } },
                             requestPermissionOnAttach = false,
+                            previewMaxHeight = previewMaxHeight,
+                            shutterLabel = shutterLabel,
+                            showGuideInstruction = showGuideInstruction,
                         )
                     }
                 }

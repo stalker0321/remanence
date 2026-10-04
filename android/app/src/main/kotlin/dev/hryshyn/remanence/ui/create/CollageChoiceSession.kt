@@ -40,6 +40,20 @@ class CollageChoiceSession {
     var notice: String? by mutableStateOf(null)
         private set
 
+    var isPreparing: Boolean by mutableStateOf(false)
+        private set
+
+    private var preparationGeneration = 0L
+
+    fun isCurrentPreparation(generation: Long): Boolean = preparationGeneration == generation
+
+    fun beginPreparing(): Long {
+        clear()
+        isPreparing = true
+        onCandidatesReplaced?.invoke()
+        return preparationGeneration
+    }
+
     /**
      * Monotonic fresh-build generation, incremented on every
      * [replaceCandidates] (and only there — in-place
@@ -64,6 +78,7 @@ class CollageChoiceSession {
     /** A fresh build resets the browse cursor to the first candidate and drops
      *  any explicit selection; it never auto-freezes. */
     fun replaceCandidates(built: List<CollageCandidate>) {
+        isPreparing = false
         candidates = built
         displayIndex = 0
         selectedIndex = null
@@ -73,6 +88,7 @@ class CollageChoiceSession {
     }
 
     fun showNotice(reason: String) {
+        isPreparing = false
         candidates = emptyList()
         displayIndex = 0
         selectedIndex = null
@@ -84,6 +100,11 @@ class CollageChoiceSession {
         if (index !in candidates.indices) return false
         selectedIndex = index
         return true
+    }
+
+    /** Return to browsing the same expression without retaining a selection. */
+    fun clearSelection() {
+        selectedIndex = null
     }
 
     /**
@@ -111,6 +132,8 @@ class CollageChoiceSession {
 
     /** Source/note/music edit invalidation: drops candidates and selection. */
     fun clear() {
+        preparationGeneration += 1
+        isPreparing = false
         candidates = emptyList()
         displayIndex = 0
         selectedIndex = null

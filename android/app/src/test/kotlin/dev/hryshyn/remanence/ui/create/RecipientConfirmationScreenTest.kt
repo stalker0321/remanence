@@ -57,10 +57,12 @@ class RecipientConfirmationScreenTest {
     fun showsHandleAndNonIdAccountCue() {
         setContent()
         composeRule.onNodeWithTag("confirm_handle_text", useUnmergedTree = true).assertIsDisplayed()
-        // The cue is handle-anchored, never a raw user/key UUID: the
-        // immutable binding travels in the confirmed snapshot, not UI text.
-        composeRule.onNodeWithTag("confirm_account_cue_text").assertTextEquals("For @mykola")
-        val cue = composeRule.onNodeWithTag("confirm_account_cue_text")
+        // The frozen card labels the resolved handle without exposing an ID.
+        composeRule.onNodeWithTag("confirm_account_cue_text", useUnmergedTree = true)
+            .assertTextEquals("their handle")
+        composeRule.onNodeWithTag("confirm_handle_text", useUnmergedTree = true)
+            .assertTextEquals("@mykola")
+        val cue = composeRule.onNodeWithTag("confirm_button")
             .fetchSemanticsNode().let { node ->
                 node.config.toString()
             }
@@ -94,9 +96,7 @@ class RecipientConfirmationScreenTest {
         val cancellations = mutableListOf<Int>()
         setContent(confirmations, cancellations)
 
-        // First press runs the 110 ms press hold, fires, and must release
-        // the internal activating state — otherwise the surface stays
-        // disabled (e.g. when a callback throws; see HoldActionObject).
+        // Press feedback must never gate or disable the explicit action.
         composeRule.onNodeWithTag("confirm_button").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("confirm_button").performClick()
         composeRule.waitUntil(timeoutMillis = 2_000) { confirmations.size == 1 }

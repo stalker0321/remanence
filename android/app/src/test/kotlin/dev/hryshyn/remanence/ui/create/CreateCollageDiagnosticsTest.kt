@@ -215,6 +215,7 @@ class CreateCollageDiagnosticsTest {
             normalizer = PhotoNormalizerPort { _ ->
                 NormalizedPhotoDto(byteArrayOf(9, 8, 7), 100, 100)
             },
+            workerDispatcher = testDispatcher,
         )
     }
 

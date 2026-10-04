@@ -2,11 +2,10 @@ package dev.hryshyn.remanence.ui.create.music
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.graphics.ImageBitmap
 import dev.hryshyn.remanence.core.data.network.MusicSearchResult
 import dev.hryshyn.remanence.core.data.network.MusicTrackHit
 
@@ -19,7 +18,7 @@ import dev.hryshyn.remanence.core.data.network.MusicTrackHit
  * [onClearSelection] sinks. There is deliberately no selection-flow
  * bridge: a recreated machine seeds its display from [vmSelection] and
  * can never write a silent null back (the S4 STOP bug class). The reverse
- * sync below only clears stale UI display when the owner cleared — it
+ * sync below reflects an owner selection restored or cleared elsewhere — it
  * never touches owner state.
  */
 @Composable
@@ -29,6 +28,7 @@ fun MusicPickerContent(
     onSelect: (MusicTrackHit) -> Unit,
     onClearSelection: () -> Unit,
     modifier: Modifier = Modifier,
+    selectedArtwork: ImageBitmap? = null,
 ) {
     val scope = rememberCoroutineScope()
     val machine = remember {
@@ -37,6 +37,7 @@ fun MusicPickerContent(
     MusicPickerSection(
         state = machine,
         modifier = modifier,
+        selectedArtwork = selectedArtwork,
         onSelect = { hit ->
             machine.onSelect(hit)
             onSelect(hit)
@@ -49,6 +50,8 @@ fun MusicPickerContent(
     LaunchedEffect(vmSelection) {
         if (vmSelection == null) {
             machine.onClearSelection()
+        } else if (machine.selection.value != vmSelection) {
+            machine.onSelect(vmSelection)
         }
     }
 }

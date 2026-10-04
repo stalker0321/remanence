@@ -327,10 +327,14 @@ class CreateViewModel(
      * and a resolved finish additionally publishes the preview bitmap decoded
      * from the verified bytes. Stale epochs publish nothing.
      */
+    var isResolvingMusicArtwork: Boolean by mutableStateOf(false)
+        private set
+
     private fun startMusicArtworkResolution(
         hit: dev.hryshyn.remanence.core.data.network.MusicTrackHit?,
     ) {
         val epoch = ++musicArtworkEpoch
+        isResolvingMusicArtwork = false
         _musicArtwork.value = null
         _musicArtworkReason.value = null
         _musicArtworkBitmap.value = null
@@ -347,6 +351,7 @@ class CreateViewModel(
                 )
                 return
             }
+        isResolvingMusicArtwork = true
         viewModelScope.launch {
             val outcome = try {
                 resolver.resolveOutcome(recordingMbid)
@@ -358,8 +363,15 @@ class CreateViewModel(
                 )
             }
             if (epoch == musicArtworkEpoch) {
+                isResolvingMusicArtwork = false
                 when (outcome) {
                     is dev.hryshyn.remanence.core.data.network.MusicArtworkResolution.Resolved -> {
+                        if (_musicArtwork.value != outcome.artwork) {
+                            collageChoices.clear()
+                            frozenCollageSelection = null
+                            clearDrawableProofs()
+                            clearCropState()
+                        }
                         _musicArtwork.value = outcome.artwork
                         _musicArtworkReason.value =
                             dev.hryshyn.remanence.core.data.network.MusicArtworkReason.RESOLVED
@@ -411,6 +423,7 @@ class CreateViewModel(
         note = noteEditor.text.takeIf { it.isNotEmpty() },
         trackId = collageChooserTrackFor(_musicSelection.value)?.trackId?.toString(),
         artworkSize = _musicArtworkBitmap.value?.let { "${it.width}x${it.height}" },
+        artwork = _musicArtwork.value,
     )
 
     /** Positive Ready inputs by candidate id (equality-checked on every use). */
@@ -472,24 +485,19 @@ class CreateViewModel(
      * only the display refocuses on the newly displayed candidate.
      */
     fun clearFrozenCollageSelection() {
+        collageChoices.clearSelection()
         frozenCollageSelection = null
         frozenDrawableInputs = null
         refreshCropDisplay()
     }
 
     // ---------------------------------------------------------------------
-    // T150 real crop (Astra guide rows 29/41, T155 contract, T157 math):
-    // per-(candidate, slot, contentId) transforms owned by create state.
-    // Stored entries persist across browse-away/back; Done applies the
-    // displayed candidate's entries through
-    // [FixedFrameCropCorrection.correct] (SAME shared cached analysis)
-    // into a NEW authored expression + frozen hash. Any rejection fails
-    // closed: the uncorrected candidate stands, entries are kept for
-    // adjustment. Content/owner edits drop the whole store; candidate
-    // navigation never does.
+    // Manual crop state is keyed by candidate, slot and content. Done saves
+    // the exact source window through the shared safety analysis. Saved crops
+    // survive browsing; Back discards the open draft. Content edits clear both.
     // ---------------------------------------------------------------------
 
-    /** Fixed-frame correction display values for one photo. */
+    /** Source-window correction relative to the original solver crop. */
     data class CropCorrection(
         val contentId: String,
         val zoom: Float,
@@ -532,9 +540,30 @@ class CreateViewModel(
     /** Candidate identity the open crop stage was opened against. */
     private var cropSlotCandidateId: String? = null
 
+    // Keep the original solver window across successive edits. Reopening a
+    // saved crop must still allow zooming out and Reset to the original frame.
+    private var cropBases = emptyMap<dev.hryshyn.remanence.ui.collage.CorrectionKey, GeneratorExpression.CropWindow>()
+    private var cropEntryTransform: dev.hryshyn.remanence.ui.collage.CropTransform? = null
+
+    private fun restoreCropDraft() {
+        val candidateId = cropSlotCandidateId ?: return
+        val contentId = _cropSlot.value ?: return
+        val candidate = collageChoices.candidates.firstOrNull { it.candidateId == candidateId } ?: return
+        val key = cropKeyFor(candidate, contentId) ?: return
+        val entry = cropEntryTransform
+        _cropTransforms.value = if (entry == null) _cropTransforms.value - key
+            else _cropTransforms.value + (key to entry)
+    }
+
     /** Refreshes the display map from the keyed store for the displayed candidate. */
     private fun refreshCropDisplay() {
         val candidate = collageChoices.displayed
+        if (_cropSlot.value != null && candidate?.candidateId != cropSlotCandidateId) {
+            restoreCropDraft()
+            _cropSlot.value = null
+            cropSlotCandidateId = null
+            cropEntryTransform = null
+        }
         val display = LinkedHashMap<String, CropCorrection>()
         if (candidate != null) {
             for ((key, transform) in _cropTransforms.value) {
@@ -571,22 +600,17 @@ class CreateViewModel(
         val baseCrop: GeneratorExpression.CropWindow?,
     )
 
-    /**
-     * The displayed candidate's slot geometry for [contentId], or `null` when
-     * no candidate is displayed / the photo is not a slot of it. Reads the
-     * explicit highlight, which [openCrop] proves identical to the displayed
-     * sheet before any stage opens, so the frame can never come from another
-     * candidate.
-     */
+    /** Geometry belongs to the displayed candidate even before selection. */
     fun cropSlotGeometry(contentId: String): CropSlotGeometry? {
-        val placement = collageChoices.selected?.expression?.placements
-            ?.firstOrNull { it.contentId == contentId } ?: return null
+        val candidate = collageChoices.displayed ?: return null
+        val placement = candidate.expression.placements
+            .firstOrNull { it.contentId == contentId } ?: return null
         val aspect = if (placement.height > 0) {
             placement.width.toFloat() / placement.height.toFloat()
         } else {
             return null
         }
-        return CropSlotGeometry(aspect, placement.crop)
+        return CropSlotGeometry(aspect, cropKeyFor(candidate, contentId)?.let(cropBases::get) ?: placement.crop)
     }
 
     /**
@@ -685,142 +709,130 @@ class CreateViewModel(
     /** Opens the crop stage for one photo of the DISPLAYED candidate. */
     fun openCrop(contentId: String): Boolean {
         if (_step.value != Step.COMPOSE) return false
-        val candidate = collageChoices.selected
+        val candidate = collageChoices.displayed
         if (candidate == null) {
-            // Frozen ordering (Astra `model.mjs:15` "select one, then tap a
-            // photograph"): browsing alone never opens the stage.
-            failGuard("crop needs a selected candidate")
+            failGuard("crop needs a displayed candidate")
             return false
         }
-        // Same-candidate proof: the stage frame and base window below come
-        // from `selected`, so refuse unless it IS the displayed sheet.
-        // Structurally `selected != null` already implies equality (Select
-        // targets the display cursor and browse nulls the highlight), but
-        // this gate proves it instead of trusting the invariant.
-        val displayed = collageChoices.displayed
-        if (displayed == null || displayed.candidateId != candidate.candidateId) {
-            failGuard("crop needs the displayed candidate")
-            return false
-        }
-        if (candidate.expression.placements.none { it.contentId == contentId }) {
+        val key = cropKeyFor(candidate, contentId)
+        val placement = key?.let { candidate.expression.placements.getOrNull(it.slot) }
+        val initialCrop = placement?.crop
+        if (key == null || initialCrop == null) {
             failGuard("crop needs a current preview photo")
             return false
         }
+        if (_cropSlot.value == contentId && cropSlotCandidateId == candidate.candidateId) return true
+        closeCrop()
+        cropBases = cropBases + (key to (cropBases[key] ?: initialCrop))
+        cropEntryTransform = _cropTransforms.value[key]
         _cropSlot.value = contentId
         cropSlotCandidateId = candidate.candidateId
+        _flowError.value = null
         return true
     }
 
-    /**
-     * Edits the open slot's correction through the accepted T157 clamp
-     * ([FixedFrameCropCorrection.clampTransform]: zoom 1..1.25, pan within
-     * (zoom-1)*50; non-finite input is dropped). Silent no-op unless a slot
-     * is open. Never touches sealed geometry.
-     */
+    /** Moves the draft frame within the original photo; never changes sealed geometry. */
     fun updateCrop(zoom: Float, panX: Float, panY: Float) {
         val slot = _cropSlot.value ?: return
-        val candidate = collageChoices.selected ?: return
+        val candidate = collageChoices.displayed?.takeIf { it.candidateId == cropSlotCandidateId } ?: return
         val key = cropKeyFor(candidate, slot) ?: return
-        val clamped = dev.hryshyn.remanence.ui.collage.FixedFrameCropCorrection
-            .clampTransform(zoom.toDouble(), panX.toDouble(), panY.toDouble()) ?: return
+        val base = cropBases[key]?.let {
+            dev.hryshyn.remanence.ui.collage.FixedFrameCropCorrection.normalizedCrop(it)
+        } ?: return
+        val clamped = CropEditorGeometry.clamp(base,
+            dev.hryshyn.remanence.ui.collage.CropTransform(zoom.toDouble(), panX.toDouble(), panY.toDouble())) ?: return
         _cropTransforms.value = _cropTransforms.value + (key to clamped)
+        _flowError.value = null
         refreshCropDisplay()
     }
 
-    /** Resets the open slot to identity (keyed entry removed). */
+    /** Resets the draft to the original solver window. Done is still required. */
     fun resetCrop() {
         val slot = _cropSlot.value ?: return
-        val candidate = collageChoices.selected
+        val candidate = collageChoices.displayed?.takeIf { it.candidateId == cropSlotCandidateId }
         val key = candidate?.let { cropKeyFor(it, slot) }
         if (key != null) {
-            _cropTransforms.value = _cropTransforms.value - key
+            _cropTransforms.value = _cropTransforms.value +
+                (key to dev.hryshyn.remanence.ui.collage.CropTransform(1.0, 0.0, 0.0))
         }
+        _flowError.value = null
         refreshCropDisplay()
     }
 
-    /** Closes the crop stage (Back); stored entries are preserved. */
+    /** Cancel restores the last saved crop; only Done commits a draft. */
     fun closeCrop(): Boolean {
         if (_cropSlot.value == null) return false
+        restoreCropDraft()
         _cropSlot.value = null
         cropSlotCandidateId = null
+        cropEntryTransform = null
+        _flowError.value = null
+        refreshCropDisplay()
         return true
     }
 
-    /**
-     * Done: applies the displayed candidate's stored entries through the
-     * safe correction ([FixedFrameCropCorrection.correct] with the SAME
-     * shared cached analysis), quantizes/validates, authors a NEW
-     * expression, swaps it into the session, selects and freezes it (new
-     * frozen hash), consumes the applied entries and closes the stage.
-     * Any rejection fails closed: the uncorrected candidate stands, the
-     * entries are kept for adjustment, the stage stays open with a
-     * visible reason.
-     */
+    /** Saves this photo's frame without turning browsing into a selection. */
     suspend fun applyCropAndClose(): Boolean {
-        val slot = _cropSlot.value
-        val candidate = collageChoices.selected
-        if (slot == null || candidate == null) {
-            closeCrop()
-            return false
-        }
-        val keys = _cropTransforms.value.keys.filter { keyMatchesCandidate(it, candidate) }
-        if (keys.isEmpty()) {
+        val slot = _cropSlot.value ?: return false
+        val candidate = collageChoices.displayed?.takeIf { it.candidateId == cropSlotCandidateId } ?: return false
+        val key = cropKeyFor(candidate, slot) ?: return false
+        val transform = _cropTransforms.value[key]
+        if (transform == null) {
             closeCrop()
             return true
+        }
+        // Prove all live text/music inputs BEFORE replacing any candidate.
+        val priorProof = drawableInputs[candidate.candidateId]
+        if (priorProof == null || priorProof != prepareInputs()) {
+            failGuard("candidate is not drawable")
+            return false
         }
         val cropSource = collageCropSource
         if (cropSource == null) {
             failGuard("crop needs the production crop source")
             return false
         }
-        val analyses = cropSource.analysisSource()
-        var placements = candidate.expression.placements
-        for (key in keys) {
-            val placement = placements.getOrNull(key.slot)
-            if (placement == null || placement.contentId != key.contentId) {
-                _cropTransforms.value = _cropTransforms.value - key
-                continue
-            }
-            val transform = _cropTransforms.value.getValue(key)
-            val base = placement.crop?.let {
-                dev.hryshyn.remanence.ui.collage.FixedFrameCropCorrection.normalizedCrop(it)
-            }
-            if (base == null) {
-                failGuard("crop needs an approved base window")
-                return false
-            }
-            val analysis = analyses.analysisFor(key.contentId)
-            if (analysis == null) {
-                failGuard("crop analysis is unavailable")
-                return false
-            }
-            val outcome = dev.hryshyn.remanence.ui.collage.FixedFrameCropCorrection.correct(
-                baseCrop = base,
-                slot = dev.hryshyn.remanence.ui.collage.Envelope50CropSolver.Slot(
-                    width = placement.width.toDouble(),
-                    height = placement.height.toDouble(),
-                    // F1 (peer-crop-integration): the corrected window is
-                    // re-classified under the placement's OWN aperture shape.
-                    // Defaulting to "rect" would waive the frozen round/ellipse
-                    // mask safety for V4 placements (grammar 11 interlock).
-                    shape = placement.shape.name.lowercase(),
-                ),
-                sourceWidth = analysis.width,
-                sourceHeight = analysis.height,
-                transform = transform,
-                analysis = analysis,
-            )
-            val window = outcome.window
-            if (window == null) {
-                val reason = outcome.geometryReject?.name ?: outcome.safetyReject?.name
-                failGuard("crop refused: ${reason ?: "unsafe correction"}")
-                return false
-            }
-            placements = placements.toMutableList().also { list ->
-                list[key.slot] = placement.copy(
-                    crop = window.toCropWindow(),
-                )
-            }
+        val placement = candidate.expression.placements[key.slot]
+        val base = cropBases[key]?.let {
+            dev.hryshyn.remanence.ui.collage.FixedFrameCropCorrection.normalizedCrop(it)
+        } ?: return false
+        val requested = CropEditorGeometry.window(base, transform) ?: return false
+        val analysis = cropSource.analysisSource().analysisFor(slot)
+        // Cached analysis may suspend. A cancelled editor or changed content
+        // must never receive its stale result.
+        if (_step.value != Step.COMPOSE || _cropSlot.value != slot ||
+            cropSlotCandidateId != candidate.candidateId ||
+            collageChoices.displayed?.candidateId != candidate.candidateId ||
+            _cropTransforms.value[key] != transform || prepareInputs() != priorProof
+        ) return false
+        if (analysis == null) {
+            failGuard("crop analysis is unavailable")
+            return false
+        }
+        // Quantize first and classify the exact window the renderer will use.
+        // Identity here deliberately validates a manually positioned frame;
+        // source bounds, slot aspect, mask/face/field and resolution gates are
+        // all the same gates used by the existing correction path.
+        val quantized = requested.toCropWindow()
+        val sealedWindow = dev.hryshyn.remanence.ui.collage.FixedFrameCropCorrection.normalizedCrop(quantized)
+            ?: return false
+        val outcome = dev.hryshyn.remanence.ui.collage.FixedFrameCropCorrection.correct(
+            baseCrop = sealedWindow,
+            slot = dev.hryshyn.remanence.ui.collage.Envelope50CropSolver.Slot(
+                width = placement.width.toDouble(), height = placement.height.toDouble(),
+                shape = placement.shape.name.lowercase(),
+            ),
+            sourceWidth = analysis.width, sourceHeight = analysis.height,
+            transform = dev.hryshyn.remanence.ui.collage.CropTransform(1.0, 0.0, 0.0),
+            analysis = analysis,
+        )
+        if (!outcome.accepted) {
+            val reason = outcome.geometryReject?.name ?: outcome.safetyReject?.name
+            failGuard("crop refused: ${reason ?: "unsafe correction"}")
+            return false
+        }
+        val placements = candidate.expression.placements.toMutableList().also {
+            it[key.slot] = placement.copy(crop = quantized)
         }
         val corrected = candidate.expression.copy(placements = placements)
         if (dev.hryshyn.remanence.core.model.GeneratorExpression.validateResolved(corrected)
@@ -836,37 +848,41 @@ class CreateViewModel(
         }
         val correctedId = dev.hryshyn.remanence.core.model.GeneratorBer1Provider
             .candidateIdFor(corrected)
-        if (!collageChoices.replaceCandidate(index, candidate.copy(candidateId = correctedId, expression = corrected))) {
+        val replacement = candidate.copy(candidateId = correctedId, expression = corrected)
+        val wasSelected = collageChoices.selected?.candidateId == candidate.candidateId
+        val updatedFrozen = if (wasSelected) buildFrozenSelection(
+            candidate = replacement, currentInput = collageChooserInput(), capsuleId = _capsuleId,
+        ) ?: run {
+            failGuard("corrected collage cannot freeze")
+            return false
+        } else null
+        if (!collageChoices.replaceCandidate(index, replacement)) {
             failGuard("crop needs a displayed candidate")
             return false
         }
-        // Drawable carry-over: the corrected expression differs from the
-        // selected one ONLY by solver-approved crop windows (photo source
-        // rects). Every text-measurement input (regions, types, note, track,
-        // artwork) is identical, so the prior positive proof transfers to
-        // the new id — but only when it still matches live inputs; a changed
-        // note/track/artwork since the proof fails closed below instead.
-        val priorProof = drawableInputs[candidate.candidateId]
-        if (priorProof == null || priorProof != prepareInputs()) {
-            failGuard("candidate is not drawable")
-            return false
-        }
+        // Only crops changed, so carry over the unchanged text layout proof.
         drawableInputs[correctedId] = priorProof
-        collageChoices.select(index)
-        refreshCropDisplay()
-        if (!freezeCollageSelection()) {
-            failGuard("corrected collage cannot freeze")
-            return false
+        if (wasSelected) {
+            frozenCollageSelection = updatedFrozen
+            frozenDrawableInputs = priorProof
         }
-        _cropTransforms.value = _cropTransforms.value - keys.toSet()
+        fun migrated(key: dev.hryshyn.remanence.ui.collage.CorrectionKey) =
+            if (keyMatchesCandidate(key, candidate)) key.copy(expressionIdentity = correctedId) else key
+        cropBases = cropBases.mapKeys { migrated(it.key) }
+        _cropTransforms.value = _cropTransforms.value.mapKeys { migrated(it.key) }
+        _cropSlot.value = null
+        cropSlotCandidateId = null
+        cropEntryTransform = null
+        _flowError.value = null
         refreshCropDisplay()
-        closeCrop()
         return true
     }
 
     private fun clearCropState() {
         _cropSlot.value = null
         cropSlotCandidateId = null
+        cropEntryTransform = null
+        cropBases = emptyMap()
         _cropTransforms.value = emptyMap()
         _cropCorrections.value = emptyMap()
     }
@@ -1451,6 +1467,32 @@ class CreateViewModel(
     fun backToContent(): Boolean {
         if (_step.value != Step.COMPOSE) return false
         _step.value = Step.CONTENT
+        return true
+    }
+
+    fun backToFront(): Boolean {
+        if (_step.value != Step.CONTENT) return false
+        createSessionGeneration += 1
+        deliveryGeneration += 1
+        // FRONT baselines are immutable per capsule. A different postcard
+        // starts a fresh draft identity, keeping its content and recipient;
+        // never overwrite/delete the old baseline (an earlier publication
+        // may still own it even after its UI job detached).
+        cancelPublishingLocked()
+        dropGeneratorBound { bridge, context, sessionId ->
+            bridge.cancel(context, sessionId)
+        }
+        clearFrozenCollageSelection()
+        outboxObservationJob?.cancel()
+        outboxObservationJob = null
+        _capsuleId = UUID.randomUUID().toString()
+        _publishError.value = null
+        _uploadStatus.value = CreateUploadStatus.NotStarted
+        observeCurrentOutbox(sessionOwner, _capsuleId, createSessionGeneration)
+        frontFingerprintId = null
+        frontAttempt.restartCapture()
+        clearGuardError()
+        _step.value = Step.FRONT
         return true
     }
 

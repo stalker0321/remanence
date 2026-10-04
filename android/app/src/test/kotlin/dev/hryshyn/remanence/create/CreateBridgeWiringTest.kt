@@ -274,8 +274,7 @@ class CreateBridgeWiringTest {
     }
 
     private suspend fun freezeCurrentV5(vm: CreateViewModel) {
-        val ready = vm.generatorPreview.value as? dev.hryshyn.remanence.ui.create.GeneratorPreviewState.Ready
-            ?: error("expected Ready, got ${vm.generatorPreview.value}")
+        val input = requireNotNull(vm.collageChooserInput())
         val provider = CollageCandidateProvider(
             CollageCropSource { requests ->
                 requests.associate { request ->
@@ -286,7 +285,7 @@ class CreateBridgeWiringTest {
                 CollageRenderer.TextMeasurement(1, request.line.coerceAtLeast(1), false)
             },
         )
-        val result = provider.candidates(ready.expression.input, null, null)
+        val result = provider.candidates(input, input.note, null)
         val candidates = (result as? CollageProviderResult.Candidates)?.candidates
             ?: error("expected collage candidates, got $result")
         vm.collageChoices.replaceCandidates(candidates)
@@ -496,8 +495,8 @@ class CreateBridgeWiringTest {
         vm.startPublishing()
         awaitTerminalPublish(vm)
 
-        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
-        assertTrue(vm.publishError.value.orEmpty().contains("no collage has been frozen"))
+        assertEquals(CreateViewModel.Step.COMPOSE, vm.step.value)
+        assertEquals("frozen candidate is not drawable", vm.flowError.value)
         assertEquals(0, bridge.liveSessions())
         assertNull(outboxRow(vm.capsuleId))
     }
@@ -617,12 +616,6 @@ class CreateBridgeWiringTest {
         )
     }
 
-    private val fitsPort = dev.hryshyn.remanence.core.model.GeneratorEditorialRows.NoteMeasurementPort {
-        dev.hryshyn.remanence.core.model.GeneratorEditorialRows.NoteMeasurement.Fits(
-            dev.hryshyn.remanence.core.model.GeneratorEditorialRows.NOTE_REGION,
-        )
-    }
-
     /** Opens the published outbox capsule and returns its decrypted manifest. */
     private suspend fun decryptedContent(vm: CreateViewModel): dev.hryshyn.remanence.core.crypto.ContentManifestContent {
         val row = outboxRow(vm.capsuleId)!!
@@ -671,7 +664,7 @@ class CreateBridgeWiringTest {
 
         val parsed = decryptedContent(vm)
         assertEquals(2, parsed.protocolVersion)
-        val admitted = ExpressionReceiverAdmission.admit(parsed)
+        val admitted = ExpressionReceiverAdmission.admit(parsed, dev.hryshyn.remanence.ui.collage.BundledCollageRenderCapability)
         assertTrue("expected Supported, got $admitted", admitted is ExpressionReceiverAdmission.Result.Supported)
         val expression = (admitted as ExpressionReceiverAdmission.Result.Supported).expression
 
@@ -703,13 +696,8 @@ class CreateBridgeWiringTest {
     fun measuredNoteSelectionPublishesV2ExpressionWithNoteRegion() = runBlocking {
         val vm = contentStage()
         assertTrue(vm.noteEditor.onChange("dear mama"))
-        val pending = vm.generatorPreview.value as? dev.hryshyn.remanence.ui.create.GeneratorPreviewState.NotePending
-            ?: error("expected NotePending, got ${vm.generatorPreview.value}")
-        val measured = (
-            dev.hryshyn.remanence.core.model.GeneratorEditorialRows.plan(pending.input, fitsPort)
-                as dev.hryshyn.remanence.core.model.GeneratorEditorialRows.PlanResult.Planned
-            ).expression
-        vm.onPreviewMeasured(measured)
+        freezeCurrentV5(vm)
+        val chosenNoteRegion = requireNotNull(vm.frozenCollageSelection?.expression?.noteRegion)
 
         assertTrue(vm.goToCompose())
         vm.startPublishing()
@@ -718,55 +706,47 @@ class CreateBridgeWiringTest {
         assertEquals("publishError=${vm.publishError.value}", CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
         assertEquals(OutboxCapsuleState.ENCRYPTED, outboxRow(vm.capsuleId)!!.state)
         val parsed = decryptedContent(vm)
-        val admitted = ExpressionReceiverAdmission.admit(parsed)
+        val admitted = ExpressionReceiverAdmission.admit(parsed, dev.hryshyn.remanence.ui.collage.BundledCollageRenderCapability)
         assertTrue("expected Supported, got $admitted", admitted is ExpressionReceiverAdmission.Result.Supported)
         val expression = (admitted as ExpressionReceiverAdmission.Result.Supported).expression
         assertEquals("dear mama", expression.input.note)
         assertEquals(
-            dev.hryshyn.remanence.core.model.GeneratorEditorialRows.NOTE_REGION,
+            chosenNoteRegion,
             expression.noteRegion,
         )
     }
 
     @Test
-    fun unmeasuredNoteIsTypedRejectedAndStagesNothing() = runBlocking {
+    fun unpreparedNoteIsRefusedBeforeBridgeAndStagesNothing() = runBlocking {
         val vm = contentStage()
         assertTrue(vm.noteEditor.onChange("dear mama"))
-        // No onPreviewMeasured: the host never measured this note.
+        // The edit invalidates the old frozen collage. No new drawable proof
+        // or explicit selection has been supplied by the host.
         assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)
 
-        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
-        assertNotNull(vm.publishError.value)
-        assertTrue(
-            "expected a note-measurement rejection, was ${vm.publishError.value}",
-            vm.publishError.value!!.contains("measure"),
-        )
+        assertEquals(CreateViewModel.Step.COMPOSE, vm.step.value)
+        assertEquals("frozen candidate is not drawable", vm.flowError.value)
         assertNull(outboxRow(vm.capsuleId))
         assertEquals(0, bridge.liveSessions())
     }
 
     @Test
-    fun editedNoteAfterMeasurementIsTypedRejected() = runBlocking {
+    fun editedNoteInvalidatesFrozenSelectionAndStagesNothing() = runBlocking {
         val vm = contentStage()
         assertTrue(vm.noteEditor.onChange("dear mama"))
-        val pending = vm.generatorPreview.value as? dev.hryshyn.remanence.ui.create.GeneratorPreviewState.NotePending
-            ?: error("expected NotePending, got ${vm.generatorPreview.value}")
-        val measured = (
-            dev.hryshyn.remanence.core.model.GeneratorEditorialRows.plan(pending.input, fitsPort)
-                as dev.hryshyn.remanence.core.model.GeneratorEditorialRows.PlanResult.Planned
-            ).expression
-        vm.onPreviewMeasured(measured)
-        // Editing the note invalidates the measurement for the old text.
+        freezeCurrentV5(vm)
+        // Editing the note invalidates the positively drawable frozen input.
         assertTrue(vm.noteEditor.onChange("dear mama edited"))
+        assertNull(vm.frozenCollageSelection)
 
         assertTrue(vm.goToCompose())
         vm.startPublishing()
         awaitTerminalPublish(vm)
 
-        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
-        assertNotNull(vm.publishError.value)
+        assertEquals(CreateViewModel.Step.COMPOSE, vm.step.value)
+        assertEquals("frozen candidate is not drawable", vm.flowError.value)
         assertNull(outboxRow(vm.capsuleId))
         assertEquals(0, bridge.liveSessions())
     }

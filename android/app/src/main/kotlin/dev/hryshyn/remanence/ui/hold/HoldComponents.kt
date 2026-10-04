@@ -22,16 +22,54 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
+import dev.hryshyn.remanence.R
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private fun Modifier.holdPressShift(pressed: Boolean, enabled: Boolean): Modifier =
-    graphicsLayer { translationY = if (pressed && enabled) 4f else 0f }
+    graphicsLayer { translationY = if (pressed && enabled) 4.dp.toPx() else 0f }
+
+/** The frozen flow bar contains only a back arrow and a close control. */
+@Composable
+fun HoldFlowHeader(
+    onBack: () -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+    testKey: String = "create",
+) {
+    val backLabel = stringResource(R.string.hold_back)
+    val closeLabel = stringResource(R.string.hold_close)
+    Row(
+        modifier.fillMaxWidth().height(56.dp).padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(
+            onClick = onBack,
+            modifier = Modifier.size(48.dp).testTag("flow_back_$testKey")
+                .semantics { contentDescription = backLabel },
+        ) {
+            Text("←", Modifier.clearAndSetSemantics {}, style = MaterialTheme.typography.titleLarge)
+        }
+        Spacer(Modifier.weight(1f))
+        IconButton(
+            onClick = onClose,
+            modifier = Modifier.size(48.dp).testTag("flow_exit_$testKey")
+                .semantics { contentDescription = closeLabel },
+        ) {
+            Text("×", Modifier.clearAndSetSemantics {}, style = MaterialTheme.typography.titleLarge)
+        }
+    }
+}
 
 @Composable
 fun HoldButton(
@@ -103,17 +141,31 @@ fun HoldInput(
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     keyboardActions: KeyboardActions = KeyboardActions.Default,
     visualTransformation: VisualTransformation = VisualTransformation.None,
-) = OutlinedTextField(
-    value = value, onValueChange = onValueChange, modifier = modifier,
-    label = label, isError = isError, enabled = enabled, singleLine = singleLine,
-    keyboardOptions = keyboardOptions, keyboardActions = keyboardActions,
-    visualTransformation = visualTransformation,
-    shape = RoundedCornerShape(8.dp), textStyle = MaterialTheme.typography.bodyLarge,
-    colors = OutlinedTextFieldDefaults.colors(
-        focusedContainerColor = HoldColors.Field, unfocusedContainerColor = HoldColors.Field,
-        disabledContainerColor = HoldColors.Field, unfocusedBorderColor = Color.Transparent,
-    ),
-)
+    textStyle: TextStyle = MaterialTheme.typography.bodyLarge,
+    minLines: Int = 1,
+) {
+    // The label belongs above the flat field in the accepted form, and never
+    // floats into an outline when its value changes or it gains focus.
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (label != null) {
+            ProvideTextStyle(MaterialTheme.typography.bodySmall.copy(color = HoldColors.Ink)) {
+                label()
+            }
+        }
+        OutlinedTextField(
+            value = value, onValueChange = onValueChange, modifier = modifier,
+            isError = isError, enabled = enabled, singleLine = singleLine,
+            keyboardOptions = keyboardOptions, keyboardActions = keyboardActions,
+            visualTransformation = visualTransformation, minLines = minLines,
+            shape = RoundedCornerShape(8.dp), textStyle = textStyle,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedContainerColor = HoldColors.Field, unfocusedContainerColor = HoldColors.Field,
+                disabledContainerColor = HoldColors.Field, unfocusedBorderColor = Color.Transparent,
+                focusedBorderColor = Color.Transparent, disabledBorderColor = Color.Transparent,
+            ),
+        )
+    }
+}
 
 /** A single actionable surface. Information and subjects never use this component. */
 @Composable

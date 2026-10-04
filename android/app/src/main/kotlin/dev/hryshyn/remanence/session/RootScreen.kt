@@ -103,18 +103,11 @@ fun RootScreen(
 
     CompositionLocalProvider(LocalAstraCarryFront provides carryFront) {
     when (destination) {
-        // FIX-STATE-12: the root owns the FULL available size; the header is
-        // laid out first and the flow body receives the REMAINING height via
-        // weight(1f), so a full-size flow screen can never push the header's
-        // controls out of reach or measure itself against the whole window.
+        // Create owns its step-aware back arrow and pinned close control.
+        // The root owns only the route boundary and session lifecycle.
         AppDestination.Create -> key(destination) {
             AstraContextArrival(motion = motion, modifier = modifier.fillMaxSize(), contentKey = destination) {
-                Column(Modifier.fillMaxSize()) {
-                    FlowHeader(title = R.string.hold_make, testKey = "create", onExit = onExitFlow)
-                    Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
-                        createContent()
-                    }
-                }
+                createContent()
             }
         }
 

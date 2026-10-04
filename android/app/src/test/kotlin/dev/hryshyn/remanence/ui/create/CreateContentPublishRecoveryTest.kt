@@ -8,8 +8,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsEnabled
-import androidx.compose.ui.test.hasTestTag
-import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
@@ -290,7 +289,11 @@ class CreateContentPublishRecoveryTest {
     }
 
     private fun androidx.compose.ui.test.junit4.ComposeTestRule.scrollToTag(tag: String) {
-        onNodeWithTag("create_screen_scroll").performScrollToNode(hasTestTag(tag))
+        try {
+            onNodeWithTag(tag).assertIsDisplayed()
+        } catch (_: AssertionError) {
+            onNodeWithTag(tag).performScrollTo().assertIsDisplayed()
+        }
     }
 
     private fun stagingDir() =
@@ -354,6 +357,7 @@ class CreateContentPublishRecoveryTest {
             "editable=$editable errNodes=$errNodes limit=${vm.noteEditor.limitReached}",
             errNodes > 0,
         )
+        composeRule.scrollToTag("create_note_limit_error")
         composeRule.onNodeWithTag("create_note_limit_error").assertIsDisplayed()
         // No photos yet: the explicit Next gate stays closed.
         composeRule.onNodeWithTag("create_next").assertIsNotEnabled()
@@ -381,7 +385,7 @@ class CreateContentPublishRecoveryTest {
         composeRule.runOnIdle { vm.onPhotosPicked(listOf("a", "b")) }
         composeRule.onNodeWithTag("create_selection_count").assertIsDisplayed()
         composeRule.runOnIdle {
-            assertEquals("Selected: 2 of 3-5", countText())
+            assertEquals("choose 3–5 photographs · 2", countText())
             assertFalse(vm.photoSelection.canProceed)
         }
         composeRule.scrollToTag("create_next")
@@ -389,7 +393,7 @@ class CreateContentPublishRecoveryTest {
 
         composeRule.runOnIdle { vm.onPhotosPicked(listOf("a", "b", "c")) }
         composeRule.runOnIdle {
-            assertEquals("Selected: 3 of 3-5", countText())
+            assertEquals("choose 3–5 photographs · 3", countText())
             assertTrue(vm.photoSelection.canProceed)
         }
         composeRule.onNodeWithTag("create_next").assertIsEnabled()
@@ -398,7 +402,7 @@ class CreateContentPublishRecoveryTest {
         composeRule.runOnIdle { vm.onPhotosPicked(listOf("1", "2", "3", "4", "5", "6")) }
         composeRule.runOnIdle {
             assertEquals(5, vm.photoSelection.selectedIds.size)
-            assertEquals("Selected: 5 of 3-5", countText())
+            assertEquals("choose 3–5 photographs · 5", countText())
         }
     }
 
@@ -413,6 +417,7 @@ class CreateContentPublishRecoveryTest {
     // ------------------------------------------------------------------
 
     @Test
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
     fun publishingShowsProgressAndFailureRecoversToContentPreservingInputs() = runBlocking {
         val gate = CompletableDeferred<SenderIdentitySnapshot>()
         val (vm, _, _) = contentStage(identityGate = gate)
@@ -425,15 +430,15 @@ class CreateContentPublishRecoveryTest {
             assertTrue(vm.noteEditor.onChange("recover me"))
         }
         composeRule.waitForIdle()
-        // Explicit Next first: publishing lives on the COMPOSE screen now.
-        composeRule.scrollToTag("create_next")
-        composeRule.onNodeWithTag("create_next")
-            .assertIsEnabled()
-            .performClick()
-        composeRule.runOnIdle { assertEquals(CreateViewModel.Step.COMPOSE, vm.step.value) }
-        // No frozen choice here, so the test drives the VM gate directly;
-        // the publish job still reaches PUBLISHING before the identity fails.
-        composeRule.runOnIdle { vm.startPublishing() }
+        // This publisher-failure fixture parks identity resolution, so it
+        // supplies an explicitly prepared/frozen collage through the existing
+        // test fixture before entering COMPOSE. The real surface preparation
+        // and selection path is covered by CreateUiHappyPathTest.
+        composeRule.runOnIdle {
+            CollageFreezeFixture.freezeFirstCandidate(vm)
+            assertTrue(vm.goToCompose())
+            vm.startPublishing()
+        }
 
         composeRule.waitForIdle()
         assertEquals(

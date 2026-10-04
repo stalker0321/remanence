@@ -4,65 +4,57 @@ import android.graphics.BitmapFactory
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import kotlin.math.roundToInt
+import dev.hryshyn.remanence.R
 import dev.hryshyn.remanence.core.model.GeneratorExpression
+import dev.hryshyn.remanence.ui.collage.CropTransform
 import dev.hryshyn.remanence.ui.collage.FixedFrameCropCorrection
 import dev.hryshyn.remanence.ui.collage.NormalizedCrop
-import dev.hryshyn.remanence.ui.collage.PanDirection
-import dev.hryshyn.remanence.R
+import dev.hryshyn.remanence.ui.hold.HoldButton
+import dev.hryshyn.remanence.ui.hold.HoldColors
+import dev.hryshyn.remanence.ui.hold.HoldTextButton
 import java.util.Locale
+import kotlin.math.min
+import kotlin.math.roundToInt
 
-/**
- * T150 crop seam surfaces (Astra `guide.mjs:29,:41`, `render.mjs:58`):
- * per-photo fixed-frame correction entry plus the crop stage.
- *
- * The stage is the frozen `.crop-stage`/`.crop-window` contract, not a
- * source-aspect preview:
- * - the frame is the **fixed window at the slot's aspect**
- *   (`--crop-ratio: slot.w/slot.h`), clipped (`overflow:hidden`) so the frame
- *   edge IS the retained window;
- * - the source excerpt (the approved `baseCrop`) fills the frame and the
- *   fragment carries the frozen `translate(x%, y%) scale(z)` transform about
- *   the centre, percent of the frame box (`.fragment`);
- * - the `.crop-grid` overlay (2 px white border + thirds) sits above the
- *   fragment and is never transformed.
- *
- * Values are display state only until [CreateViewModel.applyCropAndClose]
- * runs the same transform through the accepted T157 `correct()` seam into a
- * new sealed window and frozen hash. Absent entry == identity.
- */
 @Composable
 fun CropSlotPicker(
     sources: List<GeneratorPreviewSource>,
@@ -70,48 +62,20 @@ fun CropSlotPicker(
     onOpen: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier.fillMaxWidth().testTag("crop_slots")) {
-        Text(
-            androidx.compose.ui.res.stringResource(R.string.hold_crop_title),
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.testTag("crop_slots_label"),
-        )
-        Spacer(Modifier.height(4.dp))
-        // Four/five slot buttons must stay reachable on narrow screens: the
-        // row scrolls horizontally instead of clipping the trailing slots.
-        Row(
-            modifier = Modifier.horizontalScroll(rememberScrollState()),
-            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
-        ) {
-            sources.forEachIndexed { index, source ->
-                val corrected = corrections.containsKey(source.contentId)
-                HoldTextButtonCompat(
-                    text = "Photo ${index + 1}" + if (corrected) " ✓" else "",
-                    tag = "crop_slot_$index",
-                    onClick = { onOpen(source.contentId) },
-                )
+    Row(
+        modifier = modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).testTag("crop_slots"),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        sources.forEachIndexed { index, source ->
+            HoldTextButton(onClick = { onOpen(source.contentId) }, modifier = Modifier.testTag("crop_slot_$index")) {
+                Text(stringResource(R.string.crop_photo_number, index + 1) +
+                    if (corrections.containsKey(source.contentId)) " ✓" else "")
             }
         }
     }
 }
 
-@Composable
-private fun HoldTextButtonCompat(text: String, tag: String, onClick: () -> Unit) {
-    dev.hryshyn.remanence.ui.hold.HoldTextButton(
-        onClick = onClick,
-        modifier = Modifier.testTag(tag),
-    ) { Text(text) }
-}
-
-/**
- * Fixed-frame crop stage.
- *
- * @param slotAspect width/height of the destination slot; the frame keeps it
- *   exactly (Astra `render.mjs:58` `--crop-ratio:${slot[2]/slot[3]}`).
- * @param baseCrop the approved sealed window for this slot (`0..10000` units);
- *   the source excerpt drawn under the frame. `null` falls back to the whole
- *   source so the stage still renders fail-safe.
- */
+/** Full upright source with a movable, slot-aspect crop frame. No source pixels are hidden. */
 @Composable
 fun CropStageContent(
     source: GeneratorPreviewSource,
@@ -127,222 +91,145 @@ fun CropStageContent(
     val bitmap = remember(source) {
         BitmapFactory.decodeByteArray(source.jpegBytes, 0, source.jpegBytes.size)?.asImageBitmap()
     }
-    val zoom = correction?.zoom ?: 1f
-    val panX = correction?.panX ?: 0f
-    val panY = correction?.panY ?: 0f
-    val base = remember(baseCrop) {
-        baseCrop?.let { FixedFrameCropCorrection.normalizedCrop(it) }
-            ?: NormalizedCrop(0.0, 0.0, 1.0, 1.0)
+    val sourceAspect = source.widthPx.coerceAtLeast(1).toDouble() / source.heightPx.coerceAtLeast(1)
+    val base = remember(baseCrop, slotAspect, sourceAspect) {
+        baseCrop?.let { FixedFrameCropCorrection.normalizedCrop(it) } ?: run {
+            val ratio = slotAspect.takeIf { it.isFinite() && it > 0 }?.toDouble() ?: sourceAspect
+            val width = min(1.0, ratio / sourceAspect)
+            val height = min(1.0, sourceAspect / ratio)
+            NormalizedCrop((1 - width) / 2, (1 - height) / 2, width, height)
+        }
     }
-    // The retained window is derived with the SAME accepted math the
-    // ViewModel uses to seal the correction, so the display can never show
-    // a window different from the one that will be frozen.
-    val transform = remember(zoom, panX, panY) {
-        dev.hryshyn.remanence.ui.collage.CropTransform(zoom.toDouble(), panX.toDouble(), panY.toDouble())
-    }
-    val retained = remember(base, transform) {
-        FixedFrameCropCorrection.sourceWindow(base, transform) ?: base
-    }
-    val safeAspect = if (slotAspect.isFinite() && slotAspect > 0f) slotAspect else 1f
-
-    Column(modifier = modifier.fillMaxWidth().testTag("crop_stage")) {
-        Text(
-            androidx.compose.ui.res.stringResource(R.string.hold_crop_title),
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.testTag("crop_stage_label"),
-        )
-        Text(
-            androidx.compose.ui.res.stringResource(R.string.hold_crop_stage_hint),
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.testTag("crop_stage_hint"),
-        )
-        Spacer(Modifier.height(8.dp))
-        BoxWithConstraints(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(safeAspect)
-                // `.crop-window{overflow:hidden}`: the frame edge is the
-                // retained window, everything else is clipped away.
-                .clipToBounds()
-                .background(Color(0xFFD4D3DC))
-                .semantics { stateDescription = windowState(retained) }
-                .testTag("crop_frame"),
-        ) {
-            val frameWidth = constraints.maxWidth.toFloat()
-            val frameHeight = constraints.maxHeight.toFloat()
-            val sourceWidth = source.widthPx.coerceAtLeast(1).toFloat()
-            val sourceHeight = source.heightPx.coerceAtLeast(1).toFloat()
-            val baseWidth = base.width.coerceAtLeast(1e-9)
-            val baseHeight = base.height.coerceAtLeast(1e-9)
-            if (bitmap != null && frameWidth > 0f && frameHeight > 0f) {
-                // The approved excerpt fills the frame (frozen `excerpt()`):
-                // image size = frame / base fraction, offset = -base origin.
-                val imageWidth = (frameWidth / baseWidth).toDouble()
-                val imageHeight = (frameHeight / baseHeight).toDouble()
-                val offsetX = -base.x * imageWidth
-                val offsetY = -base.y * imageHeight
-                // `.fragment`: fills the window and carries the frozen
-                // translate(x%,y%) scale(z) about the centre, percent of frame.
-                Box(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .graphicsLayer {
-                            scaleX = zoom
-                            scaleY = zoom
-                            translationX = panX / 100f * frameWidth
-                            translationY = panY / 100f * frameHeight
-                        }
-                        .testTag("crop_fragment"),
-                ) {
-                    Image(
-                        bitmap = bitmap,
-                        contentDescription = "crop source",
-                        contentScale = ContentScale.FillBounds,
-                        modifier = Modifier
-                            .excerptPlacement(
-                                frameWidthPx = frameWidth,
-                                frameHeightPx = frameHeight,
-                                imageWidthPx = imageWidth.toFloat(),
-                                imageHeightPx = imageHeight.toFloat(),
-                                offsetXPx = offsetX.toFloat(),
-                                offsetYPx = offsetY.toFloat(),
-                            )
-                            .testTag("crop_image"),
-                    )
+    val transform = CropTransform(
+        correction?.zoom?.toDouble() ?: 1.0,
+        correction?.panX?.toDouble() ?: 0.0,
+        correction?.panY?.toDouble() ?: 0.0,
+    )
+    val retained = CropEditorGeometry.window(base, transform) ?: base
+    val currentTransform by rememberUpdatedState(transform)
+    val currentUpdate by rememberUpdatedState(onUpdate)
+    val density = LocalDensity.current
+    BoxWithConstraints(modifier.fillMaxWidth().testTag("crop_stage")) {
+        // Production provides bounded height; the fallback supports embedded previews.
+        val editorHeight = if (constraints.hasBoundedHeight) maxHeight else 540.dp
+        Column(Modifier.fillMaxWidth().height(editorHeight), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    stringResource(R.string.crop_one_photograph),
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = HoldColors.Muted,
+                )
+                HoldTextButton(onClick = onBack, modifier = Modifier.testTag("crop_back")) {
+                    Text(stringResource(R.string.crop_cancel))
                 }
             }
-            // `.crop-grid`: border + thirds, absolute over the fragment.
-            Canvas(
-                modifier = Modifier
-                    .matchParentSize()
-                    .semantics { contentDescription = "crop grid" }
-                    .testTag("crop_grid"),
+            Text(stringResource(R.string.hold_crop_title),
+                style = MaterialTheme.typography.headlineLarge, modifier = Modifier.testTag("crop_stage_label"))
+            Text(
+                stringResource(R.string.crop_gesture_hint), style = MaterialTheme.typography.bodyMedium,
+                color = HoldColors.Muted, modifier = Modifier.testTag("crop_stage_hint"),
+            )
+            BoxWithConstraints(
+                Modifier.fillMaxWidth().weight(1f).background(HoldColors.Field).testTag("crop_workspace"),
+                contentAlignment = Alignment.Center,
             ) {
-                val borderWidth = 2.dp.toPx()
-                val thirdW = size.width / 3f
-                val thirdH = size.height / 3f
-                val lineColor = Color.White.copy(alpha = 0.33f)
-                drawLine(
-                    color = lineColor,
-                    start = Offset(thirdW, 0f),
-                    end = Offset(thirdW, size.height),
-                    strokeWidth = borderWidth,
-                )
-                drawLine(
-                    color = lineColor,
-                    start = Offset(thirdW * 2f, 0f),
-                    end = Offset(thirdW * 2f, size.height),
-                    strokeWidth = borderWidth,
-                )
-                drawLine(
-                    color = lineColor,
-                    start = Offset(0f, thirdH),
-                    end = Offset(size.width, thirdH),
-                    strokeWidth = borderWidth,
-                )
-                drawLine(
-                    color = lineColor,
-                    start = Offset(0f, thirdH * 2f),
-                    end = Offset(size.width, thirdH * 2f),
-                    strokeWidth = borderWidth,
-                )
-                drawRect(
-                    color = Color.White,
-                    topLeft = Offset.Zero,
-                    size = Size(size.width, size.height),
-                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = borderWidth),
-                )
+                val imageWidthPx = min(constraints.maxWidth.toDouble(), constraints.maxHeight * sourceAspect).toFloat()
+                val imageHeightPx = (imageWidthPx / sourceAspect).toFloat()
+                val fittedWidth = with(density) { imageWidthPx.toDp() }
+                val fittedHeight = with(density) { imageHeightPx.toDp() }
+                Box(
+                    Modifier.size(fittedWidth, fittedHeight)
+                        .pointerInput(source.contentId, base, imageWidthPx, imageHeightPx) {
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false)
+                                var gestureTransform = currentTransform
+                                val initial = CropEditorGeometry.window(base, gestureTransform) ?: base
+                                val x = down.position.x / imageWidthPx
+                                val y = down.position.y / imageHeightPx
+                                val startedOnFrame = x >= initial.x && x <= initial.x + initial.width &&
+                                    y >= initial.y && y <= initial.y + initial.height
+                                do {
+                                    val event = awaitPointerEvent()
+                                    if (event.changes.any { it.isConsumed }) break
+                                    val pinch = event.changes.count { it.pressed } > 1
+                                    if (startedOnFrame || pinch) {
+                                        val pan = event.calculatePan()
+                                        val zoom = event.calculateZoom()
+                                        val centroid = event.calculateCentroid(useCurrent = false)
+                                        if (pan != Offset.Zero || zoom != 1f) {
+                                            CropEditorGeometry.gesture(
+                                                base, gestureTransform,
+                                                pan.x.toDouble() / imageWidthPx,
+                                                pan.y.toDouble() / imageHeightPx,
+                                                zoom.toDouble(),
+                                                centroid.x.toDouble() / imageWidthPx,
+                                                centroid.y.toDouble() / imageHeightPx,
+                                            )?.let { next ->
+                                                gestureTransform = next
+                                                currentUpdate(next.z.toFloat(), next.xPercent.toFloat(), next.yPercent.toFloat())
+                                            }
+                                            event.changes.forEach { it.consume() }
+                                        }
+                                    }
+                                } while (event.changes.any { it.pressed })
+                            }
+                        }.testTag("crop_source_surface"),
+                ) {
+                    if (bitmap != null) {
+                        Image(
+                            bitmap = bitmap,
+                            contentDescription = stringResource(R.string.crop_original_photo),
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.matchParentSize().testTag("crop_image"),
+                        )
+                    }
+                    Canvas(Modifier.matchParentSize()) {
+                        val left = (retained.x * size.width).toFloat()
+                        val top = (retained.y * size.height).toFloat()
+                        val right = ((retained.x + retained.width) * size.width).toFloat()
+                        val bottom = ((retained.y + retained.height) * size.height).toFloat()
+                        val shade = Color.Black.copy(alpha = .42f)
+                        drawRect(shade, Offset.Zero, Size(size.width, top))
+                        drawRect(shade, Offset(0f, bottom), Size(size.width, (size.height - bottom).coerceAtLeast(0f)))
+                        drawRect(shade, Offset(0f, top), Size(left, bottom - top))
+                        drawRect(shade, Offset(right, top), Size((size.width - right).coerceAtLeast(0f), bottom - top))
+                    }
+                    Canvas(
+                        Modifier.offset {
+                            IntOffset((retained.x * imageWidthPx).roundToInt(), (retained.y * imageHeightPx).roundToInt())
+                        }.size(
+                            with(density) { (retained.width * imageWidthPx).toFloat().toDp() },
+                            with(density) { (retained.height * imageHeightPx).toFloat().toDp() },
+                        ).semantics {
+                            contentDescription = "crop grid"
+                            stateDescription = windowState(retained)
+                        }.testTag("crop_frame"),
+                    ) {
+                        val stroke = 2.dp.toPx()
+                        for (third in 1..2) {
+                            drawLine(Color.White.copy(alpha = .4f), Offset(size.width * third / 3, 0f),
+                                Offset(size.width * third / 3, size.height), 1.dp.toPx())
+                            drawLine(Color.White.copy(alpha = .4f), Offset(0f, size.height * third / 3),
+                                Offset(size.width, size.height * third / 3), 1.dp.toPx())
+                        }
+                        drawRect(Color.White, Offset(stroke / 2, stroke / 2),
+                            Size((size.width - stroke).coerceAtLeast(0f), (size.height - stroke).coerceAtLeast(0f)), style = Stroke(stroke))
+                    }
+                }
             }
-        }
-        Spacer(Modifier.height(8.dp))
-        Text("Zoom", modifier = Modifier.testTag("crop_zoom_label"))
-        Slider(
-            value = zoom,
-            onValueChange = { onUpdate(it, panX, panY) },
-            valueRange = 1f..1.25f,
-            steps = 24,
-            modifier = Modifier.fillMaxWidth().testTag("crop_zoom"),
-        )
-        Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
-            // Direction deltas come from the accepted T157 contract
-            // (engine.mjs:118 pan(dir): one axis, ±1 frame percent); the
-            // ViewModel clamps the sum through clampTransform.
-            CropPadButton("←", "crop_pan_left") {
-                val d = FixedFrameCropCorrection.panDelta(PanDirection.LEFT)
-                onUpdate(zoom, panX + d.xPercent.toFloat(), panY + d.yPercent.toFloat())
+            HoldButton(onClick = onDone, modifier = Modifier.fillMaxWidth().testTag("crop_done")) {
+                Text(stringResource(R.string.crop_done), Modifier.weight(1f))
+                Text("→", style = MaterialTheme.typography.titleLarge)
             }
-            CropPadButton("↑", "crop_pan_up") {
-                val d = FixedFrameCropCorrection.panDelta(PanDirection.UP)
-                onUpdate(zoom, panX + d.xPercent.toFloat(), panY + d.yPercent.toFloat())
+            HoldTextButton(onClick = onReset, modifier = Modifier.fillMaxWidth().testTag("crop_reset")) {
+                Text(stringResource(R.string.crop_reset))
             }
-            CropPadButton("↓", "crop_pan_down") {
-                val d = FixedFrameCropCorrection.panDelta(PanDirection.DOWN)
-                onUpdate(zoom, panX + d.xPercent.toFloat(), panY + d.yPercent.toFloat())
-            }
-            CropPadButton("→", "crop_pan_right") {
-                val d = FixedFrameCropCorrection.panDelta(PanDirection.RIGHT)
-                onUpdate(zoom, panX + d.xPercent.toFloat(), panY + d.yPercent.toFloat())
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
-            dev.hryshyn.remanence.ui.hold.HoldTextButton(
-                onClick = onBack,
-                modifier = Modifier.testTag("crop_back"),
-            ) { Text(androidx.compose.ui.res.stringResource(R.string.hold_back)) }
-            dev.hryshyn.remanence.ui.hold.HoldTextButton(
-                onClick = onReset,
-                modifier = Modifier.testTag("crop_reset"),
-            ) { Text("Reset") }
-            dev.hryshyn.remanence.ui.hold.HoldButton(
-                onClick = onDone,
-                modifier = Modifier.fillMaxWidth().testTag("crop_done"),
-            ) { Text("Done") }
         }
     }
 }
 
-/**
- * Frozen excerpt placement (render.mjs absolute `.fragment img`): sizes the
- * image exactly (ignoring parent max, like `requiredSize`) but places it at
- * the explicit offset from the parent origin — never recentered. A plain
- * oversized `requiredSize` child is centered by placement, which shifts the
- * shown window away from the sealed one by (image − frame)/2; this bypasses
- * alignment entirely (`place` at exact pixels). All inputs are px floats;
- * rounding is at most half a pixel per edge.
- */
-private fun Modifier.excerptPlacement(
-    frameWidthPx: Float,
-    frameHeightPx: Float,
-    imageWidthPx: Float,
-    imageHeightPx: Float,
-    offsetXPx: Float,
-    offsetYPx: Float,
-): Modifier = layout { measurable, _ ->
-    val iw = imageWidthPx.roundToInt().coerceAtLeast(1)
-    val ih = imageHeightPx.roundToInt().coerceAtLeast(1)
-    val placeable = measurable.measure(Constraints.fixed(iw, ih))
-    layout(frameWidthPx.roundToInt(), frameHeightPx.roundToInt()) {
-        placeable.place(offsetXPx.roundToInt(), offsetYPx.roundToInt())
-    }
-}
-
-/** Stable, machine-readable rendering of the retained source window. */
+/** Source coordinates, shared by accessibility diagnostics and render tests. */
 internal fun windowState(window: NormalizedCrop): String = String.format(
-    Locale.ROOT,
-    "window %.6f,%.6f,%.6f,%.6f",
-    window.x,
-    window.y,
-    window.width,
-    window.height,
+    Locale.ROOT, "window %.6f,%.6f,%.6f,%.6f", window.x, window.y, window.width, window.height,
 )
-
-@Composable
-private fun CropPadButton(label: String, tag: String, onClick: () -> Unit) {
-    dev.hryshyn.remanence.ui.hold.HoldTextButton(
-        onClick = onClick,
-        modifier = Modifier
-            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
-            .testTag(tag),
-    ) { Text(label) }
-}

@@ -27,7 +27,8 @@ import java.security.MessageDigest
  *
  * Contract V4 (full frozen V5) additionally carries authored provenance
  * marks, decor planes, per-photo aperture shapes, and the nine frozen
- * music modes. The V3 path below is behavior-identical with no V4 layers.
+ * music modes. The V3 path has no V4 layers; both versions show music controls
+ * from the existing sealed region without adding serialized fields.
  * V4 provenance colour resolves to the style `ink` role, except brand
  * marks in grammars 23/24 which resolve to `soundInk` (`styles.css`); V4
  * music bands render the `sound` background except the two CSS-traced
@@ -105,6 +106,9 @@ object CollageRenderer {
          * measured with swapped axes. Always false on v3.
          */
         val vertical: Boolean = false,
+        /** Copy and play share the exact geometry admitted by prepare. */
+        val copyRegion: RectI = region,
+        val playRegion: RectI? = null,
     )
 
     /**
@@ -620,12 +624,11 @@ object CollageRenderer {
                 // the same region. `spine` is text-only in the frozen DOM
                 // and never reaches this arm. A missing bitmap on a cover
                 // mode keeps the fail-closed text behavior below. The copy
-                // is measured in the exact remainder rect (cover + gap +
-                // padding per `V5Decor.placeCover`), matching the frozen
+                // is measured in the exact remainder rect (cover, play, gaps,
+                // and padding), matching the frozen
                 // flex shrink; the same rect drives Canvas pixels.
-                val placement = V5Decor.placeCover(
-                    musicRegion.x, musicRegion.y, musicRegion.width, musicRegion.height,
-                    expression.grammarId, musicRegion.mode,
+                val placement = MusicBandGeometry.layout(
+                    regionRect, expression.grammarId, musicRegion.mode, artwork = true,
                 ) ?: return SceneResult.Rejected("music cover does not fit its sealed region")
                 val text = snapshot.title + "\n" + snapshot.artistDisplay
                 val measurement = measurer.measure(
@@ -636,17 +639,17 @@ object CollageRenderer {
                         weight = musicType.weight,
                         italic = musicType.italic,
                         line = musicType.line,
-                        maxWidth = placement.text.width,
-                        maxHeight = placement.text.height,
+                        maxWidth = placement.copy.width,
+                        maxHeight = placement.copy.height,
                     ),
                 )
-                if (!fits(measurement, placement.text)) {
+                if (!fits(measurement, placement.copy)) {
                     reportMusicFit(
                         arm = "cover-remainder",
                         expression = expression,
                         region = musicRegion,
                         measured = "joined=${measurement.width}x${measurement.height} " +
-                            "box=${placement.text.width}x${placement.text.height}",
+                            "box=${placement.copy.width}x${placement.copy.height}",
                     )
                     return SceneResult.Rejected("music does not fit its sealed region")
                 }
@@ -665,9 +668,13 @@ object CollageRenderer {
                     color = bandColor,
                     transparentBackground = transparentBand,
                     mode = musicRegion.mode,
+                    copyRegion = placement.copy,
+                    playRegion = placement.play,
                 )
                 artworkScene = SceneArtwork(regionRect, parseColor(style.palette.sound))
             } else if (isV4 && musicRegion.mode == "spine") {
+                val placement = MusicBandGeometry.layout(regionRect, expression.grammarId, musicRegion.mode, false)
+                    ?: return SceneResult.Rejected("music control does not fit its sealed region")
                 // Spine copy reads vertically (`.g6 .music-spine
                 // .music-copy{writing-mode:vertical-rl}`) as TWO nowrap
                 // nodes stacked on the reading axis: the sealed label and
@@ -742,6 +749,7 @@ object CollageRenderer {
                     transparentBackground = transparentBand,
                     mode = musicRegion.mode,
                     vertical = true,
+                    playRegion = placement.play,
                 )
                 artworkScene = null
             } else {
@@ -749,6 +757,8 @@ object CollageRenderer {
                 // whose cover could not be fetched/verified: render the
                 // sealed words (the no-art layout). Never a placeholder.
                 val text = snapshot.title + "\n" + snapshot.artistDisplay
+                val placement = MusicBandGeometry.layout(regionRect, expression.grammarId, musicRegion.mode, false)
+                    ?: return SceneResult.Rejected("music control does not fit its sealed region")
                 val measurement = measurer.measure(
                     TextMeasureRequest(
                         text = text,
@@ -757,17 +767,17 @@ object CollageRenderer {
                         weight = musicType.weight,
                         italic = musicType.italic,
                         line = musicType.line,
-                        maxWidth = musicRegion.width,
-                        maxHeight = musicRegion.height,
+                        maxWidth = placement.copy.width,
+                        maxHeight = placement.copy.height,
                     ),
                 )
-                if (!fits(measurement, regionRect)) {
+                if (!fits(measurement, placement.copy)) {
                     reportMusicFit(
-                        arm = "full-region",
+                        arm = "text-remainder",
                         expression = expression,
                         region = musicRegion,
                         measured = "joined=${measurement.width}x${measurement.height} " +
-                            "box=${musicRegion.width}x${musicRegion.height}",
+                            "box=${placement.copy.width}x${placement.copy.height}",
                     )
                     return SceneResult.Rejected("music does not fit its sealed region")
                 }
@@ -786,6 +796,8 @@ object CollageRenderer {
                     color = bandColor,
                     transparentBackground = transparentBand,
                     mode = musicRegion.mode,
+                    copyRegion = placement.copy,
+                    playRegion = placement.play,
                 )
                 artworkScene = null
             }

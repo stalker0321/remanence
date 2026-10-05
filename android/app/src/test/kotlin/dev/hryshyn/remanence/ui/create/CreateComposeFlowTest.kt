@@ -56,6 +56,7 @@ import dev.hryshyn.remanence.ui.collage.CollageCandidateProvider
 import dev.hryshyn.remanence.ui.collage.CollageCropSource
 import dev.hryshyn.remanence.ui.collage.CollageProviderResult
 import dev.hryshyn.remanence.ui.collage.CollageRenderer
+import dev.hryshyn.remanence.ui.collage.toCropWindow
 
 /**
  * T150 explicit CONTENT → COMPOSE flow: Next is refused until the form is
@@ -174,6 +175,7 @@ class CreateComposeFlowTest {
     private fun newViewModel(
         withCropSource: Boolean = false,
         cornerFace: Boolean = false,
+        severableTip: Boolean = false,
         persistence: SealedFingerprintPersistence = NoPersistence(),
     ): CreateViewModel {
         val roots = AccountScopedFileRoots(stagingDir)
@@ -195,7 +197,7 @@ class CreateComposeFlowTest {
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
             enqueueUpload = { _, _ -> },
-            collageSourceFactory = if (withCropSource) testCollageSourceFactory(cornerFace) else null,
+            collageSourceFactory = if (withCropSource) testCollageSourceFactory(cornerFace, severableTip) else null,
         ).also { it.beginSession(1L, ownerUuid.toString()) }
     }
 
@@ -705,9 +707,8 @@ class CreateComposeFlowTest {
 
     @Test
     fun cropApplySealsNewWindowAndFrozenHash() = runBlocking {
-        // Real safe crop: production crop source + its OWN cached analysis
-        // (shared instance), T157 correct() gate, quantized window, new
-        // authored expression and a new frozen candidate id/hash.
+        // A manual crop seals the user's bounded source window, producing
+        // a new expression and frozen candidate id/hash.
         val vm = newViewModel(withCropSource = true)
         driveToContent(vm)
         val ids = previewContentIds(vm)
@@ -719,9 +720,7 @@ class CreateComposeFlowTest {
                 .first { it.contentId == ids.first() }.crop,
         )
 
-        // A modest zoom: the corrected window must stay above the frozen
-        // protection-field floor (PROTECTION_FIELD_LOW) for the narrow slot —
-        // the classifier is never waived to make the test pass.
+        // A modest zoom changes the exact window without changing the slot.
         vm.updateCrop(1.02f, 0f, 0f)
         // Evaluate first: the message must report the POST-apply state.
         val applied = vm.applyCropAndClose()
@@ -755,18 +754,9 @@ class CreateComposeFlowTest {
         assertTrue(ids.first() in expression.placements.map { it.contentId })
     }
 
-    /**
-     * F1 wiring regression (peer-crop-integration): `applyCropAndClose` must
-     * re-classify the corrected window under the placement's OWN
-     * [GeneratorExpression.PhotoShape]. With a face parked in the extreme
-     * corner of the analysis:
-     * - the identical RECT placement applies (the frozen rect mask keeps it);
-     * - a ROUND V4 placement of the same window is refused with the frozen
-     *   `FACE_CROSSES_CROP_OR_MASK` reason, and the frozen selection is left
-     *   untouched — the round/ellipse mask safety is never waived.
-     */
+    /** Automatic face/mask preferences must not veto an intentional manual frame. */
     @Test
-    fun roundedApertureCorrectionIsRefusedByTheFrozenMask() = runBlocking {
+    fun manualRoundedCropSavesEvenWhenAutomaticMaskWouldRefuse() = runBlocking {
         val rectVm = newViewModel(withCropSource = true, cornerFace = true)
         driveToContent(rectVm)
         val rectIds = previewContentIds(rectVm)
@@ -782,24 +772,86 @@ class CreateComposeFlowTest {
         val roundVm = newViewModel(withCropSource = true, cornerFace = true)
         driveToContent(roundVm)
         val roundIds = previewContentIds(roundVm)
-        val frozenBefore = CollageFreezeFixture.freezeRoundCandidate(roundVm, aspectMatchedSlots = true)
+        CollageFreezeFixture.freezeRoundCandidate(roundVm, aspectMatchedSlots = true)
         assertTrue(roundVm.goToCompose())
         assertTrue(roundVm.openCrop(roundIds.first()))
         roundVm.updateCrop(1f, 0f, 0f)
-        assertFalse(
-            "a ROUND aperture must be re-checked under the round mask",
-            roundVm.applyCropAndClose(),
-        )
-        val refusal = requireNotNull(roundVm.flowError.value)
-        assertTrue(
-            "the typed frozen mask reason must surface, got $refusal",
-            refusal.contains("FACE_CROSSES_CROP_OR_MASK"),
+        val placement = requireNotNull(roundVm.collageChoices.displayed).expression.placements
+            .first { it.contentId == roundIds.first() }
+        val analysis = requireNotNull(roundVm.collageCropSource).analysisSource().analysisFor(roundIds.first())
+        val automatic = dev.hryshyn.remanence.ui.collage.FixedFrameCropCorrection.correct(
+            baseCrop = requireNotNull(dev.hryshyn.remanence.ui.collage.FixedFrameCropCorrection
+                .normalizedCrop(requireNotNull(placement.crop))),
+            slot = dev.hryshyn.remanence.ui.collage.Envelope50CropSolver.Slot(
+                placement.width.toDouble(), placement.height.toDouble(), shape = "round"),
+            sourceWidth = 1000, sourceHeight = 1000,
+            transform = dev.hryshyn.remanence.ui.collage.CropTransform(1.0, 0.0, 0.0),
+            analysis = analysis,
         )
         assertEquals(
-            "the frozen selection must stay untouched when the correction is refused",
-            frozenBefore,
-            roundVm.frozenCollageSelection?.candidateId,
+            dev.hryshyn.remanence.ui.collage.CropRejectReason.FACE_CROSSES_CROP_OR_MASK,
+            automatic.safetyReject,
         )
+        assertTrue("the sender's manual frame must save", roundVm.applyCropAndClose())
+        assertNull(roundVm.flowError.value)
+        assertNull(roundVm.cropSlot.value)
+        val frozen = requireNotNull(roundVm.frozenCollageSelection)
+        assertTrue(GeneratorExpression.validateResolved(frozen.expression)
+            is GeneratorExpression.InputValidation.Valid)
+        assertEquals(GeneratorBer1Provider.candidateIdFor(frozen.expression), frozen.candidateId)
+    }
+
+    @Test
+    fun manualCropDoesNotDependOnFreshCompositionAnalysis() = runBlocking {
+        val vm = newViewModel(withCropSource = false)
+        driveToContent(vm)
+        val ids = previewContentIds(vm)
+        CollageFreezeFixture.freezeFirstCandidate(vm, aspectMatchedSlots = true)
+        assertNull(vm.collageCropSource)
+        assertTrue(vm.goToCompose())
+        assertTrue(vm.openCrop(ids.first()))
+        vm.updateCrop(1.15f, 3f, -2f)
+        assertTrue("bounded manual crop requires no detector veto", vm.applyCropAndClose())
+        assertNull(vm.flowError.value)
+        assertNull(vm.cropSlot.value)
+        val frozen = requireNotNull(vm.frozenCollageSelection)
+        assertEquals(GeneratorBer1Provider.candidateIdFor(frozen.expression), frozen.candidateId)
+        assertTrue(GeneratorExpression.validateResolved(frozen.expression)
+            is GeneratorExpression.InputValidation.Valid)
+    }
+
+    @Test
+    fun manualCropSavesEvenWhenAutomaticClassifierSeesSeveredContour() = runBlocking {
+        val vm = newViewModel(withCropSource = true, severableTip = true)
+        driveToContent(vm)
+        val contentId = previewContentIds(vm).first()
+        CollageFreezeFixture.freezeFirstCandidate(vm, aspectMatchedSlots = true)
+        assertTrue(vm.goToCompose())
+        assertTrue(vm.openCrop(contentId))
+        val placement = requireNotNull(vm.collageChoices.displayed).expression.placements
+            .first { it.contentId == contentId }
+        val base = requireNotNull(dev.hryshyn.remanence.ui.collage.FixedFrameCropCorrection
+            .normalizedCrop(requireNotNull(placement.crop)))
+        vm.updateCrop(1.25f, 0f, 0f)
+        val requested = requireNotNull(CropEditorGeometry.window(base,
+            dev.hryshyn.remanence.ui.collage.CropTransform(1.25, 0.0, 0.0)))
+        val analysis = requireNotNull(vm.collageCropSource).analysisSource().analysisFor(contentId)
+        val automatic = dev.hryshyn.remanence.ui.collage.FixedFrameCropCorrection.correct(
+            baseCrop = requested,
+            slot = dev.hryshyn.remanence.ui.collage.Envelope50CropSolver.Slot(
+                placement.width.toDouble(), placement.height.toDouble()),
+            sourceWidth = 1000, sourceHeight = 1000,
+            transform = dev.hryshyn.remanence.ui.collage.CropTransform(1.0, 0.0, 0.0),
+            analysis = analysis,
+        )
+        assertEquals(dev.hryshyn.remanence.ui.collage.CropRejectReason.CONTOUR_ENDPOINT_SEVERED,
+            automatic.safetyReject)
+        assertTrue("intentional manual contour crop must save", vm.applyCropAndClose())
+        assertNull(vm.flowError.value)
+        assertNull(vm.cropSlot.value)
+        val sealed = requireNotNull(vm.frozenCollageSelection).expression.placements
+            .first { it.contentId == contentId }.crop
+        assertEquals(requested.toCropWindow(), sealed)
     }
 
     // ------------------------------------------------------------------

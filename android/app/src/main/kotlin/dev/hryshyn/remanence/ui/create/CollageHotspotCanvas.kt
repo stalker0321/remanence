@@ -35,6 +35,8 @@ internal fun CollageHotspotCanvas(
     modifier: Modifier = Modifier,
     textMeasurer: CollageTextMeasurer = rememberCollageTextMeasurer(),
     artwork: ImageBitmap? = null,
+    onMusicClick: (() -> Unit)? = null,
+    musicActionLabel: String? = null,
 ) {
     BoxWithConstraints(
         modifier.aspectRatio(scene.canvasWidth.toFloat() / scene.canvasHeight.toFloat()),
@@ -46,6 +48,8 @@ internal fun CollageHotspotCanvas(
             modifier = Modifier.fillMaxSize(),
             textMeasurer = textMeasurer,
             artwork = artwork,
+            onMusicClick = onMusicClick,
+            musicActionLabel = musicActionLabel,
         )
         val width = maxWidth
         val height = maxHeight

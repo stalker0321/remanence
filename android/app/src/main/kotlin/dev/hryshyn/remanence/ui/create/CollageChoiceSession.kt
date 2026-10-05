@@ -4,15 +4,35 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.hryshyn.remanence.ui.collage.CollageCandidate
+import java.util.UUID
 
 /**
  * Sender collage chooser state. The built candidate list is stable: it only
- * changes through [setCandidates] (an explicit rebuild) or [clear] (an edit
+ * changes through [replaceCandidates] (an explicit rebuild) or [clear] (an edit
  * invalidation). [previous]/[next] move the selection index without rebuilding,
  * and no candidate becomes publishable until the user calls [select]
  * explicitly.
  */
 class CollageChoiceSession {
+
+    private var draftId = UUID.randomUUID().toString()
+    private var variantOrder = CollageVariantOrder(draftId)
+
+    internal var draftGeneration: Long by mutableStateOf(0L)
+        private set
+
+    /** New capsule only; repeated entry/rotation and ordinary edits keep its order. */
+    fun beginDraft(capsuleId: String) {
+        if (capsuleId == draftId) return
+        draftId = capsuleId
+        variantOrder = CollageVariantOrder(capsuleId)
+        draftGeneration += 1
+        clear()
+        onCandidatesReplaced?.invoke()
+    }
+
+    internal fun arrangePreparedCandidates(built: List<CollageCandidate>): List<CollageCandidate> =
+        variantOrder.arrangePrepared(built)
 
     var candidates: List<CollageCandidate> by mutableStateOf(emptyList())
         private set

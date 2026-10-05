@@ -437,6 +437,50 @@ class CollageChoiceHostTest {
     }
 
     @Test
+    fun previewMusicOpensServicePickerWhilePhotoCropAndSelectionRemainIndependent() {
+        val base = rejectedMusicCandidate()
+        val expression = base.expression.copy(
+            musicRegion = requireNotNull(base.expression.musicRegion).copy(width = 340),
+        )
+        val candidate = base.copy(
+            candidateId = dev.hryshyn.remanence.core.model.GeneratorBer1Provider.candidateIdFor(expression),
+            expression = expression,
+        )
+        val track = dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1.parse(
+            "be30e36b-1111-4111-8111-000000000001", "Love", "MowMowMow", null, 253000L,
+        )
+        val bytes = collageChoiceJpeg()
+        val cover = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size).asImageBitmap()
+        val session = CollageChoiceSession()
+        val urls = mutableListOf<String>()
+        val crops = mutableListOf<String>()
+        composeRule.setContent {
+            val action = dev.hryshyn.remanence.ui.capsule.music.rememberTrackServiceAction(track) {
+                urls += it
+                true
+            }
+            Column(Modifier.width(320.dp).verticalScroll(rememberScrollState())) {
+                CollageChoiceHost(
+                    session, input(), sources(), null, track, cropSource(),
+                    artworkBitmap = cover, candidateBuilder = { listOf(candidate) },
+                    onSlotTap = { crops += it }, onMusicClick = action, musicActionLabel = "Open Love",
+                )
+            }
+        }
+        awaitCandidates(session)
+        composeRule.onNodeWithTag("capsule_music_region").performScrollTo().performClick()
+        composeRule.onNodeWithTag("capsule_track_service_picker").assertIsDisplayed()
+        val spotify = dev.hryshyn.remanence.ui.capsule.music.StreamingService.SPOTIFY
+        composeRule.onNodeWithTag(spotify.testTag).performClick()
+        assertEquals(listOf(spotify.searchUrl(track.title, track.artistDisplay)), urls)
+        assertTrue(crops.isEmpty())
+        assertTrue(session.selectedIndex == null)
+        composeRule.onNodeWithTag("crop_hotspot_0").performScrollTo().performClick()
+        assertEquals(listOf(contentIds.first()), crops)
+        assertTrue(session.selectedIndex == null)
+    }
+
+    @Test
     fun smallViewportKeepsEntireCanvasInsideHorizontalBounds() {
         val session = CollageChoiceSession()
         composeRule.setContent {
@@ -471,7 +515,7 @@ class CollageChoiceHostTest {
     }
 
     @Test
-    fun mixedBuildBrowsesOnlyCandidatesAcceptedByRealPrepare() {
+    fun mixedBuildKeepsFirstDrawablePermutationOfEachVariant() {
         val rejected = rejectedMusicCandidate()
         val fittingExpression = rejected.expression.copy(
             musicRegion = requireNotNull(rejected.expression.musicRegion).copy(width = 340),
@@ -479,6 +523,17 @@ class CollageChoiceHostTest {
         val fitting = rejected.copy(
             candidateId = dev.hryshyn.remanence.core.model.GeneratorBer1Provider.candidateIdFor(fittingExpression),
             expression = fittingExpression,
+        )
+        val permutationExpression = fittingExpression.copy(
+            branchId = "other-assignment",
+            placements = fittingExpression.placements.mapIndexed { index, placement ->
+                placement.copy(x = (2 - index) * 120)
+            },
+        )
+        val permutation = fitting.copy(
+            candidateId = dev.hryshyn.remanence.core.model.GeneratorBer1Provider.candidateIdFor(permutationExpression),
+            branchId = permutationExpression.branchId,
+            expression = permutationExpression,
         )
         val session = CollageChoiceSession()
         val track = dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1.parse(
@@ -492,7 +547,7 @@ class CollageChoiceHostTest {
         composeRule.setContent {
             CollageChoiceHost(
                 session, input(), sources(), null, track, cropSource(),
-                artworkBitmap = cover, candidateBuilder = { listOf(rejected, fitting) },
+                artworkBitmap = cover, candidateBuilder = { listOf(rejected, fitting, permutation) },
                 onSelect = { selected += it },
             )
         }

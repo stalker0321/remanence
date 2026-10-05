@@ -1,8 +1,12 @@
 package dev.hryshyn.remanence.ui.collage
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -42,6 +46,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.dp
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -249,8 +254,9 @@ fun rememberCollageTextMeasurer(): CollageTextMeasurer {
  * composition), closed by the authored provenance marks with exact
  * vertical rotation and alignment.
  *
- * The whole composition is one accessibility node: [contentDescription] and
- * [Role.Image]. Internal layers are not separate accessibility nodes.
+ * The composition exposes [contentDescription] and [Role.Image]. A supplied
+ * music action adds one button covering the sealed music region; paint layers
+ * remain decorative.
  */
 @Composable
 fun CollageCanvas(
@@ -265,6 +271,8 @@ fun CollageCanvas(
      * nothing otherwise (fail-closed, never a placeholder).
      */
     artwork: ImageBitmap? = null,
+    onMusicClick: (() -> Unit)? = null,
+    musicActionLabel: String? = null,
 ) {
     val imageSizes = remember(images) {
         images.mapValues { CollageRenderer.SourcePhoto(it.value.width, it.value.height) }
@@ -286,7 +294,7 @@ fun CollageCanvas(
     val musicFits = when {
         music == null -> true
         music.vertical -> spineLayouts?.let { fitsSpine(music, scene.grammarId, it) } == true
-        else -> musicLayout?.fitsRegion(music.region) == true
+        else -> musicLayout?.fitsRegion(music.copyRegion) == true
     }
     val drawable = drawOps != null &&
         (note == null || noteLayout?.fitsRegion(note.region) == true) &&
@@ -298,7 +306,7 @@ fun CollageCanvas(
         modifier = modifier
             .fillMaxSize()
             .testTag("collage_canvas")
-            .semantics(mergeDescendants = true) {
+            .semantics(mergeDescendants = onMusicClick == null) {
                 this.contentDescription = contentDescription
                 role = Role.Image
             },
@@ -502,44 +510,18 @@ fun CollageCanvas(
                                     return@forEach
                                 }
                                 val layout = musicLayout ?: return@Canvas
-                                // V4 cover + text composition: the cover box
-                                // and copy rect come from the shared exact
-                                // helper (same rects prepare measured), so
-                                // pixels and gate agree. Legacy scenes keep
-                                // the full-region layout.
-                                val cover = scene.artwork
-                                if (cover != null && scene.music != null) {
-                                    val placement = V5Decor.placeCover(
-                                        op.region.x, op.region.y,
-                                        op.region.width, op.region.height,
-                                        scene.grammarId, scene.music.mode,
-                                    ) ?: return@Canvas
-                                    val text = placement.text
-                                    clipRect(
-                                        left = text.x.toFloat(),
-                                        top = text.y.toFloat(),
-                                        right = (text.x + text.width).toFloat(),
-                                        bottom = (text.y + text.height).toFloat(),
-                                    ) {
-                                        drawText(
-                                            textLayoutResult = layout,
-                                            color = Color(op.color),
-                                            topLeft = Offset(text.x.toFloat(), text.y.toFloat()),
-                                        )
-                                    }
-                                } else {
-                                    clipRect(
-                                        left = op.region.x.toFloat(),
-                                        top = op.region.y.toFloat(),
-                                        right = (op.region.x + op.region.width).toFloat(),
-                                        bottom = (op.region.y + op.region.height).toFloat(),
-                                    ) {
-                                        drawText(
-                                            textLayoutResult = layout,
-                                            color = Color(op.color),
-                                            topLeft = Offset(op.region.x.toFloat(), op.region.y.toFloat()),
-                                        )
-                                    }
+                                val text = scene.music?.copyRegion ?: op.region
+                                clipRect(
+                                    left = text.x.toFloat(),
+                                    top = text.y.toFloat(),
+                                    right = (text.x + text.width).toFloat(),
+                                    bottom = (text.y + text.height).toFloat(),
+                                ) {
+                                    drawText(
+                                        textLayoutResult = layout,
+                                        color = Color(op.color),
+                                        topLeft = Offset(text.x.toFloat(), text.y.toFloat()),
+                                    )
                                 }
                             }
 
@@ -572,11 +554,6 @@ fun CollageCanvas(
                                         filterQuality = FilterQuality.High,
                                     )
                                 } else {
-                                    drawRect(
-                                        color = Color(op.background),
-                                        topLeft = Offset(coverRegion.x.toFloat(), coverRegion.y.toFloat()),
-                                        size = Size(coverRegion.width.toFloat(), coverRegion.height.toFloat()),
-                                    )
                                     val image = artwork ?: return@Canvas
                                     val placement = V5Decor.placeCover(
                                         coverRegion.x, coverRegion.y,
@@ -624,6 +601,20 @@ fun CollageCanvas(
                                         )
                                     }
                                 }
+                            }
+
+                            is CollagePainter.Op.MusicPlay -> {
+                                val bounds = op.region
+                                val center = Offset(bounds.x + bounds.width / 2f, bounds.y + bounds.height / 2f)
+                                val radius = min(bounds.width, bounds.height) / 2f
+                                op.background?.let { drawCircle(Color(it), radius, center) }
+                                val triangle = Path().apply {
+                                    moveTo(center.x - radius * .25f, center.y - radius * .43f)
+                                    lineTo(center.x + radius * .47f, center.y)
+                                    lineTo(center.x - radius * .25f, center.y + radius * .43f)
+                                    close()
+                                }
+                                drawPath(triangle, Color(op.foreground))
                             }
 
                             is CollagePainter.Op.Provenance -> {
@@ -685,6 +676,23 @@ fun CollageCanvas(
                     }
                 }
             }
+            val region = scene.music?.region ?: scene.artwork?.region
+            val cue = renderOps.filterIsInstance<CollagePainter.Op.MusicPlay>().firstOrNull()?.region
+            if (region != null) BoxWithConstraints(Modifier.fillMaxSize()) {
+                val scale = min(maxWidth.value / scene.canvasWidth, maxHeight.value / scene.canvasHeight)
+                val dx = (maxWidth.value - scene.canvasWidth * scale) / 2f
+                val dy = (maxHeight.value - scene.canvasHeight * scale) / 2f
+                if (cue != null) Box(Modifier
+                    .absoluteOffset((dx + cue.x * scale).dp, (dy + cue.y * scale).dp)
+                    .size((cue.width * scale).dp, (cue.height * scale).dp)
+                    .testTag("collage_music_play_cue"))
+                if (onMusicClick != null) Box(Modifier
+                    .absoluteOffset((dx + region.x * scale).dp, (dy + region.y * scale).dp)
+                    .size((region.width * scale).dp, (region.height * scale).dp)
+                    .clickable(role = Role.Button, onClickLabel = musicActionLabel, onClick = onMusicClick)
+                    .semantics { musicActionLabel?.let { this.contentDescription = it } }
+                    .testTag("capsule_music_region"))
+            }
         }
     }
 }
@@ -741,6 +749,6 @@ private fun CollageRenderer.SceneMusic.toMeasureRequest() = CollageRenderer.Text
     weight = weight,
     italic = italic,
     line = line,
-    maxWidth = region.width,
-    maxHeight = region.height,
+    maxWidth = copyRegion.width,
+    maxHeight = copyRegion.height,
 )

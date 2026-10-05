@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="track_service_title">Open track search in</string>
+    <string name="track_no_handler">No app can open streaming links on this device.</string>
+    <string name="track_open_action">listen to %1$s — %2$s</string>
+</resources>

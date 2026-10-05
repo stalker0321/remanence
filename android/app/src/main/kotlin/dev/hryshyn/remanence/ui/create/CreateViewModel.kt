@@ -493,7 +493,8 @@ class CreateViewModel(
 
     // ---------------------------------------------------------------------
     // Manual crop state is keyed by candidate, slot and content. Done saves
-    // the exact source window through the shared safety analysis. Saved crops
+    // the exact source window chosen by the sender. Composition analysis is
+    // an automatic-crop aid, never a veto of a valid manual frame. Saved crops
     // survive browsing; Back discards the open draft. Content edits clear both.
     // ---------------------------------------------------------------------
 
@@ -787,50 +788,17 @@ class CreateViewModel(
             failGuard("candidate is not drawable")
             return false
         }
-        val cropSource = collageCropSource
-        if (cropSource == null) {
-            failGuard("crop needs the production crop source")
-            return false
-        }
         val placement = candidate.expression.placements[key.slot]
         val base = cropBases[key]?.let {
             dev.hryshyn.remanence.ui.collage.FixedFrameCropCorrection.normalizedCrop(it)
         } ?: return false
         val requested = CropEditorGeometry.window(base, transform) ?: return false
-        val analysis = cropSource.analysisSource().analysisFor(slot)
-        // Cached analysis may suspend. A cancelled editor or changed content
-        // must never receive its stale result.
-        if (_step.value != Step.COMPOSE || _cropSlot.value != slot ||
-            cropSlotCandidateId != candidate.candidateId ||
-            collageChoices.displayed?.candidateId != candidate.candidateId ||
-            _cropTransforms.value[key] != transform || prepareInputs() != priorProof
-        ) return false
-        if (analysis == null) {
-            failGuard("crop analysis is unavailable")
-            return false
-        }
-        // Quantize first and classify the exact window the renderer will use.
-        // Identity here deliberately validates a manually positioned frame;
-        // source bounds, slot aspect, mask/face/field and resolution gates are
-        // all the same gates used by the existing correction path.
+        // The editor already preserves the slot aspect and clamps the frame
+        // to the full original. Quantize this exact user choice, without
+        // re-running the automatic face/contour/protection-field classifier.
+        // Structural source bounds and the expression/publication guards
+        // below still apply; subjective composition is the sender's choice.
         val quantized = requested.toCropWindow()
-        val sealedWindow = dev.hryshyn.remanence.ui.collage.FixedFrameCropCorrection.normalizedCrop(quantized)
-            ?: return false
-        val outcome = dev.hryshyn.remanence.ui.collage.FixedFrameCropCorrection.correct(
-            baseCrop = sealedWindow,
-            slot = dev.hryshyn.remanence.ui.collage.Envelope50CropSolver.Slot(
-                width = placement.width.toDouble(), height = placement.height.toDouble(),
-                shape = placement.shape.name.lowercase(),
-            ),
-            sourceWidth = analysis.width, sourceHeight = analysis.height,
-            transform = dev.hryshyn.remanence.ui.collage.CropTransform(1.0, 0.0, 0.0),
-            analysis = analysis,
-        )
-        if (!outcome.accepted) {
-            val reason = outcome.geometryReject?.name ?: outcome.safetyReject?.name
-            failGuard("crop refused: ${reason ?: "unsafe correction"}")
-            return false
-        }
         val placements = candidate.expression.placements.toMutableList().also {
             it[key.slot] = placement.copy(crop = quantized)
         }
@@ -927,6 +895,7 @@ class CreateViewModel(
      * only an explicitly frozen and publish-gate-accepted candidate can seal.
      */
     val collageChoices = CollageChoiceSession().also { session ->
+        session.beginDraft(_capsuleId)
         session.onCandidatesReplaced = {
             frozenCollageSelection = null
             frozenDrawableInputs = null
@@ -1146,6 +1115,7 @@ class CreateViewModel(
             deleteSessionStaging(previousOwner, previousCapsuleId)
         }
         _capsuleId = UUID.randomUUID().toString()
+        collageChoices.beginDraft(_capsuleId)
         sessionOwner = nextOwner
         // C2: session-sync for the bridge — the epoch is retained for the
         // context and the bridge is resolved per session owner (a null
@@ -1486,6 +1456,7 @@ class CreateViewModel(
         outboxObservationJob?.cancel()
         outboxObservationJob = null
         _capsuleId = UUID.randomUUID().toString()
+        collageChoices.beginDraft(_capsuleId)
         _publishError.value = null
         _uploadStatus.value = CreateUploadStatus.NotStarted
         observeCurrentOutbox(sessionOwner, _capsuleId, createSessionGeneration)

@@ -63,6 +63,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.hryshyn.remanence.RemanenceApplication
 import dev.hryshyn.remanence.capture.CaptureAttemptSurface
 import dev.hryshyn.remanence.ui.create.music.MusicPickerContent
+import dev.hryshyn.remanence.ui.capsule.music.rememberTrackServiceAction
 import dev.hryshyn.remanence.ui.motion.AstraStepArrival
 import dev.hryshyn.remanence.ui.motion.rememberAstraMotion
 
@@ -729,6 +730,11 @@ private fun CollageStepChooser(
     val artwork by viewModel.musicArtwork.collectAsStateWithLifecycle()
     val artworkBitmap by viewModel.musicArtworkBitmap.collectAsStateWithLifecycle()
     val input = viewModel.collageChooserInputFor(musicSelection)
+    val track = viewModel.collageChooserTrackFor(musicSelection)
+    val musicAction = rememberTrackServiceAction(track)
+    val musicActionLabel = track?.let {
+        stringResource(R.string.track_open_action, it.title, it.artistDisplay)
+    }
     val sources = when (val current = preview) {
         is GeneratorPreviewState.Ready -> current.sources
         is GeneratorPreviewState.NotePending -> current.sources
@@ -738,13 +744,14 @@ private fun CollageStepChooser(
         CollageChoiceHost(
             session = viewModel.collageChoices, input = input, sources = sources,
             note = viewModel.noteEditor.text.takeIf { it.isNotEmpty() },
-            track = viewModel.collageChooserTrackFor(musicSelection),
+            track = track,
             cropSource = viewModel.collageCropSource ?: remember { dev.hryshyn.remanence.ui.collage.CollageCropSource { null } },
             artwork = artwork, artworkBitmap = artworkBitmap,
             frozenCandidateId = { viewModel.frozenCollageSelection?.candidateId },
             onNavigate = viewModel::clearFrozenCollageSelection, onMeasured = viewModel::onPreviewMeasured,
             onPrepared = viewModel::onCandidatePrepared, prepareInputs = viewModel.prepareInputs(),
             onSlotTap = onSlotTap, candidateBuilder = { viewModel.buildAllFamilySealedCandidates() },
+            onMusicClick = musicAction, musicActionLabel = musicActionLabel,
             showSelectInNavigation = false, contentWrapper = contentWrapper, modifier = modifier,
         )
     }

@@ -26,6 +26,7 @@ import dev.hryshyn.remanence.ui.collage.CollageCanvas
 import dev.hryshyn.remanence.ui.collage.CollageRenderer
 import dev.hryshyn.remanence.ui.collage.rememberCollageTextMeasurer
 import dev.hryshyn.remanence.ui.hold.HoldTextButton
+import dev.hryshyn.remanence.ui.capsule.music.rememberTrackServiceAction
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -227,6 +228,7 @@ internal fun CollagePresentationHost(
     contentDescription: String,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    openTrackUrl: ((String) -> Boolean)? = null,
 ) {
     when (val status = state.status) {
         CollagePresentationState.Status.Loading -> Unit
@@ -254,6 +256,8 @@ internal fun CollagePresentationHost(
             }
             when (result) {
                 is CollageRenderer.SceneResult.Ready -> Box(modifier.fillMaxSize()) {
+                    val musicAction = rememberTrackServiceAction(state.track, openTrackUrl)
+                    val musicLabel = state.track?.let { stringResource(R.string.track_open_action, it.title, it.artistDisplay) }
                     CollageCanvas(
                         scene = result.scene,
                         images = images,
@@ -261,6 +265,8 @@ internal fun CollagePresentationHost(
                         modifier = Modifier.fillMaxSize(),
                         textMeasurer = measurer,
                         artwork = artwork,
+                        onMusicClick = musicAction,
+                        musicActionLabel = musicLabel,
                     )
                     HoldTextButton(
                         onClick = { state.close(); onClose() },

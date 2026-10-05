@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="track_service_title">Где найти трек</string>
+    <string name="track_no_handler">На устройстве нет приложения для открытия музыкальных ссылок.</string>
+    <string name="track_open_action">слушать %1$s — %2$s</string>
+</resources>

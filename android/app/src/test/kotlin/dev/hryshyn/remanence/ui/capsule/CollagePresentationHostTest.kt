@@ -5,6 +5,11 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.click
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.test.assertIsDisplayed
+import dev.hryshyn.remanence.ui.capsule.music.StreamingService
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hryshyn.remanence.core.data.network.ArtworkFetchResult
 import dev.hryshyn.remanence.core.data.network.ArtworkFetcher
@@ -15,6 +20,7 @@ import dev.hryshyn.remanence.ui.collage.FontRegistry
 import dev.hryshyn.remanence.ui.collage.StyleRegistry
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -143,6 +149,8 @@ class CollagePresentationHostTest {
         composeRule.onNodeWithTag("capsule_page_0").assertDoesNotExist()
         composeRule.onNodeWithTag("capsule_underlayer").assertDoesNotExist()
         composeRule.onNodeWithTag("capsule_track_card").assertDoesNotExist()
+        composeRule.onNodeWithTag("capsule_music_region").assertDoesNotExist()
+        composeRule.onNodeWithTag("collage_music_play_cue", useUnmergedTree = true).assertDoesNotExist()
     }
 
     @Test
@@ -157,6 +165,58 @@ class CollagePresentationHostTest {
         composeRule.setContent { CollagePresentationHost(state, "collage", onClose = {}) }
         composeRule.onNodeWithTag("collage_canvas").assertExists()
         composeRule.onNodeWithTag("capsule_track_card").assertDoesNotExist()
+        composeRule.onNodeWithTag("collage_music_play_cue", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("capsule_music_region").assertIsDisplayed()
+    }
+
+    @Test
+    fun wholeMusicBandOpensServiceChoiceAndEachServiceGetsTheSealedTrackSearch() {
+        val music = GeneratorExpression.MusicRegion(
+            x = 0, y = 220, width = 360, height = 60, mode = "text",
+            type = GeneratorExpression.TextType("StudySerif", 14, 400, true, 16), artwork = null,
+        )
+        val track = snapshot()
+        val state = loadedState(expressionV3(musicRegion = music), track = track)
+        val launched = mutableListOf<String>()
+        composeRule.setContent {
+            CollagePresentationHost(state, "collage", onClose = {}, openTrackUrl = { launched += it; true })
+        }
+        StreamingService.entries.forEach { service ->
+            // Tap the far copy edge, outside the play icon: the entire sealed band is actionable.
+            composeRule.onNodeWithTag("capsule_music_region").performTouchInput {
+                click(Offset(width - 2f, height / 2f))
+            }
+            composeRule.onNodeWithTag("capsule_track_service_picker").assertIsDisplayed()
+            val before = launched.size
+            composeRule.onNodeWithTag(service.testTag).performClick()
+            assertEquals(before + 1, launched.size)
+            assertEquals(service.searchUrl(track.title, track.artistDisplay), launched.last())
+            assertTrue(StreamingService.isAllowedUrl(launched.last()))
+            composeRule.onNodeWithTag("capsule_track_service_picker").assertDoesNotExist()
+        }
+    }
+
+    @Test
+    fun dismissingServiceChoiceDoesNotLaunchAndFailedLaunchKeepsCapsuleOpen() {
+        val music = GeneratorExpression.MusicRegion(
+            x = 0, y = 220, width = 360, height = 60, mode = "text",
+            type = GeneratorExpression.TextType("StudySerif", 14, 400, true, 16), artwork = null,
+        )
+        val state = loadedState(expressionV3(musicRegion = music), track = snapshot())
+        var launches = 0
+        composeRule.setContent {
+            CollagePresentationHost(state, "collage", onClose = {}, openTrackUrl = { launches += 1; false })
+        }
+        composeRule.onNodeWithTag("capsule_music_region").performClick()
+        composeRule.onNodeWithTag("capsule_track_open_dismiss").performClick()
+        assertEquals(0, launches)
+        composeRule.onNodeWithTag("capsule_music_region").performClick()
+        composeRule.onNodeWithTag(StreamingService.SPOTIFY.testTag).performClick()
+        composeRule.onNodeWithTag("capsule_track_no_browser").assertIsDisplayed()
+        assertTrue(state.status is CollagePresentationState.Status.Ready)
+        composeRule.runOnIdle { state.close() }
+        composeRule.onNodeWithTag("capsule_track_no_browser").assertDoesNotExist()
+        composeRule.onNodeWithTag("collage_canvas").assertDoesNotExist()
     }
 
     @Test

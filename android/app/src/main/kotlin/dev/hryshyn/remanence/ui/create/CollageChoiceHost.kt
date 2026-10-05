@@ -59,6 +59,8 @@ internal fun CollageChoiceHost(
     onPrepared: (String, Boolean, PrepareInputs) -> Unit = { _, _, _ -> },
     prepareInputs: PrepareInputs? = null,
     onSlotTap: ((String) -> Unit)? = null,
+    onMusicClick: (() -> Unit)? = null,
+    musicActionLabel: String? = null,
     candidateBuilder: (suspend () -> List<CollageCandidate>?)? = null,
     showSelectInNavigation: Boolean = true,
     contentWrapper: @Composable (CanvasParcel, NavParcel) -> Unit = { canvas, nav ->
@@ -73,7 +75,7 @@ internal fun CollageChoiceHost(
     val noteArg = note?.takeIf { it.isNotBlank() }
     val currentOnPrepared by rememberUpdatedState(onPrepared)
 
-    LaunchedEffect(input, sources, note, track, cropSource, artwork, artworkBitmap, measurer) {
+    LaunchedEffect(session, session.draftGeneration, input, sources, note, track, cropSource, artwork, artworkBitmap, measurer) {
         val generation = session.beginPreparing()
         try {
             val decoded = images.ifEmpty { withContext(Dispatchers.Default) { decodeSources(sources) } }
@@ -105,11 +107,15 @@ internal fun CollageChoiceHost(
             if (drawable.isEmpty()) {
                 session.showNotice(noFitCopy)
             } else {
-                session.replaceCandidates(drawable)
+                // A rejected permutation cannot consume its grammar/style's
+                // single slot: deduplicate only after actual renderer prepare.
+                val variants = session.arrangePreparedCandidates(drawable)
+                if (BuildConfig.DEBUG) Log.d("CollagePreparation", "uniqueVariants=${variants.size}")
+                session.replaceCandidates(variants)
                 // Replacement invalidates prior proofs. Report the new proofs
                 // afterwards, in the same uninterrupted main turn.
                 prepareInputs?.let { proof ->
-                    drawable.forEach { currentOnPrepared(it.candidateId, true, proof) }
+                    variants.forEach { currentOnPrepared(it.candidateId, true, proof) }
                 }
             }
         } catch (cancelled: CancellationException) {
@@ -149,10 +155,12 @@ internal fun CollageChoiceHost(
                         val width = if (maxHeight != Dp.Infinity) minOf(maxWidth, maxHeight * ratio) else maxWidth
                         val canvas = Modifier.size(width, width / ratio)
                         if (onSlotTap == null) {
-                            CollageCanvas(result.scene, images, "collage candidate", canvas, measurer, artworkBitmap)
+                            CollageCanvas(result.scene, images, "collage candidate", canvas, measurer, artworkBitmap,
+                                onMusicClick = onMusicClick, musicActionLabel = musicActionLabel)
                         } else {
                             CollageHotspotCanvas(result.scene, images, displayed.expression.placements,
-                                onSlotTap, canvas, measurer, artworkBitmap)
+                                onSlotTap, canvas, measurer, artworkBitmap,
+                                onMusicClick = onMusicClick, musicActionLabel = musicActionLabel)
                         }
                     }
                 } else {

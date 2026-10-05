@@ -2,6 +2,7 @@ package dev.hryshyn.remanence.ui.collage
 
 import dev.hryshyn.remanence.core.model.GeneratorExpression
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -69,7 +70,7 @@ class CollagePainterV4Test {
             listOf(
                 "Paper", "Decor",
                 "Photo", "Photo", "Photo",
-                "MusicBackground", "MusicText", "MusicArtwork",
+                "MusicBackground", "MusicArtwork", "MusicText",
                 "Provenance",
             ),
             ops.map { it::class.simpleName },
@@ -87,8 +88,26 @@ class CollagePainterV4Test {
         val ops = CollagePainter.drawList(scene().copy(provenance = emptyList(), decor = emptyList()), imageSizes())
             ?: error("expected a draw list")
         assertEquals(
-            listOf("Paper", "Photo", "Photo", "Photo", "MusicBackground", "MusicText", "MusicArtwork"),
+            listOf("Paper", "Photo", "Photo", "Photo", "MusicBackground", "MusicArtwork", "MusicText"),
             ops.map { it::class.simpleName },
         )
+    }
+
+    @Test
+    fun playIsPaintedAfterCoverAndCopyWithoutChangingTheSealedBand() {
+        val original = scene()
+        val play = rect(82, 520, 36, 36)
+        val prepared = original.copy(music = original.music!!.copy(playRegion = play))
+        val ops = requireNotNull(CollagePainter.drawList(prepared, imageSizes()))
+        val coverIndex = ops.indexOfFirst { it is CollagePainter.Op.MusicArtwork }
+        val copyIndex = ops.indexOfFirst { it is CollagePainter.Op.MusicText }
+        val cueIndex = ops.indexOfFirst { it is CollagePainter.Op.MusicPlay }
+        assertTrue("artwork must not paint over the title", coverIndex < copyIndex)
+        assertTrue("cue must remain visible above music layers", copyIndex < cueIndex)
+        val cue = ops[cueIndex] as CollagePainter.Op.MusicPlay
+        assertEquals(play, cue.region)
+        assertEquals(original.music!!.background, cue.foreground)
+        assertEquals(original.music!!.color, cue.background)
+        assertEquals(original.music!!.region, prepared.music!!.region)
     }
 }

@@ -32,14 +32,17 @@ import java.security.MessageDigest
  * cannot pass on the tiny `memoryTestJpegForPhotoId` pixel sizes, and this is
  * a detector fixture, not a photo claim.
  */
-internal fun testCollageSourceFactory(cornerFace: Boolean = false): CollageCropSourceFactory =
+internal fun testCollageSourceFactory(
+    cornerFace: Boolean = false,
+    severableTip: Boolean = false,
+): CollageCropSourceFactory =
     CollageCropSourceFactory {
         AndroidCollageCropSource(
             bytesSource = it.asUprightBytesSource(),
             imageDecoder = { _ ->
                 FieldStageImage(FIXTURE_SOURCE_PX, FIXTURE_SOURCE_PX, IntArray(FIXTURE_SOURCE_PX * FIXTURE_SOURCE_PX) { 0xFF336699.toInt() })
             },
-            fieldRunner = FieldStageRunner(FakeFieldRuntime()),
+            fieldRunner = FieldStageRunner(FakeFieldRuntime(severableTip)),
             nanoDetRunner = NanoDetRunner(
                 FakeAsset(ByteArray(32) { 1 }),
                 FakeNanoRuntime(),
@@ -47,7 +50,7 @@ internal fun testCollageSourceFactory(cornerFace: Boolean = false): CollageCropS
             ),
             yuNetRunner = YuNetRunner(
                 FakeAsset(ByteArray(32) { 2 }),
-                FakeYuNetRuntime(cornerFace),
+                FakeYuNetRuntime(cornerFace, noFaces = severableTip),
                 Files.createTempDirectory("t150-yunet").toFile(),
             ),
         )
@@ -98,7 +101,7 @@ private class FakeAsset(val bytes: ByteArray) : ModelAssetSource {
 }
 
 /** Constant protection fields: every window clears the frozen floors. */
-private class FakeFieldRuntime : FieldStageRuntime {
+private class FakeFieldRuntime(private val severableTip: Boolean = false) : FieldStageRuntime {
     override fun analyze(image: FieldStageImage): FieldStageMaps {
         val cells = CollageAnalysis.GRID_SIZE * CollageAnalysis.GRID_SIZE
         return FieldStageMaps(
@@ -108,7 +111,9 @@ private class FakeFieldRuntime : FieldStageRuntime {
             edgeEnergy = DoubleArray(cells) { 1.0 },
             contrast = DoubleArray(cells) { 1.0 },
             tips = DoubleArray(cells) { 1.0 },
-            tipBoxes = emptyList(),
+            tipBoxes = if (severableTip) listOf(
+                dev.hryshyn.remanence.ui.collage.NormBox(.88, .88, .08, .08),
+            ) else emptyList(),
         )
     }
 
@@ -142,10 +147,14 @@ private class FakeNanoRuntime : NanoDetRuntime {
  * of the 1000x1000 fixture source, so a rounded/elliptic aperture clips it
  * while the rectangular one keeps it (shape-safety regressions).
  */
-private class FakeYuNetRuntime(private val cornerFace: Boolean = false) : YuNetRuntime {
+private class FakeYuNetRuntime(
+    private val cornerFace: Boolean = false,
+    private val noFaces: Boolean = false,
+) : YuNetRuntime {
     override fun load(modelPath: String, config: YuNetConfig) = Unit
 
     override fun detect(image: YuNetImage, longEdge: Int): YuNetPass {
+        if (noFaces) return YuNetPass(image.width, image.height, 15, emptyList())
         val values = FloatArray(15)
         values[0] = if (cornerFace) 0f else 64f
         values[1] = if (cornerFace) 0f else 64f

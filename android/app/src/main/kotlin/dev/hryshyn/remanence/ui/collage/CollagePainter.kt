@@ -77,6 +77,8 @@ object CollagePainter {
          */
         data class MusicArtwork(val region: CollageRenderer.RectI, val background: Int) : Op
 
+        data class MusicPlay(val region: CollageRenderer.RectI, val foreground: Int, val background: Int?) : Op
+
         /**
          * Authored provenance mark (v4 only): index into
          * [CollageRenderer.Scene.provenance]. The canvas resolves the
@@ -145,10 +147,24 @@ object CollagePainter {
         scene.note?.let { ops += Op.Note(it.text, it.region, it.color) }
         scene.music?.let {
             ops += Op.MusicBackground(it.background, it.region, it.transparentBackground, it.color)
-            ops += Op.MusicText(it.title, it.artist, it.text, it.region, it.color)
         }
         scene.artwork?.let {
             ops += Op.MusicArtwork(it.region, it.background)
+        }
+        scene.music?.let {
+            ops += Op.MusicText(it.title, it.artist, it.text, it.region, it.color)
+            it.playRegion?.let { play ->
+                ops += Op.MusicPlay(play,
+                    foreground = if (it.transparentBackground) it.color else it.background,
+                    background = if (it.transparentBackground) null else it.color)
+            }
+        }
+        // Legacy thumbnail capsules carry only cover art, with no copy layer.
+        if (scene.music == null) scene.artwork?.let {
+            val size = minOf(36, it.region.width, it.region.height)
+            ops += Op.MusicPlay(CollageRenderer.RectI(
+                it.region.x + (it.region.width - size) / 2,
+                it.region.y + (it.region.height - size) / 2, size, size), scene.sound, scene.soundInk)
         }
         scene.provenance.forEachIndexed { index, _ -> ops += Op.Provenance(index) }
         return ops

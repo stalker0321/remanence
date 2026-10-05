@@ -178,6 +178,36 @@ class CollageCanvasTest {
         composeRule.onNodeWithTag("collage_canvas_content", useUnmergedTree = true).assertExists()
     }
 
+    @Test
+    fun musicPreviewPaintsCueAndMeasuresCopyBesideItWithoutExposingAnAction() {
+        val musicRegion = GeneratorExpression.MusicRegion(
+            x = 0, y = 250, width = 360, height = 90, mode = "text",
+            type = GeneratorExpression.TextType("StudySans", 14, 400, false, 16), artwork = null,
+        )
+        val track = dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1.parse(
+            "be30e36b-1111-4111-8111-000000000001",
+            "A Longer Track Title That Still Fits Beside The Play Control", "Arctic Monkeys", null, 253000L,
+        )
+        val expression = expressionV3("note").copy(musicRegion = musicRegion)
+        var prepared: CollageRenderer.Scene? = null
+        composeRule.setContent {
+            val measurer = rememberCollageTextMeasurer()
+            val result = remember(measurer) { CollageRenderer.prepare(expression, "note", track, sourceMap(), measurer) }
+            if (result is CollageRenderer.SceneResult.Ready) {
+                prepared = result.scene
+                CollageCanvas(result.scene, images("p0", "p1", "p2"), "preview", textMeasurer = measurer)
+            }
+        }
+        composeRule.waitForIdle()
+        val music = requireNotNull(prepared?.music)
+        val play = requireNotNull(music.playRegion)
+        assertTrue(music.copyRegion.x >= play.x + play.width)
+        assertTrue(music.copyRegion.x + music.copyRegion.width <= music.region.x + music.region.width)
+        composeRule.onNodeWithTag("collage_canvas_content", useUnmergedTree = true).assertExists()
+        composeRule.onNodeWithTag("collage_music_play_cue", useUnmergedTree = true).assertExists()
+        composeRule.onNodeWithTag("capsule_music_region").assertDoesNotExist()
+    }
+
     private fun expressionV3(note: String) = GeneratorExpression.ResolvedExpression(
         canvasVersion = 1,
         grammarId = "g-hold",

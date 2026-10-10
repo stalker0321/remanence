@@ -151,11 +151,14 @@ private fun RootSurface(
 
     // I02/I03: cold-start session bootstrap decides the first surface.
     val rootViewModel: RootViewModel = viewModel(factory = factory)
+    var recoveryBusy by remember { mutableStateOf(false) }
     // BUG-014: the health epoch advances on every real foreground/resume
     // transition alongside the session refresh, so the check below re-runs.
     var healthCheckEpoch by remember { mutableIntStateOf(0) }
     ForegroundResumeEffect {
-        rootViewModel.onAppForegrounded()
+        // Returning from the Credential Manager dialog must not rotate the
+        // session underneath its session-bound registration/setup challenge.
+        if (!recoveryBusy) rootViewModel.onAppForegrounded()
         healthCheckEpoch++
     }
     val loginViewModel: LoginViewModel = viewModel(factory = factory)
@@ -174,7 +177,8 @@ private fun RootSurface(
     // The root re-resolves after a terminal submit flow and on foreground.
     val loginSubmit by loginViewModel.submitState.collectAsStateWithLifecycle()
     LaunchedEffect(loginSubmit) {
-        if (loginSubmit is LoginSubmitState.LoggedIn) {
+        if (loginSubmit is LoginSubmitState.LoggedIn ||
+            (BuildConfig.REMANENCE_RECOVERY_ENABLED && loginSubmit is LoginSubmitState.RecoveryRequired)) {
             rootViewModel.onSessionEstablished()
         }
     }
@@ -223,7 +227,15 @@ private fun RootSurface(
                     HoldInformation("Connect to the internet so we can check your session.")
                     HoldTextButton(onClick = rootViewModel::onAppForegrounded) { Text("try connection again") }
                 }
-                if (registering) {
+                dev.hryshyn.remanence.recovery.RecoveryActions(
+                    container, hasIdentity = false,
+                    recoveryRequired = authState == AuthUiState.RecoveryRequired,
+                    onRecovered = rootViewModel::onSessionEstablished,
+                    onBusyChange = { recoveryBusy = it },
+                )
+                if (recoveryBusy) {
+                    Spacer(Modifier.weight(1f))
+                } else if (registering) {
                     val form by registrationViewModel.form.collectAsStateWithLifecycle()
                     val submit by registrationViewModel.submitState.collectAsStateWithLifecycle()
                     RegistrationFormScreen(
@@ -263,7 +275,11 @@ private fun RootSurface(
                 )
             }
             if (authenticated != null) {
-                AuthenticatedHomeChrome(authenticated.handle, rootViewModel::logout, home)
+                AuthenticatedHomeChrome(authenticated.handle, rootViewModel::logout, home,
+                    recoveryContent = {
+                        dev.hryshyn.remanence.recovery.RecoveryActions(container, true, false, rootViewModel::onSessionEstablished,
+                            onBusyChange = { recoveryBusy = it })
+                    })
             } else {
                 home()
             }

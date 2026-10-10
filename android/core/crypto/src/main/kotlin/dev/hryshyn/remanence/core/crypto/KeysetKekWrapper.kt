@@ -16,6 +16,19 @@ import java.security.GeneralSecurityException
  */
 class KeysetKekWrapper(private val kekBoundary: KekBoundary) {
 
+    internal fun wrapRecoveryIdentity(alias: String, identity: AccountRecoveryCrypto.Restored): WrappedKeysetRecord {
+        val plain = AccountRecoveryCrypto.serialize(identity.encryption, identity.signing)
+        try {
+            val sealed = kekBoundary.loadKekAead(alias).encrypt(plain, recoveryAad(alias))
+            return WrappedKeysetRecord.create(alias, sealed.copyOfRange(0, NONCE_SIZE), sealed.copyOfRange(NONCE_SIZE, sealed.size))
+        } finally { plain.fill(0) }
+    }
+    internal fun unwrapRecoveryIdentity(record: WrappedKeysetRecord): AccountRecoveryCrypto.Restored {
+        val plain = loadAeadFor(record).decrypt(record.nonce + record.wrappedKeyset, recoveryAad(record.alias))
+        try { return AccountRecoveryCrypto.deserialize(plain) } finally { plain.fill(0) }
+    }
+    private fun recoveryAad(alias: String) = "remanence/local/recovered-identity/v1\n$alias".toByteArray()
+
     fun wrap(alias: String, keysetHandle: KeysetHandle): WrappedKeysetRecord {
         val aead = kekBoundary.loadKekAead(alias)
         val serialized = TinkProtoKeysetFormat.serializeKeyset(keysetHandle, InsecureSecretKeyAccess.get())

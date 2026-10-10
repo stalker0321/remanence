@@ -15,6 +15,9 @@ val v2LineLocalizationEnabled = when (
 }
 
 val remanenceProductVersion = providers.gradleProperty("remanence.productVersion").get()
+val recoveryEnabled = providers.gradleProperty("remanence.recovery.enabled").orElse("false").get().also {
+    require(it == "true" || it == "false") { "remanence.recovery.enabled must be true or false" }
+}
 val remanenceAndroidVersionCode =
     providers.gradleProperty("remanence.androidVersionCode").get().toInt()
 
@@ -33,12 +36,18 @@ android {
 
     buildTypes {
         named("debug") {
+            if (recoveryEnabled == "true") {
+                // Test installation must not replace the owner's current app/data.
+                applicationIdSuffix = ".recoverytest"
+                versionNameSuffix = "-recovery-test"
+            }
             buildConfigField(
                 "String",
                 "API_BASE_URL",
                 quoteBuildConfigString(remanenceApiBaseUrl("http://127.0.0.1:8000/")),
             )
             buildConfigField("boolean", "REMANENCE_V2_LINE_LOCALIZATION", v2LineLocalizationEnabled)
+            buildConfigField("boolean", "REMANENCE_RECOVERY_ENABLED", recoveryEnabled)
         }
         named("release") {
             buildConfigField(
@@ -47,6 +56,7 @@ android {
                 quoteBuildConfigString(remanenceApiBaseUrl("https://invalid.invalid/")),
             )
             buildConfigField("boolean", "REMANENCE_V2_LINE_LOCALIZATION", "false")
+            buildConfigField("boolean", "REMANENCE_RECOVERY_ENABLED", "false")
         }
     }
 
@@ -72,6 +82,9 @@ dependencies {
     implementation(project(":core:recognition"))
     implementation("org.opencv:opencv:4.10.0")
     implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.kotlinx.serialization.json)
+    implementation("androidx.credentials:credentials:1.6.0")
+    implementation("androidx.credentials:credentials-play-services-auth:1.6.0")
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.appcompat)

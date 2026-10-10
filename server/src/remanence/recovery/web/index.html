@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Remanence recovery integration</title></head>
+<body><main>
+<h1>Remanence · recovery integration</h1>
+<p>Experimental: opens the existing account identity, not a random fixture. No gallery, key download or persistent browser session.</p>
+<button id="passkey" type="button">Sign in and unlock with a passkey</button>
+<details><summary>Lost access to your passkey provider?</summary>
+<label>Email <input id="email" type="email" autocomplete="username" maxlength="320"></label>
+<label>Password <input id="password" type="password" autocomplete="current-password" maxlength="128"></label>
+<label>Recovery code <input id="code" type="password" autocomplete="off" maxlength="43"></label>
+<button id="recover" type="button">Unlock with recovery code</button></details>
+<pre id="result" aria-live="polite">NOT_RUN</pre>
+</main><script type="module" src="./app.mjs"></script></body></html>

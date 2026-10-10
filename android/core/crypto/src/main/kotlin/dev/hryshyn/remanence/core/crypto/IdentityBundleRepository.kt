@@ -33,8 +33,9 @@ class IdentityBundleRepository(
      * Generates a fresh identity bundle and persists it wrapped under the
      * given KEK alias. Throws instead of overwriting any existing record.
      */
+    @Synchronized
     fun createFresh(kekAlias: String): AccountIdentityGenerator.AccountIdentity {
-        if (encryptionFile().exists() || signingFile().exists()) {
+        if (exists()) {
             throw GeneralSecurityException("identity bundle already exists; refusing silent replacement")
         }
         val identity = AccountIdentityGenerator().generate()
@@ -48,7 +49,16 @@ class IdentityBundleRepository(
         return identity
     }
 
+    @Synchronized
     fun load(): LoadResult {
+        val recovered = File(baseDirectory, RECOVERED_FILE_NAME)
+        if (recovered.exists()) {
+            return try {
+                val record = WrappedKeysetRecord.parse(recovered.readBytes())
+                val keys = wrapper.unwrapRecoveryIdentity(record)
+                LoadResult.Available(keys.encryption, keys.signing)
+            } catch (_: Exception) { LoadResult.RecoveryRequired }
+        }
         val encryptionRecord = readRecord(encryptionFile()) ?: return LoadResult.RecoveryRequired
         val signingRecord = readRecord(signingFile()) ?: return LoadResult.RecoveryRequired
         val encryption = try {
@@ -64,7 +74,20 @@ class IdentityBundleRepository(
         return LoadResult.Available(encryption, signing)
     }
 
-    fun exists(): Boolean = encryptionFile().exists() || signingFile().exists()
+    fun exists(): Boolean = encryptionFile().exists() || signingFile().exists() || File(baseDirectory, RECOVERED_FILE_NAME).exists()
+
+    /** One atomic wrapped record; never replace another or an unusable existing identity. */
+    @Synchronized
+    fun installRecovered(kekAlias: String, restored: AccountRecoveryCrypto.Restored) {
+        if (exists()) {
+            val current = load()
+            if (current is LoadResult.Available &&
+                java.security.MessageDigest.isEqual(AccountRecoveryCrypto.public(current.encryptionHandle), AccountRecoveryCrypto.public(restored.encryption)) &&
+                java.security.MessageDigest.isEqual(AccountRecoveryCrypto.public(current.signingHandle), AccountRecoveryCrypto.public(restored.signing))) return
+            throw GeneralSecurityException("existing identity cannot be replaced by recovery")
+        }
+        writeAtomically(File(baseDirectory, RECOVERED_FILE_NAME), wrapper.wrapRecoveryIdentity(kekAlias, restored))
+    }
 
     /**
      * Serialized public-only keysets of the stored bundle. Lets callers
@@ -112,5 +135,6 @@ class IdentityBundleRepository(
     private companion object {
         const val ENCRYPTION_FILE_NAME = "identity.encryption.pwks"
         const val SIGNING_FILE_NAME = "identity.signing.pwks"
+        const val RECOVERED_FILE_NAME = "identity.recovered.pwks"
     }
 }

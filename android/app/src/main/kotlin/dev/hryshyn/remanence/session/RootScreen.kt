@@ -188,12 +188,14 @@ fun AuthenticatedHomeChrome(
     onLogout: () -> Unit,
     homeContent: @Composable () -> Unit,
     modifier: Modifier = Modifier,
+    recoveryContent: @Composable () -> Unit = {},
 ) {
     Column(modifier = modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("@$handle", modifier = Modifier.weight(1f).testTag("root_signed_in_as"), style = MaterialTheme.typography.labelMedium)
             OutlinedButton(onClick = onLogout, modifier = Modifier.testTag("root_logout_button")) { Text(stringResource(R.string.hold_logout)) }
         }
+        recoveryContent()
         Box(Modifier.weight(1f)) { homeContent() }
     }
 }

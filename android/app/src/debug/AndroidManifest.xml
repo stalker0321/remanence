@@ -4,6 +4,9 @@
     <application
         android:usesCleartextTraffic="true"
         tools:replace="android:usesCleartextTraffic">
+        <!-- Test-only association; website DAL must also authorize the exact
+             package and signer. Does not enable recovery in default builds. -->
+        <meta-data android:name="asset_statements" android:resource="@string/recovery_asset_statements" />
         <!-- Harness for LocaleSelectActivityTest (Robolectric launches it by
              intent, so it must resolve in the test manifest). Explicit
              AppCompat theme: the delegate enforces it in onPostCreate.

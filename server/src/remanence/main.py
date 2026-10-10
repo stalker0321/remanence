@@ -21,6 +21,7 @@ from remanence.api.capsules import router as capsules_router
 from remanence.api.music import router as music_router
 from remanence.api.problems import RequestIdMiddleware, problem_response
 from remanence.api.users import router as users_router
+from remanence.api.recovery import router as recovery_router
 from remanence.capsules.upload_reservations import (
     UploadReservationManager,
     build_upload_reservation_manager,
@@ -171,4 +172,5 @@ def create_app(
     app.include_router(directory_router)
     app.include_router(capsules_router)
     app.include_router(music_router)
+    app.include_router(recovery_router)
     return app

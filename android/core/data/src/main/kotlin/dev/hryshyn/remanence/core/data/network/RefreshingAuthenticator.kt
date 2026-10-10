@@ -207,6 +207,16 @@ class SessionRefreshCoordinator internal constructor(
      */
     fun acquireAccountLease(): Long = accountLeaseEpoch.get()
 
+    /** Bounded local recovery installation, fenced against logout/replacement. No network. */
+    fun commitLocalRecovery(lease: Long, install: () -> Unit): Boolean {
+        publicationFence.lock()
+        try {
+            if (accountLeaseEpoch.get() != lease) return false
+            install()
+            return true
+        } finally { publicationFence.unlock() }
+    }
+
     /**
      * Logout/account teardown: retires outstanding replacement leases and
      * closes the refresh domain. Does not clear the live bearer so

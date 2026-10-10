@@ -40,7 +40,7 @@ class RegistrationService:
         self,
         *,
         email_normalized: str,
-        password: str,
+        password: str | None,
         handle_normalized: str,
         key_bundle_id: uuid.UUID,
         suite: str,
@@ -75,12 +75,13 @@ class RegistrationService:
         self._session.add(user)
         self._session.flush()
 
-        auth_credential = AuthCredential(
-            user_id=user_id,
-            password_hash=self._password_service.hash_password(password),
-        )
-        self._session.add(auth_credential)
-        self._session.flush()
+        if password is not None:
+            auth_credential = AuthCredential(
+                user_id=user_id,
+                password_hash=self._password_service.hash_password(password),
+            )
+            self._session.add(auth_credential)
+            self._session.flush()
 
         key_bundle = UserKeyBundle(
             id=key_bundle_id,

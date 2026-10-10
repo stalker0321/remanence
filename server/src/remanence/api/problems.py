@@ -117,6 +117,10 @@ PROBLEM_CATALOG: Final[dict[str, ProblemSpec]] = {
         "Handle unavailable",
         "The handle is not available.",
     ),
+    "HANDLE_IMMUTABLE": _spec(
+        "HANDLE_IMMUTABLE", 409, "Handle immutable",
+        "The account handle is permanent and cannot be changed.",
+    ),
     "HANDLE_NOT_FOUND": _spec(
         "HANDLE_NOT_FOUND",
         404,

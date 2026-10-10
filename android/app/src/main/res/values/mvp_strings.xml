@@ -1,0 +1,17 @@
+<resources>
+    <string name="mvp_other_sign_in">Other sign-in options</string>
+    <string name="mvp_settings">Settings</string>
+    <string name="mvp_handle_permanent">Your handle is permanent.</string>
+    <string name="mvp_recovery_ready">Access to your memories is saved and recovery verified.</string>
+    <string name="mvp_recovery_not_ready">Recovery has not been verified.</string>
+    <string name="mvp_privacy_summary">Photos and capsule content are encrypted on your device. Signing in and unlocking encrypted memories are separate steps.</string>
+    <string name="mvp_google_continue">Continue with Google</string>
+    <string name="mvp_handle_title">Choose your handle</string>
+    <string name="mvp_handle_label">Handle</string>
+    <string name="mvp_continue">Continue</string>
+    <string name="mvp_google_retry">Sign-in did not complete. Try again.</string>
+    <string name="mvp_google_conflict">The handle may be taken, or this email belongs to an existing account. Accounts are not merged automatically.</string>
+    <string name="mvp_setup_saved">Your account and handle are saved. Finish saving access before using Remanence.</string>
+    <string name="mvp_working">Working…</string>
+    <string name="mvp_retry_connection">Retry connection</string>
+</resources>

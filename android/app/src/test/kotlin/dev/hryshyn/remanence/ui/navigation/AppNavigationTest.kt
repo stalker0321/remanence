@@ -75,7 +75,7 @@ class AppNavigationTest {
     @Test
     fun destinationInventoryAllowsOnlyAuthHomeCreateScanAndGrantGatedCapsule() {
         val inventory = RouteGuard.allDestinations().map { it.javaClass.simpleName }.toSet()
-        assertEquals(setOf("Authentication", "Home", "Create", "Scan", "Capsule"), inventory)
+        assertEquals(setOf("Authentication", "Home", "Settings", "Create", "Scan", "Capsule"), inventory)
         for (forbidden in listOf("Gallery", "Inbox", "History", "Feed", "DeepLink")) {
             org.junit.Assert.assertFalse("forbidden route type: $forbidden", forbidden in inventory.joinToString())
         }

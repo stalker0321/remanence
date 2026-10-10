@@ -28,6 +28,21 @@ RP = "remanence.hryshyn.dev"
 ORIGIN = "https://remanence.hryshyn.dev"
 
 
+def test_setup_status_is_owner_bound_and_supports_resume(env):
+    client, factory = env; a = seed(client); other = seed(client, "b")
+    assert client.get("/v1/recovery/status").status_code == 401
+    assert client.get("/v1/recovery/status", headers=a["headers"]).json()["state"] == "NOT_STARTED"
+    id = register(client, a)
+    assert client.get("/v1/recovery/status", headers=a["headers"]).json() == {"state": "PENDING", "credential_id": id}
+    assert client.get("/v1/recovery/status", headers=other["headers"]).json()["state"] == "NOT_STARTED"
+    r = record(a); flow = setup(client, a)
+    post(client, "record", {"flow": flow, "record": r}, a["headers"])
+    assert client.get("/v1/recovery/status", headers=a["headers"]).json() == {"state": "STORED", "credential_id": id}
+    # Resume verification uses the same credential and unchanged encrypted package.
+    setup(client, a)
+    assert client.get("/v1/recovery/record", headers=a["headers"]).json()["record"] == r
+
+
 class Authenticator:
     def __init__(self, user):
         self.user = user; self.id = os.urandom(32); self.key = ec.generate_private_key(ec.SECP256R1()); self.counter = 0

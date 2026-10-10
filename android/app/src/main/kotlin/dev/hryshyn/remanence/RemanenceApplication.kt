@@ -171,6 +171,8 @@ class AppContainer private constructor(
 
     val appContext: Context = context.applicationContext
 
+    val recoveryReadiness by lazy { dev.hryshyn.remanence.recovery.RecoveryReadinessStore(appContext) }
+
     /**
      * In-app language choice (EN/RU/UK + system default). Handle only: the
      * store is AppCompat's (single source of truth), so switching recreates
@@ -1185,6 +1187,9 @@ class AppContainer private constructor(
             tokens = sessionTokenPort(),
             identity = identityAvailability,
             account = { currentAccountStore.load() },
+            refreshForRecovery = BuildConfig.REMANENCE_RECOVERY_ENABLED,
+            recoveryReady = { account -> !BuildConfig.REMANENCE_RECOVERY_ENABLED ||
+                recoveryReadiness.isReady(account.userId, account.activeKeyBundleId) },
             refresher = object : dev.hryshyn.remanence.session.SessionRefresher {
                 override suspend fun hasStoredToken(): Boolean =
                     refreshCoordinator.hasStoredToken()

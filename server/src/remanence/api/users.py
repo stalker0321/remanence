@@ -27,6 +27,8 @@ def change_handle(
     principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
     session: Session = Depends(get_db_session),
 ) -> HandleChangeResponse | JSONResponse:
+    if request.app.state.settings.recovery_enabled:
+        return problem_response(request, "HANDLE_IMMUTABLE")
     try:
         user = session.scalar(
             select(User).where(User.id == principal.user_id).with_for_update()

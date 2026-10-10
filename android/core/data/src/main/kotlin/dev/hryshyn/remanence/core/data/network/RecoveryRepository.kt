@@ -29,7 +29,7 @@ class RecoveryRepository(private val baseUrl: ApiBaseUrl) {
     }
     private companion object {
         const val MAX_BYTES = 96L * 1024
-        val PATHS = setOf("register/options", "register/verify", "setup/options", "setup/verify", "login/options", "login/verify", "record")
+        val PATHS = setOf("register/options", "register/verify", "setup/options", "setup/verify", "login/options", "login/verify", "record", "status")
     }
 }
 class RecoveryRejectedException : Exception("recovery request rejected")

@@ -37,11 +37,19 @@ class Settings(BaseSettings):
     blob_root: Path | None = None
     music_search_backend: MusicSearchBackend = MusicSearchBackend.DISABLED
     recovery_enabled: bool = False
+    google_sign_in_enabled: bool = False
+    google_client_ids: list[str] = Field(default_factory=list)
+    google_presenter_ids: list[str] = Field(default_factory=list)
     recovery_rp_id: str = "remanence.hryshyn.dev"
     recovery_origins: list[str] = Field(default_factory=lambda: ["https://remanence.hryshyn.dev"])
 
     @model_validator(mode="after")
     def require_datastore_for_non_test(self) -> Self:
+        if self.google_sign_in_enabled:
+            if self.mode is AppMode.PROD or not self.recovery_enabled:
+                raise ValueError("Google onboarding requires experimental DEV/TEST recovery")
+            if not self.google_client_ids or any(not re.fullmatch(r"[A-Za-z0-9_-]+\.apps\.googleusercontent\.com", v) for v in self.google_client_ids + self.google_presenter_ids):
+                raise ValueError("explicit Google OAuth client IDs required")
         if self.recovery_enabled and self.mode is AppMode.PROD:
             raise ValueError("experimental recovery is DEV/TEST only")
         if not self.recovery_rp_id or not self.recovery_origins:

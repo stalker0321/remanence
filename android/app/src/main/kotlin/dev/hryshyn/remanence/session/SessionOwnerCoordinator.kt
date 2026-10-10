@@ -93,6 +93,7 @@ internal class SessionOwnerCoordinator(
 
             SessionState.SignedOut -> return SessionOwnerResolution.Rejected
             SessionState.RecoveryRequired -> return SessionOwnerResolution.RecoveryRequired
+            is SessionState.RecoverySetupRequired -> return SessionOwnerResolution.RecoveryRequired
         }
     }
 

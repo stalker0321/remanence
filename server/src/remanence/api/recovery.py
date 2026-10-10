@@ -316,3 +316,16 @@ def save_record(payload: SaveRequest, principal: AuthenticatedPrincipal = Depend
 @router.get("/v1/recovery/record")
 def get_record(principal: AuthenticatedPrincipal = Depends(get_authenticated_principal), db: Session = Depends(get_db_session)):
     return run(db, lambda: record_response(db, principal.user_id))
+
+
+@router.get("/v1/recovery/status")
+def recovery_status(principal: AuthenticatedPrincipal = Depends(get_authenticated_principal), db: Session = Depends(get_db_session)):
+    def operation():
+        record = db.get(RecoveryRecord, principal.user_id)
+        if record:
+            if record.bundle_id != active_bundle(db, principal.user_id).id: raise ValueError()
+            return {"state": "STORED", "credential_id": record.credential_id}
+        pending = db.scalar(select(RecoveryCredential).where(RecoveryCredential.user_id == principal.user_id)
+            .order_by(RecoveryCredential.created_at.desc(), RecoveryCredential.id).limit(1))
+        return {"state": "PENDING" if pending else "NOT_STARTED", "credential_id": pending.id if pending else None}
+    return run(db, operation)

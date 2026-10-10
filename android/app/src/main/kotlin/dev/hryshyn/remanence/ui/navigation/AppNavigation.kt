@@ -19,8 +19,10 @@ sealed interface AuthUiState {
 
     data object SignedOut : AuthUiState
 
-    /** Password accepted by the server, but local private identity is absent. */
+    /** Account authenticated by the server, but local private identity is absent. */
     data object RecoveryRequired : AuthUiState
+
+    data class RecoverySetupRequired(val userId: String, val handle: String, val bundleId: String) : AuthUiState
 
     /** Sealed refresh token exists but the cold-start refresh could not complete. */
     data object RequiresConnectivity : AuthUiState
@@ -67,6 +69,8 @@ sealed interface AppDestination {
     /** Post-authentication home. */
     data object Home : AppDestination
 
+    data object Settings : AppDestination
+
     /** Sender flow entry: resolve recipient, capture, encrypt, publish. */
     data object Create : AppDestination
 
@@ -95,6 +99,7 @@ object RouteGuard {
         AuthUiState.SignedOut,
         AuthUiState.RecoveryRequired,
         AuthUiState.RequiresConnectivity,
+        is AuthUiState.RecoverySetupRequired,
         -> AppDestination.Authentication
 
         is AuthUiState.Authenticated ->
@@ -124,6 +129,7 @@ object RouteGuard {
     fun allDestinations(): Set<AppDestination> = setOf(
         AppDestination.Authentication,
         AppDestination.Home,
+        AppDestination.Settings,
         AppDestination.Create,
         AppDestination.Scan,
         AppDestination.Capsule("inventory-probe"),

@@ -10,6 +10,7 @@ from sqlalchemy import Engine
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from remanence.api.auth import router as auth_router
+from remanence.api.google_auth import router as google_auth_router
 from remanence.api.dependencies import (
     AuthenticationRequiredError,
     DatabaseUnavailableError,
@@ -168,6 +169,7 @@ def create_app(
 
     app.include_router(health_router)
     app.include_router(auth_router)
+    app.include_router(google_auth_router)
     app.include_router(users_router)
     app.include_router(directory_router)
     app.include_router(capsules_router)

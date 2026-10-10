@@ -25,7 +25,7 @@ class HomeCapabilityViewModel(
     fun onAuthStateChanged(authState: AuthUiState) {
         _capability.value = when (authState) {
             AuthUiState.Resolving,
-            AuthUiState.SignedOut, AuthUiState.RequiresConnectivity ->
+            AuthUiState.SignedOut, AuthUiState.RequiresConnectivity, is AuthUiState.RecoverySetupRequired ->
                 AccountCapabilityState.NotAuthenticated
 
             AuthUiState.RecoveryRequired -> AccountCapabilityState.RecoveryRequired

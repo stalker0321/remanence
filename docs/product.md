@@ -44,7 +44,9 @@ The MVP is production-shaped, not a throwaway prototype. In scope:
   auto-open and remain blocked until the future explicit candidate picker is
   shipped.
 - A postcard MUST be treated as a UX recognition token. It MUST NOT be treated as a cryptographic secret.
-- Sender and recipient relationships MUST use immutable user IDs. Handles are mutable display/search attributes only.
+- Sender and recipient relationships MUST use immutable user IDs. The Android
+  MVP direction (ADR-019) uses unique permanent handles; the old mutable-handle
+  API is legacy compatibility outside the recovery-enabled MVP profile.
 
 ## 5. Deferred / non-goals
 
@@ -158,7 +160,9 @@ A rooted device, modified client, unlocked-device attacker, screenshot, or direc
 
 ## 14. Account and identity assumptions
 
-- MVP authentication uses a private email plus password. Email is not part of the public product identity.
+- Current legacy authentication uses a private email plus password. ADR-019
+  prepares Google authentication independently of the passkey storage provider;
+  Apple sign-in is deferred. Email is not part of the public product identity.
 - The current public handle is unique after ASCII lowercase normalization and matches `[a-z0-9_.]` with a documented length limit.
 - Recipient confirmation MUST bind the current display handle to immutable `user_id` and the selected active public-key ID.
 - Password reset and E2EE recovery are separate. Recovering authentication MUST NOT be presented as recovering encrypted memories.

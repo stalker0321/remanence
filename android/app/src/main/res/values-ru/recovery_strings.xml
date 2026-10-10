@@ -1,0 +1,19 @@
+<resources>
+    <string name="recovery_title">Сохраните доступ к воспоминаниям</string>
+    <string name="recovery_test_title">Восстановление · тестовая сборка</string>
+    <string name="recovery_setup_hint">Выберите хранилище passkey в системном диалоге. Оно может отличаться от аккаунта для входа. Сохранять фразу восстановления не нужно.</string>
+    <string name="recovery_prf_missing">Этот менеджер passkey не поддерживает восстановление зашифрованных воспоминаний. Аккаунт сохранён, но настройка не завершена. Попробуйте поддерживаемый менеджер.</string>
+    <string name="recovery_failed">Восстановление не завершено. Существующие ключи не заменены. Проверьте подключение и способ восстановления.</string>
+    <string name="recovery_old_android">Для восстановления через passkey нужен Android 9 или новее. На этом устройстве нельзя завершить настройку passkey.</string>
+    <string name="recovery_verified">Доступ сохранён, восстановление проверено. Дополнительный код сохранять необязательно.</string>
+    <string name="recovery_save">Сохранить или проверить passkey</string>
+    <string name="recovery_show_code">Показать необязательный код восстановления</string>
+    <string name="recovery_another_manager">Выбрать другой менеджер passkey</string>
+    <string name="recovery_restored">Доступ восстановлен.</string>
+    <string name="recovery_restore_signed_in">Восстановить воспоминания через passkey</string>
+    <string name="recovery_sign_in">Войти и восстановить через passkey</string>
+    <string name="recovery_code_label">Код восстановления</string>
+    <string name="recovery_code_restore">Восстановить через код</string>
+    <string name="recovery_code_hint">Необязательная дополнительная защита. Для восстановления через код также нужен вход в аккаунт. Сохранять код для продолжения не требуется.</string>
+    <string name="recovery_hide_code">Скрыть код</string>
+</resources>

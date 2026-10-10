@@ -52,6 +52,7 @@ fun RootScreen(
     capsuleContent: @Composable (grantId: String) -> Unit = {},
     onExitFlow: () -> Unit = {},
     showPublicHome: Boolean = false,
+    settingsContent: @Composable () -> Unit = {},
 ) {
     if (authState is AuthUiState.Resolving) {
         // Cold-start session check still in flight: hold a neutral frame so
@@ -83,7 +84,7 @@ fun RootScreen(
     }
 
     BackHandler(
-        enabled = destination == AppDestination.Create || destination == AppDestination.Scan,
+        enabled = destination == AppDestination.Create || destination == AppDestination.Scan || destination == AppDestination.Settings,
         onBack = onExitFlow,
     )
 
@@ -103,6 +104,7 @@ fun RootScreen(
 
     CompositionLocalProvider(LocalAstraCarryFront provides carryFront) {
     when (destination) {
+        AppDestination.Settings -> key(destination) { settingsContent() }
         // Create owns its step-aware back arrow and pinned close control.
         // The root owns only the route boundary and session lifecycle.
         AppDestination.Create -> key(destination) {
@@ -189,11 +191,16 @@ fun AuthenticatedHomeChrome(
     homeContent: @Composable () -> Unit,
     modifier: Modifier = Modifier,
     recoveryContent: @Composable () -> Unit = {},
+    onSettings: (() -> Unit)? = null,
 ) {
     Column(modifier = modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("@$handle", modifier = Modifier.weight(1f).testTag("root_signed_in_as"), style = MaterialTheme.typography.labelMedium)
-            OutlinedButton(onClick = onLogout, modifier = Modifier.testTag("root_logout_button")) { Text(stringResource(R.string.hold_logout)) }
+            if (onSettings == null) {
+                OutlinedButton(onClick = onLogout, modifier = Modifier.testTag("root_logout_button")) { Text(stringResource(R.string.hold_logout)) }
+            } else {
+                OutlinedButton(onClick = onSettings, modifier = Modifier.testTag("root_settings_button")) { Text(stringResource(R.string.mvp_settings)) }
+            }
         }
         recoveryContent()
         Box(Modifier.weight(1f)) { homeContent() }

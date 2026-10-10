@@ -1,0 +1,122 @@
+package dev.hryshyn.remanence.auth
+
+import android.app.Activity
+import androidx.credentials.CredentialManager
+import androidx.credentials.CustomCredential
+import androidx.credentials.GetCredentialRequest
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import dev.hryshyn.remanence.AppContainer
+import dev.hryshyn.remanence.BuildConfig
+import dev.hryshyn.remanence.core.data.network.GoogleAuthRepository
+import dev.hryshyn.remanence.core.data.network.GoogleAuthRejected
+import dev.hryshyn.remanence.core.data.network.LoginResponseDto
+import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.wiring.PreparedIdentity
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.*
+import kotlin.coroutines.cancellation.CancellationException
+
+fun interface GoogleCredentialPort {
+    suspend fun token(clientId: String, nonce: String): String
+}
+
+class AndroidGoogleCredentials(private val activity: Activity) : GoogleCredentialPort {
+    override suspend fun token(clientId: String, nonce: String): String {
+        val option = GetSignInWithGoogleOption.Builder(clientId).setNonce(nonce).build()
+        val result = CredentialManager.create(activity).getCredential(activity,
+            GetCredentialRequest(listOf(option))).credential as? CustomCredential
+            ?: error("unexpected credential")
+        check(result.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL)
+        return GoogleIdTokenCredential.createFrom(result.data).idToken
+    }
+}
+
+sealed interface GoogleAuthState {
+    data object Idle : GoogleAuthState
+    data object Working : GoogleAuthState
+    data object ChooseHandle : GoogleAuthState
+    data object SignedIn : GoogleAuthState
+    data class Failed(val conflict: Boolean) : GoogleAuthState
+}
+
+/** Tickets live in this retained VM only; no ID token, ticket or password in saved state. */
+class GoogleAuthViewModel(private val container: AppContainer) : ViewModel() {
+    private val api = GoogleAuthRepository(container.apiBaseUrl)
+    private val json = Json { ignoreUnknownKeys = false }
+    private val mutableState = MutableStateFlow<GoogleAuthState>(GoogleAuthState.Idle)
+    val state = mutableState.asStateFlow()
+    private var ticket: JsonObject? = null
+    private var replacementLease: Long? = null
+
+    fun start(credentials: GoogleCredentialPort) {
+        if (!BuildConfig.REMANENCE_GOOGLE_SIGN_IN_ENABLED || state.value == GoogleAuthState.Working) return
+        ticket = null
+        mutableState.value = GoogleAuthState.Working
+        viewModelScope.launch {
+            try {
+                val lease = container.sessionReplacement.acquireLease()
+                replacementLease = lease
+                val options = api.request("options", JsonObject(emptyMap()))
+                val token = credentials.token(options.text("client_id"), options.text("nonce"))
+                val result = api.request("verify", buildJsonObject {
+                    put("flow", options.getValue("flow")); put("nonce", options.getValue("nonce")); put("id_token", token)
+                })
+                when (result.text("status")) {
+                    "NEEDS_HANDLE" -> { ticket = result; mutableState.value = GoogleAuthState.ChooseHandle }
+                    "SIGNED_IN" -> commit(result, lease)
+                    else -> error("invalid response")
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { mutableState.value = GoogleAuthState.Failed(e is GoogleAuthRejected && e.status == 409) }
+        }
+    }
+
+    fun register(handle: String) {
+        val pending = ticket ?: return
+        val lease = replacementLease ?: return
+        if (state.value == GoogleAuthState.Working) return
+        mutableState.value = GoogleAuthState.Working
+        viewModelScope.launch {
+            try {
+                val identity = withContext(Dispatchers.IO) { container.registrationIdentityAdapter.prepareIdentity() }
+                val result = api.request("register", buildJsonObject {
+                    put("flow", pending.getValue("flow")); put("registration_token", pending.getValue("registration_token"))
+                    put("handle", handle)
+                    put("key_bundle", buildJsonObject {
+                        put("key_bundle_id", identity.keyBundleId); put("suite", PreparedIdentity.SUITE)
+                        put("protocol_version", PreparedIdentity.PROTOCOL_VERSION)
+                        put("encryption_public_keyset", identity.encryptionPublicKeysetB64Url)
+                        put("signing_public_keyset", identity.signingPublicKeysetB64Url)
+                    })
+                })
+                commit(result, lease)
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { mutableState.value = GoogleAuthState.Failed(e is GoogleAuthRejected && e.status == 409) }
+        }
+    }
+
+    val hasTicket: Boolean get() = ticket != null
+
+    private suspend fun commit(result: JsonObject, lease: Long) {
+        check(result.text("status") == "SIGNED_IN")
+        val login = json.decodeFromJsonElement<LoginResponseDto>(result.getValue("login"))
+        var committed = false
+        try {
+            container.sessionReplacement.replace(lease, UserId.parseRest(login.user.userId), login.accessToken, login.refreshToken) {
+                container.currentAccountStore.record(login.user.userId, login.user.handle, login.activeKeyBundle.keyBundleId)
+            }
+            committed = true; ticket = null; mutableState.value = GoogleAuthState.SignedIn
+        } finally {
+            if (!committed) withContext(NonCancellable) { container.bareAuthRepository.logout(login.accessToken) }
+        }
+    }
+}
+private fun JsonObject.text(name: String) = getValue(name).jsonPrimitive.content

@@ -3,6 +3,18 @@
 2026-10-10. Opt-in DEV/TEST implementation; not a production rollout.
 Cryptographic contract and release limits: [ADR-011](decisions/ADR-011-passkey-prf-first-integration.md).
 
+The newer Android onboarding preparation is defined in
+[ADR-019](decisions/ADR-019-google-onboarding-mvp.md) and the
+[morning runbook](android-mvp-morning-runbook.md). In that enabled test profile,
+Google authenticates the account independently of its passkey provider; a new
+account cannot enter Create/Scan until actual PRF/readback recovery succeeds.
+Pending/stored enrollment resumes without replacing the identity or record.
+The recovery code is optional and hidden until requested, not a required
+registration step. A signed-in Google account can restore with its existing
+passkey or previously saved code; Google login alone cannot decrypt anything.
+The original password-only acceptance below remains a legacy test scenario,
+not the new onboarding specification. These changes are not yet deployed.
+
 ## What works in this slice
 
 Android owners with an existing account/private identity can select **Protect

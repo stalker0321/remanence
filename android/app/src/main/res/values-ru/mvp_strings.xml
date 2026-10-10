@@ -1,0 +1,17 @@
+<resources>
+    <string name="mvp_other_sign_in">Другие способы входа</string>
+    <string name="mvp_settings">Настройки</string>
+    <string name="mvp_handle_permanent">Ваш хэндл постоянный, изменить его нельзя.</string>
+    <string name="mvp_recovery_ready">Доступ к воспоминаниям сохранён, восстановление проверено.</string>
+    <string name="mvp_recovery_not_ready">Восстановление ещё не проверено.</string>
+    <string name="mvp_privacy_summary">Фото и содержимое капсул шифруются на вашем устройстве. Вход в аккаунт и открытие зашифрованных воспоминаний — отдельные шаги.</string>
+    <string name="mvp_google_continue">Продолжить с Google</string>
+    <string name="mvp_handle_title">Выберите хэндл</string>
+    <string name="mvp_handle_label">Хэндл</string>
+    <string name="mvp_continue">Продолжить</string>
+    <string name="mvp_google_retry">Вход не завершён. Попробуйте ещё раз.</string>
+    <string name="mvp_google_conflict">Хэндл может быть занят, или этот email принадлежит существующему аккаунту. Аккаунты не объединяются автоматически.</string>
+    <string name="mvp_setup_saved">Аккаунт и хэндл сохранены. Завершите сохранение доступа, чтобы пользоваться Remanence.</string>
+    <string name="mvp_working">Подождите…</string>
+    <string name="mvp_retry_connection">Повторить подключение</string>
+</resources>

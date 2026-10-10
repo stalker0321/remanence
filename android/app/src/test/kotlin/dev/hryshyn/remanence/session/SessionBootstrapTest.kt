@@ -130,6 +130,8 @@ class SessionBootstrapTest {
         identity: IdentityAvailabilityPort = FakeIdentity(),
         summary: PersistedAccountSummary? = PersistedAccountSummary(ownerA, "mykola", bundleA),
         tokenPresent: Boolean? = null,
+        recoveryReady: Boolean = true,
+        refreshForRecovery: Boolean = false,
     ): Fixture {
         val dir = createTempDirectory("session").toFile().apply { deleteOnExit() }
         val saved = savedRefresh?.let {
@@ -141,13 +143,30 @@ class SessionBootstrapTest {
             tokenPresent ?: (savedRefresh != null),
             tokens,
         )
-        val bootstrap = SessionBootstrap(tokens, identity, { summary }, refresher)
+        val bootstrap = SessionBootstrap(tokens, identity, { summary }, refresher,
+            recoveryReady = { recoveryReady }, refreshForRecovery = refreshForRecovery)
         return Fixture(bootstrap, tokens, refresher, identity)
     }
 
     @Test
     fun coldStartWithoutTokenIsSignedOut() = runBlocking {
         assertEquals(SessionState.SignedOut, fixture(savedRefresh = null).bootstrap.bootstrap())
+    }
+
+    @Test fun unfinishedRecoveryBlocksOnlineAndOfflineWithoutErasingAccount() = runBlocking {
+        val online = fixture(recoveryReady = false)
+        assertEquals(SessionState.RecoverySetupRequired(ownerA, "mykola", bundleA), online.bootstrap.bootstrap())
+        assertEquals(1, online.refresher.calls)
+        assertEquals(0, online.tokens.clearCount)
+        val offline = fixture(recoveryReady = false, refresherOutcome = SessionRefreshOutcome.Unreachable)
+        assertTrue(offline.bootstrap.bootstrap() is SessionState.RecoverySetupRequired)
+        assertEquals(0, offline.tokens.clearCount)
+    }
+
+    @Test fun recoverySessionCanRefreshWithoutGeneratingMissingIdentity() = runBlocking {
+        val f = fixture(identity = FakeIdentity(null), refreshForRecovery = true)
+        assertEquals(SessionState.RecoveryRequired, f.bootstrap.bootstrap())
+        assertEquals(1, f.refresher.calls)
     }
 
     @Test

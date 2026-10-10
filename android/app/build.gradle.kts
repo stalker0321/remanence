@@ -18,6 +18,10 @@ val remanenceProductVersion = providers.gradleProperty("remanence.productVersion
 val recoveryEnabled = providers.gradleProperty("remanence.recovery.enabled").orElse("false").get().also {
     require(it == "true" || it == "false") { "remanence.recovery.enabled must be true or false" }
 }
+val googleSignInEnabled = providers.gradleProperty("remanence.google.enabled").orElse("false").get().also {
+    require(it == "true" || it == "false")
+    require(it != "true" || recoveryEnabled == "true") { "Google onboarding requires recovery" }
+}
 val remanenceAndroidVersionCode =
     providers.gradleProperty("remanence.androidVersionCode").get().toInt()
 
@@ -48,6 +52,7 @@ android {
             )
             buildConfigField("boolean", "REMANENCE_V2_LINE_LOCALIZATION", v2LineLocalizationEnabled)
             buildConfigField("boolean", "REMANENCE_RECOVERY_ENABLED", recoveryEnabled)
+            buildConfigField("boolean", "REMANENCE_GOOGLE_SIGN_IN_ENABLED", googleSignInEnabled)
         }
         named("release") {
             buildConfigField(
@@ -57,6 +62,7 @@ android {
             )
             buildConfigField("boolean", "REMANENCE_V2_LINE_LOCALIZATION", "false")
             buildConfigField("boolean", "REMANENCE_RECOVERY_ENABLED", "false")
+            buildConfigField("boolean", "REMANENCE_GOOGLE_SIGN_IN_ENABLED", "false")
         }
     }
 
@@ -85,6 +91,7 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation("androidx.credentials:credentials:1.6.0")
     implementation("androidx.credentials:credentials-play-services-auth:1.6.0")
+    implementation("com.google.android.libraries.identity.googleid:googleid:1.2.1")
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.appcompat)

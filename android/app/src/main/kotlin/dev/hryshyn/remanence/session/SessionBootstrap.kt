@@ -19,6 +19,8 @@ sealed interface SessionState {
     /** Refresh token exists but the wrapped identity keysets are gone: recovery flow. */
     data object RecoveryRequired : SessionState
 
+    data class RecoverySetupRequired(val userId: String, val handle: String, val bundleId: String) : SessionState
+
     /**
      * Sealed refresh token plus usable keysets, but the server could not be
      * reached to prove the session; connectivity is required before Home.
@@ -154,6 +156,8 @@ class SessionBootstrap(
     private val identity: IdentityAvailabilityPort,
     private val account: AccountSummaryPort,
     private val refresher: SessionRefresher? = null,
+    private val recoveryReady: (PersistedAccountSummary) -> Boolean = { true },
+    private val refreshForRecovery: Boolean = false,
 ) : SessionStateResolver {
 
     /**
@@ -190,11 +194,16 @@ class SessionBootstrap(
         } catch (_: Exception) {
             false
         }
-        if (!identityMatches) {
+        if (!identityMatches && !refreshForRecovery) {
             return SessionState.RecoveryRequired
         }
 
-        return when (val outcome = refresher.refresh(accountOwner)) {
+        val outcome = refresher.refresh(accountOwner)
+        if (outcome is SessionRefreshOutcome.Rotated || outcome is SessionRefreshOutcome.Reused) {
+            if (!identityMatches) return SessionState.RecoveryRequired
+            if (!recoveryReady(summary)) return SessionState.RecoverySetupRequired(summary.userId, summary.handle, summary.activeKeyBundleId)
+        }
+        return when (outcome) {
             is SessionRefreshOutcome.Rotated,
             is SessionRefreshOutcome.Reused,
             -> SessionState.Active(
@@ -213,7 +222,9 @@ class SessionBootstrap(
             SessionRefreshOutcome.NoToken,
             -> SessionState.SignedOut
 
-            SessionRefreshOutcome.Unreachable -> SessionState.OfflineActive(
+            SessionRefreshOutcome.Unreachable -> if (!identityMatches) SessionState.RequiresConnectivity
+            else if (!recoveryReady(summary)) SessionState.RecoverySetupRequired(summary.userId, summary.handle, summary.activeKeyBundleId)
+            else SessionState.OfflineActive(
                 userId = summary.userId,
                 handle = summary.handle,
                 hasEncryptionKeyset = true,

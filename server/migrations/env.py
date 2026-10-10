@@ -3,6 +3,7 @@ from sqlalchemy import create_engine, pool
 
 from remanence.auth.models import AuthCredential as _AuthCredential
 from remanence.auth.models import AuthSession as _AuthSession
+from remanence.auth.google_models import GoogleIdentity, GoogleFlow
 from remanence.capsules.blob_models import CapsuleBlob as _CapsuleBlob
 from remanence.capsules.delivery_models import RecipientDeliveryState as _RecipientDeliveryState
 from remanence.capsules.envelope_models import CapsuleEnvelope as _CapsuleEnvelope

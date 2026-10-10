@@ -1,0 +1,19 @@
+<resources>
+    <string name="recovery_title">Save access to your memories</string>
+    <string name="recovery_test_title">Recovery · experimental test build</string>
+    <string name="recovery_setup_hint">Choose where to save your passkey in the system dialog. It can be different from the account you used to sign in. No recovery phrase is required.</string>
+    <string name="recovery_prf_missing">This passkey manager cannot restore encrypted memories. Your account is saved, but setup is not complete. Try a supported manager.</string>
+    <string name="recovery_failed">Recovery did not complete. Existing keys were not replaced. Check the connection and recovery method.</string>
+    <string name="recovery_old_android">Passkey recovery requires Android 9 or newer. This device cannot complete passkey setup.</string>
+    <string name="recovery_verified">Access saved and recovery verified. An additional recovery code is optional.</string>
+    <string name="recovery_save">Save or verify passkey</string>
+    <string name="recovery_show_code">Show optional recovery code</string>
+    <string name="recovery_another_manager">Choose another passkey manager</string>
+    <string name="recovery_restored">Access restored.</string>
+    <string name="recovery_restore_signed_in">Restore memories with your passkey</string>
+    <string name="recovery_sign_in">Sign in and restore with a passkey</string>
+    <string name="recovery_code_label">Recovery code</string>
+    <string name="recovery_code_restore">Restore with recovery code</string>
+    <string name="recovery_code_hint">Optional extra protection. Code recovery also requires signing in to your account. You do not need to save this code to continue.</string>
+    <string name="recovery_hide_code">Hide optional code</string>
+</resources>

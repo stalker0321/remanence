@@ -254,7 +254,7 @@ class RootViewModel internal constructor(
                 when (intent) {
                     HomeIntent.OPEN -> openScan()
                     HomeIntent.MAKE -> openCreate()
-                    HomeIntent.ACCOUNT -> Unit
+                    HomeIntent.ACCOUNT -> openSettings()
                 }
             } else if (_authState.value == AuthUiState.SignedOut) {
                 _homeIntent.value = intent
@@ -264,6 +264,17 @@ class RootViewModel internal constructor(
 
     fun cancelHomeIntent() {
         synchronized(publicationFence) { _homeIntent.value = null }
+    }
+
+    fun openSettings() {
+        synchronized(publicationFence) {
+            if (!authenticatedEntryAdmitted()) return
+            // Settings is entered from Home only; never retain a scan grant behind it.
+            if (controller.current != AppDestination.Home) return
+            controller.consumeCapsuleAccess()
+            controller.navigate(AppDestination.Settings)
+            _destination.value = controller.current
+        }
     }
 
     /** Home entry point: sender create flow (authenticated accounts only). */
@@ -660,6 +671,7 @@ class RootViewModel internal constructor(
             when (val resolved = sessionBootstrap.bootstrap()) {
                 SessionState.SignedOut -> AuthUiState.SignedOut
                 SessionState.RecoveryRequired -> AuthUiState.RecoveryRequired
+                is SessionState.RecoverySetupRequired -> AuthUiState.RecoverySetupRequired(resolved.userId, resolved.handle, resolved.bundleId)
                 SessionState.RequiresConnectivity -> AuthUiState.RequiresConnectivity
                 is SessionState.Active -> {
                     activeUserId = resolved.userId

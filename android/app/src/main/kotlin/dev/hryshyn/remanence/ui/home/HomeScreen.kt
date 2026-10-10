@@ -64,6 +64,7 @@ fun HomeScreen(
     publicEntry: Boolean = false,
     appLocale: AppLocale = AppLocale.SYSTEM,
     onLocaleSelected: (AppLocale) -> Unit = {},
+    showLanguageSwitch: Boolean = true,
     /**
      * Whether the recovery note shows. Defaults to the capability, but the
      * caller passes the union with the synchronous auth state so the note is
@@ -97,7 +98,7 @@ fun HomeScreen(
                 enabled = enabled, onCreate = onCreate,
                 minSurfaceHeight = createFloor, tag = "create_action",
             )
-            LanguageSwitchRow(
+            if (showLanguageSwitch) LanguageSwitchRow(
                 current = appLocale,
                 onSelect = onLocaleSelected,
             )
@@ -118,7 +119,7 @@ fun HomeScreen(
         val brandPlaceables = subcompose("homeBrand") { HomeBrand(recoveryRequired = recoveryRequired) }
             .map { it.measure(wrap) }
         val langPlaceables = subcompose("homeLang") {
-            LanguageSwitchRow(current = appLocale, onSelect = onLocaleSelected)
+            if (showLanguageSwitch) LanguageSwitchRow(current = appLocale, onSelect = onLocaleSelected)
         }.map { it.measure(wrap) }
         // Intrinsic pass: natural content heights; floors stay minima.
         // Measured copies carry no test tag and cleared semantics so the

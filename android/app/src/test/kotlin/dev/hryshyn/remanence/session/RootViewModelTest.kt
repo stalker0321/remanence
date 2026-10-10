@@ -57,6 +57,19 @@ class RootViewModelTest {
         override suspend fun logout(): SessionState = SessionState.SignedOut
     }
 
+    @Test fun incompleteOnboardingBlocksFlowsAndDoesNotScheduleAccountWork() = runTest {
+        var scheduled = 0
+        val pending = SessionState.RecoverySetupRequired("0198f0a0-0000-7000-8000-00000000a001", "permanent", "00000000-0000-4000-8000-000000000001")
+        val vm = RootViewModel(FixedOutcomeResolver(pending), scheduleIncomingSync = {
+            scheduled++; IncomingSyncSchedulingOutcome.EnqueueFailed
+        })
+        advanceUntilIdle()
+        assertTrue(vm.authState.value is AuthUiState.RecoverySetupRequired)
+        vm.openCreate(); vm.openScan(); vm.openSettings()
+        assertEquals(AppDestination.Authentication, vm.destination.value)
+        assertEquals(0, scheduled)
+    }
+
     private class FixedOutcomeResolver(private val state: SessionState) : SessionStateResolver {
         var resolveCount: Int = 0
             private set

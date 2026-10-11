@@ -3,7 +3,6 @@ package dev.hryshyn.remanence.probe
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
-import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
@@ -106,7 +105,7 @@ class BetaUiDeviceTest {
                 assertTrue("blue half missing from real GPU capture", blue > 100)
                 file.copyTo(File(evidence, "export-current-page-fixture.png"), overwrite = true)
             } finally { bitmap.recycle() }
-            await { shell("dumpsys activity activities").contains("ChooserActivity") }
+            awaitExternalActivity("com.android.intentresolver")
             capture("system-share-chooser-fixture")
             shell("input keyevent BACK")
             rule.onNodeWithTag("capsule_share").assertIsDisplayed().assertIsEnabled()
@@ -123,7 +122,7 @@ class BetaUiDeviceTest {
             rule.onNodeWithTag("capsule_export_file").performClick()
             // Google Play images use com.google.android.documentsui, AOSP uses
             // com.android.documentsui. Match the discovered shared suffix.
-            await { shell("dumpsys activity activities").contains("documentsui") }
+            awaitExternalActivity("documentsui")
             capture("system-save-picker-fixture")
             shell("input keyevent BACK")
             rule.onNodeWithTag("capsule_share").assertIsDisplayed().assertIsEnabled().performClick()
@@ -179,7 +178,8 @@ class BetaUiDeviceTest {
                 assertTrue(Color.red(bitmap.getPixel(bitmap.width / 12, bitmap.height / 12)) > 180)
                 file.copyTo(File(evidence, "export-collage-fixture.png"), overwrite = true)
             } finally { bitmap.recycle() }
-            await { shell("dumpsys activity activities").contains("ChooserActivity") }
+            awaitExternalActivity("com.android.intentresolver")
+            capture("collage-system-share-chooser-fixture")
             shell("input keyevent BACK")
             rule.onNodeWithTag("capsule_share").assertIsEnabled()
         } finally { rule.runOnIdle { state.close() } }
@@ -208,14 +208,20 @@ class BetaUiDeviceTest {
         rule.onAllNodesWithTag("capsule_page_0").fetchSemanticsNodes().isNotEmpty()
     }
     private fun exportFiles() = File(context.cacheDir, "capsule-exports").listFiles()?.toList().orEmpty()
+    private fun awaitExternalActivity(component: String) {
+        // A matching historical ActivityRecord is not evidence of foreground UI.
+        await { shell("dumpsys activity activities").lineSequence().any {
+            it.trimStart().startsWith("topResumedActivity=") && it.contains(component)
+        } }
+        InstrumentationRegistry.getInstrumentation().uiAutomation.waitForIdle(500, 5_000)
+    }
     private fun await(predicate: () -> Boolean) {
         // SwiftShader GPU readback on the bounded headless VM can be slow.
         // This is a fixture deadline, not a phone-performance assertion.
-        val deadline = SystemClock.elapsedRealtime() + 45_000
-        while (!predicate()) {
-            check(SystemClock.elapsedRealtime() < deadline) { "system UI transition timed out" }
-            SystemClock.sleep(250)
-        }
+        // The v2 Compose rule controls the coroutine scheduler. A blocking
+        // sleep loop leaves the post-IO continuation (including startActivity)
+        // queued until teardown. Pump the rule while observing external UI.
+        rule.waitUntil(45_000, predicate)
     }
     private fun shell(command: String): String = InstrumentationRegistry.getInstrumentation().uiAutomation
         .executeShellCommand(command).use { android.os.ParcelFileDescriptor.AutoCloseInputStream(it).bufferedReader().readText() }

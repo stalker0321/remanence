@@ -32,6 +32,16 @@ unrestricted public rollout. Support contact: hryshyn.dev@gmail.com.
 
 ## Still required before inviting friends
 
+Deployment checkpoint2026-10-11: T174 activated the existing beta implementation
+on the onboarding API (dfa5a6d5 source,image870e3c1e), schema0011 and mode=beta.
+Privacy/terms/deletion request URLs now return200; existing15 tables preserved.
+128 isolated server tests and live read-only smoke pass. T172 signed vc35 is
+already uploaded as an Internal draft; T173's three Play signing keys/OAuth
+clients are configured. Signing/build/config steps below are completed for this
+artifact, not a request to rebuild it. Play-signed owner-only device smoke is
+next; policy review, manual deletion/moderation execution and reviewer access
+are not established by deployment.
+
 1. Full catalog is wired into the existing hosted API (T171): 40,475,049
    recordings in the compact read-only runtime catalog. Verify known-song
    searches from the owner's phone; this does not require another APK.

@@ -48,10 +48,12 @@ prfprobe/recoverytest entries and HTTPS/debug service origins.
 
 ## Remaining rollout gates
 
-Actual Play-signed Google/PRF smoke, tested beta
-consent/safety/legal deployment and deletion/moderation operations still pending.
-Do not serve the beta rollout against the current schema0010 server, reset
-accounts, or uninstall the owner's working recoverytest application. These are
+T174 deployed dfa5a6d5 runtime with additive schema0011 and mode=beta;128 isolated
+tests pass, restored-copy migration rehearsal and unchanged live prior-data
+fingerprints verified. Legal pages are now live. Owner-only Internal vc35 smoke
+can proceed; no replacement AAB needed. Actual Play-signed Google/PRF smoke and
+deletion/moderation operations before friends are still pending.
+Do not reset accounts or uninstall the owner's working recoverytest application. These are
 separate installs against preserved accounts/ciphertext, not a data migration.
 
 Official contracts:

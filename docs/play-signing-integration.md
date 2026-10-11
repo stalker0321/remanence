@@ -11,10 +11,18 @@ still required; do not infer device/PRF acceptance from configuration.
 | Remanence Play Hybrid Classical | `D5:36:53:4B:DA:99:41:77:6F:94:A2:D0:B4:9D:29:ED:14:DE:B5:3C` |
 | Remanence Play Hybrid PQC | `44:2D:5F:04:2A:81:58:98:B0:E1:D7:49:FA:D2:FC:54:46:56:AE:00` |
 
-Create three Android clients in the existing181177070441 Google Cloud project,
-each with the permanent package and its exact SHA-1. Keep the existing Web
-audience and debug Android client. No new Web client or client secret needed.
-Require actual returned Android client IDs before adding trusted presenters.
+Owner created the three Android clients in the existing181177070441 project:
+
+| Signing key | Android client ID |
+| --- | --- |
+| Classical | `181177070441-fk00qgofaajsfnae17ell5penam1frcv.apps.googleusercontent.com` |
+| Hybrid classical | `181177070441-mqdb3brtg0khfvh8s7d02oag6qdn48nn.apps.googleusercontent.com` |
+| Hybrid PQC | `181177070441-lmhlc38ded2mcjchcbnseovvu2g2mto2.apps.googleusercontent.com` |
+
+Each uses the permanent package and corresponding SHA-1 per owner's mapping.
+Add these exact IDs as trusted presenters, not audiences. Keep the existing
+Web audience and debug Android client. No new Web client or client secret needed.
+An actual Play login still needs to verify the owner's Cloud configuration.
 
 ## DAL fingerprints and native origins
 
@@ -40,7 +48,7 @@ prfprobe/recoverytest entries and HTTPS/debug service origins.
 
 ## Remaining rollout gates
 
-OAuth IDs,presenter allowlist, actual Play-signed Google/PRF smoke, tested beta
+Actual Play-signed Google/PRF smoke, tested beta
 consent/safety/legal deployment and deletion/moderation operations still pending.
 Do not serve the beta rollout against the current schema0010 server, reset
 accounts, or uninstall the owner's working recoverytest application. These are

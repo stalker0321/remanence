@@ -26,6 +26,9 @@ from remanence.api.dependencies import (
     get_upload_reservations,
 )
 from remanence.api.problems import PROBLEM_CATALOG, problem_response, request_id_of
+from remanence.settings import AppMode
+from remanence.users.safety_models import TermsAcceptance
+from remanence.users.safety import TERMS_VERSION
 from remanence.capsules.abort_service import CapsuleAbortError, CapsuleAbortService
 from remanence.capsules.blob_models import CapsuleBlobKind
 from remanence.capsules.delivery_models import RecipientDeliveryStatus
@@ -830,6 +833,10 @@ async def create_capsule_draft(
         parsed = parse_create_capsule_draft_request(raw_body)
         request_sha256 = hashlib.sha256(raw_body).digest()
         with session.begin():
+            if request.app.state.settings.mode is AppMode.BETA:
+                consent = session.get(TermsAcceptance, principal.user_id)
+                if consent is None or consent.version != TERMS_VERSION:
+                    return problem_response(request, "TERMS_REQUIRED")
             result = CapsuleDraftService(session).create_draft(
                 authenticated_sender_user_id=principal.user_id,
                 request=parsed,

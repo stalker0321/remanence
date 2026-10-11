@@ -18,6 +18,8 @@ from remanence.capsules.models import Capsule, CapsuleState
 from remanence.capsules.schemas import CreateCapsuleDraftRequest
 from remanence.users.key_models import KeyBundleStatus, UserKeyBundle
 from remanence.users.models import User
+from remanence.users.safety_models import UserBlock
+from remanence.users.safety import owner_lock
 
 
 _METHOD = "POST"
@@ -312,6 +314,9 @@ class CapsuleDraftService:
                 raise _error("AUTH_INVALID")
 
             recipient = self._session.get(User, request.recipient_user_id)
+            owner_lock(self._session, request.recipient_user_id)
+            if self._session.get(UserBlock, (request.recipient_user_id, authenticated_sender_user_id)) is not None:
+                raise _error("RECIPIENT_NOT_CONFIRMED")
             if recipient is None or recipient.disabled_at is not None:
                 raise _error("RECIPIENT_NOT_CONFIRMED")
 

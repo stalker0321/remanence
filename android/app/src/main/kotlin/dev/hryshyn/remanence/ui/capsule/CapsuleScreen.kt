@@ -290,6 +290,7 @@ fun CapsuleScreen(
     decoder: CapsulePageDecoder = DefaultCapsulePageDecoder,
     underlayerEnabled: Boolean = true,
     motion: AstraMotionSpec.Resolved = rememberAstraMotion(),
+    validateExport: () -> Unit = {},
     onClose: () -> Unit,
 ) {
     var currentIndex by remember { mutableIntStateOf(0) }
@@ -314,6 +315,7 @@ fun CapsuleScreen(
     val settled by animateFloatAsState(reveal, capsuleUnderlayerSettleSpec(motion), label = "capsule underlayer")
     val progress = if (dragging) reveal else settled
     val density = LocalDensity.current
+    val export = rememberCapsuleImageExport(validateExport)
 
     BoxWithConstraints(modifier.fillMaxSize().background(HoldColors.Paper)) {
         val footer = 76.dp
@@ -328,6 +330,7 @@ fun CapsuleScreen(
         ) else Modifier
 
         Column(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxWidth().height(available).then(export.contentModifier)) {
             Box(Modifier.fillMaxWidth().height(imageHeight).then(gesture), contentAlignment = Alignment.Center) {
                 val bitmap = pager.displayedBitmap
                 when {
@@ -338,7 +341,7 @@ fun CapsuleScreen(
                         modifier = Modifier.fillMaxSize().testTag("capsule_page_${currentIndex}"),
                     )
                     pager.pageError != null -> Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(pager.pageError!!, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("capsule_page_error"))
+                        Text(stringResource(R.string.capsule_route_failure), color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("capsule_page_error"))
                         HoldTextButton(onClick = { pageRetryEpoch += 1 }, modifier = Modifier.testTag("capsule_page_retry")) { Text(stringResource(R.string.hold_retry)) }
                     }
                     else -> CircularProgressIndicator(modifier = Modifier.testTag("capsule_page_loading"))
@@ -351,13 +354,14 @@ fun CapsuleScreen(
                         .testTag("capsule_underlayer"),
                 ) {
                     // Only actual content is available in the current artifact contract.
-                    // Sender/date/share need protocol metadata, never specimen values.
+                    // Sender/date need protocol metadata, never specimen values.
                     Text(stringResource(R.string.hold_inside), style = MaterialTheme.typography.labelMedium, color = HoldColors.Muted)
                     Spacer(Modifier.height(12.dp))
                     Text(state.note ?: stringResource(R.string.hold_photo_summary, state.photoCount),
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.testTag(if (state.note != null) "capsule_note_text" else "capsule_content_summary"))
                 }
+            }
             }
             Row(
                 Modifier.fillMaxWidth().heightIn(min = footer).padding(horizontal = 8.dp),
@@ -379,6 +383,8 @@ fun CapsuleScreen(
                     enabled = state.canAdvance(currentIndex), modifier = Modifier.testTag("capsule_next_button")) { Text(stringResource(R.string.hold_next_photo)) }
             }
         }
+        CapsuleImageExportButton(export, enabled = pager.displayedBitmap != null && !dragging,
+            modifier = Modifier.align(Alignment.TopStart).padding(8.dp))
         HoldTextButton(
             onClick = { state.close(); onClose() },
             modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)

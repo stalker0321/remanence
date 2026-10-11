@@ -1,3 +1,5 @@
+import java.net.URI
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -36,6 +38,8 @@ android {
         targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = remanenceAndroidVersionCode
         versionName = remanenceProductVersion
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("boolean", "REMANENCE_PLAY_BETA", "false")
     }
 
     buildTypes {
@@ -64,6 +68,29 @@ android {
             buildConfigField("boolean", "REMANENCE_RECOVERY_ENABLED", "false")
             buildConfigField("boolean", "REMANENCE_GOOGLE_SIGN_IN_ENABLED", "false")
         }
+        // Closed Play beta is explicit, non-debuggable and separate from the
+        // legacy release defaults. Never publish the recoverytest debug APK.
+        create("beta") {
+            initWith(getByName("release"))
+            matchingFallbacks += "release"
+            isDebuggable = false
+            buildConfigField("boolean", "REMANENCE_PLAY_BETA", "true")
+            buildConfigField("boolean", "REMANENCE_RECOVERY_ENABLED", "true")
+            buildConfigField("boolean", "REMANENCE_GOOGLE_SIGN_IN_ENABLED", "true")
+            buildConfigField("boolean", "REMANENCE_V2_LINE_LOCALIZATION", "false")
+            buildConfigField("String", "API_BASE_URL",
+                quoteBuildConfigString(remanenceApiBaseUrl("https://invalid.invalid/")))
+            versionNameSuffix = "-beta"
+            val keystore = providers.environmentVariable("REMANENCE_UPLOAD_KEYSTORE").orNull
+            if (keystore != null) {
+                signingConfig = signingConfigs.create("playUpload") {
+                    storeFile = file(keystore)
+                    storePassword = providers.environmentVariable("REMANENCE_UPLOAD_STORE_PASSWORD").get()
+                    keyAlias = providers.environmentVariable("REMANENCE_UPLOAD_KEY_ALIAS").get()
+                    keyPassword = providers.environmentVariable("REMANENCE_UPLOAD_KEY_PASSWORD").get()
+                }
+            }
+        }
     }
 
     compileOptions {
@@ -81,12 +108,30 @@ android {
     }
 }
 
+androidComponents {
+    beforeVariants(selector().withBuildType("beta")) { it.minSdk = 28 }
+}
+
+val verifyBetaEndpoint = tasks.register("verifyBetaEndpoint") {
+    doLast {
+        val endpoint = URI(remanenceApiBaseUrl("https://invalid.invalid/"))
+        require(endpoint.scheme == "https" && !endpoint.host.isNullOrEmpty() &&
+            endpoint.host != "invalid.invalid" && endpoint.host != "localhost" &&
+            endpoint.host != "127.0.0.1" && endpoint.rawUserInfo == null &&
+            endpoint.rawQuery == null && endpoint.rawFragment == null) {
+            "Beta requires an explicit HTTPS remanence.apiBaseUrl without credentials/query/fragment"
+        }
+    }
+}
+tasks.matching { it.name == "preBetaBuild" }.configureEach { dependsOn(verifyBetaEndpoint) }
+
 dependencies {
     implementation(project(":core:data"))
     implementation(project(":core:crypto"))
     implementation(project(":core:model"))
     implementation(project(":core:recognition"))
-    implementation("org.opencv:opencv:4.10.0")
+    // 4.10 shipped 4KB-aligned OpenCV and libc++; 4.12 adds Android 16KB support.
+    implementation("org.opencv:opencv:4.12.0")
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.serialization.json)
     implementation("androidx.credentials:credentials:1.6.0")
@@ -121,6 +166,8 @@ dependencies {
     // into the release APK or production runtime graph).
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation("androidx.test:runner:1.5.0")
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.compose.ui.test.junit4)
 }
 
 fun remanenceApiBaseUrl(default: String): String {

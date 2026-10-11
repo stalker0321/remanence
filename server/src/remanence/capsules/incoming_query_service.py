@@ -23,6 +23,7 @@ from remanence.capsules.incoming_cursor import (
 )
 from remanence.capsules.limits import LIMITS_V1
 from remanence.capsules.models import Capsule, CapsuleState
+from remanence.users.safety_models import UserBlock
 
 
 _GENERIC_SERVICE_MESSAGE: Final = "incoming capsule query failed"
@@ -206,6 +207,10 @@ class IncomingCapsuleQueryService:
             .where(
                 Capsule.recipient_user_id == recipient_id,
                 Capsule.state == CapsuleState.READY,
+                ~select(UserBlock.owner_id).where(
+                    UserBlock.owner_id == recipient_id,
+                    UserBlock.blocked_id == Capsule.sender_user_id,
+                ).exists(),
             )
         )
         if after is not None:

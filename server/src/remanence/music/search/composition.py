@@ -1,4 +1,4 @@
-"""Opt-in DEV/TEST-only staging search composition (M-S1).
+"""Opt-in search composition: read-only full catalog or DEV/TEST staging.
 
 Default is unwired (``DISABLED`` → ``None`` → endpoint 503). Setting
 ``POSTGRES_STAGING`` in DEV/TEST wires :class:`PostgresStagingSearch` over
@@ -14,13 +14,14 @@ from collections.abc import Callable
 from sqlalchemy.orm import Session
 
 from remanence.music.search.staging import PostgresStagingSearch
+from remanence.music.search.full_catalog import FullCatalogSearch
 from remanence.settings import AppMode, MusicSearchBackend, Settings
 
 
 def build_music_search(
     settings: Settings,
     session_factory: Callable[[], Session] | None = None,
-) -> PostgresStagingSearch | None:
+) -> PostgresStagingSearch | FullCatalogSearch | None:
     """Compose the music search port from settings + session factory.
 
     Returns ``None`` when disabled (endpoint stays fail-closed 503).
@@ -30,6 +31,15 @@ def build_music_search(
     backend = settings.music_search_backend
     if backend is MusicSearchBackend.DISABLED:
         return None
+    if backend is MusicSearchBackend.FULL_CATALOG:
+        if settings.music_catalog_path is None:
+            raise ValueError("full catalog search requires music_catalog_path")
+        search = FullCatalogSearch(
+            settings.music_catalog_path,
+            timeout_seconds=settings.music_search_timeout_seconds,
+        )
+        search.validate_ready()
+        return search
     if backend is not MusicSearchBackend.POSTGRES_STAGING:
         raise ValueError(f"unknown music search backend: {backend!r}")
     if settings.mode is AppMode.PROD:

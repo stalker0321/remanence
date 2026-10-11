@@ -73,6 +73,7 @@ def _spec(
 
 
 PROBLEM_CATALOG: Final[dict[str, ProblemSpec]] = {
+    "TERMS_REQUIRED": _spec("TERMS_REQUIRED", 403, "Terms required", "Accept the current terms before creating content."),
     "AUTH_INVALID": _spec(
         "AUTH_INVALID",
         401,

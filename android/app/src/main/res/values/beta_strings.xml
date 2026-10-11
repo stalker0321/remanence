@@ -1,0 +1,25 @@
+<resources>
+    <string name="beta_privacy_policy">Privacy policy</string>
+    <string name="beta_terms">Terms of use</string>
+    <string name="beta_delete_account">Request account deletion</string>
+    <string name="beta_external_failed">Could not open an app. Contact hryshyn.dev@gmail.com.</string>
+    <string name="beta_terms_title">Before your first postcard</string>
+    <string name="beta_terms_summary">Only send content you have the right to share. No harassment, spam or illegal content. A recipient can block or report a sender.</string>
+    <string name="beta_terms_agree">I accept the terms of use</string>
+    <string name="beta_network_failed">Could not complete the request. Check your connection and try again.</string>
+    <string name="beta_safety_title">contact safety</string>
+    <string name="beta_safety_detail">Enter a sender’s handle to block future deliveries or report them. Blocking does not erase copies already received or exported.</string>
+    <string name="beta_block">Block sender</string>
+    <string name="beta_blocked">Sender blocked.</string>
+    <string name="beta_unblock">Unblock @%1$s</string>
+    <string name="beta_unblocked">Sender unblocked.</string>
+    <string name="beta_report">Report sender</string>
+    <string name="beta_report_received">Report received for review. No photos, notes or keys were sent.</string>
+    <string name="beta_reason_spam">Spam</string>
+    <string name="beta_reason_harassment">Harassment</string>
+    <string name="beta_reason_content">Inappropriate content</string>
+    <string name="beta_reason_other">Other</string>
+    <string name="capsule_route_loading">Opening the capsule…</string>
+    <string name="capsule_route_failure">The capsule could not be opened.</string>
+    <string name="capsule_route_closed">This capsule was closed automatically.</string>
+</resources>

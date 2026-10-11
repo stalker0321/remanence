@@ -18,6 +18,14 @@
         android:fullBackupContent="@xml/backup_rules"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:localeConfig="@xml/locales_config">
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.capsuleexport"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/capsule_export_paths" />
+        </provider>
         <!-- AppCompat auto-storage opt-in for the pre-33 per-app locale
              backport: without it AppCompat never persists/restores the app
              locales below API 33 (see AppCompatDelegate docs). The 33+

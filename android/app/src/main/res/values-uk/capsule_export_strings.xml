@@ -1,0 +1,8 @@
+<resources>
+    <string name="capsule_export_share">поділитися</string>
+    <string name="capsule_export_apps">Поділитися через застосунок</string>
+    <string name="capsule_export_file">Зберегти зображення</string>
+    <string name="capsule_export_warning">Поточний вигляд капсули збережеться зображенням, без кнопок. Цю копію зможе побачити кожен, у кого вона опиниться: шифрування Remanence її більше не захищає.</string>
+    <string name="capsule_export_working">підготовка…</string>
+    <string name="capsule_export_failed">Не вдалося експортувати зображення. Залиште капсулу відкритою та спробуйте ще раз.</string>
+</resources>

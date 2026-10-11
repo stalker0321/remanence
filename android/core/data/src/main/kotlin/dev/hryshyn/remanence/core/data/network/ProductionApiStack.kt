@@ -62,6 +62,8 @@ class ProductionApiStack private constructor(
             sessionRefreshCoordinator,
         ).build()
 
+    val safetyRepository: SafetyRepository = SafetyRepository(authenticatedClient, baseUrl, requestLeaseProvider)
+
     /** Capsule clients share the serialized authenticated transport boundary. */
     val capsuleDraftRepository: CapsuleDraftRepository =
         CapsuleDraftRepository(authenticatedClient, baseUrl, requestLeaseProvider)

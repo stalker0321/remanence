@@ -23,6 +23,8 @@ from remanence.api.music import router as music_router
 from remanence.api.problems import RequestIdMiddleware, problem_response
 from remanence.api.users import router as users_router
 from remanence.api.recovery import router as recovery_router
+from remanence.api.safety import router as safety_router
+from remanence.api.legal import router as legal_router
 from remanence.capsules.upload_reservations import (
     UploadReservationManager,
     build_upload_reservation_manager,
@@ -45,6 +47,10 @@ def create_app(
 ) -> FastAPI:
     resolved = Settings() if settings is None else settings
     engine: Engine | None = None
+    if music_search is None and resolved.music_search_backend is MusicSearchBackend.FULL_CATALOG:
+        # Full catalog is independent of the account DB. Validate before startup;
+        # never substitute fixtures/staging when a revision is missing or invalid.
+        music_search = build_music_search(resolved)
     if resolved.mode is AppMode.PROD and isinstance(music_search, InMemoryMusicSearch):
         # R2: close the fixture bypass at the single choke point. Neither
         # build_fixture_music_search() with a forgotten mode nor a directly
@@ -175,4 +181,6 @@ def create_app(
     app.include_router(capsules_router)
     app.include_router(music_router)
     app.include_router(recovery_router)
+    app.include_router(safety_router)
+    app.include_router(legal_router)
     return app

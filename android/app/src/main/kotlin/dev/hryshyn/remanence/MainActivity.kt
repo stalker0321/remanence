@@ -359,7 +359,11 @@ private fun RootSurface(
             val signedIn = authState as? AuthUiState.Authenticated
             if (signedIn != null) dev.hryshyn.remanence.ui.settings.SettingsScreen(signedIn.handle, appLocale,
                 onLocaleSelected, signedIn.activeKeyBundleId?.let { container.recoveryReadiness.isReady(signedIn.userId, it) } == true,
-                rootViewModel::returnToHome, rootViewModel::logout)
+                rootViewModel::returnToHome, rootViewModel::logout,
+                safetyContent = {
+                    if (BuildConfig.REMANENCE_PLAY_BETA) dev.hryshyn.remanence.ui.settings.BetaSafetyPanel(
+                        container.apiStack.safetyRepository, signedIn.userId.toString())
+                })
         },
         createContent = {
             val createViewModel: CreateViewModel = viewModel(factory = factory)
@@ -374,6 +378,7 @@ private fun RootSurface(
                 createViewModel.beginSession(createEpoch, authenticatedOwner)
             }
             androidx.compose.runtime.key(createEpoch) {
+                val create: @Composable () -> Unit = {
                 CreateScreen(
                     viewModel = createViewModel,
                     onExit = rootViewModel::returnToHome,
@@ -387,6 +392,11 @@ private fun RootSurface(
                         }
                     },
                 )
+                }
+                if (BuildConfig.REMANENCE_PLAY_BETA && authenticatedOwner != null)
+                    dev.hryshyn.remanence.ui.settings.BetaTermsGate(container.apiStack.safetyRepository,
+                        authenticatedOwner.toString(), create)
+                else create()
             }
         },
         capsuleContent = { grantId ->

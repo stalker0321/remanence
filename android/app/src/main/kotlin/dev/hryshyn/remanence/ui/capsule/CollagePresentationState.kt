@@ -229,6 +229,7 @@ internal fun CollagePresentationHost(
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
     openTrackUrl: ((String) -> Boolean)? = null,
+    validateExport: () -> Unit = {},
 ) {
     when (val status = state.status) {
         CollagePresentationState.Status.Loading -> Unit
@@ -256,18 +257,22 @@ internal fun CollagePresentationHost(
             }
             when (result) {
                 is CollageRenderer.SceneResult.Ready -> Box(modifier.fillMaxSize()) {
+                    val export = rememberCapsuleImageExport(validateExport)
                     val musicAction = rememberTrackServiceAction(state.track, openTrackUrl)
                     val musicLabel = state.track?.let { stringResource(R.string.track_open_action, it.title, it.artistDisplay) }
                     CollageCanvas(
                         scene = result.scene,
                         images = images,
                         contentDescription = contentDescription,
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize().then(export.contentModifier),
                         textMeasurer = measurer,
                         artwork = artwork,
                         onMusicClick = musicAction,
                         musicActionLabel = musicLabel,
                     )
+                    CapsuleImageExportButton(export,
+                        enabled = state.status is CollagePresentationState.Status.Ready,
+                        modifier = Modifier.align(Alignment.TopStart).padding(8.dp))
                     HoldTextButton(
                         onClick = { state.close(); onClose() },
                         modifier = Modifier

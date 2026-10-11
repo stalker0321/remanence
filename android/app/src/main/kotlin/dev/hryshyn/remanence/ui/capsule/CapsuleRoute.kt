@@ -246,15 +246,18 @@ internal fun CapsuleRoute(
 
         is CapsuleRouteState.Ready -> when (val presentation = current.presentation) {
             is CapsulePresentation.Photos ->
-                CapsuleScreen(state = presentation.state, onClose = onClose, modifier = modifier)
+                CapsuleScreen(state = presentation.state, onClose = onClose, modifier = modifier,
+                    validateExport = validateLiveGrant)
             is CapsulePresentation.Ber1 ->
-                Ber1PresentationHost(state = presentation.state, onClose = onClose, modifier = modifier)
+                Ber1PresentationHost(state = presentation.state, onClose = onClose, modifier = modifier,
+                    validateExport = validateLiveGrant)
             is CapsulePresentation.Collage ->
                 CollagePresentationHost(
                     state = presentation.state,
                     contentDescription = stringResource(R.string.hold_collage_content_description),
                     onClose = onClose,
                     modifier = modifier,
+                    validateExport = validateLiveGrant,
                 )
             is CapsulePresentation.Unsupported ->
                 Ber1UnsupportedPresentation(
@@ -275,10 +278,10 @@ private fun RouteBusy(onClose: () -> Unit) {
         Spacer(Modifier.height(24.dp))
         CircularProgressIndicator(modifier = Modifier.testTag("capsule_route_loading"))
         Spacer(Modifier.height(16.dp))
-        Text("Decrypting the capsule…", style = MaterialTheme.typography.bodyMedium)
+        Text(stringResource(R.string.capsule_route_loading), style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(16.dp))
         OutlinedButton(onClick = onClose, modifier = Modifier.testTag("capsule_route_close")) {
-            Text("Close")
+            Text(stringResource(R.string.hold_close))
         }
     }
 }
@@ -291,24 +294,25 @@ private fun RouteFailure(message: String, onRetry: () -> Unit, onClose: () -> Un
     ) {
         Spacer(Modifier.height(24.dp))
         Text(
-            "The capsule could not be opened:",
+            stringResource(R.string.capsule_route_failure),
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.testTag("capsule_route_failed_header"),
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            message,
+            stringResource(if (message == "This capsule was closed automatically.")
+                R.string.capsule_route_closed else R.string.capsule_route_failure),
             color = MaterialTheme.colorScheme.error,
             modifier = Modifier.testTag("capsule_route_failed_message"),
         )
         Spacer(Modifier.height(16.dp))
         Row {
             Button(onClick = onRetry, modifier = Modifier.testTag("capsule_route_retry")) {
-                Text("Try again")
+                Text(stringResource(R.string.hold_retry))
             }
             Spacer(Modifier.width(12.dp))
             OutlinedButton(onClick = onClose, modifier = Modifier.testTag("capsule_route_close")) {
-                Text("Close")
+                Text(stringResource(R.string.hold_close))
             }
         }
     }

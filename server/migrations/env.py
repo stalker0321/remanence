@@ -15,6 +15,7 @@ from remanence.db.session import DatabaseConfigurationError
 from remanence.settings import Settings
 from remanence.users.key_models import UserKeyBundle as _UserKeyBundle
 from remanence.users.models import User as _User
+from remanence.users.safety_models import UserBlock, SafetyReport, TermsAcceptance
 from remanence.recovery.models import RecoveryCredential, RecoveryRecord, RecoveryChallenge
 
 target_metadata = Base.metadata

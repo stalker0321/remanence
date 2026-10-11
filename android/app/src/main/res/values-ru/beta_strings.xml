@@ -1,0 +1,25 @@
+<resources>
+    <string name="beta_privacy_policy">Политика конфиденциальности</string>
+    <string name="beta_terms">Правила использования</string>
+    <string name="beta_delete_account">Запросить удаление аккаунта</string>
+    <string name="beta_external_failed">Не удалось открыть приложение. Напишите на hryshyn.dev@gmail.com.</string>
+    <string name="beta_terms_title">Перед первой открыткой</string>
+    <string name="beta_terms_summary">Отправляйте только то, чем имеете право делиться. Без преследования, спама и незаконного контента. Получатель может заблокировать отправителя или пожаловаться на него.</string>
+    <string name="beta_terms_agree">Я принимаю правила использования</string>
+    <string name="beta_network_failed">Не удалось выполнить запрос. Проверьте соединение и попробуйте ещё раз.</string>
+    <string name="beta_safety_title">безопасность общения</string>
+    <string name="beta_safety_detail">Введите ник отправителя, чтобы заблокировать новые отправления или пожаловаться. Блокировка не удаляет уже полученные или экспортированные копии.</string>
+    <string name="beta_block">Заблокировать отправителя</string>
+    <string name="beta_blocked">Отправитель заблокирован.</string>
+    <string name="beta_unblock">Разблокировать @%1$s</string>
+    <string name="beta_unblocked">Отправитель разблокирован.</string>
+    <string name="beta_report">Пожаловаться на отправителя</string>
+    <string name="beta_report_received">Жалоба получена для рассмотрения. Фотографии, заметки и ключи не отправлялись.</string>
+    <string name="beta_reason_spam">Спам</string>
+    <string name="beta_reason_harassment">Преследование</string>
+    <string name="beta_reason_content">Недопустимый контент</string>
+    <string name="beta_reason_other">Другое</string>
+    <string name="capsule_route_loading">Открываем капсулу…</string>
+    <string name="capsule_route_failure">Не удалось открыть капсулу.</string>
+    <string name="capsule_route_closed">Эта капсула закрылась автоматически.</string>
+</resources>

@@ -1,4 +1,4 @@
-"""Isolated read-only FTS5 adapter; not wired into production composition.
+"""Read-only FTS5 adapter for a verified, immutable catalog revision.
 
 AND-prefix retrieval (not Meili typo equivalence) with exact total and bounded
 execution time. Existing MusicSearchPort/public own-ID result contract stays.
@@ -22,6 +22,37 @@ class FullCatalogSearch:
         self.database = database.resolve()
         self.timeout_seconds = timeout_seconds
 
+    def _connect(self):
+        # as_uri encodes reserved characters: paths cannot inject URI options.
+        connection = sqlite3.connect(
+            self.database.as_uri() + "?mode=ro", uri=True,
+            timeout=self.timeout_seconds,
+        )
+        connection.execute("PRAGMA query_only=ON")
+        connection.execute("PRAGMA cache_size=-16384")
+        return connection
+
+    def validate_ready(self):
+        """Bounded startup check; full integrity/hash checks belong to staging.
+
+        Never scan all 40m rows at API startup. A catalog mounted read-only must
+        already have passed deployment integrity/coverage/checksum verification.
+        """
+        connection = None
+        deadline = time.monotonic() + self.timeout_seconds
+        try:
+            connection = self._connect()
+            connection.set_progress_handler(lambda: int(time.monotonic() > deadline), 10000)
+            if connection.execute("SELECT value FROM build_metadata WHERE key='state'").fetchone() != ("READY",):
+                raise MusicSearchUnavailableError("catalog not ready")
+            connection.execute("SELECT recording_id,id,title,artists,duration_ms,version,recording_mbid,canonical_rank FROM tracks LIMIT 0")
+            connection.execute("SELECT rowid FROM track_fts WHERE track_fts MATCH ? LIMIT 0", ('"startup_probe"',))
+        except sqlite3.Error as error:
+            raise MusicSearchUnavailableError("full catalog search unavailable") from error
+        finally:
+            if connection is not None:
+                connection.close()
+
     def search(self, query: str, limit: int, offset: int = 0):
         return self.search_with_total(query, limit, offset)[0]
 
@@ -36,9 +67,7 @@ class FullCatalogSearch:
         deadline = time.monotonic() + self.timeout_seconds
         connection = None
         try:
-            connection = sqlite3.connect(f"file:{self.database}?mode=ro", uri=True)
-            connection.execute("PRAGMA query_only=ON")
-            connection.execute("PRAGMA cache_size=-16384")
+            connection = self._connect()
             connection.set_progress_handler(lambda: int(time.monotonic() > deadline), 10000)
             if connection.execute("SELECT value FROM build_metadata WHERE key='state'").fetchone() != ("READY",):
                 raise MusicSearchUnavailableError("catalog not ready")

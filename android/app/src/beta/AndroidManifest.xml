@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Mandatory PRF setup uses Credential Manager passkeys (Android 9+). -->
+    <application android:usesCleartextTraffic="false">
+        <meta-data android:name="asset_statements" android:resource="@string/recovery_asset_statements" />
+    </application>
+</manifest>

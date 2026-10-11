@@ -99,20 +99,24 @@ internal fun Ber1PresentationHost(
     state: Ber1PresentationState,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    validateExport: () -> Unit = {},
 ) {
     if (!state.isOpen) return
     Box(modifier.fillMaxSize()) {
+        val export = rememberCapsuleImageExport(validateExport)
         val result = GeneratorBer1Preview(
             expression = state.expression,
             sources = state.bitmaps,
-            modifier = Modifier.fillMaxSize().testTag("capsule_ber1_canvas"),
+            modifier = Modifier.fillMaxSize().then(export.contentModifier).testTag("capsule_ber1_canvas"),
         )
         if (result !is GeneratorBer1Renderer.SceneResult.Ready) {
             Text(
-                text = "This capsule's layout can't be shown.",
+                text = stringResource(R.string.capsule_route_failure),
                 modifier = Modifier.align(Alignment.Center).testTag("capsule_ber1_blocked"),
             )
         }
+        CapsuleImageExportButton(export, enabled = result is GeneratorBer1Renderer.SceneResult.Ready,
+            modifier = Modifier.align(Alignment.TopStart).padding(8.dp))
         state.track?.let { track ->
             val context = LocalContext.current
             TrackSnapshotCard(

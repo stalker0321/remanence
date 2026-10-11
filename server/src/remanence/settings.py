@@ -14,12 +14,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class AppMode(StrEnum):
     TEST = "test"
     DEV = "dev"
+    BETA = "beta"
     PROD = "prod"
 
 
 class MusicSearchBackend(StrEnum):
     DISABLED = "disabled"
     POSTGRES_STAGING = "postgres_staging"
+    FULL_CATALOG = "full_catalog"
 
 
 class Settings(BaseSettings):
@@ -36,6 +38,8 @@ class Settings(BaseSettings):
     database_url: SecretStr | None = None
     blob_root: Path | None = None
     music_search_backend: MusicSearchBackend = MusicSearchBackend.DISABLED
+    music_catalog_path: Path | None = None
+    music_search_timeout_seconds: float = Field(default=2.0, gt=0, le=10)
     recovery_enabled: bool = False
     google_sign_in_enabled: bool = False
     google_client_ids: list[str] = Field(default_factory=list)
@@ -45,13 +49,16 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def require_datastore_for_non_test(self) -> Self:
+        if self.music_search_backend is MusicSearchBackend.FULL_CATALOG:
+            if self.music_catalog_path is None or not self.music_catalog_path.is_absolute():
+                raise ValueError("full catalog search requires an absolute music_catalog_path")
         if self.google_sign_in_enabled:
             if self.mode is AppMode.PROD or not self.recovery_enabled:
-                raise ValueError("Google onboarding requires experimental DEV/TEST recovery")
+                raise ValueError("Google onboarding requires explicit DEV/TEST/BETA recovery")
             if not self.google_client_ids or any(not re.fullmatch(r"[A-Za-z0-9_-]+\.apps\.googleusercontent\.com", v) for v in self.google_client_ids + self.google_presenter_ids):
                 raise ValueError("explicit Google OAuth client IDs required")
         if self.recovery_enabled and self.mode is AppMode.PROD:
-            raise ValueError("experimental recovery is DEV/TEST only")
+            raise ValueError("recovery requires explicit DEV/TEST/BETA mode")
         if not self.recovery_rp_id or not self.recovery_origins:
             raise ValueError("explicit recovery RP/origins required")
         if self.recovery_enabled:
@@ -72,6 +79,6 @@ class Settings(BaseSettings):
             raise ValueError("DEV and PROD require database_url and blob_root")
         if not self.database_url.get_secret_value().startswith("postgresql+psycopg://"):
             raise ValueError('database_url must start exactly with "postgresql+psycopg://"')
-        if self.mode is AppMode.PROD and not self.blob_root.is_absolute():
+        if self.mode in (AppMode.PROD, AppMode.BETA) and not self.blob_root.is_absolute():
             raise ValueError("PROD blob_root must be absolute")
         return self

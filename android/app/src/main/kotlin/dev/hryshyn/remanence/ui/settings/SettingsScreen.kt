@@ -30,7 +30,8 @@ import dev.hryshyn.remanence.ui.locale.AppLocale
 /** Only functioning controls; no fake device-management, purge or deletion buttons. */
 @Composable
 fun SettingsScreen(handle: String, locale: AppLocale, onLocale: (AppLocale) -> Unit,
-                   recoveryReady: Boolean, onBack: () -> Unit, onLogout: () -> Unit) {
+                   recoveryReady: Boolean, onBack: () -> Unit, onLogout: () -> Unit,
+                   safetyContent: @Composable () -> Unit = {}) {
     val gutter = HoldSpace.pageGutter()
     val backLabel = stringResource(R.string.hold_back)
     Column(Modifier.fillMaxSize().background(HoldColors.Paper).testTag("settings_screen")) {
@@ -97,7 +98,9 @@ fun SettingsScreen(handle: String, locale: AppLocale, onLocale: (AppLocale) -> U
             SettingsSection(stringResource(R.string.settings_design_privacy), "settings_section_privacy") {
                 Text(stringResource(R.string.mvp_privacy_summary), Modifier.fillMaxWidth(),
                     style = MaterialTheme.typography.bodyMedium, color = HoldColors.Ink)
+                BetaLegalLinks(handle)
             }
+            safetyContent()
             SettingsSection(stringResource(R.string.settings_design_about), "settings_section_about") {
                 Text("Remanence " + BuildConfig.VERSION_NAME, Modifier.fillMaxWidth(),
                     style = MaterialTheme.typography.bodySmall, color = HoldColors.Muted)

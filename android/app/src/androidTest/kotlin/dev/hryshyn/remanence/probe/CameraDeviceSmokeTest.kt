@@ -59,6 +59,17 @@ class CameraDeviceSmokeTest {
                 val evidence = File(rule.activity.getExternalFilesDir(null), "t169-fixture-evidence").apply { mkdirs() }
                 File(evidence, "virtual-scene-camera.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
                 assertTrue(OpenCVLoader.initDebug())
+                val pixels = IntArray(bitmap.width * bitmap.height)
+                bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+                val fingerprint = try {
+                    dev.hryshyn.remanence.core.recognition.SiftRootSiftFingerprintExtractor()
+                        .extract(pixels, bitmap.width, bitmap.height)
+                } finally { pixels.fill(0) }
+                val matched = dev.hryshyn.remanence.core.recognition.SiftRootSiftMatcher()
+                    .match(fingerprint, fingerprint)
+                assertTrue("production matcher should attempt actual geometry", matched.diagnostics.geometryAttempted)
+                assertTrue("production matcher should find camera self homography", matched.diagnostics.geometryFound)
+                assertTrue(matched.diagnostics.inliers >= 6)
                 val rgba = Mat(); val gray = Mat(); val keypoints = MatOfKeyPoint(); val descriptors = Mat(); val mask = Mat()
                 try {
                     Utils.bitmapToMat(bitmap, rgba)

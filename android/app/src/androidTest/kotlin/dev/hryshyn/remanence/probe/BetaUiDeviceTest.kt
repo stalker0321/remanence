@@ -22,6 +22,11 @@ import dev.hryshyn.remanence.ui.capsule.*
 import dev.hryshyn.remanence.ui.hold.*
 import dev.hryshyn.remanence.ui.locale.AppLocale
 import dev.hryshyn.remanence.ui.settings.SettingsScreen
+import dev.hryshyn.remanence.core.model.GeneratorExpression
+import dev.hryshyn.remanence.ui.collage.CollageRenderer
+import dev.hryshyn.remanence.ui.collage.FontRegistry
+import dev.hryshyn.remanence.ui.collage.StyleRegistry
+import kotlinx.coroutines.runBlocking
 import java.io.ByteArrayOutputStream
 import java.io.File
 import org.junit.Assert.*
@@ -116,7 +121,9 @@ class BetaUiDeviceTest {
             waitForPage()
             rule.onNodeWithTag("capsule_share").performClick()
             rule.onNodeWithTag("capsule_export_file").performClick()
-            await { shell("dumpsys activity activities").contains("com.android.documentsui") }
+            // Google Play images use com.google.android.documentsui, AOSP uses
+            // com.android.documentsui. Match the discovered shared suffix.
+            await { shell("dumpsys activity activities").contains("documentsui") }
             capture("system-save-picker-fixture")
             shell("input keyevent BACK")
             rule.onNodeWithTag("capsule_share").assertIsDisplayed().assertIsEnabled().performClick()
@@ -139,19 +146,62 @@ class BetaUiDeviceTest {
         } finally { rule.runOnIdle { state.close() } }
     }
 
+    @Test fun collageRendererExportsItsRealCanvasWithoutAppControls() {
+        val ids = listOf("p0", "p1", "p2")
+        val expression = GeneratorExpression.ResolvedExpression(
+            canvasVersion = 1, grammarId = "g-hold", grammarVersion = 3, branchId = "b-rows",
+            input = GeneratorExpression.GeneratorInput("fixture-owner", 7L,
+                ids.mapIndexed { index, id -> GeneratorExpression.PhotoRef(id, index, 320, 240, ('a' + index).toString().repeat(64)) },
+                note = null, music = null),
+            placements = ids.mapIndexed { index, id -> GeneratorExpression.Placement(
+                id, index * 120, 0, 120, 213, GeneratorExpression.CropWindow(0, 0, 10000, 10000), null, null) },
+            noteTreatment = "regular-region", diagnostics = emptyList(),
+            fontVersion = FontRegistry.VERSION, paletteVersion = CollageRenderer.PALETTE_REGISTRY_VERSION,
+            expressionContractVersion = GeneratorExpression.EXPRESSION_CONTRACT_V3,
+            noteRegion = null, style = GeneratorExpression.StyleBinding("press", "style-study-1", requireNotNull(StyleRegistry.digest("press"))),
+            noteType = GeneratorExpression.TextType("StudySans", 16, 400, false, 18), musicRegion = null,
+        )
+        val state = CollagePresentationState(expression, { fixtureJpeg() })
+        runBlocking { state.load() }
+        try {
+            rule.setContent { HoldTheme { CollagePresentationHost(state, "Synthetic collage", {},
+                validateExport = { check(state.status is CollagePresentationState.Status.Ready) }) } }
+            rule.onNodeWithTag("capsule_share").assertIsEnabled()
+            capture("collage-before-share-fixture")
+            val existing = exportFiles().map { it.name }.toSet()
+            rule.onNodeWithTag("capsule_share").performClick()
+            rule.onNodeWithTag("capsule_export_apps").performClick()
+            await { exportFiles().any { it.name !in existing } }
+            val file = exportFiles().first { it.name !in existing }
+            val bitmap = checkNotNull(BitmapFactory.decodeFile(file.absolutePath))
+            try {
+                assertTrue(bitmap.width > 100 && bitmap.height > 100)
+                assertTrue(Color.red(bitmap.getPixel(bitmap.width / 12, bitmap.height / 12)) > 180)
+                file.copyTo(File(evidence, "export-collage-fixture.png"), overwrite = true)
+            } finally { bitmap.recycle() }
+            await { shell("dumpsys activity activities").contains("ChooserActivity") }
+            shell("input keyevent BACK")
+            rule.onNodeWithTag("capsule_share").assertIsEnabled()
+        } finally { rule.runOnIdle { state.close() } }
+    }
+
     private fun fixtureCapsule(): CapsulePresentationState {
         val state = CapsulePresentationState(CapsulePhotoLoader { ordinal ->
-            val bitmap = Bitmap.createBitmap(320, 240, Bitmap.Config.ARGB_8888)
-            val canvas = android.graphics.Canvas(bitmap)
-            canvas.drawColor(Color.RED)
-            canvas.drawRect(160f, 0f, 320f, 240f, android.graphics.Paint().apply { color = Color.BLUE })
-            val stream = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
-            bitmap.recycle()
-            DecryptedPhoto(ordinal, stream.toByteArray())
+            DecryptedPhoto(ordinal, fixtureJpeg())
         })
         state.open(3, "Synthetic test content, not user media")
         return state
+    }
+
+    private fun fixtureJpeg(): ByteArray {
+        val bitmap = Bitmap.createBitmap(320, 240, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(bitmap)
+        canvas.drawColor(Color.RED)
+        canvas.drawRect(160f, 0f, 320f, 240f, android.graphics.Paint().apply { color = Color.BLUE })
+        val stream = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
+        bitmap.recycle()
+        return stream.toByteArray()
     }
 
     private fun waitForPage() = rule.waitUntil(10_000) {
@@ -159,10 +209,12 @@ class BetaUiDeviceTest {
     }
     private fun exportFiles() = File(context.cacheDir, "capsule-exports").listFiles()?.toList().orEmpty()
     private fun await(predicate: () -> Boolean) {
-        val deadline = SystemClock.elapsedRealtime() + 15_000
+        // SwiftShader GPU readback on the bounded headless VM can be slow.
+        // This is a fixture deadline, not a phone-performance assertion.
+        val deadline = SystemClock.elapsedRealtime() + 45_000
         while (!predicate()) {
             check(SystemClock.elapsedRealtime() < deadline) { "system UI transition timed out" }
-            SystemClock.sleep(100)
+            SystemClock.sleep(250)
         }
     }
     private fun shell(command: String): String = InstrumentationRegistry.getInstrumentation().uiAutomation

@@ -12,6 +12,8 @@ import org.opencv.android.OpenCVLoader
 import org.opencv.calib3d.Calib3d
 import org.opencv.core.Core
 import org.opencv.core.CvType
+import org.opencv.core.CvException
+import org.junit.Assert.assertThrows
 import org.opencv.core.Mat
 import org.opencv.core.MatOfDMatch
 import org.opencv.core.MatOfKeyPoint
@@ -337,17 +339,21 @@ class SiftNativeCapabilityProbeTest {
     }
 
     @Test
-    fun degenerateCorrespondencesFailClosedWithEmptyHomography() {
+    fun insufficientCorrespondencesAreRejectedWithoutHomography() {
         val src = MatOfPoint2f(Point(0.0, 0.0), Point(1.0, 0.0), Point(0.0, 1.0))
         val dst = MatOfPoint2f(Point(0.0, 0.0), Point(1.0, 0.0), Point(0.0, 1.0))
         val mask = Mat()
         var homography: Mat? = null
         try {
-            homography = Calib3d.findHomography(
-                src, dst, Calib3d.USAC_MAGSAC, 4.0, mask, 2000, 0.99,
-            )
-            val result: Mat = homography
-            assertTrue(result.empty())
+            // This invalid native input throws on the shipped4.12 artifact.
+            // Production guards MIN_GEOMETRY_PAIRS=6 before entering JNI.
+            val rejected = assertThrows(CvException::class.java) {
+                homography = Calib3d.findHomography(
+                    src, dst, Calib3d.USAC_MAGSAC, 4.0, mask, 2000, 0.99,
+                )
+            }
+            assertTrue(rejected.message.orEmpty().contains("sample_size <= points_size_"))
+            assertTrue(homography == null)
         } finally {
             homography?.release()
             src.release()

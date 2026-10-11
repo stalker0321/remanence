@@ -42,6 +42,11 @@ import dev.hryshyn.remanence.session.AuthenticatedHomeChrome
 import dev.hryshyn.remanence.session.RootScreen
 import dev.hryshyn.remanence.session.RootViewModel
 import dev.hryshyn.remanence.ui.auth.LoginScreen
+import dev.hryshyn.remanence.ui.auth.AccessPage
+import dev.hryshyn.remanence.ui.auth.AccessHeading
+import dev.hryshyn.remanence.ui.auth.GoogleSignInButton
+import dev.hryshyn.remanence.ui.auth.HandleSetupContent
+import dev.hryshyn.remanence.ui.auth.AccessLanguageControl
 import dev.hryshyn.remanence.ui.auth.LoginSubmitState
 import dev.hryshyn.remanence.ui.auth.LoginViewModel
 import dev.hryshyn.remanence.ui.create.CreateScreen
@@ -222,87 +227,105 @@ private fun RootSurface(
         authenticationContent = {
             val setupRequired = authState as? AuthUiState.RecoverySetupRequired
             if (setupRequired != null) {
-                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(HoldSpace.Gutter), verticalArrangement = Arrangement.spacedBy(HoldSpace.Group)) {
-                    Text("@${setupRequired.handle}")
-                    HoldInformation(stringResource(R.string.mvp_setup_saved))
-                    dev.hryshyn.remanence.recovery.RecoveryActions(container, true, false,
-                        rootViewModel::onSessionEstablished, onBusyChange = { recoveryBusy = it }, mandatorySetup = true)
-                    HoldTextButton(enabled = !recoveryBusy, onClick = rootViewModel::onAppForegrounded) {
-                        Text(stringResource(R.string.mvp_retry_connection))
+                AccessPage(footer = { AccessLanguageControl(current = appLocale, onSelect = onLocaleSelected) }) {
+                    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = HoldSpace.Gutter),
+                        verticalArrangement = Arrangement.spacedBy(HoldSpace.Section)) {
+                        Text("\u2068@${setupRequired.handle}\u2069", style = MaterialTheme.typography.labelLarge,
+                            color = dev.hryshyn.remanence.ui.hold.HoldColors.Muted)
+                        dev.hryshyn.remanence.recovery.RecoveryActions(container, true, false,
+                            rootViewModel::onSessionEstablished, onBusyChange = { recoveryBusy = it }, mandatorySetup = true)
+                        HoldInformation(stringResource(R.string.mvp_setup_saved))
+                        HoldTextButton(enabled = !recoveryBusy, onClick = rootViewModel::onAppForegrounded) {
+                            Text(stringResource(R.string.mvp_retry_connection))
+                        }
+                        HoldTextButton(enabled = !recoveryBusy, onClick = rootViewModel::logout) {
+                            Text(stringResource(R.string.hold_logout), color = dev.hryshyn.remanence.ui.hold.HoldColors.Destructive)
+                        }
                     }
-                    LanguageSwitchRow(current = appLocale, onSelect = onLocaleSelected)
-                    HoldTextButton(enabled = !recoveryBusy, onClick = rootViewModel::logout) { Text(stringResource(R.string.hold_logout)) }
                 }
             } else {
-            Column(
-                Modifier.fillMaxSize().padding(horizontal = HoldSpace.pageGutter(), vertical = HoldSpace.Gutter),
-                verticalArrangement = Arrangement.spacedBy(HoldSpace.Group),
-            ) {
-                if (authState == AuthUiState.SignedOut) {
-                    HoldTextButton(onClick = { registering = false; rootViewModel.cancelHomeIntent() }) { Text(stringResource(R.string.hold_back)) }
-                }
-                Text(if (registering) stringResource(R.string.hold_register_title) else stringResource(R.string.hold_auth_title), style = MaterialTheme.typography.headlineLarge)
-                HoldInformation(when (homeIntent) {
-                    HomeIntent.OPEN -> "Sign in to open the remanence meant for you."
-                    HomeIntent.MAKE -> "Sign in to leave a memory for someone."
-                    else -> "Your account keeps each remanence with the person it was meant for."
-                })
-                if (authState == AuthUiState.RequiresConnectivity) {
-                    HoldInformation("Connect to the internet so we can check your session.")
-                    HoldTextButton(onClick = rootViewModel::onAppForegrounded) { Text("try connection again") }
-                }
-                if (BuildConfig.REMANENCE_GOOGLE_SIGN_IN_ENABLED && authState == AuthUiState.SignedOut) {
-                    HoldTextButton(enabled = googleState != dev.hryshyn.remanence.auth.GoogleAuthState.Working && !recoveryBusy,
-                        onClick = { googleViewModel.start(googleCredentials) }) { Text(stringResource(R.string.mvp_google_continue)) }
-                    if (googleState == dev.hryshyn.remanence.auth.GoogleAuthState.Working) Text(stringResource(R.string.mvp_working))
-                    val failed = googleState as? dev.hryshyn.remanence.auth.GoogleAuthState.Failed
-                    if (failed != null) Text(stringResource(if (failed.conflict) R.string.mvp_google_conflict else R.string.mvp_google_retry))
-                    if (googleViewModel.hasTicket) {
+                val googleWorking = googleState == dev.hryshyn.remanence.auth.GoogleAuthState.Working
+                val failed = googleState as? dev.hryshyn.remanence.auth.GoogleAuthState.Failed
+                // Keep RecoveryActions at the same composition site while its
+                // dialog is working; moving branches would cancel the operation.
+                val legacyVisible = showLegacyAuth && !googleViewModel.hasTicket && !googleWorking &&
+                    authState != AuthUiState.RecoveryRequired
+                AccessPage(
+                    onBack = if (authState == AuthUiState.SignedOut) ({
+                        if (showLegacyAuth && BuildConfig.REMANENCE_GOOGLE_SIGN_IN_ENABLED) showLegacyAuth = false
+                        else { registering = false; rootViewModel.cancelHomeIntent() }
+                    }) else null,
+                    backEnabled = !recoveryBusy && !googleWorking,
+                    footer = { AccessLanguageControl(current = appLocale, onSelect = onLocaleSelected) },
+                ) {
+                    if (googleViewModel.hasTicket && authState == AuthUiState.SignedOut) {
                         var handle by rememberSaveable { mutableStateOf("") }
-                        Text(stringResource(R.string.mvp_handle_title))
-                        androidx.compose.material3.OutlinedTextField(value = handle,
-                            onValueChange = { if (it.length <= 30) handle = it }, singleLine = true,
-                            label = { Text(stringResource(R.string.mvp_handle_label)) })
-                        Text(stringResource(R.string.mvp_handle_permanent))
-                        HoldTextButton(enabled = googleState != dev.hryshyn.remanence.auth.GoogleAuthState.Working &&
-                            handle.isNotEmpty() && dev.hryshyn.remanence.ui.auth.RegistrationFormValidator.handleError(handle) == null,
-                            onClick = { googleViewModel.register(handle) }) { Text(stringResource(R.string.mvp_continue)) }
+                        if (failed != null) HoldInformation(stringResource(if (failed.conflict) R.string.mvp_google_conflict else R.string.mvp_google_retry))
+                        HoldTextButton(enabled = !googleWorking, onClick = { googleViewModel.start(googleCredentials) }) {
+                            Text(stringResource(R.string.access_google_again))
+                        }
+                        Box(Modifier.weight(1f).fillMaxWidth().padding(bottom = HoldSpace.Group)) {
+                            HandleSetupContent(handle, { if (it.length <= 30) handle = it }, googleWorking,
+                                onContinue = { googleViewModel.register(handle) })
+                        }
+                    } else if (legacyVisible) {
+                        AccessHeading(stringResource(if (registering) R.string.hold_register_title else R.string.hold_auth_title))
+                        if (authState == AuthUiState.RequiresConnectivity) {
+                            HoldInformation(stringResource(R.string.access_connection_detail))
+                            HoldTextButton(onClick = rootViewModel::onAppForegrounded) { Text(stringResource(R.string.mvp_retry_connection)) }
+                        }
+                        Spacer(Modifier.height(HoldSpace.Gutter))
+                        if (recoveryBusy) {
+                            Spacer(Modifier.weight(1f))
+                        } else if (registering) {
+                            val form by registrationViewModel.form.collectAsStateWithLifecycle()
+                            val submit by registrationViewModel.submitState.collectAsStateWithLifecycle()
+                            RegistrationFormScreen(form, submit, registrationViewModel::onFieldChange, registrationViewModel::submit,
+                                modifier = Modifier.weight(1f).fillMaxWidth())
+                            HoldTextButton(onClick = { registering = false }, enabled = submit !is RegistrationSubmitState.Submitting) {
+                                Text(stringResource(R.string.hold_existing_account))
+                            }
+                        } else {
+                            val form by loginViewModel.form.collectAsStateWithLifecycle()
+                            val submit by loginViewModel.submitState.collectAsStateWithLifecycle()
+                            LoginScreen(form, submit, loginViewModel::onEmailChange, loginViewModel::onPasswordChange, loginViewModel::submit,
+                                modifier = Modifier.weight(1f).fillMaxWidth())
+                            HoldTextButton(onClick = { registering = true }, enabled = submit !is LoginSubmitState.Submitting) {
+                                Text(stringResource(R.string.hold_create_account))
+                            }
+                        }
+                        if (!BuildConfig.REMANENCE_GOOGLE_SIGN_IN_ENABLED) dev.hryshyn.remanence.recovery.RecoveryActions(
+                            container, hasIdentity = false, recoveryRequired = false,
+                            onRecovered = rootViewModel::onSessionEstablished, onBusyChange = { recoveryBusy = it })
+                    } else {
+                        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = HoldSpace.Gutter),
+                            verticalArrangement = Arrangement.spacedBy(HoldSpace.Section)) {
+                            AccessHeading(stringResource(if (authState == AuthUiState.RecoveryRequired) R.string.access_restore_title else R.string.hold_auth_title), if (authState == AuthUiState.RecoveryRequired) null else stringResource(when (homeIntent) {
+                                HomeIntent.OPEN -> R.string.access_open_detail
+                                HomeIntent.MAKE -> R.string.access_make_detail
+                                else -> R.string.access_default_detail
+                            }))
+                            if (authState == AuthUiState.RequiresConnectivity) {
+                                HoldInformation(stringResource(R.string.access_connection_detail))
+                                HoldTextButton(onClick = rootViewModel::onAppForegrounded) { Text(stringResource(R.string.mvp_retry_connection)) }
+                            }
+                            if (BuildConfig.REMANENCE_GOOGLE_SIGN_IN_ENABLED && authState == AuthUiState.SignedOut) {
+                                GoogleSignInButton(onClick = { googleViewModel.start(googleCredentials) }, enabled = !googleWorking && !recoveryBusy, busy = googleWorking)
+                                if (failed != null) Text(stringResource(if (failed.conflict) R.string.mvp_google_conflict else R.string.mvp_google_retry),
+                                    color = dev.hryshyn.remanence.ui.hold.HoldColors.Error, style = MaterialTheme.typography.bodyMedium)
+                            }
+                            if (!googleWorking) dev.hryshyn.remanence.recovery.RecoveryActions(container, hasIdentity = false,
+                                recoveryRequired = authState == AuthUiState.RecoveryRequired, onRecovered = rootViewModel::onSessionEstablished,
+                                onBusyChange = { recoveryBusy = it })
+                            if (authState == AuthUiState.RecoveryRequired) HoldTextButton(enabled = !recoveryBusy, onClick = rootViewModel::logout) {
+                                Text(stringResource(R.string.hold_logout), color = dev.hryshyn.remanence.ui.hold.HoldColors.Destructive)
+                            }
+                            if (BuildConfig.REMANENCE_GOOGLE_SIGN_IN_ENABLED && authState == AuthUiState.SignedOut && !googleWorking) {
+                                HoldTextButton(enabled = !recoveryBusy, onClick = { showLegacyAuth = true }) { Text(stringResource(R.string.mvp_other_sign_in)) }
+                            }
+                        }
                     }
                 }
-                if (!googleViewModel.hasTicket && googleState != dev.hryshyn.remanence.auth.GoogleAuthState.Working) dev.hryshyn.remanence.recovery.RecoveryActions(
-                    container, hasIdentity = false,
-                    recoveryRequired = authState == AuthUiState.RecoveryRequired,
-                    onRecovered = rootViewModel::onSessionEstablished,
-                    onBusyChange = { recoveryBusy = it },
-                )
-                if (authState == AuthUiState.RecoveryRequired) HoldTextButton(enabled = !recoveryBusy, onClick = rootViewModel::logout) {
-                    Text(stringResource(R.string.hold_logout))
-                }
-                if (BuildConfig.REMANENCE_GOOGLE_SIGN_IN_ENABLED && authState == AuthUiState.SignedOut &&
-                    !googleViewModel.hasTicket && googleState != dev.hryshyn.remanence.auth.GoogleAuthState.Working) {
-                    HoldTextButton(onClick = { showLegacyAuth = !showLegacyAuth }) { Text(stringResource(R.string.mvp_other_sign_in)) }
-                }
-                if (!showLegacyAuth || recoveryBusy || googleViewModel.hasTicket || googleState == dev.hryshyn.remanence.auth.GoogleAuthState.Working) {
-                    Spacer(Modifier.weight(1f))
-                } else if (registering) {
-                    val form by registrationViewModel.form.collectAsStateWithLifecycle()
-                    val submit by registrationViewModel.submitState.collectAsStateWithLifecycle()
-                    RegistrationFormScreen(
-                        form, submit, registrationViewModel::onFieldChange, registrationViewModel::submit,
-                        modifier = Modifier.weight(1f).fillMaxWidth(),
-                    )
-                    HoldTextButton(onClick = { registering = false }, enabled = submit !is RegistrationSubmitState.Submitting) { Text(stringResource(R.string.hold_existing_account)) }
-                } else {
-                    val form by loginViewModel.form.collectAsStateWithLifecycle()
-                    val submit by loginViewModel.submitState.collectAsStateWithLifecycle()
-                    LoginScreen(
-                        form, submit, loginViewModel::onEmailChange, loginViewModel::onPasswordChange, loginViewModel::submit,
-                        modifier = Modifier.weight(1f).fillMaxWidth(),
-                    )
-                    HoldTextButton(onClick = { registering = true }, enabled = submit !is LoginSubmitState.Submitting) { Text(stringResource(R.string.hold_create_account)) }
-                }
-                LanguageSwitchRow(current = appLocale, onSelect = onLocaleSelected)
-            }
             }
         },
         homeContent = {

@@ -1,0 +1,9 @@
+<resources>
+    <string name="settings_design_title">settings</string>
+    <string name="settings_design_account">account</string>
+    <string name="settings_design_language">language</string>
+    <string name="settings_design_access">access to memories</string>
+    <string name="settings_design_privacy">privacy</string>
+    <string name="settings_design_about">about Remanence</string>
+    <string name="settings_design_logout">log out of this account</string>
+</resources>

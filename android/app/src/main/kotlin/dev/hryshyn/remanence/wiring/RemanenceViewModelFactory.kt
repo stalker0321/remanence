@@ -121,6 +121,11 @@ class RemanenceViewModelFactory(
             recipientLookupOwnerProvider = {
                 container.currentAccountStore.load()?.userId
             },
+            selfRecipientAccountProvider = {
+                container.currentAccountStore.loadEntity()?.let {
+                    dev.hryshyn.remanence.ui.create.SelfRecipientAccount(it.userId, it.handleNormalized)
+                }
+            },
             recipientLookupBoundaryEpoch = container.sessionBoundary::currentEpoch,
             registerRecipientLookupBoundary = container.sessionBoundary::register,
             // C2: the per-owner C1 bridge provider for VM session-sync.

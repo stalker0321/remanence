@@ -1,0 +1,15 @@
+<resources>
+    <string name="access_restore_title">Відкрити спогади</string>
+    <string name="access_open_detail">Увійди, щоб відкрити листівку для тебе.</string>
+    <string name="access_make_detail">Увійди, щоб залишити комусь спогад.</string>
+    <string name="access_default_detail">Місце для спогадів, якими ви ділитеся.</string>
+    <string name="access_connection_detail">Підключись до інтернету, щоб перевірити вхід до акаунта.</string>
+    <string name="access_handle_detail">За цим ніком тебе знайдуть і зможуть надіслати тобі листівку.</string>
+    <string name="access_google_again">Вибрати інший акаунт Google</string>
+    <string name="access_keys_detail">Ти увійшов до акаунта. Віднови ключі, щоб відкрити свої листівки на цьому пристрої.</string>
+    <string name="access_setup_detail">Збережи passkey, щоб листівки залишались із тобою і на новому пристрої.</string>
+    <string name="access_manager_detail">Вибери зручний менеджер паролів. Він не обов’язково має збігатися зі способом входу.</string>
+    <string name="access_code_option">Використати код відновлення</string>
+    <string name="access_verified_detail">Passkey перевірено. Можна продовжувати.</string>
+    <string name="access_passkey_detail">Уже є passkey Remanence? Можна увійти з його допомогою.</string>
+</resources>

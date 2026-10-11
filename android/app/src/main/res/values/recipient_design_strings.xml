@@ -1,0 +1,5 @@
+<resources>
+    <string name="recipient_design_self_title">postcard for myself</string>
+    <string name="recipient_design_self_action">choose my account</string>
+    <string name="recipient_design_self_unavailable">Your account changed or is unavailable. Look up the recipient again.</string>
+</resources>

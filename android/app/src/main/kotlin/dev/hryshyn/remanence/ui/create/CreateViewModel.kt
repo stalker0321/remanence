@@ -72,6 +72,9 @@ data class SenderIdentitySnapshot(
     val signingPrivateHandle: KeysetHandle,
 )
 
+/** Metadata only: self selection never reads private key material. */
+data class SelfRecipientAccount(val userId: String, val handle: String)
+
 /**
  * FIX-M1-007-11: the production Create flow over real components only -
  * directory resolve + explicit confirmation, front capture through the SIFT
@@ -175,6 +178,8 @@ class CreateViewModel(
      * Production wires [PickedPhotoThumbnails] over the app ContentResolver.
      */
     private val pickedThumbnailLoader: (suspend (String) -> androidx.compose.ui.graphics.ImageBitmap?)? = null,
+    /** Actual currently signed-in account, absent means no self shortcut. */
+    private val selfRecipientAccountProvider: suspend () -> SelfRecipientAccount? = { null },
 ) : ViewModel() {
 
     /** Current-send state; deliberately contains no history or inbox projection. */
@@ -227,6 +232,15 @@ class CreateViewModel(
      * confirmation screen. Binding happens ONLY through explicit confirm.
      */
     val pendingRecipient: StateFlow<ResolvedHandleSnapshot?> get() = recipientFlow.pendingRecipient
+
+    private val selfLookupOwnerProvider = recipientLookupOwnerProvider
+    private val _selfRecipientAccount = MutableStateFlow<SelfRecipientAccount?>(null)
+    val selfRecipientAccount: StateFlow<SelfRecipientAccount?> = _selfRecipientAccount.asStateFlow()
+    private val _selfRecipientLookupRejected = MutableStateFlow(false)
+    val selfRecipientLookupRejected: StateFlow<Boolean> = _selfRecipientLookupRejected.asStateFlow()
+    private var selfAccountJob: Job? = null
+    private var selfLookupJob: Job? = null
+    private var selfRecipientTargetUserId: String? = null
 
     private val _step = MutableStateFlow(Step.RECIPIENT_LOOKUP)
     val step: StateFlow<Step> = _step.asStateFlow()
@@ -1145,6 +1159,7 @@ class CreateViewModel(
         _uploadStatus.value = CreateUploadStatus.NotStarted
         _revokeStatus.value = CapsuleRevokeStatus.Idle
         observeCurrentOutbox(sessionOwner, _capsuleId, createSessionGeneration)
+        refreshSelfRecipientAccount()
     }
 
     /**
@@ -1205,12 +1220,98 @@ class CreateViewModel(
     // Recipient steps.
     // ---------------------------------------------------------------------
 
-    fun onHandleChange(value: String) = pickerVm.onHandleChange(value)
+    fun onHandleChange(value: String) {
+        selfLookupJob?.cancel()
+        selfLookupJob = null
+        selfRecipientTargetUserId = null
+        _selfRecipientLookupRejected.value = false
+        pickerVm.onHandleChange(value)
+    }
 
-    fun lookupRecipient() = pickerVm.lookup()
+    fun lookupRecipient() {
+        selfLookupJob?.cancel()
+        selfLookupJob = null
+        selfRecipientTargetUserId = null
+        _selfRecipientLookupRejected.value = false
+        pickerVm.lookup()
+    }
+
+    private suspend fun readSelfRecipientAccount(): SelfRecipientAccount? {
+        val account = withContext(ioDispatcher) { selfRecipientAccountProvider() } ?: return null
+        return runCatching {
+            SelfRecipientAccount(UserId.parseRest(account.userId).toRestString(),
+                dev.hryshyn.remanence.core.model.NormalizedHandle.parse(account.handle).value)
+        }.getOrNull()
+    }
+
+    private suspend fun readSelfLookupOwner(): String? = try { selfLookupOwnerProvider() }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { null }
+
+    private fun refreshSelfRecipientAccount() {
+        clearSelfRecipientState()
+        val expectedOwner = sessionOwner?.toRestString() ?: return
+        val generation = createSessionGeneration
+        selfAccountJob = viewModelScope.launch {
+            val account = try { readSelfRecipientAccount() }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { null }
+            val liveOwner = readSelfLookupOwner()
+            if (generation == createSessionGeneration && sessionOwner?.toRestString() == expectedOwner &&
+                account?.userId == expectedOwner && liveOwner == expectedOwner) {
+                _selfRecipientAccount.value = account
+            }
+        }
+    }
+
+    /** Same authenticated directory flow; a successful lookup still needs explicit confirmation. */
+    fun lookupPostcardForMyself() {
+        if (_step.value != Step.RECIPIENT_LOOKUP || _selfRecipientAccount.value == null ||
+            pickerVm.state.value is RecipientLookupUiState.LookingUp || selfLookupJob?.isActive == true) return
+        val expectedOwner = sessionOwner?.toRestString() ?: return
+        val generation = createSessionGeneration
+        val typedAtStart = pickerVm.handle.value
+        _selfRecipientLookupRejected.value = false
+        selfLookupJob = viewModelScope.launch {
+            val account = try { readSelfRecipientAccount() }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { null }
+            val liveOwner = readSelfLookupOwner()
+            if (generation != createSessionGeneration || sessionOwner?.toRestString() != expectedOwner ||
+                _step.value != Step.RECIPIENT_LOOKUP || pickerVm.handle.value != typedAtStart) return@launch
+            if (account?.userId != expectedOwner || liveOwner != expectedOwner) {
+                _selfRecipientAccount.value = null
+                _selfRecipientLookupRejected.value = true
+                return@launch
+            }
+            _selfRecipientAccount.value = account
+            selfRecipientTargetUserId = expectedOwner
+            // Not local key construction or automatic recipient binding.
+            pickerVm.onHandleChange(account.handle)
+            pickerVm.lookup()
+        }
+    }
+
+    private fun clearSelfRecipientState() {
+        selfAccountJob?.cancel(); selfAccountJob = null
+        selfLookupJob?.cancel(); selfLookupJob = null
+        selfRecipientTargetUserId = null
+        _selfRecipientAccount.value = null
+        _selfRecipientLookupRejected.value = false
+    }
 
     fun onResolved(snapshot: ResolvedHandleSnapshot) {
         if (!requireStep(Step.RECIPIENT_LOOKUP, "recipient resolution")) return
+        selfRecipientTargetUserId?.let { expectedOwner ->
+            val live = pickerVm.state.value as? RecipientLookupUiState.Resolved
+            if (snapshot.userId.toRestString() != expectedOwner ||
+                sessionOwner?.toRestString() != expectedOwner || live?.snapshot !== snapshot) {
+                selfRecipientTargetUserId = null
+                pickerVm.reset()
+                _selfRecipientLookupRejected.value = true
+                return
+            }
+        }
         recipientFlow.onResolved(snapshot)
         _step.value = Step.RECIPIENT_CONFIRM
     }
@@ -1233,6 +1334,8 @@ class CreateViewModel(
             return
         }
         recipientFlow.restartLookup()
+        selfRecipientTargetUserId = null
+        _selfRecipientLookupRejected.value = false
         _step.value = Step.RECIPIENT_LOOKUP
     }
 
@@ -2306,6 +2409,7 @@ class CreateViewModel(
         // own NonCancellable cleanup guarantees staged plaintext removal.
         createSessionGeneration += 1
         deliveryGeneration += 1
+        clearSelfRecipientState()
         val owner = sessionOwner
         val capsuleId = _capsuleId
         cancelPublishingLocked()

@@ -1,0 +1,15 @@
+<resources>
+    <string name="access_restore_title">Открыть воспоминания</string>
+    <string name="access_open_detail">Войди, чтобы открыть открытку для тебя.</string>
+    <string name="access_make_detail">Войди, чтобы оставить кому-то воспоминание.</string>
+    <string name="access_default_detail">Место для воспоминаний, которыми вы делитесь.</string>
+    <string name="access_connection_detail">Подключись к интернету, чтобы проверить вход в аккаунт.</string>
+    <string name="access_handle_detail">По этому нику тебя найдут и смогут отправить тебе открытку.</string>
+    <string name="access_google_again">Выбрать другой аккаунт Google</string>
+    <string name="access_keys_detail">Ты вошёл в аккаунт. Восстанови ключи, чтобы открыть свои открытки на этом устройстве.</string>
+    <string name="access_setup_detail">Сохрани passkey, чтобы открытки оставались с тобой и на новом устройстве.</string>
+    <string name="access_manager_detail">Выбери удобный менеджер паролей. Он не обязательно должен совпадать со способом входа.</string>
+    <string name="access_code_option">Использовать код восстановления</string>
+    <string name="access_verified_detail">Passkey проверен. Можно продолжать.</string>
+    <string name="access_passkey_detail">Уже есть passkey Remanence? Можно войти с его помощью.</string>
+</resources>

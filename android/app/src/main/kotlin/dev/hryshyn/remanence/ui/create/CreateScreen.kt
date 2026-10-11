@@ -43,6 +43,7 @@ import dev.hryshyn.remanence.ui.hold.HoldDestructiveButton
 import dev.hryshyn.remanence.ui.hold.HoldColors
 import dev.hryshyn.remanence.ui.hold.HoldSpace
 import dev.hryshyn.remanence.ui.hold.HoldInformation
+import dev.hryshyn.remanence.ui.hold.HoldActionObject
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.runtime.DisposableEffect
@@ -329,6 +330,8 @@ fun CreateScreen(
 private fun RecipientLookupContent(viewModel: CreateViewModel) {
     val handle by viewModel.pickerVm.handle.collectAsStateWithLifecycle()
     val state by viewModel.pickerVm.state.collectAsStateWithLifecycle()
+    val selfAccount by viewModel.selfRecipientAccount.collectAsStateWithLifecycle()
+    val selfRejected by viewModel.selfRecipientLookupRejected.collectAsStateWithLifecycle()
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
             OutlinedTextField(
@@ -338,7 +341,21 @@ private fun RecipientLookupContent(viewModel: CreateViewModel) {
                 singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
                 modifier = Modifier.fillMaxWidth().testTag("create_handle_input"),
             )
+            selfAccount?.let { account ->
+                Spacer(Modifier.height(HoldSpace.Group))
+                HoldActionObject(
+                    title = stringResource(R.string.recipient_design_self_title),
+                    detail = "\u2068@" + account.handle + "\u2069",
+                    action = stringResource(R.string.recipient_design_self_action),
+                    onClick = viewModel::lookupPostcardForMyself,
+                    modifier = Modifier.fillMaxWidth().testTag("create_self_recipient"),
+                    enabled = state !is RecipientLookupUiState.LookingUp,
+                    compact = true,
+                )
+            }
             Spacer(Modifier.height(8.dp))
+            if (selfRejected) Text(stringResource(R.string.recipient_design_self_unavailable),
+                color = HoldColors.Error, modifier = Modifier.testTag("create_self_recipient_error"))
             when (val current = state) {
                 is RecipientLookupUiState.Resolved -> LaunchedEffect(current.snapshot) { viewModel.onResolved(current.snapshot) }
                 RecipientLookupUiState.NotFound -> Text(stringResource(R.string.hold_no_handle))

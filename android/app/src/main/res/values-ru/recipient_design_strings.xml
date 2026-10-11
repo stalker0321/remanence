@@ -1,0 +1,5 @@
+<resources>
+    <string name="recipient_design_self_title">открытка себе</string>
+    <string name="recipient_design_self_action">выбрать свой аккаунт</string>
+    <string name="recipient_design_self_unavailable">Аккаунт изменился или недоступен. Найдите получателя заново.</string>
+</resources>

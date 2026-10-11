@@ -2,6 +2,10 @@ package dev.hryshyn.remanence.ui.create
 
 import android.content.Context
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -10,6 +14,7 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performScrollTo
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -34,6 +39,8 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
+import dev.hryshyn.remanence.ui.hold.HoldTheme
 import dev.hryshyn.remanence.core.recognition.FingerprintSide
 import dev.hryshyn.remanence.core.data.db.FingerprintOrigin
 import dev.hryshyn.remanence.core.data.db.RemanenceLocalDatabase
@@ -150,10 +157,14 @@ class CreateRecipientConfirmFlowTest {
         stagingDir.deleteRecursively()
     }
 
-    private fun viewModel(directory: RecipientDirectoryPort): CreateViewModel {
+    private fun viewModel(directory: RecipientDirectoryPort,
+                          selfAccount: suspend () -> SelfRecipientAccount? = { null },
+                          ownerProvider: suspend () -> String? = { "token" }): CreateViewModel {
         val retryStore = SenderRetryMaterialStore(dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir))
         return CreateViewModel(
             directory = directory,
+            selfRecipientAccountProvider = selfAccount,
+            recipientLookupOwnerProvider = ownerProvider,
             accessTokenProvider = { "token" },
             identityProvider = { null },
             persistence = NoPersistence(),
@@ -181,6 +192,113 @@ class CreateRecipientConfirmFlowTest {
             composeRule.onAllNodesWithTag("confirm_handle_text", useUnmergedTree = true)
                 .fetchSemanticsNodes().isNotEmpty()
         }
+    }
+
+    @Test
+    @Config(qualifiers = "w390dp-h844dp-xhdpi")
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun selfShortcutNativeVisualFixtureUsesActualCreateScreen() {
+        val owner = selfSnapshot.userId.toRestString()
+        val vm = viewModel(ScriptedDirectory(mapOf("vodkolyan" to selfSnapshot)),
+            { SelfRecipientAccount(owner, "vodkolyan") }, { owner })
+        vm.beginSession(1L, owner)
+        val root = java.util.concurrent.atomic.AtomicReference<android.view.View>()
+        composeRule.setContent {
+            root.set(LocalView.current.rootView)
+            HoldTheme { Surface(Modifier.fillMaxSize()) { CreateScreen(viewModel = vm) } }
+        }
+        composeRule.waitUntil(timeoutMillis = 10_000) { vm.selfRecipientAccount.value != null }
+        composeRule.onNodeWithTag("create_handle_input").assertIsDisplayed()
+        composeRule.onNodeWithTag("create_self_recipient").assertIsDisplayed().assertIsEnabled()
+        composeRule.waitForIdle()
+        composeRule.runOnIdle {
+            val view = checkNotNull(root.get())
+            check(view.width > 0 && view.height > 0)
+            val bitmap = android.graphics.Bitmap.createBitmap(view.width, view.height,
+                android.graphics.Bitmap.Config.ARGB_8888)
+            view.draw(android.graphics.Canvas(bitmap))
+            val output = File("build/hold-review/recipient-self-en.png")
+            output.parentFile.mkdirs()
+            output.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+            bitmap.recycle()
+        }
+        // Presentation fixture only: no directory request or recipient binding happened.
+        assertNull(vm.pendingRecipient.value)
+        assertNull(vm.confirmedRecipient.value)
+    }
+
+    @Test
+    fun selfActionUsesAccountMetadataAndDirectoryThenRequiresExplicitConfirmation() {
+        val calls = mutableListOf<String>()
+        val owner = selfSnapshot.userId.toRestString()
+        val vm = viewModel(RecipientDirectoryPort { raw ->
+            calls += raw
+            DirectoryLookupResult.Found(selfSnapshot)
+        }, { SelfRecipientAccount(owner, "vodkolyan") }, { owner })
+        vm.beginSession(1L, owner)
+        setContent(vm)
+        composeRule.waitUntil(timeoutMillis = 10_000) { vm.selfRecipientAccount.value != null }
+        composeRule.onNodeWithTag("create_handle_input").performTextInput("friend")
+        composeRule.onNodeWithTag("create_self_recipient").performScrollTo().performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000) { vm.step.value == CreateViewModel.Step.RECIPIENT_CONFIRM }
+        assertEquals(listOf("vodkolyan"), calls)
+        assertSame(selfSnapshot, vm.pendingRecipient.value)
+        assertNull(vm.confirmedRecipient.value)
+        composeRule.onNodeWithTag("confirm_button").performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000) { vm.step.value == CreateViewModel.Step.FRONT }
+        assertSame(selfSnapshot, vm.confirmedRecipient.value)
+    }
+
+    @Test
+    fun noCurrentAccountMeansNoSelfShortcut() {
+        val vm = viewModel(ScriptedDirectory(mapOf("vodkolyan" to selfSnapshot)))
+        vm.beginSession(1L, selfSnapshot.userId.toRestString())
+        setContent(vm)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("create_self_recipient").assertDoesNotExist()
+        assertNull(vm.selfRecipientAccount.value)
+    }
+
+    @Test
+    fun foreignDirectorySnapshotCannotBecomeSelfPendingConfirmation() {
+        val owner = selfSnapshot.userId.toRestString()
+        val vm = viewModel(RecipientDirectoryPort { DirectoryLookupResult.Found(otherSnapshot) },
+            { SelfRecipientAccount(owner,"vodkolyan") }, { owner })
+        vm.beginSession(1L, owner)
+        setContent(vm)
+        composeRule.waitUntil(timeoutMillis = 10_000) { vm.selfRecipientAccount.value != null }
+        composeRule.onNodeWithTag("create_self_recipient").performScrollTo().performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000) { vm.selfRecipientLookupRejected.value }
+        assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
+        assertNull(vm.pendingRecipient.value)
+        assertNull(vm.confirmedRecipient.value)
+        composeRule.onNodeWithTag("create_self_recipient_error").assertExists()
+    }
+
+    @Test
+    fun ownerChangeDuringSelfMetadataReadPreventsDirectoryLookup() {
+        val originalOwner = selfSnapshot.userId.toRestString()
+        var liveOwner = originalOwner
+        val gate = kotlinx.coroutines.CompletableDeferred<SelfRecipientAccount?>()
+        val reads = java.util.concurrent.atomic.AtomicInteger()
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        val vm = viewModel(RecipientDirectoryPort {
+            calls.incrementAndGet()
+            DirectoryLookupResult.Found(selfSnapshot)
+        }, {
+            if (reads.incrementAndGet() == 1) SelfRecipientAccount(originalOwner,"vodkolyan") else gate.await()
+        }, { liveOwner })
+        vm.beginSession(1L, originalOwner)
+        setContent(vm)
+        composeRule.waitUntil(timeoutMillis = 10_000) { vm.selfRecipientAccount.value != null }
+        composeRule.onNodeWithTag("create_self_recipient").performScrollTo().performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000) { reads.get() == 2 }
+        liveOwner = otherSnapshot.userId.toRestString()
+        gate.complete(SelfRecipientAccount(originalOwner,"vodkolyan"))
+        composeRule.waitUntil(timeoutMillis = 10_000) { vm.selfRecipientLookupRejected.value }
+        assertEquals(0,calls.get())
+        assertNull(vm.pendingRecipient.value)
+        assertNull(vm.confirmedRecipient.value)
     }
 
     @Test

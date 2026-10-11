@@ -1,0 +1,5 @@
+<resources>
+    <string name="recipient_design_self_title">листівка собі</string>
+    <string name="recipient_design_self_action">вибрати свій акаунт</string>
+    <string name="recipient_design_self_unavailable">Акаунт змінився або недоступний. Знайдіть отримувача знову.</string>
+</resources>

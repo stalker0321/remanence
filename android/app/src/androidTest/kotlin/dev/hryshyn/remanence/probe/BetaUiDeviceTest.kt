@@ -213,7 +213,13 @@ class BetaUiDeviceTest {
         await { shell("dumpsys activity activities").lineSequence().any {
             it.trimStart().startsWith("topResumedActivity=") && it.contains(component)
         } }
-        InstrumentationRegistry.getInstrumentation().uiAutomation.waitForIdle(500, 5_000)
+        // Resumed precedes drawing/active-window accessibility during animation.
+        // Do not send Back or capture the still-visible previous app frame.
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        await { automation.rootInActiveWindow?.let {
+            it.packageName?.toString()?.contains(component) == true && it.childCount > 0
+        } == true }
+        automation.waitForIdle(500, 5_000)
     }
     private fun await(predicate: () -> Boolean) {
         // SwiftShader GPU readback on the bounded headless VM can be slow.

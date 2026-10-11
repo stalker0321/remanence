@@ -32,7 +32,9 @@ unrestricted public rollout. Support contact: hryshyn.dev@gmail.com.
 
 ## Still required before inviting friends
 
-1. Finish full catalog, known-song queries and backend wiring/rollback.
+1. Full catalog is wired into the existing hosted API (T171): 40,475,049
+   recordings in the compact read-only runtime catalog. Verify known-song
+   searches from the owner's phone; this does not require another APK.
 2. Review/approve the published privacy/terms text and operational retention.
    An email link alone does not fulfill a deletion request: operator must verify
    ownership and actually remove the relevant account/data. Define backup expiry,
@@ -93,3 +95,23 @@ not as a minimum group size to start the beta.
 
 User-facing crypto compatibility and these policy documents remain distinct:
 closed testing is not an exemption from mandatory account/UGC safeguards.
+
+## QA checkpoint, 2026-10-11
+
+v35 debug QA APK and unsigned beta AAB build successfully. APK/AAB ELF64
+16K checks and debug APK ZIP alignment pass. On the existing API36 Play AVD,
+native CameraX capture plus the production SIFT extractor/matcher, native DNN
+probes and current-capsule GPU PNG pixels pass. Focused JVM tests:32 pass;
+isolated server suites:44 pass,1 skipped. These are emulator/local evidence,
+not physical-camera, provider-sync or Play-signed acceptance.
+
+The current hosted backend remains on schema0010, without the beta safety
+migration0011 or legal pages. Debug QA builds hide unhosted policy links; beta
+builds still require policy/safety deployment before inviting friends. No
+account reset, live schema migration or Play upload was performed.
+
+Legacy BER presentation follow-up: its track card is a sibling of the captured
+canvas, so that older format's PNG does not yet include the visible track card.
+Current V3 collage and paginated photo fixtures have pixel evidence. Do not
+claim every legacy presentation or saving a file to an external provider was
+tested from the chooser/picker cancellation checks.

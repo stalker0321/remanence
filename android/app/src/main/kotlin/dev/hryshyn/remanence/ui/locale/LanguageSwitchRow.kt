@@ -3,7 +3,7 @@ package dev.hryshyn.remanence.ui.locale
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -65,13 +65,16 @@ fun LanguageSwitchRow(
                 .testTag("language_group_label")
                 .semantics { heading() },
         )
-        Row(
+        // Each option is measured against the whole available width, then
+        // wrapped as a unit. Row squeezed the final label into a letter stack
+        // at large font sizes (and on narrow phones).
+        FlowRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .selectableGroup()
                 .testTag("language_select_group"),
             horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             LanguageOption(
                 locale = AppLocale.SYSTEM,

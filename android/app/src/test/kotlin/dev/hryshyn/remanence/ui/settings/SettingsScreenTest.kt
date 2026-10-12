@@ -40,6 +40,8 @@ class SettingsScreenTest {
         compose.onNodeWithTag("language_option_russian").performScrollTo().performClick()
         assertEquals(AppLocale.RUSSIAN, selected)
         compose.onNodeWithTag("settings_logout").performScrollTo().performClick()
+        assertFalse(loggedOut)
+        compose.onNodeWithTag("settings_logout_confirm").performClick()
         compose.waitForIdle()
         assertTrue(loggedOut)
     }
@@ -89,6 +91,8 @@ class SettingsScreenTest {
         compose.onNodeWithTag("settings_access_row").performScrollTo().performClick()
         compose.onNodeWithTag("settings_recovery_status").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("settings_logout").performScrollTo().assertIsDisplayed().performClick()
+        assertFalse(loggedOut)
+        compose.onNodeWithTag("settings_logout_confirm").performClick()
         compose.waitForIdle()
         assertTrue(loggedOut)
     }
@@ -112,6 +116,16 @@ class SettingsScreenTest {
         } else compose.onNodeWithTag("settings_handle_permanent").assertDoesNotExist()
     }
 
+    @Test fun cancellingLogoutLeavesSessionAndSettingsOpen() {
+        var logout = 0
+        compose.setContent { HoldTheme { SettingsScreen("person", AppLocale.SYSTEM, {}, true, {}, { logout++ }) } }
+        compose.onNodeWithTag("settings_logout").performScrollTo().performClick()
+        compose.onNodeWithTag("settings_logout_cancel").performClick()
+        assertEquals(0, logout)
+        compose.onNodeWithTag("settings_logout_confirm").assertDoesNotExist()
+        compose.onNodeWithTag("settings_screen").assertExists()
+    }
+
     @Test fun settingsLabelsHaveEnglishRussianUkrainianParity() {
         val files = listOf("values", "values-ru", "values-uk")
         val values = files.map { locale ->
@@ -124,6 +138,19 @@ class SettingsScreenTest {
             }
         }
         assertTrue(values.first().isNotEmpty())
+        values.forEach { assertEquals(values.first().keys, it.keys); assertTrue(it.values.all(String::isNotBlank)) }
+    }
+
+    @Test fun homeAuditLabelsHaveEnglishRussianUkrainianParity() {
+        val values = listOf("values", "values-ru", "values-uk").map { locale ->
+            val nodes = DocumentBuilderFactory.newInstance().newDocumentBuilder()
+                .parse(moduleFile("src/main/res/$locale/home_audit_strings.xml")).getElementsByTagName("string")
+            (0 until nodes.length).associate { index ->
+                val node = nodes.item(index) as org.w3c.dom.Element
+                node.getAttribute("name") to node.textContent
+            }
+        }
+        assertEquals(4, values.first().size)
         values.forEach { assertEquals(values.first().keys, it.keys); assertTrue(it.values.all(String::isNotBlank)) }
     }
 

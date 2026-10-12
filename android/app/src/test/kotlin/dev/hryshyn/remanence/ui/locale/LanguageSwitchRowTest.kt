@@ -12,6 +12,9 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hryshyn.remanence.ui.hold.HoldTheme
 import org.junit.Assert.assertEquals
@@ -19,6 +22,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 /**
  * Compose contract for the discoverable language switch: all four entries
@@ -88,6 +92,30 @@ class LanguageSwitchRowTest {
             .assertTextContains("Русский")
         composeRule.onNodeWithTag("language_option_ukrainian")
             .assertTextContains("Українська")
+    }
+
+    @Test
+    @Config(qualifiers = "w320dp-h640dp-mdpi", fontScale = 1.6f)
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun narrowLargeTypeWrapsWholeOptionsInsteadOfStackingLetters() {
+        composeRule.setContent {
+            HoldTheme { LanguageSwitchRow(current = AppLocale.SYSTEM, onSelect = {}) }
+        }
+        for (label in listOf("English", "Русский", "Українська")) {
+            val results = mutableListOf<TextLayoutResult>()
+            composeRule.onNodeWithText(label).assertIsDisplayed()
+                .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(results) }
+            assertEquals("$label must remain on one readable line", 1, results.single().lineCount)
+            val layout = results.single()
+            // Shrink-wrapped Text can retain the original paragraph block
+            // width in Robolectric (296px block, 66px English glyph line).
+            // Test rendered line extents, not that block-width comparison.
+            org.junit.Assert.assertFalse("$label must not be ellipsized", layout.isLineEllipsized(0))
+            org.junit.Assert.assertTrue("$label left edge must fit", layout.getLineLeft(0) >= -0.5f)
+            org.junit.Assert.assertTrue("$label right edge must fit its ${layout.size.width}px label",
+                layout.getLineRight(0) <= layout.size.width + 0.5f)
+            org.junit.Assert.assertTrue("$label bottom edge must fit", layout.getLineBottom(0) <= layout.size.height + 0.5f)
+        }
     }
 
     @Test

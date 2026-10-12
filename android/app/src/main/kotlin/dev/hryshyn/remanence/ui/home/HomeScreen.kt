@@ -4,6 +4,7 @@ import androidx.compose.ui.res.stringResource
 import dev.hryshyn.remanence.R
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -19,6 +20,7 @@ import dev.hryshyn.remanence.ui.locale.LanguageSwitchRow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.Constraints
@@ -110,9 +112,19 @@ fun HomeScreen(
     // weight() would split the TOTAL height and skew both the scan-create
     // diff and the extra-height ratio, so intrinsics are measured via
     // SubcomposeLayout and the surplus is distributed here.
+    // Keep a bounded viewport for flex calculation, but let the content grow
+    // and scroll when its natural minimum exceeds it (including system insets).
+    // A scroll modifier directly around the old layout would erase the height
+    // constraint and lose the accepted proportional fill on tall screens.
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+    val viewportHeight = with(LocalDensity.current) {
+        if (constraints.hasBoundedHeight) maxHeight.roundToPx() else 0
+    }
     SubcomposeLayout(
-        modifier = Modifier.fillMaxSize().padding(horizontal = gutter, vertical = HoldSpace.Gutter),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+            .padding(horizontal = gutter, vertical = HoldSpace.Gutter),
     ) { constraints ->
+        val contentViewport = maxOf(0, viewportHeight - (HoldSpace.Gutter * 2).roundToPx())
         val maxW = constraints.maxWidth
         val wrap = Constraints(maxWidth = maxW)
         val gapPx = HoldSpace.Group.toPx().toInt()
@@ -139,11 +151,7 @@ fun HomeScreen(
         val leavesH = brandPlaceables.sumOf { it.height } + langPlaceables.sumOf { it.height }
         // Brand, [recovery], scan, create, language with one gap between each.
         val gapsH = gapPx * (brandPlaceables.size + langPlaceables.size + 1)
-        val surplus = if (constraints.hasBoundedHeight) {
-            maxOf(0, constraints.maxHeight - leavesH - gapsH - baseScan - baseCreate)
-        } else {
-            0
-        }
+        val surplus = maxOf(0, contentViewport - leavesH - gapsH - baseScan - baseCreate)
         // Remainder goes to scan so the column exactly fills the viewport.
         val createExtra = (surplus * (CREATE_FLEX / (SCAN_FLEX + CREATE_FLEX))).toInt()
         val scanExtra = surplus - createExtra
@@ -155,9 +163,7 @@ fun HomeScreen(
         val createPlaceables = subcompose("homeCreate") {
             HomeCreateCard(enabled = enabled, onCreate = onCreate, minSurfaceHeight = createFloor, tag = "create_action")
         }.map { it.measure(Constraints.fixed(maxW, createH)) }
-        val totalH = if (constraints.hasBoundedHeight) constraints.maxHeight else {
-            leavesH + gapsH + scanH + createH
-        }
+        val totalH = maxOf(contentViewport, leavesH + gapsH + scanH + createH)
         layout(maxW, totalH) {
             var y = 0
             brandPlaceables.forEach { it.placeRelative(0, y); y += it.height }
@@ -169,6 +175,7 @@ fun HomeScreen(
             langPlaceables.forEach { it.placeRelative(0, y); y += it.height }
         }
     }
+    }
 }
 
 @Composable
@@ -177,7 +184,7 @@ private fun HomeBrand(recoveryRequired: Boolean) {
         Text("remanence", style = MaterialTheme.typography.titleLarge)
         if (recoveryRequired) {
             Text(
-                "Private keys for this account are not on this device; recovery required.",
+                stringResource(R.string.home_audit_recovery_required),
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.testTag("home_recovery_note"),
             )

@@ -1,0 +1,6 @@
+<resources>
+    <string name="home_audit_recovery_required">На цьому пристрої немає твоїх особистих ключів. Віднови доступ, щоб відкривати листівки.</string>
+    <string name="home_audit_logout_title">Вийти з акаунта?</string>
+    <string name="home_audit_logout_cancel">Залишитися в акаунті</string>
+    <string name="home_audit_logout_detail">На цьому пристрої потрібно буде знову ввійти й відновити доступ до листівок.</string>
+</resources>

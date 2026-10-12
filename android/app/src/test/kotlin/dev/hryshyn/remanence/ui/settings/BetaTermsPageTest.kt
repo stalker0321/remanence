@@ -39,6 +39,7 @@ class BetaTermsPageTest {
         rule.onNodeWithTag("beta_terms_continue").assertIsNotEnabled()
         rule.runOnIdle { available = true; busy = true }
         rule.onNodeWithTag("beta_terms_continue").assertIsNotEnabled()
+        rule.onNodeWithTag("beta_terms_retry").performScrollTo().assertIsNotEnabled()
         rule.onNodeWithTag("beta_terms_agreement").performScrollTo().assertIsNotEnabled()
         rule.runOnIdle { busy = false }
         rule.onNodeWithTag("beta_terms_continue").assertIsEnabled()

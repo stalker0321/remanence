@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -58,13 +59,34 @@ internal fun BetaLegalLinks(handle: String) {
 /** Mandatory beta UGC consent before entering Create. Offline/missing API stays closed. */
 @Composable
 internal fun BetaTermsGate(repository: SafetyRepository, owner: String, onBack: () -> Unit, content: @Composable () -> Unit) {
+    val context = LocalContext.current
+    BetaTermsGateWithActions(owner, repository::state, repository::acceptTerms,
+        { context.openRemanenceLink(it) }, onBack, content)
+}
+
+/** Scriptable UI boundary; production callbacks remain the fenced repository. */
+@Composable
+internal fun BetaTermsGateWithActions(owner: String, fetchState: suspend () -> SafetyState?,
+    acceptTerms: suspend () -> Boolean, openLink: (String) -> Boolean,
+    onBack: () -> Unit, content: @Composable () -> Unit) {
+    // Saveable inputs alone are not checked when restoring a saved instance.
+    // Include the owner in the composition identity, not just remember inputs.
+    key(owner) { BetaTermsOwnerContent(owner, fetchState, acceptTerms, openLink, onBack, content) }
+}
+
+@Composable
+private fun BetaTermsOwnerContent(owner: String, fetchState: suspend () -> SafetyState?,
+    acceptTerms: suspend () -> Boolean, openLink: (String) -> Boolean,
+    onBack: () -> Unit, content: @Composable () -> Unit) {
     var state by remember(owner) { mutableStateOf<SafetyState?>(null) }
     var busy by remember(owner) { mutableStateOf(true) }
     var failed by remember(owner) { mutableStateOf(false) }
-    var agreed by remember(owner) { mutableStateOf(false) }
+    var linkFailed by remember(owner) { mutableStateOf(false) }
+    // Only local form input is restored. Never persist an acceptance verdict:
+    // the repository must confirm consent again after recreation.
+    var agreed by rememberSaveable(owner) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    val context = LocalContext.current
-    LaunchedEffect(owner) { state = repository.state(); failed = state == null; busy = false }
+    LaunchedEffect(owner) { state = fetchState(); failed = state == null; busy = false }
     if (state?.terms_accepted == true) { content(); return }
     // A pending lookup is not an unaccepted user. Previously the full consent
     // form flashed on every Home -> Create entry, then vanished after the HTTP
@@ -75,15 +97,22 @@ internal fun BetaTermsGate(repository: SafetyRepository, owner: String, onBack: 
     }
     BetaTermsPage(agreed = agreed, busy = busy, available = state != null, failed = failed,
         onAgree = { agreed = it }, onBack = onBack,
-        onTerms = { failed = !context.openRemanenceLink("terms") },
-        onPrivacy = { failed = !context.openRemanenceLink("privacy") },
-        onRetry = { busy = true; scope.launch { state = repository.state(); failed = state == null; busy = false } },
-        onContinue = {
-            busy = true; scope.launch {
-                if (repository.acceptTerms()) { state = repository.state(); failed = state == null } else failed = true
-                busy = false
+        onTerms = { linkFailed = !openLink("terms") },
+        onPrivacy = { linkFailed = !openLink("privacy") },
+        onRetry = {
+            if (!busy) {
+                busy = true
+                scope.launch { state = fetchState(); failed = state == null; busy = false }
             }
-        })
+        },
+        onContinue = {
+            if (!busy && agreed && state != null) {
+                busy = true; scope.launch {
+                    if (acceptTerms()) { state = fetchState(); failed = state?.terms_accepted != true } else failed = true
+                    busy = false
+                }
+            }
+        }, linkFailed = linkFailed)
 }
 
 @Composable
@@ -100,7 +129,8 @@ internal fun BetaTermsPendingPage(onBack: () -> Unit) {
 @Composable
 internal fun BetaTermsPage(agreed: Boolean, busy: Boolean, available: Boolean, failed: Boolean,
     onAgree: (Boolean) -> Unit, onBack: () -> Unit, onTerms: () -> Unit,
-    onPrivacy: () -> Unit, onRetry: () -> Unit, onContinue: () -> Unit) {
+    onPrivacy: () -> Unit, onRetry: () -> Unit, onContinue: () -> Unit,
+    linkFailed: Boolean = false) {
     AccessPage(onBack = onBack) {
       HoldFormScaffold(modifier = Modifier.padding(bottom = 16.dp), primary = {
         HoldButton(enabled = agreed && available && !busy, onClick = onContinue,
@@ -121,9 +151,11 @@ internal fun BetaTermsPage(agreed: Boolean, busy: Boolean, available: Boolean, f
             Text(stringResource(R.string.beta_terms_agree), Modifier.weight(1f))
         }
         if (busy) CircularProgressIndicator()
+        if (linkFailed) Text(stringResource(R.string.beta_external_failed),
+            Modifier.testTag("beta_terms_link_failed"), color = HoldColors.Destructive)
         if (failed) {
             Text(stringResource(R.string.beta_network_failed), color = HoldColors.Destructive)
-            HoldTextButton(onClick = onRetry, modifier = Modifier.testTag("beta_terms_retry")) {
+            HoldTextButton(enabled = !busy, onClick = onRetry, modifier = Modifier.testTag("beta_terms_retry")) {
                 Text(stringResource(R.string.hold_retry))
             }
         }
@@ -133,19 +165,36 @@ internal fun BetaTermsPage(agreed: Boolean, busy: Boolean, available: Boolean, f
 
 @Composable
 internal fun BetaSafetyPanel(repository: SafetyRepository, owner: String) {
+    BetaSafetyPanelWithActions(owner, repository::state, repository::block,
+        repository::report, repository::unblock)
+}
+
+@Composable
+internal fun BetaSafetyPanelWithActions(owner: String, fetchState: suspend () -> SafetyState?,
+    block: suspend (String) -> Boolean, report: suspend (String, String) -> Boolean,
+    unblock: suspend (String) -> Boolean) {
+    key(owner) { BetaSafetyOwnerContent(owner, fetchState, block, report, unblock) }
+}
+
+@Composable
+private fun BetaSafetyOwnerContent(owner: String, fetchState: suspend () -> SafetyState?,
+    block: suspend (String) -> Boolean, report: suspend (String, String) -> Boolean,
+    unblock: suspend (String) -> Boolean) {
     var state by remember(owner) { mutableStateOf<SafetyState?>(null) }
-    var handle by remember(owner) { mutableStateOf("") }
-    var reason by remember(owner) { mutableStateOf("SPAM") }
-    var busy by remember(owner) { mutableStateOf(false) }
+    var handle by rememberSaveable(owner) { mutableStateOf("") }
+    var reason by rememberSaveable(owner) { mutableStateOf("SPAM") }
+    var busy by remember(owner) { mutableStateOf(true) }
+    var fetchFailed by remember(owner) { mutableStateOf(false) }
     var message by remember(owner) { mutableStateOf<Int?>(null) }
     val scope = rememberCoroutineScope()
-    var expanded by remember(owner) { mutableStateOf(false) }
-    LaunchedEffect(owner) { state = repository.state() }
+    var expanded by rememberSaveable(owner) { mutableStateOf(false) }
+    LaunchedEffect(owner) { state = fetchState(); fetchFailed = state == null; busy = false }
     fun operation(action: suspend () -> Boolean, success: Int) {
+        if (busy) return
         busy = true; message = null
         scope.launch {
             message = if (action()) success else R.string.beta_network_failed
-            state = repository.state(); busy = false
+            state = fetchState(); fetchFailed = state == null; busy = false
         }
     }
     Column(Modifier.fillMaxWidth().testTag("settings_contact_safety"), verticalArrangement = Arrangement.spacedBy(HoldSpace.Small)) {
@@ -158,7 +207,7 @@ internal fun BetaSafetyPanel(repository: SafetyRepository, owner: String) {
             label = { Text(stringResource(R.string.mvp_handle_label)) }, singleLine = true, enabled = !busy,
             modifier = Modifier.fillMaxWidth().testTag("settings_block_handle"))
         val valid = handle.matches(Regex("[a-z0-9_.]{3,30}")) && !busy
-        HoldSecondaryButton(enabled = valid, onClick = { operation({ repository.block(handle) }, R.string.beta_blocked) }, modifier = Modifier.fillMaxWidth()) {
+        HoldSecondaryButton(enabled = valid, onClick = { operation({ block(handle) }, R.string.beta_blocked) }, modifier = Modifier.fillMaxWidth()) {
             Text(stringResource(R.string.beta_block))
         }
         val reasons = listOf("SPAM" to R.string.beta_reason_spam, "HARASSMENT" to R.string.beta_reason_harassment,
@@ -172,16 +221,29 @@ internal fun BetaSafetyPanel(repository: SafetyRepository, owner: String) {
                 reasons.forEach { (key, label) -> DropdownMenuItem(text = { Text(stringResource(label)) }, onClick = { reason = key; chooseReason = false }) }
             }
         }
-        HoldSecondaryButton(enabled = valid, onClick = { operation({ repository.report(handle, reason) }, R.string.beta_report_received) }, modifier = Modifier.fillMaxWidth()) {
+        HoldSecondaryButton(enabled = valid, onClick = { operation({ report(handle, reason) }, R.string.beta_report_received) }, modifier = Modifier.fillMaxWidth()) {
             Text(stringResource(R.string.beta_report))
         }
         state?.blocked_handles?.forEach { blocked ->
-            HoldTextButton(enabled = !busy, onClick = { operation({ repository.unblock(blocked) }, R.string.beta_unblocked) }) {
+            HoldTextButton(enabled = !busy, onClick = { operation({ unblock(blocked) }, R.string.beta_unblocked) }) {
                 Text(stringResource(R.string.beta_unblock, blocked))
             }
         }
         if (busy) CircularProgressIndicator()
-        message?.let { Text(stringResource(it), style = MaterialTheme.typography.bodySmall) }
+        if (fetchFailed) {
+            Text(stringResource(R.string.beta_network_failed), Modifier.testTag("settings_safety_fetch_failed"),
+                color = HoldColors.Destructive, style = MaterialTheme.typography.bodySmall)
+            HoldTextButton(enabled = !busy, onClick = {
+                if (!busy) {
+                    busy = true
+                    scope.launch { state = fetchState(); fetchFailed = state == null; busy = false }
+                }
+            }, modifier = Modifier.testTag("settings_safety_retry")) { Text(stringResource(R.string.hold_retry)) }
+        }
+        // A failed operation followed by a failed refresh has the same network
+        // guidance; keep one visible copy alongside the refresh Retry action.
+        message?.takeUnless { fetchFailed && it == R.string.beta_network_failed }
+            ?.let { Text(stringResource(it), style = MaterialTheme.typography.bodySmall) }
         }
         }
     }

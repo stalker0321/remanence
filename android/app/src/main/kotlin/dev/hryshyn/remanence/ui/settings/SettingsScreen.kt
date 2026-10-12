@@ -32,6 +32,7 @@ fun SettingsScreen(handle: String, locale: AppLocale, onLocale: (AppLocale) -> U
     var languages by rememberSaveable { mutableStateOf(false) }
     var access by rememberSaveable { mutableStateOf(false) }
     var privacy by rememberSaveable { mutableStateOf(false) }
+    var logoutConfirmation by rememberSaveable { mutableStateOf(false) }
     val backLabel = stringResource(R.string.hold_back)
     Column(Modifier.fillMaxSize().background(HoldColors.Paper).testTag("settings_screen")) {
         Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = gutter), verticalAlignment = Alignment.CenterVertically) {
@@ -76,12 +77,24 @@ fun SettingsScreen(handle: String, locale: AppLocale, onLocale: (AppLocale) -> U
                 }
             }
             SettingsGroup {
-                SettingsActionRow(stringResource(R.string.settings_design_logout), onClick = onLogout,
+                SettingsActionRow(stringResource(R.string.settings_design_logout), onClick = { logoutConfirmation = true },
                     modifier = Modifier.testTag("settings_logout"), destructive = true)
             }
             Text("Remanence " + BuildConfig.VERSION_NAME, style = MaterialTheme.typography.bodySmall, color = HoldColors.Muted)
         }
     }
+    if (logoutConfirmation) AlertDialog(onDismissRequest = { logoutConfirmation = false },
+        title = { Text(stringResource(R.string.home_audit_logout_title)) },
+        text = { Text(stringResource(R.string.home_audit_logout_detail)) },
+        confirmButton = {
+            HoldTextButton(onClick = { logoutConfirmation = false; onLogout() },
+                modifier = Modifier.testTag("settings_logout_confirm")) {
+                Text(stringResource(R.string.settings_design_logout), color = HoldColors.Destructive)
+            }
+        }, dismissButton = {
+            HoldTextButton(onClick = { logoutConfirmation = false },
+                modifier = Modifier.testTag("settings_logout_cancel")) { Text(stringResource(R.string.home_audit_logout_cancel)) }
+        })
     if (languages) AlertDialog(onDismissRequest = { languages = false },
         title = { Text(stringResource(R.string.settings_design_language)) },
         text = {

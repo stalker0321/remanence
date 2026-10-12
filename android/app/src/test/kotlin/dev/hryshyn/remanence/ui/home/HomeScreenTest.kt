@@ -152,6 +152,34 @@ class HomeScreenTest {
     }
 
     @Test
+    @Config(qualifiers = "w320dp-h640dp-xhdpi")
+    fun crowdedNonCompactHomeKeepsEveryLanguageReachable() {
+        var selected = dev.hryshyn.remanence.ui.locale.AppLocale.SYSTEM
+        composeRule.setContent {
+            HoldTheme { HomeScreen(BackendHealthUiState.AVAILABLE, publicEntry = true,
+                onLocaleSelected = { selected = it }) }
+        }
+        for (option in dev.hryshyn.remanence.ui.locale.AppLocale.options) {
+            composeRule.onNodeWithTag("language_option_${option.name.lowercase()}")
+                .performScrollTo().assertIsDisplayed().performClick()
+            assertEquals(option, selected)
+        }
+        composeRule.onNodeWithTag("create_action").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w320dp-h640dp-xhdpi", fontScale = 1.6f)
+    fun crowdedLargeTypeHomeKeepsEveryLanguageReachable() {
+        composeRule.setContent {
+            HoldTheme { HomeScreen(BackendHealthUiState.AVAILABLE, publicEntry = true) }
+        }
+        for (option in dev.hryshyn.remanence.ui.locale.AppLocale.options) {
+            composeRule.onNodeWithTag("language_option_${option.name.lowercase()}")
+                .performScrollTo().assertIsDisplayed()
+        }
+    }
+
+    @Test
     fun healthyHomeHasNoRecoveryNote() {
         composeRule.setContent {
             HoldTheme {

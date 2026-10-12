@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -317,7 +318,8 @@ fun CapsuleScreen(
     val density = LocalDensity.current
     val export = rememberCapsuleImageExport(validateExport)
 
-    BoxWithConstraints(modifier.fillMaxSize().background(HoldColors.Paper)) {
+    BoxWithConstraints(modifier.fillMaxSize().background(HoldColors.Field)) {
+        val viewportWidth = maxWidth
         val footer = 76.dp
         val available = (maxHeight - footer).coerceAtLeast(1.dp)
         val revealDistance = with(density) { (available * .34f).toPx() }.coerceAtLeast(1f)
@@ -330,38 +332,35 @@ fun CapsuleScreen(
         ) else Modifier
 
         Column(Modifier.fillMaxSize()) {
-            Column(Modifier.fillMaxWidth().height(available).then(export.contentModifier)) {
-            Box(Modifier.fillMaxWidth().height(imageHeight).then(gesture), contentAlignment = Alignment.Center) {
+            // Fit a content card; the spare viewer space is never in its layer.
+            Box(Modifier.fillMaxWidth().height(available).then(gesture), contentAlignment = Alignment.Center) {
                 val bitmap = pager.displayedBitmap
                 when {
-                    bitmap != null -> Image(
-                        bitmap = bitmap.asImageBitmap(),
-                        contentDescription = "Capsule photo ${currentIndex + 1}",
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxSize().testTag("capsule_page_${currentIndex}"),
-                    )
+                    bitmap != null -> {
+                        val (width, height) = capsuleSheetSize(viewportWidth, imageHeight, bitmap.width.toFloat() / bitmap.height)
+                        Column(Modifier.width(width).background(HoldColors.Paper).then(export.contentModifier)) {
+                        Image(bitmap = bitmap.asImageBitmap(), contentDescription = "Capsule photo ${currentIndex + 1}",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.fillMaxWidth().height(height).testTag("capsule_page_${currentIndex}"))
+                        if (progress > .001f) {
+                            Column(Modifier.fillMaxWidth().height(available - imageHeight)
+                                .verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 12.dp)
+                                .testTag("capsule_underlayer")) {
+                                Text(stringResource(R.string.hold_inside), style = MaterialTheme.typography.labelMedium, color = HoldColors.Muted)
+                                Spacer(Modifier.height(12.dp))
+                                Text(state.note ?: stringResource(R.string.hold_photo_summary, state.photoCount),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.testTag(if (state.note != null) "capsule_note_text" else "capsule_content_summary"))
+                            }
+                        }
+                        }
+                    }
                     pager.pageError != null -> Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(stringResource(R.string.capsule_route_failure), color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("capsule_page_error"))
                         HoldTextButton(onClick = { pageRetryEpoch += 1 }, modifier = Modifier.testTag("capsule_page_retry")) { Text(stringResource(R.string.hold_retry)) }
                     }
                     else -> CircularProgressIndicator(modifier = Modifier.testTag("capsule_page_loading"))
                 }
-            }
-            if (progress > .001f) {
-                Column(
-                    Modifier.fillMaxWidth().height(available - imageHeight)
-                        .verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 12.dp)
-                        .testTag("capsule_underlayer"),
-                ) {
-                    // Only actual content is available in the current artifact contract.
-                    // Sender/date need protocol metadata, never specimen values.
-                    Text(stringResource(R.string.hold_inside), style = MaterialTheme.typography.labelMedium, color = HoldColors.Muted)
-                    Spacer(Modifier.height(12.dp))
-                    Text(state.note ?: stringResource(R.string.hold_photo_summary, state.photoCount),
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.testTag(if (state.note != null) "capsule_note_text" else "capsule_content_summary"))
-                }
-            }
             }
             Row(
                 Modifier.fillMaxWidth().heightIn(min = footer).padding(horizontal = 8.dp),

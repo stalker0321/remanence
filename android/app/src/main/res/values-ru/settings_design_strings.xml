@@ -1,4 +1,7 @@
 <resources>
+    <string name="settings_access_saved">Восстановление проверено</string>
+    <string name="settings_access_needed">Нужно настроить восстановление</string>
+    <string name="settings_privacy_detail">Приватность и данные аккаунта</string>
     <string name="settings_design_title">настройки</string>
     <string name="settings_design_account">аккаунт</string>
     <string name="settings_design_language">язык</string>

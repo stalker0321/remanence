@@ -19,6 +19,8 @@ import dev.hryshyn.remanence.R
 import dev.hryshyn.remanence.core.data.network.SafetyRepository
 import dev.hryshyn.remanence.core.data.network.SafetyState
 import dev.hryshyn.remanence.ui.hold.*
+import dev.hryshyn.remanence.ui.auth.AccessPage
+import dev.hryshyn.remanence.ui.auth.AccessHeading
 import kotlinx.coroutines.launch
 
 internal const val SUPPORT_EMAIL = "hryshyn.dev@gmail.com"
@@ -45,23 +47,17 @@ internal fun BetaLegalLinks(handle: String) {
     val context = LocalContext.current
     var failed by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(HoldSpace.Small)) {
-        HoldTextButton(onClick = { failed = !context.openRemanenceLink("privacy") }, modifier = Modifier.testTag("settings_privacy_policy")) {
-            Text(stringResource(R.string.beta_privacy_policy))
-        }
-        HoldTextButton(onClick = { failed = !context.openRemanenceLink("terms") }, modifier = Modifier.testTag("settings_terms")) {
-            Text(stringResource(R.string.beta_terms))
-        }
-        HoldTextButton(onClick = { failed = !context.requestAccountDeletion(handle) }, modifier = Modifier.testTag("settings_delete_account")) {
-            Text(stringResource(R.string.beta_delete_account), color = HoldColors.Destructive)
-        }
-        Text(SUPPORT_EMAIL, color = HoldColors.Muted, style = MaterialTheme.typography.bodySmall)
+        SettingsActionRow(stringResource(R.string.beta_privacy_policy), onClick = { failed = !context.openRemanenceLink("privacy") }, modifier = Modifier.testTag("settings_privacy_policy"))
+        SettingsActionRow(stringResource(R.string.beta_terms), onClick = { failed = !context.openRemanenceLink("terms") }, modifier = Modifier.testTag("settings_terms"))
+        SettingsActionRow(stringResource(R.string.beta_delete_account), onClick = { failed = !context.requestAccountDeletion(handle) }, modifier = Modifier.testTag("settings_delete_account"), destructive = true)
+        Text(SUPPORT_EMAIL, Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = HoldColors.Muted, style = MaterialTheme.typography.bodySmall)
         if (failed) Text(stringResource(R.string.beta_external_failed), color = HoldColors.Destructive)
     }
 }
 
 /** Mandatory beta UGC consent before entering Create. Offline/missing API stays closed. */
 @Composable
-internal fun BetaTermsGate(repository: SafetyRepository, owner: String, content: @Composable () -> Unit) {
+internal fun BetaTermsGate(repository: SafetyRepository, owner: String, onBack: () -> Unit, content: @Composable () -> Unit) {
     var state by remember(owner) { mutableStateOf<SafetyState?>(null) }
     var busy by remember(owner) { mutableStateOf(true) }
     var failed by remember(owner) { mutableStateOf(false) }
@@ -70,20 +66,39 @@ internal fun BetaTermsGate(repository: SafetyRepository, owner: String, content:
     val context = LocalContext.current
     LaunchedEffect(owner) { state = repository.state(); failed = state == null; busy = false }
     if (state?.terms_accepted == true) { content(); return }
-    HoldFormScaffold(primary = {
-        HoldButton(enabled = agreed && state != null && !busy, onClick = {
+    BetaTermsPage(agreed = agreed, busy = busy, available = state != null, failed = failed,
+        onAgree = { agreed = it }, onBack = onBack,
+        onTerms = { failed = !context.openRemanenceLink("terms") },
+        onPrivacy = { failed = !context.openRemanenceLink("privacy") },
+        onRetry = { busy = true; scope.launch { state = repository.state(); failed = state == null; busy = false } },
+        onContinue = {
             busy = true; scope.launch {
                 if (repository.acceptTerms()) { state = repository.state(); failed = state == null } else failed = true
                 busy = false
             }
-        }, modifier = Modifier.fillMaxWidth().testTag("beta_terms_continue")) { Text(stringResource(R.string.mvp_continue)) }
-    }) {
-        Text(stringResource(R.string.beta_terms_title), style = MaterialTheme.typography.headlineMedium)
-        Text(stringResource(R.string.beta_terms_summary))
-        HoldTextButton(onClick = { failed = !context.openRemanenceLink("terms") }) { Text(stringResource(R.string.beta_terms)) }
-        HoldTextButton(onClick = { failed = !context.openRemanenceLink("privacy") }) { Text(stringResource(R.string.beta_privacy_policy)) }
-        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).semantics(mergeDescendants = true) {}
-            .toggleable(value = agreed, enabled = !busy, role = Role.Checkbox, onValueChange = { agreed = it }),
+        })
+}
+
+/** Shared testable layout; the repository alone decides consent is saved. */
+@Composable
+internal fun BetaTermsPage(agreed: Boolean, busy: Boolean, available: Boolean, failed: Boolean,
+    onAgree: (Boolean) -> Unit, onBack: () -> Unit, onTerms: () -> Unit,
+    onPrivacy: () -> Unit, onRetry: () -> Unit, onContinue: () -> Unit) {
+    AccessPage(onBack = onBack) {
+      HoldFormScaffold(modifier = Modifier.padding(bottom = 16.dp), primary = {
+        HoldButton(enabled = agreed && available && !busy, onClick = onContinue,
+            modifier = Modifier.fillMaxWidth().testTag("beta_terms_continue")) { Text(stringResource(R.string.mvp_continue)) }
+      }) {
+        AccessHeading(stringResource(R.string.beta_terms_title), stringResource(R.string.beta_terms_summary))
+        Spacer(Modifier.height(8.dp))
+        SettingsGroup {
+            SettingsActionRow(stringResource(R.string.beta_terms), onClick = onTerms, modifier = Modifier.testTag("beta_terms_link"))
+            SettingsActionRow(stringResource(R.string.beta_privacy_policy), onClick = onPrivacy, modifier = Modifier.testTag("beta_privacy_link"))
+        }
+        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("beta_terms_agreement")
+            .semantics(mergeDescendants = true) {}
+            .toggleable(value = agreed, enabled = !busy, role = Role.Checkbox, onValueChange = onAgree)
+            .padding(vertical = 12.dp),
             verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             Checkbox(checked = agreed, onCheckedChange = null, enabled = !busy)
             Text(stringResource(R.string.beta_terms_agree), Modifier.weight(1f))
@@ -91,10 +106,11 @@ internal fun BetaTermsGate(repository: SafetyRepository, owner: String, content:
         if (busy) CircularProgressIndicator()
         if (failed) {
             Text(stringResource(R.string.beta_network_failed), color = HoldColors.Destructive)
-            HoldTextButton(onClick = { busy = true; scope.launch { state = repository.state(); failed = state == null; busy = false } }) {
+            HoldTextButton(onClick = onRetry, modifier = Modifier.testTag("beta_terms_retry")) {
                 Text(stringResource(R.string.hold_retry))
             }
         }
+      }
     }
 }
 
@@ -116,16 +132,16 @@ internal fun BetaSafetyPanel(repository: SafetyRepository, owner: String) {
         }
     }
     Column(Modifier.fillMaxWidth().testTag("settings_contact_safety"), verticalArrangement = Arrangement.spacedBy(HoldSpace.Small)) {
-        HoldTextButton(onClick = { expanded = !expanded }) {
-            Text(stringResource(R.string.beta_safety_title), color = HoldColors.Ink)
-        }
+        SettingsActionRow(stringResource(R.string.beta_safety_title), onClick = { expanded = !expanded },
+            modifier = Modifier.testTag("settings_safety_row"), expanded = expanded)
         if (expanded) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(stringResource(R.string.beta_safety_detail), style = MaterialTheme.typography.bodyMedium)
         HoldInput(handle, { if (it.length <= 30) handle = it.lowercase().removePrefix("@") },
             label = { Text(stringResource(R.string.mvp_handle_label)) }, singleLine = true, enabled = !busy,
             modifier = Modifier.fillMaxWidth().testTag("settings_block_handle"))
         val valid = handle.matches(Regex("[a-z0-9_.]{3,30}")) && !busy
-        HoldTextButton(enabled = valid, onClick = { operation({ repository.block(handle) }, R.string.beta_blocked) }) {
+        HoldSecondaryButton(enabled = valid, onClick = { operation({ repository.block(handle) }, R.string.beta_blocked) }, modifier = Modifier.fillMaxWidth()) {
             Text(stringResource(R.string.beta_block))
         }
         val reasons = listOf("SPAM" to R.string.beta_reason_spam, "HARASSMENT" to R.string.beta_reason_harassment,
@@ -139,7 +155,7 @@ internal fun BetaSafetyPanel(repository: SafetyRepository, owner: String) {
                 reasons.forEach { (key, label) -> DropdownMenuItem(text = { Text(stringResource(label)) }, onClick = { reason = key; chooseReason = false }) }
             }
         }
-        HoldTextButton(enabled = valid, onClick = { operation({ repository.report(handle, reason) }, R.string.beta_report_received) }) {
+        HoldSecondaryButton(enabled = valid, onClick = { operation({ repository.report(handle, reason) }, R.string.beta_report_received) }, modifier = Modifier.fillMaxWidth()) {
             Text(stringResource(R.string.beta_report))
         }
         state?.blocked_handles?.forEach { blocked ->
@@ -149,6 +165,7 @@ internal fun BetaSafetyPanel(repository: SafetyRepository, owner: String) {
         }
         if (busy) CircularProgressIndicator()
         message?.let { Text(stringResource(it), style = MaterialTheme.typography.bodySmall) }
+        }
         }
     }
 }

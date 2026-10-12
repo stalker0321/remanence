@@ -256,30 +256,24 @@ internal fun CollagePresentationHost(
                 if (result is CollageRenderer.SceneResult.Rejected) state.unsupported(result.reason)
             }
             when (result) {
-                is CollageRenderer.SceneResult.Ready -> Box(modifier.fillMaxSize()) {
+                is CollageRenderer.SceneResult.Ready -> {
                     val export = rememberCapsuleImageExport(validateExport)
                     val musicAction = rememberTrackServiceAction(state.track, openTrackUrl)
                     val musicLabel = state.track?.let { stringResource(R.string.track_open_action, it.title, it.artistDisplay) }
+                    CapsuleSheetFrame(export, enabled = state.status is CollagePresentationState.Status.Ready,
+                        ratio = result.scene.canvasWidth.toFloat() / result.scene.canvasHeight,
+                        onClose = { state.close(); onClose() }, modifier = modifier, closeTag = "capsule_collage_close") { sheetModifier ->
                     CollageCanvas(
                         scene = result.scene,
                         images = images,
                         contentDescription = contentDescription,
-                        modifier = Modifier.fillMaxSize().then(export.contentModifier),
+                        modifier = sheetModifier,
                         textMeasurer = measurer,
                         artwork = artwork,
                         onMusicClick = musicAction,
                         musicActionLabel = musicLabel,
                     )
-                    CapsuleImageExportButton(export,
-                        enabled = state.status is CollagePresentationState.Status.Ready,
-                        modifier = Modifier.align(Alignment.TopStart).padding(8.dp))
-                    HoldTextButton(
-                        onClick = { state.close(); onClose() },
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(8.dp)
-                            .testTag("capsule_collage_close"),
-                    ) { Text(stringResource(R.string.hold_close)) }
+                    }
                 }
 
                 is CollageRenderer.SceneResult.Rejected ->

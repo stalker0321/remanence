@@ -317,7 +317,7 @@ class ScanCaptureOnceTest {
     }
 
     @Test
-    fun heldProcessingStillEndToEndThenClearsOnTerminal() {
+    fun receiverProcessingIsNeutralAndCaptureBufferClearsOnTerminal() {
         val gate = CountDownLatch(1)
         val vm = viewModel(GatedProcessor(gate), cpuDispatcher = Dispatchers.Default)
         val adapter = FakeStillCameraAdapter()
@@ -347,9 +347,10 @@ class ScanCaptureOnceTest {
         composeRule.waitUntil(5_000) { vm.frontDisplayStill.value != null }
         composeRule.waitForIdle()
 
-        // ...the surface holds it with no live preview anywhere, the camera
-        // is released after exactly one capture, and the shutter is dead.
-        composeRule.onNodeWithTag("capture_processing_still").assertIsDisplayed()
+        // Receiver must not flash the raw JPEG. Camera release/one-capture
+        // and the existing internal display-buffer cleanup still hold.
+        composeRule.onNodeWithTag("capture_processing_still").assertDoesNotExist()
+        composeRule.onNodeWithTag("capture_processing_neutral").assertIsDisplayed()
         composeRule.onNodeWithTag("capture_still_hold_copy").assertIsDisplayed()
         composeRule.onAllNodesWithTag("capture_preview").assertCountEquals(0)
         composeRule.onAllNodesWithTag("fake_camera_preview").assertCountEquals(0)

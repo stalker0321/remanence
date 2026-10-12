@@ -116,7 +116,7 @@ fun RootScreen(
         AppDestination.Scan -> key(destination) {
             AstraContextArrival(motion = motion, modifier = modifier.fillMaxSize(), contentKey = destination) {
                 Column(Modifier.fillMaxSize()) {
-                    FlowHeader(title = R.string.hold_scan, testKey = "scan", onExit = onExitFlow)
+                    dev.hryshyn.remanence.ui.hold.HoldFlowHeader(onBack = onExitFlow, onClose = onExitFlow, testKey = "scan")
                     Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
                         scanContent()
                     }

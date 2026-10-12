@@ -92,11 +92,18 @@ class MainActivity : AppCompatActivity() {
             var appLocale by remember {
                 mutableStateOf(container.appLocaleRepository.load())
             }
+            val factory = remember { RemanenceViewModelFactory(container) }
+            val rootViewModel: RootViewModel = viewModel(factory = factory)
+            val destination by rootViewModel.destination.collectAsStateWithLifecycle()
             HoldTheme {
-                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                // Transparent system bars use the same viewer mat as the
+                // capsule, so safe-area insets do not become white stripes.
+                Surface(Modifier.fillMaxSize(), color = if (destination is AppDestination.Capsule)
+                    dev.hryshyn.remanence.ui.hold.HoldColors.Field else MaterialTheme.colorScheme.background) {
                     Box(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
                         RootSurface(
                             container = container,
+                            rootViewModel = rootViewModel,
                             appLocale = appLocale,
                             onLocaleSelected = { locale ->
                                 appLocale = AppLocaleController.select(locale)
@@ -151,13 +158,13 @@ internal class BackendHealthMonitor(
 @Composable
 private fun RootSurface(
     container: AppContainer,
+    rootViewModel: RootViewModel,
     appLocale: AppLocale,
     onLocaleSelected: (AppLocale) -> Unit,
 ) {
     val factory = remember { RemanenceViewModelFactory(container) }
 
     // I02/I03: cold-start session bootstrap decides the first surface.
-    val rootViewModel: RootViewModel = viewModel(factory = factory)
     var recoveryBusy by remember { mutableStateOf(false) }
     // BUG-014: the health epoch advances on every real foreground/resume
     // transition alongside the session refresh, so the check below re-runs.
@@ -395,7 +402,7 @@ private fun RootSurface(
                 }
                 if (BuildConfig.REMANENCE_PLAY_BETA && authenticatedOwner != null)
                     dev.hryshyn.remanence.ui.settings.BetaTermsGate(container.apiStack.safetyRepository,
-                        authenticatedOwner.toString(), create)
+                        authenticatedOwner.toString(), rootViewModel::returnToHome, create)
                 else create()
             }
         },

@@ -38,7 +38,7 @@ import org.junit.runner.RunWith
 class BetaUiDeviceTest {
     @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
-    private val evidence get() = File(context.getExternalFilesDir(null), "t169-fixture-evidence").apply { mkdirs() }
+    private val evidence get() = File(context.getExternalFilesDir(null), "t175-fixture-evidence").apply { mkdirs() }
 
     @Test fun settingsSelectsLanguageAndLogoutWithoutCrowding() {
         var locale by mutableStateOf(AppLocale.SYSTEM)
@@ -47,6 +47,7 @@ class BetaUiDeviceTest {
             SettingsScreen("qa_fixture", locale, { locale = it }, true, {}, { loggedOut = true })
         } } }
         rule.onNodeWithTag("settings_title").assertIsDisplayed()
+        rule.onNodeWithTag("language_switch_row").performScrollTo().performClick()
         rule.onNodeWithTag("language_option_ukrainian").performScrollTo().performClick()
         rule.runOnIdle { assertEquals(AppLocale.UKRAINIAN, locale) }
         capture("settings-fixture")
@@ -94,6 +95,10 @@ class BetaUiDeviceTest {
             try {
                 assertTrue(bitmap.width > 100 && bitmap.height > 100)
                 assertTrue("app footer must be outside PNG", bitmap.height < rule.activity.window.decorView.height)
+                assertEquals("export must have photo ratio, not phone ratio", 4f / 3f,
+                    bitmap.width.toFloat() / bitmap.height, 0.015f)
+                assertTrue("no paper letterbox at top", Color.red(bitmap.getPixel(bitmap.width / 4, 0)) > 180)
+                assertTrue("no paper letterbox at bottom", Color.blue(bitmap.getPixel(bitmap.width * 3 / 4, bitmap.height - 1)) > 180)
                 var red = 0
                 var blue = 0
                 for (y in 0 until bitmap.height step 4) for (x in 0 until bitmap.width step 4) {
@@ -175,6 +180,8 @@ class BetaUiDeviceTest {
             val bitmap = checkNotNull(BitmapFactory.decodeFile(file.absolutePath))
             try {
                 assertTrue(bitmap.width > 100 && bitmap.height > 100)
+                assertEquals("PNG must be the 360:640 sheet, not the viewport", 360f / 640f,
+                    bitmap.width.toFloat() / bitmap.height, 0.006f)
                 assertTrue(Color.red(bitmap.getPixel(bitmap.width / 12, bitmap.height / 12)) > 180)
                 file.copyTo(File(evidence, "export-collage-fixture.png"), overwrite = true)
             } finally { bitmap.recycle() }

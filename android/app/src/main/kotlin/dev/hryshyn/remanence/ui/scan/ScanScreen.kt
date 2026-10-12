@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.ui.scan
 import androidx.compose.ui.res.stringResource
 import dev.hryshyn.remanence.R
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -26,6 +27,8 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.hryshyn.remanence.capture.CaptureAttemptSurface
 import dev.hryshyn.remanence.scan.ScanSessionState
@@ -71,16 +74,18 @@ fun ScanScreen(
     // their own entries. The camera lifecycle below is untouched.
     val entryMotion = rememberScanEntryMotion(rememberAstraMotion())
 
+    BoxWithConstraints(modifier.fillMaxSize()) {
+    val previewBudget = (maxHeight - 160.dp).coerceAtLeast(64.dp)
     Column(
-        modifier = modifier
+        modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             // FIX-STATE-14: named scroll container so layout tests prove the
             // step content scrolls INSIDE the bounded root region.
             .testTag("scan_screen_scroll")
-            .padding(horizontal = 24.dp, vertical = 16.dp),
+            .padding(horizontal = dev.hryshyn.remanence.ui.hold.HoldSpace.pageGutter(), vertical = 16.dp),
     ) {
-        Text(stringResource(R.string.hold_scan_title), style = MaterialTheme.typography.headlineSmall)
+        Text(stringResource(R.string.hold_scan_title), style = MaterialTheme.typography.headlineLarge.copy(fontSize = 27.sp, lineHeight = 32.sp))
         Spacer(Modifier.height(16.dp))
 
         when (val current = matchState) {
@@ -91,20 +96,20 @@ fun ScanScreen(
             is ScanMatchUiState.AwaitingCapture -> AstraEnterTransition(
                 motion = entryMotion,
             ) {
-                // Capture-once display frame: shares the delivered pixels
-                // (no copy) and converts on change only. Null until the
-                // current delivery decodes — and always null again once the
-                // attempt leaves Processing (terminal/retake/reset paths in
-                // the ViewModel clear it).
-                val displayStill by viewModel.frontDisplayStill.collectAsStateWithLifecycle()
-                val displayImage = remember(displayStill) { displayStill?.asImageBitmap() }
+                Column {
+                Text(stringResource(R.string.create_capture_body), style = MaterialTheme.typography.bodySmall,
+                    color = dev.hryshyn.remanence.ui.hold.HoldColors.Muted)
+                Spacer(Modifier.height(16.dp))
+                // Like Create, keep processing neutral rather than showing
+                // a raw captured JPEG with a different EXIF orientation.
                 FrontCapture(
                     viewModel,
                     Modifier.fillMaxWidth(),
                     adapterFactory,
                     requestPermissionOnAttach,
-                    processingStill = displayImage,
+                    previewMaxHeight = previewBudget,
                 )
+                }
             }
             // ASTRA-FIDELITY: post-scan waiting states share one waiting
             // group — the drawn postcard carries the wait while only the
@@ -175,6 +180,7 @@ fun ScanScreen(
             }
         }
     }
+    }
 }
 
 /**
@@ -203,6 +209,7 @@ private fun FrontCapture(
     adapterFactory: (() -> dev.hryshyn.remanence.capture.StillCameraAdapter)? = null,
     requestPermissionOnAttach: Boolean = true,
     processingStill: ImageBitmap? = null,
+    previewMaxHeight: Dp? = null,
 ) {
     when (viewModel.captureSession.state) {
         ScanSessionState.AWAITING_FRONT -> CaptureAttemptSurface(
@@ -216,6 +223,9 @@ private fun FrontCapture(
             adapterFactory = adapterFactory,
             requestPermissionOnAttach = requestPermissionOnAttach,
             processingStill = processingStill,
+            previewMaxHeight = previewMaxHeight,
+            shutterLabel = stringResource(R.string.create_use_postcard),
+            showGuideInstruction = false,
         )
 
         ScanSessionState.CONSUMED -> Unit

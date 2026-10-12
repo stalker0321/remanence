@@ -94,17 +94,18 @@ class CollagePainterV4Test {
     }
 
     @Test
-    fun playIsPaintedAfterCoverAndCopyWithoutChangingTheSealedBand() {
+    fun coverIsUnobscuredWhileTextFallbackKeepsItsCueAndSealedBand() {
         val original = scene()
         val play = rect(82, 520, 36, 36)
         val prepared = original.copy(music = original.music!!.copy(playRegion = play))
         val ops = requireNotNull(CollagePainter.drawList(prepared, imageSizes()))
         val coverIndex = ops.indexOfFirst { it is CollagePainter.Op.MusicArtwork }
         val copyIndex = ops.indexOfFirst { it is CollagePainter.Op.MusicText }
-        val cueIndex = ops.indexOfFirst { it is CollagePainter.Op.MusicPlay }
         assertTrue("artwork must not paint over the title", coverIndex < copyIndex)
-        assertTrue("cue must remain visible above music layers", copyIndex < cueIndex)
-        val cue = ops[cueIndex] as CollagePainter.Op.MusicPlay
+        assertTrue("no play overlay on verified cover", ops.none { it is CollagePainter.Op.MusicPlay })
+        val fallback = prepared.copy(artwork = null)
+        val fallbackOps = requireNotNull(CollagePainter.drawList(fallback, imageSizes()))
+        val cue = fallbackOps.filterIsInstance<CollagePainter.Op.MusicPlay>().single()
         assertEquals(play, cue.region)
         assertEquals(original.music!!.background, cue.foreground)
         assertEquals(original.music!!.color, cue.background)

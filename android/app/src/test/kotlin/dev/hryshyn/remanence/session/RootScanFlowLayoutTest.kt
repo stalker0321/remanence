@@ -214,7 +214,7 @@ class RootScanFlowLayoutTest {
         )
 
         // Header STILL displayed after all scrolling - its action really exits.
-        composeRule.onNodeWithText("Back to Home")
+        composeRule.onNodeWithTag("flow_back_scan")
             .assertIsDisplayed()
             .performClick()
         composeRule.runOnIdle { assertTrue("exit must fire", exited) }

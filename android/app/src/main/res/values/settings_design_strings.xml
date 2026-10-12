@@ -1,4 +1,7 @@
 <resources>
+    <string name="settings_access_saved">Recovery verified</string>
+    <string name="settings_access_needed">Recovery setup needed</string>
+    <string name="settings_privacy_detail">Privacy &amp; account data</string>
     <string name="settings_design_title">settings</string>
     <string name="settings_design_account">account</string>
     <string name="settings_design_language">language</string>

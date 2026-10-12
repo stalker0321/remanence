@@ -114,9 +114,7 @@ class CollagePainterTest {
         assertEquals(rect(0, 220, 360, 60), artworkOp.region)
         assertEquals(0xFF040506.toInt(), artworkOp.background)
         assertTrue("a thumbnail scene must not also draw music text", ops.none { it is CollagePainter.Op.MusicText })
-        val cue = ops.filterIsInstance<CollagePainter.Op.MusicPlay>().single()
-        assertTrue("legacy cover also needs a visible play cue", cue.region.width > 0 && cue.region.height > 0)
-        assertTrue(ops.indexOf(cue) > ops.indexOf(artworkOp))
+        assertTrue("verified legacy cover must remain unobscured", ops.none { it is CollagePainter.Op.MusicPlay })
     }
 
     @Test

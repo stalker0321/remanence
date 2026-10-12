@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -102,22 +103,24 @@ internal fun Ber1PresentationHost(
     validateExport: () -> Unit = {},
 ) {
     if (!state.isOpen) return
-    Box(modifier.fillMaxSize()) {
-        val export = rememberCapsuleImageExport(validateExport)
+    var exportReady by remember(state) { mutableStateOf(false) }
+    val export = rememberCapsuleImageExport { check(state.isOpen && exportReady); validateExport() }
+    CapsuleSheetFrame(export, enabled = state.isOpen && exportReady, ratio = 360f / 640f,
+        onClose = { state.close(); onClose() }, modifier = modifier, closeTag = "capsule_ber1_close") { sheetModifier ->
+      Box(sheetModifier) {
         val result = GeneratorBer1Preview(
             expression = state.expression,
             sources = state.bitmaps,
-            modifier = Modifier.fillMaxSize().then(export.contentModifier).testTag("capsule_ber1_canvas"),
+            modifier = Modifier.fillMaxSize().testTag("capsule_ber1_canvas"),
         )
+        SideEffect { exportReady = result is GeneratorBer1Renderer.SceneResult.Ready }
         if (result !is GeneratorBer1Renderer.SceneResult.Ready) {
             Text(
                 text = stringResource(R.string.capsule_route_failure),
                 modifier = Modifier.align(Alignment.Center).testTag("capsule_ber1_blocked"),
             )
         }
-        CapsuleImageExportButton(export, enabled = result is GeneratorBer1Renderer.SceneResult.Ready,
-            modifier = Modifier.align(Alignment.TopStart).padding(8.dp))
-        state.track?.let { track ->
+        state.track?.takeIf { result is GeneratorBer1Renderer.SceneResult.Ready }?.let { track ->
             val context = LocalContext.current
             TrackSnapshotCard(
                 track = track,
@@ -127,11 +130,7 @@ internal fun Ber1PresentationHost(
                 },
             )
         }
-        HoldTextButton(
-            onClick = { state.close(); onClose() },
-            modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
-                .testTag("capsule_ber1_close"),
-        ) { Text(stringResource(R.string.hold_close)) }
+      }
     }
 }
 

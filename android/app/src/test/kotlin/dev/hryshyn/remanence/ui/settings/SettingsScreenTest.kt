@@ -36,6 +36,7 @@ class SettingsScreenTest {
             SettingsScreen("permanent", AppLocale.SYSTEM, { selected = it }, true, {}, { loggedOut = true })
         } }
         compose.onNodeWithTag("settings_handle").assertExists()
+        compose.onNodeWithTag("language_switch_row").performScrollTo().performClick()
         compose.onNodeWithTag("language_option_russian").performScrollTo().performClick()
         assertEquals(AppLocale.RUSSIAN, selected)
         compose.onNodeWithTag("settings_logout").performScrollTo().performClick()
@@ -50,12 +51,14 @@ class SettingsScreenTest {
             SettingsScreen("person", selected, { selected = it }, true, { back = true }, {})
         } }
         for (option in AppLocale.options) {
+            compose.onNodeWithTag("language_switch_row").performScrollTo().performClick()
             val node = compose.onNodeWithTag("language_option_" + option.name.lowercase())
             node.performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp)
                 .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton))
             val groupWidth = compose.onNodeWithTag("language_select_group").fetchSemanticsNode().boundsInRoot.width
             assertEquals(groupWidth, node.fetchSemanticsNode().boundsInRoot.width, 0.1f)
-            node.performClick().assertIsSelected()
+            if (selected == option) node.assertIsSelected() else node.assertIsNotSelected()
+            node.performClick()
             assertEquals(option, selected)
         }
         compose.onNodeWithTag("settings_back").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
@@ -79,8 +82,11 @@ class SettingsScreenTest {
         assertTrue("long handle must wrap", layouts.single().lineCount > 1)
         assertFalse("handle text must not clip", layouts.single().hasVisualOverflow)
         for (line in 0 until layouts.single().lineCount) assertFalse(layouts.single().isLineEllipsized(line))
-        compose.onNodeWithTag("language_option_ukrainian").performScrollTo()
+        compose.onNodeWithTag("language_switch_row").performScrollTo().performClick()
+        compose.onNodeWithTag("language_option_ukrainian")
             .assertIsDisplayed().assertIsSelected().assertHeightIsAtLeast(48.dp)
+        compose.onNodeWithTag("language_dialog_close").performClick()
+        compose.onNodeWithTag("settings_access_row").performScrollTo().performClick()
         compose.onNodeWithTag("settings_recovery_status").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("settings_logout").performScrollTo().assertIsDisplayed().performClick()
         compose.waitForIdle()
@@ -92,6 +98,8 @@ class SettingsScreenTest {
         compose.setContent { HoldTheme {
             SettingsScreen("person", AppLocale.SYSTEM, {}, ready, {}, {})
         } }
+        compose.onNodeWithTag("settings_recovery_status").assertDoesNotExist()
+        compose.onNodeWithTag("settings_access_row").performScrollTo().performClick()
         val status = compose.onNodeWithTag("settings_recovery_status").performScrollTo()
         val before = status.fetchSemanticsNode().config[SemanticsProperties.Text].single().text
         status.assert(hasClickAction().not())

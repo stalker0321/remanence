@@ -471,8 +471,8 @@ private fun ProcessingContent(
     shutterLabel: String?,
 ) {
     Column {
-        if (still != null) {
-            CaptureFrame(frameTag = null, previewMaxHeight = previewMaxHeight) {
+        CaptureFrame(frameTag = null, previewMaxHeight = previewMaxHeight) {
+            if (still != null) {
                 // Fills the guaranteed area exactly like the live preview did.
                 Image(
                     bitmap = still,
@@ -480,9 +480,15 @@ private fun ProcessingContent(
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.matchParentSize().testTag("capture_processing_still"),
                 )
+            } else {
+                Box(Modifier.matchParentSize().background(dev.hryshyn.remanence.ui.hold.HoldColors.Field)
+                    .testTag("capture_processing_neutral"), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = dev.hryshyn.remanence.ui.hold.HoldColors.Accent,
+                        strokeWidth = 2.dp)
+                }
             }
-            Spacer(Modifier.height(8.dp))
         }
+        Spacer(Modifier.height(8.dp))
         Text(
             stringResource(R.string.hold_scan_still_hold),
             style = MaterialTheme.typography.bodyMedium,

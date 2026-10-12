@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
@@ -85,13 +87,14 @@ class UiPolishDeviceTest {
 
     @Test fun coverRemainsUnobscuredAndTextFallbackKeepsMusicAction() {
         val bitmap = Bitmap.createBitmap(200, 200, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.GREEN) }
+        val artwork = Bitmap.createBitmap(200, 200, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.MAGENTA) }
         var cover by mutableStateOf(true); var clicks = 0
         val rect = CollageRenderer.RectI(0, 500, 360, 80)
         val music = CollageRenderer.SceneMusic("505", "Arctic Monkeys", "505\nArctic Monkeys", rect,
             "StudySans", 14, 400, false, 18, requireNotNull(FontRegistry.resourceFor("StudySans",400,false)),
             0xFF333951.toInt(), 0xFFF4F2EC.toInt(),
-            copyRegion = CollageRenderer.RectI(60,500,290,80), playRegion = CollageRenderer.RectI(8,520,36,36))
-        val base = CollageRenderer.Scene(360,640,"press", paper=0xFFF4F2EC.toInt(), ink=0xFF333951.toInt(),
+            mode = "thumbnail", copyRegion = CollageRenderer.RectI(60,507,290,66), playRegion = CollageRenderer.RectI(8,520,36,36))
+        val base = CollageRenderer.Scene(360,640,"g1", paper=0xFFF4F2EC.toInt(), ink=0xFF333951.toInt(),
             sound=0xFF333951.toInt(), soundInk=0xFFF4F2EC.toInt(),
             photos=listOf(CollageRenderer.ScenePhoto("p0",CollageRenderer.RectI(0,0,360,400),CollageRenderer.RectI(0,0,200,200))),
             note=null,music=music)
@@ -102,13 +105,20 @@ class UiPolishDeviceTest {
                 CollageCanvas(base.copy(artwork=if(cover) CollageRenderer.SceneArtwork(rect,0xFF333951.toInt()) else null),
                     mapOf("p0" to bitmap.asImageBitmap()), "Synthetic music capsule",
                     modifier=sheetModifier,
-                    artwork=if(cover) bitmap.asImageBitmap() else null,
+                    artwork=if(cover) artwork.asImageBitmap() else null,
                     onMusicClick={clicks++}, musicActionLabel="Listen to 505 by Arctic Monkeys")
               }
             } }
             rule.onNodeWithTag("collage_music_play_cue",useUnmergedTree=true).assertDoesNotExist()
             rule.onNodeWithTag("capsule_music_region").assertIsDisplayed().performClick()
-            assertEquals(1,clicks); capture("music-with-cover")
+            assertEquals(1,clicks)
+            val canvas = rule.onNodeWithTag("collage_canvas").captureToImage()
+            val pixels = canvas.toPixelMap()
+            val scale = canvas.width / 360f
+            // The real GPU must paint the unobscured cover, not merely expose
+            // a semantics node for an invalid synthetic cover/mode pair.
+            assertEquals(android.graphics.Color.MAGENTA, pixels[(24*scale).toInt(), (540*scale).toInt()].toArgb())
+            capture("music-with-cover")
             rule.runOnIdle { cover=false }
             rule.onNodeWithTag("collage_music_play_cue",useUnmergedTree=true).assertExists()
             rule.onNodeWithTag("capsule_music_region").performClick()
@@ -119,6 +129,9 @@ class UiPolishDeviceTest {
     }
 
     private fun capture(name:String) {
+        rule.waitForIdle()
+        // PixelCopy waits for the Compose draw before the full-window capture.
+        rule.onRoot().captureToImage()
         val bitmap=checkNotNull(instrumentation.uiAutomation.takeScreenshot())
         try { File(evidence,"$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG,100,it) } }
         finally { bitmap.recycle() }

@@ -106,7 +106,7 @@ not as a minimum group size to start the beta.
 User-facing crypto compatibility and these policy documents remain distinct:
 closed testing is not an exemption from mandatory account/UGC safeguards.
 
-## QA checkpoint, 2026-10-11
+## Historical QA checkpoint, 2026-10-11 (before T174 deployment)
 
 v35 debug QA APK and unsigned beta AAB build successfully. APK/AAB ELF64
 16K checks and debug APK ZIP alignment pass. On the existing API36 Play AVD,
@@ -125,3 +125,37 @@ canvas, so that older format's PNG does not yet include the visible track card.
 Current V3 collage and paginated photo fixtures have pixel evidence. Do not
 claim every legacy presentation or saving a file to an external provider was
 tested from the chooser/picker cancellation checks.
+
+## Current checkpoint, 2026-10-12 — T175
+
+The preceding schema0010/unsigned statements describe the earlier QA run, not
+the current deployment. T174 deployed schema0011/legal/safety; owner reports
+actual Play install/login/recovery working. Owner did not check old-capsule
+opening on that Play build, so that gate remains outstanding.
+
+UI feedback implemented at ce306e4d731ef752038cb4adc8c25cf3d105466b:
+consent layout/back/large fonts, grouped settings, unobscured music cover and
+no-cover cue, mat/sheet viewer, content-only PNG and no rotated scan-JPEG flash.
+Legacy BER track moved into the captured content layer with renderer-Ready
+guard; this fixes the known sibling omission but has no new native BER fixture.
+58 focused JVM tests pass; 11 distinct native synthetic UI/GPU tests pass
+(10 pass in native-r5 plus corrected static-cover check in native-r6, test pin
+be252950; early stale-runner logs are not refinement evidence). Export tests
+prove PNG ratio/pixels and chooser/document-picker launch/cancel, not an
+external recipient app import or actual provider document write.
+
+Frozen signed AAB:
+`/home/vodkolyan/remanence-agent-control/tasks/T175/artifacts/remanence-v36-internal.aab`
+145586752 bytes; SHA256
+`c2590c1c98db96e7d3209844b1c8a413987036a96072ed6c036669314895b131`.
+Permanent package dev.hryshyn.remanence, vc36, min28/target36, non-debuggable,
+same upload signer/API URL/Google flags. JAR signature, all609 payload manifest
+digests and ZIP integrity pass. All28 native library hashes and BundleConfig
+are byte-identical to the v35 16KB-audited bundle; QA APK16KB ZIP alignment passes.
+Self-signed/no-timestamp and AGP manifest-order JarInputStream warnings are
+retained in evidence; JarFile signature and every payload digest verify.
+
+No Play publication or backend/account changes in T175. Owner uploads vc36 to
+the existing Internal app and updates in place; no uninstall, account reset or
+new OAuth clients. Phone visual/camera/export smoke remains, as do the manual
+moderation/deletion/reviewer-access obligations before a friends Closed beta.

@@ -111,8 +111,7 @@ class UiPolishDeviceTest {
               }
             } }
             rule.onNodeWithTag("collage_music_play_cue",useUnmergedTree=true).assertDoesNotExist()
-            rule.onNodeWithTag("capsule_music_region").assertIsDisplayed().performClick()
-            assertEquals(1,clicks)
+            rule.onNodeWithTag("capsule_music_region").assertIsDisplayed()
             val canvas = rule.onNodeWithTag("collage_canvas").captureToImage()
             val pixels = canvas.toPixelMap()
             val scale = canvas.width / 360f
@@ -123,14 +122,20 @@ class UiPolishDeviceTest {
                 canvas.asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it)
             }
             capture("music-with-cover")
+            // Verify static pixels before clicking: the normal press ripple
+            // temporarily darkens even an unobscured cover.
+            rule.onNodeWithTag("capsule_music_region").performClick()
+            assertEquals(1,clicks)
             rule.runOnIdle { cover=false }
             rule.onNodeWithTag("collage_music_play_cue",useUnmergedTree=true).assertExists()
-            rule.onNodeWithTag("capsule_music_region").performClick()
-            assertEquals(2,clicks); capture("music-without-cover")
+            rule.mainClock.advanceTimeBy(600)
+            capture("music-without-cover")
             val fallback = rule.onNodeWithTag("collage_canvas").captureToImage()
             File(evidence, "music-no-cover-canvas-pixelcopy.png").outputStream().use {
                 fallback.asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it)
             }
+            rule.onNodeWithTag("capsule_music_region").performClick()
+            assertEquals(2,clicks)
         } finally {
             // Renderer owns a reference until composition ends; never recycle mid-frame.
         }

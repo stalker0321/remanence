@@ -15,7 +15,7 @@ sealed interface LoginSubmitState {
 
     data object Submitting : LoginSubmitState
 
-    data class Failed(val message: String) : LoginSubmitState
+    data class Failed(val message: AuthMessage) : LoginSubmitState
 
     /**
      * Password accepted by the server but the matching private identity is
@@ -67,7 +67,7 @@ class LoginViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                LoginSubmitState.Failed("Unexpected error. Try again later.")
+                LoginSubmitState.Failed(AuthMessage.UNEXPECTED)
             }
         }
     }
@@ -77,13 +77,13 @@ class LoginViewModel(
         is LoginUseCase.Outcome.RecoveryRequired -> LoginSubmitState.RecoveryRequired
         is LoginUseCase.Outcome.Rejected -> LoginSubmitState.Failed(rejectedMessage(outcome.httpStatus))
         LoginUseCase.Outcome.NetworkUnreachable ->
-            LoginSubmitState.Failed("Network unreachable. Try again later.")
+            LoginSubmitState.Failed(AuthMessage.NETWORK)
         LoginUseCase.Outcome.InvalidResponse ->
-            LoginSubmitState.Failed("Unexpected server response.")
+            LoginSubmitState.Failed(AuthMessage.INVALID_RESPONSE)
     }
 
-    private fun rejectedMessage(httpStatus: Int): String = when (httpStatus) {
-        401 -> "Incorrect email or password."
-        else -> "Sign-in failed. Try again later."
+    private fun rejectedMessage(httpStatus: Int): AuthMessage = when (httpStatus) {
+        401 -> AuthMessage.WRONG_CREDENTIALS
+        else -> AuthMessage.SIGN_IN_FAILED
     }
 }

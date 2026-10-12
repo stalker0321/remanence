@@ -8,7 +8,7 @@ import org.junit.Test
 
 class AccessStringsParityTest {
     @Test fun accessAndRecipientLabelsHaveEnglishRussianUkrainianParity() {
-        for (name in listOf("access_design_strings.xml", "recipient_design_strings.xml", "capsule_export_strings.xml", "beta_strings.xml")) {
+        for (name in listOf("access_design_strings.xml", "recipient_design_strings.xml", "capsule_export_strings.xml", "beta_strings.xml", "auth_audit_strings.xml")) {
             val labels = listOf("values", "values-ru", "values-uk").map { locale ->
                 val path = moduleFile("src/main/res/$locale/$name")
                 val nodes = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(path)

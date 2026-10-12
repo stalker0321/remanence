@@ -40,23 +40,16 @@ fun LoginScreen(
             }
         },
     ) {
-        OutlinedTextField(
-            value = form.email,
-            onValueChange = onEmailChange,
-            label = { Text(stringResource(R.string.hold_email)) },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
-            isError = form.email.isNotEmpty() && LoginFormValidator.emailError(form.email) != null,
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("login_email_field"),
-        )
-        if (LoginFormValidator.emailError(form.email) != null) {
-            Text(
-                text = "Enter a valid email",
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.testTag("login_error_email"),
+        AuthFieldGroup(if (LoginFormValidator.emailError(form.email) != null) stringResource(R.string.auth_email_invalid) else null,
+            "login_error_email") { focusModifier ->
+            OutlinedTextField(
+                value = form.email,
+                onValueChange = onEmailChange,
+                label = { Text(stringResource(R.string.hold_email)) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
+                isError = form.email.isNotEmpty() && LoginFormValidator.emailError(form.email) != null,
+                modifier = focusModifier.fillMaxWidth().testTag("login_email_field"),
             )
         }
 
@@ -75,13 +68,13 @@ fun LoginScreen(
 
         when (submitState) {
             is LoginSubmitState.Failed -> Text(
-                text = submitState.message,
+                text = stringResource(submitState.message.resourceId),
                 color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.testTag("login_error_message"),
             )
             LoginSubmitState.RecoveryRequired -> Text(
-                text = "Signed in, but the private keys for this account are not on this device. Recovery required; existing encrypted content stays inaccessible until keys are restored.",
+                text = stringResource(R.string.auth_recovery_required),
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.testTag("login_recovery_required"),
             )

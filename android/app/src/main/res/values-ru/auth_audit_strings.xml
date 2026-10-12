@@ -1,0 +1,18 @@
+<resources>
+    <string name="auth_email_invalid">Введи корректный адрес почты.</string>
+    <string name="auth_password_short">Не менее %1$d символов.</string>
+    <string name="auth_password_long">Не более %1$d символов.</string>
+    <string name="auth_handle_rule">3–30 символов: a–z, 0–9, _ или .</string>
+    <string name="auth_account_created">Аккаунт создан.</string>
+    <string name="auth_unexpected">Что-то пошло не так. Попробуй ещё раз.</string>
+    <string name="auth_network">Проверь подключение и попробуй ещё раз.</string>
+    <string name="auth_invalid_response">Сервер не смог выполнить запрос. Попробуй позже.</string>
+    <string name="auth_wrong_credentials">Неверная почта или пароль.</string>
+    <string name="auth_sign_in_failed">Вход не завершён. Попробуй ещё раз.</string>
+    <string name="auth_account_unavailable">Эта почта или ник недоступны.</string>
+    <string name="auth_identity_rejected">Настройка аккаунта не завершена. Попробуй позже.</string>
+    <string name="auth_registration_failed">Не удалось создать аккаунт. Попробуй ещё раз.</string>
+    <string name="auth_recovery_required">Ты вошёл в аккаунт, но его ключей нет на этом устройстве. Восстанови доступ, чтобы открыть зашифрованные воспоминания. Существующие ключи не будут заменены.</string>
+    <string name="auth_passkey_cancelled">Отменено. Можно попробовать снова, когда будешь готов.</string>
+    <string name="auth_passkey_setup_failed">Настройка пасскея не завершена. Существующие ключи не изменены. Проверь подключение и попробуй ещё раз.</string>
+</resources>

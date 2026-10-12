@@ -63,85 +63,64 @@ fun RegistrationFormScreen(
             }
         },
     ) {
-        OutlinedTextField(
-            value = form.email,
-            onValueChange = { onFieldChange(RegistrationField.EMAIL, it) },
-            label = { Text(stringResource(R.string.hold_email)) },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
-            isError = form.email.isNotEmpty() && RegistrationFormValidator.emailError(form.email) != null,
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("reg_email_field"),
-        )
-        FieldErrorText(errors[RegistrationFieldError.EMAIL_INVALID], "reg_error_email")
-
-        OutlinedTextField(
-            value = form.password,
-            onValueChange = { onFieldChange(RegistrationField.PASSWORD, it) },
-            label = { Text(stringResource(R.string.hold_password)) },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Next),
-            isError = form.password.isNotEmpty() && RegistrationFormValidator.passwordError(form.password) != null,
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("reg_password_field"),
-        )
+        AuthFieldGroup(if (RegistrationFieldError.EMAIL_INVALID in errors) stringResource(R.string.auth_email_invalid) else null,
+            "reg_error_email") { focusModifier ->
+            OutlinedTextField(
+                value = form.email,
+                onValueChange = { onFieldChange(RegistrationField.EMAIL, it) },
+                label = { Text(stringResource(R.string.hold_email)) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
+                isError = form.email.isNotEmpty() && RegistrationFormValidator.emailError(form.email) != null,
+                modifier = focusModifier.fillMaxWidth().testTag("reg_email_field"),
+            )
+        }
         val passwordError = RegistrationFormValidator.passwordError(form.password)
-        FieldErrorText(
-            when (passwordError) {
-                RegistrationFieldError.PASSWORD_TOO_SHORT ->
-                    "At least ${RegistrationFormValidator.MIN_PASSWORD_CODE_POINTS} characters"
-                RegistrationFieldError.PASSWORD_TOO_LONG ->
-                    "At most ${RegistrationFormValidator.MAX_PASSWORD_CODE_POINTS} characters"
-                else -> null
-            },
-            "reg_error_password",
-        )
-
-        OutlinedTextField(
-            value = form.handle,
-            onValueChange = { onFieldChange(RegistrationField.HANDLE, it) },
-            label = { Text(stringResource(R.string.hold_handle)) },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = { onSubmit() }),
-            isError = form.handle.isNotEmpty() && RegistrationFormValidator.handleError(form.handle) != null,
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("reg_handle_field"),
-        )
-        FieldErrorText(
-            if (RegistrationFormValidator.handleError(form.handle) == null) null
-            else "3–30 chars: a–z 0–9 _ .",
-            "reg_error_handle",
-        )
+        val passwordMessage = when (passwordError) {
+            RegistrationFieldError.PASSWORD_TOO_SHORT ->
+                stringResource(R.string.auth_password_short, RegistrationFormValidator.MIN_PASSWORD_CODE_POINTS)
+            RegistrationFieldError.PASSWORD_TOO_LONG ->
+                stringResource(R.string.auth_password_long, RegistrationFormValidator.MAX_PASSWORD_CODE_POINTS)
+            else -> null
+        }
+        AuthFieldGroup(passwordMessage, "reg_error_password") { focusModifier ->
+            OutlinedTextField(
+                value = form.password,
+                onValueChange = { onFieldChange(RegistrationField.PASSWORD, it) },
+                label = { Text(stringResource(R.string.hold_password)) },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Next),
+                isError = form.password.isNotEmpty() && RegistrationFormValidator.passwordError(form.password) != null,
+                modifier = focusModifier.fillMaxWidth().testTag("reg_password_field"),
+            )
+        }
+        AuthFieldGroup(if (RegistrationFormValidator.handleError(form.handle) == null) null
+            else stringResource(R.string.auth_handle_rule), "reg_error_handle") { focusModifier ->
+            OutlinedTextField(
+                value = form.handle,
+                onValueChange = { onFieldChange(RegistrationField.HANDLE, it) },
+                label = { Text(stringResource(R.string.hold_handle)) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { onSubmit() }),
+                isError = form.handle.isNotEmpty() && RegistrationFormValidator.handleError(form.handle) != null,
+                modifier = focusModifier.fillMaxWidth().testTag("reg_handle_field"),
+            )
+        }
 
         when (submitState) {
             is RegistrationSubmitState.Failed -> Text(
-                text = submitState.message,
+                text = stringResource(submitState.message.resourceId),
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.testTag("reg_error_message"),
             )
             RegistrationSubmitState.Completed -> Text(
-                text = "Account created.",
+                text = stringResource(R.string.auth_account_created),
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.testTag("reg_completed_message"),
             )
             else -> Unit
         }
-    }
-}
-
-@Composable
-private fun FieldErrorText(message: String?, tag: String) {
-    if (message != null) {
-        Text(
-            text = message,
-            color = MaterialTheme.colorScheme.error,
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.testTag(tag),
-        )
     }
 }

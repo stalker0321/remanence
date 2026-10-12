@@ -98,7 +98,7 @@ class RegistrationViewModelTest {
         vm.submit()
         advanceUntilIdle()
         val failed = vm.submitState.value as RegistrationSubmitState.Failed
-        assertEquals("Email or handle is unavailable.", failed.message)
+        assertEquals(AuthMessage.ACCOUNT_UNAVAILABLE, failed.message)
 
         vm.submit()
         advanceUntilIdle()
@@ -116,7 +116,7 @@ class RegistrationViewModelTest {
         advanceUntilIdle()
 
         assertEquals(
-            RegistrationSubmitState.Failed("Email or handle is unavailable."),
+            RegistrationSubmitState.Failed(AuthMessage.ACCOUNT_UNAVAILABLE),
             vm.submitState.value,
         )
     }
@@ -132,7 +132,7 @@ class RegistrationViewModelTest {
         advanceUntilIdle()
 
         assertEquals(
-            RegistrationSubmitState.Failed("The registration identity was not accepted. Try again later."),
+            RegistrationSubmitState.Failed(AuthMessage.IDENTITY_REJECTED),
             vm.submitState.value,
         )
     }
@@ -148,9 +148,42 @@ class RegistrationViewModelTest {
         advanceUntilIdle()
 
         assertEquals(
-            RegistrationSubmitState.Failed("Registration failed. Try again later."),
+            RegistrationSubmitState.Failed(AuthMessage.REGISTRATION_FAILED),
             vm.submitState.value,
         )
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun networkAndMalformedResponsesUseRedactedTypedMessages() = runTest {
+        for ((reason, expected) in listOf(
+            dev.hryshyn.remanence.core.data.network.AuthFailure.NETWORK to AuthMessage.NETWORK,
+            dev.hryshyn.remanence.core.data.network.AuthFailure.INVALID_RESPONSE to AuthMessage.INVALID_RESPONSE,
+        )) {
+            val api = object : RegistrationAuthApiPort {
+                override suspend fun register(request: RegisterRequestDto): AuthResult<RegisterResponseDto> =
+                    AuthResult.Failure(reason)
+            }
+            val vm = viewModel(api, testScheduler)
+            applyValidForm(vm)
+            vm.submit()
+            advanceUntilIdle()
+            assertEquals(RegistrationSubmitState.Failed(expected), vm.submitState.value)
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun unexpectedExceptionCannotExposeItsMessage() = runTest {
+        val api = object : RegistrationAuthApiPort {
+            override suspend fun register(request: RegisterRequestDto): AuthResult<RegisterResponseDto> =
+                throw IllegalStateException("private server diagnostics")
+        }
+        val vm = viewModel(api, testScheduler)
+        applyValidForm(vm)
+        vm.submit()
+        advanceUntilIdle()
+        assertEquals(RegistrationSubmitState.Failed(AuthMessage.UNEXPECTED), vm.submitState.value)
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)

@@ -81,7 +81,8 @@ fun RecoveryPanel(hasIdentity: Boolean, recoveryRequired: Boolean, mandatorySetu
         if (busy) Text(stringResource(R.string.mvp_working), style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
         if (message != 0 && !(verified && message == R.string.recovery_verified)) Text(stringResource(message),
-            color = if (message == R.string.recovery_failed || message == R.string.recovery_prf_missing) HoldColors.Error else HoldColors.Muted,
+            color = if (message == R.string.recovery_failed || message == R.string.recovery_prf_missing ||
+                message == R.string.auth_passkey_setup_failed) HoldColors.Error else HoldColors.Muted,
             style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("recovery_message").semantics { liveRegion = LiveRegionMode.Polite })
     }
 }

@@ -109,7 +109,7 @@ class LoginViewModelTest {
         vm.submit()
 
         val failed = vm.submitState.value as LoginSubmitState.Failed
-        assertEquals("Incorrect email or password.", failed.message)
+        assertEquals(AuthMessage.WRONG_CREDENTIALS, failed.message)
     }
 
     @Test
@@ -118,6 +118,20 @@ class LoginViewModelTest {
         assertFalse(LoginFormValidator.canSubmit(vm.form.value))
         vm.submit()
         assertEquals(LoginSubmitState.Idle, vm.submitState.value)
+    }
+
+    @Test
+    fun networkAndInvalidResponseUseTypedMessagesNotExceptionText() = runTest {
+        for ((reason, expected) in listOf(
+            dev.hryshyn.remanence.core.data.network.AuthFailure.NETWORK to AuthMessage.NETWORK,
+            dev.hryshyn.remanence.core.data.network.AuthFailure.INVALID_RESPONSE to AuthMessage.INVALID_RESPONSE,
+        )) {
+            val (vm, _) = buildVm(AuthResult.Failure(reason), true)
+            vm.onEmailChange("private@example.com")
+            vm.onPasswordChange("secret-password")
+            vm.submit()
+            assertEquals(LoginSubmitState.Failed(expected), vm.submitState.value)
+        }
     }
 
 }

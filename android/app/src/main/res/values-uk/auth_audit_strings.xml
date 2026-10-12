@@ -1,0 +1,18 @@
+<resources>
+    <string name="auth_email_invalid">Введи коректну адресу пошти.</string>
+    <string name="auth_password_short">Щонайменше %1$d символів.</string>
+    <string name="auth_password_long">Щонайбільше %1$d символів.</string>
+    <string name="auth_handle_rule">3–30 символів: a–z, 0–9, _ або .</string>
+    <string name="auth_account_created">Акаунт створено.</string>
+    <string name="auth_unexpected">Щось пішло не так. Спробуй ще раз.</string>
+    <string name="auth_network">Перевір підключення та спробуй ще раз.</string>
+    <string name="auth_invalid_response">Сервер не зміг виконати запит. Спробуй пізніше.</string>
+    <string name="auth_wrong_credentials">Неправильна пошта або пароль.</string>
+    <string name="auth_sign_in_failed">Вхід не завершено. Спробуй ще раз.</string>
+    <string name="auth_account_unavailable">Ця пошта або нік недоступні.</string>
+    <string name="auth_identity_rejected">Налаштування акаунта не завершено. Спробуй пізніше.</string>
+    <string name="auth_registration_failed">Не вдалося створити акаунт. Спробуй ще раз.</string>
+    <string name="auth_recovery_required">Ти увійшов в акаунт, але його ключів немає на цьому пристрої. Віднови доступ, щоб відкрити зашифровані спогади. Наявні ключі не будуть замінені.</string>
+    <string name="auth_passkey_cancelled">Скасовано. Можна спробувати знову, коли будеш готовий.</string>
+    <string name="auth_passkey_setup_failed">Налаштування паскея не завершено. Наявні ключі не змінено. Перевір підключення та спробуй ще раз.</string>
+</resources>

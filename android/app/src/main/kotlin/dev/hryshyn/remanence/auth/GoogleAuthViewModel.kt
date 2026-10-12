@@ -15,6 +15,9 @@ import dev.hryshyn.remanence.core.data.network.GoogleAuthRejected
 import dev.hryshyn.remanence.core.data.network.LoginResponseDto
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.wiring.PreparedIdentity
+import dev.hryshyn.remanence.ui.auth.AuthMessage
+import dev.hryshyn.remanence.ui.auth.isCredentialUserCancellation
+import java.io.IOException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,7 +47,8 @@ sealed interface GoogleAuthState {
     data object Working : GoogleAuthState
     data object ChooseHandle : GoogleAuthState
     data object SignedIn : GoogleAuthState
-    data class Failed(val conflict: Boolean) : GoogleAuthState
+    data class Failed(val conflict: Boolean,
+        val message: AuthMessage = if (conflict) AuthMessage.GOOGLE_CONFLICT else AuthMessage.GOOGLE_FAILED) : GoogleAuthState
 }
 
 /** Tickets live in this retained VM only; no ID token, ticket or password in saved state. */
@@ -75,7 +79,9 @@ class GoogleAuthViewModel(private val container: AppContainer) : ViewModel() {
                     else -> error("invalid response")
                 }
             } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { mutableState.value = GoogleAuthState.Failed(e is GoogleAuthRejected && e.status == 409) }
+            catch (e: Exception) {
+                mutableState.value = googleFailureState(e)
+            }
         }
     }
 
@@ -99,7 +105,7 @@ class GoogleAuthViewModel(private val container: AppContainer) : ViewModel() {
                 })
                 commit(result, lease)
             } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { mutableState.value = GoogleAuthState.Failed(e is GoogleAuthRejected && e.status == 409) }
+            catch (e: Exception) { mutableState.value = googleFailureState(e) }
         }
     }
 
@@ -118,5 +124,11 @@ class GoogleAuthViewModel(private val container: AppContainer) : ViewModel() {
             if (!committed) withContext(NonCancellable) { container.bareAuthRepository.logout(login.accessToken) }
         }
     }
+}
+/** User dismissals never look like network/server failure; provider text remains private. */
+internal fun googleFailureState(failure: Exception): GoogleAuthState = when {
+    isCredentialUserCancellation(failure) -> GoogleAuthState.Idle
+    failure is IOException -> GoogleAuthState.Failed(false, AuthMessage.NETWORK)
+    else -> GoogleAuthState.Failed(failure is GoogleAuthRejected && failure.status == 409)
 }
 private fun JsonObject.text(name: String) = getValue(name).jsonPrimitive.content

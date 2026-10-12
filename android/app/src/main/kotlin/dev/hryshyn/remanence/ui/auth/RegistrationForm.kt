@@ -53,15 +53,12 @@ object RegistrationFormValidator {
         }
     }
 
-    fun visibleErrors(form: RegistrationFormState): Map<RegistrationFieldError, String> {
-        val errors = mutableMapOf<RegistrationFieldError, String>()
-        listOfNotNull(
+    fun visibleErrors(form: RegistrationFormState): Set<RegistrationFieldError> =
+        setOfNotNull(
             emailError(form.email),
             passwordError(form.password),
             handleError(form.handle),
-        ).forEach { errors[it] = it.name }
-        return errors
-    }
+        )
 
     fun canSubmit(form: RegistrationFormState): Boolean =
         form.email.isNotEmpty() &&

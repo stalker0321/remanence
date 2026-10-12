@@ -3,10 +3,11 @@ package dev.hryshyn.remanence.ui.auth
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -55,11 +56,11 @@ class LoginScreenTest {
             submissions = submissions,
         )
         composeRule.onNodeWithTag("login_recovery_required").assertIsDisplayed()
-        assertEquals(emptyList<Int>(), listOf<Int>())
+        assertEquals(emptyList<Int>(), submissions)
     }
 
     @Test
-    fun typedEmailEnablesSubmitAndClickSubmitsOnce() {
+    fun validFormEnablesSubmitAndClickSubmitsOnce() {
         val submissions = mutableListOf<Int>()
         composeRule.setContent {
             MaterialTheme {
@@ -73,8 +74,8 @@ class LoginScreenTest {
                 )
             }
         }
-        composeRule.onNodeWithTag("login_email_field").performTextInput("")
-        composeRule.onNodeWithTag("login_submit_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("login_submit_button").assertIsEnabled().performClick()
+        assertEquals(listOf(1), submissions)
     }
 
     @Test
@@ -83,7 +84,7 @@ class LoginScreenTest {
             MaterialTheme {
                 LoginScreen(
                     form = LoginFormState(email = "private@example.com", password = "secret-password"),
-                    submitState = LoginSubmitState.Failed("Incorrect email or password."),
+                    submitState = LoginSubmitState.Failed(AuthMessage.WRONG_CREDENTIALS),
                     onEmailChange = {},
                     onPasswordChange = {},
                     onSubmit = {},

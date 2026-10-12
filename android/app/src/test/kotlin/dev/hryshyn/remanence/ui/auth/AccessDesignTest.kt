@@ -58,6 +58,10 @@ class AccessDesignTest {
             AccessPage { HandleSetupContent(handle, {}, busy, { calls++ }) }
         } } }
         rule.onNodeWithTag("access_handle_continue").assertIsNotEnabled()
+        rule.onNodeWithTag("access_handle_guidance").assertIsDisplayed()
+        rule.runOnIdle { handle = "ab" }
+        rule.onNodeWithTag("access_handle_continue").assertIsNotEnabled()
+        rule.onNodeWithTag("access_handle_guidance").assertTextEquals(rule.activity.getString(R.string.auth_handle_rule))
         rule.runOnIdle { handle = "vodkolyan" }
         rule.onNodeWithTag("access_handle_continue").assertIsEnabled()
         rule.runOnIdle { busy = true }

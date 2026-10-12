@@ -17,7 +17,7 @@ sealed interface RegistrationSubmitState {
 
     data object Submitting : RegistrationSubmitState
 
-    data class Failed(val message: String) : RegistrationSubmitState
+    data class Failed(val message: AuthMessage) : RegistrationSubmitState
 
     data object Completed : RegistrationSubmitState
 }
@@ -61,7 +61,7 @@ class RegistrationViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                RegistrationSubmitState.Failed("Unexpected error. Try again later.")
+                RegistrationSubmitState.Failed(AuthMessage.UNEXPECTED)
             }
         }
     }
@@ -70,18 +70,18 @@ class RegistrationViewModel(
         is RegistrationUseCase.Outcome.Registered -> RegistrationSubmitState.Completed
         is RegistrationUseCase.Outcome.Rejected -> RegistrationSubmitState.Failed(rejectedMessage(outcome.problemCode))
         RegistrationUseCase.Outcome.NetworkUnreachable ->
-            RegistrationSubmitState.Failed("Network unreachable. Try again later.")
+            RegistrationSubmitState.Failed(AuthMessage.NETWORK)
         RegistrationUseCase.Outcome.InvalidResponse ->
-            RegistrationSubmitState.Failed("Unexpected server response.")
+            RegistrationSubmitState.Failed(AuthMessage.INVALID_RESPONSE)
         RegistrationUseCase.Outcome.RecoveryRequired ->
-            RegistrationSubmitState.Failed("Existing keys cannot be opened on this device; recovery required.")
+            RegistrationSubmitState.Failed(AuthMessage.RECOVERY_REQUIRED)
     }
 
-    private fun rejectedMessage(problemCode: RegistrationProblemCode?): String = when (problemCode) {
+    private fun rejectedMessage(problemCode: RegistrationProblemCode?): AuthMessage = when (problemCode) {
         RegistrationProblemCode.EMAIL_UNAVAILABLE,
         RegistrationProblemCode.HANDLE_UNAVAILABLE,
-        -> "Email or handle is unavailable."
-        RegistrationProblemCode.KEY_BUNDLE_INVALID -> "The registration identity was not accepted. Try again later."
-        null -> "Registration failed. Try again later."
+        -> AuthMessage.ACCOUNT_UNAVAILABLE
+        RegistrationProblemCode.KEY_BUNDLE_INVALID -> AuthMessage.IDENTITY_REJECTED
+        null -> AuthMessage.REGISTRATION_FAILED
     }
 }

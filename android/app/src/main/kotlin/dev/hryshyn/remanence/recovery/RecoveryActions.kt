@@ -9,6 +9,7 @@ import dev.hryshyn.remanence.AppContainer
 import dev.hryshyn.remanence.BuildConfig
 import dev.hryshyn.remanence.R
 import dev.hryshyn.remanence.core.crypto.AccountRecoveryCrypto
+import dev.hryshyn.remanence.ui.auth.isCredentialUserCancellation
 import kotlinx.coroutines.launch
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -38,7 +39,7 @@ fun RecoveryActions(container: AppContainer, hasIdentity: Boolean, recoveryRequi
             if (!originallySecure && shown != null) activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
         }
     }
-    fun launch(action: suspend () -> Unit) {
+    fun launch(protecting: Boolean = false, action: suspend () -> Unit) {
         if (busy) return
         busy = true; onBusyChange(true); message = 0
         scope.launch {
@@ -48,20 +49,23 @@ fun RecoveryActions(container: AppContainer, hasIdentity: Boolean, recoveryRequi
                 offerAnotherManager = hasIdentity
                 message = R.string.recovery_prf_missing
             }
-            catch (_: Exception) { message = R.string.recovery_failed; offerAnotherManager = hasIdentity }
+            catch (failure: Exception) {
+                message = recoveryFailureMessage(failure, protecting)
+                if (!isCredentialUserCancellation(failure)) offerAnotherManager = hasIdentity
+            }
             finally { busy = false; onBusyChange(false) }
         }
     }
     RecoveryPanel(hasIdentity, recoveryRequired, mandatorySetup, passkeysAvailable, busy, verified,
         offerAnotherManager, message, code != null, showCode, codeInput,
-        onProtect = { launch {
+        onProtect = { launch(protecting = true) {
                 code = recovery.protect(credentials)
                 verified = true
                 message = R.string.recovery_verified
         } },
         onContinue = { code = null; onRecovered() },
         onToggleCode = { showCode = !showCode },
-        onAnotherManager = { launch {
+        onAnotherManager = { launch(protecting = true) {
                 code = recovery.protect(credentials, chooseAnotherManager = true)
                 verified = true; offerAnotherManager = false
                 message = R.string.recovery_verified
@@ -78,4 +82,11 @@ fun RecoveryActions(container: AppContainer, hasIdentity: Boolean, recoveryRequi
         onHideCode = { code = null },
         codeContent = { code?.let { Text(AccountRecoveryCrypto.encode(it)) } },
     )
+}
+
+/** Only typed provider cancellation is neutral. Timeouts and unknown failures still fail closed. */
+internal fun recoveryFailureMessage(failure: Exception, protecting: Boolean): Int = when {
+    isCredentialUserCancellation(failure) -> R.string.auth_passkey_cancelled
+    protecting -> R.string.auth_passkey_setup_failed
+    else -> R.string.recovery_failed
 }

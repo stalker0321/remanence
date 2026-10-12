@@ -100,6 +100,7 @@ fun GoogleSignInButton(onClick: () -> Unit, enabled: Boolean = true, busy: Boole
 @Composable
 fun HandleSetupContent(handle: String, onChange: (String) -> Unit, busy: Boolean, onContinue: () -> Unit) {
     val valid = handle.isNotEmpty() && RegistrationFormValidator.handleError(handle) == null
+    val invalid = handle.isNotEmpty() && !valid
     HoldFormScaffold(primary = {
         HoldButton(onClick = onContinue, enabled = !busy && valid,
             modifier = Modifier.fillMaxWidth().testTag("access_handle_continue")) {
@@ -108,11 +109,15 @@ fun HandleSetupContent(handle: String, onChange: (String) -> Unit, busy: Boolean
     }) {
         AccessHeading(stringResource(R.string.mvp_handle_title), stringResource(R.string.access_handle_detail))
         Spacer(Modifier.height(HoldSpace.Related))
-        HoldInput(value = handle, onValueChange = onChange, enabled = !busy,
+        HoldInput(value = handle, onValueChange = onChange, enabled = !busy, isError = invalid,
             label = { Text(stringResource(R.string.mvp_handle_label)) }, singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = { if (!busy && valid) onContinue() }),
             modifier = Modifier.fillMaxWidth().testTag("access_handle_input"))
+        Text(stringResource(R.string.auth_handle_rule),
+            style = MaterialTheme.typography.bodySmall,
+            color = if (invalid) HoldColors.Error else HoldColors.Muted,
+            modifier = Modifier.testTag("access_handle_guidance").semantics { liveRegion = LiveRegionMode.Polite })
         Text(stringResource(R.string.mvp_handle_permanent), style = MaterialTheme.typography.bodySmall, color = HoldColors.Muted)
     }
 }

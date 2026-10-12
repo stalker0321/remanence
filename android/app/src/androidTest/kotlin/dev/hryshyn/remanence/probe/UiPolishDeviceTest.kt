@@ -119,11 +119,18 @@ class UiPolishDeviceTest {
             // The real GPU must paint the unobscured cover, not merely expose
             // a semantics node for an invalid synthetic cover/mode pair.
             assertEquals(android.graphics.Color.MAGENTA, pixels[(24*scale).toInt(), (540*scale).toInt()].toArgb())
+            File(evidence, "music-cover-canvas-pixelcopy.png").outputStream().use {
+                canvas.asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it)
+            }
             capture("music-with-cover")
             rule.runOnIdle { cover=false }
             rule.onNodeWithTag("collage_music_play_cue",useUnmergedTree=true).assertExists()
             rule.onNodeWithTag("capsule_music_region").performClick()
             assertEquals(2,clicks); capture("music-without-cover")
+            val fallback = rule.onNodeWithTag("collage_canvas").captureToImage()
+            File(evidence, "music-no-cover-canvas-pixelcopy.png").outputStream().use {
+                fallback.asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it)
+            }
         } finally {
             // Renderer owns a reference until composition ends; never recycle mid-frame.
         }

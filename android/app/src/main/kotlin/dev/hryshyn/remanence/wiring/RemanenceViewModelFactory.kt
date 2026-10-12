@@ -141,7 +141,9 @@ class RemanenceViewModelFactory(
             // owns fresh runners (the seam closes them); model loads happen
             // lazily on first analysis. Removal (null factory) keeps the
             // chooser on its typed notice path.
-            collageSourceFactory = productionCollageCropSourceFactory(container.appContext),
+            collageSourceFactory = productionCollageCropSourceFactory(container.appContext,
+                cropPolicy = dev.hryshyn.remanence.ui.collage.CropAdmissionPolicy.BALANCED),
+            collageCropPolicy = dev.hryshyn.remanence.ui.collage.CropAdmissionPolicy.BALANCED,
             // Stage1-C CONTENT preview: bounded upright in-memory sources.
             generatorPreviewLoader = dev.hryshyn.remanence.create.DefaultGeneratorPreviewLoader(
                 openSource = { pickerId ->

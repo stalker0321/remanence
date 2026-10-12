@@ -107,10 +107,14 @@ internal data class AllFamilyOmission(
  *
  * Verified inputs: blank sender omits the sender mark; blank/absent note and
  * absent artwork are distinct states and are passed through exactly.
+ * Product BALANCED must match the matrix policy. The historical
+ * complete-safe-matching identifier preserves expression compatibility; in
+ * BALANCED it does not imply frozen aesthetic-admission parity.
  */
 internal class AllFamilyCandidateProducer(
     private val cropMatrix: CollageCropMatrixSource,
     private val measure: FrozenGrammarPlans.TextMeasurer = FrozenGrammarPlans.LINE_HEIGHT_STUB,
+    private val cropPolicy: CropAdmissionPolicy = CropAdmissionPolicy.STRICT,
 ) {
 
     suspend fun produce(input: AllFamilyInput): AllFamilyOutcome {
@@ -220,6 +224,7 @@ internal class AllFamilyCandidateProducer(
                 val solved = Envelope50CropSolver.solveDetailed(
                     analysis,
                     Envelope50CropSolver.Slot(tile.rect.w, tile.rect.h, tile.shape, tile.zooms),
+                    cropPolicy,
                 )
                 val crop = (solved as? CropSolveResult.Solved)?.crop
                 if (crop == null) {

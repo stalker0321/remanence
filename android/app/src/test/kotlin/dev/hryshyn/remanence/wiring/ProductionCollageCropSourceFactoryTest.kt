@@ -9,6 +9,8 @@ import dev.hryshyn.remanence.ui.collage.CollageAnalysis
 import dev.hryshyn.remanence.ui.collage.CollageCandidateProvider
 import dev.hryshyn.remanence.ui.collage.CollageProviderResult
 import dev.hryshyn.remanence.ui.collage.CollageRenderer
+import dev.hryshyn.remanence.ui.collage.CollageCropRequest
+import dev.hryshyn.remanence.ui.collage.CropAdmissionPolicy
 import dev.hryshyn.remanence.ui.collage.NanoDetDecoder
 import dev.hryshyn.remanence.ui.collage.NanoDetHead
 import dev.hryshyn.remanence.ui.collage.analysis.FieldStageImage
@@ -130,6 +132,34 @@ class ProductionCollageCropSourceFactoryTest {
         }
     }
 
+    @Test
+    fun productionLegacySourceDefaultsBalancedWithoutFabricatingAnalysis() = runBlocking {
+        val holder = RetainedOriginalHolder()
+        val bytes = jpeg(0xFF315A8A.toInt(), 4000, 1000)
+        val hash = sha256Hex(bytes)
+        val contentId = CapsulePhotoIdentity.contentIdFor(hash)
+        assertTrue(holder.retain(contentId, bytes, hash) is RetainedOriginalHolder.RetainResult.Retained)
+        fun source(policy: CropAdmissionPolicy? = null) = requireNotNull(
+            if (policy == null) productionCollageCropSourceFactory(context,
+                { AvailableFieldRuntime() }, { AvailableNanoRuntime() }, { AvailableYuNetRuntime() })
+            else productionCollageCropSourceFactory(context,
+                { AvailableFieldRuntime() }, { AvailableNanoRuntime() }, { AvailableYuNetRuntime() }, policy)
+        ).create(holder)
+        val strictSource = requireNotNull(source(CropAdmissionPolicy.STRICT))
+        val installedSource = requireNotNull(source())
+        try {
+            val request = listOf(CollageCropRequest(contentId, 250, 250, zooms = listOf(1.0)))
+            assertTrue(requireNotNull(strictSource.cropsFor(request)).isEmpty())
+            assertTrue(requireNotNull(installedSource.cropsFor(request)).containsKey(contentId))
+            val missing = listOf(CollageCropRequest("missing-original", 250, 250))
+            assertEquals(null, installedSource.cropsFor(missing))
+        } finally {
+            strictSource.close()
+            installedSource.close()
+            holder.close()
+        }
+    }
+
     private class AvailableNanoRuntime : NanoDetRuntime {
         var loads = 0
         var forwards = 0
@@ -176,8 +206,8 @@ class ProductionCollageCropSourceFactoryTest {
         }
     }
 
-    private fun jpeg(color: Int): ByteArray {
-        val bitmap = Bitmap.createBitmap(400, 400, Bitmap.Config.ARGB_8888)
+    private fun jpeg(color: Int, width: Int = 400, height: Int = 400): ByteArray {
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         bitmap.eraseColor(color)
         return try {
             ByteArrayOutputStream().use { output ->

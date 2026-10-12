@@ -76,6 +76,8 @@ class AndroidCollageCropSource(
      * spans the hop unchanged. Injectable for hermetic lane tests.
      */
     private val workerDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    /** Parity seam defaults strict; installed legacy source explicitly selects balanced. */
+    private val cropPolicy: CropAdmissionPolicy = CropAdmissionPolicy.STRICT,
 ) : CollageCropSource, CollageCropDiagnostics, AutoCloseable {
 
     private val mutex = Mutex()
@@ -109,6 +111,7 @@ class AndroidCollageCropSource(
                             shape = request.shape,
                             zooms = request.zooms,
                         ),
+                        cropPolicy,
                     )
                 ) {
                     is CropSolveResult.Solved -> crops[request.contentId] = solved.crop.toCropWindow()

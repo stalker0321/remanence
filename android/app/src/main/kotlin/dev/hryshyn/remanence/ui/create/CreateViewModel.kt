@@ -164,6 +164,8 @@ class CreateViewModel(
      * diagnostic engine path.
      */
     private val collageSourceFactory: CollageCropSourceFactory? = null,
+    /** Same production policy for assignment and final solve; strict for parity fixtures. */
+    private val collageCropPolicy: dev.hryshyn.remanence.ui.collage.CropAdmissionPolicy = dev.hryshyn.remanence.ui.collage.CropAdmissionPolicy.STRICT,
     /**
      * T062: sender-side descriptor source (direct MusicBrainz/CAA client).
      * Null/absent keeps the pre-T062 behaviour exactly: every selection seals
@@ -714,7 +716,7 @@ class CreateViewModel(
                 })
         } ?: dev.hryshyn.remanence.ui.collage.FrozenGrammarPlans.LINE_HEIGHT_STUB
         val outcome = withContext(ioDispatcher) {
-            AllFamilyCandidateProducer(AndroidCollageCropMatrixSource(), measure).produce(familyInput)
+            AllFamilyCandidateProducer(AndroidCollageCropMatrixSource(collageCropPolicy), measure, collageCropPolicy).produce(familyInput)
         }
         if (outcome !is dev.hryshyn.remanence.ui.collage.AllFamilyOutcome.Candidates) {
             return null

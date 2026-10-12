@@ -12,8 +12,10 @@ import kotlin.math.min
  * face/role gates; cost is
  * `|log(sourceAspect/slotAspect)|*0.14 + (1-importance)*0.4 + roleCost +
  * facePixelPenalty`, exactly the frozen weighted fit.
+ * STRICT is the parity default. Product BALANCED uses strict-first aesthetic
+ * fallback for feasibility; authored role and face-pixel gates stay the same.
  */
-class AndroidCollageCropMatrixSource : CollageCropMatrixSource {
+class AndroidCollageCropMatrixSource(private val policy: CropAdmissionPolicy = CropAdmissionPolicy.STRICT) : CollageCropMatrixSource {
 
     override suspend fun matrix(
         photos: List<CropMatrixPhoto>,
@@ -37,7 +39,7 @@ class AndroidCollageCropMatrixSource : CollageCropMatrixSource {
 
     private fun evaluate(analysis: CollageAnalysis, anyObject: Boolean, request: CropMatrixRequest): CropMatrixCell {
         val slot = Envelope50CropSolver.Slot(request.slotWidth, request.slotHeight, request.shape, request.zooms)
-        val metrics = Envelope50CropSolver.baseMetrics(analysis, slot)
+        val metrics = Envelope50CropSolver.baseMetrics(analysis, slot, policy)
             ?: return CropMatrixCell(feasible = false, reason = reasonFor(analysis, slot))
 
         val faces = analysis.faces.filter { it.box.width * it.box.height > 0.003 }
@@ -68,7 +70,7 @@ class AndroidCollageCropMatrixSource : CollageCropMatrixSource {
     }
 
     private fun reasonFor(analysis: CollageAnalysis, slot: Envelope50CropSolver.Slot): CropRejectReason =
-        (Envelope50CropSolver.solveDetailed(analysis, slot) as? CropSolveResult.Rejected)?.reason
+        (Envelope50CropSolver.solveDetailed(analysis, slot, policy) as? CropSolveResult.Rejected)?.reason
             ?: CropRejectReason.NO_CROP_CANDIDATE
 
     private fun isObject(analysis: CollageAnalysis?): Boolean {

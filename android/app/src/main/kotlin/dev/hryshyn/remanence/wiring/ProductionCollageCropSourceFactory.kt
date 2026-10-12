@@ -2,6 +2,7 @@ package dev.hryshyn.remanence.wiring
 
 import android.content.Context
 import dev.hryshyn.remanence.ui.collage.AndroidCollageCropSource
+import dev.hryshyn.remanence.ui.collage.CropAdmissionPolicy
 import dev.hryshyn.remanence.ui.collage.analysis.FieldStageRunner
 import dev.hryshyn.remanence.ui.collage.analysis.FieldStageRuntime
 import dev.hryshyn.remanence.ui.collage.analysis.FieldUprightDecoder
@@ -26,6 +27,7 @@ internal fun productionCollageCropSourceFactory(
     fieldRuntime: () -> FieldStageRuntime = { OpenCvFieldStage() },
     nanoDetRuntime: () -> NanoDetRuntime = { OpenCvNanoDetRuntime() },
     yuNetRuntime: () -> YuNetRuntime = { OpenCvYuNetRuntime() },
+    cropPolicy: CropAdmissionPolicy = CropAdmissionPolicy.BALANCED,
 ): CollageCropSourceFactory = CollageCropSourceFactory { holder ->
     val cacheBase = java.io.File(appContext.cacheDir, "collage")
     AndroidCollageCropSource(
@@ -42,6 +44,7 @@ internal fun productionCollageCropSourceFactory(
             yuNetRuntime(),
             java.io.File(cacheBase, "yunet"),
         ),
+        cropPolicy = cropPolicy,
     )
 }
 

@@ -52,6 +52,11 @@ class BetaUiDeviceTest {
         rule.runOnIdle { assertEquals(AppLocale.UKRAINIAN, locale) }
         capture("settings-fixture")
         rule.onNodeWithTag("settings_logout").performScrollTo().performClick()
+        rule.runOnIdle { assertFalse(loggedOut) }
+        rule.onNodeWithTag("settings_logout_cancel").performClick()
+        rule.runOnIdle { assertFalse(loggedOut) }
+        rule.onNodeWithTag("settings_logout").performClick()
+        rule.onNodeWithTag("settings_logout_confirm").performClick()
         rule.runOnIdle { assertTrue(loggedOut) }
     }
 

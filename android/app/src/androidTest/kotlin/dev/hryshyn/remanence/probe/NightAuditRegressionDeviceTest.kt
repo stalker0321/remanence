@@ -8,6 +8,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -15,6 +20,11 @@ import androidx.test.platform.app.InstrumentationRegistry
 import dev.hryshyn.remanence.core.data.network.SafetyState
 import dev.hryshyn.remanence.ui.capsule.CapsuleExportFiles
 import dev.hryshyn.remanence.ui.hold.HoldTheme
+import dev.hryshyn.remanence.ui.home.HomeScreen
+import dev.hryshyn.remanence.ui.home.BackendHealthUiState
+import dev.hryshyn.remanence.ui.home.AccountCapabilityState
+import dev.hryshyn.remanence.ui.locale.AppLocale
+import dev.hryshyn.remanence.ui.locale.LanguageSwitchRow
 import dev.hryshyn.remanence.ui.settings.BetaTermsGateWithActions
 import kotlinx.coroutines.CompletableDeferred
 import java.io.File
@@ -29,6 +39,28 @@ class NightAuditRegressionDeviceTest {
     @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
     private val evidence get() = File(context.getExternalFilesDir(null), "t179-fixture-evidence").apply { mkdirs() }
+
+    @Test fun smallHomeWithLargeNativeTypeKeepsWholeLanguageOptionsReachable() {
+        var selected = AppLocale.SYSTEM
+        rule.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, 1.6f)) {
+                HoldTheme { Box(Modifier.width(320.dp).height(640.dp)) {
+                    HomeScreen(BackendHealthUiState.AVAILABLE, AccountCapabilityState.SignedOut,
+                        footer = { LanguageSwitchRow(AppLocale.SYSTEM, { selected = it }) })
+                } }
+            }
+        }
+        rule.onNodeWithTag("language_option_ukrainian").performScrollTo().assertIsDisplayed().performClick()
+        rule.runOnIdle { assertEquals(AppLocale.UKRAINIAN, selected) }
+        val results = mutableListOf<TextLayoutResult>()
+        rule.onNodeWithText("Українська").performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(results) }
+        val layout = results.single()
+        assertEquals(1, layout.lineCount)
+        assertFalse(layout.isLineEllipsized(0))
+        assertTrue(layout.getLineRight(0) <= layout.size.width + 1)
+        capture("home-small-large-type-language")
+    }
 
     @Test fun legalLinkAfterFailedFetchPreservesRetryAndServerAuthority() {
         var calls = 0

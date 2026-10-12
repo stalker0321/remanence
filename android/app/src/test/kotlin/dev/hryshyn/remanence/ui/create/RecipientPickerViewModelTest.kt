@@ -124,7 +124,7 @@ class RecipientPickerViewModelTest {
         owner = "owner-b"
         result.complete(DirectoryLookupResult.Found(snapshot))
 
-        assertEquals(RecipientLookupUiState.Failed("Sign in first."), vm.state.value)
+        assertEquals(RecipientLookupUiState.Failed("Sign in first.", RecipientLookupUiState.Failure.SIGN_IN), vm.state.value)
     }
 
     @Test
@@ -235,7 +235,7 @@ class RecipientPickerViewModelTest {
 
         assertEquals(1, refreshCalls)
         assertEquals(0, fake.handles.size)
-        assertEquals(RecipientLookupUiState.Failed("Sign in first."), vm.state.value)
+        assertEquals(RecipientLookupUiState.Failed("Sign in first.", RecipientLookupUiState.Failure.SIGN_IN), vm.state.value)
     }
 
     @Test
@@ -257,7 +257,7 @@ class RecipientPickerViewModelTest {
         assertEquals(1, refreshCalls)
         assertEquals(0, fake.handles.size)
         assertEquals(
-            RecipientLookupUiState.Failed("Network unreachable. Try again later."),
+            RecipientLookupUiState.Failed("Network unreachable. Try again later.", RecipientLookupUiState.Failure.NETWORK),
             vm.state.value,
         )
     }

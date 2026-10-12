@@ -314,7 +314,8 @@ class CreatePublishLifetimeTest {
         vm.startPublishing()
         awaitTerminalPublish(vm)
 
-        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
+        assertTrue(vm.uploadStatus.value is CreateViewModel.CreateUploadStatus.RetryableFailure)
         assertEquals("upload could not be queued; retry available", vm.publishError.value)
         val row = outboxRow(vm.capsuleId)
         assertNotNull(row)

@@ -222,9 +222,10 @@ class ContentPhotoTilesTest {
         assertEquals(uris, vm.photoSelection.selectedIds)
         assertTrue(vm.photoSelection.canProceed)
         assertEquals(
-            listOf("content://a", "content://c", "content://d"),
+            uris,
             vm.pickedThumbnails.value.keys.toList(),
         )
+        assertNull(vm.pickedThumbnails.value["content://b"])
     }
 
     @Test
@@ -306,6 +307,8 @@ class ContentPhotoTilesTest {
         repeat(3) { index ->
             composeRule.onNodeWithTag("create_photo_tile_$index").performScrollTo()
             composeRule.onNodeWithTag("create_photo_tile_check_$index", useUnmergedTree = true).assertIsDisplayed()
+            composeRule.onNodeWithTag("create_photo_tile_pending_$index", useUnmergedTree = true).assertDoesNotExist()
+            composeRule.onNodeWithTag("create_photo_tile_failed_$index", useUnmergedTree = true).assertIsDisplayed()
         }
         composeRule.onNodeWithTag("create_selection_count")
             .assertTextContains("choose 3–5 photographs · 3")

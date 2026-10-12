@@ -147,7 +147,8 @@ class CreateStaleDeliveryTest {
         vm.frontAttempt.onPreviewBound()
         assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
         assertTrue(vm.beginFrontCapture())
-        vm.deliverFrontJpeg("in-flight".toByteArray())
+        val delivered = "in-flight".toByteArray()
+        vm.deliverFrontJpeg(delivered)
 
         // Delivery marked the attempt Processing; the pipeline work is queued,
         // NOT executed (the scheduler was never advanced).
@@ -159,9 +160,11 @@ class CreateStaleDeliveryTest {
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
         assertNull(vm.frontAttempt.phase)
 
-        // NOW the abandoned pipeline finishes with ACCEPTANCE...
+        // The queued abandoned work is cancelled before CPU/persistence. Its
+        // owned JPEG still has a finally cleanup; no stale baseline is stored.
         cpuDispatcher.scheduler.advanceUntilIdle()
-        assertTrue(processor.bytes!!.all { it == 0.toByte() })
+        assertNull(processor.bytes)
+        assertTrue(delivered.all { it == 0.toByte() })
 
         // ...and changes NOTHING in the fresh session: the terminal publication
         // for the dead attempt is structurally inert.

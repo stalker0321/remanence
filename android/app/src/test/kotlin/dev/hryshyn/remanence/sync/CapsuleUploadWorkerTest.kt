@@ -7,6 +7,18 @@ import org.junit.Test
 class CapsuleUploadWorkerTest {
 
     @Test
+    fun durableUploadUsesConnectedNetworkAndBoundedExponentialBackoff() {
+        val owner = dev.hryshyn.remanence.core.model.UserId.parseRest("9c111111-2222-4333-8444-555555555555")
+        val capsule = dev.hryshyn.remanence.core.model.CapsuleId.parseRest("9c333333-4444-4555-8666-777777777777")
+        val request = CapsuleUploadWorker.request(owner, capsule)
+        assertEquals(androidx.work.NetworkType.CONNECTED, request.workSpec.constraints.requiredNetworkType)
+        assertEquals(androidx.work.BackoffPolicy.EXPONENTIAL, request.workSpec.backoffPolicy)
+        assertEquals(30_000L, request.workSpec.backoffDelayDuration)
+        assertEquals(owner.toRestString(), request.workSpec.input.getString(CapsuleUploadWorker.INPUT_OWNER_USER_ID))
+        assertEquals(capsule.toRestString(), request.workSpec.input.getString(CapsuleUploadWorker.INPUT_CAPSULE_ID))
+    }
+
+    @Test
     fun succeededWorkCompletesSuccessfully() {
         assertEquals(
             ListenableWorker.Result.success(),

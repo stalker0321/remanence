@@ -903,6 +903,10 @@ class CreateViewModel(
      * finish its work, but its RESULT can never be applied to the new session.
      */
     private var deliveryGeneration: Long = 0L
+    private var frontDeliveryJob: Job? = null
+    private var uploadRetryJob: Job? = null
+    private val _uploadRetrying = MutableStateFlow(false)
+    val uploadRetrying: StateFlow<Boolean> = _uploadRetrying.asStateFlow()
 
     /**
      * FIX-STATE-11: THE owning Job of the active publication plus the
@@ -1130,6 +1134,7 @@ class CreateViewModel(
         begunEpoch = epoch
         createSessionGeneration += 1
         deliveryGeneration += 1
+        cancelDeliveryAndRetry()
         cancelPublishingLocked()
         cancelRevokeLocked()
         outboxObservationJob?.cancel()
@@ -1337,6 +1342,9 @@ class CreateViewModel(
     }
 
     fun confirmRecipient() {
+        // A second tap queued before confirmation unmounts is not a new
+        // recipient operation. Keep the immutable confirmed snapshot.
+        if (_step.value == Step.FRONT && confirmedRecipient.value != null) return
         if (!requireStep(Step.RECIPIENT_CONFIRM, "recipient confirmation")) return
         try {
             recipientFlow.onConfirm()
@@ -1388,7 +1396,7 @@ class CreateViewModel(
      * timing, not a user action, so it must not raise the recovery banner.
      */
     fun deliverFrontJpeg(jpegBytes: ByteArray) {
-        if (!frontAttempt.hasActiveAttempt) {
+        if (frontAttempt.phase != dev.hryshyn.remanence.capture.CaptureAttemptPhase.Capturing) {
             jpegBytes.fill(0)
             return
         }
@@ -1397,7 +1405,8 @@ class CreateViewModel(
             return
         }
         val generation = deliveryGeneration
-        viewModelScope.launch {
+        frontDeliveryJob?.cancel()
+        frontDeliveryJob = viewModelScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
             val outcome = frontFlow.onJpegDelivered(jpegBytes, capsuleId, persistence, frontAttempt)
             // A session reset supersedes this continuation entirely.
             if (generation != deliveryGeneration) return@launch
@@ -1460,6 +1469,11 @@ class CreateViewModel(
      * previous selection (the system picker is authoritative per attempt).
      */
     fun onPhotosPicked(ids: List<String>) {
+        // PickMultipleVisualMedia reports dismissal/cancel as an empty list,
+        // not a deliberate "remove all" edit. Tile toggles own that action.
+        if (ids.isEmpty()) return
+        // A deliberate new picker result may retry previously failed reads.
+        _pickedThumbnails.value = _pickedThumbnails.value.filterValues { it != null }
         // C2: a fresh picker result is a photo edit — it revokes any bound
         // bridge session on its exact context before the selection changes.
         dropGeneratorBound { bridge, context, sessionId ->
@@ -1488,8 +1502,8 @@ class CreateViewModel(
      * CONTENT selected-tiles thumbnails, keyed by picked URI string in
      * selection order. Loaded off-main on [ioDispatcher] through
      * [pickedThumbnailLoader]; only missing keys load, a newer pick cancels
-     * the in-flight job (epoch guard), and load failures simply leave the
-     * key absent — the tile keeps its selection check, the valid choice is
+     * the in-flight job (epoch guard), and load failures publish a null
+     * sentinel — the tile keeps its selection check, the valid choice is
      * retained. Empty without a loader: tiles render check-only.
      */
     private val _pickedThumbnails =
@@ -1531,10 +1545,10 @@ class CreateViewModel(
                     null
                 }
                 if (epoch != pickedThumbnailEpoch) return@launch
-                if (bitmap != null) {
-                    current[uri] = bitmap
-                    _pickedThumbnails.value = current.toMap()
-                }
+                // Presence marks completion; null is a failed decode, not an
+                // endless in-progress tile. A new picker inventory can retry.
+                current[uri] = bitmap
+                _pickedThumbnails.value = current.toMap()
             }
         }
     }
@@ -1590,6 +1604,7 @@ class CreateViewModel(
         if (_step.value != Step.CONTENT) return false
         createSessionGeneration += 1
         deliveryGeneration += 1
+        cancelDeliveryAndRetry()
         // FRONT baselines are immutable per capsule. A different postcard
         // starts a fresh draft identity, keeping its content and recipient;
         // never overwrite/delete the old baseline (an earlier publication
@@ -2235,7 +2250,9 @@ class CreateViewModel(
             dropGeneratorBoundForGeneration(generation) { bridge, context, sessionId ->
                 bridge.cancel(context, sessionId)
             }
-            _publishError.value = failure.message ?: "publishing failed"
+            // Provider/Room/WorkManager exception text is never presentation
+            // copy; retain only a fixed diagnostic category in VM state.
+            _publishError.value = "publishing failed"
             _step.value = Step.CONTENT
         } finally {
             inFlightPublications.remove(inputs.capsuleId)
@@ -2375,7 +2392,15 @@ class CreateViewModel(
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Exception) {
-                    failPublishing("upload could not be queued; retry available", generation)
+                    // Ciphertext is already durably staged. Never send the
+                    // user through sealing again (stage rejects replay).
+                    if (!isPublishCurrent(generation)) return
+                    if (_uploadStatus.value is CreateUploadStatus.Published) {
+                        _step.value = Step.PUBLISHED
+                        return
+                    }
+                    _uploadStatus.value = CreateUploadStatus.RetryableFailure("QUEUE_FAILED")
+                    failPublishing("upload could not be queued; retry available", generation, Step.UPLOAD_PENDING)
                     return
                 }
                 ensureCurrent()
@@ -2407,6 +2432,54 @@ class CreateViewModel(
         if (!isPublishCurrent(generation)) return
         _publishError.value = message
         _step.value = restartAt
+    }
+
+    /** Retry transport only; the account/capsule row remains the sole source. */
+    fun retryUpload() {
+        if (_step.value != Step.UPLOAD_PENDING || _uploadRetrying.value) return
+        val owner = sessionOwner ?: return
+        val capsule = _capsuleId
+        val generation = createSessionGeneration
+        val dao = outboxCapsuleDao ?: return
+        _uploadRetrying.value = true
+        uploadRetryJob = viewModelScope.launch {
+            try {
+                val row = dao.getByCapsuleIdAndOwner(capsule, owner.toRestString()) ?: return@launch
+                if (!outboxObservationStillCurrent(generation, owner, capsule)) return@launch
+                // In-flight chains keep their scheduler/backoff. Terminal,
+                // published and preparation-only rows cannot be retried here.
+                if (row.state != OutboxCapsuleState.ENCRYPTED &&
+                    row.state != OutboxCapsuleState.RETRYABLE_FAILURE) return@launch
+                val liveOwner = identityProvider()?.userId
+                if (liveOwner != owner.toRestString() ||
+                    !outboxObservationStillCurrent(generation, owner, capsule)) return@launch
+                val expectedStatus = _uploadStatus.value
+                enqueueUpload(owner, CapsuleId.parseRest(capsule))
+                if (outboxObservationStillCurrent(generation, owner, capsule)) {
+                    _publishError.value = null
+                    // A fast worker may already have emitted a newer state.
+                    // Never repaint Published/a fresh failure with our old row.
+                    if (_step.value == Step.UPLOAD_PENDING && _uploadStatus.value == expectedStatus) {
+                        _uploadStatus.value = CreateUploadStatus.Pending(row.state)
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                if (outboxObservationStillCurrent(generation, owner, capsule) &&
+                    _step.value == Step.UPLOAD_PENDING && _uploadStatus.value !is CreateUploadStatus.Published) {
+                    _uploadStatus.value = CreateUploadStatus.RetryableFailure("QUEUE_FAILED")
+                }
+            } finally {
+                if (generation == createSessionGeneration) _uploadRetrying.value = false
+            }
+        }
+    }
+
+    private fun cancelDeliveryAndRetry() {
+        frontDeliveryJob?.cancel(); frontDeliveryJob = null
+        uploadRetryJob?.cancel(); uploadRetryJob = null
+        _uploadRetrying.value = false
     }
 
     /**
@@ -2452,6 +2525,7 @@ class CreateViewModel(
         // own NonCancellable cleanup guarantees staged plaintext removal.
         createSessionGeneration += 1
         deliveryGeneration += 1
+        cancelDeliveryAndRetry()
         clearSelfRecipientState()
         val owner = sessionOwner
         val capsuleId = _capsuleId

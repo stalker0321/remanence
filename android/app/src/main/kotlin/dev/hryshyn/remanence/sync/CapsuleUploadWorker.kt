@@ -2,6 +2,10 @@ package dev.hryshyn.remanence.sync
 
 import android.content.Context
 import androidx.work.CoroutineWorker
+import androidx.work.BackoffPolicy
+import androidx.work.Constraints
+import androidx.work.NetworkType
+import java.util.concurrent.TimeUnit
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequest
 import androidx.work.OneTimeWorkRequestBuilder
@@ -58,6 +62,8 @@ class CapsuleUploadWorker(
                         INPUT_CAPSULE_ID to capsule.toRestString(),
                     ),
                 )
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30_000L, TimeUnit.MILLISECONDS)
                 .also { builder -> identity.tags.forEach(builder::addTag) }
                 .build()
         }

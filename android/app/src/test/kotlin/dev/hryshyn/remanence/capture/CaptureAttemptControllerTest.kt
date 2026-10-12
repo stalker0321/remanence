@@ -43,6 +43,22 @@ class CaptureAttemptControllerTest {
         fail("expected IllegalStateException")
     }
 
+    @Test
+    fun hungStillTimeoutIsAttemptBoundAndDoesNotInterruptProcessingOrRetake() {
+        reachReady()
+        val first = controller.beginAttempt()
+        assertTrue(controller.expireStillCapture(first, "retake"))
+        assertTrue(controller.phase is CaptureAttemptPhase.Failed)
+        controller.startRetake()
+        controller.onPreviewBound()
+        val second = controller.beginAttempt()
+        assertFalse(controller.expireStillCapture(first, "stale timeout"))
+        assertEquals(CaptureAttemptPhase.Capturing, controller.phase)
+        controller.markProcessing()
+        assertFalse(controller.expireStillCapture(second, "too late"))
+        assertEquals(CaptureAttemptPhase.Processing, controller.phase)
+    }
+
     // ------------------------------------------------------------------
     // Permission half (FIX-REVIEW-05 semantics preserved).
     // ------------------------------------------------------------------

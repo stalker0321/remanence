@@ -28,7 +28,9 @@ sealed interface RecipientLookupUiState {
 
     data object NotFound : RecipientLookupUiState
 
-    data class Failed(val message: String) : RecipientLookupUiState
+    enum class Failure { NETWORK, SIGN_IN, LOOKUP, SERVER, UNEXPECTED }
+    /** Diagnostic copy retained for older tests; UI renders only [reason]. */
+    data class Failed(val message: String, val reason: Failure = Failure.UNEXPECTED) : RecipientLookupUiState
 }
 
 /**
@@ -117,9 +119,9 @@ class RecipientPickerViewModel(
                 if (recovery == SessionRecovery.RECOVERED && fresh != null) {
                     startLookup()
                 } else if (recovery == SessionRecovery.NETWORK_FAILED) {
-                    _state.value = RecipientLookupUiState.Failed("Network unreachable. Try again later.")
+                    _state.value = RecipientLookupUiState.Failed("Network unreachable. Try again later.", RecipientLookupUiState.Failure.NETWORK)
                 } else {
-                    _state.value = RecipientLookupUiState.Failed("Sign in first.")
+                    _state.value = RecipientLookupUiState.Failed("Sign in first.", RecipientLookupUiState.Failure.SIGN_IN)
                 }
             }
             return
@@ -137,7 +139,7 @@ class RecipientPickerViewModel(
         lookupJob = scope.launch {
             val expectedOwner = sessionOwnerProvider() ?: run {
                 if (generation == lookupGeneration) {
-                    _state.value = RecipientLookupUiState.Failed("Sign in first.")
+                    _state.value = RecipientLookupUiState.Failed("Sign in first.", RecipientLookupUiState.Failure.SIGN_IN)
                 }
                 return@launch
             }
@@ -156,7 +158,7 @@ class RecipientPickerViewModel(
                 _state.value = if (currentOwner == expectedOwner) {
                     result
                 } else {
-                    RecipientLookupUiState.Failed("Sign in first.")
+                    RecipientLookupUiState.Failed("Sign in first.", RecipientLookupUiState.Failure.SIGN_IN)
                 }
             }
         }
@@ -172,9 +174,9 @@ class RecipientPickerViewModel(
         DirectoryLookupResult.NotFound -> RecipientLookupUiState.NotFound
         is DirectoryLookupResult.Failure -> when (result.reason) {
             DirectoryFailure.NOT_FOUND -> RecipientLookupUiState.NotFound
-            DirectoryFailure.NETWORK -> RecipientLookupUiState.Failed("Network unreachable. Try again later.")
-            DirectoryFailure.HTTP -> RecipientLookupUiState.Failed("Lookup failed. Try again later.")
-            DirectoryFailure.INVALID_RESPONSE -> RecipientLookupUiState.Failed("Unexpected server response.")
+            DirectoryFailure.NETWORK -> RecipientLookupUiState.Failed("Network unreachable. Try again later.", RecipientLookupUiState.Failure.NETWORK)
+            DirectoryFailure.HTTP -> RecipientLookupUiState.Failed("Lookup failed. Try again later.", RecipientLookupUiState.Failure.LOOKUP)
+            DirectoryFailure.INVALID_RESPONSE -> RecipientLookupUiState.Failed("Unexpected server response.", RecipientLookupUiState.Failure.SERVER)
         }
     }
 }

@@ -23,6 +23,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -49,6 +54,8 @@ fun RecipientConfirmationScreen(
     onCancel: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var activating by remember(snapshot) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val travel by animateDpAsState(
@@ -65,7 +72,14 @@ fun RecipientConfirmationScreen(
                     interactionSource = interaction,
                     indication = null,
                     role = Role.Button,
-                    onClick = onConfirm,
+                    enabled = !activating,
+                    onClick = {
+                        if (!activating) {
+                            activating = true
+                            onConfirm()
+                            scope.launch { delay(110L); activating = false }
+                        }
+                    },
                 ),
         ) {
             Box(Modifier.matchParentSize().offset(y = 6.dp).background(HoldColors.LilacEdge, cardShape))

@@ -1,6 +1,7 @@
 package dev.hryshyn.remanence.ui.create
 
 import androidx.compose.ui.res.stringResource
+import androidx.annotation.StringRes
 import dev.hryshyn.remanence.R
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -101,6 +102,7 @@ fun CreateScreen(
     val publishError by viewModel.publishError.collectAsStateWithLifecycle()
     val flowError by viewModel.flowError.collectAsStateWithLifecycle()
     val revokeStatus by viewModel.revokeStatus.collectAsStateWithLifecycle()
+    val uploadRetrying by viewModel.uploadRetrying.collectAsStateWithLifecycle()
     var showRevokeConfirmation by remember { mutableStateOf(false) }
     val motion = rememberAstraMotion()
 
@@ -125,16 +127,8 @@ fun CreateScreen(
     // the first mount (no stacked root alpha) and animates only on step
     // changes; the outgoing step is dropped synchronously.
     //
-    // COMPOSE is a bounded viewport on tall screens (frozen
-    // `.expression{overflow:hidden}` pane): no root scroll, so the chooser
-    // art-space measures real remaining space and the whole sheet + footer
-    // fit. On crowded screens (height<=640dp or fontScale>=1.6, frozen
-    // handoff frame/data-crowded rule) the expression scrolls and the
-    // art-space is a fixed 280.dp (handoff crowded art-space) instead of
-    // the tiny weight remainder. Every other step keeps the scrollable
-    // root for small phones (FIX-STATE-04). The typed guard stays a
-    // direct child of this scrolling column, so it is reachable by
-    // scroll on crowded screens instead of clipped off-column.
+    // CONTENT/COMPOSE have their own bounded pane above; only later status
+    // steps use this scrolling column to keep messages/actions reachable.
     Column(modifier.fillMaxSize()) {
     HoldFlowHeader(
         onBack = {
@@ -231,46 +225,61 @@ fun CreateScreen(
                             modifier = Modifier.testTag("create_publishing_spinner"),
                         )
                         Spacer(Modifier.height(8.dp))
-                        Text("Encrypting locally...", modifier = Modifier.testTag("create_publishing"))
+                        Text(stringResource(R.string.create_audit_encrypting), modifier = Modifier.testTag("create_publishing"))
                     }
-                    CreateViewModel.Step.UPLOAD_PENDING -> when (val status = uploadStatus) {
+                    CreateViewModel.Step.UPLOAD_PENDING -> Column {
+                    when (val status = if (publishError != null && uploadStatus !is CreateViewModel.CreateUploadStatus.Published &&
+                        uploadStatus !is CreateViewModel.CreateUploadStatus.TerminalFailure)
+                        CreateViewModel.CreateUploadStatus.RetryableFailure("QUEUE_FAILED") else uploadStatus) {
                         is CreateViewModel.CreateUploadStatus.RetryableFailure -> Text(
-                            createUploadPendingCopy(status),
+                            stringResource(createUploadPendingCopy(status)),
                             modifier = Modifier.testTag("create_upload_retryable_failure"),
                         )
                         is CreateViewModel.CreateUploadStatus.TerminalFailure -> Text(
-                            createUploadPendingCopy(status),
+                            stringResource(createUploadPendingCopy(status)),
                             color = MaterialTheme.colorScheme.error,
                             modifier = Modifier.testTag("create_upload_terminal_failure"),
                         )
                         else -> Text(
-                            createUploadPendingCopy(status),
+                            stringResource(createUploadPendingCopy(status)),
                             modifier = Modifier.testTag("create_upload_pending"),
                         )
                     }
+                    if (uploadStatus !is CreateViewModel.CreateUploadStatus.TerminalFailure &&
+                        (uploadStatus is CreateViewModel.CreateUploadStatus.RetryableFailure || publishError != null)) {
+                        Spacer(Modifier.height(16.dp))
+                        ForwardAction(stringResource(R.string.create_audit_retry), "create_retry_upload",
+                            viewModel::retryUpload, enabled = !uploadRetrying, busy = uploadRetrying)
+                    } else if (uploadStatus is CreateViewModel.CreateUploadStatus.TerminalFailure) {
+                        Spacer(Modifier.height(16.dp))
+                        Button(onClick = onExit, modifier = Modifier.testTag("create_terminal_home")) {
+                            Text(stringResource(R.string.create_audit_return_home))
+                        }
+                    }
+                    }
                     CreateViewModel.Step.PUBLISHED -> Column {
                         Text(
-                            "Capsule sealed. Send the physical postcard.",
+                            stringResource(R.string.create_audit_published),
                             modifier = Modifier.testTag("create_published"),
                         )
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            "Cancellation stops future delivery when possible. A copy already received or decrypted by the recipient cannot be removed.",
+                            stringResource(R.string.create_audit_revoke_disclaimer),
                             modifier = Modifier.testTag("create_revoke_disclaimer"),
                         )
                         Spacer(Modifier.height(8.dp))
                         when (val status = revokeStatus) {
                             CreateViewModel.CapsuleRevokeStatus.Idle -> Unit
                             CreateViewModel.CapsuleRevokeStatus.InFlight -> Text(
-                                "Cancelling capsule...",
+                                stringResource(R.string.create_audit_revoke_inflight),
                                 modifier = Modifier.testTag("create_revoke_in_flight"),
                             )
                             is CreateViewModel.CapsuleRevokeStatus.Succeeded -> Text(
-                                "Capsule cancelled for future delivery. A copy already received or decrypted by the recipient is not removed.",
+                                stringResource(R.string.create_audit_revoke_success),
                                 modifier = Modifier.testTag("create_revoke_success"),
                             )
                             is CreateViewModel.CapsuleRevokeStatus.Failed -> Text(
-                                createRevokeCopy(status),
+                                stringResource(createRevokeCopy(status)),
                                 color = MaterialTheme.colorScheme.error,
                                 modifier = Modifier.testTag("create_revoke_error"),
                             )
@@ -281,7 +290,7 @@ fun CreateScreen(
                             enabled = revokeActionEnabled(revokeStatus),
                             modifier = Modifier.testTag("create_revoke_button"),
                         ) {
-                            Text("Cancel capsule")
+                            Text(stringResource(R.string.create_audit_revoke_confirm))
                         }
                     }
                 }
@@ -292,13 +301,13 @@ fun CreateScreen(
         val guard = flowError
         if (guard != null && step != CreateViewModel.Step.PUBLISHING) {
             Spacer(Modifier.height(8.dp))
-            Text(text = guard, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("create_guard_error"))
+            Text(text = stringResource(R.string.create_audit_guard), color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("create_guard_error"))
         }
 
         val error = publishError
-        if (error != null && step != CreateViewModel.Step.PUBLISHING) {
+        if (error != null && step != CreateViewModel.Step.PUBLISHING && step != CreateViewModel.Step.UPLOAD_PENDING) {
             Spacer(Modifier.height(8.dp))
-            Text(text = error, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("create_error"))
+            Text(text = stringResource(R.string.create_audit_publish_error), color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("create_error"))
         }
     }
     }
@@ -307,10 +316,10 @@ fun CreateScreen(
     if (showRevokeConfirmation && step == CreateViewModel.Step.PUBLISHED) {
         AlertDialog(
             onDismissRequest = { showRevokeConfirmation = false },
-            title = { Text("Cancel this capsule?") },
+            title = { Text(stringResource(R.string.create_audit_revoke_title)) },
             text = {
                 Text(
-                    "This stops future delivery if the recipient has not already received it. A copy already received or decrypted by the recipient cannot be removed.",
+                    stringResource(R.string.create_audit_revoke_body),
                 )
             },
             confirmButton = {
@@ -321,13 +330,13 @@ fun CreateScreen(
                     },
                     enabled = revokeActionEnabled(revokeStatus),
                     modifier = Modifier.testTag("create_revoke_confirm"),
-                ) { Text("Cancel capsule", color = HoldColors.Destructive) }
+                ) { Text(stringResource(R.string.create_audit_revoke_confirm), color = HoldColors.Destructive) }
             },
             dismissButton = {
                 TextButton(
                     onClick = { showRevokeConfirmation = false },
                     modifier = Modifier.testTag("create_revoke_dismiss"),
-                ) { Text("Keep capsule") }
+                ) { Text(stringResource(R.string.create_audit_revoke_keep)) }
             },
         )
     }
@@ -348,6 +357,13 @@ private fun RecipientLookupContent(viewModel: CreateViewModel) {
                 singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
                 modifier = Modifier.fillMaxWidth().testTag("create_handle_input"),
             )
+            if (handle.isNotEmpty() && runCatching {
+                    dev.hryshyn.remanence.core.model.NormalizedHandle.parse(handle)
+                }.isFailure) {
+                Text(stringResource(R.string.create_audit_handle_rule), color = HoldColors.Error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.testTag("create_handle_rule"))
+            }
             selfAccount?.let { account ->
                 Text(stringResource(R.string.recipient_design_or),
                     color = HoldColors.Muted, style = MaterialTheme.typography.bodySmall,
@@ -370,7 +386,7 @@ private fun RecipientLookupContent(viewModel: CreateViewModel) {
             when (val current = state) {
                 is RecipientLookupUiState.Resolved -> LaunchedEffect(current.snapshot) { viewModel.onResolved(current.snapshot) }
                 RecipientLookupUiState.NotFound -> Text(stringResource(R.string.hold_no_handle))
-                is RecipientLookupUiState.Failed -> Text(current.message, color = MaterialTheme.colorScheme.error)
+                is RecipientLookupUiState.Failed -> Text(stringResource(createLookupFailureCopy(current.reason)), color = MaterialTheme.colorScheme.error)
                 else -> Unit
             }
         }
@@ -393,7 +409,7 @@ private fun RecipientConfirmContent(viewModel: CreateViewModel) {
         // fail closed with an explicit error instead of an eternal blank screen.
         Column {
             Text(
-                "No resolved recipient is pending. Resolve the handle again.",
+                stringResource(R.string.create_audit_lookup_missing),
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.testTag("create_confirm_missing_pending"),
             )
@@ -401,7 +417,7 @@ private fun RecipientConfirmContent(viewModel: CreateViewModel) {
             Button(
                 onClick = viewModel::restartLookup,
                 modifier = Modifier.testTag("create_confirm_back_to_lookup"),
-            ) { Text("Back to handle lookup") }
+            ) { Text(stringResource(R.string.create_audit_lookup_back)) }
         }
         return
     }
@@ -456,7 +472,7 @@ private fun ContentStepContent(
                     style = MaterialTheme.typography.bodySmall, color = HoldColors.Muted,
                     modifier = Modifier.weight(1f).testTag("create_selection_count"))
                 if (pickedIds.isNotEmpty()) {
-                    TextButton(onClick = pickPhotos, modifier = Modifier.testTag("create_pick_photos")) {
+                    TextButton(onClick = pickPhotos, enabled = !preparing, modifier = Modifier.testTag("create_pick_photos")) {
                         Text(stringResource(R.string.create_change_photographs),
                             style = MaterialTheme.typography.bodySmall)
                     }
@@ -488,11 +504,8 @@ private fun ContentStepContent(
                 onSelect = viewModel::setMusicSelection, onClearSelection = viewModel::clearMusicSelection,
             )
             val preview by viewModel.generatorPreview.collectAsStateWithLifecycle()
-            val notice = viewModel.collageChoices.notice ?: when (preview) {
-                is GeneratorPreviewState.Unavailable, is GeneratorPreviewState.Incompatible,
-                is GeneratorPreviewState.Rejected -> stringResource(R.string.create_no_fitting_expression)
-                else -> null
-            }
+            val notice = createPreviewNotice(preview)?.let { stringResource(it) }
+                ?: viewModel.collageChoices.notice?.let { stringResource(R.string.create_no_fitting_expression) }
             if (notice != null) Text(notice, color = HoldColors.Muted,
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(vertical = 12.dp).testTag("collage_notice"))
@@ -547,12 +560,18 @@ internal fun PickedPhotoTiles(
                                     modifier = Modifier.fillMaxSize().testTag("create_photo_tile_image_$index"),
                                     contentScale = androidx.compose.ui.layout.ContentScale.Crop,
                                 )
-                            } else {
+                            } else if (!thumbnails.containsKey(uri)) {
                                 androidx.compose.material3.CircularProgressIndicator(
                                     strokeWidth = 1.dp,
                                     modifier = Modifier.size(20.dp).align(Alignment.Center)
                                         .testTag("create_photo_tile_pending_$index"),
                                 )
+                            } else {
+                                Text(stringResource(R.string.create_audit_thumbnail_failed),
+                                    style = MaterialTheme.typography.labelSmall, color = HoldColors.Muted,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.align(Alignment.Center).padding(6.dp)
+                                        .testTag("create_photo_tile_failed_$index"))
                             }
                             Box(Modifier.align(Alignment.BottomEnd).padding(5.dp).size(20.dp)
                                 .background(if (included) HoldColors.Accent else HoldColors.Paper, RoundedCornerShape(50))
@@ -569,24 +588,6 @@ internal fun PickedPhotoTiles(
         }
     }
 }
-
-/**
- * Frozen crowded-expression predicate (handoff frame/data-crowded rule):
- * height<=640dp or fontScale>=1.6. Extracted pure so the full decision
- * matrix (including tall viewports unreachable under the Robolectric
- * window cap) is JVM-testable; [CreateScreen] calls exactly this.
- *
- * Native measurement note (peer F4): this measures the Compose content
- * box (available height at the screen root), not the full device height
- * frame.mjs uses — on inset-less phones they agree (the 320x640 QA device
- * is crowded under both). Devices at 641–~690dp total height with content
- * ≤640dp take the crowded branch in-app while frozen data-crowded would
- * not; that narrow band is a documented measurement choice, not a
- * product blocker. The fontScale arm matches frame.mjs data-largeType
- * exactly.
- */
-internal fun isCrowdedExpression(maxHeight: androidx.compose.ui.unit.Dp, fontScale: Float): Boolean =
-    maxHeight <= 640.dp || fontScale >= 1.6f
 
 /**
  * T150 explicit composition browsing surface (spec `expression`/`selected`):
@@ -628,7 +629,7 @@ private fun ContentAndCompositionFlow(
             if (!session.isPreparing && !viewModel.isResolvingMusicArtwork && session.candidates.isNotEmpty()) {
                 viewModel.goToCompose()
                 awaitingComposition = false
-            } else if (session.notice != null || preview is GeneratorPreviewState.Unavailable ||
+            } else if (preview is GeneratorPreviewState.Idle || session.notice != null || preview is GeneratorPreviewState.Unavailable ||
                 preview is GeneratorPreviewState.Rejected || preview is GeneratorPreviewState.Incompatible) {
                 awaitingComposition = false
             }
@@ -638,6 +639,7 @@ private fun ContentAndCompositionFlow(
     val back = {
         when {
             cropSlot != null -> { viewModel.closeCrop(); Unit }
+            awaitingComposition -> { awaitingComposition = false; Unit }
             reviewing -> reviewing = false
             step == CreateViewModel.Step.COMPOSE && frozen != null -> viewModel.clearFrozenCollageSelection()
             step == CreateViewModel.Step.COMPOSE -> { viewModel.backToContent(); Unit }
@@ -651,7 +653,9 @@ private fun ContentAndCompositionFlow(
             if (step == CreateViewModel.Step.COMPOSE) 18.dp else HoldSpace.pageGutter())
             .padding(bottom = 16.dp)) {
             if (step == CreateViewModel.Step.CONTENT) {
-                ContentStepContent(viewModel, awaitingComposition, publishError ?: flowError) { awaitingComposition = true }
+                ContentStepContent(viewModel, awaitingComposition,
+                    if (publishError != null) stringResource(R.string.create_audit_publish_error)
+                    else if (flowError != null) stringResource(R.string.create_audit_guard) else null) { awaitingComposition = true }
             }
             CollageStepChooser(
                 viewModel,
@@ -669,7 +673,7 @@ private fun ContentAndCompositionFlow(
                                     onBack = { viewModel.closeCrop() },
                                     modifier = Modifier.weight(1f).fillMaxWidth(),
                                 )
-                                if (flowError != null) Text(flowError!!, color = MaterialTheme.colorScheme.error,
+                                if (flowError != null) Text(stringResource(R.string.create_audit_guard), color = MaterialTheme.colorScheme.error,
                                     style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("create_guard_error"))
                             }
                         } else {
@@ -706,7 +710,7 @@ private fun ContentAndCompositionFlow(
                                     )
                                 }
                                 val error = flowError ?: publishError
-                                if (error != null) Text(error, color = MaterialTheme.colorScheme.error,
+                                if (error != null) Text(stringResource(if (publishError != null) R.string.create_audit_publish_error else R.string.create_audit_guard), color = MaterialTheme.colorScheme.error,
                                     style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("create_guard_error"))
                             }
                         }
@@ -791,13 +795,26 @@ private fun CollageStepChooser(
     }
 }
 
-private fun collageStepNotice(preview: GeneratorPreviewState): String = when (preview) {
-    GeneratorPreviewState.Idle -> "Select 3–5 photos to see collage variants."
-    GeneratorPreviewState.Loading -> "Preparing collage variants…"
-    is GeneratorPreviewState.Rejected -> "Collage unavailable: ${preview.reasons.joinToString("; ")}"
-    is GeneratorPreviewState.Incompatible -> "This photo mix can't be previewed: ${preview.reason}"
-    is GeneratorPreviewState.Unavailable -> "Collage unavailable: ${preview.reason}"
-    else -> "Collage unavailable."
+@StringRes
+internal fun createPreviewNotice(preview: GeneratorPreviewState): Int? = when (preview) {
+    is GeneratorPreviewState.Rejected -> when {
+        "select 3..5 photos" in preview.reasons -> R.string.create_audit_photos_count
+        "photos must be unique" in preview.reasons -> R.string.create_audit_photos_duplicate
+        "the note exceeds its byte limit" in preview.reasons -> R.string.create_note_too_long
+        else -> R.string.create_no_fitting_expression
+    }
+    is GeneratorPreviewState.Unavailable -> if (preview.reason == "could not read a selected photo")
+        R.string.create_audit_photos_unreadable else R.string.create_audit_preview_unavailable
+    is GeneratorPreviewState.Incompatible -> R.string.create_no_fitting_expression
+    else -> null
+}
+
+@StringRes
+internal fun createLookupFailureCopy(reason: RecipientLookupUiState.Failure): Int = when (reason) {
+    RecipientLookupUiState.Failure.NETWORK -> R.string.create_audit_lookup_network
+    RecipientLookupUiState.Failure.SIGN_IN -> R.string.create_audit_lookup_signin
+    RecipientLookupUiState.Failure.SERVER -> R.string.create_audit_lookup_server
+    else -> R.string.create_audit_lookup_failed
 }
 
 /**
@@ -805,11 +822,12 @@ private fun collageStepNotice(preview: GeneratorPreviewState): String = when (pr
  * [CreateViewModel.CreateUploadStatus] error codes stay on the status object
  * for logic and diagnostics and must never be interpolated here.
  */
-internal fun createUploadPendingCopy(status: CreateViewModel.CreateUploadStatus): String =
+@StringRes
+internal fun createUploadPendingCopy(status: CreateViewModel.CreateUploadStatus): Int =
     when (status) {
-        is CreateViewModel.CreateUploadStatus.RetryableFailure -> "Send needs a retry."
-        is CreateViewModel.CreateUploadStatus.TerminalFailure -> "Send failed permanently."
-        else -> "Encrypted capsule queued. Upload will continue in the background."
+        is CreateViewModel.CreateUploadStatus.RetryableFailure -> R.string.create_audit_upload_retry
+        is CreateViewModel.CreateUploadStatus.TerminalFailure -> R.string.create_audit_upload_terminal
+        else -> R.string.create_audit_upload_pending
     }
 
 private fun revokeActionEnabled(status: CreateViewModel.CapsuleRevokeStatus): Boolean =
@@ -823,15 +841,16 @@ private fun revokeActionEnabled(status: CreateViewModel.CapsuleRevokeStatus): Bo
                 status.reason != dev.hryshyn.remanence.core.data.network.CapsuleRevokeFailure.CAPSULE_NOT_FOUND
     }
 
-internal fun createRevokeCopy(status: CreateViewModel.CapsuleRevokeStatus.Failed): String =
+@StringRes
+internal fun createRevokeCopy(status: CreateViewModel.CapsuleRevokeStatus.Failed): Int =
     when (status.reason) {
         dev.hryshyn.remanence.core.data.network.CapsuleRevokeFailure.NETWORK ->
-            "Connect to the internet to cancel this capsule, then try again."
+            R.string.create_audit_revoke_network
         dev.hryshyn.remanence.core.data.network.CapsuleRevokeFailure.WINDOW_EXPIRED,
         dev.hryshyn.remanence.core.data.network.CapsuleRevokeFailure.CAPSULE_STATE_INVALID,
         dev.hryshyn.remanence.core.data.network.CapsuleRevokeFailure.CAPSULE_NOT_FOUND,
-        -> "This capsule can no longer be cancelled."
+        -> R.string.create_audit_revoke_expired
         dev.hryshyn.remanence.core.data.network.CapsuleRevokeFailure.AUTH_INVALID ->
-            "Your session expired. Sign in again."
-        else -> "Couldn’t cancel the capsule. Try again."
+            R.string.create_audit_session_expired
+        else -> R.string.create_audit_revoke_failed
     }

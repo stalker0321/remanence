@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Test
 import dev.hryshyn.remanence.core.data.network.CapsuleRevokeFailure
+import dev.hryshyn.remanence.R
 
 /**
  * User-facing Create send copy must stay fixed. Persisted last_error_code
@@ -26,17 +27,15 @@ class CreateUploadStatusCopyTest {
             val terminal = createUploadPendingCopy(
                 CreateViewModel.CreateUploadStatus.TerminalFailure(code),
             )
-            assertEquals("Send needs a retry.", retryable)
-            assertEquals("Send failed permanently.", terminal)
-            assertFalse(retryable.contains(code))
-            assertFalse(terminal.contains(code))
+            assertEquals(R.string.create_audit_upload_retry, retryable)
+            assertEquals(R.string.create_audit_upload_terminal, terminal)
         }
         assertEquals(
-            "Send needs a retry.",
+            R.string.create_audit_upload_retry,
             createUploadPendingCopy(CreateViewModel.CreateUploadStatus.RetryableFailure(null)),
         )
         assertEquals(
-            "Send failed permanently.",
+            R.string.create_audit_upload_terminal,
             createUploadPendingCopy(CreateViewModel.CreateUploadStatus.TerminalFailure(null)),
         )
     }
@@ -46,13 +45,19 @@ class CreateUploadStatusCopyTest {
         val success = createRevokeCopy(
             CreateViewModel.CapsuleRevokeStatus.Failed(CapsuleRevokeFailure.NETWORK, true),
         )
-        assertEquals("Connect to the internet to cancel this capsule, then try again.", success)
+        assertEquals(R.string.create_audit_revoke_network, success)
 
         val terminal = createRevokeCopy(
             CreateViewModel.CapsuleRevokeStatus.Failed(CapsuleRevokeFailure.WINDOW_EXPIRED, false),
         )
-        assertEquals("This capsule can no longer be cancelled.", terminal)
-        assertFalse(success.contains("delete", ignoreCase = true))
-        assertFalse(terminal.contains("delete", ignoreCase = true))
+        assertEquals(R.string.create_audit_revoke_expired, terminal)
+    }
+
+    @Test
+    fun previewReasonsSelectUsefulFixedCopyRatherThanInternalText() {
+        assertEquals(R.string.create_audit_photos_count, createPreviewNotice(GeneratorPreviewState.Rejected(listOf("select 3..5 photos"))))
+        assertEquals(R.string.create_audit_photos_unreadable, createPreviewNotice(GeneratorPreviewState.Unavailable("could not read a selected photo")))
+        assertEquals(R.string.create_note_too_long, createPreviewNotice(GeneratorPreviewState.Rejected(listOf("the note exceeds its byte limit"))))
+        assertEquals(R.string.create_audit_preview_unavailable, createPreviewNotice(GeneratorPreviewState.Unavailable("private-hostname")))
     }
 }

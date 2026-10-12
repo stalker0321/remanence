@@ -214,6 +214,7 @@ class FrontCaptureFlow(
         attempt: CaptureAttemptController,
     ): FrontCaptureOutcome {
         val owner = ownerCounter.incrementAndGet()
+        val expectedAttemptId = attempt.attemptId
         // A stale or non-capturing delivery is structurally inert.
         if (!attempt.markProcessing()) {
             handoffQueue.clear(owner)
@@ -241,6 +242,10 @@ class FrontCaptureFlow(
                 }
                 result
             }
+            if (attempt.attemptId != expectedAttemptId || attempt.phase != CaptureAttemptPhase.Processing) {
+                handoffQueue.clear(owner)
+                return FrontCaptureOutcome.Superseded
+            }
             return when (processed) {
                 is ProcessedStill.Rejected -> {
                     // Quality failure: no persistence, controller shows Rejected.
@@ -251,6 +256,9 @@ class FrontCaptureFlow(
                     val id = withContext(ioDispatcher) {
                         createRepository(persistence, owner).captureFront(capsuleId)
                     }
+                    if (attempt.attemptId != expectedAttemptId || attempt.phase != CaptureAttemptPhase.Processing) {
+                        return FrontCaptureOutcome.Superseded
+                    }
                     attempt.accept()
                     FrontCaptureOutcome.Captured(id, processed.advisoryQualityReasons)
                 }
@@ -259,13 +267,17 @@ class FrontCaptureFlow(
             // Clean lifecycle completion: no terminal result is published for
             // this attempt, and nothing stays queued.
             handoffQueue.clear(owner)
-            attempt.cancelActiveAttempt()
+            // A delayed cancelled CPU/IO callback must not cancel a newer
+            // capture started with the same controller after route re-entry.
+            if (attempt.attemptId == expectedAttemptId) attempt.cancelActiveAttempt()
             throw cancelled
         } catch (failure: Exception) {
             handoffQueue.clear(owner)
             val message = failure.message ?: "capture failed"
-            attempt.fail(message)
-            return FrontCaptureOutcome.Failed(message)
+            return if (attempt.attemptId == expectedAttemptId && attempt.hasActiveAttempt) {
+                attempt.fail(message)
+                FrontCaptureOutcome.Failed(message)
+            } else FrontCaptureOutcome.Superseded
         } catch (failure: Error) {
             // Fatal failures are not converted into a UI outcome, but an
             // accepted processor result may already be queued for persistence.

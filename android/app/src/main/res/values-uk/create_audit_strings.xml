@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="create_audit_encrypting">Шифруємо на пристрої…</string>
+    <string name="create_audit_guard">Цей крок більше недоступний. Повернись назад і спробуй ще раз.</string>
+    <string name="create_audit_publish_error">Не вдалося підготувати капсулу. Твій вибір збережено; спробуй ще раз.</string>
+    <string name="create_audit_upload_retry">Потрібно повторити надсилання.</string>
+    <string name="create_audit_upload_terminal">Не вдалося надіслати цю капсулу.</string>
+    <string name="create_audit_upload_pending">Зашифрована капсула в черзі. Надсилання продовжиться у фоні.</string>
+    <string name="create_audit_retry">Повторити надсилання</string>
+    <string name="create_audit_return_home">На головний екран</string>
+    <string name="create_audit_published">Капсулу запечатано. Надішли фізичну листівку.</string>
+    <string name="create_audit_revoke_disclaimer">Скасування за можливості зупинить майбутню доставку. Копію, яку одержувач уже отримав або розшифрував, видалити неможливо.</string>
+    <string name="create_audit_revoke_inflight">Скасовуємо капсулу…</string>
+    <string name="create_audit_revoke_success">Подальшу доставку капсули скасовано. Уже отримана або розшифрована копія залишається в одержувача.</string>
+    <string name="create_audit_revoke_title">Скасувати цю капсулу?</string>
+    <string name="create_audit_revoke_body">Це зупинить майбутню доставку, якщо одержувач ще не отримав капсулу. Уже отриману або розшифровану копію видалити неможливо.</string>
+    <string name="create_audit_revoke_confirm">Скасувати капсулу</string>
+    <string name="create_audit_revoke_keep">Залишити капсулу</string>
+    <string name="create_audit_revoke_network">Підключись до інтернету й спробуй скасувати капсулу ще раз.</string>
+    <string name="create_audit_revoke_expired">Цю капсулу більше неможливо скасувати.</string>
+    <string name="create_audit_session_expired">Сесія завершилась. Увійди знову.</string>
+    <string name="create_audit_revoke_failed">Не вдалося скасувати капсулу. Спробуй ще раз.</string>
+    <string name="create_audit_lookup_missing">Знайди й підтвердь одержувача знову.</string>
+    <string name="create_audit_lookup_back">Повернутись до пошуку</string>
+    <string name="create_audit_lookup_network">Перевір з’єднання та спробуй ще раз.</string>
+    <string name="create_audit_lookup_signin">Увійди знову, щоб знайти одержувача.</string>
+    <string name="create_audit_lookup_failed">Зараз не вдалося знайти одержувача. Спробуй ще раз.</string>
+    <string name="create_audit_lookup_server">Не вдалося прочитати відповідь сервера. Спробуй ще раз.</string>
+    <string name="create_audit_photos_count">Вибери 3–5 фотографій, щоб продовжити.</string>
+    <string name="create_audit_photos_unreadable">Не вдалося прочитати фотографію. Вибери її знову або заміни іншою.</string>
+    <string name="create_audit_photos_duplicate">Вибери різні фотографії.</string>
+    <string name="create_audit_preview_unavailable">Перегляд недоступний. Повернись назад і спробуй ще раз.</string>
+    <string name="create_audit_thumbnail_failed">Немає перегляду</string>
+    <string name="create_audit_capture_timeout">Камера не відповіла вчасно. Перезніми листівку.</string>
+    <string name="create_audit_crop_grid">Сітка кадрування</string>
+    <string name="create_audit_handle_rule">3–30 символів: a–z, 0–9, _ або .</string>
+</resources>

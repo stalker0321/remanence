@@ -412,6 +412,35 @@ class CreateContentPublishRecoveryTest {
             ?.joinToString("") { it.text } ?: ""
     }
 
+    @Test
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    fun failedEnqueueRetriesTheExactDurableCiphertextWithoutSealingAgain() = runBlocking {
+        var attempts = 0
+        val gate = CompletableDeferred<SenderIdentitySnapshot>().apply { complete(senderIdentity()) }
+        val (vm, persistence, _) = contentStage(identityGate = gate, enqueueUpload = { _, _ ->
+            attempts++
+            if (attempts == 1) throw java.io.IOException("private-hostname")
+        })
+        vm.onPhotosPicked(listOf("p1", "p2", "p3"))
+        CollageFreezeFixture.freezeFirstCandidate(vm)
+        assertTrue(vm.goToCompose())
+        vm.startPublishing()
+        awaitStep(vm, CreateViewModel.Step.UPLOAD_PENDING)
+        val dao = database.outboxCapsuleDao()
+        val staged = requireNotNull(dao.getByCapsuleIdAndOwner(vm.capsuleId, userUuid.toString()))
+        val reads = persistence.decryptIds.size
+        assertEquals(OutboxCapsuleState.ENCRYPTED, staged.state)
+        composeRule.setContent { MaterialTheme { CreateScreen(vm) } }
+        composeRule.onNodeWithTag("create_retry_upload").performClick()
+        composeRule.waitForIdle()
+        assertEquals(2, attempts)
+        assertEquals(staged, dao.getByCapsuleIdAndOwner(vm.capsuleId, userUuid.toString()))
+        assertEquals(reads, persistence.decryptIds.size)
+        assertEquals(CreateViewModel.Step.UPLOAD_PENDING, vm.step.value)
+        assertTrue(vm.publishError.value == null)
+        assertTrue(!vm.uploadRetrying.value)
+    }
+
     // ------------------------------------------------------------------
     // Publishing progress, failure recovery, single side effects.
     // ------------------------------------------------------------------

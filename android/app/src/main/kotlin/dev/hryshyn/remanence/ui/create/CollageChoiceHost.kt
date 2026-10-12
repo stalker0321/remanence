@@ -165,7 +165,9 @@ internal fun CollageChoiceHost(
                     }
                 } else {
                     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        Text(if (session.isPreparing) preparingCopy else session.notice ?: noFitCopy,
+                        // Admission diagnostics remain in session state only;
+                        // never expose internal English reasons as UI copy.
+                        Text(if (session.isPreparing) preparingCopy else noFitCopy,
                             modifier = Modifier.testTag("collage_notice"))
                     }
                 }

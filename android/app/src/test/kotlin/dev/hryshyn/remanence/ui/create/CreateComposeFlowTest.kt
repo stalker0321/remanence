@@ -212,6 +212,24 @@ class CreateComposeFlowTest {
         assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
     }
 
+    @Test
+    fun pickerCancellationPreservesInventoryPreviewAndFrozenChoice() {
+        val vm = newViewModel()
+        driveToContent(vm)
+        awaitReadyPreview(vm)
+        CollageFreezeFixture.freezeFirstCandidate(vm)
+        val frozen = vm.frozenCollageSelection
+        val preview = vm.generatorPreview.value
+        val capsule = vm.capsuleId
+        vm.onPhotosPicked(emptyList())
+        assertEquals(listOf("content://0", "content://1", "content://2"), vm.photoSelection.selectedIds)
+        assertEquals(vm.photoSelection.selectedIds, vm.pickedPhotoIds.value)
+        assertEquals(preview, vm.generatorPreview.value)
+        assertEquals(frozen, vm.frozenCollageSelection)
+        assertEquals(capsule, vm.capsuleId)
+        assertTrue(vm.photoSelection.canProceed)
+    }
+
     private fun awaitReadyPreview(vm: CreateViewModel) {
         val deadline = System.currentTimeMillis() + 10_000
         while (vm.generatorPreview.value !is GeneratorPreviewState.Ready) {

@@ -65,6 +65,44 @@ class FrontCaptureFlowTest {
         persistence = FakePersistence()
     }
 
+    @Test
+    fun cancelledOldProcessorCannotCancelNewAttemptOnSharedController() = runBlocking {
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val jpeg = byteArrayOf(1, 2, 3)
+        val canonical = CanonicalSiftFingerprintFixture.bytes(seed = 6)
+        Executors.newSingleThreadExecutor().asCoroutineDispatcher().use { cpu ->
+            val controller = capturingController()
+            val flow = FrontCaptureFlow(StillProcessor {
+                entered.countDown()
+                check(release.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                ProcessedStill.Accepted("postcard-sift-rootsift-v1", canonical)
+            }, cpu, Dispatchers.Unconfined)
+            val old = launch(Dispatchers.Default) {
+                flow.onJpegDelivered(jpeg, CAPSULE_ID, persistence, controller)
+            }
+            try {
+                assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                old.cancel()
+                controller.reset()
+                controller.onPermissionResult(true, false)
+                controller.onPreviewBound()
+                val newAttempt = controller.beginAttempt()
+                release.countDown()
+                old.join()
+                assertEquals(newAttempt, controller.attemptId)
+                assertEquals(CaptureAttemptPhase.Capturing, controller.phase)
+                assertTrue(jpeg.all { it == 0.toByte() })
+                assertTrue(canonical.all { it == 0.toByte() })
+                assertTrue(persistence.persisted.isEmpty())
+            } finally {
+                release.countDown()
+                old.cancel()
+                old.join()
+            }
+        }
+    }
+
     /** Drives a controller to Capturing exactly as the production UI does. */
     private fun capturingController(): CaptureAttemptController =
         CaptureAttemptController().apply {

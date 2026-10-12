@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="create_audit_encrypting">Encrypting locally…</string>
+    <string name="create_audit_guard">This step is no longer available. Go back and try again.</string>
+    <string name="create_audit_publish_error">Couldn’t prepare this capsule. Your choices are kept; try again.</string>
+    <string name="create_audit_upload_retry">Send needs a retry.</string>
+    <string name="create_audit_upload_terminal">This capsule couldn’t be sent.</string>
+    <string name="create_audit_upload_pending">Encrypted capsule queued. Upload will continue in the background.</string>
+    <string name="create_audit_retry">Retry send</string>
+    <string name="create_audit_return_home">Back to home</string>
+    <string name="create_audit_published">Capsule sealed. Send the physical postcard.</string>
+    <string name="create_audit_revoke_disclaimer">Cancellation stops future delivery when possible. A copy already received or decrypted by the recipient cannot be removed.</string>
+    <string name="create_audit_revoke_inflight">Cancelling capsule…</string>
+    <string name="create_audit_revoke_success">Capsule cancelled for future delivery. A copy already received or decrypted by the recipient is not removed.</string>
+    <string name="create_audit_revoke_title">Cancel this capsule?</string>
+    <string name="create_audit_revoke_body">This stops future delivery if the recipient has not already received it. A copy already received or decrypted by the recipient cannot be removed.</string>
+    <string name="create_audit_revoke_confirm">Cancel capsule</string>
+    <string name="create_audit_revoke_keep">Keep capsule</string>
+    <string name="create_audit_revoke_network">Connect to the internet to cancel this capsule, then try again.</string>
+    <string name="create_audit_revoke_expired">This capsule can no longer be cancelled.</string>
+    <string name="create_audit_session_expired">Your session expired. Sign in again.</string>
+    <string name="create_audit_revoke_failed">Couldn’t cancel the capsule. Try again.</string>
+    <string name="create_audit_lookup_missing">Find and confirm the recipient again.</string>
+    <string name="create_audit_lookup_back">Back to handle lookup</string>
+    <string name="create_audit_lookup_network">Check the connection, then try again.</string>
+    <string name="create_audit_lookup_signin">Sign in again to find this person.</string>
+    <string name="create_audit_lookup_failed">Couldn’t find this person right now. Try again.</string>
+    <string name="create_audit_lookup_server">Couldn’t read the server response. Try again.</string>
+    <string name="create_audit_photos_count">Choose 3–5 photographs to continue.</string>
+    <string name="create_audit_photos_unreadable">A photograph couldn’t be read. Choose it again or pick another.</string>
+    <string name="create_audit_photos_duplicate">Choose different photographs.</string>
+    <string name="create_audit_preview_unavailable">The preview is unavailable. Go back and try again.</string>
+    <string name="create_audit_thumbnail_failed">Preview unavailable</string>
+    <string name="create_audit_capture_timeout">The camera took too long. Retake the postcard.</string>
+    <string name="create_audit_crop_grid">Crop grid</string>
+    <string name="create_audit_handle_rule">3–30 characters: a–z, 0–9, _ or .</string>
+</resources>

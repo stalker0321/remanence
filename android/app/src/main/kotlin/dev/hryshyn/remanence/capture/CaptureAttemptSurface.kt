@@ -158,6 +158,15 @@ fun CaptureAttemptSurface(
     showGuideInstruction: Boolean = true,
 ) {
     val context = LocalContext.current
+    val captureTimeoutCopy = stringResource(R.string.create_audit_capture_timeout)
+    val capturePhase = controller.phase
+    val captureAttemptId = controller.attemptId
+    LaunchedEffect(controller, capturePhase, captureAttemptId) {
+        if (capturePhase == CaptureAttemptPhase.Capturing) {
+            kotlinx.coroutines.delay(20_000L)
+            controller.expireStillCapture(captureAttemptId, captureTimeoutCopy)
+        }
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -384,9 +393,16 @@ private fun LivePreviewContent(
                 label = shutterLabel,
                 onClick = {
                     if (onBeginAttempt()) {
+                        val expectedAttemptId = controller.attemptId
                         adapter.captureStill(
-                            onDelivered = onDelivered,
-                            onError = { reason -> controller.fail(reason) },
+                            onDelivered = { bytes ->
+                                if (controller.attemptId == expectedAttemptId &&
+                                    controller.phase == CaptureAttemptPhase.Capturing) onDelivered(bytes)
+                                else bytes.fill(0)
+                            },
+                            onError = { reason ->
+                                controller.expireStillCapture(expectedAttemptId, reason)
+                            },
                         )
                     }
                 },

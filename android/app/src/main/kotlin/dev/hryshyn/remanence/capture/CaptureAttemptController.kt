@@ -220,6 +220,10 @@ class CaptureAttemptController {
     fun fail(message: String): Boolean =
         terminate { CaptureAttemptPhase.Failed(attemptId, message) }
 
+    /** A watchdog may fail only the same still capture, never newer work. */
+    fun expireStillCapture(expectedAttemptId: Long, message: String): Boolean =
+        if (attemptId == expectedAttemptId && phase == CaptureAttemptPhase.Capturing) fail(message) else false
+
     private inline fun terminate(compute: () -> CaptureAttemptPhase): Boolean =
         when (phase) {
             is CaptureAttemptPhase.Capturing, is CaptureAttemptPhase.Processing -> {

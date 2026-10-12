@@ -109,6 +109,7 @@ fun CropStageContent(
     val currentTransform by rememberUpdatedState(transform)
     val currentUpdate by rememberUpdatedState(onUpdate)
     val density = LocalDensity.current
+    val cropGridDescription = stringResource(R.string.create_audit_crop_grid)
     BoxWithConstraints(modifier.fillMaxWidth().testTag("crop_stage")) {
         // Production provides bounded height; the fallback supports embedded previews.
         val editorHeight = if (constraints.hasBoundedHeight) maxHeight else 540.dp
@@ -202,7 +203,7 @@ fun CropStageContent(
                             with(density) { (retained.width * imageWidthPx).toFloat().toDp() },
                             with(density) { (retained.height * imageHeightPx).toFloat().toDp() },
                         ).semantics {
-                            contentDescription = "crop grid"
+                            contentDescription = cropGridDescription
                             stateDescription = windowState(retained)
                         }.testTag("crop_frame"),
                     ) {

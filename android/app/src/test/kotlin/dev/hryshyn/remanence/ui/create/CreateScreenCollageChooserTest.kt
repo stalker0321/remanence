@@ -486,6 +486,17 @@ class CreateScreenCollageChooserTest {
         composeRule.onNodeWithTag("create_next").assertIsNotEnabled()
         composeRule.onNodeWithTag("collage_canvas").assertDoesNotExist()
 
+        // The pending arrival has a bounded escape: Back cancels only the
+        // wait, not the front capture or selected content. A late empty picker
+        // callback is neutral and cannot invalidate its in-flight build.
+        composeRule.runOnIdle { vm.onPhotosPicked(emptyList()) }
+        composeRule.onNodeWithTag("create_pick_photos").assertIsNotEnabled()
+        composeRule.onNodeWithTag("flow_back_create").performClick()
+        composeRule.waitForIdle()
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        assertEquals(ids, vm.photoSelection.selectedIds)
+        composeRule.onNodeWithTag("create_next").assertIsEnabled().performClick()
+
         gate.complete(Unit)
         composeRule.waitUntil(10_000) { vm.step.value == CreateViewModel.Step.COMPOSE }
         composeRule.waitForIdle()
@@ -534,7 +545,7 @@ class CreateScreenCollageChooserTest {
 
     @Test
     @Config(sdk = [35], qualifiers = "w400dp-h900dp")
-    fun tallViewportKeepsBoundedPaneWithoutScroll() {
+    fun tallViewportKeepsCanvasAndActionsWithinBoundedPane() {
         // A genuinely tall window, not an oversized child whose pinned
         // actions fall below the real display.
         val ids = listOf("u1", "u2", "u3")

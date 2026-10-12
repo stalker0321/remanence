@@ -42,6 +42,9 @@ internal object AllFamilyV4Adapter {
         style: StyleRegistry.Style,
         artwork: GeneratorExpression.ArtworkRef? = null,
     ): Outcome {
+        if (style.grammar != candidate.grammarId) {
+            return Outcome.Rejected(listOf("style belongs to another grammar"))
+        }
         val slotByContent = HashMap<String, Int>()
         candidate.placements.forEach { slotByContent[it.contentId] = it.slotIndex }
         val placements = ArrayList<GeneratorExpression.Placement>(input.photos.size)
@@ -154,7 +157,11 @@ internal object AllFamilyV4Adapter {
      * different bundled style of the same grammar.
      */
     fun styleForGrammar(grammarId: Int): StyleRegistry.Style? =
-        StyleRegistry.ids.sorted().firstNotNullOfOrNull { id ->
+        stylesForGrammar(grammarId).firstOrNull()
+
+    /** Every authored colour/type variant; all still pass seal and real prepare. */
+    fun stylesForGrammar(grammarId: Int): List<StyleRegistry.Style> =
+        StyleRegistry.ids.sorted().mapNotNull { id ->
             StyleRegistry.style(id)?.takeIf { it.grammar == grammarId }
         }
 

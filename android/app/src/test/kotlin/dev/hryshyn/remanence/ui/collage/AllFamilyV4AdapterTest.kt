@@ -146,4 +146,25 @@ class AllFamilyV4AdapterTest {
         assertEquals(23, style(23).grammar)
         assertNull(AllFamilyV4Adapter.styleForGrammar(99))
     }
+
+    @Test
+    fun allAuthoredStylesAreEnumeratedOnceForTheirOwnGrammar() {
+        val styles = FrozenGrammarPlans.ACTIVE_GRAMMAR_IDS.flatMap(AllFamilyV4Adapter::stylesForGrammar)
+        assertEquals(StyleRegistry.ids, styles.map { it.id }.toSet())
+        assertEquals(StyleRegistry.ids.size, styles.size)
+        assertTrue(AllFamilyV4Adapter.stylesForGrammar(5).size > 1)
+        assertTrue(AllFamilyV4Adapter.stylesForGrammar(23).size > 1)
+        assertTrue(AllFamilyV4Adapter.stylesForGrammar(99).isEmpty())
+    }
+
+    @Test
+    fun paletteVariantsSealDistinctExpressionsWithoutChangingPhotoGeometry() {
+        val expressions = AllFamilyV4Adapter.stylesForGrammar(23).map { style ->
+            (AllFamilyV4Adapter.seal(candidate(), input(), "Alice", style) as AllFamilyV4Adapter.Outcome.Sealed).expression
+        }
+        assertTrue(expressions.size > 1)
+        assertEquals(expressions.size, expressions.map { it.style!!.styleId }.toSet().size)
+        assertEquals(1, expressions.map { it.placements }.toSet().size)
+        assertTrue(AllFamilyV4Adapter.seal(candidate(), input(), "Alice", style(5)) is AllFamilyV4Adapter.Outcome.Rejected)
+    }
 }

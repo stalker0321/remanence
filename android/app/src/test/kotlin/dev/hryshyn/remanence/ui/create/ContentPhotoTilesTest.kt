@@ -8,6 +8,8 @@ import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -280,8 +282,8 @@ class ContentPhotoTilesTest {
         // view (throws if absent) to prove all four tiles + checks + images.
         repeat(4) { index ->
             composeRule.onNodeWithTag("create_photo_tile_$index").performScrollTo()
-            composeRule.onNodeWithTag("create_photo_tile_check_$index").assertIsDisplayed()
-            composeRule.onNodeWithTag("create_photo_tile_image_$index").assertIsDisplayed()
+            composeRule.onNodeWithTag("create_photo_tile_check_$index", useUnmergedTree = true).assertIsDisplayed()
+            composeRule.onNodeWithTag("create_photo_tile_image_$index", useUnmergedTree = true).assertIsDisplayed()
         }
         composeRule.onNodeWithTag("create_photo_tile_0").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("create_selection_count")
@@ -303,9 +305,47 @@ class ContentPhotoTilesTest {
         composeRule.waitForIdle()
         repeat(3) { index ->
             composeRule.onNodeWithTag("create_photo_tile_$index").performScrollTo()
-            composeRule.onNodeWithTag("create_photo_tile_check_$index").assertIsDisplayed()
+            composeRule.onNodeWithTag("create_photo_tile_check_$index", useUnmergedTree = true).assertIsDisplayed()
         }
         composeRule.onNodeWithTag("create_selection_count")
             .assertTextContains("choose 3–5 photographs · 3")
+    }
+
+    @Test
+    fun tileTogglesInclusionWithoutLosingInventoryOrThumbnailsAndKeepsThreePhotoGate() {
+        val vm = newViewModel()
+        val ids = listOf("content://a", "content://b", "content://c")
+        driveToContent(vm, ids)
+        val thumbnails = vm.pickedThumbnails.value
+        composeRule.setContent { MaterialTheme { CreateScreen(vm, requestPermissionOnAttach = false) } }
+        composeRule.onNodeWithTag("create_photo_tile_0").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        assertEquals(ids.drop(1), vm.photoSelection.selectedIds)
+        assertEquals(ids, vm.pickedPhotoIds.value)
+        assertEquals(thumbnails, vm.pickedThumbnails.value)
+        composeRule.onNodeWithTag("create_photo_tile_0").assertIsDisplayed()
+        composeRule.onNodeWithTag("create_photo_tile_check_0", useUnmergedTree = true).assertDoesNotExist()
+        composeRule.onNodeWithTag("create_next").assertIsNotEnabled()
+        composeRule.onNodeWithTag("create_photo_tile_0").performClick()
+        composeRule.waitForIdle()
+        assertTrue(vm.photoSelection.canProceed)
+        assertEquals(ids.toSet(), vm.photoSelection.selectedIds.toSet())
+        composeRule.onNodeWithTag("create_photo_tile_check_0", useUnmergedTree = true).assertExists()
+        vm.endSession()
+        assertTrue(vm.pickedPhotoIds.value.isEmpty())
+    }
+
+    @Test
+    fun allDeselectedInventoryRemainsAndForeignTileCannotBeAdded() {
+        val vm = newViewModel()
+        val ids = listOf("content://a", "content://b", "content://c")
+        driveToContent(vm, ids)
+        ids.forEach(vm::togglePickedPhoto)
+        assertTrue(vm.photoSelection.selectedIds.isEmpty())
+        assertEquals(ids, vm.pickedPhotoIds.value)
+        vm.togglePickedPhoto("content://foreign")
+        assertTrue(vm.photoSelection.selectedIds.isEmpty())
+        vm.togglePickedPhoto(ids.first())
+        assertEquals(listOf(ids.first()), vm.photoSelection.selectedIds)
     }
 }

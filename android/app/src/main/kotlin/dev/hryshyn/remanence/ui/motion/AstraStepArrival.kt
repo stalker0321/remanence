@@ -22,12 +22,12 @@ import kotlinx.coroutines.launch
  *
  * - First mount snaps to rest: it composes under the root boundary Carry,
  *   so replaying alpha/travel on top of it would double the fade
- *   (0.72 × 0.72) and stack travel. Later step changes animate.
+ *   and stack travel. Later step changes animate.
  * - The outgoing step is removed synchronously: no exit fade, no retained
  *   private content, no navigation delay. The incoming step is interactive
  *   as soon as it is composed; the animation is purely graphical.
  * - Regimes reuse the [AstraMotionSpec] tokens via [rememberAstraMotion]:
- *   FULL is the 340 ms routine Carry (gentle dissolve + travel),
+ *   FULL is the product routine Carry (gentle dissolve + travel),
  *   REDUCED_SHORT is the 80 ms alpha-only crossfade (no travel),
  *   INSTANT snaps with zero duration.
  */
@@ -62,9 +62,9 @@ private fun StepArrivalContent(
     content: @Composable () -> Unit,
 ) {
     val atRest = snapFirst || motion == AstraMotionSpec.Resolved.INSTANT
-    val alpha = remember(motion) { Animatable(if (atRest) 1f else 0.72f) }
+    val alpha = remember(motion) { Animatable(if (atRest) 1f else AstraMotionSpec.ARRIVAL_ALPHA) }
     val offset = remember(motion) {
-        Animatable(if (!snapFirst && motion == AstraMotionSpec.Resolved.FULL) 8f else 0f)
+        Animatable(if (!snapFirst && motion == AstraMotionSpec.Resolved.FULL) AstraMotionSpec.ARRIVAL_OFFSET_DP else 0f)
     }
     val density = LocalDensity.current
 

@@ -104,7 +104,9 @@ fun RootScreen(
 
     CompositionLocalProvider(LocalAstraCarryFront provides carryFront) {
     when (destination) {
-        AppDestination.Settings -> key(destination) { settingsContent() }
+        AppDestination.Settings -> key(destination) {
+            AstraContextArrival(motion, modifier.fillMaxSize(), contentKey = destination) { settingsContent() }
+        }
         // Create owns its step-aware back arrow and pinned close control.
         // The root owns only the route boundary and session lifecycle.
         AppDestination.Create -> key(destination) {

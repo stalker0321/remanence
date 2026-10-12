@@ -1,7 +1,9 @@
 package dev.hryshyn.remanence.ui.motion
 
 /**
- * Astra fidelity motion tokens for scan/capture/result surfaces.
+ * Astra motion tokens for scan/capture/result surfaces.
+ * T176 product revision: calmer durations and softer travel on owner feedback;
+ * the original study below remains an immutable reference, not current timing.
  *
  * Authoritative source: the design study first implementation —
  * `/home/vodkolyan/Remanence-design/design/motion/motion-original.mjs`
@@ -17,23 +19,26 @@ package dev.hryshyn.remanence.ui.motion
  */
 object AstraMotionSpec {
 
-    /** Routine context change, continuous Carry (`motion.mjs`, `model.mjs:7`). */
-    const val ROUTINE_CONTEXT_MS = 340
+    /** Calmer product routine Carry; originally340ms in the study. */
+    const val ROUTINE_CONTEXT_MS = 520
 
-    /** Image handoff range, continuous Carry (`model.mjs:7`). */
-    const val IMAGE_TRAVEL_MIN_MS = 420
+    /** Calmer product image handoff range; originally420..480ms. */
+    const val IMAGE_TRAVEL_MIN_MS = 540
 
     /**
      * Image handoff used by Compose presence transitions: the midpoint of
-     * the authored 420–480 ms range. The range bounds stay pinned by tests.
+     * the product 540–620 ms range. The range bounds stay pinned by tests.
      */
-    const val IMAGE_TRAVEL_MS = 450
+    const val IMAGE_TRAVEL_MS = 580
 
     /** Image handoff range upper bound. */
-    const val IMAGE_TRAVEL_MAX_MS = 480
+    const val IMAGE_TRAVEL_MAX_MS = 620
 
     /** Physical-to-digital opening, one overlapping movement (`motion.mjs:92`). */
-    const val OPENING_MS = 680
+    const val OPENING_MS = 820
+
+    const val ARRIVAL_ALPHA = .85f
+    const val ARRIVAL_OFFSET_DP = 4f
 
     /**
      * Reduced-motion replacement: a single short crossfade, no travel, no
@@ -45,8 +50,8 @@ object AstraMotionSpec {
     /** `gentle` default easing (`motion-original.mjs:2`). cubic-bezier(.2,.75,.25,1). */
     val EASING_GENTLE = floatArrayOf(0.2f, 0.75f, 0.25f, 1.0f)
 
-    /** Continuous-Carry travel easing (`motion.mjs:5`). cubic-bezier(.22,.64,.2,1). */
-    val EASING_TRAVEL = floatArrayOf(0.22f, 0.64f, 0.2f, 1.0f)
+    /** Softer initial velocity, no spring/overshoot; T176 product revision. */
+    val EASING_TRAVEL = floatArrayOf(0.24f, 0.4f, 0.22f, 1.0f)
 
     /** Continuous-Carry dissolve easing (`motion.mjs:6`). cubic-bezier(.32,0,.28,1). */
     val EASING_DISSOLVE = floatArrayOf(0.32f, 0.0f, 0.28f, 1.0f)

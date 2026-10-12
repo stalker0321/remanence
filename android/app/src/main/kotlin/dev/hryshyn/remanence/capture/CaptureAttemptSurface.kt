@@ -483,8 +483,8 @@ private fun ProcessingContent(
             } else {
                 Box(Modifier.matchParentSize().background(dev.hryshyn.remanence.ui.hold.HoldColors.Field)
                     .testTag("capture_processing_neutral"), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = dev.hryshyn.remanence.ui.hold.HoldColors.Accent,
-                        strokeWidth = 2.dp)
+                    // ProcessingStatus below owns the single progress indicator.
+                    // Do not flash the raw JPEG here while recognition runs.
                 }
             }
         }

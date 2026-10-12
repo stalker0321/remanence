@@ -344,10 +344,33 @@ class CreateRecipientConfirmFlowTest {
         assertNotNull(vm.pendingRecipient.value)
 
         composeRule.onNodeWithTag("cancel_button").performClick()
+        composeRule.waitForIdle()
 
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
         assertNull(vm.pendingRecipient.value)
         assertNull(vm.confirmedRecipient.value)
+        assertEquals("vodkolyan", vm.pickerVm.handle.value)
+        assertEquals(RecipientLookupUiState.Idle, vm.pickerVm.state.value)
+        composeRule.onNodeWithTag("create_handle_input").assertIsDisplayed()
+        composeRule.onNodeWithTag("confirm_button").assertDoesNotExist()
+    }
+
+    @Test
+    fun headerBackClearsResolvedStateInsteadOfImmediatelyReenteringConfirmation() {
+        val vm = viewModel(ScriptedDirectory(mapOf("vodkolyan" to selfSnapshot)))
+        vm.beginSession(1L)
+        setContent(vm)
+        resolveThroughUi("vodkolyan")
+        composeRule.onNodeWithTag("flow_back_create").performClick()
+        composeRule.waitForIdle()
+        assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
+        assertEquals("vodkolyan", vm.pickerVm.handle.value)
+        assertEquals(RecipientLookupUiState.Idle, vm.pickerVm.state.value)
+        assertNull(vm.pendingRecipient.value)
+        composeRule.onNodeWithTag("confirm_button").assertDoesNotExist()
+        composeRule.onNodeWithTag("create_lookup_button").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("confirm_button").assertIsDisplayed()
     }
 
     @Test

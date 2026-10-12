@@ -56,7 +56,7 @@ class AstraOpeningCarryTest {
         motion: AstraMotionSpec.Resolved,
         frontRect: OpeningRect? = front,
     ) {
-        // Frozen virtual clock: the 680 ms opening must be observable
+        // Virtual clock: the opening must be observable
         // mid-flight (auto-advance would run it to completion during idle).
         composeRule.mainClock.autoAdvance = false
         composeRule.setContent {
@@ -92,7 +92,7 @@ class AstraOpeningCarryTest {
         composeRule.onNodeWithTag("astra_opening_bridge").assertIsDisplayed()
         composeRule.onNodeWithTag("astra_opening_front").assertIsDisplayed()
 
-        composeRule.mainClock.advanceTimeBy(700L)
+        composeRule.mainClock.advanceTimeBy(AstraMotionSpec.OPENING_MS.toLong() + 32L)
         composeRule.waitForIdle()
 
         // Synchronous removal at t = d: no leftover card after close.

@@ -1,12 +1,16 @@
 package dev.hryshyn.remanence.ui.capsule
 
 import android.graphics.Bitmap
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.swipeLeft
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
 import dev.hryshyn.remanence.ui.capsule.music.StreamingService
@@ -151,6 +155,40 @@ class CollagePresentationHostTest {
         composeRule.onNodeWithTag("capsule_track_card").assertDoesNotExist()
         composeRule.onNodeWithTag("capsule_music_region").assertDoesNotExist()
         composeRule.onNodeWithTag("collage_music_play_cue", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun photoOpensOriginalPagerAndCloseReturnsToSealedCanvas() {
+        val state = loadedState(expressionV3())
+        var validations = 0
+        composeRule.setContent { CollagePresentationHost(state, "collage", onClose = {}, validateExport = { validations++ }) }
+        composeRule.onNodeWithTag("capsule_photo_region_0").performClick()
+        composeRule.onNodeWithTag("capsule_photo_dialog").assertIsDisplayed()
+        composeRule.onNodeWithTag("capsule_photo_page_count").assertTextEquals("1 / 3")
+        composeRule.onNodeWithTag("capsule_photo_pager").performTouchInput { swipeLeft() }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("capsule_photo_page_count").assertTextEquals("2 / 3")
+        assertTrue(validations >= 2)
+        composeRule.onNodeWithTag("capsule_photo_close").performClick()
+        composeRule.onNodeWithTag("capsule_photo_dialog").assertDoesNotExist()
+        composeRule.onNodeWithTag("collage_canvas").assertExists()
+        assertTrue(state.status is CollagePresentationState.Status.Ready)
+    }
+
+    @Test
+    fun closingPresentationDropsOriginalModalAndExpiredGrantCannotOpenOne() {
+        var state by androidx.compose.runtime.mutableStateOf(loadedState(expressionV3()))
+        var valid by androidx.compose.runtime.mutableStateOf(true)
+        var closed = 0
+        composeRule.setContent { CollagePresentationHost(state, "collage", onClose = { closed++ }, validateExport = { check(valid) }) }
+        composeRule.onNodeWithTag("capsule_photo_region_0").performClick()
+        composeRule.onNodeWithTag("capsule_photo_dialog").assertExists()
+        composeRule.runOnIdle { state.close() }
+        composeRule.onNodeWithTag("capsule_photo_dialog").assertDoesNotExist()
+        composeRule.runOnIdle { state = loadedState(expressionV3()); valid = false }
+        composeRule.onNodeWithTag("capsule_photo_region_0").performClick()
+        composeRule.onNodeWithTag("capsule_photo_dialog").assertDoesNotExist()
+        assertEquals(1, closed)
     }
 
     @Test

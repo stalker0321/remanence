@@ -22,7 +22,7 @@ class AstraOpeningSpecTest {
 
     @Test
     fun openingBudgetMatchesTheFreeze() {
-        assertEquals(680, AstraMotionSpec.openingMs(AstraMotionSpec.Resolved.FULL))
+        assertEquals(820, AstraMotionSpec.openingMs(AstraMotionSpec.Resolved.FULL))
         assertEquals(80, AstraMotionSpec.openingMs(AstraMotionSpec.Resolved.REDUCED_SHORT))
         assertEquals(0, AstraMotionSpec.openingMs(AstraMotionSpec.Resolved.INSTANT))
     }
@@ -75,7 +75,7 @@ class AstraOpeningSpecTest {
     fun geometryUsesTravelAndOpacityUsesDissolve() {
         assertSame(AstraMotionSpec.EASING_TRAVEL, AstraOpeningSpec.GEOMETRY_EASING)
         assertSame(AstraMotionSpec.EASING_DISSOLVE, AstraOpeningSpec.OPACITY_EASING)
-        assertArrayEquals(floatArrayOf(0.22f, 0.64f, 0.2f, 1f), AstraMotionSpec.EASING_TRAVEL, 0f)
+        assertArrayEquals(floatArrayOf(0.24f, 0.4f, 0.22f, 1f), AstraMotionSpec.EASING_TRAVEL, 0f)
         assertArrayEquals(floatArrayOf(0.32f, 0f, 0.28f, 1f), AstraMotionSpec.EASING_DISSOLVE, 0f)
     }
 

@@ -270,6 +270,10 @@ class CreateViewModel(
 
     // Content state.
     val photoSelection = PhotoSelectionState().also { it.onEdit = { invalidateGeneratorForPhotoEdit() } }
+    // Keep picker inventory separate from the active capsule selection, so a
+    // deselected tile can be selected again without reopening the system picker.
+    private val _pickedPhotoIds = MutableStateFlow<List<String>>(emptyList())
+    val pickedPhotoIds: StateFlow<List<String>> = _pickedPhotoIds.asStateFlow()
     val noteEditor = NoteEditorState().also { it.onEdit = { invalidateGeneratorForNoteEdit() } }
 
     /**
@@ -684,31 +688,40 @@ class CreateViewModel(
      * rejection), so the caller keeps the V3 provider path — a failed seal is
      * never replaced by a fake or partial candidate.
      */
-    internal suspend fun buildAllFamilySealedCandidates(): List<CollageCandidate>? {
+    internal suspend fun buildAllFamilySealedCandidates(
+        textMeasurer: dev.hryshyn.remanence.ui.collage.CollageTextMeasurer? = null,
+    ): List<CollageCandidate>? {
         // Cheap non-suspending gates first: never touch the (possibly gated)
         // identity seam unless the authoritative analysis is available.
         val input = collageChooserInput() ?: return null
         val photos = loadAllFamilyPhotos() ?: return null
         val sender = identityProvider() ?: return null
         val artwork = _musicArtwork.value
+        val familyInput = dev.hryshyn.remanence.ui.collage.AllFamilyInput(
+            id = input.ownerId, sender = sender.handle, note = input.note,
+            music = input.music != null, artwork = artwork != null, photos = photos,
+        )
+        // Production supplies the host's real font measurer. Capture its metrics
+        // on the UI thread before moving matching/solver work off-main.
+        val measure = textMeasurer?.let { text ->
+            AllFamilyCandidateProducer.prepareTextMeasurer(familyInput,
+                dev.hryshyn.remanence.ui.collage.FrozenGrammarPlans.TextMeasurer { note, width, size, line, font ->
+                    val layout = text.layout(dev.hryshyn.remanence.ui.collage.CollageRenderer.TextMeasureRequest(
+                        text = note, family = font, size = size.toInt(), weight = 400, italic = false,
+                        line = line.toInt(), maxWidth = kotlin.math.floor(width).toInt(), maxHeight = Int.MAX_VALUE,
+                    ))
+                    dev.hryshyn.remanence.ui.collage.FrozenGrammarPlans.TextMetric(layout.size.height.toDouble(), layout.lineCount)
+                })
+        } ?: dev.hryshyn.remanence.ui.collage.FrozenGrammarPlans.LINE_HEIGHT_STUB
         val outcome = withContext(ioDispatcher) {
-            AllFamilyCandidateProducer(AndroidCollageCropMatrixSource()).produce(
-                dev.hryshyn.remanence.ui.collage.AllFamilyInput(
-                    id = input.ownerId,
-                    sender = sender.handle,
-                    note = input.note,
-                    music = input.music != null,
-                    artwork = artwork != null,
-                    photos = photos,
-                ),
-            )
+            AllFamilyCandidateProducer(AndroidCollageCropMatrixSource(), measure).produce(familyInput)
         }
         if (outcome !is dev.hryshyn.remanence.ui.collage.AllFamilyOutcome.Candidates) {
             return null
         }
         val sealed = ArrayList<CollageCandidate>(outcome.candidates.size)
         for (candidate in outcome.candidates) {
-            val style = AllFamilyV4Adapter.styleForGrammar(candidate.grammarId) ?: continue
+          for (style in AllFamilyV4Adapter.stylesForGrammar(candidate.grammarId)) {
             val sealedOutcome = AllFamilyV4Adapter.seal(candidate, input, sender.handle, style, artwork)
             if (sealedOutcome !is AllFamilyV4Adapter.Outcome.Sealed) continue
             sealed += CollageCandidate(
@@ -717,6 +730,11 @@ class CreateViewModel(
                 branchId = candidate.branchId,
                 expression = sealedOutcome.expression,
             )
+          }
+        }
+        if (dev.hryshyn.remanence.BuildConfig.DEBUG) {
+            android.util.Log.d("CollagePreparation", "allFamily=${outcome.candidates.size} sealedStyles=${sealed.size} omissions=" +
+                outcome.omissions.groupingBy { it.kind }.eachCount())
         }
         return sealed.ifEmpty { null }
     }
@@ -1142,6 +1160,8 @@ class CreateViewModel(
         recipientFlow.clearTransientMaterial()
         pickerVm.reset()
         photoSelection.clear()
+        _pickedPhotoIds.value = emptyList()
+        clearPickedThumbnails()
         noteEditor.reset()
         // S2b-sender: a picker selection belongs to exactly one
         // session; a new epoch/owner must never inherit it (placed after
@@ -1336,6 +1356,11 @@ class CreateViewModel(
         recipientFlow.restartLookup()
         selfRecipientTargetUserId = null
         _selfRecipientLookupRejected.value = false
+        // The lookup screen observes Resolved and advances to confirmation.
+        // Invalidate that result (and any late lookup) BEFORE mounting it again,
+        // but retain the handle so changing recipient is not a fresh form.
+        pickerVm.onHandleChange(pickerVm.handle.value)
+        clearGuardError()
         _step.value = Step.RECIPIENT_LOOKUP
     }
 
@@ -1445,9 +1470,18 @@ class CreateViewModel(
         clearCollageDiagnostics()
         clearCropState()
         photoSelection.clear()
-        ids.forEach { id -> photoSelection.toggle(id) }
+        _pickedPhotoIds.value = ids.distinct().take(PhotoSelectionState.MAX_PHOTOS)
+        _pickedPhotoIds.value.forEach { id -> photoSelection.toggle(id) }
         refreshPickedThumbnails()
         refreshGeneratorPreview()
+    }
+
+    fun togglePickedPhoto(id: String) {
+        if (!requireStep(Step.CONTENT, "photo selection")) return
+        if (id !in _pickedPhotoIds.value) return
+        // PhotoSelection's edit callback invalidates the frozen choice and
+        // bridge proof. Unchecked photos remain thumbnails, never sealed input.
+        photoSelection.toggle(id)
     }
 
     /**
@@ -1466,6 +1500,13 @@ class CreateViewModel(
     private var pickedThumbnailEpoch = 0
     private var pickedThumbnailJob: kotlinx.coroutines.Job? = null
 
+    private fun clearPickedThumbnails() {
+        pickedThumbnailEpoch++
+        pickedThumbnailJob?.cancel()
+        pickedThumbnailJob = null
+        _pickedThumbnails.value = emptyMap()
+    }
+
     fun refreshPickedThumbnails() {
         val epoch = ++pickedThumbnailEpoch
         pickedThumbnailJob?.cancel()
@@ -1473,10 +1514,12 @@ class CreateViewModel(
             _pickedThumbnails.value = emptyMap()
             return
         }
-        val wanted = photoSelection.selectedIds.toList()
+        val wanted = (_pickedPhotoIds.value + photoSelection.selectedIds).distinct()
         pickedThumbnailJob = viewModelScope.launch(ioDispatcher) {
             val current = _pickedThumbnails.value.toMutableMap()
             current.keys.retainAll(wanted.toSet())
+            if (epoch != pickedThumbnailEpoch) return@launch
+            _pickedThumbnails.value = current.toMap()
             for (uri in wanted) {
                 if (epoch != pickedThumbnailEpoch) return@launch
                 if (current.containsKey(uri)) continue
@@ -2424,6 +2467,8 @@ class CreateViewModel(
         recipientFlow.clearTransientMaterial()
         pickerVm.reset()
         photoSelection.clear()
+        _pickedPhotoIds.value = emptyList()
+        clearPickedThumbnails()
         noteEditor.reset()
         // S2b-sender: leaving the surface drops the picker selection
         // with every other content state (see beginSession for the rationale).

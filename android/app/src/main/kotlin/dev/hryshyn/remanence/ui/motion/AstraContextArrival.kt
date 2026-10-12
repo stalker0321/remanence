@@ -18,7 +18,7 @@ import kotlinx.coroutines.launch
  *
  * Ownership: exactly one arrival per route boundary, owned by the root.
  * Inner flow steps must not wrap themselves: nesting multiplies the alpha
- * (0.72 * 0.72) and stacks travel on top of the boundary Carry.
+ * and stacks travel on top of the boundary Carry.
  *
  * This has no navigation delay. A quick destination is interactive as soon
  * as it is composed, and reduced motion removes the spatial travel entirely.
@@ -30,8 +30,8 @@ fun AstraContextArrival(
     contentKey: Any? = null,
     content: @Composable () -> Unit,
 ) {
-    val alpha = remember(motion, contentKey) { Animatable(if (motion == AstraMotionSpec.Resolved.INSTANT) 1f else 0.72f) }
-    val offset = remember(motion, contentKey) { Animatable(if (motion == AstraMotionSpec.Resolved.FULL) 8f else 0f) }
+    val alpha = remember(motion, contentKey) { Animatable(if (motion == AstraMotionSpec.Resolved.INSTANT) 1f else AstraMotionSpec.ARRIVAL_ALPHA) }
+    val offset = remember(motion, contentKey) { Animatable(if (motion == AstraMotionSpec.Resolved.FULL) AstraMotionSpec.ARRIVAL_OFFSET_DP else 0f) }
     val density = LocalDensity.current
 
     LaunchedEffect(motion, contentKey) {

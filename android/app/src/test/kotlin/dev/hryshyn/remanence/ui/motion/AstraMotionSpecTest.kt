@@ -20,23 +20,23 @@ class AstraMotionSpecTest {
 
     @Test
     fun routineContextDurationIsAuthored() {
-        assertEquals(340, AstraMotionSpec.ROUTINE_CONTEXT_MS)
+        assertEquals(520, AstraMotionSpec.ROUTINE_CONTEXT_MS)
     }
 
     @Test
     fun imageTravelSitsInsideTheAuthoredRange() {
-        assertEquals(420, AstraMotionSpec.IMAGE_TRAVEL_MIN_MS)
-        assertEquals(480, AstraMotionSpec.IMAGE_TRAVEL_MAX_MS)
+        assertEquals(540, AstraMotionSpec.IMAGE_TRAVEL_MIN_MS)
+        assertEquals(620, AstraMotionSpec.IMAGE_TRAVEL_MAX_MS)
         val travel = AstraMotionSpec.IMAGE_TRAVEL_MS
         assertTrue(
-            "image travel $travel outside 420..480",
+            "image travel $travel outside 540..620",
             travel in AstraMotionSpec.IMAGE_TRAVEL_MIN_MS..AstraMotionSpec.IMAGE_TRAVEL_MAX_MS,
         )
     }
 
     @Test
     fun openingAndReducedDurationsAreAuthored() {
-        assertEquals(680, AstraMotionSpec.OPENING_MS)
+        assertEquals(820, AstraMotionSpec.OPENING_MS)
         assertEquals(80, AstraMotionSpec.REDUCED_CROSSFADE_MS)
     }
 
@@ -48,7 +48,7 @@ class AstraMotionSpecTest {
             0f,
         )
         assertArrayEquals(
-            floatArrayOf(0.22f, 0.64f, 0.2f, 1.0f),
+            floatArrayOf(0.24f, 0.4f, 0.22f, 1.0f),
             AstraMotionSpec.EASING_TRAVEL,
             0f,
         )
@@ -83,9 +83,9 @@ class AstraMotionSpecTest {
 
     @Test
     fun fullRegimeKeepsAuthoredDurations() {
-        assertEquals(340, AstraMotionSpec.routineMs(AstraMotionSpec.Resolved.FULL))
-        assertEquals(450, AstraMotionSpec.imageTravelMs(AstraMotionSpec.Resolved.FULL))
-        assertEquals(680, AstraMotionSpec.openingMs(AstraMotionSpec.Resolved.FULL))
+        assertEquals(520, AstraMotionSpec.routineMs(AstraMotionSpec.Resolved.FULL))
+        assertEquals(580, AstraMotionSpec.imageTravelMs(AstraMotionSpec.Resolved.FULL))
+        assertEquals(820, AstraMotionSpec.openingMs(AstraMotionSpec.Resolved.FULL))
     }
 
     @Test

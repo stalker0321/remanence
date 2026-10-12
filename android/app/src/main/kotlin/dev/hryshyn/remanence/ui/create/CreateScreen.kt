@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
@@ -32,6 +34,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.Role
 import dev.hryshyn.remanence.ui.hold.HoldButton as Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
@@ -111,6 +114,10 @@ fun CreateScreen(
     if (step == CreateViewModel.Step.CONTENT || step == CreateViewModel.Step.COMPOSE) {
         ContentAndCompositionFlow(viewModel, onExit, modifier)
         return
+    }
+
+    BackHandler(enabled = step == CreateViewModel.Step.RECIPIENT_CONFIRM) {
+        viewModel.restartLookup()
     }
 
     // Motion ownership: the root owns the single boundary arrival
@@ -342,7 +349,11 @@ private fun RecipientLookupContent(viewModel: CreateViewModel) {
                 modifier = Modifier.fillMaxWidth().testTag("create_handle_input"),
             )
             selfAccount?.let { account ->
-                Spacer(Modifier.height(HoldSpace.Group))
+                Text(stringResource(R.string.recipient_design_or),
+                    color = HoldColors.Muted, style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)
+                        .testTag("create_recipient_or"))
                 HoldActionObject(
                     title = stringResource(R.string.recipient_design_self_title),
                     detail = "\u2068@" + account.handle + "\u2069",
@@ -409,6 +420,7 @@ private fun ContentStepContent(
     onContinue: () -> Unit = { viewModel.goToCompose() },
 ) {
     val selectedIds = viewModel.photoSelection.selectedIds
+    val pickedIds by viewModel.pickedPhotoIds.collectAsStateWithLifecycle()
     val pickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.PickMultipleVisualMedia(PhotoSelectionState.MAX_PHOTOS),
     ) { uris -> viewModel.onPhotosPicked(uris.map { it.toString() }) }
@@ -443,18 +455,19 @@ private fun ContentStepContent(
                 Text(stringResource(R.string.create_photographs_count, selectedIds.size),
                     style = MaterialTheme.typography.bodySmall, color = HoldColors.Muted,
                     modifier = Modifier.weight(1f).testTag("create_selection_count"))
-                if (selectedIds.isNotEmpty()) {
+                if (pickedIds.isNotEmpty()) {
                     TextButton(onClick = pickPhotos, modifier = Modifier.testTag("create_pick_photos")) {
                         Text(stringResource(R.string.create_change_photographs),
                             style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
-            if (selectedIds.isEmpty()) {
+            if (pickedIds.isEmpty()) {
                 Button(onClick = pickPhotos, modifier = Modifier.fillMaxWidth().testTag("create_pick_photos")) {
                     Text(stringResource(R.string.hold_choose_photos))
                 }
-            } else PickedPhotoTiles(selectedIds, thumbnails)
+            } else PickedPhotoTiles(pickedIds, thumbnails, selectedIds.toSet(),
+                onToggle = viewModel::togglePickedPhoto, enabled = !preparing)
             Spacer(Modifier.height(18.dp))
             OutlinedTextField(
                 value = viewModel.noteEditor.text,
@@ -495,20 +508,17 @@ private fun ContentStepContent(
 }
 
 /**
- * Frozen CONTENT selected-photo tiles (reference `photo-choice` visual
- * contract): one display-only tile per actually picked URI in selection
- * order, each with its selection check. No placeholders, no fabricated
- * items — empty selection renders nothing. Tiles are NOT interactive: tap
- * add/remove continues through the existing picker flow (the system picker
- * is authoritative per attempt), never through a tile state machine, and
- * never the Compose crop editor. Thumbnails load off-main via the VM sink;
- * a missing image keeps the tile and its check (load failure retains the
- * valid choice).
+ * Picker inventory in picker order; tapping reversibly changes inclusion.
+ * Unchecked items stay visible. Only selected IDs enter sealing/generation.
+ * A thumbnail decode failure never discards the underlying selection.
  */
 @Composable
 internal fun PickedPhotoTiles(
     selectedIds: List<String>,
     thumbnails: Map<String, androidx.compose.ui.graphics.ImageBitmap?>,
+    includedIds: Set<String> = selectedIds.toSet(),
+    onToggle: ((String) -> Unit)? = null,
+    enabled: Boolean = true,
 ) {
     if (selectedIds.isEmpty()) return
     Column(Modifier.fillMaxWidth().testTag("create_photo_tiles"),
@@ -519,11 +529,16 @@ internal fun PickedPhotoTiles(
                     val uri = ids.getOrNull(column)
                     if (uri == null) Spacer(Modifier.weight(1f)) else {
                         val index = row * 3 + column
+                        val included = uri in includedIds
+                        val label = stringResource(R.string.create_photo_selection_label, index + 1, selectedIds.size)
                         Box(Modifier.weight(1f).aspectRatio(1f).clip(RoundedCornerShape(8.dp))
                             .background(HoldColors.Field).testTag("create_photo_tile_$index")
+                            .then(if (onToggle != null) Modifier.toggleable(value = included,
+                                enabled = enabled, role = Role.Checkbox,
+                                onValueChange = { onToggle(uri) }) else Modifier)
                             .semantics {
-                                selected = true
-                                contentDescription = "Selected photo ${index + 1} of ${selectedIds.size}"
+                                selected = included
+                                contentDescription = label
                             }) {
                             val bitmap = thumbnails[uri]
                             if (bitmap != null) {
@@ -540,9 +555,11 @@ internal fun PickedPhotoTiles(
                                 )
                             }
                             Box(Modifier.align(Alignment.BottomEnd).padding(5.dp).size(20.dp)
-                                .background(HoldColors.Accent, RoundedCornerShape(50)),
+                                .background(if (included) HoldColors.Accent else HoldColors.Paper, RoundedCornerShape(50))
+                                .border(1.5.dp, HoldColors.Accent, RoundedCornerShape(50))
+                                .testTag("create_photo_tile_indicator_$index"),
                                 contentAlignment = Alignment.Center) {
-                                Text("✓", color = HoldColors.OnAccent, style = MaterialTheme.typography.labelSmall,
+                                if (included) Text("✓", color = HoldColors.OnAccent, style = MaterialTheme.typography.labelSmall,
                                     modifier = Modifier.testTag("create_photo_tile_check_$index"))
                             }
                         }
@@ -767,7 +784,7 @@ private fun CollageStepChooser(
             frozenCandidateId = { viewModel.frozenCollageSelection?.candidateId },
             onNavigate = viewModel::clearFrozenCollageSelection, onMeasured = viewModel::onPreviewMeasured,
             onPrepared = viewModel::onCandidatePrepared, prepareInputs = viewModel.prepareInputs(),
-            onSlotTap = onSlotTap, candidateBuilder = { viewModel.buildAllFamilySealedCandidates() },
+            onSlotTap = onSlotTap, candidateBuilder = { viewModel.buildAllFamilySealedCandidates(it) },
             onMusicClick = musicAction, musicActionLabel = musicActionLabel,
             showSelectInNavigation = false, contentWrapper = contentWrapper, modifier = modifier,
         )

@@ -99,6 +99,23 @@ class AllFamilyCandidateProducerTest {
     }
 
     @Test
+    fun immutableTextSnapshotIsEquivalentAndNeverCallsUiMeasurerDuringCropWork() = runBlocking {
+        var capture = true
+        var measurements = 0
+        val source = FrozenGrammarPlans.TextMeasurer { _, _, _, line, _ ->
+            check(capture) { "UI measurer escaped into background work" }
+            measurements++
+            FrozenGrammarPlans.TextMetric(line * 2, 2)
+        }
+        val captured = AllFamilyCandidateProducer.prepareTextMeasurer(input(), source)
+        assertTrue(measurements > 0)
+        capture = false
+        val result = AllFamilyCandidateProducer(fakeMatrix(), captured).produce(input())
+        assertTrue(result is AllFamilyOutcome.Candidates)
+        assertTrue((result as AllFamilyOutcome.Candidates).candidates.isNotEmpty())
+    }
+
+    @Test
     fun blankSenderOmitsSenderMarks() = runBlocking {
         val outcome = AllFamilyCandidateProducer(fakeMatrix()).produce(input(sender = "   "))
         val result = outcome as AllFamilyOutcome.Candidates

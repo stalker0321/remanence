@@ -1,4 +1,7 @@
 <resources>
+    <string name="capsule_view_original">Переглянути фото повністю</string>
+    <string name="recipient_design_or">або</string>
+    <string name="create_photo_selection_label">Фото %1$d з %2$d</string>
     <string name="recipient_design_self_title">для себе</string>
     <string name="recipient_design_self_action">вибрати свій акаунт</string>
     <string name="recipient_design_self_unavailable">Акаунт змінився або недоступний. Знайдіть отримувача знову.</string>

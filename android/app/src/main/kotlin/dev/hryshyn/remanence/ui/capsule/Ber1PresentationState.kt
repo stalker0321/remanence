@@ -1,6 +1,10 @@
 package dev.hryshyn.remanence.ui.capsule
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.absoluteOffset
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -21,6 +25,9 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.hryshyn.remanence.R
 import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
@@ -104,6 +111,8 @@ internal fun Ber1PresentationHost(
 ) {
     if (!state.isOpen) return
     var exportReady by remember(state) { mutableStateOf(false) }
+    var originalPhoto by remember(state) { mutableStateOf<String?>(null) }
+    val photoLabel = stringResource(R.string.capsule_view_original)
     val export = rememberCapsuleImageExport { check(state.isOpen && exportReady); validateExport() }
     CapsuleSheetFrame(export, enabled = state.isOpen && exportReady, ratio = 360f / 640f,
         onClose = { state.close(); onClose() }, modifier = modifier, closeTag = "capsule_ber1_close") { sheetModifier ->
@@ -114,6 +123,21 @@ internal fun Ber1PresentationHost(
             modifier = Modifier.fillMaxSize().testTag("capsule_ber1_canvas"),
         )
         SideEffect { exportReady = result is GeneratorBer1Renderer.SceneResult.Ready }
+        if (result is GeneratorBer1Renderer.SceneResult.Ready) BoxWithConstraints(Modifier.fillMaxSize()) {
+            val scene = result.scene
+            val scale = minOf(maxWidth.value / scene.canvasWidth, maxHeight.value / scene.canvasHeight)
+            val dx = (maxWidth.value - scene.canvasWidth * scale) / 2f
+            val dy = (maxHeight.value - scene.canvasHeight * scale) / 2f
+            scene.photos.forEachIndexed { index, photo ->
+                val rect = photo.contentRect
+                Box(Modifier.absoluteOffset((dx + rect.x * scale).dp, (dy + rect.y * scale).dp)
+                    .size((rect.width * scale).dp, (rect.height * scale).dp)
+                    .clickable(role = Role.Button, onClickLabel = photoLabel) {
+                        try { check(state.isOpen && exportReady); validateExport(); originalPhoto = photo.contentId }
+                        catch (_: Exception) { state.close(); onClose() }
+                    }.semantics { contentDescription = photoLabel }.testTag("capsule_photo_region_$index"))
+            }
+        }
         if (result !is GeneratorBer1Renderer.SceneResult.Ready) {
             Text(
                 text = stringResource(R.string.capsule_route_failure),
@@ -131,6 +155,11 @@ internal fun Ber1PresentationHost(
             )
         }
       }
+    }
+    originalPhoto?.let { id ->
+        CapsulePhotoDialog(state.expression.input.photos.sortedBy { it.ordinal }.map { it.contentId }, state.bitmaps, id,
+            validateAccess = { check(state.isOpen && exportReady); validateExport() },
+            onAccessLost = { originalPhoto = null; state.close(); onClose() }, onDismiss = { originalPhoto = null })
     }
 }
 

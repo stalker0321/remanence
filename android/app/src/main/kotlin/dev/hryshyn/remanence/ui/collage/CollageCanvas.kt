@@ -273,6 +273,8 @@ fun CollageCanvas(
     artwork: ImageBitmap? = null,
     onMusicClick: (() -> Unit)? = null,
     musicActionLabel: String? = null,
+    onPhotoClick: ((String) -> Unit)? = null,
+    photoActionLabel: String? = null,
 ) {
     val imageSizes = remember(images) {
         images.mapValues { CollageRenderer.SourcePhoto(it.value.width, it.value.height) }
@@ -306,7 +308,7 @@ fun CollageCanvas(
         modifier = modifier
             .fillMaxSize()
             .testTag("collage_canvas")
-            .semantics(mergeDescendants = onMusicClick == null) {
+            .semantics(mergeDescendants = onMusicClick == null && onPhotoClick == null) {
                 this.contentDescription = contentDescription
                 role = Role.Image
             },
@@ -678,15 +680,25 @@ fun CollageCanvas(
             }
             val region = scene.music?.region ?: scene.artwork?.region
             val cue = renderOps.filterIsInstance<CollagePainter.Op.MusicPlay>().firstOrNull()?.region
-            if (region != null) BoxWithConstraints(Modifier.fillMaxSize()) {
+            if (region != null || onPhotoClick != null) BoxWithConstraints(Modifier.fillMaxSize()) {
                 val scale = min(maxWidth.value / scene.canvasWidth, maxHeight.value / scene.canvasHeight)
                 val dx = (maxWidth.value - scene.canvasWidth * scale) / 2f
                 val dy = (maxHeight.value - scene.canvasHeight * scale) / 2f
+                if (onPhotoClick != null) scene.photos.forEachIndexed { index, photo ->
+                    val rect = photo.destination
+                    Box(Modifier
+                        .absoluteOffset((dx + rect.x * scale).dp, (dy + rect.y * scale).dp)
+                        .size((rect.width * scale).dp, (rect.height * scale).dp)
+                        .clickable(role = Role.Button, onClickLabel = photoActionLabel,
+                            onClick = { onPhotoClick(photo.contentId) })
+                        .semantics { photoActionLabel?.let { this.contentDescription = it } }
+                        .testTag("capsule_photo_region_$index"))
+                }
                 if (cue != null) Box(Modifier
                     .absoluteOffset((dx + cue.x * scale).dp, (dy + cue.y * scale).dp)
                     .size((cue.width * scale).dp, (cue.height * scale).dp)
                     .testTag("collage_music_play_cue"))
-                if (onMusicClick != null) Box(Modifier
+                if (onMusicClick != null && region != null) Box(Modifier
                     .absoluteOffset((dx + region.x * scale).dp, (dy + region.y * scale).dp)
                     .size((region.width * scale).dp, (region.height * scale).dp)
                     .clickable(role = Role.Button, onClickLabel = musicActionLabel, onClick = onMusicClick)

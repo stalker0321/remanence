@@ -257,6 +257,8 @@ internal fun CollagePresentationHost(
             }
             when (result) {
                 is CollageRenderer.SceneResult.Ready -> {
+                    var originalPhoto by remember(state, images) { mutableStateOf<String?>(null) }
+                    val photoLabel = stringResource(R.string.capsule_view_original)
                     val export = rememberCapsuleImageExport(validateExport)
                     val musicAction = rememberTrackServiceAction(state.track, openTrackUrl)
                     val musicLabel = state.track?.let { stringResource(R.string.track_open_action, it.title, it.artistDisplay) }
@@ -272,7 +274,24 @@ internal fun CollagePresentationHost(
                         artwork = artwork,
                         onMusicClick = musicAction,
                         musicActionLabel = musicLabel,
+                        onPhotoClick = { id ->
+                            try {
+                                check(state.status is CollagePresentationState.Status.Ready)
+                                validateExport()
+                                originalPhoto = id
+                            } catch (_: Exception) { state.close(); onClose() }
+                        },
+                        photoActionLabel = photoLabel,
                     )
+                    }
+                    originalPhoto?.let { id ->
+                        CapsulePhotoDialog(
+                            photoIds = state.expression.input.photos.sortedBy { it.ordinal }.map { it.contentId },
+                            images = images, initialPhotoId = id,
+                            validateAccess = { check(state.status is CollagePresentationState.Status.Ready); validateExport() },
+                            onAccessLost = { originalPhoto = null; state.close(); onClose() },
+                            onDismiss = { originalPhoto = null },
+                        )
                     }
                 }
 

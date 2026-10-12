@@ -164,7 +164,7 @@ internal fun CapsuleImageExportButton(export: CapsuleImageExport, enabled: Boole
         }
     }
     HoldTextButton(onClick = { menu = true }, enabled = enabled && !busy,
-        modifier = modifier.background(HoldColors.Paper).testTag("capsule_share")) {
+        modifier = modifier.testTag("capsule_share")) {
         Text(stringResource(if (busy) R.string.capsule_export_working else R.string.capsule_export_share))
     }
     if (menu) AlertDialog(onDismissRequest = { menu = false },

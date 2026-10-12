@@ -277,6 +277,29 @@ internal class AllFamilyCandidateProducer(
         }
 
     companion object {
+        private data class TextKey(val text: String, val width: Double, val size: Double, val line: Double, val font: String)
+
+        /** Immutable plan metrics; the mutable Compose font/layout cache stays on its UI thread. */
+        fun prepareTextMeasurer(input: AllFamilyInput, source: FrozenGrammarPlans.TextMeasurer): FrozenGrammarPlans.TextMeasurer {
+            val d = FrozenGrammarPlans.Input(input.id, input.sender.trim(),
+                input.photos.map { FrozenGrammarPlans.Photo(it.contentId, it.widthPx.toDouble(), it.heightPx.toDouble(), it.hasProminentFace) },
+                input.note?.takeIf { it.isNotBlank() },
+                if (input.music) FrozenGrammarPlans.MusicInput(input.artwork) else null)
+            val captured = LinkedHashMap<TextKey, FrozenGrammarPlans.TextMetric>()
+            val collecting = FrozenGrammarPlans.TextMeasurer { text, width, size, line, font ->
+                captured.getOrPut(TextKey(text, width, size, line, font)) { source.measure(text, width, size, line, font) }
+            }
+            for (gid in FrozenGrammarPlans.ACTIVE_GRAMMAR_IDS) {
+                val def = FrozenGrammarPlans.def(gid)
+                if (!FrozenGrammarPlans.applicability(d, def).ok) continue
+                FrozenGrammarPlans.plans(d, def, FrozenGrammarPlans.noteState(d, def, collecting), collecting)
+            }
+            val snapshot = captured.toMap()
+            return FrozenGrammarPlans.TextMeasurer { text, width, size, line, font ->
+                requireNotNull(snapshot[TextKey(text, width, size, line, font)]) { "uncaptured plan text metric" }
+            }
+        }
+
         const val MIN_PHOTOS = 3
         const val MAX_PHOTOS = 5
         const val NO_ANALYSIS = "authoritative collage analysis is not available on this build"

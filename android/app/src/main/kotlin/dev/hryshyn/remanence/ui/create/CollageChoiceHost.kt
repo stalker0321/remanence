@@ -61,7 +61,7 @@ internal fun CollageChoiceHost(
     onSlotTap: ((String) -> Unit)? = null,
     onMusicClick: (() -> Unit)? = null,
     musicActionLabel: String? = null,
-    candidateBuilder: (suspend () -> List<CollageCandidate>?)? = null,
+    candidateBuilder: (suspend (CollageTextMeasurer) -> List<CollageCandidate>?)? = null,
     showSelectInNavigation: Boolean = true,
     contentWrapper: @Composable (CanvasParcel, NavParcel) -> Unit = { canvas, nav ->
         nav()
@@ -80,7 +80,7 @@ internal fun CollageChoiceHost(
         try {
             val decoded = images.ifEmpty { withContext(Dispatchers.Default) { decodeSources(sources) } }
             images = decoded
-            val sealed = candidateBuilder?.invoke()
+            val sealed = candidateBuilder?.invoke(measurer)
             val candidates = if (!sealed.isNullOrEmpty()) sealed else {
                 when (val result = CollageCandidateProvider(cropSource, measurer)
                     .candidates(input, note, track, artwork)) {

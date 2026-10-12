@@ -66,6 +66,13 @@ internal fun BetaTermsGate(repository: SafetyRepository, owner: String, onBack: 
     val context = LocalContext.current
     LaunchedEffect(owner) { state = repository.state(); failed = state == null; busy = false }
     if (state?.terms_accepted == true) { content(); return }
+    // A pending lookup is not an unaccepted user. Previously the full consent
+    // form flashed on every Home -> Create entry, then vanished after the HTTP
+    // response, making the route look like two abrupt transitions.
+    if (busy && state == null && !failed) {
+        BetaTermsPendingPage(onBack)
+        return
+    }
     BetaTermsPage(agreed = agreed, busy = busy, available = state != null, failed = failed,
         onAgree = { agreed = it }, onBack = onBack,
         onTerms = { failed = !context.openRemanenceLink("terms") },
@@ -77,6 +84,16 @@ internal fun BetaTermsGate(repository: SafetyRepository, owner: String, onBack: 
                 busy = false
             }
         })
+}
+
+@Composable
+internal fun BetaTermsPendingPage(onBack: () -> Unit) {
+    AccessPage(onBack = onBack) {
+        Box(Modifier.fillMaxSize().testTag("beta_terms_pending"),
+            contentAlignment = androidx.compose.ui.Alignment.Center) {
+            CircularProgressIndicator(color = HoldColors.Accent, strokeWidth = 2.dp)
+        }
+    }
 }
 
 /** Shared testable layout; the repository alone decides consent is saved. */

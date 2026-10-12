@@ -24,7 +24,6 @@ import dev.hryshyn.remanence.ui.home.HomeScreen
 import dev.hryshyn.remanence.ui.home.BackendHealthUiState
 import dev.hryshyn.remanence.ui.home.AccountCapabilityState
 import dev.hryshyn.remanence.ui.locale.AppLocale
-import dev.hryshyn.remanence.ui.locale.LanguageSwitchRow
 import dev.hryshyn.remanence.ui.settings.BetaTermsGateWithActions
 import kotlinx.coroutines.CompletableDeferred
 import java.io.File
@@ -46,8 +45,8 @@ class NightAuditRegressionDeviceTest {
             val density = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides Density(density.density, 1.6f)) {
                 HoldTheme { Box(Modifier.width(320.dp).height(640.dp)) {
-                    HomeScreen(BackendHealthUiState.AVAILABLE, AccountCapabilityState.SignedOut,
-                        footer = { LanguageSwitchRow(AppLocale.SYSTEM, { selected = it }) })
+                    HomeScreen(BackendHealthUiState.AVAILABLE, AccountCapabilityState.NotAuthenticated,
+                        publicEntry = true, onLocaleSelected = { selected = it })
                 } }
             }
         }

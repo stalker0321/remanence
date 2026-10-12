@@ -204,11 +204,11 @@ internal fun TrackSnapshotCard(
             HoldTextButton(
                 onClick = { pickerOpen = true; noHandler = false },
                 modifier = Modifier.testTag("capsule_track_open"),
-            ) { Text("Listen") }
+            ) { Text(stringResource(R.string.track_open_action)) }
         }
         if (noHandler) {
             Text(
-                text = "No app can open streaming links on this device.",
+                text = stringResource(R.string.track_no_handler),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.testTag("capsule_track_no_browser"),
@@ -237,13 +237,13 @@ internal fun Ber1UnsupportedPresentation(
     ) {
         Spacer(Modifier.height(24.dp))
         Text(
-            "This capsule uses a layout this version can't show.",
+            stringResource(R.string.capsule_audit_unsupported),
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.testTag("capsule_unsupported_notice"),
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            reason,
+            stringResource(R.string.capsule_audit_unsupported_detail),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error,
             modifier = Modifier.testTag("capsule_unsupported_reason"),

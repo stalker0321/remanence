@@ -1081,6 +1081,39 @@ class RootViewModelTest {
     }
 
     @Test
+    fun signedOutStartupSweepCompletesBeforeLoginUiAndDoesNotRepeatAfterLiveSession() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val resolver = MutableOutcomeResolver(SessionState.SignedOut)
+        var calls = 0
+        val vm = RootViewModel(resolver, recoverSignedOutStaging = { calls++; gate.await() })
+        assertEquals(AuthUiState.Resolving, vm.authState.value)
+        assertEquals(1, calls)
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(AuthUiState.SignedOut, vm.authState.value)
+        resolver.state = SessionState.Active("0198f0a0-0000-7000-8000-00000000c601", "mykola", true, true)
+        vm.resolveNow()
+        resolver.state = SessionState.SignedOut
+        vm.resolveNow()
+        assertEquals(1, calls) // no blanket sweep over a live publisher's files
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+    }
+
+    @Test
+    fun failedSignedOutStartupSweepRemainsRetryableWithoutPublishingLoginUi() = runTest {
+        val resolver = MutableOutcomeResolver(SessionState.SignedOut)
+        var fail = true
+        var calls = 0
+        val vm = RootViewModel(resolver, recoverSignedOutStaging = { calls++; if (fail) error("storage failure") })
+        assertEquals(AuthUiState.RequiresConnectivity, vm.authState.value)
+        fail = false
+        vm.resolveNow()
+        assertEquals(AuthUiState.SignedOut, vm.authState.value)
+        assertEquals(2, calls)
+        vm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+    }
+
+    @Test
     fun recoverCreateStagingRunsBeforeAuthenticatedPublicationAndResume() = runTest {
         val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000c601")
         val resolver = MutableOutcomeResolver(SessionState.SignedOut)

@@ -95,6 +95,8 @@ class RemanenceApplication : Application() {
         // component runs (docs/recognition.md section 4).
         org.opencv.android.OpenCVLoader.initLocal()
         container = AppContainer(this)
+        // A prior process may have died without disposing its share route.
+        runCatching { dev.hryshyn.remanence.ui.capsule.CapsuleExportFiles.sweep(this) }
     }
 }
 
@@ -338,6 +340,7 @@ class AppContainer private constructor(
     /** Per-process, per-owner Create plaintext recovery completion ledger. */
     private val createStagingSweepOwners = ConcurrentHashMap.newKeySet<String>()
     private val createStagingSweepMutex = Mutex()
+    private var startupStagingRecoveryComplete = false
     /** Keeps WorkInfo observation and KEEP enqueue one operation per owner. */
     private val incomingScheduleLocks =
         dev.hryshyn.remanence.sync.OwnerScopedIncomingScheduleLocks()
@@ -354,7 +357,23 @@ class AppContainer private constructor(
                 if (ownerText in createStagingSweepOwners) return@withLock
                 accountStorageRetention.sweepCreateStaging(owner)
                 createStagingSweepOwners += ownerText
+                startupStagingRecoveryComplete = true
             }
+        }
+    }
+
+    /** A missing/rejected refresh token must not leave prior process plaintext
+     * waiting for reauthentication. The canonical local account is attribution,
+     * not authorization; only its temporary Create files are swept, not keys,
+     * ciphertext or durable outbox. Once any live session began, route/publisher
+     * cleanup owns its inputs and this startup-only sweep cannot run again. */
+    suspend fun sweepSignedOutCreateStagingOnce() = withContext(Dispatchers.IO) {
+        createStagingSweepMutex.withLock {
+            if (startupStagingRecoveryComplete) return@withLock
+            val row = currentAccountStore.loadEntity()
+            val owner = row?.userId?.let { runCatching { UserId.parseRest(it) }.getOrNull() }
+            if (owner != null) accountStorageRetention.sweepCreateStaging(owner)
+            startupStagingRecoveryComplete = true
         }
     }
 

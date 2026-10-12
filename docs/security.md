@@ -312,8 +312,8 @@ dedicated recovery milestone passes, device loss remains honestly unrecoverable.
 - Compose state, ViewModels, SavedStateHandle, navigation arguments, analytics, and crash breadcrumbs must never contain photo bytes, private keys, capsule keysets, note text, or descriptor arrays beyond the minimal active operation.
 - Decrypt one photo at a time or with a bounded prefetch window.
 - Android secure-window screenshot blocking is a product choice, not a confidentiality guarantee; it is not required for MVP because the legitimate recipient can use another camera.
-- Clipboard/export/share intents are not provided.
-- On capsule close or grant invalidation, release bitmaps and delete any temporary plaintext cache files.
+- No automatic clipboard or plaintext export. The recipient may explicitly export the displayed capsule after a warning; external saved/shared copies cannot be revoked remotely.
+- On capsule close or grant invalidation, release bitmaps and delete temporary presentation plaintext. An explicitly shared PNG has a separate one-hour, app-private read lease (at most three files, 16 MiB each) so asynchronous recipient applications can finish reading after the chooser opens. Its URI grants and file are removed on account-boundary/logout or expiry sweeps (scheduled WorkManager plus startup/foreground; Android may delay background work). User-saved external copies are not temporary presentation files. No plaintext export is backed up.
 
 ## 13. Backend and logging hardening
 

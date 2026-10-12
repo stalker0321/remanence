@@ -129,6 +129,23 @@ class ScanReadinessTest {
     }
 
     @Test
+    fun pendingConnectivityRefreshChangesOnlyTheCurrentPendingState() {
+        seedIndexCached(ownerA)
+        connected.set(false)
+        val vm = viewModel()
+        captureMatchingPair(vm)
+        assertFalse((vm.matchState.value as ScanMatchUiState.MaterialPending).connected)
+        connected.set(true)
+        vm.refreshPendingConnectivity()
+        assertTrue((vm.matchState.value as ScanMatchUiState.MaterialPending).connected)
+        vm.resetSession()
+        val afterReset = vm.matchState.value
+        connected.set(false)
+        vm.refreshPendingConnectivity()
+        assertEquals(afterReset, vm.matchState.value)
+    }
+
+    @Test
     fun recognizedIndexCachedIncomingShowsPendingCopyNotRecapture() {
         seedIndexCached(ownerA)
         connected.set(true)

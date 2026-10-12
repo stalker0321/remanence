@@ -71,7 +71,7 @@ fun RootScreen(
         Column(modifier = modifier.fillMaxSize()) {
             if (authState is AuthUiState.RecoveryRequired) {
                 Text(
-                    "The private keys for this account are missing on this device. Signing in alone cannot restore them.",
+                    androidx.compose.ui.res.stringResource(dev.hryshyn.remanence.R.string.home_audit_recovery_required),
                     modifier = Modifier.padding(16.dp),
                 )
                 Spacer(Modifier.height(8.dp))

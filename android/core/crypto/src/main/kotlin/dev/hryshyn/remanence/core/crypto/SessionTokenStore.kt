@@ -38,7 +38,8 @@ class SessionTokenStore(
             throw GeneralSecurityException("session token must not be empty")
         }
         val aead = loadAead()
-        val sealed = aead.encrypt(encode(record), associatedData())
+        val plain = encode(record)
+        val sealed = try { aead.encrypt(plain, associatedData()) } finally { plain.fill(0) }
         directory.mkdirs()
         val target = tokenFile()
         val temporary = File(directory, "$FILE_NAME.tmp")
@@ -57,7 +58,8 @@ class SessionTokenStore(
         val file = tokenFile()
         if (!file.exists()) return null
         val aead = loadAead()
-        return decode(aead.decrypt(file.readBytes(), associatedData()))
+        val plain = aead.decrypt(file.readBytes(), associatedData())
+        return try { decode(plain) } finally { plain.fill(0) }
     }
 
     /** Removes stored material; idempotent. */
@@ -76,25 +78,26 @@ class SessionTokenStore(
     private fun encode(record: SessionRefreshRecord): ByteArray {
         val owner = record.ownerUserId.toRestString().encodeToByteArray()
         val token = record.refreshToken.encodeToByteArray()
-        val payload = ByteArray(1 + owner.size + 1 + token.size)
-        payload[0] = PAYLOAD_VERSION
-        owner.copyInto(payload, 1)
-        payload[1 + owner.size] = 0x00
-        token.copyInto(payload, 2 + owner.size)
-        return payload
+        return try {
+            val payload = ByteArray(1 + owner.size + 1 + token.size)
+            payload[0] = PAYLOAD_VERSION
+            owner.copyInto(payload, 1)
+            payload[1 + owner.size] = 0x00
+            token.copyInto(payload, 2 + owner.size)
+            payload
+        } finally { owner.fill(0); token.fill(0) }
     }
 
     private fun decode(plain: ByteArray): SessionRefreshRecord {
         if (plain.isEmpty() || plain[0] != PAYLOAD_VERSION) {
             throw GeneralSecurityException("unsupported session record")
         }
-        val rest = plain.copyOfRange(1, plain.size)
-        val separator = rest.indexOf(0)
-        if (separator <= 0 || separator >= rest.lastIndex) {
+        val separator = (1 until plain.size).firstOrNull { plain[it] == 0.toByte() } ?: -1
+        if (separator <= 1 || separator >= plain.lastIndex) {
             throw GeneralSecurityException("malformed session record")
         }
-        val ownerRaw = rest.copyOfRange(0, separator).decodeToString()
-        val token = rest.copyOfRange(separator + 1, rest.size).decodeToString()
+        val ownerRaw = plain.decodeToString(startIndex = 1, endIndex = separator)
+        val token = plain.decodeToString(startIndex = separator + 1)
         if (token.isEmpty()) {
             throw GeneralSecurityException("session token must not be empty")
         }

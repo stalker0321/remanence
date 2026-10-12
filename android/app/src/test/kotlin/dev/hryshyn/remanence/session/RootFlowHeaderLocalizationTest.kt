@@ -5,7 +5,6 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.onNodeWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hryshyn.remanence.ui.navigation.AppDestination
 import dev.hryshyn.remanence.ui.navigation.AuthUiState
@@ -16,7 +15,7 @@ import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 
 /**
- * The frozen Create back/close controls and existing Scan chrome retain
+ * The shared frozen Create/Scan back/close controls retain
  * localized accessible names in EN, RU and UK.
  */
 @RunWith(AndroidJUnit4::class)
@@ -38,8 +37,8 @@ class RootFlowHeaderLocalizationTest {
     fun englishScanFlowHeaderKeepsTheAcceptedLabels() = assertHeader(
         destination = AppDestination.Scan,
         testKey = "scan",
-        exitLabel = "Back to Home",
-        titleLabel = "scan to open",
+        exitLabel = "close",
+        titleLabel = "back",
     )
 
     @Test
@@ -56,8 +55,8 @@ class RootFlowHeaderLocalizationTest {
     fun russianScanFlowHeaderRendersTranslatedLabels() = assertHeader(
         destination = AppDestination.Scan,
         testKey = "scan",
-        exitLabel = "Назад на главную",
-        titleLabel = "отсканировать и открыть",
+        exitLabel = "закрыть",
+        titleLabel = "назад",
     )
 
     @Test
@@ -74,8 +73,8 @@ class RootFlowHeaderLocalizationTest {
     fun ukrainianScanFlowHeaderRendersTranslatedLabels() = assertHeader(
         destination = AppDestination.Scan,
         testKey = "scan",
-        exitLabel = "Назад на головну",
-        titleLabel = "сканувати й відкрити",
+        exitLabel = "закрити",
+        titleLabel = "назад",
     )
 
     private fun assertHeader(
@@ -98,14 +97,8 @@ class RootFlowHeaderLocalizationTest {
         }
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("flow_exit_$testKey").assertIsDisplayed()
-        if (destination == AppDestination.Create) {
-            composeRule.onNodeWithTag("flow_exit_create").assertContentDescriptionEquals(exitLabel)
-            composeRule.onNodeWithTag("flow_back_create").assertIsDisplayed().assertContentDescriptionEquals(titleLabel)
-            composeRule.onNodeWithTag("flow_title_create").assertDoesNotExist()
-            return
-        }
-        composeRule.onNodeWithTag("flow_title_$testKey").assertIsDisplayed()
-        composeRule.onNodeWithText(exitLabel).assertIsDisplayed()
-        composeRule.onNodeWithText(titleLabel).assertIsDisplayed()
+        composeRule.onNodeWithTag("flow_exit_$testKey").assertContentDescriptionEquals(exitLabel)
+        composeRule.onNodeWithTag("flow_back_$testKey").assertIsDisplayed().assertContentDescriptionEquals(titleLabel)
+        composeRule.onNodeWithTag("flow_title_$testKey").assertDoesNotExist()
     }
 }

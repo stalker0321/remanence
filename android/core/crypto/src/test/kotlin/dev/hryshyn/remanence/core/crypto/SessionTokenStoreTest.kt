@@ -106,6 +106,33 @@ class SessionTokenStoreTest {
         assertNull(store.load())
     }
 
+    @Test
+    fun saveAndLoadClearOwnedPlaintextBuffersAfterAeadUse() {
+        ensureKek()
+        val delegate = InMemoryKekBoundary()
+        var encoded: ByteArray? = null
+        var decrypted: ByteArray? = null
+        val boundary = object : KekBoundary by delegate {
+            override fun loadKekAead(alias: String): com.google.crypto.tink.Aead {
+                val aead = delegate.loadKekAead(alias)
+                return object : com.google.crypto.tink.Aead {
+                    override fun encrypt(plaintext: ByteArray, associatedData: ByteArray): ByteArray {
+                        encoded = plaintext
+                        return aead.encrypt(plaintext, associatedData)
+                    }
+                    override fun decrypt(ciphertext: ByteArray, associatedData: ByteArray): ByteArray =
+                        aead.decrypt(ciphertext, associatedData).also { decrypted = it }
+                }
+            }
+        }
+        val store = SessionTokenStore(tempDir.toFile(), boundary, kekAlias)
+        val record = record(token = "test-owned-token-buffer")
+        store.save(record)
+        assertTrue(checkNotNull(encoded).all { it == 0.toByte() })
+        assertEquals(record, store.load())
+        assertTrue(checkNotNull(decrypted).all { it == 0.toByte() })
+    }
+
     private fun ensureKek() {
         val boundary = InMemoryKekBoundary()
         if (!boundary.hasKey(kekAlias)) boundary.createAes256GcmKey(kekAlias)

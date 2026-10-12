@@ -1,0 +1,5 @@
+<resources>
+    <string name="capsule_audit_preparing_scan">preparing the scanner…</string>
+    <string name="capsule_audit_unsupported">this version cannot display this capsule’s layout.</string>
+    <string name="capsule_audit_unsupported_detail">update Remanence and try again. your capsule has not been changed.</string>
+</resources>

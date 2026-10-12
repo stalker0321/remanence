@@ -339,7 +339,7 @@ fun CapsuleScreen(
                     bitmap != null -> {
                         val (width, height) = capsuleSheetSize(viewportWidth, imageHeight, bitmap.width.toFloat() / bitmap.height)
                         Column(Modifier.width(width).background(HoldColors.Paper).then(export.contentModifier)) {
-                        Image(bitmap = bitmap.asImageBitmap(), contentDescription = "Capsule photo ${currentIndex + 1}",
+                        Image(bitmap = bitmap.asImageBitmap(), contentDescription = stringResource(R.string.create_photo_selection_label, currentIndex + 1, state.photoCount),
                             contentScale = ContentScale.Fit,
                             modifier = Modifier.fillMaxWidth().height(height).testTag("capsule_page_${currentIndex}"))
                         if (progress > .001f) {

@@ -49,7 +49,11 @@ class RemanenceViewModelFactory(
                 }
             },
             invalidateSessionRefreshes = { container.sessionRefreshCoordinator.invalidate() },
-            invalidateSessionBoundary = { container.sessionBoundary.invalidate() },
+            invalidateSessionBoundary = {
+                container.sessionBoundary.invalidate()
+                // Storage failures must not strand the root's logout fence.
+                runCatching { dev.hryshyn.remanence.ui.capsule.CapsuleExportFiles.sweep(container.appContext, clearAll = true) }
+            },
             // FIX-REVIEW-03: THE one authoritative grant lifecycle.
             presentationGrants = container.presentationGrants,
             resumeCapsuleUploads = { owner ->
@@ -61,6 +65,7 @@ class RemanenceViewModelFactory(
             recoverCreateStaging = { owner ->
                 container.sweepCreateStagingOnce(owner)
             },
+            recoverSignedOutStaging = { container.sweepSignedOutCreateStagingOnce() },
         ) as T
         LoginViewModel::class.java -> LoginViewModel(container.loginUseCase) as T
         dev.hryshyn.remanence.auth.GoogleAuthViewModel::class.java -> dev.hryshyn.remanence.auth.GoogleAuthViewModel(container) as T
@@ -211,6 +216,9 @@ class RemanenceViewModelFactory(
             outboxCapsuleDao = container.database.outboxCapsuleDao(),
         ) as T
         ScanViewModel::class.java -> ScanViewModel(
+            // Product Processing is intentionally neutral. Do not decode a
+            // display bitmap that no production surface consumes.
+            captureDisplayDecoder = dev.hryshyn.remanence.capture.CaptureDisplayDecoder { null },
             persistence = container.fingerprintPersistence,
             database = container.database,
             profile = dev.hryshyn.remanence.core.recognition.RecognitionProfile.postcardSiftRootSiftV1(),

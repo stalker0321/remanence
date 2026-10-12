@@ -1,0 +1,5 @@
+<resources>
+    <string name="capsule_audit_preparing_scan">готовим сканер…</string>
+    <string name="capsule_audit_unsupported">эта версия не может показать оформление капсулы.</string>
+    <string name="capsule_audit_unsupported_detail">обнови Remanence и попробуй снова. капсула не изменилась.</string>
+</resources>

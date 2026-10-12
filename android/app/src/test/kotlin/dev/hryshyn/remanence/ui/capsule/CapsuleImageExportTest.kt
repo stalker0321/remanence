@@ -62,4 +62,22 @@ class CapsuleImageExportTest {
         assertThrows(IllegalArgumentException::class.java) { CapsuleExportFiles.write(context, byteArrayOf()) }
         assertThrows(IllegalArgumentException::class.java) { CapsuleExportFiles.write(context, ByteArray(CapsuleExportFiles.MAX_BYTES + 1)) }
     }
+
+    @Test fun expirySweepDoesNotNeedAnotherShareAndKeepsActiveReaderLease() {
+        val file = CapsuleExportFiles.write(context, byteArrayOf(1))
+        val written = file.lastModified()
+        CapsuleExportFiles.sweep(context, written + CapsuleExportFiles.TTL_MILLIS - 1)
+        assertTrue(file.exists()) // asynchronous receiver can still read
+        CapsuleExportFiles.sweep(context, written + CapsuleExportFiles.TTL_MILLIS)
+        assertFalse(file.exists())
+    }
+
+    @Test fun accountBoundaryPurgesFreshOwnedExportsNotOtherCacheFiles() {
+        val file = CapsuleExportFiles.write(context, byteArrayOf(1))
+        val unrelated = File(context.cacheDir, "unrelated-test-cache").apply { writeBytes(byteArrayOf(2)) }
+        CapsuleExportFiles.sweep(context, clearAll = true)
+        assertFalse(file.exists())
+        assertTrue(unrelated.exists())
+        CapsuleExportFiles.sweep(context, clearAll = true) // idempotent
+    }
 }

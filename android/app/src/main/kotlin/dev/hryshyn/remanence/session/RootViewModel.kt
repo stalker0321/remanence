@@ -88,6 +88,8 @@ class RootViewModel internal constructor(
         },
     /** Authenticated startup cleanup before the account UI becomes visible. */
     private val recoverCreateStaging: suspend (UserId) -> Unit = {},
+    /** Cold signed-out recovery only; never delete an active publisher's inputs. */
+    private val recoverSignedOutStaging: suspend () -> Unit = {},
 ) : ViewModel() {
 
     /** Serializes root refresh requests while retaining one trailing request. */
@@ -106,6 +108,7 @@ class RootViewModel internal constructor(
      * publication, and scheduling checks observe it under [publicationFence].
      */
     private var logoutInProgress = false
+    private var startupStagingRecovered = false
     private val refreshWaiters = mutableListOf<CompletableDeferred<Unit>>()
 
     private val controller = AppNavigationController(AuthUiState.Resolving)
@@ -711,11 +714,24 @@ class RootViewModel internal constructor(
             if (!isCurrentRefresh(generation)) return
             try {
                 recoverCreateStaging(activeOwner)
+                startupStagingRecovered = true
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
                 // Do not expose the authenticated account while an in-scope
                 // plaintext recovery sweep could not complete.
+                publishIfCurrent(generation, AuthUiState.RequiresConnectivity)
+                return
+            }
+        }
+        if (next == AuthUiState.SignedOut && !startupStagingRecovered &&
+            _authState.value !is AuthUiState.Authenticated) {
+            if (!isCurrentRefresh(generation)) return
+            try {
+                recoverSignedOutStaging()
+                if (isCurrentRefresh(generation)) startupStagingRecovered = true
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) {
                 publishIfCurrent(generation, AuthUiState.RequiresConnectivity)
                 return
             }

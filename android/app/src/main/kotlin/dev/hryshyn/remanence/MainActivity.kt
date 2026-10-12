@@ -170,6 +170,7 @@ private fun RootSurface(
     // transition alongside the session refresh, so the check below re-runs.
     var healthCheckEpoch by remember { mutableIntStateOf(0) }
     ForegroundResumeEffect {
+        runCatching { dev.hryshyn.remanence.ui.capsule.CapsuleExportFiles.sweep(container.appContext) }
         // Returning from the Credential Manager dialog must not rotate the
         // session underneath its session-bound registration/setup challenge.
         if (!recoveryBusy) rootViewModel.onAppForegrounded()
@@ -199,7 +200,7 @@ private fun RootSurface(
     val loginSubmit by loginViewModel.submitState.collectAsStateWithLifecycle()
     LaunchedEffect(loginSubmit) {
         if (loginSubmit is LoginSubmitState.LoggedIn ||
-            (BuildConfig.REMANENCE_RECOVERY_ENABLED && loginSubmit is LoginSubmitState.RecoveryRequired)) {
+            loginSubmit is LoginSubmitState.RecoveryRequired) {
             rootViewModel.onSessionEstablished()
         }
     }
@@ -222,9 +223,18 @@ private fun RootSurface(
     val homeIntent by rootViewModel.homeIntent.collectAsStateWithLifecycle()
     var registering by rememberSaveable { mutableStateOf(false) }
     var showLegacyAuth by rememberSaveable { mutableStateOf(!BuildConfig.REMANENCE_GOOGLE_SIGN_IN_ENABLED) }
+    var logoutRequested by remember { mutableStateOf(false) }
     BackHandler(authState == AuthUiState.SignedOut && homeIntent != null) {
-        registering = false
-        rootViewModel.cancelHomeIntent()
+        // Consume Back while a provider request owns this surface; otherwise
+        // the activity may finish and silently cancel its composition scope.
+        if (!recoveryBusy && googleState != dev.hryshyn.remanence.auth.GoogleAuthState.Working) {
+            if (showLegacyAuth && BuildConfig.REMANENCE_GOOGLE_SIGN_IN_ENABLED) showLegacyAuth = false
+            else {
+                registering = false
+                showLegacyAuth = !BuildConfig.REMANENCE_GOOGLE_SIGN_IN_ENABLED
+                rootViewModel.cancelHomeIntent()
+            }
+        }
     }
 
     RootScreen(
@@ -245,7 +255,7 @@ private fun RootSurface(
                         HoldTextButton(enabled = !recoveryBusy, onClick = rootViewModel::onAppForegrounded) {
                             Text(stringResource(R.string.mvp_retry_connection))
                         }
-                        HoldTextButton(enabled = !recoveryBusy, onClick = rootViewModel::logout) {
+                        HoldTextButton(enabled = !recoveryBusy, onClick = { logoutRequested = true }) {
                             Text(stringResource(R.string.hold_logout), color = dev.hryshyn.remanence.ui.hold.HoldColors.Destructive)
                         }
                     }
@@ -261,13 +271,13 @@ private fun RootSurface(
                     onBack = if (authState == AuthUiState.SignedOut) ({
                         if (showLegacyAuth && BuildConfig.REMANENCE_GOOGLE_SIGN_IN_ENABLED) showLegacyAuth = false
                         else { registering = false; rootViewModel.cancelHomeIntent() }
-                    }) else null,
+                    }) else if (authState == AuthUiState.RequiresConnectivity) ({ logoutRequested = true }) else null,
                     backEnabled = !recoveryBusy && !googleWorking,
                     footer = { AccessLanguageControl(current = appLocale, onSelect = onLocaleSelected) },
                 ) {
                     if (googleViewModel.hasTicket && authState == AuthUiState.SignedOut) {
                         var handle by rememberSaveable { mutableStateOf("") }
-                        if (failed != null) HoldInformation(stringResource(if (failed.conflict) R.string.mvp_google_conflict else R.string.mvp_google_retry))
+                        if (failed != null) HoldInformation(stringResource(failed.message.resourceId))
                         HoldTextButton(enabled = !googleWorking, onClick = { googleViewModel.start(googleCredentials) }) {
                             Text(stringResource(R.string.access_google_again))
                         }
@@ -318,13 +328,13 @@ private fun RootSurface(
                             }
                             if (BuildConfig.REMANENCE_GOOGLE_SIGN_IN_ENABLED && authState == AuthUiState.SignedOut) {
                                 GoogleSignInButton(onClick = { googleViewModel.start(googleCredentials) }, enabled = !googleWorking && !recoveryBusy, busy = googleWorking)
-                                if (failed != null) Text(stringResource(if (failed.conflict) R.string.mvp_google_conflict else R.string.mvp_google_retry),
+                                if (failed != null) Text(stringResource(failed.message.resourceId),
                                     color = dev.hryshyn.remanence.ui.hold.HoldColors.Error, style = MaterialTheme.typography.bodyMedium)
                             }
                             if (!googleWorking) dev.hryshyn.remanence.recovery.RecoveryActions(container, hasIdentity = false,
                                 recoveryRequired = authState == AuthUiState.RecoveryRequired, onRecovered = rootViewModel::onSessionEstablished,
                                 onBusyChange = { recoveryBusy = it })
-                            if (authState == AuthUiState.RecoveryRequired) HoldTextButton(enabled = !recoveryBusy, onClick = rootViewModel::logout) {
+                            if (authState == AuthUiState.RecoveryRequired || authState == AuthUiState.RequiresConnectivity) HoldTextButton(enabled = !recoveryBusy, onClick = { logoutRequested = true }) {
                                 Text(stringResource(R.string.hold_logout), color = dev.hryshyn.remanence.ui.hold.HoldColors.Destructive)
                             }
                             if (BuildConfig.REMANENCE_GOOGLE_SIGN_IN_ENABLED && authState == AuthUiState.SignedOut && !googleWorking) {
@@ -356,7 +366,7 @@ private fun RootSurface(
                 )
             }
             if (authenticated != null) {
-                AuthenticatedHomeChrome(authenticated.handle, rootViewModel::logout, home,
+                AuthenticatedHomeChrome(authenticated.handle, { logoutRequested = true }, home,
                     onSettings = rootViewModel::openSettings)
             } else {
                 home()
@@ -402,7 +412,7 @@ private fun RootSurface(
                 }
                 if (BuildConfig.REMANENCE_PLAY_BETA && authenticatedOwner != null)
                     dev.hryshyn.remanence.ui.settings.BetaTermsGate(container.apiStack.safetyRepository,
-                        authenticatedOwner.toString(), rootViewModel::returnToHome, create)
+                        authenticatedOwner.toString(), { createViewModel.endSession(); rootViewModel.returnToHome() }, create)
                 else create()
             }
         },
@@ -467,11 +477,27 @@ private fun RootSurface(
                     ScanFlowSurface(rootViewModel = rootViewModel, scanViewModel = scanViewModel)
                 }
             } else {
-                Text("Preparing scan…", modifier = Modifier.testTag("scan_session_initializing"))
+                Text(stringResource(R.string.capsule_audit_preparing_scan), modifier = Modifier.testTag("scan_session_initializing"))
             }
         },
         onExitFlow = rootViewModel::returnToHome,
     )
+    // Register after child routes so an activity-level Back cannot dispose a
+    // session-bound provider request. The provider sheet owns its own cancel.
+    BackHandler(recoveryBusy || googleState == dev.hryshyn.remanence.auth.GoogleAuthState.Working) { }
+    if (logoutRequested && authState != AuthUiState.SignedOut) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { logoutRequested = false },
+            title = { Text(stringResource(R.string.home_audit_logout_title)) },
+            text = { Text(stringResource(R.string.home_audit_logout_detail)) },
+            confirmButton = {
+                HoldTextButton(enabled = !recoveryBusy, onClick = { logoutRequested = false; rootViewModel.logout() }) {
+                    Text(stringResource(R.string.hold_logout))
+                }
+            },
+            dismissButton = { HoldTextButton(onClick = { logoutRequested = false }) { Text(stringResource(R.string.home_audit_logout_cancel)) } },
+        )
+    }
 }
 
 /**
@@ -480,15 +506,29 @@ private fun RootSurface(
  */
 @Composable
 private fun ScanFlowSurface(rootViewModel: RootViewModel, scanViewModel: ScanViewModel) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    androidx.compose.runtime.DisposableEffect(scanViewModel) {
+        val manager = context.getSystemService(android.net.ConnectivityManager::class.java)
+        val callback = object : android.net.ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: android.net.Network) = scanViewModel.refreshPendingConnectivity()
+            override fun onLost(network: android.net.Network) = scanViewModel.refreshPendingConnectivity()
+            override fun onCapabilitiesChanged(network: android.net.Network, capabilities: android.net.NetworkCapabilities) =
+                scanViewModel.refreshPendingConnectivity()
+        }
+        val registered = runCatching { manager?.registerDefaultNetworkCallback(callback); manager != null }.getOrDefault(false)
+        onDispose { if (registered) runCatching { manager?.unregisterNetworkCallback(callback) } }
+    }
+    ForegroundResumeEffect { scanViewModel.refreshPendingConnectivity() }
     val terminal by scanViewModel.terminal.collectAsStateWithLifecycle()
     LaunchedEffect(terminal) {
         val granted = terminal as? ScanTerminalState.Granted ?: return@LaunchedEffect
         // FIX-REVIEW-03: only the random grant ID travels; the root resolves
         // the capsule ID through THE authoritative grant manager itself.
-        rootViewModel.openCapsuleWithGrant(
+        val opened = rootViewModel.openCapsuleWithGrant(
             grantId = granted.grantId,
             onPresentationClosed = scanViewModel::resetSession,
         )
+        if (!opened) scanViewModel.resetSession()
     }
     ScanScreen(
         viewModel = scanViewModel,

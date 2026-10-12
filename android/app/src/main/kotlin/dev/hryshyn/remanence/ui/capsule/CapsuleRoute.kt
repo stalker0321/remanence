@@ -72,8 +72,10 @@ sealed interface CapsuleRouteState {
 
     data class Ready(val presentation: CapsulePresentation) : CapsuleRouteState
 
-    data class Failed(val message: String) : CapsuleRouteState
+    data class Failed(val reason: CapsuleRouteFailure) : CapsuleRouteState
 }
+
+enum class CapsuleRouteFailure { CLOSED, CANNOT_OPEN }
 
 /** Port resolving the local identity for decryption; null means unavailable. */
 fun interface CapsuleIdentityLoader {
@@ -138,14 +140,14 @@ internal fun CapsuleRoute(
             if (revokedId == grantId) {
                 revoked.value = true
                 (state as? CapsuleRouteState.Ready)?.presentation?.close()
-                state = CapsuleRouteState.Failed("This capsule was closed automatically.")
+                state = CapsuleRouteState.Failed(CapsuleRouteFailure.CLOSED)
             }
         }
     }
 
     LaunchedEffect(grantId, loadEpoch) {
         if (revoked.value) {
-            state = CapsuleRouteState.Failed("This capsule was closed automatically.")
+            state = CapsuleRouteState.Failed(CapsuleRouteFailure.CLOSED)
             return@LaunchedEffect
         }
         state = CapsuleRouteState.Loading
@@ -231,7 +233,7 @@ internal fun CapsuleRoute(
         } catch (failure: Exception) {
             (state as? CapsuleRouteState.Ready)?.presentation?.close()
             onFailure()
-            state = CapsuleRouteState.Failed("The capsule could not be opened.")
+            state = CapsuleRouteState.Failed(CapsuleRouteFailure.CANNOT_OPEN)
         }
     }
 
@@ -239,7 +241,7 @@ internal fun CapsuleRoute(
         CapsuleRouteState.Loading -> RouteBusy(onClose = onClose)
 
         is CapsuleRouteState.Failed -> RouteFailure(
-            message = current.message,
+            reason = current.reason,
             onRetry = { loadEpoch += 1 },
             onClose = onClose,
         )
@@ -287,7 +289,7 @@ private fun RouteBusy(onClose: () -> Unit) {
 }
 
 @Composable
-private fun RouteFailure(message: String, onRetry: () -> Unit, onClose: () -> Unit) {
+private fun RouteFailure(reason: CapsuleRouteFailure, onRetry: () -> Unit, onClose: () -> Unit) {
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -300,7 +302,7 @@ private fun RouteFailure(message: String, onRetry: () -> Unit, onClose: () -> Un
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            stringResource(if (message == "This capsule was closed automatically.")
+            stringResource(if (reason == CapsuleRouteFailure.CLOSED)
                 R.string.capsule_route_closed else R.string.capsule_route_failure),
             color = MaterialTheme.colorScheme.error,
             modifier = Modifier.testTag("capsule_route_failed_message"),

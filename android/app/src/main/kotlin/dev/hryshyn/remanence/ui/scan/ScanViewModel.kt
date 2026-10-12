@@ -1692,6 +1692,14 @@ class ScanViewModel internal constructor(
         )
     }
 
+    fun refreshPendingConnectivity() {
+        val current = _matchState.value as? ScanMatchUiState.MaterialPending ?: return
+        if (!sessionBoundaryIsCurrent()) return
+        // Connectivity callbacks may race grant delivery: never write a pending
+        // state over a newer Accepted/rejected state.
+        _matchState.compareAndSet(current, current.copy(connected = networkConnected()))
+    }
+
     private fun publishPendingIfRecognized(
         generation: Int,
         origin: CandidateOrigin?,

@@ -34,15 +34,16 @@ import kotlinx.coroutines.withContext
 /** Narrow provider root; never expose identity, ciphertext, databases or all cache files. */
 internal object CapsuleExportFiles {
     private const val MAX_FILES = 3
-    private const val TTL_MILLIS = 60 * 60 * 1000L
+    internal const val TTL_MILLIS = 60 * 60 * 1000L
     const val MAX_BYTES = 16 * 1024 * 1024
 
+    @Synchronized
     fun write(context: Context, png: ByteArray, now: Long = System.currentTimeMillis()): File {
         require(png.isNotEmpty() && png.size <= MAX_BYTES)
         val directory = File(context.cacheDir, "capsule-exports").apply { check(mkdirs() || isDirectory) }
         directory.listFiles()?.filter { it.isFile && it.name.endsWith(".png") }
             ?.sortedByDescending { it.lastModified() }?.forEachIndexed { index, file ->
-                if (index >= MAX_FILES - 1 || now - file.lastModified() > TTL_MILLIS) check(file.delete())
+                if (index >= MAX_FILES - 1 || now - file.lastModified() >= TTL_MILLIS) remove(context, file)
             }
         val target = File(directory, "remanence-${UUID.randomUUID()}.png")
         try {
@@ -53,6 +54,26 @@ internal object CapsuleExportFiles {
             throw failure
         }
     }
+
+    /** URI readers get a short lease; expiry does not depend on another export. */
+    @Synchronized
+    fun sweep(context: Context, now: Long = System.currentTimeMillis(), clearAll: Boolean = false) {
+        File(context.cacheDir, "capsule-exports").listFiles()
+            ?.filter { it.isFile && it.name.matches(EXPORT_NAME) }
+            ?.forEach { file ->
+                if (clearAll || now - file.lastModified() >= TTL_MILLIS || file.lastModified() > now) {
+                    remove(context, file)
+                }
+            }
+    }
+
+    private fun remove(context: Context, file: File) {
+        val uri = FileProvider.getUriForFile(context, context.packageName + ".capsuleexport", file)
+        context.revokeUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        check(file.delete() || !file.exists())
+    }
+
+    private val EXPORT_NAME = Regex("remanence-[a-f0-9-]+\\.png")
 
     fun shareIntent(context: Context, file: File): Intent {
         val uri = FileProvider.getUriForFile(context, context.packageName + ".capsuleexport", file)
@@ -153,6 +174,7 @@ internal fun CapsuleImageExportButton(export: CapsuleImageExport, enabled: Boole
                 } else {
                     val png = checkNotNull(bytes)
                     withContext(Dispatchers.IO) { file = CapsuleExportFiles.write(context, png) }
+                    CapsuleExportCleanupWorker.schedule(context)
                     export.validate() // expiry/account switch while writing must not hand the URI out
                     context.startActivity(Intent.createChooser(CapsuleExportFiles.shareIntent(context, checkNotNull(file)), title))
                     file = null // intentional plaintext export; recipient owns its external copy

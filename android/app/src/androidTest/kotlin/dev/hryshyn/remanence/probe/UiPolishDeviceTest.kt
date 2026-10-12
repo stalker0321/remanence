@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.LocalDensity
@@ -130,10 +131,9 @@ class UiPolishDeviceTest {
 
     private fun capture(name:String) {
         rule.waitForIdle()
-        // PixelCopy waits for the Compose draw before the full-window capture.
-        rule.onRoot().captureToImage()
-        val bitmap=checkNotNull(instrumentation.uiAutomation.takeScreenshot())
-        try { File(evidence,"$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG,100,it) } }
-        finally { bitmap.recycle() }
+        // Android's native PixelCopy waits for the actual window draw. Raw
+        // UiAutomation screenshots can lag a frame on the headless QA AVD.
+        val bitmap = rule.onRoot().captureToImage().asAndroidBitmap()
+        File(evidence,"$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG,100,it) }
     }
 }

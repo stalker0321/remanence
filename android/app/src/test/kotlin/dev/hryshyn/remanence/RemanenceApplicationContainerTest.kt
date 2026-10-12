@@ -99,6 +99,95 @@ class RemanenceApplicationContainerTest {
     )
 
     @Test
+    fun signedOutStartupSweepUsesPersistedCanonicalOwnerAndDeletesOnlyItsCreateOrphans() = runBlocking {
+        val appContainer = container()
+        val ownerA = UserId.parseRest("0198f0a0-0000-7000-8000-00000000a001")
+        val ownerB = UserId.parseRest("0198f0a0-0000-7000-8000-00000000a002")
+        val roots = appContainer.accountScopedFileRoots
+        try {
+            appContainer.currentAccountStore.record(ownerA.toRestString(), "alice",
+                "0198f0a0-0000-7000-8000-00000000b001")
+            appContainer.sessionTokenStore.clear()
+            val orphanA = stagingFixtureFile(roots.createStagingRoot(ownerA),
+                "11111111-2222-4333-8444-555555555555/plain.jpg")
+            val orphanB = stagingFixtureFile(roots.createStagingRoot(ownerB),
+                "22222222-3333-4444-8555-666666666666/plain.jpg")
+            val durableA = stagingFixtureFile(roots.child(ownerA,
+                dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots.ChildRoot.OUTBOX_CIPHERTEXT),
+                "durable-sentinel.ciphertext")
+            val otherTempA = stagingFixtureFile(roots.child(ownerA,
+                dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots.ChildRoot.TEMP),
+                "unrelated-temp-sentinel")
+            val unrecognizedA = stagingFixtureFile(roots.createStagingRoot(ownerA), "not-a-uuid/sentinel")
+
+            // Real bootstrap with no bound token is signed out; the local row
+            // is only cleanup attribution, never a manufactured login/session.
+            assertEquals(SessionState.SignedOut, appContainer.sessionBootstrap.bootstrap())
+            appContainer.sweepSignedOutCreateStagingOnce()
+
+            assertFalse(orphanA.exists())
+            assertFalse(orphanA.parentFile.exists())
+            assertTrue(orphanB.isFile)
+            assertTrue(durableA.isFile)
+            assertTrue(otherTempA.isFile)
+            assertTrue(unrecognizedA.isFile)
+            assertEquals(ownerA.toRestString(), appContainer.currentAccountStore.loadEntity()?.userId)
+            assertNull(appContainer.sessionTokenStore.load())
+        } finally {
+            appContainer.currentAccountStore.clear()
+            appContainer.database.close()
+        }
+    }
+
+    @Test
+    fun successfulLiveOwnerStartupSweepSuppressesLaterSignedOutDeletionOfPublisherInputs() = runBlocking {
+        val appContainer = container()
+        val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000a001")
+        val createRoot = appContainer.accountScopedFileRoots.createStagingRoot(owner)
+        try {
+            appContainer.currentAccountStore.record(owner.toRestString(), "alice",
+                "0198f0a0-0000-7000-8000-00000000b001")
+            val abandoned = stagingFixtureFile(createRoot,
+                "11111111-2222-4333-8444-555555555555/plain.jpg")
+            // This is the real container hook Root invokes before opening an
+            // authenticated owner's UI, not a claim of provider authentication.
+            appContainer.sweepCreateStagingOnce(owner)
+            assertFalse(abandoned.exists())
+            val activePublisherInput = stagingFixtureFile(createRoot,
+                "22222222-3333-4444-8555-666666666666/plain.jpg")
+
+            appContainer.sweepSignedOutCreateStagingOnce()
+            appContainer.sweepCreateStagingOnce(owner)
+            assertTrue("The same process must not blanket-delete a later publisher's inputs",
+                activePublisherInput.isFile)
+        } finally {
+            appContainer.currentAccountStore.clear()
+            appContainer.database.close()
+        }
+    }
+
+    @Test
+    fun signedOutStartupWithoutAccountAttributionDoesNotGuessAnOwnerToDelete() = runBlocking {
+        val appContainer = container()
+        val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000a001")
+        try {
+            appContainer.currentAccountStore.clear()
+            val unattributed = stagingFixtureFile(appContainer.accountScopedFileRoots.createStagingRoot(owner),
+                "11111111-2222-4333-8444-555555555555/plain.jpg")
+            appContainer.sweepSignedOutCreateStagingOnce()
+            assertTrue(unattributed.isFile)
+            assertNull(appContainer.currentAccountStore.loadEntity())
+        } finally {
+            appContainer.database.close()
+        }
+    }
+
+    private fun stagingFixtureFile(root: File, relative: String): File = File(root, relative).apply {
+        check(parentFile.mkdirs() || parentFile.isDirectory)
+        writeBytes(byteArrayOf(17, 23)) // local sentinel, never user plaintext or an accepted crypto artifact
+    }
+
+    @Test
     fun containerBuildsACoherentGraphOverDatabasePersistenceAndTokenStore() = runBlocking {
         val container = AppContainer(
             context,

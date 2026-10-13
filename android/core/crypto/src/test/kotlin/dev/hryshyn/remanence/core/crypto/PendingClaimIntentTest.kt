@@ -21,6 +21,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 /**
  * T186 M7c: claim intent + envelope acceptance with REAL Tink crypto.
@@ -118,7 +119,6 @@ class PendingClaimIntentTest {
             .setClaimPolicyVersion(1)
             .setClaimSigningKeyId(ByteString.copyFrom(serviceKey))
             .build().toByteArray()
-        val recipientKeys = KeysetHandle.generateNew(KeyTemplates.get(TinkPrimitives.HPKE_TEMPLATE))
         val context = ClaimedEnvelopeContextV2.newBuilder()
             .setProtocolVersion(2)
             .setCapsuleId(ByteString.copyFrom(uuidBytes(capsule)))
@@ -194,6 +194,22 @@ class PendingClaimIntentTest {
         // Explicitly untrusted type — never a production Accepted.
         val partial = result as PendingClaimedEnvelope.EnvelopeAcceptance.PartiallyAccepted
         assertContentEquals(f.rawKey, partial.capsuleAeadKeyset)
+    }
+
+    @Test
+    fun handleWithoutPinNeverYieldsAccepted() {
+        val f = fixture()
+        // A service handle WITHOUT an authorized deployment UUID must not
+        // yield Accepted — the numeric Tink key id is not a deployment UUID.
+        val unpinned = f.expectation.copy(authorizedServiceKeyId = null)
+        val result = PendingClaimedEnvelope.accept(
+            f.sealedEnvelope, f.envelopeSha, f.statement, f.claim,
+            f.senderSig, f.claimSig, f.recipientPrivate,
+            senderVerifyHandle = f.senderPublic,
+            serviceVerifyHandle = f.servicePublic,
+            expected = unpinned,
+        )
+        assertTrue(result is PendingClaimedEnvelope.EnvelopeAcceptance.PartiallyAccepted)
     }
 
     @Test

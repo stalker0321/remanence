@@ -188,6 +188,8 @@ object PendingClaimedEnvelope {
         val claim = dev.hryshyn.remanence.protocol.delivery_v2.ClaimBindingV1.parseFrom(claimBytes)
         // Authorized service-key pin: when present, BOTH carried ids must
         // equal the deployment pin (self-consistency alone proves nothing).
+        // A numeric Tink key id is never a deployment UUID — no comparison
+        // between the two domains exists anywhere on this path.
         val pin = expected.authorizedServiceKeyId
         if (pin != null &&
             (!uuidEquals(statement.claimSigningKeyId, pin) ||
@@ -195,13 +197,16 @@ object PendingClaimedEnvelope {
         ) {
             throw GeneralSecurityException("pending envelope service key mismatch")
         }
-        // Service signature over canonical R (or explicit partial).
+        // Service signature over canonical R (or explicit partial). A
+        // non-null handle WITHOUT an authorized pin must NOT yield
+        // Accepted: the signature is still verified (fail closed on
+        // corrupt bytes) but promotion requires the pin.
         val serviceDone = if (serviceVerifyHandle != null) {
             PendingPublishVerifier.verifySignature(
                 serviceVerifyHandle, claimBytes, claimSignature,
                 "pending claim", CLAIM_BINDING_DOMAIN,
             )
-            true
+            pin != null
         } else {
             false
         }

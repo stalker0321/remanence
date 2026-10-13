@@ -8,7 +8,15 @@
     <string name="pending_code_cancel">назад</string>
     <string name="pending_code_invalid">этот код нельзя использовать. проверьте его и попробуйте ещё раз.</string>
     <string name="pending_code_unavailable">поиск по коду пока недоступен в этой тестовой сборке.</string>
-    <string name="pending_handle_required_title">выберите имя перед отправкой</string>
-    <string name="pending_handle_required_body">для отправки нужно одноразовое публичное имя. настройка имени появится в следующем тестовом обновлении; получение и открытие продолжают работать.</string>
-    <string name="pending_handle_required_back">назад</string>
+    <string name="pending_handle_setup_title">выберите имя</string>
+    <string name="pending_handle_setup_body">для отправки нужно одноразовое публичное имя на этом же аккаунте. изменить его позже нельзя.</string>
+    <string name="pending_handle_setup_label">имя</string>
+    <string name="pending_handle_setup_continue">сохранить и продолжить</string>
+    <string name="pending_handle_setup_back">назад</string>
+    <string name="pending_handle_setup_committed">сохранено. возвращаем к отправке…</string>
+    <string name="pending_handle_setup_invalid">это имя нельзя использовать. 3–30 строчных букв, цифр, точек или подчёркиваний.</string>
+    <string name="pending_handle_setup_conflict">это имя занято или заблокировано. попробуйте другое.</string>
+    <string name="pending_handle_setup_network">не удалось связаться с сервером. попробуйте ещё раз.</string>
+    <string name="pending_handle_setup_session">сессия изменилась. при необходимости войдите снова.</string>
+    <string name="pending_handle_setup_generic">не получилось. попробуйте ещё раз.</string>
 </resources>

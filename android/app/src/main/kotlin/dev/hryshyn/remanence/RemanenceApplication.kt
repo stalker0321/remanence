@@ -972,6 +972,14 @@ class AppContainer private constructor(
         dev.hryshyn.remanence.session.RoomCurrentAccountStore(database.localAccountDao())
     }
 
+    /**
+     * T186 M7a: frozen R17 handle-commit port (routes scaffold server-side;
+     * calls fail generic-retryable until mounted — never fake success).
+     */
+    val pendingHandleCommitPort: dev.hryshyn.remanence.core.data.network.HandleCommitPort by lazy {
+        dev.hryshyn.remanence.core.data.network.PendingHandleCommitRepository.create(apiBaseUrl)
+    }
+
     /** One account/capsule upload boundary used by [CapsuleUploadWorker]. */
     val capsuleUploadOrchestrator: CapsuleUploadOrchestrator by lazy {
         val retryStore = dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore(

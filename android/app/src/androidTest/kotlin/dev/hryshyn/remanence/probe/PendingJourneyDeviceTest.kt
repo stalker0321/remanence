@@ -30,7 +30,8 @@ import dev.hryshyn.remanence.ui.capsule.DecryptedPhoto
 import dev.hryshyn.remanence.ui.hold.HoldTheme
 import dev.hryshyn.remanence.pending.PendingCodeEntryButton
 import dev.hryshyn.remanence.pending.PendingCodeEntrySheet
-import dev.hryshyn.remanence.pending.PendingHandleRequiredNotice
+import dev.hryshyn.remanence.pending.PendingHandleSetupScreen
+import dev.hryshyn.remanence.pending.PendingHandleSetupViewModel
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Locale
@@ -154,15 +155,46 @@ class PendingJourneyDeviceTest {
         capture("pending-code-unavailable-en")
     }
 
-    @Test fun handleNoticeBackFires() {
+    @Test fun handleSetupBackFires() {
         var backed = false
+        val viewModel = PendingHandleSetupViewModel(
+            r17 = dev.hryshyn.remanence.core.data.network.HandleCommitPort { _, _ ->
+                error("no network in this fixture")
+            },
+            loadAccount = { null },
+            captureLease = { null },
+            tokenFor = { null },
+            leaseLive = { false },
+            recordHandle = { _, _ -> },
+        )
         mountEntry("en") {
-            PendingHandleRequiredNotice(onBack = { backed = true }, enabled = true)
+            PendingHandleSetupScreen(viewModel = viewModel, onBack = { backed = true }, enabled = true)
         }
-        rule.onNodeWithTag("pending_handle_required").assertIsDisplayed()
-        capture("pending-handle-required-en")
-        rule.onNodeWithTag("pending_handle_required_back").performClick()
+        rule.onNodeWithTag("pending_handle_setup").assertIsDisplayed()
+        capture("pending-handle-setup-en")
+        rule.onNodeWithTag("pending_handle_setup_back").performClick()
         rule.runOnIdle { assertTrue(backed) }
+    }
+
+    @Test fun handleSetupInvalidShowsGenericError() {
+        val viewModel = PendingHandleSetupViewModel(
+            r17 = dev.hryshyn.remanence.core.data.network.HandleCommitPort { _, _ ->
+                error("no network in this fixture")
+            },
+            loadAccount = { null },
+            captureLease = { null },
+            tokenFor = { null },
+            leaseLive = { false },
+            recordHandle = { _, _ -> },
+        )
+        mountEntry("en") {
+            PendingHandleSetupScreen(viewModel = viewModel, onBack = {}, enabled = true)
+        }
+        // Client-side validation only: no network touched for bad input.
+        rule.onNodeWithTag("pending_handle_setup_field").performTextInput("??")
+        rule.onNodeWithTag("pending_handle_setup_continue").performClick()
+        rule.onNodeWithTag("pending_handle_setup_error").assertIsDisplayed()
+        capture("pending-handle-setup-invalid-en")
     }
 
     /** Decodable-JPEG reader so the Ready path renders real pixels. */

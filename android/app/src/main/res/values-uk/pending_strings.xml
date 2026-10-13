@@ -8,7 +8,15 @@
     <string name="pending_code_cancel">назад</string>
     <string name="pending_code_invalid">цей код не можна використати. перевірте його та спробуйте ще раз.</string>
     <string name="pending_code_unavailable">пошук за кодом поки недоступний у цій тестовій збірці.</string>
-    <string name="pending_handle_required_title">оберіть ім’я перед надсиланням</string>
-    <string name="pending_handle_required_body">для надсилання потрібне одноразове публічне ім’я. налаштування імені з’явиться в наступному тестовому оновленні; отримання й відкриття продовжують працювати.</string>
-    <string name="pending_handle_required_back">назад</string>
+    <string name="pending_handle_setup_title">оберіть ім’я</string>
+    <string name="pending_handle_setup_body">для надсилання потрібне одноразове публічне ім’я на цьому ж акаунті. змінити його пізніше не можна.</string>
+    <string name="pending_handle_setup_label">ім’я</string>
+    <string name="pending_handle_setup_continue">зберегти й продовжити</string>
+    <string name="pending_handle_setup_back">назад</string>
+    <string name="pending_handle_setup_committed">збережено. повертаємо до надсилання…</string>
+    <string name="pending_handle_setup_invalid">це ім’я не можна використати. 3–30 малих літер, цифр, крапок або підкреслень.</string>
+    <string name="pending_handle_setup_conflict">це ім’я зайняте або заблоковане. спробуйте інше.</string>
+    <string name="pending_handle_setup_network">не вдалося зв’язатися із сервером. спробуйте ще раз.</string>
+    <string name="pending_handle_setup_session">сесія змінилася. за потреби увійдіть знову.</string>
+    <string name="pending_handle_setup_generic">не вийшло. спробуйте ще раз.</string>
 </resources>

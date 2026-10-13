@@ -210,6 +210,16 @@ private fun RootSurface(
             rootViewModel.onSessionEstablished()
         }
     }
+    // T186 M7a: a committed first-send handle re-resolves the root, which
+    // reloads Active WITH the handle and continues into Create via the gate.
+    val setupViewModel: dev.hryshyn.remanence.pending.PendingHandleSetupViewModel =
+        viewModel(factory = factory)
+    val setupState by setupViewModel.state.collectAsStateWithLifecycle()
+    LaunchedEffect(setupState) {
+        if (setupState is dev.hryshyn.remanence.pending.PendingHandleSetupViewModel.SetupState.Committed) {
+            rootViewModel.onSessionEstablished()
+        }
+    }
 
     val authState by rootViewModel.authState.collectAsStateWithLifecycle()
     val destination by rootViewModel.destination.collectAsStateWithLifecycle()
@@ -217,6 +227,7 @@ private fun RootSurface(
     // Real capability derivation: authenticated AND both keysets on device.
     LaunchedEffect(authState) {
         capabilityViewModel.onAuthStateChanged(authState)
+        setupViewModel.onAuthChanged()
     }
     val accountCapability by capabilityViewModel.capability.collectAsStateWithLifecycle()
 
@@ -410,7 +421,13 @@ private fun RootSurface(
                         ),
                     )
                 if (handleGate) {
-                    dev.hryshyn.remanence.pending.PendingHandleRequiredNotice(
+                    // T186 M7a: real first-send handle form (frozen R17).
+                    // Committed refreshes the root above, which re-resolves
+                    // Active WITH the handle and continues into Create.
+                    // setupViewModel is hoisted at the root surface so the
+                    // committed observer fires exactly once per commit.
+                    dev.hryshyn.remanence.pending.PendingHandleSetupScreen(
+                        viewModel = setupViewModel,
                         onBack = rootViewModel::returnToHome,
                     )
                 } else {

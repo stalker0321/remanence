@@ -74,6 +74,15 @@ class RemanenceViewModelFactory(
         LoginViewModel::class.java -> LoginViewModel(container.loginUseCase) as T
         dev.hryshyn.remanence.auth.GoogleAuthViewModel::class.java -> dev.hryshyn.remanence.auth.GoogleAuthViewModel(container) as T
         RegistrationViewModel::class.java -> RegistrationViewModel(container.registrationUseCase) as T
+        dev.hryshyn.remanence.pending.PendingHandleSetupViewModel::class.java ->
+            dev.hryshyn.remanence.pending.PendingHandleSetupViewModel(
+                r17 = container.pendingHandleCommitPort,
+                loadAccount = container.currentAccountStore::load,
+                captureLease = container.apiStack::captureSessionRequestLease,
+                tokenFor = container.apiStack::accessTokenForSessionRequestLease,
+                leaseLive = container.apiStack::isSessionRequestLeaseLive,
+                recordHandle = { userId, handle -> container.currentAccountStore.updateHandle(userId, handle) },
+            ) as T
         HomeCapabilityViewModel::class.java ->
             HomeCapabilityViewModel(container.identityAvailability) as T
         CreateViewModel::class.java -> CreateViewModel(

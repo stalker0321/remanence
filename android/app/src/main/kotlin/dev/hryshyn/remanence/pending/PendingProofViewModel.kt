@@ -89,7 +89,6 @@ class PendingProofViewModel(
      * envelope acceptance closed.
      */
     private val ownBundleKeyProvider: suspend () -> ByteArray? = { null },
-    private val claimPort: ProofClaimPort? = null,
     /**
      * Auth session id for the intent (fenced holder in production, null
      * until a live owner-bound session exists). Null keeps the flow at a

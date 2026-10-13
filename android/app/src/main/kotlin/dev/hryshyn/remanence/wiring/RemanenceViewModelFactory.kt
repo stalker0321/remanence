@@ -42,6 +42,8 @@ class RemanenceViewModelFactory(
                 container.logoutUseCase.logout()
                 // T186 M7c: session-id dies with the session.
                 runCatching { container.sessionIdHolder.clear() }
+                // T186 M10: gift intent dies with the session.
+                runCatching { container.pendingGiftIntentStore.clear() }
                 if (dev.hryshyn.remanence.BuildConfig.REMANENCE_GOOGLE_SIGN_IN_ENABLED) {
                     try {
                         androidx.credentials.CredentialManager.create(container.appContext)

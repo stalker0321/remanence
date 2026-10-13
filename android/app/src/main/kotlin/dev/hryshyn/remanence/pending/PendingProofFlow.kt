@@ -97,6 +97,28 @@ fun PendingProofFlow(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().testTag("pending_proof_destination"),
                     )
+                    // T186 M10: explicit affirmative SMS consent, phone
+                    // channels only — never derived from the channel. The
+                    // timestamp is captured at request time in the VM.
+                    val smsConsent by viewModel.smsConsent.collectAsStateWithLifecycle()
+                    if (!current.channel.equals("email", ignoreCase = true)) {
+                        Spacer(Modifier.height(8.dp))
+                        androidx.compose.foundation.layout.Row(
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            androidx.compose.material3.Checkbox(
+                                checked = smsConsent,
+                                onCheckedChange = viewModel::onSmsConsentChange,
+                                modifier = Modifier.testTag("pending_proof_sms_consent"),
+                            )
+                            Text(
+                                stringResource(R.string.pending_proof_sms_consent),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = dev.hryshyn.remanence.ui.hold.HoldColors.Muted,
+                            )
+                        }
+                    }
                     Spacer(Modifier.height(12.dp))
                     Button(
                         onClick = viewModel::requestAttempt,
@@ -198,6 +220,11 @@ fun PendingProofFlow(
                         modifier = Modifier.testTag("pending_proof_error"),
                     )
                     Spacer(Modifier.height(12.dp))
+                    Button(
+                        onClick = viewModel::retry,
+                        modifier = Modifier.testTag("pending_proof_retry"),
+                    ) { Text(stringResource(R.string.pending_proof_retry)) }
+                    Spacer(Modifier.height(8.dp))
                     OutlinedButton(
                         onClick = onDone,
                         modifier = Modifier.testTag("pending_proof_cancel"),

@@ -486,6 +486,9 @@ class AppContainer private constructor(
                 }
             },
             rotationSink = sessionRotationSink,
+            // T186 M10: authoritative SID refresh hook (owner-bound, under
+            // fence; covers refresh/bootstrap after process restart).
+            sessionIds = sessionIdHolder,
         )
     }
 
@@ -995,6 +998,14 @@ class AppContainer private constructor(
     }
 
     /**
+     * T186 M10: single-slot opaque gift intent (resume across sheet close,
+     * rotation, process death). Owner-fenced, cleared on logout.
+     */
+    val pendingGiftIntentStore: dev.hryshyn.remanence.pending.PendingGiftIntentStore by lazy {
+        dev.hryshyn.remanence.pending.PendingGiftIntentStore(appContext.filesDir)
+    }
+
+    /**
      * T186 M7a: frozen R17 handle-commit port (routes scaffold server-side;
      * calls fail generic-retryable until mounted — never fake success).
      */
@@ -1043,22 +1054,9 @@ class AppContainer private constructor(
             optionsPort = dev.hryshyn.remanence.pending.ProofOptionsPort { deliveryId, token ->
                 claimRepo.options(deliveryId, token)
             },
-            tokenProvider = {
-                val lease = try {
-                    apiStack.captureSessionRequestLease()
-                } catch (_: Exception) {
-                    null
-                }
-                if (lease == null) {
-                    null
-                } else {
-                    try {
-                        apiStack.accessTokenForSessionRequestLease(lease)
-                    } catch (_: Exception) {
-                        null
-                    }
-                }
-            },
+            // T186 M10: the REAL held lease gate (capture + token per call,
+            // owner/incarnation recheck after every await).
+            sessionGate = pendingSessionGate,
             accountProvider = {
                 val summary = try {
                     currentAccountStore.load()

@@ -11,6 +11,7 @@
     <string name="pending_code_found_next">проверка адреса и подтверждение продолжаются ниже. обычное сканирование работает.</string>
     <string name="pending_code_found_next_update">проверка адреса и подтверждение продолжатся в следующем тестовом обновлении; обычное сканирование работает.</string>
     <string name="pending_code_continue_proof">продолжить</string>
+    <string name="pending_gift_resume">продолжить с сохранённым подарком</string>
     <string name="pending_code_notfound">этот код не подошёл ни к одному доступному подарку.</string>
     <string name="pending_code_network">не удалось связаться с сервером. попробуйте ещё раз.</string>
     <string name="pending_code_generic">не получилось. попробуйте ещё раз.</string>
@@ -22,6 +23,8 @@
     <string name="pending_proof_body">введите адрес, на который отправили подарок. дальше придёт одноразовый код.</string>
     <string name="pending_proof_destination">почта или телефон</string>
     <string name="pending_proof_send_code">отправить код</string>
+    <string name="pending_proof_retry">попробовать снова</string>
+    <string name="pending_proof_sms_consent">Согласен получить одно SMS с кодом.</string>
     <string name="pending_proof_code_title">введите код</string>
     <string name="pending_proof_code_label">код</string>
     <string name="pending_proof_verify">проверить</string>

@@ -553,11 +553,20 @@ private fun RootSurface(
                         } else {
                             null
                         }
+                    // T186 M10: resume needs the same account AND key
+                    // readiness; PRF itself stays enforced by existing gates.
+                    val resumeOwner =
+                        (authState as? AuthUiState.Authenticated)?.userId
+                    val resumeReady = resumeOwner != null &&
+                        (authState as? AuthUiState.Authenticated)?.activeKeyBundleId != null
                     ScanFlowSurface(
                         rootViewModel = rootViewModel,
                         scanViewModel = scanViewModel,
                         pendingLookup = pendingLookup,
                         newProofVm = newProofVm,
+                        resumeOwnerId = resumeOwner,
+                        resumeStore = container.pendingGiftIntentStore,
+                        resumeEnabled = resumeReady,
                     )
                 }
             } else {
@@ -603,6 +612,13 @@ private fun ScanFlowSurface(
      * lookup-only mode.
      */
     newProofVm: ((kotlinx.coroutines.CoroutineScope) -> dev.hryshyn.remanence.pending.PendingProofViewModel)? = null,
+    /**
+     * T186 M10: durable gift-intent resume for the same owner with key
+     * readiness (existing scan/auth gates still enforce PRF).
+     */
+    resumeOwnerId: String? = null,
+    resumeStore: dev.hryshyn.remanence.pending.PendingGiftIntentStore? = null,
+    resumeEnabled: Boolean = false,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     androidx.compose.runtime.DisposableEffect(scanViewModel) {
@@ -632,6 +648,9 @@ private fun ScanFlowSurface(
         viewModel = scanViewModel,
         pendingLookup = pendingLookup,
         newProofVm = newProofVm,
+        resumeOwnerId = resumeOwnerId,
+        resumeStore = resumeStore,
+        resumeEnabled = resumeEnabled,
         // Activity recreation disposes/recreates Compose but keeps the
         // ViewModel and root destination. Only an actual route exit should
         // tear down the scan; this preserves same-epoch rotation state.

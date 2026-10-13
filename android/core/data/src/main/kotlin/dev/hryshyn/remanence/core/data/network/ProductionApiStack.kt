@@ -20,6 +20,7 @@ class ProductionApiStack private constructor(
     tokens: AuthTokenHolder,
     refreshTokenReader: RefreshTokenReader,
     rotationSink: SessionRotationSink,
+    sessionIds: SessionIdHolder? = null,
 ) {
 
     /** Bare repository for register/login/refresh/logout round trips. */
@@ -33,6 +34,7 @@ class ProductionApiStack private constructor(
             tokens = tokens,
             refreshTokenReader = refreshTokenReader,
             rotationSink = rotationSink,
+            sessionIds = sessionIds,
         )
 
     /** Every resource repository captures an in-memory lease at call entry. */
@@ -147,11 +149,13 @@ class ProductionApiStack private constructor(
             tokens: AuthTokenHolder,
             refreshTokenReader: RefreshTokenReader,
             rotationSink: SessionRotationSink,
+            sessionIds: SessionIdHolder? = null,
         ): ProductionApiStack = ProductionApiStack(
             baseUrl = baseUrl,
             tokens = tokens,
             refreshTokenReader = refreshTokenReader,
             rotationSink = rotationSink,
+            sessionIds = sessionIds,
         )
     }
 }

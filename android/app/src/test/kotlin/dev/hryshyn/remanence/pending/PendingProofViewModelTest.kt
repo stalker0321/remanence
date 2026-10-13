@@ -8,7 +8,9 @@ import dev.hryshyn.remanence.core.crypto.PendingClaimChallenge
 import dev.hryshyn.remanence.core.crypto.TinkPrimitives
 import dev.hryshyn.remanence.core.data.network.ClaimOptionsResult
 import dev.hryshyn.remanence.core.data.network.ContinueResult
+import dev.hryshyn.remanence.core.data.network.SessionRequestLease
 import dev.hryshyn.remanence.core.data.network.VerificationResult
+import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.protocol.delivery_v2.ClaimChallengeV1
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -114,18 +116,47 @@ class PendingProofViewModelTest {
         return java.util.Base64.getDecoder().decode(str(crypto, "sender_ed25519_public_keyset_b64"))
     }
 
+    private fun leaseFor(owner: String): SessionRequestLease = SessionRequestLease(
+        ownerUserId = UserId.parseRest(owner),
+        incarnation = 1L,
+    )
+
+    /** Fake held-lease gate: token queue + liveness + owner binding. */
+    private class FakeGate(
+        val owner: String,
+        val tokens: MutableList<String?>,
+        var live: Boolean = true,
+    ) : PendingRetirementSessionGate {
+        var captures = 0
+
+        override fun capture(): SessionRequestLease? {
+            captures += 1
+            return leaseFor(owner)
+        }
+
+        override fun accessTokenFor(lease: SessionRequestLease): String? =
+            if (tokens.isEmpty()) null else tokens.removeAt(0)
+
+        override fun isLive(lease: SessionRequestLease): Boolean =
+            live && lease.ownerUserId == UserId.parseRest(owner)
+    }
+
     private fun vm(
         continueResult: ContinueResult = proofBranch(),
         options: (String) -> ClaimOptionsResult = { ClaimOptionsResult.Failure(
             dev.hryshyn.remanence.core.data.network.ClaimFailure.ADDRESS_PROOF_REQUIRED, 400, false,
         ) },
-        tokens: MutableList<String?> = mutableListOf("token", "token", "token"),
+        tokens: MutableList<String?> = mutableListOf("token", "token", "token", "token"),
+        live: Boolean = true,
         account: ProofAccount? = ProofAccount(accountId, bundleId),
+        gateOwner: String? = null,
         signing: KeysetHandle? = null,
         hpke: KeysetHandle? = null,
         session: String? = sessionId,
         senderKey: ByteArray? = frozenSenderKey(),
         claim: PendingClaimPort? = null,
+        onRequest: ((Boolean) -> Unit)? = null,
+        checkBehavior: (() -> VerificationResult)? = null,
     ): PendingProofViewModel {
         TinkPrimitives.ensureRegistered()
         val signingKeys = signing
@@ -138,14 +169,18 @@ class PendingProofViewModelTest {
                 override suspend fun request(
                     deliveryId: String, destination: String, smsConsent: Boolean,
                     nowSeconds: Long, idempotencyKey: String, token: String,
-                ) = VerificationResult.Attempt(attemptId, 1_798_765_432L, 60L)
+                ): VerificationResult {
+                    onRequest?.invoke(smsConsent)
+                    return VerificationResult.Attempt(attemptId, 1_798_765_432L, 60L)
+                }
 
                 override suspend fun check(
                     deliveryId: String, attemptId: String, code: String, token: String,
-                ) = VerificationResult.Verified(attemptId)
+                ): VerificationResult =
+                    checkBehavior?.invoke() ?: VerificationResult.Verified(attemptId)
             },
             optionsPort = ProofOptionsPort { _, _ -> options("") },
-            tokenProvider = { if (tokens.isEmpty()) null else tokens.removeAt(0) },
+            sessionGate = FakeGate(gateOwner ?: account?.userId ?: ownerless(), tokens, live),
             accountProvider = { account },
             signingKeyProvider = { signingKeys },
             hpkeKeyProvider = { hpke },
@@ -156,6 +191,8 @@ class PendingProofViewModelTest {
             scope = scope,
         )
     }
+
+    private fun ownerless(): String = "00000000-0000-0000-0000-000000000000"
 
     @Test
     fun fullFlowReachesSignedIntent() = runTest {
@@ -326,5 +363,92 @@ class PendingProofViewModelTest {
             PendingProofViewModel.ProofState.Failed(PendingProofViewModel.PendingProofMessage.SESSION_CHANGED),
             viewModel.state.value,
         )
+    }
+
+    @Test
+    fun deadLeaseFailsSessionChanged() = runTest {
+        val viewModel = vm(live = false)
+        viewModel.start("ref")
+        testScheduler.advanceUntilIdle()
+        assertEquals(
+            PendingProofViewModel.ProofState.Failed(PendingProofViewModel.PendingProofMessage.SESSION_CHANGED),
+            viewModel.state.value,
+        )
+    }
+
+    @Test
+    fun ownerMismatchFailsAtAttempt() = runTest {
+        val viewModel = vm(
+            account = ProofAccount("99999999-2222-3333-4444-555555555555", bundleId),
+            gateOwner = accountId,
+        )
+        // R7 needs no account: the proof branch still opens...
+        viewModel.start("ref")
+        testScheduler.advanceUntilIdle()
+        assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.ProofRequired)
+        // ...but any account-bound step fences on the lease owner.
+        viewModel.onDestinationChange("a42@example.test")
+        viewModel.requestAttempt()
+        testScheduler.advanceUntilIdle()
+        assertEquals(
+            PendingProofViewModel.ProofState.Failed(PendingProofViewModel.PendingProofMessage.SESSION_CHANGED),
+            viewModel.state.value,
+        )
+    }
+
+    @Test
+    fun retryRetainsGiftAndAttempt() = runTest {
+        var first = true
+        val viewModel = vm(
+            checkBehavior = {
+                if (first) {
+                    first = false
+                    VerificationResult.Failure(
+                        dev.hryshyn.remanence.core.data.network.GiftLookupFailure.NETWORK,
+                        null, true,
+                    )
+                } else {
+                    VerificationResult.Verified(attemptId)
+                }
+            },
+        )
+        viewModel.start("ref")
+        testScheduler.advanceUntilIdle()
+        viewModel.onDestinationChange("a42@example.test")
+        viewModel.requestAttempt()
+        testScheduler.advanceUntilIdle()
+        assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.CodeRequired)
+        // A network failure keeps gift + attempt: retry restores the step.
+        viewModel.onCodeChange("12345678")
+        viewModel.checkCode()
+        testScheduler.advanceUntilIdle()
+        assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.Failed)
+        viewModel.retry()
+        val retried = viewModel.state.value as PendingProofViewModel.ProofState.CodeRequired
+        assertEquals(attemptId, retried.attemptId)
+        assertEquals(deliveryId, retried.deliveryId)
+    }
+
+    @Test
+    fun smsConsentExplicitNotDerived() = runTest {
+        // Default: no consent sent even for non-email channels.
+        val seenDefault = mutableListOf<Boolean>()
+        val plain = vm(onRequest = { seenDefault += it })
+        plain.start("ref")
+        testScheduler.advanceUntilIdle()
+        plain.onDestinationChange("+380501234567")
+        plain.requestAttempt()
+        testScheduler.advanceUntilIdle()
+        assertEquals(listOf(false), seenDefault)
+        // Affirmed: consent travels.
+        val seenAffirmed = mutableListOf<Boolean>()
+        val consenting = vm(onRequest = { seenAffirmed += it })
+        consenting.start("ref")
+        testScheduler.advanceUntilIdle()
+        consenting.onDestinationChange("+380501234567")
+        consenting.onSmsConsentChange(true)
+        consenting.requestAttempt()
+        testScheduler.advanceUntilIdle()
+        assertEquals(listOf(true), seenAffirmed)
     }
 }

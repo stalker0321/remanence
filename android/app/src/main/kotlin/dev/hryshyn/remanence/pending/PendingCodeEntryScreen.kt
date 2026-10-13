@@ -77,6 +77,14 @@ fun PendingCodeEntrySheet(
      * builds a container-wired VM via `AppContainer.newPendingProofViewModel`.
      */
     newProofVm: ((kotlinx.coroutines.CoroutineScope) -> PendingProofViewModel)? = null,
+    /**
+     * T186 M10: durable gift intent. Saved on every Found (owner-gated);
+     * [resumeIntent] replays a stored ref/code once on mount (rotation /
+     * process-death resume). Null keeps memory-only behavior.
+     */
+    ownerUserId: String? = null,
+    giftIntentStore: PendingGiftIntentStore? = null,
+    resumeIntent: PendingGiftIntentStore.StoredIntent? = null,
 ) {
     if (!enabled) return
     var raw by remember { mutableStateOf("") }
@@ -195,28 +203,30 @@ fun PendingCodeEntrySheet(
                 )
             }
             Spacer(Modifier.height(12.dp))
-            Button(
-                onClick = {
-                    val normalized = PendingCodeNormalizer.normalize(raw)
-                    if (normalized == null) {
-                        showGenericError = true
-                    } else if (lookup == null) {
-                        // Fail closed: no lookup path wired.
-                        showUnavailable = true
-                        onWellFormedCode(normalized)
-                    } else {
-                        working = true
-                        foundHint = null
-                        lookupError = null
-                        scope.launch {
-                            try {
-                                when (val result = lookup(normalized)) {
-                                    is dev.hryshyn.remanence.core.data.network.GiftLookupResult.Found -> {
-                                        foundHint = result.hint.ifBlank { null } ?: result.channel
-                                        foundReference = result.giftReference
-                                        onWellFormedCode(normalized)
+            fun submitCode(normalized: String) {
+                if (lookup == null) {
+                    // Fail closed: no lookup path wired.
+                    showUnavailable = true
+                    onWellFormedCode(normalized)
+                } else {
+                    working = true
+                    foundHint = null
+                    lookupError = null
+                    scope.launch {
+                        try {
+                            when (val result = lookup(normalized)) {
+                                is dev.hryshyn.remanence.core.data.network.GiftLookupResult.Found -> {
+                                    foundHint = result.hint.ifBlank { null } ?: result.channel
+                                    foundReference = result.giftReference
+                                    // Durable intent (owner-gated, opaque only).
+                                    val owner = ownerUserId
+                                    val store = giftIntentStore
+                                    if (owner != null && store != null) {
+                                        runCatching { store.save(owner, result.giftReference, normalized) }
                                     }
-                                    is dev.hryshyn.remanence.core.data.network.GiftLookupResult.Failure -> {
+                                    onWellFormedCode(normalized)
+                                }
+                                is dev.hryshyn.remanence.core.data.network.GiftLookupResult.Failure -> {
                                         lookupError = when (result.reason) {
                                             dev.hryshyn.remanence.core.data.network.GiftLookupFailure.GIFT_UNAVAILABLE ->
                                                 dev.hryshyn.remanence.pending.PendingLookupError.NOT_FOUND
@@ -239,6 +249,27 @@ fun PendingCodeEntrySheet(
                                 working = false
                             }
                         }
+                    }
+                }
+            }
+            // Rotation/process-death resume: replay the stored code once.
+            var resumed by remember(resumeIntent) { mutableStateOf(false) }
+            androidx.compose.runtime.LaunchedEffect(resumeIntent) {
+                val stored = resumeIntent
+                if (stored != null && !resumed && lookup != null) {
+                    resumed = true
+                    raw = stored.code
+                    submitCode(stored.code)
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            Button(
+                onClick = {
+                    val normalized = PendingCodeNormalizer.normalize(raw)
+                    if (normalized == null) {
+                        showGenericError = true
+                    } else {
+                        submitCode(normalized)
                     }
                 },
                 enabled = !working,
@@ -264,4 +295,24 @@ internal fun PendingLookupError.stringRes(): Int = when (this) {
     PendingLookupError.NOT_FOUND -> dev.hryshyn.remanence.R.string.pending_code_notfound
     PendingLookupError.NETWORK -> dev.hryshyn.remanence.R.string.pending_code_network
     PendingLookupError.GENERIC -> dev.hryshyn.remanence.R.string.pending_code_generic
+}
+
+/**
+ * T186 M10: resume entry for a stored same-owner gift intent. Renders
+ * nothing unless the pending build flag is ON.
+ */
+@androidx.compose.runtime.Composable
+fun PendingGiftResumeButton(
+    onResume: () -> Unit,
+    modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier,
+) {
+    if (!PendingFeatureGate.isEnabled()) return
+    dev.hryshyn.remanence.ui.hold.HoldTextButton(
+        onClick = onResume,
+        modifier = modifier.testTag("pending_gift_resume"),
+    ) {
+        androidx.compose.material3.Text(
+            androidx.compose.ui.res.stringResource(dev.hryshyn.remanence.R.string.pending_gift_resume),
+        )
+    }
 }

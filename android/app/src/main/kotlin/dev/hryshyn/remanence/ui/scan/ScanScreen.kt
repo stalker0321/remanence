@@ -70,12 +70,41 @@ fun ScanScreen(
      * is on.
      */
     newProofVm: ((kotlinx.coroutines.CoroutineScope) -> dev.hryshyn.remanence.pending.PendingProofViewModel)? = null,
+    /**
+     * T186 M10: durable gift-intent resume. [resumeOwnerId] gates the
+     * stored intent to the same account; [resumeStore] holds the opaque
+     * slot; [resumeEnabled] additionally requires key readiness (the
+     * existing scan/auth gates still enforce PRF — never bypassed).
+     */
+    resumeOwnerId: String? = null,
+    resumeStore: dev.hryshyn.remanence.pending.PendingGiftIntentStore? = null,
+    resumeEnabled: Boolean = false,
 ) {
     val matchState by viewModel.matchState.collectAsStateWithLifecycle()
     // T186: pending code sheet state. Local only; feature-gated composables
     // render nothing when the pending build flag is OFF, so beta behavior
     // is unchanged.
     var showPendingCode by remember { mutableStateOf(false) }
+    // T186 M10: durable gift-intent resume for the SAME owner (loaded off
+    // the calling thread; PRF readiness enforced by existing gates).
+    var resumeIntent by remember {
+        mutableStateOf<dev.hryshyn.remanence.pending.PendingGiftIntentStore.StoredIntent?>(null)
+    }
+    LaunchedEffect(resumeOwnerId, resumeEnabled) {
+        resumeIntent = if (resumeEnabled) {
+            val owner = resumeOwnerId
+            val store = resumeStore
+            if (owner == null || store == null) {
+                null
+            } else {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    runCatching { store.peek(owner) }.getOrNull()
+                }
+            }
+        } else {
+            null
+        }
+    }
 
     DisposableEffect(Unit) {
         onDispose(onScreenDispose)
@@ -127,6 +156,14 @@ fun ScanScreen(
                 // T186: secondary code path. Ordinary scan stays primary;
                 // the gated button renders nothing unless the pending build
                 // flag is ON. Sheet returns to this same capture surface.
+                // A stored same-owner intent offers resume (rotation /
+                // process-death survival); PRF readiness stays gated.
+                val resume = resumeIntent
+                if (resume != null) {
+                    dev.hryshyn.remanence.pending.PendingGiftResumeButton(
+                        onResume = { showPendingCode = true },
+                    )
+                }
                 dev.hryshyn.remanence.pending.PendingCodeEntryButton(
                     onOpenCodeEntry = { showPendingCode = true },
                 )
@@ -135,6 +172,9 @@ fun ScanScreen(
                         onClose = { showPendingCode = false },
                         lookup = pendingLookup,
                         newProofVm = newProofVm,
+                        ownerUserId = resumeOwnerId,
+                        giftIntentStore = resumeStore,
+                        resumeIntent = resume,
                     )
                 }
                 }

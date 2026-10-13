@@ -73,7 +73,12 @@ class PendingProofViewModel(
     private val verifyPort: ProofVerifyPort,
     private val optionsPort: ProofOptionsPort,
     private val claimPort: ProofClaimPort? = null,
-    private val tokenProvider: suspend () -> String?,
+    /**
+     * T186 M10: held lease gate — EVERY network call captures a fresh
+     * lease, sends with its token, and rechecks owner/incarnation
+     * liveness after the await. No bare token strings cross calls.
+     */
+    private val sessionGate: PendingRetirementSessionGate,
     private val accountProvider: suspend () -> ProofAccount?,
     private val signingKeyProvider: suspend () -> KeysetHandle?,
     private val hpkeKeyProvider: suspend () -> KeysetHandle?,
@@ -159,6 +164,36 @@ class PendingProofViewModel(
     private val _code = MutableStateFlow("")
     val code: StateFlow<String> = _code.asStateFlow()
 
+    /**
+     * T186 M10: explicit affirmative SMS consent (phone channels only).
+     * Never derived from the channel — the user toggles it, timestamped
+     * at request time. Email flows always send no consent.
+     */
+    private val _smsConsent = MutableStateFlow(false)
+    val smsConsent: StateFlow<Boolean> = _smsConsent.asStateFlow()
+
+    fun onSmsConsentChange(affirmed: Boolean) {
+        _smsConsent.value = affirmed
+    }
+
+    /**
+     * T186 M10: retry after a wrong code / network failure WITHOUT losing
+     * the gift or the attempt — restores the previous step in place.
+     */
+    fun retry() {
+        if (_state.value !is ProofState.Failed) return
+        val currentProof = proof ?: return
+        val currentAttempt = attempt
+        _state.value = if (currentAttempt != null) {
+            ProofState.CodeRequired(currentProof.deliveryId, currentAttempt, null)
+        } else {
+            ProofState.ProofRequired(
+                currentProof.deliveryId, currentProof.channel,
+                currentProof.claimExpiresAt, currentProof.publishStatementB64,
+            )
+        }
+    }
+
     fun onDestinationChange(value: String) {
         _destination.value = value
     }
@@ -199,15 +234,47 @@ class PendingProofViewModel(
         }
     }
 
-    private suspend fun bearer(): String? = try {
-        tokenProvider()?.takeIf { it.isNotBlank() }
-    } catch (_: Exception) {
-        null
+    /** Captures a fresh lease + token + owner for exactly one call. */
+    private fun creds(): ProofCreds? {
+        val lease = try {
+            sessionGate.capture()
+        } catch (_: Exception) {
+            return null
+        } ?: return null
+        val token = try {
+            sessionGate.accessTokenFor(lease)
+        } catch (_: Exception) {
+            return null
+        }
+        if (token.isNullOrBlank()) return null
+        return ProofCreds(lease, token, lease.ownerUserId.toRestString())
     }
 
+    /** Post-await fence: same owner AND live incarnation, or the call dies. */
+    private fun credsLive(creds: ProofCreds): Boolean = try {
+        sessionGate.isLive(creds.lease) &&
+            creds.lease.ownerUserId.toRestString() == creds.ownerId
+    } catch (_: Exception) {
+        false
+    }
+
+    private data class ProofCreds(
+        val lease: dev.hryshyn.remanence.core.data.network.SessionRequestLease,
+        val token: String,
+        val ownerId: String,
+    )
+
     private suspend fun continueFlow(reference: String): ProofState {
-        val token = bearer() ?: return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
-        return when (val result = continuePort.continueFrom(reference, token)) {
+        val creds = creds() ?: return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+        val result = try {
+            continuePort.continueFrom(reference, creds.token)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return ProofState.Failed(PendingProofMessage.NETWORK)
+        }
+        if (!credsLive(creds)) return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+        return when (result) {
             is ContinueResult.Sync -> ProofState.SyncReady(result.capsuleId)
             is ContinueResult.Proof -> {
                 // Full S verification with the REAL sender key from the
@@ -260,15 +327,17 @@ class PendingProofViewModel(
         _state.value = ProofState.RequestingAttempt
         launchScope.launch {
             _state.value = try {
-                val token = bearer()
-                if (token == null) {
+                val creds = creds()
+                if (creds == null) {
                     ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
                 } else {
-                    val sms = !current.channel.equals("email", ignoreCase = true)
-                    when (val result = verifyPort.request(
-                        current.deliveryId, _destination.value.trim(), sms,
-                        clockSeconds(), java.util.UUID.randomUUID().toString(), token,
-                    )) {
+                    val result = verifyPort.request(
+                        current.deliveryId, _destination.value.trim(), _smsConsent.value,
+                        clockSeconds(), java.util.UUID.randomUUID().toString(), creds.token,
+                    )
+                    if (!credsLive(creds)) {
+                        ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+                    } else when (result) {
                         is VerificationResult.Attempt -> {
                             attempt = result.attemptId
                             ProofState.CodeRequired(current.deliveryId, result.attemptId, result.resendCooldownSeconds)
@@ -292,11 +361,14 @@ class PendingProofViewModel(
         _state.value = ProofState.CheckingCode
         launchScope.launch {
             _state.value = try {
-                val token = bearer()
-                if (token == null) {
+                val creds = creds()
+                if (creds == null) {
                     ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
                 } else {
-                    when (val result = verifyPort.check(current.deliveryId, attemptId, _code.value.trim(), token)) {
+                    val result = verifyPort.check(current.deliveryId, attemptId, _code.value.trim(), creds.token)
+                    if (!credsLive(creds)) {
+                        ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+                    } else when (result) {
                         is VerificationResult.Verified -> verifiedState(current.deliveryId, result.attemptId)
                         is VerificationResult.Attempt -> {
                             attempt = result.attemptId
@@ -349,13 +421,16 @@ class PendingProofViewModel(
     ): ProofState {
         val port = claimPort
             ?: return ProofState.Failed(PendingProofMessage.BLOCKED)
-        val token = bearer() ?: return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+        val creds = creds() ?: return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
         val account = try {
             accountProvider()
         } catch (_: Exception) {
             null
         } ?: return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
-        if (account.userId.isBlank() || account.bundleId.isBlank()) {
+        if (account.userId.isBlank() || account.bundleId.isBlank() ||
+            account.userId != creds.ownerId
+        ) {
+            // Owner fence at entry: the account must be the lease owner.
             return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
         }
         val submitted = try {
@@ -363,13 +438,14 @@ class PendingProofViewModel(
                 current.deliveryId,
                 Base64.getEncoder().encodeToString(intent),
                 Base64.getEncoder().encodeToString(intentSig),
-                opId, token,
+                opId, creds.token,
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
             return ProofState.Failed(PendingProofMessage.NETWORK)
         }
+        if (!credsLive(creds)) return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
         if (submitted !is dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed) {
             val failure = submitted as dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Failure
             return ProofState.Failed(mapClaimFailure(failure.reason))
@@ -443,22 +519,25 @@ class PendingProofViewModel(
     private suspend fun verifiedState(deliveryId: String, attemptId: String): ProofState {
         attempt = attemptId
         _state.value = ProofState.LoadingOptions
-        val token = bearer() ?: return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+        val creds = creds() ?: return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
         val account = try {
             accountProvider()
         } catch (_: Exception) {
             null
         } ?: return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
-        if (account.userId.isBlank() || account.bundleId.isBlank()) {
+        if (account.userId.isBlank() || account.bundleId.isBlank() ||
+            account.userId != creds.ownerId
+        ) {
             return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
         }
         val options = try {
-            optionsPort.options(deliveryId, token)
+            optionsPort.options(deliveryId, creds.token)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
             return ProofState.Failed(PendingProofMessage.NETWORK)
         }
+        if (!credsLive(creds)) return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
         if (options !is ClaimOptionsResult.Options) {
             val failure = options as ClaimOptionsResult.Failure
             return ProofState.Failed(mapClaimFailure(failure.reason))

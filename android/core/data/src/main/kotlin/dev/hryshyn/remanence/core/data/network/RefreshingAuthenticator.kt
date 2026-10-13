@@ -150,6 +150,13 @@ class SessionRefreshCoordinator internal constructor(
     private val tokens: AuthTokenHolder,
     private val refreshTokenReader: RefreshTokenReader,
     private val rotationSink: SessionRotationSink,
+    /**
+     * T186 M10: authoritative SID refresh hook. Set from successful
+     * rotations (owner-bound, under fence); refresh/bootstrap then
+     * repopulates the id after process restart. Null keeps legacy
+     * behavior (callers without the holder are unaffected).
+     */
+    private val sessionIds: SessionIdHolder? = null,
 ) {
 
     private val mutex = Mutex()
@@ -555,6 +562,12 @@ class SessionRefreshCoordinator internal constructor(
                             result.value.accessToken,
                             result.value.refreshToken,
                         )
+                        // T186 M10: authoritative SID refresh under the same
+                        // fence/owner (covers bootstrap + rotation after
+                        // process restart; logout clears via the holder).
+                        runCatching {
+                            sessionIds?.set(storedOwner, result.value.sessionId)
+                        }
                         if (expectedOwner != null &&
                             !installBootstrapOwnerLocked(
                                 expectedOwner = expectedOwner,

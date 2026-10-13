@@ -218,10 +218,11 @@ object PendingClaimedEnvelope {
         // Re-open/restore is permanent after an accepted claim: the claimed
         // instant must fall inside S's own [created, expiry] window — NOT
         // "now before expiry" (a durable open past the deadline stays
-        // valid). Plus a future bound: claimed_at is never ahead of now.
+        // valid). Plus a bounded future-skew check: claimed_at is never
+        // ahead of now beyond clock skew.
         if (claim.claimedAtEpochSeconds < statement.createdAtEpochSeconds ||
             claim.claimedAtEpochSeconds > statement.claimExpiresAtEpochSeconds ||
-            claim.claimedAtEpochSeconds > expected.nowEpochSeconds
+            claim.claimedAtEpochSeconds > expected.nowEpochSeconds + FUTURE_SKEW_SECONDS
         ) {
             throw GeneralSecurityException("pending envelope time invalid")
         }
@@ -328,6 +329,8 @@ object PendingClaimedEnvelope {
 
     /** Frozen §2 domains reused for recomputation. */
     const val CLAIMED_ENVELOPE_DOMAIN: String = "postmark/claimed-envelope/v2"
+    /** Bounded clock-skew allowance for claimed_at (not a lifetime cut). */
+    const val FUTURE_SKEW_SECONDS: Long = 300L
     const val CLAIM_BINDING_DOMAIN: String = "postmark/claim-binding/v1"
     private const val DELIVERY_ADDRESS_DOMAIN: String = "postmark/delivery-address/v1"
     private const val DELIVERY_KEY_DOMAIN: String = "postmark/delivery-key/v1"

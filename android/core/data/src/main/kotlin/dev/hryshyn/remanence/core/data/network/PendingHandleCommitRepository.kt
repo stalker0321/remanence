@@ -113,10 +113,16 @@ class PendingHandleCommitRepository internal constructor(
                 response.code,
                 COMMIT_PROBLEM_CODES,
             )
+            // AUTH_INVALID retained retryable (never dropped): see R15 —
+            // the token was just leased live; re-auth belongs to the
+            // session machinery while this call retains.
+            val reason = problem?.let { mapProblemCode(it.code) } ?: HandleCommitFailure.HTTP
+            val retryable = (problem?.retryable ?: capsuleHttpFallbackIsRetryable(response.code)) ||
+                reason == HandleCommitFailure.AUTH_INVALID
             return HandleCommitResult.Failure(
-                reason = problem?.let { mapProblemCode(it.code) } ?: HandleCommitFailure.HTTP,
+                reason = reason,
                 httpStatus = response.code,
-                retryable = problem?.retryable ?: capsuleHttpFallbackIsRetryable(response.code),
+                retryable = retryable,
             )
         }
         if (!isJson(response, JSON_SUBTYPE)) {

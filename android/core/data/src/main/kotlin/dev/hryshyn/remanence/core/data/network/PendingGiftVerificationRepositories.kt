@@ -141,16 +141,36 @@ private data class TolerantLookupProblemDto(
 
 private val tolerantLookupJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
 
-private fun lookupProblemOutcome(text: String, httpStatus: Int): Pair<GiftLookupFailure, Boolean> {
+/**
+ * R8 request encoder: `explicitNulls = false` so `consent` is OMitted for
+ * email (frozen §8) instead of sent as explicit null. Decoding stays on
+ * the strict shared [NetworkJson].
+ */
+private val verificationRequestJson = kotlinx.serialization.json.Json {
+    ignoreUnknownKeys = false
+    isLenient = false
+    explicitNulls = false
+    encodeDefaults = true
+}
+
+internal fun lookupProblemOutcome(text: String, httpStatus: Int): Pair<GiftLookupFailure, Boolean> {
     val strict = classifyCapsuleProblem(text, httpStatus, LOOKUP_PROBLEM_CODES)
-    if (strict != null) return mapLookupProblem(strict.code) to strict.retryable
+    if (strict != null) {
+        val reason = mapLookupProblem(strict.code)
+        // AUTH_INVALID retained retryable (never dropped): the bearer was
+        // just leased live; see R15. Overrides the retry bit only.
+        return reason to (strict.retryable || reason == GiftLookupFailure.AUTH_INVALID)
+    }
     val tolerant = try {
         tolerantLookupJson.decodeFromString<TolerantLookupProblemDto>(text)
     } catch (_: Exception) {
         null
     }
     if (tolerant != null && tolerant.code in LOOKUP_PROBLEM_CODES) {
-        return mapLookupProblem(tolerant.code) to capsuleHttpFallbackIsRetryable(httpStatus)
+        val reason = mapLookupProblem(tolerant.code)
+        return reason to (
+            capsuleHttpFallbackIsRetryable(httpStatus) || reason == GiftLookupFailure.AUTH_INVALID
+            )
     }
     return GiftLookupFailure.HTTP to capsuleHttpFallbackIsRetryable(httpStatus)
 }
@@ -318,8 +338,7 @@ class PendingGiftLookupRepository internal constructor(
 }
 
 /** Authenticated verification request + code check (R8/R9, bearer via caller). */
-class PendingVerificationRepository internal constructor(
-    private val client: OkHttpClient,
+class PendingVerificationRepository internal constructor(    private val client: OkHttpClient,
     private val baseUrl: ApiBaseUrl,
 ) {
     suspend fun requestVerification(
@@ -341,7 +360,7 @@ class PendingVerificationRepository internal constructor(
             null
         }
         val body = try {
-            NetworkJson.encodeToString(
+            verificationRequestJson.encodeToString(
                 VerificationRequestDto.serializer(),
                 VerificationRequestDto(confirmDestination, consent, idempotencyKey),
             )

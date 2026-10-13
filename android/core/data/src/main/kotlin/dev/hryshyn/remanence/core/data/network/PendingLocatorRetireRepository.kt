@@ -155,10 +155,18 @@ class PendingLocatorRetireRepository internal constructor(
                 response.code,
                 RETIRE_PROBLEM_CODES,
             )
+            // AUTH_INVALID is retained retryable (never dropped): every call
+            // carries a just-leased token, so a 401 means the refresh domain
+            // moved underneath — transient by construction. The session
+            // machinery re-auths; the durable queue retains. This overrides
+            // only the retry bit, never the reason.
+            val reason = problem?.let { mapProblemCode(it.code) } ?: LocatorRetireFailure.HTTP
+            val retryable = (problem?.retryable ?: capsuleHttpFallbackIsRetryable(response.code)) ||
+                reason == LocatorRetireFailure.AUTH_INVALID
             return LocatorRetireResult.Failure(
-                reason = problem?.let { mapProblemCode(it.code) } ?: LocatorRetireFailure.HTTP,
+                reason = reason,
                 httpStatus = response.code,
-                retryable = problem?.retryable ?: capsuleHttpFallbackIsRetryable(response.code),
+                retryable = retryable,
             )
         }
         if (!isJson(response, JSON_SUBTYPE)) {

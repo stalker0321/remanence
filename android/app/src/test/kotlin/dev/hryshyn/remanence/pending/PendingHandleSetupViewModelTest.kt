@@ -159,8 +159,10 @@ class PendingHandleSetupViewModelTest {
     private fun vm(
         scope: CoroutineScope,
         account: PersistedAccountSummary?,
-        liveAfter: Boolean,
-        response: (String) -> HandleCommitResult,
+        liveAfter: Boolean = true,
+        response: (String) -> HandleCommitResult = { handle ->
+            HandleCommitResult.Committed(account!!.userId, handle, 200)
+        },
         calls: Calls,
         token: String? = "token",
     ): PendingHandleSetupViewModel = PendingHandleSetupViewModel(

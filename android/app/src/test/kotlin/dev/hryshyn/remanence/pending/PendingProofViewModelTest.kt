@@ -158,7 +158,7 @@ class PendingProofViewModelTest {
         options: (String) -> ClaimOptionsResult = { ClaimOptionsResult.Failure(
             dev.hryshyn.remanence.core.data.network.ClaimFailure.ADDRESS_PROOF_REQUIRED, 400, false,
         ) },
-        tokens: MutableList<String?> = mutableListOf("token", "token", "token", "token"),
+        tokens: MutableList<String?> = mutableListOf("token", "token", "token", "token", "token"),
         live: Boolean = true,
         account: ProofAccount? = ProofAccount(accountId, bundleId),
         gateOwner: String? = null,
@@ -170,6 +170,11 @@ class PendingProofViewModelTest {
         claim: ProofClaimPort? = null,
         onRequest: ((Boolean) -> Unit)? = null,
         checkBehavior: (() -> VerificationResult)? = null,
+        // R11-flow bearer budget: R7, R8, R9, R10 options and R11 submit
+        // each capture one bearer (FIFTH call); the positive fake stays
+        // live for all five. Intentional exhaustion negatives pass an
+        // explicit short list instead.
+        ownBundleKey: ByteArray? = null,
     ): PendingProofViewModel {
         TinkPrimitives.ensureRegistered()
         val signingKeys = signing
@@ -199,7 +204,7 @@ class PendingProofViewModelTest {
             hpkeKeyProvider = { hpke },
             sessionIdProvider = { session },
             senderKeyProvider = senderKeyProvider ?: { _, _ -> senderKey },
-            ownBundleKeyProvider = { null },
+            ownBundleKeyProvider = { ownBundleKey },
             claimPort = claim,
             scope = scope,
         )
@@ -248,7 +253,6 @@ class PendingProofViewModelTest {
                 )
             },
             hpke = setup.recipientPrivate,
-            tokens = mutableListOf("token", "token", "token", "token"),
             claim = ProofClaimPort { _, _, _, _, _ ->
                 submitted += 1
                 dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Failure(
@@ -278,6 +282,7 @@ class PendingProofViewModelTest {
     @Test
     fun submitGarbageClaimedRejected() = runTest {
         val setup = challengeSetup()
+        var submitted = 0
         val viewModel = vm(
             options = {
                 ClaimOptionsResult.Options(
@@ -287,8 +292,13 @@ class PendingProofViewModelTest {
                 )
             },
             hpke = setup.recipientPrivate,
-            tokens = mutableListOf("token", "token", "token", "token"),
+            // Genuine recipient public bytes: the rejection must come
+            // from the invalid binding parse — never from a null seam.
+            ownBundleKey = com.google.crypto.tink.TinkProtoKeysetFormat.serializeKeysetWithoutSecret(
+                setup.recipientPrivate.publicKeysetHandle,
+            ),
             claim = ProofClaimPort { _, _, _, _, _ ->
+                submitted += 1
                 dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
                     "55555555-6666-7777-8888-999999999999",
                     Base64.getEncoder().encodeToString(ByteArray(10)),
@@ -307,9 +317,11 @@ class PendingProofViewModelTest {
         viewModel.checkCode()
         testScheduler.advanceUntilIdle()
         assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.IntentReady)
-        // Structurally invalid binding bytes: acceptance rejects, never opens.
+        // R11 ran and the structurally invalid binding was rejected:
+        // no Claimed state, no grant, never opened.
         viewModel.submitClaim()
         testScheduler.advanceUntilIdle()
+        assertEquals(1, submitted)
         assertEquals(
             PendingProofViewModel.ProofState.Failed(PendingProofViewModel.PendingProofMessage.GENERIC),
             viewModel.state.value,

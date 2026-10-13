@@ -127,6 +127,28 @@ class ContentManifestCodec {
         expression: Triple<String, String, GeneratorExpression.ResolvedExpression>?,
         blobIdByContentId: Map<String, ByteArray>?,
         trackSnapshot: CapsuleTrackSnapshotV1? = null,
+    ): ByteArray = CapsuleArtifactCryptor().encrypt(
+        capsuleKeyset = capsuleKeyset,
+        context = contentContext(routingContext),
+        plaintext = buildPlaintext(
+            routingContext.capsuleId, photos, note,
+            expression, blobIdByContentId, trackSnapshot,
+        ),
+    )
+
+    /**
+     * T186 M12c: framed inner plaintext WITHOUT encryption (v1 bytes).
+     * The v2 sender seals these exact bytes under the delivery-target
+     * AAD; v1 callers keep the encrypting overloads (output unchanged —
+     * pinned by the existing frozen golden/round-trip tests).
+     */
+    fun buildPlaintext(
+        capsuleId: dev.hryshyn.remanence.core.model.CapsuleId,
+        photos: List<ManifestPhoto>,
+        note: String?,
+        expression: Triple<String, String, GeneratorExpression.ResolvedExpression>?,
+        blobIdByContentId: Map<String, ByteArray>?,
+        trackSnapshot: CapsuleTrackSnapshotV1? = null,
     ): ByteArray {
         validatePhotos(photos)
         validateNote(note)
@@ -136,7 +158,7 @@ class ContentManifestCodec {
 
         val builder = ContentManifest.newBuilder()
             .setProtocolVersion(if (expression == null) PROTOCOL_VERSION else PROTOCOL_VERSION_V2)
-            .setCapsuleId(routingContext.capsuleId.toProtoBytes())
+            .setCapsuleId(capsuleId.toProtoBytes())
         photos.sortedBy { it.ordinal }.forEach { photo ->
             builder.addPhotos(
                 PhotoEntry.newBuilder()
@@ -170,11 +192,7 @@ class ContentManifestCodec {
             builder.setTrackSnapshot(snapshotBuilder.build())
         }
 
-        return CapsuleArtifactCryptor().encrypt(
-            capsuleKeyset = capsuleKeyset,
-            context = contentContext(routingContext),
-            plaintext = builder.build().toByteArray(),
-        )
+        return builder.build().toByteArray()
     }
 
     fun decryptAndParse(

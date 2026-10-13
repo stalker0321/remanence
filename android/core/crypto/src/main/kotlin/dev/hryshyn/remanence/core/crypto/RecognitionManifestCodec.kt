@@ -52,18 +52,15 @@ class RecognitionManifestCodec {
         require(frontFingerprint.isNotEmpty()) { "front fingerprint is required" }
         require(frontFingerprint.size <= MAX_FINGERPRINT_BYTES) { "front fingerprint is too large" }
 
-        val hint = ChooserHint.newBuilder()
-            .setSenderHandleSnapshot(senderHandleSnapshot)
-            .setCreatedAtEpochSeconds(createdAtEpochSeconds)
-            .apply { placeLabel?.let(::setPlaceLabel) }
-            .build()
-        val manifest = RecognitionManifest.newBuilder()
-            .setManifestVersion(RecognitionManifestFormat.VERSION)
-            .setCapsuleId(routingContext.capsuleIdProto())
-            .setChooserHint(hint)
-            .setFrontFingerprint(com.google.protobuf.ByteString.copyFrom(frontFingerprint))
-            .build()
-        val plaintext = manifest.toByteArray()
+        // Inner plaintext via the shared seam (v1 bytes pinned by the
+        // existing frozen golden tests, not by this call site).
+        val plaintext = buildPlaintext(
+            routingContext.capsuleId,
+            senderHandleSnapshot,
+            createdAtEpochSeconds,
+            placeLabel,
+            frontFingerprint,
+        )
         require(plaintext.size + ProtocolV1Limits.ARTIFACT_AEAD_OVERHEAD_BYTES <=
             ProtocolV1Limits.RECOGNITION_MANIFEST_MAX_CIPHERTEXT_BYTES
         ) { "recognition manifest is too large" }
@@ -76,6 +73,43 @@ class RecognitionManifestCodec {
         } finally {
             plaintext.fill(0)
         }
+    }
+
+    /**
+     * T186 M12c: framed inner plaintext WITHOUT encryption (v1 bytes).
+     * The v2 sender seals these exact bytes under the delivery-target
+     * AAD; v1 callers keep `buildAndEncrypt` (unchanged output — the
+     * parity `require` above pins the seam to the historical bytes).
+     */
+    fun buildPlaintext(
+        capsuleId: dev.hryshyn.remanence.core.model.CapsuleId,
+        senderHandleSnapshot: String,
+        createdAtEpochSeconds: Long,
+        placeLabel: String?,
+        frontFingerprint: ByteArray,
+    ): ByteArray {
+        require(NormalizedHandle.parse(senderHandleSnapshot).value == senderHandleSnapshot) {
+            "invalid sender handle snapshot"
+        }
+        placeLabel?.let {
+            require(it.isNotEmpty()) { "place label is empty" }
+            require(it.toByteArray(Charsets.UTF_8).size <= PLACE_LABEL_MAX_BYTES) { "place label too long" }
+        }
+        require(createdAtEpochSeconds >= 0L) { "created timestamp is invalid" }
+        require(frontFingerprint.isNotEmpty()) { "front fingerprint is required" }
+        require(frontFingerprint.size <= MAX_FINGERPRINT_BYTES) { "front fingerprint is too large" }
+        val hint = ChooserHint.newBuilder()
+            .setSenderHandleSnapshot(senderHandleSnapshot)
+            .setCreatedAtEpochSeconds(createdAtEpochSeconds)
+            .apply { placeLabel?.let(::setPlaceLabel) }
+            .build()
+        return RecognitionManifest.newBuilder()
+            .setManifestVersion(RecognitionManifestFormat.VERSION)
+            .setCapsuleId(capsuleId.toProtoBytes())
+            .setChooserHint(hint)
+            .setFrontFingerprint(com.google.protobuf.ByteString.copyFrom(frontFingerprint))
+            .build()
+            .toByteArray()
     }
 
     fun decryptAndParse(

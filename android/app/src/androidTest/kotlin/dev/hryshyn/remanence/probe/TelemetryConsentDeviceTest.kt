@@ -29,6 +29,7 @@ import dev.hryshyn.remanence.ui.locale.AppLocale
 import dev.hryshyn.remanence.ui.settings.*
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.security.MessageDigest
 import java.util.Locale
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
@@ -63,7 +64,12 @@ class TelemetryConsentDeviceTest {
     private fun mountChooser(browse: Boolean) {
         val sources = sources()
         val input = GeneratorExpression.GeneratorInput("fixture-owner", 182L,
-            sources.mapIndexed { i, source -> GeneratorExpression.PhotoRef(source.contentId, i, 1000, 1000, "a".repeat(64)) }, null, null)
+            sources.mapIndexed { i, source -> GeneratorExpression.PhotoRef(source.contentId, i, 1000, 1000,
+                MessageDigest.getInstance("SHA-256").digest(source.jpegBytes)
+                    .joinToString("") { "%02x".format(it.toInt() and 255) }) }, null, null)
+        // Distinct originals are a production input invariant. Catch an
+        // ineligible fixture before it turns into an opaque chooser timeout.
+        assertEquals(GeneratorExpression.InputValidation.Valid, GeneratorExpression.validate(input))
         val chooser = CollageChoiceSession()
         val transport = Transport()
         val owner = TelemetryCoordinator(Store(), transport)

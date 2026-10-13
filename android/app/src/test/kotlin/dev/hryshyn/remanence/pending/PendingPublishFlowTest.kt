@@ -169,7 +169,7 @@ class PendingPublishFlowTest {
             scope = null,
         )
         val result = blocked.publish(frozenPending(), capsule, "k1", "k2")
-        assertTrue(result is PendingPublishFlow.State.Failed)
-        assertEquals(PendingPublishFlow.Reason.BLOCKED, result.reason)
+        val failed = result as PendingPublishFlow.State.Failed
+        assertEquals(PendingPublishFlow.Reason.BLOCKED, failed.reason)
     }
 }

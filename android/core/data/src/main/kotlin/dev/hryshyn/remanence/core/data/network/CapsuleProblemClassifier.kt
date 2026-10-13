@@ -55,6 +55,24 @@ internal fun classifyCapsuleProblem(
 internal fun capsuleHttpFallbackIsRetryable(httpStatus: Int): Boolean =
     httpStatus == HTTP_RATE_LIMITED || httpStatus in HTTP_SERVER_ERROR_RANGE
 
+/**
+ * Canonical single (status, retryable) terminal tuple for one problem
+ * code, or null when the code has no single canonical binding
+ * (`INTERNAL_ERROR` is dual-status; unknown codes have none). The
+ * shared [TERMINAL_CODE_STATUSES] map is consulted first so legacy v1
+ * tuples (e.g. `PROTOCOL_UNSUPPORTED` at 422) always win; endpoint
+ * scopes only add codes the shared map does not know.
+ */
+internal fun canonicalTerminalTuple(
+    code: String,
+    endpointStatuses: Map<String, Int> = emptyMap(),
+): Pair<Int, Boolean>? {
+    if (code == CODE_RATE_LIMITED) return HTTP_RATE_LIMITED to true
+    TERMINAL_CODE_STATUSES[code]?.let { return it to false }
+    endpointStatuses[code]?.let { return it to false }
+    return null
+}
+
 private fun canonicalRetryability(
     code: String,
     status: Int,

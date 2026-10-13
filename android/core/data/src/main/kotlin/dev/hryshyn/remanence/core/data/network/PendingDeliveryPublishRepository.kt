@@ -9,6 +9,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -175,6 +176,23 @@ private val PENDING_PUBLISH_ENDPOINT_STATUSES = mapOf(
     "ROUTE_STALE" to 409,
     "PROTOCOL_UNSUPPORTED" to 404,
 )
+
+/**
+ * Exact minimal pending `_problem` shape
+ * (`server/src/remanence/pending/api.py`): `{type, title, status,
+ * code}` — no `detail`/`request_id`/`retryable`. The shared strict
+ * classifier requires the full v1 fields, so minimal bodies arrive
+ * here. `retryable` is optional: omitted ⇒ derived canonically;
+ * explicit but wrong ⇒ rejected.
+ */
+@Serializable
+private data class MinimalPublishProblemDto(
+    val code: String = "",
+    val status: Int = 0,
+    val retryable: Boolean? = null,
+)
+
+private val minimalPublishJson = Json { ignoreUnknownKeys = true }
 
 private fun mapPublishProblem(code: String): PendingPublishFailure = when (code) {
     "AUTH_INVALID" -> PendingPublishFailure.AUTH_INVALID
@@ -475,18 +493,57 @@ class PendingDeliveryPublishRepository internal constructor(
         response: Response,
         bytes: ByteArray,
     ): Pair<PendingPublishFailure, Boolean> {
-        if (!isPublishJson(response, "problem+json")) {
-            return PendingPublishFailure.INVALID_RESPONSE to
-                capsuleHttpFallbackIsRetryable(response.code)
+        val text = bytes.toString(Charsets.UTF_8)
+        // Strict full-shape contract first (v1 fields, problem+json).
+        if (isPublishJson(response, "problem+json")) {
+            val problem = classifyCapsuleProblem(
+                text,
+                response.code,
+                PENDING_PUBLISH_PROBLEM_CODES,
+                PENDING_PUBLISH_ENDPOINT_STATUSES,
+            )
+            if (problem != null) {
+                val reason = mapPublishProblem(problem.code)
+                val retryable = problem.retryable ||
+                    reason == PendingPublishFailure.AUTH_INVALID
+                return reason to retryable
+            }
         }
-        val problem = classifyCapsuleProblem(
-            bytes.toString(Charsets.UTF_8),
-            response.code,
-            PENDING_PUBLISH_PROBLEM_CODES,
-            PENDING_PUBLISH_ENDPOINT_STATUSES,
-        )
-        val reason = problem?.let { mapPublishProblem(it.code) } ?: PendingPublishFailure.HTTP
-        val retryable = (problem?.retryable ?: capsuleHttpFallbackIsRetryable(response.code)) ||
+        // Exact minimal pending `_problem` contract (`about:blank` type,
+        // no detail/request_id/retryable). The pending gateway emits
+        // `application/json`, so both sub-types are accepted here —
+        // success bodies never reach this path (non-200 only).
+        if (isPublishJson(response, "problem+json") || isPublishJson(response, "json")) {
+            val minimal = minimalPublishProblem(text, response.code)
+            if (minimal != null) return minimal
+        }
+        return PendingPublishFailure.HTTP to
+            capsuleHttpFallbackIsRetryable(response.code)
+    }
+
+    /**
+     * Minimal-body tuple gate: frozen code set, wire status equality,
+     * endpoint-scoped canonical tuple, locally derived retryability.
+     * An explicit `retryable` that contradicts the canonical value is
+     * rejected (never trusted); an omitted one is derived.
+     */
+    private fun minimalPublishProblem(
+        text: String,
+        httpStatus: Int,
+    ): Pair<PendingPublishFailure, Boolean>? {
+        val dto = try {
+            minimalPublishJson.decodeFromString<MinimalPublishProblemDto>(text)
+        } catch (_: Exception) {
+            return null
+        }
+        if (dto.code !in PENDING_PUBLISH_PROBLEM_CODES) return null
+        if (dto.status != httpStatus) return null
+        val canonical = canonicalTerminalTuple(dto.code, PENDING_PUBLISH_ENDPOINT_STATUSES)
+            ?: return null
+        if (canonical.first != httpStatus) return null
+        if (dto.retryable != null && dto.retryable != canonical.second) return null
+        val reason = mapPublishProblem(dto.code)
+        val retryable = canonical.second ||
             reason == PendingPublishFailure.AUTH_INVALID
         return reason to retryable
     }

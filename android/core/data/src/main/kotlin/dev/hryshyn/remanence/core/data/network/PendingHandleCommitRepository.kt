@@ -204,7 +204,8 @@ class PendingHandleCommitRepository internal constructor(
             "INTERNAL_ERROR",
         )
 
-        internal fun create(baseUrl: ApiBaseUrl): PendingHandleCommitRepository =
+        /** Public factory for cross-module use (client stays internal). */
+        fun create(baseUrl: ApiBaseUrl): PendingHandleCommitRepository =
             PendingHandleCommitRepository(HttpClientFactory.create(), baseUrl)
     }
 }

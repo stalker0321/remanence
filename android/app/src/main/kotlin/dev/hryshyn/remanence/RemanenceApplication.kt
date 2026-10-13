@@ -836,18 +836,16 @@ class AppContainer private constructor(
      * pending flag + isolated API (worker + global container fail-closed).
      */
     val pendingRetirementPort: dev.hryshyn.remanence.pending.PendingRetirementPort by lazy {
-        val retire = dev.hryshyn.remanence.core.data.network.PendingLocatorRetireRepository(
-            dev.hryshyn.remanence.core.data.network.HttpClientFactory.create(),
-            apiBaseUrl,
-        )
+        val retire = dev.hryshyn.remanence.core.data.network.PendingLocatorRetireRepository.create(apiBaseUrl)
         dev.hryshyn.remanence.pending.PendingRetirementPort { _, capsule, op, pub, token ->
             if (token.isBlank()) {
                 dev.hryshyn.remanence.pending.PendingRetireOutcome.RetryableFailure("no-token")
             } else {
                 val id = runCatching {
                     dev.hryshyn.remanence.core.model.CapsuleId.parseRest(capsule)
-                }.getOrNull() ?: return@PendingRetirementPort
-                    dev.hryshyn.remanence.pending.PendingRetireOutcome.PermanentFailure("malformed-capsule-id")
+                }.getOrNull() ?: return@PendingRetirementPort dev.hryshyn.remanence.pending.PendingRetireOutcome.PermanentFailure(
+                    "malformed-capsule-id",
+                )
                 when (val result = retire.complete(id, pub, op, token)) {
                     is dev.hryshyn.remanence.core.data.network.LocatorRetireResult.Completed ->
                         dev.hryshyn.remanence.pending.PendingRetireOutcome.Success

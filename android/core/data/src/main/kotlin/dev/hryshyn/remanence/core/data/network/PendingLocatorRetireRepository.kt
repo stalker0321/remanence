@@ -251,7 +251,8 @@ class PendingLocatorRetireRepository internal constructor(
             "INTERNAL_ERROR",
         )
 
-        internal fun create(baseUrl: ApiBaseUrl): PendingLocatorRetireRepository =
+        /** Public factory for cross-module use (client stays internal). */
+        fun create(baseUrl: ApiBaseUrl): PendingLocatorRetireRepository =
             PendingLocatorRetireRepository(HttpClientFactory.create(), baseUrl)
     }
 }

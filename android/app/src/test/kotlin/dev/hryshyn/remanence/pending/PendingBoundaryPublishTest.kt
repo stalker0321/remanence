@@ -91,7 +91,7 @@ class PendingBoundaryPublishTest {
         accountOf: () -> ProofAccount? = { ProofAccount(gate.owner, senderBundle) },
         pin: PendingServicePin? = null,
         authored: PendingBoundaryPublish.Authored = authored(),
-        expectedOwnerId: String? = null,
+        expectedLease: SessionRequestLease? = null,
         draftCalls: MutableList<Unit> = mutableListOf(),
     ): PendingBoundaryPublish.Result {
         TinkPrimitives.ensureRegistered()
@@ -118,7 +118,7 @@ class PendingBoundaryPublishTest {
                     deliveryId, "AB3DE", 1814317432L, "a•••@•••",
                 )
             },
-            expectedOwnerId = expectedOwnerId,
+            expectedLease = expectedLease,
         )
     }
 
@@ -163,11 +163,18 @@ class PendingBoundaryPublishTest {
         assertEquals(listOf(1, 2, 3), kinds)
     }
 
+    /**
+     * T186 M12e (T188 B4): a carried lease from another owner never
+     * starts work — fail-closed before any draft, zero side effects.
+     */
     @Test
-    fun expectedOwnerMismatchFailsWithoutDraft() = runTest {
+    fun expectedLeaseMismatchFailsWithoutDraft() = runTest {
         val drafts = mutableListOf<Unit>()
+        val foreign = SessionRequestLease(
+            UserId.parseRest("99999999-2222-3333-4444-555555555555"), 1L,
+        )
         val result = run(
-            expectedOwnerId = "99999999-2222-3333-4444-555555555555",
+            expectedLease = foreign,
             draftCalls = drafts,
         )
         assertEquals(
@@ -200,5 +207,86 @@ class PendingBoundaryPublishTest {
             PendingBoundaryPublish.Result.Failed(PendingBoundaryPublish.Reason.BLOCKED),
             result,
         )
+    }
+
+    /**
+     * T186 M12e (T188 B3): the lease dies DURING the runner's account
+     * await — the re-read after the await catches it, zero drafts.
+     */
+    @Test
+    fun invalidationDuringAccountAwaitFails() = runTest {
+        val gate = SwitchingGate()
+        val other = "99999999-2222-3333-4444-555555555555"
+        var calls = 0
+        val drafts = mutableListOf<Unit>()
+        val result = run(
+            gate = gate,
+            accountOf = {
+                calls += 1
+                if (calls == 1) gate.owner = other
+                ProofAccount(gate.owner, senderBundle)
+            },
+            draftCalls = drafts,
+        )
+        assertEquals(1, calls)
+        assertEquals(
+            PendingBoundaryPublish.Result.Failed(PendingBoundaryPublish.Reason.SESSION_CHANGED),
+            result,
+        )
+        assertTrue(drafts.isEmpty())
+    }
+
+    /**
+     * T186 M12e (T188 B4): same-owner logout/relogin mints a new
+     * incarnation — the carried ORIGINAL lease no longer matches a
+     * fresh capture, so the run fails closed with zero drafts.
+     */
+    @Test
+    fun reloginSameOwnerFailsWithoutDraft() = runTest {
+        val gate = SwitchingGate()
+        var epoch = 1L
+        val rotating = object : PendingRetirementSessionGate {
+            override fun capture(): SessionRequestLease =
+                SessionRequestLease(UserId.parseRest(gate.owner), epoch)
+
+            override fun accessTokenFor(lease: SessionRequestLease): String? = "token"
+
+            override fun isLive(lease: SessionRequestLease): Boolean =
+                lease.ownerUserId == UserId.parseRest(gate.owner) && lease.incarnation == epoch
+        }
+        val stale = rotating.capture()
+        epoch = 2L
+        val drafts = mutableListOf<Unit>()
+        TinkPrimitives.ensureRegistered()
+        val result = PendingBoundaryPublish.run(
+            frozen = frozenPending(),
+            authored = authored(),
+            identity = identity(),
+            pin = testPin(),
+            sessionGate = rotating,
+            accountProvider = { ProofAccount(senderId, senderBundle) },
+            draftPort = PendingPublishFlow.DraftPort { _, _, _, _, _, _, _, _, _, _ ->
+                drafts += Unit
+                PendingDraftResult.Draft(
+                    "0198f0a0-0000-7000-8000-00000000d401",
+                    "0f".repeat(32),
+                    1798765432L,
+                )
+            },
+            blobPort = PendingPublishFlow.BlobPort { _, blobId, _, _, _, _ ->
+                PendingBlobResult.Uploaded(blobId, 11L)
+            },
+            finalizePort = PendingPublishFlow.FinalizePort { deliveryId, _, _, _, _, _ ->
+                PendingFinalizeResult.Finalized(
+                    deliveryId, "AB3DE", 1814317432L, "a•••@•••",
+                )
+            },
+            expectedLease = stale,
+        )
+        assertEquals(
+            PendingBoundaryPublish.Result.Failed(PendingBoundaryPublish.Reason.SESSION_CHANGED),
+            result,
+        )
+        assertTrue(drafts.isEmpty())
     }
 }

@@ -349,4 +349,39 @@ class PendingSenderViewModelTest {
         assertEquals(1, handed.size)
         assertTrue(viewModel.state.value is PendingSenderViewModel.State.KnownV1)
     }
+
+    /**
+     * T186 M12e (T188 B3): the lease dies DURING the post-content
+     * account await — the re-read after the await catches it, so no
+     * R3 draft escapes for a dead session.
+     */
+    @Test
+    fun invalidationDuringContentAccountAwaitFails() = runTest {
+        val switching = SwitchingGate()
+        val other = "99999999-2222-3333-4444-555555555555"
+        var calls = 0
+        var drafts = 0
+        val viewModel = vm(
+            switchingGate = switching,
+            accountOf = {
+                calls += 1
+                // VM checkTxn account calls: entry(1), post-freeze(2),
+                // post-identity(3), post-content(4). Kill the lease
+                // inside the last one: the pre-read still passes, the
+                // re-read must not.
+                if (calls == 4) switching.owner = other
+                ProofAccount(switching.owner, senderBundle)
+            },
+            onDraft = { drafts += 1 },
+        )
+        viewModel.onDestinationChange("a42@example.test")
+        viewModel.send()
+        testScheduler.advanceUntilIdle()
+        assertEquals(4, calls)
+        assertEquals(
+            PendingSenderViewModel.State.Failed(PendingSenderViewModel.Message.SESSION_CHANGED),
+            viewModel.state.value,
+        )
+        assertEquals(0, drafts)
+    }
 }

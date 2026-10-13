@@ -179,7 +179,10 @@ class PendingCapsulePublisherTest {
             publication.artifacts.map { it.ordinal },
         )
         val statement = PendingPublishVerifier.verifyStructure(publication.statement)
-        assertEquals(3, statement.artifactsCount)
+        // Four declarations: recognition + content + two photos (the
+        // kind/order assertion above is the contract; the count binds S
+        // to the same full set).
+        assertEquals(4, statement.artifactsCount)
         assertEquals(
             publication.artifacts.map { it.kind },
             statement.artifactsList.map { it.kind },

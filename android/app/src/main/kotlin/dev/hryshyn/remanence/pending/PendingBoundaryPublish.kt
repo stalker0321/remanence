@@ -90,14 +90,14 @@ object PendingBoundaryPublish {
         draftPort: PendingPublishFlow.DraftPort,
         blobPort: PendingPublishFlow.BlobPort,
         finalizePort: PendingPublishFlow.FinalizePort,
-        expectedOwnerId: String? = null,
+        expectedLease: dev.hryshyn.remanence.core.data.network.SessionRequestLease? = null,
     ): Result {
         if (!PendingServicePinConfig.usable(pin)) return Result.Failed(Reason.SERVICE_UNAVAILABLE)
         if (identity.userId.isBlank() || identity.bundleId.isBlank()) {
             return Result.Failed(Reason.RECOVERY_REQUIRED)
         }
         if (authored.photos.isEmpty()) return Result.Failed(Reason.BLOCKED)
-        val txn = beginTxn(sessionGate, expectedOwnerId) ?: return Result.Failed(Reason.SESSION_CHANGED)
+        val txn = beginTxn(sessionGate, expectedLease) ?: return Result.Failed(Reason.SESSION_CHANGED)
         if (!checkTxn(sessionGate, accountProvider, txn)) return Result.Failed(Reason.SESSION_CHANGED)
         if (identity.userId != txn.ownerId) return Result.Failed(Reason.SESSION_CHANGED)
         val keys = try {
@@ -189,7 +189,7 @@ object PendingBoundaryPublish {
                 frozen, authored.capsuleId,
                 java.util.UUID.randomUUID().toString(),
                 java.util.UUID.randomUUID().toString(),
-                txnOwnerId = txn.ownerId,
+                txnLease = txn.lease,
             )
         ) {
             is PendingPublishFlow.State.Published ->
@@ -215,7 +215,7 @@ object PendingBoundaryPublish {
 
     private fun beginTxn(
         sessionGate: PendingRetirementSessionGate,
-        expectedOwnerId: String?,
+        expectedLease: dev.hryshyn.remanence.core.data.network.SessionRequestLease?,
     ): Txn? {
         val lease = try {
             sessionGate.capture()
@@ -224,7 +224,14 @@ object PendingBoundaryPublish {
         } ?: return null
         val ownerId = lease.ownerUserId.toRestString()
         if (ownerId.isBlank()) return null
-        if (expectedOwnerId != null && ownerId != expectedOwnerId) return null
+        // T186 M12e (T188 B4): pin owner AND incarnation to the caller's
+        // ORIGINAL capture — same-owner relogin fails closed here.
+        if (expectedLease != null &&
+            (lease.ownerUserId != expectedLease.ownerUserId ||
+                lease.incarnation != expectedLease.incarnation)
+        ) {
+            return null
+        }
         return Txn(lease, ownerId)
     }
 
@@ -244,6 +251,14 @@ object PendingBoundaryPublish {
         } catch (_: Exception) {
             return false
         }
+        // T186 M12e (T188 B3): re-read liveness AFTER the account await —
+        // the lease may have died while it was in flight.
+        val stillLive = try {
+            sessionGate.isLive(txn.lease)
+        } catch (_: Exception) {
+            return false
+        }
+        if (!stillLive) return false
         return account != null && !account.userId.isBlank() && account.userId == txn.ownerId
     }
 }

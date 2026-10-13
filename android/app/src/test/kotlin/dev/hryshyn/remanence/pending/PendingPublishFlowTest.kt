@@ -48,15 +48,20 @@ class PendingPublishFlowTest {
      * previously captured leases (mirrors the incarnation bump on
      * logout/replacement); the account follows the current owner, so a
      * mid-transaction A→B switch is observable at the next fence.
+     * Bumping [epoch] models a same-owner logout/relogin (owner
+     * unchanged, incarnation rotated).
      */
-    private inner class SwitchingGate(var owner: String = senderId) : PendingRetirementSessionGate {
+    private inner class SwitchingGate(
+        var owner: String = senderId,
+        var epoch: Long = 1L,
+    ) : PendingRetirementSessionGate {
         override fun capture(): SessionRequestLease =
-            SessionRequestLease(UserId.parseRest(owner), 1L)
+            SessionRequestLease(UserId.parseRest(owner), epoch)
 
         override fun accessTokenFor(lease: SessionRequestLease): String? = "token"
 
         override fun isLive(lease: SessionRequestLease): Boolean =
-            lease.ownerUserId == UserId.parseRest(owner)
+            lease.ownerUserId == UserId.parseRest(owner) && lease.incarnation == epoch
     }
 
     private fun material() = PendingPublishFlow.PublishMaterial(
@@ -97,13 +102,14 @@ class PendingPublishFlowTest {
             )
         },
         materialOverride: PendingPublishFlow.MaterialPort? = null,
+        accountOf: (() -> ProofAccount?)? = null,
     ): PendingPublishFlow = PendingPublishFlow(
         draftPort = draft,
         blobPort = blob,
         finalizePort = finalize,
         materialPort = materialOverride ?: PendingPublishFlow.MaterialPort { material() },
         sessionGate = gate,
-        accountProvider = { account },
+        accountProvider = accountOf ?: { account },
         scope = null,
     )
 
@@ -258,5 +264,81 @@ class PendingPublishFlowTest {
             result,
         )
         assertEquals(0, blobs)
+    }
+
+    /**
+     * T186 M12e (T188 B3): the lease dies DURING the post-finalize
+     * account await — the re-read after the await catches it, so no
+     * live-looking Published result escapes for a dead session.
+     */
+    @Test
+    fun invalidationDuringPostFinalizeAccountAwaitFails() = runTest {
+        val switching = SwitchingGate()
+        val other = "99999999-2222-3333-4444-555555555555"
+        var calls = 0
+        val result = flow(
+            gate = switching,
+            accountOf = {
+                calls += 1
+                // checkTxn account calls: entry(1), post-material(2),
+                // post-draft(3), blob pre(4)/post(5), pre-finalize(6),
+                // post-finalize(7). Kill the lease inside the last one:
+                // the pre-read still passes, the re-read must not.
+                if (calls == 7) switching.owner = other
+                ProofAccount(switching.owner, "bundle")
+            },
+        ).publish(frozenPending(), capsule, "k1", "k2")
+        assertEquals(7, calls)
+        assertEquals(
+            PendingPublishFlow.State.Failed(PendingPublishFlow.Reason.SESSION_CHANGED),
+            result,
+        )
+        assertTrue(result !is PendingPublishFlow.State.Published)
+    }
+
+    /**
+     * T186 M12e (T188 B4): same-owner logout/relogin mints a new
+     * incarnation — the ORIGINAL carried lease no longer matches a
+     * fresh capture, so the flow fails closed BEFORE the first R3
+     * side effect (zero drafts).
+     */
+    @Test
+    fun reloginSameOwnerFailsBeforeR3() = runTest {
+        val switching = SwitchingGate()
+        var drafts = 0
+        val stale = switching.capture()
+        switching.epoch = 2L
+        val result = flow(
+            gate = switching,
+            draft = PendingPublishFlow.DraftPort { _, _, _, _, _, _, _, _, _, _ ->
+                drafts += 1
+                PendingDraftResult.Draft(
+                    "0198f0a0-0000-7000-8000-00000000d401",
+                    "0f".repeat(32),
+                    1798765432L,
+                )
+            },
+        ).publish(frozenPending(), capsule, "k1", "k2", txnLease = stale)
+        assertEquals(
+            PendingPublishFlow.State.Failed(PendingPublishFlow.Reason.SESSION_CHANGED),
+            result,
+        )
+        assertEquals(0, drafts)
+    }
+
+    /**
+     * T186 M12e (T188 B4): ordinary bearer rotation keeps owner AND
+     * incarnation, so carrying the previously captured lease still
+     * passes — no false rejection of a healthy session.
+     */
+    @Test
+    fun rotationWithSameValuesPasses() = runTest {
+        val switching = SwitchingGate()
+        val lease = switching.capture()
+        val result = flow(gate = switching).publish(
+            frozenPending(), capsule, "k1", "k2", txnLease = lease,
+        )
+        val published = result as PendingPublishFlow.State.Published
+        assertEquals("AB3DE", published.locatorCode)
     }
 }

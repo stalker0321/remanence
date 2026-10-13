@@ -31,7 +31,8 @@ import kotlinx.coroutines.launch
  * rechecked after EVERY await — including the local material await —
  * and BEFORE every network side effect; bearers are re-read for the
  * same live lease per call, never substituted. An optional
- * [txnOwnerId] pins the original owner across a caller boundary.
+ * [txnLease] pins the ORIGINAL lease across a caller boundary (owner
+ * AND incarnation must match a fresh capture).
  */
 class PendingPublishFlow(
     private val draftPort: DraftPort,
@@ -149,7 +150,7 @@ class PendingPublishFlow(
         val ownerId: String,
     )
 
-    private fun beginTxn(expectedOwnerId: String? = null): Txn? {
+    private fun beginTxn(expectedLease: dev.hryshyn.remanence.core.data.network.SessionRequestLease? = null): Txn? {
         val lease = try {
             sessionGate.capture()
         } catch (_: Exception) {
@@ -157,7 +158,16 @@ class PendingPublishFlow(
         } ?: return null
         val ownerId = lease.ownerUserId.toRestString()
         if (ownerId.isBlank()) return null
-        if (expectedOwnerId != null && ownerId != expectedOwnerId) return null
+        // T186 M12e (T188 B4): pin owner AND incarnation to the caller's
+        // ORIGINAL capture. A same-owner logout/relogin mints a new
+        // incarnation and fails closed here; an ordinary bearer rotation
+        // keeps both values and passes.
+        if (expectedLease != null &&
+            (lease.ownerUserId != expectedLease.ownerUserId ||
+                lease.incarnation != expectedLease.incarnation)
+        ) {
+            return null
+        }
         return Txn(lease, ownerId)
     }
 
@@ -185,27 +195,30 @@ class PendingPublishFlow(
         } catch (_: Exception) {
             return false
         }
+        // T186 M12e (T188 B3): re-read liveness AFTER the account await —
+        // the lease may have died while it was in flight. One read before
+        // the await is not a fence.
+        if (!txnLive(txn)) return false
         return account != null && !account.userId.isBlank() && account.userId == txn.ownerId
     }
 
     /**
      * Publishes one frozen pending route. Suspends (no owned scope kept;
      * callers launch). Idempotency keys are caller-supplied per stage so
-     * retries replay canonically. [txnOwnerId] pins the ORIGINAL
-     * transaction owner across a caller boundary (e.g. the sender
-     * ViewModel's R1 owner): a lease captured here for a different owner
-     * fails closed before any side effect.
+     * retries replay canonically. [txnLease] pins the ORIGINAL
+     * transaction lease across a caller boundary (owner AND incarnation
+     * must match a fresh capture, else fail-closed before R3).
      */
     suspend fun publish(
         frozen: PendingSendRouteFlow.FrozenIdentity.Pending,
         capsuleId: String,
         draftIdempotencyKey: String,
         finalizeIdempotencyKey: String,
-        txnOwnerId: String? = null,
+        txnLease: dev.hryshyn.remanence.core.data.network.SessionRequestLease? = null,
     ): State {
         _state.value = State.Drafting
         return try {
-            publishFlow(frozen, capsuleId, draftIdempotencyKey, finalizeIdempotencyKey, txnOwnerId)
+            publishFlow(frozen, capsuleId, draftIdempotencyKey, finalizeIdempotencyKey, txnLease)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
@@ -219,11 +232,11 @@ class PendingPublishFlow(
         capsuleId: String,
         draftIdempotencyKey: String,
         finalizeIdempotencyKey: String,
-        txnOwnerId: String? = null,
+        txnLease: dev.hryshyn.remanence.core.data.network.SessionRequestLease? = null,
     ) {
         val scope = launchScope ?: return
         scope.launch {
-            publish(frozen, capsuleId, draftIdempotencyKey, finalizeIdempotencyKey, txnOwnerId)
+            publish(frozen, capsuleId, draftIdempotencyKey, finalizeIdempotencyKey, txnLease)
         }
     }
 
@@ -232,9 +245,9 @@ class PendingPublishFlow(
         capsuleId: String,
         draftKey: String,
         finalizeKey: String,
-        txnOwnerId: String?,
+        txnLease: dev.hryshyn.remanence.core.data.network.SessionRequestLease?,
     ): State {
-        val txn = beginTxn(txnOwnerId) ?: return State.Failed(Reason.SESSION_CHANGED)
+        val txn = beginTxn(txnLease) ?: return State.Failed(Reason.SESSION_CHANGED)
         if (!checkTxn(txn)) return State.Failed(Reason.SESSION_CHANGED)
         val material = try {
             materialPort.material(frozen)

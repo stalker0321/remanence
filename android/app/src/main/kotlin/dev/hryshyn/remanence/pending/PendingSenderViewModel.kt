@@ -36,6 +36,16 @@ fun interface PendingSenderIdentityPort {
 }
 
 /**
+ * T186 M12e: resolves a frozen v1 route to the existing directory
+ * snapshot (userId + key-bundle match, ACTIVE bundle). Null when the
+ * directory cannot prove the pair — the frozen route alone never
+ * substitutes for directory ownership.
+ */
+fun interface PendingV1ResolvePort {
+    suspend fun resolve(userId: String, bundleId: String, token: String): dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot?
+}
+
+/**
  * T186 M12: actual v2 sender caller (isolated EMAIL/PHONE destination →
  * existing R1 freeze → real R3/R4/R5 publication → displayed 5-char
  * code). Owns the `PendingSendRouteFlow` freeze and drives a caller-built
@@ -72,6 +82,19 @@ class PendingSenderViewModel(
      * defers publication. Defaults to no-op (unit surfaces).
      */
     private val onFrozenRoute: (PendingSendRouteFlow.FrozenIdentity) -> Unit = {},
+    /**
+     * T186 M12e: existing-pipeline handoff for a frozen v1 route.
+     * Invoked with the directory-proven snapshot (user + bundle match,
+     * ACTIVE) so the caller can run the ordinary confirm→publish path
+     * with zero escrow. Never invoked on mismatch (fail closed, still
+     * `KnownV1` display).
+     */
+    private val onResolvedHandle: (dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot) -> Unit = {},
+    /**
+     * T186 M12e: directory ownership proof for frozen v1 routes. Null
+     * keeps the frozen display without the existing-pipeline handoff.
+     */
+    private val v1ResolvePort: PendingV1ResolvePort? = null,
     scope: CoroutineScope? = null,
 ) : ViewModel() {
 
@@ -143,7 +166,8 @@ class PendingSenderViewModel(
      * T186 M12b (T188 C3): one held sender transaction — the ORIGINAL
      * owner + lease (incarnation pinned). Rechecked after EVERY await
      * (identity, content, R1) and BEFORE every side effect; the same
-     * owner is pinned across the publish-flow boundary via [Txn.ownerId].
+     * owner + lease is pinned across the publish-flow boundary via
+ * [Txn.lease] (owner AND incarnation must match a fresh capture).
      */
     private data class Txn(
         val lease: dev.hryshyn.remanence.core.data.network.SessionRequestLease,
@@ -183,6 +207,9 @@ class PendingSenderViewModel(
         } catch (_: Exception) {
             return false
         }
+        // T186 M12e (T188 B3): re-read liveness AFTER the account await —
+        // the lease may have died while it was in flight.
+        if (!txnLive(txn)) return false
         return account != null && !account.userId.isBlank() && account.userId == txn.ownerId
     }
 
@@ -235,13 +262,47 @@ class PendingSenderViewModel(
                     return State.Failed(Message.GENERIC)
                 }
                 when (val identity = frozen.identity) {
-                    is PendingSendRouteFlow.FrozenIdentity.V1 -> State.KnownV1(identity)
+                    is PendingSendRouteFlow.FrozenIdentity.V1 -> {
+                        resolveV1ForExistingPipeline(txn, identity)
+                        State.KnownV1(identity)
+                    }
                     is PendingSendRouteFlow.FrozenIdentity.Pending ->
                         publishPending(txn, identity, capsuleId)
                 }
             }
             is PendingSendRouteFlow.State.Failed -> State.Failed(mapRouteFailure(frozen.reason))
             else -> State.Failed(Message.GENERIC)
+        }
+    }
+
+    /**
+     * T186 M12e: proves a frozen v1 route against the directory (same
+     * transaction fences) and hands the proven snapshot to the existing
+     * pipeline. Mismatch/unknown/failure ⇒ no callback (fail closed);
+     * the frozen display still stands.
+     */
+    private suspend fun resolveV1ForExistingPipeline(
+        txn: Txn,
+        identity: PendingSendRouteFlow.FrozenIdentity.V1,
+    ) {
+        val port = v1ResolvePort ?: return
+        if (!checkTxn(txn)) return
+        val token = txnBearer(txn) ?: return
+        val snapshot = try {
+            port.resolve(identity.userId, identity.keyBundleId, token)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            null
+        } ?: return
+        if (!checkTxn(txn)) return
+        if (snapshot.keyBundleStatus != "ACTIVE") return
+        if (snapshot.userId.toRestString() != identity.userId) return
+        if (snapshot.keyBundleId.toRestString() != identity.keyBundleId) return
+        try {
+            onResolvedHandle(snapshot)
+        } catch (_: Exception) {
+            // Display stands; the handoff simply did not land.
         }
     }
 
@@ -354,7 +415,7 @@ class PendingSenderViewModel(
             val published = flow.publish(
                 frozen, capsuleId,
                 java.util.UUID.randomUUID().toString(), finalizeKey,
-                txnOwnerId = txn.ownerId,
+                txnLease = txn.lease,
             )
         ) {
             is PendingPublishFlow.State.Published ->

@@ -122,7 +122,7 @@ class PendingProofViewModelTest {
     )
 
     /** Fake held-lease gate: token queue + liveness + owner binding. */
-    private class FakeGate(
+    private inner class FakeGate(
         val owner: String,
         val tokens: MutableList<String?>,
         var live: Boolean = true,
@@ -141,7 +141,7 @@ class PendingProofViewModelTest {
             live && lease.ownerUserId == UserId.parseRest(owner)
     }
 
-    private fun vm(
+    private fun kotlinx.coroutines.test.TestScope.vm(
         continueResult: ContinueResult = proofBranch(),
         options: (String) -> ClaimOptionsResult = { ClaimOptionsResult.Failure(
             dev.hryshyn.remanence.core.data.network.ClaimFailure.ADDRESS_PROOF_REQUIRED, 400, false,
@@ -155,7 +155,7 @@ class PendingProofViewModelTest {
         session: String? = sessionId,
         senderKey: ByteArray? = frozenSenderKey(),
         senderKeyProvider: (suspend (String, String) -> ByteArray?)? = null,
-        claim: PendingClaimPort? = null,
+        claim: ProofClaimPort? = null,
         onRequest: ((Boolean) -> Unit)? = null,
         checkBehavior: (() -> VerificationResult)? = null,
     ): PendingProofViewModel {
@@ -237,7 +237,7 @@ class PendingProofViewModelTest {
             },
             hpke = setup.recipientPrivate,
             tokens = mutableListOf("token", "token", "token", "token"),
-            claim = PendingClaimPort { _, _, _, _, _ ->
+            claim = ProofClaimPort { _, _, _, _, _ ->
                 submitted += 1
                 dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Failure(
                     dev.hryshyn.remanence.core.data.network.ClaimFailure.CLAIM_CONFLICT,
@@ -276,7 +276,7 @@ class PendingProofViewModelTest {
             },
             hpke = setup.recipientPrivate,
             tokens = mutableListOf("token", "token", "token", "token"),
-            claim = PendingClaimPort { _, _, _, _, _ ->
+            claim = ProofClaimPort { _, _, _, _, _ ->
                 dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
                     "55555555-6666-7777-8888-999999999999",
                     Base64.getEncoder().encodeToString(ByteArray(10)),

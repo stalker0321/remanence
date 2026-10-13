@@ -331,7 +331,7 @@ class PendingJourneyDeviceTest {
             ),
         )
         mountEntry("en") {
-            PendingProofFlow(viewModel = viewModel, giftReference = "ref")
+            PendingProofFlow(viewModel = viewModel, giftReference = "ref", onDone = {})
         }
         // Already owned: ordinary sync/scan note, no proof form.
         rule.onNodeWithTag("pending_proof_sync").assertIsDisplayed()
@@ -348,7 +348,7 @@ class PendingJourneyDeviceTest {
             ),
         )
         mountEntry("en") {
-            PendingProofFlow(viewModel = viewModel, giftReference = "ref")
+            PendingProofFlow(viewModel = viewModel, giftReference = "ref", onDone = {})
         }
         // Generic failure, never a proof branch for someone else.
         rule.onNodeWithTag("pending_proof_error").assertIsDisplayed()

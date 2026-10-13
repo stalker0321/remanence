@@ -249,13 +249,12 @@ class CreateViewModel(
      * keeps confirmed-handle and frozen-route mutually exclusive.
      */
     fun onPendingRouteFrozen(identity: dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity) {
-        // T186 M12e-frozen-gate (T188 REDO B1): gate BEFORE any store
-        // mutation — an off-step callback must not replace the chosen
-        // recipient. Step first, then session: without a live session
-        // owner nothing is stored.
-        if (identity is dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity.Pending) {
-            if (!requireStep(Step.RECIPIENT_LOOKUP, "pending route")) return
-        }
+        // T186 M14b (T188 B3): in-step gate for BOTH modes BEFORE any
+        // store mutation — an off-step callback must not replace the
+        // chosen recipient (nor null the confirmed handle via the
+        // store's mutual exclusion). Step first, then session: without
+        // a live session owner nothing is stored.
+        if (!requireStep(Step.RECIPIENT_LOOKUP, "pending route")) return
         if (sessionOwner == null) {
             failGuard("authenticated owner is unavailable; recipient choice disabled")
             return

@@ -325,4 +325,21 @@ class CreatePendingRouteStepTest {
         assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
         assertFalse(vm.backToRecipient())
     }
+
+    /**
+     * T186 M14b (T188 B3): the in-step gate covers BOTH modes — an
+     * off-step V1 freeze stores nothing (V1 keeps its no-advance
+     * behaviour where the resolve+confirm path owns it).
+     */
+    @Test
+    fun v1OffStepFreezeStoresNothing() {
+        val vm = viewModel()
+        vm.onPendingRouteFrozen(pendingIdentity())
+        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        assertEquals(pendingIdentity(), vm.pendingRoute.value)
+        vm.onPendingRouteFrozen(v1Identity())
+        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        assertEquals(pendingIdentity(), vm.pendingRoute.value)
+        assertTrue(vm.flowError.value != null)
+    }
 }

@@ -31,9 +31,15 @@ class PendingFeatureGateTest {
     }
 
     @Test
-    fun pendingDisabledByDefault() {
-        // Plain-JVM default: experimental journey is OFF unless the debug
-        // build explicitly opts in. All pending UI returns early on false.
-        assertFalse(PendingFeatureGate.isEnabled())
+    fun enabledMirrorsBuildConfig() {
+        // The flag value comes from the build (default OFF; debug opt-in
+        // via -Premanence.pending.enabled; release/beta hardwire false —
+        // root verifies the generated BuildConfig independently). The suite
+        // must NOT assume a value: it asserts the gate reads the build
+        // source of truth, whatever this harness configured.
+        assertEquals(
+            dev.hryshyn.remanence.BuildConfig.REMANENCE_PENDING_ENABLED,
+            PendingFeatureGate.isEnabled(),
+        )
     }
 }

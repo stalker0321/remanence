@@ -93,7 +93,23 @@ class PendingRetirementOutbox(
             quarantineLocked(ownerUserId)
             emptyList()
         }.toMutableList()
-        existing.firstOrNull { it.capsuleId == capsuleId }?.let { return@withLock it }
+        existing.firstOrNull { it.capsuleId == capsuleId }?.let { prior ->
+            // Dedup healing: a hash-less placeholder heals to the trusted
+            // hash when first supplied (same id + operation id preserved).
+            // A DIFFERENT non-null hash for the same capsule is rejected:
+            // the publication hash is immutable once known.
+            if (prior.publicationHash.isNullOrBlank() && !publicationHash.isNullOrBlank()) {
+                val healed = prior.copy(publicationHash = publicationHash)
+                writeLocked(ownerUserId, existing.map { if (it.capsuleId == capsuleId) healed else it })
+                return@withLock healed
+            }
+            if (!prior.publicationHash.isNullOrBlank() && !publicationHash.isNullOrBlank() &&
+                prior.publicationHash != publicationHash
+            ) {
+                throw IllegalArgumentException("publication hash conflict for queued capsule")
+            }
+            return@withLock prior
+        }
         val item = Item(
             id = java.util.UUID.randomUUID().toString(),
             ownerUserId = ownerUserId,

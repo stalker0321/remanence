@@ -13,6 +13,7 @@ class PendingRetirementOutboxTest {
     companion object {
         const val OWNER_1 = "11111111-2222-3333-4444-555555555555"
         const val OWNER_2 = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        const val PUB_HEX = "0f3e5a58f2e94f1923e0410be469bcc8a911b78107b0c5364834a63812d9fb68"
     }
 
     private fun tempRoot(): java.io.File = Files.createTempDirectory("pending-outbox").toFile()
@@ -34,7 +35,7 @@ class PendingRetirementOutboxTest {
     fun enqueuePersistsAndSurvivesRestartWithoutNetwork() = runTest {
         val root = tempRoot()
         val outbox = PendingRetirementOutbox(root, UnconfiguredPendingRetirementPort)
-        val item = outbox.enqueue(OWNER_1, "capsule-1")
+        val item = outbox.enqueue(OWNER_1, "capsule-1", PUB_HEX)
         assertEquals(OWNER_1, item.ownerUserId)
         assertEquals("capsule-1", item.capsuleId)
         assertTrue(item.operationId.isNotBlank())
@@ -59,7 +60,7 @@ class PendingRetirementOutboxTest {
             PendingRetireOutcome.RetryableFailure("network")
         }
         val outbox = PendingRetirementOutbox(root, flaky)
-        outbox.enqueue(OWNER_1, "capsule-1")
+        outbox.enqueue(OWNER_1, "capsule-1", PUB_HEX)
         assertEquals(0, outbox.drain(OWNER_1, liveGate()))
         assertEquals(0, outbox.drain(OWNER_1, liveGate()))
         assertEquals(2, calls)
@@ -72,8 +73,8 @@ class PendingRetirementOutboxTest {
         val root = tempRoot()
         val ok = PendingRetirementPort { _, _, _, _, _ -> PendingRetireOutcome.Success }
         val outbox = PendingRetirementOutbox(root, ok)
-        outbox.enqueue(OWNER_1, "capsule-1")
-        outbox.enqueue(OWNER_2, "capsule-2")
+        outbox.enqueue(OWNER_1, "capsule-1", PUB_HEX)
+        outbox.enqueue(OWNER_2, "capsule-2", PUB_HEX)
         // Switched owner: owner-2 items never execute under owner-1 drain.
         assertEquals(1, outbox.drain(OWNER_1, liveGate()))
         assertEquals(0, outbox.pendingCount(OWNER_1))
@@ -89,7 +90,7 @@ class PendingRetirementOutboxTest {
             PendingRetireOutcome.Success
         }
         val outbox = PendingRetirementOutbox(root, port)
-        outbox.enqueue(OWNER_1, "capsule-1")
+        outbox.enqueue(OWNER_1, "capsule-1", PUB_HEX)
         // Even a success response is discarded when the lease died mid-send.
         assertEquals(0, outbox.drain(OWNER_1, leaseFor(OWNER_1, live = false)))
         assertEquals(1, outbox.pendingCount(OWNER_1))
@@ -110,7 +111,7 @@ class PendingRetirementOutboxTest {
             override fun isLive(lease: SessionRequestLease) = true
         }
         val outbox = PendingRetirementOutbox(root, port)
-        outbox.enqueue(OWNER_1, "capsule-1")
+        outbox.enqueue(OWNER_1, "capsule-1", PUB_HEX)
         assertEquals(0, outbox.drain(OWNER_1, noLease))
         assertEquals(0, calls)
         assertEquals(1, outbox.pendingCount(OWNER_1))
@@ -125,7 +126,7 @@ class PendingRetirementOutboxTest {
             PendingRetireOutcome.Success
         }
         val outbox = PendingRetirementOutbox(root, port)
-        outbox.enqueue(OWNER_1, "capsule-1")
+        outbox.enqueue(OWNER_1, "capsule-1", PUB_HEX)
         // Live lease, but for the wrong account: reject, no dispatch.
         assertEquals(0, outbox.drain(OWNER_1, leaseFor(OWNER_2)))
         assertEquals(0, calls)
@@ -147,9 +148,9 @@ class PendingRetirementOutboxTest {
             override fun isLive(lease: SessionRequestLease) = false
         }
         val outbox = PendingRetirementOutbox(root, port)
-        outbox.enqueue(OWNER_1, "capsule-1")
-        outbox.enqueue(OWNER_1, "capsule-2")
-        outbox.enqueue(OWNER_1, "capsule-3")
+        outbox.enqueue(OWNER_1, "capsule-1", PUB_HEX)
+        outbox.enqueue(OWNER_1, "capsule-2", PUB_HEX)
+        outbox.enqueue(OWNER_1, "capsule-3", PUB_HEX)
         assertEquals(0, outbox.drain(OWNER_1, deadFirst))
         assertEquals(3, outbox.pendingCount(OWNER_1))
         assertEquals(1, calls)
@@ -179,9 +180,9 @@ class PendingRetirementOutboxTest {
             }
         }
         val outbox = PendingRetirementOutbox(root, port)
-        outbox.enqueue(OWNER_1, "capsule-1")
-        outbox.enqueue(OWNER_1, "capsule-2")
-        outbox.enqueue(OWNER_1, "capsule-3")
+        outbox.enqueue(OWNER_1, "capsule-1", PUB_HEX)
+        outbox.enqueue(OWNER_1, "capsule-2", PUB_HEX)
+        outbox.enqueue(OWNER_1, "capsule-3", PUB_HEX)
         // Head removed, middle kept (bumped), tail preserved untouched.
         assertEquals(1, outbox.drain(OWNER_1, flapping))
         assertEquals(2, sends)
@@ -194,7 +195,7 @@ class PendingRetirementOutboxTest {
     fun queueCarriesOnlyOpaqueIds() = runTest {
         val root = tempRoot()
         val outbox = PendingRetirementOutbox(root, UnconfiguredPendingRetirementPort)
-        outbox.enqueue(OWNER_1, "capsule-1")
+        outbox.enqueue(OWNER_1, "capsule-1", PUB_HEX)
         val file = java.io.File(root, "accounts/$OWNER_1/pending-retirement/outbox.json")
         val text = file.readText()
         assertTrue("capsule-1" in text)
@@ -230,7 +231,7 @@ class PendingRetirementOutboxTest {
         val outbox = PendingRetirementOutbox(root, UnconfiguredPendingRetirementPort)
         corruptQueueFile(root, OWNER_1)
         // The failed intent is NOT lost: quarantine-then-write keeps it queued.
-        val item = outbox.enqueue(OWNER_1, "capsule-1")
+        val item = outbox.enqueue(OWNER_1, "capsule-1", PUB_HEX)
         assertEquals("capsule-1", item.capsuleId)
         assertEquals(1, outbox.pendingCount(OWNER_1))
         // The recent quarantine still faults (no silent empty-success) while
@@ -245,7 +246,7 @@ class PendingRetirementOutboxTest {
     fun agedQuarantineStopsFaulting() = runTest {
         val root = tempRoot()
         val outbox = PendingRetirementOutbox(root, UnconfiguredPendingRetirementPort)
-        outbox.enqueue(OWNER_1, "capsule-1")
+        outbox.enqueue(OWNER_1, "capsule-1", PUB_HEX)
         corruptQueueFile(root, OWNER_1)
         // Quarantine the corrupt file via a faulting drain first.
         assertTrue(outbox.drainDetailed(OWNER_1, liveGate()).fault)
@@ -257,5 +258,58 @@ class PendingRetirementOutboxTest {
             nowMillis = System.currentTimeMillis() + PendingRetirementOutbox.FAULT_TTL_MILLIS + 1,
         )
         assertTrue(!aged.fault)
+    }
+
+    @Test
+    fun nullHashItemIsNeverSent() = runTest {
+        val root = tempRoot()
+        var calls = 0
+        val port = PendingRetirementPort { _, _, _, _, _ ->
+            calls += 1
+            PendingRetireOutcome.Success
+        }
+        val outbox = PendingRetirementOutbox(root, port)
+        // Legacy hash-less intent: kept queued (bumped, retryable) until the
+        // trusted-hash derivation lands — never sent hash-less, never dropped.
+        outbox.enqueue(OWNER_1, "capsule-1")
+        val outcome = outbox.drainDetailed(OWNER_1, liveGate())
+        assertEquals(0, calls)
+        assertEquals(0, outcome.removed)
+        assertEquals(1, outcome.remaining)
+        assertTrue(!outcome.fault)
+        assertEquals(1, outbox.pendingCount(OWNER_1))
+    }
+
+    @Test
+    fun duplicateHealsNullHashPreservingIds() = runTest {
+        val root = tempRoot()
+        val outbox = PendingRetirementOutbox(root, UnconfiguredPendingRetirementPort)
+        val placeholder = outbox.enqueue(OWNER_1, "capsule-1")
+        assertTrue(placeholder.publicationHash == null)
+        // The trusted hash arrives later: same id + operation id preserved.
+        val healed = outbox.enqueue(OWNER_1, "capsule-1", PUB_HEX)
+        assertEquals(placeholder.id, healed.id)
+        assertEquals(placeholder.operationId, healed.operationId)
+        assertEquals(PUB_HEX, healed.publicationHash)
+        assertEquals(1, outbox.pendingCount(OWNER_1))
+        // Same hash again is idempotent.
+        val replay = outbox.enqueue(OWNER_1, "capsule-1", PUB_HEX)
+        assertEquals(healed.id, replay.id)
+    }
+
+    @Test
+    fun conflictingHashRejected() = runTest {
+        val root = tempRoot()
+        val outbox = PendingRetirementOutbox(root, UnconfiguredPendingRetirementPort)
+        outbox.enqueue(OWNER_1, "capsule-1", PUB_HEX)
+        var rejected = false
+        try {
+            outbox.enqueue(OWNER_1, "capsule-1", "aa".repeat(32))
+        } catch (_: IllegalArgumentException) {
+            rejected = true
+        }
+        assertTrue(rejected)
+        // The original intent is untouched.
+        assertEquals(PUB_HEX, outbox.readSnapshot(OWNER_1).single().publicationHash)
     }
 }

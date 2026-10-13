@@ -898,10 +898,11 @@ class AppContainer private constructor(
      * failure never affects display/entitlement. Never blocks the viewer,
      * never reads Room on the caller thread.
      *
-     * @param publicationHash R15 64-hex of the exact published bytes,
-     * derived by the caller from trusted local material (H = `SHA256(S)`
-     * once the claim envelope is bound). Null until that derivation lands;
-     * hash-less items stay queued retryable and are never sent hash-less.
+     * @param publicationHash R15 64-hex override when the caller already
+     * holds the exact published bytes (H = `SHA256(S)` for v2). Null by
+     * default: derived here from the trusted local incoming entity
+     * (stored statement digest, else digest of the verified statement
+     * bytes); capsules without statement material are not enqueued.
      */
     fun notifySupportedPresentation(
         ownerUserId: String,
@@ -925,7 +926,7 @@ class AppContainer private constructor(
             return
         }
         // Fence against account switch between presentation and callback:
-        // suspend Room read inside the application-owned coroutine, never on
+        // suspend Room reads inside the application-owned coroutine, never on
         // the caller (often Main) thread and never runBlocking.
         pendingAppScope.launch {
             val current = try {
@@ -934,9 +935,34 @@ class AppContainer private constructor(
                 null
             } ?: return@launch
             if (current != ownerUserId) return@launch
+            // H from trusted local material: prefer the stored statement
+            // digest, else hash the verified statement bytes. Capsules
+            // without locator metadata (no statement material) are NOT
+            // enqueued at all.
+            val derived = publicationHash ?: run {
+                val entity = try {
+                    database.incomingCapsuleDao().getByCapsuleIdAndOwner(capsuleId, ownerUserId)
+                } catch (_: Exception) {
+                    null
+                } ?: return@launch
+                val stored = entity.signedStatementSha256
+                if (stored.isNotEmpty()) {
+                    stored.joinToString("") { "%02x".format(it) }
+                } else if (entity.signedStatementBytes.isNotEmpty()) {
+                    try {
+                        java.security.MessageDigest.getInstance("SHA-256")
+                            .digest(entity.signedStatementBytes)
+                            .joinToString("") { "%02x".format(it) }
+                    } catch (_: Exception) {
+                        return@launch
+                    }
+                } else {
+                    return@launch
+                }
+            }
             // Application-owned scope inside; never the caller's screen scope.
             dev.hryshyn.remanence.pending.PendingRetirementScheduler.enqueueAfterPresentation(
-                this@AppContainer, ownerUserId, capsuleId, publicationHash,
+                this@AppContainer, ownerUserId, capsuleId, derived,
             )
         }
     }

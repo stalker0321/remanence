@@ -23,6 +23,7 @@ import dev.hryshyn.remanence.ui.hold.HoldSecondaryButton as OutlinedButton
 import dev.hryshyn.remanence.ui.hold.HoldTextButton
 import dev.hryshyn.remanence.ui.motion.AstraEnterTransition
 import dev.hryshyn.remanence.ui.motion.rememberAstraMotion
+import kotlinx.coroutines.launch
 
 /**
  * T186: localized secondary code entry for the scan/receive surface.
@@ -64,11 +65,21 @@ fun PendingCodeEntrySheet(
     modifier: Modifier = Modifier,
     /** Test seam, see [PendingCodeEntryButton]. */
     enabled: Boolean = PendingFeatureGate.isEnabled(),
+    /**
+     * T186 M7b: real R6 lookup (anonymous, budgeted). Null keeps the
+     * fail-closed unavailable note. A found gift shows the server's
+     * minimal hint; the continue journey (R7) lands on its handoff.
+     */
+    lookup: (suspend (String) -> dev.hryshyn.remanence.core.data.network.GiftLookupResult)? = null,
 ) {
     if (!enabled) return
     var raw by remember { mutableStateOf("") }
     var showGenericError by remember { mutableStateOf(false) }
     var showUnavailable by remember { mutableStateOf(false) }
+    var working by remember { mutableStateOf(false) }
+    var foundHint by remember { mutableStateOf<String?>(null) }
+    var lookupError by remember { mutableStateOf<dev.hryshyn.remanence.pending.PendingLookupError?>(null) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
 
     AstraEnterTransition(motion = rememberAstraMotion()) {
         Column(
@@ -94,9 +105,12 @@ fun PendingCodeEntrySheet(
                     raw = it
                     showGenericError = false
                     showUnavailable = false
+                    foundHint = null
+                    lookupError = null
                 },
                 label = { Text(stringResource(R.string.pending_code_hint)) },
                 singleLine = true,
+                enabled = !working,
                 modifier = Modifier.fillMaxWidth().testTag("pending_code_field"),
             )
             if (showGenericError) {
@@ -115,18 +129,76 @@ fun PendingCodeEntrySheet(
                     modifier = Modifier.testTag("pending_code_unavailable"),
                 )
             }
+            if (foundHint != null) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    foundHint!!,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.testTag("pending_code_found"),
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    stringResource(R.string.pending_code_found_next),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = dev.hryshyn.remanence.ui.hold.HoldColors.Muted,
+                    modifier = Modifier.testTag("pending_code_found_next"),
+                )
+            }
+            if (lookupError != null) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    stringResource(lookupError!!.stringRes()),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.testTag("pending_code_lookup_error"),
+                )
+            }
             Spacer(Modifier.height(12.dp))
             Button(
                 onClick = {
                     val normalized = PendingCodeNormalizer.normalize(raw)
                     if (normalized == null) {
                         showGenericError = true
-                    } else {
-                        // Fail closed: no wire DTOs invented before T185.
+                    } else if (lookup == null) {
+                        // Fail closed: no lookup path wired.
                         showUnavailable = true
                         onWellFormedCode(normalized)
+                    } else {
+                        working = true
+                        foundHint = null
+                        lookupError = null
+                        scope.launch {
+                            try {
+                                when (val result = lookup(normalized)) {
+                                    is dev.hryshyn.remanence.core.data.network.GiftLookupResult.Found -> {
+                                        foundHint = result.hint.ifBlank { null } ?: result.channel
+                                        onWellFormedCode(normalized)
+                                    }
+                                    is dev.hryshyn.remanence.core.data.network.GiftLookupResult.Failure -> {
+                                        lookupError = when (result.reason) {
+                                            dev.hryshyn.remanence.core.data.network.GiftLookupFailure.GIFT_UNAVAILABLE ->
+                                                dev.hryshyn.remanence.pending.PendingLookupError.NOT_FOUND
+                                            dev.hryshyn.remanence.core.data.network.GiftLookupFailure.NETWORK ->
+                                                dev.hryshyn.remanence.pending.PendingLookupError.NETWORK
+                                            else -> if (result.retryable) {
+                                                dev.hryshyn.remanence.pending.PendingLookupError.NETWORK
+                                            } else {
+                                                dev.hryshyn.remanence.pending.PendingLookupError.GENERIC
+                                            }
+                                        }
+                                        onWellFormedCode(normalized)
+                                    }
+                                }
+                            } catch (cancelled: kotlin.coroutines.cancellation.CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                lookupError = dev.hryshyn.remanence.pending.PendingLookupError.NETWORK
+                            } finally {
+                                working = false
+                            }
+                        }
                     }
                 },
+                enabled = !working,
                 modifier = Modifier.testTag("pending_code_continue"),
             ) { Text(stringResource(R.string.pending_code_continue)) }
             Spacer(Modifier.height(8.dp))
@@ -136,4 +208,17 @@ fun PendingCodeEntrySheet(
             ) { Text(stringResource(R.string.pending_code_cancel)) }
         }
     }
+}
+
+/** Lookup outcome kinds; all messages stay generic (no existence oracle). */
+enum class PendingLookupError {
+    NOT_FOUND,
+    NETWORK,
+    GENERIC,
+}
+
+internal fun PendingLookupError.stringRes(): Int = when (this) {
+    PendingLookupError.NOT_FOUND -> dev.hryshyn.remanence.R.string.pending_code_notfound
+    PendingLookupError.NETWORK -> dev.hryshyn.remanence.R.string.pending_code_network
+    PendingLookupError.GENERIC -> dev.hryshyn.remanence.R.string.pending_code_generic
 }

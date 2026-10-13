@@ -59,6 +59,11 @@ fun ScanScreen(
     adapterFactory: (() -> dev.hryshyn.remanence.capture.StillCameraAdapter)? = null,
     requestPermissionOnAttach: Boolean = true,
     onScreenDispose: () -> Unit = viewModel::resetSession,
+    /**
+     * T186 M7b: real R6 lookup entry (anonymous, budgeted). Null keeps the
+     * fail-closed sheet. Wired from the activity with the container port.
+     */
+    pendingLookup: (suspend (String) -> dev.hryshyn.remanence.core.data.network.GiftLookupResult)? = null,
 ) {
     val matchState by viewModel.matchState.collectAsStateWithLifecycle()
     // T186: pending code sheet state. Local only; feature-gated composables
@@ -122,6 +127,7 @@ fun ScanScreen(
                 if (showPendingCode) {
                     dev.hryshyn.remanence.pending.PendingCodeEntrySheet(
                         onClose = { showPendingCode = false },
+                        lookup = pendingLookup,
                     )
                 }
                 }

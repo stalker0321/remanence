@@ -538,7 +538,20 @@ private fun RootSurface(
             LaunchedEffect(scanEpoch) { scanViewModel.beginSession(scanEpoch) }
             if (initializedEpoch == scanEpoch) {
                 androidx.compose.runtime.key(scanEpoch) {
-                    ScanFlowSurface(rootViewModel = rootViewModel, scanViewModel = scanViewModel)
+                    // T186 M7b: the receiving intent flows through the SAME
+                    // auth + mandatory PRF enrollment gates as every scan
+                    // (no bypass); the lookup itself is anonymous budgeted.
+                    val pendingLookup: (suspend (String) -> dev.hryshyn.remanence.core.data.network.GiftLookupResult)? =
+                        if (dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled()) {
+                            { code -> container.pendingGiftLookupPort.lookup(code) }
+                        } else {
+                            null
+                        }
+                    ScanFlowSurface(
+                        rootViewModel = rootViewModel,
+                        scanViewModel = scanViewModel,
+                        pendingLookup = pendingLookup,
+                    )
                 }
             } else {
                 Text(stringResource(R.string.capsule_audit_preparing_scan), modifier = Modifier.testTag("scan_session_initializing"))
@@ -569,7 +582,16 @@ private fun RootSurface(
  * the guarded capsule route - only while this surface is composed.
  */
 @Composable
-private fun ScanFlowSurface(rootViewModel: RootViewModel, scanViewModel: ScanViewModel) {
+private fun ScanFlowSurface(
+    rootViewModel: RootViewModel,
+    scanViewModel: ScanViewModel,
+    /**
+     * T186 M7b: real R6 lookup entry (anonymous, budgeted). Null keeps the
+     * fail-closed sheet. Production passes the container port when the
+     * pending flag is on.
+     */
+    pendingLookup: (suspend (String) -> dev.hryshyn.remanence.core.data.network.GiftLookupResult)? = null,
+) {
     val context = androidx.compose.ui.platform.LocalContext.current
     androidx.compose.runtime.DisposableEffect(scanViewModel) {
         val manager = context.getSystemService(android.net.ConnectivityManager::class.java)
@@ -596,6 +618,7 @@ private fun ScanFlowSurface(rootViewModel: RootViewModel, scanViewModel: ScanVie
     }
     ScanScreen(
         viewModel = scanViewModel,
+        pendingLookup = pendingLookup,
         // Activity recreation disposes/recreates Compose but keeps the
         // ViewModel and root destination. Only an actual route exit should
         // tear down the scan; this preserves same-epoch rotation state.

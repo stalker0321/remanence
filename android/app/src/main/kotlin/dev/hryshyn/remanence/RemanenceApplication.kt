@@ -980,6 +980,14 @@ class AppContainer private constructor(
         dev.hryshyn.remanence.core.data.network.PendingHandleCommitRepository.create(apiBaseUrl)
     }
 
+    /**
+     * T186 M7b: frozen R6 gift-lookup port (anonymous, budgeted). Routes
+     * scaffold server-side; failures stay generic (no existence oracle).
+     */
+    val pendingGiftLookupPort: dev.hryshyn.remanence.core.data.network.PendingGiftLookupRepository by lazy {
+        dev.hryshyn.remanence.core.data.network.PendingGiftLookupRepository.create(apiBaseUrl)
+    }
+
     /** One account/capsule upload boundary used by [CapsuleUploadWorker]. */
     val capsuleUploadOrchestrator: CapsuleUploadOrchestrator by lazy {
         val retryStore = dev.hryshyn.remanence.core.data.storage.SenderRetryMaterialStore(

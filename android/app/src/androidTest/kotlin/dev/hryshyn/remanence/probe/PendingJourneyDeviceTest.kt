@@ -147,12 +147,58 @@ class PendingJourneyDeviceTest {
         }
         rule.onNodeWithTag("pending_code_field").performTextInput("a3k9q")
         rule.onNodeWithTag("pending_code_continue").performClick()
-        // Normalized per the frozen contract, but no wire invented: the
-        // unavailable note shows and the sheet stays (no fake opening).
+        // Normalized per the frozen contract, but no lookup path wired:
+        // the unavailable note shows and the sheet stays (no fake opening).
         rule.runOnIdle { assertEquals("A3K9Q", normalized) }
         rule.onNodeWithTag("pending_code_unavailable").assertIsDisplayed()
         rule.onNodeWithTag("pending_code_sheet").assertIsDisplayed()
         capture("pending-code-unavailable-en")
+    }
+
+    @Test fun lookupFoundShowsServerHint() {
+        mountEntry("en") {
+            PendingCodeEntrySheet(
+                onClose = {},
+                enabled = true,
+                lookup = {
+                    dev.hryshyn.remanence.core.data.network.GiftLookupResult.Found(
+                        giftReference = "0198f0a0-0000-7000-8000-00000000ab01",
+                        channel = "email",
+                        hint = "a•••@•••",
+                    )
+                },
+            )
+        }
+        rule.onNodeWithTag("pending_code_field").performTextInput("a3k9q")
+        rule.onNodeWithTag("pending_code_continue").performClick()
+        // The server's minimal hint shows verbatim; continue journey (R7)
+        // is disclosed as pending — never a fake opening.
+        rule.onNodeWithText("a•••@•••").assertIsDisplayed()
+        rule.onNodeWithTag("pending_code_found_next").assertIsDisplayed()
+        rule.onNodeWithTag("pending_code_lookup_error").assertDoesNotExist()
+        capture("pending-code-found-en")
+    }
+
+    @Test fun lookupFailureStaysGeneric() {
+        mountEntry("en") {
+            PendingCodeEntrySheet(
+                onClose = {},
+                enabled = true,
+                lookup = {
+                    dev.hryshyn.remanence.core.data.network.GiftLookupResult.Failure(
+                        dev.hryshyn.remanence.core.data.network.GiftLookupFailure.GIFT_UNAVAILABLE,
+                        httpStatus = 404,
+                        retryable = false,
+                    )
+                },
+            )
+        }
+        rule.onNodeWithTag("pending_code_field").performTextInput("a3k9q")
+        rule.onNodeWithTag("pending_code_continue").performClick()
+        // Generic message, no existence oracle beyond the frozen shape.
+        rule.onNodeWithTag("pending_code_lookup_error").assertIsDisplayed()
+        rule.onNodeWithTag("pending_code_found").assertDoesNotExist()
+        capture("pending-code-notfound-en")
     }
 
     @Test fun handleSetupBackFires() {

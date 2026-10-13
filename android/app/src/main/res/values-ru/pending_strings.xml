@@ -8,6 +8,10 @@
     <string name="pending_code_cancel">назад</string>
     <string name="pending_code_invalid">этот код нельзя использовать. проверьте его и попробуйте ещё раз.</string>
     <string name="pending_code_unavailable">поиск по коду пока недоступен в этой тестовой сборке.</string>
+    <string name="pending_code_found_next">проверка адреса и подтверждение продолжатся в следующем тестовом обновлении; обычное сканирование работает.</string>
+    <string name="pending_code_notfound">этот код не подошёл ни к одному доступному подарку.</string>
+    <string name="pending_code_network">не удалось связаться с сервером. попробуйте ещё раз.</string>
+    <string name="pending_code_generic">не получилось. попробуйте ещё раз.</string>
     <string name="pending_handle_setup_title">выберите имя</string>
     <string name="pending_handle_setup_body">для отправки нужно одноразовое публичное имя на этом же аккаунте. изменить его позже нельзя.</string>
     <string name="pending_handle_setup_label">имя</string>

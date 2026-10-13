@@ -492,6 +492,9 @@ def test_profiles_receive_and_first_handle(session_factory) -> None:
         session.rollback()
         user = session.get(User, result.user_id)
         assert user.handle_normalized is None and user.handle_display is None
+        # S1: typed result carries the persisted created_at (v2_user_dict
+        # parity for the receive-register response).
+        assert result.created_at == user.created_at
         # Old client (v1 capability) gets upgrade-required before any session.
         with pytest.raises(ProfileError) as caught:
             summarize_user(user, client_profile_version=1)

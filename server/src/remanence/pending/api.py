@@ -1,6 +1,9 @@
-"""Experimental pending-gift HTTP router (T185 M3). NOT mounted in main.py.
+"""Experimental pending-gift HTTP router (T185 M3). Mounted in main.py
+iff the master pending flag is ON with an explicit pending_ctx
+(custody/keys/providers); otherwise startup fails closed and flag OFF
+mounts nothing new.
 
-Stage: scaffold with service-backed handlers. Every route requires the
+Stage: service-backed handlers. Every route requires the
 master pending flag and its sub-flag; otherwise 404. Production without
 configured custody/vault/signers fails closed (503/404, never fake
 success). DTO shapes are the frozen §8 contract: strict schemas
@@ -298,6 +301,7 @@ def google_receive_register(
             "email": result.email,
             "handle": None,
             "profile_version": 2,
+            "created_at": result.created_at.isoformat(),
         },
         "active_key_bundle": {
             "key_bundle_id": str(result.active_key_bundle_id),
@@ -502,10 +506,9 @@ def create_pending_delivery(
 
 def _mask_hint(channel: str, normalized: str) -> str:
     """Minimal public hint, computed in memory only (never logged)."""
-    if channel == "sms" or normalized.startswith("+"):
-        return "••••" + normalized[-2:]
-    local, _, _domain = normalized.partition("@")
-    return (local[:1] if local else "•") + "•••@•••"
+    from remanence.pending.locator import mask_hint as _shared_mask
+
+    return _shared_mask(channel, normalized)
 
 
 def _delivery_hint(db: Session, delivery, ctx) -> str:

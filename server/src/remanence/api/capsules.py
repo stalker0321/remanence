@@ -14,6 +14,7 @@ from typing import BinaryIO, Literal
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy import select
 from sqlalchemy.exc import DBAPIError, DisconnectionError
 from sqlalchemy.orm import Session
 
@@ -43,6 +44,7 @@ from remanence.capsules.finalize_service import (
     CapsuleFinalizeError,
     CapsuleFinalizeResult,
     CapsuleFinalizeService,
+    LocatorIssuance,
 )
 from remanence.capsules.first_open_service import (
     CapsuleFirstOpenError,
@@ -617,6 +619,8 @@ async def mark_capsule_material_synced(
         parsed_capsule_id = _canonical_path_uuid(capsule_id)
         await _require_empty_material_synced_body(request)
         with session.begin():
+            if _locator_upgrade_gate(request, session, parsed_capsule_id):
+                return _problem_response(request, "CLIENT_UPGRADE_REQUIRED")
             result = RecipientMaterialSyncedService(session).mark_material_synced(
                 authenticated_recipient_user_id=principal.user_id,
                 capsule_id=parsed_capsule_id,
@@ -743,6 +747,8 @@ def download_capsule_blob(
         parsed_blob_id = _canonical_path_uuid(blob_id)
         _reject_range_headers(request)
         with session.begin():
+            if _locator_upgrade_gate(request, session, parsed_capsule_id):
+                return _problem_response(request, "CLIENT_UPGRADE_REQUIRED")
             snapshot = RecipientBlobQueryService(session).get_ready_blob(
                 authenticated_recipient_user_id=principal.user_id,
                 capsule_id=parsed_capsule_id,
@@ -855,6 +861,67 @@ async def create_capsule_draft(
     return _response_dto(result)
 
 
+def _v1_locator_issuance(request: Request) -> LocatorIssuance | None:
+    """R2 negotiation for v1 finalize: issue a common locator ONLY when
+    the sender negotiated the locator capability (the same
+    X-Remanence-Profile-Version: 2 token T186 already sends for pending;
+    no second capability token) AND the issuance flag is on AND an
+    explicit custody context supplies both keys. Every other case is
+    None: byte-for-byte legacy finalize. Production/beta never issues
+    (no production code-key custody exists yet)."""
+    from remanence.pending.profiles import PROFILE_VERSION_2, client_profile_version
+
+    if client_profile_version(request.headers) < PROFILE_VERSION_2:
+        return None
+    settings = request.app.state.settings
+    if not settings.pending_locator_issuance_enabled:
+        return None
+    if settings.mode is AppMode.PROD or settings.mode is AppMode.BETA:
+        return None
+    ctx = getattr(request.app.state, "pending_ctx", None)
+    if not isinstance(ctx, dict):
+        return None
+    hmac_key = ctx.get("hmac_key")
+    code_key = ctx.get("locator_code_key")
+    if (
+        not isinstance(hmac_key, bytes)
+        or len(hmac_key) < 32
+        or not isinstance(code_key, bytes)
+        or len(code_key) != 32
+    ):
+        return None
+    return LocatorIssuance(
+        hmac_key=bytes(hmac_key),
+        code_key_32=bytes(code_key),
+        code_key_mode=settings.mode.value,
+    )
+
+
+def _locator_upgrade_gate(
+    request: Request, session: Session, capsule_id: uuid.UUID
+) -> bool:
+    """R2 recipient gate: an old client (no locator capability) hitting a
+    locator-bearing capsule must get CLIENT_UPGRADE_REQUIRED (426) BEFORE
+    first-open control/material, never silent admission without
+    retirement. Capable clients and locator-free capsules pass through
+    untouched. One indexed lookup (GiftLocator.capsule_id is UNIQUE)."""
+    from remanence.pending.models import GiftLocator
+    from remanence.pending.profiles import PROFILE_VERSION_2, client_profile_version
+
+    if client_profile_version(request.headers) >= PROFILE_VERSION_2:
+        return False
+    try:
+        return (
+            session.scalar(select(GiftLocator.id).where(GiftLocator.capsule_id == capsule_id))
+            is not None
+        )
+    except Exception:
+        # Positive-evidence gate only: a failed locator read never invents
+        # a 426. The service's own read below then governs (and surfaces
+        # the real error, e.g. on mocked sessions in unit tests).
+        return False
+
+
 def _accepted_finalize_response(result: object) -> tuple[CapsuleFinalizeResponse, bool]:
     if not isinstance(result, CapsuleFinalizeResult):
         raise CapsuleFinalizeError("INTERNAL_ERROR")
@@ -917,10 +984,26 @@ async def finalize_capsule(
                     ciphertext_sha256=parsed.recipient_envelope.ciphertext_sha256,
                 ),
                 now=datetime.now(timezone.utc),
+                locator_issuance=_v1_locator_issuance(request),
             )
             dto, is_replay = _accepted_finalize_response(result)
-        response.status_code = 200 if is_replay else 201
-        return dto
+        status = 200 if is_replay else 201
+        if getattr(result, "locator_code", None) is None:
+            response.status_code = status
+            return dto
+        # Negotiated R2 issuance: additive locator fields beside the exact
+        # legacy triple (old clients never take this branch: without the
+        # capability no code is issued and the shape above is returned).
+        # The plaintext code is returned ONCE here; never in idempotency
+        # storage or logs.
+        return JSONResponse(
+            status_code=status,
+            content={
+                **dto.model_dump(mode="json"),
+                "locator_code": result.locator_code,
+                "locator_hint": result.locator_hint,
+            },
+        )
     except CapsuleDraftValidationError as exc:
         return _problem_response(request, exc.code)
     except CapsuleFinalizeError as exc:
@@ -1015,6 +1098,8 @@ def first_open_capsule(
     try:
         parsed_capsule_id = _canonical_path_uuid(capsule_id)
         with session.begin():
+            if _locator_upgrade_gate(request, session, parsed_capsule_id):
+                return _problem_response(request, "CLIENT_UPGRADE_REQUIRED")
             result = CapsuleFirstOpenService(session).claim(
                 authenticated_recipient_user_id=principal.user_id,
                 capsule_id=parsed_capsule_id,

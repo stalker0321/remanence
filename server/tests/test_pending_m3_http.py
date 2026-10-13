@@ -864,6 +864,33 @@ def test_google_receive_register_consumes_ticket(session_factory) -> None:
     assert body["status"] == "SIGNED_IN"
     assert body["user"]["handle"] is None
     assert body["user"]["profile_version"] == 2
+    # S1 exact typed shape: same keys as v2_user_dict / Android required
+    # RegistrationUserDto (createdAt required String). Not merely status 200.
+    assert set(body["user"]) == {
+        "user_id", "email", "handle", "profile_version", "created_at",
+    }
+    assert body["user"]["email"] == "newfriend@example.test"
+    created_at = datetime.fromisoformat(body["user"]["created_at"])
+    assert created_at.tzinfo is not None
+    assert set(body["active_key_bundle"]) == {
+        "key_bundle_id", "suite", "protocol_version", "status",
+    }
+    assert body["active_key_bundle"]["key_bundle_id"] == payload["key_bundle_id"]
+    assert body["active_key_bundle"]["status"] == "ACTIVE"
+    for key in ("session_id", "access_token", "refresh_token",
+                "access_expires_at", "refresh_expires_at"):
+        assert body[key], key
+    # Persisted typed summary parity: stored user row carries the same
+    # created_at the response just published.
+    from remanence.users.models import User as _User
+
+    with session_factory() as session:
+        stored = session.scalar(
+            select(_User).where(_User.id == uuid.UUID(body["user"]["user_id"]))
+        )
+        assert stored is not None
+        assert stored.handle_normalized is None
+        assert stored.created_at.isoformat() == body["user"]["created_at"]
     # Consumed ticket cannot mint a second account.
     again = client.post("/v2/auth/google/receive-register", json=payload)
     assert again.status_code in (400, 409)

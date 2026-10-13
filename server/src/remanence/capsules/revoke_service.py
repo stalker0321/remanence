@@ -151,6 +151,20 @@ class CapsuleRevokeService:
                 capsule.tombstone_sequence = tombstone_sequence
                 capsule.revoked_at = now
                 self._session.flush()
+                # R2: a locator-bearing v1 capsule retires terminally in the
+                # same transaction (tombstone persisted, code never reused).
+                # Capsules without a locator row (legacy or non-capable
+                # finalize) are untouched.
+                from remanence.pending.locator_store import retire as _retire_locator
+                from remanence.pending.models import GiftLocator as _GiftLocator
+
+                locator = self._session.scalar(
+                    select(_GiftLocator).where(_GiftLocator.capsule_id == capsule_id)
+                )
+                if locator is not None:
+                    _retire_locator(
+                        self._session, locator_id=locator.id, terminal=True, now=now
+                    )
             except CapsuleRevokeError:
                 raise
             except Exception as exc:

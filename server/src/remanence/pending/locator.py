@@ -74,3 +74,15 @@ def allocate_unique(exists: object, attempts: int = MAX_ALLOCATION_ATTEMPTS) -> 
         if not exists(candidate):
             return candidate
     raise LocatorError("LOCATOR_ALLOCATION_BUSY")
+
+
+def mask_hint(channel: str, normalized: str) -> str:
+    """Minimal public hint, computed in memory only (never logged).
+
+    Shared by the pending (R5) and v1 (R2) issuance paths so both
+    surfaces mask identically. Never the literal "pending".
+    """
+    if channel == "sms" or normalized.startswith("+"):
+        return "••••" + normalized[-2:]
+    local, _, _domain = normalized.partition("@")
+    return (local[:1] if local else "•") + "•••@•••"

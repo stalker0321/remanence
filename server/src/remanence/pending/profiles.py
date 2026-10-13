@@ -68,6 +68,7 @@ class ReceiveRegistrationResult:
     refresh_token: str = field(repr=False)
     access_expires_at: datetime
     refresh_expires_at: datetime
+    created_at: datetime
 
 
 def summarize_user(user: User, *, client_profile_version: int | None) -> dict:
@@ -165,6 +166,10 @@ def register_receive(
     session.add(GoogleIdentity(subject=ticket.subject, user_id=user.id))
     ticket.consumed_at = now
     session.flush()
+    # Server-default created_at is DB-generated: refresh it inside the same
+    # transaction so the typed response carries the persisted value
+    # (v2_user_dict parity, Android required createdAt).
+    session.refresh(user, attribute_names=["created_at"])
     return ReceiveRegistrationResult(
         user_id=user.id,
         email=ticket.email,
@@ -175,6 +180,7 @@ def register_receive(
         refresh_token=refresh_token,
         access_expires_at=access_expires_at,
         refresh_expires_at=refresh_expires_at,
+        created_at=user.created_at,
     )
 
 

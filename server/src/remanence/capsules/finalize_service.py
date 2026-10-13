@@ -82,9 +82,32 @@ class CapsuleFinalizeResult:
     ready_at: datetime
     recipient_key_bundle_id: uuid.UUID
     is_replay: bool
+    # R2 common-locator extension (additive): plaintext code + hint are
+    # present ONLY when the caller negotiated issuance on this call.
+    # Never persisted, never logged; v1 signed bytes untouched.
+    locator_code: str | None = None
+    locator_hint: str | None = None
 
     def __repr__(self) -> str:
         return "CapsuleFinalizeResult(<redacted>)"
+
+
+@dataclass(frozen=True, slots=True)
+class LocatorIssuance:
+    """Opt-in R2 issuance context for one v1 finalize call.
+
+    None (the default) means legacy behavior: no locator row, legacy
+    response shape. Supplied only by the route layer when the client
+    negotiated the locator capability AND the issuance flag + custody
+    context allow it. No EscrowVault is involved on this path.
+    """
+
+    hmac_key: bytes
+    code_key_32: bytes
+    code_key_mode: str
+
+    def __repr__(self) -> str:
+        return "LocatorIssuance(<redacted>)"
 
 
 def _error(code: str) -> CapsuleFinalizeError:
@@ -162,6 +185,7 @@ class CapsuleFinalizeService:
         sender_key_bundle_id: uuid.UUID,
         envelope: CapsuleFinalizeEnvelope,
         now: datetime,
+        locator_issuance: LocatorIssuance | None = None,
     ) -> CapsuleFinalizeResult:
         _require_uuid(authenticated_sender_user_id)
         _require_uuid(capsule_id)
@@ -174,6 +198,8 @@ class CapsuleFinalizeService:
         _require_bytes(envelope.ciphertext)
         _require_bytes(envelope.ciphertext_sha256)
         now = _require_utc(now)
+        if locator_issuance is not None and not isinstance(locator_issuance, LocatorIssuance):
+            raise _error("VALIDATION_FAILED")
 
         try:
             return self._finalize(
@@ -184,6 +210,7 @@ class CapsuleFinalizeService:
                 sender_key_bundle_id=sender_key_bundle_id,
                 envelope=envelope,
                 now=now,
+                locator_issuance=locator_issuance,
             )
         except CapsuleFinalizeError:
             raise
@@ -201,6 +228,7 @@ class CapsuleFinalizeService:
         sender_key_bundle_id: uuid.UUID,
         envelope: CapsuleFinalizeEnvelope,
         now: datetime,
+        locator_issuance: LocatorIssuance | None,
     ) -> CapsuleFinalizeResult:
         with self._session.no_autoflush:
             self._session.execute(
@@ -220,6 +248,7 @@ class CapsuleFinalizeService:
                     signature=signature,
                     sender_key_bundle_id=sender_key_bundle_id,
                     envelope=envelope,
+                    locator_issuance=locator_issuance,
                 )
             if capsule.state is not CapsuleState.DRAFT:
                 raise _error("CAPSULE_STATE_INVALID")
@@ -276,6 +305,7 @@ class CapsuleFinalizeService:
                 envelope=envelope,
                 now=now,
                 publication_sequence=publication_sequence,
+                locator_issuance=locator_issuance,
             )
 
     def _next_publication_sequence(self, recipient_user_id: uuid.UUID) -> int:
@@ -336,6 +366,7 @@ class CapsuleFinalizeService:
         signature: bytes,
         sender_key_bundle_id: uuid.UUID,
         envelope: CapsuleFinalizeEnvelope,
+        locator_issuance: LocatorIssuance | None,
     ) -> CapsuleFinalizeResult:
         stored_envelope = self._session.get(CapsuleEnvelope, capsule.id)
         delivery = self._session.get(
@@ -354,13 +385,44 @@ class CapsuleFinalizeService:
         )
         if not equivalent:
             raise _error("FINALIZE_CONFLICT")
+        locator_code, locator_hint = self._read_issued_code(capsule.id, locator_issuance)
         return CapsuleFinalizeResult(
             capsule_id=capsule.id,
             state=CapsuleState.READY,
             ready_at=capsule.ready_at,
             recipient_key_bundle_id=capsule.recipient_key_bundle_id,
             is_replay=True,
+            locator_code=locator_code,
+            locator_hint=locator_hint,
         )
+
+    def _read_issued_code(
+        self, capsule_id: uuid.UUID, issuance: LocatorIssuance | None
+    ) -> tuple[str | None, str | None]:
+        """Replay read-back: return the committed code ONLY when the caller
+        negotiated issuance on THIS call and a locator row exists. Replays
+        never allocate (no retro-issuance); any seal/lookup failure
+        degrades to the legacy shape, never a finalize failure."""
+        if issuance is None or issuance.code_key_mode in ("prod", "beta"):
+            return None, None
+        try:
+            from remanence.pending.models import GiftLocator as _GiftLocator
+            from remanence.pending.vault import aead_from_raw_key as _aead
+
+            row = self._session.scalar(
+                select(_GiftLocator).where(_GiftLocator.capsule_id == capsule_id)
+            )
+            if row is None or row.code_ciphertext is None:
+                return None, None
+            code = (
+                _aead(issuance.code_key_32)
+                .decrypt(bytes(row.code_ciphertext), b"pending-locator-code-v1")
+                .decode("utf-8")
+            )
+            return code, row.hint_mask
+        except Exception as exc:
+            _log_internal("locator", capsule_id, exc)
+            return None, None
 
     @staticmethod
     def _stored_ready_shape_is_consistent(
@@ -416,6 +478,7 @@ class CapsuleFinalizeService:
         envelope: CapsuleFinalizeEnvelope,
         now: datetime,
         publication_sequence: int,
+        locator_issuance: LocatorIssuance | None,
     ) -> CapsuleFinalizeResult:
         signature = authorization.signature
         if type(signature) is not bytes or len(signature) != _SIGNATURE_LENGTH:
@@ -444,6 +507,7 @@ class CapsuleFinalizeService:
             available_at=now,
             ciphertext_synced_at=None,
         )
+        locator_row = None
         try:
             capsule.recipient_key_bundle_id = authorization.recipient_key_bundle_id
             capsule.signed_statement = authorization.verified_statement.canonical_bytes
@@ -454,11 +518,14 @@ class CapsuleFinalizeService:
             self._session.add(envelope_row)
             self._session.add(delivery_row)
             self._session.flush()
+            locator_code, locator_hint, locator_row = self._maybe_issue_locator(
+                capsule, locator_issuance
+            )
         except CapsuleFinalizeError:
-            self._restore_capsule(capsule, original, envelope_row, delivery_row)
+            self._restore_capsule(capsule, original, envelope_row, delivery_row, locator_row)
             raise
         except Exception as exc:
-            self._restore_capsule(capsule, original, envelope_row, delivery_row)
+            self._restore_capsule(capsule, original, envelope_row, delivery_row, locator_row)
             _log_internal("persist", capsule.id, exc)
             raise _error("INTERNAL_ERROR") from None
         return CapsuleFinalizeResult(
@@ -467,7 +534,68 @@ class CapsuleFinalizeService:
             ready_at=now,
             recipient_key_bundle_id=capsule.recipient_key_bundle_id,
             is_replay=False,
+            locator_code=locator_code,
+            locator_hint=locator_hint,
         )
+
+    def _maybe_issue_locator(
+        self, capsule: Capsule, issuance: LocatorIssuance | None
+    ) -> tuple:
+        """R2: allocate + activate the common locator inside the caller's
+        finalize transaction (same pattern as the pending path).
+
+        None issuance (no negotiated capability) is byte-for-byte legacy:
+        no row, no response fields. Issuance runs in its own savepoint so
+        an allocation failure degrades to the legacy shape (logged,
+        redacted) instead of failing the existing v1 send; the locator
+        is public routing metadata, never key material, and no
+        EscrowVault call happens on this path. Production/beta modes
+        refuse the dev code adapter loudly (route layer never requests
+        issuance there). Returns (code, hint, row) with Nones on legacy
+        or degrade; the row lets the persist-failure path expunge it.
+        """
+        if issuance is None:
+            return None, None, None
+        if issuance.code_key_mode in ("prod", "beta"):
+            raise _error("INTERNAL_ERROR")
+        try:
+            from remanence.pending.locator import mask_hint as _mask
+            from remanence.pending.locator_store import (
+                activate as _activate,
+            )
+            from remanence.pending.locator_store import (
+                allocate_reserved as _allocate,
+            )
+            from remanence.pending.vault import aead_from_raw_key as _aead
+
+            recipient_email = self._session.scalar(
+                select(User.email_normalized).where(User.id == capsule.recipient_user_id)
+            )
+            if not isinstance(recipient_email, str) or not recipient_email:
+                raise _error("INTERNAL_ERROR")
+            hint_mask = _mask("email", recipient_email)
+            with self._session.begin_nested():
+                locator, code = _allocate(
+                    self._session,
+                    capsule_id=capsule.id,
+                    hint_mask=hint_mask,
+                    hmac_key=issuance.hmac_key,
+                )
+                primitive = _aead(issuance.code_key_32)
+                _activate(
+                    self._session,
+                    locator_id=locator.id,
+                    code_ciphertext=primitive.encrypt(
+                        code.encode("ascii"), b"pending-locator-code-v1"
+                    ),
+                )
+                self._session.flush()
+            return code, hint_mask, locator
+        except CapsuleFinalizeError:
+            raise
+        except Exception as exc:
+            _log_internal("locator", capsule.id, exc)
+            return None, None, None
 
     def _restore_capsule(
         self,
@@ -475,6 +603,7 @@ class CapsuleFinalizeService:
         original: dict,
         envelope_row: CapsuleEnvelope,
         delivery_row: RecipientDeliveryState,
+        locator_row=None,
     ) -> None:
         try:
             capsule.recipient_key_bundle_id = original["recipient_key_bundle_id"]
@@ -485,7 +614,9 @@ class CapsuleFinalizeService:
             capsule.ready_at = original["ready_at"]
         except Exception:
             pass
-        for row in (envelope_row, delivery_row):
+        for row in (envelope_row, delivery_row, locator_row):
+            if row is None:
+                continue
             try:
                 if inspect(row).session is self._session:
                     self._session.expunge(row)

@@ -66,7 +66,12 @@ import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 /** One immutable snapshot of the local account used as sender AND recipient (M1). */
 data class SenderIdentitySnapshot(
     val userId: String,
-    val handle: String,
+    /**
+     * T186: null for handleless receive-only accounts. Scan/receive paths
+     * never read it; publish paths fail closed without it (the Create entry
+     * gate already routes handleless accounts to handle setup first).
+     */
+    val handle: String?,
     val activeKeyBundleId: String,
     val encryptionPrivateHandle: KeysetHandle,
     val signingPrivateHandle: KeysetHandle,
@@ -700,9 +705,13 @@ class CreateViewModel(
         val input = collageChooserInput() ?: return null
         val photos = loadAllFamilyPhotos() ?: return null
         val sender = identityProvider() ?: return null
+        // T186: publish-side metadata requires the handle; handleless
+        // accounts never reach here (Create entry gate), this is defense in
+        // depth that fails closed without a placeholder.
+        val senderHandle = sender.handle ?: return null
         val artwork = _musicArtwork.value
         val familyInput = dev.hryshyn.remanence.ui.collage.AllFamilyInput(
-            id = input.ownerId, sender = sender.handle, note = input.note,
+            id = input.ownerId, sender = senderHandle, note = input.note,
             music = input.music != null, artwork = artwork != null, photos = photos,
         )
         // Production supplies the host's real font measurer. Capture its metrics
@@ -726,7 +735,7 @@ class CreateViewModel(
         val sealed = ArrayList<CollageCandidate>(outcome.candidates.size)
         for (candidate in outcome.candidates) {
           for (style in AllFamilyV4Adapter.stylesForGrammar(candidate.grammarId)) {
-            val sealedOutcome = AllFamilyV4Adapter.seal(candidate, input, sender.handle, style, artwork)
+            val sealedOutcome = AllFamilyV4Adapter.seal(candidate, input, senderHandle, style, artwork)
             if (sealedOutcome !is AllFamilyV4Adapter.Outcome.Sealed) continue
             sealed += CollageCandidate(
                 candidateId = GeneratorBer1Provider.candidateIdFor(sealedOutcome.expression),
@@ -2063,6 +2072,13 @@ class CreateViewModel(
         // A prior accepted selection can never satisfy a new attempt.
         generatorFrozenSelection = null
         val sender = capturedSender
+        // T186: generator attribution requires the handle (entry-gated;
+        // fail-closed defense in depth, never a placeholder).
+        val senderHandle = sender.handle
+        if (senderHandle == null) {
+            failPublishing("local handle is unavailable; handle setup required", generation)
+            return false
+        }
         val prereadOwner = GeneratorPrereadOwner()
         try {
             val prereadAvailable = withContext(ioDispatcher) {
@@ -2115,7 +2131,7 @@ class CreateViewModel(
                 sessionEpoch = epoch,
                 generationId = inputs.capsuleId,
                 input = selection.expression.input,
-                sender = GeneratorStaging.SenderSnapshot(sender.userId, sender.handle),
+                sender = GeneratorStaging.SenderSnapshot(sender.userId, senderHandle),
             )
             if (begun == null) {
                 failPublishing("generator session was rejected; publishing cancelled", generation)
@@ -2332,6 +2348,13 @@ class CreateViewModel(
         // recipient, not a default.
         val snapshot = inputs.recipient
         val sender = capturedSender
+        // T186: publishing requires the handle (entry-gated; fail-closed
+        // defense in depth, never a placeholder).
+        val senderHandle = sender.handle
+        if (senderHandle == null) {
+            failPublishing("local handle is unavailable; handle setup required", generation)
+            return
+        }
         ensureCurrent()
         val senderOwner = runCatching { UserId.parseRest(sender.userId) }.getOrNull()
         if (senderOwner != inputs.owner) {
@@ -2405,7 +2428,7 @@ class CreateViewModel(
                         senderKeyBundleId = KeyBundleId(UUID.fromString(sender.activeKeyBundleId)),
                         recipientKeyBundleId = snapshot.keyBundleId,
                         ownerUserId = inputs.owner.toRestString(),
-                        senderHandleSnapshot = sender.handle,
+                        senderHandleSnapshot = senderHandle,
                         createdAtEpochSeconds = clockMillis() / 1000L,
                         photoJpegs = photoJpegs,
                         photoWidthsPx = photoWidthsPx,

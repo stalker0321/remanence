@@ -27,7 +27,9 @@ from remanence.api.dependencies import (
     AuthenticatedPrincipal,
     get_authenticated_principal,
     get_blob_store,
+    get_ciphertext_stager,
     get_db_session,
+    get_upload_reservations,
 )
 from remanence.pending import claim as claim_service
 from remanence.pending import locator_store, proof as proof_service
@@ -542,12 +544,12 @@ def finalize_pending_delivery(
             db.rollback()
             return _problem("PROVIDER_UNAVAILABLE", 503)
 
-        def _exists(blob_id: uuid.UUID) -> bool:
+        def _blob_stat(blob_id: uuid.UUID):
             try:
-                store.stat(_blob_key(delivery_id, blob_id))
-                return True
+                info = store.stat(_blob_key(delivery_id, blob_id))
+                return (info.size, info.sha256_hex)
             except Exception:
-                return False
+                return None
 
         delivery, code = publication_service.finalize_delivery(
             db,
@@ -563,7 +565,7 @@ def finalize_pending_delivery(
             locator_code_key_mode=request.app.state.settings.mode.value,
             hint_mask=hint_mask,
             now=datetime.now(timezone.utc),
-            blob_exists=_exists,
+            blob_stat=_blob_stat,
             operation_id=payload.idempotency_key,
         )
         db.commit()
@@ -990,18 +992,42 @@ async def upload_pending_blob(
     db: Session = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
     blob_store=Depends(get_blob_store),
+    ciphertext_stager=Depends(get_ciphertext_stager),
+    upload_reservations=Depends(get_upload_reservations),
 ):
-    """R4: sender uploads exactly the declared bytes (hash/size checked
-    against the R3 declarations). Undeclared/hash-mismatch/oversize
-    rejected before storage."""
-    import hashlib as _hashlib
-    import io as _io
+    """R4: sender streams exactly the declared bytes through the bounded
+    ciphertext stager (incremental size/hash enforcement, never joined
+    in memory). A per-account upload reservation bounds outstanding
+    work; a fresh locked post-await recheck (still DRAFT, same sender,
+    same declaration) guards the cancel/overwrite race; staged temps
+    are always cleaned up."""
+    from sqlalchemy import select as _select
 
+    from remanence.capsules.upload_reservations import (
+        UploadReservationError as _ReservationError,
+    )
     from remanence.pending.claim_models import PendingDelivery as _DeliveryBlob
+    from remanence.storage.staging import (
+        InvalidStagingExpectationError as _BadExpectation,
+    )
+    from remanence.storage.staging import (
+        StagingHashMismatchError as _HashMismatch,
+    )
+    from remanence.storage.staging import (
+        StagingIOError as _StagingIO,
+    )
+    from remanence.storage.staging import (
+        StagingSizeExceededError as _SizeExceeded,
+    )
+    from remanence.storage.staging import (
+        StagingSizeTruncatedError as _Truncated,
+    )
 
     ctx = _gate(request, "pending_sends_enabled")
     if isinstance(ctx, JSONResponse):
         return ctx
+    reservation = None
+    staged = None
     try:
         delivery = db.get(_DeliveryBlob, delivery_id)
         if (
@@ -1010,40 +1036,78 @@ async def upload_pending_blob(
             or delivery.sender_user_id != principal.user_id
         ):
             return _problem("GIFT_UNAVAILABLE", 404)
-        # Bounded streaming: cap+1 aborts before unbounded memory. The
-        # store re-validates exact size/hash on put.
-        chunks: list[bytes] = []
-        received = 0
-        async for chunk in request.stream():
-            if not chunk:
-                continue
-            received += len(chunk)
-            if received > PENDING_BLOB_MAX_BYTES + 1:
-                return _problem("VALIDATION_FAILED", 400)
-            chunks.append(chunk)
-        body = b"".join(chunks)
         entry = next(
             (e for e in (delivery.blob_declarations or []) if e["blob_id"] == str(blob_id)),
             None,
         )
-        if entry is None:
-            return _problem("PROTOCOL_UNSUPPORTED", 404)
-        if len(body) != entry["ciphertext_size"] or _hashlib.sha256(body).hexdigest() != entry[
-            "ciphertext_sha256_hex"
-        ]:
+        if entry is None or entry["ciphertext_size"] <= 0:
             return _problem("PROTOCOL_UNSUPPORTED", 404)
         try:
-            blob_store.put(
-                _blob_key(delivery_id, blob_id),
-                _io.BytesIO(body),
-                expected_size=len(body),
-                expected_sha256=_hashlib.sha256(body).hexdigest(),
+            reservation = upload_reservations.reserve(
+                owner_user_id=principal.user_id,
+                token=(delivery_id, blob_id),
+                size=entry["ciphertext_size"],
             )
+        except _ReservationError:
+            return _problem("RATE_LIMITED", 429)
+        try:
+            staged = await ciphertext_stager.stage(
+                request.stream(),
+                expected_size=entry["ciphertext_size"],
+                expected_sha256=entry["ciphertext_sha256_hex"],
+                max_bytes=PENDING_BLOB_MAX_BYTES,
+            )
+        except (_SizeExceeded, _Truncated):
+            return _problem("VALIDATION_FAILED", 400)
+        except _HashMismatch:
+            return _problem("PROTOCOL_UNSUPPORTED", 404)
+        except (_BadExpectation, _StagingIO):
+            return _problem("PROVIDER_UNAVAILABLE", 503)
+        # Post-await recheck under a fresh row lock: cancellation or a
+        # declaration swap mid-stream must not publish orphan bytes.
+        fresh = db.scalar(
+            _select(_DeliveryBlob)
+            .where(_DeliveryBlob.id == delivery_id)
+            .with_for_update()
+            .execution_options(populate_existing=True),
+        )
+        if (
+            fresh is None
+            or fresh.state != "DRAFT"
+            or fresh.sender_user_id != principal.user_id
+        ):
+            return _problem("GIFT_UNAVAILABLE", 404)
+        still_declared = next(
+            (e for e in (fresh.blob_declarations or []) if e["blob_id"] == str(blob_id)),
+            None,
+        )
+        if (
+            still_declared is None
+            or still_declared["ciphertext_size"] != entry["ciphertext_size"]
+            or still_declared["ciphertext_sha256_hex"] != entry["ciphertext_sha256_hex"]
+        ):
+            return _problem("IDEMPOTENCY_CONFLICT", 409)
+        try:
+            with staged.open_reader() as reader:
+                blob_store.put(
+                    _blob_key(delivery_id, blob_id),
+                    reader,
+                    expected_size=entry["ciphertext_size"],
+                    expected_sha256=entry["ciphertext_sha256_hex"],
+                )
         except Exception:
             return _problem("PROVIDER_UNAVAILABLE", 503)
-        return {"blob_id": str(blob_id), "size": len(body)}
+        return {"blob_id": str(blob_id), "size": entry["ciphertext_size"]}
     except Exception as exc:
         return _map_error(exc)
+    finally:
+        if staged is not None:
+            try:
+                staged.cleanup()
+            except Exception:
+                pass
+        if reservation is not None:
+            reservation.release()
 
 
 @router.get("/v2/pending-deliveries/{delivery_id}/manifest")
@@ -1097,27 +1161,51 @@ def download_pending_blob(
         claim = db.get(_ClaimBlob, delivery.delivery_target_id)
         if claim is None or claim.account_user_id != principal.user_id:
             return _problem("GIFT_UNAVAILABLE", 404)
+    entry = next(
+        (e for e in (delivery.blob_declarations or []) if e["blob_id"] == str(blob_id)),
+        None,
+    )
+    if entry is None:
+        return _problem("GIFT_UNAVAILABLE", 404)
     try:
         info = blob_store.stat(_blob_key(delivery_id, blob_id))
-        if info.size > PENDING_BLOB_MAX_BYTES:
+        if info.size != entry["ciphertext_size"]:
             return _problem("GIFT_UNAVAILABLE", 404)
     except Exception:
         return _problem("GIFT_UNAVAILABLE", 404)
+    expected_size = entry["ciphertext_size"]
+    expected_sha = entry["ciphertext_sha256_hex"]
 
     def _stream():
+        import hashlib as _hashlib
+
+        cumulative = 0
+        digest = _hashlib.sha256()
         try:
             with blob_store.open_reader(_blob_key(delivery_id, blob_id)) as reader:
                 while True:
                     piece = reader.read(65536)
                     if not piece:
                         break
+                    cumulative += len(piece)
+                    if cumulative > expected_size:
+                        break
+                    digest.update(piece)
                     yield piece
         except Exception:
+            return
+        if cumulative != expected_size or digest.hexdigest() != expected_sha:
+            # Declared Content-Length lets the client detect truncation
+            # instead of accepting corrupt bytes as complete.
             return
 
     from fastapi.responses import StreamingResponse as _Streaming
 
-    return _Streaming(_stream(), media_type="application/octet-stream")
+    return _Streaming(
+        _stream(),
+        media_type="application/octet-stream",
+        headers={"Content-Length": str(expected_size)},
+    )
 
 
 @router.get("/v2/pending-incoming")

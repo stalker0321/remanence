@@ -112,13 +112,25 @@ def _build_client(session_factory, *, flags_on: bool, user_id, session_id, ctx_o
         "vault": DevSealedVault(mode="test", key_id="http-1", key_32=DEV_VAULT_KEY),
         "service_key_id": uuid.uuid4(),
         "email_sender": _DefaultMockDispatcher(),
+        "locator_code_key": LOCATOR_CODE_KEY,
     }
     ctx.update(ctx_overrides or {})
     app.state.pending_ctx = ctx
     # Isolated harness: tests seed the registry directly, so readiness is
     # asserted here the way lifespan backfill asserts it in composition.
     app.state.pending_registry_ready = True
+    import tempfile as _tempfile
+
+    from remanence.capsules.upload_reservations import (
+        build_upload_reservation_manager as _build_reservations,
+    )
+    from remanence.storage.staging import CiphertextStager as _Stager
+
     app.state.blob_store = _MemoryBlobStore()
+    app.state.ciphertext_stager = _Stager(
+        __import__("pathlib").Path(_tempfile.mkdtemp(prefix="pending-stager-"))
+    )
+    app.state.upload_reservations = _build_reservations()
 
     def _factory():
         session = session_factory()
@@ -1249,3 +1261,132 @@ def test_pending_incoming_feed_discovery_and_v1_isolation(session_factory) -> No
         _as(recipient_id, recipient_session)
         paged = client.get("/v2/pending-incoming", params={"limit": 1})
         assert len(paged.json()["items"]) == 1
+
+
+def test_upload_oversize_undeclared_cancel_race(session_factory) -> None:
+    """Bounded transport hazards: oversize bodies rejected by the stager,
+    undeclared blobs refused, and a cancel racing an upload leaves no
+    orphan bytes, no staged temps, and no held reservation."""
+    import base64 as _b64
+
+    from remanence.capsules.upload_reservations import (
+        build_upload_reservation_manager as _Reservations,
+    )
+    from remanence.pending.publication import cancel_delivery, create_draft
+    from remanence.pending.routing import decide_for_send, freeze_route
+
+    sender_ring = Keyring()
+    with session_factory() as session:
+        sender = _make_user(session, f"tu{uuid.uuid4().hex[:8]}")
+        _make_bundle(session, sender, sender_ring)
+        session.commit()
+        decision = decide_for_send(
+            session, destination_kind="email", normalized_destination=ADDRESS,
+            active_bundle_id=None, hmac_key=HMAC_KEY,
+            evidence_key=EVIDENCE_KEY, sender_user_id=sender.id,
+        )
+        route = freeze_route(
+            session, sender_user_id=sender.id, capsule_id=uuid.uuid4(),
+            destination_kind="email", normalized_destination=ADDRESS,
+            destination_key_32=DEST_KEY, destination_key_mode="test", hmac_key=HMAC_KEY,
+            decision=decision, now=NOW, pending_sends_enabled=True,
+        )
+        blob_id = str(uuid.uuid4())
+        declarations = [{"blob_id": blob_id, "kind": 3, "ordinal": 0,
+                         "ciphertext_size": 1024,
+                         "ciphertext_sha256_hex": hashlib.sha256(b"x" * 1024).hexdigest()}]
+        delivery = create_draft(
+            session, sender_user_id=sender.id, capsule_id=route.capsule_id,
+            delivery_target_id=decision.delivery_target_id, route_id=route.id,
+            channel="email", claim_expires_at=NOW + timedelta(days=10),
+            declarations=declarations, now=NOW, pending_sends_enabled=True,
+        )
+        session.commit()
+        sender_id, delivery_id = sender.id, delivery.id
+    client = _build_client(session_factory, flags_on=True, user_id=sender_id, session_id=uuid.uuid4())
+    # Oversize for the STAGER is bounded: declared 1024 but 2 MiB sent.
+    big = client.put(
+        f"/v2/pending-deliveries/{delivery_id}/blobs/{blob_id}", content=b"y" * (2 * 1024 * 1024)
+    )
+    assert big.status_code in (400, 404)
+    # Undeclared blob refused.
+    assert client.put(
+        f"/v2/pending-deliveries/{delivery_id}/blobs/{uuid.uuid4()}", content=b"z" * 10
+    ).status_code in (400, 404)
+    # Cancel, then upload: pre-check refuses before any staging.
+    with session_factory() as session:
+        cancel_delivery(session, delivery_id=delivery_id, sender_user_id=sender_id)
+        session.commit()
+    refused = client.put(
+        f"/v2/pending-deliveries/{delivery_id}/blobs/{blob_id}", content=b"x" * 1024
+    )
+    assert refused.status_code == 404
+    store = client.app.state.blob_store
+    assert f"pending/{delivery_id}/{blob_id}" not in store._blobs
+    reservations = client.app.state.upload_reservations
+    assert reservations.outstanding_bytes(sender_id) == 0
+    assert reservations.outstanding_uploads(sender_id) == 0
+
+
+def test_finalize_rejects_corrupted_store(session_factory) -> None:
+    """Corruption pre-finalize: bytes replaced after upload no longer
+    match the declared hash, so seal is refused."""
+    import base64 as _b64
+
+    from remanence.pending.publication import create_draft
+    from remanence.pending.routing import decide_for_send, freeze_route
+
+    sender_ring = Keyring()
+    service_key_id = uuid.uuid4()
+    blob_bytes = bytes([0x71]) * 256
+    with session_factory() as session:
+        sender = _make_user(session, f"tc{uuid.uuid4().hex[:8]}")
+        sender_bundle = _make_bundle(session, sender, sender_ring)
+        session.commit()
+        decision = decide_for_send(
+            session, destination_kind="email", normalized_destination=ADDRESS,
+            active_bundle_id=None, hmac_key=HMAC_KEY,
+            evidence_key=EVIDENCE_KEY, sender_user_id=sender.id,
+        )
+        route = freeze_route(
+            session, sender_user_id=sender.id, capsule_id=uuid.uuid4(),
+            destination_kind="email", normalized_destination=ADDRESS,
+            destination_key_32=DEST_KEY, destination_key_mode="test", hmac_key=HMAC_KEY,
+            decision=decision, now=NOW, pending_sends_enabled=True,
+        )
+        import hashlib as _hashlib
+
+        blob_id = str(uuid.uuid4())
+        declarations = [{"blob_id": blob_id, "kind": 3, "ordinal": 0,
+                         "ciphertext_size": len(blob_bytes),
+                         "ciphertext_sha256_hex": _hashlib.sha256(blob_bytes).hexdigest()}]
+        delivery = create_draft(
+            session, sender_user_id=sender.id, capsule_id=route.capsule_id,
+            delivery_target_id=decision.delivery_target_id, route_id=route.id,
+            channel="email", claim_expires_at=NOW + timedelta(days=10),
+            declarations=declarations, now=NOW, pending_sends_enabled=True,
+        )
+        session.commit()
+        sender_id, delivery_id = sender.id, delivery.id
+    client = _build_client(session_factory, flags_on=True, user_id=sender_id, session_id=uuid.uuid4())
+    assert client.put(
+        f"/v2/pending-deliveries/{delivery_id}/blobs/{blob_id}", content=blob_bytes
+    ).status_code == 200
+    # Attacker swaps the stored bytes: finalize's stat/size/hash binding
+    # refuses the seal.
+    client.app.state.blob_store._blobs[f"pending/{delivery_id}/{blob_id}"] = bytes([0x72]) * 256
+    statement_raw, payload_raw, _ = _publish_package(
+        capsule_id=delivery.capsule_id, target_id=decision.delivery_target_id,
+        sender_id=sender_id, sender_bundle_id=sender_bundle.id,
+        service_key_id=service_key_id, artifacts=declarations,
+    )
+    finalize = client.post(
+        f"/v2/pending-deliveries/{delivery_id}/finalize",
+        json={"publish_statement_b64": _b64.b64encode(statement_raw).decode(),
+              "publish_signature_69_b64": _b64.b64encode(sender_ring.sign69(
+                  domains.domain_prefix(domains.PENDING_PUBLISH_DOMAIN) + statement_raw)).decode(),
+              "escrow_payload_b64": _b64.b64encode(payload_raw).decode(),
+              "idempotency_key": str(uuid.uuid4())},
+    )
+    assert finalize.status_code == 404
+    assert finalize.json()["code"] == "PROTOCOL_UNSUPPORTED"

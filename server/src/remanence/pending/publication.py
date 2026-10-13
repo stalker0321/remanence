@@ -275,7 +275,7 @@ def finalize_delivery(
     locator_code_key_mode: str,
     hint_mask: str,
     now: datetime,
-    blob_exists=None,
+    blob_stat=None,
     operation_id: uuid.UUID | None = None,
 ) -> tuple[PendingDelivery, str]:
     """Finalize a DRAFT into PENDING + ACTIVE locator in one flush.
@@ -354,9 +354,17 @@ def finalize_delivery(
         raise PublicationError("ROUTE_STALE")
     if not declarations_match_s(delivery.blob_declarations, statement):
         raise PublicationError("PROTOCOL_UNSUPPORTED")
-    if blob_exists is not None:
+    if blob_stat is not None:
+        # Size/hash binding at seal time, not mere existence: every S
+        # artifact must resolve to stored bytes matching its declared
+        # size and SHA-256.
         for artifact in statement.artifacts:
-            if not blob_exists(uuid.UUID(bytes=bytes(artifact.blob_id))):
+            observed = blob_stat(uuid.UUID(bytes=bytes(artifact.blob_id)))
+            if (
+                observed is None
+                or observed[0] != artifact.ciphertext_size
+                or observed[1] != bytes(artifact.ciphertext_sha256).hex()
+            ):
                 raise PublicationError("PROTOCOL_UNSUPPORTED")
     verify_signature_69(
         bytes(bundle.signing_public_keyset),

@@ -1500,13 +1500,24 @@ def test_finalize_requires_uploaded_blobs(session_factory) -> None:
             locator_code_key_32=LOCATOR_CODE_KEY, locator_code_key_mode="test",
             hint_mask="g•••@•••", now=NOW,
         )
-        # Store empty: seal refused before escrow intake.
+        # Store empty / wrong size / wrong hash: seal refused.
         with pytest.raises(PublicationError):
-            finalize_delivery(session, blob_exists=lambda blob_id: False, **base)
+            finalize_delivery(session, blob_stat=lambda blob_id: None, **base)
         session.rollback()
-        # Bytes present: seals.
+        with pytest.raises(PublicationError):
+            finalize_delivery(
+                session, blob_stat=lambda blob_id: (1, "00" * 32), **base
+            )
+        session.rollback()
+        # Exact size+hash bound: seals.
+        declaration = setup["declarations"][0]
         finalized, _ = finalize_delivery(
-            session, blob_exists=lambda blob_id: True, **base
+            session,
+            blob_stat=lambda blob_id: (
+                declaration["ciphertext_size"],
+                declaration["ciphertext_sha256_hex"],
+            ),
+            **base,
         )
         assert finalized.state == "PENDING"
         session.commit()

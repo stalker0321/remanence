@@ -41,12 +41,13 @@ class PendingFeedSync(
      * committed ONLY after this returns successfully (and after the
      * same-owner fence); a throw keeps the old cursor so failure and
      * process loss cannot lose the page. REQUIRED — there is no
-     * advance-without-ingest mode.
+     * advance-without-ingest mode. The sync passes its HELD lease so
+     * ingestion pins the same owner+incarnation (no re-pinning).
      */
     fun interface IngestPort {
         suspend fun ingest(
             ownerUserId: String,
-            token: String,
+            expectedLease: dev.hryshyn.remanence.core.data.network.SessionRequestLease,
             items: List<PendingFeedItem>,
         )
     }
@@ -148,11 +149,11 @@ class PendingFeedSync(
         return when (page) {
             is PendingFeedResult.Page -> {
                 // Durable ingestion BEFORE the cursor moves (same owner
-                // fence around it): a throw keeps the old cursor, so a
-                // failed page — or a dead process — can never lose it.
-                val ingestToken = txnBearer(txn) ?: return State.Failed(Reason.SESSION_CHANGED)
+                // fence around it, held lease carried in): a throw keeps
+                // the old cursor, so a failed page — or a dead process —
+                // can never lose it.
                 try {
-                    ingestPort.ingest(txn.ownerId, ingestToken, page.items)
+                    ingestPort.ingest(txn.ownerId, txn.lease, page.items)
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Exception) {

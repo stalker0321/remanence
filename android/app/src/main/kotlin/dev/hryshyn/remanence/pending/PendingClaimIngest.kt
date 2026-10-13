@@ -11,13 +11,24 @@ import kotlin.coroutines.cancellation.CancellationException
  * page (the REAL caller of [PendingTrustedAdmission] and
  * [PendingAdmittedGiftStore]).
  *
+ * One held transaction (T188 REDO): the caller passes its ORIGINAL
+ * lease; this unit re-pins owner AND incarnation against a fresh
+ * capture, rechecks liveness after EVERY await (R12, R18, directory,
+ * keys) and BEFORE every effect (fetch, admission, upsert), and
+ * re-reads the bearer for the same live lease per call — a same-owner
+ * replacement can never slip a new incarnation in, and an outer
+ * post-ingest fence cannot undo side effects because every effect was
+ * already fenced. The FIRST failure throws (the sync keeps its cursor
+ * — failure and process loss cannot lose the page; retry is idempotent
+ * and owner-fenced).
+ *
  * Per feed item, in order: R12 redownload (same envelope bytes) → R18
  * control (exact S + sender signature for H re-derivation) → directory
  * sender-bundle owner + verify key → live recipient keys → strict
  * trusted admission (pair gate, sender + deployment-pinned service
- * signatures, D/KC recomputation) → durable admitted row. The FIRST
- * failure throws (the sync keeps its cursor — failure and process
- * loss cannot lose the page; retry is idempotent and owner-fenced).
+ * signatures, D/KC recomputation) → feed ids bound to the verified
+ * bytes → durable admitted row. Every admission outcome (Accepted AND
+ * PartiallyAdmitted) is zeroized in `finally`.
  *
  * No plaintext, keysets or private material are persisted — only the
  * sealed opaque envelope bytes travel into the index. Manifest/blob
@@ -30,6 +41,8 @@ class PendingClaimIngest(
     private val directoryPort: DirectoryPort,
     private val recipientKeysPort: RecipientKeysPort,
     private val servicePinPort: () -> PendingServicePin?,
+    private val sessionGate: PendingRetirementSessionGate,
+    private val accountProvider: suspend () -> ProofAccount?,
     private val admittedStore: PendingAdmittedGiftStore,
     private val clockSeconds: () -> Long = { System.currentTimeMillis() / 1000L },
 ) {
@@ -81,18 +94,74 @@ class PendingClaimIngest(
         val blobRefs: List<String>,
     )
 
+    private data class Txn(
+        val lease: dev.hryshyn.remanence.core.data.network.SessionRequestLease,
+        val ownerId: String,
+    )
+
+    private fun beginTxn(
+        expectedLease: dev.hryshyn.remanence.core.data.network.SessionRequestLease,
+    ): Txn? {
+        val lease = try {
+            sessionGate.capture()
+        } catch (_: Exception) {
+            return null
+        } ?: return null
+        val ownerId = lease.ownerUserId.toRestString()
+        if (ownerId.isBlank()) return null
+        // Pin owner AND incarnation to the caller's ORIGINAL capture —
+        // a same-owner replacement fails closed here, never later.
+        if (lease.ownerUserId != expectedLease.ownerUserId ||
+            lease.incarnation != expectedLease.incarnation
+        ) {
+            return null
+        }
+        return Txn(lease, ownerId)
+    }
+
+    private fun txnLive(txn: Txn): Boolean = try {
+        sessionGate.isLive(txn.lease)
+    } catch (_: Exception) {
+        false
+    }
+
+    private fun txnBearer(txn: Txn): String? {
+        if (!txnLive(txn)) return null
+        return try {
+            sessionGate.accessTokenFor(txn.lease).takeIf { !it.isNullOrBlank() }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private suspend fun checkTxn(txn: Txn): Boolean {
+        if (!txnLive(txn)) return false
+        val account = try {
+            accountProvider()
+        } catch (_: Exception) {
+            return false
+        }
+        // Re-read liveness AFTER the account await.
+        if (!txnLive(txn)) return false
+        return account != null && !account.userId.isBlank() && account.userId == txn.ownerId
+    }
+
     /**
-     * Ingests every item for [ownerUserId] with [token]. Throws on the
-     * first failure (terminal or transient alike — the caller keeps its
-     * cursor and retries the same page).
+     * Ingests every item for [ownerUserId] under [expectedLease] (the
+     * caller's ORIGINAL capture). Throws on the first failure (terminal
+     * or transient alike — the caller keeps its cursor and retries the
+     * same page).
      */
     suspend fun ingest(
         ownerUserId: String,
-        token: String,
+        expectedLease: dev.hryshyn.remanence.core.data.network.SessionRequestLease,
         items: List<FeedItemInputs>,
     ) {
         require(ownerUserId.isNotBlank()) { "pending ingest owner required" }
-        require(token.isNotBlank()) { "pending ingest bearer required" }
+        val txn = beginTxn(expectedLease)
+            ?: throw IllegalStateException("pending session changed")
+        if (!checkTxn(txn)) throw IllegalStateException("pending session changed")
+        if (txn.ownerId != ownerUserId) throw IllegalStateException("pending owner mismatch")
         val pin = try {
             servicePinPort()
         } catch (_: Exception) {
@@ -101,13 +170,14 @@ class PendingClaimIngest(
         val serviceVerify = pin?.let { parseServicePin(it) }
         val serviceKeyId = serviceVerify?.let { pin?.deploymentUuid }
         for (item in items) {
-            ingestOne(ownerUserId, token, item, serviceVerify, serviceKeyId)
+            if (!checkTxn(txn)) throw IllegalStateException("pending session changed")
+            ingestOne(ownerUserId, txn, item, serviceVerify, serviceKeyId)
         }
     }
 
     private suspend fun ingestOne(
         ownerUserId: String,
-        token: String,
+        txn: Txn,
         item: FeedItemInputs,
         serviceVerify: KeysetHandle?,
         serviceKeyId: String?,
@@ -117,9 +187,10 @@ class PendingClaimIngest(
             item.envelopeRef.isNotBlank() && item.manifestRef.isNotBlank()) {
             "pending feed item is malformed"
         }
+        val claimToken = txnBearer(txn) ?: throw IllegalStateException("pending session changed")
         val claimed = when (
             val redownloaded = try {
-                claimPort.claim(item.deliveryId, token)
+                claimPort.claim(item.deliveryId, claimToken)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -130,9 +201,11 @@ class PendingClaimIngest(
             is PendingRedownloadResult.Failure ->
                 throw IllegalStateException("pending claim fetch failed")
         }
+        if (!checkTxn(txn)) throw IllegalStateException("pending session changed")
+        val controlToken = txnBearer(txn) ?: throw IllegalStateException("pending session changed")
         val control = when (
             val retrieved = try {
-                controlPort.control(item.deliveryId, token)
+                controlPort.control(item.deliveryId, controlToken)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -143,6 +216,17 @@ class PendingClaimIngest(
             is PendingControlResult.Failure ->
                 throw IllegalStateException("pending control fetch failed")
         }
+        // The fetched bodies must describe THIS feed item — never index
+        // a different capsule/target/claim than the page row.
+        if (control.capsuleId != item.capsuleId ||
+            control.deliveryTargetId != item.deliveryTargetId ||
+            control.deliveryId != item.deliveryId ||
+            control.claimId != item.claimId ||
+            claimed.claimId != item.claimId
+        ) {
+            throw IllegalStateException("pending item binding mismatch")
+        }
+        if (!checkTxn(txn)) throw IllegalStateException("pending session changed")
         val statementBytes = try {
             Base64.getDecoder().decode(control.publishStatementB64)
         } catch (_: Exception) {
@@ -156,6 +240,7 @@ class PendingClaimIngest(
         } catch (_: Exception) {
             null
         } ?: throw IllegalStateException("pending sender bundle unknown")
+        if (!checkTxn(txn)) throw IllegalStateException("pending session changed")
         val senderVerify = try {
             com.google.crypto.tink.TinkProtoKeysetFormat
                 .parseKeysetWithoutSecret(directory.signingPublicKeyset)
@@ -169,6 +254,7 @@ class PendingClaimIngest(
         } catch (_: Exception) {
             null
         } ?: throw IllegalStateException("pending recipient keys unavailable")
+        if (!checkTxn(txn)) throw IllegalStateException("pending session changed")
         if (recipient.userId.isBlank() || recipient.userId != ownerUserId) {
             throw IllegalStateException("pending recipient owner mismatch")
         }
@@ -218,12 +304,12 @@ class PendingClaimIngest(
         } catch (_: Exception) {
             throw IllegalStateException("pending trusted admission rejected")
         }
-        // Only Accepted rows admit (partial stays untrusted, never the
-        // index). The caller-owned copies are zeroized right after the
-        // sealed bytes are snapshotted for the row.
-        val admitted = acceptance as? dev.hryshyn.remanence.core.crypto.PendingTrustedAdmission.Admission.Admitted
-            ?: throw IllegalStateException("pending service trust pending")
         try {
+            // Only Accepted rows admit (partial stays untrusted, never
+            // the index) — and EVERY outcome is zeroized below, so a
+            // PartiallyAdmitted copy can never survive a throw.
+            val admitted = acceptance as? dev.hryshyn.remanence.core.crypto.PendingTrustedAdmission.Admission.Admitted
+                ?: throw IllegalStateException("pending service trust pending")
             val row = PendingAdmittedGiftStore.AdmittedGift(
                 ownerUserId = ownerUserId,
                 capsuleId = item.capsuleId,
@@ -239,11 +325,17 @@ class PendingClaimIngest(
                 completedAt = null,
                 admittedAtMillis = System.currentTimeMillis(),
             )
+            if (!checkTxn(txn)) throw IllegalStateException("pending session changed")
             if (!admittedStore.upsert(row)) {
                 throw IllegalStateException("pending admitted index not durable")
             }
         } finally {
-            admitted.capsuleAeadKeyset.fill(0)
+            when (acceptance) {
+                is dev.hryshyn.remanence.core.crypto.PendingTrustedAdmission.Admission.Accepted ->
+                    acceptance.capsuleAeadKeyset.fill(0)
+                is dev.hryshyn.remanence.core.crypto.PendingTrustedAdmission.Admission.PartiallyAdmitted ->
+                    acceptance.capsuleAeadKeyset.fill(0)
+            }
         }
     }
 

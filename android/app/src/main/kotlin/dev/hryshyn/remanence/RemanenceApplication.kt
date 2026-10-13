@@ -922,16 +922,16 @@ class AppContainer private constructor(
                     encryption.encryptionHandle, publicBytes,
                 )
             },
-            servicePinProvider = { pendingServicePin },
+            servicePinPort = { pendingServicePin },
             admittedStore = pendingAdmittedGiftStore,
         )
     }
 
     override val pendingFeedIngest: dev.hryshyn.remanence.pending.PendingFeedSync.IngestPort? by lazy {
-        dev.hryshyn.remanence.pending.PendingFeedSync.IngestPort { owner, token, items ->
+        dev.hryshyn.remanence.pending.PendingFeedSync.IngestPort { owner, lease, items ->
             pendingClaimIngest.ingest(
                 owner,
-                token,
+                lease,
                 items.map {
                     dev.hryshyn.remanence.pending.PendingClaimIngest.FeedItemInputs(
                         it.capsuleId, it.deliveryId, it.deliveryTargetId,
@@ -1351,7 +1351,9 @@ class AppContainer private constructor(
             // T186 M12b: SAME out-of-band selected pin the sender uses
             // for S (never an R-carried key). Null ⇒ typed partial.
             servicePinProvider = { pendingServicePin },
-            scope = scope,
+            sessionGate = pendingSessionGate,
+            accountProvider = pendingFeedAccount,
+            admittedStore = pendingAdmittedGiftStore,
         )
     }
 

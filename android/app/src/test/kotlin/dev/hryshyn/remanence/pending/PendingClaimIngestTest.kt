@@ -21,11 +21,11 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.UUID
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Test
 
 /**
  * T186 M14b-ingest: claim ingestion with REAL crypto fixtures
@@ -200,13 +200,35 @@ class PendingClaimIngestTest {
         ),
     )
 
+    private inner class FencedGate(
+        var owner: String = recipient,
+        var epoch: Long = 1L,
+    ) : dev.hryshyn.remanence.pending.PendingRetirementSessionGate {
+        override fun capture(): dev.hryshyn.remanence.core.data.network.SessionRequestLease =
+            dev.hryshyn.remanence.core.data.network.SessionRequestLease(
+                dev.hryshyn.remanence.core.model.UserId.parseRest(owner), epoch,
+            )
+
+        override fun accessTokenFor(
+            lease: dev.hryshyn.remanence.core.data.network.SessionRequestLease,
+        ): String? = "token"
+
+        override fun isLive(
+            lease: dev.hryshyn.remanence.core.data.network.SessionRequestLease,
+        ): Boolean =
+            lease.ownerUserId == dev.hryshyn.remanence.core.model.UserId.parseRest(owner) &&
+                lease.incarnation == epoch
+    }
+
     private fun ingest(
         dir: File,
         crypto: Crypto,
         directoryOwner: String = sender,
         recipientUser: String = recipient,
         claimResult: PendingRedownloadResult? = null,
-    ): PendingClaimIngest = PendingClaimIngest(
+        gate: FencedGate = FencedGate(),
+    ): Triple<PendingClaimIngest, FencedGate, dev.hryshyn.remanence.core.data.network.SessionRequestLease> {
+        val ingest = PendingClaimIngest(
         claimPort = PendingClaimIngest.ClaimFetchPort { _, _ ->
             claimResult ?: PendingRedownloadResult.Redownloaded(
                 claim, crypto.claimB64, crypto.claimSigB64,
@@ -235,17 +257,21 @@ class PendingClaimIngestTest {
                 crypto.recipientKeys, crypto.recipientPublicBytes,
             )
         },
-        servicePinProvider = { pinFor(crypto.serviceKeys) },
+        servicePinPort = { pinFor(crypto.serviceKeys) },
+        sessionGate = gate,
+        accountProvider = { dev.hryshyn.remanence.pending.ProofAccount(gate.owner, bundle) },
         admittedStore = PendingAdmittedGiftStore(dir),
         clockSeconds = { 1_798_765_200L },
     )
+        return Triple(ingest, gate, gate.capture())
+    }
 
     @Test
     fun ingestAdmitsAndPersistsRow() = runTest {
         val dir = Files.createTempDirectory("pending-ingest").toFile()
         try {
             val crypto = crypto()
-            ingest(dir, crypto).ingest(recipient, "token", listOf(item()))
+            ingest(dir, crypto).let { (ingest, _, lease) -> ingest.ingest(recipient, lease, listOf(item())) }
             val row = PendingAdmittedGiftStore(dir).get(recipient, capsule)
             assertEquals(delivery, row?.deliveryId)
             assertEquals(crypto.envelopeB64, row?.envelopeB64)
@@ -260,9 +286,9 @@ class PendingClaimIngestTest {
         val dir = Files.createTempDirectory("pending-ingest-owner").toFile()
         try {
             val crypto = crypto()
-            assertFailsWith<IllegalStateException> {
+            assertThrows(IllegalStateException::class.java) {
                 ingest(dir, crypto, directoryOwner = "99999999-2222-3333-4444-555555555555")
-                    .ingest(recipient, "token", listOf(item()))
+                    .let { (ingest, _, lease) -> ingest.ingest(recipient, lease, listOf(item())) }
             }
             assertNull(PendingAdmittedGiftStore(dir).get(recipient, capsule))
         } finally {
@@ -275,14 +301,14 @@ class PendingClaimIngestTest {
         val dir = Files.createTempDirectory("pending-ingest-claim").toFile()
         try {
             val crypto = crypto()
-            assertFailsWith<IllegalStateException> {
+            assertThrows(IllegalStateException::class.java) {
                 ingest(
                     dir, crypto,
                     claimResult = PendingRedownloadResult.Failure(
                         dev.hryshyn.remanence.core.data.network.PendingMaterialFailure.NOT_FOUND,
                         404, false,
                     ),
-                ).ingest(recipient, "token", listOf(item()))
+                ).let { (ingest, _, lease) -> ingest.ingest(recipient, lease, listOf(item())) }
             }
             assertNull(PendingAdmittedGiftStore(dir).get(recipient, capsule))
         } finally {
@@ -295,9 +321,30 @@ class PendingClaimIngestTest {
         val dir = Files.createTempDirectory("pending-ingest-recipient").toFile()
         try {
             val crypto = crypto()
-            assertFailsWith<IllegalStateException> {
+            assertThrows(IllegalStateException::class.java) {
                 ingest(dir, crypto, recipientUser = "99999999-2222-3333-4444-555555555555")
-                    .ingest(recipient, "token", listOf(item()))
+                    .let { (ingest, _, lease) -> ingest.ingest(recipient, lease, listOf(item())) }
+            }
+            assertNull(PendingAdmittedGiftStore(dir).get(recipient, capsule))
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /**
+     * T186 M14b-lease: a same-owner replacement across the ingest
+     * awaits fails closed with no admitted row — the ORIGINAL carried
+     * lease no longer matches a fresh capture.
+     */
+    @Test
+    fun reloginAcrossIngestFailsWithoutRow() = runTest {
+        val dir = Files.createTempDirectory("pending-ingest-relogin").toFile()
+        try {
+            val crypto = crypto()
+            val (ingest, gate, stale) = ingest(dir, crypto)
+            gate.epoch = 2L
+            assertThrows(IllegalStateException::class.java) {
+                ingest.ingest(recipient, stale, listOf(item()))
             }
             assertNull(PendingAdmittedGiftStore(dir).get(recipient, capsule))
         } finally {

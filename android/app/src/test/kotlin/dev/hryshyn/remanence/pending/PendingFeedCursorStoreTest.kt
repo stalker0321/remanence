@@ -2,10 +2,10 @@ package dev.hryshyn.remanence.pending
 
 import java.io.File
 import java.nio.file.Files
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertNull
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Test
 
 /**
  * T186 M13: feed cursor durability — opaque owner-fenced slot,

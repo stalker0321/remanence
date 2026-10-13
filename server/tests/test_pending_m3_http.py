@@ -33,6 +33,7 @@ from test_pending_m3_pg import (
     NOW,
     OTP_KEY,
     PROOF_MAC_KEY,
+    SUITE,
     Keyring,
     _make_bundle,
     _make_user,
@@ -647,3 +648,169 @@ def test_http_continue_foreign_owned_is_generic_unavailable(session_factory) -> 
     response = stranger_client.post(f"/v2/gift-lookups/{reference}/continue", json={})
     assert response.status_code == 404
     assert response.json()["code"] == "GIFT_UNAVAILABLE"
+
+
+def test_r7_proof_branch_carries_next_step_material(session_factory) -> None:
+    """Frozen R7 DTO: unresolved pending returns delivery_id/capsule/
+    target/channel/expiry plus the public S snapshot (D/KC/expiry/
+    service-key inside); H is its hash. T186 drives R8/R10/R11 from this."""
+    import base64 as _b64
+
+    from remanence.protocol.delivery_v2 import delivery_v2_pb2 as dv2
+
+    from remanence.pending.publication import create_draft, finalize_delivery
+    from remanence.pending.routing import decide_for_send, freeze_route
+
+    sender_ring = Keyring()
+    service_key_id = uuid.uuid4()
+    vault = DevSealedVault(mode="test", key_id="http-r7p-1", key_32=DEV_VAULT_KEY)
+    with session_factory() as session:
+        sender = _make_user(session, f"ps{uuid.uuid4().hex[:8]}")
+        sender_bundle = _make_bundle(session, sender, sender_ring)
+        session.commit()
+        decision = decide_for_send(
+            session, destination_kind="email", normalized_destination=ADDRESS,
+            active_bundle_id=None, hmac_key=HMAC_KEY,
+        )
+        route = freeze_route(
+            session, sender_user_id=sender.id, capsule_id=uuid.uuid4(),
+            destination_kind="email", normalized_destination=ADDRESS,
+            destination_key_32=DEST_KEY, destination_key_mode="test", hmac_key=HMAC_KEY,
+            decision=decision, now=NOW, pending_sends_enabled=True,
+        )
+        delivery = create_draft(
+            session, sender_user_id=sender.id, capsule_id=route.capsule_id,
+            delivery_target_id=decision.delivery_target_id, route_id=route.id,
+            channel="email", claim_expires_at=NOW + timedelta(days=180), now=NOW,
+            pending_sends_enabled=True,
+        )
+        session.commit()
+        statement_raw, payload_raw, _ = _publish_package(
+            capsule_id=delivery.capsule_id, target_id=delivery.delivery_target_id,
+            sender_id=sender.id, sender_bundle_id=sender_bundle.id,
+            service_key_id=service_key_id,
+        )
+        finalized, _ = finalize_delivery(
+            session, delivery_id=delivery.id, principal_user_id=sender.id,
+            statement_raw=statement_raw,
+            signature_69=sender_ring.sign69(
+                domains.domain_prefix(domains.PENDING_PUBLISH_DOMAIN) + statement_raw),
+            escrow_payload_raw=payload_raw, vault=vault,
+            expected_service_key_id=service_key_id, locator_hmac_key=HMAC_KEY,
+            locator_code_key_32=LOCATOR_CODE_KEY, locator_code_key_mode="test",
+            hint_mask=LOCATOR_HINT, now=NOW,
+        )
+        session.commit()
+        locator_id = finalized.locator_id
+        delivery_id, capsule_id, target_id = delivery.id, delivery.capsule_id, delivery.delivery_target_id
+        newcomer = _make_user(session, f"pn{uuid.uuid4().hex[:8]}")
+        session.commit()
+        newcomer_id = newcomer.id
+    client = _build_client(session_factory, flags_on=True, user_id=newcomer_id, session_id=uuid.uuid4())
+    response = client.post(f"/v2/gift-lookups/{locator_id}/continue", json={})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["next"] == "proof"
+    assert body["delivery_id"] == str(delivery_id)
+    assert body["capsule_id"] == str(capsule_id)
+    assert body["delivery_target_id"] == str(target_id)
+    assert body["channel"] == "email"
+    assert isinstance(body["claim_expires_at"], int)
+    statement = dv2.PendingPublishStatementV2.FromString(_b64.b64decode(body["publish_statement_b64"]))
+    assert uuid.UUID(bytes=statement.capsule_id) == capsule_id
+    assert uuid.UUID(bytes=statement.delivery_target_id) == target_id
+    assert hashlib.sha256(_b64.b64decode(body["publish_statement_b64"])).hexdigest() == \
+        hashlib.sha256(statement_raw).hexdigest()
+
+
+def test_google_receive_register_consumes_ticket(session_factory) -> None:
+    """v2 Google receive route: same verified REGISTER ticket consumed
+    atomically; handle null + profile_version 2; replay/reuse refused."""
+    import base64 as _b64
+
+    from remanence.auth.google_models import GoogleFlow
+
+    ring = Keyring()
+    with session_factory() as session:
+        secret = "receive-ticket-secret-1"
+        ticket = GoogleFlow(
+            id=uuid.uuid4(), purpose="REGISTER",
+            secret_hash=hashlib.sha256(secret.encode()).digest(),
+            subject="google-subject-receive-1", email="newfriend@example.test",
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+            consumed_at=None,
+        )
+        session.add(ticket)
+        session.commit()
+        flow_id = ticket.id
+        stranger = _make_user(session, f"gr{uuid.uuid4().hex[:8]}")
+        session.commit()
+        client = _build_client(session_factory, flags_on=True, user_id=stranger.id, session_id=uuid.uuid4())
+    payload = {
+        "flow": str(flow_id), "registration_token": secret,
+        "key_bundle_id": str(uuid.uuid4()), "suite": SUITE, "protocol_version": 1,
+        "encryption_public_keyset_b64": _b64.b64encode(ring.hpke_public).decode(),
+        "signing_public_keyset_b64": _b64.b64encode(ring.ed_public).decode(),
+    }
+    response = client.post("/v2/auth/google/receive-register", json=payload)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "SIGNED_IN"
+    assert body["user"]["handle"] is None
+    assert body["user"]["profile_version"] == 2
+    # Consumed ticket cannot mint a second account.
+    again = client.post("/v2/auth/google/receive-register", json=payload)
+    assert again.status_code in (400, 409)
+
+
+def test_entitlement_paths_ignore_disabled_subflags(session_factory) -> None:
+    """Master-only gates: new-send subflags OFF must not cut off claim
+    redownload, lookup, ack, or completion reads."""
+    app_settings = Settings(
+        mode=AppMode.TEST, pending_protocol_enabled=True,
+        pending_sends_enabled=False, pending_claims_enabled=False,
+        pending_locator_issuance_enabled=False,
+        pending_hmac_secret="synthetic-test-secret-32-bytes-minimum",
+    )
+    app = FastAPI()
+    app.state.settings = app_settings
+    app.state.session_factory = session_factory
+    app.state.pending_ctx = {"hmac_key": HMAC_KEY}
+    from remanence.pending.api import router as _router
+
+    app.include_router(_router)
+
+    def _factory():
+        session = session_factory()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    with session_factory() as session:
+        user = _make_user(session, f"en{uuid.uuid4().hex[:8]}")
+        session.commit()
+        user_id = user.id
+
+    async def _principal() -> AuthenticatedPrincipal:
+        return AuthenticatedPrincipal(user_id=user_id, session_id=uuid.uuid4())
+
+    app.dependency_overrides[get_db_session] = _factory
+    app.dependency_overrides[get_authenticated_principal] = _principal
+    client = TestClient(app, raise_server_exceptions=False)
+    # New sends disabled...
+    denied = client.post(
+        "/v2/send-routes",
+        json={"capsule_id": str(uuid.uuid4()),
+              "destination": {"kind": "email", "value": "a@b.test"},
+              "idempotency_key": str(uuid.uuid4())},
+    )
+    assert denied.status_code == 404
+    # ...but lookup shape still served (generic unavailable, not disabled).
+    lookup = client.post("/v2/gift-lookups", json={"code": "ZZ999"})
+    assert lookup.status_code in (404, 429)
+    assert lookup.json()["code"] in ("GIFT_UNAVAILABLE", "RATE_LIMITED")
+    # ...and completion reads reach the entitlement check, not the gate.
+    missing = client.get(f"/v2/capsules/{uuid.uuid4()}/locator-open-completion")
+    assert missing.status_code == 404
+    assert missing.json()["code"] == "GIFT_UNAVAILABLE"

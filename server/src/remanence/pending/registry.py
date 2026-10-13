@@ -340,6 +340,23 @@ def backfill_reservations(
     return {"created": created, "existing": existing, "blocked": blocked}
 
 
+def backfill_from_users(
+    session: Session,
+    *,
+    hmac_key: bytes,
+    limit: int = 10000,
+) -> dict[str, int]:
+    """Runtime backfill from the ACTUAL users table (operator-invoked,
+    e.g. one-shot at deployment or via maintenance job — never implicit
+    in login/registration). Every primary email becomes a RESERVED row
+    for its owner; never VERIFIED, never rebound, conflicts blocked."""
+    from remanence.users.models import User as _User
+
+    rows = session.scalars(select(_User).order_by(_User.id).limit(limit)).all()
+    triples = [("email", user.email_normalized, user.id) for user in rows]
+    return backfill_reservations(session, rows=triples, hmac_key=hmac_key)
+
+
 def claim_fence(
     session: Session,
     *,

@@ -46,8 +46,14 @@ def create_app(
     ciphertext_stager: CiphertextStager | None = None,
     upload_reservations: UploadReservationManager | None = None,
     music_search=None,
+    pending_ctx: dict | None = None,
 ) -> FastAPI:
     resolved = Settings() if settings is None else settings
+    if resolved.pending_protocol_enabled and pending_ctx is None:
+        # M4 gated composition: the master flag alone never enables the
+        # experimental router — explicit custody/keys/providers context is
+        # required, otherwise startup fails closed. Flag OFF ignores ctx.
+        raise ValueError("pending master flag requires explicit pending_ctx")
     engine: Engine | None = None
     if music_search is None and resolved.music_search_backend is MusicSearchBackend.FULL_CATALOG:
         # Full catalog is independent of the account DB. Validate before startup;
@@ -193,4 +199,12 @@ def create_app(
     app.include_router(recovery_router)
     app.include_router(safety_router)
     app.include_router(legal_router)
+    if resolved.pending_protocol_enabled and pending_ctx is not None:
+        # Experimental pending router ONLY under the master flag with
+        # explicit ctx. Existing handlers/auth/recovery above are
+        # untouched; flag OFF (default) mounts nothing new.
+        from remanence.pending.api import router as pending_router
+
+        app.include_router(pending_router)
+        app.state.pending_ctx = pending_ctx
     return app

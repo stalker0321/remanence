@@ -617,3 +617,33 @@ def test_retired_alias_never_rebound(session_factory) -> None:
                 evidence_key=EVIDENCE_KEY, hmac_key=HMAC_KEY, now=NOW,
             )
         session.rollback()
+
+
+def test_backfill_from_actual_users_table(session_factory) -> None:
+    """Runtime backfill reads the ACTUAL users table (operator-invoked):
+    every primary email becomes RESERVED for its owner; rerun stable."""
+    from remanence.pending.registry import backfill_from_users
+
+    with session_factory() as session:
+        owners = [_make_user(session, handle=f"rtbf{i}") for i in range(3)]
+        session.commit()
+        outcome = backfill_from_users(session, hmac_key=HMAC_KEY)
+        assert outcome["created"] >= 3
+        session.commit()
+        for owner in owners:
+            refreshed = session.get(User, owner.id)
+            assert (
+                address_fate(
+                    session, kind="email", normalized=refreshed.email_normalized, hmac_key=HMAC_KEY
+                )
+                == "RESERVED"
+            )
+            assert (
+                live_verified(
+                    session, kind="email", normalized=refreshed.email_normalized, hmac_key=HMAC_KEY
+                )
+                is None
+            )
+        rerun = backfill_from_users(session, hmac_key=HMAC_KEY)
+        assert rerun["created"] == 0
+        session.rollback()

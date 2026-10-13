@@ -219,6 +219,76 @@ def _b64decode(value: str, *, max_bytes: int = 8192) -> bytes:
 # --- routes --------------------------------------------------------------------------
 
 
+class GoogleReceiveRegistration(Strict):
+    flow: uuid.UUID
+    registration_token: str = Field(min_length=1, max_length=256)
+    key_bundle_id: uuid.UUID
+    suite: str = Field(min_length=1, max_length=80)
+    protocol_version: int
+    encryption_public_keyset_b64: str
+    signing_public_keyset_b64: str
+
+
+@router.post("/v2/auth/google/receive-register")
+def google_receive_register(
+    payload: GoogleReceiveRegistration, request: Request,
+    db: Session = Depends(get_db_session),
+):
+    """Capability-negotiated receive registration: consumes the SAME
+    verified REGISTER ticket / GoogleIdentity flow as v1, but creates a
+    handleless account (profile version 2, handle null). No bare-email
+    path, no auto-link, no second session minted. Gated on the master
+    pending flag (receive profile), not on sends."""
+    from datetime import datetime as _datetime
+
+    from sqlalchemy.exc import IntegrityError as _IntegrityError
+
+    from remanence.api.google_auth import fail as _google_fail
+    from remanence.api.google_auth import pending as _ticket
+
+    ctx = _gate(request, "pending_protocol_enabled")
+    if isinstance(ctx, JSONResponse):
+        return ctx
+    try:
+        row = _ticket(db, payload.flow, "REGISTER", payload.registration_token)
+        result = profile_service.register_receive(
+            db,
+            ticket=row,
+            key_bundle_id=payload.key_bundle_id,
+            suite=payload.suite,
+            protocol_version=payload.protocol_version,
+            encryption_public_keyset=_b64decode(
+                payload.encryption_public_keyset_b64, max_bytes=4096
+            ),
+            signing_public_keyset=_b64decode(
+                payload.signing_public_keyset_b64, max_bytes=4096
+            ),
+            now=_datetime.now(timezone.utc),
+            pending_protocol_enabled=True,
+        )
+        db.commit()
+    except ProfileError as exc:
+        db.rollback()
+        return _map_error(exc)
+    except _IntegrityError:
+        db.rollback()
+        return _problem("REGISTRATION_CONFLICT", 409)
+    except Exception:
+        db.rollback()
+        return _google_fail()
+    return {
+        "status": "SIGNED_IN",
+        "user": {
+            "user_id": str(result.user_id),
+            "email": result.email,
+            "handle": None,
+            "profile_version": 2,
+        },
+        "active_key_bundle_id": str(result.active_key_bundle_id),
+        "session_id": str(result.session_id),
+    }
+
+
 @router.post("/v2/send-routes")
 def send_routes(
     payload: SendRouteRequest, request: Request, db: Session = Depends(get_db_session),
@@ -575,11 +645,19 @@ def lookup_continue(
     reference: uuid.UUID, request: Request, db: Session = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
 ):
-    """Authenticated continuation: owner -> ordinary sync/scan; genuinely
-    unclaimed pending -> setup/proof requirements. A foreign already-owned
-    gift (v1 recipient or another account's claim) gets generic
-    GIFT_UNAVAILABLE — never a proof branch for someone else's gift. The
-    reference alone authorizes nothing."""
+    """Authenticated continuation (frozen R7 DTO).
+
+    - Owner -> {"next":"sync","capsule_id"}: ordinary sync/scan.
+    - Genuinely unclaimed pending ->
+      {"next":"proof","gift_reference","delivery_id","capsule_id",
+       "delivery_target_id","channel","claim_expires_at",
+       "publish_statement_b64","publish_signature_69_b64"}: everything
+      the client needs for R8 (delivery_id), R10/R11 (S snapshot carries
+      D/KC/expiry/service-key; H is its hash). S is sender-signed public
+      verification material — no plaintext, keys, or destination.
+    - Foreign already-owned (v1 recipient or another account's claim) ->
+      generic GIFT_UNAVAILABLE, never a proof branch for someone else.
+    The reference alone authorizes nothing."""
     from sqlalchemy import select as _select
 
     from remanence.capsules.models import Capsule
@@ -602,7 +680,26 @@ def lookup_continue(
     )
     if delivery is not None:
         if delivery.state == "PENDING":
-            return {"next": "proof", "gift_reference": str(locator.id)}
+            if (
+                delivery.publish_statement is None
+                or delivery.publish_signature is None
+            ):
+                return _problem("GIFT_UNAVAILABLE", 404)
+            return {
+                "next": "proof",
+                "gift_reference": str(locator.id),
+                "delivery_id": str(delivery.id),
+                "capsule_id": str(delivery.capsule_id),
+                "delivery_target_id": str(delivery.delivery_target_id),
+                "channel": delivery.channel,
+                "claim_expires_at": int(delivery.claim_expires_at.timestamp()),
+                "publish_statement_b64": base64.b64encode(
+                    bytes(delivery.publish_statement)
+                ).decode(),
+                "publish_signature_69_b64": base64.b64encode(
+                    bytes(delivery.publish_signature)
+                ).decode(),
+            }
         return _problem("GIFT_UNAVAILABLE", 404)
     if db.get(Capsule, locator.capsule_id) is not None:
         # v1 capsule owned by someone else (owner branch above missed).

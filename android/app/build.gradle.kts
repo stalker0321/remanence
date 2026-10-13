@@ -34,6 +34,14 @@ val googleSignInEnabled = providers.gradleProperty("remanence.google.enabled").o
 val pendingEnabled = (findProperty("remanence.pending.enabled") as? String ?: "false").lowercase().also {
     require(it == "true" || it == "false") { "remanence.pending.enabled must be true or false" }
 }
+// T186 M12b: root-selected out-of-band service pin (per-epoch PUBLIC
+// deployment UUID + Ed25519 public keyset, standard base64). Supplied via
+// `-Premanence.pending.serviceKeyId=<uuid> -Premanence.pending.serviceKeysetB64=<b64>`
+// for pending debug builds only; empty (fail closed) unless root provides
+// the generated epoch pair. Release/beta below hard-wire empty. Never an
+// R-carried key, never the discarded-fixture pair at runtime.
+val pendingServiceKeyId = (findProperty("remanence.pending.serviceKeyId") as? String ?: "").trim()
+val pendingServiceKeysetB64 = (findProperty("remanence.pending.serviceKeysetB64") as? String ?: "").trim()
 val remanenceAndroidVersionCode =
     providers.gradleProperty("remanence.androidVersionCode").get().toInt()
 
@@ -91,6 +99,10 @@ android {
             buildConfigField("boolean", "REMANENCE_GOOGLE_SIGN_IN_ENABLED", googleSignInEnabled)
             // T186: pending journey gate. Debug-only opt-in; release/beta below hard-OFF.
             buildConfigField("boolean", "REMANENCE_PENDING_ENABLED", pendingEnabled)
+            // T186 M12b: out-of-band service pin (empty unless root passes
+            // the per-epoch public pair for this pending debug build).
+            buildConfigField("String", "REMANENCE_PENDING_SERVICE_KEY_ID", quoteBuildConfigString(pendingServiceKeyId))
+            buildConfigField("String", "REMANENCE_PENDING_SERVICE_KEYSET_B64", quoteBuildConfigString(pendingServiceKeysetB64))
         }
         named("release") {
             buildConfigField(
@@ -103,6 +115,9 @@ android {
             buildConfigField("boolean", "REMANENCE_GOOGLE_SIGN_IN_ENABLED", "false")
             // T186: pending journey is debug-only; release can never enable it.
             buildConfigField("boolean", "REMANENCE_PENDING_ENABLED", "false")
+            // T186 M12b: no service pin outside pending debug (fail closed).
+            buildConfigField("String", "REMANENCE_PENDING_SERVICE_KEY_ID", quoteBuildConfigString(""))
+            buildConfigField("String", "REMANENCE_PENDING_SERVICE_KEYSET_B64", quoteBuildConfigString(""))
         }
         // Closed Play beta is explicit, non-debuggable and separate from the
         // legacy release defaults. Never publish the recoverytest debug APK.
@@ -116,6 +131,9 @@ android {
             buildConfigField("boolean", "REMANENCE_V2_LINE_LOCALIZATION", "false")
             // T186: pending journey is debug-only; beta can never enable it.
             buildConfigField("boolean", "REMANENCE_PENDING_ENABLED", "false")
+            // T186 M12b: no service pin outside pending debug (fail closed).
+            buildConfigField("String", "REMANENCE_PENDING_SERVICE_KEY_ID", quoteBuildConfigString(""))
+            buildConfigField("String", "REMANENCE_PENDING_SERVICE_KEYSET_B64", quoteBuildConfigString(""))
             buildConfigField("String", "API_BASE_URL",
                 quoteBuildConfigString(remanenceApiBaseUrl("https://invalid.invalid/")))
             versionNameSuffix = "-beta"

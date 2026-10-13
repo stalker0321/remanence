@@ -178,6 +178,15 @@ private val PENDING_PUBLISH_ENDPOINT_STATUSES = mapOf(
 )
 
 /**
+ * Endpoint-exclusive codes: on this surface ONLY the endpoint tuple
+ * is canonical. In particular a minimal `PROTOCOL_UNSUPPORTED` at the
+ * legacy v1 422 is rejected (the shared tuple stays valid for v1 full
+ * bodies and for the strict path — this exclusivity binds the minimal
+ * handler only).
+ */
+private val PENDING_PUBLISH_ENDPOINT_EXCLUSIVE = PENDING_PUBLISH_ENDPOINT_STATUSES.keys
+
+/**
  * Exact minimal pending `_problem` shape
  * (`server/src/remanence/pending/api.py`): `{type, title, status,
  * code}` — no `detail`/`request_id`/`retryable`. The shared strict
@@ -501,6 +510,7 @@ class PendingDeliveryPublishRepository internal constructor(
                 response.code,
                 PENDING_PUBLISH_PROBLEM_CODES,
                 PENDING_PUBLISH_ENDPOINT_STATUSES,
+                PENDING_PUBLISH_ENDPOINT_EXCLUSIVE,
             )
             if (problem != null) {
                 val reason = mapPublishProblem(problem.code)
@@ -538,8 +548,11 @@ class PendingDeliveryPublishRepository internal constructor(
         }
         if (dto.code !in PENDING_PUBLISH_PROBLEM_CODES) return null
         if (dto.status != httpStatus) return null
-        val canonical = canonicalTerminalTuple(dto.code, PENDING_PUBLISH_ENDPOINT_STATUSES)
-            ?: return null
+        val canonical = canonicalTerminalTuple(
+            dto.code,
+            PENDING_PUBLISH_ENDPOINT_STATUSES,
+            PENDING_PUBLISH_ENDPOINT_EXCLUSIVE,
+        ) ?: return null
         if (canonical.first != httpStatus) return null
         if (dto.retryable != null && dto.retryable != canonical.second) return null
         val reason = mapPublishProblem(dto.code)

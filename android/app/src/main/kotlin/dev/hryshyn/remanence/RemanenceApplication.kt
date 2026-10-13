@@ -1006,15 +1006,15 @@ class AppContainer private constructor(
     }
 
     /**
-     * T186 M12: selected service verifier + deployment UUID. Out-of-band
-     * T185 dev bootstrap while pending builds run (`PendingDevServicePin`
-     * answers only when the pending flag is ON); every other build gets
-     * null and PENDING_V2 publication fails closed — never an invented
-     * UUID, never an R-carried key. Deployment replaces this with its
-     * own pin history, never the dev pair.
+     * T186 M12b: root-selected service verifier + deployment UUID
+     * (out-of-band per-epoch PUBLIC pair for pending debug builds;
+     * `PendingServicePinConfig.selected()`). Null everywhere else —
+     * PENDING_V2 publication AND claim acceptance fail closed without
+     * it. Never an invented UUID, never an R-carried key; deployment
+     * replaces the pair with its own pin history.
      */
     val pendingServicePin: dev.hryshyn.remanence.pending.PendingServicePin? by lazy {
-        dev.hryshyn.remanence.pending.PendingDevServicePin.pinIfEnabled()
+        dev.hryshyn.remanence.pending.PendingServicePinConfig.selected()
     }
 
     /**
@@ -1167,6 +1167,9 @@ class AppContainer private constructor(
                     }
                 }
             },
+            // T186 M12b: SAME out-of-band selected pin the sender uses
+            // for S (never an R-carried key). Null ⇒ typed partial.
+            servicePinProvider = { pendingServicePin },
             scope = scope,
         )
     }

@@ -104,6 +104,16 @@ class PendingProofViewModel(
      * an id.
      */
     private val sessionIdProvider: suspend () -> String? = { null },
+    /**
+     * T186 M12b: root-selected service pin (SAME out-of-band pair the
+     * sender uses for S — never an R-carried key). When present AND its
+     * keyset parses, the service signature is verified AND the pin is
+     * required for `Accepted`; otherwise the typed `PartiallyAccepted`
+     * path stands (production today: null ⇒ always partial, never
+     * admission). A malformed pin fails closed to partial, never to
+     * `Accepted`.
+     */
+    private val servicePinProvider: () -> PendingServicePin? = { null },
     private val clockSeconds: () -> Long = { System.currentTimeMillis() / 1000L },
     scope: CoroutineScope? = null,
 ) : ViewModel() {
@@ -482,8 +492,13 @@ class PendingProofViewModel(
             val failure = submitted as dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Failure
             return ProofState.Failed(mapClaimFailure(failure.reason))
         }
-        // Trusted acceptance of the server response (partial: service key
-        // undistributed — typed, never promoted, never admission).
+        // Trusted acceptance of the server response. The SAME
+        // out-of-band selected pin the sender uses for S is the only
+        // trust root here (never an R-carried key): both the handle and
+        // the authorized UUID come from that one configured pair, so a
+        // handle that fails to parse can never yield `Accepted`.
+        // Null/malformed pin ⇒ typed `PartiallyAccepted` (never
+        // production `Accepted`, never admission).
         val sBytes = statementBytes
             ?: return ProofState.Failed(PendingProofMessage.GENERIC)
         val senderKeyBytes = senderKeyBytesStored
@@ -498,6 +513,19 @@ class PendingProofViewModel(
         } catch (_: Exception) {
             null
         } ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+        val selectedPin = try {
+            servicePinProvider()
+        } catch (_: Exception) {
+            null
+        }
+        val serviceVerify = selectedPin?.let { pin ->
+            try {
+                val keysetBytes = Base64.getDecoder().decode(pin.publicKeysetB64)
+                com.google.crypto.tink.TinkProtoKeysetFormat.parseKeysetWithoutSecret(keysetBytes)
+            } catch (_: Exception) {
+                null
+            }
+        }
         return try {
             val binding = Base64.getDecoder().decode(submitted.claimBindingB64)
             val envelope = Base64.getDecoder().decode(submitted.envelopeB64)
@@ -521,15 +549,15 @@ class PendingProofViewModel(
                 claimSignature = claimSig,
                 recipientPrivateHandle = hpke,
                 senderVerifyHandle = senderVerify,
-                // Service-key distribution pending: partial path only,
-                // typed untrusted, never promoted.
-                serviceVerifyHandle = null,
+                serviceVerifyHandle = serviceVerify,
                 expected = dev.hryshyn.remanence.core.crypto.PendingClaimedEnvelope.LocalExpectation(
                     recipientUserId = account.userId,
                     recipientKeyBundleId = account.bundleId,
                     recipientPublicKeyset = ownPublic,
                     nowEpochSeconds = clockSeconds(),
-                    authorizedServiceKeyId = null,
+                    // Bound to the SAME selected pin the handle parsed
+                    // from; null (or an unparsable pin) stays partial.
+                    authorizedServiceKeyId = serviceVerify?.let { selectedPin?.deploymentUuid },
                 ),
             )
             try {

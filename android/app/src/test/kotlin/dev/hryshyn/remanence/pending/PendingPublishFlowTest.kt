@@ -43,6 +43,22 @@ class PendingPublishFlowTest {
             override fun isLive(lease: SessionRequestLease): Boolean = live
         }
 
+    /**
+     * T186 M12b (T188 C3): switchable owner gate. Flipping [owner] kills
+     * previously captured leases (mirrors the incarnation bump on
+     * logout/replacement); the account follows the current owner, so a
+     * mid-transaction A→B switch is observable at the next fence.
+     */
+    private inner class SwitchingGate(var owner: String = senderId) : PendingRetirementSessionGate {
+        override fun capture(): SessionRequestLease =
+            SessionRequestLease(UserId.parseRest(owner), 1L)
+
+        override fun accessTokenFor(lease: SessionRequestLease): String? = "token"
+
+        override fun isLive(lease: SessionRequestLease): Boolean =
+            lease.ownerUserId == UserId.parseRest(owner)
+    }
+
     private fun material() = PendingPublishFlow.PublishMaterial(
         salt32 = ByteArray(32),
         claimExpiresAt = 1814317432L,
@@ -80,11 +96,12 @@ class PendingPublishFlowTest {
                 "a•••@•••",
             )
         },
+        materialOverride: PendingPublishFlow.MaterialPort? = null,
     ): PendingPublishFlow = PendingPublishFlow(
         draftPort = draft,
         blobPort = blob,
         finalizePort = finalize,
-        materialPort = PendingPublishFlow.MaterialPort { material() },
+        materialPort = materialOverride ?: PendingPublishFlow.MaterialPort { material() },
         sessionGate = gate,
         accountProvider = { account },
         scope = null,
@@ -171,5 +188,75 @@ class PendingPublishFlowTest {
         val result = blocked.publish(frozenPending(), capsule, "k1", "k2")
         val failed = result as PendingPublishFlow.State.Failed
         assertEquals(PendingPublishFlow.Reason.BLOCKED, failed.reason)
+    }
+
+    /**
+     * T186 M12b (T188 C3): the lease dies while the local material await
+     * is in flight ⇒ the post-await fence fires BEFORE the first network
+     * side effect — zero R3 calls.
+     */
+    @Test
+    fun materialAwaitSwitchMakesZeroDraftCalls() = runTest {
+        val switching = SwitchingGate()
+        var drafts = 0
+        val result = flow(
+            gate = switching,
+            account = ProofAccount(switching.owner, "bundle"),
+            draft = PendingPublishFlow.DraftPort { _, _, _, _, _, _, _, _, _, _ ->
+                drafts += 1
+                PendingDraftResult.Draft(
+                    "0198f0a0-0000-7000-8000-00000000d401",
+                    "0f".repeat(32),
+                    1798765432L,
+                )
+            },
+            materialOverride = PendingPublishFlow.MaterialPort {
+                switching.owner = "99999999-2222-3333-4444-555555555555"
+                material()
+            },
+        ).publish(frozenPending(), capsule, "k1", "k2")
+        assertEquals(
+            PendingPublishFlow.State.Failed(PendingPublishFlow.Reason.SESSION_CHANGED),
+            result,
+        )
+        assertEquals(0, drafts)
+    }
+
+    /**
+     * T186 M12b (T188 C3): A→B owner switch while R3 is in flight ⇒ no
+     * later-stage call runs for the previous owner's frozen route — zero
+     * blob uploads even though the draft itself succeeded.
+     */
+    @Test
+    fun ownerSwitchBeforeBlobStagesNothing() = runTest {
+        val switching = SwitchingGate()
+        val other = "99999999-2222-3333-4444-555555555555"
+        var blobs = 0
+        val result = PendingPublishFlow(
+            draftPort = PendingPublishFlow.DraftPort { _, _, _, _, _, _, _, _, _, _ ->
+                switching.owner = other
+                PendingDraftResult.Draft(
+                    "0198f0a0-0000-7000-8000-00000000d401",
+                    "0f".repeat(32),
+                    1798765432L,
+                )
+            },
+            blobPort = PendingPublishFlow.BlobPort { _, blobId, _, _, _, _ ->
+                blobs += 1
+                PendingBlobResult.Uploaded(blobId, 11L)
+            },
+            finalizePort = PendingPublishFlow.FinalizePort { _, _, _, _, _, _ ->
+                PendingFinalizeResult.Failure(PendingPublishFailure.NETWORK, retryable = true)
+            },
+            materialPort = PendingPublishFlow.MaterialPort { material() },
+            sessionGate = switching,
+            accountProvider = { ProofAccount(switching.owner, "bundle") },
+            scope = null,
+        ).publish(frozenPending(), capsule, "k1", "k2")
+        assertEquals(
+            PendingPublishFlow.State.Failed(PendingPublishFlow.Reason.SESSION_CHANGED),
+            result,
+        )
+        assertEquals(0, blobs)
     }
 }

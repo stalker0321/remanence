@@ -57,6 +57,16 @@ class PendingSenderViewModelTest {
             live && lease.ownerUserId == UserId.parseRest(owner)
     }
 
+    private inner class SwitchingGate(var owner: String = senderId) : PendingRetirementSessionGate {
+        override fun capture(): SessionRequestLease =
+            SessionRequestLease(UserId.parseRest(owner), 1L)
+
+        override fun accessTokenFor(lease: SessionRequestLease): String? = "token"
+
+        override fun isLive(lease: SessionRequestLease): Boolean =
+            lease.ownerUserId == UserId.parseRest(owner)
+    }
+
     private fun kotlinx.coroutines.test.TestScope.vm(
         freeze: SendRouteResult = frozenPending(),
         account: ProofAccount? = ProofAccount(senderId, senderBundle),
@@ -71,6 +81,9 @@ class PendingSenderViewModelTest {
             listOf("photo-bytes".toByteArray()),
         ),
         contentCalled: (() -> Unit)? = null,
+        switchingGate: SwitchingGate? = null,
+        accountOf: (() -> ProofAccount?)? = null,
+        onDraft: (() -> Unit)? = null,
     ): PendingSenderViewModel {
         TinkPrimitives.ensureRegistered()
         val signing = KeysetHandle.generateNew(KeyTemplates.get("ED25519"))
@@ -78,11 +91,19 @@ class PendingSenderViewModelTest {
         val scope = kotlinx.coroutines.CoroutineScope(
             kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler),
         )
+        val sharedGate: PendingRetirementSessionGate = switchingGate ?: FakeGate(gateOwner, live)
+        val sharedAccount: suspend () -> ProofAccount? = { accountOf?.invoke() ?: account }
+        // Absent provider ⇒ default ARK-ready identity; a PROVIDED
+        // provider returning null ⇒ genuine recovery fence (never the
+        // fallback). Collapsing the two would hide the RECOVERY path.
+        val resolvedIdentity: suspend () -> PendingSenderIdentity? =
+            identityProvider ?: { fallbackIdentity }
         return PendingSenderViewModel(
             freezePort = PendingSendRouteFlow.SendRoutePort { _, _, _, _, _ -> freeze },
             publishFlowFactory = { materialPort ->
                 PendingPublishFlow(
                     draftPort = PendingPublishFlow.DraftPort { _, _, _, _, _, _, _, _, _, _ ->
+                        onDraft?.invoke()
                         PendingDraftResult.Draft(
                             "0198f0a0-0000-7000-8000-00000000d401",
                             "0f".repeat(32),
@@ -98,8 +119,8 @@ class PendingSenderViewModelTest {
                         )
                     },
                     materialPort = materialPort,
-                    sessionGate = FakeGate(gateOwner, live),
-                    accountProvider = { account },
+                    sessionGate = sharedGate,
+                    accountProvider = sharedAccount,
                     scope = null,
                 )
             },
@@ -107,10 +128,10 @@ class PendingSenderViewModelTest {
                 contentCalled?.invoke()
                 content
             },
-            identityPort = PendingSenderIdentityPort { identityProvider?.invoke() ?: fallbackIdentity },
+            identityPort = PendingSenderIdentityPort { resolvedIdentity() },
             servicePinProvider = { pin },
-            sessionGate = FakeGate(gateOwner, live),
-            accountProvider = { account },
+            sessionGate = sharedGate,
+            accountProvider = sharedAccount,
             scope = scope,
         )
     }
@@ -206,5 +227,63 @@ class PendingSenderViewModelTest {
             PendingSenderViewModel.State.Failed(PendingSenderViewModel.Message.VALIDATION),
             viewModel.state.value,
         )
+    }
+
+    /**
+     * T186 M12b (T188 C3): A→B switch while the identity await is in
+     * flight ⇒ the ORIGINAL-owner fence fires before content is even
+     * read — no content, no publication.
+     */
+    @Test
+    fun identityAwaitSwitchBuildsNothing() = runTest {
+        val switching = SwitchingGate()
+        val other = "99999999-2222-3333-4444-555555555555"
+        var contentTouched = false
+        val viewModel = vm(
+            switchingGate = switching,
+            accountOf = { ProofAccount(switching.owner, senderBundle) },
+            identityProvider = {
+                switching.owner = other
+                PendingSenderIdentity(
+                    other, senderBundle,
+                    KeysetHandle.generateNew(KeyTemplates.get("ED25519")),
+                )
+            },
+            contentCalled = { contentTouched = true },
+        )
+        viewModel.onDestinationChange("a42@example.test")
+        viewModel.send()
+        testScheduler.advanceUntilIdle()
+        assertEquals(
+            PendingSenderViewModel.State.Failed(PendingSenderViewModel.Message.SESSION_CHANGED),
+            viewModel.state.value,
+        )
+        assertTrue(!contentTouched)
+    }
+
+    /**
+     * T186 M12b (T188 C3): A→B switch while the content await is in
+     * flight ⇒ no R3 draft ever leaves for the previous owner's route.
+     */
+    @Test
+    fun contentAwaitSwitchStartsNoFlow() = runTest {
+        val switching = SwitchingGate()
+        val other = "99999999-2222-3333-4444-555555555555"
+        var drafts = 0
+        val viewModel = vm(
+            switchingGate = switching,
+            accountOf = { ProofAccount(switching.owner, senderBundle) },
+            onDraft = { drafts += 1 },
+            content = PendingSenderContent(listOf("photo-bytes".toByteArray())),
+            contentCalled = { switching.owner = other },
+        )
+        viewModel.onDestinationChange("a42@example.test")
+        viewModel.send()
+        testScheduler.advanceUntilIdle()
+        assertEquals(
+            PendingSenderViewModel.State.Failed(PendingSenderViewModel.Message.SESSION_CHANGED),
+            viewModel.state.value,
+        )
+        assertEquals(0, drafts)
     }
 }

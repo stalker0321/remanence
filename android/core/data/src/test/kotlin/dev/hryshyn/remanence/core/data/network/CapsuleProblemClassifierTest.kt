@@ -76,4 +76,41 @@ class CapsuleProblemClassifierTest {
 
     private fun problemJson(code: String, status: Int, retryable: Boolean): String =
         """{"type":"https://remanence.invalid/problems/${code.lowercase()}","title":"safe","status":$status,"code":"$code","detail":"private detail","request_id":"0198f0a0-0000-7000-8000-00000000ac01","retryable":$retryable}"""
+
+    @Test
+    fun exclusiveScopeSkipsSharedTuple() {
+        val scope = mapOf("PROTOCOL_UNSUPPORTED" to 404)
+        // Exclusive: the shared legacy 422 is skipped for this code.
+        val rejected = classifyCapsuleProblem(
+            problemJson(code = "PROTOCOL_UNSUPPORTED", status = 422, retryable = false),
+            httpStatus = 422,
+            allowedCodes = setOf("PROTOCOL_UNSUPPORTED"),
+            endpointStatuses = scope,
+            endpointExclusive = setOf("PROTOCOL_UNSUPPORTED"),
+        )
+        assertNull(rejected)
+        // …while the endpoint tuple itself is accepted.
+        val accepted = classifyCapsuleProblem(
+            problemJson(code = "PROTOCOL_UNSUPPORTED", status = 404, retryable = false),
+            httpStatus = 404,
+            allowedCodes = setOf("PROTOCOL_UNSUPPORTED"),
+            endpointStatuses = scope,
+            endpointExclusive = setOf("PROTOCOL_UNSUPPORTED"),
+        )
+        assertEquals("PROTOCOL_UNSUPPORTED", accepted?.code)
+    }
+
+    @Test
+    fun nonExclusiveScopeKeepsSharedTuple() {
+        val scope = mapOf("ROUTE_STALE" to 409)
+        // Non-exclusive codes keep the shared canonical tuple (v1 422
+        // default unchanged) alongside the additive scoped one.
+        val legacy = classifyCapsuleProblem(
+            problemJson(code = "PROTOCOL_UNSUPPORTED", status = 422, retryable = false),
+            httpStatus = 422,
+            allowedCodes = setOf("PROTOCOL_UNSUPPORTED"),
+            endpointStatuses = scope,
+        )
+        assertEquals("PROTOCOL_UNSUPPORTED", legacy?.code)
+    }
 }

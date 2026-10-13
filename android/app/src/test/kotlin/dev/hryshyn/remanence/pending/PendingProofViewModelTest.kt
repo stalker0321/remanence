@@ -98,14 +98,26 @@ class PendingProofViewModelTest {
 
     private fun proofBranch(): ContinueResult.Proof {
         val sB64 = Base64.getEncoder().encodeToString(frozenS())
+        // Positive fixture: the frozen server-side signature over this
+        // exact S (delivery-v2-crypto.json), verifiable under the frozen
+        // sender public key. Zero/garbage signatures are covered by the
+        // explicit tampered-signature negative below — never by default.
         return ContinueResult.Proof(
             giftReference = "0198f0a0-0000-7000-8000-00000000ab01",
             deliveryId = deliveryId, capsuleId = capsule,
             deliveryTargetId = target, channel = "email",
             claimExpiresAt = 1_798_765_432L,
             publishStatementB64 = sB64,
-            publishSignature69B64 = Base64.getEncoder().encodeToString(ByteArray(69)),
+            publishSignature69B64 = Base64.getEncoder().encodeToString(frozenSSignature()),
         )
+    }
+
+    private fun frozenSSignature(): ByteArray {
+        val crypto = fixtures.parseToJsonElement(
+            javaClass.getResourceAsStream("/pending/delivery-v2-crypto.json")!!
+                .bufferedReader().readText(),
+        ).jsonObject
+        return unhex(str(crypto, "pending_publish_signature_69_hex"))
     }
 
     private fun frozenSenderKey(): ByteArray {
@@ -349,6 +361,23 @@ class PendingProofViewModelTest {
         val viewModel = vm(continueResult = bad)
         viewModel.start("ref")
         testScheduler.advanceUntilIdle()
+        assertEquals(
+            PendingProofViewModel.ProofState.Failed(PendingProofViewModel.PendingProofMessage.GENERIC),
+            viewModel.state.value,
+        )
+    }
+
+    @Test
+    fun tamperedSenderSignatureFailsClosed() = runTest {
+        val sig = frozenSSignature().also { it[it.size - 1] = (it[it.size - 1] + 1).toByte() }
+        val bad = proofBranch().copy(
+            publishSignature69B64 = Base64.getEncoder().encodeToString(sig),
+        )
+        val viewModel = vm(continueResult = bad)
+        viewModel.start("ref")
+        testScheduler.advanceUntilIdle()
+        // Framing intact (69 bytes) but cryptographically wrong: the
+        // proof branch never opens, never ProofRequired.
         assertEquals(
             PendingProofViewModel.ProofState.Failed(PendingProofViewModel.PendingProofMessage.GENERIC),
             viewModel.state.value,

@@ -26,10 +26,12 @@ import kotlinx.coroutines.launch
  * signature, and escrow arrive via [MaterialPort] (built with
  * `core:crypto` `PendingPublishCrypto`; inner payloads unchanged).
  * Route freeze is enforced (PENDING_V2 only — no v1→pending fallback;
- * known-v1 takes the separate R2 path). Every network call captures a
- * fresh lease, sends with its token, and rechecks owner/incarnation
- * liveness after the await; the local sender account must be the lease
- * owner at entry and after every await.
+ * known-v1 takes the separate R2 path). One held transaction: the
+ * ORIGINAL owner + lease (incarnation pinned) is captured at entry and
+ * rechecked after EVERY await — including the local material await —
+ * and BEFORE every network side effect; bearers are re-read for the
+ * same live lease per call, never substituted. An optional
+ * [txnOwnerId] pins the original owner across a caller boundary.
  */
 class PendingPublishFlow(
     private val draftPort: DraftPort,
@@ -131,48 +133,79 @@ class PendingPublishFlow(
     private val _state = MutableStateFlow<State>(State.Idle)
     val state: StateFlow<State> = _state.asStateFlow()
 
-    private fun creds(): ProofCreds? {
+    /**
+     * T186 M12b (T188 C3): one held transaction — the ORIGINAL owner +
+     * lease (owner AND incarnation pinned in the captured lease object).
+     * After EVERY await (local material/identity/content work and every
+     * network call) and BEFORE every side effect, [checkTxn] requires
+     * the SAME lease still live and the current account still the
+     * ORIGINAL owner. Bearers are re-read for the same live lease per
+     * call (ordinary rotation never bumps the incarnation, so same-owner
+     * refresh keeps working); a NEW lease is never substituted, so an
+     * A→B switch cannot continue B-side work for A's frozen route.
+     */
+    private data class Txn(
+        val lease: dev.hryshyn.remanence.core.data.network.SessionRequestLease,
+        val ownerId: String,
+    )
+
+    private fun beginTxn(expectedOwnerId: String? = null): Txn? {
         val lease = try {
             sessionGate.capture()
         } catch (_: Exception) {
             return null
         } ?: return null
-        val token = try {
-            sessionGate.accessTokenFor(lease)
-        } catch (_: Exception) {
-            return null
-        }
-        if (token.isNullOrBlank()) return null
-        return ProofCreds(lease, token, lease.ownerUserId.toRestString())
+        val ownerId = lease.ownerUserId.toRestString()
+        if (ownerId.isBlank()) return null
+        if (expectedOwnerId != null && ownerId != expectedOwnerId) return null
+        return Txn(lease, ownerId)
     }
 
-    private fun credsLive(creds: ProofCreds): Boolean = try {
-        sessionGate.isLive(creds.lease) &&
-            creds.lease.ownerUserId.toRestString() == creds.ownerId
+    private fun txnLive(txn: Txn): Boolean = try {
+        sessionGate.isLive(txn.lease)
     } catch (_: Exception) {
         false
     }
 
-    private data class ProofCreds(
-        val lease: dev.hryshyn.remanence.core.data.network.SessionRequestLease,
-        val token: String,
-        val ownerId: String,
-    )
+    /** Fresh bearer for the SAME live lease (null when dead/rotated-out). */
+    private fun txnBearer(txn: Txn): String? {
+        if (!txnLive(txn)) return null
+        return try {
+            sessionGate.accessTokenFor(txn.lease).takeIf { !it.isNullOrBlank() }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Owner fence against the ORIGINAL transaction owner (not a new lease). */
+    private suspend fun checkTxn(txn: Txn): Boolean {
+        if (!txnLive(txn)) return false
+        val account = try {
+            accountProvider()
+        } catch (_: Exception) {
+            return false
+        }
+        return account != null && !account.userId.isBlank() && account.userId == txn.ownerId
+    }
 
     /**
      * Publishes one frozen pending route. Suspends (no owned scope kept;
      * callers launch). Idempotency keys are caller-supplied per stage so
-     * retries replay canonically.
+     * retries replay canonically. [txnOwnerId] pins the ORIGINAL
+     * transaction owner across a caller boundary (e.g. the sender
+     * ViewModel's R1 owner): a lease captured here for a different owner
+     * fails closed before any side effect.
      */
     suspend fun publish(
         frozen: PendingSendRouteFlow.FrozenIdentity.Pending,
         capsuleId: String,
         draftIdempotencyKey: String,
         finalizeIdempotencyKey: String,
+        txnOwnerId: String? = null,
     ): State {
         _state.value = State.Drafting
         return try {
-            publishFlow(frozen, capsuleId, draftIdempotencyKey, finalizeIdempotencyKey)
+            publishFlow(frozen, capsuleId, draftIdempotencyKey, finalizeIdempotencyKey, txnOwnerId)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
@@ -186,10 +219,11 @@ class PendingPublishFlow(
         capsuleId: String,
         draftIdempotencyKey: String,
         finalizeIdempotencyKey: String,
+        txnOwnerId: String? = null,
     ) {
         val scope = launchScope ?: return
         scope.launch {
-            publish(frozen, capsuleId, draftIdempotencyKey, finalizeIdempotencyKey)
+            publish(frozen, capsuleId, draftIdempotencyKey, finalizeIdempotencyKey, txnOwnerId)
         }
     }
 
@@ -198,16 +232,10 @@ class PendingPublishFlow(
         capsuleId: String,
         draftKey: String,
         finalizeKey: String,
+        txnOwnerId: String?,
     ): State {
-        val creds = creds() ?: return State.Failed(Reason.SESSION_CHANGED)
-        val account = try {
-            accountProvider()
-        } catch (_: Exception) {
-            null
-        } ?: return State.Failed(Reason.SESSION_CHANGED)
-        if (account.userId.isBlank() || account.userId != creds.ownerId) {
-            return State.Failed(Reason.SESSION_CHANGED)
-        }
+        val txn = beginTxn(txnOwnerId) ?: return State.Failed(Reason.SESSION_CHANGED)
+        if (!checkTxn(txn)) return State.Failed(Reason.SESSION_CHANGED)
         val material = try {
             materialPort.material(frozen)
         } catch (cancelled: CancellationException) {
@@ -218,6 +246,10 @@ class PendingPublishFlow(
         if (material.salt32.size != 32 || material.artifacts.isEmpty()) {
             return State.Failed(Reason.BLOCKED)
         }
+        // The material await may have outlived the lease: recheck BEFORE
+        // the first network side effect (R3), with a fresh bearer.
+        if (!checkTxn(txn)) return State.Failed(Reason.SESSION_CHANGED)
+        val draftToken = txnBearer(txn) ?: return State.Failed(Reason.SESSION_CHANGED)
         val declarations = material.artifacts.map { artifact ->
             PendingArtifactDeclaration(
                 blobId = artifact.blobId,
@@ -233,14 +265,14 @@ class PendingPublishFlow(
                 frozen.routeId, capsuleId, frozen.deliveryTargetId,
                 frozen.channel, frozen.normalizedDestination,
                 material.salt32, material.claimExpiresAt,
-                declarations, draftKey, creds.token,
+                declarations, draftKey, draftToken,
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
             return State.Failed(Reason.NETWORK)
         }
-        if (!credsLive(creds)) return State.Failed(Reason.SESSION_CHANGED)
+        if (!checkTxn(txn)) return State.Failed(Reason.SESSION_CHANGED)
         val deliveryId = when (draft) {
             is PendingDraftResult.Draft -> draft.deliveryId
             is PendingDraftResult.Failure -> return State.Failed(mapFailure(draft.reason))
@@ -248,55 +280,42 @@ class PendingPublishFlow(
         var uploaded = 0
         for (artifact in material.artifacts) {
             _state.value = State.Uploading(uploaded, material.artifacts.size)
-            // Per-blob lease freshness: re-capture before each upload.
-            val blobCreds = creds() ?: return State.Failed(Reason.SESSION_CHANGED)
-            val blobAccount = try {
-                accountProvider()
-            } catch (_: Exception) {
-                null
-            }
-            if (blobAccount == null || blobAccount.userId != blobCreds.ownerId) {
-                return State.Failed(Reason.SESSION_CHANGED)
-            }
+            // Same transaction owner/incarnation for every blob stage —
+            // never a substituted lease — with a fresh bearer per call.
+            if (!checkTxn(txn)) return State.Failed(Reason.SESSION_CHANGED)
+            val blobToken = txnBearer(txn) ?: return State.Failed(Reason.SESSION_CHANGED)
             val declaration = declarations[uploaded]
             val uploadedResult = try {
                 blobPort.upload(
                     deliveryId, artifact.blobId, artifact.ciphertext,
                     declaration.ciphertextSize, declaration.ciphertextSha256Hex,
-                    blobCreds.token,
+                    blobToken,
                 )
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
                 return State.Failed(Reason.NETWORK)
             }
-            if (!credsLive(blobCreds)) return State.Failed(Reason.SESSION_CHANGED)
+            if (!checkTxn(txn)) return State.Failed(Reason.SESSION_CHANGED)
             when (uploadedResult) {
                 is PendingBlobResult.Uploaded -> uploaded += 1
                 is PendingBlobResult.Failure -> return State.Failed(mapFailure(uploadedResult.reason))
             }
         }
         _state.value = State.Finalizing
-        val finalCreds = creds() ?: return State.Failed(Reason.SESSION_CHANGED)
-        val finalAccount = try {
-            accountProvider()
-        } catch (_: Exception) {
-            null
-        }
-        if (finalAccount == null || finalAccount.userId != finalCreds.ownerId) {
-            return State.Failed(Reason.SESSION_CHANGED)
-        }
+        if (!checkTxn(txn)) return State.Failed(Reason.SESSION_CHANGED)
+        val finalToken = txnBearer(txn) ?: return State.Failed(Reason.SESSION_CHANGED)
         val finalized = try {
             finalizePort.finalize(
                 deliveryId, material.statementB64, material.statementSignature69B64,
-                material.escrowPayloadB64, finalizeKey, finalCreds.token,
+                material.escrowPayloadB64, finalizeKey, finalToken,
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
             return State.Failed(Reason.NETWORK)
         }
-        if (!credsLive(finalCreds)) return State.Failed(Reason.SESSION_CHANGED)
+        if (!checkTxn(txn)) return State.Failed(Reason.SESSION_CHANGED)
         return when (finalized) {
             is PendingFinalizeResult.Finalized ->
                 State.Published(finalized.deliveryId, finalized.locatorCode, finalized.hint)

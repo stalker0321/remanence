@@ -47,8 +47,10 @@ fun interface PendingSenderIdentityPort {
  * escrow, no fallback ever); `PENDING_V2` requires the out-of-band
  * service pin (null ⇒ BLOCKED, never an invented UUID), ARK-ready
  * identity (null ⇒ recovery BLOCKED) and content (null ⇒ BLOCKED).
- * Every network stage captures a fresh lease and rechecks owner/
- * incarnation liveness after the await.
+ * One held transaction (T188 C3): the ORIGINAL R1 owner + lease is
+ * rechecked after the identity/content awaits and before every side
+ * effect, and pinned across the publish-flow boundary; bearers are
+ * re-read for the same live lease per call, never substituted.
  */
 class PendingSenderViewModel(
     private val freezePort: PendingSendRouteFlow.SendRoutePort,
@@ -115,33 +117,52 @@ class PendingSenderViewModel(
         if (kind == "email" || kind == "phone") _kind.value = kind
     }
 
-    private fun creds(): ProofCreds? {
+    /**
+     * T186 M12b (T188 C3): one held sender transaction — the ORIGINAL
+     * owner + lease (incarnation pinned). Rechecked after EVERY await
+     * (identity, content, R1) and BEFORE every side effect; the same
+     * owner is pinned across the publish-flow boundary via [Txn.ownerId].
+     */
+    private data class Txn(
+        val lease: dev.hryshyn.remanence.core.data.network.SessionRequestLease,
+        val ownerId: String,
+    )
+
+    private fun beginTxn(): Txn? {
         val lease = try {
             sessionGate.capture()
         } catch (_: Exception) {
             return null
         } ?: return null
-        val token = try {
-            sessionGate.accessTokenFor(lease)
-        } catch (_: Exception) {
-            return null
-        }
-        if (token.isNullOrBlank()) return null
-        return ProofCreds(lease, token, lease.ownerUserId.toRestString())
+        val ownerId = lease.ownerUserId.toRestString()
+        if (ownerId.isBlank()) return null
+        return Txn(lease, ownerId)
     }
 
-    private fun credsLive(creds: ProofCreds): Boolean = try {
-        sessionGate.isLive(creds.lease) &&
-            creds.lease.ownerUserId.toRestString() == creds.ownerId
+    private fun txnLive(txn: Txn): Boolean = try {
+        sessionGate.isLive(txn.lease)
     } catch (_: Exception) {
         false
     }
 
-    private data class ProofCreds(
-        val lease: dev.hryshyn.remanence.core.data.network.SessionRequestLease,
-        val token: String,
-        val ownerId: String,
-    )
+    private fun txnBearer(txn: Txn): String? {
+        if (!txnLive(txn)) return null
+        return try {
+            sessionGate.accessTokenFor(txn.lease).takeIf { !it.isNullOrBlank() }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private suspend fun checkTxn(txn: Txn): Boolean {
+        if (!txnLive(txn)) return false
+        val account = try {
+            accountProvider()
+        } catch (_: Exception) {
+            return false
+        }
+        return account != null && !account.userId.isBlank() && account.userId == txn.ownerId
+    }
 
     fun send() {
         if (_state.value !is State.Idle && _state.value !is State.Failed) return
@@ -168,31 +189,25 @@ class PendingSenderViewModel(
     }
 
     private suspend fun sendFlow(rawDestination: String, kind: String): State {
-        val creds = creds() ?: return State.Failed(Message.SESSION_CHANGED)
-        val account = try {
-            accountProvider()
-        } catch (_: Exception) {
-            null
-        } ?: return State.Failed(Message.SESSION_CHANGED)
-        if (account.userId.isBlank() || account.userId != creds.ownerId) {
-            return State.Failed(Message.SESSION_CHANGED)
-        }
+        val txn = beginTxn() ?: return State.Failed(Message.SESSION_CHANGED)
+        if (!checkTxn(txn)) return State.Failed(Message.SESSION_CHANGED)
         val capsuleId = java.util.UUID.randomUUID().toString()
         val draftKey = java.util.UUID.randomUUID().toString()
+        val freezeToken = txnBearer(txn) ?: return State.Failed(Message.SESSION_CHANGED)
         val routeFlow = PendingSendRouteFlow(freezePort)
         val frozen = try {
-            routeFlow.freeze(capsuleId, kind, rawDestination, draftKey, creds.token)
+            routeFlow.freeze(capsuleId, kind, rawDestination, draftKey, freezeToken)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
             return State.Failed(Message.NETWORK)
         }
-        if (!credsLive(creds)) return State.Failed(Message.SESSION_CHANGED)
+        if (!checkTxn(txn)) return State.Failed(Message.SESSION_CHANGED)
         return when (frozen) {
             is PendingSendRouteFlow.State.Frozen -> when (val identity = frozen.identity) {
                 is PendingSendRouteFlow.FrozenIdentity.V1 -> State.KnownV1(identity)
                 is PendingSendRouteFlow.FrozenIdentity.Pending ->
-                    publishPending(identity, capsuleId)
+                    publishPending(txn, identity, capsuleId)
             }
             is PendingSendRouteFlow.State.Failed -> State.Failed(mapRouteFailure(frozen.reason))
             else -> State.Failed(Message.GENERIC)
@@ -200,6 +215,7 @@ class PendingSenderViewModel(
     }
 
     private suspend fun publishPending(
+        txn: Txn,
         frozen: PendingSendRouteFlow.FrozenIdentity.Pending,
         capsuleId: String,
     ): State {
@@ -212,13 +228,19 @@ class PendingSenderViewModel(
             return State.Failed(Message.SERVICE_UNAVAILABLE)
         }
         // ARK-readiness: signing keys must unwrap (recovery otherwise).
+        // Both awaits are fenced against the ORIGINAL transaction owner.
         val identity = try {
             identityPort.identity()
         } catch (_: Exception) {
             null
         } ?: return State.Failed(Message.RECOVERY_REQUIRED)
+        if (!checkTxn(txn)) return State.Failed(Message.SESSION_CHANGED)
         if (identity.userId.isBlank() || identity.bundleId.isBlank()) {
             return State.Failed(Message.RECOVERY_REQUIRED)
+        }
+        if (identity.userId != txn.ownerId) {
+            // Identity drifted from the ORIGINAL transaction owner.
+            return State.Failed(Message.SESSION_CHANGED)
         }
         val content = try {
             contentPort.content(capsuleId)
@@ -227,6 +249,7 @@ class PendingSenderViewModel(
         } catch (_: Exception) {
             null
         }
+        if (!checkTxn(txn)) return State.Failed(Message.SESSION_CHANGED)
         val photos = content?.photoJpegs
         if (photos.isNullOrEmpty()) return State.Failed(Message.BLOCKED)
         val channel = when (frozen.channel) {
@@ -265,6 +288,9 @@ class PendingSenderViewModel(
             return State.Failed(Message.GENERIC)
         }
         _state.value = State.Publishing
+        // Pin the ORIGINAL R1 transaction owner across the flow
+        // boundary: a switch since freeze fails closed inside.
+        if (!checkTxn(txn)) return State.Failed(Message.SESSION_CHANGED)
         val flow = publishFlowFactory(
             PendingPublishFlow.MaterialPort {
                 PendingPublishFlow.PublishMaterial(
@@ -288,6 +314,7 @@ class PendingSenderViewModel(
             val published = flow.publish(
                 frozen, capsuleId,
                 java.util.UUID.randomUUID().toString(), finalizeKey,
+                txnOwnerId = txn.ownerId,
             )
         ) {
             is PendingPublishFlow.State.Published ->

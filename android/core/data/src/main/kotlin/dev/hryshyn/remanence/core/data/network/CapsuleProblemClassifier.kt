@@ -36,6 +36,7 @@ internal fun classifyCapsuleProblem(
     httpStatus: Int,
     allowedCodes: Set<String>,
     endpointStatuses: Map<String, Int> = emptyMap(),
+    endpointExclusive: Set<String> = emptySet(),
 ): ClassifiedCapsuleProblem? {
     val problem = try {
         capsuleProblemJson.decodeFromString<CapsuleProblemResponseDto>(text)
@@ -47,7 +48,8 @@ internal fun classifyCapsuleProblem(
 
     if (problem.status != httpStatus || problem.code !in allowedCodes) return null
     val canonicalRetryable =
-        canonicalRetryability(problem.code, problem.status, endpointStatuses) ?: return null
+        canonicalRetryability(problem.code, problem.status, endpointStatuses, endpointExclusive)
+            ?: return null
     if (problem.retryable != canonicalRetryable) return null
     return ClassifiedCapsuleProblem(problem.code, problem.retryable)
 }
@@ -60,14 +62,20 @@ internal fun capsuleHttpFallbackIsRetryable(httpStatus: Int): Boolean =
  * code, or null when the code has no single canonical binding
  * (`INTERNAL_ERROR` is dual-status; unknown codes have none). The
  * shared [TERMINAL_CODE_STATUSES] map is consulted first so legacy v1
- * tuples (e.g. `PROTOCOL_UNSUPPORTED` at 422) always win; endpoint
- * scopes only add codes the shared map does not know.
+ * tuples (e.g. `PROTOCOL_UNSUPPORTED` at 422) always win — unless the
+ * code is [endpointExclusive], in which case ONLY the endpoint tuple is
+ * accepted and the shared one is skipped for that code.
  */
 internal fun canonicalTerminalTuple(
     code: String,
     endpointStatuses: Map<String, Int> = emptyMap(),
+    endpointExclusive: Set<String> = emptySet(),
 ): Pair<Int, Boolean>? {
     if (code == CODE_RATE_LIMITED) return HTTP_RATE_LIMITED to true
+    if (code in endpointExclusive) {
+        endpointStatuses[code]?.let { return it to false }
+        return null
+    }
     TERMINAL_CODE_STATUSES[code]?.let { return it to false }
     endpointStatuses[code]?.let { return it to false }
     return null
@@ -77,13 +85,17 @@ private fun canonicalRetryability(
     code: String,
     status: Int,
     endpointStatuses: Map<String, Int> = emptyMap(),
-): Boolean? = when {
-    code == CODE_RATE_LIMITED && status == HTTP_RATE_LIMITED -> true
-    code == CODE_INTERNAL_ERROR && status == HTTP_SERVICE_UNAVAILABLE -> true
-    code == CODE_INTERNAL_ERROR && status == HTTP_INTERNAL_SERVER_ERROR -> false
-    TERMINAL_CODE_STATUSES[code] == status -> false
-    endpointStatuses[code] == status -> false
-    else -> null
+    endpointExclusive: Set<String> = emptySet(),
+): Boolean? {
+    if (code == CODE_RATE_LIMITED && status == HTTP_RATE_LIMITED) return true
+    if (code == CODE_INTERNAL_ERROR && status == HTTP_SERVICE_UNAVAILABLE) return true
+    if (code == CODE_INTERNAL_ERROR && status == HTTP_INTERNAL_SERVER_ERROR) return false
+    if (code in endpointExclusive) {
+        return if (endpointStatuses[code] == status) false else null
+    }
+    if (TERMINAL_CODE_STATUSES[code] == status) return false
+    if (endpointStatuses[code] == status) return false
+    return null
 }
 
 private val capsuleProblemJson = Json {

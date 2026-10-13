@@ -397,4 +397,56 @@ class PendingDeliveryPublishRepositoryTest {
             assertEquals(PendingPublishFailure.HTTP, result.reason)
         }
     }
+
+    /**
+     * Endpoint-exclusive: a minimal `PROTOCOL_UNSUPPORTED` at the legacy
+     * v1 422 is rejected on this surface (the shared 422 tuple stays
+     * valid for v1 full bodies and the strict path — exclusivity binds
+     * the minimal handler only).
+     */
+    @Test
+    fun minimalProtocolUnsupported422Rejected() = runTest {
+        withServer { server ->
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(422)
+                    .setHeader("Content-Type", "application/json")
+                    .body(minimalProblemJson("PROTOCOL_UNSUPPORTED", 422))
+                    .build(),
+            )
+            val result = assertIs<PendingFinalizeResult.Failure>(
+                repository(server).finalize(
+                    deliveryId = "d", publishStatementB64 = "Uw==",
+                    publishSignature69B64 = "Ux==", escrowPayloadB64 = "RXNj",
+                    idempotencyKey = "k", accessToken = "token",
+                ),
+            )
+            assertEquals(PendingPublishFailure.HTTP, result.reason)
+            assertFalse(result.retryable)
+        }
+    }
+
+    @Test
+    fun minimalProtocolUnsupportedWrongRetryabilityRejected() = runTest {
+        withServer { server ->
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(404)
+                    .setHeader("Content-Type", "application/json")
+                    .body(
+                        """{"type":"about:blank","title":"PROTOCOL_UNSUPPORTED","status":404,"code":"PROTOCOL_UNSUPPORTED","retryable":true}""",
+                    )
+                    .build(),
+            )
+            val result = assertIs<PendingFinalizeResult.Failure>(
+                repository(server).finalize(
+                    deliveryId = "d", publishStatementB64 = "Uw==",
+                    publishSignature69B64 = "Ux==", escrowPayloadB64 = "RXNj",
+                    idempotencyKey = "k", accessToken = "token",
+                ),
+            )
+            // Terminal tuple claiming retryable: rejected, never trusted.
+            assertEquals(PendingPublishFailure.HTTP, result.reason)
+        }
+    }
 }

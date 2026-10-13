@@ -7,6 +7,7 @@ import com.google.crypto.tink.TinkProtoKeysetFormat
 import dev.hryshyn.remanence.core.crypto.TinkPrimitives
 import java.util.Base64
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -42,8 +43,8 @@ class PendingServicePinConfigTest {
     fun blankPairFailsClosed() {
         assertNull(PendingServicePinConfig.select("", ""))
         assertNull(PendingServicePinConfig.select("   ", "   "))
-        assertNull(PendingServicePinConfig.usable(null))
-        assertNull(
+        assertFalse(PendingServicePinConfig.usable(null))
+        assertFalse(
             PendingServicePinConfig.usable(PendingServicePin("", "")),
         )
     }
@@ -69,7 +70,7 @@ class PendingServicePinConfigTest {
         val junk = Base64.getEncoder().encodeToString("hello world, not a keyset".toByteArray())
         assertNull(PendingServicePinConfig.select(uuid, junk))
         assertNull(PendingServicePinConfig.parseVerificationKeyset(junk))
-        assertNull(
+        assertFalse(
             PendingServicePinConfig.usable(PendingServicePin(uuid, junk)),
         )
     }

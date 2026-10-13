@@ -251,6 +251,17 @@ class CreateViewModel(
     fun onPendingRouteFrozen(identity: dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity) {
         sessionStore.freezePendingRoute(identity)
         clearGuardError()
+        // T186 M12e-step: a frozen PENDING_V2 route is the explicit
+        // recipient decision — advance LOOKUP→FRONT like an explicit
+        // confirmation does, so capture can begin. Frozen V1 stays
+        // for the resolve+confirm path (no step change here). No fake
+        // account, handle or recipient keys are fabricated; the later
+        // composition/publish guards still enforce owner, 3..5 photos,
+        // note, drawable, handle-readiness and the frozen route itself.
+        if (identity is dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity.Pending) {
+            if (!requireStep(Step.RECIPIENT_LOOKUP, "pending route")) return
+            _step.value = Step.FRONT
+        }
     }
 
     /** Frozen pending route for the publish boundary (null when handle-bound). */

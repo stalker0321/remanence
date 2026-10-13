@@ -128,6 +128,27 @@ def create_app(
             app.state.ciphertext_stager = ciphertext_stager
         elif resolved.mode is not AppMode.TEST and resolved.blob_root is not None:
             app.state.ciphertext_stager = CiphertextStager(resolved.blob_root / ".staging")
+        app.state.pending_registry_ready = False
+        if resolved.pending_protocol_enabled and pending_ctx is not None:
+            # Registry bootstrap: backfill actual users-table emails as
+            # RESERVED rows before any send/claim is admitted. Bounded,
+            # idempotent, RESERVED-only; configured outside-DB HMAC only.
+            # No live writes: this composition never runs for live beta
+            # (master flag OFF there).
+            try:
+                from remanence.pending.registry import backfill_from_users
+
+                factory = getattr(app.state, "session_factory", None)
+                if factory is not None:
+                    hmac_secret = resolved.pending_hmac_secret
+                    key = hmac_secret.get_secret_value().encode() if hmac_secret else b""
+                    with factory() as session:
+                        outcome = backfill_from_users(session, hmac_key=key)
+                        session.commit()
+                    app.state.pending_registry_ready = True
+                    app.state.pending_backfill_outcome = outcome
+            except Exception:
+                app.state.pending_registry_ready = False
         yield
         if engine is not None:
             engine.dispose()

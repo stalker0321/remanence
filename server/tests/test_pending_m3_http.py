@@ -48,6 +48,36 @@ def _register_tink() -> None:
     tink_config.register()
 
 
+class _MemoryBlobStore:
+    """In-memory BlobStore with the same hash/size conflict semantics."""
+
+    def __init__(self) -> None:
+        self._blobs: dict[str, bytes] = {}
+
+    def put(self, key, source, *, expected_size, expected_sha256):
+        import hashlib as _hashlib
+        import io as _io
+
+        data = source.read() if hasattr(source, "read") else bytes(source)
+        if len(data) != expected_size or _hashlib.sha256(data).hexdigest() != expected_sha256:
+            raise ValueError("integrity mismatch")
+        if key in self._blobs and self._blobs[key] != data:
+            raise ValueError("conflict")
+        self._blobs[key] = data
+        return {"key": key, "size": len(data)}
+
+    def open_reader(self, key):
+        import contextlib as _contextlib
+        import io as _io
+
+        if key not in self._blobs:
+            raise KeyError(key)
+        return _contextlib.closing(_io.BytesIO(self._blobs[key]))
+
+    def stat(self, key):
+        return {"key": key, "size": len(self._blobs[key])}
+
+
 def _build_client(session_factory, *, flags_on: bool, user_id, session_id, ctx_overrides=None) -> TestClient:
     settings = Settings(
         mode=AppMode.TEST,
@@ -71,6 +101,10 @@ def _build_client(session_factory, *, flags_on: bool, user_id, session_id, ctx_o
     }
     ctx.update(ctx_overrides or {})
     app.state.pending_ctx = ctx
+    # Isolated harness: tests seed the registry directly, so readiness is
+    # asserted here the way lifespan backfill asserts it in composition.
+    app.state.pending_registry_ready = True
+    app.state.blob_store = _MemoryBlobStore()
 
     def _factory():
         session = session_factory()
@@ -86,6 +120,19 @@ def _build_client(session_factory, *, flags_on: bool, user_id, session_id, ctx_o
     app.dependency_overrides[get_authenticated_principal] = _principal
     app.include_router(pending_router)
     return TestClient(app, raise_server_exceptions=False)
+
+
+
+def _one_decl():
+    return [
+        {
+            "blob_id": str(uuid.uuid4()),
+            "kind": 3,
+            "ordinal": 0,
+            "ciphertext_size": 505,
+            "ciphertext_sha256_hex": "55" * 32,
+        }
+    ]
 
 
 def test_disabled_flags_404_and_strict_dtos(session_factory) -> None:
@@ -155,10 +202,12 @@ def test_r15_frozen_shape_end_to_end(session_factory) -> None:
             destination_key_32=DEST_KEY, destination_key_mode="test", hmac_key=HMAC_KEY,
             decision=decision, now=NOW, pending_sends_enabled=True,
         )
+        declarations = _one_decl()
         delivery = create_draft(
             session, sender_user_id=sender.id, capsule_id=route.capsule_id,
             delivery_target_id=decision.delivery_target_id, route_id=route.id,
-            channel="email", claim_expires_at=NOW + timedelta(days=180), now=NOW,
+            channel="email", claim_expires_at=NOW + timedelta(days=180),
+            declarations=declarations, now=NOW,
             pending_sends_enabled=True,
         )
         session.commit()
@@ -166,6 +215,7 @@ def test_r15_frozen_shape_end_to_end(session_factory) -> None:
             capsule_id=delivery.capsule_id, target_id=delivery.delivery_target_id,
             sender_id=sender.id, sender_bundle_id=sender_bundle.id,
             service_key_id=service_key_id,
+            artifacts=declarations,
         )
         sig = sender_ring.sign69(
             domains.domain_prefix(domains.PENDING_PUBLISH_DOMAIN) + statement_raw
@@ -322,6 +372,10 @@ def test_http_finalize_verify_claim_round_trip(session_factory) -> None:
         session_factory, flags_on=True, user_id=sender_id,
         session_id=sender_session, ctx_overrides=ctx_overrides,
     )
+    draft_artifact = {
+        "blob_id": str(uuid.uuid4()), "kind": 3, "ordinal": 0,
+        "ciphertext_size": 505, "ciphertext_sha256_hex": "55" * 32,
+    }
     draft = sender_client.post(
         "/v2/pending-deliveries",
         json={"route_id": str(route_id), "capsule_id": str(capsule_id),
@@ -329,7 +383,7 @@ def test_http_finalize_verify_claim_round_trip(session_factory) -> None:
               "destination": ADDRESS, "salt_b64": _b64.b64encode(bytes(range(32))).decode(),
               "claim_expires_at": int((
                   datetime.now(timezone.utc) + timedelta(days=179)).timestamp()),
-              "claim_policy_version": 1, "artifacts": [],
+              "claim_policy_version": 1, "artifacts": [draft_artifact],
               "idempotency_key": str(uuid.uuid4())},
     )
     assert draft.status_code == 200, draft.text
@@ -337,6 +391,7 @@ def test_http_finalize_verify_claim_round_trip(session_factory) -> None:
     statement_raw, payload_raw, _ = _publish_package(
         capsule_id=capsule_id, target_id=target_id, sender_id=sender_id,
         sender_bundle_id=sender_bundle.id, service_key_id=service_key_id,
+        artifacts=[draft_artifact],
     )
     finalize = sender_client.post(
         f"/v2/pending-deliveries/{delivery_id}/finalize",
@@ -449,10 +504,12 @@ def test_http_wrong_codes_lock_attempt_persistently(session_factory) -> None:
             destination_key_32=DEST_KEY, destination_key_mode="test", hmac_key=HMAC_KEY,
             decision=decision, now=NOW, pending_sends_enabled=True,
         )
+        declarations = _one_decl()
         delivery = create_draft(
             session, sender_user_id=sender.id, capsule_id=route.capsule_id,
             delivery_target_id=decision.delivery_target_id, route_id=route.id,
-            channel="email", claim_expires_at=NOW + timedelta(days=180), now=NOW,
+            channel="email", claim_expires_at=NOW + timedelta(days=180),
+            declarations=declarations, now=NOW,
             pending_sends_enabled=True,
         )
         session.commit()
@@ -460,6 +517,7 @@ def test_http_wrong_codes_lock_attempt_persistently(session_factory) -> None:
             capsule_id=delivery.capsule_id, target_id=delivery.delivery_target_id,
             sender_id=sender.id, sender_bundle_id=sender_bundle.id,
             service_key_id=service_key_id,
+            artifacts=declarations,
         )
         _finalize_service(
             session, delivery_id=delivery.id, principal_user_id=sender.id,
@@ -556,10 +614,12 @@ def test_http_continue_foreign_owned_is_generic_unavailable(session_factory) -> 
             destination_key_32=DEST_KEY, destination_key_mode="test", hmac_key=HMAC_KEY,
             decision=decision, now=NOW, pending_sends_enabled=True,
         )
+        declarations = _one_decl()
         delivery = create_draft(
             session, sender_user_id=sender.id, capsule_id=route.capsule_id,
             delivery_target_id=decision.delivery_target_id, route_id=route.id,
-            channel="email", claim_expires_at=NOW + timedelta(days=180), now=NOW,
+            channel="email", claim_expires_at=NOW + timedelta(days=180),
+            declarations=declarations, now=NOW,
             pending_sends_enabled=True,
         )
         session.commit()
@@ -567,6 +627,7 @@ def test_http_continue_foreign_owned_is_generic_unavailable(session_factory) -> 
             capsule_id=delivery.capsule_id, target_id=delivery.delivery_target_id,
             sender_id=sender.id, sender_bundle_id=sender_bundle.id,
             service_key_id=service_key_id,
+            artifacts=declarations,
         )
         finalized, code = finalize_delivery(
             session, delivery_id=delivery.id,
@@ -678,10 +739,12 @@ def test_r7_proof_branch_carries_next_step_material(session_factory) -> None:
             destination_key_32=DEST_KEY, destination_key_mode="test", hmac_key=HMAC_KEY,
             decision=decision, now=NOW, pending_sends_enabled=True,
         )
+        declarations = _one_decl()
         delivery = create_draft(
             session, sender_user_id=sender.id, capsule_id=route.capsule_id,
             delivery_target_id=decision.delivery_target_id, route_id=route.id,
-            channel="email", claim_expires_at=NOW + timedelta(days=180), now=NOW,
+            channel="email", claim_expires_at=NOW + timedelta(days=180),
+            declarations=declarations, now=NOW,
             pending_sends_enabled=True,
         )
         session.commit()
@@ -689,6 +752,7 @@ def test_r7_proof_branch_carries_next_step_material(session_factory) -> None:
             capsule_id=delivery.capsule_id, target_id=delivery.delivery_target_id,
             sender_id=sender.id, sender_bundle_id=sender_bundle.id,
             service_key_id=service_key_id,
+            artifacts=declarations,
         )
         finalized, _ = finalize_delivery(
             session, delivery_id=delivery.id, principal_user_id=sender.id,
@@ -814,3 +878,244 @@ def test_entitlement_paths_ignore_disabled_subflags(session_factory) -> None:
     missing = client.get(f"/v2/capsules/{uuid.uuid4()}/locator-open-completion")
     assert missing.status_code == 404
     assert missing.json()["code"] == "GIFT_UNAVAILABLE"
+
+
+def test_r1_exact_shapes_and_known_verified_v1(session_factory) -> None:
+    """Frozen R1: exact response keysets for both arms; known-verified
+    address routes v1 with zero escrow involvement."""
+    from remanence.pending.registry import verify_binding
+    from remanence.pending.routing import decide_for_send, freeze_route
+
+    with session_factory() as session:
+        sender = _make_user(session, f"s1{uuid.uuid4().hex[:8]}")
+        recipient = _make_user(session, f"s2{uuid.uuid4().hex[:8]}")
+        recipient_bundle = _make_bundle(session, recipient, Keyring())
+        session.commit()
+        verify_binding(
+            session, kind="email", normalized=ADDRESS, owner_user_id=recipient.id,
+            evidence_method="otp", evidence_key=EVIDENCE_KEY, hmac_key=HMAC_KEY, now=NOW,
+        )
+        session.commit()
+        sender_id, sender_session = sender.id, uuid.uuid4()
+    client = _build_client(session_factory, flags_on=True, user_id=sender_id, session_id=sender_session)
+    pending = client.post(
+        "/v2/send-routes",
+        json={"capsule_id": str(uuid.uuid4()),
+              "destination": {"kind": "email", "value": "fresh-new@example.test"},
+              "idempotency_key": str(uuid.uuid4())},
+    )
+    assert pending.status_code == 200, pending.text
+    assert set(pending.json()) == {
+        "route_id", "mode", "expires_at", "normalized_destination",
+        "channel", "claim_deadline", "service_key_id", "delivery_target_id",
+    }
+    assert pending.json()["mode"] == "PENDING_V2"
+    known = client.post(
+        "/v2/send-routes",
+        json={"capsule_id": str(uuid.uuid4()),
+              "destination": {"kind": "email", "value": ADDRESS},
+              "idempotency_key": str(uuid.uuid4())},
+    )
+    assert known.status_code == 200, known.text
+    assert set(known.json()) == {
+        "route_id", "mode", "expires_at", "user_id", "key_bundle_id", "binding_revision",
+    }
+    assert known.json()["mode"] == "EXISTING_USER_V1"
+    assert known.json()["user_id"] == str(recipient.id)
+    # Handle arm resolves through the directory, not the email decider.
+    handle = client.post(
+        "/v2/send-routes",
+        json={"capsule_id": str(uuid.uuid4()),
+              "destination": {"kind": "handle", "value": recipient.handle_normalized},
+              "idempotency_key": str(uuid.uuid4())},
+    )
+    assert handle.status_code == 200, handle.text
+    assert handle.json()["mode"] == "EXISTING_USER_V1"
+
+
+def test_r3_validates_policy_artifacts_idempotency(session_factory) -> None:
+    import base64 as _b64
+
+    from remanence.pending.routing import decide_for_send, freeze_route
+
+    with session_factory() as session:
+        sender = _make_user(session, f"s3{uuid.uuid4().hex[:8]}")
+        session.commit()
+        decision = decide_for_send(
+            session, destination_kind="email", normalized_destination=ADDRESS,
+            active_bundle_id=None, hmac_key=HMAC_KEY,
+        )
+        route = freeze_route(
+            session, sender_user_id=sender.id, capsule_id=uuid.uuid4(),
+            destination_kind="email", normalized_destination=ADDRESS,
+            destination_key_32=DEST_KEY, destination_key_mode="test", hmac_key=HMAC_KEY,
+            decision=decision, now=NOW, pending_sends_enabled=True,
+        )
+        session.commit()
+        sender_id, route_id = sender.id, route.id
+    client = _build_client(session_factory, flags_on=True, user_id=sender_id, session_id=uuid.uuid4())
+    route_capsule, route_target = str(route.capsule_id), str(route.delivery_target_id)
+    base = {"route_id": str(route_id), "capsule_id": route_capsule, "channel": "email",
+            "delivery_target_id": route_target,
+            "destination": ADDRESS, "salt_b64": _b64.b64encode(bytes(range(32))).decode(),
+            "claim_expires_at": int((datetime.now(timezone.utc) + timedelta(days=10)).timestamp()),
+            "claim_policy_version": 1,
+            "artifacts": [{"blob_id": str(uuid.uuid4()), "kind": 3, "ordinal": 0,
+                           "ciphertext_size": 10, "ciphertext_sha256_hex": "aa" * 32}],
+            "idempotency_key": str(uuid.uuid4())}
+    created = client.post("/v2/pending-deliveries", json=base)
+    assert created.status_code == 200, created.text
+    assert set(created.json()) == {"delivery_id", "state", "address_commitment_d_hex", "expires_at"}
+    assert len(created.json()["address_commitment_d_hex"]) == 64
+    # Wrong policy rejected, not silently accepted.
+    bad_policy = dict(base, claim_policy_version=2, idempotency_key=str(uuid.uuid4()))
+    assert client.post("/v2/pending-deliveries", json=bad_policy).status_code == 404
+    # Destination mismatch with the frozen route rejected.
+    mismatch = dict(base, destination="other@example.test", idempotency_key=str(uuid.uuid4()))
+    assert client.post("/v2/pending-deliveries", json=mismatch).status_code == 409
+    # Draft for another target cannot ride this route.
+    other_target = dict(base, delivery_target_id=str(uuid.uuid4()), idempotency_key=str(uuid.uuid4()))
+    assert client.post("/v2/pending-deliveries", json=other_target).status_code == 409
+    # Same capsule+target redraft is idempotent (same delivery id).
+    replay = client.post("/v2/pending-deliveries", json=base)
+    assert replay.status_code == 200
+    assert replay.json()["delivery_id"] == created.json()["delivery_id"]
+
+
+def test_r8_phone_consent_and_r6_channel(session_factory) -> None:
+    import base64 as _b64
+
+    from remanence.pending.publication import create_draft, finalize_delivery
+    from remanence.pending.routing import decide_for_send, freeze_route
+
+    sender_ring = Keyring()
+    service_key_id = uuid.uuid4()
+    phone = "+380509998877"
+    with session_factory() as session:
+        sender = _make_user(session, f"s4{uuid.uuid4().hex[:8]}")
+        sender_bundle = _make_bundle(session, sender, sender_ring)
+        session.commit()
+        decision = decide_for_send(
+            session, destination_kind="phone", normalized_destination=phone,
+            active_bundle_id=None, hmac_key=HMAC_KEY,
+        )
+        route = freeze_route(
+            session, sender_user_id=sender.id, capsule_id=uuid.uuid4(),
+            destination_kind="phone", normalized_destination=phone,
+            destination_key_32=DEST_KEY, destination_key_mode="test", hmac_key=HMAC_KEY,
+            decision=decision, now=NOW, pending_sends_enabled=True,
+        )
+        declarations = [{"blob_id": str(uuid.uuid4()), "kind": 3, "ordinal": 0,
+                         "ciphertext_size": 10, "ciphertext_sha256_hex": "bb" * 32}]
+        delivery = create_draft(
+            session, sender_user_id=sender.id, capsule_id=route.capsule_id,
+            delivery_target_id=decision.delivery_target_id, route_id=route.id,
+            channel="sms", claim_expires_at=NOW + timedelta(days=10),
+            declarations=declarations, now=NOW, pending_sends_enabled=True,
+        )
+        session.commit()
+        statement_raw, payload_raw, _ = _publish_package(
+            capsule_id=delivery.capsule_id, target_id=delivery.delivery_target_id,
+            sender_id=sender.id, sender_bundle_id=sender_bundle.id,
+            service_key_id=service_key_id, artifacts=declarations,
+        )
+        finalized, code = finalize_delivery(
+            session, delivery_id=delivery.id, principal_user_id=sender.id,
+            statement_raw=statement_raw,
+            signature_69=sender_ring.sign69(
+                domains.domain_prefix(domains.PENDING_PUBLISH_DOMAIN) + statement_raw),
+            escrow_payload_raw=payload_raw,
+            vault=DevSealedVault(mode="test", key_id="http-pc-1", key_32=DEV_VAULT_KEY),
+            expected_service_key_id=service_key_id, locator_hmac_key=HMAC_KEY,
+            locator_code_key_32=LOCATOR_CODE_KEY, locator_code_key_mode="test",
+            hint_mask=LOCATOR_HINT, now=NOW,
+        )
+        session.commit()
+        delivery_id, sender_id = delivery.id, sender.id
+    client = _build_client(session_factory, flags_on=True, user_id=sender_id, session_id=uuid.uuid4())
+    # R6 reports the real channel, never 'unknown' for live gifts.
+    lookup = client.post("/v2/gift-lookups", json={"code": code.lower().replace(" ", "")})
+    assert lookup.status_code == 200, lookup.text
+    assert lookup.json()["channel"] == "sms"
+    # R8 without phone consent is refused before any dispatch.
+    recipient = None
+    with session_factory() as session:
+        recipient = _make_user(session, f"s5{uuid.uuid4().hex[:8]}")
+        _make_bundle(session, recipient, Keyring())
+        session.commit()
+        recipient_id, recipient_session = recipient.id, uuid.uuid4()
+    rclient = _build_client(session_factory, flags_on=True, user_id=recipient_id, session_id=recipient_session)
+    refused = rclient.post(
+        f"/v2/pending-deliveries/{delivery_id}/verification",
+        json={"confirm_destination": phone, "idempotency_key": str(uuid.uuid4())},
+    )
+    assert refused.status_code == 400
+
+
+def test_blob_upload_manifest_download(session_factory) -> None:
+    import base64 as _b64
+
+    from remanence.pending.publication import create_draft
+    from remanence.pending.routing import decide_for_send, freeze_route
+
+    sender_ring = Keyring()
+    service_ring = Keyring()
+    service_key_id = uuid.uuid4()
+    blob_bytes = bytes([0x77]) * 505
+    with session_factory() as session:
+        sender = _make_user(session, f"s6{uuid.uuid4().hex[:8]}")
+        sender_bundle = _make_bundle(session, sender, sender_ring)
+        session.commit()
+        decision = decide_for_send(
+            session, destination_kind="email", normalized_destination=ADDRESS,
+            active_bundle_id=None, hmac_key=HMAC_KEY,
+        )
+        route = freeze_route(
+            session, sender_user_id=sender.id, capsule_id=uuid.uuid4(),
+            destination_kind="email", normalized_destination=ADDRESS,
+            destination_key_32=DEST_KEY, destination_key_mode="test", hmac_key=HMAC_KEY,
+            decision=decision, now=NOW, pending_sends_enabled=True,
+        )
+        import hashlib as _hashlib
+
+        blob_id = str(uuid.uuid4())
+        declarations = [{"blob_id": blob_id, "kind": 3, "ordinal": 0,
+                         "ciphertext_size": len(blob_bytes),
+                         "ciphertext_sha256_hex": _hashlib.sha256(blob_bytes).hexdigest()}]
+        delivery = create_draft(
+            session, sender_user_id=sender.id, capsule_id=route.capsule_id,
+            delivery_target_id=decision.delivery_target_id, route_id=route.id,
+            channel="email", claim_expires_at=NOW + timedelta(days=10),
+            declarations=declarations, now=NOW, pending_sends_enabled=True,
+        )
+        session.commit()
+        sender_id, delivery_id = sender.id, delivery.id
+    sclient = _build_client(session_factory, flags_on=True, user_id=sender_id, session_id=uuid.uuid4())
+    # Undeclared blob refused.
+    assert sclient.put(
+        f"/v2/pending-deliveries/{delivery_id}/blobs/{uuid.uuid4()}",
+        content=b"nope",
+    ).status_code in (400, 404)
+    # Hash mismatch refused.
+    assert sclient.put(
+        f"/v2/pending-deliveries/{delivery_id}/blobs/{blob_id}",
+        content=bytes([0x78]) * 505,
+    ).status_code in (400, 404)
+    # Exact declared bytes accepted.
+    uploaded = sclient.put(
+        f"/v2/pending-deliveries/{delivery_id}/blobs/{blob_id}", content=blob_bytes
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    # Sender manifest lists the artifact.
+    manifest = sclient.get(f"/v2/pending-deliveries/{delivery_id}/manifest")
+    assert manifest.status_code == 200
+    assert manifest.json()["artifacts"][0]["blob_id"] == blob_id
+    # Pre-claim recipient download denied; sender download works.
+    with session_factory() as session:
+        stranger = _make_user(session, f"s7{uuid.uuid4().hex[:8]}")
+        session.commit()
+        stranger_id = stranger.id
+    xclient = _build_client(session_factory, flags_on=True, user_id=stranger_id, session_id=uuid.uuid4())
+    assert xclient.get(f"/v2/pending-deliveries/{delivery_id}/blobs/{blob_id}").status_code == 404
+    got = sclient.get(f"/v2/pending-deliveries/{delivery_id}/blobs/{blob_id}")
+    assert got.status_code == 200 and got.content == blob_bytes

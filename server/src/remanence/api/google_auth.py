@@ -72,6 +72,10 @@ def fail(reason="GOOGLE_AUTH_REJECTED", status=400):
     return JSONResponse({"reason": reason}, status_code=status, headers={"Cache-Control": "no-store"})
 
 
+class ProfileUpgradeRequired(Exception):
+    """Handleless account met an old client: 426 BEFORE token issuance."""
+
+
 def fresh(db, purpose, secret, subject=None, email=None):
     now = datetime.now(timezone.utc)
     # Serialize admission to keep the anonymous ceremony budget bounded.
@@ -94,6 +98,10 @@ def pending(db, flow, purpose, secret):
 
 
 def login_response(db, user):
+    if user.handle_normalized is None:
+        # Capability guard BEFORE any token/session issuance: old clients
+        # get 426, never a null-decoder 500 or a fake handle.
+        raise ProfileUpgradeRequired()
     if user.disabled_at is not None: raise ValueError("disabled account")
     bundle = active_bundle(db, user.id)
     now = datetime.now(timezone.utc); access = generate_access_token(); refresh = generate_refresh_token()
@@ -138,6 +146,10 @@ def verify(payload: GoogleProof, request: Request, db: Session = Depends(get_db_
                 registration = fresh(db, "REGISTER", token, proof["subject"], proof["email"])
                 result = {"status": "NEEDS_HANDLE", "flow": str(registration.id), "registration_token": token}
         db.commit(); return result
+    except ProfileUpgradeRequired:
+        db.rollback()
+        return JSONResponse({"reason": "CLIENT_UPGRADE_REQUIRED"}, status_code=426,
+                            headers={"Cache-Control": "no-store"})
     except Exception:
         if burned: db.commit()
         else: db.rollback()

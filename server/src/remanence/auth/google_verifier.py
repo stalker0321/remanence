@@ -32,4 +32,13 @@ def validate_google_claims(claims: dict, nonce: str, settings) -> dict:
     if not isinstance(subject, str) or not subject or len(subject) > 255:
         raise ValueError("invalid Google subject")
     from remanence.api.auth_schemas import normalize_email
-    return {"subject": subject, "email": normalize_email(claims["email"])}
+    return {
+        "subject": subject,
+        "email": normalize_email(claims["email"]),
+        # Authority evidence preserved for delivery verification (T185):
+        # trusted Gmail/Workspace-hd distinction and token age must be
+        # derivable from validated originals, never re-fetched ad hoc.
+        "email_verified": True,
+        "hd": claims.get("hd"),
+        "iat": claims.get("iat"),
+    }

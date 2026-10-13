@@ -647,3 +647,26 @@ def test_backfill_from_actual_users_table(session_factory) -> None:
         rerun = backfill_from_users(session, hmac_key=HMAC_KEY)
         assert rerun["created"] == 0
         session.rollback()
+
+
+def test_handleless_login_gets_426_before_tokens(session_factory) -> None:
+    """Old client meeting a handleless account: 426 BEFORE any session
+    or token is issued (never a 500, never a fake handle)."""
+    from sqlalchemy import func
+
+    from remanence.api.google_auth import ProfileUpgradeRequired, login_response
+    from remanence.auth.models import AuthSession
+
+    with session_factory() as session:
+        handleless = _make_user(session, handle=None)
+        session.commit()
+        with pytest.raises(ProfileUpgradeRequired):
+            login_response(session, handleless)
+        session.rollback()
+        assert session.scalar(select(func.count()).select_from(AuthSession)) == 0
+        handleful = _make_user(session, handle="capableuser")
+        _make_bundle(session, handleful)
+        session.commit()
+        response = login_response(session, handleful)
+        assert response["user"]["handle"] == "capableuser"
+        session.rollback()

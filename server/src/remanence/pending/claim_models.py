@@ -23,6 +23,7 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy import JSON as JSONTYPE
 from sqlalchemy.orm import Mapped, mapped_column
 
 from remanence.db.base import Base
@@ -96,6 +97,9 @@ class PendingDelivery(Base):
         ForeignKey("gift_locators.id", name="fk_pending_deliveries_locator"),
         nullable=True,
     )
+    # Validated R3 blob declarations (kind/ordinal/size/sha per blob).
+    # Bound at finalize: S artifacts must match exactly. JSON list.
+    blob_declarations: Mapped[list | None] = mapped_column(JSONTYPE, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

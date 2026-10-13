@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import base64
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from remanence.api.dependencies import (
     AuthenticatedPrincipal,
     get_authenticated_principal,
+    get_blob_store,
     get_db_session,
 )
 from remanence.pending import claim as claim_service
@@ -94,6 +95,9 @@ class VerificationRequest(Strict):
     idempotency_key: uuid.UUID
 
 
+SMS_CONSENT_TEXT_VERSION = "v1"
+
+
 class VerificationCheckRequest(Strict):
     code: str = Field(min_length=1, max_length=32)
 
@@ -137,6 +141,14 @@ def _gate(request: Request, subflag: str) -> Any:
     if ctx is None:
         return _problem("PROVIDER_UNAVAILABLE", 503)
     return ctx
+
+
+def _gate_registry_ready(request: Request) -> JSONResponse | None:
+    """Sends/claims require a completed registry bootstrap (old emails
+    RESERVED). Until the lifespan backfill succeeds: 503, no sends."""
+    if getattr(request.app.state, "pending_registry_ready", False):
+        return None
+    return _problem("REGISTRY_NOT_READY", 503)
 
 
 class LookupRateLimiter:
@@ -202,6 +214,7 @@ def _map_error(exc: Exception) -> JSONResponse:
         "CLIENT_UPGRADE_REQUIRED": 426,
         "PROTOCOL_UNSUPPORTED": 404,
         "RECIPIENT_KEY_STALE": 409,
+        "REGISTRY_NOT_READY": 503,
     }.get(code, 400)
     return _problem(code, status)
 
@@ -284,8 +297,17 @@ def google_receive_register(
             "handle": None,
             "profile_version": 2,
         },
-        "active_key_bundle_id": str(result.active_key_bundle_id),
+        "active_key_bundle": {
+            "key_bundle_id": str(result.active_key_bundle_id),
+            "suite": payload.suite,
+            "protocol_version": payload.protocol_version,
+            "status": "ACTIVE",
+        },
         "session_id": str(result.session_id),
+        "access_token": result.access_token,
+        "refresh_token": result.refresh_token,
+        "access_expires_at": result.access_expires_at.isoformat(),
+        "refresh_expires_at": result.refresh_expires_at.isoformat(),
     }
 
 
@@ -297,6 +319,9 @@ def send_routes(
     ctx = _gate(request, "pending_sends_enabled")
     if isinstance(ctx, JSONResponse):
         return ctx
+    not_ready = _gate_registry_ready(request)
+    if not_ready is not None:
+        return not_ready
     from remanence.pending.normalize import (
         normalize_email_destination,
         normalize_phone_destination,
@@ -310,6 +335,15 @@ def send_routes(
             normalized = normalize_phone_destination(payload.destination.value)
         else:
             normalized = payload.destination.value
+        # Existing send policy: the sender needs a completed (handleful)
+        # profile; receive-only accounts must choose a handle first.
+        from remanence.users.models import User as _User
+
+        sender = db.get(_User, principal.user_id)
+        if sender is None or sender.disabled_at is not None:
+            return _problem("AUTH_INVALID", 401)
+        if sender.handle_normalized is None:
+            return _problem("HANDLE_REQUIRED_FOR_SEND", 403)
         decision = routing_service.decide_for_send(
             db,
             destination_kind=kind,
@@ -334,7 +368,11 @@ def send_routes(
     except Exception as exc:
         db.rollback()
         return _map_error(exc)
-    body: dict[str, Any] = {"route_id": str(route.id), "mode": route.mode}
+    body: dict[str, Any] = {
+        "route_id": str(route.id),
+        "mode": route.mode,
+        "expires_at": int(route.expires_at.timestamp()),
+    }
     if route.mode == "EXISTING_USER_V1":
         body.update(
             user_id=str(route.target_user_id),
@@ -342,7 +380,13 @@ def send_routes(
             binding_revision=route.binding_revision,
         )
     else:
-        body.update(delivery_target_id=str(route.delivery_target_id))
+        body.update(
+            normalized_destination=normalized,
+            channel="sms" if kind == "phone" else "email",
+            claim_deadline=int((datetime.now(timezone.utc) + timedelta(days=180)).timestamp()),
+            service_key_id=str(ctx["service_key_id"]),
+            delivery_target_id=str(route.delivery_target_id),
+        )
     return body
 
 
@@ -363,23 +407,115 @@ def create_pending_delivery(
             mode="PENDING_V2",
             now=datetime.now(timezone.utc),
         )
-        _ = route
-        delivery = publication_service.create_draft(
-            db,
-            sender_user_id=principal.user_id,
-            capsule_id=payload.capsule_id,
-            delivery_target_id=payload.delivery_target_id,
-            route_id=payload.route_id,
-            channel=payload.channel,
-            claim_expires_at=datetime.fromtimestamp(payload.claim_expires_at, timezone.utc),
-            now=datetime.now(timezone.utc),
-            pending_sends_enabled=True,
+        # The frozen route binds the delivery target too: a draft for a
+        # different target cannot ride this route (new draft needed).
+        if route.delivery_target_id != payload.delivery_target_id:
+            db.rollback()
+            return _problem("ROUTE_STALE", 409)
+        # Salt: exactly 32 random bytes (opens the address commitment).
+        try:
+            salt = _b64decode(payload.salt_b64, max_bytes=64)
+        except PublicationError as exc:
+            return _map_error(exc)
+        if len(salt) != 32:
+            return _problem("VALIDATION_FAILED", 400)
+        # Destination must equal the frozen route's committed value.
+        sealed_route_destination = routing_service.open_destination(
+            sealed=bytes(route.sealed_destination),
+            key_32=ctx["destination_key"],
+        )
+        import hmac as _hmac
+
+        if not _hmac.compare_digest(payload.destination, sealed_route_destination):
+            return _problem("ROUTE_STALE", 409)
+        # Policy: only the frozen v1 policy version is accepted.
+        if payload.claim_policy_version != 1:
+            return _problem("PROTOCOL_UNSUPPORTED", 404)
+        declarations = publication_service.validate_declarations(payload.artifacts)
+        # Idempotency: same capsule+target redraft returns the same DRAFT;
+        # anything else conflicts (savepoint-scoped, no TX poisoning).
+        from sqlalchemy import select as _select
+        from sqlalchemy.exc import IntegrityError as _IntegrityError
+
+        from remanence.pending.claim_models import PendingDelivery as _Delivery
+
+        try:
+            with db.begin_nested():
+                delivery = publication_service.create_draft(
+                    db,
+                    sender_user_id=principal.user_id,
+                    capsule_id=payload.capsule_id,
+                    delivery_target_id=payload.delivery_target_id,
+                    route_id=payload.route_id,
+                    channel=payload.channel,
+                    claim_expires_at=datetime.fromtimestamp(
+                        payload.claim_expires_at, timezone.utc
+                    ),
+                    declarations=declarations,
+                    now=datetime.now(timezone.utc),
+                    pending_sends_enabled=True,
+                )
+        except _IntegrityError:
+            existing = db.scalar(
+                _select(_Delivery).where(_Delivery.capsule_id == payload.capsule_id)
+            )
+            if (
+                existing is None
+                or existing.sender_user_id != principal.user_id
+                or existing.delivery_target_id != payload.delivery_target_id
+                or existing.route_id != payload.route_id
+            ):
+                db.rollback()
+                return _problem("IDEMPOTENCY_CONFLICT", 409)
+            delivery = existing
+        from remanence.pending import domains as _domains
+        from remanence.protocol.delivery_v2 import delivery_v2_pb2 as _dv2
+
+        opening = _dv2.AddressOpening(
+            normalization_version=1,
+            channel=1 if payload.channel == "email" else 2,
+            normalized_destination=sealed_route_destination,
+            salt=salt,
+        )
+        commitment = _domains.domain_digest(
+            _domains.DELIVERY_ADDRESS_DOMAIN,
+            opening.SerializeToString(deterministic=True),
         )
         db.commit()
     except Exception as exc:
         db.rollback()
         return _map_error(exc)
-    return {"delivery_id": str(delivery.id), "state": delivery.state}
+    return {
+        "delivery_id": str(delivery.id),
+        "state": delivery.state,
+        "address_commitment_d_hex": commitment.hex(),
+        "expires_at": int(delivery.claim_expires_at.timestamp()),
+    }
+
+
+def _mask_hint(channel: str, normalized: str) -> str:
+    """Minimal public hint, computed in memory only (never logged)."""
+    if channel == "sms" or normalized.startswith("+"):
+        return "••••" + normalized[-2:]
+    local, _, _domain = normalized.partition("@")
+    return (local[:1] if local else "•") + "•••@•••"
+
+
+def _delivery_hint(db: Session, delivery, ctx) -> str:
+    """Resolve the committed destination via the frozen sealed route and
+    mask it. Failures fall back to a generic mask (never the raw value)."""
+    try:
+        from remanence.pending.models import PendingSendRoute
+
+        route = db.get(PendingSendRoute, delivery.route_id) if delivery.route_id else None
+        if route is None:
+            return "•••"
+        normalized = routing_service.open_destination(
+            sealed=bytes(route.sealed_destination), key_32=ctx["destination_key"]
+        )
+        return _mask_hint(delivery.channel, normalized)
+    except Exception:
+        return "•••"
 
 
 @router.post("/v2/pending-deliveries/{delivery_id}/finalize")
@@ -392,6 +528,10 @@ def finalize_pending_delivery(
     if isinstance(ctx, JSONResponse):
         return ctx
     try:
+        from remanence.pending.claim_models import PendingDelivery as _DeliveryProbe
+
+        hint_probe = db.get(_DeliveryProbe, delivery_id)
+        hint_mask = _delivery_hint(db, hint_probe, ctx) if hint_probe is not None else "•••"
         delivery, code = publication_service.finalize_delivery(
             db,
             delivery_id=delivery_id,
@@ -404,14 +544,20 @@ def finalize_pending_delivery(
             locator_hmac_key=ctx["hmac_key"],
             locator_code_key_32=ctx["locator_code_key"],
             locator_code_key_mode=request.app.state.settings.mode.value,
-            hint_mask="pending",
+            hint_mask=hint_mask,
             now=datetime.now(timezone.utc),
         )
         db.commit()
     except Exception as exc:
         db.rollback()
         return _map_error(exc)
-    return {"delivery_id": str(delivery.id), "state": delivery.state, "locator_code": code}
+    return {
+        "delivery_id": str(delivery.id),
+        "state": delivery.state,
+        "locator_code": code,
+        "claim_expires_at": int(delivery.claim_expires_at.timestamp()),
+        "hint": _delivery_hint(db, delivery, ctx),
+    }
 
 
 @router.post("/v2/pending-deliveries/{delivery_id}/cancel")
@@ -443,6 +589,17 @@ def start_proof(
     if isinstance(ctx, JSONResponse):
         return ctx
     try:
+        from remanence.pending.claim_models import PendingDelivery as _DeliveryForConsent
+
+        delivery = db.get(_DeliveryForConsent, delivery_id)
+        if delivery is None:
+            return _problem("GIFT_UNAVAILABLE", 404)
+        # Phone requires explicit SMS consent (versioned text); without
+        # it no dispatch happens. Email needs no consent object.
+        if delivery.channel == "sms":
+            consent = payload.consent or {}
+            if consent.get("sms_text_version") != SMS_CONSENT_TEXT_VERSION:
+                return _problem("VALIDATION_FAILED", 400)
         attempt = proof_service.start_verification(
             db,
             delivery_id=delivery_id,
@@ -509,6 +666,95 @@ def check_proof(
     return {"attempt_id": str(attempt.id), "state": attempt.state}
 
 
+class GoogleShortcutRequest(Strict):
+    flow: uuid.UUID
+    nonce: str = Field(min_length=43, max_length=43)
+    id_token: str = Field(min_length=1, max_length=16384)
+
+
+def _google_authority(claims: dict) -> str | None:
+    """Gmail, or verified Workspace carrying hd. Anything else (incl.
+    third-party email_verified alone) is NOT authority -> None (OTP)."""
+    email = str(claims.get("email", ""))
+    domain = email.partition("@")[2].lower()
+    if domain in ("gmail.com", "googlemail.com"):
+        return "gmail"
+    if claims.get("hd"):
+        return "workspace_hd"
+    return None
+
+
+@router.post("/v2/pending-deliveries/{delivery_id}/verification/google")
+def google_shortcut(
+    delivery_id: uuid.UUID, payload: GoogleShortcutRequest, request: Request,
+    db: Session = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+):
+    """Fresh authoritative Google shortcut over HTTP. The nonce comes
+    from a server-issued AUTH ceremony (same pending() consumption as
+    login: single-use, expiry-checked) — never an arbitrary
+    request-chosen value. Verifies the REAL Google token (no bypass);
+    disabled Google config fails closed. Only Gmail / Workspace-hd
+    authority skips dispatch; third-party falls to OTP."""
+    from remanence.auth.google_verifier import verify_google_token
+
+    ctx = _gate(request, "pending_claims_enabled")
+    if isinstance(ctx, JSONResponse):
+        return ctx
+    settings = request.app.state.settings
+    if not settings.google_sign_in_enabled:
+        return _problem("PROVIDER_UNAVAILABLE", 503)
+    try:
+        from remanence.api.google_auth import pending as _consume_flow
+
+        flow_row = _consume_flow(db, payload.flow, "AUTH", payload.nonce)
+        claims = verify_google_token(payload.id_token, payload.nonce, settings)
+        flow_row.consumed_at = datetime.now(timezone.utc)
+        db.flush()
+    except Exception:
+        db.rollback()
+        return _problem("ADDRESS_PROOF_REQUIRED", 400)
+    authority = _google_authority(claims)
+    if authority is None:
+        return _problem("ADDRESS_PROOF_REQUIRED", 400)
+    try:
+        issued_at = datetime.fromtimestamp(int(claims.get("iat", 0) or 0), timezone.utc)
+    except (ValueError, TypeError, OSError):
+        return _problem("ADDRESS_PROOF_REQUIRED", 400)
+    if datetime.now(timezone.utc) - issued_at > timedelta(minutes=10):
+        return _problem("ADDRESS_PROOF_REQUIRED", 400)
+    try:
+        from remanence.auth.google_models import GoogleIdentity as _GI
+
+        identity = db.scalar(select(_GI).where(_GI.subject == claims["subject"]))
+        # The verified subject must belong to the signed-in principal:
+        # no cross-account token presentation.
+        if identity is None or identity.user_id != principal.user_id:
+            db.rollback()
+            return _problem("ADDRESS_PROOF_REQUIRED", 400)
+        attempt = proof_service.verify_google_shortcut(
+            db,
+            delivery_id=delivery_id,
+            account_user_id=principal.user_id,
+            session_id=principal.session_id,
+            google_subject=claims["subject"],
+            google_email_normalized=claims["email"],
+            google_issued_at=issued_at,
+            account_google_subject=claims["subject"],
+            google_authority=authority,
+            destination_key_32=ctx["destination_key"],
+            destination_tag_key=ctx["hmac_key"],
+            registry_hmac_key=ctx["hmac_key"],
+            proof_mac_key=ctx["proof_mac_key"],
+            now=datetime.now(timezone.utc),
+        )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        return _map_error(exc)
+    return {"attempt_id": str(attempt.id), "state": attempt.state}
+
+
 @router.post("/v2/pending-deliveries/{delivery_id}/claim/options")
 def claim_challenge(
     delivery_id: uuid.UUID, request: Request, db: Session = Depends(get_db_session),
@@ -563,6 +809,9 @@ def submit_claim(
     ctx = _gate(request, "pending_claims_enabled")
     if isinstance(ctx, JSONResponse):
         return ctx
+    not_ready = _gate_registry_ready(request)
+    if not_ready is not None:
+        return not_ready
     try:
         claim = claim_service.execute_claim(
             db,
@@ -707,6 +956,129 @@ def lookup_continue(
     return _problem("GIFT_UNAVAILABLE", 404)
 
 
+PENDING_BLOB_MAX_BYTES = 16 * 1024 * 1024
+
+
+def _blob_key(delivery_id: uuid.UUID, blob_id: uuid.UUID) -> str:
+    return f"pending/{delivery_id}/{blob_id}"
+
+
+@router.put("/v2/pending-deliveries/{delivery_id}/blobs/{blob_id}")
+async def upload_pending_blob(
+    delivery_id: uuid.UUID,
+    blob_id: uuid.UUID,
+    request: Request,
+    db: Session = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    blob_store=Depends(get_blob_store),
+):
+    """R4: sender uploads exactly the declared bytes (hash/size checked
+    against the R3 declarations). Undeclared/hash-mismatch/oversize
+    rejected before storage."""
+    import hashlib as _hashlib
+    import io as _io
+
+    from remanence.pending.claim_models import PendingDelivery as _DeliveryBlob
+
+    ctx = _gate(request, "pending_sends_enabled")
+    if isinstance(ctx, JSONResponse):
+        return ctx
+    try:
+        delivery = db.get(_DeliveryBlob, delivery_id)
+        if (
+            delivery is None
+            or delivery.state != "DRAFT"
+            or delivery.sender_user_id != principal.user_id
+        ):
+            return _problem("GIFT_UNAVAILABLE", 404)
+        body = await request.body()
+        if len(body) > PENDING_BLOB_MAX_BYTES:
+            return _problem("VALIDATION_FAILED", 400)
+        entry = next(
+            (e for e in (delivery.blob_declarations or []) if e["blob_id"] == str(blob_id)),
+            None,
+        )
+        if entry is None:
+            return _problem("PROTOCOL_UNSUPPORTED", 404)
+        if len(body) != entry["ciphertext_size"] or _hashlib.sha256(body).hexdigest() != entry[
+            "ciphertext_sha256_hex"
+        ]:
+            return _problem("PROTOCOL_UNSUPPORTED", 404)
+        try:
+            blob_store.put(
+                _blob_key(delivery_id, blob_id),
+                _io.BytesIO(body),
+                expected_size=len(body),
+                expected_sha256=_hashlib.sha256(body).hexdigest(),
+            )
+        except Exception:
+            return _problem("PROVIDER_UNAVAILABLE", 503)
+        return {"blob_id": str(blob_id), "size": len(body)}
+    except Exception as exc:
+        return _map_error(exc)
+
+
+@router.get("/v2/pending-deliveries/{delivery_id}/manifest")
+def pending_manifest(
+    delivery_id: uuid.UUID,
+    request: Request,
+    db: Session = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+):
+    """Owner-scoped artifact manifest (S bindings): sender anytime;
+    recipient only after claim. No anonymous access."""
+    from remanence.pending.claim_models import PendingClaim as _ClaimManifest
+    from remanence.pending.claim_models import PendingDelivery as _DeliveryManifest
+
+    ctx = _gate(request, "pending_protocol_enabled")
+    if isinstance(ctx, JSONResponse):
+        return ctx
+    delivery = db.get(_DeliveryManifest, delivery_id)
+    if delivery is None:
+        return _problem("GIFT_UNAVAILABLE", 404)
+    if principal.user_id != delivery.sender_user_id:
+        claim = db.get(_ClaimManifest, delivery.delivery_target_id)
+        if claim is None or claim.account_user_id != principal.user_id:
+            return _problem("GIFT_UNAVAILABLE", 404)
+    if not delivery.blob_declarations:
+        return _problem("GIFT_UNAVAILABLE", 404)
+    return {"delivery_id": str(delivery.id), "artifacts": delivery.blob_declarations}
+
+
+@router.get("/v2/pending-deliveries/{delivery_id}/blobs/{blob_id}")
+def download_pending_blob(
+    delivery_id: uuid.UUID,
+    blob_id: uuid.UUID,
+    request: Request,
+    db: Session = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    blob_store=Depends(get_blob_store),
+):
+    """Recipient transport: sender anytime; final recipient only after
+    claim. Every other principal gets generic unavailable."""
+    from fastapi.responses import Response as _Response
+
+    from remanence.pending.claim_models import PendingClaim as _ClaimBlob
+    from remanence.pending.claim_models import PendingDelivery as _DeliveryBlob
+
+    ctx = _gate(request, "pending_protocol_enabled")
+    if isinstance(ctx, JSONResponse):
+        return ctx
+    delivery = db.get(_DeliveryBlob, delivery_id)
+    if delivery is None:
+        return _problem("GIFT_UNAVAILABLE", 404)
+    if principal.user_id != delivery.sender_user_id:
+        claim = db.get(_ClaimBlob, delivery.delivery_target_id)
+        if claim is None or claim.account_user_id != principal.user_id:
+            return _problem("GIFT_UNAVAILABLE", 404)
+    try:
+        with blob_store.open_reader(_blob_key(delivery_id, blob_id)) as reader:
+            data = reader.read()
+    except Exception:
+        return _problem("GIFT_UNAVAILABLE", 404)
+    return _Response(content=data, media_type="application/octet-stream")
+
+
 @router.post("/v2/gift-lookups")
 def gift_lookup(payload: GiftLookupRequest, request: Request, db: Session = Depends(get_db_session)):
     import time as _time
@@ -726,7 +1098,16 @@ def gift_lookup(payload: GiftLookupRequest, request: Request, db: Session = Depe
     row = locator_store.resolve_active(db, tag=_hmac(canonical, ctx["hmac_key"]))
     if row is None:
         return _problem("GIFT_UNAVAILABLE", 404)
-    return {"gift_reference": str(row.id), "channel": "unknown", "hint": row.hint_mask}
+    # Real channel from the owning delivery (ACTIVE locator always has
+    # one); unknown only if storage is inconsistent (never guessed).
+    from sqlalchemy import select as _select
+    from remanence.pending.claim_models import PendingDelivery as _DeliveryByCapsule
+
+    delivery = db.scalar(
+        _select(_DeliveryByCapsule).where(_DeliveryByCapsule.capsule_id == row.capsule_id)
+    )
+    channel = delivery.channel if delivery is not None else "unknown"
+    return {"gift_reference": str(row.id), "channel": channel, "hint": row.hint_mask}
 
 
 @router.post("/v2/me/handle")

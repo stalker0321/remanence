@@ -155,6 +155,7 @@ def _publish_package(
     sender_bundle_id: uuid.UUID,
     service_key_id: uuid.UUID,
     salt: bytes = bytes(range(32)),
+    **kwargs,
 ):
     """Canonical S + escrow payload with correctly recomputed D/KC."""
     keyset_bytes = _real_aes_keyset(bytes([0x20] * 32))
@@ -172,13 +173,25 @@ def _publish_package(
     kc = domains.domain_digest(
         domains.DELIVERY_KEY_DOMAIN, kc_input.SerializeToString(deterministic=True)
     )
-    binding = dv2.ArtifactBindingV2(
-        blob_id=uuid.uuid4().bytes,
-        kind=3,
-        ordinal=0,
-        ciphertext_size=505,
-        ciphertext_sha256=bytes([0x55] * 32),
-    )
+    artifacts = kwargs.get("artifacts") or [
+        {
+            "blob_id": str(uuid.uuid4()),
+            "kind": 3,
+            "ordinal": 0,
+            "ciphertext_size": 505,
+            "ciphertext_sha256_hex": "55" * 32,
+        }
+    ]
+    bindings = [
+        dv2.ArtifactBindingV2(
+            blob_id=uuid.UUID(a["blob_id"]).bytes,
+            kind=a["kind"],
+            ordinal=a["ordinal"],
+            ciphertext_size=a["ciphertext_size"],
+            ciphertext_sha256=bytes.fromhex(a["ciphertext_sha256_hex"]),
+        )
+        for a in artifacts
+    ]
     statement = dv2.PendingPublishStatementV2(
         protocol_version=2,
         capsule_id=capsule_id.bytes,
@@ -191,7 +204,7 @@ def _publish_package(
         claim_expires_at_epoch_seconds=int(NOW.timestamp()) + 180 * 86400,
         claim_policy_version=1,
         claim_signing_key_id=service_key_id.bytes,
-        artifacts=[binding],
+        artifacts=bindings,
     )
     statement_raw = statement.SerializeToString(deterministic=True)
     payload = dv2.PendingEscrowPlaintextV1(
@@ -238,6 +251,15 @@ def _setup_pending(session, *, address: str = ADDRESS, channel: str = "email"):
         now=NOW,
         pending_sends_enabled=True,
     )
+    declarations = [
+        {
+            "blob_id": str(uuid.uuid4()),
+            "kind": 3,
+            "ordinal": 0,
+            "ciphertext_size": 505,
+            "ciphertext_sha256_hex": "55" * 32,
+        }
+    ]
     delivery = create_draft(
         session,
         sender_user_id=sender.id,
@@ -246,11 +268,13 @@ def _setup_pending(session, *, address: str = ADDRESS, channel: str = "email"):
         route_id=route.id,
         channel=channel,
         claim_expires_at=NOW + timedelta(days=180),
+        declarations=declarations,
         now=NOW,
         pending_sends_enabled=True,
     )
     session.commit()
     return {
+        "declarations": declarations,
         "sender": sender,
         "sender_ring": sender_ring,
         "sender_bundle": sender_bundle,
@@ -267,6 +291,7 @@ def _finalize(session, setup, service_key_id: uuid.UUID, vault) -> tuple:
         sender_id=setup["sender"].id,
         sender_bundle_id=setup["sender_bundle"].id,
         service_key_id=service_key_id,
+        artifacts=setup["declarations"],
     )
     sig = setup["sender_ring"].sign69(
         domains.domain_prefix(domains.PENDING_PUBLISH_DOMAIN) + statement_raw
@@ -630,6 +655,7 @@ def test_finalize_failure_rolls_back_without_partial_state(session_factory) -> N
             capsule_id=delivery.capsule_id, target_id=delivery.delivery_target_id,
             sender_id=setup["sender"].id, sender_bundle_id=setup["sender_bundle"].id,
             service_key_id=service_key_id,
+            artifacts=setup["declarations"],
         )
         sig = setup["sender_ring"].sign69(
             domains.domain_prefix(domains.PENDING_PUBLISH_DOMAIN) + statement_raw

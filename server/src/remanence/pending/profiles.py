@@ -44,6 +44,8 @@ class ReceiveRegistrationResult:
     session_id: uuid.UUID
     access_token: str = field(repr=False)
     refresh_token: str = field(repr=False)
+    access_expires_at: datetime
+    refresh_expires_at: datetime
 
 
 def summarize_user(user: User, *, client_profile_version: int | None) -> dict:
@@ -129,12 +131,14 @@ def register_receive(
     session.flush()
     access_token = generate_access_token()
     refresh_token = generate_refresh_token()
+    access_expires_at = now + ACCESS_TTL
+    refresh_expires_at = now + REFRESH_TTL
     auth_session = AuthSessionRepository(session).create(
         user_id=user.id,
         access_token_hash=hash_opaque_token(access_token),
         refresh_token_hash=hash_opaque_token(refresh_token),
-        access_expires_at=now + ACCESS_TTL,
-        refresh_expires_at=now + REFRESH_TTL,
+        access_expires_at=access_expires_at,
+        refresh_expires_at=refresh_expires_at,
     )
     session.add(GoogleIdentity(subject=ticket.subject, user_id=user.id))
     ticket.consumed_at = now
@@ -147,6 +151,8 @@ def register_receive(
         session_id=auth_session.id,
         access_token=access_token,
         refresh_token=refresh_token,
+        access_expires_at=access_expires_at,
+        refresh_expires_at=refresh_expires_at,
     )
 
 

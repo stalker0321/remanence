@@ -114,6 +114,65 @@ def parse_statement(raw: bytes) -> dv2.PendingPublishStatementV2:
     return statement
 
 
+def validate_declarations(declarations: list) -> list[dict]:
+    """R3 shape validation: each entry needs blob_id UUID, kind 1..3,
+    ordinal (-1 except PHOTO 0..4), non-negative size, 32-byte sha."""
+    if not isinstance(declarations, list) or len(declarations) > 8:
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
+    cleaned: list[dict] = []
+    for entry in declarations:
+        if not isinstance(entry, dict):
+            raise PublicationError("PROTOCOL_UNSUPPORTED")
+        try:
+            blob_id = uuid.UUID(str(entry["blob_id"]))
+            kind = int(entry["kind"])
+            ordinal = int(entry["ordinal"])
+            size = int(entry["ciphertext_size"])
+            sha = bytes.fromhex(str(entry["ciphertext_sha256_hex"]))
+        except Exception as exc:
+            raise PublicationError("PROTOCOL_UNSUPPORTED") from exc
+        if kind not in (1, 2, 3) or len(sha) != 32 or size < 0:
+            raise PublicationError("PROTOCOL_UNSUPPORTED")
+        if kind != 3 and ordinal != -1:
+            raise PublicationError("PROTOCOL_UNSUPPORTED")
+        if kind == 3 and not (0 <= ordinal <= 4):
+            raise PublicationError("PROTOCOL_UNSUPPORTED")
+        cleaned.append(
+            {
+                "blob_id": str(blob_id),
+                "kind": kind,
+                "ordinal": ordinal,
+                "ciphertext_size": size,
+                "ciphertext_sha256_hex": sha.hex(),
+            }
+        )
+    order = [(e["kind"], e["ordinal"], e["blob_id"]) for e in cleaned]
+    if order != sorted(order):
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
+    return cleaned
+
+
+def declarations_match_s(declarations: list | None, statement) -> bool:
+    """Finalize binding: S artifacts must equal the R3 declarations."""
+    if not declarations:
+        return False
+    if len(declarations) != len(statement.artifacts):
+        return False
+    for declared, artifact in zip(
+        sorted(declarations, key=lambda e: (e["kind"], e["ordinal"], e["blob_id"])),
+        sorted(statement.artifacts, key=lambda a: (a.kind, a.ordinal, bytes(a.blob_id))),
+    ):
+        if (
+            declared["blob_id"] != str(uuid.UUID(bytes=bytes(artifact.blob_id)))
+            or declared["kind"] != artifact.kind
+            or declared["ordinal"] != artifact.ordinal
+            or declared["ciphertext_size"] != artifact.ciphertext_size
+            or declared["ciphertext_sha256_hex"] != bytes(artifact.ciphertext_sha256).hex()
+        ):
+            return False
+    return True
+
+
 def create_draft(
     session: Session,
     *,
@@ -123,6 +182,7 @@ def create_draft(
     route_id: uuid.UUID | None,
     channel: str,
     claim_expires_at: datetime,
+    declarations: list | None,
     now: datetime,
     pending_sends_enabled: bool,
 ) -> PendingDelivery:
@@ -134,6 +194,7 @@ def create_draft(
         raise PublicationError("PROTOCOL_UNSUPPORTED")
     if (claim_expires_at - now).days > MAX_CLAIM_DEADLINE_DAYS:
         raise PublicationError("PROTOCOL_UNSUPPORTED")
+    cleaned = validate_declarations(declarations or [])
     row = PendingDelivery(
         id=uuid.uuid4(),
         sender_user_id=sender_user_id,
@@ -143,6 +204,7 @@ def create_draft(
         channel=channel,
         state="DRAFT",
         claim_expires_at=claim_expires_at,
+        blob_declarations=cleaned,
     )
     session.add(row)
     session.flush()
@@ -230,6 +292,8 @@ def finalize_delivery(
     bundle = _sender_bundle_or_raise(session, delivery.sender_user_id)
     if uuid.UUID(bytes=bytes(statement.sender_key_bundle_id)) != bundle.id:
         raise PublicationError("ROUTE_STALE")
+    if not declarations_match_s(delivery.blob_declarations, statement):
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
     verify_signature_69(
         bytes(bundle.signing_public_keyset),
         domains.domain_prefix(domains.PENDING_PUBLISH_DOMAIN) + statement_raw,

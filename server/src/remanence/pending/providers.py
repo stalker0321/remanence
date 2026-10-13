@@ -97,6 +97,61 @@ class MockEmailSender(TransactionalEmailSender):
         return reference
 
 
+class FileSinkEmailSender(TransactionalEmailSender):
+    """Dev-bootstrap OTP sink: appends one JSON line per dispatch to a
+    root-readable local file, so an HTTP proof run can obtain the OTP
+    without a mailbox. No network, no real sends, and NO HTTP reader
+    endpoint (the file is the only reader). Mode-gated: prod/beta
+    refused. Parent directory must already exist (fail closed); the
+    file itself is created 0600 if absent. The stored destination is
+    never written — only the attempt reference, code, locale, and
+    timestamp (the R8 response already gives the caller its
+    attempt_id)."""
+
+    def __init__(self, *, path: str, mode: str = "test") -> None:
+        import os as _os
+
+        if mode in ("prod", "beta"):
+            raise ProviderError("PROVIDER_UNAVAILABLE")
+        if not path or not isinstance(path, str):
+            raise ProviderError("PROVIDER_UNAVAILABLE")
+        parent = _os.path.dirname(_os.path.abspath(path))
+        if not _os.path.isdir(parent):
+            raise ProviderError("PROVIDER_UNAVAILABLE")
+        self._path = path
+        self.dispatched: list[DispatchRecord] = []
+
+    @property
+    def path(self) -> str:
+        return self._path
+
+    def send(self, *, attempt_id: str, stored_destination: str, code: str, locale: str) -> str:
+        import json as _json
+        import os as _os
+
+        reference = f"dev-email-{attempt_id}"
+        record = {
+            "reference": reference,
+            "code": code,
+            "locale": locale,
+            "dispatched_at": datetime.now(timezone.utc).isoformat(),
+        }
+        fd = _os.open(self._path, _os.O_APPEND | _os.O_CREAT | _os.O_WRONLY, 0o600)
+        try:
+            _os.write(fd, (_json.dumps(record) + "\n").encode("utf-8"))
+        finally:
+            _os.close(fd)
+        self.dispatched.append(
+            DispatchRecord(
+                attempt_id=attempt_id,
+                destination_kind="stored",
+                destination_length=len(stored_destination),
+                dispatched_at=datetime.now(timezone.utc),
+            )
+        )
+        return reference
+
+
 class MockSmsVerify(SmsVerifyProvider):
     """Isolated-test Verify flow: the mock owns code lifecycle. Tests
     fetch the issued code from issued_codes (the handset side), never

@@ -973,6 +973,14 @@ class AppContainer private constructor(
     }
 
     /**
+     * T186 M8: frozen R1 route-freeze port (routes scaffold server-side;
+     * failures stay typed). Sender UI mount follows on navigation handoff.
+     */
+    val pendingSendRoutePort: dev.hryshyn.remanence.core.data.network.PendingSendRouteRepository by lazy {
+        dev.hryshyn.remanence.core.data.network.PendingSendRouteRepository.create(apiBaseUrl)
+    }
+
+    /**
      * T186 M7a: frozen R17 handle-commit port (routes scaffold server-side;
      * calls fail generic-retryable until mounted — never fake success).
      */

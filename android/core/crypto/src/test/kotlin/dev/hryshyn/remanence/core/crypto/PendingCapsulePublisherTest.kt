@@ -160,7 +160,8 @@ class PendingCapsulePublisherTest {
             frontFingerprintBytes = ByteArray(96) { (it * 3).toByte() },
             photos = listOf(
                 PendingCapsulePublisher.PhotoInput("photo-one".toByteArray(), 1000, 1000),
-                PendingCapsulePublisher.PhotoInput("photo-two".toByteArray(), 1000, 1000),
+                PendingCapsulePublisher.PhotoInput("photo-two".toByteArray(), 1200, 800),
+                PendingCapsulePublisher.PhotoInput("photo-three".toByteArray(), 800, 1200),
             ),
             noteUtf8 = "hello",
         )
@@ -171,18 +172,18 @@ class PendingCapsulePublisherTest {
         val publication = fullPublication()
         // Server-frozen declaration order: (kind, ordinal, blob_id).
         assertEquals(
-            listOf(1, 2, 3, 3),
+            listOf(1, 2, 3, 3, 3),
             publication.artifacts.map { it.kind },
         )
         assertEquals(
-            listOf(-1, -1, 0, 1),
+            listOf(-1, -1, 0, 1, 2),
             publication.artifacts.map { it.ordinal },
         )
         val statement = PendingPublishVerifier.verifyStructure(publication.statement)
-        // Four declarations: recognition + content + two photos (the
-        // kind/order assertion above is the contract; the count binds S
-        // to the same full set).
-        assertEquals(4, statement.artifactsCount)
+        // Five declarations: recognition + content + three photos
+        // (the kind/order assertion above is the contract; the count
+        // binds S to the same full set).
+        assertEquals(5, statement.artifactsCount)
         assertEquals(
             publication.artifacts.map { it.kind },
             statement.artifactsList.map { it.kind },
@@ -191,7 +192,7 @@ class PendingCapsulePublisherTest {
         val tags = publication.artifacts.map {
             java.util.UUID.fromString(it.blobId).mostSignificantBits ushr 56
         }
-        assertEquals(listOf(0x01L, 0x02L, 0x10L, 0x11L), tags)
+        assertEquals(listOf(0x01L, 0x02L, 0x10L, 0x11L, 0x12L), tags)
     }
 
     @Test
@@ -244,7 +245,8 @@ class PendingCapsulePublisherTest {
         val front = ByteArray(96) { (it * 3).toByte() }
         val photos = listOf(
             PendingCapsulePublisher.PhotoInput("photo-one".toByteArray(), 1000, 1000),
-            PendingCapsulePublisher.PhotoInput("photo-two".toByteArray(), 1000, 1000),
+            PendingCapsulePublisher.PhotoInput("photo-two".toByteArray(), 1200, 800),
+            PendingCapsulePublisher.PhotoInput("photo-three".toByteArray(), 800, 1200),
         )
         val publication = PendingCapsulePublisher.publishFull(
             capsuleId = capsule,
@@ -290,7 +292,13 @@ class PendingCapsulePublisherTest {
                         dev.hryshyn.remanence.core.model.CapsulePhotoIdentity.photoBlobId(
                             dev.hryshyn.remanence.core.model.CapsuleId.parseRest(capsule), 1,
                         ).value,
-                        1, 1000, 1000,
+                        1, 1200, 800,
+                    ),
+                    ManifestPhoto(
+                        dev.hryshyn.remanence.core.model.CapsulePhotoIdentity.photoBlobId(
+                            dev.hryshyn.remanence.core.model.CapsuleId.parseRest(capsule), 2,
+                        ).value,
+                        2, 800, 1200,
                     ),
                 ),
                 "hello", null, null, null,
@@ -329,7 +337,13 @@ class PendingCapsulePublisherTest {
                 dev.hryshyn.remanence.core.model.CapsulePhotoIdentity.photoBlobId(
                     capsuleId, 1,
                 ).value,
-                1, 1000, 1000,
+                1, 1200, 800,
+            ),
+            ManifestPhoto(
+                dev.hryshyn.remanence.core.model.CapsulePhotoIdentity.photoBlobId(
+                    capsuleId, 2,
+                ).value,
+                2, 800, 1200,
             ),
         )
         val v1Sealed = ContentManifestCodec().buildAndEncrypt(
@@ -381,6 +395,8 @@ class PendingCapsulePublisherTest {
             frontFingerprintBytes = ByteArray(96) { (it * 3).toByte() },
             photos = listOf(
                 PendingCapsulePublisher.PhotoInput("photo-one".toByteArray(), 1000, 1000),
+                PendingCapsulePublisher.PhotoInput("photo-two".toByteArray(), 1200, 800),
+                PendingCapsulePublisher.PhotoInput("photo-three".toByteArray(), 800, 1200),
             ),
             noteUtf8 = "hello",
         )

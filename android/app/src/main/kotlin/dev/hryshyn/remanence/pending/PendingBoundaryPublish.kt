@@ -262,3 +262,17 @@ object PendingBoundaryPublish {
         return account != null && !account.userId.isBlank() && account.userId == txn.ownerId
     }
 }
+
+/**
+ * T186 M12e-boundary: container-assembled ports for the Create publish
+ * boundary (real frozen clients + session gate + account + selected
+ * pin). Null (legacy/test fixtures) keeps the v1-only path exactly.
+ */
+data class PendingBoundaryPorts(
+    val draft: PendingPublishFlow.DraftPort,
+    val blob: PendingPublishFlow.BlobPort,
+    val finalize: PendingPublishFlow.FinalizePort,
+    val gate: PendingRetirementSessionGate,
+    val account: suspend () -> ProofAccount?,
+    val pin: () -> PendingServicePin?,
+)

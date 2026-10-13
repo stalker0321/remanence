@@ -69,9 +69,19 @@ class PendingBoundaryPublishTest {
 
     private fun authored(manifests: Boolean = false) = PendingBoundaryPublish.Authored(
         capsuleId = capsule,
-        photos = listOf(
-            PendingBoundaryPublish.PhotoBytes("photo-bytes".toByteArray(), 1000, 1000),
-        ),
+        // Manifest mode needs 3 genuine photos (codec 3..5 guard);
+        // photos-only mode keeps one.
+        photos = if (!manifests) {
+            listOf(
+                PendingBoundaryPublish.PhotoBytes("photo-bytes".toByteArray(), 1000, 1000),
+            )
+        } else {
+            listOf(
+                PendingBoundaryPublish.PhotoBytes("photo-one".toByteArray(), 1000, 1000),
+                PendingBoundaryPublish.PhotoBytes("photo-two".toByteArray(), 1200, 800),
+                PendingBoundaryPublish.PhotoBytes("photo-three".toByteArray(), 800, 1200),
+            )
+        },
         manifests = if (!manifests) {
             null
         } else {
@@ -159,8 +169,8 @@ class PendingBoundaryPublishTest {
             },
         )
         assertTrue(result is PendingBoundaryPublish.Result.Published)
-        // Recognition + content + photo, server-frozen declaration order.
-        assertEquals(listOf(1, 2, 3), kinds)
+        // Recognition + content + three photos, server-frozen order.
+        assertEquals(listOf(1, 2, 3, 3, 3), kinds)
     }
 
     /**

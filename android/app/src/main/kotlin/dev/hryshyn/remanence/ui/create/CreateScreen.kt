@@ -262,6 +262,32 @@ fun CreateScreen(
                             stringResource(R.string.create_audit_published),
                             modifier = Modifier.testTag("create_published"),
                         )
+                        // T186 M12e-boundary: a completed pending v2
+                        // publication displays its handwritten code here
+                        // (server-masked hint beside it). The v1 revoke
+                        // section below is inert for pending gifts.
+                        val pendingCode by viewModel.pendingPublication.collectAsStateWithLifecycle()
+                        if (pendingCode != null) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                pendingCode!!.locatorCode,
+                                style = MaterialTheme.typography.headlineSmall,
+                                modifier = Modifier.testTag("create_pending_code"),
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                pendingCode!!.hint,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = HoldColors.Muted,
+                                modifier = Modifier.testTag("create_pending_hint"),
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                stringResource(R.string.pending_sender_code_note),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = HoldColors.Muted,
+                            )
+                        }
                         Spacer(Modifier.height(8.dp))
                         Text(
                             stringResource(R.string.create_audit_revoke_disclaimer),
@@ -286,8 +312,10 @@ fun CreateScreen(
                         }
                         Spacer(Modifier.height(8.dp))
                         HoldDestructiveButton(
+                            // T186 M12e-boundary: v1 revoke has no pending
+                            // gift to act on (no outbox row staged).
                             onClick = { showRevokeConfirmation = true },
-                            enabled = revokeActionEnabled(revokeStatus),
+                            enabled = revokeActionEnabled(revokeStatus) && pendingCode == null,
                             modifier = Modifier.testTag("create_revoke_button"),
                         ) {
                             Text(stringResource(R.string.create_audit_revoke_confirm))
@@ -416,6 +444,10 @@ private fun RecipientLookupContent(viewModel: CreateViewModel) {
                             viewModel.pendingSenderContent()
                         },
                         onFrozenRoute = viewModel::onPendingRouteFrozen,
+                        // T186 M12e-boundary: a directory-proven frozen v1
+                        // route enters the EXISTING confirm→publish path
+                        // (zero escrow); the sheet never publishes v1.
+                        onResolvedHandle = viewModel::onResolved,
                     )
                 }
                 dev.hryshyn.remanence.pending.PendingSenderSheet(

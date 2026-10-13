@@ -136,6 +136,13 @@ class CreateViewModel(
     private val enqueueUpload: suspend (UserId, CapsuleId) -> Unit,
     /** Exact owner + capsule current-send projection for the mounted flow. */
     private val outboxCapsuleDao: OutboxCapsuleDao? = null,
+    /**
+     * T186 M12e-boundary: pending v2 publish ports for the normal
+     * publish boundary (real R3/R4/R5 clients + session gate + account
+     * + selected pin). Null (legacy/test fixtures) keeps the v1-only
+     * path exactly — the pending route can freeze but never publishes.
+     */
+    private val pendingBoundary: dev.hryshyn.remanence.pending.PendingBoundaryPorts? = null,
     /** Server-authoritative sender cancellation; absent only in legacy test fixtures. */
     private val capsuleRevoke: CapsuleRevokePort? = null,
     /** Foreground connectivity admission for the no-offline-queue revoke action. */
@@ -304,6 +311,20 @@ class CreateViewModel(
 
     private val _publishError = MutableStateFlow<String?>(null)
     val publishError: StateFlow<String?> = _publishError.asStateFlow()
+
+    /**
+     * T186 M12e-boundary: the handwritten 5-char locator code of a
+     * completed pending v2 publication (null otherwise). Set only on a
+     * genuine R5 `PENDING` result; cleared when a new publish begins.
+     */
+    data class PendingPublishedCode(
+        val deliveryId: String,
+        val locatorCode: String,
+        val hint: String,
+    )
+
+    private val _pendingPublication = MutableStateFlow<PendingPublishedCode?>(null)
+    val pendingPublication: StateFlow<PendingPublishedCode?> = _pendingPublication.asStateFlow()
 
     // Content state.
     val photoSelection = PhotoSelectionState().also { it.onEdit = { invalidateGeneratorForPhotoEdit() } }
@@ -1185,7 +1206,13 @@ class CreateViewModel(
     private data class PublishInputs(
         val capsuleId: String,
         val owner: UserId,
-        val recipient: ResolvedHandleSnapshot,
+        /**
+         * T186 M12e-boundary: null for a frozen PENDING_V2 route (no
+         * handle to confirm — the boundary branch consumes the route
+         * instead). The v1 sealed path requires non-null (fail-closed
+         * below, plus the startPublishing guard).
+         */
+        val recipient: ResolvedHandleSnapshot?,
         val noteText: String?,
         val frontFingerprintId: String,
         val photoIds: List<String>,
@@ -1739,7 +1766,19 @@ class CreateViewModel(
         // here makes the contract explicit and prevents a synchronously
         // thrown NPE from the requireNotNull below reaching the UI.
         val boundRecipient = confirmedRecipient.value
-        if (boundRecipient == null) {
+        // T186 M12e-boundary: a frozen PENDING_V2 route is a second
+        // legitimate binding (no handle to confirm). A frozen V1 route
+        // without a confirmed handle still fails here — the resolved
+        // handle must be confirmed first (existing path below).
+        val frozenForPublish =
+            if (dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled()) {
+                sessionStore.pendingRoute.value
+            } else {
+                null
+            }
+        if (boundRecipient == null &&
+            frozenForPublish !is dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity.Pending
+        ) {
             failGuard("a recipient must be confirmed before publishing")
             return
         }
@@ -2318,6 +2357,7 @@ class CreateViewModel(
 
     private suspend fun publish(generation: Long, inputs: PublishInputs) {
         _publishError.value = null
+        _pendingPublication.value = null
         try {
             // C3 authoritative cutover: the single sender snapshot is read
             // unconditionally here. There is no legacy fallback left: every
@@ -2368,13 +2408,17 @@ class CreateViewModel(
         // M2-P07: the recipient identity, recipient key-bundle identity, and
         // recipient encryption public keyset come ONLY from the explicitly
         // confirmed immutable [ResolvedHandleSnapshot] captured into
-        // [PublishInputs] before any suspend boundary. The sender identity
+        // [PublishInputs] before any suspend boundary (null for a frozen
+        // pending route — the boundary branch below consumes the route
+        // instead; fail-closed there). The sender identity
         // (user id, signing key, handle, owner) is the single snapshot
         // captured per publication ([capturedSender]). A self-send is a
         // valid publication because the user may confirm their own handle -
         // the request builder then receives EQUAL VALUES for sender and
         // recipient, not a default.
-        val snapshot = inputs.recipient
+        // pending route is frozen, the v1 request below is unreachable
+        // (its recipient would be null); the startPublishing guard plus
+        // the branch above keep exactly one path live.
         val sender = capturedSender
         // T186: publishing requires the handle (entry-gated; fail-closed
         // defense in depth, never a placeholder).
@@ -2435,6 +2479,27 @@ class CreateViewModel(
             // S2b-sender: use only the snapshot captured in PublishInputs
             // before the first suspension; never reread live picker state.
             val trackSnapshot = inputs.trackSnapshot
+            // T186 M12e-boundary: frozen pending route → v2 sealed
+            // publication at the normal boundary (authored inputs above:
+            // bound photos/dims, frozen expression, note, fingerprint).
+            // The existing v1 path below runs unchanged when no pending
+            // route is bound. Early return still runs the staging/front
+            // cleanups in the surrounding finally blocks.
+            val pendingFrozen = pendingRouteForBoundary()
+            if (pendingFrozen != null) {
+                publishPendingAtBoundary(
+                    generation, inputs, sender, senderHandle,
+                    photoJpegs, photoWidthsPx, photoHeightsPx,
+                    frozenSelection, trackSnapshot, frontForPublish, pendingFrozen,
+                )
+                return
+            }
+            // v1-only from here: the recipient is non-null by the
+            // startPublishing guard (pending routes returned above).
+            val snapshot = inputs.recipient ?: run {
+                failPublishing("a recipient must be confirmed before publishing", generation)
+                return
+            }
             try {
                 ensureCurrent()
                 val prepared = withContext(cpuDispatcher) {
@@ -2526,6 +2591,139 @@ class CreateViewModel(
             // cancellation, or stale-session path wipes it here.
             frontBytes?.fill(0)
         }
+    }
+
+    /**
+     * T186 M12e-boundary: the publish boundary reads the session's
+     * frozen pending route (never a placeholder, never a re-resolve).
+     * Null unless the pending flag is ON, the boundary ports are wired
+     * and a PENDING_V2 route is actually frozen.
+     */
+    private fun pendingRouteForBoundary(): dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity.Pending? {
+        if (!dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled()) return null
+        if (pendingBoundary == null) return null
+        return sessionStore.pendingRoute.value as?
+            dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity.Pending
+    }
+
+    /**
+     * T186 M12e-boundary: v2 sealed publication at the normal publish
+     * boundary from the already-authored inputs (bound photos/dims,
+     * frozen expression, note, fingerprint — the same locals the v1
+     * request below is built from). Full
+     * recognition+content+photos payload with unchanged inner bytes and
+     * the frozen delivery target; the handwritten code lands in
+     * [pendingPublication] on a genuine R5 result. Early returns run
+     * the caller's staging/front cleanups via the surrounding
+     * finally blocks.
+     */
+    @Suppress("LongParameterList")
+    private suspend fun publishPendingAtBoundary(
+        generation: Long,
+        inputs: PublishInputs,
+        sender: SenderIdentitySnapshot,
+        senderHandle: String,
+        photoJpegs: List<ByteArray>,
+        photoWidthsPx: List<Int>,
+        photoHeightsPx: List<Int>,
+        frozenSelection: CollageFrozenSelection,
+        trackSnapshot: CapsuleTrackSnapshotV1?,
+        frontForPublish: ByteArray,
+        frozen: dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity.Pending,
+    ) {
+        val ports = pendingBoundary
+        if (ports == null) {
+            failPublishing("code sending isn't configured in this build", generation)
+            return
+        }
+        // Owner fence mirrors the v1 path (senderOwner != inputs.owner).
+        val pendingOwner = runCatching { UserId.parseRest(sender.userId) }.getOrNull()
+        if (pendingOwner == null || pendingOwner != inputs.owner) {
+            failPublishing("authenticated owner changed; publishing cancelled", generation)
+            return
+        }
+        val pin = try {
+            ports.pin()
+        } catch (_: Exception) {
+            null
+        }
+        if (pin == null) {
+            failPublishing("code sending isn't configured in this build", generation)
+            return
+        }
+        val result = try {
+            dev.hryshyn.remanence.pending.PendingBoundaryPublish.run(
+                frozen = frozen,
+                authored = dev.hryshyn.remanence.pending.PendingBoundaryPublish.Authored(
+                    capsuleId = inputs.capsuleId,
+                    photos = photoJpegs.mapIndexed { index, jpeg ->
+                        dev.hryshyn.remanence.pending.PendingBoundaryPublish.PhotoBytes(
+                            jpeg, photoWidthsPx[index], photoHeightsPx[index],
+                        )
+                    },
+                    manifests = dev.hryshyn.remanence.pending.PendingBoundaryPublish.ManifestInputs(
+                        senderHandleSnapshot = senderHandle,
+                        frontFingerprintBytes = frontForPublish,
+                        noteUtf8 = inputs.noteText,
+                        expression = dev.hryshyn.remanence.core.crypto.PendingCapsulePublisher.ExpressionInput(
+                            candidateId = frozenSelection.candidateId,
+                            expression = frozenSelection.expression,
+                            contentIds = frozenSelection.expression.input.photos.map { it.contentId },
+                            trackSnapshot = trackSnapshot,
+                        ),
+                    ),
+                    claimExpiresAt = frozen.claimDeadline,
+                    createdAtEpochSeconds = clockMillis() / 1000L,
+                ),
+                identity = dev.hryshyn.remanence.pending.PendingSenderIdentity(
+                    sender.userId, sender.activeKeyBundleId, sender.signingPrivateHandle,
+                ),
+                pin = pin,
+                sessionGate = ports.gate,
+                accountProvider = ports.account,
+                draftPort = ports.draft,
+                blobPort = ports.blob,
+                finalizePort = ports.finalize,
+                expectedLease = null,
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            failPublishing("publishing failed", generation)
+            return
+        }
+        when (result) {
+            is dev.hryshyn.remanence.pending.PendingBoundaryPublish.Result.Published -> {
+                if (!isPublishCurrent(generation)) return
+                _pendingPublication.value = PendingPublishedCode(
+                    result.deliveryId, result.locatorCode, result.hint,
+                )
+                _step.value = Step.PUBLISHED
+            }
+            is dev.hryshyn.remanence.pending.PendingBoundaryPublish.Result.Failed -> {
+                failPublishing(pendingBoundaryMessage(result.reason), generation)
+            }
+        }
+    }
+
+    private fun pendingBoundaryMessage(
+        reason: dev.hryshyn.remanence.pending.PendingBoundaryPublish.Reason,
+    ): String = when (reason) {
+        dev.hryshyn.remanence.pending.PendingBoundaryPublish.Reason.NETWORK ->
+            "code sending failed; network unreachable"
+        dev.hryshyn.remanence.pending.PendingBoundaryPublish.Reason.SESSION_CHANGED ->
+            "authenticated owner changed; publishing cancelled"
+        dev.hryshyn.remanence.pending.PendingBoundaryPublish.Reason.CONFLICT ->
+            "that send is already on the server"
+        dev.hryshyn.remanence.pending.PendingBoundaryPublish.Reason.BLOCKED,
+        dev.hryshyn.remanence.pending.PendingBoundaryPublish.Reason.SERVICE_UNAVAILABLE,
+        -> "code sending isn't configured in this build"
+        dev.hryshyn.remanence.pending.PendingBoundaryPublish.Reason.RECOVERY_REQUIRED ->
+            "local identity is unavailable; recovery required"
+        dev.hryshyn.remanence.pending.PendingBoundaryPublish.Reason.VALIDATION ->
+            "that address can't be used for code sending"
+        dev.hryshyn.remanence.pending.PendingBoundaryPublish.Reason.GENERIC ->
+            "publishing failed"
     }
 
     private fun failPublishing(

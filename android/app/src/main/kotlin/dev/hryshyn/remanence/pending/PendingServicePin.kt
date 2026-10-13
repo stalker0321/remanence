@@ -93,7 +93,7 @@ object PendingServicePinConfig {
             if (proto.keyCount < 1) return null
             for (key in proto.keyList) {
                 if (key.keyData.keyMaterialType !=
-                    com.google.crypto.tink.proto.KeyMaterialType.ASYMMETRIC_PUBLIC
+                    com.google.crypto.tink.proto.KeyData.KeyMaterialType.ASYMMETRIC_PUBLIC
                 ) {
                     return null
                 }

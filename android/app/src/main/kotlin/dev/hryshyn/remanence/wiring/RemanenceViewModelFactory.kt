@@ -237,6 +237,9 @@ class RemanenceViewModelFactory(
                 ).await()
             },
             outboxCapsuleDao = container.database.outboxCapsuleDao(),
+            // T186 M12e-boundary: pending v2 publish ports for the normal
+            // publish boundary (inert without a frozen pending route).
+            pendingBoundary = container.pendingBoundaryPorts,
         ) as T
         ScanViewModel::class.java -> ScanViewModel(
             // Product Processing is intentionally neutral. Do not decode a

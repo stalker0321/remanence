@@ -1175,6 +1175,48 @@ class AppContainer private constructor(
     }
 
     /**
+     * T186 M12e-boundary: container-assembled ports for the Create
+     * publish boundary (real R3/R4/R5 clients + session gate + account
+     * + selected pin). Inert without a frozen pending route; the
+     * pending flag gates use.
+     */
+    val pendingBoundaryPorts: dev.hryshyn.remanence.pending.PendingBoundaryPorts by lazy {
+        val publishRepo = pendingDeliveryPublishPort
+        dev.hryshyn.remanence.pending.PendingBoundaryPorts(
+            draft = dev.hryshyn.remanence.pending.PendingPublishFlow.DraftPort { route, capsule, target, channel, destination, salt, expiry, artifacts, key, token ->
+                publishRepo.draft(
+                    route, capsule, target, channel, destination,
+                    salt, expiry,
+                    artifacts.map {
+                        dev.hryshyn.remanence.core.data.network.PendingArtifactDeclaration(
+                            it.blobId, it.kind, it.ordinal,
+                            it.ciphertextSize, it.ciphertextSha256Hex,
+                        )
+                    },
+                    key, token,
+                )
+            },
+            blob = dev.hryshyn.remanence.pending.PendingPublishFlow.BlobPort { delivery, blob, bytes, size, sha, token ->
+                publishRepo.uploadBlob(delivery, blob, bytes, size, sha, token)
+            },
+            finalize = dev.hryshyn.remanence.pending.PendingPublishFlow.FinalizePort { delivery, statement, signature, escrow, key, token ->
+                publishRepo.finalize(delivery, statement, signature, escrow, key, token)
+            },
+            gate = pendingSessionGate,
+            account = {
+                try {
+                    currentAccountStore.load()
+                } catch (_: Exception) {
+                    null
+                }?.let {
+                    dev.hryshyn.remanence.pending.ProofAccount(it.userId, it.activeKeyBundleId)
+                }
+            },
+            pin = { pendingServicePin },
+        )
+    }
+
+    /**
      * T186 M12: actual v2 sender caller (isolated EMAIL/PHONE → R1 freeze
      * → R3/R4/R5 → 5-char code). Ports are the real frozen clients;
      * [contentPort] supplies the authored photo JPEGs for one capsule
@@ -1184,6 +1226,7 @@ class AppContainer private constructor(
         scope: kotlinx.coroutines.CoroutineScope,
         contentPort: dev.hryshyn.remanence.pending.PendingSenderContentPort,
         onFrozenRoute: (dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity) -> Unit = {},
+        onResolvedHandle: (dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot) -> Unit = {},
     ): dev.hryshyn.remanence.pending.PendingSenderViewModel {
         val publishRepo = pendingDeliveryPublishPort
         val sendRepo = pendingSendRoutePort
@@ -1272,6 +1315,30 @@ class AppContainer private constructor(
                 }
             },
             onFrozenRoute = onFrozenRoute,
+            // T186 M12e-boundary: directory ownership proof for a frozen
+            // v1 route (single resolve; the proven snapshot then flows
+            // through the existing confirm→publish path — never
+            // re-resolved, never substituted).
+            v1ResolvePort = dev.hryshyn.remanence.pending.PendingV1ResolvePort { userId, bundleId, token ->
+                val parsed = try {
+                    dev.hryshyn.remanence.core.model.UserId.parseRest(userId)
+                } catch (_: Exception) {
+                    null
+                } ?: return@PendingV1ResolvePort null
+                // Bundle-id match is checked by the caller against the
+                // frozen route; only well-formed lookups leave here.
+                try {
+                    dev.hryshyn.remanence.core.model.KeyBundleId.parseRest(bundleId)
+                } catch (_: Exception) {
+                    return@PendingV1ResolvePort null
+                }
+                when (val result = recipientUserLookupRepository.lookup(parsed, token)) {
+                    is dev.hryshyn.remanence.core.data.network.RecipientUserLookupResult.Found ->
+                        result.snapshot
+                    else -> null
+                }
+            },
+            onResolvedHandle = onResolvedHandle,
             scope = scope,
         )
     }

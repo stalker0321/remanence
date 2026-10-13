@@ -83,6 +83,8 @@ class PendingSenderViewModelTest {
         accountOf: (() -> ProofAccount?)? = null,
         onDraft: (() -> Unit)? = null,
         onFrozen: ((PendingSendRouteFlow.FrozenIdentity) -> Unit)? = null,
+        resolveSnapshot: dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot? = null,
+        onResolved: ((dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot) -> Unit)? = null,
     ): PendingSenderViewModel {
         TinkPrimitives.ensureRegistered()
         val signing = KeysetHandle.generateNew(KeyTemplates.get("ED25519"))
@@ -143,6 +145,8 @@ class PendingSenderViewModelTest {
             sessionGate = sharedGate,
             accountProvider = sharedAccount,
             onFrozenRoute = onFrozen ?: {},
+            v1ResolvePort = PendingV1ResolvePort { _, _, _ -> resolveSnapshot },
+            onResolvedHandle = { onResolved?.invoke(it) },
             scope = scope,
         )
     }
@@ -383,5 +387,61 @@ class PendingSenderViewModelTest {
             viewModel.state.value,
         )
         assertEquals(0, drafts)
+    }
+
+    private fun resolvedSnapshot(
+        userId: String = "33333333-4444-5555-6666-777777777777",
+        bundleId: String = "0b0b0b0b-1c1c-2d2d-3e3e-4f4f4f4f4f4f",
+    ) = dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot(
+        userId = dev.hryshyn.remanence.core.model.UserId.parseRest(userId),
+        handle = dev.hryshyn.remanence.core.model.NormalizedHandle.parse("mykola"),
+        keyBundleId = dev.hryshyn.remanence.core.model.KeyBundleId.parseRest(bundleId),
+        suite = "s",
+        protocolVersion = 1,
+        encryptionPublicKeysetB64Url = "e",
+        signingPublicKeysetB64Url = "s",
+        keyBundleStatus = "ACTIVE",
+        directoryVersion = "1",
+    )
+
+    /**
+     * T186 M12e-boundary: a frozen v1 route proven by the directory
+     * (frozen UUID+bundle match, ACTIVE) enters the existing
+     * confirm→publish path via callback — zero escrow, no fallback.
+     */
+    @Test
+    fun v1ResolveHandsProvenSnapshot() = runTest {
+        val resolved = mutableListOf<dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot>()
+        val viewModel = vm(
+            freeze = frozenV1(),
+            resolveSnapshot = resolvedSnapshot(),
+            onResolved = resolved::add,
+        )
+        viewModel.onDestinationChange("known@example.test")
+        viewModel.send()
+        testScheduler.advanceUntilIdle()
+        assertTrue(viewModel.state.value is PendingSenderViewModel.State.KnownV1)
+        assertEquals(1, resolved.size)
+        assertEquals("33333333-4444-5555-6666-777777777777", resolved.single().userId.toRestString())
+    }
+
+    /**
+     * T186 M12e-boundary: a directory answer that does NOT match the
+     * frozen pair (or an inactive bundle) never reaches the existing
+     * pipeline — fail closed, frozen display still stands.
+     */
+    @Test
+    fun v1ResolveMismatchNoCallback() = runTest {
+        val resolved = mutableListOf<dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot>()
+        val viewModel = vm(
+            freeze = frozenV1(),
+            resolveSnapshot = resolvedSnapshot(bundleId = "ffffffff-ffff-ffff-ffff-ffffffffffff"),
+            onResolved = resolved::add,
+        )
+        viewModel.onDestinationChange("known@example.test")
+        viewModel.send()
+        testScheduler.advanceUntilIdle()
+        assertTrue(viewModel.state.value is PendingSenderViewModel.State.KnownV1)
+        assertTrue(resolved.isEmpty())
     }
 }

@@ -32,6 +32,22 @@ class VaultError(RuntimeError):
     """Fail-closed vault failure. Never carries key/plaintext material."""
 
 
+def _require_no_unknown_fields(message, what: str) -> None:
+    """Reject preserved protobuf unknown fields.
+
+    Re-serialize equality alone does NOT catch unknown fields: the
+    runtime preserves them through parse/serialize. Discard them on a
+    deep copy and require byte equality instead.
+    """
+    probe = type(message)()
+    probe.CopyFrom(message)
+    probe.DiscardUnknownFields()
+    if probe.SerializeToString(deterministic=True) != message.SerializeToString(
+        deterministic=True
+    ):
+        raise VaultError(f"vault {what} has unknown fields")
+
+
 def parse_exact_capsule_key(key_bytes: bytes) -> bytes:
     """Parse K as exactly one ENABLED AES256_GCM TINK key; return raw key_value.
 
@@ -50,11 +66,14 @@ def parse_exact_capsule_key(key_bytes: bytes) -> bytes:
         raise VaultError("vault key malformed") from exc
     if keyset.SerializeToString() != key_bytes:
         raise VaultError("vault key non-canonical")
+    _require_no_unknown_fields(keyset, "key")
     if len(keyset.key) != 1:
         raise VaultError("vault key must be exactly one key")
     key = keyset.key[0]
     if key.status != tink_pb2.ENABLED:
         raise VaultError("vault key not enabled")
+    if key.key_id == 0 or keyset.primary_key_id != key.key_id:
+        raise VaultError("vault key primary mismatch")
     if key.output_prefix_type != tink_pb2.TINK:
         raise VaultError("vault key prefix unsupported")
     if (
@@ -70,6 +89,7 @@ def parse_exact_capsule_key(key_bytes: bytes) -> bytes:
         raise VaultError("vault key malformed")
     if aes_key.SerializeToString() != key.key_data.value:
         raise VaultError("vault key non-canonical")
+    _require_no_unknown_fields(aes_key, "key")
     return aes_key.key_value
 
 
@@ -127,6 +147,7 @@ def build_escrow_aad(
 
 def validate_escrow_plaintext(payload: dv2.PendingEscrowPlaintextV1) -> None:
     """Strict parser: exact versions, sizes, single AES keyset. No echo."""
+    _require_no_unknown_fields(payload, "payload")
     if payload.escrow_version != 1 or payload.capsule_protocol_version != 2:
         raise VaultError("vault payload version unsupported")
     for value in (payload.capsule_id, payload.delivery_target_id, payload.sender_user_id):
@@ -162,6 +183,7 @@ def verify_escrow_bindings(
     verified S; stored AAD is never trusted. Any mismatch fails closed.
     """
     validate_escrow_plaintext(payload)
+    _require_no_unknown_fields(aad, "AAD")
     if (
         aad.aad_version != 1
         or aad.purpose != ESCROW_AAD_PURPOSE

@@ -202,6 +202,63 @@ def test_exact_key_parser_accepts_single_aes_and_rejects_others() -> None:
     # Trailing data rejected.
     with pytest.raises(VaultError):
         parse_exact_capsule_key(_aes_keyset_bytes(KEY_A) + b"\xff\xff")
+    # Preserved unknown field (field 100, varint) rejected: re-serialize
+    # equality alone does not catch it.
+    with pytest.raises(VaultError):
+        parse_exact_capsule_key(_aes_keyset_bytes(KEY_A) + bytes.fromhex("a00601"))
+    # primary_key_id must equal the enabled key's nonzero key_id.
+    from tink.proto import aes_gcm_pb2 as _aes_pb2
+
+    for primary_id, key_id in ((99, 1), (1, 0), (0, 1)):
+        skewed = tink_pb2.Keyset(primary_key_id=primary_id)
+        skewed.key.append(
+            tink_pb2.Keyset.Key(
+                key_data=tink_pb2.KeyData(
+                    type_url=_AES_URL,
+                    value=_aes_pb2.AesGcmKey(version=0, key_value=KEY_A).SerializeToString(),
+                    key_material_type=tink_pb2.KeyData.SYMMETRIC,
+                ),
+                status=tink_pb2.ENABLED,
+                key_id=key_id,
+                output_prefix_type=tink_pb2.TINK,
+            )
+        )
+        with pytest.raises(VaultError):
+            parse_exact_capsule_key(skewed.SerializeToString())
+    # Unknown field nested inside the AES key rejected.
+    smuggled_value = _aes_pb2.AesGcmKey(version=0, key_value=KEY_A).SerializeToString() + bytes.fromhex(
+        "a00601"
+    )
+    smuggled = tink_pb2.Keyset(primary_key_id=1)
+    smuggled.key.append(
+        tink_pb2.Keyset.Key(
+            key_data=tink_pb2.KeyData(
+                type_url=_AES_URL,
+                value=smuggled_value,
+                key_material_type=tink_pb2.KeyData.SYMMETRIC,
+            ),
+            status=tink_pb2.ENABLED,
+            key_id=1,
+            output_prefix_type=tink_pb2.TINK,
+        )
+    )
+    with pytest.raises(VaultError):
+        parse_exact_capsule_key(smuggled.SerializeToString())
+
+
+def test_payload_and_aad_unknown_fields_rejected() -> None:
+    from remanence.pending.vault import validate_escrow_plaintext, verify_escrow_bindings
+
+    payload = _payload()
+    raw = payload.SerializeToString(deterministic=True) + bytes.fromhex("a00601")
+    smuggled = dv2.PendingEscrowPlaintextV1.FromString(raw)
+    with pytest.raises(VaultError):
+        validate_escrow_plaintext(smuggled)
+    aad = _aad(payload)
+    aad_raw = aad.SerializeToString(deterministic=True) + bytes.fromhex("a00601")
+    smuggled_aad = dv2.PendingEscrowAadV1.FromString(aad_raw)
+    with pytest.raises(VaultError):
+        verify_escrow_bindings(payload, smuggled_aad)
 
 
 # --- binding cross-checks ---------------------------------------------------------

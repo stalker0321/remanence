@@ -277,3 +277,84 @@ def test_hpke_roundtrip_with_pinned_context_and_wrong_context_reject() -> None:
     assert dec.decrypt(sealed, info) == secret
     with pytest.raises(tink.TinkError):
         dec.decrypt(sealed, b"postmark/claimed-envelope/v1\x00wrong")
+
+
+def test_canonical_s_accepted_duplicates_nonminimal_rejected() -> None:
+    """Root probe 9f120fae: canonical S parses; duplicate singular fields
+    and non-minimal varints are rejected (raw-byte equality, not
+    parse-reserialize equivalence)."""
+    from remanence.pending.canonical import CanonicalError, parse_strict
+    from remanence.pending.publication import PublicationError, parse_statement
+
+    fx = _load("delivery-v2-canonical.json")
+    s_bytes = bytes.fromhex(fx["pending_publish_statement_s_hex"])
+    assert s_bytes[:2] == b"\x08\x02"
+    parse_strict(dv2.PendingPublishStatementV2, s_bytes)
+    parse_statement(s_bytes)
+    # Duplicate protocol_version with a DIFFERENT value (last-wins would
+    # silently flip semantics under the old check).
+    with pytest.raises((CanonicalError, PublicationError)):
+        parse_statement(s_bytes + b"\x08\x01")
+    # Non-minimal varint for the leading field.
+    with pytest.raises((CanonicalError, PublicationError)):
+        parse_statement(b"\x08\x82\x00" + s_bytes[2:])
+    # Trailing garbage.
+    with pytest.raises((CanonicalError, PublicationError)):
+        parse_statement(s_bytes + b"\xff")
+
+
+def test_canonical_intent_duplicates_nonminimal_rejected() -> None:
+    from remanence.pending.canonical import CanonicalError, parse_strict
+    from remanence.pending.claim import ClaimError, parse_claim_intent
+
+    intent = dv2.ClaimIntentV2(
+        intent_version=1,
+        operation_id=uuid.uuid4().bytes,
+        capsule_id=uuid.uuid4().bytes,
+        delivery_target_id=uuid.uuid4().bytes,
+        publish_statement_sha256=bytes(32),
+        proof_id=uuid.uuid4().bytes,
+        challenge_id=uuid.uuid4().bytes,
+        recipient_user_id=uuid.uuid4().bytes,
+        recipient_key_bundle_id=uuid.uuid4().bytes,
+        session_id=uuid.uuid4().bytes,
+        nonce=bytes(32),
+        nonce_sha256=bytes(32),
+        bind_alias=False,
+    )
+    raw = intent.SerializeToString(deterministic=True)
+    assert raw[:2] == b"\x08\x01"
+    parse_strict(dv2.ClaimIntentV2, raw)
+    parse_claim_intent(raw)
+    with pytest.raises((CanonicalError, ClaimError)):
+        parse_claim_intent(raw + b"\x08\x02")
+    with pytest.raises((CanonicalError, ClaimError)):
+        parse_claim_intent(b"\x08\x81\x00" + raw[2:])
+
+
+def test_ed25519_keyset_primary_prefix_rejected() -> None:
+    """Primary-skewed (99 vs key 1) and RAW-prefix public keysets are
+    rejected even when the key bytes and signature are otherwise valid."""
+    from tink.proto import tink_pb2
+
+    from remanence.pending.publication import PublicationError, verify_signature_69
+
+    fx = _load("delivery-v2-crypto.json")
+    pub_bin = base64.b64decode(fx["sender_ed25519_public_keyset_b64"])
+    domain_input = bytes.fromhex(fx["pending_publish_domain_input_hex"])
+    sig = bytes.fromhex(fx["pending_publish_signature_69_hex"])
+    verify_signature_69(pub_bin, domain_input, sig)
+    keyset = tink_pb2.Keyset.FromString(pub_bin)
+    skewed = tink_pb2.Keyset()
+    skewed.CopyFrom(keyset)
+    skewed.primary_key_id = 99
+    with pytest.raises(PublicationError):
+        verify_signature_69(skewed.SerializeToString(), domain_input, sig)
+    raw_prefix = tink_pb2.Keyset()
+    raw_prefix.CopyFrom(keyset)
+    raw_prefix.key[0].output_prefix_type = tink_pb2.RAW
+    with pytest.raises(PublicationError):
+        verify_signature_69(raw_prefix.SerializeToString(), domain_input, sig)
+    smuggled = pub_bin + bytes.fromhex("a00601")
+    with pytest.raises(PublicationError):
+        verify_signature_69(smuggled, domain_input, sig)

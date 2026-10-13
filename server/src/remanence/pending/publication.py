@@ -57,9 +57,17 @@ def verify_signature_69(public_keyset: bytes, domain_input: bytes, sig: bytes) -
     probe = tink_pb2.Keyset()
     probe.CopyFrom(keyset)
     probe.DiscardUnknownFields()
-    if probe.SerializeToString() != public_keyset or len(keyset.key) != 1:
+    if keyset.SerializeToString(deterministic=True) != bytes(public_keyset):
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
+    if probe.SerializeToString(deterministic=True) != bytes(public_keyset):
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
+    if len(keyset.key) != 1:
         raise PublicationError("PROTOCOL_UNSUPPORTED")
     key = keyset.key[0]
+    if key.key_id == 0 or keyset.primary_key_id != key.key_id:
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
+    if key.output_prefix_type != tink_pb2.TINK:
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
     if (
         key.status != tink_pb2.ENABLED
         or key.key_data.key_material_type != tink_pb2.KeyData.ASYMMETRIC_PUBLIC
@@ -87,19 +95,12 @@ def verify_signature_69(public_keyset: bytes, domain_input: bytes, sig: bytes) -
 
 
 def parse_statement(raw: bytes) -> dv2.PendingPublishStatementV2:
-    from google.protobuf.message import DecodeError
+    from remanence.pending.canonical import CanonicalError, parse_strict
 
     try:
-        statement = dv2.PendingPublishStatementV2.FromString(raw)
-    except DecodeError as exc:
+        statement = parse_strict(dv2.PendingPublishStatementV2, raw)
+    except CanonicalError as exc:
         raise PublicationError("PROTOCOL_UNSUPPORTED") from exc
-    probe = dv2.PendingPublishStatementV2()
-    probe.CopyFrom(statement)
-    probe.DiscardUnknownFields()
-    if probe.SerializeToString(deterministic=True) != statement.SerializeToString(
-        deterministic=True
-    ):
-        raise PublicationError("PROTOCOL_UNSUPPORTED")
     if statement.protocol_version != 2 or statement.claim_policy_version != 1:
         raise PublicationError("PROTOCOL_UNSUPPORTED")
     for value in (
@@ -257,6 +258,7 @@ def finalize_delivery(
     hint_mask: str,
     now: datetime,
     blob_exists=None,
+    operation_id: uuid.UUID | None = None,
 ) -> tuple[PendingDelivery, str]:
     """Finalize a DRAFT into PENDING + ACTIVE locator in one flush.
 
@@ -275,8 +277,23 @@ def finalize_delivery(
         raise PublicationError("GIFT_UNAVAILABLE")
     statement = parse_statement(statement_raw)
     statement_hash = hashlib.sha256(statement_raw).digest()
+    request_digest = hashlib.sha256(
+        b"v1|finalize|"
+        + (operation_id.bytes if operation_id is not None else b"")
+        + statement_raw
+        + signature_69
+    ).digest()
     if delivery.state == "PENDING" and bytes(delivery.publish_statement) == statement_raw:
         if bytes(delivery.publish_signature or b"") != bytes(signature_69):
+            raise PublicationError("IDEMPOTENCY_CONFLICT")
+        # Exact full binding: same operation id AND same statement +
+        # signature + escrow digest. Changed escrow (or a new operation
+        # id over the same bytes) conflicts instead of replaying.
+        if (
+            operation_id is None
+            or delivery.finalize_operation_id != operation_id
+            or bytes(delivery.finalize_request_digest or b"") != request_digest
+        ):
             raise PublicationError("IDEMPOTENCY_CONFLICT")
         locator = session.get(GiftLocator, delivery.locator_id) if delivery.locator_id else None
         code = ""
@@ -321,9 +338,12 @@ def finalize_delivery(
         domains.domain_prefix(domains.PENDING_PUBLISH_DOMAIN) + statement_raw,
         signature_69,
     )
+    from remanence.pending.canonical import CanonicalError as _CanonicalError
+    from remanence.pending.canonical import parse_strict as _parse_strict
+
     try:
-        escrow_payload = dv2.PendingEscrowPlaintextV1.FromString(escrow_payload_raw)
-    except Exception as exc:
+        escrow_payload = _parse_strict(dv2.PendingEscrowPlaintextV1, escrow_payload_raw)
+    except _CanonicalError as exc:
         raise PublicationError("PROTOCOL_UNSUPPORTED") from exc
     if (
         bytes(escrow_payload.publish_statement_sha256) != statement_hash
@@ -372,6 +392,8 @@ def finalize_delivery(
     delivery.vault_ciphertext = handle.ciphertext
     delivery.vault_binding_hex = handle.binding_digest_hex
     delivery.locator_id = locator.id
+    delivery.finalize_operation_id = operation_id
+    delivery.finalize_request_digest = request_digest
     delivery.state = "PENDING"
     session.flush()
     return delivery, code

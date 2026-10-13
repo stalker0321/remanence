@@ -97,6 +97,15 @@ class PendingDelivery(Base):
         ForeignKey("gift_locators.id", name="fk_pending_deliveries_locator"),
         nullable=True,
     )
+    # Exact full binding for finalize idempotency: operation id + digest
+    # over statement/signature/escrow bytes. Replay must present the
+    # same triple; anything else conflicts (changed escrow included).
+    finalize_operation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    finalize_request_digest: Mapped[bytes | None] = mapped_column(
+        LargeBinary(32), nullable=True
+    )
     # Validated R3 blob declarations (kind/ordinal/size/sha per blob).
     # Bound at finalize: S artifacts must match exactly. JSON list.
     blob_declarations: Mapped[list | None] = mapped_column(JSONTYPE, nullable=True)

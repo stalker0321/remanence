@@ -297,6 +297,7 @@ def _finalize(session, setup, service_key_id: uuid.UUID, vault) -> tuple:
         domains.domain_prefix(domains.PENDING_PUBLISH_DOMAIN) + statement_raw
     )
     assert len(sig) == 69
+    operation_id = uuid.uuid4()
     finalized, code = finalize_delivery(
         session,
         delivery_id=delivery.id,
@@ -311,8 +312,10 @@ def _finalize(session, setup, service_key_id: uuid.UUID, vault) -> tuple:
         locator_code_key_mode="test",
         hint_mask="g•••@•••",
         now=NOW,
+        operation_id=operation_id,
     )
     session.commit()
+    setup["finalize_operation_id"] = operation_id
     return finalized, code, statement_raw, payload_raw
 
 
@@ -438,8 +441,28 @@ def test_full_lifecycle_claim_and_open(session_factory) -> None:
             locator_code_key_mode="test",
             hint_mask="g•••@•••",
             now=NOW,
+            operation_id=setup["finalize_operation_id"],
         )
         assert code2 == code
+        session.rollback()
+        # Same bytes with a fresh operation id conflict (exact binding).
+        with pytest.raises(PublicationError):
+            finalize_delivery(
+                session,
+                delivery_id=delivery.id,
+                principal_user_id=setup["sender"].id,
+                statement_raw=bytes(delivery.publish_statement),
+                signature_69=bytes(delivery.publish_signature),
+                escrow_payload_raw=b"",
+                vault=vault,
+                expected_service_key_id=service_key_id,
+                locator_hmac_key=HMAC_KEY,
+                locator_code_key_32=LOCATOR_CODE_KEY,
+                locator_code_key_mode="test",
+                hint_mask="g•••@•••",
+                now=NOW,
+                operation_id=uuid.uuid4(),
+            )
         session.rollback()
         # Recipient path with sender offline.
         recipient = _make_user(session, f"rcp{uuid.uuid4().hex[:8]}")

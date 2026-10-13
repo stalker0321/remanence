@@ -184,6 +184,11 @@ def rejected():
     return JSONResponse({"reason": "RECOVERY_REJECTED"}, status_code=400, headers={"Cache-Control": "no-store"})
 
 
+class _NeedUpgrade426(Exception):
+    """Handleless account on an old client: savepoint already rolled the
+    minted session back; the runner maps this to 426."""
+
+
 def run(db, operation, ceremony=None):
     # Burn the validated challenge OUTSIDE the work savepoint. Failed proofs
     # cannot replay, and no partial credential/record/session write is committed.
@@ -195,6 +200,11 @@ def run(db, operation, ceremony=None):
         with db.begin_nested():
             result = operation(row) if ceremony else operation()
         db.commit(); return result
+    except _NeedUpgrade426:
+        if burned: db.commit()
+        else: db.rollback()
+        return JSONResponse({"reason": "CLIENT_UPGRADE_REQUIRED"}, status_code=426,
+                            headers={"Cache-Control": "no-store"})
     except Exception:
         if burned: db.commit()
         else: db.rollback()
@@ -279,15 +289,15 @@ def authenticate(payload, request, db, row, principal=None):
     auth = AuthSessionRepository(db).create(user_id=user.id, access_token_hash=hash_opaque_token(access), refresh_token_hash=hash_opaque_token(refresh),
         access_expires_at=now + ACCESS_TTL, refresh_expires_at=now + REFRESH_TTL)
     if user.handle_normalized is None:
-        # Nullable-profile fence for passkey login: capability decides
-        # between 426 and a usable null-handle session.
-        from remanence.api.problems import problem_response as _problem
+        # Nullable-profile fence for passkey login: the just-minted
+        # session rolls back with the savepoint; old clients get 426,
+        # v2 clients get a usable null-handle session.
         from remanence.pending.profiles import PROFILE_VERSION_2 as _V2
         from remanence.pending.profiles import client_profile_version as _capability
         from remanence.pending.profiles import v2_user_dict as _v2user
 
         if _capability(request.headers) < _V2:
-            return _problem(request, "CLIENT_UPGRADE_REQUIRED")
+            raise _NeedUpgrade426()
         return {**recovered, "login": {
             "user": _v2user(user),
             "active_key_bundle": {"key_bundle_id": str(bundle.id), "suite": bundle.suite,

@@ -30,8 +30,11 @@ from remanence.auth.session_rotation import (
     SessionRotationService,
 )
 from remanence.users.key_bundle_validation import PublicKeyBundleValidationError
-
 router = APIRouter()
+
+
+class _NeedUpgrade(Exception):
+    """Handleless account on an old client: roll back, then 426."""
 
 
 def _registration_conflict_code(exc: IntegrityError) -> str | None:
@@ -95,12 +98,26 @@ def login(
     request: Request,
     session: Session = Depends(get_db_session),
 ) -> LoginResponse:
-    with session.begin():
-        result = LoginService(session, PasswordService()).login(
-            email_normalized=payload.email,
-            password=payload.password.get_secret_value(),
-            now=datetime.now(timezone.utc),
-        )
+    from remanence.pending.profiles import PROFILE_VERSION_2, client_profile_version
+
+    capability = client_profile_version(request.headers)
+    try:
+        with session.begin():
+            result = LoginService(session, PasswordService()).login(
+                email_normalized=payload.email,
+                password=payload.password.get_secret_value(),
+                now=datetime.now(timezone.utc),
+            )
+            if (
+                result.status is LoginStatus.SUCCESS
+                and result.handle is None
+                and capability < PROFILE_VERSION_2
+            ):
+                # Old client: roll the just-minted session back with the
+                # transaction, then 426. No orphan session persists.
+                raise _NeedUpgrade()
+    except _NeedUpgrade:
+        return problem_response(request, "CLIENT_UPGRADE_REQUIRED")
     if result.status is not LoginStatus.SUCCESS:
         return problem_response(request, "AUTH_INVALID")
     if result.handle is None:

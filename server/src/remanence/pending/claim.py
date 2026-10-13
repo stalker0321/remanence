@@ -54,19 +54,15 @@ def _delivery_or_raise(session: Session, delivery_id: uuid.UUID, now: datetime) 
 
 
 def parse_claim_intent(raw: bytes) -> dv2.ClaimIntentV2:
-    """Strict canonical parser: unknown fields, versions, and sizes are
-    rejected before any authorization decision (same bar as S parsing)."""
+    """Strict canonical parser: raw-byte equality plus unknown-field,
+    version, and size checks before any authorization decision (same bar
+    as S parsing)."""
+    from remanence.pending.canonical import CanonicalError, parse_strict
+
     try:
-        intent = dv2.ClaimIntentV2.FromString(raw)
-    except Exception as exc:
+        intent = parse_strict(dv2.ClaimIntentV2, raw)
+    except CanonicalError as exc:
         raise ClaimError("PROTOCOL_UNSUPPORTED") from exc
-    probe = dv2.ClaimIntentV2()
-    probe.CopyFrom(intent)
-    probe.DiscardUnknownFields()
-    if probe.SerializeToString(deterministic=True) != intent.SerializeToString(
-        deterministic=True
-    ):
-        raise ClaimError("PROTOCOL_UNSUPPORTED")
     if intent.intent_version != 1:
         raise ClaimError("PROTOCOL_UNSUPPORTED")
     for value in (

@@ -559,6 +559,7 @@ def finalize_pending_delivery(
             hint_mask=hint_mask,
             now=datetime.now(timezone.utc),
             blob_exists=_exists,
+            operation_id=payload.idempotency_key,
         )
         db.commit()
     except Exception as exc:

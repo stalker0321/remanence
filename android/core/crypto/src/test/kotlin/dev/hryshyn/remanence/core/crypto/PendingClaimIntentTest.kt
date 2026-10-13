@@ -147,7 +147,7 @@ class PendingClaimIntentTest {
             "postmark/pending-publish/v2".toByteArray(Charsets.US_ASCII) + byteArrayOf(0x00) + statement,
         )
         val claimSig = serviceKeys.getPrimitive(com.google.crypto.tink.PublicKeySign::class.java).sign(
-            PendingClaimIntent.CLAIM_BINDING_DOMAIN.toByteArray(Charsets.US_ASCII) + byteArrayOf(0x00) + claim,
+            PendingClaimedEnvelope.CLAIM_BINDING_DOMAIN.toByteArray(Charsets.US_ASCII) + byteArrayOf(0x00) + claim,
         )
         val expectation = PendingClaimedEnvelope.LocalExpectation(
             recipientUserId = recipient,

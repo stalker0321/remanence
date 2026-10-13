@@ -1083,14 +1083,22 @@ class AppContainer private constructor(
                     dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.RecoveryRequired -> null
                 }
             },
-            senderKeyProvider = { bundleId ->
+            senderKeyProvider = { senderUserId, bundleId ->
                 when (val result = keyBundleByIdRepository.fetch(bundleId)) {
-                    is dev.hryshyn.remanence.core.data.network.KeyBundleByIdResult.Found -> try {
-                        com.google.crypto.tink.subtle.Base64.urlSafeDecode(
-                            result.bundle.signingPublicKeysetB64Url,
-                        )
-                    } catch (_: Exception) {
-                        null
+                    is dev.hryshyn.remanence.core.data.network.KeyBundleByIdResult.Found -> {
+                        // Immutable pair (sender_user_id, bundle_id): the
+                        // directory owner must equal the statement sender,
+                        // otherwise OWNER_MISMATCH fails closed (never proof
+                        // readiness/admission on a substituted bundle).
+                        if (result.bundle.ownerUserId.toRestString() != senderUserId) {
+                            null
+                        } else try {
+                            com.google.crypto.tink.subtle.Base64.urlSafeDecode(
+                                result.bundle.signingPublicKeysetB64Url,
+                            )
+                        } catch (_: Exception) {
+                            null
+                        }
                     }
                     else -> null
                 }

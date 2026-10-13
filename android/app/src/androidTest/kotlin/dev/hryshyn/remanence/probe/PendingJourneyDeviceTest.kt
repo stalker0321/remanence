@@ -304,7 +304,21 @@ class PendingJourneyDeviceTest {
         optionsPort = dev.hryshyn.remanence.pending.ProofOptionsPort { _, _ ->
             error("no options in this fixture")
         },
-        tokenProvider = { "token" },
+        sessionGate = object : dev.hryshyn.remanence.pending.PendingRetirementSessionGate {
+            override fun capture(): dev.hryshyn.remanence.core.data.network.SessionRequestLease =
+                dev.hryshyn.remanence.core.data.network.SessionRequestLease(
+                    dev.hryshyn.remanence.core.model.UserId.parseRest("00000000-0000-0000-0000-000000000000"),
+                    1L,
+                )
+
+            override fun accessTokenFor(
+                lease: dev.hryshyn.remanence.core.data.network.SessionRequestLease,
+            ): String? = "token"
+
+            override fun isLive(
+                lease: dev.hryshyn.remanence.core.data.network.SessionRequestLease,
+            ): Boolean = true
+        },
         accountProvider = { null },
         signingKeyProvider = { null },
         hpkeKeyProvider = { null },

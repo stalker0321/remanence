@@ -154,6 +154,7 @@ class PendingProofViewModelTest {
         hpke: KeysetHandle? = null,
         session: String? = sessionId,
         senderKey: ByteArray? = frozenSenderKey(),
+        senderKeyProvider: (suspend (String, String) -> ByteArray?)? = null,
         claim: PendingClaimPort? = null,
         onRequest: ((Boolean) -> Unit)? = null,
         checkBehavior: (() -> VerificationResult)? = null,
@@ -185,7 +186,7 @@ class PendingProofViewModelTest {
             signingKeyProvider = { signingKeys },
             hpkeKeyProvider = { hpke },
             sessionIdProvider = { session },
-            senderKeyProvider = { senderKey },
+            senderKeyProvider = senderKeyProvider ?: { _, _ -> senderKey },
             ownBundleKeyProvider = { null },
             claimPort = claim,
             scope = scope,
@@ -392,6 +393,22 @@ class PendingProofViewModelTest {
         testScheduler.advanceUntilIdle()
         assertEquals(
             PendingProofViewModel.ProofState.Failed(PendingProofViewModel.PendingProofMessage.SESSION_CHANGED),
+            viewModel.state.value,
+        )
+    }
+
+    @Test
+    fun senderBundleOwnerMismatchFailsClosed() = runTest {
+        // Directory bundle owner differs from the statement sender:
+        // the provider refuses (OWNER_MISMATCH, null) and the flow
+        // fails closed with GENERIC, never ProofRequired/admission.
+        val viewModel = vm(
+            senderKeyProvider = { _, _ -> null },
+        )
+        viewModel.start("ref")
+        testScheduler.advanceUntilIdle()
+        assertEquals(
+            PendingProofViewModel.ProofState.Failed(PendingProofViewModel.PendingProofMessage.GENERIC),
             viewModel.state.value,
         )
     }

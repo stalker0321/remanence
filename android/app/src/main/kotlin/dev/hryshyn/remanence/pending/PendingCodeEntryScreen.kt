@@ -218,13 +218,28 @@ fun PendingCodeEntrySheet(
                                 is dev.hryshyn.remanence.core.data.network.GiftLookupResult.Found -> {
                                     foundHint = result.hint.ifBlank { null } ?: result.channel
                                     foundReference = result.giftReference
-                                    // Durable intent (owner-gated, opaque only).
+                                    // Durable intent (owner-gated, opaque only):
+                                    // fsync/rename runs on IO, never Main;
+                                    // cancellation propagates; UI publish
+                                    // rechecks the live owner after the hop.
                                     val owner = ownerUserId
                                     val store = giftIntentStore
                                     if (owner != null && store != null) {
-                                        runCatching { store.save(owner, result.giftReference, normalized) }
+                                        try {
+                                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                                store.save(owner, result.giftReference, normalized)
+                                            }
+                                        } catch (cancelled: kotlin.coroutines.cancellation.CancellationException) {
+                                            throw cancelled
+                                        } catch (_: Exception) {
+                                            // Save failure never blocks lookup UI.
+                                        }
+                                        if (ownerUserId == owner) {
+                                            onWellFormedCode(normalized)
+                                        }
+                                    } else {
+                                        onWellFormedCode(normalized)
                                     }
-                                    onWellFormedCode(normalized)
                                 }
                                 is dev.hryshyn.remanence.core.data.network.GiftLookupResult.Failure -> {
                                         lookupError = when (result.reason) {
@@ -251,7 +266,6 @@ fun PendingCodeEntrySheet(
                         }
                     }
                 }
-            }
             // Rotation/process-death resume: replay the stored code once.
             var resumed by remember(resumeIntent) { mutableStateOf(false) }
             androidx.compose.runtime.LaunchedEffect(resumeIntent) {

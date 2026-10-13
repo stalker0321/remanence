@@ -56,18 +56,20 @@ class PendingGiftIntentStore(filesDir: File) {
         }
 
     /** Returns the intent only for the SAME owner; null otherwise. */
-    fun peek(ownerUserId: String): StoredIntent? = try {
-        if (ownerUserId.isBlank() || !file.isFile) return null
-        val text = file.readText()
-        if (text.isBlank()) return null
-        val dto = storeJson.decodeFromString(StoredIntentDto.serializer(), text)
-        if (dto.owner.isBlank() || dto.owner != ownerUserId || dto.reference.isBlank()) {
+    fun peek(ownerUserId: String): StoredIntent? {
+        return try {
+            if (ownerUserId.isBlank() || !file.isFile) return null
+            val text = file.readText()
+            if (text.isBlank()) return null
+            val dto = storeJson.decodeFromString(StoredIntentDto.serializer(), text)
+            if (dto.owner.isBlank() || dto.owner != ownerUserId || dto.reference.isBlank()) {
+                null
+            } else {
+                StoredIntent(dto.owner, dto.reference, dto.code, dto.at)
+            }
+        } catch (_: Exception) {
             null
-        } else {
-            StoredIntent(dto.owner, dto.reference, dto.code, dto.at)
         }
-    } catch (_: Exception) {
-        null
     }
 
     suspend fun clear(): Unit = mutex.withLock {

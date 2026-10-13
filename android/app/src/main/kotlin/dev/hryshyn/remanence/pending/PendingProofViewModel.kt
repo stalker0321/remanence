@@ -83,11 +83,14 @@ class PendingProofViewModel(
     private val signingKeyProvider: suspend () -> KeysetHandle?,
     private val hpkeKeyProvider: suspend () -> KeysetHandle?,
     /**
-     * Sender signing public keyset bytes by bundle id (directory-backed —
-     * the server holds no monopoly). Null/unfetchable fails S verification
-     * closed; the flow never proceeds on structure alone.
+     * Sender signing public keyset bytes by the immutable pair
+     * (sender_user_id, bundle_id), directory-backed — the server holds
+     * no monopoly. The provider must refuse when the directory bundle
+     * owner differs from the statement sender (OWNER_MISMATCH, fail
+     * closed). Null/unfetchable fails S verification closed; the flow
+     * never proceeds on structure alone.
      */
-    private val senderKeyProvider: suspend (bundleId: String) -> ByteArray? = { null },
+    private val senderKeyProvider: suspend (senderUserId: String, bundleId: String) -> ByteArray? = { _, _ -> null },
     /**
      * Own bundle public keyset bytes (directory-fetched — the exact stored
      * bytes the server hashed for the recipient digest check). Null fails
@@ -294,7 +297,10 @@ class PendingProofViewModel(
                     return ProofState.Failed(PendingProofMessage.GENERIC)
                 }
                 val senderKeyBytes = try {
-                    senderKeyProvider(uuidRest(statement.senderKeyBundleId))
+                    senderKeyProvider(
+                        uuidRest(statement.senderUserId),
+                        uuidRest(statement.senderKeyBundleId),
+                    )
                 } catch (_: Exception) {
                     null
                 } ?: return ProofState.Failed(PendingProofMessage.GENERIC)
@@ -331,19 +337,32 @@ class PendingProofViewModel(
                 if (creds == null) {
                     ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
                 } else {
-                    val result = verifyPort.request(
-                        current.deliveryId, _destination.value.trim(), _smsConsent.value,
-                        clockSeconds(), java.util.UUID.randomUUID().toString(), creds.token,
-                    )
-                    if (!credsLive(creds)) {
+                    // Entry owner fence (same as R10/R11): the local
+                    // account must be the lease owner before any R8 work.
+                    val account = try {
+                        accountProvider()
+                    } catch (_: Exception) {
+                        null
+                    }
+                    if (account == null || account.userId.isBlank() ||
+                        account.userId != creds.ownerId
+                    ) {
                         ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
-                    } else when (result) {
-                        is VerificationResult.Attempt -> {
-                            attempt = result.attemptId
-                            ProofState.CodeRequired(current.deliveryId, result.attemptId, result.resendCooldownSeconds)
+                    } else {
+                        val result = verifyPort.request(
+                            current.deliveryId, _destination.value.trim(), _smsConsent.value,
+                            clockSeconds(), java.util.UUID.randomUUID().toString(), creds.token,
+                        )
+                        if (!credsLive(creds)) {
+                            ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+                        } else when (result) {
+                            is VerificationResult.Attempt -> {
+                                attempt = result.attemptId
+                                ProofState.CodeRequired(current.deliveryId, result.attemptId, result.resendCooldownSeconds)
+                            }
+                            is VerificationResult.Verified -> verifiedState(current.deliveryId, result.attemptId)
+                            is VerificationResult.Failure -> ProofState.Failed(mapLookupFailure(result.reason))
                         }
-                        is VerificationResult.Verified -> verifiedState(current.deliveryId, result.attemptId)
-                        is VerificationResult.Failure -> ProofState.Failed(mapLookupFailure(result.reason))
                     }
                 }
             } catch (cancelled: CancellationException) {
@@ -365,16 +384,29 @@ class PendingProofViewModel(
                 if (creds == null) {
                     ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
                 } else {
-                    val result = verifyPort.check(current.deliveryId, attemptId, _code.value.trim(), creds.token)
-                    if (!credsLive(creds)) {
+                    // Entry owner fence (same as R10/R11): the local
+                    // account must be the lease owner before any R9 work.
+                    val account = try {
+                        accountProvider()
+                    } catch (_: Exception) {
+                        null
+                    }
+                    if (account == null || account.userId.isBlank() ||
+                        account.userId != creds.ownerId
+                    ) {
                         ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
-                    } else when (result) {
-                        is VerificationResult.Verified -> verifiedState(current.deliveryId, result.attemptId)
-                        is VerificationResult.Attempt -> {
-                            attempt = result.attemptId
-                            ProofState.CodeRequired(current.deliveryId, result.attemptId, result.resendCooldownSeconds)
+                    } else {
+                        val result = verifyPort.check(current.deliveryId, attemptId, _code.value.trim(), creds.token)
+                        if (!credsLive(creds)) {
+                            ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+                        } else when (result) {
+                            is VerificationResult.Verified -> verifiedState(current.deliveryId, result.attemptId)
+                            is VerificationResult.Attempt -> {
+                                attempt = result.attemptId
+                                ProofState.CodeRequired(current.deliveryId, result.attemptId, result.resendCooldownSeconds)
+                            }
+                            is VerificationResult.Failure -> ProofState.Failed(mapLookupFailure(result.reason))
                         }
-                        is VerificationResult.Failure -> ProofState.Failed(mapLookupFailure(result.reason))
                     }
                 }
             } catch (cancelled: CancellationException) {
@@ -475,32 +507,45 @@ class PendingProofViewModel(
                 .parseKeysetWithoutSecret(senderKeyBytes)
             val senderSig = senderSigStored
                 ?: return ProofState.Failed(PendingProofMessage.GENERIC)
-            when (
-                dev.hryshyn.remanence.core.crypto.PendingClaimedEnvelope.accept(
-                    sealedEnvelope = envelope,
-                    expectedEnvelopeSha256 = envelopeSha,
-                    statementBytes = sBytes,
-                    claimBytes = binding,
-                    senderSignature = senderSig,
-                    claimSignature = claimSig,
-                    recipientPrivateHandle = hpke,
-                    senderVerifyHandle = senderVerify,
-                    // Service-key distribution pending: partial path only,
-                    // typed untrusted, never promoted.
-                    serviceVerifyHandle = null,
-                    expected = dev.hryshyn.remanence.core.crypto.PendingClaimedEnvelope.LocalExpectation(
-                        recipientUserId = account.userId,
-                        recipientKeyBundleId = account.bundleId,
-                        recipientPublicKeyset = ownPublic,
-                        nowEpochSeconds = clockSeconds(),
-                        authorizedServiceKeyId = null,
-                    ),
-                )
-            ) {
-                is dev.hryshyn.remanence.core.crypto.PendingClaimedEnvelope.EnvelopeAcceptance.Accepted ->
-                    ProofState.Claimed(current.deliveryId, serviceVerified = true)
-                is dev.hryshyn.remanence.core.crypto.PendingClaimedEnvelope.EnvelopeAcceptance.PartiallyAccepted ->
-                    ProofState.Claimed(current.deliveryId, serviceVerified = false)
+            // Caller-owned secret copies from accept() are dropped here
+            // (no grant/persist on this path — Partial never yields a
+            // grant; opening depends on future sync/scan admission).
+            // Zero them in finally; Java/protobuf immutable internals
+            // are out of scope for this caller-copy contract.
+            val acceptance = dev.hryshyn.remanence.core.crypto.PendingClaimedEnvelope.accept(
+                sealedEnvelope = envelope,
+                expectedEnvelopeSha256 = envelopeSha,
+                statementBytes = sBytes,
+                claimBytes = binding,
+                senderSignature = senderSig,
+                claimSignature = claimSig,
+                recipientPrivateHandle = hpke,
+                senderVerifyHandle = senderVerify,
+                // Service-key distribution pending: partial path only,
+                // typed untrusted, never promoted.
+                serviceVerifyHandle = null,
+                expected = dev.hryshyn.remanence.core.crypto.PendingClaimedEnvelope.LocalExpectation(
+                    recipientUserId = account.userId,
+                    recipientKeyBundleId = account.bundleId,
+                    recipientPublicKeyset = ownPublic,
+                    nowEpochSeconds = clockSeconds(),
+                    authorizedServiceKeyId = null,
+                ),
+            )
+            try {
+                when (acceptance) {
+                    is dev.hryshyn.remanence.core.crypto.PendingClaimedEnvelope.EnvelopeAcceptance.Accepted ->
+                        ProofState.Claimed(current.deliveryId, serviceVerified = true)
+                    is dev.hryshyn.remanence.core.crypto.PendingClaimedEnvelope.EnvelopeAcceptance.PartiallyAccepted ->
+                        ProofState.Claimed(current.deliveryId, serviceVerified = false)
+                }
+            } finally {
+                when (acceptance) {
+                    is dev.hryshyn.remanence.core.crypto.PendingClaimedEnvelope.EnvelopeAcceptance.Accepted ->
+                        acceptance.capsuleAeadKeyset.fill(0)
+                    is dev.hryshyn.remanence.core.crypto.PendingClaimedEnvelope.EnvelopeAcceptance.PartiallyAccepted ->
+                        acceptance.capsuleAeadKeyset.fill(0)
+                }
             }
         } catch (_: GeneralSecurityException) {
             ProofState.Failed(PendingProofMessage.GENERIC)

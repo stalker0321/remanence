@@ -36,14 +36,17 @@ class PendingBoundaryPublishTest {
         expiresAt = 1798765432L,
     )
 
-    private inner class SwitchingGate(var owner: String = senderId) : PendingRetirementSessionGate {
+    private inner class SwitchingGate(
+        var owner: String = senderId,
+        var epoch: Long = 1L,
+    ) : PendingRetirementSessionGate {
         override fun capture(): SessionRequestLease =
-            SessionRequestLease(UserId.parseRest(owner), 1L)
+            SessionRequestLease(UserId.parseRest(owner), epoch)
 
         override fun accessTokenFor(lease: SessionRequestLease): String? = "token"
 
         override fun isLive(lease: SessionRequestLease): Boolean =
-            lease.ownerUserId == UserId.parseRest(owner)
+            lease.ownerUserId == UserId.parseRest(owner) && lease.incarnation == epoch
     }
 
     private fun testPin(): PendingServicePin {
@@ -220,20 +223,21 @@ class PendingBoundaryPublishTest {
     }
 
     /**
-     * T186 M12e (T188 B3): the lease dies DURING the runner's account
-     * await — the re-read after the await catches it, zero drafts.
+     * T186 M12e-fence2 (T188 B3 REDO F1): the lease dies DURING the
+     * runner's account await while the account still returns the
+     * ORIGINAL owner — only the post-await liveness re-read catches
+     * it, zero drafts.
      */
     @Test
     fun invalidationDuringAccountAwaitFails() = runTest {
         val gate = SwitchingGate()
-        val other = "99999999-2222-3333-4444-555555555555"
         var calls = 0
         val drafts = mutableListOf<Unit>()
         val result = run(
             gate = gate,
             accountOf = {
                 calls += 1
-                if (calls == 1) gate.owner = other
+                if (calls == 1) gate.epoch = 2L
                 ProofAccount(gate.owner, senderBundle)
             },
             draftCalls = drafts,

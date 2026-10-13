@@ -444,6 +444,10 @@ private fun RecipientLookupContent(viewModel: CreateViewModel) {
                             viewModel.pendingSenderContent()
                         },
                         onFrozenRoute = viewModel::onPendingRouteFrozen,
+                        // T186 M12e-gap2: the SAME session capsule id the
+                        // boundary publishes under (route.capsule_id ==
+                        // R3 capsule_id, server-enforced).
+                        capsuleIdProvider = { viewModel.capsuleId },
                         // T186 M12e-boundary: a directory-proven frozen v1
                         // route enters the EXISTING confirm→publish path
                         // (zero escrow); the sheet never publishes v1.

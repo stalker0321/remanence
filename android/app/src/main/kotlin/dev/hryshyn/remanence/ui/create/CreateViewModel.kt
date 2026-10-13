@@ -1217,6 +1217,16 @@ class CreateViewModel(
         val frontFingerprintId: String,
         val photoIds: List<String>,
         val trackSnapshot: CapsuleTrackSnapshotV1?,
+        /**
+         * T186 M12e-gap3: immutable route + ORIGINAL lease captured at
+         * publication entry (startPublishing, before ANY identity or
+         * staging await). The boundary branch consumes these — never a
+         * live store re-read after awaits — and the runner pins the
+         * lease instead of re-pinning a fresh one, so a same-owner
+         * replacement cannot slip a new incarnation in.
+         */
+        val pendingRoute: dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity.Pending? = null,
+        val pendingLease: dev.hryshyn.remanence.core.data.network.SessionRequestLease? = null,
     )
 
     /** Thrown when the publishing session was replaced mid-flight. */
@@ -1696,8 +1706,20 @@ class CreateViewModel(
             return false
         }
         if (confirmedRecipient.value == null) {
-            failGuard("a recipient must be confirmed before composition")
-            return false
+            // T186 M12e-gap1: a frozen PENDING_V2 route is an alternate
+            // VALID recipient binding for composition (no handle, no
+            // account, no recipient keys fabricated — the route itself
+            // is the binding). v1 guards below are unchanged.
+            val frozenComposed =
+                if (dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled()) {
+                    sessionStore.pendingRoute.value
+                } else {
+                    null
+                }
+            if (frozenComposed !is dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity.Pending) {
+                failGuard("a recipient must be confirmed before composition")
+                return false
+            }
         }
         if (sessionOwner == null) {
             failGuard("authenticated owner is unavailable; composition disabled")
@@ -1818,6 +1840,25 @@ class CreateViewModel(
             frontFingerprintId = requireNotNull(frontFingerprintId),
             photoIds = photoSelection.selectedIds.toList(),
             trackSnapshot = trackSnapshot,
+            // T186 M12e-gap3: capture the immutable route + ORIGINAL
+            // lease synchronously here (no awaits above since the
+            // guard) so the boundary consumes entry-time state even
+            // after long staging awaits.
+            pendingRoute = frozenRouteForPublish as?
+                dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity.Pending,
+            pendingLease =
+                if (pendingBoundary == null || frozenRouteForPublish !is
+                    dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity.Pending ||
+                    !dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled()
+                ) {
+                    null
+                } else {
+                    try {
+                        pendingBoundary.gate.capture()
+                    } catch (_: Exception) {
+                        null
+                    }
+                },
         )
         _step.value = Step.PUBLISHING
         val generation = createSessionGeneration
@@ -2485,7 +2526,11 @@ class CreateViewModel(
             // The existing v1 path below runs unchanged when no pending
             // route is bound. Early return still runs the staging/front
             // cleanups in the surrounding finally blocks.
-            val pendingFrozen = pendingRouteForBoundary()
+            //
+            // T186 M12e-gap3: the route AND the entry-time lease come
+            // from [inputs] (captured at publication entry, before ANY
+            // staging await) — never a live store re-read here.
+            val pendingFrozen = inputs.pendingRoute
             if (pendingFrozen != null) {
                 publishPendingAtBoundary(
                     generation, inputs, sender, senderHandle,
@@ -2594,19 +2639,6 @@ class CreateViewModel(
     }
 
     /**
-     * T186 M12e-boundary: the publish boundary reads the session's
-     * frozen pending route (never a placeholder, never a re-resolve).
-     * Null unless the pending flag is ON, the boundary ports are wired
-     * and a PENDING_V2 route is actually frozen.
-     */
-    private fun pendingRouteForBoundary(): dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity.Pending? {
-        if (!dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled()) return null
-        if (pendingBoundary == null) return null
-        return sessionStore.pendingRoute.value as?
-            dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity.Pending
-    }
-
-    /**
      * T186 M12e-boundary: v2 sealed publication at the normal publish
      * boundary from the already-authored inputs (bound photos/dims,
      * frozen expression, note, fingerprint — the same locals the v1
@@ -2684,7 +2716,11 @@ class CreateViewModel(
                 draftPort = ports.draft,
                 blobPort = ports.blob,
                 finalizePort = ports.finalize,
-                expectedLease = null,
+                // T186 M12e-gap3: the ORIGINAL lease captured at
+                // publication entry (PublishInputs) — the runner pins it
+                // instead of re-pinning a fresh lease, so a same-owner
+                // replacement across the staging awaits fails closed.
+                expectedLease = inputs.pendingLease,
             )
         } catch (cancelled: CancellationException) {
             throw cancelled

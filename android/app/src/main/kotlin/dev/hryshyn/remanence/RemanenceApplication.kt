@@ -1227,6 +1227,7 @@ class AppContainer private constructor(
         contentPort: dev.hryshyn.remanence.pending.PendingSenderContentPort,
         onFrozenRoute: (dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity) -> Unit = {},
         onResolvedHandle: (dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot) -> Unit = {},
+        capsuleIdProvider: () -> String = { java.util.UUID.randomUUID().toString() },
     ): dev.hryshyn.remanence.pending.PendingSenderViewModel {
         val publishRepo = pendingDeliveryPublishPort
         val sendRepo = pendingSendRoutePort
@@ -1315,6 +1316,7 @@ class AppContainer private constructor(
                 }
             },
             onFrozenRoute = onFrozenRoute,
+            capsuleIdProvider = capsuleIdProvider,
             // T186 M12e-boundary: directory ownership proof for a frozen
             // v1 route (single resolve; the proven snapshot then flows
             // through the existing confirm→publish path — never

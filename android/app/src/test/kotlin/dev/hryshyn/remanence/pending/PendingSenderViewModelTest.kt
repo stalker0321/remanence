@@ -57,14 +57,17 @@ class PendingSenderViewModelTest {
             live && lease.ownerUserId == UserId.parseRest(owner)
     }
 
-    private inner class SwitchingGate(var owner: String = senderId) : PendingRetirementSessionGate {
+    private inner class SwitchingGate(
+        var owner: String = senderId,
+        var epoch: Long = 1L,
+    ) : PendingRetirementSessionGate {
         override fun capture(): SessionRequestLease =
-            SessionRequestLease(UserId.parseRest(owner), 1L)
+            SessionRequestLease(UserId.parseRest(owner), epoch)
 
         override fun accessTokenFor(lease: SessionRequestLease): String? = "token"
 
         override fun isLive(lease: SessionRequestLease): Boolean =
-            lease.ownerUserId == UserId.parseRest(owner)
+            lease.ownerUserId == UserId.parseRest(owner) && lease.incarnation == epoch
     }
 
     private fun kotlinx.coroutines.test.TestScope.vm(
@@ -85,6 +88,9 @@ class PendingSenderViewModelTest {
         onFrozen: ((PendingSendRouteFlow.FrozenIdentity) -> Unit)? = null,
         resolveSnapshot: dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot? = null,
         onResolved: ((dev.hryshyn.remanence.core.data.network.ResolvedHandleSnapshot) -> Unit)? = null,
+        capsuleIdProvider: (() -> String)? = null,
+        freezeSeen: ((String) -> Unit)? = null,
+        draftSeen: ((String) -> Unit)? = null,
     ): PendingSenderViewModel {
         TinkPrimitives.ensureRegistered()
         val signing = KeysetHandle.generateNew(KeyTemplates.get("ED25519"))
@@ -111,11 +117,15 @@ class PendingSenderViewModelTest {
         val resolvedIdentity: suspend () -> PendingSenderIdentity? =
             identityProvider ?: { fallbackIdentity }
         return PendingSenderViewModel(
-            freezePort = PendingSendRouteFlow.SendRoutePort { _, _, _, _, _ -> freeze },
+            freezePort = PendingSendRouteFlow.SendRoutePort { capsule, kind, value, key, token ->
+                freezeSeen?.invoke(capsule)
+                freeze
+            },
             publishFlowFactory = { materialPort ->
                 PendingPublishFlow(
-                    draftPort = PendingPublishFlow.DraftPort { _, _, _, _, _, _, _, _, _, _ ->
+                    draftPort = PendingPublishFlow.DraftPort { _, capsule, _, _, _, _, _, _, _, _ ->
                         onDraft?.invoke()
+                        draftSeen?.invoke(capsule)
                         PendingDraftResult.Draft(
                             "0198f0a0-0000-7000-8000-00000000d401",
                             "0f".repeat(32),
@@ -147,6 +157,7 @@ class PendingSenderViewModelTest {
             onFrozenRoute = onFrozen ?: {},
             v1ResolvePort = PendingV1ResolvePort { _, _, _ -> resolveSnapshot },
             onResolvedHandle = { onResolved?.invoke(it) },
+            capsuleIdProvider = capsuleIdProvider ?: { java.util.UUID.randomUUID().toString() },
             scope = scope,
         )
     }
@@ -355,14 +366,14 @@ class PendingSenderViewModelTest {
     }
 
     /**
-     * T186 M12e (T188 B3): the lease dies DURING the post-content
-     * account await — the re-read after the await catches it, so no
-     * R3 draft escapes for a dead session.
+     * T186 M12e-fence2 (T188 B3 REDO F1): the lease dies DURING the
+     * post-content account await while the account still returns the
+     * ORIGINAL owner — only the post-await liveness re-read catches it,
+     * so no R3 draft escapes for a dead session.
      */
     @Test
     fun invalidationDuringContentAccountAwaitFails() = runTest {
         val switching = SwitchingGate()
-        val other = "99999999-2222-3333-4444-555555555555"
         var calls = 0
         var drafts = 0
         val viewModel = vm(
@@ -371,9 +382,9 @@ class PendingSenderViewModelTest {
                 calls += 1
                 // VM checkTxn account calls: entry(1), post-freeze(2),
                 // post-identity(3), post-content(4). Kill the lease
-                // inside the last one: the pre-read still passes, the
-                // re-read must not.
-                if (calls == 4) switching.owner = other
+                // (incarnation bump, same owner/account) inside the last
+                // one: the pre-read still passes, the re-read must not.
+                if (calls == 4) switching.epoch = 2L
                 ProofAccount(switching.owner, senderBundle)
             },
             onDraft = { drafts += 1 },
@@ -443,5 +454,38 @@ class PendingSenderViewModelTest {
         testScheduler.advanceUntilIdle()
         assertTrue(viewModel.state.value is PendingSenderViewModel.State.KnownV1)
         assertTrue(resolved.isEmpty())
+    }
+
+    /**
+     * T186 M12e-gap2: the R1 freeze and the R3 draft carry the SAME
+     * caller-supplied capsule id (the Create session capsule — the
+     * server requires route.capsule_id == R3 capsule_id).
+     */
+    @Test
+    fun freezeAndDraftShareCallerCapsuleId() = runTest {
+        val capsuleId = "11111111-2222-3333-4444-555555555555"
+        var frozenCapsule: String? = null
+        var draftedCapsule: String? = null
+        val viewModel = vm(
+            capsuleIdProvider = { capsuleId },
+            freeze = SendRouteResult.FrozenPending(
+                routeId = "0198f0a0-0000-7000-8000-00000000b301",
+                deliveryTargetId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                normalizedDestination = "a42@example.test",
+                channel = "email",
+                claimDeadline = 1814317432L,
+                serviceKeyId = "9f9f9f9f-8e8e-7d7d-6c6c-5b5b5b5b5b5b",
+                expiresAt = 1798765432L,
+            ),
+            freezeSeen = { frozenCapsule = it },
+            draftSeen = { draftedCapsule = it },
+        )
+        viewModel.onDestinationChange("a42@example.test")
+        viewModel.send()
+        testScheduler.advanceUntilIdle()
+        // The SAME caller capsule id at R1 freeze and R3 draft.
+        assertEquals(capsuleId, frozenCapsule)
+        assertEquals(capsuleId, draftedCapsule)
+        assertTrue(viewModel.state.value is PendingSenderViewModel.State.Published)
     }
 }

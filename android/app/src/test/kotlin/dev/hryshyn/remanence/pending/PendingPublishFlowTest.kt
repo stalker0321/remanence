@@ -267,14 +267,14 @@ class PendingPublishFlowTest {
     }
 
     /**
-     * T186 M12e (T188 B3): the lease dies DURING the post-finalize
-     * account await — the re-read after the await catches it, so no
-     * live-looking Published result escapes for a dead session.
+     * T186 M12e-fence2 (T188 B3 REDO F1): the lease dies DURING the
+     * post-finalize account await — the account still returns the
+     * ORIGINAL owner, so only the post-await liveness re-read can catch
+     * it. No live-looking Published result escapes for a dead session.
      */
     @Test
     fun invalidationDuringPostFinalizeAccountAwaitFails() = runTest {
         val switching = SwitchingGate()
-        val other = "99999999-2222-3333-4444-555555555555"
         var calls = 0
         val result = flow(
             gate = switching,
@@ -282,9 +282,10 @@ class PendingPublishFlowTest {
                 calls += 1
                 // checkTxn account calls: entry(1), post-material(2),
                 // post-draft(3), blob pre(4)/post(5), pre-finalize(6),
-                // post-finalize(7). Kill the lease inside the last one:
-                // the pre-read still passes, the re-read must not.
-                if (calls == 7) switching.owner = other
+                // post-finalize(7). Kill the lease (incarnation bump,
+                // same owner, same account) inside the last one: the
+                // pre-read still passes, the re-read must not.
+                if (calls == 7) switching.epoch = 2L
                 ProofAccount(switching.owner, "bundle")
             },
         ).publish(frozenPending(), capsule, "k1", "k2")

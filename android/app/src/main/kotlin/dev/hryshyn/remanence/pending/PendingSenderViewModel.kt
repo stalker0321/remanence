@@ -95,6 +95,14 @@ class PendingSenderViewModel(
      * keeps the frozen display without the existing-pipeline handoff.
      */
     private val v1ResolvePort: PendingV1ResolvePort? = null,
+    /**
+     * T186 M12e-gap2: the capsule id is supplied by the actual Create
+     * caller (the session capsule), so the R1-frozen
+     * `route.capsule_id` is the SAME uuid the boundary later publishes
+     * under R3 (the server requires equality). Defaults to a random
+     * uuid (unit surfaces).
+     */
+    private val capsuleIdProvider: () -> String = { java.util.UUID.randomUUID().toString() },
     scope: CoroutineScope? = null,
 ) : ViewModel() {
 
@@ -240,7 +248,7 @@ class PendingSenderViewModel(
     private suspend fun sendFlow(rawDestination: String, kind: String): State {
         val txn = beginTxn() ?: return State.Failed(Message.SESSION_CHANGED)
         if (!checkTxn(txn)) return State.Failed(Message.SESSION_CHANGED)
-        val capsuleId = java.util.UUID.randomUUID().toString()
+        val capsuleId = capsuleIdProvider()
         val draftKey = java.util.UUID.randomUUID().toString()
         val freezeToken = txnBearer(txn) ?: return State.Failed(Message.SESSION_CHANGED)
         val routeFlow = PendingSendRouteFlow(freezePort)

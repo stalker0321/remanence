@@ -10,8 +10,11 @@ class RecoveryRepository(private val baseUrl: ApiBaseUrl) {
     private val client = HttpClientFactory.create()
     suspend fun request(path: String, body: JsonObject? = null, token: String? = null): JsonObject {
         require(path in PATHS)
-        val request = Request.Builder().url(baseUrl.resolve("v1/recovery/$path"))
-            .header("Accept", "application/json")
+        val builder = PendingProfileHeaders.apply(
+            Request.Builder().url(baseUrl.resolve("v1/recovery/$path"))
+                .header("Accept", "application/json"),
+        )
+        val request = builder
         if (token != null) request.header("Authorization", "Bearer $token")
         if (body != null) request.post(body.toString().toRequestBody("application/json".toMediaType()))
         return client.executeResponseWithCallLifetime(request.build()) { response ->

@@ -93,21 +93,47 @@ object PendingPublishVerifier {
         } catch (_: Exception) {
             throw GeneralSecurityException("pending sender keyset malformed")
         }
+        verifySignature(verifyingHandle, statementBytes, signature, "pending publish")
+    }
+
+    /** Handle-based twin (same gates; the handle comes from the directory). */
+    fun verifyPublishWithHandle(
+        verifyingHandle: KeysetHandle,
+        statementBytes: ByteArray,
+        signature: ByteArray,
+    ) {
+        verifyStructure(statementBytes)
+        verifySignature(verifyingHandle, statementBytes, signature, "pending publish")
+    }
+
+    /**
+     * 69-byte Tink Ed25519 check over `domain || 0x00 || signedBytes`
+     * with key-id match. Shared by publish/intent/claim-binding checks.
+     */
+    fun verifySignature(
+        verifyingHandle: KeysetHandle,
+        signedBytes: ByteArray,
+        signature: ByteArray,
+        what: String,
+        domain: String = PENDING_PUBLISH_DOMAIN,
+    ) {
+        if (signature.size != SIGNATURE_LENGTH || signature[0] != TINK_PREFIX_TYPE_BYTE) {
+            throw GeneralSecurityException("$what signature framing invalid")
+        }
         val embeddedKeyId = ((signature[1].toInt() and 0xFF) shl 24) or
             ((signature[2].toInt() and 0xFF) shl 16) or
             ((signature[3].toInt() and 0xFF) shl 8) or
             (signature[4].toInt() and 0xFF)
         if (embeddedKeyId != verifyingHandle.keysetInfo.primaryKeyId) {
-            throw GeneralSecurityException("pending publish signature key mismatch")
+            throw GeneralSecurityException("$what signature key mismatch")
         }
-        val input = PENDING_PUBLISH_DOMAIN.toByteArray(Charsets.US_ASCII) +
-            byteArrayOf(0x00) + statementBytes
+        val input = domain.toByteArray(Charsets.US_ASCII) + byteArrayOf(0x00) + signedBytes
         try {
             verifyingHandle.getPrimitive(PublicKeyVerify::class.java).verify(signature, input)
         } catch (failure: GeneralSecurityException) {
             throw failure
         } catch (_: Exception) {
-            throw GeneralSecurityException("pending publish verification failed")
+            throw GeneralSecurityException("$what verification failed")
         }
     }
 

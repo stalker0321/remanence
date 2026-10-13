@@ -10,6 +10,7 @@ import dev.hryshyn.remanence.core.data.network.ClaimOptionsResult
 import dev.hryshyn.remanence.core.data.network.ContinueResult
 import dev.hryshyn.remanence.core.data.network.GiftLookupFailure
 import dev.hryshyn.remanence.core.data.network.VerificationResult
+import java.security.GeneralSecurityException
 import java.util.Base64
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -23,7 +24,8 @@ fun interface ProofContinuePort {
     suspend fun continueFrom(reference: String, token: String): ContinueResult
 }
 
-fun interface ProofVerifyPort {
+/** Two-method seam: request an attempt, then check the code. Plain interface. */
+interface ProofVerifyPort {
     suspend fun request(
         deliveryId: String,
         destination: String,
@@ -345,7 +347,9 @@ class PendingProofViewModel(
     }
 
     private fun mapLookupFailure(reason: GiftLookupFailure): PendingProofMessage = when (reason) {
-        GiftLookupFailure.NETWORK -> PendingProofMessage.NETWORK
+        GiftLookupFailure.NETWORK,
+        GiftLookupFailure.RATE_LIMITED,
+        -> PendingProofMessage.NETWORK
         GiftLookupFailure.GIFT_UNAVAILABLE -> PendingProofMessage.NOT_FOUND
         GiftLookupFailure.ADDRESS_PROOF_REQUIRED,
         GiftLookupFailure.SESSION_CHANGED,
@@ -353,12 +357,7 @@ class PendingProofViewModel(
         GiftLookupFailure.RECOVERY_REQUIRED,
         -> PendingProofMessage.SESSION_CHANGED
         GiftLookupFailure.PROOF_EXPIRED -> PendingProofMessage.EXPIRED
-        GiftLookupFailure.CLAIM_CONFLICT -> PendingProofMessage.CONFLICT
-        else -> if (reason == GiftLookupFailure.RATE_LIMITED) {
-            PendingProofMessage.NETWORK
-        } else {
-            PendingProofMessage.GENERIC
-        }
+        else -> PendingProofMessage.GENERIC
     }
 
     private fun mapClaimFailure(reason: dev.hryshyn.remanence.core.data.network.ClaimFailure): PendingProofMessage =

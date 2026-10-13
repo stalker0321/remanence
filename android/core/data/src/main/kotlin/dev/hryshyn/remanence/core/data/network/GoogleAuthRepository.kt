@@ -10,8 +10,10 @@ class GoogleAuthRepository(private val baseUrl: ApiBaseUrl) {
     private val client = HttpClientFactory.create()
     suspend fun request(path: String, body: JsonObject): JsonObject {
         require(path in setOf("options", "verify", "register"))
-        val request = Request.Builder().url(baseUrl.resolve("v1/auth/google/$path"))
-            .header("Accept", "application/json")
+        val request = PendingProfileHeaders.apply(
+            Request.Builder().url(baseUrl.resolve("v1/auth/google/$path"))
+                .header("Accept", "application/json"),
+        )
             .post(body.toString().toRequestBody("application/json".toMediaType())).build()
         return client.executeResponseWithCallLifetime(request) { response ->
             if (!response.isSuccessful) throw GoogleAuthRejected(response.code)

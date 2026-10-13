@@ -182,6 +182,11 @@ class AppContainer private constructor(
         ) {
             throw IllegalStateException("pending-enabled build requires an isolated API base (live beta forbidden)")
         }
+        // T186 M7c: capability profile header, pending builds ONLY.
+        // Ordinary beta/default builds never send it.
+        if (BuildConfig.REMANENCE_PENDING_ENABLED) {
+            dev.hryshyn.remanence.core.data.network.PendingProfileHeaders.installForPendingBuilds()
+        }
     }
 
     val healthRepository: HealthRepository by lazy { HealthRepository.create(apiBaseUrl) }
@@ -973,6 +978,15 @@ class AppContainer private constructor(
     }
 
     /**
+     * T186 M7c: memory-only fenced auth session-id store (R11 intents).
+     * Set on login paths that parse a `session_id`; cleared on logout.
+     * Readers must present the live lease owner (see the proof VM).
+     */
+    val sessionIdHolder: dev.hryshyn.remanence.core.data.network.SessionIdHolder by lazy {
+        dev.hryshyn.remanence.core.data.network.SessionIdHolder()
+    }
+
+    /**
      * T186 M8: frozen R1 route-freeze port (routes scaffold server-side;
      * failures stay typed). Sender UI mount follows on navigation handoff.
      */
@@ -1071,8 +1085,25 @@ class AppContainer private constructor(
                     dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.RecoveryRequired -> null
                 }
             },
-            // Explicit block: auth session_id not persisted client-side.
-            sessionIdProvider = { null },
+            // T186 M7c: session id from the fenced holder, bound to the
+            // LIVE lease owner (never borrowed across accounts). Null
+            // without a live owner-bound session (BLOCKED downstream).
+            sessionIdProvider = {
+                val lease = try {
+                    apiStack.captureSessionRequestLease()
+                } catch (_: Exception) {
+                    null
+                }
+                if (lease == null) {
+                    null
+                } else {
+                    try {
+                        sessionIdHolder.currentFor(lease.ownerUserId)
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+            },
             scope = scope,
         )
     }
@@ -1461,6 +1492,8 @@ class AppContainer private constructor(
                 }
             },
             sessionReplacement = sessionReplacement,
+            // T186 M7c: fenced session-id sink for R11 intents.
+            sessionIds = sessionIdHolder,
         )
     }
 

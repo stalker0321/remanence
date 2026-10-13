@@ -40,6 +40,8 @@ class RemanenceViewModelFactory(
             sessionBootstrap = container.sessionBootstrap,
             logoutAction = {
                 container.logoutUseCase.logout()
+                // T186 M7c: session-id dies with the session.
+                runCatching { container.sessionIdHolder.clear() }
                 if (dev.hryshyn.remanence.BuildConfig.REMANENCE_GOOGLE_SIGN_IN_ENABLED) {
                     try {
                         androidx.credentials.CredentialManager.create(container.appContext)

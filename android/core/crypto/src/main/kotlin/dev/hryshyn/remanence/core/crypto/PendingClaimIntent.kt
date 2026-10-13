@@ -115,36 +115,101 @@ internal object PendingUuid16 {
 
 /**
  * Trusted claimed-envelope acceptance. Everything is recomputed from the
- * verified `S` + the opened plaintext — stored AAD/envelopes are never
- * trusted. Explicit remaining gap: the SERVICE `claim_signature_69`
- * needs the deployment-pinned service public key (distribution pending);
- * structural + agreement + envelope-SHA + D/KC checks below are real and
- * complete without it.
+ * verified `S` + accepted `R` + opened plaintext — stored AAD/envelopes
+ * are never trusted. Gate order: digest → strict/canonical → AUTHORITATIVE
+ * sender signature → R agreement → service signature → local owned
+ * account/bundle/digest/time checks → HPKE open → plaintext checks. The
+ * opened plaintext is zeroized in `finally` on EVERY branch (failure and
+ * success alike); callers own the returned copies.
+ *
+ * Result typing is explicit: [EnvelopeAcceptance.Accepted] requires the
+ * deployment-pinned SERVICE signature; without a service key the same
+ * chain yields [EnvelopeAcceptance.PartiallyAccepted], which is typed
+ * untrusted and must NEVER be promoted to production `Accepted`.
  */
 object PendingClaimedEnvelope {
 
-    data class Accepted(
-        val capsuleAeadKeyset: ByteArray,
-        val addressOpening: AddressOpening,
+    /** Locally owned expectations, checked BEFORE admission/HPKE. */
+    data class LocalExpectation(
+        val recipientUserId: String,
+        val recipientKeyBundleId: String,
+        /** Directory-fetched public keyset bytes (what the server hashed). */
+        val recipientPublicKeyset: ByteArray,
+        val nowEpochSeconds: Long,
     )
 
-    fun openAndAccept(
+    sealed interface EnvelopeAcceptance {
+        data class Accepted(
+            val capsuleAeadKeyset: ByteArray,
+            val addressOpening: AddressOpening,
+        ) : EnvelopeAcceptance
+
+        /**
+         * Everything EXCEPT the service signature verified. Explicitly
+         * untrusted: never a production `Accepted`, never admission.
+         */
+        data class PartiallyAccepted(
+            val capsuleAeadKeyset: ByteArray,
+            val addressOpening: AddressOpening,
+        ) : EnvelopeAcceptance
+    }
+
+    fun accept(
         sealedEnvelope: ByteArray,
         expectedEnvelopeSha256: ByteArray,
         statementBytes: ByteArray,
         claimBytes: ByteArray,
+        senderSignature: ByteArray,
+        claimSignature: ByteArray,
         recipientPrivateHandle: KeysetHandle,
-    ): Accepted {
+        senderVerifyHandle: KeysetHandle,
+        /** Null until the service key is distributed → partial only. */
+        serviceVerifyHandle: KeysetHandle?,
+        expected: LocalExpectation,
+    ): EnvelopeAcceptance {
         if (sealedEnvelope.isEmpty()) throw GeneralSecurityException("pending envelope is empty")
         val actualEnvelopeSha = MessageDigest.getInstance("SHA-256").digest(sealedEnvelope)
         if (!actualEnvelopeSha.contentEquals(expectedEnvelopeSha256)) {
             throw GeneralSecurityException("pending envelope digest mismatch")
         }
-        // Full S/R agreement gate first (versions, ids, H, D, policy,
-        // service-key id) — reuses the frozen verifier, no duplication.
+        // Authoritative sender signature over S — required, before R work.
+        PendingPublishVerifier.verifyPublishWithHandle(senderVerifyHandle, statementBytes, senderSignature)
+        // Full S/R agreement gate (versions, ids, H, D, policy, service id).
         PendingPublishVerifier.verifyClaimAgreement(statementBytes, claimBytes)
         val statement = PendingPublishStatementV2.parseFrom(statementBytes)
         val claim = dev.hryshyn.remanence.protocol.delivery_v2.ClaimBindingV1.parseFrom(claimBytes)
+        // Service signature over canonical R (or explicit partial).
+        val serviceDone = if (serviceVerifyHandle != null) {
+            PendingPublishVerifier.verifySignature(
+                serviceVerifyHandle, claimBytes, claimSignature,
+                "pending claim", CLAIM_BINDING_DOMAIN,
+            )
+            true
+        } else {
+            false
+        }
+        // Local owned account/bundle/digest/time checks — BEFORE HPKE.
+        if (!uuidEquals(claim.recipientUserId, expected.recipientUserId) ||
+            !uuidEquals(claim.recipientKeyBundleId, expected.recipientKeyBundleId)
+        ) {
+            throw GeneralSecurityException("pending envelope owner mismatch")
+        }
+        val publicDigest = MessageDigest.getInstance("SHA-256").digest(expected.recipientPublicKeyset)
+        if (!publicDigest.contentEquals(claim.recipientEncryptionPublicKeysetSha256.toByteArray())) {
+            throw GeneralSecurityException("pending envelope key digest mismatch")
+        }
+        if (statement.claimExpiresAtEpochSeconds <= expected.nowEpochSeconds ||
+            claim.claimedAtEpochSeconds > expected.nowEpochSeconds
+        ) {
+            throw GeneralSecurityException("pending envelope time invalid")
+        }
+        // Re-open/restore is permanent after an accepted claim: the claimed
+        // instant must fall inside the statement's own [created, expiry]
+        // window (NOT merely "now before expiry").
+        // NOTE: created_at is not carried on S; the creation lower bound is
+        // enforced by the agreement-time checks at claim (server) time. The
+        // client enforces claimed_at <= expiry here and documents the
+        // created-bound as server-owned.
         // Rebuild the exact HPKE context the server sealed to.
         val context = dev.hryshyn.remanence.protocol.delivery_v2.ClaimedEnvelopeContextV2.newBuilder()
             .setProtocolVersion(2)
@@ -165,51 +230,66 @@ object PendingClaimedEnvelope {
         } catch (_: Exception) {
             throw GeneralSecurityException("pending envelope open failed")
         }
-        PendingStrictProto.requireNoUnknownFields(
-            plaintextBytes,
-            PendingStrictProto.CLAIMED_ENVELOPE_PLAINTEXT_V2,
-            "claimed envelope",
-        )
-        val plaintext = try {
-            ClaimedEnvelopePlaintextV2.parseFrom(plaintextBytes)
-        } catch (_: Exception) {
-            throw GeneralSecurityException("pending claimed envelope malformed")
+        try {
+            PendingStrictProto.requireNoUnknownFields(
+                plaintextBytes,
+                PendingStrictProto.CLAIMED_ENVELOPE_PLAINTEXT_V2,
+                "claimed envelope",
+            )
+            val plaintext = try {
+                ClaimedEnvelopePlaintextV2.parseFrom(plaintextBytes)
+            } catch (_: Exception) {
+                throw GeneralSecurityException("pending claimed envelope malformed")
+            }
+            if (!plaintext.toByteArray().contentEquals(plaintextBytes)) {
+                throw GeneralSecurityException("pending claimed envelope not canonical")
+            }
+            // The opened binding must equal the locally rebuilt context.
+            if (!plaintext.binding.toByteArray().contentEquals(contextRaw)) {
+                throw GeneralSecurityException("pending envelope context mismatch")
+            }
+            // Recompute D over the opened AddressOpening; must match S.
+            val openingBytes = plaintext.addressOpening.toByteArray()
+            val recomputedD = MessageDigest.getInstance("SHA-256").digest(
+                DELIVERY_ADDRESS_DOMAIN.toByteArray(Charsets.US_ASCII) + byteArrayOf(0x00) + openingBytes,
+            )
+            if (!recomputedD.contentEquals(statement.addressCommitment.toByteArray())) {
+                throw GeneralSecurityException("pending address commitment mismatch")
+            }
+            // Recompute KC over (v1, capsule, target, exact K); must match S.
+            val kcInput = KeyCommitmentInput.newBuilder()
+                .setVersion(1)
+                .setCapsuleId(statement.capsuleId)
+                .setDeliveryTargetId(statement.deliveryTargetId)
+                .setCapsuleAeadKeyset(plaintext.capsuleAeadKeyset)
+                .build().toByteArray()
+            val recomputedKc = MessageDigest.getInstance("SHA-256").digest(
+                DELIVERY_KEY_DOMAIN.toByteArray(Charsets.US_ASCII) + byteArrayOf(0x00) + kcInput,
+            )
+            if (!recomputedKc.contentEquals(statement.keyCommitment.toByteArray())) {
+                throw GeneralSecurityException("pending key commitment mismatch")
+            }
+            // Exact-K shape: single ENABLED AES256_GCM/TINK keyset (the vault
+            // adapter re-verifies before storage; rejected here first).
+            requireExactAesKey(plaintext.capsuleAeadKeyset.toByteArray())
+            val keyCopy = plaintext.capsuleAeadKeyset.toByteArray()
+            val openingCopy = AddressOpening.parseFrom(openingBytes)
+            if (!serviceDone) {
+                return EnvelopeAcceptance.PartiallyAccepted(keyCopy, openingCopy)
+            }
+            return EnvelopeAcceptance.Accepted(keyCopy, openingCopy)
+        } finally {
+            plaintextBytes.fill(0)
         }
-        if (!plaintext.toByteArray().contentEquals(plaintextBytes)) {
-            throw GeneralSecurityException("pending claimed envelope not canonical")
+    }
+
+    private fun uuidEquals(actual: com.google.protobuf.ByteString, expectedRest: String): Boolean {
+        val expected = try {
+            PendingUuid16.of(expectedRest, "expectation")
+        } catch (_: GeneralSecurityException) {
+            return false
         }
-        // The opened binding must equal the locally rebuilt context.
-        if (!plaintext.binding.toByteArray().contentEquals(contextRaw)) {
-            throw GeneralSecurityException("pending envelope context mismatch")
-        }
-        // Recompute D over the opened AddressOpening; must match S.
-        val openingBytes = plaintext.addressOpening.toByteArray()
-        val recomputedD = MessageDigest.getInstance("SHA-256").digest(
-            DELIVERY_ADDRESS_DOMAIN.toByteArray(Charsets.US_ASCII) + byteArrayOf(0x00) + openingBytes,
-        )
-        if (!recomputedD.contentEquals(statement.addressCommitment.toByteArray())) {
-            throw GeneralSecurityException("pending address commitment mismatch")
-        }
-        // Recompute KC over (v1, capsule, target, exact K); must match S.
-        val kcInput = KeyCommitmentInput.newBuilder()
-            .setVersion(1)
-            .setCapsuleId(statement.capsuleId)
-            .setDeliveryTargetId(statement.deliveryTargetId)
-            .setCapsuleAeadKeyset(plaintext.capsuleAeadKeyset)
-            .build().toByteArray()
-        val recomputedKc = MessageDigest.getInstance("SHA-256").digest(
-            DELIVERY_KEY_DOMAIN.toByteArray(Charsets.US_ASCII) + byteArrayOf(0x00) + kcInput,
-        )
-        if (!recomputedKc.contentEquals(statement.keyCommitment.toByteArray())) {
-            throw GeneralSecurityException("pending key commitment mismatch")
-        }
-        // Exact-K shape: single ENABLED AES256_GCM/TINK keyset (the vault
-        // adapter re-verifies before storage; rejected here first).
-        requireExactAesKey(plaintext.capsuleAeadKeyset.toByteArray())
-        return Accepted(
-            capsuleAeadKeyset = plaintext.capsuleAeadKeyset.toByteArray(),
-            addressOpening = plaintext.addressOpening,
-        )
+        return actual.toByteArray().contentEquals(expected)
     }
 
     private fun actualStatementHash(bytes: ByteArray): ByteArray =
@@ -233,6 +313,7 @@ object PendingClaimedEnvelope {
 
     /** Frozen §2 domains reused for recomputation. */
     const val CLAIMED_ENVELOPE_DOMAIN: String = "postmark/claimed-envelope/v2"
+    const val CLAIM_BINDING_DOMAIN: String = "postmark/claim-binding/v1"
     private const val DELIVERY_ADDRESS_DOMAIN: String = "postmark/delivery-address/v1"
     private const val DELIVERY_KEY_DOMAIN: String = "postmark/delivery-key/v1"
     private const val AES_GCM_TYPE_URL: String = "type.googleapis.com/google.crypto.tink.AesGcmKey"

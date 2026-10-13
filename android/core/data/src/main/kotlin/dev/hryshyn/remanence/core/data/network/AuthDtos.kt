@@ -32,6 +32,13 @@ data class RegistrationUserDto(
      */
     val handle: String? = null,
     @SerialName("created_at") val createdAt: String,
+    /**
+     * T186 M7c: capability profile version from staged server 63 wire.
+     * Optional typed int (absent in older payloads); the strict shared
+     * decoder requires it to be a DECLARED field (unknown-field rejection
+     * otherwise breaks new receive/login/recovery decodes).
+     */
+    @SerialName("profile_version") val profileVersion: Int? = null,
 )
 
 /** Wire shape of the active public key bundle metadata returned by auth endpoints. */

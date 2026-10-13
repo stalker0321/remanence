@@ -123,6 +123,10 @@ class GoogleAuthViewModel(private val container: AppContainer) : ViewModel() {
             container.sessionReplacement.replace(lease, UserId.parseRest(login.user.userId), login.accessToken, login.refreshToken) {
                 container.currentAccountStore.record(login.user.userId, login.user.handle, login.activeKeyBundle.keyBundleId)
             }
+            // T186 M7c: fenced session-id for R11 intents (owner-bound).
+            runCatching {
+                container.sessionIdHolder.set(UserId.parseRest(login.user.userId), login.sessionId)
+            }
             committed = true; ticket = null; mutableState.value = GoogleAuthState.SignedIn
         } finally {
             if (!committed) withContext(NonCancellable) { container.bareAuthRepository.logout(login.accessToken) }

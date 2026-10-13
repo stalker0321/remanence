@@ -83,10 +83,12 @@ class AuthRepository internal constructor(
 
     /** Revokes the authenticated session; the server is idempotent and answers 204. */
     suspend fun logout(accessToken: String): AuthResult<Unit> {
-        val request = Request.Builder()
-            .url(baseUrl.resolve("v1/auth/logout"))
-            .header("Accept", "application/json")
-            .header("Authorization", "Bearer $accessToken")
+        val request = PendingProfileHeaders.apply(
+            Request.Builder()
+                .url(baseUrl.resolve("v1/auth/logout"))
+                .header("Accept", "application/json")
+                .header("Authorization", "Bearer $accessToken"),
+        )
             .post(ByteArray(0).toRequestBody("application/json".toMediaTypeOrNull()))
             .build()
         return try {
@@ -112,9 +114,11 @@ class AuthRepository internal constructor(
         decode: (String) -> T,
     ): AuthResult<T> {
         val requestBody = body.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
-        val request = Request.Builder()
-            .url(baseUrl.resolve(path))
-            .header("Accept", "application/json")
+        val request = PendingProfileHeaders.apply(
+            Request.Builder()
+                .url(baseUrl.resolve(path))
+                .header("Accept", "application/json"),
+        )
             .post(requestBody)
             .build()
         return try {

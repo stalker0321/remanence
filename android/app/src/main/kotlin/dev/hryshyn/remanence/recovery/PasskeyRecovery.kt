@@ -125,6 +125,10 @@ class PasskeyRecovery(private val container: AppContainer) {
                 container.currentAccountStore.record(login.user.userId, login.user.handle, login.activeKeyBundle.keyBundleId)
                 container.recoveryReadiness.markVerified(login.user.userId, login.activeKeyBundle.keyBundleId)
             }
+            // T186 M7c: fenced session-id for R11 intents (owner-bound).
+            runCatching {
+                container.sessionIdHolder.set(UserId.parseRest(login.user.userId), login.sessionId)
+            }
             committed = true
         } finally {
             secret.fill(0)

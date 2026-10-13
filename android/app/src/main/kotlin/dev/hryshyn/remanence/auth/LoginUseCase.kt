@@ -36,6 +36,8 @@ class LoginUseCase(
     private val authApi: LoginAuthApiPort,
     private val accounts: CurrentAccountPort,
     private val sessionReplacement: SessionReplacementPort,
+    /** T186 M7c: fenced session-id sink (R11 intents); null keeps legacy tests/behavior. */
+    private val sessionIds: dev.hryshyn.remanence.core.data.network.SessionIdHolder? = null,
 ) {
 
     sealed interface Outcome {
@@ -73,6 +75,7 @@ class LoginUseCase(
                         activeKeyBundleId = response.activeKeyBundle.keyBundleId,
                         accessToken = response.accessToken,
                         refreshToken = response.refreshToken,
+                        sessionId = response.sessionId,
                     )
                 ) {
                     return Outcome.InvalidResponse
@@ -106,6 +109,7 @@ class LoginUseCase(
         activeKeyBundleId: String,
         accessToken: String,
         refreshToken: String,
+        sessionId: String?,
     ): Boolean {
         val owner = try {
             UserId.parseRest(user.userId)
@@ -116,6 +120,7 @@ class LoginUseCase(
             sessionReplacement.replace(lease, owner, accessToken, refreshToken) {
                 accounts.recordCurrentAccount(user, activeKeyBundleId)
             }
+            if (!sessionId.isNullOrBlank()) sessionIds?.set(owner, sessionId)
             true
         } catch (cancelled: CancellationException) {
             throw cancelled

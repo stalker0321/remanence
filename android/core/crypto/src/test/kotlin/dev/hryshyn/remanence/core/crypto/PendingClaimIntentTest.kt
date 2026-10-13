@@ -43,12 +43,18 @@ class PendingClaimIntentTest {
 
     private data class Fixture(
         val statement: ByteArray,
+        val senderSig: ByteArray,
+        val senderPublic: KeysetHandle,
         val claim: ByteArray,
+        val claimSig: ByteArray,
+        val servicePublic: KeysetHandle,
         val sealedEnvelope: ByteArray,
         val envelopeSha: ByteArray,
         val recipientPrivate: KeysetHandle,
+        val recipientPublicBytes: ByteArray,
         val rawKey: ByteArray,
         val opening: AddressOpening,
+        val expectation: PendingClaimedEnvelope.LocalExpectation,
     )
 
     private fun fixture(): Fixture {
@@ -76,6 +82,8 @@ class PendingClaimIntentTest {
             .build().toByteArray()
         val kc = sha256("postmark/delivery-key/v1".toByteArray(Charsets.US_ASCII) + byteArrayOf(0x00) + kcInput)
         val serviceKey = uuidBytes("0b0b0b0b-1c1c-2d2d-3e3e-4f4f4f4f4f4f")
+        val senderKeys = KeysetHandle.generateNew(KeyTemplates.get("ED25519"))
+        val serviceKeys = KeysetHandle.generateNew(KeyTemplates.get("ED25519"))
         val statement = PendingPublishStatementV2.newBuilder()
             .setProtocolVersion(2)
             .setCapsuleId(ByteString.copyFrom(uuidBytes(capsule)))
@@ -89,6 +97,9 @@ class PendingClaimIntentTest {
             .setClaimPolicyVersion(1)
             .setClaimSigningKeyId(ByteString.copyFrom(serviceKey))
             .build().toByteArray()
+        val recipientKeys = KeysetHandle.generateNew(KeyTemplates.get(TinkPrimitives.HPKE_TEMPLATE))
+        val recipientPublicBytes =
+            TinkProtoKeysetFormat.serializeKeysetWithoutSecret(recipientKeys.publicKeysetHandle)
         val claimId = "55555555-6666-7777-8888-999999999999"
         val claim = ClaimBindingV1.newBuilder()
             .setBindingVersion(1)
@@ -99,7 +110,9 @@ class PendingClaimIntentTest {
             .setAddressCommitment(ByteString.copyFrom(d))
             .setRecipientUserId(ByteString.copyFrom(uuidBytes(recipient)))
             .setRecipientKeyBundleId(ByteString.copyFrom(uuidBytes(bundle)))
-            .setRecipientEncryptionPublicKeysetSha256(ByteString.copyFrom(ByteArray(32)))
+            .setRecipientEncryptionPublicKeysetSha256(
+                ByteString.copyFrom(sha256(recipientPublicBytes)),
+            )
             .setClaimId(ByteString.copyFrom(uuidBytes(claimId)))
             .setClaimedAtEpochSeconds(1_798_765_100L)
             .setClaimPolicyVersion(1)
@@ -127,17 +140,57 @@ class PendingClaimIntentTest {
         val sealed = recipientKeys.publicKeysetHandle
             .getPrimitive(HybridEncrypt::class.java)
             .encrypt(plaintext, info)
-        return Fixture(statement, claim, sealed, sha256(sealed), recipientKeys, rawKey, opening)
+        // Sender + service signatures over the frozen domain inputs (the
+        // service pair is synthetic test-only, like the backend fixture
+        // pattern — never an R-carried key as trust root).
+        val senderSig = senderKeys.getPrimitive(com.google.crypto.tink.PublicKeySign::class.java).sign(
+            "postmark/pending-publish/v2".toByteArray(Charsets.US_ASCII) + byteArrayOf(0x00) + statement,
+        )
+        val claimSig = serviceKeys.getPrimitive(com.google.crypto.tink.PublicKeySign::class.java).sign(
+            PendingClaimIntent.CLAIM_BINDING_DOMAIN.toByteArray(Charsets.US_ASCII) + byteArrayOf(0x00) + claim,
+        )
+        val expectation = PendingClaimedEnvelope.LocalExpectation(
+            recipientUserId = recipient,
+            recipientKeyBundleId = bundle,
+            recipientPublicKeyset = recipientPublicBytes,
+            nowEpochSeconds = 1_798_765_200L,
+        )
+        return Fixture(
+            statement, senderSig, senderKeys.publicKeysetHandle,
+            claim, claimSig, serviceKeys.publicKeysetHandle,
+            sealed, sha256(sealed), recipientKeys, recipientPublicBytes,
+            rawKey, opening, expectation,
+        )
     }
 
     @Test
-    fun sealedEnvelopeOpensAndVerifies() {
+    fun fullAcceptedWithServiceSignature() {
         val f = fixture()
-        val accepted = PendingClaimedEnvelope.openAndAccept(
-            f.sealedEnvelope, f.envelopeSha, f.statement, f.claim, f.recipientPrivate,
+        val result = PendingClaimedEnvelope.accept(
+            f.sealedEnvelope, f.envelopeSha, f.statement, f.claim,
+            f.senderSig, f.claimSig, f.recipientPrivate,
+            senderVerifyHandle = f.senderPublic,
+            serviceVerifyHandle = f.servicePublic,
+            expected = f.expectation,
         )
+        val accepted = result as PendingClaimedEnvelope.EnvelopeAcceptance.Accepted
         assertContentEquals(f.rawKey, accepted.capsuleAeadKeyset)
         assertEquals(f.opening, accepted.addressOpening)
+    }
+
+    @Test
+    fun partialWithoutServiceKeyIsUntrusted() {
+        val f = fixture()
+        val result = PendingClaimedEnvelope.accept(
+            f.sealedEnvelope, f.envelopeSha, f.statement, f.claim,
+            f.senderSig, f.claimSig, f.recipientPrivate,
+            senderVerifyHandle = f.senderPublic,
+            serviceVerifyHandle = null,
+            expected = f.expectation,
+        )
+        // Explicitly untrusted type — never a production Accepted.
+        val partial = result as PendingClaimedEnvelope.EnvelopeAcceptance.PartiallyAccepted
+        assertContentEquals(f.rawKey, partial.capsuleAeadKeyset)
     }
 
     @Test
@@ -145,9 +198,29 @@ class PendingClaimIntentTest {
         val f = fixture()
         val bad = f.envelopeSha.copyOf().also { it[0] = (it[0] + 1).toByte() }
         val failure = assertFailsWith<GeneralSecurityException> {
-            PendingClaimedEnvelope.openAndAccept(f.sealedEnvelope, bad, f.statement, f.claim, f.recipientPrivate)
+            PendingClaimedEnvelope.accept(
+                f.sealedEnvelope, bad, f.statement, f.claim,
+                f.senderSig, f.claimSig, f.recipientPrivate,
+                f.senderPublic, f.servicePublic, f.expectation,
+            )
         }
         assertEquals("pending envelope digest mismatch", failure.message)
+    }
+
+    @Test
+    fun wrongSenderSignatureFails() {
+        val f = fixture()
+        val other = KeysetHandle.generateNew(KeyTemplates.get("ED25519"))
+        val badSig = other.getPrimitive(com.google.crypto.tink.PublicKeySign::class.java).sign(
+            "postmark/pending-publish/v2".toByteArray(Charsets.US_ASCII) + byteArrayOf(0x00) + f.statement,
+        )
+        assertFailsWith<GeneralSecurityException> {
+            PendingClaimedEnvelope.accept(
+                f.sealedEnvelope, f.envelopeSha, f.statement, f.claim,
+                badSig, f.claimSig, f.recipientPrivate,
+                f.senderPublic, f.servicePublic, f.expectation,
+            )
+        }
     }
 
     @Test
@@ -156,8 +229,26 @@ class PendingClaimIntentTest {
         val f = fixture()
         val other = KeysetHandle.generateNew(KeyTemplates.get(TinkPrimitives.HPKE_TEMPLATE))
         assertFailsWith<GeneralSecurityException> {
-            PendingClaimedEnvelope.openAndAccept(f.sealedEnvelope, f.envelopeSha, f.statement, f.claim, other)
+            PendingClaimedEnvelope.accept(
+                f.sealedEnvelope, f.envelopeSha, f.statement, f.claim,
+                f.senderSig, f.claimSig, other,
+                f.senderPublic, f.servicePublic, f.expectation,
+            )
         }
+    }
+
+    @Test
+    fun ownerMismatchFailsBeforeHpke() {
+        val f = fixture()
+        val wrong = f.expectation.copy(recipientUserId = "99999999-2222-3333-4444-555555555555")
+        val failure = assertFailsWith<GeneralSecurityException> {
+            PendingClaimedEnvelope.accept(
+                f.sealedEnvelope, f.envelopeSha, f.statement, f.claim,
+                f.senderSig, f.claimSig, f.recipientPrivate,
+                f.senderPublic, f.servicePublic, wrong,
+            )
+        }
+        assertEquals("pending envelope owner mismatch", failure.message)
     }
 
     @Test
@@ -197,8 +288,12 @@ class PendingClaimIntentTest {
     }
 
     @Test
-    fun intentRejectsBadSizes() {
-        assertFailsWith<IllegalArgumentException> {
+    fun intentRejectsMalformedUuid() {
+        // PendingUuid16 raises GeneralSecurityException (not bare
+        // IllegalArgumentException) so malformed ids fail the crypto gate,
+        // never slip into signed bytes. Size checks below stay
+        // IllegalArgumentException by construction (documented).
+        assertFailsWith<GeneralSecurityException> {
             PendingClaimIntent.buildCanonical(
                 PendingClaimIntent.Fields(
                     operationId = "not-a-uuid",

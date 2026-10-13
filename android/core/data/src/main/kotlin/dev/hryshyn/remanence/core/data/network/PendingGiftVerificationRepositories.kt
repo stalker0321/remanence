@@ -126,6 +126,35 @@ private data class VerificationResponseDto(
 @Serializable
 private data class VerificationCheckRequestDto(val code: String)
 
+/**
+ * Tolerant problem shape for pending codes whose exact HTTP bindings are
+ * still landing server-side (T185 implementing HTTP now). The CODE set is
+ * frozen (§8/error list); only the status binding is tolerated. Strict
+ * canonical tuples still win when they match; unknown codes stay generic.
+ */
+@Serializable
+private data class TolerantLookupProblemDto(
+    val code: String = "",
+    val status: Int = 0,
+    val retryable: Boolean = false,
+)
+
+private val tolerantLookupJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+
+private fun lookupProblemOutcome(text: String, httpStatus: Int): Pair<GiftLookupFailure, Boolean> {
+    val strict = classifyCapsuleProblem(text, httpStatus, LOOKUP_PROBLEM_CODES)
+    if (strict != null) return mapLookupProblem(strict.code) to strict.retryable
+    val tolerant = try {
+        tolerantLookupJson.decodeFromString<TolerantLookupProblemDto>(text)
+    } catch (_: Exception) {
+        null
+    }
+    if (tolerant != null && tolerant.code in LOOKUP_PROBLEM_CODES) {
+        return mapLookupProblem(tolerant.code) to capsuleHttpFallbackIsRetryable(httpStatus)
+    }
+    return GiftLookupFailure.HTTP to capsuleHttpFallbackIsRetryable(httpStatus)
+}
+
 private const val GIFT_LOOKUP_MEDIA = "application/json; charset=utf-8"
 private const val GIFT_LOOKUP_SUBTYPE = "json"
 private const val GIFT_LOOKUP_PROBLEM_SUBTYPE = "problem+json"
@@ -149,8 +178,7 @@ private val LOOKUP_PROBLEM_CODES = setOf(
     "INTERNAL_ERROR",
 )
 
-private fun mapLookupProblem(code: String): GiftLookupFailure = when (code) {
-    "GIFT_UNAVAILABLE" -> GiftLookupFailure.GIFT_UNAVAILABLE
+private fun mapLookupProblem(code: String): GiftLookupFailure = when (code) {    "GIFT_UNAVAILABLE" -> GiftLookupFailure.GIFT_UNAVAILABLE
     "RATE_LIMITED" -> GiftLookupFailure.RATE_LIMITED
     "VALIDATION_FAILED" -> GiftLookupFailure.VALIDATION_FAILED
     "AUTH_INVALID" -> GiftLookupFailure.AUTH_INVALID
@@ -235,20 +263,17 @@ class PendingGiftLookupRepository internal constructor(
                     retryable = capsuleHttpFallbackIsRetryable(response.code),
                 )
             }
-            val problem = classifyCapsuleProblem(
-                bytes.toString(Charsets.UTF_8),
-                response.code,
-                LOOKUP_PROBLEM_CODES,
-            )
-            // Unlisted codes (incl. future GIFT_UNAVAILABLE variants) stay
-            // generic-unavailable-shaped: never an existence oracle here.
-            val reason = problem?.let { mapLookupProblem(it.code) }
-                ?: if (response.code == 404) GiftLookupFailure.GIFT_UNAVAILABLE
-                else GiftLookupFailure.HTTP
+            val (reason, retryable) = lookupProblemOutcome(bytes.toString(Charsets.UTF_8), response.code)
+            // Unlisted codes stay generic-unavailable-shaped: never an
+            // existence oracle here.
             return GiftLookupResult.Failure(
-                reason = reason,
+                reason = if (reason == GiftLookupFailure.HTTP && response.code == 404) {
+                    GiftLookupFailure.GIFT_UNAVAILABLE
+                } else {
+                    reason
+                },
                 httpStatus = response.code,
-                retryable = problem?.retryable ?: capsuleHttpFallbackIsRetryable(response.code),
+                retryable = retryable,
             )
         }
         if (!isLookupJson(response, GIFT_LOOKUP_SUBTYPE)) {
@@ -387,15 +412,11 @@ class PendingVerificationRepository internal constructor(
                     retryable = capsuleHttpFallbackIsRetryable(response.code),
                 )
             }
-            val problem = classifyCapsuleProblem(
-                bytes.toString(Charsets.UTF_8),
-                response.code,
-                LOOKUP_PROBLEM_CODES,
-            )
+            val (reason, retryable) = lookupProblemOutcome(bytes.toString(Charsets.UTF_8), response.code)
             return VerificationResult.Failure(
-                reason = problem?.let { mapLookupProblem(it.code) } ?: GiftLookupFailure.HTTP,
+                reason = reason,
                 httpStatus = response.code,
-                retryable = problem?.retryable ?: capsuleHttpFallbackIsRetryable(response.code),
+                retryable = retryable,
             )
         }
         if (!isLookupJson(response, GIFT_LOOKUP_SUBTYPE)) {

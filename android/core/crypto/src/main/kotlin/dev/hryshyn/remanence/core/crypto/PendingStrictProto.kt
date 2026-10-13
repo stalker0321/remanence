@@ -25,7 +25,9 @@ object PendingStrictProto {
     )
 
     val ADDRESS_OPENING: MessageSpec = MessageSpec(setOf(1, 2, 3, 4))
-    val KEY_COMMITMENT_INPUT: MessageSpec = MessageSpec(setOf(1, 2, 3))
+    // KeyCommitmentInput: version=1, capsule_id=2, delivery_target_id=3,
+    // capsule_aead_keyset=4 (key bytes). Verified against delivery_v2.proto.
+    val KEY_COMMITMENT_INPUT: MessageSpec = MessageSpec(setOf(1, 2, 3, 4))
     val ARTIFACT_AAD_V2: MessageSpec = MessageSpec((1..7).toSet())
     val ARTIFACT_BINDING_V2: MessageSpec = MessageSpec((1..5).toSet())
     val PUBLISH_STATEMENT_V2: MessageSpec =

@@ -49,6 +49,13 @@ object PendingPublishVerifier {
         if (statement.protocolVersion != PENDING_PROTOCOL_VERSION) {
             throw GeneralSecurityException("pending publish version unsupported")
         }
+        // Canonical form: lite re-serialization emits field-number order
+        // with minimal varints and no duplicates, so byte equality holds
+        // exactly for canonical inputs (reordered/duplicate/non-minimal
+        // bytes parse but never match). Unknowns were already excluded.
+        if (!statement.toByteArray().contentEquals(statementBytes)) {
+            throw GeneralSecurityException("pending publish statement not canonical")
+        }
         if (signature.size != SIGNATURE_LENGTH || signature[0] != TINK_PREFIX_TYPE_BYTE) {
             throw GeneralSecurityException("pending publish signature framing invalid")
         }
@@ -100,6 +107,12 @@ object PendingPublishVerifier {
             ClaimBindingV1.parseFrom(claimBytes)
         } catch (_: Exception) {
             throw GeneralSecurityException("pending claim binding malformed")
+        }
+        if (!claim.toByteArray().contentEquals(claimBytes)) {
+            throw GeneralSecurityException("pending claim binding not canonical")
+        }
+        if (!statement.toByteArray().contentEquals(statementBytes)) {
+            throw GeneralSecurityException("pending publish statement not canonical")
         }
         if (statement.protocolVersion != PENDING_PROTOCOL_VERSION ||
             claim.bindingVersion != CLAIM_BINDING_VERSION ||

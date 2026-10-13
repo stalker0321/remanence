@@ -164,4 +164,51 @@ class PendingPublishVerifierTest {
             PendingPublishVerifier.verifyPublish(keyset, statement.copyOf(10), signature)
         }
     }
+
+    /** Splits top-level TLV spans so tests can build non-canonical inputs. */
+    private fun topLevelSpans(bytes: ByteArray): List<ByteArray> {
+        val input = com.google.protobuf.CodedInputStream.newInstance(bytes)
+        val spans = mutableListOf<ByteArray>()
+        while (true) {
+            val start = input.totalBytesRead
+            val tag = input.readTag()
+            if (tag == 0) break
+            if (!input.skipField(tag)) break
+            spans += bytes.copyOfRange(start, input.totalBytesRead)
+        }
+        return spans
+    }
+
+    @Test
+    fun duplicateFieldRejectedAsNonCanonical() {
+        TinkPrimitives.ensureRegistered()
+        val (keyset, statement, signature) = triple()
+        val firstSpan = topLevelSpans(statement).first()
+        // Same value twice: parses to the identical message, but the bytes
+        // are not canonical.
+        val withDup = statement + firstSpan
+        val parsedDup = dev.hryshyn.remanence.protocol.delivery_v2.PendingPublishStatementV2.parseFrom(withDup)
+        val parsedOrig = dev.hryshyn.remanence.protocol.delivery_v2.PendingPublishStatementV2.parseFrom(statement)
+        assertEquals(parsedOrig, parsedDup)
+        val failure = assertFailsWith<GeneralSecurityException> {
+            PendingPublishVerifier.verifyPublish(keyset, withDup, signature)
+        }
+        assertEquals("pending publish statement not canonical", failure.message)
+    }
+
+    @Test
+    fun reorderedFieldsRejectedAsNonCanonical() {
+        TinkPrimitives.ensureRegistered()
+        val (keyset, statement, signature) = triple()
+        val spans = topLevelSpans(statement)
+        assertEquals(true, spans.size > 1)
+        val reordered = spans.reversed().reduce { acc, span -> acc + span }
+        val parsedReordered = dev.hryshyn.remanence.protocol.delivery_v2.PendingPublishStatementV2.parseFrom(reordered)
+        val parsedOrig = dev.hryshyn.remanence.protocol.delivery_v2.PendingPublishStatementV2.parseFrom(statement)
+        assertEquals(parsedOrig, parsedReordered)
+        val failure = assertFailsWith<GeneralSecurityException> {
+            PendingPublishVerifier.verifyPublish(keyset, reordered, signature)
+        }
+        assertEquals("pending publish statement not canonical", failure.message)
+    }
 }

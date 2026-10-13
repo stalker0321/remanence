@@ -42,8 +42,13 @@ import dev.hryshyn.remanence.ui.motion.rememberAstraMotion
 fun PendingCodeEntryButton(
     onOpenCodeEntry: () -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * Test seam: production passes the build-time gate (default); device
+     * tests force it to mount the real component without an auth session.
+     */
+    enabled: Boolean = PendingFeatureGate.isEnabled(),
 ) {
-    if (!PendingFeatureGate.isEnabled()) return
+    if (!enabled) return
     HoldTextButton(
         onClick = onOpenCodeEntry,
         modifier = modifier.testTag("pending_code_entry"),
@@ -57,8 +62,10 @@ fun PendingCodeEntrySheet(
     onClose: () -> Unit,
     onWellFormedCode: (String) -> Unit = {},
     modifier: Modifier = Modifier,
+    /** Test seam, see [PendingCodeEntryButton]. */
+    enabled: Boolean = PendingFeatureGate.isEnabled(),
 ) {
-    if (!PendingFeatureGate.isEnabled()) return
+    if (!enabled) return
     var raw by remember { mutableStateOf("") }
     var showGenericError by remember { mutableStateOf(false) }
     var showUnavailable by remember { mutableStateOf(false) }

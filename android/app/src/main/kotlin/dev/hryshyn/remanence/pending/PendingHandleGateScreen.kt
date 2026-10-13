@@ -31,8 +31,10 @@ import dev.hryshyn.remanence.ui.motion.rememberAstraMotion
 fun PendingHandleRequiredNotice(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Test seam: production passes the build-time gate (default). */
+    enabled: Boolean = PendingFeatureGate.isEnabled(),
 ) {
-    if (!PendingFeatureGate.isEnabled()) return
+    if (!enabled) return
     AstraEnterTransition(motion = rememberAstraMotion()) {
         Column(
             modifier = modifier

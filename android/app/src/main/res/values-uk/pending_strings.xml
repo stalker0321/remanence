@@ -66,6 +66,7 @@
     <string name="pending_sender_working">надсилаємо…</string>
     <string name="pending_sender_code_note">напишіть його на листівці точно. він перестане працювати після відкриття подарунка.</string>
     <string name="pending_sender_known_v1">ця адреса вже тут. надішліть звичайним способом — нічого не утримано.</string>
+    <string name="pending_sender_deferred">маршрут заморожено. завершіть листівку, і код створиться під час надсилання.</string>
     <string name="pending_sender_invalid">цю адресу не можна використати. перевірте її та спробуйте ще раз.</string>
     <string name="pending_sender_network">не вдалося зв’язатися із сервером. спробуйте ще раз.</string>
     <string name="pending_sender_session">сесія змінилася. за потреби увійдіть знову.</string>

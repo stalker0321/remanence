@@ -82,6 +82,7 @@ class PendingSenderViewModelTest {
         switchingGate: SwitchingGate? = null,
         accountOf: (() -> ProofAccount?)? = null,
         onDraft: (() -> Unit)? = null,
+        onFrozen: ((PendingSendRouteFlow.FrozenIdentity) -> Unit)? = null,
     ): PendingSenderViewModel {
         TinkPrimitives.ensureRegistered()
         val signing = KeysetHandle.generateNew(KeyTemplates.get("ED25519"))
@@ -141,6 +142,7 @@ class PendingSenderViewModelTest {
             servicePinProvider = pinProvider ?: { servicePin },
             sessionGate = sharedGate,
             accountProvider = sharedAccount,
+            onFrozenRoute = onFrozen ?: {},
             scope = scope,
         )
     }
@@ -312,5 +314,39 @@ class PendingSenderViewModelTest {
             viewModel.state.value,
         )
         assertEquals(0, drafts)
+    }
+
+    /**
+     * T186 M12d: the frozen route is handed out at freeze time for the
+     * normal publish boundary — both modes — and an empty sheet defers
+     * instead of faking an empty publication.
+     */
+    @Test
+    fun frozenPendingHandedOutAndDeferredWithoutContent() = runTest {
+        val handed = mutableListOf<PendingSendRouteFlow.FrozenIdentity>()
+        val viewModel = vm(
+            content = PendingSenderContent(emptyList()),
+            onFrozen = handed::add,
+        )
+        viewModel.onDestinationChange("a42@example.test")
+        viewModel.send()
+        testScheduler.advanceUntilIdle()
+        assertEquals(1, handed.size)
+        val deferred = viewModel.state.value as PendingSenderViewModel.State.DeferredForAuthoring
+        assertEquals(target, deferred.identity.deliveryTargetId)
+    }
+
+    @Test
+    fun frozenV1HandedOut() = runTest {
+        val handed = mutableListOf<PendingSendRouteFlow.FrozenIdentity>()
+        val viewModel = vm(
+            freeze = frozenV1(),
+            onFrozen = handed::add,
+        )
+        viewModel.onDestinationChange("known@example.test")
+        viewModel.send()
+        testScheduler.advanceUntilIdle()
+        assertEquals(1, handed.size)
+        assertTrue(viewModel.state.value is PendingSenderViewModel.State.KnownV1)
     }
 }

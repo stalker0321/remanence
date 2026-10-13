@@ -146,6 +146,18 @@ fun PendingSenderSheet(
                         modifier = Modifier.testTag("pending_sender_done"),
                     ) { Text(stringResource(R.string.pending_sender_done)) }
                 }
+                is PendingSenderViewModel.State.DeferredForAuthoring -> {
+                    Text(
+                        stringResource(R.string.pending_sender_deferred),
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.testTag("pending_sender_deferred"),
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Button(
+                        onClick = onClose,
+                        modifier = Modifier.testTag("pending_sender_done"),
+                    ) { Text(stringResource(R.string.pending_sender_done)) }
+                }
                 is PendingSenderViewModel.State.Published -> {
                     Text(
                         current.locatorCode,

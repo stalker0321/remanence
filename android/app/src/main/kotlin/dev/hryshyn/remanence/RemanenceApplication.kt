@@ -1183,6 +1183,7 @@ class AppContainer private constructor(
     fun newPendingSenderViewModel(
         scope: kotlinx.coroutines.CoroutineScope,
         contentPort: dev.hryshyn.remanence.pending.PendingSenderContentPort,
+        onFrozenRoute: (dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity) -> Unit = {},
     ): dev.hryshyn.remanence.pending.PendingSenderViewModel {
         val publishRepo = pendingDeliveryPublishPort
         val sendRepo = pendingSendRoutePort
@@ -1270,6 +1271,7 @@ class AppContainer private constructor(
                     dev.hryshyn.remanence.pending.ProofAccount(summary.userId, summary.activeKeyBundleId)
                 }
             },
+            onFrozenRoute = onFrozenRoute,
             scope = scope,
         )
     }

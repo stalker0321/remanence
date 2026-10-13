@@ -237,6 +237,20 @@ class CreateViewModel(
     val confirmedRecipient: StateFlow<ResolvedHandleSnapshot?> get() = sessionStore.confirmedRecipient
 
     /**
+     * T186 M12d: binds an R1-frozen pending route (EMAIL/PHONE choice at
+     * the recipient step) for the normal publish boundary. The store
+     * keeps confirmed-handle and frozen-route mutually exclusive.
+     */
+    fun onPendingRouteFrozen(identity: dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity) {
+        sessionStore.freezePendingRoute(identity)
+        clearGuardError()
+    }
+
+    /** Frozen pending route for the publish boundary (null when handle-bound). */
+    val pendingRoute: kotlinx.coroutines.flow.StateFlow<dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity?>
+        get() = sessionStore.pendingRoute
+
+    /**
      * T186 M12: authored photo originals for the pending v2 sender (the
      * same retained originals the preview generation keeps). Pure read —
      * no state change. Null unless the pending flag is ON and at least

@@ -71,6 +71,7 @@
     <string name="pending_sender_working">sending…</string>
     <string name="pending_sender_code_note">write it on the card exactly. it stops working after the gift is opened.</string>
     <string name="pending_sender_known_v1">that address is already here. send it the ordinary way — nothing was held back.</string>
+    <string name="pending_sender_deferred">route is frozen. finish your card and the code is created at sending.</string>
     <string name="pending_sender_invalid">that address can’t be used. check it and try again.</string>
     <string name="pending_sender_network">couldn’t reach the server. try again.</string>
     <string name="pending_sender_session">the session changed. sign in again if needed.</string>

@@ -415,6 +415,7 @@ private fun RecipientLookupContent(viewModel: CreateViewModel) {
                         contentPort = dev.hryshyn.remanence.pending.PendingSenderContentPort {
                             viewModel.pendingSenderContent()
                         },
+                        onFrozenRoute = viewModel::onPendingRouteFrozen,
                     )
                 }
                 dev.hryshyn.remanence.pending.PendingSenderSheet(

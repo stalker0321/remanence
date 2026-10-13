@@ -66,6 +66,7 @@
     <string name="pending_sender_working">отправляем…</string>
     <string name="pending_sender_code_note">напишите его на открытке точно. он перестанет работать после открытия подарка.</string>
     <string name="pending_sender_known_v1">этот адрес уже здесь. отправьте обычным способом — ничего не удержано.</string>
+    <string name="pending_sender_deferred">маршрут заморожен. закончите открытку, и код создастся при отправке.</string>
     <string name="pending_sender_invalid">этот адрес нельзя использовать. проверьте его и попробуйте ещё раз.</string>
     <string name="pending_sender_network">не удалось связаться с сервером. попробуйте ещё раз.</string>
     <string name="pending_sender_session">сессия изменилась. при необходимости войдите снова.</string>

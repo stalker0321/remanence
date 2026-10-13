@@ -46,11 +46,15 @@ fun interface PendingSenderIdentityPort {
  * for the existing zero-escrow pipeline (no pending material, no
  * escrow, no fallback ever); `PENDING_V2` requires the out-of-band
  * service pin (null ⇒ BLOCKED, never an invented UUID), ARK-ready
- * identity (null ⇒ recovery BLOCKED) and content (null ⇒ BLOCKED).
- * One held transaction (T188 C3): the ORIGINAL R1 owner + lease is
- * rechecked after the identity/content awaits and before every side
- * effect, and pinned across the publish-flow boundary; bearers are
- * re-read for the same live lease per call, never substituted.
+ * identity (null ⇒ recovery BLOCKED) and content. When authored
+ * content is present the sheet publishes immediately; when the sheet
+ * has no content yet the frozen route is handed out for the normal
+ * publish boundary instead (`DeferredForAuthoring` — never a fake
+ * empty publication). One held transaction (T188 C3): the ORIGINAL R1
+ * owner + lease is rechecked after the identity/content awaits and
+ * before every side effect, and pinned across the publish-flow
+ * boundary; bearers are re-read for the same live lease per call,
+ * never substituted.
  */
 class PendingSenderViewModel(
     private val freezePort: PendingSendRouteFlow.SendRoutePort,
@@ -61,6 +65,13 @@ class PendingSenderViewModel(
     private val sessionGate: PendingRetirementSessionGate,
     private val accountProvider: suspend () -> ProofAccount?,
     private val clockSeconds: () -> Long = { System.currentTimeMillis() / 1000L },
+    /**
+     * T186 M12d: frozen-route handoff. Invoked with the frozen identity
+     * as soon as R1 freezes (BOTH modes), so the caller can bind it for
+     * the normal publish boundary (session store) even when this sheet
+     * defers publication. Defaults to no-op (unit surfaces).
+     */
+    private val onFrozenRoute: (PendingSendRouteFlow.FrozenIdentity) -> Unit = {},
     scope: CoroutineScope? = null,
 ) : ViewModel() {
 
@@ -75,6 +86,17 @@ class PendingSenderViewModel(
          */
         data class KnownV1(
             val identity: PendingSendRouteFlow.FrozenIdentity.V1,
+        ) : State
+
+        /**
+         * T186 M12d: frozen PENDING_V2 route with no authored content at
+         * the sheet — publication is deferred to the normal publish
+         * boundary (which seals the authored payload), never faked
+         * empty here. The identity is already handed out via
+         * [onFrozenRoute].
+         */
+        data class DeferredForAuthoring(
+            val identity: PendingSendRouteFlow.FrozenIdentity.Pending,
         ) : State
 
         data object Publishing : State
@@ -204,10 +226,19 @@ class PendingSenderViewModel(
         }
         if (!checkTxn(txn)) return State.Failed(Message.SESSION_CHANGED)
         return when (frozen) {
-            is PendingSendRouteFlow.State.Frozen -> when (val identity = frozen.identity) {
-                is PendingSendRouteFlow.FrozenIdentity.V1 -> State.KnownV1(identity)
-                is PendingSendRouteFlow.FrozenIdentity.Pending ->
-                    publishPending(txn, identity, capsuleId)
+            is PendingSendRouteFlow.State.Frozen -> {
+                // The route is frozen: hand it out for the normal publish
+                // boundary regardless of what this sheet does next.
+                try {
+                    onFrozenRoute(frozen.identity)
+                } catch (_: Exception) {
+                    return State.Failed(Message.GENERIC)
+                }
+                when (val identity = frozen.identity) {
+                    is PendingSendRouteFlow.FrozenIdentity.V1 -> State.KnownV1(identity)
+                    is PendingSendRouteFlow.FrozenIdentity.Pending ->
+                        publishPending(txn, identity, capsuleId)
+                }
             }
             is PendingSendRouteFlow.State.Failed -> State.Failed(mapRouteFailure(frozen.reason))
             else -> State.Failed(Message.GENERIC)
@@ -255,7 +286,12 @@ class PendingSenderViewModel(
         }
         if (!checkTxn(txn)) return State.Failed(Message.SESSION_CHANGED)
         val photos = content?.photoJpegs
-        if (photos.isNullOrEmpty()) return State.Failed(Message.BLOCKED)
+        if (photos.isNullOrEmpty()) {
+            // No authored content at the sheet: defer to the normal
+            // publish boundary (already handed out above) — never a
+            // fake empty publication here.
+            return State.DeferredForAuthoring(frozen)
+        }
         val channel = when (frozen.channel) {
             "email" -> PendingPublishCrypto.CHANNEL_EMAIL
             "sms" -> PendingPublishCrypto.CHANNEL_SMS

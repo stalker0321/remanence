@@ -1,0 +1,158 @@
+syntax = "proto3";
+
+package dev.hryshyn.remanence.protocol.delivery_v2;
+
+option java_package = "dev.hryshyn.remanence.protocol.delivery_v2";
+option java_multiple_files = true;
+option java_outer_classname = "RemanenceDeliveryV2";
+option optimize_for = LITE_RUNTIME;
+
+// T185 M1 freeze. NEW package; v1 tags untouched. Deterministic protobuf:
+// no maps/floats, UUIDs 16 network-order bytes, SHA-256 32 bytes.
+// channel: 1 = EMAIL, 2 = SMS; zero/other rejected.
+message AddressOpening {
+  uint32 normalization_version = 1;
+  uint32 channel = 2;
+  string normalized_destination = 3;
+  bytes salt = 4;  // 32 random bytes, private until inside claimed envelope
+}
+
+message KeyCommitmentInput {
+  uint32 version = 1;  // 1
+  bytes capsule_id = 2;  // UUID bytes exactly 16
+  bytes delivery_target_id = 3;  // UUID bytes exactly 16
+  bytes capsule_aead_keyset = 4;
+}
+
+message ArtifactAadV2 {
+  uint32 protocol_version = 1;  // 2
+  bytes capsule_id = 2;  // UUID bytes exactly 16
+  bytes blob_id = 3;  // UUID bytes exactly 16
+  uint32 artifact_kind = 4;  // existing kind numbers 1, 2, 3
+  sint32 ordinal = 5;  // -1 except PHOTO 0..4
+  bytes sender_user_id = 6;  // UUID bytes exactly 16
+  bytes delivery_target_id = 7;  // NEVER final recipient user
+}
+
+message ArtifactBindingV2 {
+  bytes blob_id = 1;  // UUID bytes exactly 16
+  uint32 kind = 2;
+  sint32 ordinal = 3;
+  uint64 ciphertext_size = 4;
+  bytes ciphertext_sha256 = 5;  // SHA256 exactly 32
+}
+
+message PendingPublishStatementV2 {
+  uint32 protocol_version = 1;  // 2
+  bytes capsule_id = 2;  // UUID bytes exactly 16
+  bytes sender_user_id = 3;  // UUID bytes exactly 16
+  bytes sender_key_bundle_id = 4;  // UUID bytes exactly 16
+  bytes delivery_target_id = 5;  // UUID bytes exactly 16
+  bytes address_commitment = 6;  // D, 32 bytes
+  bytes key_commitment = 7;  // KC, 32 bytes
+  int64 created_at_epoch_seconds = 8;
+  int64 claim_expires_at_epoch_seconds = 9;
+  uint32 claim_policy_version = 10;  // 1, this contract
+  bytes claim_signing_key_id = 11;  // deployment-pinned SERVICE UUID, 16 bytes
+  repeated ArtifactBindingV2 artifacts = 12;
+}
+
+message ClaimBindingV1 {
+  uint32 binding_version = 1;  // 1
+  uint32 capsule_protocol_version = 2;  // 2
+  bytes capsule_id = 3;  // UUID bytes exactly 16
+  bytes delivery_target_id = 4;  // UUID bytes exactly 16
+  bytes publish_statement_sha256 = 5;  // 32 bytes
+  bytes address_commitment = 6;  // D, 32 bytes
+  bytes recipient_user_id = 7;  // UUID bytes exactly 16
+  bytes recipient_key_bundle_id = 8;  // UUID bytes exactly 16
+  bytes recipient_encryption_public_keyset_sha256 = 9;  // 32 bytes
+  bytes claim_id = 10;  // UUID bytes exactly 16
+  int64 claimed_at_epoch_seconds = 11;
+  uint32 claim_policy_version = 12;
+  bytes claim_signing_key_id = 13;  // 16 bytes
+}
+
+message ClaimedEnvelopeContextV2 {
+  uint32 protocol_version = 1;  // 2
+  bytes capsule_id = 2;  // UUID bytes exactly 16
+  bytes delivery_target_id = 3;  // UUID bytes exactly 16
+  bytes sender_user_id = 4;  // UUID bytes exactly 16
+  bytes recipient_user_id = 5;  // UUID bytes exactly 16
+  bytes recipient_key_bundle_id = 6;  // UUID bytes exactly 16
+  bytes publish_statement_sha256 = 7;  // 32 bytes
+  bytes claim_binding_sha256 = 8;  // 32 bytes
+}
+
+message ClaimedEnvelopePlaintextV2 {
+  ClaimedEnvelopeContextV2 binding = 1;
+  bytes capsule_aead_keyset = 2;
+  AddressOpening address_opening = 3;
+}
+
+// P1-frozen auxiliary claim-possession messages. Tags reserved here so
+// runtime never improvises them.
+message ClaimChallengeV1 {
+  bytes challenge_id = 1;  // UUID bytes exactly 16
+  bytes capsule_id = 2;  // UUID bytes exactly 16
+  bytes delivery_target_id = 3;  // UUID bytes exactly 16
+  bytes recipient_user_id = 4;  // UUID bytes exactly 16
+  bytes recipient_key_bundle_id = 5;  // UUID bytes exactly 16
+  bytes session_id = 6;  // UUID bytes exactly 16
+  bytes nonce_sha256 = 7;  // 32 bytes
+  int64 expires_at_epoch_seconds = 8;
+}
+
+message ClaimIntentV2 {
+  uint32 intent_version = 1;  // 1
+  bytes operation_id = 2;  // UUID bytes exactly 16
+  bytes capsule_id = 3;  // UUID bytes exactly 16
+  bytes delivery_target_id = 4;  // UUID bytes exactly 16
+  bytes publish_statement_sha256 = 5;  // 32 bytes
+  bytes proof_id = 6;  // UUID bytes exactly 16
+  bytes challenge_id = 7;  // UUID bytes exactly 16
+  bytes recipient_user_id = 8;  // UUID bytes exactly 16
+  bytes recipient_key_bundle_id = 9;  // UUID bytes exactly 16
+  bytes session_id = 10;  // UUID bytes exactly 16
+  bytes nonce = 11;  // 32 bytes, transient over TLS, never persisted
+  bytes nonce_sha256 = 12;  // 32 bytes
+  bool bind_alias = 13;
+}
+
+// P1-frozen escrow payload: exact byte schema for the sealed pending-key
+// deposit. Field numbers frozen. Exact K parser accepts ONLY the single
+// enabled symmetric keyset; HPKE/Ed25519 keysets, ARK-shaped bytes,
+// malformed K, mismatched openings and extra secret fields are rejected
+// by the vault adapter before storage, without echo/logging.
+message PendingEscrowPlaintextV1 {
+  uint32 escrow_version = 1;  // 1
+  uint32 capsule_protocol_version = 2;  // 2
+  bytes capsule_id = 3;  // UUID bytes exactly 16
+  bytes delivery_target_id = 4;  // UUID bytes exactly 16
+  bytes sender_user_id = 5;  // UUID bytes exactly 16
+  bytes publish_statement_sha256 = 6;  // H, 32 bytes
+  bytes address_commitment = 7;  // D, 32 bytes
+  bytes key_commitment = 8;  // KC, 32 bytes
+  int64 claim_expires_at_epoch_seconds = 9;
+  bytes capsule_aead_keyset = 10;  // exact K bytes (opaque to DB layer)
+  AddressOpening address_opening = 11;
+}
+
+// P1-frozen canonical escrow AAD. The KMS EncryptionContext (production)
+// or dev-AEAD AAD (dev/test) is derived EXACTLY as:
+//   {purpose: "remanence-pending-v1",
+//    binding: hex(SHA256(canonical_PendingEscrowAadV1))}.
+// Workers rebuild it from the verified S; never trust stored AAD.
+message PendingEscrowAadV1 {
+  uint32 aad_version = 1;  // 1
+  string purpose = 2;  // exactly "PENDING_CAPSULE_KEY"
+  uint32 capsule_protocol_version = 3;  // 2
+  bytes capsule_id = 4;  // UUID bytes exactly 16
+  bytes delivery_target_id = 5;  // UUID bytes exactly 16
+  bytes sender_user_id = 6;  // UUID bytes exactly 16
+  bytes publish_statement_sha256 = 7;  // H, 32 bytes
+  bytes address_commitment = 8;  // D, 32 bytes
+  bytes key_commitment = 9;  // KC, 32 bytes
+  uint32 claim_policy_version = 10;  // 1
+  int64 claim_expires_at_epoch_seconds = 11;
+}

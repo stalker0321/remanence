@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "note": "Real-Tink M1 vectors. No private key material stored.",
+  "sender_ed25519_public_keyset_b64": "CPiXj/kEEmsKXwo3dHlwZS5nb29nbGVhcGlzLmNvbS9nb29nbGUuY3J5cHRvLnRpbmsuRWQyNTUxOVB1YmxpY0tleRIiEiD9Uup1iuGlvG8Y0AAv6WzkcbGiSbG5yIxDPPLWPjwBaRgDEAEY+JeP+QQgAQ==",
+  "pending_publish_domain_input_hex": "706f73746d61726b2f70656e64696e672d7075626c6973682f76320008021210111111112222333344445555555555551a100101010102020303040405050505050522100b0b0b0b1c1c2d2d3e3e4f4f4f4f4f4f2a10aaaaaaaabbbbccccddddeeeeeeeeeeee32200f3e5a58f2e94f1923e0410be469bcc8a911b78107b0c5364834a63812d9fb683a20d383bc3ab1ce385739a02a05b91fa1ce6a28e094a9e9e978c0ef15844f84ea3040f8f6dbd90648f89291e10650015a109f9f9f9f8e8e7d7d6c6c5b5b5b5b5b5b62390a10ccccccccddddeeeeffff000000000001100320f9032a205555555555555555555555555555555555555555555555555555555555555555",
+  "pending_publish_signature_69_hex": "014f23cbf8c4088946eb1705cc7a74ac0b4a5a836359684e2fe18057181acecf47c0e2fe350c9ce7416321dc68f3de56e4fc21b87dd539c742e12e67de5adc731a179e6d06",
+  "aead_template": "AES256_GCM (Tink, runtime-generated key; vector ciphertext below is one instance)",
+  "aead_aad_hex": "706f73746d61726b2f61727469666163742f76320008021210111111112222333344445555555555551a10ccccccccddddeeeeffff00000000000120033210010101010202030304040505050505053a10aaaaaaaabbbbccccddddeeeeeeeeeeee",
+  "aead_plaintext_utf8": "pending-artifact-plaintext-vector-01",
+  "aead_ciphertext_b64": "AULjc1OXoWhjcHA1Q+l89yk7LMh1t7xEISFRa0C+VPE4yDbrIXdcj0aDjAizJZZWGzzpz7322H9dcdYlDxjGt5l5W6oy",
+  "hpke_note": "Context pinned in canonical fixture; round trip uses ephemeral keypairs at test runtime (no stored privates)."
+}

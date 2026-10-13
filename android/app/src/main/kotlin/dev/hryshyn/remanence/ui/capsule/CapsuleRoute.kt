@@ -102,6 +102,14 @@ internal fun CapsuleRoute(
     revocations: Flow<String>,
     onClose: () -> Unit,
     onFailure: () -> Unit = {},
+    /**
+     * T186: fired once with the capsule id when the route publishes Ready
+     * with a SUPPORTED presentation (Photos/Ber1/Collage). Never fired for
+     * Loading/Failed/Unsupported. The receiver (application container)
+     * re-validates the live grant + owner before enqueueing retirement;
+     * display never waits for it.
+     */
+    onSupportedReady: (capsuleId: String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var state by remember(grantId) {
@@ -114,6 +122,9 @@ internal fun CapsuleRoute(
     // decrypt/decode can never publish Ready afterwards.
     val revoked = remember(grantId) { mutableStateOf(false) }
 
+    // T186: capsule id of the published Ready state, for the retirement
+    // callback. Set only on successful load; cleared on revoke/failure.
+    var readyCapsuleId by remember(grantId) { mutableStateOf<String?>(null) }
     // Bounded in-memory verified-cover cache shared across this route's opens.
     // Never on disk, keyed by the sealed digest, never logged.
     val artworkCache = remember { ArtworkCache() }
@@ -139,6 +150,7 @@ internal fun CapsuleRoute(
         revocations.collect { revokedId ->
             if (revokedId == grantId) {
                 revoked.value = true
+                readyCapsuleId = null
                 (state as? CapsuleRouteState.Ready)?.presentation?.close()
                 state = CapsuleRouteState.Failed(CapsuleRouteFailure.CLOSED)
             }
@@ -228,12 +240,31 @@ internal fun CapsuleRoute(
                 return@LaunchedEffect
             }
             state = loaded
+            readyCapsuleId = if (loaded is CapsuleRouteState.Ready) binding.capsuleId else null
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
             (state as? CapsuleRouteState.Ready)?.presentation?.close()
+            readyCapsuleId = null
             onFailure()
             state = CapsuleRouteState.Failed(CapsuleRouteFailure.CANNOT_OPEN)
+        }
+    }
+
+    // T186: genuine supported-presentation signal. Fires once per grant when
+    // Ready carries a supported presentation; the container re-validates the
+    // live grant + owner account before enqueueing. Unsupported never fires.
+    val supportedReadyId = (state as? CapsuleRouteState.Ready)?.let { ready ->
+        if (ready.presentation is CapsulePresentation.Unsupported) null else readyCapsuleId
+    }
+    LaunchedEffect(grantId, supportedReadyId) {
+        if (supportedReadyId != null) {
+            try {
+                validateLiveGrant()
+            } catch (_: Exception) {
+                return@LaunchedEffect
+            }
+            onSupportedReady(supportedReadyId)
         }
     }
 

@@ -462,6 +462,28 @@ private fun RootSurface(
                 revocations = rootViewModel.capsuleRevocations,
                 onClose = rootViewModel::closeCapsule,
                 onFailure = { rootViewModel.revokePresentationForRouteFailure(grantId) },
+                // T186: genuine supported-presentation hook. Nonblocking: the
+                // container persists + schedules on its application scope and
+                // re-validates grant + owner; display never waits for it.
+                onSupportedReady = { capsuleId ->
+                    val owner = (authState as? AuthUiState.Authenticated)?.userId
+                    if (owner != null) {
+                        var grantLive = false
+                        try {
+                            rootViewModel.requireLivePresentationGrant(grantId)
+                            grantLive = true
+                        } catch (_: Exception) {
+                            grantLive = false
+                        }
+                        container.notifySupportedPresentation(
+                            ownerUserId = owner,
+                            capsuleId = capsuleId,
+                            grantLive = grantLive,
+                            routeReady = true,
+                            supported = true,
+                        )
+                    }
+                },
             )
         },
         scanContent = {

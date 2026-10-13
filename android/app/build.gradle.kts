@@ -24,6 +24,13 @@ val googleSignInEnabled = providers.gradleProperty("remanence.google.enabled").o
     require(it == "true" || it == "false")
     require(it != "true" || recoveryEnabled == "true") { "Google onboarding requires recovery" }
 }
+// T186: experimental pending-recipient journey. Default OFF everywhere;
+// only the debug variant consumes this opt-in property. Release and beta
+// are hard-disabled so an experimental build can never ride the live/beta
+// pipeline. Debug enables the isolated .pendingtest package/label.
+val pendingEnabled = (findProperty("remanence.pending.enabled") as? String ?: "false").lowercase().also {
+    require(it == "true" || it == "false") { "remanence.pending.enabled must be true or false" }
+}
 val remanenceAndroidVersionCode =
     providers.gradleProperty("remanence.androidVersionCode").get().toInt()
 
@@ -40,6 +47,10 @@ android {
         versionName = remanenceProductVersion
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("boolean", "REMANENCE_PLAY_BETA", "false")
+        // T186: launcher label placeholder. Default points at the existing
+        // @string/app_name; the pending debug block below repoints it at the
+        // generated @string/pending_app_name. No duplicated app_name value.
+        manifestPlaceholders["pendingAppLabel"] = "@string/app_name"
     }
 
     buildTypes {
@@ -49,6 +60,24 @@ android {
                 applicationIdSuffix = ".recoverytest"
                 versionNameSuffix = "-recovery-test"
             }
+            if (pendingEnabled == "true") {
+                // T186 isolated experimental install: never overwrites beta.
+                // Distinct identity does NOT mean disabled recovery: the
+                // pending journey preserves mandatory PRF/Google readiness,
+                // so recovery (and the normal Google config) stays ON.
+                // No bypass: the standard recoveryEnabled/google checks above
+                // still apply.
+                check(recoveryEnabled == "true") {
+                    "remanence.pending.enabled requires remanence.recovery.enabled=true (PRF/Google readiness preserved)"
+                }
+                applicationIdSuffix = ".pendingtest"
+                versionNameSuffix = "-pending-test"
+                // Distinct launcher label via a separate generated resource
+                // (never a second app_name value): the main manifest reads
+                // ${pendingAppLabel}, defaulting to @string/app_name.
+                resValue("string", "pending_app_name", "Remanence Pending Test")
+                manifestPlaceholders["pendingAppLabel"] = "@string/pending_app_name"
+            }
             buildConfigField(
                 "String",
                 "API_BASE_URL",
@@ -57,6 +86,8 @@ android {
             buildConfigField("boolean", "REMANENCE_V2_LINE_LOCALIZATION", v2LineLocalizationEnabled)
             buildConfigField("boolean", "REMANENCE_RECOVERY_ENABLED", recoveryEnabled)
             buildConfigField("boolean", "REMANENCE_GOOGLE_SIGN_IN_ENABLED", googleSignInEnabled)
+            // T186: pending journey gate. Debug-only opt-in; release/beta below hard-OFF.
+            buildConfigField("boolean", "REMANENCE_PENDING_ENABLED", pendingEnabled)
         }
         named("release") {
             buildConfigField(
@@ -67,6 +98,8 @@ android {
             buildConfigField("boolean", "REMANENCE_V2_LINE_LOCALIZATION", "false")
             buildConfigField("boolean", "REMANENCE_RECOVERY_ENABLED", "false")
             buildConfigField("boolean", "REMANENCE_GOOGLE_SIGN_IN_ENABLED", "false")
+            // T186: pending journey is debug-only; release can never enable it.
+            buildConfigField("boolean", "REMANENCE_PENDING_ENABLED", "false")
         }
         // Closed Play beta is explicit, non-debuggable and separate from the
         // legacy release defaults. Never publish the recoverytest debug APK.
@@ -78,6 +111,8 @@ android {
             buildConfigField("boolean", "REMANENCE_RECOVERY_ENABLED", "true")
             buildConfigField("boolean", "REMANENCE_GOOGLE_SIGN_IN_ENABLED", "true")
             buildConfigField("boolean", "REMANENCE_V2_LINE_LOCALIZATION", "false")
+            // T186: pending journey is debug-only; beta can never enable it.
+            buildConfigField("boolean", "REMANENCE_PENDING_ENABLED", "false")
             buildConfigField("String", "API_BASE_URL",
                 quoteBuildConfigString(remanenceApiBaseUrl("https://invalid.invalid/")))
             versionNameSuffix = "-beta"

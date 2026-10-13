@@ -43,7 +43,14 @@ dependencies {
     // OpenCV Java bindings: compiled/tested against the desktop 4.10 jar on
     // this VPS (identical org.opencv API); the official Android AAR carrying
     // device natives is packaged at the :app level.
-    val opencvDesktopJar = file("/usr/share/java/opencv4/opencv-4100.jar")
+    // T186 portability: optional -Premanence.opencvDesktopJar overrides the
+    // default absolute path so the VM can use a copied identical jar under
+    // the VM user directory (no /usr/share install, no sudo). Default stays
+    // the current host path. No algorithm/test change.
+    val opencvDesktopJar = file(
+        (findProperty("remanence.opencvDesktopJar") as? String)
+            ?: "/usr/share/java/opencv4/opencv-4100.jar",
+    )
     require(opencvDesktopJar.exists()) {
         "OpenCV desktop jar missing at $opencvDesktopJar; install libopencv-java as documented in docs/development.md"
     }

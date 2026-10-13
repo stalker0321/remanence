@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- T186 experimental pending-recipient code entry. Secondary path only;
+         the ordinary scan stays primary. Generic errors: never echo whether
+         a code exists or which character failed. -->
+    <string name="pending_code_entry">the card has a code</string>
+    <string name="pending_code_title">enter the code from the card</string>
+    <string name="pending_code_body">five characters, as printed. the ordinary scan still works for earlier cards.</string>
+    <string name="pending_code_hint">code</string>
+    <string name="pending_code_continue">continue</string>
+    <string name="pending_code_cancel">back</string>
+    <string name="pending_code_invalid">that code can’t be used. check it and try again.</string>
+    <string name="pending_code_unavailable">code lookup isn’t available yet in this test build.</string>
+</resources>

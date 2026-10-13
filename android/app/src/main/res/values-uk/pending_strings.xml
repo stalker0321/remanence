@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="pending_code_entry">На листівці є код</string>
+    <string name="pending_code_title">введіть код з листівки</string>
+    <string name="pending_code_body">п’ять символів, як надруковано. звичайне сканування й надалі працює для раніше отриманих листівок.</string>
+    <string name="pending_code_hint">код</string>
+    <string name="pending_code_continue">продовжити</string>
+    <string name="pending_code_cancel">назад</string>
+    <string name="pending_code_invalid">цей код не можна використати. перевірте його та спробуйте ще раз.</string>
+    <string name="pending_code_unavailable">пошук за кодом поки недоступний у цій тестовій збірці.</string>
+</resources>

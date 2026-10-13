@@ -61,6 +61,10 @@ fun ScanScreen(
     onScreenDispose: () -> Unit = viewModel::resetSession,
 ) {
     val matchState by viewModel.matchState.collectAsStateWithLifecycle()
+    // T186: pending code sheet state. Local only; feature-gated composables
+    // render nothing when the pending build flag is OFF, so beta behavior
+    // is unchanged.
+    var showPendingCode by remember { mutableStateOf(false) }
 
     DisposableEffect(Unit) {
         onDispose(onScreenDispose)
@@ -109,6 +113,17 @@ fun ScanScreen(
                     requestPermissionOnAttach,
                     previewMaxHeight = previewBudget,
                 )
+                // T186: secondary code path. Ordinary scan stays primary;
+                // the gated button renders nothing unless the pending build
+                // flag is ON. Sheet returns to this same capture surface.
+                dev.hryshyn.remanence.pending.PendingCodeEntryButton(
+                    onOpenCodeEntry = { showPendingCode = true },
+                )
+                if (showPendingCode) {
+                    dev.hryshyn.remanence.pending.PendingCodeEntrySheet(
+                        onClose = { showPendingCode = false },
+                    )
+                }
                 }
             }
             // ASTRA-FIDELITY: post-scan waiting states share one waiting

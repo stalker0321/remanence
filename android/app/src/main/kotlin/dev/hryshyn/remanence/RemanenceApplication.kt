@@ -148,7 +148,7 @@ class AppContainer private constructor(
     kekBoundaryOverride: KekBoundary?,
     private val identityLoadOverride: (() -> IdentityBundleRepository.LoadResult)?,
     @Suppress("UNUSED_PARAMETER") constructionMarker: Unit,
-) {
+) : dev.hryshyn.remanence.pending.PendingRetirementHost {
 
     constructor(
         context: Context,
@@ -777,6 +777,86 @@ class AppContainer private constructor(
     /** Shared app-scoped source/owner/scan-generation grant binding authority. */
     internal val presentationGrants: PresentationGrantAuthority by lazy {
         PresentationGrantAuthority()
+    }
+
+    // -- T186 experimental pending-retirement host (isolated, default OFF) --
+    override val pendingContext: Context get() = appContext
+
+    override val pendingOwnerId: String?
+        get() = try {
+            currentAccountStore.load()?.userId?.takeIf { it.isNotBlank() }
+        } catch (_: Exception) {
+            null
+        }
+
+    /** Application-owned scope: outlives any screen; never a disposable UI scope. */
+    override val pendingAppScope: kotlinx.coroutines.CoroutineScope by lazy {
+        kotlinx.coroutines.CoroutineScope(
+            kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO,
+        )
+    }
+
+    /**
+     * STAGE 1 scaffold port: fail-closed until T185 M2/M3 mount R15. Never
+     * reports fake success; the queue retains everything with backoff.
+     */
+    val pendingRetirementPort: dev.hryshyn.remanence.pending.PendingRetirementPort by lazy {
+        dev.hryshyn.remanence.pending.UnconfiguredPendingRetirementPort
+    }
+
+    override val pendingOutbox: dev.hryshyn.remanence.pending.PendingRetirementOutbox by lazy {
+        dev.hryshyn.remanence.pending.PendingRetirementOutbox(appContext.filesDir, pendingRetirementPort)
+    }
+
+    /** Real session-lease fence: capture before each send, recheck after. */
+    override val pendingSessionGate: dev.hryshyn.remanence.pending.PendingRetirementSessionGate by lazy {
+        object : dev.hryshyn.remanence.pending.PendingRetirementSessionGate {
+            override fun capture() = apiStack.captureSessionRequestLease()
+            override fun accessTokenFor(
+                lease: dev.hryshyn.remanence.core.data.network.SessionRequestLease,
+            ) = apiStack.accessTokenForSessionRequestLease(lease)
+            override fun isLive(
+                lease: dev.hryshyn.remanence.core.data.network.SessionRequestLease,
+            ) = apiStack.isSessionRequestLeaseLive(lease)
+        }
+    }
+
+    /**
+     * Production presentation callback. Call ONLY after genuine supported
+     * presentation (live grant + Ready supported content). Nonblocking: the
+     * viewer returns immediately; persistence + drain run on [pendingAppScope]
+     * and WorkManager. Backend failure never affects display/entitlement.
+     */
+    fun notifySupportedPresentation(
+        ownerUserId: String,
+        capsuleId: String,
+        grantLive: Boolean,
+        routeReady: Boolean,
+        supported: Boolean,
+    ) {
+        if (!dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled()) return
+        val kind = if (supported) {
+            dev.hryshyn.remanence.pending.PendingPresentationGate.PresentationKind.SUPPORTED
+        } else {
+            dev.hryshyn.remanence.pending.PendingPresentationGate.PresentationKind.UNSUPPORTED
+        }
+        if (!dev.hryshyn.remanence.pending.PendingPresentationGate.shouldEnqueueRetirement(
+                featureEnabled = true, grantLive = grantLive, routeReady = routeReady, kind = kind,
+            )
+        ) {
+            return
+        }
+        // Fence against account switch between presentation and callback.
+        val current = try {
+            currentAccountStore.load()?.userId?.takeIf { it.isNotBlank() }
+        } catch (_: Exception) {
+            null
+        } ?: return
+        if (current != ownerUserId) return
+        // Application-owned scope inside; never the caller's screen scope.
+        dev.hryshyn.remanence.pending.PendingRetirementScheduler.enqueueAfterPresentation(
+            this, ownerUserId, capsuleId,
+        )
     }
 
     /** FIX-M1-007-07: the current account lives in the real local_account table. */

@@ -34,6 +34,8 @@ class PendingHandleSetupViewModelTest {
         val viewModel = vm(this, handleless(), calls = calls)
         viewModel.onFieldChange("Taken")
         viewModel.save()
+        // StandardTestDispatcher: let the launched commit run.
+        testScheduler.advanceUntilIdle()
         // Normalized (lowercased) handle committed; UUID/keys/tokens
         // untouched — the ONLY write is the fenced handle update.
         assertEquals(
@@ -50,6 +52,8 @@ class PendingHandleSetupViewModelTest {
         val viewModel = vm(this, handleless(), liveAfter = false, calls = calls)
         viewModel.onFieldChange("taken")
         viewModel.save()
+        // StandardTestDispatcher: let the launched commit run.
+        testScheduler.advanceUntilIdle()
         assertEquals(
             PendingHandleSetupViewModel.SetupState.Failed(
                 PendingHandleSetupViewModel.PendingHandleSetupMessage.SESSION_CHANGED,
@@ -69,6 +73,8 @@ class PendingHandleSetupViewModelTest {
         )
         viewModel.onFieldChange("taken")
         viewModel.save()
+        // StandardTestDispatcher: let the launched commit run.
+        testScheduler.advanceUntilIdle()
         assertEquals(
             PendingHandleSetupViewModel.SetupState.Failed(
                 PendingHandleSetupViewModel.PendingHandleSetupMessage.SESSION_CHANGED,
@@ -87,6 +93,8 @@ class PendingHandleSetupViewModelTest {
         )
         viewModel.onFieldChange("taken")
         viewModel.save()
+        // StandardTestDispatcher: let the launched commit run.
+        testScheduler.advanceUntilIdle()
         assertEquals(
             PendingHandleSetupViewModel.SetupState.Failed(
                 PendingHandleSetupViewModel.PendingHandleSetupMessage.CONFLICT,
@@ -118,6 +126,8 @@ class PendingHandleSetupViewModelTest {
         val viewModel = vm(this, bound, calls = calls)
         viewModel.onFieldChange("taken")
         viewModel.save()
+        // StandardTestDispatcher: let the launched commit run.
+        testScheduler.advanceUntilIdle()
         assertEquals(
             PendingHandleSetupViewModel.SetupState.Committed("taken"),
             viewModel.state.value,
@@ -132,6 +142,8 @@ class PendingHandleSetupViewModelTest {
         val viewModel = vm(this, bound, calls = calls)
         viewModel.onFieldChange("other")
         viewModel.save()
+        // StandardTestDispatcher: let the launched commit run.
+        testScheduler.advanceUntilIdle()
         assertEquals(
             PendingHandleSetupViewModel.SetupState.Failed(
                 PendingHandleSetupViewModel.PendingHandleSetupMessage.CONFLICT,
@@ -147,6 +159,8 @@ class PendingHandleSetupViewModelTest {
         val viewModel = vm(this, null, calls = calls)
         viewModel.onFieldChange("taken")
         viewModel.save()
+        // StandardTestDispatcher: let the launched commit run.
+        testScheduler.advanceUntilIdle()
         assertEquals(
             PendingHandleSetupViewModel.SetupState.Failed(
                 PendingHandleSetupViewModel.PendingHandleSetupMessage.SESSION_CHANGED,

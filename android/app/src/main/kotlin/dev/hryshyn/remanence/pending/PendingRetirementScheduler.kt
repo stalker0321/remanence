@@ -81,6 +81,13 @@ interface PendingRetirementHost {
     val pendingOutbox: PendingRetirementOutbox
     val pendingSessionGate: PendingRetirementSessionGate?
     val pendingOwnerId: String?
+
+    /**
+     * T188-B2: the ACTUAL API base the app stack was constructed with
+     * (not just the BuildConfig constant), so the isolation guard below
+     * verifies the real endpoint before any byte is sent.
+     */
+    val pendingApiBaseUrl: String
 }
 
 /**
@@ -96,28 +103,33 @@ class PendingRetirementWorker(
 
     override suspend fun doWork(): Result {
         if (!PendingFeatureGate.isEnabled()) return Result.success()
-        // A pending-enabled build must never send to the live beta backend.
-        // If misconfigured, keep everything queued and stop.
-        val baseUrl = try {
-            dev.hryshyn.remanence.BuildConfig.API_BASE_URL
-        } catch (_: Exception) {
-            ""
-        }
-        if (!PendingFeatureGate.isIsolatedApiAccepted(baseUrl)) return Result.success()
         val host = try {
             (applicationContext as? dev.hryshyn.remanence.RemanenceApplication)?.container
                 as? PendingRetirementHost
         } catch (_: Exception) {
             null
         } ?: return Result.success()
+        // T188-B2: guard the ACTUAL constructed API base, not the
+        // BuildConfig constant. Misconfigured → keep queued, send nothing.
+        val baseUrl = try {
+            host.pendingApiBaseUrl
+        } catch (_: Exception) {
+            ""
+        }
+        if (baseUrl.isBlank() || !PendingFeatureGate.isIsolatedApiAccepted(baseUrl)) {
+            return Result.success()
+        }
         val owner = try {
             host.pendingOwnerId?.takeIf { it.isNotBlank() }
         } catch (_: Exception) {
             null
         } ?: return Result.success()
         return try {
-            host.pendingOutbox.drain(owner, host.pendingSessionGate)
-            if (host.pendingOutbox.pendingCount(owner) == 0) Result.success()
+            // T188-B3: a corrupt queue reports fault (quarantined aside),
+            // which rearms via backoff retry — never empty-success, and the
+            // failed intent stays queued. No UI thread involved.
+            val outcome = host.pendingOutbox.drainDetailed(owner, host.pendingSessionGate)
+            if (!outcome.fault && outcome.remaining == 0) Result.success()
             else Result.retry()
         } catch (_: Exception) {
             Result.retry()

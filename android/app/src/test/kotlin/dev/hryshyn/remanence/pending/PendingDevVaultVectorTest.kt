@@ -5,7 +5,9 @@ import java.util.Base64
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
-import org.json.JSONObject
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -27,10 +29,15 @@ import org.junit.Test
  */
 class PendingDevVaultVectorTest {
 
-    private fun vector(): JSONObject = JSONObject(
+    private val fixtures = Json { ignoreUnknownKeys = true }
+
+    private fun vector(): JsonObject = fixtures.parseToJsonElement(
         javaClass.getResourceAsStream("/pending/delivery-v2-dev-vault-vector.json")!!
             .bufferedReader().readText(),
-    )
+    ) as JsonObject
+
+    private fun str(o: JsonObject, key: String): String =
+        o.getValue(key).jsonPrimitive.content
 
     private fun unhex(s: String): ByteArray {
         require(s.length % 2 == 0)
@@ -62,29 +69,29 @@ class PendingDevVaultVectorTest {
     @Test
     fun storedCiphertextOpensToStoredPlaintext() {
         val v = vector()
-        assertEquals("dev-aead-v1", v.getString("vault"))
-        assertTrue(v.getString("note").startsWith("TEST-ONLY"))
-        assertEquals("synthetic-dev-vector-1", v.getString("key_id"))
+        assertEquals("dev-aead-v1", str(v, "vault"))
+        assertTrue(str(v, "note").startsWith("TEST-ONLY"))
+        assertEquals("synthetic-dev-vector-1", str(v, "key_id"))
 
-        val aad = unhex(v.getString("aad_canonical_hex"))
-        val key32 = unhex(v.getString("dev_key_32_hex_TEST_ONLY"))
-        val ciphertext = Base64.getDecoder().decode(v.getString("ciphertext_b64"))
+        val aad = unhex(str(v, "aad_canonical_hex"))
+        val key32 = unhex(str(v, "dev_key_32_hex_TEST_ONLY"))
+        val ciphertext = Base64.getDecoder().decode(str(v, "ciphertext_b64"))
 
         // Binding is SHA256 over the canonical AAD bytes.
         val binding = MessageDigest.getInstance("SHA-256").digest(aad)
             .joinToString("") { "%02x".format(it) }
-        assertEquals(v.getString("binding_hex"), binding)
+        assertEquals(str(v, "binding_hex"), binding)
 
         val opened = devOpen(ciphertext, key32, aad)
-        assertEquals(v.getString("payload_plaintext_hex"), opened.joinToString("") { "%02x".format(it) })
+        assertEquals(str(v, "payload_plaintext_hex"), opened.joinToString("") { "%02x".format(it) })
     }
 
     @Test
     fun wrongAadRejected() {
         val v = vector()
-        val aad = unhex(v.getString("aad_canonical_hex"))
-        val key32 = unhex(v.getString("dev_key_32_hex_TEST_ONLY"))
-        val ciphertext = Base64.getDecoder().decode(v.getString("ciphertext_b64"))
+        val aad = unhex(str(v, "aad_canonical_hex"))
+        val key32 = unhex(str(v, "dev_key_32_hex_TEST_ONLY"))
+        val ciphertext = Base64.getDecoder().decode(str(v, "ciphertext_b64"))
         val tamperedAad = aad.copyOf().also { it[it.size - 1] = (it.last() + 1).toByte() }
         try {
             devOpen(ciphertext, key32, tamperedAad)
@@ -97,7 +104,7 @@ class PendingDevVaultVectorTest {
     @Test
     fun tinkFramingPresent() {
         val v = vector()
-        val ciphertext = Base64.getDecoder().decode(v.getString("ciphertext_b64"))
+        val ciphertext = Base64.getDecoder().decode(str(v, "ciphertext_b64"))
         assertEquals(0x01.toByte(), ciphertext[0])
         val keyId = ((ciphertext[1].toInt() and 0xFF) shl 24) or
             ((ciphertext[2].toInt() and 0xFF) shl 16) or
@@ -105,6 +112,6 @@ class PendingDevVaultVectorTest {
             (ciphertext[4].toInt() and 0xFF)
         assertEquals(1, keyId)
         // Round-trips through the same framing the Python seal produced.
-        assertArrayEquals(ciphertext, Base64.getDecoder().decode(v.getString("ciphertext_b64")))
+        assertArrayEquals(ciphertext, Base64.getDecoder().decode(str(v, "ciphertext_b64")))
     }
 }

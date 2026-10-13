@@ -202,4 +202,40 @@ class PendingRetirementOutboxTest {
             assertTrue(forbidden !in text.lowercase())
         }
     }
+
+    private fun corruptQueueFile(root: java.io.File, owner: String) {
+        val dir = java.io.File(root, "accounts/$owner/pending-retirement")
+        dir.mkdirs()
+        java.io.File(dir, "outbox.json").writeText("not-json{{{[corrupt")
+    }
+
+    @Test
+    fun corruptQueueReportsFaultAndQuarantinesNeverSuccess() = runTest {
+        val root = tempRoot()
+        val outbox = PendingRetirementOutbox(root, UnconfiguredPendingRetirementPort)
+        corruptQueueFile(root, OWNER_1)
+        // drainDetailed reports fault (worker rearms via retry)...
+        val outcome = outbox.drainDetailed(OWNER_1, liveGate())
+        assertEquals(0, outcome.removed)
+        assertTrue(outcome.fault)
+        // ...the unreadable bytes are preserved aside, never silently dropped.
+        val dir = java.io.File(root, "accounts/$OWNER_1/pending-retirement")
+        assertTrue(dir.listFiles()!!.any { it.name.startsWith("outbox.corrupt.") })
+        assertTrue(dir.listFiles()!!.first { it.name.startsWith("outbox.corrupt.") }.readText().contains("corrupt"))
+    }
+
+    @Test
+    fun enqueueAfterCorruptionKeepsNewIntent() = runTest {
+        val root = tempRoot()
+        val outbox = PendingRetirementOutbox(root, UnconfiguredPendingRetirementPort)
+        corruptQueueFile(root, OWNER_1)
+        // The failed intent is NOT lost: quarantine-then-write keeps it queued.
+        val item = outbox.enqueue(OWNER_1, "capsule-1")
+        assertEquals("capsule-1", item.capsuleId)
+        assertEquals(1, outbox.pendingCount(OWNER_1))
+        // Next drain sees a healthy file again (no fault, retryable port).
+        val outcome = outbox.drainDetailed(OWNER_1, liveGate())
+        assertTrue(!outcome.fault)
+        assertEquals(1, outcome.remaining)
+    }
 }

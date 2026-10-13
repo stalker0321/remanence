@@ -10,7 +10,8 @@ import androidx.room.RoomDatabase
  * owner-local exact FRONT duplicate history. Version 11 adds durable
  * server-confirmed recipient first-open claims. The explicit migrations preserve
  * existing local material; unknown older paths still use the existing
- * destructive fallback policy.
+ * destructive fallback policy. Version 12 makes `local_account.handle_normalized`
+ * nullable (T186 receive-only deferred handle; existing rows preserved).
  */
 @Database(
     entities = [
@@ -26,7 +27,7 @@ import androidx.room.RoomDatabase
         TombstoneWatermarkEntity::class,
         LocalSendDuplicateEntity::class,
     ],
-    version = 11,
+    version = 12,
     exportSchema = true,
 )
 abstract class RemanenceLocalDatabase : RoomDatabase() {

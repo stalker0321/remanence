@@ -209,6 +209,7 @@ class AppContainer private constructor(
                 dev.hryshyn.remanence.core.data.db.MIGRATION_8_9_RECIPIENT_TOMBSTONES,
                 dev.hryshyn.remanence.core.data.db.MIGRATION_9_10_LOCAL_SEND_DUPLICATES,
                 dev.hryshyn.remanence.core.data.db.MIGRATION_10_11_FIRST_OPEN_CLAIMS,
+                dev.hryshyn.remanence.core.data.db.MIGRATION_11_12_NULLABLE_HANDLE,
             )
             .fallbackToDestructiveMigration(dropAllTables = true)
             .build()
@@ -782,6 +783,17 @@ class AppContainer private constructor(
 
     // -- T186 experimental pending-retirement host (isolated, default OFF) --
     override val pendingContext: Context get() = appContext
+
+    /**
+     * T188-B2: the actual constructed API base for the isolation guard.
+     * The worker verifies THIS, not the BuildConfig constant.
+     */
+    override val pendingApiBaseUrl: String
+        get() = try {
+            apiBaseUrl.httpUrl.toString()
+        } catch (_: Exception) {
+            ""
+        }
 
     override val pendingOwnerId: String?
         get() = try {

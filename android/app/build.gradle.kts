@@ -3,6 +3,9 @@ import java.net.URI
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    // T186: @Serializable queue DTO for the durable retirement outbox
+    // (pure-Kotlin JSON, no Android stub on that path).
+    alias(libs.plugins.kotlin.serialization)
 }
 
 // Local compile-time rollback switch. The legacy contour path remains the

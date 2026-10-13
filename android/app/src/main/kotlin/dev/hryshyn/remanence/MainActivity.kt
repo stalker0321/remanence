@@ -567,6 +567,14 @@ private fun RootSurface(
                         resumeOwnerId = resumeOwner,
                         resumeStore = container.pendingGiftIntentStore,
                         resumeEnabled = resumeReady,
+                        // T186 M11b (T188 F1): genuinely live owner — reads
+                        // the auth StateFlow at publish time, so an auth
+                        // change across the sheet's IO hop suppresses the
+                        // publish instead of comparing a captured value
+                        // to itself.
+                        resumeOwnerProvider = {
+                            (rootViewModel.authState.value as? AuthUiState.Authenticated)?.userId
+                        },
                     )
                 }
             } else {
@@ -619,6 +627,11 @@ private fun ScanFlowSurface(
     resumeOwnerId: String? = null,
     resumeStore: dev.hryshyn.remanence.pending.PendingGiftIntentStore? = null,
     resumeEnabled: Boolean = false,
+    /**
+     * T186 M11b (T188 F1): live owner source for the sheet publish
+     * fence. Production reads the auth StateFlow at publish time.
+     */
+    resumeOwnerProvider: () -> String? = { resumeOwnerId },
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     androidx.compose.runtime.DisposableEffect(scanViewModel) {
@@ -651,6 +664,7 @@ private fun ScanFlowSurface(
         resumeOwnerId = resumeOwnerId,
         resumeStore = resumeStore,
         resumeEnabled = resumeEnabled,
+        resumeOwnerProvider = resumeOwnerProvider,
         // Activity recreation disposes/recreates Compose but keeps the
         // ViewModel and root destination. Only an actual route exit should
         // tear down the scan; this preserves same-epoch rotation state.

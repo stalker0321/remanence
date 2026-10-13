@@ -85,6 +85,16 @@ fun PendingCodeEntrySheet(
     ownerUserId: String? = null,
     giftIntentStore: PendingGiftIntentStore? = null,
     resumeIntent: PendingGiftIntentStore.StoredIntent? = null,
+    /**
+     * T186 M11b (T188 F1): LIVE owner source read at publish time (after
+     * the IO hop). [ownerUserId] is a plain composition parameter — a
+     * coroutine capturing it cannot observe a later owner change, so
+     * comparing the parameter to itself is a tautology. Production passes
+     * a lambda reading the auth StateFlow's current value
+     * (`rootViewModel.authState.value`); the default keeps the static
+     * parameter for lookup-only/test surfaces.
+     */
+    currentOwnerProvider: () -> String? = { ownerUserId },
 ) {
     if (!enabled) return
     var raw by remember { mutableStateOf("") }
@@ -221,7 +231,10 @@ fun PendingCodeEntrySheet(
                                     // Durable intent (owner-gated, opaque only):
                                     // fsync/rename runs on IO, never Main;
                                     // cancellation propagates; UI publish
-                                    // rechecks the live owner after the hop.
+                                    // rechecks the LIVE owner after the hop
+                                    // (T188 F1: the provider reads the auth
+                                    // state at publish time — never the
+                                    // captured parameter against itself).
                                     val owner = ownerUserId
                                     val store = giftIntentStore
                                     if (owner != null && store != null) {
@@ -234,7 +247,8 @@ fun PendingCodeEntrySheet(
                                         } catch (_: Exception) {
                                             // Save failure never blocks lookup UI.
                                         }
-                                        if (ownerUserId == owner) {
+                                        val liveOwner = currentOwnerProvider()
+                                        if (liveOwner != null && liveOwner == owner) {
                                             onWellFormedCode(normalized)
                                         }
                                     } else {

@@ -79,6 +79,13 @@ fun ScanScreen(
     resumeOwnerId: String? = null,
     resumeStore: dev.hryshyn.remanence.pending.PendingGiftIntentStore? = null,
     resumeEnabled: Boolean = false,
+    /**
+     * T186 M11b (T188 F1): live owner source for the code sheet's
+     * post-IO publish fence. Defaults to the static resume owner for
+     * lookup-only surfaces; production passes a StateFlow-backed
+     * lambda that observes real auth changes across the IO hop.
+     */
+    resumeOwnerProvider: () -> String? = { resumeOwnerId },
 ) {
     val matchState by viewModel.matchState.collectAsStateWithLifecycle()
     // T186: pending code sheet state. Local only; feature-gated composables
@@ -175,6 +182,7 @@ fun ScanScreen(
                         ownerUserId = resumeOwnerId,
                         giftIntentStore = resumeStore,
                         resumeIntent = resume,
+                        currentOwnerProvider = resumeOwnerProvider,
                     )
                 }
                 }

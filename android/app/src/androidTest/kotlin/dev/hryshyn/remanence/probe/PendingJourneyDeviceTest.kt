@@ -354,4 +354,81 @@ class PendingJourneyDeviceTest {
         rule.onNodeWithTag("pending_proof_error").assertIsDisplayed()
         capture("pending-proof-error-en")
     }
+
+    /**
+     * T186 M11b (T188 F1): owner change across the sheet's IO hop
+     * suppresses the publish — the live provider (auth state at publish
+     * time) disagrees with the lookup-time owner. Same-owner control
+     * publishes normally. Root runs these on device (r18).
+     */
+    @Test fun ownerChangeAcrossIoHopSuppressesPublish() {
+        var liveOwner: String? = "0198f0a0-0000-7000-8000-000000000001"
+        var published: String? = null
+        val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val store = dev.hryshyn.remanence.pending.PendingGiftIntentStore(
+            File(context.cacheDir, "pending-owner-race"),
+        )
+        mountEntry("en") {
+            PendingCodeEntrySheet(
+                onClose = {},
+                onWellFormedCode = { published = it },
+                enabled = true,
+                lookup = {
+                    entered.complete(Unit)
+                    release.await()
+                    dev.hryshyn.remanence.core.data.network.GiftLookupResult.Found(
+                        giftReference = "0198f0a0-0000-7000-8000-00000000ab01",
+                        channel = "email",
+                        hint = "a•••@•••",
+                    )
+                },
+                ownerUserId = "0198f0a0-0000-7000-8000-000000000001",
+                giftIntentStore = store,
+                currentOwnerProvider = { liveOwner },
+            )
+        }
+        rule.onNodeWithTag("pending_code_field").performTextInput("a3k9q")
+        rule.onNodeWithTag("pending_code_continue").performClick()
+        kotlinx.coroutines.runBlocking { entered.await() }
+        // Auth switches account while the save is in flight.
+        liveOwner = "0198f0a0-0000-7000-8000-000000000002"
+        release.complete(Unit)
+        rule.waitForIdle()
+        rule.runOnIdle { assertTrue(published == null) }
+        // The server hint still renders (lookup genuinely happened);
+        // only the owner-gated publish is suppressed.
+        rule.onNodeWithTag("pending_code_found").assertIsDisplayed()
+    }
+
+    @Test fun sameOwnerAcrossIoHopPublishes() {
+        var published: String? = null
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val store = dev.hryshyn.remanence.pending.PendingGiftIntentStore(
+            File(context.cacheDir, "pending-owner-stable"),
+        )
+        mountEntry("en") {
+            PendingCodeEntrySheet(
+                onClose = {},
+                onWellFormedCode = { published = it },
+                enabled = true,
+                lookup = {
+                    release.await()
+                    dev.hryshyn.remanence.core.data.network.GiftLookupResult.Found(
+                        giftReference = "0198f0a0-0000-7000-8000-00000000ab01",
+                        channel = "email",
+                        hint = "a•••@•••",
+                    )
+                },
+                ownerUserId = "0198f0a0-0000-7000-8000-000000000001",
+                giftIntentStore = store,
+                currentOwnerProvider = { "0198f0a0-0000-7000-8000-000000000001" },
+            )
+        }
+        rule.onNodeWithTag("pending_code_field").performTextInput("a3k9q")
+        rule.onNodeWithTag("pending_code_continue").performClick()
+        release.complete(Unit)
+        rule.waitForIdle()
+        rule.runOnIdle { assertEquals("A3K9Q", published) }
+    }
 }

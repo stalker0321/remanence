@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "note": "TEST-ONLY dev service-claim pin. Synthetic Ed25519 keypair generated once with Tink; ONLY the public keyset is stored here. Pendingtest/debug isolated harnesses ONLY. NEVER production custody: deployment requires an independently configured pin history, never this pair.",
+  "service_key_id": "a3618c4c-fc28-4847-9f4c-0681e9b531bc",
+  "service_ed25519_public_keyset_b64": "CJ+h4NwGEmsKXwo3dHlwZS5nb29nbGVhcGlzLmNvbS9nb29nbGUuY3J5cHRvLnRpbmsuRWQyNTUxOVB1YmxpY0tleRIiEiA3kFtWMr1rV+z+3f1amnvWH+fVs4KGPkrm+bloQaEyVhgDEAEYn6Hg3AYgAQ==",
+  "algorithm": "ED25519 (Tink 69-byte framing, same as sender publish signatures)",
+  "claim_binding_domain": "postmark/claim-binding/v1",
+  "verify_procedure": "Tink BinaryKeysetReader(public_keyset) -> PublicKeyVerify; verify(binding_sig_69, ASCII(domain) || 0x00 || canonical_ClaimBindingV1). The S claim_signing_key_id MUST equal service_key_id (UUID, not numeric Tink key id). Keys carried next to R are NEVER trust roots.",
+  "private_custody": "Private half is NOT in this repo. Isolated automated suites keep ephemeral per-test signers. A shared synthetic dev deployment holding the private half (if ever stood up) is root-owned integration scope, out of T185."
+}

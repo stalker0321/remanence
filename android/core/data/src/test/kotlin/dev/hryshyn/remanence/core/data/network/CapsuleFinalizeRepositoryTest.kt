@@ -291,6 +291,53 @@ class CapsuleFinalizeRepositoryTest {
     private fun repository(server: MockWebServer): CapsuleFinalizeRepository =
         CapsuleFinalizeRepository.create(ApiBaseUrl.parse(server.url("/").toString()))
 
+    @Test
+    fun r2NegotiatedLocatorIssuanceParsesCodeAndHint() = runTest {
+        withServer { server ->
+            PendingProfileHeaders.installForPendingBuilds()
+            try {
+                server.enqueue(
+                    MockResponse.Builder()
+                        .code(201)
+                        .setHeader("Content-Type", "application/json")
+                        .body(
+                            """{"capsule_id":"${capsuleId.toRestString()}","state":"READY","ready_at":"2030-01-01T12:00:00Z","locator_code":"AB3DE","locator_hint":"a•••@•••"}""",
+                        )
+                        .build(),
+                )
+                val result = repository(server).finalize(request(), accessToken = "pm_at_live")
+                val success = assertIs<CapsuleFinalizeResult.Success>(result)
+                // Known-v1 zero escrow with the negotiated common locator.
+                assertEquals("AB3DE", success.finalize.locatorCode)
+                assertEquals("a•••@•••", success.finalize.locatorHint)
+                val recorded = server.takeRequest()
+                assertEquals("2", recorded.headers["X-Remanence-Profile-Version"])
+            } finally {
+                PendingProfileHeaders.resetForTests()
+            }
+        }
+    }
+
+    @Test
+    fun r2LegacyShapeKeepsNullLocator() = runTest {
+        withServer { server ->
+            PendingProfileHeaders.resetForTests()
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(201)
+                    .setHeader("Content-Type", "application/json")
+                    .body(successJson())
+                    .build(),
+            )
+            val result = repository(server).finalize(request(), accessToken = "pm_at_live")
+            val success = assertIs<CapsuleFinalizeResult.Success>(result)
+            assertNull(success.finalize.locatorCode)
+            assertNull(success.finalize.locatorHint)
+            val recorded = server.takeRequest()
+            assertNull(recorded.headers["X-Remanence-Profile-Version"])
+        }
+    }
+
     private fun successJson(): String =
         """{"capsule_id":"${capsuleId.toRestString()}","state":"READY","ready_at":"2030-01-01T12:00:00Z"}"""
 

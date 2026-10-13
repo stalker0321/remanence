@@ -90,6 +90,14 @@ data class CapsuleFinalize(
     val capsuleId: CapsuleId,
     val state: CapsuleFinalizeState,
     val readyAt: String,
+    /**
+     * T186 M11 (R2 common-locator extension, additive): the negotiated
+     * 5-char code + masked hint, present ONLY when this pending-enabled
+     * build negotiated issuance on this call. Null = legacy behavior
+     * (no locator row); v1 signed bytes untouched either way.
+     */
+    val locatorCode: String? = null,
+    val locatorHint: String? = null,
 )
 
 enum class CapsuleFinalizeFailure {
@@ -153,6 +161,9 @@ private data class CapsuleFinalizeResponseDto(
     @SerialName("capsule_id") val capsuleId: String,
     val state: String,
     @SerialName("ready_at") val readyAt: String,
+    /** R2 additive issuance (absent = legacy shape, unchanged). */
+    @SerialName("locator_code") val locatorCode: String? = null,
+    @SerialName("locator_hint") val locatorHint: String? = null,
 )
 
 /** Authenticated finalize call for one signed, fully uploaded draft. */
@@ -189,10 +200,12 @@ class CapsuleFinalizeRepository internal constructor(
         )
         val requestBody = NetworkJson.encodeToString(wireRequest)
             .toRequestBody(JSON_MEDIA_TYPE.toMediaTypeOrNull())
-        val httpRequest = Request.Builder()
-            .url(baseUrl.resolve("v1/capsules/${request.capsuleId.toRestString()}/finalize"))
-            .header("Accept", JSON_MEDIA_TYPE)
-            .header("Authorization", BEARER_PREFIX + accessToken)
+        val httpRequest = PendingProfileHeaders.apply(
+            Request.Builder()
+                .url(baseUrl.resolve("v1/capsules/${request.capsuleId.toRestString()}/finalize"))
+                .header("Accept", JSON_MEDIA_TYPE)
+                .header("Authorization", BEARER_PREFIX + accessToken),
+        )
             .post(requestBody)
             .build()
             .let { requestLeaseProvider?.tag(it, requestLease!!) ?: it }
@@ -262,10 +275,19 @@ class CapsuleFinalizeRepository internal constructor(
         val capsuleId = CapsuleId.parseRest(dto.capsuleId)
         require(capsuleId == request.capsuleId)
         require(dto.readyAt.isNotEmpty())
+        // R2 additive issuance: a present code is always the 5-char
+        // shape with a non-blank hint; absent stays legacy (nulls).
+        val locatorCode = dto.locatorCode?.takeIf { it.isNotBlank() }
+        if (locatorCode != null) {
+            require(locatorCode.length == 5)
+            require(!dto.locatorHint.isNullOrBlank())
+        }
         return CapsuleFinalize(
             capsuleId = capsuleId,
             state = CapsuleFinalizeState.READY,
             readyAt = dto.readyAt,
+            locatorCode = locatorCode,
+            locatorHint = dto.locatorHint?.takeIf { locatorCode != null },
         )
     }
 

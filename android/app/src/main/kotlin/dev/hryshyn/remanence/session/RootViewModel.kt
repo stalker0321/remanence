@@ -95,6 +95,11 @@ class RootViewModel internal constructor(
      * death / session resume). WorkManager dedups; never blocks UI.
      */
     private val rearmPendingRetirement: () -> Unit = {},
+    /**
+     * T186 M14a: best-effort re-arm of the receiver-owned feed sync
+     * (process death / session resume). Same dedup/nonblocking contract.
+     */
+    private val rearmPendingFeedSync: () -> Unit = {},
 ) : ViewModel() {
 
     /** Serializes root refresh requests while retaining one trailing request. */
@@ -193,6 +198,8 @@ class RootViewModel internal constructor(
         // T186: a fresh login/registration may inherit a durable retirement
         // queue from a dead process; re-arm its background drain.
         runCatching { rearmPendingRetirement() }
+        // T186 M14a: resume the receiver-owned feed position likewise.
+        runCatching { rearmPendingFeedSync() }
     }
 
     /**
@@ -204,6 +211,8 @@ class RootViewModel internal constructor(
         refreshAsync()
         // T186: resume may follow process death; re-arm the retirement drain.
         runCatching { rearmPendingRetirement() }
+        // T186 M14a: and the receiver-owned feed sync.
+        runCatching { rearmPendingFeedSync() }
     }
 
     fun logout() {

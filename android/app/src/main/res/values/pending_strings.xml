@@ -58,6 +58,7 @@
     <string name="pending_handle_setup_session">the session changed. sign in again if needed.</string>
     <string name="pending_handle_setup_generic">that didn’t work. try again.</string>
     <!-- T186 v2 sender (isolated EMAIL/PHONE → R1 freeze → R3/R4/R5 → handwritten code). -->
+    <string name="pending_recipient_change">change recipient</string>
     <string name="pending_sender_entry">send with a code</string>
     <string name="pending_sender_title">send with a code</string>
     <string name="pending_sender_body">the card gets a five-character code instead of an account delivery. known accounts still receive the ordinary way.</string>

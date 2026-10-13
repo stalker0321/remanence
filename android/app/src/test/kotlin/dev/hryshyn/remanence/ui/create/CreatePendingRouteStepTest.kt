@@ -310,4 +310,19 @@ class CreatePendingRouteStepTest {
         }
         attempt.onPreviewBound()
     }
+
+    /**
+     * T186 M14a: explicit recipient return — FRONT goes back to
+     * RECIPIENT_LOOKUP (v1 confirmed handles untouched) so a cleared
+     * route can be re-frozen. Silent no-op elsewhere.
+     */
+    @Test
+    fun backToRecipientReturnsForRefreeze() {
+        val vm = viewModel()
+        vm.onPendingRouteFrozen(pendingIdentity())
+        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        assertTrue(vm.backToRecipient())
+        assertEquals(CreateViewModel.Step.RECIPIENT_LOOKUP, vm.step.value)
+        assertFalse(vm.backToRecipient())
+    }
 }

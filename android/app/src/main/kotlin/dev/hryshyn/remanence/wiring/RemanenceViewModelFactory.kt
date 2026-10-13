@@ -74,6 +74,8 @@ class RemanenceViewModelFactory(
             // T186: re-arm the durable retirement drain on session/foreground
             // resume (covers process death). Deduped, never blocking.
             rearmPendingRetirement = { container.rearmPendingRetirement() },
+            // T186 M14a: re-arm the receiver-owned feed sync likewise.
+            rearmPendingFeedSync = { container.rearmPendingFeedSync() },
         ) as T
         LoginViewModel::class.java -> LoginViewModel(container.loginUseCase) as T
         dev.hryshyn.remanence.auth.GoogleAuthViewModel::class.java -> dev.hryshyn.remanence.auth.GoogleAuthViewModel(container) as T

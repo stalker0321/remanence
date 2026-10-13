@@ -1761,6 +1761,19 @@ class CreateViewModel(
         return true
     }
 
+    /**
+     * T186 M14a: FRONT → RECIPIENT_LOOKUP recipient return (explicit
+     * user action only). Lets a cleared pending route be re-frozen
+     * (or a handle chosen) without stranding the flow at FRONT; v1
+     * confirmed handles are untouched (recipient survives, only the
+     * step moves). Silent no-op elsewhere.
+     */
+    fun backToRecipient(): Boolean {
+        if (_step.value != Step.FRONT) return false
+        _step.value = Step.RECIPIENT_LOOKUP
+        return true
+    }
+
     fun backToFront(): Boolean {
         if (_step.value != Step.CONTENT) return false
         createSessionGeneration += 1

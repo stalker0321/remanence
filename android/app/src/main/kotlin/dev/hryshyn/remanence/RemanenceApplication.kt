@@ -101,6 +101,8 @@ class RemanenceApplication : Application() {
         // T186: a prior process may have died with a queued retirement outbox;
         // re-arm its background drain on every startup (deduped, nonblocking).
         runCatching { container.rearmPendingRetirement() }
+        // T186 M14a: resume the receiver-owned feed position likewise.
+        runCatching { container.rearmPendingFeedSync() }
     }
 }
 
@@ -152,7 +154,8 @@ class AppContainer private constructor(
     kekBoundaryOverride: KekBoundary?,
     private val identityLoadOverride: (() -> IdentityBundleRepository.LoadResult)?,
     @Suppress("UNUSED_PARAMETER") constructionMarker: Unit,
-) : dev.hryshyn.remanence.pending.PendingRetirementHost {
+) : dev.hryshyn.remanence.pending.PendingRetirementHost,
+    dev.hryshyn.remanence.pending.PendingFeedSyncHost {
 
     constructor(
         context: Context,
@@ -803,8 +806,83 @@ class AppContainer private constructor(
         PresentationGrantAuthority()
     }
 
-    // -- T186 experimental pending-retirement host (isolated, default OFF) --
-    override val pendingContext: Context get() = appContext
+    /**
+     * T186 M14a: receiver-owned v2 clients (feed, control/redownload/
+     * manifest/blob). Real frozen clients; failures stay typed, never
+     * fake success. v1 incoming is never touched by these routes.
+     */
+    val pendingIncomingRepository: dev.hryshyn.remanence.core.data.network.PendingIncomingRepository by lazy {
+        dev.hryshyn.remanence.core.data.network.PendingIncomingRepository.create(apiBaseUrl)
+    }
+
+    val pendingOwnedMaterialRepository: dev.hryshyn.remanence.core.data.network.PendingOwnedMaterialRepository by lazy {
+        dev.hryshyn.remanence.core.data.network.PendingOwnedMaterialRepository.create(apiBaseUrl)
+    }
+
+    /**
+     * T186 M14a: durable receiver-owned admitted gift index (metadata
+     * only — no keys).
+     */
+    val pendingAdmittedGiftStore: dev.hryshyn.remanence.pending.PendingAdmittedGiftStore by lazy {
+        dev.hryshyn.remanence.pending.PendingAdmittedGiftStore(appContext.filesDir)
+    }
+
+    // -- T186 M14a experimental pending-feed host (isolated, default OFF) --
+    override val pendingFeedContext: Context get() = appContext
+
+    override val pendingFeedGate: dev.hryshyn.remanence.pending.PendingRetirementSessionGate?
+        get() = pendingSessionGate
+
+    override val pendingFeedAccount: suspend () -> dev.hryshyn.remanence.pending.ProofAccount? get() = {
+        try {
+            currentAccountStore.load()
+        } catch (_: Exception) {
+            null
+        }?.let {
+            dev.hryshyn.remanence.pending.ProofAccount(it.userId, it.activeKeyBundleId)
+        }
+    }
+
+    override val pendingFeedCursorStore: dev.hryshyn.remanence.pending.PendingFeedCursorStore? by lazy {
+        dev.hryshyn.remanence.pending.PendingFeedCursorStore(appContext.filesDir)
+    }
+
+    override val pendingFeedFetch: dev.hryshyn.remanence.pending.PendingFeedSync.FetchPort? by lazy {
+        dev.hryshyn.remanence.pending.PendingFeedSync.FetchPort { cursor, limit, token ->
+            pendingIncomingRepository.page(cursor, limit, token)
+        }
+    }
+
+    /**
+     * T186 M14a: receiver-owned feed sync with real frozen clients. The
+     * caller supplies the coroutine scope that bounds the flow.
+     */
+    fun newPendingFeedSync(
+        scope: kotlinx.coroutines.CoroutineScope,
+    ): dev.hryshyn.remanence.pending.PendingFeedSync =
+        dev.hryshyn.remanence.pending.PendingFeedSync(
+            fetchPort = dev.hryshyn.remanence.pending.PendingFeedSync.FetchPort { cursor, limit, token ->
+                pendingIncomingRepository.page(cursor, limit, token)
+            },
+            cursorStore = pendingFeedCursorStore,
+            sessionGate = pendingSessionGate,
+            accountProvider = pendingFeedAccount,
+            scope = scope,
+        )
+
+    /**
+     * T186 M14a: best-effort re-arm of the owned-feed sync after
+     * startup/login/foreground resume (covers process death). Deduped
+     * unique work; safe to call often; never blocks the caller. No-op
+     * unless pending is enabled.
+     */
+    fun rearmPendingFeedSync() {
+        try {
+            dev.hryshyn.remanence.pending.PendingFeedSyncScheduler.schedule(appContext)
+        } catch (_: Exception) {
+            // Best effort only.
+        }
+    }
 
     /**
      * T188-B2: the actual constructed API base for the isolation guard.

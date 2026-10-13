@@ -202,20 +202,38 @@ fun CreateScreen(
                 when (step) {
                     CreateViewModel.Step.RECIPIENT_LOOKUP -> RecipientLookupContent(viewModel)
                     CreateViewModel.Step.RECIPIENT_CONFIRM -> RecipientConfirmContent(viewModel)
-                    CreateViewModel.Step.FRONT -> BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-                        CaptureAttemptSurface(
-                        controller = viewModel.frontAttempt,
-                        shutterTag = "capture_shutter_front",
-                        retakeTag = "capture_retake_front",
-                        onBeginAttempt = viewModel::beginFrontCapture,
-                        onDelivered = viewModel::deliverFrontJpeg,
-                        onRetake = viewModel::retakeFront,
-                        adapterFactory = adapterFactory,
-                        requestPermissionOnAttach = requestPermissionOnAttach,
-                        previewMaxHeight = (maxHeight - 72.dp).coerceAtLeast(64.dp),
-                        shutterLabel = stringResource(R.string.create_use_postcard),
-                        showGuideInstruction = false,
-                        )
+                    CreateViewModel.Step.FRONT -> Column(Modifier.weight(1f).fillMaxWidth()) {
+                        // T186 M14a: pending-gated recipient return (a
+                        // cleared route can be re-frozen). Visible only on
+                        // the pending journey without a confirmed handle;
+                        // v1 layout and behavior are otherwise unchanged.
+                        val confirmedHandle by viewModel.confirmedRecipient.collectAsStateWithLifecycle()
+                        if (dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled() &&
+                            confirmedHandle == null
+                        ) {
+                            TextButton(
+                                onClick = viewModel::backToRecipient,
+                                modifier = Modifier.testTag("create_pending_change_recipient"),
+                            ) {
+                                Text(stringResource(R.string.pending_recipient_change))
+                            }
+                            Spacer(Modifier.height(8.dp))
+                        }
+                        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                            CaptureAttemptSurface(
+                            controller = viewModel.frontAttempt,
+                            shutterTag = "capture_shutter_front",
+                            retakeTag = "capture_retake_front",
+                            onBeginAttempt = viewModel::beginFrontCapture,
+                            onDelivered = viewModel::deliverFrontJpeg,
+                            onRetake = viewModel::retakeFront,
+                            adapterFactory = adapterFactory,
+                            requestPermissionOnAttach = requestPermissionOnAttach,
+                            previewMaxHeight = (maxHeight - 72.dp).coerceAtLeast(64.dp),
+                            shutterLabel = stringResource(R.string.create_use_postcard),
+                            showGuideInstruction = false,
+                            )
+                        }
                     }
 
                     CreateViewModel.Step.CONTENT, CreateViewModel.Step.COMPOSE -> Unit

@@ -53,6 +53,7 @@
     <string name="pending_handle_setup_session">сесія змінилася. за потреби увійдіть знову.</string>
     <string name="pending_handle_setup_generic">не вийшло. спробуйте ще раз.</string>
     <!-- T186 v2 sender (ізольоване надсилання EMAIL/PHONE → код). -->
+    <string name="pending_recipient_change">змінити отримувача</string>
     <string name="pending_sender_entry">надіслати з кодом</string>
     <string name="pending_sender_title">надіслати з кодом</string>
     <string name="pending_sender_body">листівка отримає п’ятисимвольний код замість доставки в акаунт. відомі адреси отримують звичайним способом.</string>

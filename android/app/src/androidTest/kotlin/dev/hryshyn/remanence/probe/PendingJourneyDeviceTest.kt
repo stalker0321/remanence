@@ -26,6 +26,8 @@ import dev.hryshyn.remanence.pending.PendingCodeEntryButton
 import dev.hryshyn.remanence.pending.PendingCodeEntrySheet
 import dev.hryshyn.remanence.pending.PendingHandleSetupScreen
 import dev.hryshyn.remanence.pending.PendingHandleSetupViewModel
+import dev.hryshyn.remanence.pending.PendingProofFlow
+import dev.hryshyn.remanence.pending.PendingProofViewModel
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Locale
@@ -237,8 +239,7 @@ class PendingJourneyDeviceTest {
         capture("pending-handle-setup-invalid-en")
     }
 
-    /** Decodable-JPEG reader so the Ready path renders real pixels. */
-    private class FakePhotos : CapsuleContentReader {
+    /** Decodable-JPEG reader so the Ready path renders real pixels. */   private class FakePhotos : CapsuleContentReader {
         override suspend fun photoCount(capsuleId: String): Int = 3
         override suspend fun loadPhoto(capsuleId: String, ordinal: Int): DecryptedPhoto {
             val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
@@ -282,5 +283,61 @@ class PendingJourneyDeviceTest {
         // wait, tap, or second step from the viewer.
         rule.runOnIdle { assertTrue(retireSignalled) }
         assertFalse(closed)
+    }
+
+    private fun proofVm(
+        continueResult: dev.hryshyn.remanence.core.data.network.ContinueResult,
+    ): PendingProofViewModel = PendingProofViewModel(
+        continuePort = dev.hryshyn.remanence.pending.ProofContinuePort { _, _ -> continueResult },
+        verifyPort = object : dev.hryshyn.remanence.pending.ProofVerifyPort {
+            override suspend fun request(
+                deliveryId: String, destination: String, smsConsent: Boolean,
+                nowSeconds: Long, idempotencyKey: String, token: String,
+            ): dev.hryshyn.remanence.core.data.network.VerificationResult =
+                error("no verification in this fixture")
+
+            override suspend fun check(
+                deliveryId: String, attemptId: String, code: String, token: String,
+            ): dev.hryshyn.remanence.core.data.network.VerificationResult =
+                error("no verification in this fixture")
+        },
+        optionsPort = dev.hryshyn.remanence.pending.ProofOptionsPort { _, _ ->
+            error("no options in this fixture")
+        },
+        tokenProvider = { "token" },
+        accountProvider = { null },
+        signingKeyProvider = { null },
+        hpkeKeyProvider = { null },
+    )
+
+    @Test fun proofSyncBranchShowsScanNote() {
+        val viewModel = proofVm(
+            dev.hryshyn.remanence.core.data.network.ContinueResult.Sync(
+                "0198f0a0-0000-7000-8000-00000000ca01",
+            ),
+        )
+        mountEntry("en") {
+            PendingProofFlow(viewModel = viewModel, giftReference = "ref")
+        }
+        // Already owned: ordinary sync/scan note, no proof form.
+        rule.onNodeWithTag("pending_proof_sync").assertIsDisplayed()
+        rule.onNodeWithTag("pending_proof_done").performClick()
+        capture("pending-proof-sync-en")
+    }
+
+    @Test fun proofForeignShowsGenericError() {
+        val viewModel = proofVm(
+            dev.hryshyn.remanence.core.data.network.ContinueResult.Failure(
+                dev.hryshyn.remanence.core.data.network.GiftLookupFailure.GIFT_UNAVAILABLE,
+                httpStatus = 404,
+                retryable = false,
+            ),
+        )
+        mountEntry("en") {
+            PendingProofFlow(viewModel = viewModel, giftReference = "ref")
+        }
+        // Generic failure, never a proof branch for someone else.
+        rule.onNodeWithTag("pending_proof_error").assertIsDisplayed()
+        capture("pending-proof-error-en")
     }
 }

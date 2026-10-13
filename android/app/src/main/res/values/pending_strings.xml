@@ -11,10 +11,33 @@
     <string name="pending_code_cancel">back</string>
     <string name="pending_code_invalid">that code can’t be used. check it and try again.</string>
     <string name="pending_code_unavailable">code lookup isn’t available yet in this test build.</string>
-    <string name="pending_code_found_next">address check and proof continue on the next test update; ordinary scan still works.</string>
+    <string name="pending_code_found_next">address check and proof continue below; ordinary scan still works.</string>
+    <string name="pending_code_found_next_update">address check and proof continue on the next test update; ordinary scan still works.</string>
+    <string name="pending_code_continue_proof">continue</string>
     <string name="pending_code_notfound">that code didn’t match an available gift.</string>
     <string name="pending_code_network">couldn’t reach the server. try again.</string>
     <string name="pending_code_generic">that didn’t work. try again.</string>
+    <!-- T186 receiving proof + claim flow (frozen R7/R8/R9/R10). -->
+    <string name="pending_proof_working">checking…</string>
+    <string name="pending_proof_sync_ready">that gift is already yours. open it with the ordinary scan.</string>
+    <string name="pending_proof_done">done</string>
+    <string name="pending_proof_cancel">back</string>
+    <string name="pending_proof_title">prove this gift is yours</string>
+    <string name="pending_proof_body">enter the address the gift was sent to. a one-time code follows.</string>
+    <string name="pending_proof_destination">email or phone</string>
+    <string name="pending_proof_send_code">send code</string>
+    <string name="pending_proof_code_title">enter the code</string>
+    <string name="pending_proof_code_label">code</string>
+    <string name="pending_proof_verify">verify</string>
+    <string name="pending_proof_intent_title">verified — almost there</string>
+    <string name="pending_proof_intent_body">your claim is verified and signed. it submits on the next test update; the gift then opens with the ordinary scan.</string>
+    <string name="pending_proof_network">couldn’t reach the server. try again.</string>
+    <string name="pending_proof_notfound">that gift isn’t available.</string>
+    <string name="pending_proof_session">the session changed. sign in again if needed.</string>
+    <string name="pending_proof_expired">that attempt expired. start again.</string>
+    <string name="pending_proof_conflict">that gift was already claimed.</string>
+    <string name="pending_proof_blocked">claiming continues in the next test update.</string>
+    <string name="pending_proof_generic">that didn’t work. try again.</string>
     <!-- T186 first-send handle setup (frozen R17 commit). -->
     <string name="pending_handle_setup_title">choose your handle</string>
     <string name="pending_handle_setup_body">sending needs a one-time public handle on this same account. it can never be changed later.</string>

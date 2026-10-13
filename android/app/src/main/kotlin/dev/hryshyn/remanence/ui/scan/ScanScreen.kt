@@ -64,6 +64,12 @@ fun ScanScreen(
      * fail-closed sheet. Wired from the activity with the container port.
      */
     pendingLookup: (suspend (String) -> dev.hryshyn.remanence.core.data.network.GiftLookupResult)? = null,
+    /**
+     * T186 M7c: proof-flow factory (flow-scoped VM, sheet scope). Null keeps
+     * lookup-only mode. Production builds container-wired VMs when pending
+     * is on.
+     */
+    newProofVm: ((kotlinx.coroutines.CoroutineScope) -> dev.hryshyn.remanence.pending.PendingProofViewModel)? = null,
 ) {
     val matchState by viewModel.matchState.collectAsStateWithLifecycle()
     // T186: pending code sheet state. Local only; feature-gated composables
@@ -128,6 +134,7 @@ fun ScanScreen(
                     dev.hryshyn.remanence.pending.PendingCodeEntrySheet(
                         onClose = { showPendingCode = false },
                         lookup = pendingLookup,
+                        newProofVm = newProofVm,
                     )
                 }
                 }

@@ -71,6 +71,12 @@ fun PendingCodeEntrySheet(
      * minimal hint; the continue journey (R7) lands on its handoff.
      */
     lookup: (suspend (String) -> dev.hryshyn.remanence.core.data.network.GiftLookupResult)? = null,
+    /**
+     * T186 M7c: proof-flow factory (flow-scoped VM, caller scope). Null
+     * keeps the found hint + deferred note (lookup-only mode). Production
+     * builds a container-wired VM via `AppContainer.newPendingProofViewModel`.
+     */
+    newProofVm: ((kotlinx.coroutines.CoroutineScope) -> PendingProofViewModel)? = null,
 ) {
     if (!enabled) return
     var raw by remember { mutableStateOf("") }
@@ -78,6 +84,8 @@ fun PendingCodeEntrySheet(
     var showUnavailable by remember { mutableStateOf(false) }
     var working by remember { mutableStateOf(false) }
     var foundHint by remember { mutableStateOf<String?>(null) }
+    var foundReference by remember { mutableStateOf<String?>(null) }
+    var showProof by remember { mutableStateOf(false) }
     var lookupError by remember { mutableStateOf<dev.hryshyn.remanence.pending.PendingLookupError?>(null) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
 
@@ -106,6 +114,8 @@ fun PendingCodeEntrySheet(
                     showGenericError = false
                     showUnavailable = false
                     foundHint = null
+                    foundReference = null
+                    showProof = false
                     lookupError = null
                 },
                 label = { Text(stringResource(R.string.pending_code_hint)) },
@@ -136,9 +146,41 @@ fun PendingCodeEntrySheet(
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.testTag("pending_code_found"),
                 )
+            }
+            val proofVmFactory = newProofVm
+            val proofReference = foundReference
+            if (foundHint != null && proofVmFactory != null && proofReference != null) {
                 Spacer(Modifier.height(8.dp))
                 Text(
                     stringResource(R.string.pending_code_found_next),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = dev.hryshyn.remanence.ui.hold.HoldColors.Muted,
+                    modifier = Modifier.testTag("pending_code_found_next"),
+                )
+                Spacer(Modifier.height(8.dp))
+                if (showProof) {
+                    val proofScope = scope
+                    val proofVm = remember(proofReference) { proofVmFactory(proofScope) }
+                    PendingProofFlow(
+                        viewModel = proofVm,
+                        giftReference = proofReference,
+                        onDone = {
+                            showProof = false
+                            foundHint = null
+                            foundReference = null
+                        },
+                    )
+                } else {
+                    Button(
+                        onClick = { showProof = true },
+                        modifier = Modifier.testTag("pending_code_continue_proof"),
+                    ) { Text(stringResource(R.string.pending_code_continue_proof)) }
+                }
+            }
+            if (foundHint != null && (proofVmFactory == null || proofReference == null)) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    stringResource(R.string.pending_code_found_next_update),
                     style = MaterialTheme.typography.bodySmall,
                     color = dev.hryshyn.remanence.ui.hold.HoldColors.Muted,
                     modifier = Modifier.testTag("pending_code_found_next"),
@@ -171,6 +213,7 @@ fun PendingCodeEntrySheet(
                                 when (val result = lookup(normalized)) {
                                     is dev.hryshyn.remanence.core.data.network.GiftLookupResult.Found -> {
                                         foundHint = result.hint.ifBlank { null } ?: result.channel
+                                        foundReference = result.giftReference
                                         onWellFormedCode(normalized)
                                     }
                                     is dev.hryshyn.remanence.core.data.network.GiftLookupResult.Failure -> {

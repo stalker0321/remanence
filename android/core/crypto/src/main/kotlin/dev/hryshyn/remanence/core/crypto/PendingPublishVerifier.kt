@@ -26,6 +26,35 @@ import java.security.MessageDigest
  */
 object PendingPublishVerifier {
 
+    /**
+     * Structural gate without a sender key (the server checked the S
+     * signature at finalize; no sender key is on record client-side).
+     * Strict unknown-field scan + typed parse + canonical equality;
+     * returns the parsed statement. Real shared caller: the proof flow.
+     */
+    fun verifyStructure(statementBytes: ByteArray): PendingPublishStatementV2 {
+        if (statementBytes.isEmpty()) {
+            throw GeneralSecurityException("pending publish statement is empty")
+        }
+        PendingStrictProto.requireNoUnknownFields(
+            statementBytes,
+            PendingStrictProto.PUBLISH_STATEMENT_V2,
+            "publish statement",
+        )
+        val statement = try {
+            PendingPublishStatementV2.parseFrom(statementBytes)
+        } catch (_: Exception) {
+            throw GeneralSecurityException("pending publish statement malformed")
+        }
+        if (statement.protocolVersion != PENDING_PROTOCOL_VERSION) {
+            throw GeneralSecurityException("pending publish version unsupported")
+        }
+        if (!statement.toByteArray().contentEquals(statementBytes)) {
+            throw GeneralSecurityException("pending publish statement not canonical")
+        }
+        return statement
+    }
+
     fun verifyPublish(
         senderEd25519PublicKeyset: ByteArray,
         statementBytes: ByteArray,

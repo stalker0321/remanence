@@ -981,11 +981,92 @@ class AppContainer private constructor(
     }
 
     /**
-     * T186 M7b: frozen R6 gift-lookup port (anonymous, budgeted). Routes
+     * T186 M7c: frozen R6 gift-lookup port (anonymous, budgeted). Routes
      * scaffold server-side; failures stay generic (no existence oracle).
      */
     val pendingGiftLookupPort: dev.hryshyn.remanence.core.data.network.PendingGiftLookupRepository by lazy {
         dev.hryshyn.remanence.core.data.network.PendingGiftLookupRepository.create(apiBaseUrl)
+    }
+
+    /**
+     * T186 M7c: proof-flow ViewModel with real frozen clients. The caller
+     * supplies the coroutine scope that bounds the flow (no retained
+     * ViewModelStore needed for this short secondary journey).
+     */
+    fun newPendingProofViewModel(
+        scope: kotlinx.coroutines.CoroutineScope,
+    ): dev.hryshyn.remanence.pending.PendingProofViewModel {
+        val continueRepo = dev.hryshyn.remanence.core.data.network.PendingContinueRepository.create(apiBaseUrl)
+        val verifyRepo = dev.hryshyn.remanence.core.data.network.PendingVerificationRepository.create(apiBaseUrl)
+        val claimRepo = dev.hryshyn.remanence.core.data.network.PendingClaimRepository.create(apiBaseUrl)
+        return dev.hryshyn.remanence.pending.PendingProofViewModel(
+            continuePort = dev.hryshyn.remanence.pending.ProofContinuePort { ref, token ->
+                continueRepo.continueFrom(ref, token)
+            },
+            verifyPort = object : dev.hryshyn.remanence.pending.ProofVerifyPort {
+                override suspend fun request(
+                    deliveryId: String, destination: String, smsConsent: Boolean,
+                    nowSeconds: Long, idempotencyKey: String, token: String,
+                ) = verifyRepo.requestVerification(
+                    deliveryId, destination,
+                    if (smsConsent) "v1" else null,
+                    if (smsConsent) nowSeconds else null,
+                    idempotencyKey, token,
+                )
+
+                override suspend fun check(
+                    deliveryId: String, attemptId: String, code: String, token: String,
+                ) = verifyRepo.checkCode(deliveryId, attemptId, code, token)
+            },
+            optionsPort = dev.hryshyn.remanence.pending.ProofOptionsPort { deliveryId, token ->
+                claimRepo.options(deliveryId, token)
+            },
+            tokenProvider = {
+                val lease = try {
+                    apiStack.captureSessionRequestLease()
+                } catch (_: Exception) {
+                    null
+                }
+                if (lease == null) {
+                    null
+                } else {
+                    try {
+                        apiStack.accessTokenForSessionRequestLease(lease)
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+            },
+            accountProvider = {
+                val summary = try {
+                    currentAccountStore.load()
+                } catch (_: Exception) {
+                    null
+                }
+                if (summary == null) {
+                    null
+                } else {
+                    dev.hryshyn.remanence.pending.ProofAccount(summary.userId, summary.activeKeyBundleId)
+                }
+            },
+            signingKeyProvider = {
+                when (val loaded = identityRepository.load()) {
+                    is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available ->
+                        loaded.signingHandle
+                    dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.RecoveryRequired -> null
+                }
+            },
+            hpkeKeyProvider = {
+                when (val loaded = identityRepository.load()) {
+                    is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available ->
+                        loaded.encryptionHandle
+                    dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.RecoveryRequired -> null
+                }
+            },
+            // Explicit block: auth session_id not persisted client-side.
+            sessionIdProvider = { null },
+            scope = scope,
+        )
     }
 
     /** One account/capsule upload boundary used by [CapsuleUploadWorker]. */

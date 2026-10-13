@@ -547,10 +547,17 @@ private fun RootSurface(
                         } else {
                             null
                         }
+                    val newProofVm: ((kotlinx.coroutines.CoroutineScope) -> dev.hryshyn.remanence.pending.PendingProofViewModel)? =
+                        if (dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled()) {
+                            { scope -> container.newPendingProofViewModel(scope) }
+                        } else {
+                            null
+                        }
                     ScanFlowSurface(
                         rootViewModel = rootViewModel,
                         scanViewModel = scanViewModel,
                         pendingLookup = pendingLookup,
+                        newProofVm = newProofVm,
                     )
                 }
             } else {
@@ -591,6 +598,11 @@ private fun ScanFlowSurface(
      * pending flag is on.
      */
     pendingLookup: (suspend (String) -> dev.hryshyn.remanence.core.data.network.GiftLookupResult)? = null,
+    /**
+     * T186 M7c: proof-flow factory (flow-scoped VM, sheet scope). Null keeps
+     * lookup-only mode.
+     */
+    newProofVm: ((kotlinx.coroutines.CoroutineScope) -> dev.hryshyn.remanence.pending.PendingProofViewModel)? = null,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     androidx.compose.runtime.DisposableEffect(scanViewModel) {
@@ -619,6 +631,7 @@ private fun ScanFlowSurface(
     ScanScreen(
         viewModel = scanViewModel,
         pendingLookup = pendingLookup,
+        newProofVm = newProofVm,
         // Activity recreation disposes/recreates Compose but keeps the
         // ViewModel and root destination. Only an actual route exit should
         // tear down the scan; this preserves same-epoch rotation state.

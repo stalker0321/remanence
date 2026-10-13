@@ -237,6 +237,20 @@ class CreateViewModel(
     val confirmedRecipient: StateFlow<ResolvedHandleSnapshot?> get() = sessionStore.confirmedRecipient
 
     /**
+     * T186 M12: authored photo originals for the pending v2 sender (the
+     * same retained originals the preview generation keeps). Pure read —
+     * no state change. Null unless the pending flag is ON and at least
+     * one original is retained; the sender fails closed (BLOCKED) on
+     * null instead of fabricating content.
+     */
+    fun pendingSenderContent(): dev.hryshyn.remanence.pending.PendingSenderContent? {
+        if (!dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled()) return null
+        val photos = retainedOriginals.orderedBytes()
+        if (photos.isEmpty()) return null
+        return dev.hryshyn.remanence.pending.PendingSenderContent(photos)
+    }
+
+    /**
      * FIX-M1-ONDEVICE-01: the resolved-but-not-yet-confirmed snapshot for the
      * confirmation screen. Binding happens ONLY through explicit confirm.
      */

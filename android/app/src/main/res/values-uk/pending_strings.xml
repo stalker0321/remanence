@@ -52,4 +52,26 @@
     <string name="pending_handle_setup_network">не вдалося зв’язатися із сервером. спробуйте ще раз.</string>
     <string name="pending_handle_setup_session">сесія змінилася. за потреби увійдіть знову.</string>
     <string name="pending_handle_setup_generic">не вийшло. спробуйте ще раз.</string>
+    <!-- T186 v2 sender (ізольоване надсилання EMAIL/PHONE → код). -->
+    <string name="pending_sender_entry">надіслати з кодом</string>
+    <string name="pending_sender_title">надіслати з кодом</string>
+    <string name="pending_sender_body">листівка отримає п’ятисимвольний код замість доставки в акаунт. відомі адреси отримують звичайним способом.</string>
+    <string name="pending_sender_email">пошта</string>
+    <string name="pending_sender_phone">телефон</string>
+    <string name="pending_sender_email_hint">пошта</string>
+    <string name="pending_sender_phone_hint">телефон</string>
+    <string name="pending_sender_send">надіслати</string>
+    <string name="pending_sender_cancel">назад</string>
+    <string name="pending_sender_done">готово</string>
+    <string name="pending_sender_working">надсилаємо…</string>
+    <string name="pending_sender_code_note">напишіть його на листівці точно. він перестане працювати після відкриття подарунка.</string>
+    <string name="pending_sender_known_v1">ця адреса вже тут. надішліть звичайним способом — нічого не утримано.</string>
+    <string name="pending_sender_invalid">цю адресу не можна використати. перевірте її та спробуйте ще раз.</string>
+    <string name="pending_sender_network">не вдалося зв’язатися із сервером. спробуйте ще раз.</string>
+    <string name="pending_sender_session">сесія змінилася. за потреби увійдіть знову.</string>
+    <string name="pending_sender_conflict">це надсилання вже є на сервері.</string>
+    <string name="pending_sender_blocked">надсилання з кодом продовжиться в наступному тестовому оновленні.</string>
+    <string name="pending_sender_recovery">спочатку відновіть доступ, потім надішліть з кодом.</string>
+    <string name="pending_sender_service">надсилання з кодом не налаштоване в цій збірці.</string>
+    <string name="pending_sender_generic">не вийшло. спробуйте ще раз.</string>
 </resources>

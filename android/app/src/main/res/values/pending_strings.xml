@@ -57,4 +57,26 @@
     <string name="pending_handle_setup_network">couldn’t reach the server. try again.</string>
     <string name="pending_handle_setup_session">the session changed. sign in again if needed.</string>
     <string name="pending_handle_setup_generic">that didn’t work. try again.</string>
+    <!-- T186 v2 sender (isolated EMAIL/PHONE → R1 freeze → R3/R4/R5 → handwritten code). -->
+    <string name="pending_sender_entry">send with a code</string>
+    <string name="pending_sender_title">send with a code</string>
+    <string name="pending_sender_body">the card gets a five-character code instead of an account delivery. known accounts still receive the ordinary way.</string>
+    <string name="pending_sender_email">email</string>
+    <string name="pending_sender_phone">phone</string>
+    <string name="pending_sender_email_hint">email</string>
+    <string name="pending_sender_phone_hint">phone</string>
+    <string name="pending_sender_send">send</string>
+    <string name="pending_sender_cancel">back</string>
+    <string name="pending_sender_done">done</string>
+    <string name="pending_sender_working">sending…</string>
+    <string name="pending_sender_code_note">write it on the card exactly. it stops working after the gift is opened.</string>
+    <string name="pending_sender_known_v1">that address is already here. send it the ordinary way — nothing was held back.</string>
+    <string name="pending_sender_invalid">that address can’t be used. check it and try again.</string>
+    <string name="pending_sender_network">couldn’t reach the server. try again.</string>
+    <string name="pending_sender_session">the session changed. sign in again if needed.</string>
+    <string name="pending_sender_conflict">that send is already on the server.</string>
+    <string name="pending_sender_blocked">code sending continues in the next test update.</string>
+    <string name="pending_sender_recovery">restore access first, then send with a code.</string>
+    <string name="pending_sender_service">code sending isn’t configured in this build.</string>
+    <string name="pending_sender_generic">that didn’t work. try again.</string>
 </resources>

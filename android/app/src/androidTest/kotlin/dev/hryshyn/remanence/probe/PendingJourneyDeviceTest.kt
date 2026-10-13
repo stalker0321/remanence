@@ -9,6 +9,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalContext
@@ -430,5 +431,138 @@ class PendingJourneyDeviceTest {
         release.complete(Unit)
         rule.waitForIdle()
         rule.runOnIdle { assertEquals("A3K9Q", published) }
+    }
+
+    private fun senderVm(
+        scope: kotlinx.coroutines.CoroutineScope,
+        freeze: dev.hryshyn.remanence.core.data.network.SendRouteResult,
+    ): dev.hryshyn.remanence.pending.PendingSenderViewModel {
+        dev.hryshyn.remanence.core.crypto.TinkPrimitives.ensureRegistered()
+        val signing = com.google.crypto.tink.KeysetHandle.generateNew(
+            com.google.crypto.tink.KeyTemplates.get("ED25519"),
+        )
+        val gate = object : dev.hryshyn.remanence.pending.PendingRetirementSessionGate {
+            override fun capture(): dev.hryshyn.remanence.core.data.network.SessionRequestLease =
+                dev.hryshyn.remanence.core.data.network.SessionRequestLease(
+                    dev.hryshyn.remanence.core.model.UserId.parseRest("01010101-0202-0303-0404-050505050505"),
+                    1L,
+                )
+
+            override fun accessTokenFor(
+                lease: dev.hryshyn.remanence.core.data.network.SessionRequestLease,
+            ): String? = "token"
+
+            override fun isLive(
+                lease: dev.hryshyn.remanence.core.data.network.SessionRequestLease,
+            ): Boolean = true
+        }
+        val account = dev.hryshyn.remanence.pending.ProofAccount(
+            "01010101-0202-0303-0404-050505050505",
+            "0b0b0b0b-1c1c-2d2d-3e3e-4f4f4f4f4f4f",
+        )
+        return dev.hryshyn.remanence.pending.PendingSenderViewModel(
+            freezePort = dev.hryshyn.remanence.pending.PendingSendRouteFlow.SendRoutePort { _, _, _, _, _ -> freeze },
+            publishFlowFactory = { materialPort ->
+                dev.hryshyn.remanence.pending.PendingPublishFlow(
+                    draftPort = dev.hryshyn.remanence.pending.PendingPublishFlow.DraftPort { _, _, _, _, _, _, _, _, _, _ ->
+                        dev.hryshyn.remanence.core.data.network.PendingDraftResult.Draft(
+                            "0198f0a0-0000-7000-8000-00000000d401",
+                            "0f".repeat(32),
+                            1798765432L,
+                        )
+                    },
+                    blobPort = dev.hryshyn.remanence.pending.PendingPublishFlow.BlobPort { _, blobId, _, _, _, _ ->
+                        dev.hryshyn.remanence.core.data.network.PendingBlobResult.Uploaded(blobId, 11L)
+                    },
+                    finalizePort = dev.hryshyn.remanence.pending.PendingPublishFlow.FinalizePort { deliveryId, _, _, _, _, _ ->
+                        dev.hryshyn.remanence.core.data.network.PendingFinalizeResult.Finalized(
+                            deliveryId, "AB3DE", 1814317432L, "a•••@•••",
+                        )
+                    },
+                    materialPort = materialPort,
+                    sessionGate = gate,
+                    accountProvider = { account },
+                    scope = null,
+                )
+            },
+            contentPort = dev.hryshyn.remanence.pending.PendingSenderContentPort {
+                dev.hryshyn.remanence.pending.PendingSenderContent(
+                    listOf("device-jpeg".toByteArray()),
+                )
+            },
+            identityPort = dev.hryshyn.remanence.pending.PendingSenderIdentityPort {
+                dev.hryshyn.remanence.pending.PendingSenderIdentity(
+                    "01010101-0202-0303-0404-050505050505",
+                    "0b0b0b0b-1c1c-2d2d-3e3e-4f4f4f4f4f4f",
+                    signing,
+                )
+            },
+            servicePinProvider = {
+                dev.hryshyn.remanence.pending.PendingServicePin(
+                    "9f9f9f9f-8e8e-7d7d-6c6c-5b5b5b5b5b5b",
+                    "cGlu",
+                )
+            },
+            sessionGate = gate,
+            accountProvider = { account },
+            scope = scope,
+        )
+    }
+
+    /**
+     * T186 M12: actual sender sheet — pending route publishes through
+     * the real flow ports and displays the handwritten 5-char code.
+     * Root runs on device (r19).
+     */
+    @Test fun senderPendingRouteShowsHandwrittenCode() {
+        mountEntry("en") {
+            val scope = androidx.compose.runtime.rememberCoroutineScope()
+            val viewModel = androidx.compose.runtime.remember {
+                senderVm(
+                    scope,
+                    dev.hryshyn.remanence.core.data.network.SendRouteResult.FrozenPending(
+                        routeId = "0198f0a0-0000-7000-8000-00000000b301",
+                        deliveryTargetId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                        normalizedDestination = "a42@example.test",
+                        channel = "email",
+                        claimDeadline = 1814317432L,
+                        serviceKeyId = "9f9f9f9f-8e8e-7d7d-6c6c-5b5b5b5b5b5b",
+                        expiresAt = 1798765432L,
+                    ),
+                )
+            }
+            dev.hryshyn.remanence.pending.PendingSenderSheet(viewModel = viewModel, onClose = {}, enabled = true)
+        }
+        rule.onNodeWithTag("pending_sender_field").performTextInput("a42@example.test")
+        rule.onNodeWithTag("pending_sender_send").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("pending_sender_code").assertIsDisplayed()
+        rule.onNodeWithText("AB3DE").assertIsDisplayed()
+        rule.onNodeWithTag("pending_sender_hint").assertIsDisplayed()
+    }
+
+    @Test fun senderKnownV1StaysZeroEscrow() {
+        mountEntry("en") {
+            val scope = androidx.compose.runtime.rememberCoroutineScope()
+            val viewModel = androidx.compose.runtime.remember {
+                senderVm(
+                    scope,
+                    dev.hryshyn.remanence.core.data.network.SendRouteResult.FrozenV1(
+                        routeId = "0198f0a0-0000-7000-8000-00000000b302",
+                        userId = "33333333-4444-5555-6666-777777777777",
+                        keyBundleId = "0b0b0b0b-1c1c-2d2d-3e3e-4f4f4f4f4f4f",
+                        bindingRevision = 3L,
+                        expiresAt = 1798765432L,
+                    ),
+                )
+            }
+            dev.hryshyn.remanence.pending.PendingSenderSheet(viewModel = viewModel, onClose = {}, enabled = true)
+        }
+        rule.onNodeWithTag("pending_sender_field").performTextInput("known@example.test")
+        rule.onNodeWithTag("pending_sender_send").performClick()
+        rule.waitForIdle()
+        // Known bound route: ordinary-send note, never a code, no escrow.
+        rule.onNodeWithTag("pending_sender_known_v1").assertIsDisplayed()
+        rule.onNodeWithTag("pending_sender_code").assertDoesNotExist()
     }
 }

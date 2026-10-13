@@ -998,6 +998,26 @@ class AppContainer private constructor(
     }
 
     /**
+     * T186 M12: frozen R3/R4/R5 publication port (gated server-side;
+     * failures stay typed, never fake success).
+     */
+    val pendingDeliveryPublishPort: dev.hryshyn.remanence.core.data.network.PendingDeliveryPublishRepository by lazy {
+        dev.hryshyn.remanence.core.data.network.PendingDeliveryPublishRepository.create(apiBaseUrl)
+    }
+
+    /**
+     * T186 M12: selected service verifier + deployment UUID. Out-of-band
+     * T185 dev bootstrap while pending builds run (`PendingDevServicePin`
+     * answers only when the pending flag is ON); every other build gets
+     * null and PENDING_V2 publication fails closed — never an invented
+     * UUID, never an R-carried key. Deployment replaces this with its
+     * own pin history, never the dev pair.
+     */
+    val pendingServicePin: dev.hryshyn.remanence.pending.PendingServicePin? by lazy {
+        dev.hryshyn.remanence.pending.PendingDevServicePin.pinIfEnabled()
+    }
+
+    /**
      * T186 M10: single-slot opaque gift intent (resume across sheet close,
      * rotation, process death). Owner-fenced, cleared on logout.
      */
@@ -1145,6 +1165,106 @@ class AppContainer private constructor(
                     } catch (_: Exception) {
                         null
                     }
+                }
+            },
+            scope = scope,
+        )
+    }
+
+    /**
+     * T186 M12: actual v2 sender caller (isolated EMAIL/PHONE → R1 freeze
+     * → R3/R4/R5 → 5-char code). Ports are the real frozen clients;
+     * [contentPort] supplies the authored photo JPEGs for one capsule
+     * (production binds the Create session; tests inject fakes).
+     */
+    fun newPendingSenderViewModel(
+        scope: kotlinx.coroutines.CoroutineScope,
+        contentPort: dev.hryshyn.remanence.pending.PendingSenderContentPort,
+    ): dev.hryshyn.remanence.pending.PendingSenderViewModel {
+        val publishRepo = pendingDeliveryPublishPort
+        val sendRepo = pendingSendRoutePort
+        return dev.hryshyn.remanence.pending.PendingSenderViewModel(
+            freezePort = dev.hryshyn.remanence.pending.PendingSendRouteFlow.SendRoutePort { capsule, kind, value, key, token ->
+                sendRepo.freeze(capsule, kind, value, key, token)
+            },
+            publishFlowFactory = { materialPort ->
+                dev.hryshyn.remanence.pending.PendingPublishFlow(
+                    draftPort = dev.hryshyn.remanence.pending.PendingPublishFlow.DraftPort { route, capsule, target, channel, destination, salt, expiry, artifacts, key, token ->
+                        publishRepo.draft(
+                            route, capsule, target, channel, destination,
+                            salt, expiry,
+                            artifacts.map {
+                                dev.hryshyn.remanence.core.data.network.PendingArtifactDeclaration(
+                                    it.blobId, it.kind, it.ordinal,
+                                    it.ciphertextSize, it.ciphertextSha256Hex,
+                                )
+                            },
+                            key, token,
+                        )
+                    },
+                    blobPort = dev.hryshyn.remanence.pending.PendingPublishFlow.BlobPort { delivery, blob, bytes, size, sha, token ->
+                        publishRepo.uploadBlob(delivery, blob, bytes, size, sha, token)
+                    },
+                    finalizePort = dev.hryshyn.remanence.pending.PendingPublishFlow.FinalizePort { delivery, statement, signature, escrow, key, token ->
+                        publishRepo.finalize(delivery, statement, signature, escrow, key, token)
+                    },
+                    materialPort = materialPort,
+                    sessionGate = pendingSessionGate,
+                    accountProvider = {
+                        val summary = try {
+                            currentAccountStore.load()
+                        } catch (_: Exception) {
+                            null
+                        }
+                        if (summary == null) {
+                            null
+                        } else {
+                            dev.hryshyn.remanence.pending.ProofAccount(
+                                summary.userId, summary.activeKeyBundleId,
+                            )
+                        }
+                    },
+                    scope = null,
+                )
+            },
+            contentPort = contentPort,
+            identityPort = dev.hryshyn.remanence.pending.PendingSenderIdentityPort {
+                // ARK-readiness: keys must unwrap (recovery otherwise —
+                // without the signing handle nothing can be framed).
+                val loaded = try {
+                    identityRepository.load()
+                } catch (_: Exception) {
+                    null
+                }
+                val signing = (loaded as? dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available)
+                    ?.signingHandle
+                val summary = try {
+                    currentAccountStore.load()
+                } catch (_: Exception) {
+                    null
+                }
+                if (signing == null || summary == null ||
+                    summary.userId.isBlank() || summary.activeKeyBundleId.isBlank()
+                ) {
+                    null
+                } else {
+                    dev.hryshyn.remanence.pending.PendingSenderIdentity(
+                        summary.userId, summary.activeKeyBundleId, signing,
+                    )
+                }
+            },
+            servicePinProvider = { pendingServicePin },
+            sessionGate = pendingSessionGate,
+            accountProvider = {
+                val summary = try {
+                    currentAccountStore.load()
+                } catch (_: Exception) {
+                    null
+                }
+                if (summary == null) {
+                    null
+                } else {
+                    dev.hryshyn.remanence.pending.ProofAccount(summary.userId, summary.activeKeyBundleId)
                 }
             },
             scope = scope,

@@ -52,4 +52,26 @@
     <string name="pending_handle_setup_network">не удалось связаться с сервером. попробуйте ещё раз.</string>
     <string name="pending_handle_setup_session">сессия изменилась. при необходимости войдите снова.</string>
     <string name="pending_handle_setup_generic">не получилось. попробуйте ещё раз.</string>
+    <!-- T186 v2 sender (изолированная отправка EMAIL/PHONE → код). -->
+    <string name="pending_sender_entry">отправить с кодом</string>
+    <string name="pending_sender_title">отправить с кодом</string>
+    <string name="pending_sender_body">открытка получит пятисимвольный код вместо доставки в аккаунт. известные адреса получают обычным способом.</string>
+    <string name="pending_sender_email">почта</string>
+    <string name="pending_sender_phone">телефон</string>
+    <string name="pending_sender_email_hint">почта</string>
+    <string name="pending_sender_phone_hint">телефон</string>
+    <string name="pending_sender_send">отправить</string>
+    <string name="pending_sender_cancel">назад</string>
+    <string name="pending_sender_done">готово</string>
+    <string name="pending_sender_working">отправляем…</string>
+    <string name="pending_sender_code_note">напишите его на открытке точно. он перестанет работать после открытия подарка.</string>
+    <string name="pending_sender_known_v1">этот адрес уже здесь. отправьте обычным способом — ничего не удержано.</string>
+    <string name="pending_sender_invalid">этот адрес нельзя использовать. проверьте его и попробуйте ещё раз.</string>
+    <string name="pending_sender_network">не удалось связаться с сервером. попробуйте ещё раз.</string>
+    <string name="pending_sender_session">сессия изменилась. при необходимости войдите снова.</string>
+    <string name="pending_sender_conflict">эта отправка уже есть на сервере.</string>
+    <string name="pending_sender_blocked">отправка с кодом продолжится в следующем тестовом обновлении.</string>
+    <string name="pending_sender_recovery">сначала восстановите доступ, затем отправьте с кодом.</string>
+    <string name="pending_sender_service">отправка с кодом не настроена в этой сборке.</string>
+    <string name="pending_sender_generic">не получилось. попробуйте ещё раз.</string>
 </resources>

@@ -395,6 +395,34 @@ private fun RecipientLookupContent(viewModel: CreateViewModel) {
             stringResource(if (state is RecipientLookupUiState.LookingUp) R.string.hold_looking_up else R.string.hold_find),
             "create_lookup_button", viewModel::lookupRecipient, enabled = viewModel.pickerVm.canLookup,
         )
+        // T186 M12: secondary pending sender entry (isolated EMAIL/PHONE
+        // → R1 freeze → R3/R4/R5 → handwritten code). Renders nothing
+        // unless the pending build flag is ON; the handle flow above is
+        // untouched. Content binds the authored retained originals.
+        if (dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled()) {
+            var showSender by remember { mutableStateOf(false) }
+            Spacer(Modifier.height(8.dp))
+            dev.hryshyn.remanence.pending.PendingSenderEntryButton(
+                onOpenSender = { showSender = true },
+            )
+            if (showSender) {
+                val senderScope = rememberCoroutineScope()
+                val context = LocalContext.current
+                val senderVm = remember(senderScope) {
+                    val app = context.applicationContext as RemanenceApplication
+                    app.container.newPendingSenderViewModel(
+                        senderScope,
+                        contentPort = dev.hryshyn.remanence.pending.PendingSenderContentPort {
+                            viewModel.pendingSenderContent()
+                        },
+                    )
+                }
+                dev.hryshyn.remanence.pending.PendingSenderSheet(
+                    viewModel = senderVm,
+                    onClose = { showSender = false },
+                )
+            }
+        }
     }
 }
 

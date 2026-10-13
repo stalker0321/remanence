@@ -90,6 +90,17 @@ class RetainedOriginalHolder : AutoCloseable {
     }
 
     /**
+     * T186 M12: insertion-ordered snapshot of caller-owned retained
+     * copies (the pending v2 sender seals these authored originals).
+     * Empty when closed or nothing retained. Pure read — no state
+     * change, no zeroization.
+     */
+    fun orderedBytes(): List<ByteArray> {
+        if (closed) return emptyList()
+        return entries.values.map { it.bytes.copyOf() }
+    }
+
+    /**
      * Drops [contentId], zeroizing its retained array first. Returns whether
      * an entry was present; idempotent.
      */

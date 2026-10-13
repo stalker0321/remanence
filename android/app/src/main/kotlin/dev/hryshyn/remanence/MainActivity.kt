@@ -247,8 +247,11 @@ private fun RootSurface(
                 AccessPage(footer = { AccessLanguageControl(current = appLocale, onSelect = onLocaleSelected) }) {
                     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = HoldSpace.Gutter),
                         verticalArrangement = Arrangement.spacedBy(HoldSpace.Section)) {
-                        Text("\u2068@${setupRequired.handle}\u2069", style = MaterialTheme.typography.labelLarge,
-                            color = dev.hryshyn.remanence.ui.hold.HoldColors.Muted)
+                        // T186: handleless accounts show no handle row here either.
+                        if (setupRequired.handle != null) {
+                            Text("\u2068@${setupRequired.handle}\u2069", style = MaterialTheme.typography.labelLarge,
+                                color = dev.hryshyn.remanence.ui.hold.HoldColors.Muted)
+                        }
                         dev.hryshyn.remanence.recovery.RecoveryActions(container, true, false,
                             rootViewModel::onSessionEstablished, onBusyChange = { recoveryBusy = it }, mandatorySetup = true)
                         HoldInformation(stringResource(R.string.mvp_setup_saved))
@@ -396,6 +399,21 @@ private fun RootSurface(
                 createViewModel.beginSession(createEpoch, authenticatedOwner)
             }
             androidx.compose.runtime.key(createEpoch) {
+                // T186 first-send handle gate: a handleless receive-only
+                // account never enters the send flow (no placeholder
+                // identity, no silent v1 send). The notice explains and
+                // returns; the R17 commit lands in milestone 4.
+                val handleGate = dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled() &&
+                    dev.hryshyn.remanence.pending.PendingReceivePolicy.shouldPromptForHandleOnSend(
+                        dev.hryshyn.remanence.pending.PendingReceiveProfile(
+                            handle = (authState as? AuthUiState.Authenticated)?.handle,
+                        ),
+                    )
+                if (handleGate) {
+                    dev.hryshyn.remanence.pending.PendingHandleRequiredNotice(
+                        onBack = rootViewModel::returnToHome,
+                    )
+                } else {
                 val create: @Composable () -> Unit = {
                 CreateScreen(
                     viewModel = createViewModel,
@@ -416,6 +434,7 @@ private fun RootSurface(
                         authenticatedOwner.toString(), { createViewModel.endSession(); rootViewModel.returnToHome() }, content = create,
                         telemetryContent = { dev.hryshyn.remanence.ui.settings.TelemetryPreferences(container.telemetry) })
                 else create()
+                }
             }
         },
         capsuleContent = { grantId ->

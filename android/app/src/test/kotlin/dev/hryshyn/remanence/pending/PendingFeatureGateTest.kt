@@ -29,4 +29,11 @@ class PendingFeatureGateTest {
     fun blankIsRejected() {
         assertFalse(PendingFeatureGate.isIsolatedApiAccepted("  "))
     }
+
+    @Test
+    fun pendingDisabledByDefault() {
+        // Plain-JVM default: experimental journey is OFF unless the debug
+        // build explicitly opts in. All pending UI returns early on false.
+        assertFalse(PendingFeatureGate.isEnabled())
+    }
 }

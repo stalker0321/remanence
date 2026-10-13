@@ -128,8 +128,11 @@ class RemanenceViewModelFactory(
                 container.currentAccountStore.load()?.userId
             },
             selfRecipientAccountProvider = {
+                // T186: handleless receive-only accounts offer no self
+                // shortcut (absent means no self shortcut, by contract).
                 container.currentAccountStore.loadEntity()?.let {
-                    dev.hryshyn.remanence.ui.create.SelfRecipientAccount(it.userId, it.handleNormalized)
+                    val handle = it.handleNormalized ?: return@let null
+                    dev.hryshyn.remanence.ui.create.SelfRecipientAccount(it.userId, handle)
                 }
             },
             recipientLookupBoundaryEpoch = container.sessionBoundary::currentEpoch,

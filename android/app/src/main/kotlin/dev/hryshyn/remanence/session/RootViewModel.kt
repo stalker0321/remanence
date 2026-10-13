@@ -681,7 +681,9 @@ class RootViewModel internal constructor(
                     scheduleNetwork = true
                     AuthUiState.Authenticated(
                         userId = resolved.userId ?: "",
-                        handle = resolved.handle ?: "",
+                        // T186: null handle passes through (receive-only);
+                        // never minted into an empty placeholder identity.
+                        handle = resolved.handle,
                         activeKeyBundleId = resolved.activeKeyBundleId,
                     )
                 }
@@ -689,7 +691,7 @@ class RootViewModel internal constructor(
                     activeUserId = resolved.userId
                     AuthUiState.Authenticated(
                         userId = resolved.userId ?: "",
-                        handle = resolved.handle ?: "",
+                        handle = resolved.handle,
                         activeKeyBundleId = resolved.activeKeyBundleId,
                     )
                 }

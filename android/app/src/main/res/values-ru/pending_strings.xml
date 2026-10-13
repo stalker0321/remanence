@@ -8,4 +8,7 @@
     <string name="pending_code_cancel">назад</string>
     <string name="pending_code_invalid">этот код нельзя использовать. проверьте его и попробуйте ещё раз.</string>
     <string name="pending_code_unavailable">поиск по коду пока недоступен в этой тестовой сборке.</string>
+    <string name="pending_handle_required_title">выберите имя перед отправкой</string>
+    <string name="pending_handle_required_body">для отправки нужно одноразовое публичное имя. настройка имени появится в следующем тестовом обновлении; получение и открытие продолжают работать.</string>
+    <string name="pending_handle_required_back">назад</string>
 </resources>

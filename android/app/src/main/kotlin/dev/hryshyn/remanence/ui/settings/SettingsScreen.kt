@@ -25,7 +25,7 @@ import dev.hryshyn.remanence.ui.locale.AppLocale
 
 /** Overview first; values are not buttons and secondary detail stays behind one row. */
 @Composable
-fun SettingsScreen(handle: String, locale: AppLocale, onLocale: (AppLocale) -> Unit,
+fun SettingsScreen(handle: String?, locale: AppLocale, onLocale: (AppLocale) -> Unit,
                    recoveryReady: Boolean, onBack: () -> Unit, onLogout: () -> Unit,
                    telemetryContent: @Composable () -> Unit = {},
                    safetyContent: @Composable () -> Unit = {}) {
@@ -49,8 +49,11 @@ fun SettingsScreen(handle: String, locale: AppLocale, onLocale: (AppLocale) -> U
                 color = HoldColors.Ink, modifier = Modifier.testTag("settings_title").semantics { heading() })
             Column(Modifier.fillMaxWidth().testTag("settings_section_account"), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 SettingsLabel(stringResource(R.string.settings_design_account))
-                Text("\u2068@$handle\u2069", Modifier.fillMaxWidth().testTag("settings_handle"),
-                    style = MaterialTheme.typography.titleMedium, color = HoldColors.Ink)
+                // T186: handleless receive-only accounts show no handle row.
+                if (handle != null) {
+                    Text("\u2068@$handle\u2069", Modifier.fillMaxWidth().testTag("settings_handle"),
+                        style = MaterialTheme.typography.titleMedium, color = HoldColors.Ink)
+                }
                 if (BuildConfig.REMANENCE_RECOVERY_ENABLED) Text(stringResource(R.string.mvp_handle_permanent),
                     Modifier.testTag("settings_handle_permanent"), style = MaterialTheme.typography.bodySmall, color = HoldColors.Muted)
             }

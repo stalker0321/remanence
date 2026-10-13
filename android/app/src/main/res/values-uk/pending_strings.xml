@@ -8,4 +8,7 @@
     <string name="pending_code_cancel">назад</string>
     <string name="pending_code_invalid">цей код не можна використати. перевірте його та спробуйте ще раз.</string>
     <string name="pending_code_unavailable">пошук за кодом поки недоступний у цій тестовій збірці.</string>
+    <string name="pending_handle_required_title">оберіть ім’я перед надсиланням</string>
+    <string name="pending_handle_required_body">для надсилання потрібне одноразове публічне ім’я. налаштування імені з’явиться в наступному тестовому оновленні; отримання й відкриття продовжують працювати.</string>
+    <string name="pending_handle_required_back">назад</string>
 </resources>

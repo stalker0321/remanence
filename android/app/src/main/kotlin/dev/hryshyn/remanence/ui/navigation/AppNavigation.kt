@@ -22,14 +22,19 @@ sealed interface AuthUiState {
     /** Account authenticated by the server, but local private identity is absent. */
     data object RecoveryRequired : AuthUiState
 
-    data class RecoverySetupRequired(val userId: String, val handle: String, val bundleId: String) : AuthUiState
+    data class RecoverySetupRequired(val userId: String, val handle: String?, val bundleId: String) : AuthUiState
 
     /** Sealed refresh token exists but the cold-start refresh could not complete. */
     data object RequiresConnectivity : AuthUiState
 
     data class Authenticated(
         val userId: String,
-        val handle: String,
+        /**
+         * T186: null for receive-only accounts that defer the immutable
+         * handle until first send (T184 contract). Never an empty
+         * placeholder: routing uses [userId]; sending is gated on null.
+         */
+        val handle: String? = null,
         val activeKeyBundleId: String? = null,
     ) : AuthUiState
 }

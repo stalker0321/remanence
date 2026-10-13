@@ -188,7 +188,7 @@ private fun FlowHeader(
 /** Home chrome including the logout action, rendered for authenticated users. */
 @Composable
 fun AuthenticatedHomeChrome(
-    handle: String,
+    handle: String?,
     onLogout: () -> Unit,
     homeContent: @Composable () -> Unit,
     modifier: Modifier = Modifier,
@@ -197,7 +197,13 @@ fun AuthenticatedHomeChrome(
 ) {
     Column(modifier = modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("\u2068@$handle\u2069", modifier = Modifier.weight(1f).testTag("root_signed_in_as"), style = MaterialTheme.typography.labelMedium)
+            // T186: handleless receive-only accounts show no handle row —
+            // never an empty "@" placeholder.
+            if (handle != null) {
+                Text("\u2068@$handle\u2069", modifier = Modifier.weight(1f).testTag("root_signed_in_as"), style = MaterialTheme.typography.labelMedium)
+            } else {
+                Spacer(Modifier.weight(1f))
+            }
             if (onSettings == null) {
                 OutlinedButton(onClick = onLogout, modifier = Modifier.testTag("root_logout_button")) { Text(stringResource(R.string.hold_logout)) }
             } else {

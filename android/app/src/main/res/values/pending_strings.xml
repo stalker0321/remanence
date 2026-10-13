@@ -11,4 +11,8 @@
     <string name="pending_code_cancel">back</string>
     <string name="pending_code_invalid">that code can’t be used. check it and try again.</string>
     <string name="pending_code_unavailable">code lookup isn’t available yet in this test build.</string>
+    <!-- T186 first-send handle gate: no backend commit yet (R17 scaffold). -->
+    <string name="pending_handle_required_title">choose a handle before sending</string>
+    <string name="pending_handle_required_body">sending needs a one-time public handle. handle setup arrives with the next test update; receiving and opening keep working.</string>
+    <string name="pending_handle_required_back">back</string>
 </resources>

@@ -41,14 +41,15 @@ class LoginUseCase(
     sealed interface Outcome {
         data class LoggedIn(
             val userId: String,
-            val handle: String,
+            /** Null for receive-only accounts (deferred handle). */
+            val handle: String?,
             val activeKeyBundleId: String,
         ) : Outcome
 
         /** Password accepted by the server, but local private keys are absent. */
         data class RecoveryRequired(
             val userId: String,
-            val handle: String,
+            val handle: String?,
             val activeKeyBundleId: String,
         ) : Outcome
 

@@ -25,7 +25,8 @@ sealed interface LoginSubmitState {
 
     data class LoggedIn(
         val userId: String,
-        val handle: String,
+        /** Null for receive-only accounts (deferred handle). */
+        val handle: String?,
     ) : LoginSubmitState
 }
 

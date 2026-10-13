@@ -46,7 +46,8 @@ sealed interface AccountCapabilityState {
 
     data class CryptoReady(
         val userId: String,
-        val handle: String,
+        /** Null for receive-only accounts (handle deferred until send). */
+        val handle: String?,
     ) : AccountCapabilityState
 
     val actionsEnabled: Boolean

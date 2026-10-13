@@ -19,7 +19,7 @@ sealed interface SessionState {
     /** Refresh token exists but the wrapped identity keysets are gone: recovery flow. */
     data object RecoveryRequired : SessionState
 
-    data class RecoverySetupRequired(val userId: String, val handle: String, val bundleId: String) : SessionState
+    data class RecoverySetupRequired(val userId: String, val handle: String?, val bundleId: String) : SessionState
 
     /**
      * Sealed refresh token plus usable keysets, but the server could not be

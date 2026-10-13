@@ -84,6 +84,17 @@ class LocalAccountDaoTest {
         assertNull(dao.getAccount())
     }
 
+    @Test
+    fun nullableHandleRoundTripsForReceiveOnly() = runBlocking {
+        // T186: receive-only accounts defer the handle; no placeholder.
+        val record = account().copy(handleNormalized = null)
+        dao.replaceAccount(record)
+        val loaded = dao.getAccount()!!
+        assertNull(loaded.handleNormalized)
+        assertEquals(record.userId, loaded.userId)
+        assertEquals(record.activeKeyBundleId, loaded.activeKeyBundleId)
+    }
+
     private fun countRows(): Int =
         database.openHelper.readableDatabase.query("SELECT COUNT(*) FROM local_account").use { cursor ->
             cursor.moveToFirst()

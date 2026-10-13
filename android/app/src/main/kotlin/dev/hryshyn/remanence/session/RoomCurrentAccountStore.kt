@@ -11,7 +11,7 @@ import dev.hryshyn.remanence.core.data.db.LocalAccountEntity
 class RoomCurrentAccountStore(private val dao: LocalAccountDao) {
 
     /** Atomically replaces the single active account row after auth success. */
-    suspend fun record(userId: String, handle: String, activeKeyBundleId: String) {
+    suspend fun record(userId: String, handle: String?, activeKeyBundleId: String) {
         val existing = dao.getAccount()
         val now = System.currentTimeMillis()
         dao.replaceAccount(

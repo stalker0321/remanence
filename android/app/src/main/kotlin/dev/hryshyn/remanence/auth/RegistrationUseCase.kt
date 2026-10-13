@@ -46,7 +46,8 @@ class RegistrationUseCase(
     sealed interface Outcome {
         data class Registered(
             val userId: String,
-            val handle: String,
+            /** Null for receive-only accounts (deferred handle). */
+            val handle: String?,
             val activeKeyBundleId: String,
         ) : Outcome
 

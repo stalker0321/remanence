@@ -24,7 +24,13 @@ data class RegisterRequestDto(
 data class RegistrationUserDto(
     @SerialName("user_id") val userId: String,
     val email: String,
-    val handle: String,
+    /**
+     * T186: nullable per the pending profile contract (T185 §2, capability
+     * header v2). v1 servers always send non-null; a null here records a
+     * receive-only account that defers the handle until first send. Never
+     * replaced by an empty placeholder downstream.
+     */
+    val handle: String? = null,
     @SerialName("created_at") val createdAt: String,
 )
 

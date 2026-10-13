@@ -41,7 +41,7 @@ internal fun Context.requestAccountDeletion(handle: String): Boolean = try {
 } catch (_: android.content.ActivityNotFoundException) { openRemanenceLink("delete-account") }
 
 @Composable
-internal fun BetaLegalLinks(handle: String) {
+internal fun BetaLegalLinks(handle: String?) {
     // These pages belong to the separately deployed beta backend. Do not expose
     // dead legal links in the existing recovery-test APK while it is unchanged.
     if (!BuildConfig.REMANENCE_PLAY_BETA) return
@@ -50,7 +50,11 @@ internal fun BetaLegalLinks(handle: String) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(HoldSpace.Small)) {
         SettingsActionRow(stringResource(R.string.beta_privacy_policy), onClick = { failed = !context.openRemanenceLink("privacy") }, modifier = Modifier.testTag("settings_privacy_policy"))
         SettingsActionRow(stringResource(R.string.beta_terms), onClick = { failed = !context.openRemanenceLink("terms") }, modifier = Modifier.testTag("settings_terms"))
-        SettingsActionRow(stringResource(R.string.beta_delete_account), onClick = { failed = !context.requestAccountDeletion(handle) }, modifier = Modifier.testTag("settings_delete_account"), destructive = true)
+        // T186: the account-deletion request names the handle; handleless
+        // accounts get no dead row.
+        if (handle != null) {
+            SettingsActionRow(stringResource(R.string.beta_delete_account), onClick = { failed = !context.requestAccountDeletion(handle) }, modifier = Modifier.testTag("settings_delete_account"), destructive = true)
+        }
         Text(SUPPORT_EMAIL, Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = HoldColors.Muted, style = MaterialTheme.typography.bodySmall)
         if (failed) Text(stringResource(R.string.beta_external_failed), color = HoldColors.Destructive)
     }

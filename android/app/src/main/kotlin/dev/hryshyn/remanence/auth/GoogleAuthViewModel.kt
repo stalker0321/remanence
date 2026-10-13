@@ -116,6 +116,10 @@ class GoogleAuthViewModel(private val container: AppContainer) : ViewModel() {
         val login = json.decodeFromJsonElement<LoginResponseDto>(result.getValue("login"))
         var committed = false
         try {
+            // T186 receive intent: a SIGNED_IN summary with a null handle
+            // records a receive-only account (deferred handle, no ChooseHandle
+            // — there is nothing to choose yet). Bootstrap maps it to a
+            // handleless Active state; first send prompts for the handle.
             container.sessionReplacement.replace(lease, UserId.parseRest(login.user.userId), login.accessToken, login.refreshToken) {
                 container.currentAccountStore.record(login.user.userId, login.user.handle, login.activeKeyBundle.keyBundleId)
             }

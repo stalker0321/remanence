@@ -1397,3 +1397,40 @@ def test_claim_vs_registry_mutation_no_deadlock(session_factory) -> None:
     # terminal outcome is a ClaimError-free completion or an honest error,
     # never a hang or a deadlock abort.
     assert sorted(outcomes) == ["churned", "claimed"] or "ClaimError" in outcomes
+
+
+def test_finalize_requires_uploaded_blobs(session_factory) -> None:
+    from remanence.pending.publication import PublicationError, finalize_delivery
+
+    service_key_id = uuid.uuid4()
+    vault = DevSealedVault(mode="test", key_id="m3-blobgate-1", key_32=DEV_VAULT_KEY)
+    with session_factory() as session:
+        setup = _setup_pending(session)
+        delivery = setup["delivery"]
+        statement_raw, payload_raw, _ = _publish_package(
+            capsule_id=delivery.capsule_id, target_id=delivery.delivery_target_id,
+            sender_id=setup["sender"].id, sender_bundle_id=setup["sender_bundle"].id,
+            service_key_id=service_key_id,
+            artifacts=setup["declarations"],
+        )
+        sig = setup["sender_ring"].sign69(
+            domains.domain_prefix(domains.PENDING_PUBLISH_DOMAIN) + statement_raw
+        )
+        base = dict(
+            delivery_id=delivery.id, principal_user_id=setup["sender"].id,
+            statement_raw=statement_raw, signature_69=sig,
+            escrow_payload_raw=payload_raw, vault=vault,
+            expected_service_key_id=service_key_id, locator_hmac_key=HMAC_KEY,
+            locator_code_key_32=LOCATOR_CODE_KEY, locator_code_key_mode="test",
+            hint_mask="g•••@•••", now=NOW,
+        )
+        # Store empty: seal refused before escrow intake.
+        with pytest.raises(PublicationError):
+            finalize_delivery(session, blob_exists=lambda blob_id: False, **base)
+        session.rollback()
+        # Bytes present: seals.
+        finalized, _ = finalize_delivery(
+            session, blob_exists=lambda blob_id: True, **base
+        )
+        assert finalized.state == "PENDING"
+        session.commit()

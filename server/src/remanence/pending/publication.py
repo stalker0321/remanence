@@ -41,7 +41,9 @@ class PublicationError(RuntimeError):
 
 
 def verify_signature_69(public_keyset: bytes, domain_input: bytes, sig: bytes) -> None:
-    """Strict single ENABLED Ed25519 TINK public key verification."""
+    """Strict single ENABLED Ed25519 TINK public key verification:
+    canonical keyset bytes (unknown fields rejected), canonical inner
+    key, exact 69-byte TINK framing."""
     import tink
     from tink import signature
     from tink.proto import ed25519_pb2, tink_pb2
@@ -52,7 +54,10 @@ def verify_signature_69(public_keyset: bytes, domain_input: bytes, sig: bytes) -
         keyset = tink_pb2.Keyset.FromString(public_keyset)
     except Exception as exc:
         raise PublicationError("PROTOCOL_UNSUPPORTED") from exc
-    if len(keyset.key) != 1:
+    probe = tink_pb2.Keyset()
+    probe.CopyFrom(keyset)
+    probe.DiscardUnknownFields()
+    if probe.SerializeToString() != public_keyset or len(keyset.key) != 1:
         raise PublicationError("PROTOCOL_UNSUPPORTED")
     key = keyset.key[0]
     if (
@@ -62,7 +67,17 @@ def verify_signature_69(public_keyset: bytes, domain_input: bytes, sig: bytes) -
     ):
         raise PublicationError("PROTOCOL_UNSUPPORTED")
     try:
-        ed25519_pb2.Ed25519PublicKey.FromString(key.key_data.value)
+        inner = ed25519_pb2.Ed25519PublicKey.FromString(key.key_data.value)
+    except Exception as exc:
+        raise PublicationError("PROTOCOL_UNSUPPORTED") from exc
+    if len(inner.key_value) != 32 or inner.version != 0:
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
+    inner_probe = ed25519_pb2.Ed25519PublicKey()
+    inner_probe.CopyFrom(inner)
+    inner_probe.DiscardUnknownFields()
+    if inner_probe.SerializeToString() != key.key_data.value:
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
+    try:
         verifier = tink.KeysetHandle.read_no_secret(
             tink.BinaryKeysetReader(public_keyset)
         ).primitive(signature.PublicKeyVerify)
@@ -241,6 +256,7 @@ def finalize_delivery(
     locator_code_key_mode: str,
     hint_mask: str,
     now: datetime,
+    blob_exists=None,
 ) -> tuple[PendingDelivery, str]:
     """Finalize a DRAFT into PENDING + ACTIVE locator in one flush.
 
@@ -260,6 +276,8 @@ def finalize_delivery(
     statement = parse_statement(statement_raw)
     statement_hash = hashlib.sha256(statement_raw).digest()
     if delivery.state == "PENDING" and bytes(delivery.publish_statement) == statement_raw:
+        if bytes(delivery.publish_signature or b"") != bytes(signature_69):
+            raise PublicationError("IDEMPOTENCY_CONFLICT")
         locator = session.get(GiftLocator, delivery.locator_id) if delivery.locator_id else None
         code = ""
         if locator is not None and locator.code_ciphertext is not None:
@@ -294,6 +312,10 @@ def finalize_delivery(
         raise PublicationError("ROUTE_STALE")
     if not declarations_match_s(delivery.blob_declarations, statement):
         raise PublicationError("PROTOCOL_UNSUPPORTED")
+    if blob_exists is not None:
+        for artifact in statement.artifacts:
+            if not blob_exists(uuid.UUID(bytes=bytes(artifact.blob_id))):
+                raise PublicationError("PROTOCOL_UNSUPPORTED")
     verify_signature_69(
         bytes(bundle.signing_public_keyset),
         domains.domain_prefix(domains.PENDING_PUBLISH_DOMAIN) + statement_raw,

@@ -278,6 +278,23 @@ def authenticate(payload, request, db, row, principal=None):
     now = datetime.now(timezone.utc); access = generate_access_token(); refresh = generate_refresh_token()
     auth = AuthSessionRepository(db).create(user_id=user.id, access_token_hash=hash_opaque_token(access), refresh_token_hash=hash_opaque_token(refresh),
         access_expires_at=now + ACCESS_TTL, refresh_expires_at=now + REFRESH_TTL)
+    if user.handle_normalized is None:
+        # Nullable-profile fence for passkey login: capability decides
+        # between 426 and a usable null-handle session.
+        from remanence.api.problems import problem_response as _problem
+        from remanence.pending.profiles import PROFILE_VERSION_2 as _V2
+        from remanence.pending.profiles import client_profile_version as _capability
+        from remanence.pending.profiles import v2_user_dict as _v2user
+
+        if _capability(request.headers) < _V2:
+            return _problem(request, "CLIENT_UPGRADE_REQUIRED")
+        return {**recovered, "login": {
+            "user": _v2user(user),
+            "active_key_bundle": {"key_bundle_id": str(bundle.id), "suite": bundle.suite,
+                "protocol_version": bundle.protocol_version, "status": "ACTIVE"},
+            "session_id": str(auth.id), "access_token": access, "refresh_token": refresh,
+            "access_expires_at": (now + ACCESS_TTL).isoformat(),
+            "refresh_expires_at": (now + REFRESH_TTL).isoformat()}, "authentication_verified": True}
     login = LoginResponse(user=RegistrationUserResponse(user_id=user.id, email=user.email_normalized, handle=user.handle_normalized, created_at=user.created_at),
         active_key_bundle=ActiveKeyBundleResponse(key_bundle_id=bundle.id, suite=bundle.suite, protocol_version=bundle.protocol_version, status="ACTIVE"),
         session_id=auth.id, access_token=access, refresh_token=refresh, access_expires_at=now + ACCESS_TTL, refresh_expires_at=now + REFRESH_TTL)

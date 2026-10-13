@@ -122,6 +122,10 @@ PROBLEM_CATALOG: Final[dict[str, ProblemSpec]] = {
         "HANDLE_IMMUTABLE", 409, "Handle immutable",
         "The account handle is permanent and cannot be changed.",
     ),
+    "CLIENT_UPGRADE_REQUIRED": _spec(
+        "CLIENT_UPGRADE_REQUIRED", 426, "Client upgrade required",
+        "This account needs a client that supports nullable profiles.",
+    ),
     "HANDLE_NOT_FOUND": _spec(
         "HANDLE_NOT_FOUND",
         404,

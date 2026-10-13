@@ -97,8 +97,8 @@ def pending(db, flow, purpose, secret):
     return row
 
 
-def login_response(db, user):
-    if user.handle_normalized is None:
+def login_response(db, user, client_profile_version: int = 0):
+    if user.handle_normalized is None and client_profile_version < 2:
         # Capability guard BEFORE any token/session issuance: old clients
         # get 426, never a null-decoder 500 or a fake handle.
         raise ProfileUpgradeRequired()
@@ -107,6 +107,17 @@ def login_response(db, user):
     now = datetime.now(timezone.utc); access = generate_access_token(); refresh = generate_refresh_token()
     session = AuthSessionRepository(db).create(user_id=user.id, access_token_hash=hash_opaque_token(access),
         refresh_token_hash=hash_opaque_token(refresh), access_expires_at=now + ACCESS_TTL, refresh_expires_at=now + REFRESH_TTL)
+    if user.handle_normalized is None:
+        # Usable v2 repeat login: full session + bundle DTOs, handle null.
+        from remanence.pending.profiles import v2_user_dict
+
+        return {
+            "user": v2_user_dict(user),
+            "active_key_bundle": {"key_bundle_id": str(bundle.id), "suite": bundle.suite,
+                "protocol_version": bundle.protocol_version, "status": "ACTIVE"},
+            "session_id": str(session.id), "access_token": access, "refresh_token": refresh,
+            "access_expires_at": (now + ACCESS_TTL).isoformat(),
+            "refresh_expires_at": (now + REFRESH_TTL).isoformat()}
     return LoginResponse(user=RegistrationUserResponse(user_id=user.id, email=user.email_normalized,
         handle=user.handle_normalized, created_at=user.created_at),
         active_key_bundle=ActiveKeyBundleResponse(key_bundle_id=bundle.id, suite=bundle.suite,
@@ -130,6 +141,9 @@ def options(payload: Empty, request: Request, db: Session = Depends(get_db_sessi
 def verify(payload: GoogleProof, request: Request, db: Session = Depends(get_db_session)):
     burned = False
     try:
+        from remanence.pending.profiles import client_profile_version
+
+        capability = client_profile_version(request.headers)
         row = pending(db, payload.flow, "AUTH", payload.nonce)
         row.consumed_at = datetime.now(timezone.utc); db.flush(); burned = True
         with db.begin_nested():
@@ -137,7 +151,7 @@ def verify(payload: GoogleProof, request: Request, db: Session = Depends(get_db_
             identity = db.get(GoogleIdentity, proof["subject"])
             if identity:
                 user = db.scalar(select(User).where(User.id == identity.user_id).with_for_update())
-                result = {"status": "SIGNED_IN", "login": login_response(db, user)}
+                result = {"status": "SIGNED_IN", "login": login_response(db, user, capability)}
             elif db.scalar(select(User.id).where(User.email_normalized == proof["email"])):
                 # No implicit linking, including non-Gmail addresses controlled elsewhere.
                 result = fail("EXISTING_ACCOUNT_REQUIRES_LINK", 409)

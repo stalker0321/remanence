@@ -27,6 +27,28 @@ from remanence.users.key_models import KeyBundleStatus, UserKeyBundle
 from remanence.users.models import User
 
 PROFILE_VERSION_2 = 2
+PROFILE_HEADER = "x-remanence-profile-version"
+
+
+def client_profile_version(headers) -> int:
+    """Negotiated profile capability from request headers. 0/absent means
+    a legacy v1-only client."""
+    try:
+        return int(headers.get(PROFILE_HEADER, 0))
+    except (ValueError, TypeError):
+        return 0
+
+
+def v2_user_dict(user: User) -> dict:
+    """Exact typed v2 user summary, including created_at (T186 needs the
+    full auth user, not a bare id/handle pair)."""
+    return {
+        "user_id": str(user.id),
+        "email": user.email_normalized,
+        "handle": user.handle_normalized,
+        "profile_version": 2 if user.handle_normalized is None else 1,
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+    }
 
 
 class ProfileError(RuntimeError):

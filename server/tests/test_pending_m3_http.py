@@ -56,7 +56,8 @@ class _MemoryBlobStore:
 
     def put(self, key, source, *, expected_size, expected_sha256):
         import hashlib as _hashlib
-        import io as _io
+
+        from remanence.storage.base import BlobInfo as _BlobInfo
 
         data = source.read() if hasattr(source, "read") else bytes(source)
         if len(data) != expected_size or _hashlib.sha256(data).hexdigest() != expected_sha256:
@@ -64,7 +65,7 @@ class _MemoryBlobStore:
         if key in self._blobs and self._blobs[key] != data:
             raise ValueError("conflict")
         self._blobs[key] = data
-        return {"key": key, "size": len(data)}
+        return _BlobInfo(key=key, size=len(data), sha256_hex=_hashlib.sha256(data).hexdigest())
 
     def open_reader(self, key):
         import contextlib as _contextlib
@@ -75,7 +76,14 @@ class _MemoryBlobStore:
         return _contextlib.closing(_io.BytesIO(self._blobs[key]))
 
     def stat(self, key):
-        return {"key": key, "size": len(self._blobs[key])}
+        import hashlib as _hashlib
+
+        from remanence.storage.base import BlobInfo as _BlobInfo
+
+        return _BlobInfo(
+            key=key, size=len(self._blobs[key]),
+            sha256_hex=_hashlib.sha256(self._blobs[key]).hexdigest(),
+        )
 
 
 def _build_client(session_factory, *, flags_on: bool, user_id, session_id, ctx_overrides=None) -> TestClient:
@@ -374,8 +382,10 @@ def test_http_finalize_verify_claim_round_trip(session_factory) -> None:
     )
     draft_artifact = {
         "blob_id": str(uuid.uuid4()), "kind": 3, "ordinal": 0,
-        "ciphertext_size": 505, "ciphertext_sha256_hex": "55" * 32,
+        "ciphertext_size": 505,
+        "ciphertext_sha256_hex": hashlib.sha256(bytes([0x77]) * 505).hexdigest(),
     }
+    draft_blob_bytes = bytes([0x77]) * 505
     draft = sender_client.post(
         "/v2/pending-deliveries",
         json={"route_id": str(route_id), "capsule_id": str(capsule_id),
@@ -388,6 +398,13 @@ def test_http_finalize_verify_claim_round_trip(session_factory) -> None:
     )
     assert draft.status_code == 200, draft.text
     delivery_id = draft.json()["delivery_id"]
+    # Declared bytes must exist before seal/publish: upload first,
+    # then finalize.
+    uploaded = sender_client.put(
+        f"/v2/pending-deliveries/{delivery_id}/blobs/{draft_artifact['blob_id']}",
+        content=draft_blob_bytes,
+    )
+    assert uploaded.status_code == 200, uploaded.text
     statement_raw, payload_raw, _ = _publish_package(
         capsule_id=capsule_id, target_id=target_id, sender_id=sender_id,
         sender_bundle_id=sender_bundle.id, service_key_id=service_key_id,

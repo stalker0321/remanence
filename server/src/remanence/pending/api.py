@@ -532,6 +532,18 @@ def finalize_pending_delivery(
 
         hint_probe = db.get(_DeliveryProbe, delivery_id)
         hint_mask = _delivery_hint(db, hint_probe, ctx) if hint_probe is not None else "•••"
+        store = getattr(request.app.state, "blob_store", None)
+        if store is None:
+            db.rollback()
+            return _problem("PROVIDER_UNAVAILABLE", 503)
+
+        def _exists(blob_id: uuid.UUID) -> bool:
+            try:
+                store.stat(_blob_key(delivery_id, blob_id))
+                return True
+            except Exception:
+                return False
+
         delivery, code = publication_service.finalize_delivery(
             db,
             delivery_id=delivery_id,
@@ -546,6 +558,7 @@ def finalize_pending_delivery(
             locator_code_key_mode=request.app.state.settings.mode.value,
             hint_mask=hint_mask,
             now=datetime.now(timezone.utc),
+            blob_exists=_exists,
         )
         db.commit()
     except Exception as exc:
@@ -991,9 +1004,18 @@ async def upload_pending_blob(
             or delivery.sender_user_id != principal.user_id
         ):
             return _problem("GIFT_UNAVAILABLE", 404)
-        body = await request.body()
-        if len(body) > PENDING_BLOB_MAX_BYTES:
-            return _problem("VALIDATION_FAILED", 400)
+        # Bounded streaming: cap+1 aborts before unbounded memory. The
+        # store re-validates exact size/hash on put.
+        chunks: list[bytes] = []
+        received = 0
+        async for chunk in request.stream():
+            if not chunk:
+                continue
+            received += len(chunk)
+            if received > PENDING_BLOB_MAX_BYTES + 1:
+                return _problem("VALIDATION_FAILED", 400)
+            chunks.append(chunk)
+        body = b"".join(chunks)
         entry = next(
             (e for e in (delivery.blob_declarations or []) if e["blob_id"] == str(blob_id)),
             None,
@@ -1056,14 +1078,12 @@ def download_pending_blob(
 ):
     """Recipient transport: sender anytime; final recipient only after
     claim. Every other principal gets generic unavailable."""
-    from fastapi.responses import Response as _Response
-
-    from remanence.pending.claim_models import PendingClaim as _ClaimBlob
-    from remanence.pending.claim_models import PendingDelivery as _DeliveryBlob
-
     ctx = _gate(request, "pending_protocol_enabled")
     if isinstance(ctx, JSONResponse):
         return ctx
+    from remanence.pending.claim_models import PendingClaim as _ClaimBlob
+    from remanence.pending.claim_models import PendingDelivery as _DeliveryBlob
+
     delivery = db.get(_DeliveryBlob, delivery_id)
     if delivery is None:
         return _problem("GIFT_UNAVAILABLE", 404)
@@ -1072,11 +1092,26 @@ def download_pending_blob(
         if claim is None or claim.account_user_id != principal.user_id:
             return _problem("GIFT_UNAVAILABLE", 404)
     try:
-        with blob_store.open_reader(_blob_key(delivery_id, blob_id)) as reader:
-            data = reader.read()
+        info = blob_store.stat(_blob_key(delivery_id, blob_id))
+        if info.size > PENDING_BLOB_MAX_BYTES:
+            return _problem("GIFT_UNAVAILABLE", 404)
     except Exception:
         return _problem("GIFT_UNAVAILABLE", 404)
-    return _Response(content=data, media_type="application/octet-stream")
+
+    def _stream():
+        try:
+            with blob_store.open_reader(_blob_key(delivery_id, blob_id)) as reader:
+                while True:
+                    piece = reader.read(65536)
+                    if not piece:
+                        break
+                    yield piece
+        except Exception:
+            return
+
+    from fastapi.responses import StreamingResponse as _Streaming
+
+    return _Streaming(_stream(), media_type="application/octet-stream")
 
 
 @router.post("/v2/gift-lookups")

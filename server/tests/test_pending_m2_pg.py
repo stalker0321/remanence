@@ -670,3 +670,29 @@ def test_handleless_login_gets_426_before_tokens(session_factory) -> None:
         response = login_response(session, handleful)
         assert response["user"]["handle"] == "capableuser"
         session.rollback()
+
+
+def test_v2_repeat_login_issues_usable_session(session_factory) -> None:
+    """Capability-negotiated v2 repeat login: handleless account with a
+    v2 client gets a usable session (tokens + bundle DTO); old client
+    gets 426 with zero sessions issued."""
+    from remanence.api.google_auth import ProfileUpgradeRequired, login_response
+    from remanence.auth.models import AuthSession
+    from sqlalchemy import func
+
+    with session_factory() as session:
+        handleless = _make_user(session, handle=None)
+        _make_bundle(session, handleless)
+        session.commit()
+        with pytest.raises(ProfileUpgradeRequired):
+            login_response(session, handleless, 0)
+        session.rollback()
+        assert session.scalar(select(func.count()).select_from(AuthSession)) == 0
+        body = login_response(session, handleless, 2)
+        assert body["user"]["handle"] is None
+        assert body["user"]["profile_version"] == 2
+        assert body["user"]["created_at"] is not None
+        assert body["access_token"] and body["refresh_token"]
+        assert body["active_key_bundle"]["status"] == "ACTIVE"
+        session.commit()
+        assert session.scalar(select(func.count()).select_from(AuthSession)) == 1

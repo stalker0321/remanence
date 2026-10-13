@@ -54,6 +54,18 @@ def create_app(
         # experimental router — explicit custody/keys/providers context is
         # required, otherwise startup fails closed. Flag OFF ignores ctx.
         raise ValueError("pending master flag requires explicit pending_ctx")
+    if resolved.pending_protocol_enabled and pending_ctx is not None:
+        # Single authoritative registry key: the deployment secret in
+        # settings is the ONLY source. A ctx carrying a different HMAC
+        # key would tag/verify addresses in a parallel namespace and
+        # silently bypass historical reservations, so refuse at startup.
+        import hmac as _hmac
+
+        secret = resolved.pending_hmac_secret
+        configured = secret.get_secret_value().encode() if secret else b""
+        provided = bytes(pending_ctx.get("hmac_key") or b"")
+        if not configured or not _hmac.compare_digest(configured, provided):
+            raise ValueError("pending ctx hmac_key must equal pending_hmac_secret")
     engine: Engine | None = None
     if music_search is None and resolved.music_search_backend is MusicSearchBackend.FULL_CATALOG:
         # Full catalog is independent of the account DB. Validate before startup;

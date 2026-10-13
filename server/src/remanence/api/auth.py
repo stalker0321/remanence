@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import SecretStr
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -102,6 +103,36 @@ def login(
         )
     if result.status is not LoginStatus.SUCCESS:
         return problem_response(request, "AUTH_INVALID")
+    if result.handle is None:
+        # Nullable-profile fence: old clients get 426, v2 clients get a
+        # usable session with a null handle (same shape as Google v2).
+        from remanence.pending.profiles import PROFILE_VERSION_2, client_profile_version
+
+        if client_profile_version(request.headers) < PROFILE_VERSION_2:
+            return problem_response(request, "CLIENT_UPGRADE_REQUIRED")
+        return JSONResponse(
+            status_code=200,
+            content={
+                "user": {
+                    "user_id": str(result.user_id),
+                    "email": result.email,
+                    "handle": None,
+                    "profile_version": 2,
+                    "created_at": result.created_at.isoformat(),
+                },
+                "active_key_bundle": {
+                    "key_bundle_id": str(result.active_key_bundle_id),
+                    "suite": result.suite,
+                    "protocol_version": result.protocol_version,
+                    "status": "ACTIVE",
+                },
+                "session_id": str(result.session_id),
+                "access_token": result.access_token,
+                "access_expires_at": result.access_expires_at.isoformat(),
+                "refresh_token": result.refresh_token,
+                "refresh_expires_at": result.refresh_expires_at.isoformat(),
+            },
+        )
     return LoginResponse(
         user=RegistrationUserResponse(
             user_id=result.user_id,

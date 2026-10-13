@@ -147,6 +147,15 @@ def test_canonical_fixture_byte_parity() -> None:
         capsule_aead_keyset=bytes.fromhex(fx["test_vector_key_hex"]),
     )
     assert kc_input.SerializeToString().hex() == fx["key_commitment_input_hex"]
+    # Frozen contract: K fixture bytes are a REAL serialized single
+    # ENABLED AES256_GCM TINK keyset, not raw key material.
+    from tink.proto import tink_pb2
+
+    keyset = tink_pb2.Keyset.FromString(bytes.fromhex(fx["test_vector_key_hex"]))
+    assert len(keyset.key) == 1
+    assert keyset.key[0].status == tink_pb2.ENABLED
+    assert keyset.key[0].key_data.type_url.endswith("AesGcmKey")
+    assert keyset.key[0].key_data.key_material_type == tink_pb2.KeyData.SYMMETRIC
     assert (
         domains.domain_digest(domains.DELIVERY_KEY_DOMAIN, kc_input.SerializeToString()).hex()
         == fx["key_commitment_kc_hex"]

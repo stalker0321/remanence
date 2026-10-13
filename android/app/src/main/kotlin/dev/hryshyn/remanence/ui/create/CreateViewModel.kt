@@ -1843,6 +1843,38 @@ class CreateViewModel(
                 return
             }
         }
+        val pendingRouteForInputs = frozenRouteForPublish as?
+            dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity.Pending
+        // T186 M12e-gap3b: the ORIGINAL lease is entry state. When a
+        // pending route is bound but its lease is unavailable here,
+        // fail closed synchronously — never pass a null lease through
+        // and recapture fresh after staging.
+        val pendingLeaseForInputs =
+            if (pendingBoundary == null || pendingRouteForInputs == null ||
+                !dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled()
+            ) {
+                null
+            } else {
+                try {
+                    pendingBoundary.gate.capture()
+                } catch (_: Exception) {
+                    null
+                }
+            }
+        if (pendingRouteForInputs != null && pendingBoundary != null &&
+            dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled()
+        ) {
+            if (pendingLeaseForInputs == null) {
+                failGuard("authenticated owner changed; publishing cancelled")
+                return
+            }
+            // Lease owner must be the session owner at entry (never a
+            // foreign lease carried into this publication).
+            if (pendingLeaseForInputs.ownerUserId != owner) {
+                failGuard("authenticated owner changed; publishing cancelled")
+                return
+            }
+        }
         val inputs = PublishInputs(
             capsuleId = capsuleId,
             owner = owner,
@@ -1855,21 +1887,8 @@ class CreateViewModel(
             // lease synchronously here (no awaits above since the
             // guard) so the boundary consumes entry-time state even
             // after long staging awaits.
-            pendingRoute = frozenRouteForPublish as?
-                dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity.Pending,
-            pendingLease =
-                if (pendingBoundary == null || frozenRouteForPublish !is
-                    dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity.Pending ||
-                    !dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled()
-                ) {
-                    null
-                } else {
-                    try {
-                        pendingBoundary.gate.capture()
-                    } catch (_: Exception) {
-                        null
-                    }
-                },
+            pendingRoute = pendingRouteForInputs,
+            pendingLease = pendingLeaseForInputs,
         )
         _step.value = Step.PUBLISHING
         val generation = createSessionGeneration

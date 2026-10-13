@@ -249,6 +249,17 @@ class CreateViewModel(
      * keeps confirmed-handle and frozen-route mutually exclusive.
      */
     fun onPendingRouteFrozen(identity: dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity) {
+        // T186 M12e-frozen-gate (T188 REDO B1): gate BEFORE any store
+        // mutation — an off-step callback must not replace the chosen
+        // recipient. Step first, then session: without a live session
+        // owner nothing is stored.
+        if (identity is dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity.Pending) {
+            if (!requireStep(Step.RECIPIENT_LOOKUP, "pending route")) return
+        }
+        if (sessionOwner == null) {
+            failGuard("authenticated owner is unavailable; recipient choice disabled")
+            return
+        }
         sessionStore.freezePendingRoute(identity)
         clearGuardError()
         // T186 M12e-step: a frozen PENDING_V2 route is the explicit
@@ -259,7 +270,6 @@ class CreateViewModel(
         // composition/publish guards still enforce owner, 3..5 photos,
         // note, drawable, handle-readiness and the frozen route itself.
         if (identity is dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity.Pending) {
-            if (!requireStep(Step.RECIPIENT_LOOKUP, "pending route")) return
             _step.value = Step.FRONT
         }
     }
@@ -1768,6 +1778,12 @@ class CreateViewModel(
         outboxObservationJob?.cancel()
         outboxObservationJob = null
         _capsuleId = UUID.randomUUID().toString()
+        // T186 M12e-cap: the fresh draft identity invalidates the frozen
+        // pending route (R1 bound route.capsule_id to the old id) — a
+        // rescan/back can never publish the old-UUID route. The sender
+        // must freeze a new R1 route for the new capsule; no fallback,
+        // no fake identity. The confirmed handle recipient survives.
+        sessionStore.clearPendingRoute()
         collageChoices.beginDraft(_capsuleId)
         _publishError.value = null
         _uploadStatus.value = CreateUploadStatus.NotStarted

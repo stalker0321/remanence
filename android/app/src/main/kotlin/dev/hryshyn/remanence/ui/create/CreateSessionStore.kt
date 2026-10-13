@@ -44,6 +44,16 @@ class CreateSessionStore {
         _confirmed.value = null
     }
 
+    /**
+     * T186 M12e-cap: drops ONLY the frozen route (a fresh draft
+     * identity invalidates the R1 binding, which pins the old
+     * capsule id). The confirmed handle — the recipient — survives;
+     * the sender must freeze a new R1 route for the new capsule.
+     */
+    fun clearPendingRoute() {
+        _pendingRoute.value = null
+    }
+
     /** Ends the create session and drops every recipient binding immediately. */
     fun endSession() {
         _confirmed.value = null

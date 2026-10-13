@@ -67,6 +67,9 @@ class RemanenceViewModelFactory(
                 container.sweepCreateStagingOnce(owner)
             },
             recoverSignedOutStaging = { container.sweepSignedOutCreateStagingOnce() },
+            // T186: re-arm the durable retirement drain on session/foreground
+            // resume (covers process death). Deduped, never blocking.
+            rearmPendingRetirement = { container.rearmPendingRetirement() },
         ) as T
         LoginViewModel::class.java -> LoginViewModel(container.loginUseCase) as T
         dev.hryshyn.remanence.auth.GoogleAuthViewModel::class.java -> dev.hryshyn.remanence.auth.GoogleAuthViewModel(container) as T

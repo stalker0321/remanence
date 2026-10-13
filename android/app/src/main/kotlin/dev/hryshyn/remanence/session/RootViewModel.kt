@@ -90,6 +90,11 @@ class RootViewModel internal constructor(
     private val recoverCreateStaging: suspend (UserId) -> Unit = {},
     /** Cold signed-out recovery only; never delete an active publisher's inputs. */
     private val recoverSignedOutStaging: suspend () -> Unit = {},
+    /**
+     * T186: best-effort re-arm of the durable retirement drain (process
+     * death / session resume). WorkManager dedups; never blocks UI.
+     */
+    private val rearmPendingRetirement: () -> Unit = {},
 ) : ViewModel() {
 
     /** Serializes root refresh requests while retaining one trailing request. */
@@ -185,6 +190,9 @@ class RootViewModel internal constructor(
      */
     fun onSessionEstablished() {
         refreshAsync()
+        // T186: a fresh login/registration may inherit a durable retirement
+        // queue from a dead process; re-arm its background drain.
+        runCatching { rearmPendingRetirement() }
     }
 
     /**
@@ -194,6 +202,8 @@ class RootViewModel internal constructor(
      */
     fun onAppForegrounded() {
         refreshAsync()
+        // T186: resume may follow process death; re-arm the retirement drain.
+        runCatching { rearmPendingRetirement() }
     }
 
     fun logout() {

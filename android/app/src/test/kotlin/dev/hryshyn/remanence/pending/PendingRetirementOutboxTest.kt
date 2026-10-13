@@ -233,9 +233,29 @@ class PendingRetirementOutboxTest {
         val item = outbox.enqueue(OWNER_1, "capsule-1")
         assertEquals("capsule-1", item.capsuleId)
         assertEquals(1, outbox.pendingCount(OWNER_1))
-        // Next drain sees a healthy file again (no fault, retryable port).
+        // The recent quarantine still faults (no silent empty-success) while
+        // the healthy new intent stays queued for later sends.
         val outcome = outbox.drainDetailed(OWNER_1, liveGate())
-        assertTrue(!outcome.fault)
+        assertTrue(outcome.fault)
         assertEquals(1, outcome.remaining)
+        assertEquals(1, outbox.pendingCount(OWNER_1))
+    }
+
+    @Test
+    fun agedQuarantineStopsFaulting() = runTest {
+        val root = tempRoot()
+        val outbox = PendingRetirementOutbox(root, UnconfiguredPendingRetirementPort)
+        outbox.enqueue(OWNER_1, "capsule-1")
+        corruptQueueFile(root, OWNER_1)
+        // Quarantine the corrupt file via a faulting drain first.
+        assertTrue(outbox.drainDetailed(OWNER_1, liveGate()).fault)
+        // Terminal budget: long after the quarantine, drains stop faulting
+        // (forensics remain on disk); network retries were never budgeted.
+        val aged = outbox.drainDetailed(
+            OWNER_1,
+            liveGate(),
+            nowMillis = System.currentTimeMillis() + PendingRetirementOutbox.FAULT_TTL_MILLIS + 1,
+        )
+        assertTrue(!aged.fault)
     }
 }

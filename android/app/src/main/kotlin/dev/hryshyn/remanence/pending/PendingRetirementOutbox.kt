@@ -36,9 +36,19 @@ import kotlinx.serialization.json.Json
  *   preserved for forensics) and the drain reports [DrainOutcome.fault],
  *   which rearms the worker via backoff retry. Honest limitation: intents
  *   trapped inside irrecoverably corrupt bytes are preserved aside but NOT
- *   replayed — lossless recovery is never claimed for them. A failed
- *   [enqueue] intent itself is never lost: quarantine-then-write keeps the
- *   new intent queued. No UI thread is ever blocked by any of this.
+ *   replayed — lossless recovery is never claimed for them. The fault
+ *   marker persists while a recent quarantine exists (bounded terminal
+ *   budget, see [FAULT_TTL_MILLIS]), so the NEXT drain after corruption
+ *   cannot empty-success silently either; quarantined files are capped
+ *   ([MAX_QUARANTINES], oldest evicted) to bound disk. Regular
+ *   offline/network retries are deliberately UNBOUNDED (attempts grow,
+ *   valid intents are never dropped after N failures — a code could
+ *   otherwise remain forever); the fault budget applies to corruption
+ *   faults only, never to network retries. A failed [enqueue] intent
+ *   itself is never lost: quarantine-then-write keeps the new intent
+ *   queued — unless the disk itself is unwritable, which no software queue
+ *   can survive (documented limit, presentation still never blocks).
+ *   No UI thread is ever blocked by any of this.
  * - Durable across process death: atomic tmp-write + fsync + rename per
  *   owner under `filesDir/accounts/<owner>/pending-retirement/outbox.json`.
  *   A failed rename throws (never a silent non-atomic overwrite), and the
@@ -126,6 +136,7 @@ class PendingRetirementOutbox(
     suspend fun drainDetailed(
         currentOwnerUserId: String,
         sessionGate: PendingRetirementSessionGate? = null,
+        nowMillis: Long = System.currentTimeMillis(),
     ): DrainOutcome = fileMutex.withLock {
         if (currentOwnerUserId.isBlank()) return@withLock DrainOutcome(0, 0, false)
         val items = try {
@@ -182,12 +193,22 @@ class PendingRetirementOutbox(
                 index = items.size
                 break
             }
+            // R15 requires the publication hash: hash-less legacy items
+            // stay queued (bumped, retryable) until the derivation lands
+            // with the claim-envelope work — never dropped, never sent
+            // hash-less.
+            val pub = item.publicationHash
+            if (pub.isNullOrBlank()) {
+                remaining += item.copy(attempts = item.attempts + 1)
+                index += 1
+                continue
+            }
             val outcome = try {
                 port.retire(
                     item.ownerUserId,
                     item.capsuleId,
                     item.operationId,
-                    item.publicationHash,
+                    pub,
                     token ?: "",
                 )
             } catch (_: Exception) {
@@ -224,7 +245,11 @@ class PendingRetirementOutbox(
             // Durability failure: report what we removed in memory only.
             return@withLock DrainOutcome(removed, remaining.size, fault = true)
         }
-        DrainOutcome(removed, remaining.size, fault = false)
+        // T188-B3: a recent quarantine keeps faulting so the next drain
+        // cannot empty-success silently. Terminal budget via file age;
+        // network retries stay unbounded (see class KDoc).
+        val fault = hasRecentQuarantine(currentOwnerUserId, nowMillis)
+        DrainOutcome(removed, remaining.size, fault = fault)
     }
 
     private fun leaseOwnsItem(lease: SessionRequestLease, itemOwnerUserId: String): Boolean {
@@ -251,10 +276,39 @@ class PendingRetirementOutbox(
                 val aside = File(file.parentFile, "outbox.corrupt.${System.currentTimeMillis()}.json")
                 file.renameTo(aside)
             }
+            // Bounded disk: cap stored quarantines, oldest evicted first.
+            val quarantines = quarantineFiles(ownerUserId)
+                .sortedBy { it.name }
+            if (quarantines.size > MAX_QUARANTINES) {
+                quarantines.take(quarantines.size - MAX_QUARANTINES).forEach { it.delete() }
+            }
         } catch (_: Exception) {
             // Best effort: the fault is still reported to the worker.
         }
     }
+
+    private fun quarantineFiles(ownerUserId: String): List<File> = try {
+        val dir = outboxFile(ownerUserId).parentFile ?: return emptyList()
+        dir.listFiles { file ->
+            file.isFile && file.name.startsWith("outbox.corrupt.") && file.name.endsWith(".json")
+        }?.toList() ?: emptyList()
+    } catch (_: Exception) {
+        emptyList()
+    }
+
+    /**
+     * Bounded terminal fault budget: a quarantine faults drains only while
+     * recent. Unparseable names fault closed. Older quarantines remain as
+     * forensics without rearming work forever.
+     */
+    private fun hasRecentQuarantine(ownerUserId: String, nowMillis: Long): Boolean =
+        quarantineFiles(ownerUserId).any { file ->
+            val stamp = file.name
+                .removePrefix("outbox.corrupt.")
+                .removeSuffix(".json")
+                .toLongOrNull() ?: return@any true
+            nowMillis - stamp < FAULT_TTL_MILLIS
+        }
 
     private fun readLocked(ownerUserId: String): List<Item> {
         val file = outboxFile(ownerUserId)
@@ -314,6 +368,15 @@ class PendingRetirementOutbox(
         /** Process-wide lock: every outbox instance shares it. */
         private val fileMutex = Mutex()
 
+        /** Cap on stored quarantine files per owner (oldest evicted). */
+        const val MAX_QUARANTINES: Int = 3
+
+        /**
+         * Terminal budget for corruption faults: quarantines fault drains
+         * only while recent. Network retries are NOT budgeted.
+         */
+        const val FAULT_TTL_MILLIS: Long = 7L * 24 * 60 * 60 * 1000
+
         /** Plain-JVM JSON, no Android stub on this path. */
         private val queueJson = Json {
             ignoreUnknownKeys = true
@@ -349,11 +412,15 @@ sealed interface PendingRetireOutcome {
 }
 
 fun interface PendingRetirementPort {
+    /**
+     * T185 §8 R15: the publication hash is MANDATORY (64-hex of the exact
+     * published bytes). The drain never calls this hash-less.
+     */
     suspend fun retire(
         ownerUserId: String,
         capsuleId: String,
         operationId: String,
-        publicationHash: String?,
+        publicationHash: String,
         accessToken: String,
     ): PendingRetireOutcome
 }
@@ -378,7 +445,7 @@ object UnconfiguredPendingRetirementPort : PendingRetirementPort {
         ownerUserId: String,
         capsuleId: String,
         operationId: String,
-        publicationHash: String?,
+        publicationHash: String,
         accessToken: String,
     ) = PendingRetireOutcome.RetryableFailure("pending-contract-unavailable")
 }

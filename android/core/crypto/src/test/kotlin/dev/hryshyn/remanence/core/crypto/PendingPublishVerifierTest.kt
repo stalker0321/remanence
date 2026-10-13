@@ -62,7 +62,7 @@ class PendingPublishVerifierTest {
             com.google.crypto.tink.KeyTemplates.get("ED25519"),
         ).publicKeysetHandle
         val otherPublicBytes = com.google.crypto.tink.TinkProtoKeysetFormat.serializeKeysetWithoutSecret(
-            other, com.google.crypto.tink.InsecureSecretKeyAccess.get(),
+            other,
         )
         assertFailsWith<GeneralSecurityException> {
             PendingPublishVerifier.verifyPublish(otherPublicBytes, statement, signature)
@@ -128,5 +128,40 @@ class PendingPublishVerifierTest {
             unhex(str(canonical, "publish_statement_sha256_h_hex")),
             PendingPublishVerifier.statementHash(statement),
         )
+    }
+
+    @Test
+    fun unknownFieldsRejectedBeforeCrypto() {
+        TinkPrimitives.ensureRegistered()
+        val (keyset, statement, signature) = triple()
+        // Field 99, varint wire type: preserved by protobuf runtimes, so
+        // re-serialize equality alone would miss it — the strict gate must
+        // reject it before any signature work.
+        val withUnknown = statement + byteArrayOf(0x98.toByte(), 0x06, 0x01)
+        val failure = assertFailsWith<GeneralSecurityException> {
+            PendingPublishVerifier.verifyPublish(keyset, withUnknown, signature)
+        }
+        assertEquals("pending publish statement has unknown fields", failure.message)
+    }
+
+    @Test
+    fun unknownClaimFieldsRejected() {
+        val canonical = resource("delivery-v2-canonical.json")
+        val statement = unhex(str(canonical, "pending_publish_statement_s_hex"))
+        val claim = unhex(str(canonical, "claim_binding_r_hex")) +
+            byteArrayOf(0x98.toByte(), 0x06, 0x01)
+        val failure = assertFailsWith<GeneralSecurityException> {
+            PendingPublishVerifier.verifyClaimAgreement(statement, claim)
+        }
+        assertEquals("pending claim binding has unknown fields", failure.message)
+    }
+
+    @Test
+    fun truncatedStatementMalformed() {
+        TinkPrimitives.ensureRegistered()
+        val (keyset, statement, signature) = triple()
+        assertFailsWith<GeneralSecurityException> {
+            PendingPublishVerifier.verifyPublish(keyset, statement.copyOf(10), signature)
+        }
     }
 }

@@ -98,6 +98,9 @@ class RemanenceApplication : Application() {
         container = AppContainer(this)
         // A prior process may have died without disposing its share route.
         runCatching { dev.hryshyn.remanence.ui.capsule.CapsuleExportFiles.sweep(this) }
+        // T186: a prior process may have died with a queued retirement outbox;
+        // re-arm its background drain on every startup (deduped, nonblocking).
+        runCatching { container.rearmPendingRetirement() }
     }
 }
 
@@ -824,12 +827,13 @@ class AppContainer private constructor(
     }
 
     /**
-     * T186 M3b: TYPED R15 completion port (frozen §3 inputs). Real routing:
-     * outbox drain → this repository → `POST
+     * T186 M4: TYPED R15 completion port — EXACT frozen §8 inputs
+     * (`publication_sha256_hex` + `operation_id`). Real routing: outbox
+     * drain → this repository → `POST
      * v2/capsules/{id}/locator-open-completion`. Routes are still scaffold
      * server-side, so live calls fail into the retryable path and the queue
-     * retains — never fake success. Gated by the pending flag + isolated
-     * API (worker + global container fail-closed).
+     * retains — never fake success, never claimed working. Gated by the
+     * pending flag + isolated API (worker + global container fail-closed).
      */
     val pendingRetirementPort: dev.hryshyn.remanence.pending.PendingRetirementPort by lazy {
         val retire = dev.hryshyn.remanence.core.data.network.PendingLocatorRetireRepository(
@@ -844,7 +848,7 @@ class AppContainer private constructor(
                     dev.hryshyn.remanence.core.model.CapsuleId.parseRest(capsule)
                 }.getOrNull() ?: return@PendingRetirementPort
                     dev.hryshyn.remanence.pending.PendingRetireOutcome.PermanentFailure("malformed-capsule-id")
-                when (val result = retire.complete(id, op, pub, null, token)) {
+                when (val result = retire.complete(id, pub, op, token)) {
                     is dev.hryshyn.remanence.core.data.network.LocatorRetireResult.Completed ->
                         dev.hryshyn.remanence.pending.PendingRetireOutcome.Success
                     is dev.hryshyn.remanence.core.data.network.LocatorRetireResult.Failure ->
@@ -876,12 +880,30 @@ class AppContainer private constructor(
     }
 
     /**
+     * T186: best-effort re-arm of the retirement drain after startup/login/
+     * foreground resume (covers process death). Deduped unique work; safe to
+     * call often; never blocks the caller. No-op unless pending is enabled.
+     */
+    fun rearmPendingRetirement() {
+        try {
+            dev.hryshyn.remanence.pending.PendingRetirementScheduler.scheduleDrain(appContext)
+        } catch (_: Exception) {
+            // Best effort only.
+        }
+    }
+
+    /**
      * Production presentation callback. Call ONLY after genuine supported
      * presentation (live grant + Ready supported content). Nonblocking: the
      * viewer returns immediately; the account fence (suspend Room read) and
      * persistence + drain run on [pendingAppScope] and WorkManager. Backend
      * failure never affects display/entitlement. Never blocks the viewer,
      * never reads Room on the caller thread.
+     *
+     * @param publicationHash R15 64-hex of the exact published bytes,
+     * derived by the caller from trusted local material (H = `SHA256(S)`
+     * once the claim envelope is bound). Null until that derivation lands;
+     * hash-less items stay queued retryable and are never sent hash-less.
      */
     fun notifySupportedPresentation(
         ownerUserId: String,
@@ -889,6 +911,7 @@ class AppContainer private constructor(
         grantLive: Boolean,
         routeReady: Boolean,
         supported: Boolean,
+        publicationHash: String? = null,
     ) {
         if (!dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled()) return
         if (ownerUserId.isBlank() || capsuleId.isBlank()) return
@@ -915,7 +938,7 @@ class AppContainer private constructor(
             if (current != ownerUserId) return@launch
             // Application-owned scope inside; never the caller's screen scope.
             dev.hryshyn.remanence.pending.PendingRetirementScheduler.enqueueAfterPresentation(
-                this@AppContainer, ownerUserId, capsuleId,
+                this@AppContainer, ownerUserId, capsuleId, publicationHash,
             )
         }
     }

@@ -500,6 +500,10 @@ private fun RootSurface(
                             grantLive = grantLive,
                             routeReady = true,
                             supported = true,
+                            // Exact-byte H derivation from grant-bound published
+                            // material lands with the claim-envelope work;
+                            // hash-less items stay queued, never sent.
+                            publicationHash = null,
                         )
                     }
                 },

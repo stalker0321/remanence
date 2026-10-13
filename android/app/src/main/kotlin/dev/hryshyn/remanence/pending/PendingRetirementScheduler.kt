@@ -32,6 +32,8 @@ object PendingRetirementScheduler {
      * Persists the retirement intent on the application-owned scope, then
      * schedules a background drain. Never throws into the presentation path:
      * persistence failure degrades to a best-effort schedule attempt.
+     * [publicationHash] is the R15 64-hex of the exact published bytes;
+     * null until the caller derives it from trusted local material.
      */
     fun enqueueAfterPresentation(
         host: PendingRetirementHost,

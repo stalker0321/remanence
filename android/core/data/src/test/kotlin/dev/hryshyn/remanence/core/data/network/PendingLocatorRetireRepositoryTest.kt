@@ -12,15 +12,15 @@ import mockwebserver3.MockWebServer
 import dev.hryshyn.remanence.core.model.CapsuleId
 
 /**
- * T186 M3b: typed R15 completion client tests against MockWebServer.
- * Response shape assumption (`state == "RETIRED_OPEN"` with id echoes) is
- * flagged for T185 confirmation; routes are scaffold server-side, so these
- * run isolated only.
+ * T186 M4: typed R15 completion client tests against MockWebServer — EXACT
+ * frozen T185 `api-contract.md` §8 shapes (routes scaffold server-side, so
+ * isolated only; the backend is never claimed to work).
  */
 class PendingLocatorRetireRepositoryTest {
 
     private val capsuleId = CapsuleId.parseRest("0198f0a0-0000-7000-8000-00000000ca01")
     private val operationId = "0198f0a0-0000-7000-8000-00000000c001"
+    private val publicationHex = "0f3e5a58f2e94f1923e0410be469bcc8a911b78107b0c5364834a63812d9fb68"
 
     private suspend fun <T> withServer(block: suspend (MockWebServer) -> T): T {
         val server = MockWebServer()
@@ -39,13 +39,13 @@ class PendingLocatorRetireRepositoryTest {
         )
 
     private fun successJson() =
-        """{"capsule_id":"0198f0a0-0000-7000-8000-00000000ca01","state":"RETIRED_OPEN","operation_id":"$operationId"}"""
+        """{"capsule_id":"0198f0a0-0000-7000-8000-00000000ca01","completion":true,"locator_state":"RETIRED_OPEN"}"""
 
     private fun problemJson(code: String, status: Int, retryable: Boolean): String =
         """{"type":"https://remanence.invalid/problems/${code.lowercase()}","title":"safe","status":$status,"code":"$code","detail":"private detail","request_id":"0198f0a0-0000-7000-8000-00000000ac01","retryable":$retryable}"""
 
     @Test
-    fun retiredOpenCompletesAndSendsFrozenFields() = runTest {
+    fun retiredOpenCompletesAndSendsExactFrozenFields() = runTest {
         withServer { server ->
             server.enqueue(
                 MockResponse.Builder()
@@ -55,10 +55,9 @@ class PendingLocatorRetireRepositoryTest {
                     .build(),
             )
             val result = assertIs<LocatorRetireResult.Completed>(
-                repository(server).complete(capsuleId, operationId, "pub-hash-opaque", null, "token"),
+                repository(server).complete(capsuleId, publicationHex, operationId, "token"),
             )
             assertEquals(capsuleId, result.capsuleId)
-            assertEquals(operationId, result.operationId)
             val request = server.takeRequest()
             assertEquals("POST", request.method)
             assertEquals(
@@ -66,9 +65,12 @@ class PendingLocatorRetireRepositoryTest {
                 request.url.encodedPath,
             )
             assertEquals("Bearer token", request.headers["Authorization"])
+            // Exact §8 request shape: publication hash + operation id only.
             val body = assertNotNull(request.body).utf8()
+            assertTrue(body.contains(publicationHex))
             assertTrue(body.contains(operationId))
-            assertTrue(body.contains("pub-hash-opaque"))
+            assertFalse(body.contains("capsule_id"))
+            assertFalse(body.contains("prior_admission"))
         }
     }
 
@@ -79,11 +81,29 @@ class PendingLocatorRetireRepositoryTest {
                 MockResponse.Builder()
                     .code(200)
                     .setHeader("Content-Type", "application/json")
-                    .body("""{"capsule_id":"0198f0a0-0000-7000-8000-00000000ca01","state":"ACTIVE","operation_id":"$operationId"}""")
+                    .body("""{"capsule_id":"0198f0a0-0000-7000-8000-00000000ca01","completion":true,"locator_state":"ACTIVE"}""")
                     .build(),
             )
             val result = assertIs<LocatorRetireResult.Failure>(
-                repository(server).complete(capsuleId, operationId, null, null, "token"),
+                repository(server).complete(capsuleId, publicationHex, operationId, "token"),
+            )
+            assertEquals(LocatorRetireFailure.INVALID_RESPONSE, result.reason)
+            assertFalse(result.retryable)
+        }
+    }
+
+    @Test
+    fun completionFalseIsInvalid() = runTest {
+        withServer { server ->
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(200)
+                    .setHeader("Content-Type", "application/json")
+                    .body("""{"capsule_id":"0198f0a0-0000-7000-8000-00000000ca01","completion":false,"locator_state":"RETIRED_OPEN"}""")
+                    .build(),
+            )
+            val result = assertIs<LocatorRetireResult.Failure>(
+                repository(server).complete(capsuleId, publicationHex, operationId, "token"),
             )
             assertEquals(LocatorRetireFailure.INVALID_RESPONSE, result.reason)
             assertFalse(result.retryable)
@@ -101,7 +121,7 @@ class PendingLocatorRetireRepositoryTest {
                     .build(),
             )
             val result = assertIs<LocatorRetireResult.Failure>(
-                repository(server).complete(capsuleId, operationId, null, null, "token"),
+                repository(server).complete(capsuleId, publicationHex, operationId, "token"),
             )
             assertEquals(LocatorRetireFailure.CAPSULE_NOT_FOUND, result.reason)
             assertFalse(result.retryable)
@@ -119,7 +139,7 @@ class PendingLocatorRetireRepositoryTest {
                     .build(),
             )
             val result = assertIs<LocatorRetireResult.Failure>(
-                repository(server).complete(capsuleId, operationId, null, null, "token"),
+                repository(server).complete(capsuleId, publicationHex, operationId, "token"),
             )
             assertEquals(LocatorRetireFailure.INTERNAL_ERROR, result.reason)
             assertTrue(result.retryable)
@@ -130,7 +150,19 @@ class PendingLocatorRetireRepositoryTest {
     fun blankTokenNeverSends() = runTest {
         withServer { server ->
             val result = assertIs<LocatorRetireResult.Failure>(
-                repository(server).complete(capsuleId, operationId, null, null, "  "),
+                repository(server).complete(capsuleId, publicationHex, operationId, "  "),
+            )
+            assertEquals(LocatorRetireFailure.VALIDATION_FAILED, result.reason)
+            assertFalse(result.retryable)
+            assertEquals(0, server.requestCount)
+        }
+    }
+
+    @Test
+    fun malformedHashNeverSends() = runTest {
+        withServer { server ->
+            val result = assertIs<LocatorRetireResult.Failure>(
+                repository(server).complete(capsuleId, "not-hex", operationId, "token"),
             )
             assertEquals(LocatorRetireFailure.VALIDATION_FAILED, result.reason)
             assertFalse(result.retryable)

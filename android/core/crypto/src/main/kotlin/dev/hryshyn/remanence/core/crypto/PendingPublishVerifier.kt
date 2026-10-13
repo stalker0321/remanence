@@ -34,6 +34,13 @@ object PendingPublishVerifier {
         if (statementBytes.isEmpty()) {
             throw GeneralSecurityException("pending publish statement is empty")
         }
+        // Strict canonical gate BEFORE parsing/crypto: preserved unknown
+        // fields must never reach verification.
+        PendingStrictProto.requireNoUnknownFields(
+            statementBytes,
+            PendingStrictProto.PUBLISH_STATEMENT_V2,
+            "publish statement",
+        )
         val statement = try {
             PendingPublishStatementV2.parseFrom(statementBytes)
         } catch (_: Exception) {
@@ -74,6 +81,16 @@ object PendingPublishVerifier {
      * deployment-pinned service key id. Anything else fails closed.
      */
     fun verifyClaimAgreement(statementBytes: ByteArray, claimBytes: ByteArray) {
+        PendingStrictProto.requireNoUnknownFields(
+            statementBytes,
+            PendingStrictProto.PUBLISH_STATEMENT_V2,
+            "publish statement",
+        )
+        PendingStrictProto.requireNoUnknownFields(
+            claimBytes,
+            PendingStrictProto.CLAIM_BINDING_V1,
+            "claim binding",
+        )
         val statement = try {
             PendingPublishStatementV2.parseFrom(statementBytes)
         } catch (_: Exception) {

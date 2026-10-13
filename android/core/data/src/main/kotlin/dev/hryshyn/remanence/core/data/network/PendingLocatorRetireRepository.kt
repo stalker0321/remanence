@@ -17,15 +17,21 @@ import okhttp3.ResponseBody
 import dev.hryshyn.remanence.core.model.CapsuleId
 
 /**
- * T186 M3b: typed locator-open completion client (T185 `api-contract.md`
- * R15/R16, STAGE 1 scaffold — routes NOT mounted server-side yet).
+ * T186 M4: typed locator-open completion client — EXACT frozen T185
+ * `api-contract.md` §8 R15 (routes still scaffold server-side: this client
+ * is implemented from the frozen contract, but scaffold means the backend
+ * is not claimed to work).
  *
- * Request fields are the frozen §3 inputs (capsule id, operation UUID,
- * publication hash, prior admission); the response assumption
- * (`state == "RETIRED_OPEN"` with id echoes) is flagged for T185
- * confirmation in the task notes. Failures map to retryable/terminal with
- * the shared capsule problem classifier; backend failure never affects
- * content display — the outbox retains and retries.
+ * Request: `{"publication_sha256_hex": "64-hex", "operation_id": "uuid"}`.
+ * Both fields mandatory; the hash must be 64 lowercase hex. The caller
+ * derives it from exact published bytes of trusted local material (H =
+ * `SHA256(S)` for v2; see `PendingPublishVerifier.statementHash`).
+ * Response `200`: `{"capsule_id": "uuid", "completion": true,
+ * "locator_state": "RETIRED_OPEN"}` — all three required exact.
+ * Replay semantics (same hash regardless of operation id; changed hash →
+ * conflict) are server-owned. Failures map to retryable/terminal with the
+ * shared capsule problem classifier; backend failure never affects content
+ * display — the outbox retains and retries.
  */
 enum class LocatorRetireFailure {
     NETWORK,
@@ -42,7 +48,6 @@ enum class LocatorRetireFailure {
 sealed interface LocatorRetireResult {
     data class Completed(
         val capsuleId: CapsuleId,
-        val operationId: String,
         val httpStatus: Int,
     ) : LocatorRetireResult
 
@@ -57,26 +62,23 @@ sealed interface LocatorRetireResult {
 fun interface LocatorRetirePort {
     suspend fun complete(
         capsuleId: CapsuleId,
+        publicationSha256Hex: String,
         operationId: String,
-        publicationHash: String?,
-        priorAdmission: String?,
         accessToken: String,
     ): LocatorRetireResult
 }
 
 @Serializable
 private data class LocatorRetireRequestDto(
-    @SerialName("capsule_id") val capsuleId: String,
+    @SerialName("publication_sha256_hex") val publicationSha256Hex: String,
     @SerialName("operation_id") val operationId: String,
-    @SerialName("publication_hash") val publicationHash: String? = null,
-    @SerialName("prior_admission") val priorAdmission: String? = null,
 )
 
 @Serializable
 private data class LocatorRetireResponseDto(
     @SerialName("capsule_id") val capsuleId: String,
-    val state: String,
-    @SerialName("operation_id") val operationId: String,
+    val completion: Boolean,
+    @SerialName("locator_state") val locatorState: String,
 )
 
 /** Authenticated locator-open completion over plain bearer (lease via caller). */
@@ -87,12 +89,11 @@ class PendingLocatorRetireRepository internal constructor(
 
     override suspend fun complete(
         capsuleId: CapsuleId,
+        publicationSha256Hex: String,
         operationId: String,
-        publicationHash: String?,
-        priorAdmission: String?,
         accessToken: String,
     ): LocatorRetireResult {
-        if (accessToken.isBlank() || operationId.isBlank()) {
+        if (accessToken.isBlank() || operationId.isBlank() || !isHex64(publicationSha256Hex)) {
             return LocatorRetireResult.Failure(
                 LocatorRetireFailure.VALIDATION_FAILED,
                 retryable = false,
@@ -102,10 +103,8 @@ class PendingLocatorRetireRepository internal constructor(
             NetworkJson.encodeToString(
                 LocatorRetireRequestDto.serializer(),
                 LocatorRetireRequestDto(
-                    capsuleId = capsuleId.toRestString(),
+                    publicationSha256Hex = publicationSha256Hex.lowercase(),
                     operationId = operationId,
-                    publicationHash = publicationHash,
-                    priorAdmission = priorAdmission,
                 ),
             )
         } catch (_: Exception) {
@@ -122,7 +121,7 @@ class PendingLocatorRetireRepository internal constructor(
             .build()
         return try {
             client.executeResponseWithCallLifetime(request) { response ->
-                interpret(response, capsuleId, operationId)
+                interpret(response, capsuleId)
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -131,10 +130,12 @@ class PendingLocatorRetireRepository internal constructor(
         }
     }
 
+    private fun isHex64(raw: String): Boolean =
+        raw.length == 64 && raw.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }
+
     private suspend fun interpret(
         response: Response,
         requestedCapsuleId: CapsuleId,
-        requestedOperationId: String,
     ): LocatorRetireResult {
         val bytes = readBounded(response.body) ?: return LocatorRetireResult.Failure(
             LocatorRetireFailure.INVALID_RESPONSE,
@@ -183,11 +184,11 @@ class PendingLocatorRetireRepository internal constructor(
             )
         }
         return try {
-            require(dto.state == RETIRED_OPEN_STATE)
+            require(dto.completion)
+            require(dto.locatorState == RETIRED_OPEN_STATE)
             val capsuleId = CapsuleId.parseRest(dto.capsuleId)
             require(capsuleId == requestedCapsuleId)
-            require(dto.operationId == requestedOperationId)
-            LocatorRetireResult.Completed(capsuleId, dto.operationId, response.code)
+            LocatorRetireResult.Completed(capsuleId, response.code)
         } catch (_: IllegalArgumentException) {
             LocatorRetireResult.Failure(
                 LocatorRetireFailure.INVALID_RESPONSE,

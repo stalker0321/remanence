@@ -394,6 +394,50 @@ def test_locator_allocate_activate_retire(session_factory) -> None:
         session.commit()
 
 
+def test_locator_collision_preserves_outer_tx(session_factory, monkeypatch) -> None:
+    """Forced UNIQUE collision rolls back to a savepoint only: the
+    caller's uncommitted outer work (users/drafts) survives."""
+    import remanence.pending.locator_store as store
+
+    with session_factory() as session:
+        sender = _make_user(session, handle="collidesender")
+        recipient = _make_user(session, handle="colliderecipient")
+        sender_bundle = _make_bundle(session, sender)
+        recipient_bundle = _make_bundle(session, recipient)
+        capsule1 = _make_capsule(session, sender, sender_bundle, recipient, recipient_bundle)
+        capsule2 = _make_capsule(session, sender, sender_bundle, recipient, recipient_bundle)
+        _, code1 = allocate_reserved(
+            session, capsule_id=capsule1.id, hint_mask="c•••@•••", hmac_key=HMAC_KEY
+        )
+        real_gen = store.generate_candidate
+        calls = {"n": 0}
+
+        def flaky() -> str:
+            calls["n"] += 1
+            return code1 if calls["n"] == 1 else real_gen()
+
+        monkeypatch.setattr(store, "generate_candidate", flaky)
+        # Blind the pre-check once so the collision reaches the UNIQUE
+        # constraint (the real concurrent-race path).
+        real_known = store._code_known
+        seen = {"n": 0}
+
+        def blind_once(sess, tag) -> bool:
+            seen["n"] += 1
+            return False if seen["n"] == 1 else real_known(sess, tag)
+
+        monkeypatch.setattr(store, "_code_known", blind_once)
+        _, code2 = allocate_reserved(
+            session, capsule_id=capsule2.id, hint_mask="d•••@•••", hmac_key=HMAC_KEY
+        )
+        assert code2 != code1 and calls["n"] >= 2
+        # Outer uncommitted work survived (a full rollback would have lost
+        # the users and broken this commit).
+        session.commit()
+        assert session.get(User, sender.id) is not None
+        assert session.get(User, recipient.id) is not None
+
+
 def test_profiles_receive_and_first_handle(session_factory) -> None:
     from remanence.auth.google_models import GoogleFlow, GoogleIdentity
 
@@ -504,3 +548,72 @@ def test_downgrade_refuses_with_handleless_accounts(session_factory) -> None:
     config.set_main_option("path_separator", "os")
     with pytest.raises(RuntimeError):
         command.downgrade(config, "0012_anonymous_telemetry")
+
+
+def test_backfill_bootstrap_reserved_only(session_factory) -> None:
+    from remanence.pending.registry import backfill_reservations
+
+    with session_factory() as session:
+        owner_a = _make_user(session, handle="backfilltwo")
+        owner_b = _make_user(session, handle="backfillthree")
+        session.commit()
+        rows = [
+            ("email", "historic-a@example.test", owner_a.id),
+            ("email", "historic-b@example.test", owner_b.id),
+            ("phone", "+380501111111", owner_a.id),
+        ]
+        outcome = backfill_reservations(session, rows=rows, hmac_key=HMAC_KEY)
+        assert outcome == {"created": 3, "existing": 0, "blocked": 0}
+        session.commit()
+        # None routable; rerun is idempotent; conflicts never merge.
+        for kind, normalized, _ in rows:
+            assert live_verified(session, kind=kind, normalized=normalized, hmac_key=HMAC_KEY) is None
+            assert address_fate(session, kind=kind, normalized=normalized, hmac_key=HMAC_KEY) == "RESERVED"
+        again = backfill_reservations(session, rows=rows, hmac_key=HMAC_KEY)
+        assert again == {"created": 0, "existing": 3, "blocked": 0}
+        conflict = backfill_reservations(
+            session,
+            rows=[("email", "historic-a@example.test", owner_b.id)],
+            hmac_key=HMAC_KEY,
+        )
+        assert conflict == {"created": 0, "existing": 0, "blocked": 1}
+        session.rollback()
+
+
+def test_retired_alias_never_rebound(session_factory) -> None:
+    from remanence.pending.registry import RegistryError
+
+    with session_factory() as session:
+        owner = _make_user(session, handle="retiredowner")
+        other = _make_user(session, handle="retiredother")
+        session.commit()
+        row = reserve(
+            session, kind="email", normalized="dead@example.test",
+            owner_user_id=owner.id, hmac_key=HMAC_KEY,
+        )
+        verify_binding(
+            session, kind="email", normalized="dead@example.test",
+            owner_user_id=owner.id, evidence_method="otp",
+            evidence_key=EVIDENCE_KEY, hmac_key=HMAC_KEY, now=NOW,
+        )
+        retire_binding(session, binding_id=row.id, owner_user_id=owner.id)
+        session.commit()
+        assert address_fate(session, kind="email", normalized="dead@example.test", hmac_key=HMAC_KEY) == "RETIRED"
+        # No automatic rebind: same owner, other owner, all refused.
+        with pytest.raises(RegistryError):
+            reserve(
+                session, kind="email", normalized="dead@example.test",
+                owner_user_id=owner.id, hmac_key=HMAC_KEY,
+            )
+        with pytest.raises(RegistryError):
+            reserve(
+                session, kind="email", normalized="dead@example.test",
+                owner_user_id=other.id, hmac_key=HMAC_KEY,
+            )
+        with pytest.raises(RegistryError):
+            verify_binding(
+                session, kind="email", normalized="dead@example.test",
+                owner_user_id=owner.id, evidence_method="otp",
+                evidence_key=EVIDENCE_KEY, hmac_key=HMAC_KEY, now=NOW,
+            )
+        session.rollback()

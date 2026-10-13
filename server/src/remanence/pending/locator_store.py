@@ -77,6 +77,10 @@ def allocate_reserved(
         tag = code_hmac(candidate, hmac_key)
         if _code_known(session, tag):
             continue
+        # Fresh row object per attempt, added AND flushed inside the
+        # savepoint: a lost collision race rolls back the add and the
+        # INSERT together, never the caller's surrounding transaction,
+        # and no dead object lingers to poison the next autoflush.
         row = GiftLocator(
             id=uuid.uuid4(),
             capsule_id=capsule_id,
@@ -86,11 +90,11 @@ def allocate_reserved(
             hint_mask=hint_mask,
             policy_version=1,
         )
-        session.add(row)
         try:
-            session.flush()
+            with session.begin_nested():
+                session.add(row)
+                session.flush()
         except IntegrityError as exc:
-            session.rollback()
             last_error = exc
             continue
         return row, candidate

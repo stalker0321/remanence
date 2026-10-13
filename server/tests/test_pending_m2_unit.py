@@ -21,7 +21,14 @@ from remanence.pending.models import (
     PendingSendRoute,
     UsedLocatorTombstone,
 )
-from remanence.pending.providers import FailClosedDispatcher, MockDispatcher, ProviderError
+from remanence.pending.providers import (
+    FailClosedEmailSender,
+    FailClosedSmsVerify,
+    MockDispatcher,
+    MockEmailSender,
+    MockSmsVerify,
+    ProviderError,
+)
 from remanence.pending.registry import advisory_key, lookup_tag
 from remanence.pending.routing import (
     RouteDecision,
@@ -77,8 +84,16 @@ def test_pending_prod_with_allowlisted_custody_accepted() -> None:
         pending_protocol_enabled=True,
         pending_kms_key_id="kms-1",
         pending_allowed_kms_key_ids=["kms-1"],
+        pending_hmac_secret="synthetic-test-secret-32-bytes-minimum",
     )
     assert settings.pending_kms_key_id == "kms-1"
+
+
+def test_pending_master_requires_hmac_secret() -> None:
+    from pydantic import ValidationError as _ValidationError
+
+    with pytest.raises(_ValidationError):
+        Settings(mode=AppMode.TEST, pending_protocol_enabled=True)
 
 
 # --- advisory lock keys ----------------------------------------------------------
@@ -151,24 +166,43 @@ def test_sealed_destination_roundtrip_and_prod_refusal() -> None:
 # --- providers ----------------------------------------------------------------------
 
 
-def test_fail_closed_dispatcher_never_approves() -> None:
-    dispatcher = FailClosedDispatcher()
+def test_fail_closed_dispatchers_never_approve() -> None:
+    email = FailClosedEmailSender()
     with pytest.raises(ProviderError):
-        dispatcher.start(attempt_id="a", stored_destination="b", locale="en")
+        email.send(attempt_id="a", stored_destination="b", code="1", locale="en")
+    sms = FailClosedSmsVerify()
     with pytest.raises(ProviderError):
-        dispatcher.check(attempt_id="a", provider_reference="r", code="1")
+        sms.start(attempt_id="a", stored_destination="b", locale="en")
+    with pytest.raises(ProviderError):
+        sms.check(attempt_id="a", provider_reference="r", code="1")
+    with pytest.raises(ProviderError):
+        MockEmailSender(mode="prod")
+    with pytest.raises(ProviderError):
+        MockSmsVerify(mode="beta")
 
 
 def test_mock_dispatcher_records_lengths_not_values() -> None:
-    dispatcher = MockDispatcher(approval_code="87654321")
-    reference = dispatcher.start(
-        attempt_id="attempt-1", stored_destination="+380501234567", locale="uk"
+    from remanence.pending.providers import MockDispatcher, MockSmsVerify
+
+    dispatcher = MockDispatcher()
+    reference = dispatcher.send(
+        attempt_id="attempt-1", stored_destination="+380501234567",
+        code="87654321", locale="uk",
     )
-    assert dispatcher.check(attempt_id="attempt-1", provider_reference=reference, code="87654321") == "approved"
+    # The server-issued code passes through to the inbox (handset side).
+    issued = dispatcher.inbox[reference]
+    assert dispatcher.check(attempt_id="attempt-1", provider_reference=reference, code=issued) == "approved"
     assert dispatcher.check(attempt_id="attempt-1", provider_reference=reference, code="00000000") == "rejected"
-    assert dispatcher.check(attempt_id="attempt-1", provider_reference="wrong", code="87654321") == "rejected"
+    assert dispatcher.check(attempt_id="attempt-1", provider_reference="wrong", code=issued) == "expired"
     (record,) = dispatcher.dispatched
     assert record.destination_length == len("+380501234567")
+    sms = MockSmsVerify()
+    sms_reference = sms.start(attempt_id="s-1", stored_destination="+380501234567", locale="uk")
+    assert sms.check(attempt_id="s-1", provider_reference=sms_reference, code="000000") in (
+        "approved",
+        "rejected",
+    )
+    assert sms.check(attempt_id="s-1", provider_reference=sms_reference, code=sms.issued_codes[sms_reference]) == "approved"
 
 
 # --- models metadata ------------------------------------------------------------------

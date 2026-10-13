@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     pending_locator_issuance_enabled: bool = False
     pending_kms_key_id: str | None = None
     pending_allowed_kms_key_ids: list[str] = Field(default_factory=list)
+    # Server-secret HMAC key for address lookup tags (deployment config;
+    # synthetic in tests). Required whenever the pending master flag is on:
+    # without it the registry cannot bootstrap tags at runtime.
+    pending_hmac_secret: SecretStr | None = None
 
     @model_validator(mode="after")
     def require_pending_custody(self) -> Self:
@@ -64,6 +68,8 @@ class Settings(BaseSettings):
         )
         if any(subflags) and not self.pending_protocol_enabled:
             raise ValueError("pending sub-flags require the master protocol flag")
+        if self.pending_protocol_enabled and self.pending_hmac_secret is None:
+            raise ValueError("pending requires an explicit address HMAC secret")
         if self.pending_protocol_enabled and self.mode in (AppMode.PROD, AppMode.BETA):
             if (
                 not self.pending_kms_key_id

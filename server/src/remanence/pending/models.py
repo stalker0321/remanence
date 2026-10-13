@@ -152,11 +152,11 @@ class GiftLocator(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, nullable=False)
-    capsule_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("capsules.id", name="fk_gift_locators_capsule", ondelete="CASCADE"),
-        nullable=False,
-    )
+    # Plain capsule reference WITHOUT a foreign key: pending gifts have no
+    # v1 capsule row before claim (recipient unknown), yet share the common
+    # locator. Service layers cross-check locator.capsule_id against the
+    # owning delivery/draft; the DB enforces one locator per capsule.
+    capsule_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     code_hmac: Mapped[bytes] = mapped_column(LargeBinary(32), nullable=False)
     code_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     state: Mapped[str] = mapped_column(String(20), nullable=False)

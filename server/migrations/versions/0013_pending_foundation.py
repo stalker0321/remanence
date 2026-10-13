@@ -71,7 +71,9 @@ def upgrade():
     op.create_table(
         "gift_locators",
         sa.Column("id", sa.Uuid(), primary_key=True),
-        sa.Column("capsule_id", sa.Uuid(), sa.ForeignKey("capsules.id", ondelete="CASCADE"), nullable=False),
+        # No FK to capsules: pending gifts share the common locator before
+        # any v1 capsule row exists. One locator per capsule via unique.
+        sa.Column("capsule_id", sa.Uuid(), nullable=False),
         sa.Column("code_hmac", sa.LargeBinary(32), nullable=False),
         sa.Column("code_ciphertext", sa.LargeBinary(), nullable=True),
         sa.Column("state", sa.String(20), nullable=False),

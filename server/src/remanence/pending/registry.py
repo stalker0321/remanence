@@ -125,11 +125,13 @@ def reserve(
         select(DeliveryAddressBinding).where(
             DeliveryAddressBinding.kind == kind,
             DeliveryAddressBinding.lookup_tag == tag,
-            DeliveryAddressBinding.state != RETIRED,
         )
     )
     if existing is not None:
-        if existing.owner_user_id != owner_user_id:
+        # Terminal retirement: a retired alias is never rebound or
+        # reassigned, not even to its former owner and never to a
+        # different owner (sender must re-address a new gift).
+        if existing.state == RETIRED or existing.owner_user_id != owner_user_id:
             raise RegistryError("ADDRESS_UNAVAILABLE")
         return existing
     row = DeliveryAddressBinding(
@@ -170,9 +172,10 @@ def verify_binding(
         select(DeliveryAddressBinding).where(
             DeliveryAddressBinding.kind == kind,
             DeliveryAddressBinding.lookup_tag == tag,
-            DeliveryAddressBinding.state != RETIRED,
         )
     )
+    if row is not None and row.state == RETIRED:
+        raise RegistryError("ADDRESS_UNAVAILABLE")
     if row is None:
         row = DeliveryAddressBinding(
             id=uuid.uuid4(),
@@ -200,6 +203,174 @@ def verify_binding(
     row.verified_at = now
     session.flush()
     return row
+
+
+def reserve_by_tag(
+    session: Session, *, kind: str, tag: bytes, owner_user_id: uuid.UUID
+) -> DeliveryAddressBinding:
+    """Tag-keyed reservation for the claim-time alias bind. The tag comes
+    from a verified proof attempt over the committed stored destination —
+    never client plaintext. Foreign-owned live rows block (never merge)."""
+    if kind not in ("email", "phone") or len(tag) != 32:
+        raise RegistryError("ADDRESS_UNAVAILABLE")
+    lock_tag(session, kind, tag)
+    existing = session.scalar(
+        select(DeliveryAddressBinding).where(
+            DeliveryAddressBinding.kind == kind,
+            DeliveryAddressBinding.lookup_tag == tag,
+        )
+    )
+    if existing is not None:
+        # Terminal retirement: a retired alias is never rebound or
+        # reassigned, not even to its former owner and never to a
+        # different owner (sender must re-address a new gift).
+        if existing.state == RETIRED or existing.owner_user_id != owner_user_id:
+            raise RegistryError("ADDRESS_UNAVAILABLE")
+        return existing
+    row = DeliveryAddressBinding(
+        id=uuid.uuid4(),
+        kind=kind,
+        normalization_version=1,
+        lookup_tag=tag,
+        owner_user_id=owner_user_id,
+        state=RESERVED,
+        binding_revision=1,
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
+def verify_by_tag(
+    session: Session,
+    *,
+    kind: str,
+    tag: bytes,
+    owner_user_id: uuid.UUID,
+    evidence_method: str,
+    evidence_key: bytes,
+    now: datetime,
+) -> DeliveryAddressBinding:
+    """Promote the caller's own reservation (or create-then-verify when
+    the address was never reserved) with a server-computed evidence MAC.
+    Foreign reservations fail the claim — never transferred or merged."""
+    if evidence_method not in ("otp", "google"):
+        raise RegistryError("ADDRESS_UNAVAILABLE")
+    lock_tag(session, kind, tag)
+    row = session.scalar(
+        select(DeliveryAddressBinding).where(
+            DeliveryAddressBinding.kind == kind,
+            DeliveryAddressBinding.lookup_tag == tag,
+        )
+    )
+    if row is not None and row.state == RETIRED:
+        raise RegistryError("ADDRESS_UNAVAILABLE")
+    if row is None:
+        row = DeliveryAddressBinding(
+            id=uuid.uuid4(),
+            kind=kind,
+            normalization_version=1,
+            lookup_tag=tag,
+            owner_user_id=owner_user_id,
+            state=RESERVED,
+            binding_revision=1,
+        )
+        session.add(row)
+        session.flush()
+    if row.owner_user_id != owner_user_id:
+        raise RegistryError("ADDRESS_UNAVAILABLE")
+    row.state = VERIFIED
+    row.binding_revision += 1
+    row.evidence_method = evidence_method
+    row.evidence_ref = make_evidence_ref(
+        kind=kind,
+        tag=tag,
+        method=evidence_method,
+        owner_user_id=owner_user_id,
+        evidence_key=evidence_key,
+    )
+    row.verified_at = now
+    session.flush()
+    return row
+
+
+def backfill_reservations(
+    session: Session,
+    *,
+    rows: list[tuple[str, str, uuid.UUID]],
+    hmac_key: bytes,
+) -> dict[str, int]:
+    """Bootstrap historical associations as RESERVED rows (never VERIFIED).
+
+    `rows` is explicit (kind, normalized, owner) triples supplied by the
+    operator from a verified export — this is the single invocation path
+    that creates backfill reservations; ordinary login/registration never
+    backfills. Idempotent: existing rows are counted, not duplicated;
+    foreign-owned or retired conflicts are counted as blocked, never
+    merged or rebound.
+    """
+    created = existing = blocked = 0
+    for kind, normalized, owner in rows:
+        tag = lock_address(session, kind, normalized, hmac_key)
+        row = session.scalar(
+            select(DeliveryAddressBinding).where(
+                DeliveryAddressBinding.kind == kind,
+                DeliveryAddressBinding.lookup_tag == tag,
+            )
+        )
+        if row is not None:
+            if row.owner_user_id == owner:
+                existing += 1
+            else:
+                blocked += 1
+            continue
+        session.add(
+            DeliveryAddressBinding(
+                id=uuid.uuid4(),
+                kind=kind,
+                normalization_version=1,
+                lookup_tag=tag,
+                owner_user_id=owner,
+                state=RESERVED,
+                binding_revision=1,
+            )
+        )
+        session.flush()
+        created += 1
+    return {"created": created, "existing": existing, "blocked": blocked}
+
+
+def claim_fence(
+    session: Session,
+    *,
+    kind: str,
+    tag: bytes,
+    owner_user_id: uuid.UUID,
+    evidence_key: bytes,
+) -> None:
+    """Pre-claim registry constraint, enforced (not merely helper-tested).
+
+    - No row: unbound address, pending scenario proceeds.
+    - Row owned by another account (live or retired): ADDRESS_UNAVAILABLE.
+    - RETIRED row (even own): terminal, ADDRESS_UNAVAILABLE.
+    - VERIFIED row: evidence MAC must re-verify under the outside-DB key.
+    Called inside execute_claim before any vault work.
+    """
+    if kind not in ("email", "phone") or len(tag) != 32:
+        raise RegistryError("ADDRESS_UNAVAILABLE")
+    lock_tag(session, kind, tag)
+    row = session.scalar(
+        select(DeliveryAddressBinding).where(
+            DeliveryAddressBinding.kind == kind,
+            DeliveryAddressBinding.lookup_tag == tag,
+        )
+    )
+    if row is None:
+        return
+    if row.owner_user_id != owner_user_id or row.state == RETIRED:
+        raise RegistryError("ADDRESS_UNAVAILABLE")
+    if row.state == VERIFIED and not verify_evidence_mac(row, evidence_key=evidence_key):
+        raise RegistryError("ADDRESS_UNAVAILABLE")
 
 
 def retire_binding(

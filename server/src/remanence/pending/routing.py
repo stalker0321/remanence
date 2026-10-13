@@ -23,11 +23,14 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from remanence.pending.models import PendingSendRoute
 from remanence.pending.registry import LiveBinding, address_fate, live_verified, lock_tag, lookup_tag
 from remanence.pending.vault import VaultError, aead_from_raw_key
+from remanence.users.key_models import KeyBundleStatus, UserKeyBundle
+from remanence.users.models import User
 
 ROUTE_TTL = timedelta(hours=24)
 _DESTINATION_AAD = b"pending-route-destination-v1"
@@ -99,6 +102,17 @@ def decide_route(
     return RouteDecision(mode="PENDING_V2", delivery_target_id=uuid.uuid4())
 
 
+def active_bundle_id_for(session: Session, user_id: uuid.UUID) -> uuid.UUID | None:
+    """Authoritative usable bundle for v1 routing. None means error, not escrow."""
+    bundle = session.scalar(
+        select(UserKeyBundle).where(
+            UserKeyBundle.user_id == user_id,
+            UserKeyBundle.status == KeyBundleStatus.ACTIVE,
+        )
+    )
+    return bundle.id if bundle is not None else None
+
+
 def decide_for_send(
     session: Session,
     *,
@@ -110,8 +124,21 @@ def decide_for_send(
     sender_blocked: bool = False,
 ) -> RouteDecision:
     """Registry-backed decision under the address lock (same lock the
-    freeze takes). Email/phone only; handle destinations use decide_route
-    directly after directory resolution."""
+    freeze takes). Handles resolve through the directory to their fixed
+    user + authoritative active bundle (existing v1 policy); email/phone
+    consult the verified registry. A verified address without a usable
+    bundle errors — the caller resolves bundles authoritatively, so a
+    missing bundle is never silent escrow."""
+    if destination_kind == "handle":
+        user = session.scalar(
+            select(User).where(User.handle_normalized == normalized_destination)
+        )
+        if user is None or user.disabled_at is not None:
+            raise RoutingError("ADDRESS_UNAVAILABLE")
+        bundle_id = active_bundle_id_for(session, user.id)
+        if bundle_id is None:
+            raise RoutingError("RECIPIENT_KEY_STALE")
+        return RouteDecision(mode="EXISTING_USER_V1", user_id=user.id, bundle_id=bundle_id)
     if destination_kind not in ("email", "phone"):
         raise RoutingError("ADDRESS_UNAVAILABLE")
     fate = address_fate(
@@ -120,6 +147,7 @@ def decide_for_send(
     if fate == "RETIRED":
         raise RoutingError("ADDRESS_UNAVAILABLE")
     live = None
+    authoritative_bundle: uuid.UUID | None = active_bundle_id
     if fate == "VERIFIED":
         live = live_verified(
             session,
@@ -127,10 +155,19 @@ def decide_for_send(
             normalized=normalized_destination,
             hmac_key=hmac_key,
         )
+        assert live is not None
+        # Authoritative usable bundle wins: a verified address with no
+        # usable bundle errors (never silent escrow), and a stale
+        # caller-supplied bundle is rejected rather than trusted.
+        authoritative_bundle = active_bundle_id_for(session, live.owner_user_id)
+        if authoritative_bundle is None:
+            raise RoutingError("RECIPIENT_KEY_STALE")
+        if active_bundle_id is not None and active_bundle_id != authoritative_bundle:
+            raise RoutingError("ADDRESS_UNAVAILABLE")
     return decide_route(
         destination_kind=destination_kind,
         live=live,
-        active_bundle_id=active_bundle_id,
+        active_bundle_id=authoritative_bundle,
         recipient_disabled=recipient_disabled,
         sender_blocked=sender_blocked,
     )

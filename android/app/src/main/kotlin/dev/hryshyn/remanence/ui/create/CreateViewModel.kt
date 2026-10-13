@@ -1770,14 +1770,14 @@ class CreateViewModel(
         // legitimate binding (no handle to confirm). A frozen V1 route
         // without a confirmed handle still fails here — the resolved
         // handle must be confirmed first (existing path below).
-        val frozenForPublish =
+        val frozenRouteForPublish =
             if (dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled()) {
                 sessionStore.pendingRoute.value
             } else {
                 null
             }
         if (boundRecipient == null &&
-            frozenForPublish !is dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity.Pending
+            frozenRouteForPublish !is dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity.Pending
         ) {
             failGuard("a recipient must be confirmed before publishing")
             return

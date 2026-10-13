@@ -25,9 +25,52 @@ KMS_CONTEXT_PURPOSE = "remanence-pending-v1"
 ESCROW_AAD_PURPOSE = "PENDING_CAPSULE_KEY"
 MAX_ESCROW_PLAINTEXT_BYTES = 2048
 
+_AES_GCM_KEY_TYPE_URL = "type.googleapis.com/google.crypto.tink.AesGcmKey"
+
 
 class VaultError(RuntimeError):
     """Fail-closed vault failure. Never carries key/plaintext material."""
+
+
+def parse_exact_capsule_key(key_bytes: bytes) -> bytes:
+    """Parse K as exactly one ENABLED AES256_GCM TINK key; return raw key_value.
+
+    Contract (crypto-contract §3): the exact-K parser accepts ONLY the
+    single enabled symmetric keyset. HPKE/Ed25519/ARK-shaped bytes,
+    multi-key keysets, disabled keys, malformed inner keys, non-canonical
+    encodings and trailing data are rejected without echo/logging.
+    """
+    from tink.proto import aes_gcm_pb2, tink_pb2
+
+    if not key_bytes or len(key_bytes) > MAX_ESCROW_PLAINTEXT_BYTES:
+        raise VaultError("vault key malformed")
+    try:
+        keyset = tink_pb2.Keyset.FromString(key_bytes)
+    except Exception as exc:
+        raise VaultError("vault key malformed") from exc
+    if keyset.SerializeToString() != key_bytes:
+        raise VaultError("vault key non-canonical")
+    if len(keyset.key) != 1:
+        raise VaultError("vault key must be exactly one key")
+    key = keyset.key[0]
+    if key.status != tink_pb2.ENABLED:
+        raise VaultError("vault key not enabled")
+    if key.output_prefix_type != tink_pb2.TINK:
+        raise VaultError("vault key prefix unsupported")
+    if (
+        key.key_data.key_material_type != tink_pb2.KeyData.SYMMETRIC
+        or key.key_data.type_url != _AES_GCM_KEY_TYPE_URL
+    ):
+        raise VaultError("vault key type rejected")
+    try:
+        aes_key = aes_gcm_pb2.AesGcmKey.FromString(key.key_data.value)
+    except Exception as exc:
+        raise VaultError("vault key malformed") from exc
+    if aes_key.version != 0 or len(aes_key.key_value) != 32:
+        raise VaultError("vault key malformed")
+    if aes_key.SerializeToString() != key.key_data.value:
+        raise VaultError("vault key non-canonical")
+    return aes_key.key_value
 
 
 def escrow_aad_bytes(aad: dv2.PendingEscrowAadV1) -> bytes:
@@ -83,7 +126,7 @@ def build_escrow_aad(
 
 
 def validate_escrow_plaintext(payload: dv2.PendingEscrowPlaintextV1) -> None:
-    """Strict parser: exact versions, sizes, single symmetric K. No echo."""
+    """Strict parser: exact versions, sizes, single AES keyset. No echo."""
     if payload.escrow_version != 1 or payload.capsule_protocol_version != 2:
         raise VaultError("vault payload version unsupported")
     for value in (payload.capsule_id, payload.delivery_target_id, payload.sender_user_id):
@@ -98,8 +141,9 @@ def validate_escrow_plaintext(payload: dv2.PendingEscrowPlaintextV1) -> None:
             raise VaultError("vault payload digest malformed")
     if payload.claim_expires_at_epoch_seconds < 0:
         raise VaultError("vault payload expiry malformed")
-    if not payload.capsule_aead_keyset:
-        raise VaultError("vault payload key missing")
+    # Exact single enabled AES256_GCM/TINK serialized keyset. HPKE/Ed25519
+    # keysets, ARK-shaped bytes, multi/disabled/malformed keys rejected.
+    parse_exact_capsule_key(bytes(payload.capsule_aead_keyset))
     if len(payload.SerializeToString()) > MAX_ESCROW_PLAINTEXT_BYTES:
         raise VaultError("vault payload oversize")
     opening = payload.address_opening
@@ -107,6 +151,49 @@ def validate_escrow_plaintext(payload: dv2.PendingEscrowPlaintextV1) -> None:
         raise VaultError("vault payload opening malformed")
     if not opening.normalized_destination or len(opening.salt) != 32:
         raise VaultError("vault payload opening malformed")
+
+
+def verify_escrow_bindings(
+    payload: dv2.PendingEscrowPlaintextV1, aad: dv2.PendingEscrowAadV1
+) -> None:
+    """Recompute D/KC and cross-check payload IDs/H/D/KC/expiry vs rebuilt AAD.
+
+    Called before seal AND open. The AAD must have been rebuilt from the
+    verified S; stored AAD is never trusted. Any mismatch fails closed.
+    """
+    validate_escrow_plaintext(payload)
+    if (
+        aad.aad_version != 1
+        or aad.purpose != ESCROW_AAD_PURPOSE
+        or aad.capsule_protocol_version != 2
+        or aad.claim_policy_version != 1
+    ):
+        raise VaultError("vault AAD version unsupported")
+    opening_bytes = payload.address_opening.SerializeToString(deterministic=True)
+    recomputed_d = domains.domain_digest(domains.DELIVERY_ADDRESS_DOMAIN, opening_bytes)
+    if recomputed_d != bytes(payload.address_commitment):
+        raise VaultError("vault address commitment mismatch")
+    kc_input = dv2.KeyCommitmentInput(
+        version=1,
+        capsule_id=bytes(payload.capsule_id),
+        delivery_target_id=bytes(payload.delivery_target_id),
+        capsule_aead_keyset=bytes(payload.capsule_aead_keyset),
+    )
+    recomputed_kc = domains.domain_digest(
+        domains.DELIVERY_KEY_DOMAIN, kc_input.SerializeToString(deterministic=True)
+    )
+    if recomputed_kc != bytes(payload.key_commitment):
+        raise VaultError("vault key commitment mismatch")
+    if (
+        bytes(payload.capsule_id) != bytes(aad.capsule_id)
+        or bytes(payload.delivery_target_id) != bytes(aad.delivery_target_id)
+        or bytes(payload.sender_user_id) != bytes(aad.sender_user_id)
+        or bytes(payload.publish_statement_sha256) != bytes(aad.publish_statement_sha256)
+        or bytes(payload.address_commitment) != bytes(aad.address_commitment)
+        or bytes(payload.key_commitment) != bytes(aad.key_commitment)
+        or payload.claim_expires_at_epoch_seconds != aad.claim_expires_at_epoch_seconds
+    ):
+        raise VaultError("vault payload/AAD binding mismatch")
 
 
 @dataclass(frozen=True)
@@ -152,7 +239,7 @@ class FakeHandleVault(EscrowVault):
         self._next = 1
 
     def seal(self, payload, aad) -> SealedHandle:
-        validate_escrow_plaintext(payload)
+        verify_escrow_bindings(payload, aad)
         token = self._next
         self._next += 1
         self._store[token] = payload.SerializeToString(deterministic=True)
@@ -175,7 +262,7 @@ class FakeHandleVault(EscrowVault):
         except (ValueError, IndexError, KeyError) as exc:
             raise VaultError("vault handle unknown") from exc
         payload = dv2.PendingEscrowPlaintextV1.FromString(raw)
-        validate_escrow_plaintext(payload)
+        verify_escrow_bindings(payload, aad)
         return payload
 
 
@@ -239,7 +326,7 @@ class DevSealedVault(EscrowVault):
         return primitive
 
     def seal(self, payload, aad) -> SealedHandle:
-        validate_escrow_plaintext(payload)
+        verify_escrow_bindings(payload, aad)
         raw = payload.SerializeToString(deterministic=True)
         if len(raw) > MAX_ESCROW_PLAINTEXT_BYTES:
             raise VaultError("vault payload oversize")
@@ -265,7 +352,7 @@ class DevSealedVault(EscrowVault):
         except tink.TinkError as exc:
             raise VaultError("vault open failed") from exc
         payload = dv2.PendingEscrowPlaintextV1.FromString(raw)
-        validate_escrow_plaintext(payload)
+        verify_escrow_bindings(payload, aad)
         return payload
 
 
@@ -290,7 +377,7 @@ class ProductionKmsVault(EscrowVault):
         self._key_id = kms_key_id
 
     def seal(self, payload, aad) -> SealedHandle:
-        validate_escrow_plaintext(payload)
+        verify_escrow_bindings(payload, aad)
         raw = payload.SerializeToString(deterministic=True)
         context = kms_context_for(aad)
         ciphertext = self._client.encrypt(
@@ -313,7 +400,7 @@ class ProductionKmsVault(EscrowVault):
             key_id=self._key_id, ciphertext=handle.ciphertext, encryption_context=context
         )
         payload = dv2.PendingEscrowPlaintextV1.FromString(raw)
-        validate_escrow_plaintext(payload)
+        verify_escrow_bindings(payload, aad)
         return payload
 
 
@@ -327,6 +414,8 @@ __all__ = [
     "build_escrow_aad",
     "escrow_aad_bytes",
     "kms_context_for",
+    "parse_exact_capsule_key",
     "validate_escrow_plaintext",
+    "verify_escrow_bindings",
     "domains",
 ]

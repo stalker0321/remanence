@@ -164,6 +164,18 @@ private val PENDING_PUBLISH_PROBLEM_CODES = setOf(
     "INTERNAL_ERROR",
 )
 
+/**
+ * Strict endpoint-scoped terminal tuples for the pending publication
+ * surface (verified against `server/src/remanence/pending/api.py`):
+ * R3 sends `ROUTE_STALE` at 409; R3/R5 send `PROTOCOL_UNSUPPORTED` at
+ * 404. The shared canonical map must NOT absorb these — legacy v1 pins
+ * `PROTOCOL_UNSUPPORTED` at 422 and that tuple stays intact.
+ */
+private val PENDING_PUBLISH_ENDPOINT_STATUSES = mapOf(
+    "ROUTE_STALE" to 409,
+    "PROTOCOL_UNSUPPORTED" to 404,
+)
+
 private fun mapPublishProblem(code: String): PendingPublishFailure = when (code) {
     "AUTH_INVALID" -> PendingPublishFailure.AUTH_INVALID
     "RATE_LIMITED" -> PendingPublishFailure.RATE_LIMITED
@@ -471,6 +483,7 @@ class PendingDeliveryPublishRepository internal constructor(
             bytes.toString(Charsets.UTF_8),
             response.code,
             PENDING_PUBLISH_PROBLEM_CODES,
+            PENDING_PUBLISH_ENDPOINT_STATUSES,
         )
         val reason = problem?.let { mapPublishProblem(it.code) } ?: PendingPublishFailure.HTTP
         val retryable = (problem?.retryable ?: capsuleHttpFallbackIsRetryable(response.code)) ||

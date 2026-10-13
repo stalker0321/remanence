@@ -204,4 +204,75 @@ class PendingDeliveryPublishRepositoryTest {
             assertFalse(result.retryable)
         }
     }
+
+    /**
+     * Pending R3/R5 send `PROTOCOL_UNSUPPORTED` at 404 (verified against
+     * `server/src/remanence/pending/api.py`); legacy v1 keeps its 422
+     * tuple in the shared canonical map, untouched by this surface.
+     */
+    @Test
+    fun finalizeProtocolUnsupported404IsTerminal() = runTest {
+        withServer { server ->
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(404)
+                    .setHeader("Content-Type", "application/problem+json")
+                    .body(problemJson("PROTOCOL_UNSUPPORTED", 404, false))
+                    .build(),
+            )
+            val result = assertIs<PendingFinalizeResult.Failure>(
+                repository(server).finalize(
+                    deliveryId = "d", publishStatementB64 = "Uw==",
+                    publishSignature69B64 = "Ux==", escrowPayloadB64 = "RXNj",
+                    idempotencyKey = "k", accessToken = "token",
+                ),
+            )
+            assertEquals(PendingPublishFailure.PROTOCOL_UNSUPPORTED, result.reason)
+            assertFalse(result.retryable)
+        }
+    }
+
+    @Test
+    fun finalizeProtocolUnsupportedWrongStatusRejected() = runTest {
+        withServer { server ->
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(400)
+                    .setHeader("Content-Type", "application/problem+json")
+                    .body(problemJson("PROTOCOL_UNSUPPORTED", 400, false))
+                    .build(),
+            )
+            val result = assertIs<PendingFinalizeResult.Failure>(
+                repository(server).finalize(
+                    deliveryId = "d", publishStatementB64 = "Uw==",
+                    publishSignature69B64 = "Ux==", escrowPayloadB64 = "RXNj",
+                    idempotencyKey = "k", accessToken = "token",
+                ),
+            )
+            // Non-canonical tuple anywhere: rejected, never trusted.
+            assertEquals(PendingPublishFailure.HTTP, result.reason)
+        }
+    }
+
+    @Test
+    fun finalizeProtocolUnsupportedRetryableFlagRejected() = runTest {
+        withServer { server ->
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(404)
+                    .setHeader("Content-Type", "application/problem+json")
+                    .body(problemJson("PROTOCOL_UNSUPPORTED", 404, true))
+                    .build(),
+            )
+            val result = assertIs<PendingFinalizeResult.Failure>(
+                repository(server).finalize(
+                    deliveryId = "d", publishStatementB64 = "Uw==",
+                    publishSignature69B64 = "Ux==", escrowPayloadB64 = "RXNj",
+                    idempotencyKey = "k", accessToken = "token",
+                ),
+            )
+            // Terminal tuple claiming retryable: rejected, never trusted.
+            assertEquals(PendingPublishFailure.HTTP, result.reason)
+        }
+    }
 }

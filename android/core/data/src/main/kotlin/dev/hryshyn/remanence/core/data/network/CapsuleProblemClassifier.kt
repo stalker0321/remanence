@@ -24,11 +24,18 @@ private data class CapsuleProblemResponseDto(
 /**
  * Parses only a bounded, endpoint-allowed problem response and accepts it
  * only when the wire status/code/retryability tuple is canonical.
+ *
+ * [endpointStatuses] carries strict endpoint-scoped terminal tuples that
+ * the shared canonical map must not absorb (e.g. pending R3/R5 send
+ * `PROTOCOL_UNSUPPORTED` at 404 while legacy v1 pins it at 422 — merging
+ * either direction would weaken the other surface). Scoped tuples are
+ * terminal (non-retryable), exactly like the canonical map.
  */
 internal fun classifyCapsuleProblem(
     text: String,
     httpStatus: Int,
     allowedCodes: Set<String>,
+    endpointStatuses: Map<String, Int> = emptyMap(),
 ): ClassifiedCapsuleProblem? {
     val problem = try {
         capsuleProblemJson.decodeFromString<CapsuleProblemResponseDto>(text)
@@ -39,7 +46,8 @@ internal fun classifyCapsuleProblem(
     }
 
     if (problem.status != httpStatus || problem.code !in allowedCodes) return null
-    val canonicalRetryable = canonicalRetryability(problem.code, problem.status) ?: return null
+    val canonicalRetryable =
+        canonicalRetryability(problem.code, problem.status, endpointStatuses) ?: return null
     if (problem.retryable != canonicalRetryable) return null
     return ClassifiedCapsuleProblem(problem.code, problem.retryable)
 }
@@ -47,11 +55,16 @@ internal fun classifyCapsuleProblem(
 internal fun capsuleHttpFallbackIsRetryable(httpStatus: Int): Boolean =
     httpStatus == HTTP_RATE_LIMITED || httpStatus in HTTP_SERVER_ERROR_RANGE
 
-private fun canonicalRetryability(code: String, status: Int): Boolean? = when {
+private fun canonicalRetryability(
+    code: String,
+    status: Int,
+    endpointStatuses: Map<String, Int> = emptyMap(),
+): Boolean? = when {
     code == CODE_RATE_LIMITED && status == HTTP_RATE_LIMITED -> true
     code == CODE_INTERNAL_ERROR && status == HTTP_SERVICE_UNAVAILABLE -> true
     code == CODE_INTERNAL_ERROR && status == HTTP_INTERNAL_SERVER_ERROR -> false
     TERMINAL_CODE_STATUSES[code] == status -> false
+    endpointStatuses[code] == status -> false
     else -> null
 }
 

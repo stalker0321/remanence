@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, FetchedValue, String, UUID, UniqueConstraint, func
+from sqlalchemy import CheckConstraint, DateTime, FetchedValue, String, UUID, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from remanence.db.base import Base
@@ -14,6 +14,15 @@ class User(Base):
     __table_args__ = (
         UniqueConstraint("email_normalized", name="uq_users_email_normalized"),
         UniqueConstraint("handle_normalized", name="uq_users_handle_normalized"),
+        # T185 receive-only accounts defer the immutable handle until first
+        # send: both handle columns are NULL together, or both set together.
+        # Partial NULLs are rejected. Multiple NULLs never conflict under the
+        # unique constraint (PostgreSQL NULL semantics).
+        CheckConstraint(
+            "((handle_normalized IS NULL AND handle_display IS NULL) OR "
+            "(handle_normalized IS NOT NULL AND handle_display IS NOT NULL))",
+            name="ck_users_handle_paired_null",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -23,8 +32,10 @@ class User(Base):
         nullable=False,
     )
     email_normalized: Mapped[str] = mapped_column(String(320), nullable=False)
-    handle_normalized: Mapped[str] = mapped_column(String(30), nullable=False)
-    handle_display: Mapped[str] = mapped_column(String(30), nullable=False)
+    # Nullable since T185 M2 (receive-only accounts). Existing rows keep
+    # their handles; new sends still require a handle (server + client).
+    handle_normalized: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    handle_display: Mapped[str | None] = mapped_column(String(30), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

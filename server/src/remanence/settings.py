@@ -46,6 +46,31 @@ class Settings(BaseSettings):
     google_presenter_ids: list[str] = Field(default_factory=list)
     recovery_rp_id: str = "remanence.hryshyn.dev"
     recovery_origins: list[str] = Field(default_factory=lambda: ["https://remanence.hryshyn.dev"])
+    # T185 experimental pending-gift flags. ALL default OFF in every mode.
+    # Production/beta require configured independent custody (fail closed).
+    pending_protocol_enabled: bool = False
+    pending_sends_enabled: bool = False
+    pending_claims_enabled: bool = False
+    pending_locator_issuance_enabled: bool = False
+    pending_kms_key_id: str | None = None
+    pending_allowed_kms_key_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def require_pending_custody(self) -> Self:
+        subflags = (
+            self.pending_sends_enabled,
+            self.pending_claims_enabled,
+            self.pending_locator_issuance_enabled,
+        )
+        if any(subflags) and not self.pending_protocol_enabled:
+            raise ValueError("pending sub-flags require the master protocol flag")
+        if self.pending_protocol_enabled and self.mode in (AppMode.PROD, AppMode.BETA):
+            if (
+                not self.pending_kms_key_id
+                or self.pending_kms_key_id not in self.pending_allowed_kms_key_ids
+            ):
+                raise ValueError("pending in prod/beta requires configured independent custody")
+        return self
 
     @model_validator(mode="after")
     def require_datastore_for_non_test(self) -> Self:

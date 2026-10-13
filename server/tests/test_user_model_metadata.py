@@ -2,7 +2,7 @@
 
 import uuid
 
-from sqlalchemy import DateTime, FetchedValue, String, UUID, UniqueConstraint
+from sqlalchemy import CheckConstraint, DateTime, FetchedValue, String, UUID, UniqueConstraint
 
 from remanence.users.models import User
 
@@ -20,10 +20,13 @@ EXPECTED_COLUMNS = frozenset(
 REQUIRED_COLUMNS = (
     "id",
     "email_normalized",
-    "handle_normalized",
-    "handle_display",
     "created_at",
     "updated_at",
+)
+# T185 M2: receive-only accounts defer the handle until first send.
+NULLABLE_HANDLE_COLUMNS = (
+    "handle_normalized",
+    "handle_display",
 )
 
 
@@ -66,7 +69,18 @@ def test_column_types_lengths_and_timezones() -> None:
 def test_nullability_matches_schema() -> None:
     for name in REQUIRED_COLUMNS:
         assert _column(name).nullable is False, name
+    for name in NULLABLE_HANDLE_COLUMNS:
+        assert _column(name).nullable is True, name
     assert _column("disabled_at").nullable is True
+
+
+def test_handle_paired_null_check_constraint() -> None:
+    checks = {
+        constraint.name: constraint
+        for constraint in User.__table__.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+    assert "ck_users_handle_paired_null" in checks
 
 
 def test_named_unique_constraints_exactly_for_normalized_columns() -> None:

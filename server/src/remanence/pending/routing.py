@@ -1,0 +1,209 @@
+"""Frozen send routing (T185 M2). No silent v1<->pending fallback.
+
+Decision (pure, unit-tested):
+- handle, or active VERIFIED email/phone with exactly one owner AND a
+  usable active bundle -> EXISTING_USER_V1. No escrow, no claim.
+- absent/RESERVED binding -> PENDING_V2 (fixed target, original contract).
+- RETIRED address, conflicting/malformed evidence, disabled owner,
+  blocked sender, missing or incompatible bundle -> explicit error.
+  NEVER silent escrow, NEVER absent->pending fallback for retired rows.
+
+Destinations at rest are AEAD-sealed (dev adapter with an explicit
+synthetic key in dev/test; KMS envelope in production). Raw recipient
+destinations never reach SQL or idempotency metadata.
+
+Race policy: route freeze is the linearization point, taken under the
+same address lock as the registry reads. Binding before freeze -> v1;
+freeze first -> frozen v2 even if binding lands later.
+"""
+
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+
+from sqlalchemy.orm import Session
+
+from remanence.pending.models import PendingSendRoute
+from remanence.pending.registry import LiveBinding, address_fate, live_verified, lock_tag, lookup_tag
+from remanence.pending.vault import VaultError, aead_from_raw_key
+
+ROUTE_TTL = timedelta(hours=24)
+_DESTINATION_AAD = b"pending-route-destination-v1"
+
+
+class RoutingError(RuntimeError):
+    def __init__(self, code: str) -> None:
+        super().__init__("send route failed")
+        self.code = code
+
+
+def seal_destination(*, normalized: str, key_32: bytes, mode: str) -> bytes:
+    """Encrypt-at-rest dev adapter for route destinations. Dev/test only
+    with an explicit synthetic key; prod/beta refused (KMS envelope is
+    the production path, wired at deployment)."""
+    if mode in ("prod", "beta"):
+        raise RoutingError("PROTOCOL_UNSUPPORTED")
+    try:
+        primitive = aead_from_raw_key(key_32)
+        return primitive.encrypt(normalized.encode("utf-8"), _DESTINATION_AAD)
+    except VaultError as exc:
+        raise RoutingError("ADDRESS_UNAVAILABLE") from exc
+
+
+def open_destination(*, sealed: bytes, key_32: bytes) -> str:
+    import tink
+
+    try:
+        primitive = aead_from_raw_key(key_32)
+        return primitive.decrypt(sealed, _DESTINATION_AAD).decode("utf-8")
+    except (VaultError, tink.TinkError, UnicodeDecodeError) as exc:
+        raise RoutingError("ADDRESS_UNAVAILABLE") from exc
+
+
+@dataclass(frozen=True)
+class RouteDecision:
+    mode: str  # EXISTING_USER_V1 | PENDING_V2
+    user_id: uuid.UUID | None = None
+    bundle_id: uuid.UUID | None = None
+    delivery_target_id: uuid.UUID | None = None
+    binding_revision: int | None = None
+
+
+def decide_route(
+    *,
+    destination_kind: str,
+    live: LiveBinding | None,
+    active_bundle_id: uuid.UUID | None,
+    recipient_disabled: bool = False,
+    sender_blocked: bool = False,
+    address_retired: bool = False,
+) -> RouteDecision:
+    """Pure decision. Handle destinations pass live=None + bundle directly
+    (caller resolves the handle to its fixed user/bundle first). A retired
+    address errors explicitly — it must never fall back to pending."""
+    if sender_blocked or recipient_disabled or address_retired:
+        raise RoutingError("ADDRESS_UNAVAILABLE")
+    if live is not None:
+        if active_bundle_id is None:
+            # Verified binding without a usable bundle is an error, never
+            # permission to silently use escrow.
+            raise RoutingError("RECIPIENT_KEY_STALE")
+        return RouteDecision(
+            mode="EXISTING_USER_V1",
+            user_id=live.owner_user_id,
+            bundle_id=active_bundle_id,
+            binding_revision=live.revision,
+        )
+    return RouteDecision(mode="PENDING_V2", delivery_target_id=uuid.uuid4())
+
+
+def decide_for_send(
+    session: Session,
+    *,
+    destination_kind: str,
+    normalized_destination: str,
+    active_bundle_id: uuid.UUID | None,
+    hmac_key: bytes,
+    recipient_disabled: bool = False,
+    sender_blocked: bool = False,
+) -> RouteDecision:
+    """Registry-backed decision under the address lock (same lock the
+    freeze takes). Email/phone only; handle destinations use decide_route
+    directly after directory resolution."""
+    if destination_kind not in ("email", "phone"):
+        raise RoutingError("ADDRESS_UNAVAILABLE")
+    fate = address_fate(
+        session, kind=destination_kind, normalized=normalized_destination, hmac_key=hmac_key
+    )
+    if fate == "RETIRED":
+        raise RoutingError("ADDRESS_UNAVAILABLE")
+    live = None
+    if fate == "VERIFIED":
+        live = live_verified(
+            session,
+            kind=destination_kind,
+            normalized=normalized_destination,
+            hmac_key=hmac_key,
+        )
+    return decide_route(
+        destination_kind=destination_kind,
+        live=live,
+        active_bundle_id=active_bundle_id,
+        recipient_disabled=recipient_disabled,
+        sender_blocked=sender_blocked,
+    )
+
+
+def freeze_route(
+    session: Session,
+    *,
+    sender_user_id: uuid.UUID,
+    capsule_id: uuid.UUID,
+    destination_kind: str,
+    normalized_destination: str,
+    destination_key_32: bytes,
+    destination_key_mode: str,
+    hmac_key: bytes,
+    decision: RouteDecision,
+    now: datetime,
+    pending_sends_enabled: bool,
+) -> PendingSendRoute:
+    """Freeze under the same address lock, persisting only the SEALED
+    destination. Raw recipient destinations never reach SQL or
+    idempotency metadata."""
+    if destination_kind not in ("email", "phone", "handle"):
+        raise RoutingError("ADDRESS_UNAVAILABLE")
+    if decision.mode == "PENDING_V2" and not pending_sends_enabled:
+        # Unresolved route with sends disabled: explicit unavailable, never
+        # a fabricated existing user.
+        raise RoutingError("PROTOCOL_UNSUPPORTED")
+    if destination_kind in ("email", "phone"):
+        lock_tag(
+            session,
+            destination_kind,
+            lookup_tag(destination_kind, normalized_destination, hmac_key),
+        )
+    sealed = seal_destination(
+        normalized=normalized_destination, key_32=destination_key_32, mode=destination_key_mode
+    )
+    row = PendingSendRoute(
+        id=uuid.uuid4(),
+        sender_user_id=sender_user_id,
+        capsule_id=capsule_id,
+        mode=decision.mode,
+        destination_kind=destination_kind,
+        sealed_destination=sealed,
+        target_user_id=decision.user_id,
+        target_bundle_id=decision.bundle_id,
+        delivery_target_id=decision.delivery_target_id,
+        binding_revision=decision.binding_revision,
+        expires_at=now + ROUTE_TTL,
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
+def check_finalize_route(
+    session: Session,
+    *,
+    route_id: uuid.UUID,
+    sender_user_id: uuid.UUID,
+    capsule_id: uuid.UUID,
+    mode: str,
+    now: datetime,
+) -> PendingSendRoute:
+    """Draft/finalize must present the matching frozen route. Expired or
+    mismatched routes reject before any key intake or publication."""
+    route = session.get(PendingSendRoute, route_id)
+    if (
+        route is None
+        or route.sender_user_id != sender_user_id
+        or route.capsule_id != capsule_id
+        or route.mode != mode
+        or route.expires_at <= now
+    ):
+        raise RoutingError("ROUTE_STALE")
+    return route

@@ -104,6 +104,43 @@ def kms_context_for(aad: dv2.PendingEscrowAadV1) -> dict[str, str]:
     return {"purpose": KMS_CONTEXT_PURPOSE, "binding": binding}
 
 
+def aead_from_raw_key(key_32: bytes):
+    """Tink AES256_GCM primitive from explicit 32-byte key material.
+
+    Shared dev/test helper (version-pinned construction + self-test
+    probe, fails closed on API drift). Production custody uses KMS, never
+    this path.
+    """
+    import tink
+    from tink import aead
+    from tink.proto import aes_gcm_pb2, tink_pb2
+
+    if len(key_32) != 32:
+        raise VaultError("vault key must be 32 bytes")
+    key_proto = aes_gcm_pb2.AesGcmKey(version=0, key_value=key_32)
+    keyset = tink_pb2.Keyset(primary_key_id=1)
+    keyset.key.append(
+        tink_pb2.Keyset.Key(
+            key_data=tink_pb2.KeyData(
+                type_url="type.googleapis.com/google.crypto.tink.AesGcmKey",
+                value=key_proto.SerializeToString(),
+                key_material_type=tink_pb2.KeyData.SYMMETRIC,
+            ),
+            status=tink_pb2.ENABLED,
+            key_id=1,
+            output_prefix_type=tink_pb2.TINK,
+        )
+    )
+    try:
+        handle = tink.KeysetHandle._create(keyset)  # noqa: SLF001 (pinned)
+        primitive = handle.primitive(aead.Aead)
+        probe = primitive.encrypt(b"dev-vault-selftest", b"dev-vault-selftest")
+        assert primitive.decrypt(probe, b"dev-vault-selftest") == b"dev-vault-selftest"
+    except Exception as exc:
+        raise VaultError("dev vault cipher unavailable") from exc
+    return primitive
+
+
 def build_escrow_aad(
     *,
     capsule_id: bytes,
@@ -316,36 +353,7 @@ class DevSealedVault(EscrowVault):
 
     @staticmethod
     def _build_aead(key_32: bytes):
-        import tink
-        from tink import aead
-        from tink.proto import aes_gcm_pb2, tink_pb2
-
-        key_proto = aes_gcm_pb2.AesGcmKey(version=0, key_value=key_32)
-        keyset = tink_pb2.Keyset(primary_key_id=1)
-        keyset.key.append(
-            tink_pb2.Keyset.Key(
-                key_data=tink_pb2.KeyData(
-                    type_url="type.googleapis.com/google.crypto.tink.AesGcmKey",
-                    value=key_proto.SerializeToString(),
-                    key_material_type=tink_pb2.KeyData.SYMMETRIC,
-                ),
-                status=tink_pb2.ENABLED,
-                key_id=1,
-                output_prefix_type=tink_pb2.TINK,
-            )
-        )
-        # Pinned tink==1.16.1 exposes no public cleartext-secret reader, so
-        # the keyset is materialized via the version-pinned constructor and
-        # verified by an immediate self-test probe. Any API drift fails
-        # closed here instead of silently weakening the seal.
-        try:
-            handle = tink.KeysetHandle._create(keyset)  # noqa: SLF001 (pinned)
-            primitive = handle.primitive(aead.Aead)
-            probe = primitive.encrypt(b"dev-vault-selftest", b"dev-vault-selftest")
-            assert primitive.decrypt(probe, b"dev-vault-selftest") == b"dev-vault-selftest"
-        except Exception as exc:
-            raise VaultError("dev vault cipher unavailable") from exc
-        return primitive
+        return aead_from_raw_key(key_32)
 
     def seal(self, payload, aad) -> SealedHandle:
         verify_escrow_bindings(payload, aad)
@@ -433,6 +441,7 @@ __all__ = [
     "ProductionKmsVault",
     "SealedHandle",
     "VaultError",
+    "aead_from_raw_key",
     "build_escrow_aad",
     "escrow_aad_bytes",
     "kms_context_for",

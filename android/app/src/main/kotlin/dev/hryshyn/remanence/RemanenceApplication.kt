@@ -69,6 +69,7 @@ import dev.hryshyn.remanence.wiring.TinkRegistrationIdentityAdapter
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -784,7 +785,10 @@ class AppContainer private constructor(
 
     override val pendingOwnerId: String?
         get() = try {
-            currentAccountStore.load()?.userId?.takeIf { it.isNotBlank() }
+            // Synchronous live-lease owner: lock-guarded memory read, never
+            // a Room call. Null when no live session (signed out/refreshing).
+            apiStack.captureSessionRequestLease()
+                ?.ownerUserId?.toRestString()?.takeIf { it.isNotBlank() }
         } catch (_: Exception) {
             null
         }
@@ -824,8 +828,10 @@ class AppContainer private constructor(
     /**
      * Production presentation callback. Call ONLY after genuine supported
      * presentation (live grant + Ready supported content). Nonblocking: the
-     * viewer returns immediately; persistence + drain run on [pendingAppScope]
-     * and WorkManager. Backend failure never affects display/entitlement.
+     * viewer returns immediately; the account fence (suspend Room read) and
+     * persistence + drain run on [pendingAppScope] and WorkManager. Backend
+     * failure never affects display/entitlement. Never blocks the viewer,
+     * never reads Room on the caller thread.
      */
     fun notifySupportedPresentation(
         ownerUserId: String,
@@ -835,6 +841,7 @@ class AppContainer private constructor(
         supported: Boolean,
     ) {
         if (!dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled()) return
+        if (ownerUserId.isBlank() || capsuleId.isBlank()) return
         val kind = if (supported) {
             dev.hryshyn.remanence.pending.PendingPresentationGate.PresentationKind.SUPPORTED
         } else {
@@ -846,17 +853,21 @@ class AppContainer private constructor(
         ) {
             return
         }
-        // Fence against account switch between presentation and callback.
-        val current = try {
-            currentAccountStore.load()?.userId?.takeIf { it.isNotBlank() }
-        } catch (_: Exception) {
-            null
-        } ?: return
-        if (current != ownerUserId) return
-        // Application-owned scope inside; never the caller's screen scope.
-        dev.hryshyn.remanence.pending.PendingRetirementScheduler.enqueueAfterPresentation(
-            this, ownerUserId, capsuleId,
-        )
+        // Fence against account switch between presentation and callback:
+        // suspend Room read inside the application-owned coroutine, never on
+        // the caller (often Main) thread and never runBlocking.
+        pendingAppScope.launch {
+            val current = try {
+                currentAccountStore.load()?.userId?.takeIf { it.isNotBlank() }
+            } catch (_: Exception) {
+                null
+            } ?: return@launch
+            if (current != ownerUserId) return@launch
+            // Application-owned scope inside; never the caller's screen scope.
+            dev.hryshyn.remanence.pending.PendingRetirementScheduler.enqueueAfterPresentation(
+                this@AppContainer, ownerUserId, capsuleId,
+            )
+        }
     }
 
     /** FIX-M1-007-07: the current account lives in the real local_account table. */

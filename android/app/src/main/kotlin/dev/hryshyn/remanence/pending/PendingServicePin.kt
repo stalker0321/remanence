@@ -25,7 +25,8 @@ object PendingServicePinConfig {
 
     /**
      * The root-selected pin for pending debug builds, else null (fail
-     * closed). Absent/blank/malformed UUID or undecodable keyset ⇒ null;
+     * closed). Absent/blank/malformed UUID, undecodable keyset, or a
+     * keyset that is not a usable Ed25519 verification key ⇒ null;
      * production and beta are always null (empty BuildConfig + gate).
      */
     fun selected(): PendingServicePin? {
@@ -36,20 +37,77 @@ object PendingServicePinConfig {
         )
     }
 
-    /** Pure validation half (unit-tested without BuildConfig). */
+    /**
+     * Pure validation half (unit-tested without BuildConfig): strict
+     * canonical UUID (lowercase form, no urn/braces/uppercase aliases)
+     * plus a real keyset parse that proves an Ed25519 `PublicKeyVerify`
+     * primitive is actually available — junk bytes, wrong-algorithm
+     * keysets and private keysets all fail closed. A pin that cannot
+     * authenticate a signer must never reach publication.
+     */
     fun select(deploymentUuid: String, publicKeysetB64: String): PendingServicePin? {
+        val trimmedUuid = deploymentUuid.trim()
         val uuid = try {
-            java.util.UUID.fromString(deploymentUuid.trim())
-            deploymentUuid.trim()
+            java.util.UUID.fromString(trimmedUuid)
         } catch (_: IllegalArgumentException) {
             return null
         }
-        val keyset = try {
+        // Strict canonical form: fromString accepts urn/braces/uppercase
+        // aliases that must never select a deployment pin.
+        if (uuid.toString() != trimmedUuid) return null
+        val trimmedKeyset = publicKeysetB64.trim()
+        if (parseVerificationKeyset(trimmedKeyset) == null) return null
+        return PendingServicePin(trimmedUuid, trimmedKeyset)
+    }
+
+    /**
+     * Usability gate for an already-formed pin (the sender checks this
+     * instead of blankness, so a malformed configured pin BLOCKS
+     * publication rather than minting S under it).
+     */
+    fun usable(pin: PendingServicePin?): Boolean {
+        if (pin == null) return false
+        return select(pin.deploymentUuid, pin.publicKeysetB64) != null
+    }
+
+    /**
+     * Parses WITHOUT secrets and proves Ed25519 verification: null for
+     * undecodable bytes, non-keyset junk, private keysets (secret
+     * material refused), wrong-algorithm keysets and empty keysets. No
+     * signing is performed and no private material is touched. Checks
+     * are deterministic proto inspections plus the real Tink parse (no
+     * reliance on any single library-version behavior).
+     */
+    fun parseVerificationKeyset(publicKeysetB64: String): com.google.crypto.tink.KeysetHandle? {
+        val keysetBytes = try {
             java.util.Base64.getDecoder().decode(publicKeysetB64.trim())
         } catch (_: IllegalArgumentException) {
             return null
         }
-        if (keyset.isEmpty()) return null
-        return PendingServicePin(uuid, publicKeysetB64.trim())
+        if (keysetBytes.isEmpty()) return null
+        return try {
+            // Deterministic shape gate first: every key must be a public
+            // Ed25519 key (rejects private material and foreign
+            // algorithms before Tink even parses).
+            val proto = com.google.crypto.tink.proto.Keyset.parseFrom(keysetBytes)
+            if (proto.keyCount < 1) return null
+            for (key in proto.keyList) {
+                if (key.keyData.keyMaterialType !=
+                    com.google.crypto.tink.proto.KeyMaterialType.ASYMMETRIC_PUBLIC
+                ) {
+                    return null
+                }
+                if (key.keyData.typeUrl != ED25519_PUBLIC_KEY_TYPE_URL) return null
+            }
+            val handle = com.google.crypto.tink.TinkProtoKeysetFormat
+                .parseKeysetWithoutSecret(keysetBytes)
+            handle.getPrimitive(com.google.crypto.tink.PublicKeyVerify::class.java)
+            handle
+        } catch (_: Exception) {
+            null
+        }
     }
+
+    private const val ED25519_PUBLIC_KEY_TYPE_URL: String =
+        "type.googleapis.com/google.crypto.tink.Ed25519PublicKey"
 }

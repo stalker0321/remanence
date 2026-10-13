@@ -219,14 +219,18 @@ class PendingSenderViewModel(
         frozen: PendingSendRouteFlow.FrozenIdentity.Pending,
         capsuleId: String,
     ): State {
+        // Out-of-band pin usability (not blankness): a malformed
+        // configured pin BLOCKS publication instead of minting S under
+        // a key that can never verify.
         val pin = try {
             servicePinProvider()
         } catch (_: Exception) {
             null
-        } ?: return State.Failed(Message.SERVICE_UNAVAILABLE)
-        if (pin.deploymentUuid.isBlank() || pin.publicKeysetB64.isBlank()) {
+        }
+        if (!PendingServicePinConfig.usable(pin)) {
             return State.Failed(Message.SERVICE_UNAVAILABLE)
         }
+        val serviceKeyId = pin!!.deploymentUuid
         // ARK-readiness: signing keys must unwrap (recovery otherwise).
         // Both awaits are fenced against the ORIGINAL transaction owner.
         val identity = try {
@@ -270,7 +274,7 @@ class PendingSenderViewModel(
                 senderUserId = identity.userId,
                 senderKeyBundleId = identity.bundleId,
                 deliveryTargetId = frozen.deliveryTargetId,
-                serviceKeyId = pin.deploymentUuid,
+                serviceKeyId = serviceKeyId,
                 channel = channel,
                 normalizedDestination = frozen.normalizedDestination,
                 salt32 = salt,

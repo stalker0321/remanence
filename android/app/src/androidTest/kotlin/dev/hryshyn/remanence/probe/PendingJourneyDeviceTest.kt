@@ -441,6 +441,18 @@ class PendingJourneyDeviceTest {
         val signing = com.google.crypto.tink.KeysetHandle.generateNew(
             com.google.crypto.tink.KeyTemplates.get("ED25519"),
         )
+        // Real usable service pin (generated public keyset): a pin that
+        // cannot authenticate must never reach publication.
+        val servicePin = dev.hryshyn.remanence.pending.PendingServicePin(
+            "9f9f9f9f-8e8e-7d7d-6c6c-5b5b5b5b5b5b",
+            java.util.Base64.getEncoder().encodeToString(
+                com.google.crypto.tink.TinkProtoKeysetFormat.serializeKeysetWithoutSecret(
+                    com.google.crypto.tink.KeysetHandle.generateNew(
+                        com.google.crypto.tink.KeyTemplates.get("ED25519"),
+                    ).publicKeysetHandle,
+                ),
+            ),
+        )
         val gate = object : dev.hryshyn.remanence.pending.PendingRetirementSessionGate {
             override fun capture(): dev.hryshyn.remanence.core.data.network.SessionRequestLease =
                 dev.hryshyn.remanence.core.data.network.SessionRequestLease(
@@ -498,10 +510,7 @@ class PendingJourneyDeviceTest {
                 )
             },
             servicePinProvider = {
-                dev.hryshyn.remanence.pending.PendingServicePin(
-                    "9f9f9f9f-8e8e-7d7d-6c6c-5b5b5b5b5b5b",
-                    "cGlu",
-                )
+                servicePin
             },
             sessionGate = gate,
             accountProvider = { account },

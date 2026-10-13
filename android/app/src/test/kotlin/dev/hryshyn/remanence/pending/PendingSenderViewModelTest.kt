@@ -72,10 +72,8 @@ class PendingSenderViewModelTest {
         account: ProofAccount? = ProofAccount(senderId, senderBundle),
         gateOwner: String = senderId,
         live: Boolean = true,
-        pin: PendingServicePin? = PendingServicePin(
-            "9f9f9f9f-8e8e-7d7d-6c6c-5b5b5b5b5b5b",
-            "cGlu",
-        ),
+        pin: PendingServicePin? = null,
+        pinProvider: (() -> PendingServicePin?)? = null,
         identityProvider: (suspend () -> PendingSenderIdentity?)? = null,
         content: PendingSenderContent? = PendingSenderContent(
             listOf("photo-bytes".toByteArray()),
@@ -88,6 +86,17 @@ class PendingSenderViewModelTest {
         TinkPrimitives.ensureRegistered()
         val signing = KeysetHandle.generateNew(KeyTemplates.get("ED25519"))
         val fallbackIdentity = PendingSenderIdentity(senderId, senderBundle, signing)
+        // Real usable service pin (generated Ed25519 public keyset, not
+        // a fixture string): publication must never run under a pin that
+        // cannot authenticate.
+        val servicePin = pin ?: PendingServicePin(
+            "9f9f9f9f-8e8e-7d7d-6c6c-5b5b5b5b5b5b",
+            java.util.Base64.getEncoder().encodeToString(
+                com.google.crypto.tink.TinkProtoKeysetFormat.serializeKeysetWithoutSecret(
+                    KeysetHandle.generateNew(KeyTemplates.get("ED25519")).publicKeysetHandle,
+                ),
+            ),
+        )
         val scope = kotlinx.coroutines.CoroutineScope(
             kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler),
         )
@@ -129,7 +138,7 @@ class PendingSenderViewModelTest {
                 content
             },
             identityPort = PendingSenderIdentityPort { resolvedIdentity() },
-            servicePinProvider = { pin },
+            servicePinProvider = pinProvider ?: { servicePin },
             sessionGate = sharedGate,
             accountProvider = sharedAccount,
             scope = scope,
@@ -166,10 +175,28 @@ class PendingSenderViewModelTest {
 
     @Test
     fun missingPinBlocksService() = runTest {
-        val viewModel = vm(pin = null)
+        val viewModel = vm(pinProvider = { null })
         viewModel.onDestinationChange("a42@example.test")
         viewModel.send()
         testScheduler.advanceUntilIdle()
+        assertEquals(
+            PendingSenderViewModel.State.Failed(PendingSenderViewModel.Message.SERVICE_UNAVAILABLE),
+            viewModel.state.value,
+        )
+    }
+
+    @Test
+    fun malformedPinBlocksService() = runTest {
+        val viewModel = vm(
+            pin = PendingServicePin(
+                "9f9f9f9f-8e8e-7d7d-6c6c-5b5b5b5b5b5b",
+                java.util.Base64.getEncoder().encodeToString("not-a-keyset".toByteArray()),
+            ),
+        )
+        viewModel.onDestinationChange("a42@example.test")
+        viewModel.send()
+        testScheduler.advanceUntilIdle()
+        // A configured pin that cannot authenticate never mints S.
         assertEquals(
             PendingSenderViewModel.State.Failed(PendingSenderViewModel.Message.SERVICE_UNAVAILABLE),
             viewModel.state.value,

@@ -1,0 +1,309 @@
+"""Pending publication: draft + finalize (T185 M3). No routes mounted.
+
+Finalize atomically: verified sender S + sealed escrow + ACTIVE locator.
+v1 checks are never bypassed: separate verifiers, no fallback between
+versions. Backend failures roll back with no partial publication.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import uuid
+from datetime import datetime
+from typing import BinaryIO
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from remanence.pending import domains
+from remanence.pending.claim_models import PendingDelivery
+from remanence.pending.locator_store import activate, allocate_reserved
+from remanence.pending.models import GiftLocator
+from remanence.pending.routing import check_finalize_route
+from remanence.pending.vault import (
+    EscrowVault,
+    SealedHandle,
+    VaultError,
+    build_escrow_aad,
+    verify_escrow_bindings,
+)
+from remanence.protocol.delivery_v2 import delivery_v2_pb2 as dv2
+from remanence.users.key_models import KeyBundleStatus, UserKeyBundle
+from remanence.users.models import User
+
+MAX_CLAIM_DEADLINE_DAYS = 180
+
+
+class PublicationError(RuntimeError):
+    def __init__(self, code: str) -> None:
+        super().__init__("pending publication failed")
+        self.code = code
+
+
+def verify_signature_69(public_keyset: bytes, domain_input: bytes, sig: bytes) -> None:
+    """Strict single ENABLED Ed25519 TINK public key verification."""
+    import tink
+    from tink import signature
+    from tink.proto import ed25519_pb2, tink_pb2
+
+    if len(sig) != 69:
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
+    try:
+        keyset = tink_pb2.Keyset.FromString(public_keyset)
+    except Exception as exc:
+        raise PublicationError("PROTOCOL_UNSUPPORTED") from exc
+    if len(keyset.key) != 1:
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
+    key = keyset.key[0]
+    if (
+        key.status != tink_pb2.ENABLED
+        or key.key_data.key_material_type != tink_pb2.KeyData.ASYMMETRIC_PUBLIC
+        or key.key_data.type_url != "type.googleapis.com/google.crypto.tink.Ed25519PublicKey"
+    ):
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
+    try:
+        ed25519_pb2.Ed25519PublicKey.FromString(key.key_data.value)
+        verifier = tink.KeysetHandle.read_no_secret(
+            tink.BinaryKeysetReader(public_keyset)
+        ).primitive(signature.PublicKeyVerify)
+        verifier.verify(sig, domain_input)
+    except Exception as exc:
+        raise PublicationError("PROTOCOL_UNSUPPORTED") from exc
+
+
+def parse_statement(raw: bytes) -> dv2.PendingPublishStatementV2:
+    from google.protobuf.message import DecodeError
+
+    try:
+        statement = dv2.PendingPublishStatementV2.FromString(raw)
+    except DecodeError as exc:
+        raise PublicationError("PROTOCOL_UNSUPPORTED") from exc
+    probe = dv2.PendingPublishStatementV2()
+    probe.CopyFrom(statement)
+    probe.DiscardUnknownFields()
+    if probe.SerializeToString(deterministic=True) != statement.SerializeToString(
+        deterministic=True
+    ):
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
+    if statement.protocol_version != 2 or statement.claim_policy_version != 1:
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
+    for value in (
+        statement.capsule_id,
+        statement.sender_user_id,
+        statement.sender_key_bundle_id,
+        statement.delivery_target_id,
+        statement.claim_signing_key_id,
+    ):
+        if len(value) != 16:
+            raise PublicationError("PROTOCOL_UNSUPPORTED")
+    for value in (statement.address_commitment, statement.key_commitment):
+        if len(value) != 32:
+            raise PublicationError("PROTOCOL_UNSUPPORTED")
+    if statement.created_at_epoch_seconds < 0 or statement.claim_expires_at_epoch_seconds <= 0:
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
+    if statement.claim_expires_at_epoch_seconds <= statement.created_at_epoch_seconds:
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
+    if not statement.artifacts:
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
+    order = [(a.kind, a.ordinal, bytes(a.blob_id)) for a in statement.artifacts]
+    if order != sorted(order):
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
+    for artifact in statement.artifacts:
+        if len(bytes(artifact.blob_id)) != 16 or len(bytes(artifact.ciphertext_sha256)) != 32:
+            raise PublicationError("PROTOCOL_UNSUPPORTED")
+    return statement
+
+
+def create_draft(
+    session: Session,
+    *,
+    sender_user_id: uuid.UUID,
+    capsule_id: uuid.UUID,
+    delivery_target_id: uuid.UUID,
+    route_id: uuid.UUID | None,
+    channel: str,
+    claim_expires_at: datetime,
+    now: datetime,
+    pending_sends_enabled: bool,
+) -> PendingDelivery:
+    if not pending_sends_enabled:
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
+    if channel not in ("email", "sms"):
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
+    if claim_expires_at <= now:
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
+    if (claim_expires_at - now).days > MAX_CLAIM_DEADLINE_DAYS:
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
+    row = PendingDelivery(
+        id=uuid.uuid4(),
+        sender_user_id=sender_user_id,
+        capsule_id=capsule_id,
+        delivery_target_id=delivery_target_id,
+        route_id=route_id,
+        channel=channel,
+        state="DRAFT",
+        claim_expires_at=claim_expires_at,
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
+def _sender_bundle_or_raise(session: Session, sender_id: uuid.UUID) -> UserKeyBundle:
+    sender = session.get(User, sender_id)
+    if sender is None or sender.disabled_at is not None:
+        raise PublicationError("ADDRESS_UNAVAILABLE")
+    bundle = session.scalar(
+        select(UserKeyBundle).where(
+            UserKeyBundle.user_id == sender_id,
+            UserKeyBundle.status == KeyBundleStatus.ACTIVE,
+        )
+    )
+    if bundle is None:
+        raise PublicationError("RECIPIENT_KEY_STALE")
+    return bundle
+
+
+def finalize_delivery(
+    session: Session,
+    *,
+    delivery_id: uuid.UUID,
+    principal_user_id: uuid.UUID,
+    statement_raw: bytes,
+    signature_69: bytes,
+    escrow_payload_raw: bytes,
+    vault: EscrowVault,
+    expected_service_key_id: uuid.UUID,
+    locator_hmac_key: bytes,
+    locator_code_key_32: bytes,
+    locator_code_key_mode: str,
+    hint_mask: str,
+    now: datetime,
+) -> tuple[PendingDelivery, str]:
+    """Finalize a DRAFT into PENDING + ACTIVE locator in one flush.
+
+    Sender ownership is fenced FIRST (delivery.sender vs the
+    authenticated principal) — before S parsing, signature checks, and
+    any escrow/K intake. Canonical-request replay returns the identical
+    committed code (the sealed printable code is decrypted for the
+    sender replay).
+    """
+    from remanence.pending.vault import aead_from_raw_key
+
+    delivery = session.get(PendingDelivery, delivery_id, with_for_update=True)
+    if delivery is None:
+        raise PublicationError("GIFT_UNAVAILABLE")
+    if delivery.sender_user_id != principal_user_id:
+        raise PublicationError("GIFT_UNAVAILABLE")
+    statement = parse_statement(statement_raw)
+    statement_hash = hashlib.sha256(statement_raw).digest()
+    if delivery.state == "PENDING" and bytes(delivery.publish_statement) == statement_raw:
+        locator = session.get(GiftLocator, delivery.locator_id) if delivery.locator_id else None
+        code = ""
+        if locator is not None and locator.code_ciphertext is not None:
+            if locator_code_key_mode in ("prod", "beta"):
+                raise PublicationError("PROTOCOL_UNSUPPORTED")
+            primitive = aead_from_raw_key(locator_code_key_32)
+            code = primitive.decrypt(
+                bytes(locator.code_ciphertext), b"pending-locator-code-v1"
+            ).decode("utf-8")
+        return delivery, code
+    if delivery.state != "DRAFT":
+        raise PublicationError("GIFT_UNAVAILABLE")
+    if (
+        uuid.UUID(bytes=bytes(statement.capsule_id)) != delivery.capsule_id
+        or uuid.UUID(bytes=bytes(statement.delivery_target_id)) != delivery.delivery_target_id
+        or uuid.UUID(bytes=bytes(statement.sender_user_id)) != delivery.sender_user_id
+    ):
+        raise PublicationError("ROUTE_STALE")
+    if uuid.UUID(bytes=bytes(statement.claim_signing_key_id)) != expected_service_key_id:
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
+    if delivery.route_id is not None:
+        check_finalize_route(
+            session,
+            route_id=delivery.route_id,
+            sender_user_id=delivery.sender_user_id,
+            capsule_id=delivery.capsule_id,
+            mode="PENDING_V2",
+            now=now,
+        )
+    bundle = _sender_bundle_or_raise(session, delivery.sender_user_id)
+    if uuid.UUID(bytes=bytes(statement.sender_key_bundle_id)) != bundle.id:
+        raise PublicationError("ROUTE_STALE")
+    verify_signature_69(
+        bytes(bundle.signing_public_keyset),
+        domains.domain_prefix(domains.PENDING_PUBLISH_DOMAIN) + statement_raw,
+        signature_69,
+    )
+    try:
+        escrow_payload = dv2.PendingEscrowPlaintextV1.FromString(escrow_payload_raw)
+    except Exception as exc:
+        raise PublicationError("PROTOCOL_UNSUPPORTED") from exc
+    if (
+        bytes(escrow_payload.publish_statement_sha256) != statement_hash
+        or bytes(escrow_payload.address_commitment) != bytes(statement.address_commitment)
+        or bytes(escrow_payload.key_commitment) != bytes(statement.key_commitment)
+        or uuid.UUID(bytes=bytes(escrow_payload.capsule_id)) != delivery.capsule_id
+        or uuid.UUID(bytes=bytes(escrow_payload.delivery_target_id)) != delivery.delivery_target_id
+        or uuid.UUID(bytes=bytes(escrow_payload.sender_user_id)) != delivery.sender_user_id
+        or escrow_payload.claim_expires_at_epoch_seconds
+        != statement.claim_expires_at_epoch_seconds
+    ):
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
+    aad = build_escrow_aad(
+        capsule_id=delivery.capsule_id.bytes,
+        delivery_target_id=delivery.delivery_target_id.bytes,
+        sender_user_id=delivery.sender_user_id.bytes,
+        publish_statement_sha256=statement_hash,
+        address_commitment=bytes(statement.address_commitment),
+        key_commitment=bytes(statement.key_commitment),
+        claim_policy_version=1,
+        claim_expires_at_epoch_seconds=statement.claim_expires_at_epoch_seconds,
+    )
+    try:
+        handle = vault.seal(escrow_payload, aad)
+    except VaultError as exc:
+        raise PublicationError("PROVIDER_UNAVAILABLE") from exc
+    locator, code = allocate_reserved(
+        session, capsule_id=delivery.capsule_id, hint_mask=hint_mask, hmac_key=locator_hmac_key
+    )
+    if locator_code_key_mode in ("prod", "beta"):
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
+    code_primitive = aead_from_raw_key(locator_code_key_32)
+    activate(
+        session,
+        locator_id=locator.id,
+        code_ciphertext=code_primitive.encrypt(code.encode("ascii"), b"pending-locator-code-v1"),
+    )
+    delivery.publish_statement = statement_raw
+    delivery.publish_statement_sha256 = statement_hash
+    delivery.publish_signature = signature_69
+    delivery.address_commitment = bytes(statement.address_commitment)
+    delivery.key_commitment = bytes(statement.key_commitment)
+    delivery.service_key_id = expected_service_key_id
+    delivery.vault_name = handle.vault
+    delivery.vault_key_id = handle.key_id
+    delivery.vault_ciphertext = handle.ciphertext
+    delivery.vault_binding_hex = handle.binding_digest_hex
+    delivery.locator_id = locator.id
+    delivery.state = "PENDING"
+    session.flush()
+    return delivery, code
+
+
+def cancel_delivery(session: Session, *, delivery_id: uuid.UUID, sender_user_id: uuid.UUID) -> None:
+    """Sender cancel before claim. Claimed gifts cannot be unclaimed here
+    (v1 keeps its own first-open/window semantics)."""
+    from remanence.pending.locator_store import retire as retire_locator
+
+    delivery = session.get(PendingDelivery, delivery_id, with_for_update=True)
+    if delivery is None or delivery.sender_user_id != sender_user_id:
+        raise PublicationError("GIFT_UNAVAILABLE")
+    if delivery.state == "CANCELLED":
+        return
+    if delivery.state != "DRAFT" and delivery.state != "PENDING":
+        raise PublicationError("CLAIM_CONFLICT")
+    delivery.state = "CANCELLED"
+    if delivery.locator_id is not None:
+        retire_locator(session, locator_id=delivery.locator_id, terminal=True)
+    session.flush()

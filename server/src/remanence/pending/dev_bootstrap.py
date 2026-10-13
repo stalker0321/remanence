@@ -16,8 +16,10 @@ Fail-closed rules (exit code 2, nothing served):
 - The service signer is generated EPHEMERAL per start and lives ONLY in
   process memory. ONLY the public pin JSON is written (``--pin-out``);
   no private key is ever written to repo/tasks/logs/chat. One run is
-  one epoch: restart with a fresh DB (or reuse the explicit dev vault
-  key), and hand the fresh pin JSON to the Android config out-of-band.
+  one epoch: ALWAYS restart with a FRESH unique DB — the signer plus
+  the proof/destination/vault/code keys all rotate per start, so
+  reusing a vault key alone cannot resume an epoch (and no secrets are
+  persisted anywhere by design).
 - Secrets/keys/codes are never logged (DB host/name only, pin paths,
   key UUIDs/ids only).
 
@@ -256,23 +258,6 @@ def resolve_hmac_secret(explicit: str | None) -> bytes:
     return key
 
 
-def resolve_vault_key(explicit_hex: str | None) -> tuple[bytes, bool]:
-    """Returns (key_32, was_ephemeral). Ephemeral keys do not survive a
-    restart against the same DB — root passes --dev-vault-key-hex to keep
-    sealed escrow openable across restarts of one epoch."""
-    import binascii as _binascii
-
-    if explicit_hex is not None:
-        try:
-            key = _binascii.unhexlify(explicit_hex.strip())
-        except Exception as exc:
-            raise BootstrapRefusal("refusing malformed --dev-vault-key-hex (64 hex chars)") from None
-        if len(key) != 32:
-            raise BootstrapRefusal("refusing malformed --dev-vault-key-hex (64 hex chars)")
-        return key, False
-    return secrets.token_bytes(32), True
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Isolated dev-only pending server (loopback, synthetic custody)."
@@ -284,7 +269,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pin-out", required=True)
     parser.add_argument("--otp-sink", required=True)
     parser.add_argument("--blob-root", default="var/dev-bootstrap-blobs")
-    parser.add_argument("--dev-vault-key-hex", default=None)
     parser.add_argument("--mode", choices=("dev", "test"), default="dev")
     return parser
 
@@ -302,7 +286,10 @@ def build_composition(args: argparse.Namespace):
     db_name = database_name_of(args.database_url)
     check_schema_head(args.database_url)
     hmac_key = resolve_hmac_secret(args.hmac_secret)
-    vault_key, vault_ephemeral = resolve_vault_key(args.dev_vault_key_hex)
+    # All server-side keys are ephemeral per start (signer + proof +
+    # destination + vault + code): epochs never resume, so restarts
+    # ALWAYS take a fresh DB. No secrets are persisted by design.
+    vault_key = secrets.token_bytes(32)
     mode = AppMode.DEV if args.mode == "dev" else AppMode.TEST
 
     signer = generate_service_signer()
@@ -337,13 +324,13 @@ def build_composition(args: argparse.Namespace):
         pending_locator_issuance_enabled=True,
         pending_hmac_secret=hmac_key.decode("utf-8"),
     )
-    return host, db_name, settings, ctx, pin, signer, vault_ephemeral
+    return host, db_name, settings, ctx, pin, signer
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        host, db_name, settings, ctx, pin, signer, vault_ephemeral = build_composition(args)
+        host, db_name, settings, ctx, pin, signer = build_composition(args)
         write_pin_json(args.pin_out, pin)
         touch_otp_sink(args.otp_sink)
     except BootstrapRefusal as exc:
@@ -359,14 +346,13 @@ def main(argv: list[str] | None = None) -> int:
         "pending-dev-server: serving "
         f"{host}:{args.port} db={redacted_url(args.database_url)} "
         f"service_key_id={signer.key_id} vault={DEV_VAULT_NAME}/{DEV_VAULT_KEY_ID} "
-        f"vault_key_ephemeral={vault_ephemeral} "
         f"pin_out={args.pin_out} otp_sink={args.otp_sink}",
         flush=True,
     )
     print(
-        "pending-dev-server: one run is one epoch — restart with a fresh "
-        "remanence_tmp_* DB (or reuse --dev-vault-key-hex) and hand the fresh "
-        "pin JSON to the Android config out-of-band",
+        "pending-dev-server: one run is one epoch — ALWAYS restart with a "
+        "fresh remanence_tmp_* DB (all server-side keys rotate per start) "
+        "and hand the fresh pin JSON to the Android config out-of-band",
         flush=True,
     )
     import uvicorn

@@ -39,7 +39,6 @@ from remanence.pending.dev_bootstrap import (
     main,
     refuse_unless_loopback,
     resolve_hmac_secret,
-    resolve_vault_key,
     touch_otp_sink,
     write_pin_json,
 )
@@ -86,17 +85,6 @@ def test_hmac_secret_guards(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setenv("PENDING_DEV_HMAC_SECRET", "env-fallback-secret-00-env-fallback")
     assert resolve_hmac_secret(None) == b"env-fallback-secret-00-env-fallback"
-
-
-def test_vault_key_resolution() -> None:
-    with pytest.raises(BootstrapRefusal):
-        resolve_vault_key("not-hex")
-    with pytest.raises(BootstrapRefusal):
-        resolve_vault_key("00" * 16)
-    key, ephemeral = resolve_vault_key("0b" * 32)
-    assert (key, ephemeral) == (bytes([0x0B] * 32), False)
-    auto, ephemeral = resolve_vault_key(None)
-    assert ephemeral is True and len(auto) == 32
 
 
 def test_sink_mode_and_parent_gates(tmp_path: Path) -> None:
@@ -368,12 +356,10 @@ def test_launcher_app_composition(migrated_db: str, tmp_path: Path) -> None:
         pin_out=str(tmp_path / "pin.json"),
         otp_sink=str(tmp_path / "otp.jsonl"),
         blob_root=str(tmp_path / "blobs"),
-        dev_vault_key_hex="0b" * 32,
         mode="dev",
     )
-    host, db_name, settings, ctx, pin, signer, vault_ephemeral = build_composition(args)
+    host, db_name, settings, ctx, pin, signer = build_composition(args)
     assert host == "127.0.0.1" and db_name.startswith("remanence_tmp_")
-    assert vault_ephemeral is False
     assert str(ctx["service_key_id"]) == pin["service_key_id"] == str(signer.key_id)
     write_pin_json(args.pin_out, pin)
     touch_otp_sink(args.otp_sink)

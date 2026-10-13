@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from tink import signature, tink_config
 
 pytest_plugins = ("test_session_repository_create",)
@@ -1480,3 +1480,176 @@ def test_control_retrieval_fences_and_expiry_restore(session_factory) -> None:
     assert len(feed.json()["items"]) == 1
     xclient = _build_client(session_factory, flags_on=True, user_id=stranger_id, session_id=uuid.uuid4())
     assert xclient.get(f"/v2/pending-deliveries/{delivery_id}/control").status_code == 404
+
+
+def test_http_claim_bind_then_r1_routes_known_v1_distinct_keys(session_factory) -> None:
+    """Evidence-key split regression (HTTP, distinct ctx keys): after a
+    proof + claim with bind_alias=true, the next R1 send to the same
+    address must route EXISTING_USER_V1 to the claimant — not
+    ADDRESS_UNAVAILABLE from a write/read key split — with zero escrow
+    (no new vault seals, no new deliveries, no provider dispatch for
+    the v1 route). The app ctx carries DISTINCT evidence/hmac keys, so
+    same-key suites cannot mask a recurrence."""
+    import base64 as _b64
+
+    from remanence.pending.claim_models import PendingDelivery as _PD
+    from remanence.pending.publication import create_draft
+    from remanence.pending.routing import decide_for_send, freeze_route
+    from remanence.protocol.delivery_v2 import delivery_v2_pb2 as dv2
+
+    class _SpyVault(DevSealedVault):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.seals = 0
+
+        def seal(self, payload, aad):
+            self.seals += 1
+            return super().seal(payload, aad)
+
+    known_address = f"known-{uuid.uuid4().hex[:12]}@example.test"
+    sender_ring = Keyring()
+    service_ring = Keyring()
+    service_signer = service_ring.ed_private.primitive(signature.PublicKeySign)
+    service_key_id = uuid.uuid4()
+    spy_vault = _SpyVault(mode="test", key_id="http-ev-1", key_32=DEV_VAULT_KEY)
+    from remanence.pending.providers import MockDispatcher as _MockDispatcher
+
+    email_sender = _MockDispatcher()
+    ctx_overrides = {
+        "vault": spy_vault,
+        "service_key_id": service_key_id,
+        "service_signer": service_signer,
+        "email_sender": email_sender,
+        "locator_code_key": LOCATOR_CODE_KEY,
+    }
+    with session_factory() as session:
+        sender = _make_user(session, f"ev{uuid.uuid4().hex[:8]}")
+        sender_bundle = _make_bundle(session, sender, sender_ring)
+        session.commit()
+        decision = decide_for_send(
+            session, destination_kind="email", normalized_destination=known_address,
+            active_bundle_id=None, hmac_key=HMAC_KEY,
+            evidence_key=EVIDENCE_KEY, sender_user_id=sender.id,
+        )
+        assert decision.mode == "PENDING_V2"
+        route = freeze_route(
+            session, sender_user_id=sender.id, capsule_id=uuid.uuid4(),
+            destination_kind="email", normalized_destination=known_address,
+            destination_key_32=DEST_KEY, destination_key_mode="test", hmac_key=HMAC_KEY,
+            decision=decision, now=NOW, pending_sends_enabled=True,
+        )
+        session.commit()
+        sender_id, route_id, capsule_id, target_id = sender.id, route.id, route.capsule_id, decision.delivery_target_id
+        sender_session = uuid.uuid4()
+    sender_client = _build_client(
+        session_factory, flags_on=True, user_id=sender_id,
+        session_id=sender_session, ctx_overrides=ctx_overrides,
+    )
+    draft_artifact = {
+        "blob_id": str(uuid.uuid4()), "kind": 3, "ordinal": 0,
+        "ciphertext_size": 505,
+        "ciphertext_sha256_hex": hashlib.sha256(bytes([0x77]) * 505).hexdigest(),
+    }
+    draft = sender_client.post(
+        "/v2/pending-deliveries",
+        json={"route_id": str(route_id), "capsule_id": str(capsule_id),
+              "delivery_target_id": str(target_id), "channel": "email",
+              "destination": known_address, "salt_b64": _b64.b64encode(bytes(range(32))).decode(),
+              "claim_expires_at": int((
+                  datetime.now(timezone.utc) + timedelta(days=179)).timestamp()),
+              "claim_policy_version": 1, "artifacts": [draft_artifact],
+              "idempotency_key": str(uuid.uuid4())},
+    )
+    assert draft.status_code == 200, draft.text
+    delivery_id = draft.json()["delivery_id"]
+    assert sender_client.put(
+        f"/v2/pending-deliveries/{delivery_id}/blobs/{draft_artifact['blob_id']}",
+        content=bytes([0x77]) * 505,
+    ).status_code == 200
+    statement_raw, payload_raw, _ = _publish_package(
+        capsule_id=capsule_id, target_id=target_id, sender_id=sender_id,
+        sender_bundle_id=sender_bundle.id, service_key_id=service_key_id,
+        artifacts=[draft_artifact],
+    )
+    finalize = sender_client.post(
+        f"/v2/pending-deliveries/{delivery_id}/finalize",
+        json={"publish_statement_b64": _b64.b64encode(statement_raw).decode(),
+              "publish_signature_69_b64": _b64.b64encode(sender_ring.sign69(
+                  domains.domain_prefix(domains.PENDING_PUBLISH_DOMAIN) + statement_raw)).decode(),
+              "escrow_payload_b64": _b64.b64encode(payload_raw).decode(),
+              "idempotency_key": str(uuid.uuid4())},
+    )
+    assert finalize.status_code == 200, finalize.text
+    assert spy_vault.seals == 1
+    with session_factory() as session:
+        recipient = _make_user(session, f"ek{uuid.uuid4().hex[:8]}")
+        recipient_ring = Keyring()
+        recipient_bundle = _make_bundle(session, recipient, recipient_ring)
+        recipient_session = uuid.uuid4()
+        session.commit()
+        recipient_id, recipient_bundle_id = recipient.id, recipient_bundle.id
+    recipient_client = _build_client(
+        session_factory, flags_on=True, user_id=recipient_id,
+        session_id=recipient_session, ctx_overrides=ctx_overrides,
+    )
+    start = recipient_client.post(
+        f"/v2/pending-deliveries/{delivery_id}/verification",
+        json={"confirm_destination": known_address, "idempotency_key": str(uuid.uuid4())},
+    )
+    assert start.status_code == 200, start.text
+    attempt_id = start.json()["attempt_id"]
+    check = recipient_client.post(
+        f"/v2/pending-deliveries/{delivery_id}/verification/{attempt_id}/check",
+        json={"code": next(iter(email_sender.inbox.values()))},
+    )
+    assert check.json() == {"attempt_id": attempt_id, "state": "VERIFIED"}
+    options = recipient_client.post(f"/v2/pending-deliveries/{delivery_id}/claim/options", json={})
+    assert options.status_code == 200, options.text
+    challenge_raw = _b64.b64decode(options.json()["claim_challenge_b64"])
+    info = domains.domain_prefix(domains.CLAIM_CHALLENGE_DOMAIN) + challenge_raw
+    nonce = recipient_ring.hpke_decrypt(_b64.b64decode(options.json()["hpke_challenge_b64"]), info)
+    with session_factory() as session:
+        delivery_row = session.get(_PD, uuid.UUID(delivery_id))
+        pubhash = bytes(delivery_row.publish_statement_sha256)
+    operation_id = uuid.uuid4()
+    intent = dv2.ClaimIntentV2(
+        intent_version=1, operation_id=operation_id.bytes,
+        capsule_id=capsule_id.bytes, delivery_target_id=target_id.bytes,
+        publish_statement_sha256=pubhash, proof_id=uuid.UUID(attempt_id).bytes,
+        challenge_id=uuid.UUID(options.json()["challenge_id"]).bytes,
+        recipient_user_id=recipient_id.bytes,
+        recipient_key_bundle_id=recipient_bundle_id.bytes,
+        session_id=recipient_session.bytes, nonce=nonce,
+        nonce_sha256=hashlib.sha256(nonce).digest(), bind_alias=True,
+    )
+    intent_raw = intent.SerializeToString(deterministic=True)
+    submit = recipient_client.post(
+        f"/v2/pending-deliveries/{delivery_id}/claim",
+        json={"claim_intent_b64": _b64.b64encode(intent_raw).decode(),
+              "claim_intent_signature_69_b64": _b64.b64encode(recipient_ring.sign69(
+                  domains.domain_prefix(domains.CLAIM_INTENT_DOMAIN) + intent_raw)).decode(),
+              "idempotency_key": str(operation_id)},
+    )
+    assert submit.status_code == 200, submit.text
+    dispatched_before = len(email_sender.dispatched)
+    with session_factory() as session:
+        deliveries_before = session.scalar(
+            select(func.count()).select_from(_PD)
+        )
+    # Next send to the now-verified address: EXISTING_USER_V1, zero escrow.
+    reroute = sender_client.post(
+        "/v2/send-routes",
+        json={"capsule_id": str(uuid.uuid4()),
+              "destination": {"kind": "email", "value": known_address},
+              "idempotency_key": str(uuid.uuid4())},
+    )
+    assert reroute.status_code == 200, reroute.text
+    body = reroute.json()
+    assert body["mode"] == "EXISTING_USER_V1", body
+    assert body["user_id"] == str(recipient_id)
+    assert body["key_bundle_id"] == str(recipient_bundle_id)
+    assert isinstance(body["binding_revision"], int) and body["binding_revision"] >= 2
+    assert spy_vault.seals == 1
+    assert len(email_sender.dispatched) == dispatched_before
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(_PD)) == deliveries_before

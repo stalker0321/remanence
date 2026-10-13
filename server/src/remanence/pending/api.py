@@ -156,6 +156,22 @@ def _gate_registry_ready(request: Request) -> JSONResponse | None:
     return _problem("REGISTRY_NOT_READY", 503)
 
 
+def _evidence_key(ctx: dict) -> bytes:
+    """ONE authoritative alias evidence-key selection for every alias
+    MAC write/read path on this router (R1 routing reads, R11
+    claim-bind writes + fences). Separate domains keep tag/MAC usages
+    apart; deployments may inject a distinct key via
+    ctx["evidence_key"], otherwise the registry HMAC secret applies.
+    Callers must never mix this with ctx["hmac_key"] directly — a
+    split write/read key makes claim-bound VERIFIED aliases unroutable
+    (ADDRESS_UNAVAILABLE on the next R1) while forged MACs still fail
+    closed at every verifier."""
+    key = ctx.get("evidence_key", ctx["hmac_key"])
+    if not isinstance(key, bytes) or len(key) < 32:
+        raise PublicationError("PROTOCOL_UNSUPPORTED")
+    return key
+
+
 class LookupRateLimiter:
     """Anonymous lookup budgets: 10/minute + 100/day per client bucket +
     a global per-minute ceiling. Bucket keys are SHA-256 digests of the
@@ -350,16 +366,15 @@ def send_routes(
             return _problem("AUTH_INVALID", 401)
         if sender.handle_normalized is None:
             return _problem("HANDLE_REQUIRED_FOR_SEND", 403)
-        # Evidence key defaults to the registry HMAC secret (separate
-        # domains keep tag/MAC usages apart); deployments may inject a
-        # distinct key via ctx["evidence_key"].
+        # Alias evidence MACs use the ONE authoritative selection
+        # (_evidence_key): claim-bound VERIFIED aliases must verify here.
         decision = routing_service.decide_for_send(
             db,
             destination_kind=kind,
             normalized_destination=normalized,
             active_bundle_id=None,
             hmac_key=ctx["hmac_key"],
-            evidence_key=ctx.get("evidence_key", ctx["hmac_key"]),
+            evidence_key=_evidence_key(ctx),
             sender_user_id=principal.user_id,
         )
         route = routing_service.freeze_route(
@@ -848,7 +863,7 @@ def submit_claim(
             vault=ctx["vault"],
             service_signer=ctx["service_signer"],
             service_key_id=ctx["service_key_id"],
-            alias_evidence_key=ctx["hmac_key"],
+            alias_evidence_key=_evidence_key(ctx),
             alias_evidence_method="otp",
             proof_mac_key=ctx["proof_mac_key"],
             now=datetime.now(timezone.utc),

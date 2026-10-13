@@ -1,12 +1,13 @@
 {
   "schema_version": 1,
   "note": "Real-Tink M1 vectors. No private key material stored.",
-  "sender_ed25519_public_keyset_b64": "CI73p9AFEmsKXwo3dHlwZS5nb29nbGVhcGlzLmNvbS9nb29nbGUuY3J5cHRvLnRpbmsuRWQyNTUxOVB1YmxpY0tleRIiEiA7jtqm6wc4ISyGoRBK3BmpNJQV1W3k3pYuDrwYR5T3XhgDEAEYjven0AUgAQ==",
+  "sender_ed25519_public_keyset_b64": "COrLuvwCEmsKXwo3dHlwZS5nb29nbGVhcGlzLmNvbS9nb29nbGUuY3J5cHRvLnRpbmsuRWQyNTUxOVB1YmxpY0tleRIiEiAzxK7oUbWJquiHvr/cCnMHrVnQEL8vzIPHDhhXImhljhgDEAEY6su6/AIgAQ==",
   "pending_publish_domain_input_hex": "706f73746d61726b2f70656e64696e672d7075626c6973682f76320008021210111111112222333344445555555555551a100101010102020303040405050505050522100b0b0b0b1c1c2d2d3e3e4f4f4f4f4f4f2a10aaaaaaaabbbbccccddddeeeeeeeeeeee32200f3e5a58f2e94f1923e0410be469bcc8a911b78107b0c5364834a63812d9fb683a200446e6de84c69e503fa5d0aa64a4fc116943d1af6bb3ab5366dc64475b2740bd40f8f6dbd90648f89291e10650015a109f9f9f9f8e8e7d7d6c6c5b5b5b5b5b5b62390a10ccccccccddddeeeeffff000000000001100320f9032a205555555555555555555555555555555555555555555555555555555555555555",
-  "pending_publish_signature_69_hex": "015a09fb8e08031cf7fd19870a14dbe33a774befa3cd1eebf094f3a8e3f4c9050ed30df5fbcffea51f2d395f3d7582a9d1e188b0c9123cc82697a090d6f2ab89b0cbd46007",
-  "aead_template": "AES256_GCM (Tink, runtime-generated key; vector ciphertext below is one instance)",
+  "pending_publish_signature_69_hex": "012f8ea5ea882323666542d9edfe82591cf73f794ac1a6ba343b871ea09324cf45102a2f6d8890f2fd50e6803bb253be67b83a1a83475eb4532f2456f4be60231cdc27b00b",
+  "aead_template": "AES256_GCM (Tink) under the pinned test-vector keyset above; ciphertext decrypts with that keyset + AAD",
+  "aead_keyset_hex": "080112600a580a30747970652e676f6f676c65617069732e636f6d2f676f6f676c652e63727970746f2e74696e6b2e41657347636d4b657912221a2007070707070707070707070707070707070707070707070707070707070707071801100118012001",
   "aead_aad_hex": "706f73746d61726b2f61727469666163742f76320008021210111111112222333344445555555555551a10ccccccccddddeeeeffff00000000000120033210010101010202030304040505050505053a10aaaaaaaabbbbccccddddeeeeeeeeeeee",
   "aead_plaintext_utf8": "pending-artifact-plaintext-vector-01",
-  "aead_ciphertext_b64": "AXfZgM/F2qPPHTuGZwBVm3FwiHO97LCxQWgPKOYdtS7BgB9DWYZBWGXtWpwztd4K8jz951vN+Z7mOnzcz3PgoHASjAqk",
+  "aead_ciphertext_b64": "AQAAAAFsyuk9VZKfeSy2YstGNCQoOAwA75KO22X9xivKmtnTabvEYeBoiqi/rqqBfEHf2A/UpT1STLfZnTDR17QnwRu+",
   "hpke_note": "Context pinned in canonical fixture; round trip uses ephemeral keypairs at test runtime (no stored privates)."
 }

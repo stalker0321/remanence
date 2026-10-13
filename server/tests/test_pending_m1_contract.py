@@ -15,7 +15,8 @@ from pathlib import Path
 
 import pytest
 import tink
-from tink import aead, hybrid, signature, tink_config
+from tink import hybrid, signature, tink_config
+from tink.proto import aes_gcm_pb2, tink_pb2
 
 from remanence.pending import domains
 from remanence.pending.locator import (
@@ -239,14 +240,25 @@ def test_sender_ed25519_verify_and_wrong_domain_reject() -> None:
 def test_aead_roundtrip_and_wrong_aad_reject() -> None:
     fx = _load("delivery-v2-crypto.json")
     aad = bytes.fromhex(fx["aead_aad_hex"])
-    keyset = tink.KeysetHandle.generate_new(aead.aead_key_templates.AES256_GCM)
-    prim = keyset.primitive(aead.Aead)
+    keyset = tink_pb2.Keyset.FromString(bytes.fromhex(fx["aead_keyset_hex"]))
+    from remanence.pending.vault import aead_from_raw_key
+
+    (key,) = [k for k in keyset.key]
+    stored = aead_from_raw_key(
+        aes_gcm_pb2.AesGcmKey.FromString(key.key_data.value).key_value
+    )
+    # The STORED ciphertext decrypts under the STORED keyset + AAD to the
+    # declared plaintext (same bytes Kotlin/Tink must accept; 36 + 5 prefix
+    # + 12 nonce + 16 tag = 69).
+    ciphertext = base64.b64decode(fx["aead_ciphertext_b64"])
+    assert len(ciphertext) == len(fx["aead_plaintext_utf8"].encode()) + 5 + 12 + 16
+    assert stored.decrypt(ciphertext, aad).decode() == fx["aead_plaintext_utf8"]
+    # Fresh round trip + wrong-AAD rejection on the same pinned key.
     plaintext = b"pending-artifact-plaintext-vector-01"
-    ciphertext = prim.encrypt(plaintext, aad)
-    assert prim.decrypt(ciphertext, aad) == plaintext
-    assert ciphertext != plaintext
+    fresh = stored.encrypt(plaintext, aad)
+    assert stored.decrypt(fresh, aad) == plaintext
     with pytest.raises(tink.TinkError):
-        prim.decrypt(ciphertext, b"postmark/artifact/v1\x00wrong-context")
+        stored.decrypt(fresh, b"postmark/artifact/v1\x00wrong-context")
 
 
 def test_hpke_roundtrip_with_pinned_context_and_wrong_context_reject() -> None:

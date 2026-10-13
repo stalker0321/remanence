@@ -194,6 +194,59 @@ class CreatePendingRouteStepTest {
         assertTrue(vm.flowError.value != null)
     }
 
+    private fun pendingIdentityAs(other: String) = dev.hryshyn.remanence.pending.PendingSendRouteFlow.FrozenIdentity.Pending(
+        routeId = "0198f0a0-0000-7000-8000-00000000b999",
+        deliveryTargetId = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+        normalizedDestination = other,
+        channel = "email",
+        claimDeadline = 1814317432L,
+        serviceKeyId = "9f9f9f9f-8e8e-7d7d-6c6c-5b5b5b5b5b5b",
+        expiresAt = 1798765432L,
+    )
+
+    /**
+     * T186 M12e-gate (T188 REDO B1): an off-step callback for a
+     * DIFFERENT target must not replace the chosen recipient — the
+     * store keeps the ORIGINAL route, not merely the same identity
+     * twice.
+     */
+    @Test
+    fun frozenPendingOffStepDifferentTargetNoReplacement() {
+        val vm = viewModel()
+        val first = pendingIdentity()
+        vm.onPendingRouteFrozen(first)
+        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        assertEquals(first, vm.pendingRoute.value)
+        vm.onPendingRouteFrozen(pendingIdentityAs("other@example.test"))
+        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        assertEquals(first, vm.pendingRoute.value)
+        assertTrue(vm.flowError.value != null)
+    }
+
+    /**
+     * T186 M12e-cap: backToFront regenerates the draft identity AND
+     * clears the frozen route — a rescan/back can never publish the
+     * old-UUID route; a new R1 freeze is required for the new capsule.
+     */
+    @Test
+    fun backToFrontClearsFrozenRouteForNewCapsule() {
+        val vm = viewModel()
+        vm.onPendingRouteFrozen(pendingIdentity())
+        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        val oldCapsule = vm.capsuleId
+        bindReady(vm)
+        assertTrue(vm.beginFrontCapture())
+        vm.deliverFrontJpeg("jpeg-front".toByteArray())
+        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        assertTrue(vm.backToFront())
+        assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
+        assertTrue(vm.capsuleId != oldCapsule)
+        assertNull(vm.pendingRoute.value)
+        // Without a frozen route (and no confirmed handle) the
+        // boundary is unreachable for the old UUID.
+        assertNull(vm.confirmedRecipient.value)
+    }
+
     @Test
     fun frozenPendingCarriesCompositionToCompose() {
         val vm = viewModel()

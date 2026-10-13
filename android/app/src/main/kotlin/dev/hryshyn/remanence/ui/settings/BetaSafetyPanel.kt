@@ -45,6 +45,9 @@ internal fun BetaLegalLinks(handle: String?) {
     // These pages belong to the separately deployed beta backend. Do not expose
     // dead legal links in the existing recovery-test APK while it is unchanged.
     if (!BuildConfig.REMANENCE_PLAY_BETA) return
+    // T188-B2: the isolated experimental build never points at beta legal
+    // endpoints, even if a future flavor combines the flags.
+    if (BuildConfig.REMANENCE_PENDING_ENABLED) return
     val context = LocalContext.current
     var failed by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(HoldSpace.Small)) {

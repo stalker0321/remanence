@@ -168,7 +168,18 @@ class AppContainer private constructor(
         TinkPrimitives.ensureRegistered()
     }
 
-    val apiBaseUrl: ApiBaseUrl = ApiBaseUrl.parse(BuildConfig.API_BASE_URL)
+    val apiBaseUrl: ApiBaseUrl = ApiBaseUrl.parse(BuildConfig.API_BASE_URL).also {
+        // T188-B2 GLOBAL fail-closed: a pending-enabled build must never be
+        // constructed against the live beta backend. This fires in the
+        // container constructor before ANY client (auth/sync/upload/health/
+        // telemetry/retire) is created. Default/beta/release builds (pending
+        // OFF) are unaffected.
+        if (BuildConfig.REMANENCE_PENDING_ENABLED &&
+            !dev.hryshyn.remanence.pending.PendingFeatureGate.isIsolatedApiAccepted(BuildConfig.API_BASE_URL)
+        ) {
+            throw IllegalStateException("pending-enabled build requires an isolated API base (live beta forbidden)")
+        }
+    }
 
     val healthRepository: HealthRepository by lazy { HealthRepository.create(apiBaseUrl) }
 
@@ -813,11 +824,38 @@ class AppContainer private constructor(
     }
 
     /**
-     * STAGE 1 scaffold port: fail-closed until T185 M2/M3 mount R15. Never
-     * reports fake success; the queue retains everything with backoff.
+     * T186 M3b: TYPED R15 completion port (frozen §3 inputs). Real routing:
+     * outbox drain → this repository → `POST
+     * v2/capsules/{id}/locator-open-completion`. Routes are still scaffold
+     * server-side, so live calls fail into the retryable path and the queue
+     * retains — never fake success. Gated by the pending flag + isolated
+     * API (worker + global container fail-closed).
      */
     val pendingRetirementPort: dev.hryshyn.remanence.pending.PendingRetirementPort by lazy {
-        dev.hryshyn.remanence.pending.UnconfiguredPendingRetirementPort
+        val retire = dev.hryshyn.remanence.core.data.network.PendingLocatorRetireRepository(
+            dev.hryshyn.remanence.core.data.network.HttpClientFactory.create(),
+            apiBaseUrl,
+        )
+        dev.hryshyn.remanence.pending.PendingRetirementPort { _, capsule, op, pub, token ->
+            if (token.isBlank()) {
+                dev.hryshyn.remanence.pending.PendingRetireOutcome.RetryableFailure("no-token")
+            } else {
+                val id = runCatching {
+                    dev.hryshyn.remanence.core.model.CapsuleId.parseRest(capsule)
+                }.getOrNull() ?: return@PendingRetirementPort
+                    dev.hryshyn.remanence.pending.PendingRetireOutcome.PermanentFailure("malformed-capsule-id")
+                when (val result = retire.complete(id, op, pub, null, token)) {
+                    is dev.hryshyn.remanence.core.data.network.LocatorRetireResult.Completed ->
+                        dev.hryshyn.remanence.pending.PendingRetireOutcome.Success
+                    is dev.hryshyn.remanence.core.data.network.LocatorRetireResult.Failure ->
+                        if (result.retryable) {
+                            dev.hryshyn.remanence.pending.PendingRetireOutcome.RetryableFailure("retire-retryable")
+                        } else {
+                            dev.hryshyn.remanence.pending.PendingRetireOutcome.PermanentFailure("retire-rejected")
+                        }
+                }
+            }
+        }
     }
 
     override val pendingOutbox: dev.hryshyn.remanence.pending.PendingRetirementOutbox by lazy {

@@ -34,9 +34,11 @@ import kotlinx.serialization.json.Json
  * - Corrupt queue files are NEVER swallowed into success: the unreadable
  *   file is quarantined aside (`outbox.corrupt.<millis>.json`, bytes
  *   preserved for forensics) and the drain reports [DrainOutcome.fault],
- *   which rearms the worker via backoff retry. A failed [enqueue] intent is
- *   never lost either: quarantine-then-write keeps the new intent queued.
- *   No UI thread is ever blocked by any of this.
+ *   which rearms the worker via backoff retry. Honest limitation: intents
+ *   trapped inside irrecoverably corrupt bytes are preserved aside but NOT
+ *   replayed — lossless recovery is never claimed for them. A failed
+ *   [enqueue] intent itself is never lost: quarantine-then-write keeps the
+ *   new intent queued. No UI thread is ever blocked by any of this.
  * - Durable across process death: atomic tmp-write + fsync + rename per
  *   owner under `filesDir/accounts/<owner>/pending-retirement/outbox.json`.
  *   A failed rename throws (never a silent non-atomic overwrite), and the

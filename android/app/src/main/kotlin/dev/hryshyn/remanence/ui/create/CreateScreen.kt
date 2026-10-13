@@ -788,6 +788,7 @@ private fun CollageStepChooser(
             frozenCandidateId = { viewModel.frozenCollageSelection?.candidateId },
             onNavigate = viewModel::clearFrozenCollageSelection, onMeasured = viewModel::onPreviewMeasured,
             onPrepared = viewModel::onCandidatePrepared, prepareInputs = viewModel.prepareInputs(),
+            onShown = viewModel::onTelemetryShown,
             onSlotTap = onSlotTap, candidateBuilder = { viewModel.buildAllFamilySealedCandidates(it) },
             onMusicClick = musicAction, musicActionLabel = musicActionLabel,
             showSelectInNavigation = false, contentWrapper = contentWrapper, modifier = modifier,

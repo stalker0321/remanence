@@ -166,6 +166,7 @@ class CreateViewModel(
     private val collageSourceFactory: CollageCropSourceFactory? = null,
     /** Same production policy for assignment and final solve; strict for parity fixtures. */
     private val collageCropPolicy: dev.hryshyn.remanence.ui.collage.CropAdmissionPolicy = dev.hryshyn.remanence.ui.collage.CropAdmissionPolicy.STRICT,
+    private val telemetryCoordinator: dev.hryshyn.remanence.telemetry.TelemetryCoordinator? = null,
     /**
      * T062: sender-side descriptor source (direct MusicBrainz/CAA client).
      * Null/absent keeps the pre-T062 behaviour exactly: every selection seals
@@ -183,6 +184,7 @@ class CreateViewModel(
     /** Actual currently signed-in account, absent means no self shortcut. */
     private val selfRecipientAccountProvider: suspend () -> SelfRecipientAccount? = { null },
 ) : ViewModel() {
+    private val telemetrySession = telemetryCoordinator?.newSession()
 
     /** Current-send state; deliberately contains no history or inbox projection. */
     sealed interface CreateUploadStatus {
@@ -877,6 +879,10 @@ class CreateViewModel(
         cropEntryTransform = null
         _flowError.value = null
         refreshCropDisplay()
+        // Successful user Done can update an already selected expression
+        // without another freeze call. Export that committed final snapshot;
+        // cancellation/rejection never reaches here, and no-op Done dedupes.
+        if (wasSelected) runCatching { reportTelemetrySelection() }
         return true
     }
 
@@ -933,8 +939,10 @@ class CreateViewModel(
      * only an explicitly frozen and publish-gate-accepted candidate can seal.
      */
     val collageChoices = CollageChoiceSession().also { session ->
+        session.onTelemetryInvalidated = { telemetrySession?.reset() }
         session.beginDraft(_capsuleId)
         session.onCandidatesReplaced = {
+            telemetrySession?.reset()
             frozenCollageSelection = null
             frozenDrawableInputs = null
             clearDrawableProofs()
@@ -973,7 +981,51 @@ class CreateViewModel(
         }
         frozenCollageSelection = frozen
         frozenDrawableInputs = prepareInputs()
+        runCatching { reportTelemetrySelection() } // optional network/collection never gates freeze/Send
         return true
+    }
+
+    /** Real nonzero ready-canvas draw only, never the eager hidden prepare callback. */
+    internal fun onTelemetryShown(index: Int) {
+        val admission = telemetryCoordinator?.admission() ?: return
+        val consent = admission.consent
+        if (!consent.design && !consent.crops) return
+        runCatching {
+            val candidates = collageChoices.candidates
+            val displayed = candidates.getOrNull(index) ?: return
+            val choices = candidates.map {
+                dev.hryshyn.remanence.telemetry.TelemetryChoice.normalized(it.expression.grammarId, it.styleId) ?: return
+            }
+            val originals = if (consent.crops) candidates.map { candidate -> candidate.expression.placements.map { placement ->
+                val base = cropKeyFor(candidate, placement.contentId)?.let(cropBases::get)
+                // Already committed before this consent/cohort began: no retrospective export.
+                if (base != null && base != placement.crop) null
+                else placement.crop?.let(dev.hryshyn.remanence.telemetry.TelemetryBox::from)
+            } } else emptyList()
+            val configuration = if (consent.design)
+                dev.hryshyn.remanence.telemetry.TelemetryConfig.from(displayed.expression.input)
+                else dev.hryshyn.remanence.telemetry.TelemetryConfig(0, "none", false, false)
+            telemetrySession?.shown(admission, collageChoices.buildGeneration, index, choices, configuration, originals)
+        }
+    }
+
+    private fun reportTelemetrySelection() {
+        val admission = telemetryCoordinator?.admission() ?: return
+        val consent = admission.consent
+        if (!consent.design && !consent.crops) return
+        val index = collageChoices.selectedIndex ?: return
+        val candidate = collageChoices.selected ?: return
+        val photos = candidate.expression.input.photos.associateBy { it.contentId }
+        val crops = if (consent.crops) candidate.expression.placements.mapIndexedNotNull { slot, placement ->
+            val finalCrop = placement.crop ?: return@mapIndexedNotNull null
+            val photo = photos[placement.contentId] ?: return@mapIndexedNotNull null
+            val analysis = collageCropSource?.cachedAnalysisFor(photo.contentId, photo.widthPx, photo.heightPx)
+            val compact = dev.hryshyn.remanence.telemetry.CompactTelemetryAnalysis.from(analysis, photo.widthPx, photo.heightPx)
+                ?: return@mapIndexedNotNull null
+            dev.hryshyn.remanence.telemetry.TelemetryCropInput(slot,
+                dev.hryshyn.remanence.telemetry.TelemetryBox.from(finalCrop), compact.aspect, compact.faces, compact.focus)
+        } else emptyList()
+        telemetrySession?.selected(admission, collageChoices.buildGeneration, index, crops)
     }
 
     private fun currentPreviewInput(): GeneratorExpression.GeneratorInput? =
@@ -2522,6 +2574,7 @@ class CreateViewModel(
      * owner.
      */
     fun endSession() {
+        runCatching { telemetryCoordinator?.clearSessionData() }
         // FIX-M1-ONDEVICE-01 / FIX-STATE-11: pending resolved material AND an
         // in-flight publication never outlive the surface; the cancelled job's
         // own NonCancellable cleanup guarantees staged plaintext removal.
@@ -2572,6 +2625,7 @@ class CreateViewModel(
         // Cancellation cleanup: transient session state never outlives the VM.
         pickerVm.close()
         endSession()
+        telemetrySession?.close()
         super.onCleared()
     }
 }

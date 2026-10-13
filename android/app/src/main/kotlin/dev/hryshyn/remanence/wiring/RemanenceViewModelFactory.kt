@@ -50,6 +50,7 @@ class RemanenceViewModelFactory(
             },
             invalidateSessionRefreshes = { container.sessionRefreshCoordinator.invalidate() },
             invalidateSessionBoundary = {
+                container.telemetry.clearSessionData()
                 container.sessionBoundary.invalidate()
                 // Storage failures must not strand the root's logout fence.
                 runCatching { dev.hryshyn.remanence.ui.capsule.CapsuleExportFiles.sweep(container.appContext, clearAll = true) }
@@ -144,6 +145,7 @@ class RemanenceViewModelFactory(
             collageSourceFactory = productionCollageCropSourceFactory(container.appContext,
                 cropPolicy = dev.hryshyn.remanence.ui.collage.CropAdmissionPolicy.BALANCED),
             collageCropPolicy = dev.hryshyn.remanence.ui.collage.CropAdmissionPolicy.BALANCED,
+            telemetryCoordinator = container.telemetry,
             // Stage1-C CONTENT preview: bounded upright in-memory sources.
             generatorPreviewLoader = dev.hryshyn.remanence.create.DefaultGeneratorPreviewLoader(
                 openSource = { pickerId ->

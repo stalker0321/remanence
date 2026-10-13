@@ -57,6 +57,8 @@ import dev.hryshyn.remanence.ui.collage.CollageCropSource
 import dev.hryshyn.remanence.ui.collage.CollageProviderResult
 import dev.hryshyn.remanence.ui.collage.CollageRenderer
 import dev.hryshyn.remanence.ui.collage.toCropWindow
+import dev.hryshyn.remanence.telemetry.*
+import kotlinx.serialization.json.*
 
 /**
  * T150 explicit CONTENT → COMPOSE flow: Next is refused until the form is
@@ -177,6 +179,7 @@ class CreateComposeFlowTest {
         cornerFace: Boolean = false,
         severableTip: Boolean = false,
         persistence: SealedFingerprintPersistence = NoPersistence(),
+        telemetry: TelemetryCoordinator? = null,
     ): CreateViewModel {
         val roots = AccountScopedFileRoots(stagingDir)
         val retryStore = SenderRetryMaterialStore(roots)
@@ -198,6 +201,7 @@ class CreateComposeFlowTest {
             senderRetryKekAlias = testAlias,
             enqueueUpload = { _, _ -> },
             collageSourceFactory = if (withCropSource) testCollageSourceFactory(cornerFace, severableTip) else null,
+            telemetryCoordinator = telemetry,
         ).also { it.beginSession(1L, ownerUuid.toString()) }
     }
 
@@ -228,6 +232,93 @@ class CreateComposeFlowTest {
         assertEquals(frozen, vm.frozenCollageSelection)
         assertEquals(capsule, vm.capsuleId)
         assertTrue(vm.photoSelection.canProceed)
+    }
+
+    @Test fun telemetryActualFreezeRequiresExposureAndMissingAnalysisNeverInventsCrops() {
+        val transport = RecordingTelemetryTransport()
+        val owner = TelemetryCoordinator(MemoryConsent(TelemetryConsent(true, true)), transport)
+        val vm = newViewModel(telemetry = owner)
+        driveToContent(vm); awaitReadyPreview(vm)
+        CollageFreezeFixture.freezeFirstCandidate(vm)
+        assertTrue("Eager prepare/freeze without real exposure must be silent", transport.reports.isEmpty())
+        vm.onTelemetryShown(0); assertTrue(vm.freezeCollageSelection())
+        assertEquals(1, transport.reports.size)
+        assertTrue(transport.reports.single().containsKey("design"))
+        assertFalse(transport.reports.single().containsKey("crops"))
+        assertTrue(vm.freezeCollageSelection()); assertEquals(1, transport.reports.size)
+        vm.endSession(); assertEquals(TelemetryConsent(true, true), owner.consent.value)
+    }
+
+    @Test fun telemetryCommittedCropBeforeSelectionSurvivesRealCandidateIdentityMigration() = runBlocking {
+        val transport = RecordingTelemetryTransport()
+        val owner = TelemetryCoordinator(MemoryConsent(TelemetryConsent(false, true)), transport)
+        val vm = newViewModel(withCropSource = true, telemetry = owner)
+        driveToContent(vm); val ids = previewContentIds(vm)
+        val originalId = CollageFreezeFixture.freezeFirstCandidateWithProductionSource(vm)
+        assertTrue(vm.goToCompose()); vm.clearFrozenCollageSelection()
+        vm.onTelemetryShown(0)
+        val before = requireNotNull(vm.collageChoices.displayed).expression.placements.first().crop!!
+        assertTrue(vm.openCrop(ids.first())); vm.updateCrop(1.02f, 0f, 0f)
+        assertTrue(vm.applyCropAndClose())
+        val candidate = requireNotNull(vm.collageChoices.displayed)
+        assertNotEquals(originalId, candidate.candidateId)
+        assertTrue(transport.reports.isEmpty()) // successful Done alone did not explicitly select
+        vm.onTelemetryShown(0)
+        CollageFreezeFixture.reportDrawable(vm, candidate.candidateId)
+        assertTrue(vm.selectCollageCandidate(0)); assertTrue(vm.freezeCollageSelection())
+        val records = transport.reports.single()["crops"]!!.jsonArray.map { it.jsonObject }
+        assertEquals(3, records.size)
+        val first = records.first { it["slot"]!!.jsonPrimitive.int == 0 }
+        assertEquals(listOf(before.x, before.y, before.width, before.height), first["initial"]!!.jsonArray.map { it.jsonPrimitive.int })
+        val after = candidate.expression.placements.first().crop!!
+        assertEquals(listOf(after.x, after.y, after.width, after.height), first["final"]!!.jsonArray.map { it.jsonPrimitive.int })
+        assertTrue(first["edited"]!!.jsonPrimitive.boolean)
+        assertTrue(records.drop(1).all { !it["edited"]!!.jsonPrimitive.boolean })
+        assertFalse(transport.reports.single().containsKey("design"))
+        vm.endSession()
+    }
+
+    @Test fun telemetryCancelledCropDraftLeavesActualOriginalSelectedGeometry() = runBlocking {
+        val transport = RecordingTelemetryTransport()
+        val owner = TelemetryCoordinator(MemoryConsent(TelemetryConsent(false, true)), transport)
+        val vm = newViewModel(withCropSource = true, telemetry = owner)
+        driveToContent(vm); val ids = previewContentIds(vm)
+        CollageFreezeFixture.freezeFirstCandidateWithProductionSource(vm)
+        assertTrue(vm.goToCompose()); vm.clearFrozenCollageSelection(); vm.onTelemetryShown(0)
+        assertTrue(vm.openCrop(ids.first())); vm.updateCrop(1.02f, 0f, 0f); assertTrue(vm.closeCrop())
+        assertTrue(transport.reports.isEmpty())
+        assertTrue(vm.selectCollageCandidate(0)); assertTrue(vm.freezeCollageSelection())
+        val records = transport.reports.single()["crops"]!!.jsonArray.map { it.jsonObject }
+        assertEquals(3, records.size)
+        assertTrue(records.all { it["initial"] == it["final"] && !it["edited"]!!.jsonPrimitive.boolean })
+        vm.endSession()
+    }
+
+    @Test fun telemetrySuccessfulDoneAfterSelectionReportsChangedFinalButCancelAndNoOpAreSilent() = runBlocking {
+        val transport = RecordingTelemetryTransport()
+        val owner = TelemetryCoordinator(MemoryConsent(TelemetryConsent(false, true)), transport)
+        val vm = newViewModel(withCropSource = true, telemetry = owner)
+        driveToContent(vm); val ids = previewContentIds(vm)
+        CollageFreezeFixture.freezeFirstCandidateWithProductionSource(vm)
+        assertTrue(vm.goToCompose()); vm.onTelemetryShown(0); assertTrue(vm.freezeCollageSelection())
+        assertEquals(1, transport.reports.size)
+        val initial = transport.reports.first()["crops"]!!.jsonArray.first().jsonObject["initial"]
+        assertTrue(vm.openCrop(ids.first())); vm.updateCrop(1.02f, 0f, 0f); assertTrue(vm.closeCrop())
+        assertEquals("Cancelled draft must emit no updated selection", 1, transport.reports.size)
+        assertFalse(vm.applyCropAndClose()); assertEquals(1, transport.reports.size)
+        assertTrue(vm.openCrop(ids.first())); vm.updateCrop(1.02f, 0f, 0f); assertTrue(vm.applyCropAndClose())
+        assertEquals(2, transport.reports.size)
+        val committed = transport.reports.last()["crops"]!!.jsonArray.first().jsonObject
+        assertEquals(initial, committed["initial"]); assertNotEquals(initial, committed["final"])
+        assertTrue(committed["edited"]!!.jsonPrimitive.boolean)
+        assertTrue(vm.openCrop(ids.first())); assertTrue(vm.applyCropAndClose())
+        assertEquals("No-op Done must dedupe", 2, transport.reports.size)
+        assertTrue(vm.openCrop(ids.first())); vm.resetCrop(); assertTrue(vm.applyCropAndClose())
+        assertEquals(3, transport.reports.size)
+        val reset = transport.reports.last()["crops"]!!.jsonArray.first().jsonObject
+        assertEquals(initial, reset["initial"]); assertEquals(initial, reset["final"])
+        assertFalse("Reset+Done returning to original is not edited", reset["edited"]!!.jsonPrimitive.boolean)
+        vm.endSession()
     }
 
     private fun awaitReadyPreview(vm: CreateViewModel) {

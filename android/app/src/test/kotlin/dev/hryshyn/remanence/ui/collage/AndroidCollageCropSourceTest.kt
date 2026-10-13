@@ -186,6 +186,25 @@ class AndroidCollageCropSourceTest {
     }
 
     @Test
+    fun telemetryCacheReadNeverTriggersIoOrInferenceAndRequiresExactDimensions() {
+        val keyed = seam()
+        try {
+            assertNull(keyed.source.cachedAnalysisFor("p0", 1000, 1000))
+            assertTrue(keyed.bytes.calls.isEmpty())
+            val loaded = runBlocking { keyed.source.analysisSource().analysisFor("p0") }!!
+            val calls = keyed.bytes.calls.size
+            val forwards = keyed.nano.forwards
+            val detects = keyed.yunet.detects
+            assertTrue(loaded === keyed.source.cachedAnalysisFor("p0", loaded.width, loaded.height))
+            assertNull(keyed.source.cachedAnalysisFor("p0", loaded.width + 1, loaded.height))
+            assertNull(keyed.source.cachedAnalysisFor("missing", loaded.width, loaded.height))
+            assertEquals(calls, keyed.bytes.calls.size); assertEquals(forwards, keyed.nano.forwards); assertEquals(detects, keyed.yunet.detects)
+            keyed.source.close()
+            assertNull(keyed.source.cachedAnalysisFor("p0", loaded.width, loaded.height))
+        } finally { keyed.source.close(); keyed.nanoDir.deleteRecursively(); keyed.yunetDir.deleteRecursively() }
+    }
+
+    @Test
     fun oneAnalysisPerContentIdAcrossThreeStyleCallsWithDistinctSolves() {
         val store = mutableMapOf(
             "p0" to ByteArray(64) { 7 },

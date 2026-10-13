@@ -377,6 +377,7 @@ private fun RootSurface(
             if (signedIn != null) dev.hryshyn.remanence.ui.settings.SettingsScreen(signedIn.handle, appLocale,
                 onLocaleSelected, signedIn.activeKeyBundleId?.let { container.recoveryReadiness.isReady(signedIn.userId, it) } == true,
                 rootViewModel::returnToHome, rootViewModel::logout,
+                telemetryContent = { dev.hryshyn.remanence.ui.settings.TelemetryPreferences(container.telemetry) },
                 safetyContent = {
                     if (BuildConfig.REMANENCE_PLAY_BETA) dev.hryshyn.remanence.ui.settings.BetaSafetyPanel(
                         container.apiStack.safetyRepository, signedIn.userId.toString())
@@ -412,7 +413,8 @@ private fun RootSurface(
                 }
                 if (BuildConfig.REMANENCE_PLAY_BETA && authenticatedOwner != null)
                     dev.hryshyn.remanence.ui.settings.BetaTermsGate(container.apiStack.safetyRepository,
-                        authenticatedOwner.toString(), { createViewModel.endSession(); rootViewModel.returnToHome() }, create)
+                        authenticatedOwner.toString(), { createViewModel.endSession(); rootViewModel.returnToHome() }, content = create,
+                        telemetryContent = { dev.hryshyn.remanence.ui.settings.TelemetryPreferences(container.telemetry) })
                 else create()
             }
         },

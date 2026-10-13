@@ -10,12 +10,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.hryshyn.remanence.R
 import dev.hryshyn.remanence.BuildConfig
 import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
@@ -63,12 +68,15 @@ internal fun CollageChoiceHost(
     musicActionLabel: String? = null,
     candidateBuilder: (suspend (CollageTextMeasurer) -> List<CollageCandidate>?)? = null,
     showSelectInNavigation: Boolean = true,
+    onShown: (Int) -> Unit = {},
     contentWrapper: @Composable (CanvasParcel, NavParcel) -> Unit = { canvas, nav ->
         nav()
         canvas()
     },
 ) {
     val measurer = rememberCollageTextMeasurer()
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val currentOnShown by rememberUpdatedState(onShown)
     var images by remember(sources) { mutableStateOf<Map<String, ImageBitmap>>(emptyMap()) }
     val noFitCopy = stringResource(R.string.create_no_fitting_expression)
     val preparingCopy = stringResource(R.string.create_preparing_expressions)
@@ -150,10 +158,23 @@ internal fun CollageChoiceHost(
             {
                 val result = prepared
                 if (displayed != null && result is CollageRenderer.SceneResult.Ready) {
+                    val renderedIndex = session.displayIndex
+                    val renderedBuild = session.buildGeneration
+                    var inWindow by remember(renderedBuild, renderedIndex) { mutableStateOf(false) }
                     BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         val ratio = CollageRenderer.CANVAS_WIDTH.toFloat() / CollageRenderer.CANVAS_HEIGHT
                         val width = if (maxHeight != Dp.Infinity) minOf(maxWidth, maxHeight * ratio) else maxWidth
-                        val canvas = Modifier.size(width, width / ratio)
+                        val canvas = Modifier.size(width, width / ratio).onGloballyPositioned { coordinates ->
+                            val bounds = coordinates.boundsInWindow()
+                            inWindow = coordinates.isAttached && bounds.width > 0 && bounds.height > 0
+                        }.drawWithContent {
+                            drawContent()
+                            if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
+                                inWindow && size.width > 0 && size.height > 0 && session.buildGeneration == renderedBuild &&
+                                session.displayIndex == renderedIndex && session.displayed?.candidateId == displayed.candidateId) {
+                                runCatching { currentOnShown(renderedIndex) }
+                            }
+                        }
                         if (onSlotTap == null) {
                             CollageCanvas(result.scene, images, "collage candidate", canvas, measurer, artworkBitmap,
                                 onMusicClick = onMusicClick, musicActionLabel = musicActionLabel)

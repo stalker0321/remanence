@@ -1,0 +1,8 @@
+<resources>
+    <string name="telemetry_title">Help improve Remanence</string>
+    <string name="telemetry_optional">Optional. Choose either one and turn it off in Settings anytime.</string>
+    <string name="telemetry_design">Share the capsule designs I view and choose</string>
+    <string name="telemetry_crops">Share crop adjustments and coarse image analysis</string>
+    <string name="telemetry_disclosure">No photos, text, account or photo identifiers are sent. Crop reports include a small focus grid and approximate face boxes. You can turn either choice off anytime. Already received reports cannot be withdrawn; the network can still expose connection metadata.</string>
+    <string name="telemetry_save_failed">This choice could not be saved. Sharing is off for this session. Check these settings after restarting the app.</string>
+</resources>

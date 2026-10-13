@@ -173,6 +173,12 @@ class AppContainer private constructor(
 
     val appContext: Context = context.applicationContext
 
+    internal val telemetry by lazy {
+        dev.hryshyn.remanence.telemetry.TelemetryCoordinator(
+            dev.hryshyn.remanence.telemetry.DeviceTelemetryConsentStorage(appContext),
+            dev.hryshyn.remanence.telemetry.TelemetryHttpTransport(apiBaseUrl))
+    }
+
     val recoveryReadiness by lazy { dev.hryshyn.remanence.recovery.RecoveryReadinessStore(appContext) }
 
     /**

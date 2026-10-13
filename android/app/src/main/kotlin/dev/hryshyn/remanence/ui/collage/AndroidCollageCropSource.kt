@@ -81,7 +81,11 @@ class AndroidCollageCropSource(
 ) : CollageCropSource, CollageCropDiagnostics, AutoCloseable {
 
     private val mutex = Mutex()
-    private val analyses = LinkedHashMap<String, CollageAnalysis>()
+    private val analyses = java.util.concurrent.ConcurrentHashMap<String, CollageAnalysis>()
+
+    /** Cached-only seam: telemetry never triggers detectors or image reads. */
+    internal fun cachedAnalysisFor(contentId: String, width: Int, height: Int): CollageAnalysis? =
+        if (closed) null else analyses[contentId]?.takeIf { it.width == width && it.height == height }
 
     @Volatile
     private var closed = false

@@ -58,26 +58,27 @@ internal fun BetaLegalLinks(handle: String) {
 
 /** Mandatory beta UGC consent before entering Create. Offline/missing API stays closed. */
 @Composable
-internal fun BetaTermsGate(repository: SafetyRepository, owner: String, onBack: () -> Unit, content: @Composable () -> Unit) {
+internal fun BetaTermsGate(repository: SafetyRepository, owner: String, onBack: () -> Unit,
+    telemetryContent: @Composable () -> Unit = {}, content: @Composable () -> Unit) {
     val context = LocalContext.current
     BetaTermsGateWithActions(owner, repository::state, repository::acceptTerms,
-        { context.openRemanenceLink(it) }, onBack, content)
+        { context.openRemanenceLink(it) }, onBack, telemetryContent = telemetryContent, content = content)
 }
 
 /** Scriptable UI boundary; production callbacks remain the fenced repository. */
 @Composable
 internal fun BetaTermsGateWithActions(owner: String, fetchState: suspend () -> SafetyState?,
     acceptTerms: suspend () -> Boolean, openLink: (String) -> Boolean,
-    onBack: () -> Unit, content: @Composable () -> Unit) {
+    onBack: () -> Unit, telemetryContent: @Composable () -> Unit = {}, content: @Composable () -> Unit) {
     // Saveable inputs alone are not checked when restoring a saved instance.
     // Include the owner in the composition identity, not just remember inputs.
-    key(owner) { BetaTermsOwnerContent(owner, fetchState, acceptTerms, openLink, onBack, content) }
+    key(owner) { BetaTermsOwnerContent(owner, fetchState, acceptTerms, openLink, onBack, content, telemetryContent) }
 }
 
 @Composable
 private fun BetaTermsOwnerContent(owner: String, fetchState: suspend () -> SafetyState?,
     acceptTerms: suspend () -> Boolean, openLink: (String) -> Boolean,
-    onBack: () -> Unit, content: @Composable () -> Unit) {
+    onBack: () -> Unit, content: @Composable () -> Unit, telemetryContent: @Composable () -> Unit) {
     var state by remember(owner) { mutableStateOf<SafetyState?>(null) }
     var busy by remember(owner) { mutableStateOf(true) }
     var failed by remember(owner) { mutableStateOf(false) }
@@ -112,7 +113,7 @@ private fun BetaTermsOwnerContent(owner: String, fetchState: suspend () -> Safet
                     busy = false
                 }
             }
-        }, linkFailed = linkFailed)
+        }, linkFailed = linkFailed, telemetryContent = telemetryContent)
 }
 
 @Composable
@@ -130,7 +131,7 @@ internal fun BetaTermsPendingPage(onBack: () -> Unit) {
 internal fun BetaTermsPage(agreed: Boolean, busy: Boolean, available: Boolean, failed: Boolean,
     onAgree: (Boolean) -> Unit, onBack: () -> Unit, onTerms: () -> Unit,
     onPrivacy: () -> Unit, onRetry: () -> Unit, onContinue: () -> Unit,
-    linkFailed: Boolean = false) {
+    linkFailed: Boolean = false, telemetryContent: @Composable () -> Unit = {}) {
     AccessPage(onBack = onBack) {
       HoldFormScaffold(modifier = Modifier.padding(bottom = 16.dp), primary = {
         HoldButton(enabled = agreed && available && !busy, onClick = onContinue,
@@ -150,6 +151,7 @@ internal fun BetaTermsPage(agreed: Boolean, busy: Boolean, available: Boolean, f
             Checkbox(checked = agreed, onCheckedChange = null, enabled = !busy)
             Text(stringResource(R.string.beta_terms_agree), Modifier.weight(1f))
         }
+        telemetryContent()
         if (busy) CircularProgressIndicator()
         if (linkFailed) Text(stringResource(R.string.beta_external_failed),
             Modifier.testTag("beta_terms_link_failed"), color = HoldColors.Destructive)

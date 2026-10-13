@@ -134,6 +134,7 @@ dependencies {
     implementation("org.opencv:opencv:4.12.0")
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.okhttp) // Dedicated consent-only telemetry client; never the authenticated API stack.
     implementation("androidx.credentials:credentials:1.6.0")
     implementation("androidx.credentials:credentials-play-services-auth:1.6.0")
     implementation("com.google.android.libraries.identity.googleid:googleid:1.2.1")
@@ -160,6 +161,7 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.androidx.work.testing)
     testImplementation(libs.okhttp)
+    testImplementation(libs.okhttp.mockwebserver3)
     debugImplementation(libs.compose.ui.test.manifest)
 
     // Native-capability probe only (androidTest source set; never packaged

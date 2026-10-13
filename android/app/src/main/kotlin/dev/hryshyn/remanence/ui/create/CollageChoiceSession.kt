@@ -55,6 +55,8 @@ class CollageChoiceSession {
      * happen to overlap. Null by default (no-op).
      */
     var onCandidatesReplaced: (() -> Unit)? = null
+    /** Privacy observer only: clearing a cohort must discard optional collection immediately. */
+    internal var onTelemetryInvalidated: (() -> Unit)? = null
 
     /** Typed invalidation/unavailability copy; non-null means no candidates. */
     var notice: String? by mutableStateOf(null)
@@ -108,6 +110,7 @@ class CollageChoiceSession {
     }
 
     fun showNotice(reason: String) {
+        onTelemetryInvalidated?.invoke()
         isPreparing = false
         candidates = emptyList()
         displayIndex = 0
@@ -152,6 +155,7 @@ class CollageChoiceSession {
 
     /** Source/note/music edit invalidation: drops candidates and selection. */
     fun clear() {
+        onTelemetryInvalidated?.invoke()
         preparationGeneration += 1
         isPreparing = false
         candidates = emptyList()

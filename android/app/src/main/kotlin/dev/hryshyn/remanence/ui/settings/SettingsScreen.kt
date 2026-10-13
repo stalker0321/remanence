@@ -27,6 +27,7 @@ import dev.hryshyn.remanence.ui.locale.AppLocale
 @Composable
 fun SettingsScreen(handle: String, locale: AppLocale, onLocale: (AppLocale) -> Unit,
                    recoveryReady: Boolean, onBack: () -> Unit, onLogout: () -> Unit,
+                   telemetryContent: @Composable () -> Unit = {},
                    safetyContent: @Composable () -> Unit = {}) {
     val gutter = HoldSpace.pageGutter()
     var languages by rememberSaveable { mutableStateOf(false) }
@@ -76,6 +77,7 @@ fun SettingsScreen(handle: String, locale: AppLocale, onLocale: (AppLocale) -> U
                     safetyContent()
                 }
             }
+            telemetryContent()
             SettingsGroup {
                 SettingsActionRow(stringResource(R.string.settings_design_logout), onClick = { logoutConfirmation = true },
                     modifier = Modifier.testTag("settings_logout"), destructive = true)

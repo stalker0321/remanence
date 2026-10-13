@@ -137,11 +137,13 @@ object PendingClaimedEnvelope {
         val recipientPublicKeyset: ByteArray,
         val nowEpochSeconds: Long,
         /**
-         * Authorized deployment-pinned service key id (NOT the S/R-carried
-         * value alone: S/R self-consistency over an arbitrary id proves
-         * nothing). Both ids must equal this pin.
+         * Authorized deployment-pinned service key id. When non-null, BOTH
+         * carried ids must equal the pin (S/R self-consistency over an
+         * arbitrary id proves nothing on its own). Null while distribution
+         * is pending: S/R consistency still enforced, pinning documented
+         * as the remaining gap.
          */
-        val authorizedServiceKeyId: String,
+        val authorizedServiceKeyId: String?,
     )
 
     sealed interface EnvelopeAcceptance {
@@ -184,11 +186,12 @@ object PendingClaimedEnvelope {
         PendingPublishVerifier.verifyClaimAgreement(statementBytes, claimBytes)
         val statement = PendingPublishStatementV2.parseFrom(statementBytes)
         val claim = dev.hryshyn.remanence.protocol.delivery_v2.ClaimBindingV1.parseFrom(claimBytes)
-        // Authorized service-key pin: BOTH carried ids must equal the
-        // deployment pin — S/R self-consistency over an arbitrary id
-        // proves nothing on its own.
-        if (!uuidEquals(statement.claimSigningKeyId, expected.authorizedServiceKeyId) ||
-            !uuidEquals(claim.claimSigningKeyId, expected.authorizedServiceKeyId)
+        // Authorized service-key pin: when present, BOTH carried ids must
+        // equal the deployment pin (self-consistency alone proves nothing).
+        val pin = expected.authorizedServiceKeyId
+        if (pin != null &&
+            (!uuidEquals(statement.claimSigningKeyId, pin) ||
+                !uuidEquals(claim.claimSigningKeyId, pin))
         ) {
             throw GeneralSecurityException("pending envelope service key mismatch")
         }

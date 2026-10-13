@@ -26,7 +26,11 @@
     <string name="pending_proof_code_label">код</string>
     <string name="pending_proof_verify">проверить</string>
     <string name="pending_proof_intent_title">подтверждено — почти всё</string>
-    <string name="pending_proof_intent_body">ваша заявка проверена и подписана. она отправится в следующем тестовом обновлении; подарок откроется обычным сканированием.</string>
+    <string name="pending_proof_intent_body">ваша заявка проверена и подписана. отправка передаст её на сервер.</string>
+    <string name="pending_proof_claim">забрать подарок</string>
+    <string name="pending_proof_claimed_title">подарок ваш</string>
+    <string name="pending_proof_claimed_body">сервер записал вашу заявку. подарок откроется обычным сканированием.</string>
+    <string name="pending_proof_claimed_partial">сервер записал вашу заявку; одна серверная проверка ещё на ревью. подарок откроется обычным сканированием.</string>
     <string name="pending_proof_network">не удалось связаться с сервером. попробуйте ещё раз.</string>
     <string name="pending_proof_notfound">этот подарок недоступен.</string>
     <string name="pending_proof_session">сессия изменилась. при необходимости войдите снова.</string>

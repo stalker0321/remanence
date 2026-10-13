@@ -1085,6 +1085,43 @@ class AppContainer private constructor(
                     dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.RecoveryRequired -> null
                 }
             },
+            senderKeyProvider = { bundleId ->
+                when (val result = keyBundleByIdRepository.fetch(bundleId)) {
+                    is dev.hryshyn.remanence.core.data.network.KeyBundleByIdResult.Found -> try {
+                        com.google.crypto.tink.subtle.Base64.urlSafeDecode(
+                            result.bundle.signingPublicKeysetB64Url,
+                        )
+                    } catch (_: Exception) {
+                        null
+                    }
+                    else -> null
+                }
+            },
+            ownBundleKeyProvider = {
+                val summary = try {
+                    currentAccountStore.load()
+                } catch (_: Exception) {
+                    null
+                }
+                if (summary == null) {
+                    null
+                } else {
+                    when (val result = keyBundleByIdRepository.fetch(summary.activeKeyBundleId)) {
+                        is dev.hryshyn.remanence.core.data.network.KeyBundleByIdResult.Found -> try {
+                            com.google.crypto.tink.subtle.Base64.urlSafeDecode(
+                                result.bundle.encryptionPublicKeysetB64Url,
+                            )
+                        } catch (_: Exception) {
+                            null
+                        }
+                        else -> null
+                    }
+                }
+            },
+            claimPort = dev.hryshyn.remanence.pending.ProofClaimPort { deliveryId, intentB64, sigB64, opId, token ->
+                val claimRepo = dev.hryshyn.remanence.core.data.network.PendingClaimRepository.create(apiBaseUrl)
+                claimRepo.submit(deliveryId, intentB64, sigB64, opId, token)
+            },
             // T186 M7c: session id from the fenced holder, bound to the
             // LIVE lease owner (never borrowed across accounts). Null
             // without a live owner-bound session (BLOCKED downstream).

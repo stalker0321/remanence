@@ -42,6 +42,16 @@ fun interface ProofOptionsPort {
     suspend fun options(deliveryId: String, token: String): ClaimOptionsResult
 }
 
+fun interface ProofClaimPort {
+    suspend fun submit(
+        deliveryId: String,
+        intentB64: String,
+        intentSignature69B64: String,
+        idempotencyKey: String,
+        token: String,
+    ): dev.hryshyn.remanence.core.data.network.ClaimSubmitResult
+}
+
 /** Authenticated account material for the proof/claim flow. */
 data class ProofAccount(
     val userId: String,
@@ -49,33 +59,42 @@ data class ProofAccount(
 )
 
 /**
- * T186 M7c: receiving proof + claim flow (frozen R7/R8/R9/R10, exact §8).
+ * T186 M7c: receiving proof + claim flow (frozen R7/R8/R9/R10/R11, exact §8).
  *
- * lookup → R7 continue → (sync: hand back to scan | proof: verify S
- * structure → R8 attempt → R9 code → VERIFIED → R10 options → open
- * challenge nonce → build + sign intent → IntentReady).
- *
- * Trust notes: the S SIGNATURE cannot be verified client-side (no sender
- * key on record — the server checked it at finalize); S gets structural
- * + canonical + D/KC-presence checks, and full agreement re-runs at
- * envelope acceptance. R11 SUBMIT waits on an explicit block: the auth
- * `session_id` is not persisted client-side, so the intent is built and
- * signed but never sent until that handoff. Nothing is faked, nothing is
+ * lookup → R7 continue → S signature verified with the directory-backed
+ * sender key → R8 attempt → R9 code → VERIFIED → R10 options → open
+ * challenge nonce → build + sign intent → R11 submit → trusted envelope
+ * acceptance (partial until the service key is distributed — typed,
+ * never promoted, never admission). Nothing is faked, nothing is
  * auto-opened; the gift opens later through ordinary sync/scan.
  */
 class PendingProofViewModel(
     private val continuePort: ProofContinuePort,
     private val verifyPort: ProofVerifyPort,
     private val optionsPort: ProofOptionsPort,
+    private val claimPort: ProofClaimPort? = null,
     private val tokenProvider: suspend () -> String?,
     private val accountProvider: suspend () -> ProofAccount?,
     private val signingKeyProvider: suspend () -> KeysetHandle?,
     private val hpkeKeyProvider: suspend () -> KeysetHandle?,
     /**
-     * Explicit block: the auth `session_id` is not persisted client-side,
-     * so R11 submit waits its handoff. Null keeps the flow at a verified,
-     * signed, ready-to-submit intent (BLOCKED state) instead of inventing
-     * an id. Tests supply one; production returns null until handed off.
+     * Sender signing public keyset bytes by bundle id (directory-backed —
+     * the server holds no monopoly). Null/unfetchable fails S verification
+     * closed; the flow never proceeds on structure alone.
+     */
+    private val senderKeyProvider: suspend (bundleId: String) -> ByteArray? = { null },
+    /**
+     * Own bundle public keyset bytes (directory-fetched — the exact stored
+     * bytes the server hashed for the recipient digest check). Null fails
+     * envelope acceptance closed.
+     */
+    private val ownBundleKeyProvider: suspend () -> ByteArray? = { null },
+    private val claimPort: ProofClaimPort? = null,
+    /**
+     * Auth session id for the intent (fenced holder in production, null
+     * until a live owner-bound session exists). Null keeps the flow at a
+     * verified, signed, ready intent (BLOCKED state) instead of inventing
+     * an id.
      */
     private val sessionIdProvider: suspend () -> String? = { null },
     private val clockSeconds: () -> Long = { System.currentTimeMillis() / 1000L },
@@ -107,6 +126,14 @@ class PendingProofViewModel(
         data class IntentReady(
             val deliveryId: String,
             val nonceB64: String,
+        ) : ProofState
+
+        data object Claiming : ProofState
+
+        data class Claimed(
+            val deliveryId: String,
+            /** False until the service key is distributed (partial path). */
+            val serviceVerified: Boolean,
         ) : ProofState
 
         data class Failed(val message: PendingProofMessage) : ProofState
@@ -144,6 +171,20 @@ class PendingProofViewModel(
     private var proof: ContinueResult.Proof? = null
     private var attempt: String? = null
     private var statementBytes: ByteArray? = null
+    private var senderKeyBytesStored: ByteArray? = null
+    private var senderSigStored: ByteArray? = null
+    private var builtIntent: ByteArray? = null
+    private var builtIntentSig: ByteArray? = null
+    private var builtOpId: String? = null
+    private var builtNonce: ByteArray? = null
+    private var builtChallengeId: String? = null
+
+    private fun uuidRest(bytes: com.google.protobuf.ByteString): String {
+        val raw = bytes.toByteArray()
+        require(raw.size == 16) { "uuid must be 16 bytes" }
+        val buffer = java.nio.ByteBuffer.wrap(raw)
+        return java.util.UUID(buffer.long, buffer.long).toString()
+    }
 
     fun start(reference: String) {
         if (_state.value !is ProofState.Idle) return
@@ -170,15 +211,34 @@ class PendingProofViewModel(
         return when (val result = continuePort.continueFrom(reference, token)) {
             is ContinueResult.Sync -> ProofState.SyncReady(result.capsuleId)
             is ContinueResult.Proof -> {
-                // Structural S gate (signature needs the sender key, which
-                // only the server holds — it checked at finalize).
+                // Full S verification with the REAL sender key from the
+                // directory (no server monopoly): structure + canonical +
+                // Ed25519 over the frozen domain input. Anything missing
+                // fails closed — never structure-only acceptance.
                 val sBytes = try {
                     Base64.getDecoder().decode(result.publishStatementB64)
                 } catch (_: IllegalArgumentException) {
                     null
                 } ?: return ProofState.Failed(PendingProofMessage.GENERIC)
-                try {
+                val statement = try {
                     PendingPublishVerifier.verifyStructure(sBytes)
+                } catch (_: GeneralSecurityException) {
+                    return ProofState.Failed(PendingProofMessage.GENERIC)
+                } catch (_: Exception) {
+                    return ProofState.Failed(PendingProofMessage.GENERIC)
+                }
+                val senderKeyBytes = try {
+                    senderKeyProvider(uuidRest(statement.senderKeyBundleId))
+                } catch (_: Exception) {
+                    null
+                } ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+                val senderSig = try {
+                    Base64.getDecoder().decode(result.publishSignature69B64)
+                } catch (_: IllegalArgumentException) {
+                    null
+                } ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+                try {
+                    PendingPublishVerifier.verifyPublish(senderKeyBytes, sBytes, senderSig)
                 } catch (_: GeneralSecurityException) {
                     return ProofState.Failed(PendingProofMessage.GENERIC)
                 } catch (_: Exception) {
@@ -186,6 +246,8 @@ class PendingProofViewModel(
                 }
                 proof = result
                 statementBytes = sBytes
+                senderKeyBytesStored = senderKeyBytes
+                senderSigStored = senderSig
                 ProofState.ProofRequired(result.deliveryId, result.channel, result.claimExpiresAt, result.publishStatementB64)
             }
             is ContinueResult.Failure -> ProofState.Failed(mapLookupFailure(result.reason))
@@ -250,6 +312,133 @@ class PendingProofViewModel(
                 ProofState.Failed(PendingProofMessage.GENERIC)
             }
         }
+    }
+
+    /**
+     * Submits the built claim intent (R11) and runs trusted envelope
+     * acceptance. The service signature is still undistributed, so success
+     * lands explicitly PARTIAL (never production `Accepted`, never
+     * admission, never auto-open — the gift opens later via sync/scan).
+     */
+    fun submitClaim() {
+        val intent = builtIntent
+        val intentSig = builtIntentSig
+        val opId = builtOpId
+        val current = proof
+        if (_state.value !is ProofState.IntentReady || intent == null ||
+            intentSig == null || opId == null || current == null
+        ) {
+            return
+        }
+        _state.value = ProofState.Claiming
+        launchScope.launch {
+            _state.value = try {
+                submitClaimFlow(current, intent, intentSig, opId)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                ProofState.Failed(PendingProofMessage.GENERIC)
+            }
+        }
+    }
+
+    private suspend fun submitClaimFlow(
+        current: ContinueResult.Proof,
+        intent: ByteArray,
+        intentSig: ByteArray,
+        opId: String,
+    ): ProofState {
+        val port = claimPort
+            ?: return ProofState.Failed(PendingProofMessage.BLOCKED)
+        val token = bearer() ?: return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+        val account = try {
+            accountProvider()
+        } catch (_: Exception) {
+            null
+        } ?: return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+        if (account.userId.isBlank() || account.bundleId.isBlank()) {
+            return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+        }
+        val submitted = try {
+            port.submit(
+                current.deliveryId,
+                Base64.getEncoder().encodeToString(intent),
+                Base64.getEncoder().encodeToString(intentSig),
+                opId, token,
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return ProofState.Failed(PendingProofMessage.NETWORK)
+        }
+        if (submitted !is dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed) {
+            val failure = submitted as dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Failure
+            return ProofState.Failed(mapClaimFailure(failure.reason))
+        }
+        // Trusted acceptance of the server response (partial: service key
+        // undistributed — typed, never promoted, never admission).
+        val sBytes = statementBytes
+            ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+        val senderKeyBytes = senderKeyBytesStored
+            ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+        val hpke = try {
+            hpkeKeyProvider()
+        } catch (_: Exception) {
+            null
+        } ?: return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+        val ownPublic = try {
+            ownBundleKeyProvider()
+        } catch (_: Exception) {
+            null
+        } ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+        return try {
+            val binding = Base64.getDecoder().decode(submitted.claimBindingB64)
+            val envelope = Base64.getDecoder().decode(submitted.envelopeB64)
+            val envelopeSha = unhexStrict(submitted.envelopeSha256Hex)
+            val claimSig = Base64.getDecoder().decode(submitted.claimSignature69B64)
+            val senderVerify = com.google.crypto.tink.TinkProtoKeysetFormat
+                .parseKeysetWithoutSecret(senderKeyBytes)
+            val senderSig = senderSigStored
+                ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+            when (
+                dev.hryshyn.remanence.core.crypto.PendingClaimedEnvelope.accept(
+                    sealedEnvelope = envelope,
+                    expectedEnvelopeSha256 = envelopeSha,
+                    statementBytes = sBytes,
+                    claimBytes = binding,
+                    senderSignature = senderSig,
+                    claimSignature = claimSig,
+                    recipientPrivateHandle = hpke,
+                    senderVerifyHandle = senderVerify,
+                    // Service-key distribution pending: partial path only,
+                    // typed untrusted, never promoted.
+                    serviceVerifyHandle = null,
+                    expected = dev.hryshyn.remanence.core.crypto.PendingClaimedEnvelope.LocalExpectation(
+                        recipientUserId = account.userId,
+                        recipientKeyBundleId = account.bundleId,
+                        recipientPublicKeyset = ownPublic,
+                        nowEpochSeconds = clockSeconds(),
+                        authorizedServiceKeyId = null,
+                    ),
+                )
+            ) {
+                is dev.hryshyn.remanence.core.crypto.PendingClaimedEnvelope.EnvelopeAcceptance.Accepted ->
+                    ProofState.Claimed(current.deliveryId, serviceVerified = true)
+                is dev.hryshyn.remanence.core.crypto.PendingClaimedEnvelope.EnvelopeAcceptance.PartiallyAccepted ->
+                    ProofState.Claimed(current.deliveryId, serviceVerified = false)
+            }
+        } catch (_: GeneralSecurityException) {
+            ProofState.Failed(PendingProofMessage.GENERIC)
+        } catch (_: Exception) {
+            ProofState.Failed(PendingProofMessage.GENERIC)
+        }
+    }
+
+    private fun unhexStrict(hex: String): ByteArray {
+        require(hex.length == 64 && hex.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) {
+            "digest must be 64 hex"
+        }
+        return ByteArray(32) { i -> hex.substring(i * 2, i * 2 + 2).toInt(16).toByte() }
     }
 
     private suspend fun verifiedState(deliveryId: String, attemptId: String): ProofState {
@@ -322,9 +511,10 @@ class PendingProofViewModel(
             } catch (_: Exception) {
                 null
             } ?: return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+            val opId = java.util.UUID.randomUUID().toString()
             val intent = PendingClaimIntent.buildCanonical(
                 PendingClaimIntent.Fields(
-                    operationId = java.util.UUID.randomUUID().toString(),
+                    operationId = opId,
                     capsuleId = proof?.capsuleId ?: "",
                     deliveryTargetId = proof?.deliveryTargetId ?: "",
                     publishStatementSha256 = h,
@@ -337,7 +527,12 @@ class PendingProofViewModel(
                     bindAlias = false,
                 ),
             )
-            PendingClaimIntent.signIntent(signing, intent)
+            val intentSig = PendingClaimIntent.signIntent(signing, intent)
+            builtIntent = intent
+            builtIntentSig = intentSig
+            builtOpId = opId
+            builtNonce = nonce
+            builtChallengeId = options.challengeId
             ProofState.IntentReady(deliveryId, Base64.getEncoder().encodeToString(nonce))
         } catch (_: GeneralSecurityException) {
             ProofState.Failed(PendingProofMessage.GENERIC)

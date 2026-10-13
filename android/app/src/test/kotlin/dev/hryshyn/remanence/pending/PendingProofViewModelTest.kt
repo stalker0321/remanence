@@ -106,6 +106,14 @@ class PendingProofViewModelTest {
         )
     }
 
+    private fun frozenSenderKey(): ByteArray {
+        val crypto = fixtures.parseToJsonElement(
+            javaClass.getResourceAsStream("/pending/delivery-v2-crypto.json")!!
+                .bufferedReader().readText(),
+        ).jsonObject
+        return java.util.Base64.getDecoder().decode(str(crypto, "sender_ed25519_public_keyset_b64"))
+    }
+
     private fun vm(
         continueResult: ContinueResult = proofBranch(),
         options: (String) -> ClaimOptionsResult = { ClaimOptionsResult.Failure(
@@ -116,6 +124,8 @@ class PendingProofViewModelTest {
         signing: KeysetHandle? = null,
         hpke: KeysetHandle? = null,
         session: String? = sessionId,
+        senderKey: ByteArray? = frozenSenderKey(),
+        claim: PendingClaimPort? = null,
     ): PendingProofViewModel {
         TinkPrimitives.ensureRegistered()
         val signingKeys = signing
@@ -140,6 +150,9 @@ class PendingProofViewModelTest {
             signingKeyProvider = { signingKeys },
             hpkeKeyProvider = { hpke },
             sessionIdProvider = { session },
+            senderKeyProvider = { senderKey },
+            ownBundleKeyProvider = { null },
+            claimPort = claim,
             scope = scope,
         )
     }
@@ -170,6 +183,87 @@ class PendingProofViewModelTest {
         val ready = viewModel.state.value as PendingProofViewModel.ProofState.IntentReady
         assertEquals(deliveryId, ready.deliveryId)
         assertEquals(Base64.getEncoder().encodeToString(setup.nonce), ready.nonceB64)
+    }
+
+    @Test
+    fun submitConflictMapsToError() = runTest {
+        val setup = challengeSetup()
+        var submitted = 0
+        val viewModel = vm(
+            options = {
+                ClaimOptionsResult.Options(
+                    setup.challengeId, 1_798_765_432L,
+                    Base64.getEncoder().encodeToString(setup.sealed),
+                    Base64.getEncoder().encodeToString(setup.contextRaw),
+                )
+            },
+            hpke = setup.recipientPrivate,
+            tokens = mutableListOf("token", "token", "token", "token"),
+            claim = PendingClaimPort { _, _, _, _, _ ->
+                submitted += 1
+                dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Failure(
+                    dev.hryshyn.remanence.core.data.network.ClaimFailure.CLAIM_CONFLICT,
+                    409, false,
+                )
+            },
+        )
+        viewModel.start("ref")
+        testScheduler.advanceUntilIdle()
+        viewModel.onDestinationChange("a42@example.test")
+        viewModel.requestAttempt()
+        testScheduler.advanceUntilIdle()
+        viewModel.onCodeChange("12345678")
+        viewModel.checkCode()
+        testScheduler.advanceUntilIdle()
+        assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.IntentReady)
+        viewModel.submitClaim()
+        testScheduler.advanceUntilIdle()
+        assertEquals(1, submitted)
+        assertEquals(
+            PendingProofViewModel.ProofState.Failed(PendingProofViewModel.PendingProofMessage.CONFLICT),
+            viewModel.state.value,
+        )
+    }
+
+    @Test
+    fun submitGarbageClaimedRejected() = runTest {
+        val setup = challengeSetup()
+        val viewModel = vm(
+            options = {
+                ClaimOptionsResult.Options(
+                    setup.challengeId, 1_798_765_432L,
+                    Base64.getEncoder().encodeToString(setup.sealed),
+                    Base64.getEncoder().encodeToString(setup.contextRaw),
+                )
+            },
+            hpke = setup.recipientPrivate,
+            tokens = mutableListOf("token", "token", "token", "token"),
+            claim = PendingClaimPort { _, _, _, _, _ ->
+                dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
+                    "55555555-6666-7777-8888-999999999999",
+                    Base64.getEncoder().encodeToString(ByteArray(10)),
+                    Base64.getEncoder().encodeToString(ByteArray(69)),
+                    Base64.getEncoder().encodeToString(ByteArray(16)),
+                    "ab".repeat(32),
+                )
+            },
+        )
+        viewModel.start("ref")
+        testScheduler.advanceUntilIdle()
+        viewModel.onDestinationChange("a42@example.test")
+        viewModel.requestAttempt()
+        testScheduler.advanceUntilIdle()
+        viewModel.onCodeChange("12345678")
+        viewModel.checkCode()
+        testScheduler.advanceUntilIdle()
+        assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.IntentReady)
+        // Structurally invalid binding bytes: acceptance rejects, never opens.
+        viewModel.submitClaim()
+        testScheduler.advanceUntilIdle()
+        assertEquals(
+            PendingProofViewModel.ProofState.Failed(PendingProofViewModel.PendingProofMessage.GENERIC),
+            viewModel.state.value,
+        )
     }
 
     @Test

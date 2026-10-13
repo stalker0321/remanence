@@ -148,6 +148,44 @@ fun PendingProofFlow(
                     )
                     Spacer(Modifier.height(12.dp))
                     Button(
+                        onClick = viewModel::submitClaim,
+                        modifier = Modifier.testTag("pending_proof_claim"),
+                    ) { Text(stringResource(R.string.pending_proof_claim)) }
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = onDone,
+                        modifier = Modifier.testTag("pending_proof_cancel"),
+                    ) { Text(stringResource(R.string.pending_proof_cancel)) }
+                }
+                is PendingProofViewModel.ProofState.Claiming -> {
+                    CircularProgressIndicator(modifier = Modifier.testTag("pending_proof_working"))
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        stringResource(R.string.pending_proof_working),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = dev.hryshyn.remanence.ui.hold.HoldColors.Muted,
+                    )
+                }
+                is PendingProofViewModel.ProofState.Claimed -> {
+                    Text(
+                        stringResource(R.string.pending_proof_claimed_title),
+                        style = MaterialTheme.typography.headlineSmall,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        stringResource(
+                            if (current.serviceVerified) {
+                                R.string.pending_proof_claimed_body
+                            } else {
+                                R.string.pending_proof_claimed_partial
+                            },
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = dev.hryshyn.remanence.ui.hold.HoldColors.Muted,
+                        modifier = Modifier.testTag("pending_proof_claimed"),
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Button(
                         onClick = onDone,
                         modifier = Modifier.testTag("pending_proof_done"),
                     ) { Text(stringResource(R.string.pending_proof_done)) }

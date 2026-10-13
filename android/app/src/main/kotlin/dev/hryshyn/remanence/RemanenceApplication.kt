@@ -923,6 +923,8 @@ class AppContainer private constructor(
                 )
             },
             servicePinPort = { pendingServicePin },
+            sessionGate = pendingSessionGate,
+            accountProvider = pendingFeedAccount,
             admittedStore = pendingAdmittedGiftStore,
         )
     }
@@ -1351,9 +1353,7 @@ class AppContainer private constructor(
             // T186 M12b: SAME out-of-band selected pin the sender uses
             // for S (never an R-carried key). Null ⇒ typed partial.
             servicePinProvider = { pendingServicePin },
-            sessionGate = pendingSessionGate,
-            accountProvider = pendingFeedAccount,
-            admittedStore = pendingAdmittedGiftStore,
+            scope = scope,
         )
     }
 

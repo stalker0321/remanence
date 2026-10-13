@@ -68,7 +68,7 @@ class PendingClaimIngestTest {
         val recipientPublicBytes: ByteArray,
     )
 
-    private fun crypto(): Crypto {
+    private fun crypto(forCapsule: String = capsule): Crypto {
         TinkPrimitives.ensureRegistered()
         val opening = AddressOpening.newBuilder()
             .setNormalizationVersion(1)
@@ -86,7 +86,7 @@ class PendingClaimIngestTest {
         )
         val kcInput = KeyCommitmentInput.newBuilder()
             .setVersion(1)
-            .setCapsuleId(ByteString.copyFrom(uuidBytes(capsule)))
+            .setCapsuleId(ByteString.copyFrom(uuidBytes(forCapsule)))
             .setDeliveryTargetId(ByteString.copyFrom(uuidBytes(target)))
             .setCapsuleAeadKeyset(ByteString.copyFrom(rawKey))
             .build().toByteArray()
@@ -98,7 +98,7 @@ class PendingClaimIngestTest {
         val serviceKeys = KeysetHandle.generateNew(KeyTemplates.get("ED25519"))
         val statement = PendingPublishStatementV2.newBuilder()
             .setProtocolVersion(2)
-            .setCapsuleId(ByteString.copyFrom(uuidBytes(capsule)))
+            .setCapsuleId(ByteString.copyFrom(uuidBytes(forCapsule)))
             .setSenderUserId(ByteString.copyFrom(uuidBytes(sender)))
             .setSenderKeyBundleId(ByteString.copyFrom(uuidBytes(bundle)))
             .setDeliveryTargetId(ByteString.copyFrom(uuidBytes(target)))
@@ -115,7 +115,7 @@ class PendingClaimIngestTest {
         val claimBytes = ClaimBindingV1.newBuilder()
             .setBindingVersion(1)
             .setCapsuleProtocolVersion(2)
-            .setCapsuleId(ByteString.copyFrom(uuidBytes(capsule)))
+            .setCapsuleId(ByteString.copyFrom(uuidBytes(forCapsule)))
             .setDeliveryTargetId(ByteString.copyFrom(uuidBytes(target)))
             .setPublishStatementSha256(ByteString.copyFrom(sha256(statement)))
             .setAddressCommitment(ByteString.copyFrom(d))
@@ -131,7 +131,7 @@ class PendingClaimIngestTest {
             .build().toByteArray()
         val contextRaw = ClaimedEnvelopeContextV2.newBuilder()
             .setProtocolVersion(2)
-            .setCapsuleId(ByteString.copyFrom(uuidBytes(capsule)))
+            .setCapsuleId(ByteString.copyFrom(uuidBytes(forCapsule)))
             .setDeliveryTargetId(ByteString.copyFrom(uuidBytes(target)))
             .setSenderUserId(ByteString.copyFrom(uuidBytes(sender)))
             .setRecipientUserId(ByteString.copyFrom(uuidBytes(recipient)))
@@ -143,7 +143,7 @@ class PendingClaimIngestTest {
             .setBinding(
                 ClaimedEnvelopeContextV2.newBuilder()
                     .setProtocolVersion(2)
-                    .setCapsuleId(ByteString.copyFrom(uuidBytes(capsule)))
+                    .setCapsuleId(ByteString.copyFrom(uuidBytes(forCapsule)))
                     .setDeliveryTargetId(ByteString.copyFrom(uuidBytes(target)))
                     .setSenderUserId(ByteString.copyFrom(uuidBytes(sender)))
                     .setRecipientUserId(ByteString.copyFrom(uuidBytes(recipient)))
@@ -227,17 +227,20 @@ class PendingClaimIngestTest {
         recipientUser: String = recipient,
         claimResult: PendingRedownloadResult? = null,
         gate: FencedGate = FencedGate(),
+        echoCapsuleId: String = capsule,
+        echoTargetId: String = target,
+        echoClaimId: String = claim,
     ): Triple<PendingClaimIngest, FencedGate, dev.hryshyn.remanence.core.data.network.SessionRequestLease> {
         val ingest = PendingClaimIngest(
         claimPort = PendingClaimIngest.ClaimFetchPort { _, _ ->
             claimResult ?: PendingRedownloadResult.Redownloaded(
-                claim, crypto.claimB64, crypto.claimSigB64,
+                echoClaimId, crypto.claimB64, crypto.claimSigB64,
                 crypto.envelopeB64, crypto.envelopeShaHex,
             )
         },
         controlPort = PendingClaimIngest.ControlFetchPort { _, _ ->
             PendingControlResult.Control(
-                capsule, target, delivery, claim,
+                echoCapsuleId, echoTargetId, delivery, echoClaimId,
                 crypto.statementB64, crypto.senderSigB64,
                 sha256(Base64.getDecoder().decode(crypto.statementB64))
                     .joinToString("") { "%02x".format(it) },
@@ -347,6 +350,36 @@ class PendingClaimIngestTest {
                 ingest.ingest(recipient, stale, listOf(item()))
             }
             assertNull(PendingAdmittedGiftStore(dir).get(recipient, capsule))
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /**
+     * T186 (T187 B1): a substituted feed row is rejected against the
+     * VERIFIED bytes — every signed byte is genuinely capsule-B
+     * (internally consistent, valid signatures) while the feed row
+     * AND the echo JSON consistently name capsule-A. The unsigned
+     * echo passes, admission succeeds, but the verified binding
+     * mismatch throws and no row is written under either id.
+     */
+    @Test
+    fun substitutedFeedItemRejectedWithoutRow() = runTest {
+        val dir = Files.createTempDirectory("pending-ingest-substituted").toFile()
+        try {
+            val otherCapsule = "22222222-3333-4444-5555-666666666666"
+            val cryptoB = crypto(forCapsule = otherCapsule)
+            val (ingest, _, lease) = ingest(
+                dir, cryptoB,
+                echoCapsuleId = capsule,
+                echoTargetId = target,
+                echoClaimId = claim,
+            )
+            assertThrows(IllegalStateException::class.java) {
+                ingest.ingest(recipient, lease, listOf(item()))
+            }
+            assertNull(PendingAdmittedGiftStore(dir).get(recipient, capsule))
+            assertNull(PendingAdmittedGiftStore(dir).get(recipient, otherCapsule))
         } finally {
             dir.deleteRecursively()
         }

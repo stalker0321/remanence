@@ -310,6 +310,10 @@ class PendingClaimIngest(
             // PartiallyAdmitted copy can never survive a throw.
             val admitted = acceptance as? dev.hryshyn.remanence.core.crypto.PendingTrustedAdmission.Admission.Admitted
                 ?: throw IllegalStateException("pending service trust pending")
+            // Bind the feed ids to the VERIFIED bytes (never the
+            // unsigned JSON echo): the row must describe the capsule
+            // the signatures actually admitted.
+            requireVerifiedItemBinding(statementBytes, binding, item)
             val row = PendingAdmittedGiftStore.AdmittedGift(
                 ownerUserId = ownerUserId,
                 capsuleId = item.capsuleId,
@@ -331,7 +335,7 @@ class PendingClaimIngest(
             }
         } finally {
             when (acceptance) {
-                is dev.hryshyn.remanence.core.crypto.PendingTrustedAdmission.Admission.Accepted ->
+                is dev.hryshyn.remanence.core.crypto.PendingTrustedAdmission.Admission.Admitted ->
                     acceptance.capsuleAeadKeyset.fill(0)
                 is dev.hryshyn.remanence.core.crypto.PendingTrustedAdmission.Admission.PartiallyAdmitted ->
                     acceptance.capsuleAeadKeyset.fill(0)
@@ -354,6 +358,45 @@ class PendingClaimIngest(
 
     private fun parseServicePin(pin: PendingServicePin): KeysetHandle? =
         PendingServicePinConfig.parseVerificationKeyset(pin.publicKeysetB64)
+
+    /**
+     * T186 (T187 B1): binds the feed row to the cryptographically
+     * VERIFIED bytes — UUIDs straight from the accepted S/R protos
+     * (canonical 16-byte network order via the frozen codec, same
+     * layout the verifiers check). A substituted feed item (or echo
+     * JSON) naming a different capsule/target/claim than the admitted
+     * S/R throws and writes no row.
+     */
+    private fun requireVerifiedItemBinding(
+        statementBytes: ByteArray,
+        claimBytes: ByteArray,
+        item: FeedItemInputs,
+    ) {
+        val statement = try {
+            dev.hryshyn.remanence.protocol.delivery_v2.PendingPublishStatementV2
+                .parseFrom(statementBytes)
+        } catch (_: Exception) {
+            throw IllegalStateException("pending publish statement malformed")
+        }
+        val claim = try {
+            dev.hryshyn.remanence.protocol.delivery_v2.ClaimBindingV1
+                .parseFrom(claimBytes)
+        } catch (_: Exception) {
+            throw IllegalStateException("pending claim binding malformed")
+        }
+        if (uuidString(statement.capsuleId.toByteArray()) != item.capsuleId ||
+            uuidString(statement.deliveryTargetId.toByteArray()) != item.deliveryTargetId ||
+            uuidString(claim.claimId.toByteArray()) != item.claimId
+        ) {
+            throw IllegalStateException("pending item binding mismatch")
+        }
+    }
+
+    private fun uuidString(raw16: ByteArray): String {
+        require(raw16.size == 16) { "pending id malformed" }
+        val buffer = java.nio.ByteBuffer.wrap(raw16)
+        return java.util.UUID(buffer.long, buffer.long).toString()
+    }
 
     private fun unhexStrict(hex: String): ByteArray {
         require(hex.length == 64 && hex.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) {

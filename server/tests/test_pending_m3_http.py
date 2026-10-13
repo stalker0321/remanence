@@ -103,6 +103,7 @@ def _build_client(session_factory, *, flags_on: bool, user_id, session_id, ctx_o
         "destination_key": DEST_KEY,
         "otp_key": OTP_KEY,
         "proof_mac_key": PROOF_MAC_KEY,
+        "evidence_key": EVIDENCE_KEY,
         "vault": DevSealedVault(mode="test", key_id="http-1", key_32=DEV_VAULT_KEY),
         "service_key_id": uuid.uuid4(),
         "email_sender": _DefaultMockDispatcher(),
@@ -203,6 +204,7 @@ def test_r15_frozen_shape_end_to_end(session_factory) -> None:
         decision = decide_for_send(
             session, destination_kind="email", normalized_destination=ADDRESS,
             active_bundle_id=None, hmac_key=HMAC_KEY,
+            evidence_key=EVIDENCE_KEY, sender_user_id=sender.id,
         )
         route = freeze_route(
             session, sender_user_id=sender.id, capsule_id=uuid.uuid4(),
@@ -366,6 +368,7 @@ def test_http_finalize_verify_claim_round_trip(session_factory) -> None:
         decision = decide_for_send(
             session, destination_kind="email", normalized_destination=ADDRESS,
             active_bundle_id=None, hmac_key=HMAC_KEY,
+            evidence_key=EVIDENCE_KEY, sender_user_id=sender.id,
         )
         route = freeze_route(
             session, sender_user_id=sender.id, capsule_id=uuid.uuid4(),
@@ -514,6 +517,7 @@ def test_http_wrong_codes_lock_attempt_persistently(session_factory) -> None:
         decision = decide_for_send(
             session, destination_kind="email", normalized_destination=ADDRESS,
             active_bundle_id=None, hmac_key=HMAC_KEY,
+            evidence_key=EVIDENCE_KEY, sender_user_id=sender.id,
         )
         route = freeze_route(
             session, sender_user_id=sender.id, capsule_id=uuid.uuid4(),
@@ -624,6 +628,7 @@ def test_http_continue_foreign_owned_is_generic_unavailable(session_factory) -> 
         decision = decide_for_send(
             session, destination_kind="email", normalized_destination=ADDRESS,
             active_bundle_id=None, hmac_key=HMAC_KEY,
+            evidence_key=EVIDENCE_KEY, sender_user_id=sender.id,
         )
         route = freeze_route(
             session, sender_user_id=sender.id, capsule_id=uuid.uuid4(),
@@ -749,6 +754,7 @@ def test_r7_proof_branch_carries_next_step_material(session_factory) -> None:
         decision = decide_for_send(
             session, destination_kind="email", normalized_destination=ADDRESS,
             active_bundle_id=None, hmac_key=HMAC_KEY,
+            evidence_key=EVIDENCE_KEY, sender_user_id=sender.id,
         )
         route = freeze_route(
             session, sender_user_id=sender.id, capsule_id=uuid.uuid4(),
@@ -961,6 +967,7 @@ def test_r3_validates_policy_artifacts_idempotency(session_factory) -> None:
         decision = decide_for_send(
             session, destination_kind="email", normalized_destination=ADDRESS,
             active_bundle_id=None, hmac_key=HMAC_KEY,
+            evidence_key=EVIDENCE_KEY, sender_user_id=sender.id,
         )
         route = freeze_route(
             session, sender_user_id=sender.id, capsule_id=uuid.uuid4(),
@@ -1015,6 +1022,7 @@ def test_r8_phone_consent_and_r6_channel(session_factory) -> None:
         decision = decide_for_send(
             session, destination_kind="phone", normalized_destination=phone,
             active_bundle_id=None, hmac_key=HMAC_KEY,
+            evidence_key=EVIDENCE_KEY, sender_user_id=sender.id,
         )
         route = freeze_route(
             session, sender_user_id=sender.id, capsule_id=uuid.uuid4(),
@@ -1086,6 +1094,7 @@ def test_blob_upload_manifest_download(session_factory) -> None:
         decision = decide_for_send(
             session, destination_kind="email", normalized_destination=ADDRESS,
             active_bundle_id=None, hmac_key=HMAC_KEY,
+            evidence_key=EVIDENCE_KEY, sender_user_id=sender.id,
         )
         route = freeze_route(
             session, sender_user_id=sender.id, capsule_id=uuid.uuid4(),

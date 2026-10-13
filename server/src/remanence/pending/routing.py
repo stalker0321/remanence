@@ -120,20 +120,29 @@ def decide_for_send(
     normalized_destination: str,
     active_bundle_id: uuid.UUID | None,
     hmac_key: bytes,
+    evidence_key: bytes,
+    sender_user_id: uuid.UUID,
     recipient_disabled: bool = False,
     sender_blocked: bool = False,
 ) -> RouteDecision:
     """Registry-backed decision under the address lock (same lock the
     freeze takes). Handles resolve through the directory to their fixed
     user + authoritative active bundle (existing v1 policy); email/phone
-    consult the verified registry. A verified address without a usable
-    bundle errors — the caller resolves bundles authoritatively, so a
-    missing bundle is never silent escrow."""
+    consult the verified registry with the evidence MAC enforced — a
+    forged VERIFIED row errors instead of routing to an attacker-known
+    v1 bundle. The owner row is loaded (disabled owners error) and the
+    existing UserBlock policy applies (recipient-blocked sender errors),
+    mirroring v1 draft/incoming. A verified address without a usable
+    bundle errors, never silent escrow."""
+    from remanence.users.safety_models import UserBlock
+
     if destination_kind == "handle":
         user = session.scalar(
             select(User).where(User.handle_normalized == normalized_destination)
         )
         if user is None or user.disabled_at is not None:
+            raise RoutingError("ADDRESS_UNAVAILABLE")
+        if session.get(UserBlock, (user.id, sender_user_id)) is not None:
             raise RoutingError("ADDRESS_UNAVAILABLE")
         bundle_id = active_bundle_id_for(session, user.id)
         if bundle_id is None:
@@ -149,13 +158,27 @@ def decide_for_send(
     live = None
     authoritative_bundle: uuid.UUID | None = active_bundle_id
     if fate == "VERIFIED":
-        live = live_verified(
-            session,
-            kind=destination_kind,
-            normalized=normalized_destination,
-            hmac_key=hmac_key,
-        )
+        from remanence.pending.registry import RegistryError as _RegistryError
+
+        try:
+            live = live_verified(
+                session,
+                kind=destination_kind,
+                normalized=normalized_destination,
+                hmac_key=hmac_key,
+                evidence_key=evidence_key,
+            )
+        except _RegistryError as exc:
+            raise RoutingError("ADDRESS_UNAVAILABLE") from exc
         assert live is not None
+        owner = session.get(User, live.owner_user_id)
+        if owner is None or owner.disabled_at is not None:
+            raise RoutingError("ADDRESS_UNAVAILABLE")
+        if (
+            session.get(UserBlock, (live.owner_user_id, sender_user_id)) is not None
+            or sender_blocked
+        ):
+            raise RoutingError("ADDRESS_UNAVAILABLE")
         # Authoritative usable bundle wins: a verified address with no
         # usable bundle errors (never silent escrow), and a stale
         # caller-supplied bundle is rejected rather than trusted.

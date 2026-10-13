@@ -344,12 +344,17 @@ def send_routes(
             return _problem("AUTH_INVALID", 401)
         if sender.handle_normalized is None:
             return _problem("HANDLE_REQUIRED_FOR_SEND", 403)
+        # Evidence key defaults to the registry HMAC secret (separate
+        # domains keep tag/MAC usages apart); deployments may inject a
+        # distinct key via ctx["evidence_key"].
         decision = routing_service.decide_for_send(
             db,
             destination_kind=kind,
             normalized_destination=normalized,
             active_bundle_id=None,
             hmac_key=ctx["hmac_key"],
+            evidence_key=ctx.get("evidence_key", ctx["hmac_key"]),
+            sender_user_id=principal.user_id,
         )
         route = routing_service.freeze_route(
             db,

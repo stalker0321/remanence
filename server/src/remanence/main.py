@@ -66,6 +66,22 @@ def create_app(
         provided = bytes(pending_ctx.get("hmac_key") or b"")
         if not configured or not _hmac.compare_digest(configured, provided):
             raise ValueError("pending ctx hmac_key must equal pending_hmac_secret")
+    if resolved.pending_protocol_enabled and pending_ctx is not None and resolved.mode in (
+        AppMode.PROD,
+        AppMode.BETA,
+    ):
+        # Fail closed in production-likes: dev vaults and mock/test
+        # providers must never be injectable where real custody and
+        # delivery are required.
+        from remanence.pending.vault import ProductionKmsVault as _KmsVault
+
+        vault = pending_ctx.get("vault")
+        if not isinstance(vault, _KmsVault):
+            raise ValueError("prod/beta pending requires KMS vault custody")
+        for key in ("email_sender", "sms_provider"):
+            provider = pending_ctx.get(key)
+            if provider is not None and type(provider).__name__.startswith(("Mock", "Fake")):
+                raise ValueError(f"prod/beta pending forbids test {key}")
     engine: Engine | None = None
     if music_search is None and resolved.music_search_backend is MusicSearchBackend.FULL_CATALOG:
         # Full catalog is independent of the account DB. Validate before startup;

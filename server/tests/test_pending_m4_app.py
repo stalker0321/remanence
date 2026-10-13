@@ -162,3 +162,54 @@ def test_lifespan_backfill_then_r1_routes_old_email(session_factory) -> None:
                 address_fate(session, kind="email", normalized=owner_email, hmac_key=_CTX_KEY)
                 == "RESERVED"
             )
+
+
+def test_prod_ctx_rejects_dev_vault_and_mocks() -> None:
+    import pytest as _pytest
+
+    from remanence.pending.providers import MockDispatcher as _MockMail
+    from remanence.pending.vault import DevSealedVault as _DevVault
+    from remanence.pending.vault import ProductionKmsVault as _KmsVault
+
+    class _KmsClient:
+        def encrypt(self, *, key_id, plaintext, encryption_context):
+            return b"enc:" + plaintext
+
+        def decrypt(self, *, key_id, ciphertext, encryption_context):
+            return ciphertext[4:]
+
+    def _ctx(**overrides):
+        base = {
+            "hmac_key": _CTX_KEY,
+            "destination_key": _CTX_KEY,
+            "otp_key": _CTX_KEY,
+            "proof_mac_key": _CTX_KEY,
+            "vault": _KmsVault(kms_client=_KmsClient(), kms_key_id="kms-1", allowed_key_ids=("kms-1",)),
+            "service_key_id": uuid.uuid4(),
+            "email_sender": None,
+        }
+        base.update(overrides)
+        return base
+
+    prod = dict(
+        mode=AppMode.PROD,
+        database_url="postgresql+psycopg://u:p@127.0.0.1:1/db",
+        blob_root="/tmp/blobs",
+        pending_protocol_enabled=True,
+        pending_hmac_secret=_CTX_SECRET,
+        pending_kms_key_id="kms-1",
+        pending_allowed_kms_key_ids=["kms-1"],
+    )
+    # KMS custody accepted.
+    create_app(settings=Settings(**prod), pending_ctx=_ctx())
+    # Dev vault refused.
+    with _pytest.raises(ValueError):
+        create_app(
+            settings=Settings(**prod),
+            pending_ctx=_ctx(vault=_DevVault(mode="test", key_id="x", key_32=_CTX_KEY)),
+        )
+    # Mock providers refused.
+    with _pytest.raises(ValueError):
+        create_app(
+            settings=Settings(**prod), pending_ctx=_ctx(email_sender=_MockMail())
+        )

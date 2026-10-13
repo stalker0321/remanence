@@ -256,6 +256,12 @@ def execute_claim(
     account = session.get(User, account_id, with_for_update=True)
     if account is None or account.disabled_at is not None:
         raise ClaimError("ADDRESS_UNAVAILABLE")
+    from remanence.users.safety_models import UserBlock as _UserBlock
+
+    if session.get(_UserBlock, (account_id, delivery.sender_user_id)) is not None:
+        # Existing contact-block policy applies once the recipient is
+        # known, mirroring v1 draft/incoming.
+        raise ClaimError("ADDRESS_UNAVAILABLE")
     bundle = session.get(UserKeyBundle, bundle_id, with_for_update=True)
     if (
         bundle is None

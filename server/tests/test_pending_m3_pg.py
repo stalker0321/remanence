@@ -236,6 +236,8 @@ def _setup_pending(session, *, address: str = ADDRESS, channel: str = "email"):
         normalized_destination=address,
         active_bundle_id=None,
         hmac_key=HMAC_KEY,
+        evidence_key=EVIDENCE_KEY,
+        sender_user_id=sender.id,
     )
     assert decision.mode == "PENDING_V2"
     route = freeze_route(
@@ -419,21 +421,22 @@ def _claim(session, delivery, account, bundle, account_ring, attempt, service_ri
 def test_full_lifecycle_claim_and_open(session_factory) -> None:
     service_ring = Keyring()
     service_key_id = uuid.uuid4()
-    vault = DevSealedVault(mode="test", key_id="m3-dev-1", key_32=DEV_VAULT_KEY)
-    provider = MockDispatcher()
+    vault = DevSealedVault(mode="test", key_id="m3-full-1", key_32=DEV_VAULT_KEY)
     with session_factory() as session:
         setup = _setup_pending(session)
-        delivery, code, _, _ = _finalize(session, setup, service_key_id, vault)
+        delivery, code, statement_raw, payload_raw = _finalize(
+            session, setup, service_key_id, vault
+        )
         assert delivery.state == "PENDING"
         assert resolve_active(session, tag=code_hmac(code, HMAC_KEY)) is not None
-        # Finalize replay returns the identical committed code.
+        # Finalize replay with the exact triple returns the committed code.
         same, code2 = finalize_delivery(
             session,
             delivery_id=delivery.id,
             principal_user_id=setup["sender"].id,
-            statement_raw=bytes(delivery.publish_statement),
+            statement_raw=statement_raw,
             signature_69=bytes(delivery.publish_signature),
-            escrow_payload_raw=b"",
+            escrow_payload_raw=payload_raw,
             vault=vault,
             expected_service_key_id=service_key_id,
             locator_hmac_key=HMAC_KEY,
@@ -451,9 +454,9 @@ def test_full_lifecycle_claim_and_open(session_factory) -> None:
                 session,
                 delivery_id=delivery.id,
                 principal_user_id=setup["sender"].id,
-                statement_raw=bytes(delivery.publish_statement),
+                statement_raw=statement_raw,
                 signature_69=bytes(delivery.publish_signature),
-                escrow_payload_raw=b"",
+                escrow_payload_raw=payload_raw,
                 vault=vault,
                 expected_service_key_id=service_key_id,
                 locator_hmac_key=HMAC_KEY,
@@ -464,7 +467,57 @@ def test_full_lifecycle_claim_and_open(session_factory) -> None:
                 operation_id=uuid.uuid4(),
             )
         session.rollback()
+        # Changed escrow bytes under the same operation conflict (409).
+        tampered = bytearray(payload_raw)
+        tampered[-1] ^= 0x01
+        with pytest.raises(PublicationError) as conflicted:
+            finalize_delivery(
+                session,
+                delivery_id=delivery.id,
+                principal_user_id=setup["sender"].id,
+                statement_raw=statement_raw,
+                signature_69=bytes(delivery.publish_signature),
+                escrow_payload_raw=bytes(tampered),
+                vault=vault,
+                expected_service_key_id=service_key_id,
+                locator_hmac_key=HMAC_KEY,
+                locator_code_key_32=LOCATOR_CODE_KEY,
+                locator_code_key_mode="test",
+                hint_mask="g•••@•••",
+                now=NOW,
+                operation_id=setup["finalize_operation_id"],
+            )
+        assert conflicted.value.code == "IDEMPOTENCY_CONFLICT"
+        session.rollback()
+        # Changed immutable S conflicts with 409, never 404: a valid S
+        # with a different created_at still parses but is not the
+        # committed statement.
+        from remanence.protocol.delivery_v2 import delivery_v2_pb2 as _dv2
+
+        altered = _dv2.PendingPublishStatementV2.FromString(statement_raw)
+        altered.created_at_epoch_seconds += 1
+        altered_raw = altered.SerializeToString(deterministic=True)
+        with pytest.raises(PublicationError) as changed:
+            finalize_delivery(
+                session,
+                delivery_id=delivery.id,
+                principal_user_id=setup["sender"].id,
+                statement_raw=altered_raw,
+                signature_69=bytes(delivery.publish_signature),
+                escrow_payload_raw=payload_raw,
+                vault=vault,
+                expected_service_key_id=service_key_id,
+                locator_hmac_key=HMAC_KEY,
+                locator_code_key_32=LOCATOR_CODE_KEY,
+                locator_code_key_mode="test",
+                hint_mask="g•••@•••",
+                now=NOW,
+                operation_id=setup["finalize_operation_id"],
+            )
+        assert changed.value.code == "IDEMPOTENCY_CONFLICT"
+        session.rollback()
         # Recipient path with sender offline.
+        provider = MockDispatcher()
         recipient = _make_user(session, f"rcp{uuid.uuid4().hex[:8]}")
         recipient_ring = Keyring()
         recipient_bundle = _make_bundle(session, recipient, recipient_ring)
@@ -1457,3 +1510,32 @@ def test_finalize_requires_uploaded_blobs(session_factory) -> None:
         )
         assert finalized.state == "PENDING"
         session.commit()
+
+
+def test_claim_blocked_by_recipient_block_policy(session_factory) -> None:
+    """Once the recipient is known, the existing UserBlock policy gates
+    the claim exactly like v1 draft/incoming."""
+    from remanence.users.safety_models import UserBlock
+
+    service_key_id = uuid.uuid4()
+    vault = DevSealedVault(mode="test", key_id="m3-block-1", key_32=DEV_VAULT_KEY)
+    with session_factory() as session:
+        setup = _setup_pending(session)
+        _finalize(session, setup, service_key_id, vault)
+        delivery = setup["delivery"]
+        recipient = _make_user(session, f"bl{uuid.uuid4().hex[:8]}")
+        recipient_ring = Keyring()
+        recipient_bundle = _make_bundle(session, recipient, recipient_ring)
+        recipient_session = uuid.uuid4()
+        session.commit()
+        attempt = _prove(session, delivery, recipient, recipient_session, MockDispatcher())
+        session.add(UserBlock(owner_id=recipient.id, blocked_id=setup["sender"].id))
+        session.commit()
+        service_ring = Keyring()
+        with pytest.raises(ClaimError):
+            _claim(
+                session, delivery, recipient, recipient_bundle, recipient_ring,
+                attempt, service_ring, service_key_id, vault, uuid.uuid4(),
+            )
+        session.rollback()
+        assert session.get(PendingClaim, delivery.delivery_target_id) is None

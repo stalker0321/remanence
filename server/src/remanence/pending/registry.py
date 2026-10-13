@@ -344,17 +344,43 @@ def backfill_from_users(
     session: Session,
     *,
     hmac_key: bytes,
-    limit: int = 10000,
+    page_size: int = 1000,
+    max_pages: int = 1000,
 ) -> dict[str, int]:
     """Runtime backfill from the ACTUAL users table (operator-invoked,
     e.g. one-shot at deployment or via maintenance job — never implicit
     in login/registration). Every primary email becomes a RESERVED row
-    for its owner; never VERIFIED, never rebound, conflicts blocked."""
+    for its owner; never VERIFIED, never rebound, conflicts blocked.
+
+    Paginated keyset batches to completion: a hard page ceiling aborts
+    with an error (incomplete readiness) instead of silently marking a
+    truncated first slice ready, which would leave later addresses
+    absent and hijackable.
+    """
     from remanence.users.models import User as _User
 
-    rows = session.scalars(select(_User).order_by(_User.id).limit(limit)).all()
-    triples = [("email", user.email_normalized, user.id) for user in rows]
-    return backfill_reservations(session, rows=triples, hmac_key=hmac_key)
+    created = existing = blocked = 0
+    last_id: uuid.UUID | None = None
+    for _ in range(max_pages):
+        query = select(_User).order_by(_User.id).limit(page_size + 1)
+        if last_id is not None:
+            query = query.where(_User.id > last_id)
+        rows = session.scalars(query).all()
+        if not rows:
+            return {"created": created, "existing": existing, "blocked": blocked}
+        for user in rows[:page_size]:
+            outcome = backfill_reservations(
+                session,
+                rows=[("email", user.email_normalized, user.id)],
+                hmac_key=hmac_key,
+            )
+            created += outcome["created"]
+            existing += outcome["existing"]
+            blocked += outcome["blocked"]
+        if len(rows) <= page_size:
+            return {"created": created, "existing": existing, "blocked": blocked}
+        last_id = rows[page_size - 1].id
+    raise RegistryError("ADDRESS_UNAVAILABLE")
 
 
 def claim_fence(
@@ -422,12 +448,20 @@ def address_fate(
 
 
 def live_verified(
-    session: Session, *, kind: str, normalized: str, hmac_key: bytes
+    session: Session,
+    *,
+    kind: str,
+    normalized: str,
+    hmac_key: bytes,
+    evidence_key: bytes | None = None,
 ) -> LiveBinding | None:
     """Authoritative VERIFIED read under the address lock. RESERVED is
-    never routable; RETIRED is invisible here by design — callers that
-    must distinguish retired from absent use address_fate (routing
-    treats RETIRED as an explicit error, never pending fallback)."""
+    never routable; RETIRED is invisible here by design.
+
+    With evidence_key set (all routing paths), the outside-DB evidence
+    MAC is enforced: a forged VERIFIED row raises ADDRESS_UNAVAILABLE
+    instead of routing — never a silent pending fallback. Without it
+    (display/backfill reads only) the raw row is returned."""
     tag = lock_address(session, kind, normalized, hmac_key)
     row = session.scalar(
         select(DeliveryAddressBinding).where(
@@ -438,4 +472,6 @@ def live_verified(
     )
     if row is None:
         return None
+    if evidence_key is not None and not verify_evidence_mac(row, evidence_key=evidence_key):
+        raise RegistryError("ADDRESS_UNAVAILABLE")
     return LiveBinding(owner_user_id=row.owner_user_id, revision=row.binding_revision)

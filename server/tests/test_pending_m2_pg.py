@@ -281,6 +281,8 @@ def test_routing_freeze_both_orders_and_retired_errors(session_factory) -> None:
             normalized_destination="known@example.test",
             active_bundle_id=bundle.id,
             hmac_key=HMAC_KEY,
+            evidence_key=EVIDENCE_KEY,
+            sender_user_id=sender.id,
         )
         assert decision.mode == "EXISTING_USER_V1" and decision.user_id == recipient.id
         route = freeze_route(
@@ -314,6 +316,8 @@ def test_routing_freeze_both_orders_and_retired_errors(session_factory) -> None:
             normalized_destination="late@example.test",
             active_bundle_id=None,
             hmac_key=HMAC_KEY,
+            evidence_key=EVIDENCE_KEY,
+            sender_user_id=sender.id,
         )
         assert decision2.mode == "PENDING_V2"
         route2 = freeze_route(
@@ -342,6 +346,8 @@ def test_routing_freeze_both_orders_and_retired_errors(session_factory) -> None:
                 normalized_destination="gone@example.test",
                 active_bundle_id=None,
                 hmac_key=HMAC_KEY,
+                evidence_key=EVIDENCE_KEY,
+                sender_user_id=sender.id,
             )
         session.commit()
 
@@ -696,3 +702,92 @@ def test_v2_repeat_login_issues_usable_session(session_factory) -> None:
         assert body["active_key_bundle"]["status"] == "ACTIVE"
         session.commit()
         assert session.scalar(select(func.count()).select_from(AuthSession)) == 1
+
+
+def test_forged_binding_mac_fails_routing_not_fallback(session_factory) -> None:
+    """R1 enforces the evidence MAC at the routable read: a forged
+    VERIFIED row errors (typed unavailable), never routes v1 nor falls
+    back to pending."""
+    from remanence.pending.registry import lookup_tag
+    from remanence.pending.models import DeliveryAddressBinding as _Binding
+    from datetime import datetime as _dt, timezone as _tz
+
+    with session_factory() as session:
+        owner = _make_user(session, handle="forgedowner")
+        bundle = _make_bundle(session, owner)
+        session.commit()
+        verified = verify_binding(
+            session, kind="email", normalized="forged@example.test",
+            owner_user_id=owner.id, evidence_method="otp",
+            evidence_key=EVIDENCE_KEY, hmac_key=HMAC_KEY, now=NOW,
+        )
+        session.commit()
+        verified.evidence_ref = bytes([0xAA] * 32)
+        session.commit()
+        with pytest.raises(RoutingError):
+            decide_for_send(
+                session, destination_kind="email",
+                normalized_destination="forged@example.test",
+                active_bundle_id=bundle.id, hmac_key=HMAC_KEY,
+                evidence_key=EVIDENCE_KEY, sender_user_id=owner.id,
+            )
+        session.rollback()
+
+
+def test_disabled_owner_and_blocks_fence_routing(session_factory) -> None:
+    from datetime import datetime as _dt, timezone as _tz
+
+    from remanence.users.safety_models import UserBlock
+
+    with session_factory() as session:
+        sender = _make_user(session, handle="fencesender")
+        recipient = _make_user(session, handle="fencerecipient")
+        bundle = _make_bundle(session, recipient)
+        session.commit()
+        verify_binding(
+            session, kind="email", normalized="fenced@example.test",
+            owner_user_id=recipient.id, evidence_method="otp",
+            evidence_key=EVIDENCE_KEY, hmac_key=HMAC_KEY, now=NOW,
+        )
+        session.commit()
+        # Disabled owner errors.
+        recipient.disabled_at = _dt.now(_tz.utc)
+        session.commit()
+        with pytest.raises(RoutingError):
+            decide_for_send(
+                session, destination_kind="email",
+                normalized_destination="fenced@example.test",
+                active_bundle_id=bundle.id, hmac_key=HMAC_KEY,
+                evidence_key=EVIDENCE_KEY, sender_user_id=sender.id,
+            )
+        recipient.disabled_at = None
+        session.commit()
+        # Recipient-blocked sender errors (existing UserBlock policy).
+        session.add(UserBlock(owner_id=recipient.id, blocked_id=sender.id))
+        session.commit()
+        with pytest.raises(RoutingError):
+            decide_for_send(
+                session, destination_kind="email",
+                normalized_destination="fenced@example.test",
+                active_bundle_id=bundle.id, hmac_key=HMAC_KEY,
+                evidence_key=EVIDENCE_KEY, sender_user_id=sender.id,
+            )
+        session.rollback()
+
+
+def test_backfill_paginates_to_completion(session_factory) -> None:
+    from remanence.pending.registry import backfill_from_users
+
+    with session_factory() as session:
+        owners = [_make_user(session, handle=f"pgbf{i}") for i in range(5)]
+        session.commit()
+        outcome = backfill_from_users(session, hmac_key=HMAC_KEY, page_size=2)
+        assert outcome["created"] == 5
+        session.commit()
+        for owner in owners:
+            refreshed = session.get(User, owner.id)
+            assert (
+                address_fate(session, kind="email", normalized=refreshed.email_normalized, hmac_key=HMAC_KEY)
+                == "RESERVED"
+            )
+        session.rollback()

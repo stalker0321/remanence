@@ -211,6 +211,24 @@ def create_draft(
     if (claim_expires_at - now).days > MAX_CLAIM_DEADLINE_DAYS:
         raise PublicationError("PROTOCOL_UNSUPPORTED")
     cleaned = validate_declarations(declarations or [])
+    # Service-boundary freeze is mandatory on the pending path: every
+    # draft rides a frozen route (sender/capsule/mode/target/expiry
+    # checked). route_id=None is rejected here; harnesses needing a
+    # routeless model use routing.decide_for_send + freeze_route first.
+    from remanence.pending.routing import check_finalize_route as _check_route
+
+    if route_id is None:
+        raise PublicationError("ROUTE_STALE")
+    route = _check_route(
+        session,
+        route_id=route_id,
+        sender_user_id=sender_user_id,
+        capsule_id=capsule_id,
+        mode="PENDING_V2",
+        now=now,
+    )
+    if route.delivery_target_id != delivery_target_id:
+        raise PublicationError("ROUTE_STALE")
     row = PendingDelivery(
         id=uuid.uuid4(),
         sender_user_id=sender_user_id,
@@ -282,13 +300,15 @@ def finalize_delivery(
         + (operation_id.bytes if operation_id is not None else b"")
         + statement_raw
         + signature_69
+        + hashlib.sha256(escrow_payload_raw).digest()
     ).digest()
-    if delivery.state == "PENDING" and bytes(delivery.publish_statement) == statement_raw:
-        if bytes(delivery.publish_signature or b"") != bytes(signature_69):
+    if delivery.state == "PENDING":
+        # Exact full binding: same operation id AND same statement,
+        # signature, and escrow bytes. A changed immutable S, a changed
+        # signature, changed escrow, or a new operation id conflicts
+        # with 409 (never 404, never a replay).
+        if bytes(delivery.publish_statement) != statement_raw:
             raise PublicationError("IDEMPOTENCY_CONFLICT")
-        # Exact full binding: same operation id AND same statement +
-        # signature + escrow digest. Changed escrow (or a new operation
-        # id over the same bytes) conflicts instead of replaying.
         if (
             operation_id is None
             or delivery.finalize_operation_id != operation_id

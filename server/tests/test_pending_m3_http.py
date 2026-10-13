@@ -20,6 +20,7 @@ pytest_plugins = ("test_session_repository_create",)
 from remanence.api.dependencies import AuthenticatedPrincipal, get_authenticated_principal, get_db_session
 from remanence.pending import domains
 from remanence.pending.api import router as pending_router
+from remanence.pending.providers import MockDispatcher
 from remanence.pending.providers import MockDispatcher as _DefaultMockDispatcher
 from remanence.pending.vault import DevSealedVault
 from remanence.settings import AppMode, Settings
@@ -35,9 +36,13 @@ from test_pending_m3_pg import (
     PROOF_MAC_KEY,
     SUITE,
     Keyring,
+    _claim,
+    _finalize,
     _make_bundle,
     _make_user,
+    _prove,
     _publish_package,
+    _setup_pending,
 )
 
 LOCATOR_HINT = "g•••@•••"
@@ -1145,3 +1150,102 @@ def test_blob_upload_manifest_download(session_factory) -> None:
     assert xclient.get(f"/v2/pending-deliveries/{delivery_id}/blobs/{blob_id}").status_code == 404
     got = sclient.get(f"/v2/pending-deliveries/{delivery_id}/blobs/{blob_id}")
     assert got.status_code == 200 and got.content == blob_bytes
+
+
+def test_pending_incoming_feed_discovery_and_v1_isolation(session_factory) -> None:
+    """Owned claim-time feed: item after claim (completion null), then
+    completion metadata after R15; foreign principal sees empty; the v1
+    incoming feed never returns the v2 capsule."""
+    from fastapi import FastAPI as _FastAPI
+    from fastapi.testclient import TestClient as _TestClient
+
+    from remanence.api.dependencies import (
+        AuthenticatedPrincipal as _Principal,
+    )
+    from remanence.api.dependencies import (
+        get_authenticated_principal as _get_principal,
+    )
+    from remanence.api.dependencies import get_db_session as _get_session
+    from remanence.main import create_app as _create_app
+    from remanence.settings import AppMode as _Mode
+    from remanence.settings import Settings as _Settings
+
+    service_ring = Keyring()
+    service_key_id = uuid.uuid4()
+    vault = DevSealedVault(mode="test", key_id="http-feed-1", key_32=DEV_VAULT_KEY)
+    secret = "synthetic-feed-secret-32-bytes-min!!"
+    with session_factory() as session:
+        setup = _setup_pending(session)
+        _finalize(session, setup, service_key_id, vault)
+        delivery = setup["delivery"]
+        recipient = _make_user(session, f"fd{uuid.uuid4().hex[:8]}")
+        recipient_ring = Keyring()
+        recipient_bundle = _make_bundle(session, recipient, recipient_ring)
+        recipient_session = uuid.uuid4()
+        session.commit()
+        attempt = _prove(session, delivery, recipient, recipient_session, MockDispatcher())
+        _claim(
+            session, delivery, recipient, recipient_bundle, recipient_ring,
+            attempt, service_ring, service_key_id, vault, uuid.uuid4(),
+        )
+        capsule_id, delivery_id = delivery.capsule_id, delivery.id
+        recipient_id = recipient.id
+        stranger = _make_user(session, f"fq{uuid.uuid4().hex[:8]}")
+        session.commit()
+        stranger_id = stranger.id
+    settings = _Settings(
+        mode=_Mode.TEST, pending_protocol_enabled=True,
+        pending_sends_enabled=True, pending_claims_enabled=True,
+        pending_locator_issuance_enabled=True, pending_hmac_secret=secret,
+    )
+    ctx = {
+        "hmac_key": secret.encode(), "destination_key": DEST_KEY,
+        "otp_key": OTP_KEY, "proof_mac_key": PROOF_MAC_KEY,
+        "evidence_key": EVIDENCE_KEY,
+        "vault": DevSealedVault(mode="test", key_id="http-feed-1", key_32=DEV_VAULT_KEY),
+        "service_key_id": service_key_id,
+        "email_sender": MockDispatcher(),
+        "locator_code_key": LOCATOR_CODE_KEY,
+    }
+    app = _create_app(settings=settings, session_factory=session_factory, pending_ctx=ctx)
+
+    def _factory():
+        session = session_factory()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    app.dependency_overrides[_get_session] = _factory
+
+    def _as(user_id, session_id):
+        async def _principal() -> _Principal:
+            return _Principal(user_id=user_id, session_id=session_id)
+
+        app.dependency_overrides[_get_principal] = _principal
+
+    _as(recipient_id, recipient_session)
+    with _TestClient(app, raise_server_exceptions=False) as client:
+        feed = client.get("/v2/pending-incoming")
+        assert feed.status_code == 200, feed.text
+        body = feed.json()
+        assert len(body["items"]) == 1
+        item = body["items"][0]
+        assert item["capsule_id"] == str(capsule_id)
+        assert item["delivery_id"] == str(delivery_id)
+        assert item["completion"] is None
+        assert item["envelope_ref"].endswith("/claim")
+        assert item["manifest_ref"].endswith("/manifest")
+        assert len(item["blob_refs"]) == 1
+        # v1 feed never returns the v2 capsule.
+        v1 = client.get("/v1/capsules/incoming")
+        assert str(capsule_id) not in v1.text
+        # Foreign principal: empty page, no oracle.
+        _as(stranger_id, uuid.uuid4())
+        foreign = client.get("/v2/pending-incoming")
+        assert foreign.status_code == 200
+        assert foreign.json()["items"] == []
+        # Cursor round trip.
+        _as(recipient_id, recipient_session)
+        paged = client.get("/v2/pending-incoming", params={"limit": 1})
+        assert len(paged.json()["items"]) == 1

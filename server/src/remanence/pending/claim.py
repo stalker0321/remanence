@@ -44,8 +44,21 @@ class ClaimError(RuntimeError):
         self.code = code
 
 
+def _locked_delivery(session: Session, delivery_id: uuid.UUID) -> PendingDelivery | None:
+    """Row-locked fresh read that bypasses the identity map
+    (populate_existing): a session that touched the delivery earlier in
+    its transaction must NOT reuse a stale cached copy for the
+    terminal-state gate — otherwise cancel-vs-claim races double-win."""
+    return session.scalar(
+        select(PendingDelivery)
+        .where(PendingDelivery.id == delivery_id)
+        .with_for_update()
+        .execution_options(populate_existing=True),
+    )
+
+
 def _delivery_or_raise(session: Session, delivery_id: uuid.UUID, now: datetime) -> PendingDelivery:
-    delivery = session.get(PendingDelivery, delivery_id, with_for_update=True)
+    delivery = _locked_delivery(session, delivery_id)
     if delivery is None or delivery.state != "PENDING":
         raise ClaimError("GIFT_UNAVAILABLE")
     if delivery.claim_expires_at <= now:
@@ -225,7 +238,7 @@ def execute_claim(
         session.connection().exec_driver_sql(
             f"SELECT pg_advisory_xact_lock({advisory_key('claim', delivery_id.bytes)})"
         )
-    delivery = session.get(PendingDelivery, delivery_id, with_for_update=True)
+    delivery = _locked_delivery(session, delivery_id)
     if delivery is None:
         raise ClaimError("GIFT_UNAVAILABLE")
     if uuid.UUID(bytes=bytes(intent.capsule_id)) != delivery.capsule_id or uuid.UUID(

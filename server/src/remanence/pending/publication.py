@@ -288,7 +288,12 @@ def finalize_delivery(
     """
     from remanence.pending.vault import aead_from_raw_key
 
-    delivery = session.get(PendingDelivery, delivery_id, with_for_update=True)
+    delivery = session.scalar(
+        select(PendingDelivery)
+        .where(PendingDelivery.id == delivery_id)
+        .with_for_update()
+        .execution_options(populate_existing=True),
+    )
     if delivery is None:
         raise PublicationError("GIFT_UNAVAILABLE")
     if delivery.sender_user_id != principal_user_id:
@@ -424,7 +429,12 @@ def cancel_delivery(session: Session, *, delivery_id: uuid.UUID, sender_user_id:
     (v1 keeps its own first-open/window semantics)."""
     from remanence.pending.locator_store import retire as retire_locator
 
-    delivery = session.get(PendingDelivery, delivery_id, with_for_update=True)
+    delivery = session.scalar(
+        select(PendingDelivery)
+        .where(PendingDelivery.id == delivery_id)
+        .with_for_update()
+        .execution_options(populate_existing=True),
+    )
     if delivery is None or delivery.sender_user_id != sender_user_id:
         raise PublicationError("GIFT_UNAVAILABLE")
     if delivery.state == "CANCELLED":

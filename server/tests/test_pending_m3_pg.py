@@ -1539,3 +1539,102 @@ def test_claim_blocked_by_recipient_block_policy(session_factory) -> None:
             )
         session.rollback()
         assert session.get(PendingClaim, delivery.delivery_target_id) is None
+
+
+def test_cancel_vs_claim_race_one_winner(session_factory) -> None:
+    """Sender cancel racing recipient claim: exactly one terminal outcome.
+    Cancel-after-claim conflicts; claim-after-cancel is gone."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from remanence.pending.publication import cancel_delivery
+
+    service_ring = Keyring()
+    service_key_id = uuid.uuid4()
+    with session_factory() as session:
+        setup = _setup_pending(session)
+        vault = DevSealedVault(mode="test", key_id="m3-ccrace-1", key_32=DEV_VAULT_KEY)
+        _finalize(session, setup, service_key_id, vault)
+        delivery_id = setup["delivery"].id
+        sender_id = setup["sender"].id
+        recipient = _make_user(session, f"cr{uuid.uuid4().hex[:8]}")
+        recipient_ring = Keyring()
+        recipient_bundle = _make_bundle(session, recipient, recipient_ring)
+        recipient_session = uuid.uuid4()
+        session.commit()
+        attempt = _prove(session, setup["delivery"], recipient, recipient_session, MockDispatcher())
+        attempt_id = attempt.id
+        recipient_id, bundle_id = recipient.id, recipient_bundle.id
+    barrier = Barrier(2)
+    outcomes: list[str] = []
+
+    def cancel_side() -> None:
+        with session_factory() as session:
+            barrier.wait(timeout=60)
+            try:
+                cancel_delivery(session, delivery_id=delivery_id, sender_user_id=sender_id)
+                session.commit()
+                outcomes.append("cancelled")
+            except Exception as exc:  # noqa: BLE001
+                session.rollback()
+                outcomes.append(type(exc).__name__)
+
+    def claim_side() -> None:
+        with session_factory() as session:
+            service_ring2 = Keyring()
+            barrier.wait(timeout=60)
+            try:
+                delivery = session.get(PendingDelivery, delivery_id)
+                challenge, sealed, _ = claim_options(
+                    session, delivery_id=delivery.id, account_user_id=recipient_id,
+                    session_id=recipient_session, attempt_id=attempt_id, now=NOW,
+                )
+                session.commit()
+                info = domains.domain_prefix(domains.CLAIM_CHALLENGE_DOMAIN) + dv2.ClaimChallengeV1(
+                    challenge_id=challenge.id.bytes, capsule_id=delivery.capsule_id.bytes,
+                    delivery_target_id=delivery.delivery_target_id.bytes,
+                    recipient_user_id=recipient_id.bytes, recipient_key_bundle_id=bundle_id.bytes,
+                    session_id=recipient_session.bytes, nonce_sha256=challenge.nonce_sha256,
+                    expires_at_epoch_seconds=int((NOW + timedelta(minutes=5)).timestamp()),
+                ).SerializeToString(deterministic=True)
+                nonce = recipient_ring.hpke_decrypt(sealed, info)
+                intent = dv2.ClaimIntentV2(
+                    intent_version=1, operation_id=uuid.uuid4().bytes,
+                    capsule_id=delivery.capsule_id.bytes, delivery_target_id=delivery.delivery_target_id.bytes,
+                    publish_statement_sha256=delivery.publish_statement_sha256,
+                    proof_id=attempt_id.bytes, challenge_id=challenge.id.bytes,
+                    recipient_user_id=recipient_id.bytes, recipient_key_bundle_id=bundle_id.bytes,
+                    session_id=recipient_session.bytes, nonce=nonce,
+                    nonce_sha256=hashlib.sha256(nonce).digest(), bind_alias=False,
+                )
+                intent_raw = intent.SerializeToString(deterministic=True)
+                execute_claim(
+                    session, delivery_id=delivery.id, intent_raw=intent_raw,
+                    intent_signature_69=recipient_ring.sign69(
+                        domains.domain_prefix(domains.CLAIM_INTENT_DOMAIN) + intent_raw),
+                    operation_id=uuid.uuid4(),
+                    principal_account_id=recipient_id, principal_session_id=recipient_session,
+                    vault=DevSealedVault(mode="test", key_id="m3-ccrace-1", key_32=DEV_VAULT_KEY),
+                    service_signer=service_ring2.ed_private.primitive(signature.PublicKeySign),
+                    service_key_id=service_key_id,
+                    alias_evidence_key=EVIDENCE_KEY, alias_evidence_method="otp",
+                    proof_mac_key=PROOF_MAC_KEY, now=NOW, clock=lambda: NOW,
+                )
+                session.commit()
+                outcomes.append("claimed")
+            except Exception as exc:  # noqa: BLE001
+                session.rollback()
+                outcomes.append(type(exc).__name__)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(lambda fn: fn(), [cancel_side, claim_side]))
+    assert len(outcomes) == 2
+    # Exactly one side wins; the loser gets an honest terminal error.
+    assert not ("cancelled" in outcomes and "claimed" in outcomes)
+    with session_factory() as session:
+        final = session.get(PendingDelivery, delivery_id)
+        assert final.state in ("CANCELLED", "CLAIMED")
+        if final.state == "CLAIMED":
+            assert session.get(PendingClaim, final.delivery_target_id) is not None
+        else:
+            assert session.get(PendingClaim, final.delivery_target_id) is None

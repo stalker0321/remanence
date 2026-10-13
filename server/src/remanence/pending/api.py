@@ -1120,6 +1120,97 @@ def download_pending_blob(
     return _Streaming(_stream(), media_type="application/octet-stream")
 
 
+@router.get("/v2/pending-incoming")
+def list_pending_incoming(
+    request: Request,
+    db: Session = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    cursor: str | None = None,
+    limit: int = 50,
+):
+    """Independent claim-time cursor owned feed (frozen DTO). v1 incoming
+    never returns v2 records: separate route, separate cursor, separate
+    table. Per-owner rows only (foreign accounts see an empty page, no
+    oracle); no address-to-gifts index exists. Completion metadata
+    survives retirement/reinstall; envelope stays fetchable via R12."""
+    import base64 as _base64
+    import json as _json
+    from datetime import datetime as _datetime
+
+    from sqlalchemy import select as _select
+
+    from remanence.pending.claim_models import LocatorOpenCompletion as _Completion
+    from remanence.pending.claim_models import PendingClaim as _FeedClaim
+    from remanence.pending.claim_models import PendingDelivery as _FeedDelivery
+    from remanence.pending.claim_models import PendingIncoming as _Feed
+
+    ctx = _gate(request, "pending_protocol_enabled")
+    if isinstance(ctx, JSONResponse):
+        return ctx
+    limit = max(1, min(limit, 200))
+    last_at: _datetime | None = None
+    last_id: uuid.UUID | None = None
+    if cursor:
+        try:
+            state = _json.loads(_base64.urlsafe_b64decode(cursor.encode()).decode())
+            last_at = _datetime.fromisoformat(state["last_available_at"])
+            last_id = uuid.UUID(state["last_id"])
+        except Exception:
+            return _problem("VALIDATION_FAILED", 400)
+    query = (
+        _select(_Feed)
+        .where(_Feed.recipient_user_id == principal.user_id)
+        .order_by(_Feed.available_at, _Feed.id)
+        .limit(limit + 1)
+    )
+    if last_at is not None and last_id is not None:
+        query = query.where(
+            (_Feed.available_at > last_at)
+            | ((_Feed.available_at == last_at) & (_Feed.id > last_id))
+        )
+    rows = db.scalars(query).all()
+    page, has_more = rows[:limit], len(rows) > limit
+    items: list[dict] = []
+    for row in page:
+        delivery = db.get(_FeedDelivery, row.delivery_id)
+        if delivery is None:
+            continue
+        claim = db.get(_FeedClaim, delivery.delivery_target_id)
+        if claim is None or claim.account_user_id != principal.user_id:
+            continue
+        completion = db.get(_Completion, row.capsule_id)
+        blobs = delivery.blob_declarations or []
+        items.append(
+            {
+                "capsule_id": str(row.capsule_id),
+                "delivery_id": str(row.delivery_id),
+                "delivery_target_id": str(delivery.delivery_target_id),
+                "claim_id": str(claim.claim_id),
+                "available_at": int(row.available_at.timestamp()),
+                "envelope_ref": f"/v2/pending-deliveries/{row.delivery_id}/claim",
+                "manifest_ref": f"/v2/pending-deliveries/{row.delivery_id}/manifest",
+                "blob_refs": [
+                    f"/v2/pending-deliveries/{row.delivery_id}/blobs/{b['blob_id']}"
+                    for b in blobs
+                ],
+                "completion": (
+                    None
+                    if completion is None
+                    else {"completed_at": int(completion.completed_at.timestamp())}
+                ),
+            }
+        )
+    next_cursor = None
+    if has_more and page:
+        tail = page[-1]
+        next_cursor = _base64.urlsafe_b64encode(
+            _json.dumps(
+                {"last_available_at": tail.available_at.isoformat(), "last_id": str(tail.id)}
+            ).encode()
+        ).decode()
+    return {"items": items, "next_cursor": next_cursor}
+
+
 @router.post("/v2/gift-lookups")
 def gift_lookup(payload: GiftLookupRequest, request: Request, db: Session = Depends(get_db_session)):
     import time as _time

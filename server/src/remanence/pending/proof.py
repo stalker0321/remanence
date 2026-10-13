@@ -101,7 +101,14 @@ def verify_attempt_mac(row: AddressProofAttempt, *, mac_key: bytes) -> bool:
 
 
 def _live_delivery_or_raise(session: Session, delivery_id: uuid.UUID, now: datetime) -> PendingDelivery:
-    delivery = session.get(PendingDelivery, delivery_id, with_for_update=True)
+    # Locked fresh read bypassing the identity map (populate_existing):
+    # terminal-state gates must never reuse a stale cached copy.
+    delivery = session.scalar(
+        select(PendingDelivery)
+        .where(PendingDelivery.id == delivery_id)
+        .with_for_update()
+        .execution_options(populate_existing=True),
+    )
     if delivery is None or delivery.state != "PENDING":
         raise ProofError("GIFT_UNAVAILABLE")
     if delivery.claim_expires_at <= now:

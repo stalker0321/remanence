@@ -37,6 +37,16 @@ class PendingAdmittedGiftStore(filesDir: File) {
         /** Sealed opaque envelope bytes (no keys) for offline reopen. */
         val envelopeB64: String,
         val envelopeSha256Hex: String,
+        /**
+         * T186 M14c: cached published statement bytes + H (public,
+         * sender-signed verification material, no secrets). Lets the
+         * open path re-verify the sender signature and the retirement
+         * path derive the R15 publication hash without network.
+         */
+        val statementB64: String,
+        val statementSha256Hex: String,
+        /** Sender signature over S (public) for open-time re-verification. */
+        val publishSignature69B64: String,
         /** Frozen feed refs (manifest/blob bytes download at open time). */
         val envelopeRef: String,
         val manifestRef: String,
@@ -131,6 +141,7 @@ class PendingAdmittedGiftStore(filesDir: File) {
                 GiftDto(
                     it.capsuleId, it.deliveryId, it.deliveryTargetId, it.claimId,
                     it.availableAt, it.envelopeB64, it.envelopeSha256Hex,
+                    it.statementB64, it.statementSha256Hex, it.publishSignature69B64,
                     it.envelopeRef, it.manifestRef, it.blobRefs,
                     it.completedAt, it.admittedAtMillis,
                 )
@@ -157,6 +168,9 @@ class PendingAdmittedGiftStore(filesDir: File) {
         val availableAt: Long = -1,
         val envelopeB64: String = "",
         val envelopeSha256Hex: String = "",
+        val statementB64: String = "",
+        val statementSha256Hex: String = "",
+        val publishSignature69B64: String = "",
         val envelopeRef: String = "",
         val manifestRef: String = "",
         val blobRefs: List<String> = emptyList(),
@@ -166,6 +180,8 @@ class PendingAdmittedGiftStore(filesDir: File) {
         fun toGift(ownerUserId: String): AdmittedGift? {
             if (capsuleId.isBlank() || deliveryId.isBlank() || deliveryTargetId.isBlank() ||
                 claimId.isBlank() || availableAt < 0 || envelopeB64.isBlank() ||
+                statementB64.isBlank() || statementSha256Hex.isBlank() ||
+                publishSignature69B64.isBlank() ||
                 envelopeRef.isBlank() || manifestRef.isBlank()
             ) {
                 return null
@@ -173,6 +189,7 @@ class PendingAdmittedGiftStore(filesDir: File) {
             return AdmittedGift(
                 ownerUserId, capsuleId, deliveryId, deliveryTargetId, claimId,
                 availableAt, envelopeB64, envelopeSha256Hex,
+                statementB64, statementSha256Hex, publishSignature69B64,
                 envelopeRef, manifestRef, blobRefs.toList(),
                 completedAt, admittedAt,
             )

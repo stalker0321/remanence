@@ -312,8 +312,15 @@ class PendingClaimIngest(
                 ?: throw IllegalStateException("pending service trust pending")
             // Bind the feed ids to the VERIFIED bytes (never the
             // unsigned JSON echo): the row must describe the capsule
-            // the signatures actually admitted.
+            // the signatures actually admitted. The control-carried H
+            // must equal the recomputed statement hash (T187 minor) —
+            // the retirement path derives R15 from this row field.
             requireVerifiedItemBinding(statementBytes, binding, item)
+            val statementShaHex = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(statementBytes).joinToString("") { "%02x".format(it) }
+            if (statementShaHex != control.publishStatementSha256Hex) {
+                throw IllegalStateException("pending statement hash mismatch")
+            }
             val row = PendingAdmittedGiftStore.AdmittedGift(
                 ownerUserId = ownerUserId,
                 capsuleId = item.capsuleId,
@@ -323,6 +330,9 @@ class PendingClaimIngest(
                 availableAt = item.availableAt,
                 envelopeB64 = claimed.envelopeB64,
                 envelopeSha256Hex = claimed.envelopeSha256Hex,
+                statementB64 = control.publishStatementB64,
+                statementSha256Hex = control.publishStatementSha256Hex,
+                publishSignature69B64 = control.publishSignature69B64,
                 envelopeRef = item.envelopeRef,
                 manifestRef = item.manifestRef,
                 blobRefs = item.blobRefs.toList(),

@@ -5,6 +5,9 @@ The frozen v1 payload is in the control-plane T181/contract.md. The API reserves
 ASGI scope's peer/server/headers/query/state and refuses Authorization, Cookie or
 Proxy-Authorization (even empty). Unknown fields, non-finite numbers, duplicate
 JSON keys, incorrect boxes/indices and non-public grammar/style pairs are refused.
+Consented client reports follow explicit design selection or a successfully
+committed crop correction to an already selected design; unchanged/rejected/
+cancelled corrections do not emit. This changes no wire schema or server limits.
 Responses are fixed JSON with no request ID. Payload maximum: 32768 bytes; read
 deadline: 5 seconds; process-global bucket: burst 20 and one request/second.
 At most four receiving requests and four synchronous store workers are admitted;

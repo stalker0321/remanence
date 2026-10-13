@@ -193,7 +193,8 @@ def test_unwired_database_is_fail_closed_and_normal_contract_unchanged():
         assert client.get("/v1/me/safety").status_code == 401
         privacy = client.get("/legal/privacy")
         assert privacy.status_code == 200
-        for wording in ["Two independent", "off by default", "8×8", "cannot recall", "mathematical guarantee"]:
+        for wording in ["Two independent", "off by default", "8×8", "cannot recall", "mathematical guarantee",
+                        "explicit design selection or a successfully committed crop correction"]:
             assert wording in privacy.text
         assert "Version 2026-10-11" in client.get("/legal/terms").text
 

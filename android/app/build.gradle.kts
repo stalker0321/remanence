@@ -136,6 +136,10 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+        // T186: the pending debug block generates @string/pending_app_name
+        // via resValue; AGP requires the resValues feature for any build
+        // type that declares custom resource values.
+        resValues = true
     }
 
     testOptions {

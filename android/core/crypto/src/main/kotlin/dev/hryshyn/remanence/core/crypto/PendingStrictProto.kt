@@ -33,6 +33,7 @@ object PendingStrictProto {
     val PUBLISH_STATEMENT_V2: MessageSpec =
         MessageSpec((1..12).toSet(), mapOf(12 to ARTIFACT_BINDING_V2))
     val CLAIM_BINDING_V1: MessageSpec = MessageSpec((1..13).toSet())
+    val CLAIM_CHALLENGE_V1: MessageSpec = MessageSpec((1..8).toSet())
     val CLAIMED_ENVELOPE_CONTEXT_V2: MessageSpec = MessageSpec((1..8).toSet())
     val CLAIMED_ENVELOPE_PLAINTEXT_V2: MessageSpec = MessageSpec(
         setOf(1, 2, 3),

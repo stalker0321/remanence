@@ -154,13 +154,33 @@ class CreatePendingRouteStepTest {
             profile = RecognitionProfile.postcardSiftRootSiftV1(),
             accountScopedFileRoots = dev.hryshyn.remanence.core.data.storage.AccountScopedFileRoots(stagingDir),
             openPhotoSource = { error("photo picker not used in this test") },
-            frontProcessor = AcceptProcessor("front-bytes".toByteArray()),
+            frontProcessor = AcceptProcessor(
+                dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture.bytes(6),
+            ),
             senderRetryKeysetWrapper = testWrapper,
             senderRetryKekAlias = testAlias,
             enqueueUpload = { _, _ -> },
+            // FIX-STATE-01 (same as the lifetime harness): delivery
+            // completes synchronously under the test dispatcher so
+            // transition assertions are deterministic — never the real
+            // CPU/IO pools under test.
+            cpuDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher,
         )
         vm.beginSession(1L, userUuid.toString())
         return vm
+    }
+
+    /** Deterministic step await (mirrors awaitTerminalPublish): the async
+     * delivery path must land CONTENT before composition is attempted. */
+    private fun awaitStep(vm: CreateViewModel, step: CreateViewModel.Step) {
+        val deadline = System.currentTimeMillis() + 10_000
+        while (vm.step.value != step) {
+            if (System.currentTimeMillis() > deadline) {
+                error("step never reached $step; at ${vm.step.value}")
+            }
+            Thread.sleep(20)
+        }
     }
 
     @Test
@@ -236,8 +256,10 @@ class CreatePendingRouteStepTest {
         val oldCapsule = vm.capsuleId
         bindReady(vm)
         assertTrue(vm.beginFrontCapture())
-        vm.deliverFrontJpeg("jpeg-front".toByteArray())
-        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        vm.deliverFrontJpeg(
+            dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture.bytes(6),
+        )
+        awaitStep(vm, CreateViewModel.Step.CONTENT)
         assertTrue(vm.backToFront())
         assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
         assertTrue(vm.capsuleId != oldCapsule)
@@ -254,8 +276,12 @@ class CreatePendingRouteStepTest {
         assertEquals(CreateViewModel.Step.FRONT, vm.step.value)
         bindReady(vm)
         assertTrue(vm.beginFrontCapture())
-        vm.deliverFrontJpeg("jpeg-front".toByteArray())
-        assertEquals(CreateViewModel.Step.CONTENT, vm.step.value)
+        // Canonical SIFT bytes (not a dummy): the FRONT outcome path
+        // is the production delivery path, awaited deterministically.
+        vm.deliverFrontJpeg(
+            dev.hryshyn.remanence.test.CanonicalSiftFingerprintFixture.bytes(6),
+        )
+        awaitStep(vm, CreateViewModel.Step.CONTENT)
         vm.photoSelection.toggle("a")
         vm.photoSelection.toggle("b")
         vm.photoSelection.toggle("c")

@@ -8,6 +8,7 @@ import java.io.File
 import java.nio.file.Files
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -53,6 +54,7 @@ class PendingFeedSyncTest {
         },
     ): PendingFeedSync = PendingFeedSync(
         fetchPort = fetch,
+        ingestPort = PendingFeedSync.IngestPort { _, _, _ -> },
         cursorStore = PendingFeedCursorStore(dir),
         sessionGate = gate,
         accountProvider = { account },
@@ -88,6 +90,7 @@ class PendingFeedSyncTest {
                         PendingFeedResult.Page(listOf(item("d2")), "")
                     }
                 },
+                ingestPort = PendingFeedSync.IngestPort { _, _, _ -> },
                 cursorStore = PendingFeedCursorStore(dir),
                 sessionGate = gate,
                 accountProvider = { ProofAccount(owner, "bundle") },
@@ -122,6 +125,7 @@ class PendingFeedSyncTest {
                     }
                 },
                 cursorStore = PendingFeedCursorStore(dir),
+                ingestPort = PendingFeedSync.IngestPort { _, _, _ -> },
                 sessionGate = SwitchingGate(),
                 accountProvider = { ProofAccount(owner, "bundle") },
                 scope = null,
@@ -157,6 +161,35 @@ class PendingFeedSyncTest {
                 result,
             )
             assertEquals(false, fetched)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /**
+     * T186 M14b-ingest (T188 B2): failed ingestion keeps the old
+     * cursor — items not persisted are never advanced past, so failure
+     * and process loss cannot lose the page.
+     */
+    @Test
+    fun failedIngestKeepsCursorUnchanged() = runTest {
+        val dir = storeDir()
+        try {
+            val sync = PendingFeedSync(
+                fetchPort = PendingFeedSync.FetchPort { _, _, _ ->
+                    PendingFeedResult.Page(listOf(item("d1")), "cursor-1")
+                },
+                ingestPort = PendingFeedSync.IngestPort { _, _, _ ->
+                    throw IllegalStateException("admission rejected")
+                },
+                cursorStore = PendingFeedCursorStore(dir),
+                sessionGate = SwitchingGate(),
+                accountProvider = { ProofAccount(owner, "bundle") },
+                scope = null,
+            )
+            val failed = sync.sync()
+            assertTrue(failed is PendingFeedSync.State.Failed)
+            assertNull(PendingFeedCursorStore(dir).peek(owner))
         } finally {
             dir.deleteRecursively()
         }

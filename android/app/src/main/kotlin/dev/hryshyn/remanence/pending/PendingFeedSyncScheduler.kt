@@ -53,6 +53,8 @@ interface PendingFeedSyncHost {
     val pendingFeedAccount: (suspend () -> ProofAccount?)
     val pendingFeedCursorStore: PendingFeedCursorStore?
     val pendingFeedFetch: PendingFeedSync.FetchPort?
+    /** Real claim-ingest caller (ingest-then-cursor, same owner fence). */
+    val pendingFeedIngest: PendingFeedSync.IngestPort?
 }
 
 /** Background owned-feed sync: bounded pages, then reschedule or stop. */
@@ -72,8 +74,10 @@ class PendingFeedSyncWorker(
         val gate = host.pendingFeedGate ?: return Result.success()
         val store = host.pendingFeedCursorStore ?: return Result.success()
         val fetch = host.pendingFeedFetch ?: return Result.success()
+        val ingest = host.pendingFeedIngest ?: return Result.success()
         val sync = PendingFeedSync(
             fetchPort = fetch,
+            ingestPort = ingest,
             cursorStore = store,
             sessionGate = gate,
             accountProvider = host.pendingFeedAccount,

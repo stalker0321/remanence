@@ -82,16 +82,62 @@ class PendingReceiverClientsTest {
                 MockResponse.Builder()
                     .code(200)
                     .setHeader("Content-Type", "application/json")
-                    .body("""{"items":[],"next_cursor":""}""")
+                    .body("""{"items":[],"next_cursor":"eyJsYXN0X2F2YWlsYWJsZV9hdCI6MTc5ODc2NTQzMiwibGFzdF9pZCI6IngifQ=="}""")
                     .build(),
             )
             val page = assertIs<PendingFeedResult.Page>(
                 feed(server).page(cursor = "opaque-cursor-1", limit = 200, accessToken = "token"),
             )
             assertTrue(page.items.isEmpty())
-            assertEquals("", page.nextCursor)
+            assertEquals("eyJsYXN0X2F2YWlsYWJsZV9hdCI6MTc5ODc2NTQzMiwibGFzdF9pZCI6IngifQ==", page.nextCursor)
             val request = server.takeRequest()
             assertEquals("opaque-cursor-1", request.url.queryParameter("cursor"))
+        }
+    }
+
+    /**
+     * T186 M14b (T187 B2): the server's exact exhausted shape —
+     * `next_cursor` present with a null value (never `""`). The last
+     * page of any owned feed ends sync instead of erroring.
+     */
+    @Test
+    fun feedNullCursorTerminates() = runTest {
+        withServer { server ->
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(200)
+                    .setHeader("Content-Type", "application/json")
+                    .body("""{"items":[],"next_cursor":null}""")
+                    .build(),
+            )
+            val page = assertIs<PendingFeedResult.Page>(
+                feed(server).page(cursor = "opaque-cursor-1", limit = 50, accessToken = "token"),
+            )
+            assertTrue(page.items.isEmpty())
+            assertEquals("", page.nextCursor)
+        }
+    }
+
+    /**
+     * T186 M14b (T187 B2): the disabled-owner empty page is a normal
+     * terminal page with the exact server shape — no existence oracle,
+     * no error.
+     */
+    @Test
+    fun feedDisabledOwnerEmptyPage() = runTest {
+        withServer { server ->
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(200)
+                    .setHeader("Content-Type", "application/json")
+                    .body("""{"items": [], "next_cursor": null}""")
+                    .build(),
+            )
+            val page = assertIs<PendingFeedResult.Page>(
+                feed(server).page(cursor = null, limit = 50, accessToken = "token"),
+            )
+            assertTrue(page.items.isEmpty())
+            assertEquals("", page.nextCursor)
         }
     }
 
@@ -106,9 +152,48 @@ class PendingReceiverClientsTest {
         }
     }
 
+    /**
+     * T186 M14b (T187 minor): feed endpoint tuples — server
+     * `VALIDATION_FAILED` at 400 classifies (shared 422 skipped on
+     * this surface); a wrong status is rejected, never trusted.
+     */
     @Test
-    fun feedMinimalUnavailableMaps() = runTest {
+    fun feedMinimalValidation400Maps() = runTest {
         withServer { server ->
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(400)
+                    .setHeader("Content-Type", "application/json")
+                    .body(minimalJson("VALIDATION_FAILED", 400))
+                    .build(),
+            )
+            val result = assertIs<PendingFeedResult.Failure>(
+                feed(server).page(cursor = null, limit = 50, accessToken = "token"),
+            )
+            assertEquals(PendingFeedFailure.VALIDATION_FAILED, result.reason)
+            assertFalse(result.retryable)
+        }
+    }
+
+    @Test
+    fun feedMinimalValidationWrongStatusRejected() = runTest {
+        withServer { server ->
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(422)
+                    .setHeader("Content-Type", "application/json")
+                    .body(minimalJson("VALIDATION_FAILED", 422))
+                    .build(),
+            )
+            val result = assertIs<PendingFeedResult.Failure>(
+                feed(server).page(cursor = null, limit = 50, accessToken = "token"),
+            )
+            assertEquals(PendingFeedFailure.HTTP, result.reason)
+        }
+    }
+
+    @Test
+    fun feedMinimalUnavailableMaps() = runTest {        withServer { server ->
             server.enqueue(
                 MockResponse.Builder()
                     .code(404)
@@ -174,7 +259,7 @@ class PendingReceiverClientsTest {
                     .code(200)
                     .setHeader("Content-Type", "application/json")
                     .body(
-                        """{"claim_id":"55555555-6666-7777-8888-999999999999","claim_binding_b64":"Ug==","claim_signature_69_b64":"Uw==","envelope_b64":"RW52","envelope_sha256_hex":"${"ab".repeat(32)}"}""",
+                        """{"claim_id":"55555555-6666-7777-8888-999999999999","state":"CLAIMED","claim_binding_b64":"Ug==","claim_signature_69_b64":"Uw==","envelope_b64":"RW52","envelope_sha256_hex":"${"ab".repeat(32)}"}""",
                     )
                     .build(),
             )

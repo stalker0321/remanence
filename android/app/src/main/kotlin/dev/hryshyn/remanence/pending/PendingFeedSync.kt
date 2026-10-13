@@ -24,6 +24,7 @@ import kotlinx.coroutines.launch
  */
 class PendingFeedSync(
     private val fetchPort: FetchPort,
+    private val ingestPort: IngestPort,
     private val cursorStore: PendingFeedCursorStore,
     private val sessionGate: PendingRetirementSessionGate,
     private val accountProvider: suspend () -> ProofAccount?,
@@ -32,6 +33,22 @@ class PendingFeedSync(
 
     fun interface FetchPort {
         suspend fun page(cursor: String?, limit: Int, token: String): PendingFeedResult
+    }
+
+    /**
+     * T186 M14b-ingest (T188 B2): durable ingestion of one fetched page
+     * (claim fetch → trusted admission → admitted store). The cursor is
+     * committed ONLY after this returns successfully (and after the
+     * same-owner fence); a throw keeps the old cursor so failure and
+     * process loss cannot lose the page. REQUIRED — there is no
+     * advance-without-ingest mode.
+     */
+    fun interface IngestPort {
+        suspend fun ingest(
+            ownerUserId: String,
+            token: String,
+            items: List<PendingFeedItem>,
+        )
     }
 
     sealed interface State {
@@ -130,8 +147,19 @@ class PendingFeedSync(
         if (!checkTxn(txn)) return State.Failed(Reason.SESSION_CHANGED)
         return when (page) {
             is PendingFeedResult.Page -> {
-                // Durable position only after a fenced success, for the
-                // SAME owner that fetched it.
+                // Durable ingestion BEFORE the cursor moves (same owner
+                // fence around it): a throw keeps the old cursor, so a
+                // failed page — or a dead process — can never lose it.
+                val ingestToken = txnBearer(txn) ?: return State.Failed(Reason.SESSION_CHANGED)
+                try {
+                    ingestPort.ingest(txn.ownerId, ingestToken, page.items)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    return State.Failed(Reason.NETWORK)
+                }
+                // Same-owner fence after ingestion, then commit position
+                // for the SAME owner that fetched it.
                 if (!checkTxn(txn)) return State.Failed(Reason.SESSION_CHANGED)
                 try {
                     cursorStore.save(txn.ownerId, page.nextCursor)

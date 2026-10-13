@@ -27,14 +27,6 @@ import kotlinx.serialization.json.Json
  */
 class PendingAdmittedGiftStore(filesDir: File) {
 
-    data class StoredArtifact(
-        val blobId: String,
-        val kind: Int,
-        val ordinal: Int,
-        val ciphertextSize: Long,
-        val ciphertextSha256Hex: String,
-    )
-
     data class AdmittedGift(
         val ownerUserId: String,
         val capsuleId: String,
@@ -45,7 +37,10 @@ class PendingAdmittedGiftStore(filesDir: File) {
         /** Sealed opaque envelope bytes (no keys) for offline reopen. */
         val envelopeB64: String,
         val envelopeSha256Hex: String,
-        val artifacts: List<StoredArtifact>,
+        /** Frozen feed refs (manifest/blob bytes download at open time). */
+        val envelopeRef: String,
+        val manifestRef: String,
+        val blobRefs: List<String>,
         /** R15 completion instant, once the background completion lands. */
         val completedAt: Long?,
         val admittedAtMillis: Long,
@@ -136,12 +131,7 @@ class PendingAdmittedGiftStore(filesDir: File) {
                 GiftDto(
                     it.capsuleId, it.deliveryId, it.deliveryTargetId, it.claimId,
                     it.availableAt, it.envelopeB64, it.envelopeSha256Hex,
-                    it.artifacts.map { artifact ->
-                        ArtifactDto(
-                            artifact.blobId, artifact.kind, artifact.ordinal,
-                            artifact.ciphertextSize, artifact.ciphertextSha256Hex,
-                        )
-                    },
+                    it.envelopeRef, it.manifestRef, it.blobRefs,
                     it.completedAt, it.admittedAtMillis,
                 )
             },
@@ -159,15 +149,6 @@ class PendingAdmittedGiftStore(filesDir: File) {
     }
 
     @Serializable
-    private data class ArtifactDto(
-        val blobId: String = "",
-        val kind: Int = 0,
-        val ordinal: Int = 0,
-        val size: Long = -1,
-        val sha256Hex: String = "",
-    )
-
-    @Serializable
     private data class GiftDto(
         val capsuleId: String = "",
         val deliveryId: String = "",
@@ -176,22 +157,23 @@ class PendingAdmittedGiftStore(filesDir: File) {
         val availableAt: Long = -1,
         val envelopeB64: String = "",
         val envelopeSha256Hex: String = "",
-        val artifacts: List<ArtifactDto> = emptyList(),
+        val envelopeRef: String = "",
+        val manifestRef: String = "",
+        val blobRefs: List<String> = emptyList(),
         val completedAt: Long? = null,
         val admittedAt: Long = 0,
     ) {
         fun toGift(ownerUserId: String): AdmittedGift? {
             if (capsuleId.isBlank() || deliveryId.isBlank() || deliveryTargetId.isBlank() ||
-                claimId.isBlank() || availableAt < 0 || envelopeB64.isBlank()
+                claimId.isBlank() || availableAt < 0 || envelopeB64.isBlank() ||
+                envelopeRef.isBlank() || manifestRef.isBlank()
             ) {
                 return null
             }
             return AdmittedGift(
                 ownerUserId, capsuleId, deliveryId, deliveryTargetId, claimId,
                 availableAt, envelopeB64, envelopeSha256Hex,
-                artifacts.map {
-                    StoredArtifact(it.blobId, it.kind, it.ordinal, it.size, it.sha256Hex)
-                },
+                envelopeRef, manifestRef, blobRefs.toList(),
                 completedAt, admittedAt,
             )
         }

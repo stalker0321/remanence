@@ -854,6 +854,96 @@ class AppContainer private constructor(
     }
 
     /**
+     * T186 M14b-ingest: the REAL caller of trusted admission + the
+     * admitted store for synced feed pages (ingest-then-cursor, same
+     * owner fence). Scan/display admission is the next milestone;
+     * this unit is also directly unit-tested.
+     */
+    val pendingClaimIngest: dev.hryshyn.remanence.pending.PendingClaimIngest by lazy {
+        dev.hryshyn.remanence.pending.PendingClaimIngest(
+            claimPort = dev.hryshyn.remanence.pending.PendingClaimIngest.ClaimFetchPort { delivery, token ->
+                pendingOwnedMaterialRepository.redownload(delivery, token)
+            },
+            controlPort = dev.hryshyn.remanence.pending.PendingClaimIngest.ControlFetchPort { delivery, token ->
+                pendingOwnedMaterialRepository.control(delivery, token)
+            },
+            directoryPort = dev.hryshyn.remanence.pending.PendingClaimIngest.DirectoryPort { bundleId ->
+                when (
+                    val result = keyBundleByIdRepository.fetch(bundleId)
+                ) {
+                    is dev.hryshyn.remanence.core.data.network.KeyBundleByIdResult.Found -> {
+                        val bytes = try {
+                            com.google.crypto.tink.subtle.Base64.urlSafeDecode(
+                                result.bundle.signingPublicKeysetB64Url,
+                            )
+                        } catch (_: Exception) {
+                            null
+                        } ?: return@DirectoryPort null
+                        dev.hryshyn.remanence.pending.PendingClaimIngest.DirectoryBundle(
+                            result.bundle.ownerUserId.toRestString(),
+                            bytes,
+                        )
+                    }
+                    else -> null
+                }
+            },
+            recipientKeysPort = dev.hryshyn.remanence.pending.PendingClaimIngest.RecipientKeysPort {
+                val summary = try {
+                    currentAccountStore.load()
+                } catch (_: Exception) {
+                    null
+                } ?: return@RecipientKeysPort null
+                val loaded = try {
+                    identityRepository.load()
+                } catch (_: Exception) {
+                    null
+                }
+                val encryption = loaded as?
+                    dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available
+                    ?: return@RecipientKeysPort null
+                val bundle = try {
+                    when (
+                        val result = keyBundleByIdRepository.fetch(summary.activeKeyBundleId)
+                    ) {
+                        is dev.hryshyn.remanence.core.data.network.KeyBundleByIdResult.Found ->
+                            result.bundle.encryptionPublicKeysetB64Url
+                        else -> return@RecipientKeysPort null
+                    }
+                } catch (_: Exception) {
+                    return@RecipientKeysPort null
+                }
+                val publicBytes = try {
+                    com.google.crypto.tink.subtle.Base64.urlSafeDecode(bundle)
+                } catch (_: Exception) {
+                    return@RecipientKeysPort null
+                }
+                dev.hryshyn.remanence.pending.PendingClaimIngest.RecipientKeys(
+                    summary.userId, summary.activeKeyBundleId,
+                    encryption.encryptionHandle, publicBytes,
+                )
+            },
+            servicePinProvider = { pendingServicePin },
+            admittedStore = pendingAdmittedGiftStore,
+        )
+    }
+
+    override val pendingFeedIngest: dev.hryshyn.remanence.pending.PendingFeedSync.IngestPort? by lazy {
+        dev.hryshyn.remanence.pending.PendingFeedSync.IngestPort { owner, token, items ->
+            pendingClaimIngest.ingest(
+                owner,
+                token,
+                items.map {
+                    dev.hryshyn.remanence.pending.PendingClaimIngest.FeedItemInputs(
+                        it.capsuleId, it.deliveryId, it.deliveryTargetId,
+                        it.claimId, it.availableAt, it.envelopeRef,
+                        it.manifestRef, it.blobRefs.toList(),
+                    )
+                },
+            )
+        }
+    }
+
+    /**
      * T186 M14a: receiver-owned feed sync with real frozen clients. The
      * caller supplies the coroutine scope that bounds the flow.
      */
@@ -863,6 +953,19 @@ class AppContainer private constructor(
         dev.hryshyn.remanence.pending.PendingFeedSync(
             fetchPort = dev.hryshyn.remanence.pending.PendingFeedSync.FetchPort { cursor, limit, token ->
                 pendingIncomingRepository.page(cursor, limit, token)
+            },
+            ingestPort = dev.hryshyn.remanence.pending.PendingFeedSync.IngestPort { owner, token, items ->
+                pendingClaimIngest.ingest(
+                    owner,
+                    token,
+                    items.map {
+                        dev.hryshyn.remanence.pending.PendingClaimIngest.FeedItemInputs(
+                            it.capsuleId, it.deliveryId, it.deliveryTargetId,
+                            it.claimId, it.availableAt, it.envelopeRef,
+                            it.manifestRef, it.blobRefs.toList(),
+                        )
+                    },
+                )
             },
             cursorStore = pendingFeedCursorStore,
             sessionGate = pendingSessionGate,

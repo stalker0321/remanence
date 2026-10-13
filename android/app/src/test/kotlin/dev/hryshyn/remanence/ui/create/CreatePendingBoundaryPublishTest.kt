@@ -263,7 +263,6 @@ class CreatePendingBoundaryPublishTest {
         assertTrue(vm.goToCompose())
         assertEquals(CreateViewModel.Step.COMPOSE, vm.step.value)
     }
-    }
 
     private fun awaitTerminalPublish(vm: CreateViewModel) {
         val deadline = System.currentTimeMillis() + 10_000

@@ -25,11 +25,9 @@ class PendingAdmittedGiftStoreTest {
         availableAt = 1798765432L,
         envelopeB64 = "RW52",
         envelopeSha256Hex = "ab".repeat(32),
-        artifacts = listOf(
-            PendingAdmittedGiftStore.StoredArtifact(
-                "cccccccc-dddd-eeee-ffff-000000000001", 3, 0, 11L, "55".repeat(32),
-            ),
-        ),
+        envelopeRef = "/v2/pending-deliveries/0198f0a0-0000-7000-8000-00000000d401/claim",
+        manifestRef = "/v2/pending-deliveries/0198f0a0-0000-7000-8000-00000000d401/manifest",
+        blobRefs = listOf("/v2/pending-deliveries/0198f0a0-0000-7000-8000-00000000d401/blobs/cccccccc-dddd-eeee-ffff-000000000001"),
         completedAt = null,
         admittedAtMillis = 1L,
     )

@@ -90,7 +90,14 @@ private data class PendingFeedItemDto(
 @Serializable
 private data class PendingFeedResponseDto(
     val items: List<PendingFeedItemDto> = emptyList(),
-    @SerialName("next_cursor") val nextCursor: String = "",
+    /**
+     * T186 M14b (T187 B2): the server ALWAYS includes the key with a
+     * null value when no page follows (terminal pages, disabled-owner
+     * empty page). Nullable DTO with `""`-when-null normalization at
+     * the result layer — never `coerceInputValues`/`ignoreUnknownKeys`
+     * weakening on the shared [NetworkJson].
+     */
+    @SerialName("next_cursor") val nextCursor: String? = null,
 )
 
 private val PENDING_FEED_PROBLEM_CODES = setOf(
@@ -100,6 +107,20 @@ private val PENDING_FEED_PROBLEM_CODES = setOf(
     "PROTOCOL_UNSUPPORTED",
     "INTERNAL_ERROR",
 )
+
+/**
+ * T186 M14b (T187 minor): strict endpoint-scoped terminal tuples for
+ * the feed surface (verified against
+ * `server/src/remanence/pending/api.py`): `VALIDATION_FAILED` at 400
+ * (cursor), `PROTOCOL_UNSUPPORTED` at 404 (gate). The shared canonical
+ * map must NOT absorb these — legacy v1 keeps both at 422.
+ */
+private val PENDING_FEED_ENDPOINT_STATUSES = mapOf(
+    "VALIDATION_FAILED" to 400,
+    "PROTOCOL_UNSUPPORTED" to 404,
+)
+
+private val PENDING_FEED_ENDPOINT_EXCLUSIVE = PENDING_FEED_ENDPOINT_STATUSES.keys
 
 class PendingIncomingRepository internal constructor(
     private val client: OkHttpClient,
@@ -178,7 +199,7 @@ class PendingIncomingRepository internal constructor(
                         item.manifestRef, item.blobRefs.toList(), completion,
                     )
                 },
-                dto.nextCursor,
+                dto.nextCursor ?: "",
             )
         } catch (_: IllegalArgumentException) {
             PendingFeedResult.Failure(
@@ -204,6 +225,8 @@ class PendingIncomingRepository internal constructor(
                 text,
                 response.code,
                 PENDING_FEED_PROBLEM_CODES,
+                PENDING_FEED_ENDPOINT_STATUSES,
+                PENDING_FEED_ENDPOINT_EXCLUSIVE,
             )
             if (problem != null) {
                 val reason = mapFeedProblem(problem.code)
@@ -231,7 +254,11 @@ class PendingIncomingRepository internal constructor(
         }
         if (dto.code !in PENDING_FEED_PROBLEM_CODES) return null
         if (dto.status != httpStatus) return null
-        val canonical = canonicalTerminalTuple(dto.code) ?: return null
+        val canonical = canonicalTerminalTuple(
+            dto.code,
+            PENDING_FEED_ENDPOINT_STATUSES,
+            PENDING_FEED_ENDPOINT_EXCLUSIVE,
+        ) ?: return null
         if (canonical.first != httpStatus) return null
         if (dto.retryable != null && dto.retryable != canonical.second) return null
         val reason = mapFeedProblem(dto.code)

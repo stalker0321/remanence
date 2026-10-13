@@ -131,6 +131,7 @@ private data class PendingControlResponseDto(
 @Serializable
 private data class PendingRedownloadResponseDto(
     @SerialName("claim_id") val claimId: String = "",
+    val state: String = "",
     @SerialName("claim_binding_b64") val claimBindingB64: String = "",
     @SerialName("claim_signature_69_b64") val claimSignature69B64: String = "",
     @SerialName("envelope_b64") val envelopeB64: String = "",
@@ -345,7 +346,8 @@ class PendingOwnedMaterialRepository internal constructor(
             )
         }
         return try {
-            require(dto.claimId.isNotBlank() && dto.claimBindingB64.isNotBlank() &&
+            require(dto.claimId.isNotBlank() && dto.state == "CLAIMED" &&
+                dto.claimBindingB64.isNotBlank() &&
                 dto.claimSignature69B64.isNotBlank() && dto.envelopeB64.isNotBlank() &&
                 dto.envelopeSha256Hex.isNotBlank())
             PendingRedownloadResult.Redownloaded(

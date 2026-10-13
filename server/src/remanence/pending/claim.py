@@ -545,7 +545,8 @@ def get_claim(
     session: Session, *, delivery_id: uuid.UUID, account_user_id: uuid.UUID
 ) -> PendingClaim:
     """Final account re-download (after OTP/session renewal). Never another
-    account: ownership was fixed to a user UUID at claim."""
+    account: ownership was fixed to a user UUID at claim. Claim expiry
+    limits NEW claims only, never owned restore."""
     delivery = session.get(PendingDelivery, delivery_id)
     if delivery is None:
         raise ClaimError("GIFT_UNAVAILABLE")
@@ -553,6 +554,35 @@ def get_claim(
     if claim is None or claim.account_user_id != account_user_id:
         raise ClaimError("GIFT_UNAVAILABLE")
     return claim
+
+
+def get_control(
+    session: Session, *, delivery_id: uuid.UUID, account_user_id: uuid.UUID
+) -> dict:
+    """Strictly owner-scoped immutable control retrieval: the exact
+    published S + sender signature for new-device admission. Same
+    ownership fence as get_claim (final recipient only); claim expiry
+    never blocks owned restore. Additive: R12 is untouched."""
+    from remanence.users.models import User as _User
+
+    owner = session.get(_User, account_user_id)
+    if owner is None or owner.disabled_at is not None:
+        raise ClaimError("GIFT_UNAVAILABLE")
+    delivery = session.get(PendingDelivery, delivery_id)
+    if delivery is None or delivery.publish_statement is None:
+        raise ClaimError("GIFT_UNAVAILABLE")
+    claim = session.get(PendingClaim, delivery.delivery_target_id)
+    if claim is None or claim.account_user_id != account_user_id:
+        raise ClaimError("GIFT_UNAVAILABLE")
+    return {
+        "capsule_id": delivery.capsule_id,
+        "delivery_target_id": delivery.delivery_target_id,
+        "delivery_id": delivery.id,
+        "claim_id": claim.claim_id,
+        "publish_statement": bytes(delivery.publish_statement),
+        "publish_signature": bytes(delivery.publish_signature or b""),
+        "publish_statement_sha256": bytes(delivery.publish_statement_sha256 or b""),
+    }
 
 
 def ack_claim(

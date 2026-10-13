@@ -888,6 +888,35 @@ def fetch_claim(
     }
 
 
+@router.get("/v2/pending-deliveries/{delivery_id}/control")
+def fetch_control(
+    delivery_id: uuid.UUID, request: Request, db: Session = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+):
+    """Owner-scoped immutable control retrieval (additive): the exact
+    published S + sender signature for new-device admission after code
+    retirement. Final recipient only; claim expiry never blocks owned
+    restore. Frozen R12 is untouched."""
+    ctx = _gate(request, "pending_protocol_enabled")
+    if isinstance(ctx, JSONResponse):
+        return ctx
+    try:
+        control = claim_service.get_control(
+            db, delivery_id=delivery_id, account_user_id=principal.user_id
+        )
+    except Exception as exc:
+        return _map_error(exc)
+    return {
+        "capsule_id": str(control["capsule_id"]),
+        "delivery_target_id": str(control["delivery_target_id"]),
+        "delivery_id": str(control["delivery_id"]),
+        "claim_id": str(control["claim_id"]),
+        "publish_statement_b64": base64.b64encode(control["publish_statement"]).decode(),
+        "publish_signature_69_b64": base64.b64encode(control["publish_signature"]).decode(),
+        "publish_statement_sha256_hex": control["publish_statement_sha256"].hex(),
+    }
+
+
 @router.post("/v2/pending-deliveries/{delivery_id}/ack")
 def ack_delivery_claim(
     delivery_id: uuid.UUID, payload: AckRequest, request: Request,
@@ -1236,6 +1265,11 @@ def list_pending_incoming(
     if isinstance(ctx, JSONResponse):
         return ctx
     limit = max(1, min(limit, 200))
+    from remanence.users.models import User as _FeedUser
+
+    owner = db.get(_FeedUser, principal.user_id)
+    if owner is None or owner.disabled_at is not None:
+        return {"items": [], "next_cursor": None}
     last_at: _datetime | None = None
     last_id: uuid.UUID | None = None
     if cursor:

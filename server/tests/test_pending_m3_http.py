@@ -5,6 +5,7 @@ Synthetic PG + synthetic keys. DTO strictness + R15 frozen shape.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -20,6 +21,7 @@ pytest_plugins = ("test_session_repository_create",)
 from remanence.api.dependencies import AuthenticatedPrincipal, get_authenticated_principal, get_db_session
 from remanence.pending import domains
 from remanence.pending.api import router as pending_router
+from remanence.pending.claim import ClaimError, get_claim
 from remanence.pending.providers import MockDispatcher
 from remanence.pending.providers import MockDispatcher as _DefaultMockDispatcher
 from remanence.pending.vault import DevSealedVault
@@ -1390,3 +1392,64 @@ def test_finalize_rejects_corrupted_store(session_factory) -> None:
     )
     assert finalize.status_code == 404
     assert finalize.json()["code"] == "PROTOCOL_UNSUPPORTED"
+
+
+def test_control_retrieval_fences_and_expiry_restore(session_factory) -> None:
+    """Owner-scoped S+signature retrieval after retirement: exact bytes,
+    foreign/pre-claim/disabled denied; claim expiry never blocks owned
+    restore (it limits NEW claims only)."""
+    from datetime import datetime as _dt
+    from datetime import timezone as _tz
+
+    from remanence.pending.claim import get_control
+    from remanence.pending.claim_models import PendingDelivery as _PD
+
+    service_ring = Keyring()
+    service_key_id = uuid.uuid4()
+    vault = DevSealedVault(mode="test", key_id="http-ctl-1", key_32=DEV_VAULT_KEY)
+    with session_factory() as session:
+        setup = _setup_pending(session)
+        delivery, _, statement_raw, _ = _finalize(session, setup, service_key_id, vault)
+        recipient = _make_user(session, f"ct{uuid.uuid4().hex[:8]}")
+        recipient_ring = Keyring()
+        recipient_bundle = _make_bundle(session, recipient, recipient_ring)
+        recipient_session = uuid.uuid4()
+        session.commit()
+        attempt = _prove(session, delivery, recipient, recipient_session, MockDispatcher())
+        _claim(
+            session, delivery, recipient, recipient_bundle, recipient_ring,
+            attempt, service_ring, service_key_id, vault, uuid.uuid4(),
+        )
+        capsule_id, delivery_id = delivery.capsule_id, delivery.id
+        recipient_id = recipient.id
+        stranger = _make_user(session, f"cu{uuid.uuid4().hex[:8]}")
+        session.commit()
+        stranger_id = stranger.id
+        # Exact S + signature retrievable by the owner.
+        control = get_control(session, delivery_id=delivery_id, account_user_id=recipient_id)
+        assert control["publish_statement"] == statement_raw
+        assert control["capsule_id"] == capsule_id
+        # Foreign and pre-claim states denied (pre-claim: fresh delivery).
+        with pytest.raises(ClaimError):
+            get_control(session, delivery_id=delivery_id, account_user_id=stranger_id)
+        # Disabled owner fenced.
+        recipient.disabled_at = _dt.now(_tz.utc)
+        session.commit()
+        with pytest.raises(ClaimError):
+            get_control(session, delivery_id=delivery_id, account_user_id=recipient_id)
+        recipient.disabled_at = None
+        session.commit()
+        # Claim expiry passes: owned restore still works (feed + control).
+        row = session.get(_PD, delivery_id)
+        row.claim_expires_at = _dt.now(_tz.utc) - timedelta(days=1)
+        session.commit()
+        assert get_control(session, delivery_id=delivery_id, account_user_id=recipient_id) is not None
+        assert get_claim(session, delivery_id=delivery_id, account_user_id=recipient_id) is not None
+    client = _build_client(session_factory, flags_on=True, user_id=recipient_id, session_id=recipient_session)
+    control_http = client.get(f"/v2/pending-deliveries/{delivery_id}/control")
+    assert control_http.status_code == 200, control_http.text
+    assert control_http.json()["publish_statement_b64"] == base64.b64encode(statement_raw).decode()
+    feed = client.get("/v2/pending-incoming")
+    assert len(feed.json()["items"]) == 1
+    xclient = _build_client(session_factory, flags_on=True, user_id=stranger_id, session_id=uuid.uuid4())
+    assert xclient.get(f"/v2/pending-deliveries/{delivery_id}/control").status_code == 404

@@ -35,6 +35,8 @@ from remanence.music.search.in_memory import InMemoryMusicSearch
 from remanence.music.search.staging import PostgresStagingSearch
 from remanence.settings import AppMode, MusicSearchBackend, Settings
 from remanence.storage import BlobStore, CiphertextStager, LocalFileBlobStore
+from remanence.telemetry.ingress import TelemetryIngress, install_access_filter, reserved_path
+from remanence.telemetry.store import TelemetryStore
 
 
 def create_app(
@@ -125,7 +127,10 @@ def create_app(
             engine.dispose()
 
     app = FastAPI(title="Remanence API", version="0.1.0", lifespan=lifespan)
-    app.add_middleware(RequestIdMiddleware)
+    install_access_filter()
+    telemetry = TelemetryIngress(TelemetryStore(lambda: getattr(app.state, "session_factory", None)))
+    app.state.telemetry_ingress = telemetry
+    app.add_middleware(RequestIdMiddleware, telemetry_app=telemetry)
     app.state.settings = resolved
     app.state.upload_reservations = (
         upload_reservations if upload_reservations is not None else build_upload_reservation_manager()
@@ -171,6 +176,11 @@ def create_app(
 
     @app.exception_handler(Exception)
     def _unhandled(request: Request, exc: Exception) -> JSONResponse:
+        # Starlette's outer ServerErrorMiddleware may see a failed ASGI send.
+        # Even that fallback must not allocate/echo a normal request identifier.
+        if reserved_path(request.scope.get("path", "")):
+            return JSONResponse({"status": "REJECTED"}, status_code=503,
+                                headers={"Cache-Control": "no-store"})
         return problem_response(request, "INTERNAL_ERROR")
 
     app.include_router(health_router)

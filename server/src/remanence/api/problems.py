@@ -314,13 +314,19 @@ def _write_request_id(scope: Scope, request_id: str) -> None:
 class RequestIdMiddleware:
     """Pure ASGI middleware so streaming uploads are not buffered."""
 
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, telemetry_app: ASGIApp | None = None) -> None:
         self.app = app
+        self.telemetry_app = telemetry_app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+        if self.telemetry_app is not None:
+            from remanence.telemetry.ingress import reserved_path
+            if reserved_path(scope.get("path", "")):
+                await self.telemetry_app(scope, receive, send)
+                return
         request_id = str(uuid4())
         _write_request_id(scope, request_id)
 

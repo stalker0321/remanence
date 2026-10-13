@@ -54,7 +54,12 @@ sealed interface SendRouteResult {
         val routeId: String,
         val userId: String,
         val keyBundleId: String,
-        val bindingRevision: Long,
+        /**
+         * Authoritative binding revision for verified email/phone (always
+         * positive). Null for handle-routed decisions, which carry no
+         * revision — never faked to 0.
+         */
+        val bindingRevision: Long?,
         val expiresAt: Long,
     ) : SendRouteResult
 
@@ -91,7 +96,11 @@ private data class SendRouteResponseDto(
     val mode: String = "",
     @SerialName("user_id") val userId: String = "",
     @SerialName("key_bundle_id") val keyBundleId: String = "",
-    @SerialName("binding_revision") val bindingRevision: Long = -1,
+    /**
+     * Null for handle-routed v1 decisions (no revision issued); positive
+     * authoritative revision for verified email/phone. Never defaulted.
+     */
+    @SerialName("binding_revision") val bindingRevision: Long? = null,
     @SerialName("delivery_target_id") val deliveryTargetId: String = "",
     @SerialName("normalized_destination") val normalizedDestination: String = "",
     val channel: String = "",
@@ -186,7 +195,11 @@ class PendingSendRouteRepository internal constructor(
             require(dto.routeId.isNotBlank() && dto.expiresAt >= 0)
             when (dto.mode) {
                 "EXISTING_USER_V1" -> {
-                    require(dto.userId.isNotBlank() && dto.keyBundleId.isNotBlank() && dto.bindingRevision >= 0)
+                    require(dto.userId.isNotBlank() && dto.keyBundleId.isNotBlank())
+                    // Handle-routed decisions carry no revision (null);
+                    // verified email/phone carry a positive authoritative
+                    // one. Negative values are never valid.
+                    dto.bindingRevision?.let { require(it >= 0) }
                     require(dto.deliveryTargetId.isBlank())
                     SendRouteResult.FrozenV1(
                         dto.routeId, dto.userId, dto.keyBundleId, dto.bindingRevision, dto.expiresAt,

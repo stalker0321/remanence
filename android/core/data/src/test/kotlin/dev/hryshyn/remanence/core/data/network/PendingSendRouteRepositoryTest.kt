@@ -87,6 +87,30 @@ class PendingSendRouteRepositoryTest {
     }
 
     @Test
+    fun handleRouteWithoutRevisionAccepted() = runTest {
+        withServer { server ->
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(200)
+                    .setHeader("Content-Type", "application/json")
+                    .body(
+                        """{"route_id":"0198f0a0-0000-7000-8000-00000000ef03","mode":"EXISTING_USER_V1","user_id":"01010101-0202-0303-0404-050505050505","key_bundle_id":"01010101-0202-0303-0404-050505050506","binding_revision":null,"expires_at":1798765432}""",
+                    )
+                    .build(),
+            )
+            // Handle-routed v1 carries no revision: accepted as null, never
+            // faked to 0.
+            val result = assertIs<SendRouteResult.FrozenV1>(
+                repository(server).freeze(
+                    "11111111-2222-3333-4444-555555555555", "handle",
+                    "mykola", "0198f0a0-0000-7000-8000-00000000c001", "token",
+                ),
+            )
+            assertEquals(null, result.bindingRevision)
+        }
+    }
+
+    @Test
     fun mixedShapeRejected() = runTest {
         withServer { server ->
             server.enqueue(

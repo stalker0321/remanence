@@ -154,6 +154,9 @@ class PendingClaimIntentTest {
             recipientKeyBundleId = bundle,
             recipientPublicKeyset = recipientPublicBytes,
             nowEpochSeconds = 1_798_765_200L,
+            // Deployment pin under test: the same id S/R carry. S/R-only
+            // self-consistency over an arbitrary id is NOT sufficient.
+            authorizedServiceKeyId = "0b0b0b0b-1c1c-2d2d-3e3e-4f4f4f4f4f4f",
         )
         return Fixture(
             statement, senderSig, senderKeys.publicKeysetHandle,
@@ -235,6 +238,22 @@ class PendingClaimIntentTest {
                 f.senderPublic, f.servicePublic, f.expectation,
             )
         }
+    }
+
+    @Test
+    fun wrongServicePinRejected() {
+        val f = fixture()
+        // S/R agree with each other but NOT with the deployment pin:
+        // self-consistency over an arbitrary id proves nothing.
+        val wrong = f.expectation.copy(authorizedServiceKeyId = "0c0c0c0c-1c1c-2d2d-3e3e-4f4f4f4f4f4f")
+        val failure = assertFailsWith<GeneralSecurityException> {
+            PendingClaimedEnvelope.accept(
+                f.sealedEnvelope, f.envelopeSha, f.statement, f.claim,
+                f.senderSig, f.claimSig, f.recipientPrivate,
+                f.senderPublic, f.servicePublic, wrong,
+            )
+        }
+        assertEquals("pending envelope service key mismatch", failure.message)
     }
 
     @Test

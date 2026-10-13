@@ -1,5 +1,6 @@
 package dev.hryshyn.remanence.core.crypto
 
+import com.google.crypto.tink.KeysetHandle
 import com.google.crypto.tink.PublicKeyVerify
 import com.google.crypto.tink.TinkProtoKeysetFormat
 import com.google.protobuf.ByteString

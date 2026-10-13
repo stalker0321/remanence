@@ -136,6 +136,12 @@ object PendingClaimedEnvelope {
         /** Directory-fetched public keyset bytes (what the server hashed). */
         val recipientPublicKeyset: ByteArray,
         val nowEpochSeconds: Long,
+        /**
+         * Authorized deployment-pinned service key id (NOT the S/R-carried
+         * value alone: S/R self-consistency over an arbitrary id proves
+         * nothing). Both ids must equal this pin.
+         */
+        val authorizedServiceKeyId: String,
     )
 
     sealed interface EnvelopeAcceptance {
@@ -178,6 +184,14 @@ object PendingClaimedEnvelope {
         PendingPublishVerifier.verifyClaimAgreement(statementBytes, claimBytes)
         val statement = PendingPublishStatementV2.parseFrom(statementBytes)
         val claim = dev.hryshyn.remanence.protocol.delivery_v2.ClaimBindingV1.parseFrom(claimBytes)
+        // Authorized service-key pin: BOTH carried ids must equal the
+        // deployment pin — S/R self-consistency over an arbitrary id
+        // proves nothing on its own.
+        if (!uuidEquals(statement.claimSigningKeyId, expected.authorizedServiceKeyId) ||
+            !uuidEquals(claim.claimSigningKeyId, expected.authorizedServiceKeyId)
+        ) {
+            throw GeneralSecurityException("pending envelope service key mismatch")
+        }
         // Service signature over canonical R (or explicit partial).
         val serviceDone = if (serviceVerifyHandle != null) {
             PendingPublishVerifier.verifySignature(
@@ -198,18 +212,16 @@ object PendingClaimedEnvelope {
         if (!publicDigest.contentEquals(claim.recipientEncryptionPublicKeysetSha256.toByteArray())) {
             throw GeneralSecurityException("pending envelope key digest mismatch")
         }
-        if (statement.claimExpiresAtEpochSeconds <= expected.nowEpochSeconds ||
+        // Re-open/restore is permanent after an accepted claim: the claimed
+        // instant must fall inside S's own [created, expiry] window — NOT
+        // "now before expiry" (a durable open past the deadline stays
+        // valid). Plus a future bound: claimed_at is never ahead of now.
+        if (claim.claimedAtEpochSeconds < statement.createdAtEpochSeconds ||
+            claim.claimedAtEpochSeconds > statement.claimExpiresAtEpochSeconds ||
             claim.claimedAtEpochSeconds > expected.nowEpochSeconds
         ) {
             throw GeneralSecurityException("pending envelope time invalid")
         }
-        // Re-open/restore is permanent after an accepted claim: the claimed
-        // instant must fall inside the statement's own [created, expiry]
-        // window (NOT merely "now before expiry").
-        // NOTE: created_at is not carried on S; the creation lower bound is
-        // enforced by the agreement-time checks at claim (server) time. The
-        // client enforces claimed_at <= expiry here and documents the
-        // created-bound as server-owned.
         // Rebuild the exact HPKE context the server sealed to.
         val context = dev.hryshyn.remanence.protocol.delivery_v2.ClaimedEnvelopeContextV2.newBuilder()
             .setProtocolVersion(2)

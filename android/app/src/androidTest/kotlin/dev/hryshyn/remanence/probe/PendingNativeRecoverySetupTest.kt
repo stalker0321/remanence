@@ -13,8 +13,10 @@ import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -127,6 +129,11 @@ class PendingNativeRecoverySetupTest {
         override suspend fun get(options: JsonObject): JsonObject =
             ceremony("/get", options)
 
+        // Narrow test-only opt-in: only the `onCancelling` overload
+        // fires during cancellation (the default overload waits for
+        // completion, which a socket-blocked coroutine never reaches
+        // promptly). Verified against coroutines 1.11 `Job` API.
+        @OptIn(InternalCoroutinesApi::class)
         private suspend fun ceremony(path: String, options: JsonObject): JsonObject =
             withContext(Dispatchers.IO) {
                 currentCoroutineContext().ensureActive()

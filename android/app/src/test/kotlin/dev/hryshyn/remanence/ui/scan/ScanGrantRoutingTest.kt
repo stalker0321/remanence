@@ -307,7 +307,7 @@ class ScanGrantRoutingTest {
         ),
         candidateIndexProvider: suspend (UserId) -> ScanCandidateIndex = { ScanCandidateIndex.EMPTY },
         identityProvider: suspend () -> SenderIdentitySnapshot = { identitySnapshot() },
-        pendingVerifyCapsule: (suspend (UUID) -> Boolean)? = null,
+        pendingVerifyCapsule: (suspend (String, UUID) -> Boolean)? = null,
         frontProcessor: StillProcessor = FixedProcessor(syntheticFingerprint(11)),
         persistence: dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence = store(),
         matcher: dev.hryshyn.remanence.core.recognition.SiftRootSiftMatcherPort = deterministicMatcher(),
@@ -590,8 +590,9 @@ class ScanGrantRoutingTest {
                     ),
                 )
             },
-            pendingVerifyCapsule = { id ->
+            pendingVerifyCapsule = { userId, id ->
                 verified += 1
+                assertEquals(userUuid.toString(), userId)
                 assertEquals(capsuleUuid, id)
                 true
             },
@@ -645,7 +646,7 @@ class ScanGrantRoutingTest {
                     ),
                 )
             },
-            pendingVerifyCapsule = { false },
+            pendingVerifyCapsule = { _, _ -> false },
         )
 
         try {

@@ -69,7 +69,7 @@ class PendingClaimIngestTest {
         val recognitionBlobId: String,
     )
 
-    private fun crypto(forCapsule: String = capsule): Crypto {
+    private fun crypto(forCapsule: String = capsule, kind1Count: Int = 1): Crypto {
         TinkPrimitives.ensureRegistered()
         val opening = AddressOpening.newBuilder()
             .setNormalizationVersion(1)
@@ -102,7 +102,8 @@ class PendingClaimIngestTest {
         val recognitionBlobId = "cccccccc-dddd-eeee-ffff-000000000001"
         val recognitionBlob =
             "recognition-front-ciphertext-0123456789-abcdef-0123456789-abcdef".toByteArray()
-        val statement = PendingPublishStatementV2.newBuilder()
+        val secondRecognitionBlobId = "dddddddd-dddd-eeee-ffff-000000000002"
+        val statementBuilder = PendingPublishStatementV2.newBuilder()
             .setProtocolVersion(2)
             .setCapsuleId(ByteString.copyFrom(uuidBytes(forCapsule)))
             .setSenderUserId(ByteString.copyFrom(uuidBytes(sender)))
@@ -114,16 +115,19 @@ class PendingClaimIngestTest {
             .setClaimExpiresAtEpochSeconds(1_798_765_432L)
             .setClaimPolicyVersion(1)
             .setClaimSigningKeyId(ByteString.copyFrom(uuidBytes(serviceId)))
-            .addArtifacts(
+        repeat(kind1Count.coerceIn(0, 2)) { index ->
+            val blobId = if (index == 0) recognitionBlobId else secondRecognitionBlobId
+            statementBuilder.addArtifacts(
                 dev.hryshyn.remanence.protocol.delivery_v2.ArtifactBindingV2.newBuilder()
-                    .setBlobId(ByteString.copyFrom(uuidBytes(recognitionBlobId)))
+                    .setBlobId(ByteString.copyFrom(uuidBytes(blobId)))
                     .setKind(1)
                     .setOrdinal(-1)
                     .setCiphertextSize(recognitionBlob.size.toLong())
                     .setCiphertextSha256(ByteString.copyFrom(sha256(recognitionBlob)))
                     .build(),
             )
-            .build().toByteArray()
+        }
+        val statement = statementBuilder.build().toByteArray()
         val recipientKeys = KeysetHandle.generateNew(KeyTemplates.get(TinkPrimitives.HPKE_TEMPLATE))
         val recipientPublicBytes =
             TinkProtoKeysetFormat.serializeKeysetWithoutSecret(recipientKeys.publicKeysetHandle)
@@ -291,7 +295,9 @@ class PendingClaimIngestTest {
     fun ingestAdmitsAndPersistsRow() = runTest {
         val dir = Files.createTempDirectory("pending-ingest").toFile()
         try {
-            val crypto = crypto()
+            // Genuinely photos-only S (no kind-1 declared): staging is
+            // absent, the row still admits.
+            val crypto = crypto(kind1Count = 0)
             ingest(dir, crypto).let { (ingest, _, lease) -> ingest.ingest(recipient, lease, listOf(item())) }
             val row = PendingAdmittedGiftStore(dir).get(recipient, capsule)
             assertEquals(delivery, row?.deliveryId)
@@ -299,6 +305,51 @@ class PendingClaimIngestTest {
             assertEquals(null, row?.completedAt)
             // No blob port: staging skipped, row still admits.
             assertEquals("", row?.recognitionCiphertextB64)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /**
+     * T186 M14d-scan (T188 B3): a declared FRONT with no fetch port is
+     * a misconfiguration, not an absence — ingest throws (no row, the
+     * cursor is preserved) instead of silently dropping the signed
+     * declaration.
+     */
+    @Test
+    fun declaredFrontWithoutPortThrowsWithoutRow() = runTest {
+        val dir = Files.createTempDirectory("pending-ingest-no-port").toFile()
+        try {
+            val crypto = crypto()
+            assertThrowsSuspend(IllegalStateException::class) {
+                ingest(dir, crypto)
+                    .let { (ingest, _, lease) -> ingest.ingest(recipient, lease, listOf(item())) }
+            }
+            assertNull(PendingAdmittedGiftStore(dir).get(recipient, capsule))
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /**
+     * T186 M14d-scan (T188 B3): an ambiguous kind-1 declaration (two
+     * bindings, both genuinely signed — admission does not judge
+     * artifacts) throws at staging before any fetch is consulted, so
+     * no row lands and the cursor is preserved.
+     */
+    @Test
+    fun ambiguousKind1DeclarationThrowsWithoutRow() = runTest {
+        val dir = Files.createTempDirectory("pending-ingest-ambiguous").toFile()
+        try {
+            val crypto = crypto(kind1Count = 2)
+            val port = PendingRecognitionStage.BlobFetchPort { _, _, _ ->
+                throw AssertionError("ambiguous declaration must throw before any fetch")
+            }
+            assertThrowsSuspend(IllegalStateException::class) {
+                ingest(dir, crypto, recognitionBlobPort = port)
+                    .let { (ingest, _, lease) -> ingest.ingest(recipient, lease, listOf(item())) }
+            }
+            assertNull(PendingAdmittedGiftStore(dir).get(recipient, capsule))
         } finally {
             dir.deleteRecursively()
         }

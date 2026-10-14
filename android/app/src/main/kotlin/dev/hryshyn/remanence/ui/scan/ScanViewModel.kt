@@ -196,11 +196,15 @@ class ScanViewModel internal constructor(
     private val matcherShadow: MatcherShadowRunner? = null,
     /**
      * T186 M14d-scan: re-admission verifier for PENDING candidates
-     * (admitted-row gate on live keys — no network, no token). Null
+     * (admitted-row gate on live keys — no bearer; directory/bundle
+     * lookups travel the bridge ports). Null
      * disables the pending plane: PENDING candidates never verify and
-     * never grant. Production passes the admitted-row bridge.
+     * never grant. Production passes the admitted-row bridge. The scan
+     * resolves its own fresh identity per call and passes it in (same
+     * pattern as the outbox verifier) — the factory dual-pins it
+     * against the current account instead of trusting a caller string.
      */
-    private val pendingVerifyCapsule: (suspend (UUID) -> Boolean)? = null,
+    private val pendingVerifyCapsule: (suspend (String, UUID) -> Boolean)? = null,
 ) : ViewModel() {
 
     val captureSession = ScanCaptureSession(ScanSideExtractor {
@@ -1334,11 +1338,23 @@ class ScanViewModel internal constructor(
      * re-admission on live keys via the admitted-row bridge. False when
      * the plane is disabled, the row is unknown/foreign, or admission
      * fails. Cancellation propagates (never converted to a verdict).
+     * The owner comes from the scan's own fresh identity snapshot per
+     * call (never a stored string); same-user rotation is caught by the
+     * key-bundle digest inside re-admission, and the factory
+     * dual-checks the current account.
      */
     private suspend fun verifyPendingCapsule(capsuleId: UUID): Boolean {
         val port = pendingVerifyCapsule ?: return false
+        val identity = try {
+            identityProvider()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            null
+        } ?: return false
+        if (identity.userId.isBlank()) return false
         return try {
-            port(capsuleId)
+            port(identity.userId, capsuleId)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {

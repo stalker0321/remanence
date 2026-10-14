@@ -18,9 +18,11 @@ import kotlin.coroutines.cancellation.CancellationException
  * (the third caller of trusted admission alongside claim-time and
  * sync-time). Enumerates one owner's staged kind-1 FRONTs as
  * recognition candidates for [LocalMatchEngine], and re-admits single
- * rows for the scan crypto verifier — fully offline (no token, no
- * network): the FRONT ciphertext rode the row at reception, and every
- * key is live.
+ * rows for the scan crypto verifier — token-less (no bearer is held or
+ * minted here): staged bytes and the index are local, while directory
+ * and own-bundle key material loads over the network through the
+ * injected ports. Follow-up: route re-admission through the local
+ * trusted sender-key source instead of the network directory port.
  *
  * Rows without staged FRONT (photos-only publications, failed staging)
  * never enumerate — fail closed, never guessed. Partially-admitted
@@ -34,6 +36,12 @@ internal class PendingAdmittedCandidateProvider(
     private val directoryPort: PendingClaimIngest.DirectoryPort,
     private val recipientKeysPort: PendingClaimIngest.RecipientKeysPort,
     private val servicePinPort: () -> PendingServicePin?,
+    /**
+     * T186 M14d-scan: frozen OFF means zero pending-path calls (no
+     * store reads, no key/directory lookups). Production passes the
+     * real gate; tests inject.
+     */
+    private val featureEnabled: () -> Boolean = { PendingFeatureGate.isEnabled() },
     private val clockSeconds: () -> Long = { System.currentTimeMillis() / 1000L },
 ) {
 
@@ -113,6 +121,7 @@ internal class PendingAdmittedCandidateProvider(
      * fails re-admission. Cancellation propagates.
      */
     suspend fun openKey(ownerUserId: String, capsuleId: UUID): ByteArray {
+        if (!featureEnabled()) throw IllegalStateException("pending feature disabled")
         if (ownerUserId.isBlank()) throw IllegalStateException("pending owner required")
         val row = try {
             admittedStore.get(ownerUserId, capsuleId.toString())
@@ -149,9 +158,12 @@ internal class PendingAdmittedCandidateProvider(
     /**
      * Re-admits one owned row without opening anything (the scan crypto
      * verifier: true only after the full admission gate passes on live
-     * keys). No FRONT, no blobs, no network. Cancellation propagates.
+     * keys). No FRONT bytes, no blob downloads, no bearer — directory
+     * and bundle lookups still travel the injected ports.
+     * Cancellation propagates.
      */
     suspend fun verify(ownerUserId: String, capsuleId: UUID): Boolean {
+        if (!featureEnabled()) return false
         return try {
             openKey(ownerUserId, capsuleId).fill(0)
             true
@@ -170,6 +182,7 @@ internal class PendingAdmittedCandidateProvider(
      * wiped by the caller via [ScanCandidateIndex.wipeFingerprints]).
      */
     suspend fun load(ownerUserId: String): ScanCandidateIndex {
+        if (!featureEnabled()) return ScanCandidateIndex.EMPTY
         if (ownerUserId.isBlank()) return ScanCandidateIndex.EMPTY
         val rows = try {
             admittedStore.list(ownerUserId)
@@ -178,6 +191,8 @@ internal class PendingAdmittedCandidateProvider(
         } catch (_: Exception) {
             return ScanCandidateIndex.EMPTY
         }
+        // Short-circuit before any key fetch: no rows, no lookups.
+        if (rows.isEmpty()) return ScanCandidateIndex.EMPTY
         val candidates = ArrayList<IndexedCandidate>(rows.size)
         val presentationSources = LinkedHashMap<UUID, CapsulePresentationSource>(rows.size)
         var invalidCandidateCount = 0
@@ -294,7 +309,8 @@ internal class PendingAdmittedCandidateProvider(
         }
         // The capsule key is zeroized in the outer `finally` on EVERY
         // path below (success, skip, and failure alike) — no early
-        // return inside may bypass it.
+        // return inside may bypass it. The plaintext has its own inner
+        // `finally`; both run on every exit path, innermost first.
         try {
             val statement = dev.hryshyn.remanence.protocol.delivery_v2.PendingPublishStatementV2
                 .parseFrom(statementBytes)
@@ -326,21 +342,19 @@ internal class PendingAdmittedCandidateProvider(
                 } catch (_: Exception) {
                     return null
                 }
+                var parsed: SiftRootSiftFingerprint? = null
                 try {
-                    var parsed: SiftRootSiftFingerprint? = null
-                    try {
-                        parsed = SiftRootSiftFingerprintCodec.parse(frontBytes)
-                        return IndexedCandidate(
-                            capsuleId = capsuleUuid,
-                            front = parsed,
-                        ).also { parsed = null }
-                    } finally {
-                        parsed?.wipe()
-                        frontBytes.fill(0)
-                    }
+                    parsed = SiftRootSiftFingerprintCodec.parse(frontBytes)
+                    return IndexedCandidate(
+                        capsuleId = capsuleUuid,
+                        front = parsed,
+                    ).also { parsed = null }
                 } finally {
-                    plaintext.fill(0)
+                    parsed?.wipe()
+                    frontBytes.fill(0)
                 }
+            } finally {
+                plaintext.fill(0)
             }
         } catch (cancelled: CancellationException) {
             throw cancelled

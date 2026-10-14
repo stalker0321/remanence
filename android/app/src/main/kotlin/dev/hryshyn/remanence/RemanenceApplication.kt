@@ -830,8 +830,10 @@ class AppContainer private constructor(
     /**
      * T186 M14d-scan: the REAL scan-side consumer of admitted rows —
      * staged-FRONT enumeration for the scan index plus single-row
-     * re-admission for the scan crypto verifier. Offline (no token):
-     * same directory/recipient/pin boundary as the admitters.
+     * re-admission for the scan crypto verifier. Token-less (no bearer
+     * held or minted; staged bytes are local) — directory and
+     * own-bundle key material still loads over the network through the
+     * same boundary as the admitters.
      */
     internal val pendingScanBridge: dev.hryshyn.remanence.pending.PendingAdmittedCandidateProvider by lazy {
         dev.hryshyn.remanence.pending.PendingAdmittedCandidateProvider(
@@ -855,6 +857,9 @@ class AppContainer private constructor(
         ownerUserId: String,
         capsuleId: String,
     ): dev.hryshyn.remanence.pending.PendingAdmittedContent.OpenedPhotos {
+        if (!dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled()) {
+            throw IllegalStateException("pending feature disabled")
+        }
         if (ownerUserId.isBlank() || capsuleId.isBlank()) {
             throw IllegalStateException("pending presentation binding mismatch")
         }
@@ -868,6 +873,16 @@ class AppContainer private constructor(
         } catch (_: Exception) {
             null
         } ?: throw IllegalStateException("pending session changed")
+        // T188 B4: the ORIGINAL lease must already belong to the caller
+        // at capture — a foreign or replaced lease never starts an open.
+        val leaseOwner = try {
+            lease.ownerUserId.toRestString()
+        } catch (_: Exception) {
+            ""
+        }
+        if (leaseOwner.isBlank() || leaseOwner != ownerUserId) {
+            throw IllegalStateException("pending session changed")
+        }
         val token = try {
             pendingSessionGate.accessTokenFor(lease)
         } catch (_: Exception) {
@@ -894,6 +909,14 @@ class AppContainer private constructor(
                     )
                 }
             },
+            // T188 B4: the ORIGINAL capture travels the whole open; the
+            // same bearer is used only while it stays live (per-blob and
+            // per-await fences inside, never recaptured).
+            session = dev.hryshyn.remanence.pending.PendingAdmittedContent.OpenSession(
+                lease = lease,
+                ownerUserId = ownerUserId,
+                isLive = { pendingSessionGate.isLive(lease) },
+            ),
         )
         val opened = content.openPhotos(
             row = row,

@@ -33,6 +33,24 @@ object PendingRecognitionStage {
         val ciphertextSha256: ByteArray,
     )
 
+    /**
+     * T186 M14d-scan (T188 B3): three-way selection so callers can
+     * distinguish a genuinely absent FRONT (photos-only publication —
+     * admits normally, never enumerates) from a declared-but-unusable
+     * one (ambiguous, malformed, out-of-bounds — the cursor-preserving
+     * path must throw, never silently skip a signed declaration).
+     */
+    sealed interface Kind1Selection {
+        /** No kind-1 binding declared: nothing to stage. */
+        data object Absent : Kind1Selection
+
+        /** Exactly one usable kind-1 binding. */
+        data class Present(val binding: Kind1Binding) : Kind1Selection
+
+        /** Declared but ambiguous or malformed: fail closed. */
+        data object Unusable : Kind1Selection
+    }
+
     fun interface BlobFetchPort {
         suspend fun blobBytes(
             deliveryId: String,
@@ -44,30 +62,48 @@ object PendingRecognitionStage {
     /**
      * Selects the single kind-1/ordinal-1 binding from verified S.
      * Null when absent or ambiguous (photos-only publications carry no
-     * FRONT and never enumerate — fail closed, never guessed).
+     * FRONT and never enumerate — fail closed, never guessed). Callers
+     * with a durability obligation (cursor) use [selectKind1Detailed].
      */
-    fun selectKind1(statementBytes: ByteArray): Kind1Binding? {
+    fun selectKind1(statementBytes: ByteArray): Kind1Binding? = when (
+        val selection = selectKind1Detailed(statementBytes)
+    ) {
+        is Kind1Selection.Present -> selection.binding
+        is Kind1Selection.Absent,
+        is Kind1Selection.Unusable,
+        -> null
+    }
+
+    /**
+     * Three-way selection from verified S: empty kind-1 set is
+     * [Kind1Selection.Absent]; exactly one well-formed binding is
+     * [Kind1Selection.Present]; anything else declared is
+     * [Kind1Selection.Unusable]. Unparseable input reads as Absent
+     * (callers stage only after admission verified S).
+     */
+    fun selectKind1Detailed(statementBytes: ByteArray): Kind1Selection {
         val statement = try {
             dev.hryshyn.remanence.protocol.delivery_v2.PendingPublishStatementV2
                 .parseFrom(statementBytes)
         } catch (_: Exception) {
-            return null
+            return Kind1Selection.Absent
         }
         val recognition = statement.artifactsList.filter { it.kind == 1 && it.ordinal == -1 }
-        if (recognition.size != 1) return null
+        if (recognition.isEmpty()) return Kind1Selection.Absent
+        if (recognition.size != 1) return Kind1Selection.Unusable
         val binding = recognition.single()
         if (binding.ciphertextSize < MIN_STAGED_BYTES ||
             binding.ciphertextSize > MAX_STAGED_BYTES
         ) {
-            return null
+            return Kind1Selection.Unusable
         }
         val digest = binding.ciphertextSha256.toByteArray()
-        if (digest.size != 32) return null
+        if (digest.size != 32) return Kind1Selection.Unusable
         val rawId = binding.blobId.toByteArray()
-        if (rawId.size != 16) return null
+        if (rawId.size != 16) return Kind1Selection.Unusable
         val buffer = java.nio.ByteBuffer.wrap(rawId)
         val blobId = java.util.UUID(buffer.long, buffer.long).toString()
-        return Kind1Binding(blobId, binding.ciphertextSize, digest)
+        return Kind1Selection.Present(Kind1Binding(blobId, binding.ciphertextSize, digest))
     }
 
     /**

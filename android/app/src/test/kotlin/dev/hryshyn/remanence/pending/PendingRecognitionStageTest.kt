@@ -47,6 +47,60 @@ class PendingRecognitionStageTest {
         .setCiphertextSha256(ByteString.copyFrom(digest))
         .build()
 
+    @Test
+    fun detailedSelectionDistinguishesAbsentFromUnusable() {
+        val bytes = ByteArray(64) { it.toByte() }
+        val present = statement(binding(1, -1, bytes.size.toLong(), sha256(bytes)))
+        val selection = PendingRecognitionStage.selectKind1Detailed(present)
+        assertTrue(selection is PendingRecognitionStage.Kind1Selection.Present)
+        assertEquals(
+            blobId,
+            (selection as PendingRecognitionStage.Kind1Selection.Present).binding.blobId,
+        )
+        // Genuinely absent: no kind-1 declared at all.
+        assertTrue(
+            PendingRecognitionStage.selectKind1Detailed(
+                statement(
+                    binding(2, -1, bytes.size.toLong(), sha256(bytes)),
+                    binding(3, 0, bytes.size.toLong(), sha256(bytes)),
+                ),
+            ) is PendingRecognitionStage.Kind1Selection.Absent,
+        )
+        // Declared-but-unusable: two kind-1 bindings is ambiguous even
+        // though each alone is well-formed.
+        assertTrue(
+            PendingRecognitionStage.selectKind1Detailed(
+                statement(
+                    binding(1, -1, bytes.size.toLong(), sha256(bytes)),
+                    binding(
+                        1, -1, bytes.size.toLong(), sha256(bytes),
+                        "dddddddd-dddd-eeee-ffff-000000000002",
+                    ),
+                ),
+            ) is PendingRecognitionStage.Kind1Selection.Unusable,
+        )
+        assertTrue(
+            PendingRecognitionStage.selectKind1Detailed(
+                statement(binding(1, -1, 10L, sha256(bytes))),
+            ) is PendingRecognitionStage.Kind1Selection.Unusable,
+        )
+        assertTrue(
+            PendingRecognitionStage.selectKind1Detailed(
+                statement(binding(1, -1, bytes.size.toLong(), ByteArray(31))),
+            ) is PendingRecognitionStage.Kind1Selection.Unusable,
+        )
+        // Legacy shorthand keeps null for both non-present outcomes.
+        assertEquals(
+            null,
+            PendingRecognitionStage.selectKind1(
+                statement(
+                    binding(2, -1, bytes.size.toLong(), sha256(bytes)),
+                    binding(3, 0, bytes.size.toLong(), sha256(bytes)),
+                ),
+            ),
+        )
+    }
+
     private fun statement(vararg artifacts: ArtifactBindingV2): ByteArray =
         PendingPublishStatementV2.newBuilder()
             .setProtocolVersion(2)

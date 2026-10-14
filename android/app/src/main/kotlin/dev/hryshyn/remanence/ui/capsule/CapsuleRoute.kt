@@ -86,7 +86,11 @@ fun interface CapsuleIdentityLoader {
  * FIX-M1-007-13 / FIX-STATE-07: the live capsule presentation bound to the
  * memory-only grant lifecycle. Photos decrypt on demand from ciphertext via
  * the grant-guarded source; leaving through ANY path runs [onClose], which
- * consumes the grant and releases every decrypted byte.
+ * consumes the grant and releases every decrypted byte. Every site that
+ * closes an open presentation additionally runs [onReleaseContent] (which
+ * also covers disposal/revocation paths that never reach [onClose]);
+ * failure-before-Ready is covered by [onFailure]. All three must be
+ * idempotent.
  *
  * Failure policy (fail closed):
  * - a missing identity, unknown capsule, or decrypt error becomes [CapsuleRouteState.Failed];
@@ -102,6 +106,15 @@ internal fun CapsuleRoute(
     revocations: Flow<String>,
     onClose: () -> Unit,
     onFailure: () -> Unit = {},
+    /**
+     * T186 M14d-scan: released exactly when the route closes an open
+     * presentation (back/close, disposal, revocation, superseded load)
+     * — the pending plane wipes caller-owned photo bytes here. Runs in
+     * addition to [onClose]/[onFailure] (which also cover
+     * failure-before-Ready, where no presentation exists); all of them
+     * must be idempotent. v1 sources are unaffected (default no-op).
+     */
+    onReleaseContent: () -> Unit = {},
     /**
      * T186: fired once with the capsule id when the route publishes Ready
      * with a SUPPORTED presentation (Photos/Ber1/Collage). Never fired for
@@ -133,15 +146,21 @@ internal fun CapsuleRoute(
     // must release it before delegating the navigation/authority revocation.
     BackHandler {
         (state as? CapsuleRouteState.Ready)?.presentation?.close()
+        onReleaseContent()
         onClose()
     }
 
     // Grant replacement or route removal must close the prior Ready state;
     // CapsuleScreen's bitmap-only disposal is not sufficient for plaintext.
+    // Release is Ready-guarded like the close: transitions that never held
+    // a presentation (e.g. Loading→Ready) must not release content that a
+    // newer effect just opened.
     val stateOwnedByDisposalEffect = state
     DisposableEffect(grantId, stateOwnedByDisposalEffect) {
         onDispose {
-            (stateOwnedByDisposalEffect as? CapsuleRouteState.Ready)?.presentation?.close()
+            val owned = stateOwnedByDisposalEffect as? CapsuleRouteState.Ready
+            owned?.presentation?.close()
+            if (owned != null) onReleaseContent()
         }
     }
 
@@ -152,6 +171,7 @@ internal fun CapsuleRoute(
                 revoked.value = true
                 readyCapsuleId = null
                 (state as? CapsuleRouteState.Ready)?.presentation?.close()
+                onReleaseContent()
                 state = CapsuleRouteState.Failed(CapsuleRouteFailure.CLOSED)
             }
         }
@@ -237,6 +257,7 @@ internal fun CapsuleRoute(
             // suspended: release the newly loaded state and never publish it.
             if (revoked.value || !currentCoroutineContext().isActive) {
                 (loaded as? CapsuleRouteState.Ready)?.presentation?.close()
+                onReleaseContent()
                 return@LaunchedEffect
             }
             state = loaded
@@ -245,6 +266,7 @@ internal fun CapsuleRoute(
             throw cancelled
         } catch (failure: Exception) {
             (state as? CapsuleRouteState.Ready)?.presentation?.close()
+            onReleaseContent()
             readyCapsuleId = null
             onFailure()
             state = CapsuleRouteState.Failed(CapsuleRouteFailure.CANNOT_OPEN)

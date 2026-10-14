@@ -275,9 +275,14 @@ class RemanenceViewModelFactory(
                 // T186 M14d-scan: the v1 incoming half joined with the
                 // pending admitted-row half (offline staged FRONTs).
                 // Either half empty degrades to the other; both empty
-                // is the pre-existing IndexUnavailable path.
-                container.incomingSenderIndexCandidateProvider.load(owner) +
-                    container.pendingScanBridge.load(owner.toRestString())
+                // is the pre-existing IndexUnavailable path. Frozen OFF
+                // short-circuits before any pending path call.
+                val incoming = container.incomingSenderIndexCandidateProvider.load(owner)
+                if (!dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled()) {
+                    incoming
+                } else {
+                    incoming + container.pendingScanBridge.load(owner.toRestString())
+                }
             },
             observeIncomingIndexReadiness = { owner ->
                 container.database.incomingCapsuleDao()
@@ -298,23 +303,31 @@ class RemanenceViewModelFactory(
             },
             sessionBoundary = container.sessionBoundary,
             // T186 M14d-scan: pending-plane crypto verifier (row
-            // re-admission on live keys). Owner-resolved per call under
-            // the current account; unknown account fails closed.
-            pendingVerifyCapsule = { capsuleId ->
-                val current = try {
-                    container.currentAccountStore.loadEntity()?.userId
-                } catch (_: Exception) {
-                    null
-                }
-                if (current.isNullOrBlank()) {
+            // re-admission on live keys). Frozen OFF performs no calls.
+            // Otherwise the scan-supplied owner (fresh identity per
+            // call) must still own the current account — a switch
+            // across the suspension fails closed here; same-user
+            // rotation is caught by the key-bundle digest inside
+            // re-admission. No new auth surface: existing ports only.
+            pendingVerifyCapsule = { userId, capsuleId ->
+                if (!dev.hryshyn.remanence.pending.PendingFeatureGate.isEnabled()) {
                     false
                 } else {
-                    try {
-                        container.pendingScanBridge.verify(current, capsuleId)
-                    } catch (cancelled: kotlin.coroutines.cancellation.CancellationException) {
-                        throw cancelled
+                    val current = try {
+                        container.currentAccountStore.loadEntity()?.userId
                     } catch (_: Exception) {
+                        null
+                    }
+                    if (current.isNullOrBlank() || current != userId) {
                         false
+                    } else {
+                        try {
+                            container.pendingScanBridge.verify(userId, capsuleId)
+                        } catch (cancelled: kotlin.coroutines.cancellation.CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            false
+                        }
                     }
                 }
             },

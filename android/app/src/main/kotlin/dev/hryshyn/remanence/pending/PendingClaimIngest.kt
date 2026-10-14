@@ -382,11 +382,13 @@ class PendingClaimIngest(
 
     /**
      * T186 M14d-scan: REQUIRED kind-1 staging for the admitted row
-     * (unlike claim-time best-effort). A missing selection (photos-only
-     * publication, no FRONT) stages "" and admits normally; a FAILED
-     * fetch throws so the feed cursor is preserved and the page retries
-     * — the cursor never advances past a half-staged gift. Fetches on
-     * the held txn bearer with a liveness recheck after the await.
+     * (unlike claim-time best-effort). A verified S with NO kind-1
+     * binding (photos-only publication) stages "" and admits normally;
+     * a DECLARED-but-unusable selection (ambiguous, malformed,
+     * out-of-bounds), a missing fetch port, or a failed fetch THROWS
+     * so the feed cursor is preserved and the page retries — the
+     * cursor never advances past a half-staged gift. Fetches on the
+     * held txn bearer with a liveness recheck after the await.
      * Cancellation propagates.
      */
     private suspend fun stageRecognition(
@@ -394,8 +396,16 @@ class PendingClaimIngest(
         deliveryId: String,
         statementBytes: ByteArray,
     ): String {
-        val port = recognitionBlobPort ?: return ""
-        val binding = PendingRecognitionStage.selectKind1(statementBytes) ?: return ""
+        val binding = when (
+            val selection = PendingRecognitionStage.selectKind1Detailed(statementBytes)
+        ) {
+            is PendingRecognitionStage.Kind1Selection.Absent -> return ""
+            is PendingRecognitionStage.Kind1Selection.Unusable ->
+                throw IllegalStateException("pending recognition declaration unusable")
+            is PendingRecognitionStage.Kind1Selection.Present -> selection.binding
+        }
+        val port = recognitionBlobPort
+            ?: throw IllegalStateException("pending recognition fetch unavailable")
         val token = txnBearer(txn) ?: throw IllegalStateException("pending session changed")
         val bytes = try {
             PendingRecognitionStage.fetchVerified(deliveryId, token, binding, port)

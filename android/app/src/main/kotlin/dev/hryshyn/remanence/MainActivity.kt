@@ -464,6 +464,16 @@ private fun RootSurface(
                     null,
                 )
             }
+            // Single idempotent wipe shared by close, failure, and route
+            // disposal/revocation release (the reference nulls on first
+            // run, so repeats are no-ops). Trailing Unit keeps the
+            // inferred type () -> Unit for the route callbacks.
+            val wipePendingPhotos = {
+                pendingOpened.getAndSet(null)?.let { opened ->
+                    opened.photosByOrdinal.values.forEach { it.fill(0) }
+                }
+                Unit
+            }
             dev.hryshyn.remanence.ui.capsule.CapsuleRoute(
                 grantId = grantId,
                 contentFactory = {
@@ -526,16 +536,15 @@ private fun RootSurface(
                 validateLiveGrant = { rootViewModel.requireLivePresentationGrant(grantId) },
                 revocations = rootViewModel.capsuleRevocations,
                 onClose = {
-                    pendingOpened.getAndSet(null)?.let { opened ->
-                        opened.photosByOrdinal.values.forEach { it.fill(0) }
-                    }
+                    wipePendingPhotos()
                     rootViewModel.closeCapsule()
                 },
                 onFailure = {
-                    pendingOpened.getAndSet(null)?.let { opened ->
-                        opened.photosByOrdinal.values.forEach { it.fill(0) }
-                    }
+                    wipePendingPhotos()
                     rootViewModel.revokePresentationForRouteFailure(grantId)
+                },
+                onReleaseContent = {
+                    wipePendingPhotos()
                 },
                 // T186: genuine supported-presentation hook. Nonblocking: the
                 // container persists + schedules on its application scope and

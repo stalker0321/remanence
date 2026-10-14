@@ -70,32 +70,43 @@ object PendingRecognitionDecode {
                 throw GeneralSecurityException("pending recognition manifest place label exceeds byte limit")
             }
         }
-        val front = manifest.frontFingerprint.toByteArray()
-        if (front.isEmpty() || front.size > RecognitionManifestCodec.MAX_FINGERPRINT_BYTES) {
-            throw GeneralSecurityException("pending recognition fingerprint out of bounds")
-        }
-        // Canonical re-encode equality: the framed bytes must be exactly
-        // what the canonical builder emits (no unknown fields, no
-        // reordered/duplicate fields) — same guard as v1.
-        val canonicalHint = ChooserHint.newBuilder()
-            .setSenderHandleSnapshot(senderHandleSnapshot)
-            .setCreatedAtEpochSeconds(chooserHint.createdAtEpochSeconds)
-            .apply { placeLabel?.let(::setPlaceLabel) }
-            .build()
-        val canonical = RecognitionManifest.newBuilder()
-            .setManifestVersion(RecognitionManifestCodec.FORMAT_VERSION)
-            .setCapsuleId(manifest.capsuleId)
-            .setChooserHint(canonicalHint)
-            .setFrontFingerprint(manifest.frontFingerprint)
-            .build()
-        val canonicalBytes = canonical.toByteArray()
+        // Sole caller-owned copy (v1 codec pattern): transferred on
+        // success, wiped on any failure below — no intermediary
+        // survives either path.
+        var returnedFront = false
+        var front: ByteArray? = null
         try {
-            if (!canonicalBytes.contentEquals(plaintext)) {
-                throw GeneralSecurityException("pending recognition manifest encoding is not canonical")
+            val decoded = manifest.frontFingerprint.toByteArray()
+            front = decoded
+            if (decoded.isEmpty() || decoded.size > RecognitionManifestCodec.MAX_FINGERPRINT_BYTES) {
+                throw GeneralSecurityException("pending recognition fingerprint out of bounds")
             }
+            // Canonical re-encode equality: the framed bytes must be
+            // exactly what the canonical builder emits (no unknown
+            // fields, no reordered/duplicate fields) — same guard as v1.
+            val canonicalHint = ChooserHint.newBuilder()
+                .setSenderHandleSnapshot(senderHandleSnapshot)
+                .setCreatedAtEpochSeconds(chooserHint.createdAtEpochSeconds)
+                .apply { placeLabel?.let(::setPlaceLabel) }
+                .build()
+            val canonical = RecognitionManifest.newBuilder()
+                .setManifestVersion(RecognitionManifestCodec.FORMAT_VERSION)
+                .setCapsuleId(manifest.capsuleId)
+                .setChooserHint(canonicalHint)
+                .setFrontFingerprint(manifest.frontFingerprint)
+                .build()
+            val canonicalBytes = canonical.toByteArray()
+            try {
+                if (!canonicalBytes.contentEquals(plaintext)) {
+                    throw GeneralSecurityException("pending recognition manifest encoding is not canonical")
+                }
+            } finally {
+                canonicalBytes.fill(0)
+            }
+            returnedFront = true
+            return decoded
         } finally {
-            canonicalBytes.fill(0)
+            if (!returnedFront) front?.fill(0)
         }
-        return front.copyOf()
     }
 }

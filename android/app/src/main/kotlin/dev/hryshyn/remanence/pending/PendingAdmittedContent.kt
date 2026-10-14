@@ -25,7 +25,27 @@ import kotlin.coroutines.cancellation.CancellationException
 class PendingAdmittedContent(
     private val blobPort: BlobPort,
     private val senderVerifyPort: SenderVerifyPort,
+    /**
+     * T186 M14d-scan (T188 B4): the ORIGINAL held lease for one open
+     * (ingest-txn pattern — never fresh recapture per effect). The
+     * same bearer is used only while this lease stays live; pinned
+     * owner + liveness are re-checked before/after every blob download
+     * and around the sender-key and envelope awaits. Null disables
+     * fencing (unit surfaces).
+     */
+    private val session: OpenSession? = null,
 ) {
+
+    /**
+     * Held original-lease fence for one open: the lease captured at
+     * entry, the owner pinned at capture, and a liveness probe. The
+     * bearer travels with the lease — it is never re-captured.
+     */
+    data class OpenSession(
+        val lease: dev.hryshyn.remanence.core.data.network.SessionRequestLease,
+        val ownerUserId: String,
+        val isLive: () -> Boolean,
+    )
 
     fun interface BlobPort {
         suspend fun download(
@@ -79,6 +99,7 @@ class PendingAdmittedContent(
             "pending admitted row owner mismatch"
         }
         require(token.isNotBlank()) { "pending open bearer required" }
+        checkSession(ownerUserId)
         val statementBytes = try {
             Base64.getDecoder().decode(row.statementB64)
         } catch (_: Exception) {
@@ -97,12 +118,14 @@ class PendingAdmittedContent(
             statement.senderUserId.toByteArray(), "pending sender id malformed",
         )
         val directory = try {
+            checkSession(ownerUserId)
             senderVerifyPort.senderBundle(senderBundleId)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
             null
         } ?: throw IllegalStateException("pending sender bundle unknown")
+        checkSession(ownerUserId)
         // Trusted pair (T187 qualifier): the directory must attest THIS
         // bundle id for THIS sender — bare key bytes are never enough.
         if (directory.ownerUserId.isBlank() || directory.ownerUserId != senderId) {
@@ -129,12 +152,14 @@ class PendingAdmittedContent(
             throw IllegalStateException("pending row binding mismatch")
         }
         val capsuleKey = try {
+            checkSession(ownerUserId)
             envelopeOpener.openCapsuleKey()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
             null
         }
+        checkSession(ownerUserId)
         if (capsuleKey == null || capsuleKey.isEmpty()) {
             throw IllegalStateException("pending capsule key unavailable")
         }
@@ -164,6 +189,7 @@ class PendingAdmittedContent(
                     }
                     if (binding.kind != 2 && binding.kind != 3) continue
                     val blobId = uuidString(binding.blobId.toByteArray(), "pending blob id malformed")
+                    checkSession(ownerUserId)
                     val ciphertext = when (
                         val downloaded = try {
                             blobPort.download(row.deliveryId, blobId, token)
@@ -177,6 +203,7 @@ class PendingAdmittedContent(
                         is PendingBlobBytesResult.Failure ->
                             throw IllegalStateException("pending blob download failed")
                     }
+                    checkSession(ownerUserId)
                     if (ciphertext.size.toLong() != binding.ciphertextSize) {
                         throw IllegalStateException("pending blob size mismatch")
                     }
@@ -257,6 +284,32 @@ class PendingAdmittedContent(
             }
         } finally {
             capsuleKey.fill(0)
+        }
+    }
+
+    /**
+     * T188 B4 fence: the pinned owner must still own the caller AND
+     * the ORIGINAL lease (same owner string — a same-owner replacement
+     * carries a new incarnation, which fails the liveness probe), and
+     * the lease must still be live. Null session skips (unit
+     * surfaces). Throws — never a boolean a caller could ignore.
+     */
+    private fun checkSession(ownerUserId: String) {
+        val s = session ?: return
+        val live = try {
+            s.isLive()
+        } catch (_: Exception) {
+            false
+        }
+        val leaseOwner = try {
+            s.lease.ownerUserId.toRestString()
+        } catch (_: Exception) {
+            ""
+        }
+        if (!live || leaseOwner.isBlank() || leaseOwner != s.ownerUserId ||
+            s.ownerUserId != ownerUserId
+        ) {
+            throw IllegalStateException("pending session changed")
         }
     }
 

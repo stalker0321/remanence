@@ -29,6 +29,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 /**
@@ -257,20 +258,29 @@ class PendingAdmittedCandidateProviderTest {
         )
     }
 
-    private fun bridge(dir: java.io.File, vectors: Vectors) =
+    private fun bridge(
+        dir: java.io.File,
+        vectors: Vectors,
+        featureEnabled: Boolean = true,
+        directoryThrows: Boolean = false,
+        recipientThrows: Boolean = false,
+    ) =
         PendingAdmittedCandidateProvider(
             admittedStore = PendingAdmittedGiftStore(dir),
             directoryPort = PendingClaimIngest.DirectoryPort { bundleId ->
+                if (directoryThrows) throw AssertionError("directory must not be consulted")
                 assertEquals(bundle, bundleId)
                 PendingClaimIngest.DirectoryBundle(sender, vectors.senderPublicBytes)
             },
             recipientKeysPort = PendingClaimIngest.RecipientKeysPort {
+                if (recipientThrows) throw AssertionError("recipient keys must not be consulted")
                 PendingClaimIngest.RecipientKeys(
                     recipient, bundle,
                     vectors.recipientPrivate, vectors.recipientPublicBytes,
                 )
             },
             servicePinPort = { vectors.servicePin },
+            featureEnabled = { featureEnabled },
         )
 
     @Test
@@ -348,6 +358,61 @@ class PendingAdmittedCandidateProviderTest {
             )
             assertTrue(provider.load("99999999-2222-3333-4444-555555555555").candidates.isEmpty())
             assertTrue(provider.load("").candidates.isEmpty())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /**
+     * T186 M14d-scan: frozen OFF performs zero pending-path calls —
+     * even with a staged row present, enumeration is empty,
+     * verification is false, and no port is consulted.
+     */
+    @Test
+    fun featureOffPerformsNoPortCalls() = runTest {
+        val vectors = vectors()
+        val dir = Files.createTempDirectory("pending-bridge-off").toFile()
+        try {
+            assertTrue(PendingAdmittedGiftStore(dir).upsert(vectors.row))
+            val provider = bridge(
+                dir, vectors,
+                featureEnabled = false,
+                directoryThrows = true,
+                recipientThrows = true,
+            )
+            val index = provider.load(recipient)
+            assertTrue(index.candidates.isEmpty())
+            assertFalse(provider.verify(recipient, UUID.fromString(capsule)))
+            try {
+                provider.openKey(recipient, UUID.fromString(capsule))
+                fail("expected feature-disabled throw")
+            } catch (_: IllegalStateException) {
+            }
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /**
+     * T186 M14d-scan: an empty index short-circuits before any key
+     * fetch — enumeration needs no ports when there is nothing to
+     * enumerate.
+     */
+    @Test
+    fun emptyStoreShortCircuitsBeforeKeys() = runTest {
+        val vectors = vectors()
+        val dir = Files.createTempDirectory("pending-bridge-empty").toFile()
+        try {
+            val provider = bridge(
+                dir, vectors,
+                directoryThrows = true,
+                recipientThrows = true,
+            )
+            val index = provider.load(recipient)
+            assertTrue(index.candidates.isEmpty())
+            assertEquals(0, index.diagnostics.rawCandidateCount)
+            assertEquals(0, index.diagnostics.validCandidateCount)
+            assertEquals(0, index.diagnostics.invalidCandidateCount)
         } finally {
             dir.deleteRecursively()
         }

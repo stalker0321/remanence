@@ -10,6 +10,9 @@ import dev.hryshyn.remanence.core.crypto.PendingArtifactCryptor
 import dev.hryshyn.remanence.core.crypto.PendingCapsulePublisher
 import dev.hryshyn.remanence.core.crypto.PendingPublishCrypto
 import dev.hryshyn.remanence.core.data.network.PendingBlobBytesResult
+import dev.hryshyn.remanence.core.data.network.PendingMaterialFailure
+import dev.hryshyn.remanence.core.data.network.SessionRequestLease
+import dev.hryshyn.remanence.core.model.UserId
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
@@ -110,6 +113,7 @@ class PendingAdmittedContentTest {
         blobs: Map<String, ByteArray> = sealed.publication.artifacts
             .associate { it.blobId to it.ciphertext },
         signing: KeysetHandle = sealed.signing,
+        session: PendingAdmittedContent.OpenSession? = null,
     ) = PendingAdmittedContent(
         blobPort = PendingAdmittedContent.BlobPort { _, blobId, _ ->
             val bytes = blobs[blobId]
@@ -127,6 +131,7 @@ class PendingAdmittedContentTest {
                 ),
             )
         },
+        session = session,
     )
 
     private fun keyOf(sealed: Sealed): ByteArray = keyBytesOf(sealed.capsuleKey)
@@ -299,6 +304,27 @@ class PendingAdmittedContentTest {
             sealed.capsuleKey, capsule, manifest.blobId,
             2, -1, sender, target, rebuilt,
         )
+        // Genuinely self-consistent S: the modified kind-2 size/hash
+        // declaration, re-signed with the fixture sender key (same
+        // target AAD throughout) — size/hash checks pass, so the
+        // photo-map gate is what must reject.
+        val statement =
+            dev.hryshyn.remanence.protocol.delivery_v2.PendingPublishStatementV2.parseFrom(
+                sealed.publication.statement,
+            )
+        val kind2Index = statement.artifactsList.indexOfFirst { it.kind == 2 }
+        assertTrue(kind2Index >= 0)
+        val updated = statement.artifactsList[kind2Index].toBuilder()
+            .setCiphertextSize(resealed.size.toLong())
+            .setCiphertextSha256(
+                ByteString.copyFrom(
+                    MessageDigest.getInstance("SHA-256").digest(resealed),
+                ),
+            )
+            .build()
+        val restated = statement.toBuilder().setArtifacts(kind2Index, updated)
+            .build().toByteArray()
+        val resigned = PendingPublishCrypto.signStatement(sealed.signing, restated)
         val result = try {
             content(
                 sealed,
@@ -306,7 +332,7 @@ class PendingAdmittedContentTest {
                     it.blobId to if (it.blobId == manifest.blobId) resealed else it.ciphertext
                 },
             ).openPhotos(
-                rowOf(sealed), owner, "token",
+                rowOfStatement(restated, resigned), owner, "token",
                 PendingAdmittedContent.EnvelopeOpener { keyOf(sealed) },
             )
             null
@@ -350,5 +376,90 @@ class PendingAdmittedContentTest {
             "rejected"
         }
         assertEquals("rejected", result)
+    }
+
+    private fun sessionOf(
+        leaseOwner: String = owner,
+        live: () -> Boolean = { true },
+    ) = PendingAdmittedContent.OpenSession(
+        lease = SessionRequestLease(UserId.parseRest(leaseOwner), 1L),
+        ownerUserId = owner,
+        isLive = live,
+    )
+
+    /**
+     * T186 M14d-scan (T188 B4): a lease death mid-open fails the whole
+     * open closed — the bearer is never used past the original lease,
+     * and no further blob is attempted after the fence trips.
+     */
+    @Test
+    fun sessionDeathMidDownloadFailsClosed() = runTest {
+        val sealed = sealed()
+        var live = true
+        var downloads = 0
+        val gated = PendingAdmittedContent(
+            blobPort = PendingAdmittedContent.BlobPort { _, blobId, _ ->
+                downloads += 1
+                if (downloads == 1) live = false
+                val bytes = sealed.publication.artifacts.single { it.blobId == blobId }.ciphertext
+                PendingBlobBytesResult.Bytes(blobId, bytes)
+            },
+            senderVerifyPort = PendingAdmittedContent.SenderVerifyPort { _ ->
+                PendingAdmittedContent.DirectoryBundle(
+                    "01010101-0202-0303-0404-050505050505",
+                    TinkProtoKeysetFormat.serializeKeysetWithoutSecret(
+                        sealed.signing.publicKeysetHandle,
+                    ),
+                )
+            },
+            session = sessionOf(live = { live }),
+        )
+        val result = try {
+            gated.openPhotos(
+                rowOf(sealed), owner, "token",
+                PendingAdmittedContent.EnvelopeOpener { keyOf(sealed) },
+            )
+            null
+        } catch (failure: IllegalStateException) {
+            failure.message
+        }
+        assertTrue((result ?: "").contains("session changed"))
+        assertEquals(1, downloads)
+    }
+
+    /**
+     * T186 M14d-scan (T188 B4): a lease captured for another owner
+     * never starts an open — rejected at entry before any blob or key
+     * await.
+     */
+    @Test
+    fun sessionOwnerMismatchRejectsBeforeAnyDownload() = runTest {
+        val sealed = sealed()
+        var downloads = 0
+        val gated = PendingAdmittedContent(
+            blobPort = PendingAdmittedContent.BlobPort { _, _, _ ->
+                downloads += 1
+                throw AssertionError("fenced open must not download")
+            },
+            senderVerifyPort = PendingAdmittedContent.SenderVerifyPort { _ ->
+                throw AssertionError("fenced open must not resolve keys")
+            },
+            session = sessionOf(
+                leaseOwner = "99999999-2222-3333-4444-555555555555",
+            ),
+        )
+        val result = try {
+            gated.openPhotos(
+                rowOf(sealed), owner, "token",
+                PendingAdmittedContent.EnvelopeOpener {
+                    throw AssertionError("fenced open must not open the envelope")
+                },
+            )
+            null
+        } catch (failure: IllegalStateException) {
+            failure.message
+        }
+        assertTrue((result ?: "").contains("session changed"))
+        assertEquals(0, downloads)
     }
 }

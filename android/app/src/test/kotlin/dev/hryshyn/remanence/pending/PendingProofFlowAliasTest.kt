@@ -136,10 +136,12 @@ class PendingProofFlowAliasTest {
 
     @Test
     fun aliasCheckboxDisplayedUncheckedTogglesAndClearsOnEdit() {
+        // Hoisted: recomposition must keep observing the same instance.
+        val viewModel = viewModel()
         composeRule.setContent {
             MaterialTheme {
                 PendingProofFlow(
-                    viewModel = viewModel(),
+                    viewModel = viewModel,
                     giftReference = "ref",
                     onDone = {},
                 )

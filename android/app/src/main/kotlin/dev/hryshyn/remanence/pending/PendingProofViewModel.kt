@@ -217,8 +217,22 @@ class PendingProofViewModel(
     private val _aliasConsent = MutableStateFlow(false)
     val aliasConsent: StateFlow<Boolean> = _aliasConsent.asStateFlow()
 
-    /** Frozen (destination, alias) pair captured at requestAttempt entry. */
-    private var aliasConsentFrozen: Boolean? = null
+    /**
+     * T186 alias-bind: the ORIGINAL consent context, frozen at the
+     * request boundary (owner + incarnation + gift + address). The
+     * frozen bit may only be consumed while the live context still
+     * matches — a switch never rescues old consent with a fresh
+     * context; it fails closed instead.
+     */
+    private data class AliasGrant(
+        val affirmed: Boolean,
+        val ownerId: String,
+        val incarnation: Long,
+        val deliveryId: String,
+        val destination: String,
+    )
+
+    private var aliasGrant: AliasGrant? = null
 
     fun onAliasConsentChange(affirmed: Boolean) {
         if (_state.value !is ProofState.ProofRequired) return
@@ -244,11 +258,16 @@ class PendingProofViewModel(
     }
 
     fun onDestinationChange(value: String) {
+        // Frozen-setter guard (brief#3): destination edits are accepted
+        // before request only — a midflight/frozen update is rejected so
+        // neither the displayed alias nor the frozen bit can mutate while
+        // an old signed intent survives.
+        if (_state.value !is ProofState.ProofRequired) return
         _destination.value = value
         // A new destination needs fresh explicit consent: the frozen
-        // pair belongs to the previous address.
+        // grant belongs to the previous address.
         _aliasConsent.value = false
-        aliasConsentFrozen = null
+        aliasGrant = null
     }
 
     fun onCodeChange(value: String) {
@@ -277,7 +296,7 @@ class PendingProofViewModel(
         if (_state.value !is ProofState.Idle) return
         // New lookup, new gift: no stale consent crosses over.
         _aliasConsent.value = false
-        aliasConsentFrozen = null
+        aliasGrant = null
         _state.value = ProofState.Continuing
         launchScope.launch {
             _state.value = try {
@@ -323,7 +342,7 @@ class PendingProofViewModel(
      */
     private fun failedSessionChanged(): ProofState.Failed {
         _aliasConsent.value = false
-        aliasConsentFrozen = null
+        aliasGrant = null
         return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
     }
 
@@ -399,7 +418,6 @@ class PendingProofViewModel(
         // Freeze the (destination, alias) pair at entry, before any
         // async work: the signed intent later carries exactly this.
         val frozenDestination = _destination.value.trim()
-        aliasConsentFrozen = _aliasConsent.value
         _state.value = ProofState.RequestingAttempt
         launchScope.launch {
             _state.value = try {
@@ -419,6 +437,18 @@ class PendingProofViewModel(
                     ) {
                         failedSessionChanged()
                     } else {
+                        // Freeze the ORIGINAL consent context at the
+                        // request boundary (owner + incarnation + gift +
+                        // address), before the R8 await. Consumption
+                        // later requires this exact context — never a
+                        // freshly captured one.
+                        aliasGrant = AliasGrant(
+                            affirmed = _aliasConsent.value,
+                            ownerId = account.userId,
+                            incarnation = creds.lease.incarnation,
+                            deliveryId = current.deliveryId,
+                            destination = frozenDestination,
+                        )
                         val result = verifyPort.request(
                             current.deliveryId, frozenDestination, _smsConsent.value,
                             clockSeconds(), java.util.UUID.randomUUID().toString(), creds.token,
@@ -926,6 +956,21 @@ class PendingProofViewModel(
             } catch (_: Exception) {
                 null
             } ?: return failedSessionChanged()
+            // Consume the frozen consent ONLY under its ORIGINAL context
+            // (owner + incarnation + gift + address). Any drift since the
+            // request boundary — account switch, re-login, new lookup,
+            // edited destination — fails closed instead of rescuing old
+            // consent with a fresh context.
+            val grant = aliasGrant
+                ?: return ProofState.Failed(PendingProofMessage.GENERIC)
+            val grantCreds = creds() ?: return failedSessionChanged()
+            if (grantCreds.ownerId != grant.ownerId ||
+                grantCreds.lease.incarnation != grant.incarnation ||
+                proof?.deliveryId != grant.deliveryId ||
+                _destination.value.trim() != grant.destination
+            ) {
+                return failedSessionChanged()
+            }
             val opId = java.util.UUID.randomUUID().toString()
             val intent = PendingClaimIntent.buildCanonical(
                 PendingClaimIntent.Fields(
@@ -939,10 +984,10 @@ class PendingProofViewModel(
                     recipientKeyBundleId = account.bundleId,
                     sessionId = sessionId,
                     nonce = nonce,
-                    // Frozen at requestAttempt entry — never the live
-                    // toggle (locked outside ProofRequired), never
-                    // derived. Null only if no request ran.
-                    bindAlias = aliasConsentFrozen ?: false,
+                    // Frozen bit from the validated grant — never the
+                    // live toggle (locked outside ProofRequired), never
+                    // derived.
+                    bindAlias = grant.affirmed,
                 ),
             )
             val intentSig = PendingClaimIntent.signIntent(signing, intent)

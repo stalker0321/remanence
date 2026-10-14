@@ -29,6 +29,7 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.UUID
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -149,9 +150,9 @@ class PendingProofViewModelTest {
         return java.util.Base64.getDecoder().decode(str(crypto, "sender_ed25519_public_keyset_b64"))
     }
 
-    private fun leaseFor(owner: String): SessionRequestLease = SessionRequestLease(
+    private fun leaseFor(owner: String, epoch: Long = 1L): SessionRequestLease = SessionRequestLease(
         ownerUserId = UserId.parseRest(owner),
-        incarnation = 1L,
+        incarnation = epoch,
     )
 
     /** Fake held-lease gate: token queue + liveness + owner binding. */
@@ -159,12 +160,14 @@ class PendingProofViewModelTest {
         val owner: String,
         val tokens: MutableList<String?>,
         var live: Boolean = true,
+        /** Same-owner incarnation rotation point (liveness is owner-bound). */
+        var epoch: Long = 1L,
     ) : PendingRetirementSessionGate {
         var captures = 0
 
         override fun capture(): SessionRequestLease? {
             captures += 1
-            return leaseFor(owner)
+            return leaseFor(owner, epoch)
         }
 
         override fun accessTokenFor(lease: SessionRequestLease): String? =
@@ -189,6 +192,7 @@ class PendingProofViewModelTest {
         gateTap: ((FakeGate) -> Unit)? = null,
         session: String? = sessionId,
         senderKey: ByteArray? = frozenSenderKey(),
+        accountProvider: (suspend () -> ProofAccount?)? = null,
         senderKeyProvider: (suspend (String, String) -> ByteArray?)? = null,
         claim: ProofClaimPort? = null,
         onRequest: ((Boolean) -> Unit)? = null,
@@ -227,7 +231,7 @@ class PendingProofViewModelTest {
             },
             optionsPort = ProofOptionsPort { _, _ -> options("") },
             sessionGate = gate,
-            accountProvider = { account },
+            accountProvider = accountProvider ?: { account },
             signingKeyProvider = { signingKeys },
             hpkeKeyProvider = hpkeProvider ?: { hpke },
             sessionIdProvider = { session },
@@ -1204,6 +1208,13 @@ class PendingProofViewModelTest {
             .verify(signature, input)
     }
 
+    private fun uuidString(bytes: com.google.protobuf.ByteString): String {
+        val raw = bytes.toByteArray()
+        require(raw.size == 16) { "uuid must be 16 bytes" }
+        val buffer = java.nio.ByteBuffer.wrap(raw)
+        return java.util.UUID(buffer.long, buffer.long).toString()
+    }
+
     /**
      * T186 alias-bind: default unchecked, and the submitted signed
      * intent carries bindAlias=false (parsed + really verified).
@@ -1297,64 +1308,140 @@ class PendingProofViewModelTest {
     /**
      * T186 alias-bind: the toggle is refused outside ProofRequired —
      * a midflight attempt at CodeRequired and at IntentReady changes
-     * nothing, and the submitted intent keeps the frozen false.
+     * nothing, and the submitted signed intent keeps the frozen false
+     * (parsed + really verified).
      */
     @Test
     fun midflightToggleRefused() = runTest {
         TinkPrimitives.ensureRegistered()
-        val setup = challengeSetup()
-        val viewModel = vm(
-            options = {
-                ClaimOptionsResult.Options(
-                    setup.challengeId, 1_798_765_432L,
-                    Base64.getEncoder().encodeToString(setup.sealed),
-                    Base64.getEncoder().encodeToString(setup.contextRaw),
-                )
-            },
-            hpke = setup.recipientPrivate,
-            senderKeyProvider = { _, _ -> frozenSenderKey() },
-            ownBundleKey = TinkProtoKeysetFormat.serializeKeysetWithoutSecret(
-                setup.recipientPrivate.publicKeysetHandle,
-            ),
-        )
-        viewModel.start("ref")
-        testScheduler.advanceUntilIdle()
-        viewModel.onDestinationChange("a42@example.test")
-        viewModel.requestAttempt()
-        testScheduler.advanceUntilIdle()
-        assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.CodeRequired)
-        viewModel.onAliasConsentChange(true)
-        assertFalse(viewModel.aliasConsent.value)
-        viewModel.onCodeChange("12345678")
-        viewModel.checkCode()
-        testScheduler.advanceUntilIdle()
-        assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.IntentReady)
-        viewModel.onAliasConsentChange(true)
-        assertFalse(viewModel.aliasConsent.value)
+        val vectors = acceptedVectors()
+        val signingKeys = KeysetHandle.generateNew(KeyTemplates.get("ED25519"))
+        val submitted = arrayOfNulls<ByteArray>(2)
+        val dir = java.nio.file.Files.createTempDirectory("pending-alias-midflight").toFile()
+        try {
+            val store = PendingAdmittedGiftStore(dir)
+            val viewModel = aliasFlowVm(vectors, signingKeys, submitted, store)
+            viewModel.start("ref")
+            testScheduler.advanceUntilIdle()
+            viewModel.onDestinationChange("a42@example.test")
+            viewModel.requestAttempt()
+            testScheduler.advanceUntilIdle()
+            assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.CodeRequired)
+            viewModel.onAliasConsentChange(true)
+            assertFalse(viewModel.aliasConsent.value)
+            viewModel.onCodeChange("12345678")
+            viewModel.checkCode()
+            testScheduler.advanceUntilIdle()
+            assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.IntentReady)
+            viewModel.onAliasConsentChange(true)
+            assertFalse(viewModel.aliasConsent.value)
+            viewModel.submitClaim()
+            testScheduler.advanceUntilIdle()
+            assertEquals(
+                PendingProofViewModel.ProofState.Claimed(deliveryId, serviceVerified = true),
+                viewModel.state.value,
+            )
+            val intent = submitted[0] ?: throw AssertionError("no submitted intent")
+            val signature = submitted[1] ?: throw AssertionError("no submitted signature")
+            assertFalse(ClaimIntentV2.parseFrom(intent).bindAlias)
+            verifySubmittedIntent(signingKeys, intent, signature)
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 
     /**
-     * T186 alias-bind: the toggle is refused while Claiming — the
-     * in-flight signed intent/digest cannot change under the same
-     * operation id.
+     * T186 alias-bind: frozen setters are refused at IntentReady and
+     * while Claiming — destination, bit, submitted intent bytes and
+     * operation id stay exactly as frozen (proved by parsing the
+     * submitted intent against the vectors + real signature check).
+     * The deferred claim port holds the flow in Claiming so the
+     * refusal window is actually observed.
      */
     @Test
     fun claimingToggleRefused() = runTest {
-        val viewModel = vm()
-        viewModel.start("ref")
-        testScheduler.advanceUntilIdle()
-        viewModel.onDestinationChange("a42@example.test")
-        viewModel.requestAttempt()
-        testScheduler.advanceUntilIdle()
-        viewModel.onCodeChange("12345678")
-        viewModel.checkCode()
-        testScheduler.advanceUntilIdle()
-        assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.IntentReady)
-        viewModel.submitClaim()
-        assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.Claiming)
-        viewModel.onAliasConsentChange(true)
-        assertFalse(viewModel.aliasConsent.value)
-        testScheduler.advanceUntilIdle()
+        TinkPrimitives.ensureRegistered()
+        val vectors = acceptedVectors()
+        val signingKeys = KeysetHandle.generateNew(KeyTemplates.get("ED25519"))
+        val submitted = arrayOfNulls<ByteArray>(2)
+        var submittedOpId: String? = null
+        val release = CompletableDeferred<Unit>()
+        val dir = java.nio.file.Files.createTempDirectory("pending-alias-claiming").toFile()
+        try {
+            val store = PendingAdmittedGiftStore(dir)
+            val viewModel = vm(
+                continueResult = vectors.proof,
+                options = {
+                    ClaimOptionsResult.Options(
+                        vectors.challenge.challengeId, 1_798_765_432L,
+                        Base64.getEncoder().encodeToString(vectors.challenge.sealed),
+                        Base64.getEncoder().encodeToString(vectors.challenge.contextRaw),
+                    )
+                },
+                hpke = vectors.recipientPrivate,
+                signing = signingKeys,
+                senderKeyProvider = { _, _ -> vectors.senderPublicBytes },
+                ownBundleKey = vectors.recipientPublicBytes,
+                servicePin = vectors.servicePin,
+                admittedStore = store,
+                claim = ProofClaimPort { _, intentB64, sigB64, opId, _ ->
+                    submitted[0] = Base64.getDecoder().decode(intentB64)
+                    submitted[1] = Base64.getDecoder().decode(sigB64)
+                    submittedOpId = opId
+                    release.await()
+                    dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
+                        vectors.claimId,
+                        Base64.getEncoder().encodeToString(vectors.claim),
+                        Base64.getEncoder().encodeToString(vectors.claimSig),
+                        Base64.getEncoder().encodeToString(vectors.sealed),
+                        vectors.sealedShaHex,
+                    )
+                },
+            )
+            viewModel.start("ref")
+            testScheduler.advanceUntilIdle()
+            viewModel.onDestinationChange("a42@example.test")
+            viewModel.onAliasConsentChange(true)
+            viewModel.requestAttempt()
+            testScheduler.advanceUntilIdle()
+            viewModel.onCodeChange("12345678")
+            viewModel.checkCode()
+            testScheduler.advanceUntilIdle()
+            assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.IntentReady)
+            assertTrue(viewModel.aliasConsent.value)
+            // Frozen setters refused at IntentReady: destination, bit
+            // and the pending submit stay exactly as frozen.
+            viewModel.onDestinationChange("other@example.test")
+            assertEquals("a42@example.test", viewModel.destination.value)
+            viewModel.onAliasConsentChange(false)
+            assertTrue(viewModel.aliasConsent.value)
+            viewModel.submitClaim()
+            assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.Claiming)
+            // ... and while Claiming: the in-flight signed intent/digest
+            // cannot change under the same operation id.
+            viewModel.onDestinationChange("other2@example.test")
+            assertEquals("a42@example.test", viewModel.destination.value)
+            viewModel.onAliasConsentChange(false)
+            assertTrue(viewModel.aliasConsent.value)
+            release.complete(Unit)
+            testScheduler.advanceUntilIdle()
+            assertEquals(
+                PendingProofViewModel.ProofState.Claimed(deliveryId, serviceVerified = true),
+                viewModel.state.value,
+            )
+            val intent = submitted[0] ?: throw AssertionError("no submitted intent")
+            val signature = submitted[1] ?: throw AssertionError("no submitted signature")
+            val parsed = ClaimIntentV2.parseFrom(intent)
+            assertTrue(parsed.bindAlias)
+            assertEquals(capsule, uuidString(parsed.capsuleId))
+            assertEquals(target, uuidString(parsed.deliveryTargetId))
+            assertEquals(vectors.challenge.challengeId, uuidString(parsed.challengeId))
+            // Single-assignment operation id rides along, well-formed.
+            java.util.UUID.fromString(submittedOpId ?: throw AssertionError("no submitted opId"))
+            verifySubmittedIntent(signingKeys, intent, signature)
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 
     /**
@@ -1374,6 +1461,115 @@ class PendingProofViewModelTest {
         assertTrue(viewModel.aliasConsent.value)
         gate?.live = false
         viewModel.requestAttempt()
+        testScheduler.advanceUntilIdle()
+        assertEquals(
+            PendingProofViewModel.ProofState.Failed(PendingProofMessage.SESSION_CHANGED),
+            viewModel.state.value,
+        )
+        assertFalse(viewModel.aliasConsent.value)
+    }
+
+    /**
+     * T186 alias-bind: an owner switch before dispatch fails the
+     * frozen context closed — the opt-in dies with the scope and the
+     * signed intent is never built (submit stays a no-op).
+     */
+    @Test
+    fun ownerSwitchPreDispatchClearsAlias() = runTest {
+        var currentAccount: ProofAccount? = ProofAccount(accountId, bundleId)
+        val viewModel = vm(accountProvider = { currentAccount })
+        viewModel.start("ref")
+        testScheduler.advanceUntilIdle()
+        assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.ProofRequired)
+        viewModel.onDestinationChange("a42@example.test")
+        viewModel.onAliasConsentChange(true)
+        viewModel.requestAttempt()
+        testScheduler.advanceUntilIdle()
+        assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.CodeRequired)
+        assertTrue(viewModel.aliasConsent.value)
+        // Owner switch after the freeze, before any intent exists.
+        currentAccount = ProofAccount("99999999-2222-3333-4444-555555555555", bundleId)
+        viewModel.onCodeChange("12345678")
+        viewModel.checkCode()
+        testScheduler.advanceUntilIdle()
+        assertEquals(
+            PendingProofViewModel.ProofState.Failed(PendingProofMessage.SESSION_CHANGED),
+            viewModel.state.value,
+        )
+        assertFalse(viewModel.aliasConsent.value)
+        viewModel.submitClaim()
+        testScheduler.advanceUntilIdle()
+        assertEquals(
+            PendingProofViewModel.ProofState.Failed(PendingProofMessage.SESSION_CHANGED),
+            viewModel.state.value,
+        )
+    }
+
+    /**
+     * T186 alias-bind: a same-owner incarnation rotation before
+     * dispatch fails the frozen context closed — every older fence
+     * still passes (owner + liveness hold), so only the new
+     * owner+incarnation validation trips. No intent is built.
+     */
+    @Test
+    fun incarnationSwitchPreDispatchClearsAlias() = runTest {
+        var gate: FakeGate? = null
+        val viewModel = vm(gateTap = { gate = it })
+        viewModel.start("ref")
+        testScheduler.advanceUntilIdle()
+        viewModel.onDestinationChange("a42@example.test")
+        viewModel.onAliasConsentChange(true)
+        viewModel.requestAttempt()
+        testScheduler.advanceUntilIdle()
+        assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.CodeRequired)
+        assertTrue(viewModel.aliasConsent.value)
+        // Same owner, new incarnation: older fences pass, the frozen
+        // grant no longer matches.
+        gate?.epoch = 2L
+        viewModel.onCodeChange("12345678")
+        viewModel.checkCode()
+        testScheduler.advanceUntilIdle()
+        assertEquals(
+            PendingProofViewModel.ProofState.Failed(PendingProofMessage.SESSION_CHANGED),
+            viewModel.state.value,
+        )
+        assertFalse(viewModel.aliasConsent.value)
+    }
+
+    /**
+     * T186 alias-bind: a same-owner incarnation rotation suspended
+     * inside the options await fails the frozen context closed at
+     * intent-build time — the older post-await fences still pass, so
+     * only the new validation trips. No intent is built.
+     */
+    @Test
+    fun incarnationSwitchSuspendedAwaitClearsAlias() = runTest {
+        var gate: FakeGate? = null
+        val setup = challengeSetup()
+        val viewModel = vm(
+            gateTap = { gate = it },
+            options = {
+                gate?.epoch = 2L
+                ClaimOptionsResult.Options(
+                    setup.challengeId, 1_798_765_432L,
+                    Base64.getEncoder().encodeToString(setup.sealed),
+                    Base64.getEncoder().encodeToString(setup.contextRaw),
+                )
+            },
+            hpke = setup.recipientPrivate,
+            senderKeyProvider = { _, _ -> frozenSenderKey() },
+            ownBundleKey = TinkProtoKeysetFormat.serializeKeysetWithoutSecret(
+                setup.recipientPrivate.publicKeysetHandle,
+            ),
+        )
+        viewModel.start("ref")
+        testScheduler.advanceUntilIdle()
+        viewModel.onDestinationChange("a42@example.test")
+        viewModel.onAliasConsentChange(true)
+        viewModel.requestAttempt()
+        testScheduler.advanceUntilIdle()
+        viewModel.onCodeChange("12345678")
+        viewModel.checkCode()
         testScheduler.advanceUntilIdle()
         assertEquals(
             PendingProofViewModel.ProofState.Failed(PendingProofMessage.SESSION_CHANGED),

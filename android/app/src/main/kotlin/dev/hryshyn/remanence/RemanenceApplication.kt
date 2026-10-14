@@ -833,7 +833,7 @@ class AppContainer private constructor(
      * re-admission for the scan crypto verifier. Offline (no token):
      * same directory/recipient/pin boundary as the admitters.
      */
-    val pendingScanBridge: dev.hryshyn.remanence.pending.PendingAdmittedCandidateProvider by lazy {
+    internal val pendingScanBridge: dev.hryshyn.remanence.pending.PendingAdmittedCandidateProvider by lazy {
         dev.hryshyn.remanence.pending.PendingAdmittedCandidateProvider(
             admittedStore = pendingAdmittedGiftStore,
             directoryPort = pendingDirectoryPort,

@@ -4,7 +4,9 @@ import com.google.crypto.tink.InsecureSecretKeyAccess
 import com.google.crypto.tink.KeyTemplates
 import com.google.crypto.tink.KeysetHandle
 import com.google.crypto.tink.TinkProtoKeysetFormat
+import com.google.protobuf.ByteString
 import dev.hryshyn.remanence.core.crypto.CapsuleKeysetGenerator
+import dev.hryshyn.remanence.core.crypto.PendingArtifactCryptor
 import dev.hryshyn.remanence.core.crypto.PendingCapsulePublisher
 import dev.hryshyn.remanence.core.crypto.PendingPublishCrypto
 import dev.hryshyn.remanence.core.data.network.PendingBlobBytesResult
@@ -69,7 +71,13 @@ class PendingAdmittedContentTest {
         return Sealed(publication, signing, capsuleKey, jpeg)
     }
 
-    private fun rowOf(sealed: Sealed) = PendingAdmittedGiftStore.AdmittedGift(
+    private fun rowOf(sealed: Sealed) = rowOfStatement(
+        sealed.publication.statement,
+        sealed.publication.signature,
+    )
+
+    private fun rowOfStatement(statement: ByteArray, signature: ByteArray) =
+        PendingAdmittedGiftStore.AdmittedGift(
         ownerUserId = owner,
         capsuleId = capsule,
         deliveryId = delivery,
@@ -78,11 +86,11 @@ class PendingAdmittedContentTest {
         availableAt = 1798765432L,
         envelopeB64 = "RW52",
         envelopeSha256Hex = "ab".repeat(32),
-        statementB64 = Base64.getEncoder().encodeToString(sealed.publication.statement),
+        statementB64 = Base64.getEncoder().encodeToString(statement),
         statementSha256Hex = MessageDigest.getInstance("SHA-256")
-            .digest(sealed.publication.statement).joinToString("") { "%02x".format(it) },
+            .digest(statement).joinToString("") { "%02x".format(it) },
         publishSignature69B64 = Base64.getEncoder()
-            .encodeToString(sealed.publication.signature),
+            .encodeToString(signature),
         // Claim material is unread by the open path (the capsule key
         // arrives via the envelope opener; admission is covered by the
         // ingest/claim/readmission tests) — blanks keep this sender-side
@@ -101,6 +109,7 @@ class PendingAdmittedContentTest {
         sealed: Sealed,
         blobs: Map<String, ByteArray> = sealed.publication.artifacts
             .associate { it.blobId to it.ciphertext },
+        signing: KeysetHandle = sealed.signing,
     ) = PendingAdmittedContent(
         blobPort = PendingAdmittedContent.BlobPort { _, blobId, _ ->
             val bytes = blobs[blobId]
@@ -114,15 +123,17 @@ class PendingAdmittedContentTest {
             PendingAdmittedContent.DirectoryBundle(
                 "01010101-0202-0303-0404-050505050505",
                 TinkProtoKeysetFormat.serializeKeysetWithoutSecret(
-                    sealed.signing.publicKeysetHandle,
+                    signing.publicKeysetHandle,
                 ),
             )
         },
     )
 
-    private fun keyOf(sealed: Sealed): ByteArray =
+    private fun keyOf(sealed: Sealed): ByteArray = keyBytesOf(sealed.capsuleKey)
+
+    private fun keyBytesOf(handle: KeysetHandle): ByteArray =
         TinkProtoKeysetFormat.serializeKeyset(
-            sealed.capsuleKey,
+            handle,
             InsecureSecretKeyAccess.get(),
         )
 
@@ -212,6 +223,97 @@ class PendingAdmittedContentTest {
             "rejected"
         }
         assertEquals("rejected", result)
+    }
+
+    /**
+     * T186 M14d-scan: a photos-only publication (no manifests) has no
+     * supported presentation — the open fails closed instead of
+     * rendering a manifest-less photo fallback.
+     */
+    @Test
+    fun photoOnlyPublicationHasNoSupportedPresentation() = runTest {
+        dev.hryshyn.remanence.core.crypto.TinkPrimitives.ensureRegistered()
+        val signing = KeysetHandle.generateNew(KeyTemplates.get("ED25519"))
+        val capsuleKey = CapsuleKeysetGenerator().generate()
+        val publication = PendingCapsulePublisher.publish(
+            capsuleId = capsule,
+            senderUserId = sender,
+            senderKeyBundleId = senderBundle,
+            deliveryTargetId = target,
+            serviceKeyId = serviceKey,
+            channel = PendingPublishCrypto.CHANNEL_EMAIL,
+            normalizedDestination = "a42@example.test",
+            salt32 = ByteArray(32).also { SecureRandom().nextBytes(it) },
+            claimExpiresAt = 1814317432L,
+            createdAtEpochSeconds = 1798765432L,
+            signingHandle = signing,
+            capsuleKeyset = capsuleKey,
+            photos = listOf(
+                "photo-bytes".toByteArray(),
+                "photo-two".toByteArray(),
+                "photo-three".toByteArray(),
+            ),
+        )
+        val result = try {
+            content(
+                sealed(),
+                publication.artifacts.associate { it.blobId to it.ciphertext },
+                signing,
+            ).openPhotos(
+                rowOfStatement(publication.statement, publication.signature),
+                owner, "token",
+                PendingAdmittedContent.EnvelopeOpener { keyBytesOf(capsuleKey) },
+            )
+            null
+        } catch (failure: IllegalStateException) {
+            failure.message
+        }
+        assertTrue((result ?: "").contains("content manifest missing"))
+    }
+
+    /**
+     * T186 M14d-scan: signed declaration/photo-map agreement — a
+     * manifest photo pointing outside the S-declared kind-3 set
+     * renders nothing (re-sealed here with a foreign blob id through
+     * the real target-AAD cryptor).
+     */
+    @Test
+    fun foreignManifestPhotoRendersNothing() = runTest {
+        val sealed = sealed()
+        val manifest = sealed.publication.artifacts.single { it.kind == 2 }
+        val plaintext = PendingArtifactCryptor.decrypt(
+            sealed.capsuleKey, capsule, manifest.blobId,
+            2, -1, sender, target, manifest.ciphertext,
+        )
+        val foreignBytes = java.nio.ByteBuffer.allocate(16).apply {
+            val foreign = java.util.UUID.fromString("ffffffff-1111-2222-3333-444444444444")
+            putLong(foreign.mostSignificantBits)
+            putLong(foreign.leastSignificantBits)
+        }.array()
+        val parsed = dev.hryshyn.remanence.protocol.v1.ContentManifest.parseFrom(plaintext)
+        val swapped = parsed.getPhotos(0).toBuilder()
+            .setBlobId(ByteString.copyFrom(foreignBytes))
+            .build()
+        val rebuilt = parsed.toBuilder().setPhotos(0, swapped).build().toByteArray()
+        val resealed = PendingArtifactCryptor.encrypt(
+            sealed.capsuleKey, capsule, manifest.blobId,
+            2, -1, sender, target, rebuilt,
+        )
+        val result = try {
+            content(
+                sealed,
+                sealed.publication.artifacts.associate {
+                    it.blobId to if (it.blobId == manifest.blobId) resealed else it.ciphertext
+                },
+            ).openPhotos(
+                rowOf(sealed), owner, "token",
+                PendingAdmittedContent.EnvelopeOpener { keyOf(sealed) },
+            )
+            null
+        } catch (failure: IllegalStateException) {
+            failure.message
+        }
+        assertTrue((result ?: "").contains("photo map mismatch"))
     }
 
     /**

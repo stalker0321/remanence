@@ -60,6 +60,13 @@ class PendingAdmittedContent(
         val photosByOrdinal: Map<Int, ByteArray>,
         /** Authored note from the v2 content manifest (null when absent). */
         val note: String?,
+        /**
+         * The full validated content manifest (version, photo map,
+         * expression, track snapshot) — carried, never re-derived, so
+         * presentation admits the actual authored layout instead of a
+         * photo-count fallback.
+         */
+        val manifest: dev.hryshyn.remanence.core.crypto.ContentManifestContent,
     )
 
     suspend fun openPhotos(
@@ -143,7 +150,18 @@ class PendingAdmittedContent(
                 val photos = LinkedHashMap<Int, ByteArray>()
                 var note: String? = null
                 var manifests = 0
+                var recognitions = 0
+                val declaredPhotos = LinkedHashMap<Int, String>()
+                var manifestContent: dev.hryshyn.remanence.core.crypto.ContentManifestContent? = null
                 for (binding in statement.artifactsList) {
+                    if (binding.kind == 1) {
+                        // Recognition manifest declaration (bytes stream
+                        // through staging/scan, never downloaded here).
+                        // Both manifests are required for supported
+                        // presentation — photo-only gifts never present.
+                        recognitions++
+                        continue
+                    }
                     if (binding.kind != 2 && binding.kind != 3) continue
                     val blobId = uuidString(binding.blobId.toByteArray(), "pending blob id malformed")
                     val ciphertext = when (
@@ -200,6 +218,7 @@ class PendingAdmittedContent(
                             }
                             if (manifests++ > 0) throw IllegalStateException("pending content manifest duplicated")
                             note = parsed.note
+                            manifestContent = parsed
                         } finally {
                             opened.fill(0)
                         }
@@ -208,10 +227,25 @@ class PendingAdmittedContent(
                         if (photos.put(binding.ordinal, opened) != null) {
                             throw IllegalStateException("pending photo ordinal duplicated")
                         }
+                        declaredPhotos[binding.ordinal] = blobId
                     }
                 }
+                if (manifests == 0) throw IllegalStateException("pending content manifest missing")
+                if (recognitions == 0) throw IllegalStateException("pending recognition manifest missing")
+                val manifest = manifestContent
+                    ?: throw IllegalStateException("pending content manifest missing")
+                // Signed declaration/photo-map agreement: the authored
+                // display map must describe EXACTLY the S-declared photo
+                // set (blob id + ordinal) — a manifest pointing outside
+                // the signed declaration (or omitting declared photos)
+                // renders nothing.
+                val manifestPairs = manifest.photos.map { it.ordinal to it.blobId.toString() }.toSet()
+                val declaredPairs = declaredPhotos.map { (ordinal, blob) -> ordinal to blob }.toSet()
+                if (manifestPairs != declaredPairs) {
+                    throw IllegalStateException("pending photo map mismatch")
+                }
                 if (photos.isEmpty()) throw IllegalStateException("pending gift has no photos")
-                val result = OpenedPhotos(photos.toMap(), note)
+                val result = OpenedPhotos(photos.toMap(), note, manifest)
                 wiped.clear()
                 return result
             } catch (cancelled: CancellationException) {
@@ -244,20 +278,30 @@ class PendingAdmittedContent(
         return buffer.array()
     }
 
-    private fun capsuleKeysetFrom(keysetBytes: ByteArray): com.google.crypto.tink.KeysetHandle {
-        // Exact-K shape is enforced by admission; re-parse defensively.
-        return try {
-            com.google.crypto.tink.TinkProtoKeysetFormat.parseKeysetWithoutSecret(keysetBytes)
+    private fun capsuleKeysetFrom(keysetBytes: ByteArray): com.google.crypto.tink.KeysetHandle =
+        pendingCapsuleKeysetFrom(keysetBytes)
+}
+
+/**
+ * T186 M14d-scan: the one verified capsule-key re-parse for the
+ * pending plane (shared by open-time and scan-time callers — same
+ * exact K, no drift). Public-shape bytes parse secretless; private
+ * handle bytes (exact K as sealed) parse with secret. Anything else
+ * fails closed.
+ */
+internal fun pendingCapsuleKeysetFrom(keysetBytes: ByteArray): com.google.crypto.tink.KeysetHandle {
+    // Exact-K shape is enforced by admission; re-parse defensively.
+    return try {
+        com.google.crypto.tink.TinkProtoKeysetFormat.parseKeysetWithoutSecret(keysetBytes)
+    } catch (_: Exception) {
+        // Private handle bytes (exact K as sealed) parse with secret.
+        try {
+            com.google.crypto.tink.TinkProtoKeysetFormat.parseKeyset(
+                keysetBytes,
+                com.google.crypto.tink.InsecureSecretKeyAccess.get(),
+            )
         } catch (_: Exception) {
-            // Private handle bytes (exact K as sealed) parse with secret.
-            try {
-                com.google.crypto.tink.TinkProtoKeysetFormat.parseKeyset(
-                    keysetBytes,
-                    com.google.crypto.tink.InsecureSecretKeyAccess.get(),
-                )
-            } catch (_: Exception) {
-                throw IllegalStateException("pending capsule key malformed")
-            }
+            throw IllegalStateException("pending capsule key malformed")
         }
     }
 }

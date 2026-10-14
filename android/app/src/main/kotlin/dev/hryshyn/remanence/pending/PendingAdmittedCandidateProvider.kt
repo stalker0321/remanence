@@ -292,14 +292,18 @@ internal class PendingAdmittedCandidateProvider(
         } catch (_: Exception) {
             return null
         }
+        // The capsule key is zeroized in the outer `finally` on EVERY
+        // path below (success, skip, and failure alike) — no early
+        // return inside may bypass it.
         try {
             val statement = dev.hryshyn.remanence.protocol.delivery_v2.PendingPublishStatementV2
                 .parseFrom(statementBytes)
             val senderId = uuidString(statement.senderUserId.toByteArray())
             val targetId = uuidString(statement.deliveryTargetId.toByteArray())
+            // The exact K as sealed (secret AES keyset): the shared
+            // two-stage re-parse, same as the open-time helper.
             val keyset = try {
-                com.google.crypto.tink.TinkProtoKeysetFormat
-                    .parseKeysetWithoutSecret(capsuleKey)
+                pendingCapsuleKeysetFrom(capsuleKey)
             } catch (_: Exception) {
                 return null
             }
@@ -337,15 +341,13 @@ internal class PendingAdmittedCandidateProvider(
                 } finally {
                     plaintext.fill(0)
                 }
-            } finally {
-                capsuleKey.fill(0)
             }
         } catch (cancelled: CancellationException) {
-            capsuleKey.fill(0)
             throw cancelled
         } catch (_: Exception) {
-            capsuleKey.fill(0)
             return null
+        } finally {
+            capsuleKey.fill(0)
         }
     }
 

@@ -15,6 +15,7 @@ import dev.hryshyn.remanence.core.data.network.SessionRequestLease
 import dev.hryshyn.remanence.core.data.network.VerificationResult
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.protocol.delivery_v2.AddressOpening
+import dev.hryshyn.remanence.protocol.delivery_v2.ArtifactBindingV2
 import dev.hryshyn.remanence.protocol.delivery_v2.ClaimBindingV1
 import dev.hryshyn.remanence.protocol.delivery_v2.ClaimChallengeV1
 import dev.hryshyn.remanence.protocol.delivery_v2.ClaimedEnvelopeContextV2
@@ -195,6 +196,7 @@ class PendingProofViewModelTest {
         ownBundleKey: ByteArray? = null,
         servicePin: PendingServicePin? = null,
         admittedStore: PendingAdmittedGiftStore? = null,
+        recognitionBlobPort: PendingRecognitionStage.BlobFetchPort? = null,
     ): PendingProofViewModel {
         TinkPrimitives.ensureRegistered()
         val signingKeys = signing
@@ -229,6 +231,7 @@ class PendingProofViewModelTest {
             ownBundleKeyProvider = { ownBundleKey },
             servicePinProvider = { servicePin },
             admittedStore = admittedStore,
+            recognitionBlobPort = recognitionBlobPort,
             claimPort = claim,
             scope = scope,
         )
@@ -552,6 +555,8 @@ class PendingProofViewModelTest {
         val servicePin: PendingServicePin,
         val challenge: ChallengeSetup,
         val proof: ContinueResult.Proof,
+        val recognitionBlob: ByteArray,
+        val recognitionBlobId: String,
     )
 
     /**
@@ -601,6 +606,11 @@ class PendingProofViewModelTest {
             "postmark/delivery-key/v1".toByteArray(Charsets.US_ASCII) +
                 byteArrayOf(0x00) + kcInput,
         )
+        // Staged kind-1 ciphertext (sealed FRONT stand-in): sized above
+        // the staging floor so selection succeeds.
+        val recognitionBlobId = "cccccccc-dddd-eeee-ffff-000000000001"
+        val recognitionBytes =
+            "recognition-front-ciphertext-0123456789-abcdef-0123456789-abcdef".toByteArray()
         val statement = PendingPublishStatementV2.newBuilder()
             .setProtocolVersion(2)
             .setCapsuleId(ByteString.copyFrom(uuidBytes(capsule)))
@@ -613,6 +623,17 @@ class PendingProofViewModelTest {
             .setClaimExpiresAtEpochSeconds(now + 86400L)
             .setClaimPolicyVersion(1)
             .setClaimSigningKeyId(ByteString.copyFrom(uuidBytes(serviceId)))
+            // T186 M14d-scan: single kind-1 recognition binding so the
+            // staging tests exercise the real S declaration path.
+            .addArtifacts(
+                ArtifactBindingV2.newBuilder()
+                    .setBlobId(ByteString.copyFrom(uuidBytes(recognitionBlobId)))
+                    .setKind(1)
+                    .setOrdinal(-1)
+                    .setCiphertextSize(recognitionBytes.size.toLong())
+                    .setCiphertextSha256(ByteString.copyFrom(sha256(recognitionBytes)))
+                    .build(),
+            )
             .build().toByteArray()
         val senderSig = senderKeys.getPrimitive(PublicKeySign::class.java).sign(
             "postmark/pending-publish/v2".toByteArray(Charsets.US_ASCII) +
@@ -691,6 +712,8 @@ class PendingProofViewModelTest {
             servicePin = PendingServicePin(serviceId, servicePublicB64),
             challenge = setup,
             proof = proof,
+            recognitionBlob = recognitionBytes,
+            recognitionBlobId = recognitionBlobId,
         )
     }
 
@@ -763,6 +786,118 @@ class PendingProofViewModelTest {
                 Base64.getEncoder().encodeToString(vectors.statement),
                 row?.statementB64,
             )
+            // No blob port: staging skipped, row still admits.
+            assertEquals("", row?.recognitionCiphertextB64)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /**
+     * T186 M14d-scan: with a blob port the Accepted path stages the
+     * S-declared kind-1 ciphertext into the row for offline scan
+     * enumeration.
+     */
+    @Test
+    fun acceptedClaimStagesRecognitionCiphertext() = runTest {
+        val vectors = acceptedVectors()
+        val dir = java.nio.file.Files.createTempDirectory("pending-claim-staged").toFile()
+        try {
+            val store = PendingAdmittedGiftStore(dir)
+            val viewModel = vm(
+                continueResult = vectors.proof,
+                options = {
+                    ClaimOptionsResult.Options(
+                        vectors.challenge.challengeId, 1_798_765_432L,
+                        Base64.getEncoder().encodeToString(vectors.challenge.sealed),
+                        Base64.getEncoder().encodeToString(vectors.challenge.contextRaw),
+                    )
+                },
+                hpke = vectors.recipientPrivate,
+                senderKeyProvider = { _, _ -> vectors.senderPublicBytes },
+                ownBundleKey = vectors.recipientPublicBytes,
+                servicePin = vectors.servicePin,
+                admittedStore = store,
+                recognitionBlobPort = PendingRecognitionStage.BlobFetchPort { deliveryId, blobId, _ ->
+                    assertEquals(vectors.proof.deliveryId, deliveryId)
+                    assertEquals(vectors.recognitionBlobId, blobId)
+                    dev.hryshyn.remanence.core.data.network.PendingBlobBytesResult.Bytes(
+                        blobId, vectors.recognitionBlob,
+                    )
+                },
+                claim = PendingClaimPort { _, _, _, _, _ ->
+                    dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
+                        vectors.claimId,
+                        Base64.getEncoder().encodeToString(vectors.claim),
+                        Base64.getEncoder().encodeToString(vectors.claimSig),
+                        Base64.getEncoder().encodeToString(vectors.sealed),
+                        vectors.sealedShaHex,
+                    )
+                },
+            )
+            driveToIntentReady(viewModel)
+            viewModel.submitClaim()
+            testScheduler.advanceUntilIdle()
+            assertEquals(
+                PendingProofViewModel.ProofState.Claimed(deliveryId, serviceVerified = true),
+                viewModel.state.value,
+            )
+            assertEquals(
+                Base64.getEncoder().encodeToString(vectors.recognitionBlob),
+                store.get(accountId, capsule)?.recognitionCiphertextB64,
+            )
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /**
+     * T186 M14d-scan: a tampered kind-1 fetch (digest mismatch) stages
+     * nothing — the claim still lands truthful with an unstaged row.
+     */
+    @Test
+    fun tamperedRecognitionBlobStagesNothing() = runTest {
+        val vectors = acceptedVectors()
+        val dir = java.nio.file.Files.createTempDirectory("pending-claim-untampered").toFile()
+        try {
+            val store = PendingAdmittedGiftStore(dir)
+            val viewModel = vm(
+                continueResult = vectors.proof,
+                options = {
+                    ClaimOptionsResult.Options(
+                        vectors.challenge.challengeId, 1_798_765_432L,
+                        Base64.getEncoder().encodeToString(vectors.challenge.sealed),
+                        Base64.getEncoder().encodeToString(vectors.challenge.contextRaw),
+                    )
+                },
+                hpke = vectors.recipientPrivate,
+                senderKeyProvider = { _, _ -> vectors.senderPublicBytes },
+                ownBundleKey = vectors.recipientPublicBytes,
+                servicePin = vectors.servicePin,
+                admittedStore = store,
+                recognitionBlobPort = PendingRecognitionStage.BlobFetchPort { _, blobId, _ ->
+                    dev.hryshyn.remanence.core.data.network.PendingBlobBytesResult.Bytes(
+                        blobId, vectors.recognitionBlob.copyOf().also { it[0] = (it[0] + 1).toByte() },
+                    )
+                },
+                claim = PendingClaimPort { _, _, _, _, _ ->
+                    dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
+                        vectors.claimId,
+                        Base64.getEncoder().encodeToString(vectors.claim),
+                        Base64.getEncoder().encodeToString(vectors.claimSig),
+                        Base64.getEncoder().encodeToString(vectors.sealed),
+                        vectors.sealedShaHex,
+                    )
+                },
+            )
+            driveToIntentReady(viewModel)
+            viewModel.submitClaim()
+            testScheduler.advanceUntilIdle()
+            assertEquals(
+                PendingProofViewModel.ProofState.Claimed(deliveryId, serviceVerified = true),
+                viewModel.state.value,
+            )
+            assertEquals("", store.get(accountId, capsule)?.recognitionCiphertextB64)
         } finally {
             dir.deleteRecursively()
         }

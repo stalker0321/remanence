@@ -36,7 +36,24 @@ class PendingAdmittedGiftStoreTest {
         blobRefs = listOf("/v2/pending-deliveries/0198f0a0-0000-7000-8000-00000000d401/blobs/cccccccc-dddd-eeee-ffff-000000000001"),
         completedAt = null,
         admittedAtMillis = 1L,
+        recognitionCiphertextB64 = "a2luZDEtY2lwaGVydGV4dA==",
     )
+
+    @Test
+    fun recognitionCiphertextRoundTrips() = runTest {
+        val dir = Files.createTempDirectory("pending-admitted-recognition").toFile()
+        try {
+            val store = PendingAdmittedGiftStore(dir)
+            assertTrue(store.upsert(gift("owner-a", "capsule-1")))
+            val reopened = PendingAdmittedGiftStore(dir)
+            assertEquals(
+                "a2luZDEtY2lwaGVydGV4dA==",
+                reopened.get("owner-a", "capsule-1")?.recognitionCiphertextB64,
+            )
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
 
     @Test
     fun upsertListGetRoundTrip() = runTest {

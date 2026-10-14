@@ -65,6 +65,8 @@ class PendingClaimIngestTest {
         val serviceKeys: KeysetHandle,
         val recipientKeys: KeysetHandle,
         val recipientPublicBytes: ByteArray,
+        val recognitionBlob: ByteArray,
+        val recognitionBlobId: String,
     )
 
     private fun crypto(forCapsule: String = capsule): Crypto {
@@ -95,6 +97,11 @@ class PendingClaimIngestTest {
         )
         val senderKeys = KeysetHandle.generateNew(KeyTemplates.get("ED25519"))
         val serviceKeys = KeysetHandle.generateNew(KeyTemplates.get("ED25519"))
+        // T186 M14d-scan: single kind-1 recognition binding so staging
+        // tests exercise the real S declaration path.
+        val recognitionBlobId = "cccccccc-dddd-eeee-ffff-000000000001"
+        val recognitionBlob =
+            "recognition-front-ciphertext-0123456789-abcdef-0123456789-abcdef".toByteArray()
         val statement = PendingPublishStatementV2.newBuilder()
             .setProtocolVersion(2)
             .setCapsuleId(ByteString.copyFrom(uuidBytes(forCapsule)))
@@ -107,6 +114,15 @@ class PendingClaimIngestTest {
             .setClaimExpiresAtEpochSeconds(1_798_765_432L)
             .setClaimPolicyVersion(1)
             .setClaimSigningKeyId(ByteString.copyFrom(uuidBytes(serviceId)))
+            .addArtifacts(
+                dev.hryshyn.remanence.protocol.delivery_v2.ArtifactBindingV2.newBuilder()
+                    .setBlobId(ByteString.copyFrom(uuidBytes(recognitionBlobId)))
+                    .setKind(1)
+                    .setOrdinal(-1)
+                    .setCiphertextSize(recognitionBlob.size.toLong())
+                    .setCiphertextSha256(ByteString.copyFrom(sha256(recognitionBlob)))
+                    .build(),
+            )
             .build().toByteArray()
         val recipientKeys = KeysetHandle.generateNew(KeyTemplates.get(TinkPrimitives.HPKE_TEMPLATE))
         val recipientPublicBytes =
@@ -178,6 +194,7 @@ class PendingClaimIngestTest {
             enc.encodeToString(sealed),
             sha256(sealed).joinToString("") { "%02x".format(it) },
             senderKeys, serviceKeys, recipientKeys, recipientPublicBytes,
+            recognitionBlob, recognitionBlobId,
         )
     }
 
@@ -229,6 +246,7 @@ class PendingClaimIngestTest {
         echoCapsuleId: String = capsule,
         echoTargetId: String = target,
         echoClaimId: String = claim,
+        recognitionBlobPort: PendingRecognitionStage.BlobFetchPort? = null,
     ): Triple<PendingClaimIngest, FencedGate, dev.hryshyn.remanence.core.data.network.SessionRequestLease> {
         val ingest = PendingClaimIngest(
         claimPort = PendingClaimIngest.ClaimFetchPort { _, _ ->
@@ -263,6 +281,7 @@ class PendingClaimIngestTest {
         sessionGate = gate,
         accountProvider = { dev.hryshyn.remanence.pending.ProofAccount(gate.owner, bundle) },
         admittedStore = PendingAdmittedGiftStore(dir),
+        recognitionBlobPort = recognitionBlobPort,
         clockSeconds = { 1_798_765_200L },
     )
         return Triple(ingest, gate, gate.capture())
@@ -278,6 +297,35 @@ class PendingClaimIngestTest {
             assertEquals(delivery, row?.deliveryId)
             assertEquals(crypto.envelopeB64, row?.envelopeB64)
             assertEquals(null, row?.completedAt)
+            // No blob port: staging skipped, row still admits.
+            assertEquals("", row?.recognitionCiphertextB64)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /**
+     * T186 M14d-scan: sync-time ingestion stages the S-declared kind-1
+     * ciphertext into the row for offline scan enumeration.
+     */
+    @Test
+    fun ingestStagesRecognitionCiphertext() = runTest {
+        val dir = Files.createTempDirectory("pending-ingest-staged").toFile()
+        try {
+            val crypto = crypto()
+            val port = PendingRecognitionStage.BlobFetchPort { deliveryId, blobId, _ ->
+                assertEquals(delivery, deliveryId)
+                assertEquals(crypto.recognitionBlobId, blobId)
+                dev.hryshyn.remanence.core.data.network.PendingBlobBytesResult.Bytes(
+                    blobId, crypto.recognitionBlob,
+                )
+            }
+            ingest(dir, crypto, recognitionBlobPort = port)
+                .let { (ingest, _, lease) -> ingest.ingest(recipient, lease, listOf(item())) }
+            assertEquals(
+                Base64.getEncoder().encodeToString(crypto.recognitionBlob),
+                PendingAdmittedGiftStore(dir).get(recipient, capsule)?.recognitionCiphertextB64,
+            )
         } finally {
             dir.deleteRecursively()
         }

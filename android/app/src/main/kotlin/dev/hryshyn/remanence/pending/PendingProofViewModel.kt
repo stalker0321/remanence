@@ -124,6 +124,12 @@ class PendingProofViewModel(
      * feed sync re-admits the same row) — Claimed stays truthful.
      */
     private val admittedStore: PendingAdmittedGiftStore? = null,
+    /**
+     * T186 M14d-scan: kind-1 fetch for reception-time FRONT staging
+     * (best-effort — null skips staging and the row still admits).
+     * Production passes the owned-material blob fetch.
+     */
+    private val recognitionBlobPort: PendingRecognitionStage.BlobFetchPort? = null,
     private val clockSeconds: () -> Long = { System.currentTimeMillis() / 1000L },
     scope: CoroutineScope? = null,
 ) : ViewModel() {
@@ -602,6 +608,15 @@ class PendingProofViewModel(
                         ) {
                             return ProofState.Failed(PendingProofMessage.GENERIC)
                         }
+                        // Reception-time FRONT staging (best-effort): the
+                        // kind-1 ciphertext rides the row so scan
+                        // enumeration stays offline. "" on any failure —
+                        // the claim stays truthful either way.
+                        val recognitionB64 = stageRecognition(
+                            creds = creds,
+                            deliveryId = current.deliveryId,
+                            statementBytes = sBytes,
+                        )
                         persistAdmittedRow(
                             creds = creds,
                             accountUserId = account.userId,
@@ -610,6 +625,7 @@ class PendingProofViewModel(
                             deliveryId = current.deliveryId,
                             deliveryTargetId = verified.deliveryTargetId,
                             claimId = verified.claimId,
+                            recognitionCiphertextB64 = recognitionB64,
                             submitted = submitted,
                             statementBytes = sBytes,
                             senderSignature = senderSig,
@@ -672,6 +688,36 @@ class PendingProofViewModel(
     }
 
     /**
+     * T186 M14d-scan: best-effort kind-1 staging for the admitted row.
+     * Runs on the held R11 lease (fenced before the network and after —
+     * a mid-await death stages nothing). "" when the publication carries
+     * no FRONT, the port is absent, or the fetch fails verification.
+     * Cancellation propagates (the caller's catch rethrows).
+     */
+    private suspend fun stageRecognition(
+        creds: ProofCreds,
+        deliveryId: String,
+        statementBytes: ByteArray,
+    ): String {
+        val port = recognitionBlobPort ?: return ""
+        val binding = PendingRecognitionStage.selectKind1(statementBytes) ?: return ""
+        if (!credsLive(creds)) return ""
+        val bytes = try {
+            PendingRecognitionStage.fetchVerified(deliveryId, creds.token, binding, port)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            null
+        } ?: return ""
+        if (!credsLive(creds)) return ""
+        return try {
+            Base64.getEncoder().encodeToString(bytes)
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    /**
      * T186 M14d-claim: builds the durable admitted row from
      * already-verified claim material (metadata + sealed opaque
      * bytes only — no keys, no plaintext). Best-effort: false means
@@ -686,6 +732,7 @@ class PendingProofViewModel(
         deliveryId: String,
         deliveryTargetId: String,
         claimId: String,
+        recognitionCiphertextB64: String,
         submitted: dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed,
         statementBytes: ByteArray,
         senderSignature: ByteArray,
@@ -725,6 +772,7 @@ class PendingProofViewModel(
                     claimBindingB64 = submitted.claimBindingB64,
                     claimSignature69B64 = submitted.claimSignature69B64,
                     recipientKeyBundleId = recipientKeyBundleId,
+                    recognitionCiphertextB64 = recognitionCiphertextB64,
                     envelopeRef = "/v2/pending-deliveries/$deliveryId/claim",
                     manifestRef = "/v2/pending-deliveries/$deliveryId/manifest",
                     blobRefs = emptyList(),

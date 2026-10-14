@@ -44,6 +44,11 @@ class PendingClaimIngest(
     private val sessionGate: PendingRetirementSessionGate,
     private val accountProvider: suspend () -> ProofAccount?,
     private val admittedStore: PendingAdmittedGiftStore,
+    /**
+     * T186 M14d-scan: kind-1 fetch for reception-time FRONT staging
+     * (best-effort — null skips staging and the row still admits).
+     */
+    private val recognitionBlobPort: PendingRecognitionStage.BlobFetchPort? = null,
     private val clockSeconds: () -> Long = { System.currentTimeMillis() / 1000L },
 ) {
 
@@ -321,6 +326,11 @@ class PendingClaimIngest(
             if (statementShaHex != control.publishStatementSha256Hex) {
                 throw IllegalStateException("pending statement hash mismatch")
             }
+            // Reception-time FRONT staging (best-effort): the kind-1
+            // ciphertext rides the row so scan enumeration stays
+            // offline. "" on any fetch failure — admission and the row
+            // still land (a later upsert heals the field).
+            val recognitionB64 = stageRecognition(txn, item.deliveryId, statementBytes)
             val row = PendingAdmittedGiftStore.AdmittedGift(
                 ownerUserId = ownerUserId,
                 capsuleId = item.capsuleId,
@@ -341,6 +351,7 @@ class PendingClaimIngest(
                 blobRefs = item.blobRefs.toList(),
                 completedAt = null,
                 admittedAtMillis = System.currentTimeMillis(),
+                recognitionCiphertextB64 = recognitionB64,
             )
             if (!checkTxn(txn)) throw IllegalStateException("pending session changed")
             if (!admittedStore.upsert(row)) {
@@ -353,6 +364,35 @@ class PendingClaimIngest(
                 is dev.hryshyn.remanence.core.crypto.PendingTrustedAdmission.Admission.PartiallyAdmitted ->
                     acceptance.capsuleAeadKeyset.fill(0)
             }
+        }
+    }
+
+    /**
+     * T186 M14d-scan: best-effort kind-1 staging for the admitted row.
+     * Fetches on the held txn bearer with a liveness recheck after the
+     * await (a mid-await death throws the session wall; a fetch failure
+     * degrades to "" and the row still admits). Cancellation propagates.
+     */
+    private suspend fun stageRecognition(
+        txn: Txn,
+        deliveryId: String,
+        statementBytes: ByteArray,
+    ): String {
+        val port = recognitionBlobPort ?: return ""
+        val binding = PendingRecognitionStage.selectKind1(statementBytes) ?: return ""
+        val token = txnBearer(txn) ?: throw IllegalStateException("pending session changed")
+        val bytes = try {
+            PendingRecognitionStage.fetchVerified(deliveryId, token, binding, port)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            null
+        } ?: return ""
+        if (!checkTxn(txn)) throw IllegalStateException("pending session changed")
+        return try {
+            Base64.getEncoder().encodeToString(bytes)
+        } catch (_: Exception) {
+            ""
         }
     }
 

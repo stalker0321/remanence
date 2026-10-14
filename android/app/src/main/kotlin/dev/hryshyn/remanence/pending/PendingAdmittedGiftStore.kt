@@ -62,6 +62,14 @@ class PendingAdmittedGiftStore(filesDir: File) {
         /** R15 completion instant, once the background completion lands. */
         val completedAt: Long?,
         val admittedAtMillis: Long,
+        /**
+         * T186 M14d-scan: staged kind-1 recognition ciphertext (sealed
+         * FRONT manifest, S-size/sha-verified at reception). Lets the
+         * scan bridge enumerate offline with no token. Blank when the
+         * publication carries no FRONT or staging failed — the row still
+         * admits and opens; it simply does not enumerate.
+         */
+        val recognitionCiphertextB64: String = "",
     )
 
     private val root = File(filesDir, "pending-admitted")
@@ -152,7 +160,7 @@ class PendingAdmittedGiftStore(filesDir: File) {
                     it.statementB64, it.statementSha256Hex, it.publishSignature69B64,
                     it.claimBindingB64, it.claimSignature69B64, it.recipientKeyBundleId,
                     it.envelopeRef, it.manifestRef, it.blobRefs,
-                    it.completedAt, it.admittedAtMillis,
+                    it.completedAt, it.admittedAtMillis, it.recognitionCiphertextB64,
                 )
             },
         )
@@ -188,6 +196,7 @@ class PendingAdmittedGiftStore(filesDir: File) {
         val blobRefs: List<String> = emptyList(),
         val completedAt: Long? = null,
         val admittedAt: Long = 0,
+        val recognitionCiphertextB64: String = "",
     ) {
         fun toGift(ownerUserId: String): AdmittedGift? {
             if (capsuleId.isBlank() || deliveryId.isBlank() || deliveryTargetId.isBlank() ||
@@ -206,7 +215,7 @@ class PendingAdmittedGiftStore(filesDir: File) {
                 statementB64, statementSha256Hex, publishSignature69B64,
                 claimBindingB64, claimSignature69B64, recipientKeyBundleId,
                 envelopeRef, manifestRef, blobRefs.toList(),
-                completedAt, admittedAt,
+                completedAt, admittedAt, recognitionCiphertextB64,
             )
         }
     }

@@ -128,6 +128,8 @@ class PendingAdmittedContentTest {
             "photo-bytes",
             opened.photosByOrdinal[0]?.toString(Charsets.UTF_8),
         )
+        // The authored note arrives via the validated v2 manifest.
+        assertEquals("hello", opened.note)
     }
 
     @Test
@@ -169,6 +171,29 @@ class PendingAdmittedContentTest {
         val sealed = sealed()
         val result = try {
             content(sealed, emptyMap()).openPhotos(
+                rowOf(sealed), owner, "token",
+                PendingAdmittedContent.EnvelopeOpener { keyOf(sealed) },
+            )
+            null
+        } catch (_: IllegalStateException) {
+            "rejected"
+        }
+        assertEquals("rejected", result)
+    }
+
+    @Test
+    fun tamperedManifestRejected() = runTest {
+        val sealed = sealed()
+        val manifest = sealed.publication.artifacts.single { it.kind == 2 }
+        val tampered = manifest.ciphertext.copyOf()
+            .also { it[0] = (it[0] + 1).toByte() }
+        val result = try {
+            content(
+                sealed,
+                sealed.publication.artifacts.associate {
+                    it.blobId to if (it.blobId == manifest.blobId) tampered else it.ciphertext
+                },
+            ).openPhotos(
                 rowOf(sealed), owner, "token",
                 PendingAdmittedContent.EnvelopeOpener { keyOf(sealed) },
             )

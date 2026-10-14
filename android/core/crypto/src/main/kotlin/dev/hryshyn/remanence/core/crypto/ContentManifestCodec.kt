@@ -205,15 +205,33 @@ class ContentManifestCodec {
             contentContext(routingContext),
             ciphertext,
         )
-        val manifest = ContentManifest.parseFrom(bytes)
+        parseAndValidate(bytes, routingContext.capsuleId.toProtoBytes().toByteArray())
+    } catch (failure: GeneralSecurityException) {
+        throw failure
+    } catch (failure: Exception) {
+        throw GeneralSecurityException("content manifest failed structural validation").apply {
+            initCause(failure)
+        }
+    }
+
+    /**
+     * T186 M14c: framed plaintext validation WITHOUT decryption (v1
+     * bytes). The v2 receiver path decrypts under the delivery-target
+     * AAD first, then shares these exact checks — one validation body
+     * for both protocol versions, unchanged inner semantics.
+     */
+    fun parseAndValidate(
+        plaintext: ByteArray,
+        expectedCapsuleId: ByteArray,
+    ): ContentManifestContent = try {
+        val manifest = ContentManifest.parseFrom(plaintext)
         if (manifest.protocolVersion != PROTOCOL_VERSION &&
             manifest.protocolVersion != PROTOCOL_VERSION_V2
         ) {
             throw GeneralSecurityException("unsupported content manifest version")
         }
-        val expectedCapsuleId = routingContext.capsuleId.toProtoBytes()
-        if (manifest.capsuleId.size() != expectedCapsuleId.size() ||
-            !MessageDigest.isEqual(manifest.capsuleId.toByteArray(), expectedCapsuleId.toByteArray())
+        if (manifest.capsuleId.size() != expectedCapsuleId.size ||
+            !MessageDigest.isEqual(manifest.capsuleId.toByteArray(), expectedCapsuleId)
         ) {
             throw GeneralSecurityException("content manifest capsule id does not match routing")
         }

@@ -47,6 +47,8 @@ class PendingAdmittedContent(
 
     data class OpenedPhotos(
         val photosByOrdinal: Map<Int, ByteArray>,
+        /** Authored note from the v2 content manifest (null when absent). */
+        val note: String?,
     )
 
     suspend fun openPhotos(
@@ -108,8 +110,10 @@ class PendingAdmittedContent(
         }
         try {
             val photos = LinkedHashMap<Int, ByteArray>()
+            var note: String? = null
+            var manifests = 0
             for (binding in statement.artifactsList) {
-                if (binding.kind != 3) continue
+                if (binding.kind != 2 && binding.kind != 3) continue
                 val blobId = uuidString(binding.blobId.toByteArray(), "pending blob id malformed")
                 val ciphertext = when (
                     val downloaded = try {
@@ -148,12 +152,27 @@ class PendingAdmittedContent(
                 } catch (_: Exception) {
                     throw IllegalStateException("pending photo open failed")
                 }
-                if (photos.put(binding.ordinal, opened) != null) {
-                    throw IllegalStateException("pending photo ordinal duplicated")
+                if (binding.kind == 2) {
+                    // Content manifest: same framed validation as v1
+                    // (byte-identical inner semantics), then the note.
+                    val parsed = try {
+                        dev.hryshyn.remanence.core.crypto.ContentManifestCodec().parseAndValidate(
+                            opened,
+                            uuidBytes(row.capsuleId),
+                        )
+                    } catch (_: Exception) {
+                        throw IllegalStateException("pending content manifest rejected")
+                    }
+                    if (manifests++ > 0) throw IllegalStateException("pending content manifest duplicated")
+                    note = parsed.note
+                } else {
+                    if (photos.put(binding.ordinal, opened) != null) {
+                        throw IllegalStateException("pending photo ordinal duplicated")
+                    }
                 }
             }
             if (photos.isEmpty()) throw IllegalStateException("pending gift has no photos")
-            return OpenedPhotos(photos.toMap())
+            return OpenedPhotos(photos.toMap(), note)
         } finally {
             capsuleKey.fill(0)
         }
@@ -163,6 +182,18 @@ class PendingAdmittedContent(
         require(raw16.size == 16) { what }
         val buffer = java.nio.ByteBuffer.wrap(raw16)
         return java.util.UUID(buffer.long, buffer.long).toString()
+    }
+
+    private fun uuidBytes(rest: String): ByteArray {
+        val uuid = try {
+            java.util.UUID.fromString(rest)
+        } catch (_: IllegalArgumentException) {
+            throw IllegalStateException("pending id malformed")
+        }
+        val buffer = java.nio.ByteBuffer.allocate(16)
+        buffer.putLong(uuid.mostSignificantBits)
+        buffer.putLong(uuid.leastSignificantBits)
+        return buffer.array()
     }
 
     private fun capsuleKeysetFrom(keysetBytes: ByteArray): com.google.crypto.tink.KeysetHandle {

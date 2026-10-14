@@ -84,15 +84,19 @@ class PendingProofViewModelTest {
         val challengeId: String,
     )
 
-    private fun challengeSetup(nowSeconds: Long = 1_798_765_400L): ChallengeSetup {
+    private fun challengeSetup(
+        nowSeconds: Long = 1_798_765_400L,
+        challengeCapsule: String = capsule,
+        challengeTarget: String = target,
+    ): ChallengeSetup {
         TinkPrimitives.ensureRegistered()
         val recipient = KeysetHandle.generateNew(KeyTemplates.get(TinkPrimitives.HPKE_TEMPLATE))
         val nonce = ByteArray(32).also { SecureRandom().nextBytes(it) }
         val challengeId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
         val context = ClaimChallengeV1.newBuilder()
             .setChallengeId(ByteString.copyFrom(uuidBytes(challengeId)))
-            .setCapsuleId(ByteString.copyFrom(uuidBytes(capsule)))
-            .setDeliveryTargetId(ByteString.copyFrom(uuidBytes(target)))
+            .setCapsuleId(ByteString.copyFrom(uuidBytes(challengeCapsule)))
+            .setDeliveryTargetId(ByteString.copyFrom(uuidBytes(challengeTarget)))
             .setRecipientUserId(ByteString.copyFrom(uuidBytes(accountId)))
             .setRecipientKeyBundleId(ByteString.copyFrom(uuidBytes(bundleId)))
             .setSessionId(ByteString.copyFrom(uuidBytes(sessionId)))
@@ -176,6 +180,8 @@ class PendingProofViewModelTest {
         gateOwner: String? = null,
         signing: KeysetHandle? = null,
         hpke: KeysetHandle? = null,
+        hpkeProvider: (suspend () -> KeysetHandle?)? = null,
+        gateTap: ((FakeGate) -> Unit)? = null,
         session: String? = sessionId,
         senderKey: ByteArray? = frozenSenderKey(),
         senderKeyProvider: (suspend (String, String) -> ByteArray?)? = null,
@@ -195,6 +201,8 @@ class PendingProofViewModelTest {
             ?: KeysetHandle.generateNew(KeyTemplates.get("ED25519"))
         // Unconfined: launched flow steps run eagerly under advanceUntilIdle.
         val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler))
+        val gate = FakeGate(gateOwner ?: account?.userId ?: ownerless(), tokens, live)
+        gateTap?.invoke(gate)
         return PendingProofViewModel(
             continuePort = ProofContinuePort { _, _ -> continueResult },
             verifyPort = object : ProofVerifyPort {
@@ -212,10 +220,10 @@ class PendingProofViewModelTest {
                     checkBehavior?.invoke() ?: VerificationResult.Verified(attemptId)
             },
             optionsPort = ProofOptionsPort { _, _ -> options("") },
-            sessionGate = FakeGate(gateOwner ?: account?.userId ?: ownerless(), tokens, live),
+            sessionGate = gate,
             accountProvider = { account },
             signingKeyProvider = { signingKeys },
-            hpkeKeyProvider = { hpke },
+            hpkeKeyProvider = hpkeProvider ?: { hpke },
             sessionIdProvider = { session },
             senderKeyProvider = senderKeyProvider ?: { _, _ -> senderKey },
             ownBundleKeyProvider = { ownBundleKey },
@@ -526,15 +534,37 @@ class PendingProofViewModelTest {
         assertEquals(listOf(true), seenAffirmed)
     }
 
+    private val otherCapsule = "99999999-2222-3333-4444-555555555555"
+    private val otherTarget = "ffffffff-1111-2222-3333-444444444444"
+    private val otherClaimId = "77777777-8888-9999-0000-111111111111"
+
+    private data class AcceptedVectors(
+        val statement: ByteArray,
+        val senderSig: ByteArray,
+        val senderPublicBytes: ByteArray,
+        val claim: ByteArray,
+        val claimSig: ByteArray,
+        val sealed: ByteArray,
+        val sealedShaHex: String,
+        val claimId: String,
+        val recipientPrivate: KeysetHandle,
+        val recipientPublicBytes: ByteArray,
+        val servicePin: PendingServicePin,
+        val challenge: ChallengeSetup,
+        val proof: ContinueResult.Proof,
+    )
+
     /**
-     * T186 M14d-claim: the full Accepted path with self-built,
-     * internally consistent vectors (own sender/service keys sign S
-     * and R; the envelope seals to the test recipient) — trusted
-     * acceptance persists the admitted row (ids + sealed bytes, no
-     * keys) with serviceVerified=true. Partial (no pin) writes no row.
+     * Self-built, internally consistent Accepted vectors (own
+     * sender/service keys sign S and R; the envelope seals to the test
+     * recipient). Echo/challenge ids default to the real gift; the
+     * substitution negatives override them so the Continue echo names a
+     * sibling gift while S/R stay genuinely signed.
      */
-    @Test
-    fun acceptedClaimPersistsAdmittedRow() = runTest {
+    private fun acceptedVectors(
+        echoCapsule: String = capsule,
+        echoTarget: String = target,
+    ): AcceptedVectors {
         TinkPrimitives.ensureRegistered()
         val now = System.currentTimeMillis() / 1000L
         val senderKeys = KeysetHandle.generateNew(KeyTemplates.get("ED25519"))
@@ -545,7 +575,7 @@ class PendingProofViewModelTest {
         val servicePublicB64 = Base64.getEncoder().encodeToString(
             TinkProtoKeysetFormat.serializeKeysetWithoutSecret(serviceKeys.publicKeysetHandle),
         )
-        val setup = challengeSetup()
+        val setup = challengeSetup(challengeCapsule = echoCapsule, challengeTarget = echoTarget)
         val recipientPublicBytes =
             TinkProtoKeysetFormat.serializeKeysetWithoutSecret(setup.recipientPrivate.publicKeysetHandle)
         val opening = AddressOpening.newBuilder()
@@ -641,46 +671,81 @@ class PendingProofViewModelTest {
             "postmark/claim-binding/v1".toByteArray(Charsets.US_ASCII) +
                 byteArrayOf(0x00) + claim,
         )
+        val proof = proofBranch().copy(
+            capsuleId = echoCapsule,
+            deliveryTargetId = echoTarget,
+            publishStatementB64 = Base64.getEncoder().encodeToString(statement),
+            publishSignature69B64 = Base64.getEncoder().encodeToString(senderSig),
+        )
+        return AcceptedVectors(
+            statement = statement,
+            senderSig = senderSig,
+            senderPublicBytes = senderPublicBytes,
+            claim = claim,
+            claimSig = claimSig,
+            sealed = sealed,
+            sealedShaHex = sha256(sealed).joinToString("") { "%02x".format(it) },
+            claimId = claimId,
+            recipientPrivate = setup.recipientPrivate,
+            recipientPublicBytes = recipientPublicBytes,
+            servicePin = PendingServicePin(serviceId, servicePublicB64),
+            challenge = setup,
+            proof = proof,
+        )
+    }
+
+    private fun kotlinx.coroutines.test.TestScope.driveToIntentReady(
+        viewModel: PendingProofViewModel,
+    ) {
+        viewModel.start("ref")
+        testScheduler.advanceUntilIdle()
+        viewModel.onDestinationChange("a42@example.test")
+        viewModel.requestAttempt()
+        testScheduler.advanceUntilIdle()
+        viewModel.onCodeChange("12345678")
+        viewModel.checkCode()
+        testScheduler.advanceUntilIdle()
+        assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.IntentReady)
+    }
+
+    /**
+     * T186 M14d-claim: the full Accepted path with self-built,
+     * internally consistent vectors (own sender/service keys sign S
+     * and R; the envelope seals to the test recipient) — trusted
+     * acceptance persists the admitted row (ids + sealed bytes, no
+     * keys) with serviceVerified=true. Partial (no pin) writes no row.
+     */
+    @Test
+    fun acceptedClaimPersistsAdmittedRow() = runTest {
+        val vectors = acceptedVectors()
         val dir = java.nio.file.Files.createTempDirectory("pending-claim-row").toFile()
         try {
             val store = PendingAdmittedGiftStore(dir)
-            val proof = proofBranch().copy(
-                publishStatementB64 = Base64.getEncoder().encodeToString(statement),
-                publishSignature69B64 = Base64.getEncoder().encodeToString(senderSig),
-            )
             val viewModel = vm(
-                continueResult = proof,
+                continueResult = vectors.proof,
                 options = {
                     ClaimOptionsResult.Options(
-                        setup.challengeId, 1_798_765_432L,
-                        Base64.getEncoder().encodeToString(setup.sealed),
-                        Base64.getEncoder().encodeToString(setup.contextRaw),
+                        vectors.challenge.challengeId, 1_798_765_432L,
+                        Base64.getEncoder().encodeToString(vectors.challenge.sealed),
+                        Base64.getEncoder().encodeToString(vectors.challenge.contextRaw),
                     )
                 },
-                hpke = setup.recipientPrivate,
-                senderKeyProvider = { _, _ -> senderPublicBytes },
-                ownBundleKey = recipientPublicBytes,
-                servicePin = PendingServicePin(serviceId, servicePublicB64),
+                hpke = vectors.recipientPrivate,
+                senderKeyProvider = { _, _ -> vectors.senderPublicBytes },
+                ownBundleKey = vectors.recipientPublicBytes,
+                servicePin = vectors.servicePin,
                 admittedStore = store,
                 claim = PendingClaimPort { _, _, _, _, _ ->
                     dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
-                        claimId,
-                        Base64.getEncoder().encodeToString(claim),
-                        Base64.getEncoder().encodeToString(claimSig),
-                        Base64.getEncoder().encodeToString(sealed),
-                        sha256(sealed).joinToString("") { "%02x".format(it) },
+                        vectors.claimId,
+                        Base64.getEncoder().encodeToString(vectors.claim),
+                        Base64.getEncoder().encodeToString(vectors.claimSig),
+                        Base64.getEncoder().encodeToString(vectors.sealed),
+                        vectors.sealedShaHex,
                     )
                 },
             )
-            viewModel.start("ref")
-            testScheduler.advanceUntilIdle()
-            viewModel.onDestinationChange("a42@example.test")
-            viewModel.requestAttempt()
-            testScheduler.advanceUntilIdle()
-            viewModel.onCodeChange("12345678")
-            viewModel.checkCode()
-            testScheduler.advanceUntilIdle()
-            assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.IntentReady)
+            driveToIntentReady(viewModel)
             viewModel.submitClaim()
             testScheduler.advanceUntilIdle()
             assertEquals(
@@ -691,13 +756,171 @@ class PendingProofViewModelTest {
             val row = store.get(accountId, capsule)
             assertEquals(deliveryId, row?.deliveryId)
             assertEquals(
-                Base64.getEncoder().encodeToString(sealed),
+                Base64.getEncoder().encodeToString(vectors.sealed),
                 row?.envelopeB64,
             )
             assertEquals(
-                Base64.getEncoder().encodeToString(statement),
+                Base64.getEncoder().encodeToString(vectors.statement),
                 row?.statementB64,
             )
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /**
+     * T186 dd46 binding gate: the Continue echo names a sibling gift
+     * while S/R/envelope stay genuinely signed for the real one.
+     * accept() still passes (S/R internally consistent) but the row
+     * gate must reject — verified capsule/target != echo — with no row
+     * under either id and no Claimed promotion.
+     */
+    @Test
+    fun substitutedContinueEchoWritesNoRow() = runTest {
+        val vectors = acceptedVectors(echoCapsule = otherCapsule, echoTarget = otherTarget)
+        val dir = java.nio.file.Files.createTempDirectory("pending-claim-substituted").toFile()
+        try {
+            val store = PendingAdmittedGiftStore(dir)
+            val viewModel = vm(
+                continueResult = vectors.proof,
+                options = {
+                    ClaimOptionsResult.Options(
+                        vectors.challenge.challengeId, 1_798_765_432L,
+                        Base64.getEncoder().encodeToString(vectors.challenge.sealed),
+                        Base64.getEncoder().encodeToString(vectors.challenge.contextRaw),
+                    )
+                },
+                hpke = vectors.recipientPrivate,
+                senderKeyProvider = { _, _ -> vectors.senderPublicBytes },
+                ownBundleKey = vectors.recipientPublicBytes,
+                servicePin = vectors.servicePin,
+                admittedStore = store,
+                claim = PendingClaimPort { _, _, _, _, _ ->
+                    dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
+                        vectors.claimId,
+                        Base64.getEncoder().encodeToString(vectors.claim),
+                        Base64.getEncoder().encodeToString(vectors.claimSig),
+                        Base64.getEncoder().encodeToString(vectors.sealed),
+                        vectors.sealedShaHex,
+                    )
+                },
+            )
+            driveToIntentReady(viewModel)
+            viewModel.submitClaim()
+            testScheduler.advanceUntilIdle()
+            assertEquals(
+                PendingProofViewModel.ProofState.Failed(PendingProofViewModel.PendingProofMessage.GENERIC),
+                viewModel.state.value,
+            )
+            assertEquals(null, store.get(accountId, capsule))
+            assertEquals(null, store.get(accountId, otherCapsule))
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /**
+     * T186 dd46 binding gate: the submit echo carries a different claim
+     * id than the verified R. accept() still passes but the row gate
+     * must reject — no row, no Claimed promotion.
+     */
+    @Test
+    fun mismatchedSubmitClaimIdWritesNoRow() = runTest {
+        val vectors = acceptedVectors()
+        val dir = java.nio.file.Files.createTempDirectory("pending-claim-id-echo").toFile()
+        try {
+            val store = PendingAdmittedGiftStore(dir)
+            val viewModel = vm(
+                continueResult = vectors.proof,
+                options = {
+                    ClaimOptionsResult.Options(
+                        vectors.challenge.challengeId, 1_798_765_432L,
+                        Base64.getEncoder().encodeToString(vectors.challenge.sealed),
+                        Base64.getEncoder().encodeToString(vectors.challenge.contextRaw),
+                    )
+                },
+                hpke = vectors.recipientPrivate,
+                senderKeyProvider = { _, _ -> vectors.senderPublicBytes },
+                ownBundleKey = vectors.recipientPublicBytes,
+                servicePin = vectors.servicePin,
+                admittedStore = store,
+                claim = PendingClaimPort { _, _, _, _, _ ->
+                    dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
+                        otherClaimId,
+                        Base64.getEncoder().encodeToString(vectors.claim),
+                        Base64.getEncoder().encodeToString(vectors.claimSig),
+                        Base64.getEncoder().encodeToString(vectors.sealed),
+                        vectors.sealedShaHex,
+                    )
+                },
+            )
+            driveToIntentReady(viewModel)
+            viewModel.submitClaim()
+            testScheduler.advanceUntilIdle()
+            assertEquals(
+                PendingProofViewModel.ProofState.Failed(PendingProofViewModel.PendingProofMessage.GENERIC),
+                viewModel.state.value,
+            )
+            assertEquals(null, store.get(accountId, capsule))
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /**
+     * T186 dd46 effect fence: the held lease dies mid-await (after R11
+     * submit, during the key-provider awaits). No row is written and
+     * the flow fails SESSION_CHANGED — never Claimed, never
+     * serviceVerified promotion.
+     */
+    @Test
+    fun midAwaitSessionDeathWritesNoRow() = runTest {
+        val vectors = acceptedVectors()
+        val dir = java.nio.file.Files.createTempDirectory("pending-claim-midawait").toFile()
+        try {
+            val store = PendingAdmittedGiftStore(dir)
+            var gate: FakeGate? = null
+            // R10 options consumes the first hpke fetch; the submit-path
+            // fetch (second call) kills the lease — after the R11 submit
+            // fence, before the new post-await/upsert fences.
+            var hpkeCalls = 0
+            val viewModel = vm(
+                continueResult = vectors.proof,
+                options = {
+                    ClaimOptionsResult.Options(
+                        vectors.challenge.challengeId, 1_798_765_432L,
+                        Base64.getEncoder().encodeToString(vectors.challenge.sealed),
+                        Base64.getEncoder().encodeToString(vectors.challenge.contextRaw),
+                    )
+                },
+                hpkeProvider = {
+                    hpkeCalls += 1
+                    if (hpkeCalls == 2) gate?.live = false
+                    vectors.recipientPrivate
+                },
+                gateTap = { gate = it },
+                senderKeyProvider = { _, _ -> vectors.senderPublicBytes },
+                ownBundleKey = vectors.recipientPublicBytes,
+                servicePin = vectors.servicePin,
+                admittedStore = store,
+                claim = PendingClaimPort { _, _, _, _, _ ->
+                    dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
+                        vectors.claimId,
+                        Base64.getEncoder().encodeToString(vectors.claim),
+                        Base64.getEncoder().encodeToString(vectors.claimSig),
+                        Base64.getEncoder().encodeToString(vectors.sealed),
+                        vectors.sealedShaHex,
+                    )
+                },
+            )
+            driveToIntentReady(viewModel)
+            viewModel.submitClaim()
+            testScheduler.advanceUntilIdle()
+            assertEquals(
+                PendingProofViewModel.ProofState.Failed(PendingProofViewModel.PendingProofMessage.SESSION_CHANGED),
+                viewModel.state.value,
+            )
+            assertEquals(null, store.get(accountId, capsule))
         } finally {
             dir.deleteRecursively()
         }

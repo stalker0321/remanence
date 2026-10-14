@@ -132,10 +132,12 @@ class PendingAdmittedContent(
             throw IllegalStateException("pending capsule key unavailable")
         }
         try {
-            // Receiver hygiene (T187 qualifier): every decrypted buffer
-            // is tracked so a LATER failure wipes previously opened
-            // photos/manifest plaintext — partial buffers never gain
-            // caller ownership. On success the map takes ownership.
+            // Receiver hygiene (T187 qualifier): every decrypted PHOTO
+            // buffer is tracked so a LATER failure wipes previously opened
+            // photos — partial buffers never gain caller ownership. The
+            // content-manifest plaintext is wiped immediately after its
+            // parse (note survives as an immutable copy) and never enters
+            // the tracked set. On success the photo map takes ownership.
             val wiped = ArrayList<ByteArray>()
             try {
                 val photos = LinkedHashMap<Int, ByteArray>()
@@ -178,21 +180,31 @@ class PendingAdmittedContent(
                     } catch (_: Exception) {
                         throw IllegalStateException("pending photo open failed")
                     }
-                    wiped += opened
                     if (binding.kind == 2) {
                         // Content manifest: same framed validation as v1
                         // (byte-identical inner semantics), then the note.
-                        val parsed = try {
-                            dev.hryshyn.remanence.core.crypto.ContentManifestCodec().parseAndValidate(
-                                opened,
-                                uuidBytes(row.capsuleId),
-                            )
-                        } catch (_: Exception) {
-                            throw IllegalStateException("pending content manifest rejected")
+                        // The manifest plaintext is wiped immediately after
+                        // the parse in `finally` and never joins `wiped`:
+                        // transferred ownership is photo buffers only, so a
+                        // success `wiped.clear()` cannot drop manifest bytes
+                        // unwiped. Failures/cancel still wipe previously
+                        // opened photos through the outer handlers below.
+                        try {
+                            val parsed = try {
+                                dev.hryshyn.remanence.core.crypto.ContentManifestCodec().parseAndValidate(
+                                    opened,
+                                    uuidBytes(row.capsuleId),
+                                )
+                            } catch (_: Exception) {
+                                throw IllegalStateException("pending content manifest rejected")
+                            }
+                            if (manifests++ > 0) throw IllegalStateException("pending content manifest duplicated")
+                            note = parsed.note
+                        } finally {
+                            opened.fill(0)
                         }
-                        if (manifests++ > 0) throw IllegalStateException("pending content manifest duplicated")
-                        note = parsed.note
                     } else {
+                        wiped += opened
                         if (photos.put(binding.ordinal, opened) != null) {
                             throw IllegalStateException("pending photo ordinal duplicated")
                         }

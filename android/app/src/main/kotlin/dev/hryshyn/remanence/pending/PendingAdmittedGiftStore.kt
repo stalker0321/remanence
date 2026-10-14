@@ -47,6 +47,14 @@ class PendingAdmittedGiftStore(filesDir: File) {
         val statementSha256Hex: String,
         /** Sender signature over S (public) for open-time re-verification. */
         val publishSignature69B64: String,
+        /**
+         * T186 M14d-scan: claim binding + service signature + recipient
+         * bundle (all public verification material) so scan-time
+         * re-admission needs no network before the blob downloads.
+         */
+        val claimBindingB64: String,
+        val claimSignature69B64: String,
+        val recipientKeyBundleId: String,
         /** Frozen feed refs (manifest/blob bytes download at open time). */
         val envelopeRef: String,
         val manifestRef: String,
@@ -142,6 +150,7 @@ class PendingAdmittedGiftStore(filesDir: File) {
                     it.capsuleId, it.deliveryId, it.deliveryTargetId, it.claimId,
                     it.availableAt, it.envelopeB64, it.envelopeSha256Hex,
                     it.statementB64, it.statementSha256Hex, it.publishSignature69B64,
+                    it.claimBindingB64, it.claimSignature69B64, it.recipientKeyBundleId,
                     it.envelopeRef, it.manifestRef, it.blobRefs,
                     it.completedAt, it.admittedAtMillis,
                 )
@@ -171,6 +180,9 @@ class PendingAdmittedGiftStore(filesDir: File) {
         val statementB64: String = "",
         val statementSha256Hex: String = "",
         val publishSignature69B64: String = "",
+        val claimBindingB64: String = "",
+        val claimSignature69B64: String = "",
+        val recipientKeyBundleId: String = "",
         val envelopeRef: String = "",
         val manifestRef: String = "",
         val blobRefs: List<String> = emptyList(),
@@ -182,6 +194,8 @@ class PendingAdmittedGiftStore(filesDir: File) {
                 claimId.isBlank() || availableAt < 0 || envelopeB64.isBlank() ||
                 statementB64.isBlank() || statementSha256Hex.isBlank() ||
                 publishSignature69B64.isBlank() ||
+                claimBindingB64.isBlank() || claimSignature69B64.isBlank() ||
+                recipientKeyBundleId.isBlank() ||
                 envelopeRef.isBlank() || manifestRef.isBlank()
             ) {
                 return null
@@ -190,6 +204,7 @@ class PendingAdmittedGiftStore(filesDir: File) {
                 ownerUserId, capsuleId, deliveryId, deliveryTargetId, claimId,
                 availableAt, envelopeB64, envelopeSha256Hex,
                 statementB64, statementSha256Hex, publishSignature69B64,
+                claimBindingB64, claimSignature69B64, recipientKeyBundleId,
                 envelopeRef, manifestRef, blobRefs.toList(),
                 completedAt, admittedAt,
             )

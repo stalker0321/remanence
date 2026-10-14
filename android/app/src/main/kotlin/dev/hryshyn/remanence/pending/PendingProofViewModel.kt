@@ -10,6 +10,8 @@ import dev.hryshyn.remanence.core.data.network.ClaimOptionsResult
 import dev.hryshyn.remanence.core.data.network.ContinueResult
 import dev.hryshyn.remanence.core.data.network.GiftLookupFailure
 import dev.hryshyn.remanence.core.data.network.VerificationResult
+import dev.hryshyn.remanence.protocol.delivery_v2.ClaimBindingV1
+import dev.hryshyn.remanence.protocol.delivery_v2.PendingPublishStatementV2
 import java.security.GeneralSecurityException
 import java.util.Base64
 import kotlin.coroutines.cancellation.CancellationException
@@ -534,6 +536,11 @@ class PendingProofViewModel(
                 null
             }
         }
+        // Held-lease fence AFTER the key-provider awaits: an
+        // owner/incarnation death across hpke/own-bundle fetch must not
+        // admit, persist, or promote below (same SESSION_CHANGED wall as
+        // every R-call await).
+        if (!credsLive(creds)) return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
         return try {
             val binding = Base64.getDecoder().decode(submitted.claimBindingB64)
             val envelope = Base64.getDecoder().decode(submitted.envelopeB64)
@@ -575,15 +582,43 @@ class PendingProofViewModel(
                         // the admitted row NOW (metadata + sealed bytes
                         // only) so the gift survives without depending on
                         // a later feed sync. Partial never writes.
+                        //
+                        // Row ids come from the VERIFIED S/R bytes (never
+                        // the unsigned Continue/submit echoes): S.capsule/
+                        // target and R.claim must name this exact gift.
+                        // accept() only proves S/R internally consistent,
+                        // so an otherwise-valid response for a sibling gift
+                        // (consistent with its own signed pair) would
+                        // otherwise poison this row. Same substitution
+                        // negative as the ingest gate.
+                        val verified = try {
+                            verifiedRowIds(sBytes, binding)
+                        } catch (_: Exception) {
+                            return ProofState.Failed(PendingProofMessage.GENERIC)
+                        }
+                        if (verified.capsuleId != current.capsuleId ||
+                            verified.deliveryTargetId != current.deliveryTargetId ||
+                            verified.claimId != submitted.claimId
+                        ) {
+                            return ProofState.Failed(PendingProofMessage.GENERIC)
+                        }
                         persistAdmittedRow(
+                            creds = creds,
                             accountUserId = account.userId,
-                            capsuleId = current.capsuleId,
+                            recipientKeyBundleId = account.bundleId,
+                            capsuleId = verified.capsuleId,
                             deliveryId = current.deliveryId,
-                            deliveryTargetId = current.deliveryTargetId,
+                            deliveryTargetId = verified.deliveryTargetId,
+                            claimId = verified.claimId,
                             submitted = submitted,
                             statementBytes = sBytes,
                             senderSignature = senderSig,
                         )
+                        // Fence before promotion: a session death across
+                        // the suspend upsert must not yield Claimed.
+                        if (!credsLive(creds)) {
+                            return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+                        }
                         ProofState.Claimed(current.deliveryId, serviceVerified = true)
                     }
                     is dev.hryshyn.remanence.core.crypto.PendingClaimedEnvelope.EnvelopeAcceptance.PartiallyAccepted ->
@@ -597,11 +632,43 @@ class PendingProofViewModel(
                         acceptance.capsuleAeadKeyset.fill(0)
                 }
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (_: GeneralSecurityException) {
             ProofState.Failed(PendingProofMessage.GENERIC)
         } catch (_: Exception) {
             ProofState.Failed(PendingProofMessage.GENERIC)
         }
+    }
+
+    /**
+     * Durable row ids parsed from the VERIFIED S/R bytes (canonical
+     * 16-byte network order, same layout the verifiers check). The
+     * caller compares them against the unsigned Continue/submit echoes
+     * and builds the row from these — never from echo strings.
+     */
+    private data class VerifiedRowIds(
+        val capsuleId: String,
+        val deliveryTargetId: String,
+        val claimId: String,
+    )
+
+    private fun verifiedRowIds(statementBytes: ByteArray, claimBytes: ByteArray): VerifiedRowIds {
+        val statement = try {
+            PendingPublishStatementV2.parseFrom(statementBytes)
+        } catch (_: Exception) {
+            throw IllegalStateException("pending publish statement malformed")
+        }
+        val claim = try {
+            ClaimBindingV1.parseFrom(claimBytes)
+        } catch (_: Exception) {
+            throw IllegalStateException("pending claim binding malformed")
+        }
+        return VerifiedRowIds(
+            uuidRest(statement.capsuleId),
+            uuidRest(statement.deliveryTargetId),
+            uuidRest(claim.claimId),
+        )
     }
 
     /**
@@ -612,17 +679,20 @@ class PendingProofViewModel(
      * stays truthful either way.
      */
     private suspend fun persistAdmittedRow(
+        creds: ProofCreds,
         accountUserId: String,
+        recipientKeyBundleId: String,
         capsuleId: String,
         deliveryId: String,
         deliveryTargetId: String,
+        claimId: String,
         submitted: dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed,
         statementBytes: ByteArray,
         senderSignature: ByteArray,
     ): Boolean {
         val store = admittedStore ?: return false
         if (accountUserId.isBlank() || capsuleId.isBlank() || deliveryId.isBlank() ||
-            deliveryTargetId.isBlank()
+            deliveryTargetId.isBlank() || claimId.isBlank()
         ) {
             return false
         }
@@ -633,13 +703,18 @@ class PendingProofViewModel(
             return false
         }
         return try {
-            store.upsert(
+            // Held-lease fences around the suspend upsert: the lease that
+            // submitted R11 must still own this incarnation immediately
+            // before AND after the write — a mid-await death writes no row
+            // (and the caller additionally refuses Claimed below).
+            if (!credsLive(creds)) return false
+            val durable = store.upsert(
                 PendingAdmittedGiftStore.AdmittedGift(
                     ownerUserId = accountUserId,
                     capsuleId = capsuleId,
                     deliveryId = deliveryId,
                     deliveryTargetId = deliveryTargetId,
-                    claimId = submitted.claimId,
+                    claimId = claimId,
                     availableAt = clockSeconds(),
                     envelopeB64 = submitted.envelopeB64,
                     envelopeSha256Hex = submitted.envelopeSha256Hex,
@@ -647,6 +722,9 @@ class PendingProofViewModel(
                     statementSha256Hex = statementShaHex,
                     publishSignature69B64 = Base64.getEncoder()
                         .encodeToString(senderSignature),
+                    claimBindingB64 = submitted.claimBindingB64,
+                    claimSignature69B64 = submitted.claimSignature69B64,
+                    recipientKeyBundleId = recipientKeyBundleId,
                     envelopeRef = "/v2/pending-deliveries/$deliveryId/claim",
                     manifestRef = "/v2/pending-deliveries/$deliveryId/manifest",
                     blobRefs = emptyList(),
@@ -654,6 +732,8 @@ class PendingProofViewModel(
                     admittedAtMillis = System.currentTimeMillis(),
                 ),
             )
+            if (!credsLive(creds)) return false
+            durable
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {

@@ -455,6 +455,15 @@ private fun RootSurface(
             }
         },
         capsuleContent = { grantId ->
+            // T186 M14d-scan: caller-owned pending photos for the route
+            // lifetime — wiped on close/failure (the grant guard alone
+            // does not own these bytes). Grant-keyed remembered ref so
+            // recomposition can neither reset nor leak the wipe.
+            val pendingOpened = remember(grantId) {
+                java.util.concurrent.atomic.AtomicReference<dev.hryshyn.remanence.pending.PendingAdmittedContent.OpenedPhotos?>(
+                    null,
+                )
+            }
             dev.hryshyn.remanence.ui.capsule.CapsuleRoute(
                 grantId = grantId,
                 contentFactory = {
@@ -488,6 +497,26 @@ private fun RootSurface(
                                 },
                             )
                         }
+                        dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource.PENDING -> {
+                            // Pending plane: open under the live grant with
+                            // a held lease + bearer (admission replayed
+                            // inside the open). Any failure fails the
+                            // route closed — never partial content.
+                            val owner = (authState as? AuthUiState.Authenticated)?.userId
+                                ?: error("no authenticated local account")
+                            val opened = try {
+                                container.openPendingAdmittedPhotos(owner, capsuleId)
+                            } catch (cancelled: kotlin.coroutines.cancellation.CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                error("pending capsule is no longer available")
+                            }
+                            pendingOpened.set(opened)
+                            dev.hryshyn.remanence.pending.PendingAdmittedPhotosReader(
+                                capsuleId,
+                                opened,
+                            )
+                        }
                     }
                     dev.hryshyn.remanence.ui.capsule.CapsuleContentBinding(
                         capsuleId = capsuleId,
@@ -496,8 +525,18 @@ private fun RootSurface(
                 },
                 validateLiveGrant = { rootViewModel.requireLivePresentationGrant(grantId) },
                 revocations = rootViewModel.capsuleRevocations,
-                onClose = rootViewModel::closeCapsule,
-                onFailure = { rootViewModel.revokePresentationForRouteFailure(grantId) },
+                onClose = {
+                    pendingOpened.getAndSet(null)?.let { opened ->
+                        opened.photosByOrdinal.values.forEach { it.fill(0) }
+                    }
+                    rootViewModel.closeCapsule()
+                },
+                onFailure = {
+                    pendingOpened.getAndSet(null)?.let { opened ->
+                        opened.photosByOrdinal.values.forEach { it.fill(0) }
+                    }
+                    rootViewModel.revokePresentationForRouteFailure(grantId)
+                },
                 // T186: genuine supported-presentation hook. Nonblocking: the
                 // container persists + schedules on its application scope and
                 // re-validates grant + owner; display never waits for it.
@@ -511,16 +550,30 @@ private fun RootSurface(
                         } catch (_: Exception) {
                             grantLive = false
                         }
+                        // T186 M14d-scan: pending presentations carry
+                        // their R15 publication hash (H = SHA256(S),
+                        // cached in the admitted row) so the background
+                        // completion enqueues with exact bytes. Other
+                        // planes keep the existing derivation (null).
+                        val pendingHash = when (
+                            rootViewModel.presentationGrantFor(grantId)?.source
+                        ) {
+                            dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource.PENDING ->
+                                try {
+                                    container.pendingAdmittedGiftStore.get(owner, capsuleId)
+                                        ?.statementSha256Hex?.takeIf { it.isNotBlank() }
+                                } catch (_: Exception) {
+                                    null
+                                }
+                            else -> null
+                        }
                         container.notifySupportedPresentation(
                             ownerUserId = owner,
                             capsuleId = capsuleId,
                             grantLive = grantLive,
                             routeReady = true,
                             supported = true,
-                            // Exact-byte H derivation from grant-bound published
-                            // material lands with the claim-envelope work;
-                            // hash-less items stay queued, never sent.
-                            publicationHash = null,
+                            publicationHash = pendingHash,
                         )
                     }
                 },

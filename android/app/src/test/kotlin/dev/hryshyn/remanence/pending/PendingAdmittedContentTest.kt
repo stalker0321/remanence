@@ -83,6 +83,13 @@ class PendingAdmittedContentTest {
             .digest(sealed.publication.statement).joinToString("") { "%02x".format(it) },
         publishSignature69B64 = Base64.getEncoder()
             .encodeToString(sealed.publication.signature),
+        // Claim material is unread by the open path (the capsule key
+        // arrives via the envelope opener; admission is covered by the
+        // ingest/claim/readmission tests) — blanks keep this sender-side
+        // fixture compiling with no behavior change.
+        claimBindingB64 = "",
+        claimSignature69B64 = "",
+        recipientKeyBundleId = "",
         envelopeRef = "/v2/pending-deliveries/$delivery/claim",
         manifestRef = "/v2/pending-deliveries/$delivery/manifest",
         blobRefs = emptyList(),

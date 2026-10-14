@@ -92,11 +92,75 @@ object PendingRowReadmission {
             throw IllegalStateException("pending row re-admission rejected")
         }
         return when (acceptance) {
-            is dev.hryshyn.remanence.core.crypto.PendingTrustedAdmission.Admission.Admitted ->
-                acceptance.capsuleAeadKeyset
-            is dev.hryshyn.remanence.core.crypto.PendingTrustedAdmission.Admission.PartiallyAdmitted ->
+            is dev.hryshyn.remanence.core.crypto.PendingTrustedAdmission.Admission.Admitted -> {
+                // The verified S/R bytes must describe THIS row (capsule,
+                // target, claim, H) — internal S/R agreement alone is not
+                // enough: a hand-edited index row could otherwise pair one
+                // row's ids with another row's sealed bytes and still open.
+                try {
+                    requireRowBinding(statementBytes, claimBytes, row)
+                    acceptance.capsuleAeadKeyset
+                } catch (_: Exception) {
+                    acceptance.capsuleAeadKeyset.fill(0)
+                    throw IllegalStateException("pending row binding mismatch")
+                }
+            }
+            is dev.hryshyn.remanence.core.crypto.PendingTrustedAdmission.Admission.PartiallyAdmitted -> {
+                // Caller-copy contract (same as ingest/claim): the
+                // returned key copy is zeroized on EVERY branch, success
+                // and failure alike — a partial copy never survives.
+                acceptance.capsuleAeadKeyset.fill(0)
                 throw IllegalStateException("pending service trust pending")
+            }
         }
+    }
+
+    /**
+     * Binds the durable row columns to the cryptographically VERIFIED
+     * bytes (same gate shape as the ingest substitution check, but
+     * against the row instead of the feed item): S.capsule/target and
+     * R.claim must name this exact row, and H must equal the recomputed
+     * statement hash. Pure parse + hash — no suspension, no
+     * cancellation to propagate.
+     */
+    private fun requireRowBinding(
+        statementBytes: ByteArray,
+        claimBytes: ByteArray,
+        row: PendingAdmittedGiftStore.AdmittedGift,
+    ) {
+        val statement = try {
+            dev.hryshyn.remanence.protocol.delivery_v2.PendingPublishStatementV2
+                .parseFrom(statementBytes)
+        } catch (_: Exception) {
+            throw IllegalStateException("pending publish statement malformed")
+        }
+        val claim = try {
+            dev.hryshyn.remanence.protocol.delivery_v2.ClaimBindingV1
+                .parseFrom(claimBytes)
+        } catch (_: Exception) {
+            throw IllegalStateException("pending claim binding malformed")
+        }
+        if (uuidString(statement.capsuleId.toByteArray()) != row.capsuleId ||
+            uuidString(statement.deliveryTargetId.toByteArray()) != row.deliveryTargetId ||
+            uuidString(claim.claimId.toByteArray()) != row.claimId
+        ) {
+            throw IllegalStateException("pending row binding mismatch")
+        }
+        val statementShaHex = try {
+            java.security.MessageDigest.getInstance("SHA-256").digest(statementBytes)
+                .joinToString("") { "%02x".format(it) }
+        } catch (_: Exception) {
+            throw IllegalStateException("pending statement hash unavailable")
+        }
+        if (statementShaHex != row.statementSha256Hex) {
+            throw IllegalStateException("pending statement hash mismatch")
+        }
+    }
+
+    private fun uuidString(raw16: ByteArray): String {
+        require(raw16.size == 16) { "pending id malformed" }
+        val buffer = java.nio.ByteBuffer.wrap(raw16)
+        return java.util.UUID(buffer.long, buffer.long).toString()
     }
 
     private fun unhexStrict(hex: String): ByteArray {

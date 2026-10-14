@@ -326,11 +326,24 @@ class PendingClaimIngest(
             if (statementShaHex != control.publishStatementSha256Hex) {
                 throw IllegalStateException("pending statement hash mismatch")
             }
-            // Reception-time FRONT staging (best-effort): the kind-1
-            // ciphertext rides the row so scan enumeration stays
-            // offline. "" on any fetch failure — admission and the row
-            // still land (a later upsert heals the field).
-            val recognitionB64 = stageRecognition(txn, item.deliveryId, statementBytes)
+            // Reception-time FRONT staging (REQUIRED when S declares
+            // it): the kind-1 ciphertext rides the row so scan
+            // enumeration stays offline. A failed fetch throws above so
+            // the cursor never advances past a half-staged gift. The
+            // keep-rule below only fires when no fresh bytes exist
+            // (absent port/selection in unit surfaces): a good durable
+            // cipher is never clobbered by a blank.
+            val fresh = stageRecognition(txn, item.deliveryId, statementBytes)
+            val prior = try {
+                admittedStore.get(ownerUserId, item.capsuleId)?.recognitionCiphertextB64 ?: ""
+            } catch (_: Exception) {
+                ""
+            }
+            val recognitionB64 = if (fresh.isNotBlank()) {
+                fresh
+            } else {
+                PendingRecognitionStage.keepVerifiedPrior(prior, statementBytes)
+            }
             val row = PendingAdmittedGiftStore.AdmittedGift(
                 ownerUserId = ownerUserId,
                 capsuleId = item.capsuleId,
@@ -368,10 +381,13 @@ class PendingClaimIngest(
     }
 
     /**
-     * T186 M14d-scan: best-effort kind-1 staging for the admitted row.
-     * Fetches on the held txn bearer with a liveness recheck after the
-     * await (a mid-await death throws the session wall; a fetch failure
-     * degrades to "" and the row still admits). Cancellation propagates.
+     * T186 M14d-scan: REQUIRED kind-1 staging for the admitted row
+     * (unlike claim-time best-effort). A missing selection (photos-only
+     * publication, no FRONT) stages "" and admits normally; a FAILED
+     * fetch throws so the feed cursor is preserved and the page retries
+     * — the cursor never advances past a half-staged gift. Fetches on
+     * the held txn bearer with a liveness recheck after the await.
+     * Cancellation propagates.
      */
     private suspend fun stageRecognition(
         txn: Txn,
@@ -387,12 +403,12 @@ class PendingClaimIngest(
             throw cancelled
         } catch (_: Exception) {
             null
-        } ?: return ""
+        } ?: throw IllegalStateException("pending recognition fetch failed")
         if (!checkTxn(txn)) throw IllegalStateException("pending session changed")
         return try {
             Base64.getEncoder().encodeToString(bytes)
         } catch (_: Exception) {
-            ""
+            throw IllegalStateException("pending recognition fetch failed")
         }
     }
 

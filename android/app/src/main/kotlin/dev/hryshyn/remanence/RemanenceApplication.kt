@@ -827,6 +827,100 @@ class AppContainer private constructor(
         dev.hryshyn.remanence.pending.PendingAdmittedGiftStore(appContext.filesDir)
     }
 
+    /**
+     * T186 M14d-scan: the REAL scan-side consumer of admitted rows —
+     * staged-FRONT enumeration for the scan index plus single-row
+     * re-admission for the scan crypto verifier. Offline (no token):
+     * same directory/recipient/pin boundary as the admitters.
+     */
+    val pendingScanBridge: dev.hryshyn.remanence.pending.PendingAdmittedCandidateProvider by lazy {
+        dev.hryshyn.remanence.pending.PendingAdmittedCandidateProvider(
+            admittedStore = pendingAdmittedGiftStore,
+            directoryPort = pendingDirectoryPort,
+            recipientKeysPort = pendingRecipientKeysPort,
+            servicePinPort = { pendingServicePin },
+        )
+    }
+
+    /**
+     * T186 M14d-scan: presentation-time opening of one admitted gift
+     * under the live grant. Captures its own held lease + bearer (the
+     * grant only proves recognition + re-admission; photo bytes are
+     * fetched here, like the OUTBOX source reads at presentation).
+     * Returns caller-owned photos (the route wipes them on close/
+     * failure). Throws when the row is unknown, foreign, or fails to
+     * open — the route fails closed.
+     */
+    suspend fun openPendingAdmittedPhotos(
+        ownerUserId: String,
+        capsuleId: String,
+    ): dev.hryshyn.remanence.pending.PendingAdmittedContent.OpenedPhotos {
+        if (ownerUserId.isBlank() || capsuleId.isBlank()) {
+            throw IllegalStateException("pending presentation binding mismatch")
+        }
+        val row = pendingAdmittedGiftStore.get(ownerUserId, capsuleId)
+            ?: throw IllegalStateException("pending admitted row unknown")
+        if (row.ownerUserId != ownerUserId || row.capsuleId != capsuleId) {
+            throw IllegalStateException("pending admitted row owner mismatch")
+        }
+        val lease = try {
+            pendingSessionGate.capture()
+        } catch (_: Exception) {
+            null
+        } ?: throw IllegalStateException("pending session changed")
+        val token = try {
+            pendingSessionGate.accessTokenFor(lease)
+        } catch (_: Exception) {
+            null
+        }.takeIf { !it.isNullOrBlank() }
+            ?: throw IllegalStateException("pending session changed")
+        if (!try {
+                pendingSessionGate.isLive(lease)
+            } catch (_: Exception) {
+                false
+            }
+        ) {
+            throw IllegalStateException("pending session changed")
+        }
+        val content = dev.hryshyn.remanence.pending.PendingAdmittedContent(
+            blobPort = dev.hryshyn.remanence.pending.PendingAdmittedContent.BlobPort { delivery, blob, bearer ->
+                pendingOwnedMaterialRepository.blobBytes(delivery, blob, bearer)
+            },
+            senderVerifyPort = dev.hryshyn.remanence.pending.PendingAdmittedContent.SenderVerifyPort { bundleId ->
+                pendingDirectoryPort.bundle(bundleId)?.let {
+                    dev.hryshyn.remanence.pending.PendingAdmittedContent.DirectoryBundle(
+                        it.ownerUserId,
+                        it.signingPublicKeyset,
+                    )
+                }
+            },
+        )
+        val opened = content.openPhotos(
+            row = row,
+            ownerUserId = ownerUserId,
+            token = token,
+            envelopeOpener = dev.hryshyn.remanence.pending.PendingAdmittedContent.EnvelopeOpener {
+                try {
+                    pendingScanBridge.openKey(ownerUserId, java.util.UUID.fromString(capsuleId))
+                } catch (cancelled: kotlin.coroutines.cancellation.CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    null
+                }
+            },
+        )
+        if (!try {
+                pendingSessionGate.isLive(lease)
+            } catch (_: Exception) {
+                false
+            }
+        ) {
+            opened.photosByOrdinal.values.forEach { it.fill(0) }
+            throw IllegalStateException("pending session changed")
+        }
+        return opened
+    }
+
     // -- T186 M14a experimental pending-feed host (isolated, default OFF) --
     override val pendingContext: Context get() = appContext
 
@@ -856,6 +950,70 @@ class AppContainer private constructor(
     }
 
     /**
+     * T186 M14d-scan: shared directory/recipient key ports (SAME
+     * lambdas for sync-time ingest and scan-time re-admission — one
+     * trust boundary, no drift between admitters and the bridge).
+     */
+    private val pendingDirectoryPort =
+        dev.hryshyn.remanence.pending.PendingClaimIngest.DirectoryPort { bundleId ->
+            when (
+                val result = keyBundleByIdRepository.fetch(bundleId)
+            ) {
+                is dev.hryshyn.remanence.core.data.network.KeyBundleByIdResult.Found -> {
+                    val bytes = try {
+                        com.google.crypto.tink.subtle.Base64.urlSafeDecode(
+                            result.bundle.signingPublicKeysetB64Url,
+                        )
+                    } catch (_: Exception) {
+                        null
+                    } ?: return@DirectoryPort null
+                    dev.hryshyn.remanence.pending.PendingClaimIngest.DirectoryBundle(
+                        result.bundle.ownerUserId.toRestString(),
+                        bytes,
+                    )
+                }
+                else -> null
+            }
+        }
+
+    private val pendingRecipientKeysPort =
+        dev.hryshyn.remanence.pending.PendingClaimIngest.RecipientKeysPort {
+            val summary = try {
+                currentAccountStore.load()
+            } catch (_: Exception) {
+                null
+            } ?: return@RecipientKeysPort null
+            val loaded = try {
+                identityRepository.load()
+            } catch (_: Exception) {
+                null
+            }
+            val encryption = loaded as?
+                dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available
+                ?: return@RecipientKeysPort null
+            val bundle = try {
+                when (
+                    val result = keyBundleByIdRepository.fetch(summary.activeKeyBundleId)
+                ) {
+                    is dev.hryshyn.remanence.core.data.network.KeyBundleByIdResult.Found ->
+                        result.bundle.encryptionPublicKeysetB64Url
+                    else -> return@RecipientKeysPort null
+                }
+            } catch (_: Exception) {
+                return@RecipientKeysPort null
+            }
+            val publicBytes = try {
+                com.google.crypto.tink.subtle.Base64.urlSafeDecode(bundle)
+            } catch (_: Exception) {
+                return@RecipientKeysPort null
+            }
+            dev.hryshyn.remanence.pending.PendingClaimIngest.RecipientKeys(
+                summary.userId, summary.activeKeyBundleId,
+                encryption.encryptionHandle, publicBytes,
+            )
+        }
+
+    /**
      * T186 M14b-ingest: the REAL caller of trusted admission + the
      * admitted store for synced feed pages (ingest-then-cursor, same
      * owner fence). Scan/display admission is the next milestone;
@@ -869,65 +1027,15 @@ class AppContainer private constructor(
             controlPort = dev.hryshyn.remanence.pending.PendingClaimIngest.ControlFetchPort { delivery, token ->
                 pendingOwnedMaterialRepository.control(delivery, token)
             },
-            directoryPort = dev.hryshyn.remanence.pending.PendingClaimIngest.DirectoryPort { bundleId ->
-                when (
-                    val result = keyBundleByIdRepository.fetch(bundleId)
-                ) {
-                    is dev.hryshyn.remanence.core.data.network.KeyBundleByIdResult.Found -> {
-                        val bytes = try {
-                            com.google.crypto.tink.subtle.Base64.urlSafeDecode(
-                                result.bundle.signingPublicKeysetB64Url,
-                            )
-                        } catch (_: Exception) {
-                            null
-                        } ?: return@DirectoryPort null
-                        dev.hryshyn.remanence.pending.PendingClaimIngest.DirectoryBundle(
-                            result.bundle.ownerUserId.toRestString(),
-                            bytes,
-                        )
-                    }
-                    else -> null
-                }
-            },
-            recipientKeysPort = dev.hryshyn.remanence.pending.PendingClaimIngest.RecipientKeysPort {
-                val summary = try {
-                    currentAccountStore.load()
-                } catch (_: Exception) {
-                    null
-                } ?: return@RecipientKeysPort null
-                val loaded = try {
-                    identityRepository.load()
-                } catch (_: Exception) {
-                    null
-                }
-                val encryption = loaded as?
-                    dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available
-                    ?: return@RecipientKeysPort null
-                val bundle = try {
-                    when (
-                        val result = keyBundleByIdRepository.fetch(summary.activeKeyBundleId)
-                    ) {
-                        is dev.hryshyn.remanence.core.data.network.KeyBundleByIdResult.Found ->
-                            result.bundle.encryptionPublicKeysetB64Url
-                        else -> return@RecipientKeysPort null
-                    }
-                } catch (_: Exception) {
-                    return@RecipientKeysPort null
-                }
-                val publicBytes = try {
-                    com.google.crypto.tink.subtle.Base64.urlSafeDecode(bundle)
-                } catch (_: Exception) {
-                    return@RecipientKeysPort null
-                }
-                dev.hryshyn.remanence.pending.PendingClaimIngest.RecipientKeys(
-                    summary.userId, summary.activeKeyBundleId,
-                    encryption.encryptionHandle, publicBytes,
-                )
-            },
+            directoryPort = pendingDirectoryPort,
+            recipientKeysPort = pendingRecipientKeysPort,
             servicePinPort = { pendingServicePin },
             sessionGate = pendingSessionGate,
             accountProvider = pendingFeedAccount,
             admittedStore = pendingAdmittedGiftStore,
+            recognitionBlobPort = dev.hryshyn.remanence.pending.PendingRecognitionStage.BlobFetchPort { delivery, blob, token ->
+                pendingOwnedMaterialRepository.blobBytes(delivery, blob, token)
+            },
         )
     }
 
@@ -1363,6 +1471,11 @@ class AppContainer private constructor(
             // T186 M14d-claim: durable admitted row on Accepted (feed
             // sync re-admits on failure; claim truthfulness unaffected).
             admittedStore = pendingAdmittedGiftStore,
+            // T186 M14d-scan: reception-time kind-1 FRONT staging
+            // (best-effort; the row still admits when absent).
+            recognitionBlobPort = dev.hryshyn.remanence.pending.PendingRecognitionStage.BlobFetchPort { delivery, blob, token ->
+                pendingOwnedMaterialRepository.blobBytes(delivery, blob, token)
+            },
             scope = scope,
         )
     }

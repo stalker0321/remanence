@@ -77,6 +77,29 @@ internal data class ScanCandidateIndex(
 }
 
 /**
+ * T186 M14d-scan: joins the v1 incoming half with the pending
+ * admitted-row half (staged kind-1 FRONTs). Element ownership moves
+ * into the merged list — neither input is wiped (their models are
+ * live exactly once, in the result).
+ */
+internal operator fun ScanCandidateIndex.plus(other: ScanCandidateIndex): ScanCandidateIndex {
+    if (other.candidates.isEmpty() && other.chooserHints.isEmpty() &&
+        other.presentationSources.isEmpty()
+    ) {
+        return this
+    }
+    if (candidates.isEmpty() && chooserHints.isEmpty() && presentationSources.isEmpty()) {
+        return other
+    }
+    return ScanCandidateIndex(
+        candidates = candidates + other.candidates,
+        chooserHints = chooserHints + other.chooserHints,
+        presentationSources = presentationSources + other.presentationSources,
+        diagnostics = diagnostics + other.diagnostics,
+    )
+}
+
+/**
  * Hard bound on the dual-plane self-proof batch, tied to the protocol
  * incoming page max: the server never pages more than this per sync, so a
  * larger local dual set is pathological and fails closed instead of proving

@@ -305,6 +305,32 @@ class PendingClaimIngestTest {
     }
 
     /**
+     * T186 M14d-scan: sync-time staging is REQUIRED — a failed kind-1
+     * fetch throws (no row) so the feed cursor is preserved and the
+     * page retries, instead of advancing past a half-staged gift.
+     */
+    @Test
+    fun recognitionFetchFailureThrowsWithoutRow() = runTest {
+        val dir = Files.createTempDirectory("pending-ingest-staging-fail").toFile()
+        try {
+            val crypto = crypto()
+            val port = PendingRecognitionStage.BlobFetchPort { _, _, _ ->
+                dev.hryshyn.remanence.core.data.network.PendingBlobBytesResult.Failure(
+                    dev.hryshyn.remanence.core.data.network.PendingMaterialFailure.NETWORK,
+                    500, true,
+                )
+            }
+            assertThrowsSuspend(IllegalStateException::class) {
+                ingest(dir, crypto, recognitionBlobPort = port)
+                    .let { (ingest, _, lease) -> ingest.ingest(recipient, lease, listOf(item())) }
+            }
+            assertNull(PendingAdmittedGiftStore(dir).get(recipient, capsule))
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /**
      * T186 M14d-scan: sync-time ingestion stages the S-declared kind-1
      * ciphertext into the row for offline scan enumeration.
      */

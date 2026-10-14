@@ -231,6 +231,33 @@ class IncomingSenderIndexCandidateProviderTest {
         }
     }
 
+    /**
+     * T186 M14d-scan: the index join concatenates both halves (v1
+     * incoming + pending staged FRONTs) with summed diagnostics and
+     * unioned presentation sources. Empty halves degrade to the other
+     * side without copying.
+     */
+    @Test
+    fun plusJoinsIncomingAndPendingHalves() {
+        val pendingId = UUID.fromString("11111111-2222-3333-4444-555555555555")
+        val incoming = ScanCandidateIndex(
+            candidates = emptyList(),
+            presentationSources = mapOf(pendingId to CapsulePresentationSource.INCOMING),
+        )
+        val pending = ScanCandidateIndex(
+            candidates = emptyList(),
+            presentationSources = mapOf(pendingId to CapsulePresentationSource.PENDING),
+        )
+        val merged = incoming + pending
+        assertEquals(CapsulePresentationSource.PENDING, merged.presentationSources[pendingId])
+        assertEquals(
+            incoming.diagnostics.rawCandidateCount + pending.diagnostics.rawCandidateCount,
+            merged.diagnostics.rawCandidateCount,
+        )
+        assertEquals(ScanCandidateIndex.EMPTY, ScanCandidateIndex.EMPTY + ScanCandidateIndex.EMPTY)
+        assertEquals(pending, ScanCandidateIndex.EMPTY + pending)
+    }
+
     private suspend fun seedIndexed(capsule: IncomingCapsuleEntity) {
         database.incomingCapsuleDao().upsertAllForOwner(
             capsule.ownerUserId,

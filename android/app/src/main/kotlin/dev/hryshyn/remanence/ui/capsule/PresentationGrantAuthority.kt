@@ -12,6 +12,15 @@ import kotlinx.coroutines.flow.asSharedFlow
 enum class CapsulePresentationSource {
     INCOMING,
     OUTBOX,
+    /**
+     * T186 M14d-scan: admitted pending-delivery gift (v2). Recognition
+     * provenance is the staged kind-1 FRONT; verification is row
+     * re-admission (no network); presentation opens via
+     * [dev.hryshyn.remanence.pending.PendingAdmittedContent] under the
+     * live grant. Never carries an incoming preparation handle
+     * (the authority invariant still holds: PENDING implies null).
+     */
+    PENDING,
 }
 
 /**

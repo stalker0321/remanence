@@ -194,6 +194,13 @@ class ScanViewModel internal constructor(
      * discarded before it can reach state, grants, chooser, or recapture.
      */
     private val matcherShadow: MatcherShadowRunner? = null,
+    /**
+     * T186 M14d-scan: re-admission verifier for PENDING candidates
+     * (admitted-row gate on live keys — no network, no token). Null
+     * disables the pending plane: PENDING candidates never verify and
+     * never grant. Production passes the admitted-row bridge.
+     */
+    private val pendingVerifyCapsule: (suspend (UUID) -> Boolean)? = null,
 ) : ViewModel() {
 
     val captureSession = ScanCaptureSession(ScanSideExtractor {
@@ -923,6 +930,7 @@ class ScanViewModel internal constructor(
                         when (candidateIndex.presentationSources[capsuleId]) {
                             CapsulePresentationSource.INCOMING -> true
                             CapsulePresentationSource.OUTBOX -> verifyCapsuleCrypto(capsuleId)
+                            CapsulePresentationSource.PENDING -> verifyPendingCapsule(capsuleId)
                             null -> false
                         }
                     },
@@ -1214,6 +1222,13 @@ class ScanViewModel internal constructor(
                     is IncomingPresentationPreparationResult.Unavailable -> return null
                     else -> return null
                 }
+            } else if (source == CapsulePresentationSource.PENDING) {
+                // Pending plane: the engine already matched the staged
+                // FRONT; the grant still re-admits the row on live keys
+                // (no network) before any grant exists.
+                if (!verifyPendingCapsule(capsuleId)) {
+                    return null
+                }
             } else if (!verifyCapsuleCrypto(capsuleId)) {
                 return null
             }
@@ -1313,6 +1328,23 @@ class ScanViewModel internal constructor(
     // ------------------------------------------------------------------
     // THE verification gate: no grant without it, ever.
     // ------------------------------------------------------------------
+
+    /**
+     * T186 M14d-scan: pending-plane crypto verification — full row
+     * re-admission on live keys via the admitted-row bridge. False when
+     * the plane is disabled, the row is unknown/foreign, or admission
+     * fails. Cancellation propagates (never converted to a verdict).
+     */
+    private suspend fun verifyPendingCapsule(capsuleId: UUID): Boolean {
+        val port = pendingVerifyCapsule ?: return false
+        return try {
+            port(capsuleId)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
+        }
+    }
 
     private suspend fun verifyCapsuleCrypto(capsuleId: UUID): Boolean {
         val identity = identityProvider() ?: return false

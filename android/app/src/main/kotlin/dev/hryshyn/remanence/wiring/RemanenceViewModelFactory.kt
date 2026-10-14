@@ -12,6 +12,7 @@ import dev.hryshyn.remanence.session.RootViewModel
 import dev.hryshyn.remanence.ui.create.CreateViewModel
 import dev.hryshyn.remanence.ui.create.RecipientPickerViewModel
 import dev.hryshyn.remanence.ui.scan.ScanViewModel
+import dev.hryshyn.remanence.ui.scan.plus
 import dev.hryshyn.remanence.ui.home.HomeCapabilityViewModel
 import dev.hryshyn.remanence.ui.auth.LoginViewModel
 import dev.hryshyn.remanence.ui.auth.RegistrationViewModel
@@ -271,7 +272,12 @@ class RemanenceViewModelFactory(
             presentationGrants = container.presentationGrants,
             incomingPresentationPreparation = container.incomingPresentationPreparation,
             candidateIndexProvider = { owner ->
-                container.incomingSenderIndexCandidateProvider.load(owner)
+                // T186 M14d-scan: the v1 incoming half joined with the
+                // pending admitted-row half (offline staged FRONTs).
+                // Either half empty degrades to the other; both empty
+                // is the pre-existing IndexUnavailable path.
+                container.incomingSenderIndexCandidateProvider.load(owner) +
+                    container.pendingScanBridge.load(owner.toRestString())
             },
             observeIncomingIndexReadiness = { owner ->
                 container.database.incomingCapsuleDao()
@@ -291,6 +297,27 @@ class RemanenceViewModelFactory(
                 ) == true
             },
             sessionBoundary = container.sessionBoundary,
+            // T186 M14d-scan: pending-plane crypto verifier (row
+            // re-admission on live keys). Owner-resolved per call under
+            // the current account; unknown account fails closed.
+            pendingVerifyCapsule = { capsuleId ->
+                val current = try {
+                    container.currentAccountStore.loadEntity()?.userId
+                } catch (_: Exception) {
+                    null
+                }
+                if (current.isNullOrBlank()) {
+                    false
+                } else {
+                    try {
+                        container.pendingScanBridge.verify(current, capsuleId)
+                    } catch (cancelled: kotlin.coroutines.cancellation.CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        false
+                    }
+                }
+            },
             // T118 telemetry-only frozen matcher shadow: the accepted S1->S4
             // path beside the v1 chain, local injectable switch, bounded
             // scalar diagnostics only, every decision discarded. The catalog

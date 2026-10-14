@@ -307,6 +307,7 @@ class ScanGrantRoutingTest {
         ),
         candidateIndexProvider: suspend (UserId) -> ScanCandidateIndex = { ScanCandidateIndex.EMPTY },
         identityProvider: suspend () -> SenderIdentitySnapshot = { identitySnapshot() },
+        pendingVerifyCapsule: (suspend (UUID) -> Boolean)? = null,
         frontProcessor: StillProcessor = FixedProcessor(syntheticFingerprint(11)),
         persistence: dev.hryshyn.remanence.core.data.fingerprints.SealedFingerprintPersistence = store(),
         matcher: dev.hryshyn.remanence.core.recognition.SiftRootSiftMatcherPort = deterministicMatcher(),
@@ -324,6 +325,7 @@ class ScanGrantRoutingTest {
             matcher = matcher,
             cpuDispatcher = testDispatcher,
             ioDispatcher = testDispatcher,
+            pendingVerifyCapsule = pendingVerifyCapsule,
         )
 
     /** Routing tests exercise grant/crypto boundaries, not native OpenCV. */
@@ -552,6 +554,105 @@ class ScanGrantRoutingTest {
                 dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource.OUTBOX,
                 presentationGrants.activeForTests()?.source,
             )
+        } finally {
+            val job = scanVm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]
+            job?.cancel()
+            job?.join()
+        }
+    }
+
+    /**
+     * T186 M14d-scan: a PENDING candidate (staged admitted-row FRONT)
+     * flows through the REAL engine + verifier + grant arms — terminal
+     * Granted bound to the PENDING source, never INCOMING/OUTBOX.
+     */
+    @Test
+    fun pendingCandidateVerifiesAndGrantsWithPendingSource() = runBlocking {
+        val grantsManager = ScanGrantManager({ now })
+        val presentationGrants = PresentationGrantAuthority(grantsManager)
+        var verified = 0
+        val scanVm = scanViewModel(
+            grantsManager,
+            presentationGrants = presentationGrants,
+            candidateIndexProvider = {
+                ScanCandidateIndex(
+                    candidates = listOf(
+                        dev.hryshyn.remanence.core.recognition.IndexedCandidate(
+                            capsuleId = capsuleUuid,
+                            front = dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec.parse(
+                                syntheticFingerprint(11),
+                            ),
+                            recipientPreferred = false,
+                        ),
+                    ),
+                    presentationSources = mapOf(
+                        capsuleUuid to dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource.PENDING,
+                    ),
+                )
+            },
+            pendingVerifyCapsule = { id ->
+                verified += 1
+                assertEquals(capsuleUuid, id)
+                true
+            },
+        )
+
+        try {
+            captureMatchingPair(scanVm)
+            val granted = withTimeout(10_000) {
+                scanVm.terminal
+                    .filterIsInstance<ScanTerminalState.Granted>()
+                    .first()
+            }
+            assertEquals(capsuleUuid.toString(), granted.capsuleId)
+            assertEquals(
+                dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource.PENDING,
+                presentationGrants.activeForTests()?.source,
+            )
+            assertTrue("the pending grant re-admits before issue", verified >= 1)
+        } finally {
+            val job = scanVm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]
+            job?.cancel()
+            job?.join()
+        }
+    }
+
+    /**
+     * T186 M14d-scan: a PENDING candidate that fails re-admission
+     * issues no grant and leaves the terminal idle — selection and
+     * matching alone never mint state.
+     */
+    @Test
+    fun pendingCandidateDeniedWithoutVerificationIssuesNoGrant() = runBlocking {
+        val grantsManager = ScanGrantManager({ now })
+        val presentationGrants = PresentationGrantAuthority(grantsManager)
+        val scanVm = scanViewModel(
+            grantsManager,
+            presentationGrants = presentationGrants,
+            candidateIndexProvider = {
+                ScanCandidateIndex(
+                    candidates = listOf(
+                        dev.hryshyn.remanence.core.recognition.IndexedCandidate(
+                            capsuleId = capsuleUuid,
+                            front = dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec.parse(
+                                syntheticFingerprint(11),
+                            ),
+                            recipientPreferred = false,
+                        ),
+                    ),
+                    presentationSources = mapOf(
+                        capsuleUuid to dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource.PENDING,
+                    ),
+                )
+            },
+            pendingVerifyCapsule = { false },
+        )
+
+        try {
+            captureMatchingPair(scanVm)
+            withTimeout(10_000) { scanVm.matchState.first { it !is ScanMatchUiState.Matching } }
+            assertNull("denied pending verification must issue no grant", presentationGrants.activeForTests())
+            assertEquals(ScanTerminalState.Idle, scanVm.terminal.value)
         } finally {
             val job = scanVm.viewModelScope.coroutineContext[kotlinx.coroutines.Job]
             job?.cancel()

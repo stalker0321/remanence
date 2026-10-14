@@ -904,6 +904,90 @@ class PendingProofViewModelTest {
     }
 
     /**
+     * T186 M14d-scan: no-blank-overwrite — a previously staged cipher
+     * survives a claim whose fresh fetch fails, while it still verifies
+     * against the current S. The claim still lands truthful.
+     */
+    @Test
+    fun failedFetchKeepsPriorStagedCipher() = runTest {
+        val vectors = acceptedVectors()
+        val dir = java.nio.file.Files.createTempDirectory("pending-claim-healed").toFile()
+        try {
+            val store = PendingAdmittedGiftStore(dir)
+            assertTrue(
+                store.upsert(
+                    PendingAdmittedGiftStore.AdmittedGift(
+                        ownerUserId = accountId,
+                        capsuleId = capsule,
+                        deliveryId = deliveryId,
+                        deliveryTargetId = target,
+                        claimId = vectors.claimId,
+                        availableAt = 1_798_765_200L,
+                        envelopeB64 = Base64.getEncoder().encodeToString(vectors.sealed),
+                        envelopeSha256Hex = vectors.sealedShaHex,
+                        statementB64 = Base64.getEncoder().encodeToString(vectors.statement),
+                        statementSha256Hex = sha256(vectors.statement).joinToString("") { "%02x".format(it) },
+                        publishSignature69B64 = Base64.getEncoder().encodeToString(vectors.senderSig),
+                        claimBindingB64 = Base64.getEncoder().encodeToString(vectors.claim),
+                        claimSignature69B64 = Base64.getEncoder().encodeToString(vectors.claimSig),
+                        recipientKeyBundleId = bundleId,
+                        envelopeRef = "/v2/pending-deliveries/$deliveryId/claim",
+                        manifestRef = "/v2/pending-deliveries/$deliveryId/manifest",
+                        blobRefs = emptyList(),
+                        completedAt = null,
+                        admittedAtMillis = 1L,
+                        recognitionCiphertextB64 = Base64.getEncoder()
+                            .encodeToString(vectors.recognitionBlob),
+                    ),
+                ),
+            )
+            val viewModel = vm(
+                continueResult = vectors.proof,
+                options = {
+                    ClaimOptionsResult.Options(
+                        vectors.challenge.challengeId, 1_798_765_432L,
+                        Base64.getEncoder().encodeToString(vectors.challenge.sealed),
+                        Base64.getEncoder().encodeToString(vectors.challenge.contextRaw),
+                    )
+                },
+                hpke = vectors.recipientPrivate,
+                senderKeyProvider = { _, _ -> vectors.senderPublicBytes },
+                ownBundleKey = vectors.recipientPublicBytes,
+                servicePin = vectors.servicePin,
+                admittedStore = store,
+                recognitionBlobPort = PendingRecognitionStage.BlobFetchPort { _, _, _ ->
+                    dev.hryshyn.remanence.core.data.network.PendingBlobBytesResult.Failure(
+                        dev.hryshyn.remanence.core.data.network.PendingMaterialFailure.NETWORK,
+                        500, true,
+                    )
+                },
+                claim = PendingClaimPort { _, _, _, _, _ ->
+                    dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
+                        vectors.claimId,
+                        Base64.getEncoder().encodeToString(vectors.claim),
+                        Base64.getEncoder().encodeToString(vectors.claimSig),
+                        Base64.getEncoder().encodeToString(vectors.sealed),
+                        vectors.sealedShaHex,
+                    )
+                },
+            )
+            driveToIntentReady(viewModel)
+            viewModel.submitClaim()
+            testScheduler.advanceUntilIdle()
+            assertEquals(
+                PendingProofViewModel.ProofState.Claimed(deliveryId, serviceVerified = true),
+                viewModel.state.value,
+            )
+            assertEquals(
+                Base64.getEncoder().encodeToString(vectors.recognitionBlob),
+                store.get(accountId, capsule)?.recognitionCiphertextB64,
+            )
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /**
      * T186 dd46 binding gate: the Continue echo names a sibling gift
      * while S/R/envelope stay genuinely signed for the real one.
      * accept() still passes (S/R internally consistent) but the row

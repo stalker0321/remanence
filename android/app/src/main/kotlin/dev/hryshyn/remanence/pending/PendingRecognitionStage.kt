@@ -17,9 +17,11 @@ import kotlin.coroutines.cancellation.CancellationException
  * — no network, no token, no key handling at reception beyond the
  * admission that already ran.
  *
- * Best-effort: any staging failure yields null/"" and the row is still
- * admitted (the gift opens normally; it simply does not enumerate
- * until a later sync upsert heals the row — upsert replaces). Only
+ * Best-effort at claim time (the claim stays truthful when staging
+ * fails); REQUIRED at sync-ingest time (a fetch failure throws so the
+ * feed cursor is preserved and the page retries — the cursor never
+ * advances past a half-staged gift). Re-admission never clobbers a
+ * good staged cipher with a blank ([keepVerifiedPrior]). Only
  * [CancellationException] propagates.
  */
 object PendingRecognitionStage {
@@ -101,6 +103,32 @@ object PendingRecognitionStage {
         }
         if (!actual.contentEquals(binding.ciphertextSha256)) return null
         return bytes
+    }
+
+    /**
+     * No-blank-overwrite rule for re-admission: when a fresh fetch
+     * yields nothing but the durable row already holds staged bytes,
+     * keep them ONLY if they still verify against the CURRENT S
+     * declaration (size + SHA-256). Stale bytes (re-published S) or
+     * undecodable input yield "" — never a good cipher clobbered by a
+     * blank, never stale bytes resurrected. Pure decode + hash.
+     */
+    fun keepVerifiedPrior(priorB64: String, statementBytes: ByteArray): String {
+        if (priorB64.isBlank()) return ""
+        val binding = selectKind1(statementBytes) ?: return ""
+        val bytes = try {
+            java.util.Base64.getDecoder().decode(priorB64)
+        } catch (_: Exception) {
+            return ""
+        }
+        if (bytes.size.toLong() != binding.ciphertextSize) return ""
+        val actual = try {
+            java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+        } catch (_: Exception) {
+            return ""
+        }
+        if (!actual.contentEquals(binding.ciphertextSha256)) return ""
+        return priorB64
     }
 
     /**

@@ -207,4 +207,40 @@ class PendingRecognitionStageTest {
         } catch (_: CancellationException) {
         }
     }
+
+    @Test
+    fun keepVerifiedPriorKeepsOnlyCurrentBytes() {
+        val bytes = ByteArray(64) { it.toByte() }
+        val statementBytes = statement(binding(1, -1, bytes.size.toLong(), sha256(bytes)))
+        val prior = java.util.Base64.getEncoder().encodeToString(bytes)
+        // Exact match against the current S: kept verbatim.
+        assertEquals(
+            prior,
+            PendingRecognitionStage.keepVerifiedPrior(prior, statementBytes),
+        )
+        // Stale sizes/digests, blanks, garbage, and kind-1-less S: "".
+        assertEquals(
+            "",
+            PendingRecognitionStage.keepVerifiedPrior(
+                java.util.Base64.getEncoder().encodeToString(ByteArray(65)),
+                statementBytes,
+            ),
+        )
+        assertEquals(
+            "",
+            PendingRecognitionStage.keepVerifiedPrior(
+                java.util.Base64.getEncoder().encodeToString(ByteArray(64) { 9 }),
+                statementBytes,
+            ),
+        )
+        assertEquals("", PendingRecognitionStage.keepVerifiedPrior("", statementBytes))
+        assertEquals("", PendingRecognitionStage.keepVerifiedPrior("!!!", statementBytes))
+        assertEquals(
+            "",
+            PendingRecognitionStage.keepVerifiedPrior(
+                prior,
+                statement(binding(3, 0, bytes.size.toLong(), sha256(bytes))),
+            ),
+        )
+    }
 }

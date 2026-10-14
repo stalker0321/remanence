@@ -749,6 +749,19 @@ class PendingProofViewModel(
         } catch (_: Exception) {
             return false
         }
+        // No-blank-overwrite rule: a failed claim-time fetch ("") must
+        // not clobber a good durable cipher (e.g. staged earlier by
+        // sync) — keep it only while it still verifies against this S.
+        val prior = try {
+            store.get(accountUserId, capsuleId)?.recognitionCiphertextB64 ?: ""
+        } catch (_: Exception) {
+            ""
+        }
+        val staged = if (recognitionCiphertextB64.isNotBlank()) {
+            recognitionCiphertextB64
+        } else {
+            PendingRecognitionStage.keepVerifiedPrior(prior, statementBytes)
+        }
         return try {
             // Held-lease fences around the suspend upsert: the lease that
             // submitted R11 must still own this incarnation immediately
@@ -772,7 +785,7 @@ class PendingProofViewModel(
                     claimBindingB64 = submitted.claimBindingB64,
                     claimSignature69B64 = submitted.claimSignature69B64,
                     recipientKeyBundleId = recipientKeyBundleId,
-                    recognitionCiphertextB64 = recognitionCiphertextB64,
+                    recognitionCiphertextB64 = staged,
                     envelopeRef = "/v2/pending-deliveries/$deliveryId/claim",
                     manifestRef = "/v2/pending-deliveries/$deliveryId/manifest",
                     blobRefs = emptyList(),

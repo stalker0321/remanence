@@ -370,7 +370,13 @@ class PendingNativeExistingAccountPublicationTest {
                 throw AssertionError("publication marker not durable")
             }
 
-            val recipient = "t186recv${randomHex(8)}@example.com"
+            // T192: the recipient mailbox derives from the PUBLIC random
+            // capsule UUID (full 32 hex chars, no dashes) so a later real
+            // receiver test can reconstruct the exact confirm_destination
+            // from the marker capsuleId — the marker itself intentionally
+            // carries no contact. Already lowercase, bounded local part,
+            // permitted synthetic domain. Test data only, not a secret.
+            val recipient = "t186recv${capsuleId.replace("-", "")}@example.com"
             // Owned buffers accumulate one at a time INSIDE the
             // try/finally below: each successful JPEG is registered
             // before the next allocation, so a later failure still

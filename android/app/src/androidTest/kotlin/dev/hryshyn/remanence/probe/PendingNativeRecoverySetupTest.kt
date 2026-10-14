@@ -8,13 +8,13 @@ import dev.hryshyn.remanence.core.data.network.SessionRequestLease
 import dev.hryshyn.remanence.recovery.PasskeyRecovery
 import dev.hryshyn.remanence.recovery.RecoveryCredentialPort
 import dev.hryshyn.remanence.session.SessionState
-import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.util.UUID
-import kotlin.coroutines.coroutineContext
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -140,7 +140,14 @@ class PendingNativeRecoverySetupTest {
                         .post(requestBytes.toRequestBody("application/json; charset=utf-8".toMediaType()))
                         .build()
                     val call = client.newCall(request)
-                    val cancelHook = currentCoroutineContext().job.invokeOnCompletion { cause ->
+                    // Cancellation-phase hook (NOT the default
+                    // completion handler, which would wait out a
+                    // coroutine blocked reading the socket): fires as
+                    // soon as cancellation starts, aborting the socket
+                    // so a blocked body read unblocks promptly.
+                    val cancelHook = currentCoroutineContext().job.invokeOnCompletion(
+                        onCancelling = true,
+                    ) { cause ->
                         if (cause is CancellationException) runCatching { call.cancel() }
                     }
                     try {
@@ -193,6 +200,10 @@ class PendingNativeRecoverySetupTest {
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Exception) {
+                    // A socket abort caused by OUR cancellation surfaces
+                    // here as IOException: re-raise cancellation instead
+                    // of masking a deadline/teardown as shim failure.
+                    currentCoroutineContext().ensureActive()
                     throw AssertionError("credential shim unavailable")
                 } finally {
                     requestBytes.fill(0)
@@ -201,19 +212,31 @@ class PendingNativeRecoverySetupTest {
                 }
             }
 
+        /**
+         * Bounded collector over a fixed buffer (no growable backing
+         * whose copies escape wiping): partial content is zeroized in
+         * `finally` on success, overflow, and read errors alike. The
+         * returned copy is caller-owned (wiped by the ceremony
+         * `finally`); immutable JSON model copies cannot be wiped —
+         * stated honestly.
+         */
         private fun readBounded(stream: InputStream, scratch: ByteArray): ByteArray {
-            val out = ByteArrayOutputStream()
-            var total = 0L
-            while (true) {
-                val read = stream.read(scratch)
-                if (read == -1) break
-                total += read
-                if (total > MAX_SHIM_BODY_BYTES) {
-                    throw AssertionError("credential shim response too large")
+            val out = ByteArray(MAX_SHIM_BODY_BYTES.toInt())
+            var total = 0
+            try {
+                while (true) {
+                    val read = stream.read(scratch)
+                    if (read == -1) break
+                    if (total.toLong() + read > MAX_SHIM_BODY_BYTES) {
+                        throw AssertionError("credential shim response too large")
+                    }
+                    System.arraycopy(scratch, 0, out, total, read)
+                    total += read
                 }
-                out.write(scratch, 0, read)
+                return out.copyOf(total)
+            } finally {
+                out.fill(0)
             }
-            return out.toByteArray()
         }
 
         companion object {
@@ -402,7 +425,6 @@ class PendingNativeRecoverySetupTest {
                 ) {
                     throw AssertionError("sender session changed")
                 }
-            }
         }
     }
 }

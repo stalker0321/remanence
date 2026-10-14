@@ -65,6 +65,17 @@ class PendingNativeExistingAccountPublicationTest {
     private val context get() = instrumentation.targetContext
     private val container get() = (context.applicationContext as RemanenceApplication).container
 
+    /**
+     * Static instrumentation arguments (the `Instrumentation` base type
+     * itself carries no `arguments` accessor — the registry static
+     * does). PUBLIC opaque UUIDs only.
+     */
+    private fun stringArgument(name: String): String? = try {
+        InstrumentationRegistry.getArguments().getString(name)
+    } catch (_: Exception) {
+        null
+    }
+
     private val random = SecureRandom()
 
     private fun randomHex(chars: Int): String {
@@ -138,8 +149,11 @@ class PendingNativeExistingAccountPublicationTest {
     }
 
     /**
-     * Durable marker write (atomic tmp+rename): PUBLIC opaque fields
-     * only. Never contacts, tokens, keys, passwords, or OTP.
+     * Durable marker write (explicit file sync + directory-entry sync
+     * around an atomic tmp+rename): PUBLIC opaque fields only. A failed
+     * rename leaves the temp file in place as diagnostics (never
+     * deleted — no delete-to-rerun) and fails closed. Never contacts,
+     * tokens, keys, passwords, or OTP.
      */
     private fun writeMarker(
         capsuleId: String,
@@ -153,10 +167,42 @@ class PendingNativeExistingAccountPublicationTest {
         if (deliveryId != null) json.put("deliveryId", deliveryId)
         if (locatorCode != null) json.put("locatorCode", locatorCode)
         val marker = markerFile()
-        val tmp = File(marker.parentFile, "publication.json.tmp")
-        tmp.writeText(json.toString())
-        if (!tmp.renameTo(marker)) {
-            tmp.delete()
+        val dir = marker.parentFile
+            ?: throw AssertionError("publication marker not durable")
+        val tmp = File(dir, "publication.json.tmp")
+        try {
+            java.io.FileOutputStream(tmp).use { out ->
+                out.write(json.toString().toByteArray(Charsets.UTF_8))
+                out.fd.sync()
+            }
+            syncDir(dir)
+            if (!tmp.renameTo(marker)) {
+                throw AssertionError("publication marker not durable")
+            }
+            syncDir(dir)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            throw AssertionError("publication marker not durable")
+        }
+    }
+
+    /** Directory-entry durability for the atomic rename above. */
+    private fun syncDir(dir: File) {
+        try {
+            val fd = android.system.Os.open(
+                dir.absolutePath,
+                android.system.OsConstants.O_RDONLY,
+                0,
+            )
+            try {
+                android.system.Os.fsync(fd)
+            } finally {
+                android.system.Os.close(fd)
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
             throw AssertionError("publication marker not durable")
         }
     }
@@ -174,16 +220,8 @@ class PendingNativeExistingAccountPublicationTest {
                     "missing prerequisite: isolated pendingtest build and loopback epoch required",
                 )
             }
-            val expectedOwner = try {
-                instrumentation.arguments.getString("t186_expected_owner")
-            } catch (_: Exception) {
-                null
-            }
-            val expectedBundle = try {
-                instrumentation.arguments.getString("t186_expected_bundle")
-            } catch (_: Exception) {
-                null
-            }
+            val expectedOwner = stringArgument("t186_expected_owner")
+            val expectedBundle = stringArgument("t186_expected_bundle")
             if (expectedOwner.isNullOrBlank() || expectedBundle.isNullOrBlank()) {
                 throw AssertionError(
                     "missing prerequisite: expected owner/bundle arguments required",
@@ -265,13 +303,17 @@ class PendingNativeExistingAccountPublicationTest {
             }
 
             val recipient = "t186recv${randomHex(8)}@example.com"
-            val photos = listOf(
-                deviceJpeg(800, 600, 0xFF336699.toInt()),
-                deviceJpeg(1024, 768, 0xFF993366.toInt()),
-                deviceJpeg(640, 480, 0xFF669933.toInt()),
-            )
-            val front = CanonicalFrontFixture.distinctFront(11)
+            // Owned buffers accumulate INSIDE the try/finally below so a
+            // later allocation failure still wipes partial allocations.
+            var photos: List<Triple<ByteArray, Int, Int>> = emptyList()
+            var front: ByteArray = ByteArray(0)
             try {
+                photos = listOf(
+                    deviceJpeg(800, 600, 0xFF336699.toInt()),
+                    deviceJpeg(1024, 768, 0xFF993366.toInt()),
+                    deviceJpeg(640, 480, 0xFF669933.toInt()),
+                )
+                front = CanonicalFrontFixture.distinctFront(11)
                 // 3. R1 freeze through the real wrapper: frozen PENDING
                 // only (never v1/fallback), under the ORIGINAL lease.
                 checkLease(lease, account.userId)

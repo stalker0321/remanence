@@ -152,10 +152,6 @@ def main(argv: list[str] | None = None) -> int:
     try:
         host, port = fixed_bind()
         database_url = resolve_database_url(args.database_url)
-        try:
-            check_schema_head(database_url)
-        except _UpstreamRefusal as exc:
-            raise SidecarRefusal(str(exc)) from None
         blob_root = resolve_blob_root(args.blob_root)
         settings = build_settings(
             database_url=database_url, blob_root=blob_root, mode=args.mode
@@ -163,15 +159,41 @@ def main(argv: list[str] | None = None) -> int:
     except SidecarRefusal as exc:
         print(f"pending-recovery-sidecar: refused: {exc}", file=sys.stderr)
         return 2
-    from remanence.db.session import build_engine, build_session_factory
-    from remanence.main import create_app
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception:
+        # Fixed coarse code only: never the exception string (it can
+        # carry connection/config input) and never the URL.
+        print("pending-recovery-sidecar: failed: STARTUP_SETTINGS_FAILED", file=sys.stderr)
+        return 2
+    try:
+        try:
+            check_schema_head(database_url)
+        except _UpstreamRefusal as exc:
+            raise SidecarRefusal(str(exc)) from None
+    except SidecarRefusal as exc:
+        print(f"pending-recovery-sidecar: refused: {exc}", file=sys.stderr)
+        return 2
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception:
+        print("pending-recovery-sidecar: failed: STARTUP_SCHEMA_FAILED", file=sys.stderr)
+        return 2
+    try:
+        from remanence.db.session import build_engine, build_session_factory
+        from remanence.main import create_app
 
-    engine = build_engine(settings)
-    factory = build_session_factory(engine)
-    # No pending_ctx is ever constructed here: pending flags are OFF,
-    # so the pending router stays unmounted and no epoch keys exist in
-    # this process.
-    app = create_app(settings=settings, session_factory=factory)
+        engine = build_engine(settings)
+        factory = build_session_factory(engine)
+        # No pending_ctx is ever constructed here: pending flags are OFF,
+        # so the pending router stays unmounted and no epoch keys exist in
+        # this process.
+        app = create_app(settings=settings, session_factory=factory)
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception:
+        print("pending-recovery-sidecar: failed: STARTUP_APP_FAILED", file=sys.stderr)
+        return 2
     print(
         "pending-recovery-sidecar: serving "
         f"{host}:{port} db={redacted_url(database_url)} "
@@ -179,9 +201,15 @@ def main(argv: list[str] | None = None) -> int:
         f"origins={','.join(RECOVERY_ORIGINS)} pending=off",
         flush=True,
     )
-    import uvicorn
+    try:
+        import uvicorn
 
-    uvicorn.run(app, host=host, port=port, access_log=False, log_level="warning")
+        uvicorn.run(app, host=host, port=port, access_log=False, log_level="warning")
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception:
+        print("pending-recovery-sidecar: failed: STARTUP_SERVE_FAILED", file=sys.stderr)
+        return 2
     return 0
 
 

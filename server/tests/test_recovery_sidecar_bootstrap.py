@@ -8,6 +8,7 @@ no connections). Root executes all runtime checks.
 from __future__ import annotations
 
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -121,3 +122,32 @@ def test_main_refuses_without_database_url(tmp_path: Path, capsys) -> None:
     code = main(["--blob-root", str(tmp_path)])
     assert code == 2
     assert "database" in capsys.readouterr().err.lower()
+
+
+def test_startup_error_is_coarse_with_secret_sentinel_hidden(
+    tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fake-error source test: an unexpected startup failure (here a
+    rigged schema check carrying a secret sentinel) surfaces ONLY the
+    fixed coarse phase code — the sentinel never appears on either
+    stream, and no URL is printed."""
+    import remanence.pending.dev_bootstrap as _upstream
+
+    sentinel = f"SENTINEL-{uuid4().hex}-secret"
+
+    def _boom(database_url: str) -> None:
+        raise RuntimeError(f"fake connection failure carrying {sentinel}")
+
+    monkeypatch.setattr(_upstream, "check_schema_head", _boom)
+    code = main([
+        "--database-url",
+        "postgresql+psycopg://t181:isolated-t181@127.0.0.1:55481/remanence_tmp_sentinel",
+        "--blob-root", str(tmp_path / "blobs"),
+    ])
+    assert code == 2
+    captured = capsys.readouterr()
+    assert "STARTUP_SCHEMA_FAILED" in captured.err
+    assert sentinel not in captured.err
+    assert sentinel not in captured.out
+    assert "isolated-t181" not in captured.err
+    assert "isolated-t181" not in captured.out

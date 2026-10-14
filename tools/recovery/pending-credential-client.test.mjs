@@ -2,9 +2,12 @@
 // No browser, no server bind, no network: imports the pure validators
 // only (the shim starts only when run directly).
 import assert from 'node:assert/strict';
+import http from 'node:http';
+import {readFile} from 'node:fs/promises';
 import {
-  BIND_HOST, BIND_PORT, RP_ID, MAX_BODY_BYTES, REQUEST_TIMEOUT_MS,
+  BIND_HOST, BIND_PORT, RP_ID, MAX_BODY_BYTES, REQUEST_TIMEOUT_MS, HEADERS_TIMEOUT_MS,
   ERROR_CODES, errorBody, isLoopbackPeer, routeFor, checkOptionsScope,
+  nestPrf, createSerializer, applyServerBounds,
 } from './pending-credential-client.mjs';
 
 assert.equal(BIND_HOST, '127.0.0.1');
@@ -55,4 +58,69 @@ for (const code of Object.values(ERROR_CODES)) assert.deepEqual(errorBody(code),
 assert.throws(() => errorBody('PRF_BYTES'), /UNKNOWN_ERROR_CODE/);
 assert.throws(() => errorBody('Accepted'), /UNKNOWN_ERROR_CODE/);
 
-console.log(JSON.stringify({status: 'PASS', checks: 7, scope: 'SHIM_REFUSAL_SHAPE_ONLY', browser: 'NOT_LAUNCHED'}));
+// Genuine-PRF nesting wire (T191 consumes this shape): a real 32-byte
+// first (43-char base64url) nests under
+// credential.clientExtensionResults.prf.results.first; anything else
+// is omitted — never hardcoded/synthesized, input never mutated.
+{
+  const genuine = 'AA'.repeat(21) + 'A'; // 43 chars, canonical alphabet
+  assert.equal(genuine.length, 43);
+  const base = {id: 'c', response: {}, clientExtensionResults: {}};
+  const nested = nestPrf(base, genuine);
+  assert.deepEqual(nested.clientExtensionResults, {prf: {results: {first: genuine}}});
+  assert.equal(nested.id, 'c');
+  assert.deepEqual(base.clientExtensionResults, {});
+  for (const bad of [null, undefined, '', 'QUJD', 'A'.repeat(44), 'A'.repeat(42), 42, 'A+'.repeat(22)]) {
+    assert.deepEqual(nestPrf(base, bad), base, String(bad));
+  }
+}
+// The in-page ceremony mirrors the same wire (static pin: it must nest
+// under clientExtensionResults and must not emit a sibling prf field,
+// which T191 would discard).
+{
+  const source = await readFile(new URL('./pending-credential-client.mjs', import.meta.url), 'utf8');
+  assert.ok(source.includes('credential.clientExtensionResults = {prf: {results: {first:'));
+  assert.ok(!/out\.prf\s*=/.test(source));
+}
+
+// True serialization: busy held until the work REALLY settles.
+{
+  const deferred = () => {
+    let settle;
+    const promise = new Promise(resolve => { settle = resolve; });
+    return {promise, settle};
+  };
+  const s = createSerializer();
+  assert.equal(s.isBusy(), false);
+  const first = deferred();
+  const run1 = s.run(() => first.promise, 50);
+  assert.equal(s.isBusy(), true);
+  await assert.rejects(s.run(() => Promise.resolve('late'), 50), /CEREMONY_BUSY/);
+  first.settle('one');
+  assert.equal(await run1, 'one');
+  assert.equal(s.isBusy(), false);
+  // Timeout rejects the caller but the mutex stays held until the
+  // orphan settles; meanwhile newcomers get BUSY, never overlap.
+  const hanging = deferred();
+  const run2 = s.run(() => hanging.promise, 5);
+  await assert.rejects(run2, /CEREMONY_TIMEOUT/);
+  assert.equal(s.isBusy(), true);
+  await assert.rejects(s.run(() => Promise.resolve('overlap'), 50), /CEREMONY_BUSY/);
+  hanging.settle('late-result');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(s.isBusy(), false);
+  assert.equal(await s.run(() => Promise.resolve('next'), 50), 'next');
+  // Work errors release and surface coarsely.
+  await assert.rejects(s.run(() => Promise.reject(Error('CEREMONY_FAILED')), 50), /CEREMONY_FAILED/);
+  assert.equal(s.isBusy(), false);
+}
+
+// Explicit server bounds apply to a real (unbound) server object.
+{
+  const server = applyServerBounds(http.createServer());
+  assert.equal(server.headersTimeout, HEADERS_TIMEOUT_MS);
+  assert.equal(server.requestTimeout, REQUEST_TIMEOUT_MS + 5000);
+  await new Promise(resolve => server.close(resolve));
+}
+
+console.log(JSON.stringify({status: 'PASS', checks: 11, scope: 'SHIM_REFUSAL_SHAPE_ONLY', browser: 'NOT_LAUNCHED'}));

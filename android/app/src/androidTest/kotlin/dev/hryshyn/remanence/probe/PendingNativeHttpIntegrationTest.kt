@@ -171,12 +171,12 @@ class PendingNativeHttpIntegrationTest {
     fun senderLegPublishesFullPayloadOverRealHttp(): Unit = runBlocking {
         withTimeout(300_000) {
             val tag = epochTag()
-            val email = "t186s$tag@example.test"
+            val email = "t186s$tag@example.com"
             val passwordChars = CharArray(20) {
                 "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"[random.nextInt(62)]
             }
             val handle = "t186snd${randomHex(6)}"
-            val recipient = "t186r$tag@example.test"
+            val recipient = "t186r$tag@example.com"
             val photos = listOf(
                 deviceJpeg(800, 600, 0xFF336699.toInt()),
                 deviceJpeg(1024, 768, 0xFF993366.toInt()),

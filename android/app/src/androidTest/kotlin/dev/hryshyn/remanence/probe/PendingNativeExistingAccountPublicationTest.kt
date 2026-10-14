@@ -144,7 +144,16 @@ class PendingNativeExistingAccountPublicationTest {
     }
 
     private fun markerFile(): File {
-        val dir = File(context.filesDir, "pendingtest-publication").apply { mkdirs() }
+        val parent = context.filesDir
+        val dir = File(parent, "pendingtest-publication")
+        if (!dir.isDirectory) {
+            if (!dir.mkdirs() || !dir.isDirectory) {
+                throw AssertionError("publication marker not durable")
+            }
+            // New subdirectory entry durability in the already-durable
+            // parent (the rename sync below only covers the child).
+            syncDir(parent)
+        }
         return File(dir, "publication.json")
     }
 
@@ -303,16 +312,16 @@ class PendingNativeExistingAccountPublicationTest {
             }
 
             val recipient = "t186recv${randomHex(8)}@example.com"
-            // Owned buffers accumulate INSIDE the try/finally below so a
-            // later allocation failure still wipes partial allocations.
-            var photos: List<Triple<ByteArray, Int, Int>> = emptyList()
+            // Owned buffers accumulate one at a time INSIDE the
+            // try/finally below: each successful JPEG is registered
+            // before the next allocation, so a later failure still
+            // wipes what already landed.
+            val photos = ArrayList<Triple<ByteArray, Int, Int>>(3)
             var front: ByteArray = ByteArray(0)
             try {
-                photos = listOf(
-                    deviceJpeg(800, 600, 0xFF336699.toInt()),
-                    deviceJpeg(1024, 768, 0xFF993366.toInt()),
-                    deviceJpeg(640, 480, 0xFF669933.toInt()),
-                )
+                photos.add(deviceJpeg(800, 600, 0xFF336699.toInt()))
+                photos.add(deviceJpeg(1024, 768, 0xFF993366.toInt()))
+                photos.add(deviceJpeg(640, 480, 0xFF669933.toInt()))
                 front = CanonicalFrontFixture.distinctFront(11)
                 // 3. R1 freeze through the real wrapper: frozen PENDING
                 // only (never v1/fallback), under the ORIGINAL lease.

@@ -218,14 +218,14 @@ class PendingProofViewModel(
     val aliasConsent: StateFlow<Boolean> = _aliasConsent.asStateFlow()
 
     /**
-     * T186 alias-bind: the ORIGINAL consent context, frozen at the
-     * request boundary (owner + incarnation + gift + address). The
+     * T186 alias-bind: the ORIGINAL consent context, captured where
+     * consent is GIVEN (tap time, never inside a later coroutine from
+     * fresh credentials) — owner + incarnation + gift + address. The
      * frozen bit may only be consumed while the live context still
      * matches — a switch never rescues old consent with a fresh
-     * context; it fails closed instead.
+     * context; it fails closed instead. Presence means affirmed-true.
      */
     private data class AliasGrant(
-        val affirmed: Boolean,
         val ownerId: String,
         val incarnation: Long,
         val deliveryId: String,
@@ -236,7 +236,36 @@ class PendingProofViewModel(
 
     fun onAliasConsentChange(affirmed: Boolean) {
         if (_state.value !is ProofState.ProofRequired) return
-        _aliasConsent.value = affirmed
+        if (!affirmed) {
+            _aliasConsent.value = false
+            aliasGrant = null
+            return
+        }
+        // Capture the consent origin NOW (lease only — no bearer is
+        // extracted, so no token budget is consumed): a tap under A
+        // must never be inherited by a later B context. No session or
+        // malformed owner fails the tap closed.
+        val origin = try {
+            sessionGate.capture()
+        } catch (_: Exception) {
+            null
+        } ?: return
+        val owner = try {
+            origin.ownerUserId.toRestString()
+        } catch (_: Exception) {
+            return
+        }
+        if (owner.isBlank()) return
+        val gift = proof ?: return
+        val address = _destination.value.trim()
+        if (address.isBlank()) return
+        aliasGrant = AliasGrant(
+            ownerId = owner,
+            incarnation = origin.incarnation,
+            deliveryId = gift.deliveryId,
+            destination = address,
+        )
+        _aliasConsent.value = true
     }
 
     /**
@@ -411,6 +440,24 @@ class PendingProofViewModel(
         }
     }
 
+    /**
+     * True when no frozen consent exists, or the held credentials
+     * still match its tap-time origin (owner + incarnation + gift +
+     * address). Pure comparison against the ORIGINAL capture — no
+     * fresh capture, no bearer, no rescue of stale consent.
+     */
+    private fun aliasGrantHonored(
+        creds: ProofCreds,
+        deliveryId: String,
+        destination: String,
+    ): Boolean {
+        val grant = aliasGrant ?: return true
+        return creds.ownerId == grant.ownerId &&
+            creds.lease.incarnation == grant.incarnation &&
+            deliveryId == grant.deliveryId &&
+            destination == grant.destination
+    }
+
     fun requestAttempt() {
         val current = proof ?: return
         if (_state.value !is ProofState.ProofRequired) return
@@ -436,19 +483,12 @@ class PendingProofViewModel(
                         account.userId != creds.ownerId
                     ) {
                         failedSessionChanged()
+                    } else if (!aliasGrantHonored(creds, current.deliveryId, frozenDestination)) {
+                        // Tap-time origin mismatch: stale consent under a
+                        // new context. Fails BEFORE any R8 effect — zero
+                        // R8 calls on a switched scope.
+                        failedSessionChanged()
                     } else {
-                        // Freeze the ORIGINAL consent context at the
-                        // request boundary (owner + incarnation + gift +
-                        // address), before the R8 await. Consumption
-                        // later requires this exact context — never a
-                        // freshly captured one.
-                        aliasGrant = AliasGrant(
-                            affirmed = _aliasConsent.value,
-                            ownerId = account.userId,
-                            incarnation = creds.lease.incarnation,
-                            deliveryId = current.deliveryId,
-                            destination = frozenDestination,
-                        )
                         val result = verifyPort.request(
                             current.deliveryId, frozenDestination, _smsConsent.value,
                             clockSeconds(), java.util.UUID.randomUUID().toString(), creds.token,
@@ -956,20 +996,29 @@ class PendingProofViewModel(
             } catch (_: Exception) {
                 null
             } ?: return failedSessionChanged()
-            // Consume the frozen consent ONLY under its ORIGINAL context
-            // (owner + incarnation + gift + address). Any drift since the
-            // request boundary — account switch, re-login, new lookup,
-            // edited destination — fails closed instead of rescuing old
-            // consent with a fresh context.
+            // Consume the frozen consent ONLY under its ORIGINAL
+            // tap-time context (owner + incarnation + gift + address),
+            // re-checked here against the held R10 lease, its liveness,
+            // and a fresh (bearer-free) account read. Any drift since
+            // the tap — account switch, re-login, new lookup, edited
+            // destination — fails closed instead of rescuing old consent
+            // with a fresh context. No new bearer is captured for this.
             val grant = aliasGrant
-                ?: return ProofState.Failed(PendingProofMessage.GENERIC)
-            val grantCreds = creds() ?: return failedSessionChanged()
-            if (grantCreds.ownerId != grant.ownerId ||
-                grantCreds.lease.incarnation != grant.incarnation ||
-                proof?.deliveryId != grant.deliveryId ||
-                _destination.value.trim() != grant.destination
-            ) {
-                return failedSessionChanged()
+            if (grant != null) {
+                val freshAccount = try {
+                    accountProvider()
+                } catch (_: Exception) {
+                    null
+                }
+                if (!credsLive(creds) ||
+                    creds.ownerId != grant.ownerId ||
+                    creds.lease.incarnation != grant.incarnation ||
+                    freshAccount?.userId != grant.ownerId ||
+                    proof?.deliveryId != grant.deliveryId ||
+                    _destination.value.trim() != grant.destination
+                ) {
+                    return failedSessionChanged()
+                }
             }
             val opId = java.util.UUID.randomUUID().toString()
             val intent = PendingClaimIntent.buildCanonical(
@@ -984,10 +1033,9 @@ class PendingProofViewModel(
                     recipientKeyBundleId = account.bundleId,
                     sessionId = sessionId,
                     nonce = nonce,
-                    // Frozen bit from the validated grant — never the
-                    // live toggle (locked outside ProofRequired), never
-                    // derived.
-                    bindAlias = grant.affirmed,
+                    // Frozen bit from the validated grant — presence
+                    // means affirmed-true at tap under this context.
+                    bindAlias = grant != null,
                 ),
             )
             val intentSig = PendingClaimIntent.signIntent(signing, intent)

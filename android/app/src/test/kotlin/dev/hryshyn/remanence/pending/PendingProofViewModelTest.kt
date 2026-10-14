@@ -30,6 +30,9 @@ import java.security.SecureRandom
 import java.util.Base64
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -157,7 +160,7 @@ class PendingProofViewModelTest {
 
     /** Fake held-lease gate: token queue + liveness + owner binding. */
     private inner class FakeGate(
-        val owner: String,
+        var owner: String,
         val tokens: MutableList<String?>,
         var live: Boolean = true,
         /** Same-owner incarnation rotation point (liveness is owner-bound). */
@@ -174,7 +177,8 @@ class PendingProofViewModelTest {
             if (tokens.isEmpty()) null else tokens.removeAt(0)
 
         override fun isLive(lease: SessionRequestLease): Boolean =
-            live && lease.ownerUserId == UserId.parseRest(owner)
+            live && lease.ownerUserId == UserId.parseRest(owner) &&
+                lease.incarnation == epoch
     }
 
     private fun kotlinx.coroutines.test.TestScope.vm(
@@ -205,12 +209,16 @@ class PendingProofViewModelTest {
         servicePin: PendingServicePin? = null,
         admittedStore: PendingAdmittedGiftStore? = null,
         recognitionBlobPort: PendingRecognitionStage.BlobFetchPort? = null,
+        scope: kotlinx.coroutines.CoroutineScope? = null,
     ): PendingProofViewModel {
         TinkPrimitives.ensureRegistered()
         val signingKeys = signing
             ?: KeysetHandle.generateNew(KeyTemplates.get("ED25519"))
-        // Unconfined: launched flow steps run eagerly under advanceUntilIdle.
-        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler))
+        // Unconfined by default: launched flow steps run eagerly under
+        // advanceUntilIdle. Deferred scopes (StandardTestDispatcher) pause
+        // launches for genuine pre-dispatch switch windows.
+        val scope = scope
+            ?: kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler))
         val gate = FakeGate(gateOwner ?: account?.userId ?: ownerless(), tokens, live)
         gateTap?.invoke(gate)
         return PendingProofViewModel(
@@ -1470,33 +1478,44 @@ class PendingProofViewModelTest {
     }
 
     /**
-     * T186 alias-bind: an owner switch before dispatch fails the
-     * frozen context closed — the opt-in dies with the scope and the
-     * signed intent is never built (submit stays a no-op).
+     * T186 alias-bind: a genuine checkbox-to-R8 owner switch — tap
+     * under A, then BOTH the account and the capture move to another
+     * valid owner inside the deferred launch window. The tap-time
+     * origin no longer matches the held R8 credentials, so the new
+     * pre-R8 validation fails closed with ZERO R8 calls (the old entry
+     * fence passes: everything is B-consistent).
      */
     @Test
     fun ownerSwitchPreDispatchClearsAlias() = runTest {
+        val deferred = StandardTestDispatcher(testScheduler)
+        val scope = CoroutineScope(SupervisorJob() + deferred)
+        var gate: FakeGate? = null
         var currentAccount: ProofAccount? = ProofAccount(accountId, bundleId)
-        val viewModel = vm(accountProvider = { currentAccount })
+        var r8calls = 0
+        val viewModel = vm(
+            gateTap = { gate = it },
+            accountProvider = { currentAccount },
+            onRequest = { r8calls += 1 },
+            scope = scope,
+        )
         viewModel.start("ref")
         testScheduler.advanceUntilIdle()
         assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.ProofRequired)
         viewModel.onDestinationChange("a42@example.test")
         viewModel.onAliasConsentChange(true)
-        viewModel.requestAttempt()
-        testScheduler.advanceUntilIdle()
-        assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.CodeRequired)
         assertTrue(viewModel.aliasConsent.value)
-        // Owner switch after the freeze, before any intent exists.
+        viewModel.requestAttempt()
+        // Deferred window between the tap and R8 dispatch: the whole
+        // scope moves to another valid owner.
         currentAccount = ProofAccount("99999999-2222-3333-4444-555555555555", bundleId)
-        viewModel.onCodeChange("12345678")
-        viewModel.checkCode()
+        gate?.owner = "99999999-2222-3333-4444-555555555555"
         testScheduler.advanceUntilIdle()
         assertEquals(
             PendingProofViewModel.ProofState.Failed(PendingProofMessage.SESSION_CHANGED),
             viewModel.state.value,
         )
         assertFalse(viewModel.aliasConsent.value)
+        assertEquals(0, r8calls)
         viewModel.submitClaim()
         testScheduler.advanceUntilIdle()
         assertEquals(
@@ -1506,50 +1525,61 @@ class PendingProofViewModelTest {
     }
 
     /**
-     * T186 alias-bind: a same-owner incarnation rotation before
-     * dispatch fails the frozen context closed — every older fence
-     * still passes (owner + liveness hold), so only the new
-     * owner+incarnation validation trips. No intent is built.
+     * T186 alias-bind: a same-owner incarnation rotation inside the
+     * deferred pre-R8 window fails the tap-time origin check — every
+     * older fence still passes (owner + liveness hold), ZERO R8 calls,
+     * no intent.
      */
     @Test
     fun incarnationSwitchPreDispatchClearsAlias() = runTest {
+        val deferred = StandardTestDispatcher(testScheduler)
+        val scope = CoroutineScope(SupervisorJob() + deferred)
         var gate: FakeGate? = null
-        val viewModel = vm(gateTap = { gate = it })
+        var r8calls = 0
+        val viewModel = vm(
+            gateTap = { gate = it },
+            onRequest = { r8calls += 1 },
+            scope = scope,
+        )
         viewModel.start("ref")
         testScheduler.advanceUntilIdle()
         viewModel.onDestinationChange("a42@example.test")
         viewModel.onAliasConsentChange(true)
         viewModel.requestAttempt()
-        testScheduler.advanceUntilIdle()
-        assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.CodeRequired)
-        assertTrue(viewModel.aliasConsent.value)
-        // Same owner, new incarnation: older fences pass, the frozen
-        // grant no longer matches.
+        // Deferred window between the tap and R8 dispatch: same owner,
+        // new incarnation. Older fences still pass; only the tap-time
+        // origin check trips.
         gate?.epoch = 2L
-        viewModel.onCodeChange("12345678")
-        viewModel.checkCode()
         testScheduler.advanceUntilIdle()
+        // This flow never reached R8 (pre-R8 validation tripped), so
+        // there is no CodeRequired state — only the cleared failure.
         assertEquals(
             PendingProofViewModel.ProofState.Failed(PendingProofMessage.SESSION_CHANGED),
             viewModel.state.value,
         )
         assertFalse(viewModel.aliasConsent.value)
+        assertEquals(0, r8calls)
     }
 
     /**
-     * T186 alias-bind: a same-owner incarnation rotation suspended
-     * inside the options await fails the frozen context closed at
-     * intent-build time — the older post-await fences still pass, so
-     * only the new validation trips. No intent is built.
+     * T186 alias-bind: an owner flap suspended inside the options
+     * await fails the frozen context closed at intent-build time.
+     * Older post-await fences still pass (the held lease never died),
+     * so only the new validation — fresh account versus tap origin —
+     * trips. The claim port is armed to fail loudly if anything ever
+     * dispatches an intent.
      */
     @Test
-    fun incarnationSwitchSuspendedAwaitClearsAlias() = runTest {
-        var gate: FakeGate? = null
+    fun accountFlapSuspendedAwaitClearsAlias() = runTest {
+        var currentAccount: ProofAccount? = ProofAccount(accountId, bundleId)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
         val setup = challengeSetup()
         val viewModel = vm(
-            gateTap = { gate = it },
+            accountProvider = { currentAccount },
             options = {
-                gate?.epoch = 2L
+                entered.complete(Unit)
+                release.await()
                 ClaimOptionsResult.Options(
                     setup.challengeId, 1_798_765_432L,
                     Base64.getEncoder().encodeToString(setup.sealed),
@@ -1561,6 +1591,9 @@ class PendingProofViewModelTest {
             ownBundleKey = TinkProtoKeysetFormat.serializeKeysetWithoutSecret(
                 setup.recipientPrivate.publicKeysetHandle,
             ),
+            claim = ProofClaimPort { _, _, _, _, _ ->
+                throw AssertionError("no intent may dispatch after a mid-await flap")
+            },
         )
         viewModel.start("ref")
         testScheduler.advanceUntilIdle()
@@ -1570,6 +1603,63 @@ class PendingProofViewModelTest {
         testScheduler.advanceUntilIdle()
         viewModel.onCodeChange("12345678")
         viewModel.checkCode()
+        assertTrue(entered.isCompleted)
+        // Owner flap while the options await is suspended.
+        currentAccount = ProofAccount("99999999-2222-3333-4444-555555555555", bundleId)
+        release.complete(Unit)
+        testScheduler.advanceUntilIdle()
+        assertEquals(
+            PendingProofViewModel.ProofState.Failed(PendingProofMessage.SESSION_CHANGED),
+            viewModel.state.value,
+        )
+        assertFalse(viewModel.aliasConsent.value)
+    }
+
+    /**
+     * T186 alias-bind: a same-owner incarnation rotation suspended
+     * inside the options await fails at the post-await lease fence
+     * (incarnation-aware liveness) — distinct trip point from the
+     * account flap above, same closed outcome: no intent, cleared
+     * consent, no dispatch.
+     */
+    @Test
+    fun incarnationFlapSuspendedAwaitFailsLeaseFence() = runTest {
+        var gate: FakeGate? = null
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val setup = challengeSetup()
+        val viewModel = vm(
+            gateTap = { gate = it },
+            options = {
+                entered.complete(Unit)
+                release.await()
+                ClaimOptionsResult.Options(
+                    setup.challengeId, 1_798_765_432L,
+                    Base64.getEncoder().encodeToString(setup.sealed),
+                    Base64.getEncoder().encodeToString(setup.contextRaw),
+                )
+            },
+            hpke = setup.recipientPrivate,
+            senderKeyProvider = { _, _ -> frozenSenderKey() },
+            ownBundleKey = TinkProtoKeysetFormat.serializeKeysetWithoutSecret(
+                setup.recipientPrivate.publicKeysetHandle,
+            ),
+            claim = ProofClaimPort { _, _, _, _, _ ->
+                throw AssertionError("no intent may dispatch after a mid-await rotation")
+            },
+        )
+        viewModel.start("ref")
+        testScheduler.advanceUntilIdle()
+        viewModel.onDestinationChange("a42@example.test")
+        viewModel.onAliasConsentChange(true)
+        viewModel.requestAttempt()
+        testScheduler.advanceUntilIdle()
+        viewModel.onCodeChange("12345678")
+        viewModel.checkCode()
+        assertTrue(entered.isCompleted)
+        // Same owner, new incarnation, while suspended.
+        gate?.epoch = 2L
+        release.complete(Unit)
         testScheduler.advanceUntilIdle()
         assertEquals(
             PendingProofViewModel.ProofState.Failed(PendingProofMessage.SESSION_CHANGED),

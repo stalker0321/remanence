@@ -5,7 +5,6 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.hryshyn.remanence.RemanenceApplication
 import dev.hryshyn.remanence.core.data.network.GiftLookupResult
-import dev.hryshyn.remanence.core.data.network.GiftLookupResult
 import dev.hryshyn.remanence.core.data.network.PendingGiftLookupRepository
 import dev.hryshyn.remanence.core.data.network.SessionRequestLease
 import dev.hryshyn.remanence.core.model.GeneratorEditorialRows

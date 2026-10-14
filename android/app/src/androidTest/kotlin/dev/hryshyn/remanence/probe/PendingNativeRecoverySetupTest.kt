@@ -11,9 +11,10 @@ import dev.hryshyn.remanence.session.SessionState
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.util.UUID
+import kotlin.coroutines.coroutineContext
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -102,8 +103,15 @@ class PendingNativeRecoverySetupTest {
      * (POST `/create` and `/get` with `{"options": ...}`, expecting
      * `{"credential": ...}`). Dedicated quiet client: bounded
      * timeouts, no interceptors, no logging, no auth headers, no
-     * key export, no hardcoded PRF — the bytes that come back are the
-     * virtual authenticator's own. True cancellation via call cancel.
+     * key export. The `credential` object passes through verbatim,
+     * including its genuine nested PRF result under
+     * `clientExtensionResults.prf.results.first` exactly when the
+     * provider returned 32 bytes (T190 corrected contract) — never
+     * hardcoded or fabricated here, and never stripped: production
+     * `prf()` enforces presence. True cancellation aborts the socket
+     * via the call handle; owned request/response/scratch buffers wipe
+     * in `finally` (immutable JSON model copies cannot be wiped —
+     * stated honestly).
      */
     private class QuietShimPort : RecoveryCredentialPort {
         private val client = OkHttpClient.Builder()
@@ -121,64 +129,95 @@ class PendingNativeRecoverySetupTest {
 
         private suspend fun ceremony(path: String, options: JsonObject): JsonObject =
             withContext(Dispatchers.IO) {
-                kotlinx.coroutines.ensureActive()
-                val body = buildJsonObject { put("options", options) }
+                currentCoroutineContext().ensureActive()
+                val requestBytes = buildJsonObject { put("options", options) }
                     .toString().toByteArray(Charsets.UTF_8)
-                val request = Request.Builder()
-                    .url("http://127.0.0.1:18044$path")
-                    .post(body.toRequestBody("application/json; charset=utf-8".toMediaType()))
-                    .build()
-                val call = client.newCall(request)
-                val response = suspendCancellableCoroutine { cont ->
-                    call.enqueue(object : Callback {
-                        override fun onFailure(call: Call, e: IOException) {
-                            if (!cont.isCompleted) cont.resumeWithException(e)
-                        }
-
-                        override fun onResponse(call: Call, response: Response) {
-                            if (!cont.isCompleted) cont.resume(response, null)
-                        }
-                    })
-                    cont.invokeOnCancellation {
-                        try {
-                            call.cancel()
-                        } catch (_: Exception) {
-                        }
-                    }
-                }
+                var responseBytes: ByteArray? = null
+                val scratch = ByteArray(8192)
                 try {
-                    if (!response.isSuccessful) {
-                        throw AssertionError("credential shim unavailable")
+                    val request = Request.Builder()
+                        .url("http://127.0.0.1:18044$path")
+                        .post(requestBytes.toRequestBody("application/json; charset=utf-8".toMediaType()))
+                        .build()
+                    val call = client.newCall(request)
+                    val cancelHook = currentCoroutineContext().job.invokeOnCompletion { cause ->
+                        if (cause is CancellationException) runCatching { call.cancel() }
                     }
-                    val bytes = response.body?.byteStream()?.use { readBounded(it) }
-                        ?: throw AssertionError("credential shim invalid response")
-                    val credential = try {
-                        val root = Json.parseToJsonElement(bytes.toString(Charsets.UTF_8))
-                        (root as? JsonObject)?.get("credential") as? JsonObject
-                    } catch (_: Exception) {
-                        null
-                    } ?: throw AssertionError("credential shim invalid response")
-                    credential
-                } finally {
                     try {
-                        response.close()
-                    } catch (_: Exception) {
+                        val response = suspendCancellableCoroutine { cont ->
+                            call.enqueue(object : Callback {
+                                override fun onFailure(call: Call, e: IOException) {
+                                    // Cancellation may have already won; never
+                                    // crash the callback thread.
+                                    runCatching { cont.resumeWithException(e) }
+                                }
+
+                                override fun onResponse(call: Call, response: Response) {
+                                    cont.resume(response) {
+                                        try {
+                                            response.close()
+                                        } catch (_: Exception) {
+                                        }
+                                    }
+                                }
+                            })
+                            cont.invokeOnCancellation {
+                                runCatching { call.cancel() }
+                            }
+                        }
+                        try {
+                            if (!response.isSuccessful) {
+                                throw AssertionError("credential shim unavailable")
+                            }
+                            currentCoroutineContext().ensureActive()
+                            val bytes = response.body?.byteStream()?.use { stream ->
+                                readBounded(stream, scratch)
+                            } ?: throw AssertionError("credential shim invalid response")
+                            responseBytes = bytes
+                            val credential = try {
+                                val root = Json.parseToJsonElement(bytes.toString(Charsets.UTF_8))
+                                (root as? JsonObject)?.get("credential") as? JsonObject
+                            } catch (_: Exception) {
+                                null
+                            } ?: throw AssertionError("credential shim invalid response")
+                            credential
+                        } finally {
+                            try {
+                                response.close()
+                            } catch (_: Exception) {
+                            }
+                        }
+                    } finally {
+                        cancelHook.dispose()
                     }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    throw AssertionError("credential shim unavailable")
+                } finally {
+                    requestBytes.fill(0)
+                    responseBytes?.fill(0)
+                    scratch.fill(0)
                 }
             }
 
-        private fun readBounded(stream: InputStream, maxBytes: Long = 1_048_576L): ByteArray {
+        private fun readBounded(stream: InputStream, scratch: ByteArray): ByteArray {
             val out = ByteArrayOutputStream()
-            val buf = ByteArray(8192)
             var total = 0L
             while (true) {
-                val read = stream.read(buf)
+                val read = stream.read(scratch)
                 if (read == -1) break
                 total += read
-                if (total > maxBytes) throw AssertionError("credential shim response too large")
-                out.write(buf, 0, read)
+                if (total > MAX_SHIM_BODY_BYTES) {
+                    throw AssertionError("credential shim response too large")
+                }
+                out.write(scratch, 0, read)
             }
             return out.toByteArray()
+        }
+
+        companion object {
+            private const val MAX_SHIM_BODY_BYTES = 1_048_576L
         }
     }
 
@@ -301,29 +340,6 @@ class PendingNativeRecoverySetupTest {
                     Unit
                 else -> throw AssertionError("missing prerequisite: no available identity")
             }
-            val freshAccount = try {
-                container.currentAccountStore.load()
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                throw AssertionError("prerequisite account store unreadable")
-            } ?: throw AssertionError("missing prerequisite: no persisted account")
-            if (freshAccount.userId != expectedOwner ||
-                freshAccount.activeKeyBundleId != expectedBundle
-            ) {
-                throw AssertionError("missing prerequisite: account changed during bootstrap")
-            }
-            when (
-                val reloaded = try {
-                    container.identityRepository.load()
-                } catch (_: Exception) {
-                    null
-                }
-            ) {
-                is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available ->
-                    Unit
-                else -> throw AssertionError("missing prerequisite: no available identity")
-            }
 
             // 4. REAL protect() through the virtual-authenticator port
             // (verified credential, local wrapping, signed record,
@@ -342,7 +358,11 @@ class PendingNativeRecoverySetupTest {
                         throw AssertionError("recovery protection unavailable")
                     }
                 }
-                checkLease(lease, expectedOwner)
+            } finally {
+                code?.fill(0)
+                code = null
+            }
+            checkLease(lease, expectedOwner)
                 // 5. Ordinary nonsecret receipt, then ordinary bootstrap
                 // MUST yield exact Active (owner/bundle/keysets/lease).
                 if (!container.recoveryReadiness.isReady(expectedOwner, expectedBundle)) {
@@ -373,8 +393,15 @@ class PendingNativeRecoverySetupTest {
                 val heldLease = active.requestLease
                     ?: throw AssertionError("missing prerequisite: confirmed session has no lease")
                 checkLease(heldLease, expectedOwner)
-            } finally {
-                code?.fill(0)
+                // The ORIGINAL held lease must still be live, and the
+                // returned lease must equal it (owner + incarnation) —
+                // no fresh-lease rescue after a rotation.
+                checkLease(lease, expectedOwner)
+                if (heldLease.ownerUserId != lease.ownerUserId ||
+                    heldLease.incarnation != lease.incarnation
+                ) {
+                    throw AssertionError("sender session changed")
+                }
             }
         }
     }

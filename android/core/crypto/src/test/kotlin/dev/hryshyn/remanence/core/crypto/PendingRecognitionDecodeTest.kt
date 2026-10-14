@@ -6,9 +6,9 @@ import dev.hryshyn.remanence.protocol.v1.ChooserHint
 import dev.hryshyn.remanence.protocol.v1.RecognitionManifest
 import java.security.GeneralSecurityException
 import java.util.UUID
-import org.junit.Assert.assertArrayEquals
-import org.junit.Assert.fail
-import org.junit.Test
+import kotlin.test.Test
+import kotlin.test.assertContentEquals
+import kotlin.test.assertFailsWith
 
 /**
  * T186 M14d-scan: pending recognition decode enforces the exact v1
@@ -58,17 +58,15 @@ class PendingRecognitionDecodeTest {
     }
 
     private fun assertRejected(plaintext: ByteArray) {
-        try {
+        assertFailsWith<GeneralSecurityException> {
             PendingRecognitionDecode.frontFingerprint(plaintext, uuidBytes(capsule))
-            fail("expected GeneralSecurityException")
-        } catch (_: GeneralSecurityException) {
         }
     }
 
     @Test
     fun validManifestDecodesFingerprintCopy() {
         val decoded = PendingRecognitionDecode.frontFingerprint(validPlaintext(), uuidBytes(capsule))
-        assertArrayEquals(front, decoded)
+        assertContentEquals(front, decoded)
     }
 
     @Test

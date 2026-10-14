@@ -758,7 +758,7 @@ class PendingProofViewModelTest {
                 ownBundleKey = vectors.recipientPublicBytes,
                 servicePin = vectors.servicePin,
                 admittedStore = store,
-                claim = PendingClaimPort { _, _, _, _, _ ->
+                claim = ProofClaimPort { _, _, _, _, _ ->
                     dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
                         vectors.claimId,
                         Base64.getEncoder().encodeToString(vectors.claim),
@@ -825,7 +825,7 @@ class PendingProofViewModelTest {
                         blobId, vectors.recognitionBlob,
                     )
                 },
-                claim = PendingClaimPort { _, _, _, _, _ ->
+                claim = ProofClaimPort { _, _, _, _, _ ->
                     dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
                         vectors.claimId,
                         Base64.getEncoder().encodeToString(vectors.claim),
@@ -880,7 +880,7 @@ class PendingProofViewModelTest {
                         blobId, vectors.recognitionBlob.copyOf().also { it[0] = (it[0] + 1).toByte() },
                     )
                 },
-                claim = PendingClaimPort { _, _, _, _, _ ->
+                claim = ProofClaimPort { _, _, _, _, _ ->
                     dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
                         vectors.claimId,
                         Base64.getEncoder().encodeToString(vectors.claim),
@@ -961,7 +961,7 @@ class PendingProofViewModelTest {
                         500, true,
                     )
                 },
-                claim = PendingClaimPort { _, _, _, _, _ ->
+                claim = ProofClaimPort { _, _, _, _, _ ->
                     dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
                         vectors.claimId,
                         Base64.getEncoder().encodeToString(vectors.claim),
@@ -1014,7 +1014,7 @@ class PendingProofViewModelTest {
                 ownBundleKey = vectors.recipientPublicBytes,
                 servicePin = vectors.servicePin,
                 admittedStore = store,
-                claim = PendingClaimPort { _, _, _, _, _ ->
+                claim = ProofClaimPort { _, _, _, _, _ ->
                     dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
                         vectors.claimId,
                         Base64.getEncoder().encodeToString(vectors.claim),
@@ -1063,7 +1063,7 @@ class PendingProofViewModelTest {
                 ownBundleKey = vectors.recipientPublicBytes,
                 servicePin = vectors.servicePin,
                 admittedStore = store,
-                claim = PendingClaimPort { _, _, _, _, _ ->
+                claim = ProofClaimPort { _, _, _, _, _ ->
                     dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
                         otherClaimId,
                         Base64.getEncoder().encodeToString(vectors.claim),
@@ -1122,7 +1122,7 @@ class PendingProofViewModelTest {
                 ownBundleKey = vectors.recipientPublicBytes,
                 servicePin = vectors.servicePin,
                 admittedStore = store,
-                claim = PendingClaimPort { _, _, _, _, _ ->
+                claim = ProofClaimPort { _, _, _, _, _ ->
                     dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
                         vectors.claimId,
                         Base64.getEncoder().encodeToString(vectors.claim),

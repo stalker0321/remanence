@@ -408,10 +408,21 @@ class PendingAdmittedContentTest {
         val reader = dev.hryshyn.remanence.pending.PendingAdmittedPhotosReader(capsule, opened)
         val admission = reader.presentationAdmission(capsule)
         assertTrue(admission is dev.hryshyn.remanence.ui.capsule.CapsulePresentationAdmission.Ber1)
-        assertEquals(
-            expression,
-            (admission as dev.hryshyn.remanence.ui.capsule.CapsulePresentationAdmission.Ber1).expression,
+        // The codec deliberately normalizes sender-memory-only fields
+        // on decode (owner/epoch/diagnostics become receiver
+        // placeholders) while layout/photo sources/placements must
+        // match exactly — normalize ONLY the placeholders, then keep
+        // full authored equality.
+        val decoded =
+            (admission as dev.hryshyn.remanence.ui.capsule.CapsulePresentationAdmission.Ber1).expression
+        val normalized = expression.copy(
+            input = expression.input.copy(
+                ownerId = decoded.input.ownerId,
+                epoch = decoded.input.epoch,
+            ),
+            diagnostics = decoded.diagnostics,
         )
+        assertEquals(normalized, decoded)
         assertEquals(track, reader.trackSnapshot(capsule))
     }
 

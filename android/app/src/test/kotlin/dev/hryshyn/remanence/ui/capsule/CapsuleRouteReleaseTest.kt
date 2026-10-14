@@ -101,6 +101,116 @@ class CapsuleRouteReleaseTest {
         composeRule.onNodeWithTag("capsule_route_failed_header").assertIsDisplayed()
     }
 
+    /**
+     * T186 M14d-scan: revocation while still Loading (content already
+     * acquired, photo load gated) aborts before publishing Ready —
+     * content is released, owned bytes are zeroed, and neither Ready
+     * nor retire ever fires.
+     */
+    @Test
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun revocationWhileLoadingReleasesAndNeverPresents() {
+        var released = false
+        var retired = false
+        val owned = ByteArray(16) { 7 }
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val revocations = MutableSharedFlow<String>(extraBufferCapacity = 8)
+        val gated = object : CapsuleContentReader {
+            override suspend fun photoCount(capsuleId: String): Int {
+                gate.await()
+                return 3
+            }
+
+            override suspend fun loadPhoto(capsuleId: String, ordinal: Int): DecryptedPhoto =
+                DecryptedPhoto(ordinal, realJpegStatic(0xFF336699L + ordinal))
+
+            override suspend fun noteText(capsuleId: String): String? = null
+        }
+        composeRule.setContent {
+            MaterialTheme {
+                CapsuleRoute(
+                    grantId = "grant-1",
+                    contentFactory = { CapsuleContentBinding("capsule-1", gated) },
+                    validateLiveGrant = {},
+                    revocations = revocations,
+                    onClose = {},
+                    onReleaseContent = {
+                        released = true
+                        owned.fill(0)
+                    },
+                    onSupportedReady = { retired = true },
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("capsule_route_loading").assertIsDisplayed()
+        assertFalse(released)
+
+        // Revoke mid-load, then let the load resume: it must abort
+        // before publishing Ready and release what it acquired.
+        revocations.tryEmit("grant-1")
+        composeRule.runOnIdle { gate.complete(Unit) }
+        composeRule.waitForIdle()
+
+        assertTrue(released)
+        assertTrue(owned.all { it == 0.toByte() })
+        composeRule.onNodeWithTag("capsule_route_failed_header").assertIsDisplayed()
+        composeRule.onNodeWithTag("capsule_page_indicator").assertDoesNotExist()
+        assertFalse("revoked load must never retire", retired)
+    }
+
+    /**
+     * T186 M14d-scan: disposal while still Loading releases the
+     * acquired content through the canceled-load branch (the
+     * Ready-guarded disposal alone cannot wipe — state never reached
+     * Ready).
+     */
+    @Test
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun disposalWhileLoadingReleasesContent() {
+        var released = false
+        val owned = ByteArray(16) { 7 }
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val showRoute = androidx.compose.runtime.mutableStateOf(true)
+        val gated = object : CapsuleContentReader {
+            override suspend fun photoCount(capsuleId: String): Int {
+                gate.await()
+                return 3
+            }
+
+            override suspend fun loadPhoto(capsuleId: String, ordinal: Int): DecryptedPhoto =
+                DecryptedPhoto(ordinal, realJpegStatic(0xFF336699L + ordinal))
+
+            override suspend fun noteText(capsuleId: String): String? = null
+        }
+        composeRule.setContent {
+            MaterialTheme {
+                if (showRoute.value) {
+                    CapsuleRoute(
+                        grantId = "grant-1",
+                        contentFactory = { CapsuleContentBinding("capsule-1", gated) },
+                        validateLiveGrant = {},
+                        revocations = kotlinx.coroutines.flow.emptyFlow(),
+                        onClose = {},
+                        onReleaseContent = {
+                            released = true
+                            owned.fill(0)
+                        },
+                    )
+                }
+            }
+        }
+
+        composeRule.onNodeWithTag("capsule_route_loading").assertIsDisplayed()
+        assertFalse(released)
+
+        showRoute.value = false
+        composeRule.waitForIdle()
+
+        assertTrue(released)
+        assertTrue(owned.all { it == 0.toByte() })
+    }
+
     companion object {
         private fun realJpegStatic(color: Long): ByteArray {
             val bitmap = android.graphics.Bitmap.createBitmap(

@@ -263,6 +263,16 @@ internal fun CapsuleRoute(
             state = loaded
             readyCapsuleId = if (loaded is CapsuleRouteState.Ready) binding.capsuleId else null
         } catch (cancelled: CancellationException) {
+            // Canceled/aborted load AFTER content acquisition (route or
+            // grant removed while still Loading): the Ready-guarded
+            // disposal cannot wipe — the loader-owned content may
+            // already exist — so release here before propagating.
+            // Idempotent with every other release site; a load canceled
+            // before its content factory returned owns nothing yet, and
+            // no concurrent load shares the reference (retry relaunches
+            // only from a fully exited Failed state; a new grant mounts a
+            // new route scope).
+            onReleaseContent()
             throw cancelled
         } catch (failure: Exception) {
             (state as? CapsuleRouteState.Ready)?.presentation?.close()

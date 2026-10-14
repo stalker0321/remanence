@@ -25,11 +25,13 @@
     <string name="pending_proof_send_code">отправить код</string>
     <string name="pending_proof_retry">попробовать снова</string>
     <string name="pending_proof_sms_consent">Согласен получить одно SMS с кодом.</string>
+    <string name="pending_proof_bind_alias">Сохранить этот подтверждённый адрес в моём аккаунте для будущих открыток.</string>
     <string name="pending_proof_code_title">введите код</string>
     <string name="pending_proof_code_label">код</string>
     <string name="pending_proof_verify">проверить</string>
     <string name="pending_proof_intent_title">подтверждено — почти всё</string>
     <string name="pending_proof_intent_body">ваша заявка проверена и подписана. отправка передаст её на сервер.</string>
+    <string name="pending_proof_intent_alias">Этот подтверждённый адрес будет сохранён в вашем аккаунте.</string>
     <string name="pending_proof_claim">забрать подарок</string>
     <string name="pending_proof_claimed_title">подарок ваш</string>
     <string name="pending_proof_claimed_body">сервер записал вашу заявку. подарок откроется обычным сканированием.</string>

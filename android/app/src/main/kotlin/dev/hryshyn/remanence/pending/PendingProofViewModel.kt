@@ -206,6 +206,26 @@ class PendingProofViewModel(
     }
 
     /**
+     * T186 alias-bind: explicit opt-in to save the verified address to
+     * this account for future postcards. Default unchecked, never
+     * derived, never implied by (or implying) SMS consent. Editable
+     * ONLY while the flow sits at [ProofState.ProofRequired] — every
+     * midflight/frozen call is ignored, even programmatic. The frozen
+     * copy taken at `requestAttempt` entry is what the signed intent
+     * carries; editing the destination clears both.
+     */
+    private val _aliasConsent = MutableStateFlow(false)
+    val aliasConsent: StateFlow<Boolean> = _aliasConsent.asStateFlow()
+
+    /** Frozen (destination, alias) pair captured at requestAttempt entry. */
+    private var aliasConsentFrozen: Boolean? = null
+
+    fun onAliasConsentChange(affirmed: Boolean) {
+        if (_state.value !is ProofState.ProofRequired) return
+        _aliasConsent.value = affirmed
+    }
+
+    /**
      * T186 M10: retry after a wrong code / network failure WITHOUT losing
      * the gift or the attempt — restores the previous step in place.
      */
@@ -225,6 +245,10 @@ class PendingProofViewModel(
 
     fun onDestinationChange(value: String) {
         _destination.value = value
+        // A new destination needs fresh explicit consent: the frozen
+        // pair belongs to the previous address.
+        _aliasConsent.value = false
+        aliasConsentFrozen = null
     }
 
     fun onCodeChange(value: String) {
@@ -251,6 +275,9 @@ class PendingProofViewModel(
 
     fun start(reference: String) {
         if (_state.value !is ProofState.Idle) return
+        // New lookup, new gift: no stale consent crosses over.
+        _aliasConsent.value = false
+        aliasConsentFrozen = null
         _state.value = ProofState.Continuing
         launchScope.launch {
             _state.value = try {
@@ -287,6 +314,19 @@ class PendingProofViewModel(
         false
     }
 
+    /**
+     * T186 alias-bind: definitive scope/session invalidation. The live
+     * opt-in and any frozen pair die with the session — a later request
+     * needs fresh explicit consent even for the same gift/address.
+     * Non-session failures never touch the frozen choice (retry keeps
+     * it on the same gift/address/live owner).
+     */
+    private fun failedSessionChanged(): ProofState.Failed {
+        _aliasConsent.value = false
+        aliasConsentFrozen = null
+        return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+    }
+
     private data class ProofCreds(
         val lease: dev.hryshyn.remanence.core.data.network.SessionRequestLease,
         val token: String,
@@ -294,7 +334,7 @@ class PendingProofViewModel(
     )
 
     private suspend fun continueFlow(reference: String): ProofState {
-        val creds = creds() ?: return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+        val creds = creds() ?: return failedSessionChanged()
         val result = try {
             continuePort.continueFrom(reference, creds.token)
         } catch (cancelled: CancellationException) {
@@ -302,7 +342,7 @@ class PendingProofViewModel(
         } catch (_: Exception) {
             return ProofState.Failed(PendingProofMessage.NETWORK)
         }
-        if (!credsLive(creds)) return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+        if (!credsLive(creds)) return failedSessionChanged()
         return when (result) {
             is ContinueResult.Sync -> ProofState.SyncReady(result.capsuleId)
             is ContinueResult.Proof -> {
@@ -356,12 +396,16 @@ class PendingProofViewModel(
         val current = proof ?: return
         if (_state.value !is ProofState.ProofRequired) return
         if (_destination.value.isBlank()) return
+        // Freeze the (destination, alias) pair at entry, before any
+        // async work: the signed intent later carries exactly this.
+        val frozenDestination = _destination.value.trim()
+        aliasConsentFrozen = _aliasConsent.value
         _state.value = ProofState.RequestingAttempt
         launchScope.launch {
             _state.value = try {
                 val creds = creds()
                 if (creds == null) {
-                    ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+                    failedSessionChanged()
                 } else {
                     // Entry owner fence (same as R10/R11): the local
                     // account must be the lease owner before any R8 work.
@@ -373,14 +417,14 @@ class PendingProofViewModel(
                     if (account == null || account.userId.isBlank() ||
                         account.userId != creds.ownerId
                     ) {
-                        ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+                        failedSessionChanged()
                     } else {
                         val result = verifyPort.request(
-                            current.deliveryId, _destination.value.trim(), _smsConsent.value,
+                            current.deliveryId, frozenDestination, _smsConsent.value,
                             clockSeconds(), java.util.UUID.randomUUID().toString(), creds.token,
                         )
                         if (!credsLive(creds)) {
-                            ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+                            failedSessionChanged()
                         } else when (result) {
                             is VerificationResult.Attempt -> {
                                 attempt = result.attemptId
@@ -408,7 +452,7 @@ class PendingProofViewModel(
             _state.value = try {
                 val creds = creds()
                 if (creds == null) {
-                    ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+                    failedSessionChanged()
                 } else {
                     // Entry owner fence (same as R10/R11): the local
                     // account must be the lease owner before any R9 work.
@@ -420,11 +464,11 @@ class PendingProofViewModel(
                     if (account == null || account.userId.isBlank() ||
                         account.userId != creds.ownerId
                     ) {
-                        ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+                        failedSessionChanged()
                     } else {
                         val result = verifyPort.check(current.deliveryId, attemptId, _code.value.trim(), creds.token)
                         if (!credsLive(creds)) {
-                            ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+                            failedSessionChanged()
                         } else when (result) {
                             is VerificationResult.Verified -> verifiedState(current.deliveryId, result.attemptId)
                             is VerificationResult.Attempt -> {
@@ -479,17 +523,17 @@ class PendingProofViewModel(
     ): ProofState {
         val port = claimPort
             ?: return ProofState.Failed(PendingProofMessage.BLOCKED)
-        val creds = creds() ?: return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+        val creds = creds() ?: return failedSessionChanged()
         val account = try {
             accountProvider()
         } catch (_: Exception) {
             null
-        } ?: return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+        } ?: return failedSessionChanged()
         if (account.userId.isBlank() || account.bundleId.isBlank() ||
             account.userId != creds.ownerId
         ) {
             // Owner fence at entry: the account must be the lease owner.
-            return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+            return failedSessionChanged()
         }
         val submitted = try {
             port.submit(
@@ -503,7 +547,7 @@ class PendingProofViewModel(
         } catch (_: Exception) {
             return ProofState.Failed(PendingProofMessage.NETWORK)
         }
-        if (!credsLive(creds)) return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+        if (!credsLive(creds)) return failedSessionChanged()
         if (submitted !is dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed) {
             val failure = submitted as dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Failure
             return ProofState.Failed(mapClaimFailure(failure.reason))
@@ -523,7 +567,7 @@ class PendingProofViewModel(
             hpkeKeyProvider()
         } catch (_: Exception) {
             null
-        } ?: return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+        } ?: return failedSessionChanged()
         val ownPublic = try {
             ownBundleKeyProvider()
         } catch (_: Exception) {
@@ -546,7 +590,7 @@ class PendingProofViewModel(
         // owner/incarnation death across hpke/own-bundle fetch must not
         // admit, persist, or promote below (same SESSION_CHANGED wall as
         // every R-call await).
-        if (!credsLive(creds)) return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+        if (!credsLive(creds)) return failedSessionChanged()
         return try {
             val binding = Base64.getDecoder().decode(submitted.claimBindingB64)
             val envelope = Base64.getDecoder().decode(submitted.envelopeB64)
@@ -633,7 +677,7 @@ class PendingProofViewModel(
                         // Fence before promotion: a session death across
                         // the suspend upsert must not yield Claimed.
                         if (!credsLive(creds)) {
-                            return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+                            return failedSessionChanged()
                         }
                         ProofState.Claimed(current.deliveryId, serviceVerified = true)
                     }
@@ -812,16 +856,16 @@ class PendingProofViewModel(
     private suspend fun verifiedState(deliveryId: String, attemptId: String): ProofState {
         attempt = attemptId
         _state.value = ProofState.LoadingOptions
-        val creds = creds() ?: return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+        val creds = creds() ?: return failedSessionChanged()
         val account = try {
             accountProvider()
         } catch (_: Exception) {
             null
-        } ?: return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+        } ?: return failedSessionChanged()
         if (account.userId.isBlank() || account.bundleId.isBlank() ||
             account.userId != creds.ownerId
         ) {
-            return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+            return failedSessionChanged()
         }
         val options = try {
             optionsPort.options(deliveryId, creds.token)
@@ -830,7 +874,7 @@ class PendingProofViewModel(
         } catch (_: Exception) {
             return ProofState.Failed(PendingProofMessage.NETWORK)
         }
-        if (!credsLive(creds)) return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+        if (!credsLive(creds)) return failedSessionChanged()
         if (options !is ClaimOptionsResult.Options) {
             val failure = options as ClaimOptionsResult.Failure
             return ProofState.Failed(mapClaimFailure(failure.reason))
@@ -839,7 +883,7 @@ class PendingProofViewModel(
             hpkeKeyProvider()
         } catch (_: Exception) {
             null
-        } ?: return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+        } ?: return failedSessionChanged()
         val challengeRaw = try {
             Base64.getDecoder().decode(options.claimChallengeB64)
         } catch (_: IllegalArgumentException) {
@@ -881,7 +925,7 @@ class PendingProofViewModel(
                 signingKeyProvider()
             } catch (_: Exception) {
                 null
-            } ?: return ProofState.Failed(PendingProofMessage.SESSION_CHANGED)
+            } ?: return failedSessionChanged()
             val opId = java.util.UUID.randomUUID().toString()
             val intent = PendingClaimIntent.buildCanonical(
                 PendingClaimIntent.Fields(
@@ -895,7 +939,10 @@ class PendingProofViewModel(
                     recipientKeyBundleId = account.bundleId,
                     sessionId = sessionId,
                     nonce = nonce,
-                    bindAlias = false,
+                    // Frozen at requestAttempt entry — never the live
+                    // toggle (locked outside ProofRequired), never
+                    // derived. Null only if no request ran.
+                    bindAlias = aliasConsentFrozen ?: false,
                 ),
             )
             val intentSig = PendingClaimIntent.signIntent(signing, intent)

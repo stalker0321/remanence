@@ -323,6 +323,42 @@ class PendingClaimIntentTest {
     }
 
     @Test
+    fun intentBindAliasTrueRoundTripsAndVerifies() {
+        TinkPrimitives.ensureRegistered()
+        val accountKeys = KeysetHandle.generateNew(KeyTemplates.get("ED25519"))
+        val nonce = ByteArray(32).also { SecureRandom().nextBytes(it) }
+        val h = sha256("statement".toByteArray())
+        val intent = PendingClaimIntent.buildCanonical(
+            PendingClaimIntent.Fields(
+                operationId = "0198f0a0-0000-7000-8000-00000000c001",
+                capsuleId = "11111111-2222-3333-4444-555555555555",
+                deliveryTargetId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                publishStatementSha256 = h,
+                proofId = "0198f0a0-0000-7000-8000-00000000a701",
+                challengeId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                recipientUserId = "33333333-4444-5555-6666-777777777777",
+                recipientKeyBundleId = "01010101-0202-0303-0404-050505050506",
+                sessionId = "02020202-0303-0404-0505-060606060606",
+                nonce = nonce,
+                bindAlias = true,
+            ),
+        )
+        // Canonical form round-trips; the true bit survives the wire.
+        val parsed = dev.hryshyn.remanence.protocol.delivery_v2.ClaimIntentV2.parseFrom(intent)
+        assertEquals(intent.toList(), parsed.toByteArray().toList())
+        assertTrue(parsed.bindAlias)
+        val signature = PendingClaimIntent.signIntent(accountKeys, intent)
+        assertEquals(69, signature.size)
+        // Self-verifies under the matching public key over the frozen input.
+        val input = PendingClaimIntent.CLAIM_INTENT_DOMAIN.toByteArray(Charsets.US_ASCII) +
+            byteArrayOf(0x00) + intent
+        val publicBytes = TinkProtoKeysetFormat.serializeKeysetWithoutSecret(accountKeys.publicKeysetHandle)
+        TinkProtoKeysetFormat.parseKeysetWithoutSecret(publicBytes)
+            .getPrimitive(com.google.crypto.tink.PublicKeyVerify::class.java)
+            .verify(signature, input)
+    }
+
+    @Test
     fun intentRejectsMalformedUuid() {
         // PendingUuid16 raises GeneralSecurityException (not bare
         // IllegalArgumentException) so malformed ids fail the crypto gate,

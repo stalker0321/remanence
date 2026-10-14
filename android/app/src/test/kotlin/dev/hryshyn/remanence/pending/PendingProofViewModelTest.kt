@@ -5,9 +5,11 @@ import com.google.crypto.tink.InsecureSecretKeyAccess
 import com.google.crypto.tink.KeyTemplates
 import com.google.crypto.tink.KeysetHandle
 import com.google.crypto.tink.PublicKeySign
+import com.google.crypto.tink.PublicKeyVerify
 import com.google.crypto.tink.TinkProtoKeysetFormat
 import com.google.protobuf.ByteString
 import dev.hryshyn.remanence.core.crypto.PendingClaimChallenge
+import dev.hryshyn.remanence.core.crypto.PendingClaimIntent
 import dev.hryshyn.remanence.core.crypto.TinkPrimitives
 import dev.hryshyn.remanence.core.data.network.ClaimOptionsResult
 import dev.hryshyn.remanence.core.data.network.ContinueResult
@@ -18,6 +20,7 @@ import dev.hryshyn.remanence.protocol.delivery_v2.AddressOpening
 import dev.hryshyn.remanence.protocol.delivery_v2.ArtifactBindingV2
 import dev.hryshyn.remanence.protocol.delivery_v2.ClaimBindingV1
 import dev.hryshyn.remanence.protocol.delivery_v2.ClaimChallengeV1
+import dev.hryshyn.remanence.protocol.delivery_v2.ClaimIntentV2
 import dev.hryshyn.remanence.protocol.delivery_v2.ClaimedEnvelopeContextV2
 import dev.hryshyn.remanence.protocol.delivery_v2.ClaimedEnvelopePlaintextV2
 import dev.hryshyn.remanence.protocol.delivery_v2.KeyCommitmentInput
@@ -31,6 +34,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -1143,5 +1147,238 @@ class PendingProofViewModelTest {
         } finally {
             dir.deleteRecursively()
         }
+    }
+
+    /**
+     * T186 alias-bind: shared wiring for the signed-intent capture
+     * tests — the full Accepted flow with self-built vectors, the
+     * caller-supplied signing key, and the R11-submitted intent bytes
+     * captured for parse + real signature verification.
+     */
+    private fun kotlinx.coroutines.test.TestScope.aliasFlowVm(
+        vectors: AcceptedVectors,
+        signingKeys: KeysetHandle,
+        submitted: Array<ByteArray?>,
+        store: PendingAdmittedGiftStore,
+    ): PendingProofViewModel = vm(
+        continueResult = vectors.proof,
+        options = {
+            ClaimOptionsResult.Options(
+                vectors.challenge.challengeId, 1_798_765_432L,
+                Base64.getEncoder().encodeToString(vectors.challenge.sealed),
+                Base64.getEncoder().encodeToString(vectors.challenge.contextRaw),
+            )
+        },
+        hpke = vectors.recipientPrivate,
+        signing = signingKeys,
+        senderKeyProvider = { _, _ -> vectors.senderPublicBytes },
+        ownBundleKey = vectors.recipientPublicBytes,
+        servicePin = vectors.servicePin,
+        admittedStore = store,
+        claim = ProofClaimPort { _, intentB64, sigB64, _, _ ->
+            submitted[0] = Base64.getDecoder().decode(intentB64)
+            submitted[1] = Base64.getDecoder().decode(sigB64)
+            dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
+                vectors.claimId,
+                Base64.getEncoder().encodeToString(vectors.claim),
+                Base64.getEncoder().encodeToString(vectors.claimSig),
+                Base64.getEncoder().encodeToString(vectors.sealed),
+                vectors.sealedShaHex,
+            )
+        },
+    )
+
+    /** Real Ed25519 verification of a submitted intent under the test key. */
+    private fun verifySubmittedIntent(
+        signingKeys: KeysetHandle,
+        intent: ByteArray,
+        signature: ByteArray,
+    ) {
+        val input = PendingClaimIntent.CLAIM_INTENT_DOMAIN.toByteArray(Charsets.US_ASCII) +
+            byteArrayOf(0x00) + intent
+        val publicBytes = TinkProtoKeysetFormat.serializeKeysetWithoutSecret(
+            signingKeys.publicKeysetHandle,
+        )
+        TinkProtoKeysetFormat.parseKeysetWithoutSecret(publicBytes)
+            .getPrimitive(PublicKeyVerify::class.java)
+            .verify(signature, input)
+    }
+
+    /**
+     * T186 alias-bind: default unchecked, and the submitted signed
+     * intent carries bindAlias=false (parsed + really verified).
+     */
+    @Test
+    fun aliasDefaultsUncheckedAndStaysOutOfIntent() = runTest {
+        TinkPrimitives.ensureRegistered()
+        val vectors = acceptedVectors()
+        val signingKeys = KeysetHandle.generateNew(KeyTemplates.get("ED25519"))
+        val submitted = arrayOfNulls<ByteArray>(2)
+        val dir = java.nio.file.Files.createTempDirectory("pending-alias-default").toFile()
+        try {
+            val store = PendingAdmittedGiftStore(dir)
+            val viewModel = aliasFlowVm(vectors, signingKeys, submitted, store)
+            assertFalse(viewModel.aliasConsent.value)
+            driveToIntentReady(viewModel)
+            viewModel.submitClaim()
+            testScheduler.advanceUntilIdle()
+            assertEquals(
+                PendingProofViewModel.ProofState.Claimed(deliveryId, serviceVerified = true),
+                viewModel.state.value,
+            )
+            val intent = submitted[0] ?: throw AssertionError("no submitted intent")
+            val signature = submitted[1] ?: throw AssertionError("no submitted signature")
+            assertFalse(ClaimIntentV2.parseFrom(intent).bindAlias)
+            verifySubmittedIntent(signingKeys, intent, signature)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /**
+     * T186 alias-bind: an explicit opt-in before the request travels
+     * into the canonical signed intent as bindAlias=true (parsed +
+     * really verified); the frozen choice is visible at IntentReady.
+     */
+    @Test
+    fun aliasAffirmedTravelsIntoSignedIntent() = runTest {
+        TinkPrimitives.ensureRegistered()
+        val vectors = acceptedVectors()
+        val signingKeys = KeysetHandle.generateNew(KeyTemplates.get("ED25519"))
+        val submitted = arrayOfNulls<ByteArray>(2)
+        val dir = java.nio.file.Files.createTempDirectory("pending-alias-true").toFile()
+        try {
+            val store = PendingAdmittedGiftStore(dir)
+            val viewModel = aliasFlowVm(vectors, signingKeys, submitted, store)
+            viewModel.start("ref")
+            testScheduler.advanceUntilIdle()
+            assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.ProofRequired)
+            viewModel.onDestinationChange("a42@example.test")
+            viewModel.onAliasConsentChange(true)
+            assertTrue(viewModel.aliasConsent.value)
+            viewModel.requestAttempt()
+            testScheduler.advanceUntilIdle()
+            viewModel.onCodeChange("12345678")
+            viewModel.checkCode()
+            testScheduler.advanceUntilIdle()
+            assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.IntentReady)
+            assertTrue(viewModel.aliasConsent.value)
+            viewModel.submitClaim()
+            testScheduler.advanceUntilIdle()
+            assertEquals(
+                PendingProofViewModel.ProofState.Claimed(deliveryId, serviceVerified = true),
+                viewModel.state.value,
+            )
+            val intent = submitted[0] ?: throw AssertionError("no submitted intent")
+            val signature = submitted[1] ?: throw AssertionError("no submitted signature")
+            assertTrue(ClaimIntentV2.parseFrom(intent).bindAlias)
+            verifySubmittedIntent(signingKeys, intent, signature)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /**
+     * T186 alias-bind: editing the destination clears the opt-in (and
+     * the frozen pair) — a new address needs fresh explicit consent.
+     */
+    @Test
+    fun destinationEditClearsAlias() = runTest {
+        val viewModel = vm()
+        viewModel.start("ref")
+        testScheduler.advanceUntilIdle()
+        assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.ProofRequired)
+        viewModel.onAliasConsentChange(true)
+        assertTrue(viewModel.aliasConsent.value)
+        viewModel.onDestinationChange("other@example.test")
+        assertFalse(viewModel.aliasConsent.value)
+    }
+
+    /**
+     * T186 alias-bind: the toggle is refused outside ProofRequired —
+     * a midflight attempt at CodeRequired and at IntentReady changes
+     * nothing, and the submitted intent keeps the frozen false.
+     */
+    @Test
+    fun midflightToggleRefused() = runTest {
+        TinkPrimitives.ensureRegistered()
+        val setup = challengeSetup()
+        val viewModel = vm(
+            options = {
+                ClaimOptionsResult.Options(
+                    setup.challengeId, 1_798_765_432L,
+                    Base64.getEncoder().encodeToString(setup.sealed),
+                    Base64.getEncoder().encodeToString(setup.contextRaw),
+                )
+            },
+            hpke = setup.recipientPrivate,
+            senderKeyProvider = { _, _ -> frozenSenderKey() },
+            ownBundleKey = TinkProtoKeysetFormat.serializeKeysetWithoutSecret(
+                setup.recipientPrivate.publicKeysetHandle,
+            ),
+        )
+        viewModel.start("ref")
+        testScheduler.advanceUntilIdle()
+        viewModel.onDestinationChange("a42@example.test")
+        viewModel.requestAttempt()
+        testScheduler.advanceUntilIdle()
+        assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.CodeRequired)
+        viewModel.onAliasConsentChange(true)
+        assertFalse(viewModel.aliasConsent.value)
+        viewModel.onCodeChange("12345678")
+        viewModel.checkCode()
+        testScheduler.advanceUntilIdle()
+        assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.IntentReady)
+        viewModel.onAliasConsentChange(true)
+        assertFalse(viewModel.aliasConsent.value)
+    }
+
+    /**
+     * T186 alias-bind: the toggle is refused while Claiming — the
+     * in-flight signed intent/digest cannot change under the same
+     * operation id.
+     */
+    @Test
+    fun claimingToggleRefused() = runTest {
+        val viewModel = vm()
+        viewModel.start("ref")
+        testScheduler.advanceUntilIdle()
+        viewModel.onDestinationChange("a42@example.test")
+        viewModel.requestAttempt()
+        testScheduler.advanceUntilIdle()
+        viewModel.onCodeChange("12345678")
+        viewModel.checkCode()
+        testScheduler.advanceUntilIdle()
+        assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.IntentReady)
+        viewModel.submitClaim()
+        assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.Claiming)
+        viewModel.onAliasConsentChange(true)
+        assertFalse(viewModel.aliasConsent.value)
+        testScheduler.advanceUntilIdle()
+    }
+
+    /**
+     * T186 alias-bind: a session/owner death clears the opt-in — the
+     * next request needs fresh explicit consent even for the same
+     * gift and address.
+     */
+    @Test
+    fun sessionDeathClearsAlias() = runTest {
+        var gate: FakeGate? = null
+        val viewModel = vm(gateTap = { gate = it })
+        viewModel.start("ref")
+        testScheduler.advanceUntilIdle()
+        assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.ProofRequired)
+        viewModel.onDestinationChange("a42@example.test")
+        viewModel.onAliasConsentChange(true)
+        assertTrue(viewModel.aliasConsent.value)
+        gate?.live = false
+        viewModel.requestAttempt()
+        testScheduler.advanceUntilIdle()
+        assertEquals(
+            PendingProofViewModel.ProofState.Failed(PendingProofMessage.SESSION_CHANGED),
+            viewModel.state.value,
+        )
+        assertFalse(viewModel.aliasConsent.value)
     }
 }

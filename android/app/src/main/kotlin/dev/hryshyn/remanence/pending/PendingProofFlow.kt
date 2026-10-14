@@ -97,6 +97,28 @@ fun PendingProofFlow(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().testTag("pending_proof_destination"),
                     )
+                    // T186 alias-bind: explicit opt-in to save the
+                    // verified address to this account. Default
+                    // unchecked, never derived, independent of SMS
+                    // consent. Frozen with the destination at request
+                    // time; not editable afterwards.
+                    val aliasConsent by viewModel.aliasConsent.collectAsStateWithLifecycle()
+                    Spacer(Modifier.height(8.dp))
+                    androidx.compose.foundation.layout.Row(
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        androidx.compose.material3.Checkbox(
+                            checked = aliasConsent,
+                            onCheckedChange = viewModel::onAliasConsentChange,
+                            modifier = Modifier.testTag("pending_proof_bind_alias"),
+                        )
+                        Text(
+                            stringResource(R.string.pending_proof_bind_alias),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = dev.hryshyn.remanence.ui.hold.HoldColors.Muted,
+                        )
+                    }
                     // T186 M10: explicit affirmative SMS consent, phone
                     // channels only — never derived from the channel. The
                     // timestamp is captured at request time in the VM.
@@ -168,6 +190,19 @@ fun PendingProofFlow(
                         color = dev.hryshyn.remanence.ui.hold.HoldColors.Muted,
                         modifier = Modifier.testTag("pending_proof_intent"),
                     )
+                    // T186 alias-bind: noneditable summary of the frozen
+                    // choice carried by the signed intent (read-only —
+                    // the toggle lives only on ProofRequired).
+                    val intentAlias by viewModel.aliasConsent.collectAsStateWithLifecycle()
+                    if (intentAlias) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            stringResource(R.string.pending_proof_intent_alias),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = dev.hryshyn.remanence.ui.hold.HoldColors.Muted,
+                            modifier = Modifier.testTag("pending_proof_intent_alias"),
+                        )
+                    }
                     Spacer(Modifier.height(12.dp))
                     Button(
                         onClick = viewModel::submitClaim,

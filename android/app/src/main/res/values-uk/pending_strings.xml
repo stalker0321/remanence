@@ -25,11 +25,13 @@
     <string name="pending_proof_send_code">надіслати код</string>
     <string name="pending_proof_retry">спробувати знову</string>
     <string name="pending_proof_sms_consent">Погоджуюся отримати одне SMS із кодом.</string>
+    <string name="pending_proof_bind_alias">Зберегти цю підтверджену адресу в моєму акаунті для майбутніх листівок.</string>
     <string name="pending_proof_code_title">введіть код</string>
     <string name="pending_proof_code_label">код</string>
     <string name="pending_proof_verify">перевірити</string>
     <string name="pending_proof_intent_title">підтверджено — майже все</string>
     <string name="pending_proof_intent_body">ваша заявка перевірена й підписана. надсилання передасть її на сервер.</string>
+    <string name="pending_proof_intent_alias">Цю підтверджену адресу буде збережено у вашому акаунті.</string>
     <string name="pending_proof_claim">забрати подарунок</string>
     <string name="pending_proof_claimed_title">подарунок ваш</string>
     <string name="pending_proof_claimed_body">сервер записав вашу заявку. подарунок відкриється звичайним скануванням.</string>

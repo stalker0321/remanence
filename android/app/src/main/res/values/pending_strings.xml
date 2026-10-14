@@ -29,11 +29,13 @@
     <string name="pending_proof_send_code">send code</string>
     <string name="pending_proof_retry">try again</string>
     <string name="pending_proof_sms_consent">I agree to receive one SMS with the code.</string>
+    <string name="pending_proof_bind_alias">Save this verified address to my account for future postcards.</string>
     <string name="pending_proof_code_title">enter the code</string>
     <string name="pending_proof_code_label">code</string>
     <string name="pending_proof_verify">verify</string>
     <string name="pending_proof_intent_title">verified — almost there</string>
     <string name="pending_proof_intent_body">your claim is verified and signed. submitting sends it to the server.</string>
+    <string name="pending_proof_intent_alias">This verified address will be saved to your account.</string>
     <string name="pending_proof_claim">claim gift</string>
     <string name="pending_proof_claimed_title">gift claimed</string>
     <string name="pending_proof_claimed_body">the server recorded your claim. the gift opens with the ordinary scan.</string>

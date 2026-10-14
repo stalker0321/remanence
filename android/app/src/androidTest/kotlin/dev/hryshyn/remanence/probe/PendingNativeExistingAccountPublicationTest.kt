@@ -15,6 +15,7 @@ import dev.hryshyn.remanence.pending.PendingCodeNormalizer
 import dev.hryshyn.remanence.pending.PendingSendRouteFlow
 import dev.hryshyn.remanence.pending.PendingSenderIdentity
 import dev.hryshyn.remanence.pending.PendingServicePinConfig
+import dev.hryshyn.remanence.session.SessionState
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.security.MessageDigest
@@ -259,7 +260,7 @@ class PendingNativeExistingAccountPublicationTest {
             if (handle.isNullOrBlank()) {
                 throw AssertionError("missing prerequisite: persisted account has no handle")
             }
-            val signing = when (
+            when (
                 val loaded = try {
                     container.identityRepository.load()
                 } catch (_: Exception) {
@@ -267,20 +268,78 @@ class PendingNativeExistingAccountPublicationTest {
                 }
             ) {
                 is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available ->
-                    loaded.signingHandle
+                    Unit
                 else -> throw AssertionError("missing prerequisite: no available identity")
             }
-            val lease = try {
-                container.pendingSessionGate.capture()
+            // 2. Ordinary cold-start bootstrap (genuine refresh path —
+            // the R37 lesson: a fresh process holds memory-only null
+            // tokens, so capture-first reads a dead session). Bounded,
+            // cancellation-propagating, state-only errors. Anything but
+            // an exact-match Active state is a missing prerequisite —
+            // never token injection, login, or gate bypass.
+            val bootstrapped = withTimeout(60_000) {
+                try {
+                    container.sessionBootstrap.bootstrap()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    throw AssertionError("session bootstrap unavailable")
+                }
+            }
+            val active = when (bootstrapped) {
+                is SessionState.Active -> bootstrapped
+                else -> throw AssertionError(
+                    "missing prerequisite: session not active",
+                )
+            }
+            if (active.userId != expectedOwner || active.activeKeyBundleId != expectedBundle) {
+                throw AssertionError("missing prerequisite: bootstrapped session is not expected")
+            }
+            if (active.handle.isNullOrBlank()) {
+                throw AssertionError("missing prerequisite: bootstrapped session has no handle")
+            }
+            if (!active.hasEncryptionKeyset || !active.hasSigningKeyset) {
+                throw AssertionError("missing prerequisite: bootstrapped session keys unusable")
+            }
+            val bootstrappedLease = active.requestLease
+                ?: throw AssertionError("missing prerequisite: bootstrapped session has no lease")
+            // Re-load after the suspension: owner/bundle changes fail
+            // closed here. One immutable account + lease flows onward
+            // (the pre-bootstrap values above stay as the entry gates).
+            val freshAccount = try {
+                container.currentAccountStore.load()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (_: Exception) {
-                null
-            } ?: throw AssertionError("missing prerequisite: no live session lease")
+                throw AssertionError("prerequisite account store unreadable")
+            } ?: throw AssertionError("missing prerequisite: no persisted account")
+            if (freshAccount.userId != expectedOwner ||
+                freshAccount.activeKeyBundleId != expectedBundle
+            ) {
+                throw AssertionError("missing prerequisite: account changed during bootstrap")
+            }
+            val freshHandle = freshAccount.handle
+            if (freshHandle.isNullOrBlank()) {
+                throw AssertionError("missing prerequisite: persisted account has no handle")
+            }
+            val freshSigning = when (
+                val reloaded = try {
+                    container.identityRepository.load()
+                } catch (_: Exception) {
+                    null
+                }
+            ) {
+                is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available ->
+                    reloaded.signingHandle
+                else -> throw AssertionError("missing prerequisite: no available identity")
+            }
+            val lease = bootstrappedLease
             val leaseOwner = try {
                 lease.ownerUserId.toRestString()
             } catch (_: Exception) {
                 ""
             }
-            if (leaseOwner != account.userId) {
+            if (leaseOwner != freshAccount.userId) {
                 throw AssertionError("missing prerequisite: lease owner mismatch")
             }
             val bearer = try {
@@ -295,7 +354,7 @@ class PendingNativeExistingAccountPublicationTest {
                 throw AssertionError("missing prerequisite: service pin unusable")
             }
 
-            // 2. One-shot marker BEFORE any R1 network effect. A
+            // 3. One-shot marker BEFORE any R1 network effect. A
             // pre-existing marker refuses replay (no deletion, no
             // auto-retry — root decides deliberately).
             val capsuleId = UUID.randomUUID().toString()
@@ -323,9 +382,9 @@ class PendingNativeExistingAccountPublicationTest {
                 photos.add(deviceJpeg(1024, 768, 0xFF993366.toInt()))
                 photos.add(deviceJpeg(640, 480, 0xFF669933.toInt()))
                 front = CanonicalFrontFixture.distinctFront(11)
-                // 3. R1 freeze through the real wrapper: frozen PENDING
+                // 4. R1 freeze through the real wrapper: frozen PENDING
                 // only (never v1/fallback), under the ORIGINAL lease.
-                checkLease(lease, account.userId)
+                checkLease(lease, freshAccount.userId)
                 val routeFlow = PendingSendRouteFlow(
                     PendingSendRouteFlow.SendRoutePort { capsule, kind, value, key, token ->
                         container.pendingSendRoutePort.freeze(capsule, kind, value, key, token)
@@ -356,12 +415,12 @@ class PendingNativeExistingAccountPublicationTest {
                         throw AssertionError("R1 route freeze failed(${frozenState.reason})")
                     else -> throw AssertionError("R1 route freeze unexpected state")
                 }
-                checkLease(lease, account.userId)
+                checkLease(lease, freshAccount.userId)
                 assertTrue(pending.deliveryTargetId.isNotBlank())
                 assertEquals(recipient, pending.normalizedDestination)
                 assertEquals(pin.deploymentUuid, pending.serviceKeyId)
 
-                // 4. Full authored payload (never photos-only): canonical
+                // 5. Full authored payload (never photos-only): canonical
                 // FRONT parse-verified locally, supported expression over
                 // the exact authored refs.
                 try {
@@ -393,7 +452,7 @@ class PendingNativeExistingAccountPublicationTest {
                         PendingBoundaryPublish.PhotoBytes(bytes, widthPx, heightPx)
                     },
                     manifests = PendingBoundaryPublish.ManifestInputs(
-                        senderHandleSnapshot = handle,
+                        senderHandleSnapshot = freshHandle,
                         frontFingerprintBytes = front,
                         noteUtf8 = null,
                         expression = dev.hryshyn.remanence.core.crypto.PendingCapsulePublisher.ExpressionInput(
@@ -407,16 +466,16 @@ class PendingNativeExistingAccountPublicationTest {
                     createdAtEpochSeconds = System.currentTimeMillis() / 1000L,
                 )
                 val ports = container.pendingBoundaryPorts
-                checkLease(lease, account.userId)
+                checkLease(lease, freshAccount.userId)
                 val published = withTimeout(180_000) {
                     try {
                         PendingBoundaryPublish.run(
                             frozen = pending,
                             authored = authored,
                             identity = PendingSenderIdentity(
-                                account.userId,
-                                account.activeKeyBundleId,
-                                signing,
+                                freshAccount.userId,
+                                freshAccount.activeKeyBundleId,
+                                freshSigning,
                             ),
                             pin = pin,
                             sessionGate = container.pendingSessionGate,
@@ -432,7 +491,7 @@ class PendingNativeExistingAccountPublicationTest {
                         throw AssertionError("sender boundary publish unavailable")
                     }
                 }
-                checkLease(lease, account.userId)
+                checkLease(lease, freshAccount.userId)
                 val locator = when (published) {
                     is PendingBoundaryPublish.Result.Published -> published
                     is PendingBoundaryPublish.Result.Failed ->
@@ -451,9 +510,9 @@ class PendingNativeExistingAccountPublicationTest {
                     throw AssertionError("publication marker not durable")
                 }
 
-                // 5. Independent anonymous R6 lookup (sender scope ends;
+                // 6. Independent anonymous R6 lookup (sender scope ends;
                 // no proof/claim/retire inference).
-                checkLease(lease, account.userId)
+                checkLease(lease, freshAccount.userId)
                 val found = withTimeout(60_000) {
                     try {
                         PendingGiftLookupRepository.create(
@@ -465,7 +524,7 @@ class PendingNativeExistingAccountPublicationTest {
                         throw AssertionError("R6 locator lookup unavailable")
                     }
                 }
-                checkLease(lease, account.userId)
+                checkLease(lease, freshAccount.userId)
                 when (found) {
                     is GiftLookupResult.Found -> {
                         assertTrue(found.giftReference.isNotBlank())

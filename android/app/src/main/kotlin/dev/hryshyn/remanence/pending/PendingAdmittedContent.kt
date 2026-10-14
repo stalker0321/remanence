@@ -159,11 +159,15 @@ class PendingAdmittedContent(
         } catch (_: Exception) {
             null
         }
-        checkSession(ownerUserId)
-        if (capsuleKey == null || capsuleKey.isEmpty()) {
-            throw IllegalStateException("pending capsule key unavailable")
-        }
         try {
+            // Post-envelope fence INSIDE wipe ownership: a lease death
+            // across the key await throws here, and the `finally` below
+            // still zeroizes any returned key bytes. Nothing leaves this
+            // block with a live key reference.
+            checkSession(ownerUserId)
+            val key = capsuleKey
+                ?: throw IllegalStateException("pending capsule key unavailable")
+            if (key.isEmpty()) throw IllegalStateException("pending capsule key unavailable")
             // Receiver hygiene (T187 qualifier): every decrypted PHOTO
             // buffer is tracked so a LATER failure wipes previously opened
             // photos — partial buffers never gain caller ownership. The
@@ -219,7 +223,7 @@ class PendingAdmittedContent(
                     )
                     val opened = try {
                         PendingArtifactCryptor.decrypt(
-                            capsuleKeysetFrom(capsuleKey), row.capsuleId, blobId,
+                            capsuleKeysetFrom(key), row.capsuleId, blobId,
                             binding.kind, binding.ordinal, senderId, targetId, ciphertext,
                         )
                     } catch (_: Exception) {
@@ -283,7 +287,7 @@ class PendingAdmittedContent(
                 throw failure
             }
         } finally {
-            capsuleKey.fill(0)
+            capsuleKey?.fill(0)
         }
     }
 

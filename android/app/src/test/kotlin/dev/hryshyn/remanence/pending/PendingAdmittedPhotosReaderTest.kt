@@ -1,8 +1,11 @@
 package dev.hryshyn.remanence.pending
 
+import dev.hryshyn.remanence.core.crypto.ContentExpression
 import dev.hryshyn.remanence.core.crypto.ContentManifestContent
 import dev.hryshyn.remanence.core.crypto.ManifestPhoto
+import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
 import dev.hryshyn.remanence.ui.capsule.CapsulePresentationAdmission
+import dev.hryshyn.remanence.ui.capsule.testV2Expression
 import java.util.UUID
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertArrayEquals
@@ -83,6 +86,59 @@ class PendingAdmittedPhotosReaderTest {
         val admission = reader.presentationAdmission(capsule)
         assertTrue(admission is CapsulePresentationAdmission.Unsupported)
         assertEquals("hello", reader.noteText(capsule))
+    }
+
+    /**
+     * T186 M14d-scan: a supported v2 expression + track snapshot
+     * presents through the existing BER1 path with the snapshot
+     * carried (same admission object the v1 source maps — no
+     * restyle, no music redesign).
+     */
+    @Test
+    fun v2SupportedExpressionPresentsBer1WithTrack() = runTest {
+        val expression = testV2Expression()
+        val track = CapsuleTrackSnapshotV1.parse(
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            "Title",
+            "Artist",
+            null,
+            null,
+        )
+        val manifestPhotos = expression.input.photos.mapIndexed { index, photo ->
+            ManifestPhoto(
+                blobId = UUID.nameUUIDFromBytes("blob-$index".toByteArray()),
+                ordinal = index,
+                width = photo.widthPx,
+                height = photo.heightPx,
+            )
+        }
+        val reader = PendingAdmittedPhotosReader(
+            capsule,
+            PendingAdmittedContent.OpenedPhotos(
+                photosByOrdinal = photos(3),
+                note = null,
+                manifest = ContentManifestContent(
+                    protocolVersion = 2,
+                    photos = manifestPhotos,
+                    note = null,
+                    expression = ContentExpression(
+                        candidateId = "cand-1",
+                        projectionHash = "a".repeat(64),
+                        expression = expression,
+                    ),
+                    trackSnapshot = track,
+                ),
+            ),
+        )
+        val admission = reader.presentationAdmission(capsule)
+        assertTrue(admission is CapsulePresentationAdmission.Ber1)
+        assertEquals(
+            expression,
+            (admission as CapsulePresentationAdmission.Ber1).expression,
+        )
+        assertEquals(track, reader.trackSnapshot(capsule))
+        assertEquals(3, reader.photoCount(capsule))
+        assertNull(reader.noteText(capsule))
     }
 
     @Test

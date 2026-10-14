@@ -12,12 +12,15 @@ import dev.hryshyn.remanence.core.crypto.PendingPublishCrypto
 import dev.hryshyn.remanence.core.data.network.PendingBlobBytesResult
 import dev.hryshyn.remanence.core.data.network.PendingMaterialFailure
 import dev.hryshyn.remanence.core.data.network.SessionRequestLease
+import dev.hryshyn.remanence.core.model.CapsuleTrackSnapshotV1
 import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.ui.capsule.testV2Expression
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -343,6 +346,76 @@ class PendingAdmittedContentTest {
     }
 
     /**
+     * T186 M14d-scan: a genuinely published v2 expression gift (real
+     * publisher output, shared validated expression fixture) opens end
+     * to end — photo-map agreement over the authored set, note absent,
+     * and the reader admits the supported expression to BER1 with the
+     * track snapshot carried. No fallback, no restyle.
+     */
+    @Test
+    fun v2ExpressionGiftOpensToBer1Admission() = runTest {
+        dev.hryshyn.remanence.core.crypto.TinkPrimitives.ensureRegistered()
+        val signing = KeysetHandle.generateNew(KeyTemplates.get("ED25519"))
+        val capsuleKey = CapsuleKeysetGenerator().generate()
+        val expression = testV2Expression()
+        val track = CapsuleTrackSnapshotV1.parse(
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            "Title",
+            "Artist",
+            null,
+            null,
+        )
+        val publication = PendingCapsulePublisher.publishFull(
+            capsuleId = capsule,
+            senderUserId = sender,
+            senderKeyBundleId = senderBundle,
+            deliveryTargetId = target,
+            serviceKeyId = serviceKey,
+            channel = PendingPublishCrypto.CHANNEL_EMAIL,
+            normalizedDestination = "a42@example.test",
+            salt32 = ByteArray(32).also { SecureRandom().nextBytes(it) },
+            claimExpiresAt = 1814317432L,
+            createdAtEpochSeconds = 1798765432L,
+            signingHandle = signing,
+            capsuleKeyset = capsuleKey,
+            senderHandleSnapshot = "mykola",
+            frontFingerprintBytes = ByteArray(96) { (it * 3).toByte() },
+            photos = listOf(
+                PendingCapsulePublisher.PhotoInput("photo-bytes".toByteArray(), 1000, 1000),
+                PendingCapsulePublisher.PhotoInput("photo-two".toByteArray(), 1200, 800),
+                PendingCapsulePublisher.PhotoInput("photo-three".toByteArray(), 800, 1200),
+            ),
+            noteUtf8 = null,
+            expression = PendingCapsulePublisher.ExpressionInput(
+                "cand-1",
+                expression,
+                listOf("p1", "p2", "p3"),
+                track,
+            ),
+        )
+        val v2 = Sealed(
+            publication,
+            signing,
+            capsuleKey,
+            "photo-bytes".toByteArray(),
+        )
+        val opened = content(v2).openPhotos(
+            rowOf(v2), owner, "token",
+            PendingAdmittedContent.EnvelopeOpener { keyOf(v2) },
+        )
+        assertEquals(3, opened.photosByOrdinal.size)
+        assertNull(opened.note)
+        val reader = dev.hryshyn.remanence.pending.PendingAdmittedPhotosReader(capsule, opened)
+        val admission = reader.presentationAdmission(capsule)
+        assertTrue(admission is dev.hryshyn.remanence.ui.capsule.CapsulePresentationAdmission.Ber1)
+        assertEquals(
+            expression,
+            (admission as dev.hryshyn.remanence.ui.capsule.CapsulePresentationAdmission.Ber1).expression,
+        )
+        assertEquals(track, reader.trackSnapshot(capsule))
+    }
+
+    /**
      * T186 (T187 qualifier): a directory bundle owned by someone
      * other than the statement sender is rejected before any byte is
      * trusted — bare key bytes never suffice.
@@ -461,5 +534,53 @@ class PendingAdmittedContentTest {
         }
         assertTrue((result ?: "").contains("session changed"))
         assertEquals(0, downloads)
+    }
+
+    /**
+     * T186 M14d-scan: a lease death across the envelope await still
+     * zeroizes the returned key — the post-await fence lives inside
+     * wipe ownership, so the throw cannot strand live key bytes. No
+     * blob is downloaded and nothing presents.
+     */
+    @Test
+    fun envelopeLeaseDeathWipesReturnedKey() = runTest {
+        val sealed = sealed()
+        var live = true
+        var downloads = 0
+        val gated = PendingAdmittedContent(
+            blobPort = PendingAdmittedContent.BlobPort { _, _, _ ->
+                downloads += 1
+                throw AssertionError("fenced open must not download")
+            },
+            senderVerifyPort = PendingAdmittedContent.SenderVerifyPort { _ ->
+                PendingAdmittedContent.DirectoryBundle(
+                    "01010101-0202-0303-0404-050505050505",
+                    TinkProtoKeysetFormat.serializeKeysetWithoutSecret(
+                        sealed.signing.publicKeysetHandle,
+                    ),
+                )
+            },
+            session = sessionOf(live = { live }),
+        )
+        var returned: ByteArray? = null
+        val result = try {
+            gated.openPhotos(
+                rowOf(sealed), owner, "token",
+                PendingAdmittedContent.EnvelopeOpener {
+                    val key = keyOf(sealed)
+                    returned = key
+                    live = false
+                    key
+                },
+            )
+            null
+        } catch (failure: IllegalStateException) {
+            failure.message
+        }
+        assertTrue((result ?: "").contains("session changed"))
+        assertEquals(0, downloads)
+        val key = returned ?: throw AssertionError("opener must have returned a key")
+        assertTrue("returned key must be non-empty", key.isNotEmpty())
+        assertTrue("returned key bytes must be zeroized", key.all { it == 0.toByte() })
     }
 }

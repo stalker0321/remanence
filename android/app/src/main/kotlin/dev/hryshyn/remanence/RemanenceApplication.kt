@@ -962,10 +962,10 @@ class AppContainer private constructor(
             fetchPort = dev.hryshyn.remanence.pending.PendingFeedSync.FetchPort { cursor, limit, token ->
                 pendingIncomingRepository.page(cursor, limit, token)
             },
-            ingestPort = dev.hryshyn.remanence.pending.PendingFeedSync.IngestPort { owner, token, items ->
+            ingestPort = dev.hryshyn.remanence.pending.PendingFeedSync.IngestPort { owner, lease, items ->
                 pendingClaimIngest.ingest(
                     owner,
-                    token,
+                    lease,
                     items.map {
                         dev.hryshyn.remanence.pending.PendingClaimIngest.FeedItemInputs(
                             it.capsuleId, it.deliveryId, it.deliveryTargetId,
@@ -980,6 +980,7 @@ class AppContainer private constructor(
             accountProvider = pendingFeedAccount,
             scope = scope,
         )
+    }
 
     /**
      * T186 M14a: best-effort re-arm of the owned-feed sync after

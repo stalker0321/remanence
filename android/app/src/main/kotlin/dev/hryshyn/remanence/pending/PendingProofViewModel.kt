@@ -114,6 +114,14 @@ class PendingProofViewModel(
      * `Accepted`.
      */
     private val servicePinProvider: () -> PendingServicePin? = { null },
+    /**
+     * T186 M14d-claim: admitted-row sink, written on `Accepted` only.
+     * Null keeps the pre-row behavior (unit surfaces); production
+     * passes the durable admitted store. A failed persist does NOT
+     * fail the claim (the server holds the durable truth and the
+     * feed sync re-admits the same row) — Claimed stays truthful.
+     */
+    private val admittedStore: PendingAdmittedGiftStore? = null,
     private val clockSeconds: () -> Long = { System.currentTimeMillis() / 1000L },
     scope: CoroutineScope? = null,
 ) : ViewModel() {
@@ -562,8 +570,22 @@ class PendingProofViewModel(
             )
             try {
                 when (acceptance) {
-                    is dev.hryshyn.remanence.core.crypto.PendingClaimedEnvelope.EnvelopeAcceptance.Accepted ->
+                    is dev.hryshyn.remanence.core.crypto.PendingClaimedEnvelope.EnvelopeAcceptance.Accepted -> {
+                        // T186 M14d-claim: trust is established — persist
+                        // the admitted row NOW (metadata + sealed bytes
+                        // only) so the gift survives without depending on
+                        // a later feed sync. Partial never writes.
+                        persistAdmittedRow(
+                            accountUserId = account.userId,
+                            capsuleId = current.capsuleId,
+                            deliveryId = current.deliveryId,
+                            deliveryTargetId = current.deliveryTargetId,
+                            submitted = submitted,
+                            statementBytes = sBytes,
+                            senderSignature = senderSig,
+                        )
                         ProofState.Claimed(current.deliveryId, serviceVerified = true)
+                    }
                     is dev.hryshyn.remanence.core.crypto.PendingClaimedEnvelope.EnvelopeAcceptance.PartiallyAccepted ->
                         ProofState.Claimed(current.deliveryId, serviceVerified = false)
                 }
@@ -579,6 +601,63 @@ class PendingProofViewModel(
             ProofState.Failed(PendingProofMessage.GENERIC)
         } catch (_: Exception) {
             ProofState.Failed(PendingProofMessage.GENERIC)
+        }
+    }
+
+    /**
+     * T186 M14d-claim: builds the durable admitted row from
+     * already-verified claim material (metadata + sealed opaque
+     * bytes only — no keys, no plaintext). Best-effort: false means
+     * the feed sync will admit the same row later; the claim itself
+     * stays truthful either way.
+     */
+    private suspend fun persistAdmittedRow(
+        accountUserId: String,
+        capsuleId: String,
+        deliveryId: String,
+        deliveryTargetId: String,
+        submitted: dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed,
+        statementBytes: ByteArray,
+        senderSignature: ByteArray,
+    ): Boolean {
+        val store = admittedStore ?: return false
+        if (accountUserId.isBlank() || capsuleId.isBlank() || deliveryId.isBlank() ||
+            deliveryTargetId.isBlank()
+        ) {
+            return false
+        }
+        val statementShaHex = try {
+            java.security.MessageDigest.getInstance("SHA-256").digest(statementBytes)
+                .joinToString("") { "%02x".format(it) }
+        } catch (_: Exception) {
+            return false
+        }
+        return try {
+            store.upsert(
+                PendingAdmittedGiftStore.AdmittedGift(
+                    ownerUserId = accountUserId,
+                    capsuleId = capsuleId,
+                    deliveryId = deliveryId,
+                    deliveryTargetId = deliveryTargetId,
+                    claimId = submitted.claimId,
+                    availableAt = clockSeconds(),
+                    envelopeB64 = submitted.envelopeB64,
+                    envelopeSha256Hex = submitted.envelopeSha256Hex,
+                    statementB64 = Base64.getEncoder().encodeToString(statementBytes),
+                    statementSha256Hex = statementShaHex,
+                    publishSignature69B64 = Base64.getEncoder()
+                        .encodeToString(senderSignature),
+                    envelopeRef = "/v2/pending-deliveries/$deliveryId/claim",
+                    manifestRef = "/v2/pending-deliveries/$deliveryId/manifest",
+                    blobRefs = emptyList(),
+                    completedAt = null,
+                    admittedAtMillis = System.currentTimeMillis(),
+                ),
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
         }
     }
 

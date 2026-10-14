@@ -1,8 +1,11 @@
 package dev.hryshyn.remanence.pending
 
 import com.google.crypto.tink.HybridEncrypt
+import com.google.crypto.tink.InsecureSecretKeyAccess
 import com.google.crypto.tink.KeyTemplates
 import com.google.crypto.tink.KeysetHandle
+import com.google.crypto.tink.PublicKeySign
+import com.google.crypto.tink.TinkProtoKeysetFormat
 import com.google.protobuf.ByteString
 import dev.hryshyn.remanence.core.crypto.PendingClaimChallenge
 import dev.hryshyn.remanence.core.crypto.TinkPrimitives
@@ -11,7 +14,13 @@ import dev.hryshyn.remanence.core.data.network.ContinueResult
 import dev.hryshyn.remanence.core.data.network.SessionRequestLease
 import dev.hryshyn.remanence.core.data.network.VerificationResult
 import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.protocol.delivery_v2.AddressOpening
+import dev.hryshyn.remanence.protocol.delivery_v2.ClaimBindingV1
 import dev.hryshyn.remanence.protocol.delivery_v2.ClaimChallengeV1
+import dev.hryshyn.remanence.protocol.delivery_v2.ClaimedEnvelopeContextV2
+import dev.hryshyn.remanence.protocol.delivery_v2.ClaimedEnvelopePlaintextV2
+import dev.hryshyn.remanence.protocol.delivery_v2.KeyCommitmentInput
+import dev.hryshyn.remanence.protocol.delivery_v2.PendingPublishStatementV2
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
@@ -39,6 +48,9 @@ class PendingProofViewModelTest {
         require(s.length % 2 == 0)
         return ByteArray(s.length / 2) { i -> s.substring(i * 2, i * 2 + 2).toInt(16).toByte() }
     }
+
+    private fun sha256(bytes: ByteArray): ByteArray =
+        MessageDigest.getInstance("SHA-256").digest(bytes)
 
     private fun uuidBytes(raw: String): ByteArray {
         val uuid = UUID.fromString(raw)
@@ -175,6 +187,8 @@ class PendingProofViewModelTest {
         // live for all five. Intentional exhaustion negatives pass an
         // explicit short list instead.
         ownBundleKey: ByteArray? = null,
+        servicePin: PendingServicePin? = null,
+        admittedStore: PendingAdmittedGiftStore? = null,
     ): PendingProofViewModel {
         TinkPrimitives.ensureRegistered()
         val signingKeys = signing
@@ -205,6 +219,8 @@ class PendingProofViewModelTest {
             sessionIdProvider = { session },
             senderKeyProvider = senderKeyProvider ?: { _, _ -> senderKey },
             ownBundleKeyProvider = { ownBundleKey },
+            servicePinProvider = { servicePin },
+            admittedStore = admittedStore,
             claimPort = claim,
             scope = scope,
         )
@@ -508,5 +524,182 @@ class PendingProofViewModelTest {
         consenting.requestAttempt()
         testScheduler.advanceUntilIdle()
         assertEquals(listOf(true), seenAffirmed)
+    }
+
+    /**
+     * T186 M14d-claim: the full Accepted path with self-built,
+     * internally consistent vectors (own sender/service keys sign S
+     * and R; the envelope seals to the test recipient) — trusted
+     * acceptance persists the admitted row (ids + sealed bytes, no
+     * keys) with serviceVerified=true. Partial (no pin) writes no row.
+     */
+    @Test
+    fun acceptedClaimPersistsAdmittedRow() = runTest {
+        TinkPrimitives.ensureRegistered()
+        val now = System.currentTimeMillis() / 1000L
+        val senderKeys = KeysetHandle.generateNew(KeyTemplates.get("ED25519"))
+        val senderPublicBytes =
+            TinkProtoKeysetFormat.serializeKeysetWithoutSecret(senderKeys.publicKeysetHandle)
+        val serviceKeys = KeysetHandle.generateNew(KeyTemplates.get("ED25519"))
+        val serviceId = "0b0b0b0b-1c1c-2d2d-3e3e-4f4f4f4f4f4f"
+        val servicePublicB64 = Base64.getEncoder().encodeToString(
+            TinkProtoKeysetFormat.serializeKeysetWithoutSecret(serviceKeys.publicKeysetHandle),
+        )
+        val setup = challengeSetup()
+        val recipientPublicBytes =
+            TinkProtoKeysetFormat.serializeKeysetWithoutSecret(setup.recipientPrivate.publicKeysetHandle)
+        val opening = AddressOpening.newBuilder()
+            .setNormalizationVersion(1)
+            .setChannel(1)
+            .setNormalizedDestination("a42@example.test")
+            .setSalt(ByteString.copyFrom(ByteArray(32).also { SecureRandom().nextBytes(it) }))
+            .build()
+        val openingBytes = opening.toByteArray()
+        val d = sha256(
+            "postmark/delivery-address/v1".toByteArray(Charsets.US_ASCII) +
+                byteArrayOf(0x00) + openingBytes,
+        )
+        val capsuleKey = KeysetHandle.generateNew(KeyTemplates.get("AES256_GCM"))
+        val rawKey = TinkProtoKeysetFormat.serializeKeyset(capsuleKey, InsecureSecretKeyAccess.get())
+        val kcInput = KeyCommitmentInput.newBuilder()
+            .setVersion(1)
+            .setCapsuleId(ByteString.copyFrom(uuidBytes(capsule)))
+            .setDeliveryTargetId(ByteString.copyFrom(uuidBytes(target)))
+            .setCapsuleAeadKeyset(ByteString.copyFrom(rawKey))
+            .build().toByteArray()
+        val kc = sha256(
+            "postmark/delivery-key/v1".toByteArray(Charsets.US_ASCII) +
+                byteArrayOf(0x00) + kcInput,
+        )
+        val statement = PendingPublishStatementV2.newBuilder()
+            .setProtocolVersion(2)
+            .setCapsuleId(ByteString.copyFrom(uuidBytes(capsule)))
+            .setSenderUserId(ByteString.copyFrom(uuidBytes("01010101-0202-0303-0404-050505050505")))
+            .setSenderKeyBundleId(ByteString.copyFrom(uuidBytes(bundleId)))
+            .setDeliveryTargetId(ByteString.copyFrom(uuidBytes(target)))
+            .setAddressCommitment(ByteString.copyFrom(d))
+            .setKeyCommitment(ByteString.copyFrom(kc))
+            .setCreatedAtEpochSeconds(now - 3600L)
+            .setClaimExpiresAtEpochSeconds(now + 86400L)
+            .setClaimPolicyVersion(1)
+            .setClaimSigningKeyId(ByteString.copyFrom(uuidBytes(serviceId)))
+            .build().toByteArray()
+        val senderSig = senderKeys.getPrimitive(PublicKeySign::class.java).sign(
+            "postmark/pending-publish/v2".toByteArray(Charsets.US_ASCII) +
+                byteArrayOf(0x00) + statement,
+        )
+        val claimId = "55555555-6666-7777-8888-999999999999"
+        val claim = ClaimBindingV1.newBuilder()
+            .setBindingVersion(1)
+            .setCapsuleProtocolVersion(2)
+            .setCapsuleId(ByteString.copyFrom(uuidBytes(capsule)))
+            .setDeliveryTargetId(ByteString.copyFrom(uuidBytes(target)))
+            .setPublishStatementSha256(ByteString.copyFrom(sha256(statement)))
+            .setAddressCommitment(ByteString.copyFrom(d))
+            .setRecipientUserId(ByteString.copyFrom(uuidBytes(accountId)))
+            .setRecipientKeyBundleId(ByteString.copyFrom(uuidBytes(bundleId)))
+            .setRecipientEncryptionPublicKeysetSha256(
+                ByteString.copyFrom(sha256(recipientPublicBytes)),
+            )
+            .setClaimId(ByteString.copyFrom(uuidBytes(claimId)))
+            .setClaimedAtEpochSeconds(now)
+            .setClaimPolicyVersion(1)
+            .setClaimSigningKeyId(ByteString.copyFrom(uuidBytes(serviceId)))
+            .build().toByteArray()
+        val contextRaw = ClaimedEnvelopeContextV2.newBuilder()
+            .setProtocolVersion(2)
+            .setCapsuleId(ByteString.copyFrom(uuidBytes(capsule)))
+            .setDeliveryTargetId(ByteString.copyFrom(uuidBytes(target)))
+            .setSenderUserId(ByteString.copyFrom(uuidBytes("01010101-0202-0303-0404-050505050505")))
+            .setRecipientUserId(ByteString.copyFrom(uuidBytes(accountId)))
+            .setRecipientKeyBundleId(ByteString.copyFrom(uuidBytes(bundleId)))
+            .setPublishStatementSha256(ByteString.copyFrom(sha256(statement)))
+            .setClaimBindingSha256(ByteString.copyFrom(sha256(claim)))
+            .build().toByteArray()
+        val plaintext = ClaimedEnvelopePlaintextV2.newBuilder()
+            .setBinding(
+                ClaimedEnvelopeContextV2.newBuilder()
+                    .setProtocolVersion(2)
+                    .setCapsuleId(ByteString.copyFrom(uuidBytes(capsule)))
+                    .setDeliveryTargetId(ByteString.copyFrom(uuidBytes(target)))
+                    .setSenderUserId(ByteString.copyFrom(uuidBytes("01010101-0202-0303-0404-050505050505")))
+                    .setRecipientUserId(ByteString.copyFrom(uuidBytes(accountId)))
+                    .setRecipientKeyBundleId(ByteString.copyFrom(uuidBytes(bundleId)))
+                    .setPublishStatementSha256(ByteString.copyFrom(sha256(statement)))
+                    .setClaimBindingSha256(ByteString.copyFrom(sha256(claim)))
+                    .build(),
+            )
+            .setCapsuleAeadKeyset(ByteString.copyFrom(rawKey))
+            .setAddressOpening(opening)
+            .build().toByteArray()
+        val info = "postmark/claimed-envelope/v2".toByteArray(Charsets.US_ASCII) +
+            byteArrayOf(0x00) + contextRaw
+        val sealed = setup.recipientPrivate.publicKeysetHandle
+            .getPrimitive(HybridEncrypt::class.java)
+            .encrypt(plaintext, info)
+        val claimSig = serviceKeys.getPrimitive(PublicKeySign::class.java).sign(
+            "postmark/claim-binding/v1".toByteArray(Charsets.US_ASCII) +
+                byteArrayOf(0x00) + claim,
+        )
+        val dir = java.nio.file.Files.createTempDirectory("pending-claim-row").toFile()
+        try {
+            val store = PendingAdmittedGiftStore(dir)
+            val proof = proofBranch().copy(
+                publishStatementB64 = Base64.getEncoder().encodeToString(statement),
+                publishSignature69B64 = Base64.getEncoder().encodeToString(senderSig),
+            )
+            val viewModel = vm(
+                continueResult = proof,
+                options = {
+                    ClaimOptionsResult.Options(
+                        setup.challengeId, 1_798_765_432L,
+                        Base64.getEncoder().encodeToString(setup.sealed),
+                        Base64.getEncoder().encodeToString(setup.contextRaw),
+                    )
+                },
+                hpke = setup.recipientPrivate,
+                senderKeyProvider = { _, _ -> senderPublicBytes },
+                ownBundleKey = recipientPublicBytes,
+                servicePin = PendingServicePin(serviceId, servicePublicB64),
+                admittedStore = store,
+                claim = PendingClaimPort { _, _, _, _, _ ->
+                    dev.hryshyn.remanence.core.data.network.ClaimSubmitResult.Claimed(
+                        claimId,
+                        Base64.getEncoder().encodeToString(claim),
+                        Base64.getEncoder().encodeToString(claimSig),
+                        Base64.getEncoder().encodeToString(sealed),
+                        sha256(sealed).joinToString("") { "%02x".format(it) },
+                    )
+                },
+            )
+            viewModel.start("ref")
+            testScheduler.advanceUntilIdle()
+            viewModel.onDestinationChange("a42@example.test")
+            viewModel.requestAttempt()
+            testScheduler.advanceUntilIdle()
+            viewModel.onCodeChange("12345678")
+            viewModel.checkCode()
+            testScheduler.advanceUntilIdle()
+            assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.IntentReady)
+            viewModel.submitClaim()
+            testScheduler.advanceUntilIdle()
+            assertEquals(
+                PendingProofViewModel.ProofState.Claimed(deliveryId, serviceVerified = true),
+                viewModel.state.value,
+            )
+            // The admitted row is durable with ids + sealed bytes only.
+            val row = store.get(accountId, capsule)
+            assertEquals(deliveryId, row?.deliveryId)
+            assertEquals(
+                Base64.getEncoder().encodeToString(sealed),
+                row?.envelopeB64,
+            )
+            assertEquals(
+                Base64.getEncoder().encodeToString(statement),
+                row?.statementB64,
+            )
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 }

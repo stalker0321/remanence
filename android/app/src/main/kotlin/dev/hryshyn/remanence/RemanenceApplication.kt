@@ -1360,6 +1360,9 @@ class AppContainer private constructor(
             // T186 M12b: SAME out-of-band selected pin the sender uses
             // for S (never an R-carried key). Null ⇒ typed partial.
             servicePinProvider = { pendingServicePin },
+            // T186 M14d-claim: durable admitted row on Accepted (feed
+            // sync re-admits on failure; claim truthfulness unaffected).
+            admittedStore = pendingAdmittedGiftStore,
             scope = scope,
         )
     }

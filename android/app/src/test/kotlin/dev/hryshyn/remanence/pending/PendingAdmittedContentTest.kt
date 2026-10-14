@@ -13,7 +13,6 @@ import java.security.SecureRandom
 import java.util.Base64
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -134,7 +133,7 @@ class PendingAdmittedContentTest {
     @Test
     fun foreignOwnerRejected() = runTest {
         val sealed = sealed()
-        assertThrows(IllegalArgumentException::class.java) {
+        assertThrowsSuspend(IllegalArgumentException::class) {
             content(sealed).openPhotos(
                 rowOf(sealed), "99999999-2222-3333-4444-555555555555", "token",
                 PendingAdmittedContent.EnvelopeOpener { keyOf(sealed) },

@@ -24,7 +24,6 @@ import java.util.UUID
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertThrows
 import org.junit.Test
 
 /**
@@ -289,7 +288,7 @@ class PendingClaimIngestTest {
         val dir = Files.createTempDirectory("pending-ingest-owner").toFile()
         try {
             val crypto = crypto()
-            assertThrows(IllegalStateException::class.java) {
+            assertThrowsSuspend(IllegalStateException::class) {
                 ingest(dir, crypto, directoryOwner = "99999999-2222-3333-4444-555555555555")
                     .let { (ingest, _, lease) -> ingest.ingest(recipient, lease, listOf(item())) }
             }
@@ -304,7 +303,7 @@ class PendingClaimIngestTest {
         val dir = Files.createTempDirectory("pending-ingest-claim").toFile()
         try {
             val crypto = crypto()
-            assertThrows(IllegalStateException::class.java) {
+            assertThrowsSuspend(IllegalStateException::class) {
                 ingest(
                     dir, crypto,
                     claimResult = PendingRedownloadResult.Failure(
@@ -324,7 +323,7 @@ class PendingClaimIngestTest {
         val dir = Files.createTempDirectory("pending-ingest-recipient").toFile()
         try {
             val crypto = crypto()
-            assertThrows(IllegalStateException::class.java) {
+            assertThrowsSuspend(IllegalStateException::class) {
                 ingest(dir, crypto, recipientUser = "99999999-2222-3333-4444-555555555555")
                     .let { (ingest, _, lease) -> ingest.ingest(recipient, lease, listOf(item())) }
             }
@@ -346,7 +345,7 @@ class PendingClaimIngestTest {
             val crypto = crypto()
             val (ingest, gate, stale) = ingest(dir, crypto)
             gate.epoch = 2L
-            assertThrows(IllegalStateException::class.java) {
+            assertThrowsSuspend(IllegalStateException::class) {
                 ingest.ingest(recipient, stale, listOf(item()))
             }
             assertNull(PendingAdmittedGiftStore(dir).get(recipient, capsule))
@@ -375,7 +374,7 @@ class PendingClaimIngestTest {
                 echoTargetId = target,
                 echoClaimId = claim,
             )
-            assertThrows(IllegalStateException::class.java) {
+            assertThrowsSuspend(IllegalStateException::class) {
                 ingest.ingest(recipient, lease, listOf(item()))
             }
             assertNull(PendingAdmittedGiftStore(dir).get(recipient, capsule))

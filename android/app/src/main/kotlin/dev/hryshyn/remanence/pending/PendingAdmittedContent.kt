@@ -35,9 +35,20 @@ class PendingAdmittedContent(
         ): PendingBlobBytesResult
     }
 
-    /** Directory sender public keyset bytes for one bundle id. */
+    /** Directory sender bundle: owner + verify keyset bytes (public only). */
+    data class DirectoryBundle(
+        val ownerUserId: String,
+        val signingPublicKeyset: ByteArray,
+    )
+
+    /**
+     * T186 (T187 qualifier): returns the directory bundle WITHOUT
+     * trusting it — [openPhotos] requires
+     * `bundle.ownerUserId == S.senderUserId` (and the requested bundle
+     * id) before any byte is used. Bare key bytes never cross here.
+     */
     fun interface SenderVerifyPort {
-        suspend fun senderPublicKeyset(senderKeyBundleId: String): ByteArray?
+        suspend fun senderBundle(senderKeyBundleId: String): DirectoryBundle?
     }
 
     /** Capsule key bytes opened by the caller (R12 + live keys). */
@@ -75,13 +86,25 @@ class PendingAdmittedContent(
             statement.senderKeyBundleId.toByteArray(),
             "pending sender bundle id malformed",
         )
-        val senderKeyBytes = try {
-            senderVerifyPort.senderPublicKeyset(senderBundleId)
+        val senderId = uuidString(
+            statement.senderUserId.toByteArray(), "pending sender id malformed",
+        )
+        val directory = try {
+            senderVerifyPort.senderBundle(senderBundleId)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
             null
-        } ?: throw IllegalStateException("pending sender key unavailable")
+        } ?: throw IllegalStateException("pending sender bundle unknown")
+        // Trusted pair (T187 qualifier): the directory must attest THIS
+        // bundle id for THIS sender — bare key bytes are never enough.
+        if (directory.ownerUserId.isBlank() || directory.ownerUserId != senderId) {
+            throw IllegalStateException("pending sender owner mismatch")
+        }
+        val senderKeyBytes = directory.signingPublicKeyset
+        if (senderKeyBytes.isEmpty()) {
+            throw IllegalStateException("pending sender key unavailable")
+        }
         val senderSig = try {
             Base64.getDecoder().decode(row.publishSignature69B64)
         } catch (_: Exception) {
@@ -109,70 +132,83 @@ class PendingAdmittedContent(
             throw IllegalStateException("pending capsule key unavailable")
         }
         try {
-            val photos = LinkedHashMap<Int, ByteArray>()
-            var note: String? = null
-            var manifests = 0
-            for (binding in statement.artifactsList) {
-                if (binding.kind != 2 && binding.kind != 3) continue
-                val blobId = uuidString(binding.blobId.toByteArray(), "pending blob id malformed")
-                val ciphertext = when (
-                    val downloaded = try {
-                        blobPort.download(row.deliveryId, blobId, token)
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (_: Exception) {
-                        throw IllegalStateException("pending blob download failed")
+            // Receiver hygiene (T187 qualifier): every decrypted buffer
+            // is tracked so a LATER failure wipes previously opened
+            // photos/manifest plaintext — partial buffers never gain
+            // caller ownership. On success the map takes ownership.
+            val wiped = ArrayList<ByteArray>()
+            try {
+                val photos = LinkedHashMap<Int, ByteArray>()
+                var note: String? = null
+                var manifests = 0
+                for (binding in statement.artifactsList) {
+                    if (binding.kind != 2 && binding.kind != 3) continue
+                    val blobId = uuidString(binding.blobId.toByteArray(), "pending blob id malformed")
+                    val ciphertext = when (
+                        val downloaded = try {
+                            blobPort.download(row.deliveryId, blobId, token)
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            throw IllegalStateException("pending blob download failed")
+                        }
+                    ) {
+                        is PendingBlobBytesResult.Bytes -> downloaded.bytes
+                        is PendingBlobBytesResult.Failure ->
+                            throw IllegalStateException("pending blob download failed")
                     }
-                ) {
-                    is PendingBlobBytesResult.Bytes -> downloaded.bytes
-                    is PendingBlobBytesResult.Failure ->
-                        throw IllegalStateException("pending blob download failed")
-                }
-                if (ciphertext.size.toLong() != binding.ciphertextSize) {
-                    throw IllegalStateException("pending blob size mismatch")
-                }
-                val actualSha = java.security.MessageDigest.getInstance("SHA-256")
-                    .digest(ciphertext).joinToString("") { "%02x".format(it) }
-                val expectedSha = binding.ciphertextSha256.toByteArray()
-                    .joinToString("") { "%02x".format(it) }
-                if (!actualSha.equals(expectedSha, ignoreCase = false)) {
-                    throw IllegalStateException("pending blob hash mismatch")
-                }
-                val senderId = uuidString(
-                    statement.senderUserId.toByteArray(), "pending sender id malformed",
-                )
-                val targetId = uuidString(
-                    statement.deliveryTargetId.toByteArray(), "pending target id malformed",
-                )
-                val opened = try {
-                    PendingArtifactCryptor.decrypt(
-                        capsuleKeysetFrom(capsuleKey), row.capsuleId, blobId,
-                        binding.kind, binding.ordinal, senderId, targetId, ciphertext,
+                    if (ciphertext.size.toLong() != binding.ciphertextSize) {
+                        throw IllegalStateException("pending blob size mismatch")
+                    }
+                    val actualSha = java.security.MessageDigest.getInstance("SHA-256")
+                        .digest(ciphertext).joinToString("") { "%02x".format(it) }
+                    val expectedSha = binding.ciphertextSha256.toByteArray()
+                        .joinToString("") { "%02x".format(it) }
+                    if (!actualSha.equals(expectedSha, ignoreCase = false)) {
+                        throw IllegalStateException("pending blob hash mismatch")
+                    }
+                    val targetId = uuidString(
+                        statement.deliveryTargetId.toByteArray(), "pending target id malformed",
                     )
-                } catch (_: Exception) {
-                    throw IllegalStateException("pending photo open failed")
-                }
-                if (binding.kind == 2) {
-                    // Content manifest: same framed validation as v1
-                    // (byte-identical inner semantics), then the note.
-                    val parsed = try {
-                        dev.hryshyn.remanence.core.crypto.ContentManifestCodec().parseAndValidate(
-                            opened,
-                            uuidBytes(row.capsuleId),
+                    val opened = try {
+                        PendingArtifactCryptor.decrypt(
+                            capsuleKeysetFrom(capsuleKey), row.capsuleId, blobId,
+                            binding.kind, binding.ordinal, senderId, targetId, ciphertext,
                         )
                     } catch (_: Exception) {
-                        throw IllegalStateException("pending content manifest rejected")
+                        throw IllegalStateException("pending photo open failed")
                     }
-                    if (manifests++ > 0) throw IllegalStateException("pending content manifest duplicated")
-                    note = parsed.note
-                } else {
-                    if (photos.put(binding.ordinal, opened) != null) {
-                        throw IllegalStateException("pending photo ordinal duplicated")
+                    wiped += opened
+                    if (binding.kind == 2) {
+                        // Content manifest: same framed validation as v1
+                        // (byte-identical inner semantics), then the note.
+                        val parsed = try {
+                            dev.hryshyn.remanence.core.crypto.ContentManifestCodec().parseAndValidate(
+                                opened,
+                                uuidBytes(row.capsuleId),
+                            )
+                        } catch (_: Exception) {
+                            throw IllegalStateException("pending content manifest rejected")
+                        }
+                        if (manifests++ > 0) throw IllegalStateException("pending content manifest duplicated")
+                        note = parsed.note
+                    } else {
+                        if (photos.put(binding.ordinal, opened) != null) {
+                            throw IllegalStateException("pending photo ordinal duplicated")
+                        }
                     }
                 }
+                if (photos.isEmpty()) throw IllegalStateException("pending gift has no photos")
+                val result = OpenedPhotos(photos.toMap(), note)
+                wiped.clear()
+                return result
+            } catch (cancelled: CancellationException) {
+                wiped.forEach { it.fill(0) }
+                throw cancelled
+            } catch (failure: Exception) {
+                wiped.forEach { it.fill(0) }
+                throw failure
             }
-            if (photos.isEmpty()) throw IllegalStateException("pending gift has no photos")
-            return OpenedPhotos(photos.toMap(), note)
         } finally {
             capsuleKey.fill(0)
         }

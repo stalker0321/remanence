@@ -103,9 +103,12 @@ class PendingAdmittedContentTest {
                 )
             PendingBlobBytesResult.Bytes(blobId, bytes)
         },
-        senderVerifyPort = PendingAdmittedContent.SenderVerifyPort {
-            TinkProtoKeysetFormat.serializeKeysetWithoutSecret(
-                sealed.signing.publicKeysetHandle,
+        senderVerifyPort = PendingAdmittedContent.SenderVerifyPort { _ ->
+            PendingAdmittedContent.DirectoryBundle(
+                "01010101-0202-0303-0404-050505050505",
+                TinkProtoKeysetFormat.serializeKeysetWithoutSecret(
+                    sealed.signing.publicKeysetHandle,
+                ),
             )
         },
     )
@@ -194,6 +197,42 @@ class PendingAdmittedContentTest {
                     it.blobId to if (it.blobId == manifest.blobId) tampered else it.ciphertext
                 },
             ).openPhotos(
+                rowOf(sealed), owner, "token",
+                PendingAdmittedContent.EnvelopeOpener { keyOf(sealed) },
+            )
+            null
+        } catch (_: IllegalStateException) {
+            "rejected"
+        }
+        assertEquals("rejected", result)
+    }
+
+    /**
+     * T186 (T187 qualifier): a directory bundle owned by someone
+     * other than the statement sender is rejected before any byte is
+     * trusted — bare key bytes never suffice.
+     */
+    @Test
+    fun foreignDirectoryOwnerRejected() = runTest {
+        val sealed = sealed()
+        val content = PendingAdmittedContent(
+            blobPort = PendingAdmittedContent.BlobPort { _, blobId, _ ->
+                PendingBlobBytesResult.Bytes(
+                    blobId,
+                    sealed.publication.artifacts.single { it.blobId == blobId }.ciphertext,
+                )
+            },
+            senderVerifyPort = PendingAdmittedContent.SenderVerifyPort { _ ->
+                PendingAdmittedContent.DirectoryBundle(
+                    "99999999-2222-3333-4444-555555555555",
+                    TinkProtoKeysetFormat.serializeKeysetWithoutSecret(
+                        sealed.signing.publicKeysetHandle,
+                    ),
+                )
+            },
+        )
+        val result = try {
+            content.openPhotos(
                 rowOf(sealed), owner, "token",
                 PendingAdmittedContent.EnvelopeOpener { keyOf(sealed) },
             )

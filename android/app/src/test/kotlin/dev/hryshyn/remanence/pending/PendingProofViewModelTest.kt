@@ -1472,7 +1472,7 @@ class PendingProofViewModelTest {
         viewModel.requestAttempt()
         testScheduler.advanceUntilIdle()
         assertEquals(
-            PendingProofViewModel.ProofState.Failed(PendingProofMessage.SESSION_CHANGED),
+            PendingProofViewModel.ProofState.Failed(PendingProofViewModel.PendingProofMessage.SESSION_CHANGED),
             viewModel.state.value,
         )
         assertFalse(viewModel.aliasConsent.value)
@@ -1512,7 +1512,7 @@ class PendingProofViewModelTest {
         gate?.owner = "99999999-2222-3333-4444-555555555555"
         testScheduler.advanceUntilIdle()
         assertEquals(
-            PendingProofViewModel.ProofState.Failed(PendingProofMessage.SESSION_CHANGED),
+            PendingProofViewModel.ProofState.Failed(PendingProofViewModel.PendingProofMessage.SESSION_CHANGED),
             viewModel.state.value,
         )
         assertFalse(viewModel.aliasConsent.value)
@@ -1520,7 +1520,7 @@ class PendingProofViewModelTest {
         viewModel.submitClaim()
         testScheduler.advanceUntilIdle()
         assertEquals(
-            PendingProofViewModel.ProofState.Failed(PendingProofMessage.SESSION_CHANGED),
+            PendingProofViewModel.ProofState.Failed(PendingProofViewModel.PendingProofMessage.SESSION_CHANGED),
             viewModel.state.value,
         )
     }
@@ -1555,7 +1555,7 @@ class PendingProofViewModelTest {
         // This flow never reached R8 (pre-R8 validation tripped), so
         // there is no CodeRequired state — only the cleared failure.
         assertEquals(
-            PendingProofViewModel.ProofState.Failed(PendingProofMessage.SESSION_CHANGED),
+            PendingProofViewModel.ProofState.Failed(PendingProofViewModel.PendingProofMessage.SESSION_CHANGED),
             viewModel.state.value,
         )
         assertFalse(viewModel.aliasConsent.value)
@@ -1610,7 +1610,7 @@ class PendingProofViewModelTest {
         release.complete(Unit)
         testScheduler.advanceUntilIdle()
         assertEquals(
-            PendingProofViewModel.ProofState.Failed(PendingProofMessage.SESSION_CHANGED),
+            PendingProofViewModel.ProofState.Failed(PendingProofViewModel.PendingProofMessage.SESSION_CHANGED),
             viewModel.state.value,
         )
         assertFalse(viewModel.aliasConsent.value)
@@ -1663,7 +1663,7 @@ class PendingProofViewModelTest {
         release.complete(Unit)
         testScheduler.advanceUntilIdle()
         assertEquals(
-            PendingProofViewModel.ProofState.Failed(PendingProofMessage.SESSION_CHANGED),
+            PendingProofViewModel.ProofState.Failed(PendingProofViewModel.PendingProofMessage.SESSION_CHANGED),
             viewModel.state.value,
         )
         assertFalse(viewModel.aliasConsent.value)
@@ -1710,7 +1710,7 @@ class PendingProofViewModelTest {
         release.complete(Unit)
         testScheduler.advanceUntilIdle()
         assertEquals(
-            PendingProofViewModel.ProofState.Failed(PendingProofMessage.SESSION_CHANGED),
+            PendingProofViewModel.ProofState.Failed(PendingProofViewModel.PendingProofMessage.SESSION_CHANGED),
             viewModel.state.value,
         )
         assertFalse(viewModel.aliasConsent.value)

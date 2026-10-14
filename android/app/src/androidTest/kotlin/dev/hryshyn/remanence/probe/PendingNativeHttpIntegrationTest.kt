@@ -10,7 +10,6 @@ import dev.hryshyn.remanence.core.data.network.PendingGiftLookupRepository
 import dev.hryshyn.remanence.core.data.network.SessionRequestLease
 import dev.hryshyn.remanence.core.model.GeneratorEditorialRows
 import dev.hryshyn.remanence.core.model.GeneratorExpression
-import dev.hryshyn.remanence.core.recognition.RecognitionProfile
 import dev.hryshyn.remanence.pending.PendingBoundaryPublish
 import dev.hryshyn.remanence.pending.PendingCodeNormalizer
 import dev.hryshyn.remanence.pending.PendingSendRouteFlow
@@ -88,43 +87,13 @@ class PendingNativeHttpIntegrationTest {
     }
 
     /**
-     * Canonical SIFT FRONT framing (mirrors the unit-test canonical
-     * fixture byte-for-byte in structure — hand-built keypoints plus
-     * descriptors serialized through the frozen codec; no extractor
-     * algorithm change). The driver self-checks validity by parsing
-     * before publish.
+     * Canonical SIFT FRONT framing via the shared androidTest helper
+     * (distinct modulo-256 rows over the existing spread grid — a
+     * genuine match candidate for later scan stages, never the
+     * saturating regression shape). The driver self-checks validity by
+     * parsing before publish.
      */
-    private fun syntheticFront(seed: Int): ByteArray {
-        val profile = RecognitionProfile.postcardSiftRootSiftV1()
-        val micro = dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec.MICRO_UNITS
-        val keypoints = List(64) {
-            dev.hryshyn.remanence.core.model.SiftRootSiftKeypoint(
-                xMicro = Math.rint((it % 8) / 8.0 * micro).toInt(),
-                yMicro = Math.rint((it / 8) / 8.0 * micro).toInt(),
-                scaleMicro = micro,
-                angleCentiDegrees = 0,
-                responseQuantized = it,
-                octave = 0,
-            )
-        }
-        val fp = dev.hryshyn.remanence.core.model.SiftRootSiftFingerprint(
-            profileId = profile.profileId,
-            canonicalWidthPx = profile.capture.canonicalLongEdgePx,
-            canonicalHeightPx = 1000,
-            coarseHash64 = seed.toLong(),
-            keypoints = keypoints,
-            quantizedSiftDescriptors = List(64) { i ->
-                ByteArray(dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec.DESCRIPTOR_BYTES) {
-                    ((it * 7 + i * 13 + seed * 29).coerceIn(1, 255)).toByte()
-                }
-            },
-        )
-        return try {
-            dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec.serialize(fp)
-        } finally {
-            fp.wipe()
-        }
-    }
+    private fun syntheticFront(seed: Int): ByteArray = CanonicalFrontFixture.distinctFront(seed)
 
     /**
      * Validated supported expression through the production planner,

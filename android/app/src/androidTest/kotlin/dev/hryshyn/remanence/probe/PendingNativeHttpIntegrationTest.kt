@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.hryshyn.remanence.RemanenceApplication
+import dev.hryshyn.remanence.BuildConfig
 import dev.hryshyn.remanence.core.data.network.GiftLookupResult
 import dev.hryshyn.remanence.core.data.network.PendingGiftLookupRepository
 import dev.hryshyn.remanence.core.data.network.SessionRequestLease
@@ -170,6 +171,20 @@ class PendingNativeHttpIntegrationTest {
     @Test
     fun senderLegPublishesFullPayloadOverRealHttp(): Unit = runBlocking {
         withTimeout(300_000) {
+            // 0. Build guard FIRST (before any container, account,
+            // identity, or network touch): this driver must only ever
+            // run in the isolated .pendingtest build against the
+            // authorized loopback epoch. Any other build fails closed
+            // here — never a registration attempt against a foreign
+            // backend. No flags are toggled and no URL is rewritten.
+            if (!BuildConfig.REMANENCE_PENDING_ENABLED ||
+                context.packageName != "dev.hryshyn.remanence.pendingtest" ||
+                BuildConfig.API_BASE_URL != "http://127.0.0.1:18042/"
+            ) {
+                throw AssertionError(
+                    "missing prerequisite: isolated pendingtest build and loopback epoch required",
+                )
+            }
             val tag = epochTag()
             val email = "t186s$tag@example.com"
             val passwordChars = CharArray(20) {

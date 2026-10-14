@@ -183,7 +183,7 @@ class PendingProofViewModelTest {
 
     private fun kotlinx.coroutines.test.TestScope.vm(
         continueResult: ContinueResult = proofBranch(),
-        options: (String) -> ClaimOptionsResult = { ClaimOptionsResult.Failure(
+        options: (suspend (String) -> ClaimOptionsResult) = { ClaimOptionsResult.Failure(
             dev.hryshyn.remanence.core.data.network.ClaimFailure.ADDRESS_PROOF_REQUIRED, 400, false,
         ) },
         tokens: MutableList<String?> = mutableListOf("token", "token", "token", "token", "token"),
@@ -1299,7 +1299,7 @@ class PendingProofViewModelTest {
 
     /**
      * T186 alias-bind: editing the destination clears the opt-in (and
-     * the frozen pair) — a new address needs fresh explicit consent.
+     * the frozen origin) — a new address needs fresh explicit consent.
      */
     @Test
     fun destinationEditClearsAlias() = runTest {
@@ -1307,6 +1307,7 @@ class PendingProofViewModelTest {
         viewModel.start("ref")
         testScheduler.advanceUntilIdle()
         assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.ProofRequired)
+        viewModel.onDestinationChange("a42@example.test")
         viewModel.onAliasConsentChange(true)
         assertTrue(viewModel.aliasConsent.value)
         viewModel.onDestinationChange("other@example.test")
@@ -1666,5 +1667,53 @@ class PendingProofViewModelTest {
             viewModel.state.value,
         )
         assertFalse(viewModel.aliasConsent.value)
+    }
+
+    /**
+     * T186 alias-bind: a same-owner incarnation rotation suspended
+     * inside the request-entry account await fails at the pre-R8
+     * liveness fence. The held credentials still match the tap origin
+     * numerically (rotation is invisible to equality), so only the
+     * immediate pre-effect `credsLive` trips — ZERO R8 calls, cleared
+     * consent, no intent.
+     */
+    @Test
+    fun incarnationRotationDuringAccountAwaitFailsBeforeR8() = runTest {
+        var gate: FakeGate? = null
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var firstAccountCall = true
+        var r8calls = 0
+        val viewModel = vm(
+            gateTap = { gate = it },
+            accountProvider = {
+                if (firstAccountCall) {
+                    firstAccountCall = false
+                    entered.complete(Unit)
+                    release.await()
+                }
+                ProofAccount(accountId, bundleId)
+            },
+            onRequest = { r8calls += 1 },
+        )
+        viewModel.start("ref")
+        testScheduler.advanceUntilIdle()
+        assertTrue(viewModel.state.value is PendingProofViewModel.ProofState.ProofRequired)
+        viewModel.onDestinationChange("a42@example.test")
+        viewModel.onAliasConsentChange(true)
+        assertTrue(viewModel.aliasConsent.value)
+        viewModel.requestAttempt()
+        assertTrue(entered.isCompleted)
+        // Same owner returns from the await, but the incarnation
+        // rotated while suspended.
+        gate?.epoch = 2L
+        release.complete(Unit)
+        testScheduler.advanceUntilIdle()
+        assertEquals(
+            PendingProofViewModel.ProofState.Failed(PendingProofMessage.SESSION_CHANGED),
+            viewModel.state.value,
+        )
+        assertFalse(viewModel.aliasConsent.value)
+        assertEquals(0, r8calls)
     }
 }

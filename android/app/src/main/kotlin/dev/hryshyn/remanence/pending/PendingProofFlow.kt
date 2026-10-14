@@ -111,6 +111,10 @@ fun PendingProofFlow(
                         androidx.compose.material3.Checkbox(
                             checked = aliasConsent,
                             onCheckedChange = viewModel::onAliasConsentChange,
+                            // No deceptive enabled look while the setter
+                            // must ignore taps (blank destination can
+                            // carry no origin).
+                            enabled = destination.isNotBlank(),
                             modifier = Modifier.testTag("pending_proof_bind_alias"),
                         )
                         Text(

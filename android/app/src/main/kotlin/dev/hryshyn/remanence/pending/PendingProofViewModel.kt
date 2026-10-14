@@ -488,6 +488,12 @@ class PendingProofViewModel(
                         // new context. Fails BEFORE any R8 effect — zero
                         // R8 calls on a switched scope.
                         failedSessionChanged()
+                    } else if (!credsLive(creds)) {
+                        // The held R8 credentials may have died across the
+                        // account await above (same-owner rotation reads
+                        // dead here); re-probe liveness immediately before
+                        // the effect. The post-await fence stays as is.
+                        failedSessionChanged()
                     } else {
                         val result = verifyPort.request(
                             current.deliveryId, frozenDestination, _smsConsent.value,

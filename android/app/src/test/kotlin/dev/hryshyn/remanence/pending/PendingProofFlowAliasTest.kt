@@ -152,14 +152,16 @@ class PendingProofFlowAliasTest {
         composeRule.onNodeWithTag("pending_proof_destination").assertIsDisplayed()
         composeRule.onNodeWithTag("pending_proof_bind_alias").assertIsDisplayed()
         composeRule.onNodeWithTag("pending_proof_send_code").assertIsDisplayed()
-        // Default unchecked.
+        // Default unchecked (and not affirmable while blank).
         composeRule.onNodeWithTag("pending_proof_bind_alias").assertIsOff()
-        // Affirmative toggle.
+        // Enter an address first, then the affirmative toggle sticks.
+        composeRule.onNodeWithTag("pending_proof_destination").performTextInput("a42@example.test")
+        composeRule.waitForIdle()
         composeRule.onNodeWithTag("pending_proof_bind_alias").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("pending_proof_bind_alias").assertIsOn()
         // Editing the destination clears the opt-in.
-        composeRule.onNodeWithTag("pending_proof_destination").performTextInput("a42@example.test")
+        composeRule.onNodeWithTag("pending_proof_destination").performTextInput(".other")
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("pending_proof_bind_alias").assertIsOff()
     }

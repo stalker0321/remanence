@@ -828,6 +828,8 @@ class AppContainer private constructor(
     }
 
     // -- T186 M14a experimental pending-feed host (isolated, default OFF) --
+    override val pendingContext: Context get() = appContext
+
     override val pendingFeedContext: Context get() = appContext
 
     override val pendingFeedGate: dev.hryshyn.remanence.pending.PendingRetirementSessionGate?
@@ -947,12 +949,16 @@ class AppContainer private constructor(
 
     /**
      * T186 M14a: receiver-owned feed sync with real frozen clients. The
-     * caller supplies the coroutine scope that bounds the flow.
+     * caller supplies the coroutine scope that bounds the flow. Null
+     * when the durable cursor store is unavailable — fail closed
+     * (without durable position there is no safe sync); never a fake
+     * or no-op store. The worker null-checks the host members itself.
      */
     fun newPendingFeedSync(
         scope: kotlinx.coroutines.CoroutineScope,
-    ): dev.hryshyn.remanence.pending.PendingFeedSync =
-        dev.hryshyn.remanence.pending.PendingFeedSync(
+    ): dev.hryshyn.remanence.pending.PendingFeedSync? {
+        val store = pendingFeedCursorStore ?: return null
+        return dev.hryshyn.remanence.pending.PendingFeedSync(
             fetchPort = dev.hryshyn.remanence.pending.PendingFeedSync.FetchPort { cursor, limit, token ->
                 pendingIncomingRepository.page(cursor, limit, token)
             },
@@ -969,7 +975,7 @@ class AppContainer private constructor(
                     },
                 )
             },
-            cursorStore = pendingFeedCursorStore,
+            cursorStore = store,
             sessionGate = pendingSessionGate,
             accountProvider = pendingFeedAccount,
             scope = scope,

@@ -66,6 +66,10 @@ class ProductionApiStack private constructor(
 
     val safetyRepository: SafetyRepository = SafetyRepository(authenticatedClient, baseUrl, requestLeaseProvider)
 
+    /** Recovery ceremonies share the authenticated refreshing client. */
+    val recoveryRepository: RecoveryRepository =
+        RecoveryRepository(baseUrl, authenticatedClient, requestLeaseProvider)
+
     /** Capsule clients share the serialized authenticated transport boundary. */
     val capsuleDraftRepository: CapsuleDraftRepository =
         CapsuleDraftRepository(authenticatedClient, baseUrl, requestLeaseProvider)

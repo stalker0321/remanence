@@ -12,7 +12,6 @@ import dev.hryshyn.remanence.BuildConfig
 import dev.hryshyn.remanence.core.crypto.AccountRecoveryCrypto as Crypto
 import dev.hryshyn.remanence.core.crypto.IdentityBundleRepository
 import dev.hryshyn.remanence.core.data.network.LoginResponseDto
-import dev.hryshyn.remanence.core.data.network.RecoveryRepository
 import dev.hryshyn.remanence.core.model.UserId
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -46,7 +45,7 @@ internal fun publicCredential(c: JsonObject): JsonObject = buildJsonObject {
 }
 
 class PasskeyRecovery(private val container: AppContainer) {
-    private val api = RecoveryRepository(container.apiBaseUrl)
+    private val api = container.apiStack.recoveryRepository
     private fun enabled() = check(BuildConfig.REMANENCE_RECOVERY_ENABLED)
     private fun verifyBody(flow: String, credential: JsonObject) = buildJsonObject {
         put("flow", flow); put("response", publicCredential(credential))
@@ -62,27 +61,26 @@ class PasskeyRecovery(private val container: AppContainer) {
     suspend fun protect(credentials: RecoveryCredentialPort, chooseAnotherManager: Boolean = false): ByteArray? {
         enabled()
         val lease = container.apiStack.captureSessionRequestLease() ?: error("no session")
-        val token = container.apiStack.accessTokenForSessionRequestLease(lease) ?: error("no session")
         val account = withContext(Dispatchers.IO) { container.currentAccountStore.loadEntity() } ?: error("no account")
         val identity = withContext(Dispatchers.IO) { container.identityRepository.load() } as? IdentityBundleRepository.LoadResult.Available ?: error("identity missing")
-        val status = api.request("status", token = token)
+        val status = api.requestAuthenticated(lease, "status")
         val stored = status.text("state") == "STORED"
         check(!chooseAnotherManager || !stored) { "existing recovery is immutable" }
         val id = if (status.text("state") == "NOT_STARTED" || chooseAnotherManager) {
-            val start = api.request("register/options", JsonObject(emptyMap()), token)
+            val start = api.requestAuthenticated(lease, "register/options", JsonObject(emptyMap()))
             val created = credentials.create(start.getValue("options").jsonObject)
-            api.request("register/verify", verifyBody(start.text("flow"), created), token).text("credential_id")
+            api.requestAuthenticated(lease, "register/verify", verifyBody(start.text("flow"), created)).text("credential_id")
         } else status.text("credential_id")
-        val begin = api.request("setup/options", buildJsonObject { put("credential_id", id) }, token)
+        val begin = api.requestAuthenticated(lease, "setup/options", buildJsonObject { put("credential_id", id) })
         val got = credentials.get(begin.getValue("options").jsonObject)
         val secret = prf(got)
         var prepared: Crypto.Prepared? = null
         try {
             if (got.text("id") != id) error("wrong credential")
-            val verified = api.request("setup/verify", verifyBody(begin.text("flow"), got), token)
+            val verified = api.requestAuthenticated(lease, "setup/verify", verifyBody(begin.text("flow"), got))
             if (!container.apiStack.isSessionRequestLeaseLive(lease)) error("session changed")
             if (stored) {
-                val readback = api.request("record", token = token)
+                val readback = api.requestAuthenticated(lease, "record")
                 withContext(Dispatchers.IO) { restore(readback, secret, false, account.userId, account.activeKeyBundleId) }
                 check(container.apiStack.isSessionRequestLeaseLive(lease))
                 container.recoveryReadiness.markVerified(account.userId, account.activeKeyBundleId)
@@ -90,10 +88,10 @@ class PasskeyRecovery(private val container: AppContainer) {
             }
             val pending = withContext(Dispatchers.IO) { Crypto.prepare(account.userId, account.activeKeyBundleId, id, secret, identity) }
             prepared = pending
-            api.request("record", buildJsonObject { put("flow", verified.text("flow")); put("record", pending.record.json()) }, token)
+            api.requestAuthenticated(lease, "record", buildJsonObject { put("flow", verified.text("flow")); put("record", pending.record.json()) })
             if (!container.apiStack.isSessionRequestLeaseLive(lease)) error("session changed")
             // Read back and unwrap the actual durable server record, not only our input.
-            val readback = api.request("record", token = token)
+            val readback = api.requestAuthenticated(lease, "record")
             withContext(Dispatchers.IO) { restore(readback, secret, false, account.userId, account.activeKeyBundleId) }
             check(container.apiStack.isSessionRequestLeaseLive(lease))
             container.recoveryReadiness.markVerified(account.userId, account.activeKeyBundleId)
@@ -141,9 +139,8 @@ class PasskeyRecovery(private val container: AppContainer) {
         enabled(); require(code.size == 32)
         val accountLease = container.sessionReplacement.acquireLease()
         val lease = container.apiStack.captureSessionRequestLease() ?: error("sign in first")
-        val token = container.apiStack.accessTokenForSessionRequestLease(lease) ?: error("sign in first")
         val account = withContext(Dispatchers.IO) { container.currentAccountStore.loadEntity() } ?: error("no account")
-        val response = api.request("record", token = token)
+        val response = api.requestAuthenticated(lease, "record")
         val keys = withContext(Dispatchers.IO) { restore(response, code, true, account.userId, account.activeKeyBundleId) }
         withContext(Dispatchers.IO) {
             check(container.apiStack.isSessionRequestLeaseLive(lease))
@@ -160,16 +157,15 @@ class PasskeyRecovery(private val container: AppContainer) {
         enabled()
         val replacement = container.sessionReplacement.acquireLease()
         val lease = container.apiStack.captureSessionRequestLease() ?: error("sign in first")
-        val token = container.apiStack.accessTokenForSessionRequestLease(lease) ?: error("sign in first")
         val account = withContext(Dispatchers.IO) { container.currentAccountStore.loadEntity() } ?: error("no account")
-        val record = api.request("record", token = token)
+        val record = api.requestAuthenticated(lease, "record")
         val id = record.getValue("record").jsonObject.text("credential_id")
-        val begin = api.request("setup/options", buildJsonObject { put("credential_id", id) }, token)
+        val begin = api.requestAuthenticated(lease, "setup/options", buildJsonObject { put("credential_id", id) })
         val credential = credentials.get(begin.getValue("options").jsonObject)
         val secret = prf(credential)
         try {
             check(credential.text("id") == id)
-            api.request("setup/verify", verifyBody(begin.text("flow"), credential), token)
+            api.requestAuthenticated(lease, "setup/verify", verifyBody(begin.text("flow"), credential))
             val keys = withContext(Dispatchers.IO) { restore(record, secret, false, account.userId, account.activeKeyBundleId) }
             withContext(Dispatchers.IO) {
                 check(container.apiStack.isSessionRequestLeaseLive(lease))

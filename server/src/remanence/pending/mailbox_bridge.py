@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import hmac
+import io
 import json
 import os
 import re
@@ -499,52 +500,132 @@ def deadline_for(accept_at: float, *, bound: int, now: float) -> float:
     return max(0.0, (accept_at + bound) - now)
 
 
-class _DeadlineReader:
-    """Buffered-reader wrapper enforcing the ABSOLUTE monotonic
-    deadline on EVERY read: each readline()/read() checks the clock
-    first, so trickled headers or bodies die exactly at the deadline
-    instead of riding an idle per-recv socket timeout indefinitely.
-    Raises socket.timeout, which the suppressed server boundary turns
-    into coarse silence + close (no partial request is ever routed).
-    `clock` is a deterministic test seam (default monotonic)."""
+class _DeadlineRawStream(io.RawIOBase):
+    """Raw binary stream over one socket whose EVERY blocking read is
+    deadline-checked at the syscall boundary: each readinto() sets the
+    remaining timeout first and checks the clock after, so a trickle
+    inside a single buffered readline()/read() cannot outlive the
+    absolute deadline. Raises socket.timeout on expiry."""
 
-    def __init__(self, raw, deadline: float, *, clock=time.monotonic) -> None:
-        self._raw = raw
+    def __init__(self, sock, deadline: float, *, clock=time.monotonic) -> None:
+        self._sock = sock
         self._deadline = deadline
         self._clock = clock
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer) -> int:
+        remaining = self._deadline - self._clock()
+        if remaining <= 0:
+            raise socket.timeout("absolute request deadline exceeded")
+        try:
+            self._sock.settimeout(remaining)
+        except OSError:
+            pass
+        count = self._sock.recv_into(buffer)
+        if self._clock() >= self._deadline:
+            raise socket.timeout("absolute request deadline exceeded")
+        return count
+
+
+class _DeadlineSocket:
+    """Socket wrapper enforcing the absolute monotonic deadline at the
+    actual blocking-call boundary: every recv/recv_into/send/sendall
+    recomputes the remaining timeout first and checks the clock after,
+    so the total can overshoot the deadline by at most one call's
+    worth of already-arriving bytes — never indefinitely. makefile()
+    returns buffering over the deadline-aware raw stream above (binary
+    only; anything else fails closed), so buffered header/body parsing
+    inherits the bound with no per-read wrapper needed. All other
+    attributes delegate to the real socket. `clock` is a deterministic
+    test seam."""
+
+    def __init__(self, sock, deadline: float, *, clock=time.monotonic) -> None:
+        self._sock = sock
+        self._deadline = deadline
+        self._clock = clock
+        self._idle = float(REQUEST_TIMEOUT_SECONDS)
+
+    def _remaining(self) -> float:
+        remaining = self._deadline - self._clock()
+        if remaining <= 0:
+            raise socket.timeout("absolute request deadline exceeded")
+        return remaining
+
+    def _arm(self) -> float:
+        remaining = self._remaining()
+        budget = remaining if remaining < self._idle else self._idle
+        try:
+            self._sock.settimeout(budget)
+        except OSError:
+            pass
+        return remaining
 
     def _check(self) -> None:
         if self._clock() >= self._deadline:
             raise socket.timeout("absolute request deadline exceeded")
 
-    def read(self, size: int = -1):
+    def recv(self, bufsize: int, flags: int = 0):
+        self._arm()
+        data = self._sock.recv(bufsize, flags)
         self._check()
-        return self._raw.read(size)
+        return data
 
-    def readline(self, limit: int = -1):
+    def recv_into(self, buffer, nbytes: int = 0, flags: int = 0):
+        self._arm()
+        # An explicit nbytes=0 must NOT reach the real call (it would
+        # read nothing and spin the buffered reader); omit it instead.
+        if nbytes:
+            count = self._sock.recv_into(buffer, nbytes, flags)
+        else:
+            count = self._sock.recv_into(buffer, flags)
         self._check()
-        return self._raw.readline(limit)
+        return count
+
+    def send(self, data, flags: int = 0):
+        self._arm()
+        count = self._sock.send(data, flags)
+        self._check()
+        return count
+
+    def sendall(self, data, flags: int = 0):
+        view = memoryview(bytes(data))
+        while view:
+            sent = self.send(view, flags)
+            if sent <= 0:
+                raise socket.timeout("absolute request deadline exceeded")
+            view = view[sent:]
+
+    def settimeout(self, timeout) -> None:
+        self._idle = float(timeout)
+
+    def gettimeout(self):
+        return self._idle
+
+    def makefile(self, mode="r", buffering=None, *args, **kwargs):
+        if "b" not in mode:
+            raise ValueError("binary mode only")
+        raw = _DeadlineRawStream(self._sock, self._deadline, clock=self._clock)
+        if "r" in mode and "+" not in mode and "w" not in mode and "a" not in mode:
+            return io.BufferedReader(raw, buffer_size=buffering or io.DEFAULT_BUFFER_SIZE)
+        return io.BufferedRWPair(raw, raw, buffer_size=buffering or io.DEFAULT_BUFFER_SIZE)
 
     def __getattr__(self, name: str):
-        return getattr(self._raw, name)
+        return getattr(self._sock, name)
 
 
 class _BoundedServer(HTTPServer):
     """Single-threaded HTTP server with the absolute request lifetime
     enforced from the accepted connection: the accept instant is
-    stamped (one connection at a time — no leak, no replay), the
-    socket gets an idle timeout, and raw server tracebacks are
-    suppressed (coarse silence instead of exception dumps)."""
+    stamped (one connection at a time — no leak, no replay) and raw
+    server tracebacks are suppressed (coarse silence instead of
+    exception dumps). Per-call timeouts live on the deadline-aware
+    socket wrapper (see setup()), not here."""
 
     def get_request(self):
-        import time as _time
-
         conn, addr = super().get_request()
-        self._accept_at = _time.monotonic()
-        try:
-            conn.settimeout(REQUEST_TIMEOUT_SECONDS)
-        except OSError:
-            pass
+        self._accept_at = time.monotonic()
         return conn, addr
 
     def handle_error(self, *args) -> None:
@@ -552,8 +633,6 @@ class _BoundedServer(HTTPServer):
 
 
 def _wire_handler(*, engine, sink_path: str, delivery_id: uuid.UUID, owner_id: uuid.UUID):
-    import time as _time
-
     def lookup_attempt(attempt_id: uuid.UUID):
         return fetch_attempt_row(engine, attempt_id)
 
@@ -585,36 +664,34 @@ def _wire_handler(*, engine, sink_path: str, delivery_id: uuid.UUID, owner_id: u
             self.end_headers()
             self.wfile.write(body)
 
-        def handle(self) -> None:
-            # Absolute request lifetime from the accepted connection:
-            # the wrapped rfile checks the monotonic deadline on EVERY
-            # read, so trickled headers/bodies die at the deadline
-            # instead of riding the idle socket timeout. Exactly one
-            # request per connection (closed after it), so the deadline
-            # is always per-request. No threads, no replay, no leak.
+        def setup(self) -> None:
+            # Wrap the connection BEFORE rfile/wfile are built so all
+            # buffered header/body parsing inherits the absolute
+            # deadline at the syscall boundary (see _DeadlineSocket).
+            # One request per connection (closed after it), so the
+            # deadline is always per-request.
             accept_at = getattr(self.server, "_accept_at", None)
             if accept_at is None:
                 try:
                     self.connection.close()
                 except OSError:
                     pass
-                return
-            deadline = accept_at + REQUEST_TIMEOUT_SECONDS
-            remaining = deadline_for(
-                accept_at, bound=REQUEST_TIMEOUT_SECONDS, now=_time.monotonic()
-            )
-            if remaining <= 0:
+                raise socket.timeout("missing accept stamp")
+            if (
+                deadline_for(
+                    accept_at, bound=REQUEST_TIMEOUT_SECONDS, now=time.monotonic()
+                )
+                <= 0
+            ):
                 try:
                     self.connection.close()
                 except OSError:
                     pass
-                return
-            try:
-                self.connection.settimeout(remaining)
-            except OSError:
-                pass
-            self.rfile = _DeadlineReader(self.rfile, deadline)
-            super().handle()
+                raise socket.timeout("accept already past deadline")
+            self.connection = _DeadlineSocket(
+                self.connection, accept_at + REQUEST_TIMEOUT_SECONDS
+            )
+            super().setup()
 
         def handle_one_request(self) -> None:
             try:

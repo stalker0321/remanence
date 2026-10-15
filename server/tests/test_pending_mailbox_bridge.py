@@ -645,51 +645,136 @@ def test_read_sink_bytes_fake_descriptor_lifecycle(monkeypatch: pytest.MonkeyPat
     assert closed == [99, 99, 99]
 
 
-def test_deadline_reader_trickle_dies_at_deadline() -> None:
-    """Deterministic transport seam: every read checks the monotonic
-    deadline first, so a 1-byte trickle cannot outlive it. Fake raw +
-    fake clock, no sockets."""
-    from remanence.pending.mailbox_bridge import _DeadlineReader
-
-    calls = {"n": 0}
-
-    class _FakeRaw:
-        marker = "raw-marker"
-
-        def readline(self, limit=-1):
-            calls["n"] += 1
-            return b"x"
-
-        def read(self, size=-1):
-            calls["n"] += 1
-            return b"yz"
-
-    clock = {"now": 100.0}
-    reader = _DeadlineReader(_FakeRaw(), 110.0, clock=lambda: clock["now"])
-    assert reader.readline() == b"x"
-    assert reader.read(2) == b"yz"
-    assert reader.marker == "raw-marker"
-    assert calls["n"] == 2
-    clock["now"] = 110.0
+def test_deadline_socket_bounds_multi_recv_trickle() -> None:
+    """Genuine transport seam: ONE logical read needing several
+    internal recvs, with the clock advancing DURING blocking reads.
+    Each recv recomputes the remaining timeout (asserted decreasing)
+    and checks post-read, so expiry mid-trickle raises and no further
+    recv ever happens. Fake socket + fake clock, no real sockets."""
     import socket as _socket
 
-    with pytest.raises(_socket.timeout):
-        reader.readline()
-    with pytest.raises(_socket.timeout):
-        reader.read(2)
-    assert calls["n"] == 2  # no recv on or past the deadline
-    # A readline loop over a trickle terminates at the deadline.
-    loop_calls = {"n": 0}
+    from remanence.pending.mailbox_bridge import _DeadlineSocket
 
-    class _Trickle:
-        def readline(self, limit=-1):
-            loop_calls["n"] += 1
+    clock = {"now": 0.0}
+
+    class _FakeSocket:
+        def __init__(self) -> None:
+            self.timeouts: list = []
+            self.recvs = 0
+
+        def settimeout(self, value) -> None:
+            self.timeouts.append(value)
+
+        def recv(self, bufsize: int, flags: int = 0) -> bytes:
+            self.recvs += 1
+            clock["now"] += 4.0
+            return b"chunk"
+
+    raw = _FakeSocket()
+    sock = _DeadlineSocket(raw, 10.0, clock=lambda: clock["now"])
+    with pytest.raises(_socket.timeout):
+        for _ in range(100):
+            sock.recv(5)
+    # Pre-checks passed at t=0,4,8 (remaining 10,6,2); the third recv
+    # pushed the clock to 12, so the post-read check fired: exactly
+    # three recvs, then silence — never indefinite.
+    assert raw.recvs == 3
+    assert raw.timeouts == [10.0, 6.0, 2.0]
+
+
+def test_deadline_socket_preexpired_makes_no_calls() -> None:
+    import socket as _socket
+
+    from remanence.pending.mailbox_bridge import _DeadlineSocket
+
+    class _SilentSocket:
+        def __init__(self) -> None:
+            self.calls: list = []
+
+        def settimeout(self, value) -> None:
+            self.calls.append(("timeout", value))
+
+        def recv(self, bufsize: int, flags: int = 0):
+            self.calls.append(("recv", bufsize))
+            return b"x"
+
+    raw = _SilentSocket()
+    sock = _DeadlineSocket(raw, 10.0, clock=lambda: 10.0)
+    with pytest.raises(_socket.timeout):
+        sock.recv(5)
+    assert raw.calls == []
+    with pytest.raises(_socket.timeout):
+        sock.recv_into(bytearray(5))
+    assert raw.calls == []
+
+
+def test_deadline_buffered_readline_dies_mid_line() -> None:
+    """A SINGLE buffered readline() needing several internal recvs
+    (no newline until EOF) dies mid-line when the clock passes the
+    deadline during a blocking read — the actual buffered-reader
+    semantics the previous wrapper missed."""
+    import io as _io
+    import socket as _socket
+
+    from remanence.pending.mailbox_bridge import _DeadlineRawStream
+
+    clock = {"now": 0.0}
+    chunks = [b"GET /o", b"tp HTTP", b"/1.1-no-newline"]
+
+    class _FakeSocket:
+        def __init__(self) -> None:
+            self.recvs = 0
+
+        def settimeout(self, value) -> None:
+            return None
+
+        def recv_into(self, buffer, nbytes: int = 0, flags: int = 0) -> int:
+            self.recvs += 1
+            clock["now"] += 4.0
+            if not chunks:
+                return 0
+            data = chunks.pop(0)
+            buffer[: len(data)] = data
+            return len(data)
+
+    raw = _io.BufferedReader(_DeadlineRawStream(_FakeSocket(), 10.0, clock=lambda: clock["now"]))
+    with pytest.raises(_socket.timeout):
+        raw.readline()
+    # t=0->4 (6 bytes), t=4->8 (6 more), third recv t=8->12 expires:
+    # exactly three internal recvs, then silence.
+    assert clock["now"] == 12.0
+
+
+def test_deadline_socket_makefile_and_send_bounds() -> None:
+    import io as _io
+    import socket as _socket
+
+    from remanence.pending.mailbox_bridge import _DeadlineSocket
+
+    clock = {"now": 0.0}
+
+    class _FakeSocket:
+        def __init__(self) -> None:
+            self.sent: list = []
+
+        def settimeout(self, value) -> None:
+            return None
+
+        def send(self, data, flags: int = 0) -> int:
             clock["now"] += 6.0
-            return b"y"
+            self.sent.append(bytes(data))
+            return len(bytes(data))
 
-    clock["now"] = 100.0
-    trickle = _DeadlineReader(_Trickle(), 110.0, clock=lambda: clock["now"])
+        def recv(self, bufsize: int, flags: int = 0) -> bytes:
+            return b""
+
+    sock = _DeadlineSocket(_FakeSocket(), 10.0, clock=lambda: clock["now"])
+    assert isinstance(sock.makefile("rb"), _io.BufferedReader)
+    with pytest.raises(ValueError):
+        sock.makefile("r")
+    # 200-byte sendall in one send: t=0->6, post-check passes.
+    sock.sendall(b"z" * 200)
+    assert clock["now"] == 6.0
+    # Next send starts at t=6 with remaining 4, pushes past deadline.
     with pytest.raises(_socket.timeout):
-        while True:
-            trickle.readline()
-    assert loop_calls["n"] == 2  # 100 -> 106 -> 112: dead, not indefinite
+        sock.send(b"z" * 10)

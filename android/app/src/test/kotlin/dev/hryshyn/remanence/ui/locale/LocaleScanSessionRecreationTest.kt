@@ -30,7 +30,6 @@ import dev.hryshyn.remanence.ui.scan.ScanTerminalState
 import dev.hryshyn.remanence.ui.scan.ScanViewModel
 import dev.hryshyn.remanence.wiring.KekBoundSecretSealer
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -40,7 +39,10 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
+import org.junit.RuleChain
 import org.junit.Test
+import org.junit.rules.TestWatcher
+import org.junit.runner.Description
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowLocaleManager
@@ -74,8 +76,29 @@ import org.robolectric.shadows.ShadowLocaleManager
 @Config(sdk = [35])
 class LocaleScanSessionRecreationTest {
 
-    @get:Rule
     val composeRule = createAndroidComposeRule<MainActivity>()
+
+    /**
+     * Same ordered Main ownership as the MainActivity recreation
+     * tests: Main installed before the rule launches the Activity,
+     * so the activity-created scopes are test-driven. The @Before
+     * setMain is removed (it would run too late and crash on
+     * double-set); teardown reset is retained.
+     */
+    private val mainDispatcherRule = MainDispatcherRule()
+
+    @get:Rule
+    val chain: RuleChain = RuleChain.outerRule(mainDispatcherRule).around(composeRule)
+
+    private class MainDispatcherRule : TestWatcher() {
+        override fun starting(description: Description?) {
+            Dispatchers.setMain(UnconfinedTestDispatcher())
+        }
+
+        override fun finished(description: Description?) {
+            Dispatchers.resetMain()
+        }
+    }
 
     private val created = mutableListOf<Activity>()
     private val destroyed = mutableListOf<Activity>()
@@ -96,11 +119,8 @@ class LocaleScanSessionRecreationTest {
         override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
     }
 
-    private val testDispatcher = UnconfinedTestDispatcher()
-
     @Before
     fun setUp() {
-        Dispatchers.setMain(testDispatcher)
         ShadowLocaleManager.reset()
         resetAppCompatStatics()
         ApplicationProvider.getApplicationContext<Application>()

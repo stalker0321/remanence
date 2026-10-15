@@ -24,6 +24,10 @@ import dev.hryshyn.remanence.session.RootViewModel
 import dev.hryshyn.remanence.ui.navigation.AuthUiState
 import dev.hryshyn.remanence.wiring.RemanenceViewModelFactory
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotSame
@@ -31,7 +35,10 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
+import org.junit.RuleChain
 import org.junit.Test
+import org.junit.rules.TestWatcher
+import org.junit.runner.Description
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowLocaleManager
@@ -57,8 +64,30 @@ import org.robolectric.shadows.ShadowLocaleManager
 @Config(sdk = [35])
 class LocaleMainActivityRecreationTest {
 
-    @get:Rule
     val composeRule = createAndroidComposeRule<MainActivity>()
+
+    /**
+     * Deterministic Main BEFORE the Activity (and its RootViewModel
+     * viewModelScope) exists: the compose rule launches during rule
+     * setup, so a setMain in @Before would arrive too late for the
+     * already-created scope. Unconfined runs Main work eagerly while
+     * the real bootstrap still executes (IO for real) — nothing is
+     * forced, faked, or weakened.
+     */
+    private val mainDispatcherRule = MainDispatcherRule()
+
+    @get:Rule
+    val chain: RuleChain = RuleChain.outerRule(mainDispatcherRule).around(composeRule)
+
+    private class MainDispatcherRule : TestWatcher() {
+        override fun starting(description: Description?) {
+            Dispatchers.setMain(UnconfinedTestDispatcher())
+        }
+
+        override fun finished(description: Description?) {
+            Dispatchers.resetMain()
+        }
+    }
 
     private val created = mutableListOf<Activity>()
     private val destroyed = mutableListOf<Activity>()

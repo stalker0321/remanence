@@ -5,13 +5,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.captureToImage
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
+import androidx.activity.ComponentActivity
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hryshyn.remanence.ui.hold.HoldTheme
 import org.junit.Assert.assertEquals
@@ -43,7 +42,7 @@ import org.robolectric.annotation.GraphicsMode
 class AstraContextArrivalProgressTest {
 
     @get:Rule
-    val composeRule = createComposeRule()
+    val composeRule = createAndroidComposeRule<ComponentActivity>()
 
     private fun mount(motion: AstraMotionSpec.Resolved) {
         composeRule.mainClock.autoAdvance = false
@@ -70,13 +69,29 @@ class AstraContextArrivalProgressTest {
     /**
      * Center-pixel opacity of the synthetic probe, inferred from the
      * composited green channel (red probe over the opaque white
-     * backdrop: green == 1 - opacity). Raw captured alpha is always 1.0
+     * backdrop: green == 1 - opacity). Drawn synchronously on the test
+     * thread via the established decorView.draw pattern — deliberately
+     * NOT runOnIdle/waitForIdle/captureToImage: idleness machinery pumps
+     * frames, which would advance the paused animation clock and let the
+     * mid-flight read land anywhere. Raw captured alpha is always 1.0
      * over the opaque window and measures nothing.
      */
     private fun probeOpacity(): Float {
-        val image = composeRule.onNodeWithTag("arrival_probe").captureToImage()
-        val pixels = image.toPixelMap()
-        return 1f - pixels[image.width / 2, image.height / 2].green
+        val bounds = rule.onNodeWithTag("arrival_probe").fetchSemanticsNode().boundsInWindow
+        val cx = (bounds.left + bounds.width / 2).toInt().coerceAtLeast(0)
+        val cy = (bounds.top + bounds.height / 2).toInt().coerceAtLeast(0)
+        val view = rule.activity.window.decorView
+        val bitmap = android.graphics.Bitmap.createBitmap(
+            view.width, view.height, android.graphics.Bitmap.Config.ARGB_8888,
+        )
+        try {
+            view.draw(android.graphics.Canvas(bitmap))
+            val px = cx.coerceAtMost(bitmap.width - 1)
+            val py = cy.coerceAtMost(bitmap.height - 1)
+            return 1f - android.graphics.Color.green(bitmap.getPixel(px, py)) / 255f
+        } finally {
+            bitmap.recycle()
+        }
     }
 
     @Test

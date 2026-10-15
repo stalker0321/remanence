@@ -142,6 +142,23 @@ class LocaleMainActivityRecreationTest {
         composeRule.waitForIdle()
     }
 
+    /**
+     * The production bootstrap resolves asynchronously on real
+     * dispatchers, which waitForIdle does NOT cover (proven by the
+     * Resolving hang): await the ACTUAL terminal auth state, bounded,
+     * then the displayed public home. No sleeps, no forced root state —
+     * a timeout here names the unsettled bootstrap honestly.
+     */
+    private fun awaitSignedOutHome(): RootViewModel {
+        val vm = productionViewModel(composeRule.activity)
+        composeRule.waitUntil(120_000) {
+            vm.authState.value is AuthUiState.SignedOut
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("scan_action").assertIsDisplayed()
+        return vm
+    }
+
     @Test
     @Config(sdk = [28])
     fun localeChangeAppliesInPlaceWithoutRecreationSdk28() {
@@ -164,8 +181,7 @@ class LocaleMainActivityRecreationTest {
         // The production bootstrap resolves asynchronously: wait for the
         // terminal proof before asserting the surface, so a slow first
         // resolve is never mistaken for a missing one.
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag("scan_action").assertIsDisplayed()
+        awaitSignedOutHome()
         val first = composeRule.activity
 
         selectRussian()
@@ -205,8 +221,7 @@ class LocaleMainActivityRecreationTest {
      * are untouched. (Setup boots SYSTEM, so the system option is active.)
      */
     private fun reselectingActiveLocaleIsRealNoOp() {
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag("scan_action").assertIsDisplayed()
+        awaitSignedOutHome()
 
         composeRule.onNodeWithTag("language_option_system").performScrollTo().performClick()
         composeRule.waitForIdle()
@@ -254,8 +269,7 @@ class LocaleMainActivityRecreationTest {
      * locale, and selected UI survive the genuine restart.
      */
     private fun unrelatedManualRecreateStillRestartsAndPreserves() {
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag("scan_action").assertIsDisplayed()
+        awaitSignedOutHome()
         val firstHost = composeRule.activity
         val before = productionViewModel(firstHost)
 
@@ -283,8 +297,7 @@ class LocaleMainActivityRecreationTest {
     }
 
     private fun rapidDifferentTapsResolveLastWinsWithoutQueue() {
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag("scan_action").assertIsDisplayed()
+        awaitSignedOutHome()
 
         composeRule.onNodeWithTag("language_option_russian").performScrollTo().performClick()
         composeRule.onNodeWithTag("language_option_ukrainian").performScrollTo().performClick()
@@ -298,7 +311,7 @@ class LocaleMainActivityRecreationTest {
 
     @Test
     fun noManualRestartOn33Plus() {
-        composeRule.onNodeWithTag("scan_action").assertIsDisplayed()
+        awaitSignedOutHome()
 
         selectRussian()
 
@@ -329,6 +342,7 @@ class LocaleMainActivityRecreationTest {
     private fun authAndDestinationStableAcrossLocaleChange() {
         // Cold start with no backend: SignedOut public home, actions enabled
         // through the public entry.
+        awaitSignedOutHome()
         composeRule.onNodeWithTag("scan_action").assertIsDisplayed().assertIsEnabled()
 
         selectRussian()
@@ -357,9 +371,7 @@ class LocaleMainActivityRecreationTest {
     private fun viewModelStoreRetainedAcrossLocaleChange() {
         // Cold start with a real async bootstrap: wait for the terminal
         // proof — reading mid-resolve would see the honest Resolving state.
-        composeRule.waitForIdle()
-        val before = productionViewModel(composeRule.activity)
-        assertEquals(AuthUiState.SignedOut, before.authState.value)
+        val before = awaitSignedOutHome()
         assertEquals(0L, before.createSessionEpoch.value)
         assertEquals(0L, before.scanSessionEpoch.value)
 

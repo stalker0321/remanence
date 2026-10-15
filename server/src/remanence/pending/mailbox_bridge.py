@@ -44,11 +44,14 @@ import argparse
 import hmac
 import json
 import os
+import re
 import stat
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+from sqlalchemy import create_engine
 
 BRIDGE_HOST = "127.0.0.1"
 BRIDGE_PORT = 18045
@@ -59,6 +62,13 @@ SINK_REF_PREFIX = "dev-email-"
 REQUEST_TIMEOUT_SECONDS = 10
 TS_FUTURE_SKEW = timedelta(minutes=5)
 TS_MAX_AGE = timedelta(hours=24)
+
+# The ONLY readable sink shape: the original epoch sink. The epoch
+# name is root-chosen (single path component); anything else —
+# including an otherwise-secure owned file elsewhere — is refused so
+# a misconfigured or overridden path can never substitute records.
+# The native caller cannot override the sink (no path travels the wire).
+_SINK_SHAPE = re.compile(r"^/tmp/remanence-pending-epoch-[A-Za-z0-9_][A-Za-z0-9_.\-]*/otp\.jsonl$")
 
 # Fixed coarse wire codes. OTP_UNAVAILABLE is deliberately the single
 # code for every lookup/read failure (unknown attempt, wrong owner or
@@ -155,31 +165,56 @@ def check_attempt_row(
     return row_id
 
 
-def validate_sink_path(path: str) -> str:
-    """Validate the ORIGINAL epoch sink without modifying it. Parent
-    dir: exists, real dir, no symlink, owned by uid 0-or-runner, no
-    group/other write. File: exists, regular file, no symlink (also
-    enforced with O_NOFOLLOW at open), same ownership, 0600-class
-    modes, bounded size. Any failure is OTP_UNAVAILABLE on the request
-    path (config problems additionally fail startup loudly)."""
-    if not path or not isinstance(path, str):
+def validate_sink_path(path: str, *, explain: bool = False) -> str:
+    """Validate the ORIGINAL epoch sink without modifying it.
+
+    Shape first: the absolute path must match the original
+    ``/tmp/remanence-pending-epoch-*/otp.jsonl`` form (single epoch
+    component, fixed filename) — any other path is refused even if
+    securely owned. Then: every component resolves identically
+    (``realpath`` equality — no symlink anywhere in the chain); the
+    parent dir exists, is a real dir, is owned by uid 0-or-runner,
+    and has no group/other write; the file exists, is a regular file
+    (symlinks refused here and again with ``O_NOFOLLOW`` at open),
+    same ownership, 0600-class modes, bounded size.
+
+    ``explain=False`` (request path) maps everything to the single
+    OTP_UNAVAILABLE code. ``explain=True`` (startup only) names the
+    failing check with config identifiers only — never file content.
+    """
+    def fail(reason: str) -> BridgeRefusal:
+        if explain:
+            raise BridgeRefusal("STARTUP", f"sink refused: {reason}")
         raise BridgeRefusal(OTP_UNAVAILABLE)
-    resolved_parent = os.path.dirname(os.path.abspath(path))
+
+    if not path or not isinstance(path, str):
+        raise fail("no --sink-path configured")
+    resolved = os.path.abspath(path)
+    if not _SINK_SHAPE.match(resolved):
+        raise fail("path must be /tmp/remanence-pending-epoch-<epoch>/otp.jsonl")
+    try:
+        if os.path.realpath(resolved) != resolved:
+            raise fail("symlink escape in sink path refused")
+    except BridgeRefusal:
+        raise
+    except OSError:
+        raise fail("sink path unresolvable") from None
+    resolved_parent = os.path.dirname(resolved)
     try:
         parent_stat = os.lstat(resolved_parent)
     except OSError:
-        raise BridgeRefusal(OTP_UNAVAILABLE) from None
+        raise fail("sink parent unreadable") from None
     if (
         not stat.S_ISDIR(parent_stat.st_mode)
         or stat.S_ISLNK(parent_stat.st_mode)
         or parent_stat.st_uid not in (0, os.geteuid())
         or parent_stat.st_mode & 0o022
     ):
-        raise BridgeRefusal(OTP_UNAVAILABLE)
+        raise fail("sink parent ownership/modes insecure")
     try:
-        file_stat = os.lstat(path)
+        file_stat = os.lstat(resolved)
     except OSError:
-        raise BridgeRefusal(OTP_UNAVAILABLE) from None
+        raise fail("sink file unreadable") from None
     if (
         not stat.S_ISREG(file_stat.st_mode)
         or stat.S_ISLNK(file_stat.st_mode)
@@ -187,22 +222,40 @@ def validate_sink_path(path: str) -> str:
         or file_stat.st_mode & 0o077
         or file_stat.st_size > MAX_FILE_BYTES
     ):
-        raise BridgeRefusal(OTP_UNAVAILABLE)
-    return os.path.abspath(path)
+        raise fail("sink file ownership/modes/size insecure")
+    return resolved
 
 
-def read_sink_bytes(path: str) -> bytearray:
-    """Read the validated file into a MUTABLE buffer (caller clears
-    best-effort). O_NOFOLLOW refuses symlink escape at open time."""
-    validated = validate_sink_path(path)
+def _check_opened_sink(fd: int) -> None:
+    """Re-check guards against the ACTUAL opened descriptor (not only
+    the pre-open lstat): regular file, same ownership, 0600-class
+    modes. Closes the TOCTOU window between lstat and open for
+    metadata (content stays bounded by the read loop + parse)."""
     try:
-        fd = os.open(validated, os.O_RDONLY | os.O_NOFOLLOW)
+        opened = os.fstat(fd)
     except OSError:
         raise BridgeRefusal(OTP_UNAVAILABLE) from None
+    if (
+        not stat.S_ISREG(opened.st_mode)
+        or opened.st_uid not in (0, os.geteuid())
+        or opened.st_mode & 0o077
+    ):
+        raise BridgeRefusal(OTP_UNAVAILABLE)
+
+
+def _drain_fd(fd: int, *, read=os.read, _make_buf=bytearray) -> bytearray:
+    """Read the open descriptor into an OWNED mutable buffer, bounded.
+    Ownership transfers to the caller ONLY on successful return; on
+    ANY failure (OSError, over-bound growth, interruption) the owned
+    buffer is wiped in place before the refusal propagates, so a
+    partial prefix can never linger for a later read to pick up.
+    (Immutable bytes/str copies made downstream stay honestly
+    unwipeable — documented, not claimed.) `_make_buf` is a test seam
+    (default plain bytearray)."""
+    chunks = _make_buf()
     try:
-        chunks = bytearray()
         while len(chunks) <= MAX_FILE_BYTES:
-            piece = os.read(fd, 65536)
+            piece = read(fd, 65536)
             if not piece:
                 break
             chunks += piece
@@ -210,10 +263,38 @@ def read_sink_bytes(path: str) -> bytearray:
             raise BridgeRefusal(OTP_UNAVAILABLE)
         return chunks
     except BridgeRefusal:
+        for index in range(len(chunks)):
+            chunks[index] = 0
         raise
+    except (KeyboardInterrupt, SystemExit):
+        for index in range(len(chunks)):
+            chunks[index] = 0
+        raise
+    except BaseException:
+        for index in range(len(chunks)):
+            chunks[index] = 0
+        raise BridgeRefusal(OTP_UNAVAILABLE) from None
+
+
+def read_sink_bytes(path: str) -> bytearray:
+    """Read the validated file into a MUTABLE buffer (caller clears
+    best-effort after use). O_NOFOLLOW refuses symlink escape at open
+    time; descriptor metadata is re-checked after open."""
+    validated = validate_sink_path(path)
+    try:
+        fd = os.open(validated, os.O_RDONLY | os.O_NOFOLLOW)
     except OSError:
         raise BridgeRefusal(OTP_UNAVAILABLE) from None
-    finally:
+    try:
+        _check_opened_sink(fd)
+        return _drain_fd(fd)
+    except BaseException:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
+    else:
         try:
             os.close(fd)
         except OSError:
@@ -311,10 +392,23 @@ def handle_otp_request(
     ):
         raise BridgeRefusal(BAD_REQUEST)
     attempt_id = parse_attempt_id(parsed["attemptId"])
+    try:
+        row = lookup_attempt(attempt_id)
+    except BridgeRefusal:
+        raise
+    except Exception:
+        # Injected/production lookup failures (including disconnects)
+        # map to the single coarse code — never exception strings.
+        raise BridgeRefusal(OTP_UNAVAILABLE) from None
     row_id = check_attempt_row(
-        lookup_attempt(attempt_id), delivery_id=delivery_id, owner_id=owner_id, now=now
+        row, delivery_id=delivery_id, owner_id=owner_id, now=now
     )
-    raw = read_sink()
+    try:
+        raw = read_sink()
+    except BridgeRefusal:
+        raise
+    except Exception:
+        raise BridgeRefusal(OTP_UNAVAILABLE) from None
     try:
         code = select_code(
             parse_sink_records(raw),
@@ -396,8 +490,37 @@ def fetch_attempt_row(engine, attempt_id: uuid.UUID):
     }
 
 
+def deadline_for(accept_at: float, *, bound: int, now: float) -> float:
+    """Remaining seconds of the absolute request lifetime measured from
+    accept (monotonic clock). Pure seam: unit-tested without sockets.
+    Callers close the connection when the remainder is exhausted."""
+    return max(0.0, (accept_at + bound) - now)
+
+
+class _BoundedServer(HTTPServer):
+    """Single-threaded HTTP server with the absolute request lifetime
+    enforced from the accepted connection: the accept instant is
+    stamped (one connection at a time — no leak, no replay), the
+    socket gets an idle timeout, and raw server tracebacks are
+    suppressed (coarse silence instead of exception dumps)."""
+
+    def get_request(self):
+        import time as _time
+
+        conn, addr = super().get_request()
+        self._accept_at = _time.monotonic()
+        try:
+            conn.settimeout(REQUEST_TIMEOUT_SECONDS)
+        except OSError:
+            pass
+        return conn, addr
+
+    def handle_error(self, *args) -> None:
+        return None
+
+
 def _wire_handler(*, engine, sink_path: str, delivery_id: uuid.UUID, owner_id: uuid.UUID):
-    from http.server import BaseHTTPRequestHandler
+    import time as _time
 
     def lookup_attempt(attempt_id: uuid.UUID):
         return fetch_attempt_row(engine, attempt_id)
@@ -430,66 +553,101 @@ def _wire_handler(*, engine, sink_path: str, delivery_id: uuid.UUID, owner_id: u
             self.end_headers()
             self.wfile.write(body)
 
-        def do_GET(self) -> None:
-            try:
-                self.connection.settimeout(REQUEST_TIMEOUT_SECONDS)
-            except OSError:
-                pass
-            if self.path != "/health":
-                self._send_json(404, {"error": NOT_FOUND})
-                return
-            self._send_json(
-                200,
-                {"ready": True, "evidenceClass": "LOCAL_SYNTHETIC_MAILBOX_CLIENT"},
+        def handle(self) -> None:
+            # Absolute request lifetime from the accepted connection
+            # (covers header parsing + body + handling): a stalled
+            # connection dies here instead of wedging the
+            # single-threaded server, and its I/O is cancelled with it.
+            # No daemon threads, no replay, no leak.
+            remaining = deadline_for(
+                getattr(self.server, "_accept_at", _time.monotonic()),
+                bound=REQUEST_TIMEOUT_SECONDS,
+                now=_time.monotonic(),
             )
-
-        def do_POST(self) -> None:
-            try:
-                self.connection.settimeout(REQUEST_TIMEOUT_SECONDS)
-            except OSError:
-                pass
-            if self.path != "/otp":
-                self._send_json(404, {"error": NOT_FOUND})
-                return
-            try:
-                length_raw = self.headers.get("Content-Length", "")
-                length = int(length_raw)
-            except (TypeError, ValueError):
-                self._send_json(400, {"error": BAD_REQUEST})
-                return
-            if length < 0 or length > MAX_BODY_BYTES:
+            if remaining <= 0:
                 try:
-                    self.connection.shutdown(2)
+                    self.connection.close()
                 except OSError:
                     pass
+                return
+            try:
+                self.connection.settimeout(remaining)
+            except OSError:
+                pass
+            super().handle()
+
+        def _guarded(self, work) -> None:
+            try:
+                work()
+            except (BrokenPipeError, ConnectionResetError):
+                # Response-disconnect: silent (nothing to answer to).
+                return
+            except Exception:
+                # Any other request-work failure maps coarse; a second
+                # send failing (disconnect race) stays silent too.
                 try:
-                    self.close_connection = True
-                except AttributeError:
-                    pass
-                return
-            try:
-                body = self.rfile.read(length) if length else b""
-            except (OSError, ValueError):
-                self._send_json(400, {"error": BAD_REQUEST})
-                return
-            try:
-                status, payload = handle_otp_request(
-                    body,
-                    self.headers.get("Content-Type", ""),
-                    self._peer(),
-                    lookup_attempt=lookup_attempt,
-                    read_sink=read_sink,
-                    delivery_id=delivery_id,
-                    owner_id=owner_id,
-                    now=datetime.now(timezone.utc),
+                    self._send_json(404, {"error": OTP_UNAVAILABLE})
+                except (BrokenPipeError, ConnectionResetError, OSError, ValueError):
+                    return
+
+        def do_GET(self) -> None:
+            def _get() -> None:
+                if self.path != "/health":
+                    self._send_json(404, {"error": NOT_FOUND})
+                    return
+                self._send_json(
+                    200,
+                    {"ready": True, "evidenceClass": "LOCAL_SYNTHETIC_MAILBOX_CLIENT"},
                 )
-            except BridgeRefusal as exc:
-                mapping = {OTP_UNAVAILABLE: 404, NONLOCAL_REFUSED: 403}
-                self._send_json(mapping.get(exc.code, 400), {"error": exc.code})
-                return
-            if status is None or payload is None:
-                return
-            self._send_json(status, payload)
+
+            self._guarded(_get)
+
+        def do_POST(self) -> None:
+            def _post() -> None:
+                if self.path != "/otp":
+                    self._send_json(404, {"error": NOT_FOUND})
+                    return
+                try:
+                    length_raw = self.headers.get("Content-Length", "")
+                    length = int(length_raw)
+                except (TypeError, ValueError):
+                    self._send_json(400, {"error": BAD_REQUEST})
+                    return
+                if length < 0 or length > MAX_BODY_BYTES:
+                    try:
+                        self.connection.shutdown(2)
+                    except OSError:
+                        pass
+                    try:
+                        self.close_connection = True
+                    except AttributeError:
+                        pass
+                    return
+                try:
+                    body = self.rfile.read(length) if length else b""
+                except (OSError, ValueError):
+                    self._send_json(400, {"error": BAD_REQUEST})
+                    return
+                try:
+                    status, payload = handle_otp_request(
+                        body,
+                        self.headers.get("Content-Type", ""),
+                        self._peer(),
+                        lookup_attempt=lookup_attempt,
+                        read_sink=read_sink,
+                        delivery_id=delivery_id,
+                        owner_id=owner_id,
+                        now=datetime.now(timezone.utc),
+                    )
+                except BridgeRefusal as exc:
+                    mapping = {OTP_UNAVAILABLE: 404, NONLOCAL_REFUSED: 403}
+                    self._send_json(mapping.get(exc.code, 400), {"error": exc.code})
+                    return
+                if status is None or payload is None:
+                    return
+                self._send_json(status, payload)
+
+            self._guarded(_post)
 
         def do_PUT(self) -> None:  # noqa: N802
             self._send_json(404, {"error": NOT_FOUND})
@@ -530,7 +688,7 @@ def main(argv: list[str] | None = None) -> int:
             check_schema_head(database_url)
         except _UpstreamRefusal as exc:
             raise BridgeRefusal("STARTUP", str(exc)) from None
-        validate_sink_path(sink_path)
+        validate_sink_path(sink_path, explain=True)
     except BridgeRefusal as exc:
         print(f"pending-mailbox-bridge: refused: {exc}", file=sys.stderr)
         return 2
@@ -540,16 +698,12 @@ def main(argv: list[str] | None = None) -> int:
         print("pending-mailbox-bridge: failed: STARTUP_SCHEMA_FAILED", file=sys.stderr)
         return 2
     try:
-        from sqlalchemy import create_engine
-
-        engine = create_engine(database_url, pool_pre_ping=False)
-        from http.server import HTTPServer
-
+        engine = create_engine(database_url)
         handler = _wire_handler(
             engine=engine, sink_path=sink_path,
             delivery_id=delivery_id, owner_id=owner_id,
         )
-        server = HTTPServer((host, port), handler)
+        server = _BoundedServer((host, port), handler)
     except (KeyboardInterrupt, SystemExit):
         raise
     except Exception:

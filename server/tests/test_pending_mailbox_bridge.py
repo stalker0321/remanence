@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,14 +18,19 @@ from uuid import uuid4
 
 import pytest
 
+import remanence.pending.mailbox_bridge as mb
 from remanence.pending.mailbox_bridge import (
     BAD_REQUEST,
     BRIDGE_HOST,
     BRIDGE_PORT,
     NONLOCAL_REFUSED,
     OTP_UNAVAILABLE,
+    REQUEST_TIMEOUT_SECONDS,
     BridgeRefusal,
+    _BoundedServer,
+    _drain_fd,
     check_attempt_row,
+    deadline_for,
     fixed_bind,
     handle_otp_request,
     main,
@@ -160,39 +166,112 @@ def _secure_sink(tmp_path: Path, *lines: str) -> str:
     return str(sink)
 
 
-def test_sink_path_validation(tmp_path: Path) -> None:
-    good = _secure_sink(tmp_path, '{"a": 1}')
+def _epoch_shape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Stand-in epoch root under tmp (never the real /tmp pattern):
+    enforces the SAME shape mechanics against invented fixtures, while
+    the production literal is pinned separately below."""
+    root = tmp_path / "syntmp"
+    epoch = root / "remanence-pending-epoch-test1"
+    epoch.mkdir(mode=0o700, parents=True)
+    os.chmod(epoch, 0o700)
+    os.chmod(root, 0o700)
+    monkeypatch.setattr(
+        mb, "_SINK_SHAPE",
+        re.compile("^" + re.escape(str(root))
+                   + r"/remanence-pending-epoch-[A-Za-z0-9_][A-Za-z0-9_.\-]*/otp\.jsonl$"),
+    )
+    return root, epoch
+
+
+def _write_sink(epoch: Path, *lines: str) -> str:
+    sink = epoch / "otp.jsonl"
+    sink.write_bytes("\n".join(lines).encode() + b"\n")
+    os.chmod(sink, 0o600)
+    return str(sink)
+
+
+def test_sink_shape_literal_pins_original_epoch() -> None:
+    assert mb._SINK_SHAPE.match("/tmp/remanence-pending-epoch-abc123/otp.jsonl")
+    assert mb._SINK_SHAPE.match("/tmp/remanence-pending-epoch-2026.10-14_1/otp.jsonl")
+    for bad in (
+        "/tmp/not-an-epoch/private.jsonl",
+        "/tmp/remanence-pending-epoch-a/../evil/otp.jsonl",
+        "/tmp/remanence-pending-epoch-a/b/otp.jsonl",
+        "/tmp/remanence-pending-epoch-/otp.jsonl",
+        "/tmp/remanence-pending-epoch-a/other.jsonl",
+        "relative/remanence-pending-epoch-a/otp.jsonl",
+        "/tmp/remanence-pending-epoch-a/otp.jsonl ",
+        "/TMP/remanence-pending-epoch-a/otp.jsonl",
+    ):
+        assert not mb._SINK_SHAPE.match(bad), bad
+
+
+def test_sink_path_validation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, epoch = _epoch_shape(tmp_path, monkeypatch)
+    good = _write_sink(epoch, '{"a": 1}')
     assert validate_sink_path(good) == os.path.abspath(good)
     assert read_sink_bytes(good) == b'{"a": 1}\n'
+    # A secure owned file OUTSIDE the epoch shape is refused (the
+    # original probe): shape first, ownership second.
+    outside = tmp_path / "not-an-epoch.jsonl"
+    outside.write_bytes(b'{"a": 1}\n')
+    os.chmod(outside, 0o600)
+    with pytest.raises(BridgeRefusal) as caught:
+        validate_sink_path(str(outside))
+    assert caught.value.code == OTP_UNAVAILABLE
+    # Startup explain names the check with config identifiers only.
+    with pytest.raises(BridgeRefusal) as caught:
+        validate_sink_path(str(outside), explain=True)
+    assert caught.value.code == "STARTUP"
+    assert "remanence-pending-epoch" in str(caught.value)
     with pytest.raises(BridgeRefusal):
-        validate_sink_path(str(tmp_path / "missing.jsonl"))
+        validate_sink_path(str(root / "remanence-pending-epoch-test1" / "missing.jsonl"))
     with pytest.raises(BridgeRefusal):
         validate_sink_path("")
-    link = tmp_path / "link.jsonl"
+    link = epoch / "link.jsonl"
     try:
         os.symlink(good, link)
     except OSError:
         pytest.skip("symlinks unsupported here")
     with pytest.raises(BridgeRefusal):
         validate_sink_path(str(link))
-    exposed_dir = tmp_path / "exposed"
-    exposed_dir.mkdir(mode=0o770)
-    os.chmod(exposed_dir, 0o770)
-    exposed = exposed_dir / "otp.jsonl"
-    exposed.write_bytes(b"{}\n")
-    os.chmod(exposed, 0o600)
+    # Symlink anywhere in the chain (parent swap) is refused.
+    real_dir = tmp_path / "realdir"
+    real_dir.mkdir(mode=0o700)
+    os.chmod(real_dir, 0o700)
+    alias = root / "remanence-pending-epoch-alias"
+    try:
+        os.symlink(real_dir, alias)
+    except OSError:
+        pytest.skip("symlinks unsupported here")
+    aliased = alias / "otp.jsonl"
+    aliased.write_bytes(b"{}\n")
+    os.chmod(aliased, 0o600)
     with pytest.raises(BridgeRefusal):
-        validate_sink_path(str(exposed))
-    readable = tmp_path / "epoch" / "readable.jsonl"
-    readable.write_bytes(b"{}\n")
-    os.chmod(readable, 0o640)
+        validate_sink_path(str(aliased))
+    _tail_sink_cases(root)
+def _case_sink(root: Path, name: str, data: bytes, dmode: int, fmode: int) -> str:
+    """One epoch-shaped sink per guard case (shape matches, so the
+    exercised check is the ownership/mode/size one, not the shape)."""
+    epoch = root / f"remanence-pending-epoch-{name}"
+    epoch.mkdir(mode=0o700)
+    os.chmod(epoch, 0o700)
+    if dmode != 0o700:
+        os.chmod(epoch, dmode)
+    sink = epoch / "otp.jsonl"
+    sink.write_bytes(data)
+    os.chmod(sink, fmode)
+    return str(sink)
+
+
+def _tail_sink_cases(root: Path) -> None:
     with pytest.raises(BridgeRefusal):
-        validate_sink_path(str(readable))
-    big = tmp_path / "epoch" / "big.jsonl"
-    big.write_bytes(b"x" * (1024 * 1024 + 1))
-    os.chmod(big, 0o600)
+        validate_sink_path(_case_sink(root, "exposed", b"{}\n", 0o770, 0o600))
     with pytest.raises(BridgeRefusal):
-        validate_sink_path(str(big))
+        validate_sink_path(_case_sink(root, "readable", b"{}\n", 0o700, 0o640))
+    with pytest.raises(BridgeRefusal):
+        validate_sink_path(_case_sink(root, "big", b"x" * (1024 * 1024 + 1), 0o700, 0o600))
+    assert validate_sink_path(_case_sink(root, "ok2", b"{}\n", 0o700, 0o600))
 
 
 def test_sink_parser_bounds() -> None:
@@ -366,3 +445,150 @@ def test_main_refuses_without_database_url(tmp_path: Path, capsys) -> None:
     ])
     assert code == 2
     assert "database" in capsys.readouterr().err.lower()
+
+
+class _TrackingBytearray(bytearray):
+    """Observes wiping: any zero fill marks the buffer wiped."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.wiped = False
+
+    def __setitem__(self, key, value) -> None:
+        if value == 0 or (isinstance(value, bytes) and value and set(value) == {0}):
+            self.wiped = True
+        super().__setitem__(key, value)
+
+
+def test_drain_fd_wipes_owned_buffer_on_failure() -> None:
+    """The owned buffer is wiped in place on EVERY failure path
+    (mid-stream OSError, over-bound growth) and transferred intact
+    ONLY on success — proved with invented data through the seam."""
+    from remanence.pending.mailbox_bridge import MAX_FILE_BYTES
+
+    made: list[_TrackingBytearray] = []
+
+    def factory() -> _TrackingBytearray:
+        buf = _TrackingBytearray()
+        made.append(buf)
+        return buf
+
+    calls = {"n": 0}
+
+    def flaky_read(fd: int, size: int) -> bytes:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return b"fakebytes-partial-"
+        raise OSError("fake read failure")
+
+    with pytest.raises(BridgeRefusal) as caught:
+        _drain_fd(9, read=flaky_read, _make_buf=factory)
+    assert caught.value.code == OTP_UNAVAILABLE
+    assert len(made) == 1 and made[0].wiped
+    assert bytes(made[0]) == b"\x00" * len(made[0])
+    assert len(made[0]) == len(b"fakebytes-partial-")
+
+
+def test_drain_fd_overflow_wipes_and_refuses() -> None:
+    from remanence.pending.mailbox_bridge import MAX_FILE_BYTES
+
+    made: list[_TrackingBytearray] = []
+
+    def factory() -> _TrackingBytearray:
+        buf = _TrackingBytearray()
+        made.append(buf)
+        return buf
+
+    def gushing_read(fd: int, size: int) -> bytes:
+        return b"y" * 65536
+
+    with pytest.raises(BridgeRefusal) as caught:
+        _drain_fd(9, read=gushing_read, _make_buf=factory)
+    assert caught.value.code == OTP_UNAVAILABLE
+    assert len(made) == 1 and made[0].wiped
+    assert set(bytes(made[0])) == {0}
+    assert len(made[0]) > MAX_FILE_BYTES
+
+
+def test_drain_fd_success_transfers_intact() -> None:
+    payloads = [b"fake-one-", b"fake-two"]
+
+    def steady_read(fd: int, size: int) -> bytes:
+        return payloads.pop(0) if payloads else b""
+
+    buf = _drain_fd(9, read=steady_read)
+    assert bytes(buf) == b"fake-one-fake-two"
+    assert type(buf) is bytearray
+
+
+def test_injected_failures_map_coarse_without_strings() -> None:
+    """lookup_attempt/read_sink blowing up with a sentinel-carrying
+    exception surfaces ONLY the fixed coarse code at the handler
+    boundary — the sentinel never escapes."""
+    delivery_id, owner_id = uuid4(), uuid4()
+    now = _now()
+    row = _row(delivery_id=delivery_id, account_user_id=owner_id)
+    body = json.dumps({"attemptId": str(row.id)}).encode()
+    sentinel = f"SENTINEL-{uuid4().hex}"
+
+    def boom_lookup(attempt_id):
+        raise RuntimeError(f"fake lookup failure carrying {sentinel}")
+
+    def boom_read():
+        raise RuntimeError(f"fake read failure carrying {sentinel}")
+
+    def good_sink():
+        return bytearray(
+            _otp_line(f"dev-email-{row.id}").encode() + b"\n"
+        )
+
+    for lookup, read in ((boom_lookup, good_sink), (lambda attempt_id: row, boom_read)):
+        with pytest.raises(BridgeRefusal) as caught:
+            handle_otp_request(
+                body, "application/json", "127.0.0.1",
+                lookup_attempt=lookup, read_sink=read,
+                delivery_id=delivery_id, owner_id=owner_id, now=now,
+            )
+        assert caught.value.code == OTP_UNAVAILABLE
+        assert sentinel not in str(caught.value)
+
+
+def test_server_error_boundary_is_silent(capsys) -> None:
+    """The actual server-error boundary (handle_error override) emits
+    nothing: no raw tracebacks, even for disconnect-shaped errors."""
+    assert _BoundedServer.handle_error(object(), None, None) is None
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err == ""
+
+
+def test_deadline_for_matrix() -> None:
+    assert deadline_for(100.0, bound=10, now=95.0) == 15.0
+    assert deadline_for(100.0, bound=10, now=109.9) > 0
+    assert deadline_for(100.0, bound=10, now=110.0) == 0.0
+    assert deadline_for(100.0, bound=10, now=999.0) == 0.0
+    assert REQUEST_TIMEOUT_SECONDS == 10
+
+
+def test_main_explains_sink_shape_without_db(
+    tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Startup names the sink-shape check (config identifiers only)
+    without touching any DB: the schema check is stubbed, the sink is
+    a secure file at a non-epoch path."""
+    import remanence.pending.dev_bootstrap as _upstream
+
+    monkeypatch.setattr(_upstream, "check_schema_head", lambda url: None)
+    outside = tmp_path / "secure-but-elsewhere.jsonl"
+    outside.write_bytes(b"{}\n")
+    os.chmod(outside, 0o600)
+    code = main([
+        "--database-url",
+        "postgresql+psycopg://t181:isolated-t181@127.0.0.1:55481/remanence_tmp_explain",
+        "--delivery-id", str(uuid4()),
+        "--owner-id", str(uuid4()),
+        "--sink-path", str(outside),
+    ])
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "sink refused" in err
+    assert "remanence-pending-epoch" in err

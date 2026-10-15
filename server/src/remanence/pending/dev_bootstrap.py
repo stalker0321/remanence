@@ -273,6 +273,50 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_pending_ctx(
+    *,
+    hmac_key: bytes,
+    destination_key: bytes,
+    otp_key: bytes,
+    proof_mac_key: bytes,
+    evidence_key: bytes,
+    vault,
+    service_key_id,
+    service_signer,
+    email_sender,
+    sms_provider,
+    locator_code_key: bytes,
+) -> dict:
+    """Assemble the synthetic pending custody context from explicit
+    parts (shared by the pending-only and native launchers so both
+    wire the exact same keys — no silent divergence). Every key must
+    be 32 bytes; anything else fails closed. No I/O, no randomness
+    here: callers generate their own per-start epoch material."""
+    for name, key in (
+        ("hmac_key", hmac_key),
+        ("destination_key", destination_key),
+        ("otp_key", otp_key),
+        ("proof_mac_key", proof_mac_key),
+        ("evidence_key", evidence_key),
+        ("locator_code_key", locator_code_key),
+    ):
+        if not isinstance(key, bytes) or len(key) != 32:
+            raise BootstrapRefusal(f"refusing {name}: must be 32 bytes")
+    return {
+        "hmac_key": hmac_key,
+        "destination_key": destination_key,
+        "otp_key": otp_key,
+        "proof_mac_key": proof_mac_key,
+        "evidence_key": evidence_key,
+        "vault": vault,
+        "service_key_id": service_key_id,
+        "service_signer": service_signer,
+        "email_sender": email_sender,
+        "sms_provider": sms_provider,
+        "locator_code_key": locator_code_key,
+    }
+
+
 def build_composition(args: argparse.Namespace):
     """Validate guards and compose (settings, pending_ctx, pin, paths).
     No sockets, no serving — unit-testable. Raises BootstrapRefusal."""
@@ -299,19 +343,19 @@ def build_composition(args: argparse.Namespace):
         vault_key_id=DEV_VAULT_KEY_ID,
     )
     sender = FileSinkEmailSender(path=args.otp_sink, mode=mode.value)
-    ctx = {
-        "hmac_key": hmac_key,
-        "destination_key": secrets.token_bytes(32),
-        "otp_key": secrets.token_bytes(32),
-        "proof_mac_key": secrets.token_bytes(32),
-        "evidence_key": secrets.token_bytes(32),
-        "vault": DevSealedVault(mode=mode.value, key_id=DEV_VAULT_KEY_ID, key_32=vault_key),
-        "service_key_id": signer.key_id,
-        "service_signer": signer,
-        "email_sender": sender,
-        "sms_provider": MockSmsVerify(mode=mode.value),
-        "locator_code_key": secrets.token_bytes(32),
-    }
+    ctx = build_pending_ctx(
+        hmac_key=hmac_key,
+        destination_key=secrets.token_bytes(32),
+        otp_key=secrets.token_bytes(32),
+        proof_mac_key=secrets.token_bytes(32),
+        evidence_key=secrets.token_bytes(32),
+        vault=DevSealedVault(mode=mode.value, key_id=DEV_VAULT_KEY_ID, key_32=vault_key),
+        service_key_id=signer.key_id,
+        service_signer=signer,
+        email_sender=sender,
+        sms_provider=MockSmsVerify(mode=mode.value),
+        locator_code_key=secrets.token_bytes(32),
+    )
     blob_root = Path(args.blob_root)
     blob_root.mkdir(parents=True, exist_ok=True)
     settings = Settings(

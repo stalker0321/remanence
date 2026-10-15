@@ -31,16 +31,18 @@ Fail-closed rules (exit code 2, nothing served):
 
 Run from ``server/`` (root only)::
 
+    REMANENCE_DATABASE_URL="postgresql+psycopg://<user>:<password>@127.0.0.1:55481/remanence_tmp_native_persistent_<unique>" \\
+    PENDING_DEV_HMAC_SECRET=<generated-32+chars> \\
     uv run python scripts/pending_durable_server.py --init \\
-        --database-url postgresql+psycopg://t181:isolated-t181@127.0.0.1:55481/remanence_tmp_native_persistent_<unique> \\
-        --hmac-secret <32+char-secret> --pin-out /tmp/remanence-durable-pin.json \\
+        --pin-out /tmp/remanence-durable-pin.json \\
         --otp-sink /tmp/remanence-durable-otp.jsonl --blob-root /tmp/remanence-durable-blobs \\
         --google-audience <web-client>.apps.googleusercontent.com \\
         --google-presenters <android-client>.apps.googleusercontent.com \\
         --android-origin 'android:apk-key-hash:<43 base64url>' \\
         --state-dir /tmp/remanence-durable-state-<unique>
 
-Omit --init to resume the same state dir + DB. Root provisions the
+Secrets travel via environment only, never argv. Omit --init to
+resume the same state dir + DB. Root provisions the
 DB + ``alembic upgrade head`` first, installs the OS service after
 immutable review (never a transient exec session for custody), and
 hands the stable pin JSON to the device setup out-of-band.
@@ -292,7 +294,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     print(
         "pending-durable-server: serving "
-        f"{host}:{port} db={redacted_url(database_url)} "
+        f"{host}:{port} db={redacted_url(settings.database_url.get_secret_value())} "
         f"rp_id=remanence.hryshyn.dev google_audience={settings.google_client_ids[0]} "
         f"service_key_id={material['service_key_id']} vault={material['vault_key_id']} "
         f"pin_out={args.pin_out} otp_sink={args.otp_sink}",

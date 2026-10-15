@@ -569,3 +569,57 @@ def test_database_url_env_fallback_and_precedence(monkeypatch: pytest.MonkeyPatc
     )
     with pytest.raises(DurableRefusal):
         _boot.resolve_database_url(None)
+
+
+def test_main_happy_path_env_only_db_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """Bounded main happy path with uvicorn.run stubbed (no sockets):
+    env-only DB URL (no --database-url argv), successful composition,
+    fixed bind, redacted startup line, pin written — and neither the
+    DB password nor the HMAC secret on either stream."""
+    import uvicorn
+
+    import remanence.pending.durable_bootstrap as _boot
+
+    monkeypatch.setattr(_boot, "check_schema_head", lambda url: None)
+    monkeypatch.setattr(_boot, "check_db_empty", lambda engine: None)
+    served = {}
+
+    def _fake_run(app, *, host, port, access_log, log_level):
+        served.update(app=app, host=host, port=port,
+                      access_log=access_log, log_level=log_level)
+
+    monkeypatch.setattr(uvicorn, "run", _fake_run)
+    db_password = f"pw-{uuid4().hex}"
+    hmac_secret = f"hmac-{uuid4().hex}-32-chars-minimum-ok"
+    monkeypatch.setenv(
+        "REMANENCE_DATABASE_URL",
+        f"postgresql+psycopg://t181:{db_password}@127.0.0.1:55481/remanence_tmp_native_persistent_e9",
+    )
+    code = _boot.main([
+        "--hmac-secret", hmac_secret,
+        "--pin-out", str(tmp_path / "pin.json"),
+        "--otp-sink", str(tmp_path / "otp.jsonl"),
+        "--blob-root", str(tmp_path / "blobs"),
+        "--mode", "dev",
+        "--google-audience", "test-web.apps.googleusercontent.com",
+        "--google-presenters", "test-android.apps.googleusercontent.com",
+        "--android-origin", _canonical_origin(),
+        "--state-dir", str(tmp_path / "epoch-state"),
+        "--init",
+    ])
+    assert code == 0
+    assert served["host"] == "127.0.0.1" and served["port"] == 18047
+    assert served["access_log"] is False
+    assert served["app"] is not None
+    captured = capsys.readouterr()
+    assert "127.0.0.1:18047" in captured.out
+    assert "remanence_tmp_native_persistent_e9" in captured.out
+    assert db_password not in captured.out and db_password not in captured.err
+    assert hmac_secret not in captured.out and hmac_secret not in captured.err
+    import json as _json
+
+    pin = _json.loads(Path(tmp_path / "pin.json").read_text(encoding="utf-8"))
+    assert uuid.UUID(pin["service_key_id"])
+    assert (tmp_path / "epoch-state" / "bundle.json").is_file()

@@ -224,6 +224,37 @@ def test_zero_io_route_mounting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert "/healthz" in paths
 
 
+def test_main_rejects_protected_db_before_schema_io(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """Protected DB names refuse BEFORE any schema I/O: the schema
+    seam records its calls and must stay silent."""
+
+    def _must_not_run(url: str) -> None:
+        raise AssertionError("schema check must not run for protected names")
+
+    monkeypatch.setattr(native, "check_schema_head", _must_not_run)
+    args = _composition_args(
+        tmp_path,
+        database_url="postgresql+psycopg://t181:isolated-t181@127.0.0.1:55481/t181_clone",
+    )
+    code = native.main([
+        "--database-url", args.database_url,
+        "--hmac-secret", args.hmac_secret,
+        "--pin-out", args.pin_out,
+        "--otp-sink", args.otp_sink,
+        "--blob-root", args.blob_root,
+        "--mode", args.mode,
+        "--google-audience", args.google_audience,
+        "--google-presenters", args.google_presenters,
+        "--android-origin", args.android_origin,
+    ])
+    assert code == 2
+    assert "t181_clone" in capsys.readouterr().err
+    assert not Path(args.pin_out).exists()
+    assert not Path(args.otp_sink).exists()
+
+
 def test_main_sentinel_absence_on_refusal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:
@@ -255,18 +286,26 @@ def test_main_sentinel_absence_on_refusal(
 def test_main_maps_settings_validation_error_coarse(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:
-    """Defense-in-depth mapping: a Settings ValidationError (whose
-    message echoes the offending value) becomes a fixed coarse code
-    with the sentinel on neither stream."""
+    """Defense-in-depth mapping: a REAL Settings ValidationError
+    (whose message echoes the offending value) becomes a fixed coarse
+    code with the sentinel on neither stream. The error is built with
+    its required ctx so from_exception_data really constructs (an
+    earlier revision omitted ctx and proved only a TypeError)."""
     from pydantic import ValidationError as _ValidationError
 
     monkeypatch.setattr(native, "check_schema_head", lambda url: None)
+    marker = f"MARKER-ECHO-{uuid4().hex}"
+    error = _ValidationError.from_exception_data(
+        "Settings",
+        [{"type": "value_error", "loc": ("google_client_ids",),
+          "msg": f"value {marker} is not allowed", "input": marker,
+          "ctx": {"error": ValueError(marker)}}],
+    )
+    assert isinstance(error, _ValidationError)
+    assert marker in str(error)
 
     def _boom(**kwargs):
-        raise _ValidationError.from_exception_data(
-            "Settings", [{"type": "value_error", "loc": ("x",),
-                          "msg": "value MARKER-ECHO-SECRET is not allowed",
-                          "input": "MARKER-ECHO-SECRET"}])
+        raise error
 
     monkeypatch.setattr(native, "build_settings", _boom)
     args = _composition_args(tmp_path)
@@ -284,8 +323,8 @@ def test_main_maps_settings_validation_error_coarse(
     assert code == 2
     captured = capsys.readouterr()
     assert "STARTUP_SETTINGS_FAILED" in captured.err
-    assert "MARKER-ECHO-SECRET" not in captured.err
-    assert "MARKER-ECHO-SECRET" not in captured.out
+    assert marker not in captured.err
+    assert marker not in captured.out
 
 
 def test_shared_ctx_builder_validates_keys() -> None:
@@ -306,3 +345,111 @@ def test_shared_ctx_builder_validates_keys() -> None:
             **bad, vault=None, service_key_id=None, service_signer=None,
             email_sender=None, sms_provider=None,
         )
+    short_hmac = dict(good, hmac_key=bytes([7]) * 31)
+    with pytest.raises(BootstrapRefusal):
+        build_pending_ctx(
+            **short_hmac, vault=None, service_key_id=None, service_signer=None,
+            email_sender=None, sms_provider=None,
+        )
+
+
+def test_long_hmac_keys_preserved_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Old-parser contract preserved: HMAC keys LONGER than 32 bytes
+    (33 ASCII bytes; 34 bytes via multi-byte UTF-8) resolve and flow
+    byte-identical through the shared composer, the old composition
+    seam, and the native composition — no truncation, hash, or
+    re-encoding. Generated keys stay exactly 32."""
+    import argparse
+
+    import remanence.pending.dev_bootstrap as dev
+
+    monkeypatch.setattr(native, "check_schema_head", lambda url: None)
+    monkeypatch.setattr(dev, "check_schema_head", lambda url: None)
+    long_ascii = "a" * 33
+    long_utf8 = "b" * 31 + "é"
+    assert len(long_utf8.encode("utf-8")) == 33
+    from remanence.pending.dev_bootstrap import BootstrapRefusal, build_pending_ctx
+
+    for secret in (long_ascii, long_utf8):
+        expected = secret.encode("utf-8")
+        assert len(expected) > 32
+        keys = {name: bytes([9]) * 32 for name in (
+            "destination_key", "otp_key", "proof_mac_key",
+            "evidence_key", "locator_code_key")}
+        ctx = build_pending_ctx(
+            hmac_key=expected, **keys, vault=None, service_key_id=None,
+            service_signer=None, email_sender=None, sms_provider=None,
+        )
+        assert ctx["hmac_key"] is expected
+        old_args = argparse.Namespace(
+            host="127.0.0.1", port=18042, database_url=_EPOCH_DB,
+            hmac_secret=secret, pin_out=str(tmp_path / "p.json"),
+            otp_sink=str(tmp_path / "o.jsonl"), blob_root=str(tmp_path / "b"),
+            mode="dev",
+        )
+        _, _, old_settings, old_ctx, _, _ = dev.build_composition(old_args)
+        assert old_ctx["hmac_key"] == expected
+        assert old_settings.pending_hmac_secret.get_secret_value() == secret
+        native_args = _composition_args(tmp_path, hmac_secret=secret)
+        _, _, _, _, native_ctx, _, _ = build_composition(native_args)
+        assert native_ctx["hmac_key"] == expected
+
+
+def test_schema_refusal_emits_no_pin_or_otp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """A mocked schema refusal stops the run BEFORE any pin/OTP file
+    is written (ordering proof, not just exit code)."""
+    from remanence.pending.dev_bootstrap import (
+        BootstrapRefusal as _UpstreamRefusal,
+    )
+
+    def _refuse(url: str) -> None:
+        raise _UpstreamRefusal("refusing fake-schema")
+
+    monkeypatch.setattr(native, "check_schema_head", _refuse)
+    args = _composition_args(tmp_path)
+    code = native.main([
+        "--database-url", args.database_url,
+        "--hmac-secret", args.hmac_secret,
+        "--pin-out", args.pin_out,
+        "--otp-sink", args.otp_sink,
+        "--blob-root", args.blob_root,
+        "--mode", args.mode,
+        "--google-audience", args.google_audience,
+        "--google-presenters", args.google_presenters,
+        "--android-origin", args.android_origin,
+    ])
+    assert code == 2
+    assert "refused" in capsys.readouterr().err
+    assert not Path(args.pin_out).exists()
+    assert not Path(args.otp_sink).exists()
+
+
+def test_explicit_settings_win_conflicting_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Explicit valid config wins over a hostile environment on every
+    security-relevant flag: Google audience/presenters, RP/origins,
+    mode, and pending/recovery toggles all equal the explicit args."""
+    monkeypatch.setattr(native, "check_schema_head", lambda url: None)
+    monkeypatch.setenv("REMANENCE_GOOGLE_CLIENT_IDS", '["env-evil.apps.googleusercontent.com"]')
+    monkeypatch.setenv("REMANENCE_GOOGLE_PRESENTER_IDS", '["env-evil2.apps.googleusercontent.com"]')
+    monkeypatch.setenv("REMANENCE_GOOGLE_SIGN_IN_ENABLED", "false")
+    monkeypatch.setenv("REMANENCE_RECOVERY_ENABLED", "false")
+    monkeypatch.setenv("REMANENCE_RECOVERY_RP_ID", "env.example")
+    monkeypatch.setenv("REMANENCE_RECOVERY_ORIGINS", '["https://env.example"]')
+    monkeypatch.setenv("REMANENCE_MODE", "test")
+    monkeypatch.setenv("REMANENCE_PENDING_PROTOCOL_ENABLED", "false")
+    args = _composition_args(tmp_path)
+    _, _, _, settings, _, _, _ = build_composition(args)
+    assert settings.mode.value == "dev"
+    assert settings.google_sign_in_enabled is True
+    assert settings.google_client_ids == [args.google_audience]
+    assert settings.google_presenter_ids == [args.google_presenters]
+    assert settings.recovery_enabled is True
+    assert settings.recovery_rp_id == NATIVE_RP_ID
+    assert settings.recovery_origins == ["https://remanence.hryshyn.dev", args.android_origin]
+    assert settings.pending_protocol_enabled is True

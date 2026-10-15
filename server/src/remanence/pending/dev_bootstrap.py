@@ -289,11 +289,16 @@ def build_pending_ctx(
 ) -> dict:
     """Assemble the synthetic pending custody context from explicit
     parts (shared by the pending-only and native launchers so both
-    wire the exact same keys — no silent divergence). Every key must
-    be 32 bytes; anything else fails closed. No I/O, no randomness
-    here: callers generate their own per-start epoch material."""
+    wire the exact same keys — no silent divergence). The caller HMAC
+    keeps the old parser contract (bytes length >= 32, passed through
+    byte-identical: no truncation, hash, or re-encoding); internally
+    generated destination/otp/proof/evidence/locator keys remain
+    exactly 32 bytes. Anything else fails closed. No I/O, no
+    randomness here: callers generate their own per-start epoch
+    material."""
+    if not isinstance(hmac_key, bytes) or len(hmac_key) < 32:
+        raise BootstrapRefusal("refusing hmac_key: must be >= 32 bytes")
     for name, key in (
-        ("hmac_key", hmac_key),
         ("destination_key", destination_key),
         ("otp_key", otp_key),
         ("proof_mac_key", proof_mac_key),

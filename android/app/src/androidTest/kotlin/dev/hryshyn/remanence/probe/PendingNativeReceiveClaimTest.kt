@@ -19,6 +19,7 @@ import dev.hryshyn.remanence.pending.PendingProofViewModel
 import dev.hryshyn.remanence.session.SessionState
 import dev.hryshyn.remanence.ui.capsule.CapsulePresentationAdmission
 import dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource
+import dev.hryshyn.remanence.ui.scan.ScanCandidateIndex
 import java.io.File
 import java.io.InputStream
 import java.util.UUID
@@ -588,6 +589,10 @@ class PendingNativeReceiveClaimTest {
                 // still wipe.
                 val authority = container.presentationGrants
                 val frontBytes = CanonicalFrontFixture.distinctFront(11)
+                // Caller-owned scan index (stored FRONTs); wiped in the
+                // outer cleanup on load/match/verify/grant/open failures,
+                // like production ScanViewModel.
+                var indexOwner: ScanCandidateIndex? = null
                 try {
                     val query = try {
                         SiftRootSiftFingerprintCodec.parse(frontBytes)
@@ -600,13 +605,15 @@ class PendingNativeReceiveClaimTest {
                         // later issue inside completeVisual pins it.
                         val epoch = authority.currentEpoch()
                         checkLease(lease, expectedOwner)
-                        val candidates = try {
-                            container.pendingScanBridge.load(expectedOwner).candidates
+                        val index = try {
+                            container.pendingScanBridge.load(expectedOwner)
                         } catch (cancelled: CancellationException) {
                             throw cancelled
                         } catch (_: Exception) {
                             throw AssertionError("receiver candidate enumeration unavailable")
                         }
+                        indexOwner = index
+                        val candidates = index.candidates
                         assertTrue(candidates.any { it.capsuleId == capsuleUuid })
                         // Grant owned from issuance: engine completion,
                         // resolve, open, reader, and fence failures below
@@ -641,8 +648,8 @@ class PendingNativeReceiveClaimTest {
                                 } catch (_: Exception) {
                                     throw AssertionError("receiver grant unavailable")
                                 }
-                                checkLease(lease, expectedOwner)
                                 grantOwner = issued
+                                checkLease(lease, expectedOwner)
                                 issued.toString()
                             },
                         )
@@ -762,6 +769,10 @@ class PendingNativeReceiveClaimTest {
                         }
                     }
                 } finally {
+                    try {
+                        indexOwner?.wipeFingerprints()
+                    } catch (_: Exception) {
+                    }
                     frontBytes.fill(0)
                 }
             } finally {

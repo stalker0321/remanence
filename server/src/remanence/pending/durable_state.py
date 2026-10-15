@@ -531,10 +531,12 @@ def app_table_names() -> list[str]:
     import remanence.capsules.blob_models
     import remanence.capsules.delivery_models
     import remanence.capsules.envelope_models
+    import remanence.capsules.idempotency_models
     import remanence.capsules.models
     import remanence.pending.claim_models
     import remanence.pending.models
     import remanence.recovery.models
+    import remanence.telemetry.models
     import remanence.users.key_models
     import remanence.users.models
     import remanence.users.safety_models

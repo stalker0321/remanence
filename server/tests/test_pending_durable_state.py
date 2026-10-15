@@ -623,3 +623,37 @@ def test_main_happy_path_env_only_db_url(
     pin = _json.loads(Path(tmp_path / "pin.json").read_text(encoding="utf-8"))
     assert uuid.UUID(pin["service_key_id"])
     assert (tmp_path / "epoch-state" / "bundle.json").is_file()
+
+
+def test_table_coverage_fresh_process(tmp_path: Path) -> None:
+    """Fresh-process coverage: a clean interpreter importing ONLY the
+    coverage function must see all 30 application tables, including
+    the two the hand-kept list once missed
+    (`anonymous_telemetry_reports`, `capsule_idempotency_records`).
+    This does NOT rely on pytest-global Base.metadata seeding, which
+    masked the omission in-process."""
+    import json as _json
+    import subprocess
+    import sys as _sys
+
+    child_path = tmp_path / "coverage_child_probe.py"
+    child_path.write_text(
+        "import json\n"
+        "from remanence.pending.durable_state import app_table_names\n"
+        "print(json.dumps(sorted(app_table_names())))",
+        encoding="utf-8",
+    )
+    src = str(Path(__file__).resolve().parents[1] / "src")
+    env = {**os.environ, "PYTHONPATH": src}
+    completed = subprocess.run(
+        [_sys.executable, str(child_path)],
+        capture_output=True, text=True, timeout=120, env=env,
+    )
+    assert completed.returncode == 0, completed.stderr[-2000:]
+    names = _json.loads(completed.stdout.strip().splitlines()[-1])
+    assert "anonymous_telemetry_reports" in names
+    assert "capsule_idempotency_records" in names
+    assert "alembic_version" not in names
+    # Exact head count: any migration adding a table must update this
+    # guard consciously (fail loudly, not silently uncovered).
+    assert len(names) == 30

@@ -37,7 +37,12 @@ evidence/locator/vault keys, service private keyset + UUID). DB-backed
 rows (opaque session tokens, recovery/Google/claim challenges, proof
 attempts, idempotency, locators, bindings) and per-request nonces/OTP
 codes need no persistence; in-memory reservations/rate limits are
-documented ephemeral (client retries).
+documented ephemeral (client retries). Explicit test-only limit:
+MockSmsVerify keeps its issued-code map in process memory BY DESIGN,
+so an SMS proof started before a restart cannot complete after it —
+use the email OTP path (codes persist in the sink file and verify
+against DB state). Real OTPs and client private keys are never
+persisted anywhere here.
 """
 
 from __future__ import annotations
@@ -217,10 +222,15 @@ def _validate_public_keyset(public_raw: bytes) -> None:
 def import_service_signer(private_raw: bytes):
     """Rebuild the private signing handle from bundle bytes (strictly
     validated first) through the public `tink.cleartext_keyset_handle`
-    module — no private API, no raw-crypto variant."""
+    module — no private API, no raw-crypto variant. Registers the
+    required Tink primitives explicitly: resume (unlike init, which
+    registers while generating) must never depend on whatever the
+    importing process registered before — a cold process importing
+    ONLY this path gets a working signer."""
     import tink
-    from tink import cleartext_keyset_handle
+    from tink import cleartext_keyset_handle, tink_config
 
+    tink_config.register()
     _validate_private_keyset_bytes(private_raw)
     try:
         return cleartext_keyset_handle.read(tink.BinaryKeysetReader(bytes(private_raw)))
@@ -378,20 +388,51 @@ def init_bundle(state_dir: str, bundle: dict) -> str:
     return target
 
 
-def _check_state_file(path: str) -> os.stat_result:
+def _read_bundle_file(path: str) -> dict:
+    """Open the bundle with O_NOFOLLOW and validate the ACTUALLY
+    OPENED descriptor (fstat: regular file, same ownership, 0600-class
+    modes), then read bounded (refuse past MAX_BUNDLE_BYTES). No
+    lstat-then-open gap: the descriptor — not the path — is the
+    authority. Any failure is a fixed refusal, never file content."""
     try:
-        file_stat = os.lstat(path)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     except OSError:
         raise DurableRefusal("refusing state: unreadable") from None
-    if (
-        not stat.S_ISREG(file_stat.st_mode)
-        or stat.S_ISLNK(file_stat.st_mode)
-        or file_stat.st_uid not in (0, os.geteuid())
-        or file_stat.st_mode & 0o077
-        or file_stat.st_size > MAX_BUNDLE_BYTES
-    ):
-        raise DurableRefusal("refusing state: insecure bundle file") from None
-    return file_stat
+    try:
+        try:
+            opened = os.fstat(fd)
+        except OSError:
+            raise DurableRefusal("refusing state: unreadable") from None
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_uid not in (0, os.geteuid())
+            or opened.st_mode & 0o077
+            or opened.st_size > MAX_BUNDLE_BYTES
+        ):
+            raise DurableRefusal("refusing state: insecure bundle file") from None
+        chunks = bytearray()
+        while len(chunks) <= MAX_BUNDLE_BYTES:
+            try:
+                piece = os.read(fd, 65536)
+            except OSError:
+                raise DurableRefusal("refusing state: unreadable") from None
+            if not piece:
+                break
+            chunks += piece
+        if len(chunks) > MAX_BUNDLE_BYTES:
+            raise DurableRefusal("refusing state: bundle oversize") from None
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    try:
+        bundle = json.loads(bytes(chunks).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        raise DurableRefusal("refusing state: bundle unreadable") from None
+    if not isinstance(bundle, dict):
+        raise DurableRefusal("refusing state: bundle unreadable") from None
+    return bundle
 
 
 def load_bundle(state_dir: str, *, expected: dict) -> dict:
@@ -419,16 +460,11 @@ def load_bundle(state_dir: str, *, expected: dict) -> dict:
         not stat.S_ISDIR(dir_stat.st_mode)
         or stat.S_ISLNK(dir_stat.st_mode)
         or dir_stat.st_uid not in (0, os.geteuid())
-        or dir_stat.st_mode & 0o022
+        or dir_stat.st_mode & 0o077
     ):
         raise DurableRefusal("refusing state: insecure state dir") from None
     target = os.path.join(resolved, BUNDLE_FILENAME)
-    _check_state_file(target)
-    try:
-        with open(target, encoding="utf-8") as handle:
-            bundle = json.load(handle)
-    except (OSError, ValueError, UnicodeDecodeError):
-        raise DurableRefusal("refusing state: bundle unreadable") from None
+    bundle = _read_bundle_file(target)
     if not isinstance(bundle, dict) or set(bundle) != BUNDLE_KEYS:
         raise DurableRefusal("refusing state: bundle shape") from None
     if bundle.get("schema_version") != BUNDLE_SCHEMA_VERSION:
@@ -485,22 +521,42 @@ def load_bundle(state_dir: str, *, expected: dict) -> dict:
     return material
 
 
-def check_db_empty(engine) -> None:
-    """Fresh-DB gate for init: the core identity/capsule/delivery
-    tables must hold zero rows (read-only SELECTs, no writes). Any
-    content — or any access failure — fails closed."""
-    from sqlalchemy import func, select
+def app_table_names() -> list[str]:
+    """Every application table that must be empty for init (sorted).
+    Derived from the real model metadata — not a hand-kept list — so
+    a table added later (e.g. more Google/auth rows) is covered
+    automatically. Migration bookkeeping is exempt by name."""
+    import remanence.auth.google_models
+    import remanence.auth.models
+    import remanence.capsules.blob_models
+    import remanence.capsules.delivery_models
+    import remanence.capsules.envelope_models
+    import remanence.capsules.models
+    import remanence.pending.claim_models
+    import remanence.pending.models
+    import remanence.recovery.models
+    import remanence.users.key_models
+    import remanence.users.models
+    import remanence.users.safety_models
+    from remanence.db.base import Base
 
-    from remanence.capsules.delivery_models import RecipientDeliveryState
-    from remanence.capsules.models import Capsule
-    from remanence.pending.claim_models import PendingDelivery
-    from remanence.users.models import User
+    return sorted(
+        name for name in Base.metadata.tables if name != "alembic_version"
+    )
+
+
+def check_db_empty(engine) -> None:
+    """Fresh-DB gate for init: EVERY application table must hold zero
+    rows (read-only SELECTs, no writes) — an anonymous Google AUTH
+    challenge with no users/capsules/deliveries still blocks init.
+    Any content — or any access failure — fails closed."""
+    from sqlalchemy import func, select, table
 
     try:
         with engine.connect() as connection:
-            for model in (User, Capsule, PendingDelivery, RecipientDeliveryState):
+            for name in app_table_names():
                 count = connection.execute(
-                    select(func.count()).select_from(model)
+                    select(func.count()).select_from(table(name))
                 ).scalar()
                 if count:
                     raise DurableRefusal("refusing init: database not empty")

@@ -343,9 +343,23 @@ def _stub_engine(counts: list[int]):
 
 
 def test_check_db_empty_stubbed() -> None:
-    check_db_empty(_stub_engine([0, 0, 0, 0]))
-    with pytest.raises(DurableRefusal):
-        check_db_empty(_stub_engine([0, 1, 0, 0]))
+    from remanence.pending.durable_state import app_table_names
+
+    names = app_table_names()
+    # Metadata-derived coverage (not a hand-kept four): anonymous
+    # Google AUTH challenges and the other rows live here too, while
+    # migration bookkeeping stays exempt.
+    assert "google_flows" in names
+    assert "alembic_version" not in names
+    assert len(names) >= 28
+    check_db_empty(_stub_engine([0] * len(names)))
+    # Nonzero ONLY outside the old four-table set still blocks init:
+    # an anonymous Google challenge with no users/capsules/deliveries.
+    only_google = [0] * len(names)
+    only_google[names.index("google_flows")] = 1
+    with pytest.raises(DurableRefusal) as caught:
+        check_db_empty(_stub_engine(only_google))
+    assert "not empty" in str(caught.value)
 
     class _Broken:
         def connect(self):
@@ -488,3 +502,70 @@ def test_main_refusal_carries_no_secrets(
     assert "state dir exists" in captured.err
     assert sentinel not in captured.err and sentinel not in captured.out
     assert not Path(tmp_path / "pin.json").exists()
+
+
+def test_cold_process_resume_without_prior_registration(tmp_path: Path) -> None:
+    """TRUE new-process regression: init in this process, then a FRESH
+    Python child importing ONLY the resume path loads the bundle and
+    produces a verifiable signature — no shared Tink registry with
+    init (the suite autouse fixture cannot leak across exec)."""
+    import json as _json
+    import subprocess
+    import sys as _sys
+
+    material = _material()
+    binding = _binding()
+    hmac_key = b"k" * 32
+    state_dir = str(tmp_path / "state")
+    init_bundle(state_dir, build_bundle(material=material, binding=binding, hmac_key=hmac_key))
+    params = {
+        "state_dir": state_dir,
+        "binding": binding,
+        "hmac_b64": base64.b64encode(hmac_key).decode("ascii"),
+    }
+    params_path = tmp_path / "cold-params.json"
+    params_path.write_text(_json.dumps(params), encoding="utf-8")
+    child_path = tmp_path / "cold_resume_child.py"
+    child_path.write_text(
+        "import base64, json, sys\n"
+        "params = json.load(open(sys.argv[1], encoding='utf-8'))\n"
+        "from remanence.pending.durable_state import load_bundle\n"
+        "from remanence.pending import domains\n"
+        "material = load_bundle(params['state_dir'], expected={\n"
+        "    **params['binding'],\n"
+        "    'hmac_key': base64.b64decode(params['hmac_b64']),\n"
+        "})\n"
+        "challenge = domains.domain_prefix(domains.CLAIM_BINDING_DOMAIN) + b'cold-R'\n"
+        "sig = material['service_signer'].sign(challenge)\n"
+        "assert len(sig) == 69, len(sig)\n"
+        "print(f'COLD_OK sig={len(sig)} uuid={material[\"service_key_id\"]}')\n",
+        encoding="utf-8",
+    )
+    src = str(Path(__file__).resolve().parents[1] / "src")
+    env = {**os.environ, "PYTHONPATH": src}
+    completed = subprocess.run(
+        [_sys.executable, str(child_path), str(params_path)],
+        capture_output=True, text=True, timeout=120, env=env,
+    )
+    assert completed.returncode == 0, completed.stderr[-2000:]
+    assert "COLD_OK sig=69" in completed.stdout
+    assert str(material["service_key_id"]) in completed.stdout
+
+
+def test_database_url_env_fallback_and_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
+    import remanence.pending.durable_bootstrap as _boot
+
+    env_url = "postgresql+psycopg://t181:isolated-t181@127.0.0.1:55481/remanence_tmp_native_persistent_env"
+    explicit_url = "postgresql+psycopg://t181:isolated-t181@127.0.0.1:55481/remanence_tmp_native_persistent_exp"
+    monkeypatch.delenv("REMANENCE_DATABASE_URL", raising=False)
+    with pytest.raises(DurableRefusal):
+        _boot.resolve_database_url(None)
+    monkeypatch.setenv("REMANENCE_DATABASE_URL", env_url)
+    assert _boot.resolve_database_url(None) == env_url
+    assert _boot.resolve_database_url(explicit_url) == explicit_url
+    monkeypatch.setenv(
+        "REMANENCE_DATABASE_URL",
+        "postgresql+psycopg://t181:isolated-t181@127.0.0.1:55481/t181_clone",
+    )
+    with pytest.raises(DurableRefusal):
+        _boot.resolve_database_url(None)

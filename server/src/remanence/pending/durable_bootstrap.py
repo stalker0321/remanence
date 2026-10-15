@@ -135,11 +135,28 @@ def binding_from_args(
     }
 
 
+def resolve_database_url(explicit: str | None) -> str:
+    """Database URL with environment fallback (root's private service
+    envfile — no secrets in argv): explicit --database-url wins when
+    both are set; absent both is refused. The durable name guard
+    applies either way."""
+    import os as _os
+
+    raw = explicit or _os.environ.get("REMANENCE_DATABASE_URL")
+    if not raw:
+        raise DurableRefusal(
+            "refusing without database URL: set REMANENCE_DATABASE_URL "
+            "to the persistent epoch DB (or pass --database-url)"
+        )
+    durable_database_name_of(raw)
+    return raw
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Restartable isolated native test backend (fixed loopback bind)."
     )
-    parser.add_argument("--database-url", required=True)
+    parser.add_argument("--database-url", default=None)
     parser.add_argument("--hmac-secret", default=None)
     parser.add_argument("--pin-out", required=True)
     parser.add_argument("--otp-sink", required=True)
@@ -167,9 +184,10 @@ def build_composition(args: argparse.Namespace):
     from remanence.pending.vault import DevSealedVault
 
     host, port = fixed_bind()
-    db_name = durable_database_name_of(args.database_url)
+    database_url = resolve_database_url(args.database_url)
+    db_name = durable_database_name_of(database_url)
     try:
-        check_schema_head(args.database_url)
+        check_schema_head(database_url)
     except _UpstreamRefusal as exc:
         raise DurableRefusal(str(exc)) from None
     try:
@@ -186,12 +204,12 @@ def build_composition(args: argparse.Namespace):
     blob_root.mkdir(parents=True, exist_ok=True)
     binding = binding_from_args(
         args,
-        database_url=args.database_url,
+        database_url=database_url,
         google_audience=audience,
         google_presenters=presenters,
         android_origin=android_origin,
     )
-    engine = create_engine(args.database_url)
+    engine = create_engine(database_url)
     try:
         if args.init:
             check_db_empty(engine)
@@ -224,7 +242,7 @@ def build_composition(args: argparse.Namespace):
         locator_code_key=material["locator_code_key"],
     )
     settings = build_settings(
-        database_url=args.database_url,
+        database_url=database_url,
         blob_root=blob_root,
         mode=mode_value,
         hmac_secret=hmac_key.decode("utf-8"),
@@ -274,7 +292,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     print(
         "pending-durable-server: serving "
-        f"{host}:{port} db={redacted_url(args.database_url)} "
+        f"{host}:{port} db={redacted_url(database_url)} "
         f"rp_id=remanence.hryshyn.dev google_audience={settings.google_client_ids[0]} "
         f"service_key_id={material['service_key_id']} vault={material['vault_key_id']} "
         f"pin_out={args.pin_out} otp_sink={args.otp_sink}",

@@ -5,6 +5,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.hryshyn.remanence.BuildConfig
 import dev.hryshyn.remanence.RemanenceApplication
+import dev.hryshyn.remanence.core.data.network.GiftLookupResult
 import dev.hryshyn.remanence.core.data.network.SessionRequestLease
 import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec
 import dev.hryshyn.remanence.core.model.UserId
@@ -68,9 +69,12 @@ import java.util.concurrent.TimeUnit
  * args → persisted expected account/bundle/handle + `Available` wrapped
  * identity → ordinary bootstrap (exact `Active`) → durable one-shot
  * attempt marker (test-owned app-private filesDir, BEFORE any receiver
- * network effect; a pre-existing marker refuses replay) → real
- * `newPendingProofViewModel` flow (`start` locator reference →
- * `ProofRequired` with the expected delivery → exact reconstructed
+ * network effect; a pre-existing marker refuses replay; the explicit
+ * root-gated resume path validates the original attempted marker
+ * read-only and writes a separate one-shot marker instead) → real
+ * `newPendingProofViewModel` flow (real R6 lookup of the locator →
+ * `start` with `Found.giftReference` → `ProofRequired` with the
+ * expected delivery → exact reconstructed
  * destination → explicit alias opt-in → `requestAttempt` →
  * `CodeRequired`) → fixed quiet synthetic mailbox client (frozen
  * single-field OTP wire) → `onCodeChange` → `checkCode` →
@@ -124,7 +128,7 @@ class PendingNativeReceiveClaimTest {
         }
     }
 
-    private fun markerFile(): File {
+    private fun markerFile(resume: Boolean): File {
         val parent = context.filesDir
         val dir = File(parent, "pendingtest-receipt")
         if (!dir.isDirectory) {
@@ -133,7 +137,9 @@ class PendingNativeReceiveClaimTest {
             }
             syncDir(parent)
         }
-        return File(dir, "receipt.json")
+        // Fixed names only, never from caller args. The explicit resume
+        // path owns a SEPARATE one-shot marker.
+        return File(dir, if (resume) "receipt-r41.json" else "receipt.json")
     }
 
     /**
@@ -143,15 +149,15 @@ class PendingNativeReceiveClaimTest {
      * place as diagnostics (never deleted — no delete-to-rerun) and
      * fails closed. Never codes, contacts, tokens, keys, or OTP.
      */
-    private fun writeMarker(capsuleId: String, deliveryId: String, stage: String) {
+    private fun writeMarker(capsuleId: String, deliveryId: String, stage: String, resume: Boolean) {
         val json = JSONObject()
             .put("capsuleId", capsuleId)
             .put("deliveryId", deliveryId)
             .put("stage", stage)
-        val marker = markerFile()
+        val marker = markerFile(resume)
         val dir = marker.parentFile
             ?: throw AssertionError("receipt marker not durable")
-        val tmp = File(dir, "receipt.json.tmp")
+        val tmp = File(dir, marker.name + ".tmp")
         try {
             java.io.FileOutputStream(tmp).use { out ->
                 out.write(json.toString().toByteArray(Charsets.UTF_8))
@@ -166,6 +172,41 @@ class PendingNativeReceiveClaimTest {
             throw cancelled
         } catch (_: Exception) {
             throw AssertionError("receipt marker not durable")
+        }
+    }
+
+    /**
+     * Explicit root-gated R40 resume gate (READ-ONLY): the ORIGINAL
+     * marker must be a regular file whose JSON holds exactly the
+     * expected PUBLIC capsule/delivery and stage `attempted`.
+     * Missing/malformed/wrong/claimed/opened originals fail BEFORE
+     * any receiver effect. The original file and tmp are never
+     * written or deleted here — preserved forever.
+     */
+    private fun requireOriginalAttemptedMarker(expectedCapsule: String, expectedDelivery: String) {
+        val original = markerFile(false)
+        if (!original.isFile) {
+            throw AssertionError("resume needs the original attempted marker")
+        }
+        val text = try {
+            original.readText(Charsets.UTF_8)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            throw AssertionError("resume needs the original attempted marker")
+        }
+        val root = try {
+            JSONObject(text)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            throw AssertionError("original marker is not the expected attempted attempt")
+        }
+        if (root.optString("capsuleId") != expectedCapsule ||
+            root.optString("deliveryId") != expectedDelivery ||
+            root.optString("stage") != "attempted"
+        ) {
+            throw AssertionError("original marker is not the expected attempted attempt")
         }
     }
 
@@ -340,6 +381,14 @@ class PendingNativeReceiveClaimTest {
             val expectedCapsule = stringArgument("t194_capsule_id")
             val expectedDelivery = stringArgument("t194_delivery_id")
             val expectedLocator = stringArgument("t194_locator_code")
+            // Explicit root-gated R40 resume ONLY: absent means the
+            // original one-shot path; any value besides the single
+            // enabling literal fails closed.
+            val resumeR40LookupOnly = when (stringArgument("t194_resume_r40_lookup_only")) {
+                null -> false
+                "r40-lookup-only" -> true
+                else -> throw AssertionError("unknown resume request")
+            }
             if (expectedOwner.isNullOrBlank() || expectedBundle.isNullOrBlank() ||
                 expectedCapsule.isNullOrBlank() || expectedDelivery.isNullOrBlank() ||
                 expectedLocator.isNullOrBlank()
@@ -444,24 +493,56 @@ class PendingNativeReceiveClaimTest {
             }
 
             // 3. Durable one-shot attempt marker BEFORE any receiver
-            // network effect. A pre-existing marker refuses replay (no
-            // deletion, no auto-retry — root decides deliberately).
-            // PUBLIC opaque fields only: capsule/delivery/phase.
-            val marker = markerFile()
-            if (marker.isFile) {
-                throw AssertionError("prior receipt attempt already recorded; refusing replay")
+            // network effect (no deletion, no auto-retry — root decides
+            // deliberately). PUBLIC opaque fields only:
+            // capsule/delivery/phase.
+            if (!resumeR40LookupOnly) {
+                val marker = markerFile(false)
+                if (marker.isFile) {
+                    throw AssertionError("prior receipt attempt already recorded; refusing replay")
+                }
+            } else {
+                // Explicit root-gated R40 resume: the ORIGINAL marker
+                // must still show the untouched attempted stage
+                // (validated read-only, preserved forever); this path
+                // writes ONLY its separate one-shot marker, refused
+                // when already present or partial.
+                requireOriginalAttemptedMarker(expectedCapsule, expectedDelivery)
+                val second = markerFile(true)
+                val secondDir = second.parentFile
+                    ?: throw AssertionError("receipt marker not durable")
+                if (second.isFile || File(secondDir, second.name + ".tmp").isFile) {
+                    throw AssertionError("resume marker already present or partial; refusing replay")
+                }
             }
             val vmScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
             try {
-                writeMarker(expectedCapsule, expectedDelivery, "attempted")
+                writeMarker(expectedCapsule, expectedDelivery, "attempted", resumeR40LookupOnly)
                 checkLease(lease, expectedOwner)
 
-                // 4. Real proof flow over ALL production ports: R6
-                // reference → ProofRequired (expected delivery) →
-                // exact reconstructed destination → explicit alias
-                // opt-in → requestAttempt → CodeRequired.
+                // 4. Real proof flow over ALL production ports: real R6
+                // lookup of the human locator FIRST (like the production
+                // entry) → Found.giftReference → vm.start reference →
+                // ProofRequired (expected delivery asserted) → exact
+                // reconstructed destination → explicit alias opt-in →
+                // requestAttempt → CodeRequired.
                 val vm = container.newPendingProofViewModel(vmScope)
-                vm.start(expectedLocator)
+                checkLease(lease, expectedOwner)
+                val lookupResult = try {
+                    container.pendingGiftLookupPort.lookup(expectedLocator)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    throw AssertionError("receiver lookup unavailable")
+                }
+                checkLease(lease, expectedOwner)
+                // Only a real R6 Found continues: its opaque reference
+                // (never the human locator, never invented) drives R7.
+                val giftReference = (lookupResult as? GiftLookupResult.Found)?.giftReference
+                if (giftReference.isNullOrBlank()) {
+                    throw AssertionError("receiver lookup failed")
+                }
+                vm.start(giftReference)
                 val required = withTimeout(120_000) {
                     try {
                         vm.state.first {
@@ -567,7 +648,7 @@ class PendingNativeReceiveClaimTest {
                 assertEquals(expectedDelivery, claimed.deliveryId)
                 assertTrue(claimed.serviceVerified)
                 checkLease(lease, expectedOwner)
-                writeMarker(expectedCapsule, expectedDelivery, "claimed")
+                writeMarker(expectedCapsule, expectedDelivery, "claimed", resumeR40LookupOnly)
 
                 // 7. Durable admitted row with staged FRONT (sealed bytes
                 // only — never plaintext or keys).
@@ -731,7 +812,7 @@ class PendingNativeReceiveClaimTest {
                                         throw AssertionError("receiver admission unavailable")
                                     }
                                     assertTrue(admission is CapsulePresentationAdmission.Ber1)
-                                    writeMarker(expectedCapsule, expectedDelivery, "opened")
+                                    writeMarker(expectedCapsule, expectedDelivery, "opened", resumeR40LookupOnly)
                                 } finally {
                                     // Caller-owned decrypted bytes: the reader
                                     // returns the SAME arrays (no close API), so

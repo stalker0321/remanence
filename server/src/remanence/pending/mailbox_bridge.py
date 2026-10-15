@@ -45,8 +45,10 @@ import hmac
 import json
 import os
 import re
+import socket
 import stat
 import sys
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -243,7 +245,7 @@ def _check_opened_sink(fd: int) -> None:
         raise BridgeRefusal(OTP_UNAVAILABLE)
 
 
-def _drain_fd(fd: int, *, read=os.read, _make_buf=bytearray) -> bytearray:
+def _drain_fd(fd: int, *, read=None, _make_buf=bytearray) -> bytearray:
     """Read the open descriptor into an OWNED mutable buffer, bounded.
     Ownership transfers to the caller ONLY on successful return; on
     ANY failure (OSError, over-bound growth, interruption) the owned
@@ -251,11 +253,13 @@ def _drain_fd(fd: int, *, read=os.read, _make_buf=bytearray) -> bytearray:
     partial prefix can never linger for a later read to pick up.
     (Immutable bytes/str copies made downstream stay honestly
     unwipeable — documented, not claimed.) `_make_buf` is a test seam
-    (default plain bytearray)."""
+    (default plain bytearray). `read` resolves at call time so fake
+    I/O layers observe the same path as production."""
+    reader = os.read if read is None else read
     chunks = _make_buf()
     try:
         while len(chunks) <= MAX_FILE_BYTES:
-            piece = read(fd, 65536)
+            piece = reader(fd, 65536)
             if not piece:
                 break
             chunks += piece
@@ -279,7 +283,11 @@ def _drain_fd(fd: int, *, read=os.read, _make_buf=bytearray) -> bytearray:
 def read_sink_bytes(path: str) -> bytearray:
     """Read the validated file into a MUTABLE buffer (caller clears
     best-effort after use). O_NOFOLLOW refuses symlink escape at open
-    time; descriptor metadata is re-checked after open."""
+    time; descriptor metadata is re-checked after open. The descriptor
+    is owned here and ALWAYS closed via finally — success and failure
+    alike (a try/return/else would skip the close on success, since
+    else does not run on return). The returned buffer's lifetime is
+    independent of the close."""
     validated = validate_sink_path(path)
     try:
         fd = os.open(validated, os.O_RDONLY | os.O_NOFOLLOW)
@@ -288,13 +296,7 @@ def read_sink_bytes(path: str) -> bytearray:
     try:
         _check_opened_sink(fd)
         return _drain_fd(fd)
-    except BaseException:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-        raise
-    else:
+    finally:
         try:
             os.close(fd)
         except OSError:
@@ -497,6 +499,36 @@ def deadline_for(accept_at: float, *, bound: int, now: float) -> float:
     return max(0.0, (accept_at + bound) - now)
 
 
+class _DeadlineReader:
+    """Buffered-reader wrapper enforcing the ABSOLUTE monotonic
+    deadline on EVERY read: each readline()/read() checks the clock
+    first, so trickled headers or bodies die exactly at the deadline
+    instead of riding an idle per-recv socket timeout indefinitely.
+    Raises socket.timeout, which the suppressed server boundary turns
+    into coarse silence + close (no partial request is ever routed).
+    `clock` is a deterministic test seam (default monotonic)."""
+
+    def __init__(self, raw, deadline: float, *, clock=time.monotonic) -> None:
+        self._raw = raw
+        self._deadline = deadline
+        self._clock = clock
+
+    def _check(self) -> None:
+        if self._clock() >= self._deadline:
+            raise socket.timeout("absolute request deadline exceeded")
+
+    def read(self, size: int = -1):
+        self._check()
+        return self._raw.read(size)
+
+    def readline(self, limit: int = -1):
+        self._check()
+        return self._raw.readline(limit)
+
+    def __getattr__(self, name: str):
+        return getattr(self._raw, name)
+
+
 class _BoundedServer(HTTPServer):
     """Single-threaded HTTP server with the absolute request lifetime
     enforced from the accepted connection: the accept instant is
@@ -554,15 +586,22 @@ def _wire_handler(*, engine, sink_path: str, delivery_id: uuid.UUID, owner_id: u
             self.wfile.write(body)
 
         def handle(self) -> None:
-            # Absolute request lifetime from the accepted connection
-            # (covers header parsing + body + handling): a stalled
-            # connection dies here instead of wedging the
-            # single-threaded server, and its I/O is cancelled with it.
-            # No daemon threads, no replay, no leak.
+            # Absolute request lifetime from the accepted connection:
+            # the wrapped rfile checks the monotonic deadline on EVERY
+            # read, so trickled headers/bodies die at the deadline
+            # instead of riding the idle socket timeout. Exactly one
+            # request per connection (closed after it), so the deadline
+            # is always per-request. No threads, no replay, no leak.
+            accept_at = getattr(self.server, "_accept_at", None)
+            if accept_at is None:
+                try:
+                    self.connection.close()
+                except OSError:
+                    pass
+                return
+            deadline = accept_at + REQUEST_TIMEOUT_SECONDS
             remaining = deadline_for(
-                getattr(self.server, "_accept_at", _time.monotonic()),
-                bound=REQUEST_TIMEOUT_SECONDS,
-                now=_time.monotonic(),
+                accept_at, bound=REQUEST_TIMEOUT_SECONDS, now=_time.monotonic()
             )
             if remaining <= 0:
                 try:
@@ -574,7 +613,14 @@ def _wire_handler(*, engine, sink_path: str, delivery_id: uuid.UUID, owner_id: u
                 self.connection.settimeout(remaining)
             except OSError:
                 pass
+            self.rfile = _DeadlineReader(self.rfile, deadline)
             super().handle()
+
+        def handle_one_request(self) -> None:
+            try:
+                super().handle_one_request()
+            finally:
+                self.close_connection = True
 
         def _guarded(self, work) -> None:
             try:

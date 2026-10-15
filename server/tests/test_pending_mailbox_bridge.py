@@ -592,3 +592,104 @@ def test_main_explains_sink_shape_without_db(
     err = capsys.readouterr().err
     assert "sink refused" in err
     assert "remanence-pending-epoch" in err
+
+
+def _fake_stat(mode=0o100600, size=4):
+    return os.stat_result((mode, 0, 0, 0, os.geteuid(), 0, size, 0, 0, 0))
+
+
+def test_read_sink_bytes_fake_descriptor_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fake os.open/fstat/read/close: success transfers the bytes AND
+    closes; mid-stream OSError and descriptor refusal both raise
+    coarse AND close. No actual files."""
+    import remanence.pending.mailbox_bridge as _mb
+
+    monkeypatch.setattr(_mb, "validate_sink_path", lambda path, explain=False: "/fake/otp.jsonl")
+    opened, closed = [], []
+    reads = {"n": 0}
+
+    def fake_open(path, flags):
+        opened.append((path, flags))
+        return 99
+
+    def fake_close(fd):
+        closed.append(fd)
+
+    monkeypatch.setattr(os, "open", fake_open)
+    monkeypatch.setattr(os, "close", fake_close)
+    monkeypatch.setattr(os, "fstat", lambda fd: _fake_stat())
+
+    def steady_read(fd, size):
+        reads["n"] += 1
+        return b'{"a":1}\n' if reads["n"] == 1 else b""
+
+    monkeypatch.setattr(os, "read", steady_read)
+    assert read_sink_bytes("/fake/otp.jsonl") == bytearray(b'{"a":1}\n')
+    assert opened == [("/fake/otp.jsonl", os.O_RDONLY | os.O_NOFOLLOW)]
+    assert closed == [99]
+
+    def flaky_read(fd, size):
+        raise OSError("fake mid-stream failure")
+
+    monkeypatch.setattr(os, "read", flaky_read)
+    with pytest.raises(BridgeRefusal) as caught:
+        read_sink_bytes("/fake/otp.jsonl")
+    assert caught.value.code == OTP_UNAVAILABLE
+    assert closed == [99, 99]
+
+    monkeypatch.setattr(os, "read", steady_read)
+    monkeypatch.setattr(os, "fstat", lambda fd: (_ for _ in ()).throw(OSError("fake fstat failure")))
+    with pytest.raises(BridgeRefusal) as caught:
+        read_sink_bytes("/fake/otp.jsonl")
+    assert caught.value.code == OTP_UNAVAILABLE
+    assert closed == [99, 99, 99]
+
+
+def test_deadline_reader_trickle_dies_at_deadline() -> None:
+    """Deterministic transport seam: every read checks the monotonic
+    deadline first, so a 1-byte trickle cannot outlive it. Fake raw +
+    fake clock, no sockets."""
+    from remanence.pending.mailbox_bridge import _DeadlineReader
+
+    calls = {"n": 0}
+
+    class _FakeRaw:
+        marker = "raw-marker"
+
+        def readline(self, limit=-1):
+            calls["n"] += 1
+            return b"x"
+
+        def read(self, size=-1):
+            calls["n"] += 1
+            return b"yz"
+
+    clock = {"now": 100.0}
+    reader = _DeadlineReader(_FakeRaw(), 110.0, clock=lambda: clock["now"])
+    assert reader.readline() == b"x"
+    assert reader.read(2) == b"yz"
+    assert reader.marker == "raw-marker"
+    assert calls["n"] == 2
+    clock["now"] = 110.0
+    import socket as _socket
+
+    with pytest.raises(_socket.timeout):
+        reader.readline()
+    with pytest.raises(_socket.timeout):
+        reader.read(2)
+    assert calls["n"] == 2  # no recv on or past the deadline
+    # A readline loop over a trickle terminates at the deadline.
+    loop_calls = {"n": 0}
+
+    class _Trickle:
+        def readline(self, limit=-1):
+            loop_calls["n"] += 1
+            clock["now"] += 6.0
+            return b"y"
+
+    clock["now"] = 100.0
+    trickle = _DeadlineReader(_Trickle(), 110.0, clock=lambda: clock["now"])
+    with pytest.raises(_socket.timeout):
+        while True:
+            trickle.readline()
+    assert loop_calls["n"] == 2  # 100 -> 106 -> 112: dead, not indefinite

@@ -427,6 +427,93 @@ def handle_otp_request(
     return 200, {"code": code}
 
 
+def serve_otp_post(
+    *,
+    body: bytes,
+    content_type: str,
+    peer: object,
+    lookup_attempt,
+    read_sink,
+    delivery_id: uuid.UUID,
+    owner_id: uuid.UUID,
+    now: datetime,
+    deadline: float,
+    clock,
+) -> tuple[str, int | None, dict | None]:
+    """Gated wire step, socket-free (do_POST supplies I/O). Returns
+    ("send", status, payload) or ("close", None, None).
+
+    Expiry is enforced WITHOUT emitting: when the absolute deadline
+    has passed before the work starts — or a slow lookup/sink read
+    pushes past it before the response — the caller shuts the
+    connection silently and no code (or any body) goes out. Buffers
+    are already wiped by handle_otp_request's ownership rules by the
+    time a late abort happens. BridgeRefusal maps to its fixed
+    status; anything else unexpected maps coarse OTP_UNAVAILABLE
+    (cancellation propagates)."""
+    if not is_loopback_peer(peer):
+        return "send", 403, {"error": NONLOCAL_REFUSED}
+    if (
+        not isinstance(content_type, str)
+        or not content_type.split(";")[0].strip().lower() == "application/json"
+    ):
+        return "send", 400, {"error": BAD_REQUEST}
+    if not isinstance(body, (bytes, bytearray)) or len(body) > MAX_BODY_BYTES:
+        return "close", None, None
+    try:
+        parsed = json.loads(bytes(body))
+    except ValueError:
+        return "send", 400, {"error": BAD_REQUEST}
+    if (
+        not isinstance(parsed, dict)
+        or set(parsed) != {"attemptId"}
+        or not isinstance(parsed["attemptId"], str)
+    ):
+        return "send", 400, {"error": BAD_REQUEST}
+    try:
+        attempt_id = parse_attempt_id(parsed["attemptId"])
+    except BridgeRefusal:
+        return "send", 400, {"error": BAD_REQUEST}
+    if clock() >= deadline:
+        return "close", None, None
+    try:
+        status, payload = handle_otp_request(
+            bytes(body),
+            content_type,
+            peer,
+            lookup_attempt=lookup_attempt,
+            read_sink=read_sink,
+            delivery_id=delivery_id,
+            owner_id=owner_id,
+            now=now,
+        )
+    except BridgeRefusal as exc:
+        mapping = {OTP_UNAVAILABLE: 404, NONLOCAL_REFUSED: 403}
+        return "send", mapping.get(exc.code, 400), {"error": exc.code}
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception:
+        return "send", 404, {"error": OTP_UNAVAILABLE}
+    if clock() >= deadline:
+        return "close", None, None
+    if status is None or payload is None:
+        return "close", None, None
+    return "send", status, payload
+
+
+def engine_kwargs() -> dict:
+    """Bounded DB access for the work phase (no daemon threads): no
+    pooling (NullPool — one connection per request, closed every
+    time, so checkout can never block), 5 s connect timeout, 5 s
+    statement timeout enforced server-side per session."""
+    from sqlalchemy.pool import NullPool
+
+    return {
+        "poolclass": NullPool,
+        "connect_args": {"connect_timeout": 5, "options": "-c statement_timeout=5000"},
+    }
+
+
 def resolve_database_url(explicit: str | None) -> str:
     from remanence.pending.dev_bootstrap import BootstrapRefusal as _UpstreamRefusal
     from remanence.pending.dev_bootstrap import database_name_of
@@ -574,8 +661,8 @@ class _DeadlineSocket:
 
     def recv_into(self, buffer, nbytes: int = 0, flags: int = 0):
         self._arm()
-        # An explicit nbytes=0 must NOT reach the real call (it would
-        # read nothing and spin the buffered reader); omit it instead.
+        # Pass nbytes through only when set; otherwise take the
+        # caller's default full-buffer form.
         if nbytes:
             count = self._sock.recv_into(buffer, nbytes, flags)
         else:
@@ -604,15 +691,45 @@ class _DeadlineSocket:
         return self._idle
 
     def makefile(self, mode="r", buffering=None, *args, **kwargs):
+        # Preserve real stdlib defaults exactly: StreamRequestHandler
+        # calls makefile('rb', -1) and makefile('wb', 0). A buffering
+        # of -1/0/None selects the default size (never ValueError);
+        # only a strictly positive size is honored. 'wb'/0 stays
+        # UNBUFFERED via a direct deadline-checked writer; text mode
+        # fails closed (this server is binary-only).
         if "b" not in mode:
             raise ValueError("binary mode only")
+        if isinstance(buffering, int) and buffering > 0:
+            size = buffering
+        else:
+            size = io.DEFAULT_BUFFER_SIZE
         raw = _DeadlineRawStream(self._sock, self._deadline, clock=self._clock)
         if "r" in mode and "+" not in mode and "w" not in mode and "a" not in mode:
-            return io.BufferedReader(raw, buffer_size=buffering or io.DEFAULT_BUFFER_SIZE)
-        return io.BufferedRWPair(raw, raw, buffer_size=buffering or io.DEFAULT_BUFFER_SIZE)
+            return io.BufferedReader(raw, buffer_size=size)
+        if mode == "wb" and buffering == 0:
+            return _DirectWriter(self)
+        if "w" in mode or "a" in mode:
+            return io.BufferedWriter(raw, buffer_size=size)
+        return io.BufferedRWPair(raw, raw, buffer_size=size)
 
     def __getattr__(self, name: str):
         return getattr(self._sock, name)
+
+
+class _DirectWriter(io.RawIOBase):
+    """Unbuffered binary writer honoring the real wbufsize=0 default:
+    every write goes through the deadline-checked socket at once."""
+
+    def __init__(self, sock) -> None:
+        self._sock = sock
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, data) -> int:
+        blob = bytes(data)
+        self._sock.sendall(blob)
+        return len(blob)
 
 
 class _BoundedServer(HTTPServer):
@@ -665,31 +782,40 @@ def _wire_handler(*, engine, sink_path: str, delivery_id: uuid.UUID, owner_id: u
             self.wfile.write(body)
 
         def setup(self) -> None:
-            # Wrap the connection BEFORE rfile/wfile are built so all
+            # Wrap self.request BEFORE rfile/wfile are built so all
             # buffered header/body parsing inherits the absolute
             # deadline at the syscall boundary (see _DeadlineSocket).
-            # One request per connection (closed after it), so the
-            # deadline is always per-request.
+            # NOTE: self.connection does NOT exist yet here —
+            # BaseRequestHandler.__init__ sets self.request first and
+            # StreamRequestHandler.setup assigns self.connection from
+            # it — so wrapping self.request is the only correct point;
+            # touching self.connection would AttributeError (and would
+            # be discarded by super().setup() anyway). One request per
+            # connection (closed after it), so the deadline is always
+            # per-request. `clock` comes from the server when tests
+            # inject a deterministic one, else real monotonic time.
+            clock = getattr(self.server, "_clock", time.monotonic)
             accept_at = getattr(self.server, "_accept_at", None)
             if accept_at is None:
                 try:
-                    self.connection.close()
+                    self.request.close()
                 except OSError:
                     pass
                 raise socket.timeout("missing accept stamp")
             if (
                 deadline_for(
-                    accept_at, bound=REQUEST_TIMEOUT_SECONDS, now=time.monotonic()
+                    accept_at, bound=REQUEST_TIMEOUT_SECONDS, now=clock()
                 )
                 <= 0
             ):
                 try:
-                    self.connection.close()
+                    self.request.close()
                 except OSError:
                     pass
                 raise socket.timeout("accept already past deadline")
-            self.connection = _DeadlineSocket(
-                self.connection, accept_at + REQUEST_TIMEOUT_SECONDS
+            self._deadline = accept_at + REQUEST_TIMEOUT_SECONDS
+            self.request = _DeadlineSocket(
+                self.request, self._deadline, clock=clock
             )
             super().setup()
 
@@ -726,6 +852,16 @@ def _wire_handler(*, engine, sink_path: str, delivery_id: uuid.UUID, owner_id: u
             self._guarded(_get)
 
         def do_POST(self) -> None:
+            def _close_silently() -> None:
+                try:
+                    self.connection.shutdown(2)
+                except OSError:
+                    pass
+                try:
+                    self.close_connection = True
+                except AttributeError:
+                    pass
+
             def _post() -> None:
                 if self.path != "/otp":
                     self._send_json(404, {"error": NOT_FOUND})
@@ -737,36 +873,28 @@ def _wire_handler(*, engine, sink_path: str, delivery_id: uuid.UUID, owner_id: u
                     self._send_json(400, {"error": BAD_REQUEST})
                     return
                 if length < 0 or length > MAX_BODY_BYTES:
-                    try:
-                        self.connection.shutdown(2)
-                    except OSError:
-                        pass
-                    try:
-                        self.close_connection = True
-                    except AttributeError:
-                        pass
+                    _close_silently()
                     return
                 try:
                     body = self.rfile.read(length) if length else b""
                 except (OSError, ValueError):
                     self._send_json(400, {"error": BAD_REQUEST})
                     return
-                try:
-                    status, payload = handle_otp_request(
-                        body,
-                        self.headers.get("Content-Type", ""),
-                        self._peer(),
-                        lookup_attempt=lookup_attempt,
-                        read_sink=read_sink,
-                        delivery_id=delivery_id,
-                        owner_id=owner_id,
-                        now=datetime.now(timezone.utc),
-                    )
-                except BridgeRefusal as exc:
-                    mapping = {OTP_UNAVAILABLE: 404, NONLOCAL_REFUSED: 403}
-                    self._send_json(mapping.get(exc.code, 400), {"error": exc.code})
-                    return
-                if status is None or payload is None:
+                clock = getattr(self.server, "_clock", time.monotonic)
+                action, status, payload = serve_otp_post(
+                    body=body,
+                    content_type=self.headers.get("Content-Type", ""),
+                    peer=self._peer(),
+                    lookup_attempt=lookup_attempt,
+                    read_sink=read_sink,
+                    delivery_id=delivery_id,
+                    owner_id=owner_id,
+                    now=datetime.now(timezone.utc),
+                    deadline=getattr(self, "_deadline", clock()),
+                    clock=clock,
+                )
+                if action != "send":
+                    _close_silently()
                     return
                 self._send_json(status, payload)
 
@@ -821,7 +949,7 @@ def main(argv: list[str] | None = None) -> int:
         print("pending-mailbox-bridge: failed: STARTUP_SCHEMA_FAILED", file=sys.stderr)
         return 2
     try:
-        engine = create_engine(database_url)
+        engine = create_engine(database_url, **engine_kwargs())
         handler = _wire_handler(
             engine=engine, sink_path=sink_path,
             delivery_id=delivery_id, owner_id=owner_id,

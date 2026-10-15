@@ -778,3 +778,212 @@ def test_deadline_socket_makefile_and_send_bounds() -> None:
     # Next send starts at t=6 with remaining 4, pushes past deadline.
     with pytest.raises(_socket.timeout):
         sock.send(b"z" * 10)
+
+
+class _ScriptedSocket:
+    """Fake request socket: scripted inbound chunks, advancing fake
+    clock, captured sends. Raw makefile() raises: all buffering MUST
+    flow through the deadline wrapper (proves the wiring)."""
+
+    def __init__(self, chunks, clock, step=0.0) -> None:
+        self._chunks = [bytes(chunk) for chunk in chunks]
+        self._clock = clock
+        self._step = step
+        self.timeouts = []
+        self.recvs = 0
+        self.sent = bytearray()
+        self.closed = False
+
+    def settimeout(self, value) -> None:
+        self.timeouts.append(value)
+
+    def _tick(self) -> None:
+        self._clock["now"] += self._step
+
+    def recv(self, bufsize: int, flags: int = 0) -> bytes:
+        self.recvs += 1
+        self._tick()
+        if not self._chunks:
+            return b""
+        return self._chunks.pop(0)[:bufsize]
+
+    def recv_into(self, buffer, nbytes: int = 0, flags: int = 0) -> int:
+        data = self.recv(len(buffer))
+        buffer[: len(data)] = data
+        return len(data)
+
+    def send(self, data, flags: int = 0) -> int:
+        blob = bytes(data)
+        self.sent += blob
+        return len(blob)
+
+    def makefile(self, *args, **kwargs):
+        raise AssertionError("raw makefile must never be used")
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _lifecycle_handler():
+    import remanence.pending.mailbox_bridge as _mb
+
+    return _mb._wire_handler(
+        engine=object(), sink_path="/tmp/x",
+        delivery_id=uuid4(), owner_id=uuid4(),
+    )
+
+
+def _fake_server(clock, accept_at=100.0):
+    return SimpleNamespace(_accept_at=accept_at, _clock=lambda: clock["now"])
+
+
+def test_full_lifecycle_health_serves() -> None:
+    """Real stdlib construction/parsing/response/finish with a fake
+    request: GET /health serves 200 JSON through setup→handle→finish,
+    raw makefile never touched, socket left for the server loop."""
+    clock = {"now": 100.0}
+    request = (
+        b"GET /health HTTP/1.1\r\nHost: 127.0.0.1:18045\r\n"
+        b"Connection: close\r\n\r\n"
+    )
+    sock = _ScriptedSocket([request], clock)
+    handler_cls = _lifecycle_handler()
+    handler_cls(sock, ("127.0.0.1", 9999), _fake_server(clock))
+    assert b"200" in sock.sent
+    assert b"LOCAL_SYNTHETIC_MAILBOX_CLIENT" in sock.sent
+    assert b"no-store" in sock.sent
+    assert sock.recvs >= 1
+    assert sock.closed is False
+
+
+def test_full_lifecycle_trickle_within_deadline_serves() -> None:
+    clock = {"now": 100.0}
+    sock = _ScriptedSocket(
+        [b"GET /hea", b"lth HTTP/1.1\r\n", b"Host: x\r\n", b"\r\n"], clock, step=2.0
+    )
+    handler_cls = _lifecycle_handler()
+    handler_cls(sock, ("127.0.0.1", 9999), _fake_server(clock))
+    assert b"200" in sock.sent
+    assert sock.recvs == 4
+
+
+def test_full_lifecycle_trickle_past_deadline_is_silent() -> None:
+    """Past-deadline trickle dies mid-headers: the header block never
+    completes, the stdlib itself discards the timed-out connection
+    silently (its socket.timeout catch plus our no-op loggers), and
+    ZERO response bytes go out — nothing parsed, nothing routed.
+    Recvs stop at the deadline (3 scripted reads, never a 4th)."""
+    clock = {"now": 100.0}
+    sock = _ScriptedSocket(
+        [b"GET /health HTTP/1.1\r\n", b"Host: x\r\n", b"X-Pad: 1\r\n",
+         b"X-Pad: 2\r\n", b"X-Pad: 3\r\n"],
+        clock, step=4.0,
+    )
+    handler_cls = _lifecycle_handler()
+    handler_cls(sock, ("127.0.0.1", 9999), _fake_server(clock))
+    assert bytes(sock.sent) == b""
+    assert sock.recvs == 3
+
+
+def test_full_lifecycle_missing_stamp_fails_closed() -> None:
+    import socket as _socket
+
+    clock = {"now": 100.0}
+    sock = _ScriptedSocket([b"GET /health HTTP/1.1\r\n\r\n"], clock)
+    handler_cls = _lifecycle_handler()
+    with pytest.raises(_socket.timeout):
+        handler_cls(sock, ("127.0.0.1", 9999), SimpleNamespace())
+    assert bytes(sock.sent) == b""
+
+
+def test_serve_otp_post_expiry_gates() -> None:
+    from remanence.pending.mailbox_bridge import serve_otp_post
+
+    delivery_id, owner_id = uuid4(), uuid4()
+    now = datetime.now(timezone.utc)
+    row = SimpleNamespace(
+        id=uuid4(), delivery_id=delivery_id, account_user_id=owner_id,
+        state="CHALLENGE_PENDING", expires_at=now + timedelta(minutes=9),
+        provider_reference="", address_kind="email",
+    )
+    row.provider_reference = f"dev-email-{row.id}"
+    body = json.dumps({"attemptId": str(row.id)}).encode()
+    clock = {"now": 0.0}
+    calls = {"lookups": 0, "reads": 0}
+
+    def lookup(attempt_id):
+        calls["lookups"] += 1
+        return row
+
+    wiped = []
+
+    class _Buf(bytearray):
+        def __setitem__(self, key, value):
+            if value == 0:
+                wiped.append(True)
+            super().__setitem__(key, value)
+
+    def read_sink():
+        calls["reads"] += 1
+        buf = _Buf()
+        buf += (
+            json.dumps({"reference": f"dev-email-{row.id}", "code": "424242",
+                        "locale": "en",
+                        "dispatched_at": (now - timedelta(minutes=1)).isoformat()}).encode()
+            + b"\n"
+        )
+        return buf
+
+    base = dict(
+        body=body, content_type="application/json", peer="127.0.0.1",
+        lookup_attempt=lookup, read_sink=read_sink,
+        delivery_id=delivery_id, owner_id=owner_id, now=now,
+        deadline=100.0, clock=lambda: clock["now"],
+    )
+    # Healthy: sends the code.
+    assert serve_otp_post(**base) == ("send", 200, {"code": "424242"})
+    assert calls == {"lookups": 1, "reads": 1}
+    # Expired before work: silent close, work never starts.
+    clock["now"] = 100.0
+    assert serve_otp_post(**base)[0] == "close"
+    assert calls == {"lookups": 1, "reads": 1}
+    # Slow lookup pushes past the deadline: silent close, nothing sent.
+    clock["now"] = 0.0
+
+    def slow_lookup(attempt_id):
+        calls["lookups"] += 1
+        clock["now"] = 200.0
+        return row
+
+    assert serve_otp_post(**{**base, "lookup_attempt": slow_lookup})[0] == "close"
+    # Slow sink read pushes past the deadline: silent close, no code
+    # emitted, and the returned buffer is wiped.
+    clock["now"] = 0.0
+
+    def slow_sink():
+        calls["reads"] += 1
+        clock["now"] = 200.0
+        return read_sink()
+
+    assert serve_otp_post(**{**base, "read_sink": slow_sink}) == ("close", None, None)
+    assert wiped, "late-abort buffer must be wiped"
+    # Oversize and nonlocal stay as before.
+    assert serve_otp_post(**{**base, "body": b"x" * 1025}) == ("close", None, None)
+    assert serve_otp_post(**{**base, "peer": "10.0.0.1"})[0] == "send"
+
+
+def test_engine_kwargs_bounded_without_connecting() -> None:
+    from sqlalchemy import create_engine
+    from sqlalchemy.pool import NullPool
+
+    from remanence.pending.mailbox_bridge import engine_kwargs
+
+    kwargs = engine_kwargs()
+    assert kwargs["poolclass"] is NullPool
+    assert kwargs["connect_args"]["connect_timeout"] == 5
+    assert "statement_timeout" in kwargs["connect_args"]["options"]
+    engine = create_engine("postgresql+psycopg://u:p@127.0.0.1:1/db", **kwargs)
+    try:
+        assert isinstance(engine.pool, NullPool)
+    finally:
+        engine.dispose()

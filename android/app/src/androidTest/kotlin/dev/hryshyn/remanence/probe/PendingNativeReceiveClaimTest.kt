@@ -10,7 +10,6 @@ import dev.hryshyn.remanence.core.model.SiftRootSiftFingerprintCodec
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.core.recognition.LocalMatchEngine
 import dev.hryshyn.remanence.core.recognition.RecognitionProfile
-import dev.hryshyn.remanence.core.recognition.ScanFlowResult
 import dev.hryshyn.remanence.core.recognition.VisualScanResult
 import dev.hryshyn.remanence.pending.PendingAdmittedPhotosReader
 import dev.hryshyn.remanence.pending.PendingCodeNormalizer
@@ -22,6 +21,7 @@ import java.io.File
 import java.io.InputStream
 import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
@@ -39,6 +39,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
@@ -473,6 +474,9 @@ class PendingNativeReceiveClaimTest {
                     throw AssertionError("receiver lookup failed")
                 }
                 assertEquals(expectedDelivery, required.deliveryId)
+                // Held-lease fence before the post-lookup effect calls
+                // (destination/consent/requestAttempt after suspension).
+                checkLease(lease, expectedOwner)
                 // T192 deterministic recipient (reconstructed, never
                 // decrypted from storage).
                 val destination = "t186recv" + expectedCapsule.replace("-", "") + "@example.com"
@@ -498,7 +502,7 @@ class PendingNativeReceiveClaimTest {
 
                 // 5. Fixed single-field OTP wire, then the ordinary code
                 // events. The bridge only returns the stored code; the
-                // REAL R9 verifies. Input cleared once verified.
+                // REAL R9 verifies. Input cleared on every exit (see finally).
                 var code: String? = null
                 try {
                     code = withTimeout(120_000) {
@@ -527,8 +531,14 @@ class PendingNativeReceiveClaimTest {
                     if (ready !is PendingProofViewModel.ProofState.IntentReady) {
                         throw AssertionError("receiver code check failed")
                     }
-                    vm.onCodeChange("")
                 } finally {
+                    // VM input cleared on EVERY exit (failed verify,
+                    // timeout, cancel) — ordinary setter only; managed
+                    // String copies cannot be zeroized (stated limit).
+                    try {
+                        vm.onCodeChange("")
+                    } catch (_: Exception) {
+                    }
                     code = null
                 }
                 checkLease(lease, expectedOwner)
@@ -566,113 +576,150 @@ class PendingNativeReceiveClaimTest {
                 assertTrue(row.recognitionCiphertextB64.isNotBlank())
 
                 // 8. Real scan bridge + real matcher over the published
-                // FRONT, then a real verified grant (verified first via
-                // the bridge, resolved live — never unconditional, never
-                // a fake-true verifier).
+                // FRONT, then a real verified grant (explicit verify
+                // first via the bridge with held-lease fences, then
+                // issue with the captured epoch, then live resolve —
+                // never unconditional, never a fake-true verifier).
+                // FRONT creation/parsing lives INSIDE the wipe scope so
+                // even a parse failure cannot skip wiping.
                 val authority = container.presentationGrants
-                val frontBytes = CanonicalFrontFixture.distinctFront(11)
-                val query = try {
-                    SiftRootSiftFingerprintCodec.parse(frontBytes)
-                } catch (_: Exception) {
-                    throw AssertionError("receiver FRONT framing invalid")
-                }
                 try {
-                    val candidates = try {
-                        container.pendingScanBridge.load(expectedOwner).candidates
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (_: Exception) {
-                        throw AssertionError("receiver candidate enumeration unavailable")
-                    }
-                    assertTrue(candidates.any { it.capsuleId == capsuleUuid })
-                    val ownerUser = UserId(UUID.fromString(expectedOwner))
-                    val engine = LocalMatchEngine(
-                        profile = RecognitionProfile.postcardSiftRootSiftV1(),
-                        verifier = { id -> container.pendingScanBridge.verify(expectedOwner, id) },
-                        grantIssuer = { id ->
-                            authority.issue(ownerUser, id, CapsulePresentationSource.PENDING, 1).grantId.toString()
-                        },
-                    )
-                    val visual = try {
-                        engine.evaluateVisual(query, candidates)
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (_: Exception) {
-                        throw AssertionError("receiver visual match unavailable")
-                    }
-                    if (visual !is VisualScanResult.Accepted) {
-                        throw AssertionError("receiver visual match not accepted")
-                    }
-                    val decided = try {
-                        engine.completeVisual(visual)
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (_: Exception) {
-                        throw AssertionError("receiver grant unavailable")
-                    }
-                    val granted = decided as? ScanFlowResult.Granted
-                        ?: throw AssertionError("receiver grant not issued")
-                    assertEquals(capsuleUuid, granted.capsuleId)
-                    val grantId = try {
-                        UUID.fromString(granted.grantId)
-                    } catch (_: Exception) {
-                        throw AssertionError("receiver grant unresolvable")
-                    }
-                    val binding = try {
-                        authority.resolve(grantId, ownerUser)
-                    } catch (_: Exception) {
-                        null
-                    } ?: throw AssertionError("receiver grant not live")
-                    assertEquals(capsuleUuid, binding.capsuleId)
+                    val frontBytes = CanonicalFrontFixture.distinctFront(11)
                     try {
-                        // 9. Real open + reader (READER-LEVEL evidence
-                        // only — no CapsuleRoute render, no R15/retire;
-                        // the locator stays active).
-                        val opened = withTimeout(180_000) {
-                            try {
-                                container.openPendingAdmittedPhotos(expectedOwner, expectedCapsule)
+                        val query = try {
+                            SiftRootSiftFingerprintCodec.parse(frontBytes)
+                        } catch (_: Exception) {
+                            throw AssertionError("receiver FRONT framing invalid")
+                        }
+                        // Scope grouping only (no owned resource — failures
+                        // keep their specific phase errors, never masked).
+                        run {
+                            val candidates = try {
+                                container.pendingScanBridge.load(expectedOwner).candidates
                             } catch (cancelled: CancellationException) {
                                 throw cancelled
                             } catch (_: Exception) {
-                                throw AssertionError("receiver open unavailable")
+                                throw AssertionError("receiver candidate enumeration unavailable")
                             }
-                        }
-                        checkLease(lease, expectedOwner)
-                        val reader = PendingAdmittedPhotosReader(expectedCapsule, opened)
-                        assertEquals(3, reader.photoCount(expectedCapsule))
-                        for (ordinal in 0 until 3) {
-                            val jpeg = reader.loadPhoto(expectedCapsule, ordinal).jpegBytes
-                            var bitmap: android.graphics.Bitmap? = null
+                            assertTrue(candidates.any { it.capsuleId == capsuleUuid })
+                            val ownerUser = UserId(UUID.fromString(expectedOwner))
+                            val engine = LocalMatchEngine(
+                                profile = RecognitionProfile.postcardSiftRootSiftV1(),
+                                verifier = { id ->
+                                    container.pendingScanBridge.verify(expectedOwner, id)
+                                },
+                                grantIssuer = { id ->
+                                    throw AssertionError("visual-only match must not issue")
+                                },
+                            )
+                            val visual = try {
+                                engine.evaluateVisual(query, candidates)
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                throw AssertionError("receiver visual match unavailable")
+                            }
+                            if (visual !is VisualScanResult.Accepted) {
+                                throw AssertionError("receiver visual match not accepted")
+                            }
+                            val epoch = authority.currentEpoch()
+                            checkLease(lease, expectedOwner)
+                            val verified = try {
+                                container.pendingScanBridge.verify(expectedOwner, capsuleUuid)
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                throw AssertionError("receiver verification unavailable")
+                            }
+                            if (!verified) {
+                                throw AssertionError("receiver verification refused")
+                            }
+                            checkLease(lease, expectedOwner)
+                            val grantId = try {
+                                authority.issue(
+                                    ownerUserId = ownerUser,
+                                    capsuleId = capsuleUuid,
+                                    source = CapsulePresentationSource.PENDING,
+                                    scanGeneration = 1,
+                                    expectedEpoch = epoch,
+                                ).grantId
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                throw AssertionError("receiver grant unavailable")
+                            }
+                            checkLease(lease, expectedOwner)
                             try {
-                                bitmap = BitmapFactory.decodeByteArray(
-                                    jpeg, 0, jpeg.size,
-                                )
-                                assertTrue(
-                                    bitmap != null && bitmap.width > 0 && bitmap.height > 0,
-                                )
+                                val binding = try {
+                                    authority.resolve(grantId, ownerUser)
+                                } catch (_: Exception) {
+                                    null
+                                } ?: throw AssertionError("receiver grant not live")
+                                assertEquals(capsuleUuid, binding.capsuleId)
+                                // 9. Real open + reader (READER-LEVEL evidence
+                                // only — no CapsuleRoute render, no R15/retire;
+                                // the locator stays active). Owned photos are
+                                // wiped in `finally` on every path below,
+                                // including fence/admission/marker failures.
+                                val opened = withTimeout(180_000) {
+                                    try {
+                                        container.openPendingAdmittedPhotos(expectedOwner, expectedCapsule)
+                                    } catch (cancelled: CancellationException) {
+                                        throw cancelled
+                                    } catch (_: Exception) {
+                                        throw AssertionError("receiver open unavailable")
+                                    }
+                                }
+                                try {
+                                    checkLease(lease, expectedOwner)
+                                    val reader = PendingAdmittedPhotosReader(expectedCapsule, opened)
+                                    assertEquals(3, reader.photoCount(expectedCapsule))
+                                    for (ordinal in 0 until 3) {
+                                        val jpeg = reader.loadPhoto(expectedCapsule, ordinal).jpegBytes
+                                        var bitmap: android.graphics.Bitmap? = null
+                                        try {
+                                            bitmap = BitmapFactory.decodeByteArray(
+                                                jpeg, 0, jpeg.size,
+                                            )
+                                            assertTrue(
+                                                bitmap != null && bitmap.width > 0 && bitmap.height > 0,
+                                            )
+                                        } finally {
+                                            bitmap?.recycle()
+                                        }
+                                    }
+                                    reader.noteText(expectedCapsule)
+                                    val admission = try {
+                                        reader.presentationAdmission(expectedCapsule)
+                                    } catch (_: Exception) {
+                                        throw AssertionError("receiver admission unavailable")
+                                    }
+                                    assertTrue(admission is CapsulePresentationAdmission.Ber1)
+                                    writeMarker(expectedCapsule, expectedDelivery, "opened")
+                                } finally {
+                                    // Caller-owned decrypted bytes: the reader
+                                    // returns the SAME arrays (no close API), so
+                                    // wipe them on every exit, including fence,
+                                    // admission, and marker failures.
+                                    try {
+                                        opened.photosByOrdinal.values.forEach { it.fill(0) }
+                                    } catch (_: Exception) {
+                                    }
+                                }
                             } finally {
-                                bitmap?.recycle()
+                                try {
+                                    authority.revoke(grantId)
+                                } catch (_: Exception) {
+                                }
                             }
                         }
-                        reader.noteText(expectedCapsule)
-                        val admission = try {
-                            reader.presentationAdmission(expectedCapsule)
-                        } catch (_: Exception) {
-                            throw AssertionError("receiver admission unavailable")
-                        }
-                        assertTrue(admission is CapsulePresentationAdmission.Ber1)
-                        writeMarker(expectedCapsule, expectedDelivery, "opened")
                     } finally {
                         try {
-                            authority.revoke(grantId)
+                            query.wipe()
                         } catch (_: Exception) {
                         }
                     }
                 } finally {
-                    try {
-                        query.wipe()
-                    } catch (_: Exception) {
-                    }
                     frontBytes.fill(0)
                 }
             } finally {

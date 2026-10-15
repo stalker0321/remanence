@@ -1,6 +1,8 @@
 package dev.hryshyn.remanence.probe
 
 import androidx.activity.ComponentActivity
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -356,6 +358,8 @@ class PendingNativePresentationTest {
             var scanStore: ViewModelStore? = null
             var rootVm: RootViewModel? = null
             var scanVm: ScanViewModel? = null
+            var bodySucceeded = false
+            var routeMounted = false
             // Caller-owned pending photos for the route lifetime (grant-
             // keyed single ref like MainActivity: recomposition can
             // neither reset nor leak the wipe; idempotent across close,
@@ -364,6 +368,11 @@ class PendingNativePresentationTest {
             // Closed fence: once teardown starts disposing the route, an
             // in-flight open that returns late must wipe instead of adopt.
             val routeClosed = AtomicBoolean(false)
+            // Mount-once visibility (the installed Compose forbids a
+            // second setContent) + an explicit disposal signal observed
+            // from the instrumentation thread during teardown.
+            val routeVisible = mutableStateOf(true)
+            val routeDisposed = AtomicBoolean(false)
             val wipePendingPhotos = {
                 pendingOpened.getAndSet(null)?.let { opened ->
                     opened.photosByOrdinal.values.forEach { it.fill(0) }
@@ -575,7 +584,11 @@ class PendingNativePresentationTest {
                 val grantId = granted.grantId
                 rule.setContent {
                     HoldTheme {
-                        CapsuleRoute(
+                        if (routeVisible.value) {
+                            DisposableEffect(Unit) {
+                                onDispose { routeDisposed.set(true) }
+                            }
+                            CapsuleRoute(
                             grantId = grantId,
                             contentFactory = {
                                 val binding = root.presentationGrantFor(grantId)
@@ -663,8 +676,10 @@ class PendingNativePresentationTest {
                                 }
                             },
                         )
+                        }
                     }
                 }
+                routeMounted = true
                 // Actual manifest/render branch: Ber1 canvas or finished-
                 // collage close (contract decides), then the shared photo
                 // region. Tags assert visible content, not callbacks.
@@ -690,16 +705,21 @@ class PendingNativePresentationTest {
                 // mounted for root screenshot/UI-hierarchy capture using
                 // the existing test facilities, then orderly teardown.
                 delay(30_000)
+                bodySucceeded = true
             } finally {
-                // Cancellation-safe orderly teardown on the owner
-                // context: mark closed and dispose the mounted route
-                // FIRST (its disposal effect closes the presentation and
-                // releases content), then close/revoke, reset the scan
-                // session, clear BOTH lifecycle stores
-                // (ScanViewModel.onCleared cancels work and unregisters
-                // its session-boundary listener), and sweep remaining
-                // photo ownership last. Idempotent on every path,
-                // including timeout/cancellation.
+                // Cancellation-safe orderly teardown: mark closed and
+                // remove the mounted subtree through state on Main FIRST
+                // (its disposal effect closes the presentation and
+                // releases content), then await ACTUAL recomposition/
+                // disposal from the instrumentation thread (never Main),
+                // bounded, BEFORE clearing stores/photo ownership. Then
+                // close/revoke, reset the scan session, clear BOTH
+                // lifecycle stores (ScanViewModel.onCleared cancels work
+                // and unregisters its session-boundary listener), and
+                // sweep remaining photo ownership last. A disposal
+                // failure after a fully successful body fails the test;
+                // otherwise the primary failure is preserved, never
+                // masked by cleanup.
                 withContext(NonCancellable) {
                     withContext(Dispatchers.Main) {
                         try {
@@ -707,9 +727,20 @@ class PendingNativePresentationTest {
                         } catch (_: Exception) {
                         }
                         try {
-                            rule.setContent { }
+                            routeVisible.value = false
                         } catch (_: Exception) {
                         }
+                    }
+                    // No mount yet (pre-mount failure): nothing to dispose.
+                    val disposalConfirmed = if (!routeMounted) {
+                        true
+                    } else try {
+                        rule.waitUntil(60_000) { routeDisposed.get() }
+                        true
+                    } catch (_: Exception) {
+                        false
+                    }
+                    withContext(Dispatchers.Main) {
                         try {
                             rootVm?.closeCapsule()
                         } catch (_: Exception) {
@@ -730,6 +761,9 @@ class PendingNativePresentationTest {
                             wipePendingPhotos()
                         } catch (_: Exception) {
                         }
+                    }
+                    if (!disposalConfirmed && bodySucceeded) {
+                        throw AssertionError("route disposal unconfirmed")
                     }
                 }
             }

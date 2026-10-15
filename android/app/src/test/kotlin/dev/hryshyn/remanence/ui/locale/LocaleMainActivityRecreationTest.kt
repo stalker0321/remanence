@@ -23,6 +23,7 @@ import dev.hryshyn.remanence.RemanenceApplication
 import dev.hryshyn.remanence.session.RootViewModel
 import dev.hryshyn.remanence.ui.navigation.AuthUiState
 import dev.hryshyn.remanence.wiring.RemanenceViewModelFactory
+import kotlin.coroutines.cancellation.CancellationException
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotSame
@@ -151,8 +152,16 @@ class LocaleMainActivityRecreationTest {
      */
     private fun awaitSignedOutHome(): RootViewModel {
         val vm = productionViewModel(composeRule.activity)
-        composeRule.waitUntil(120_000) {
-            vm.authState.value is AuthUiState.SignedOut
+        try {
+            composeRule.waitUntil(10_000) {
+                vm.authState.value is AuthUiState.SignedOut
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            throw AssertionError(
+                "signed-out home never settled (auth=" + vm.authState.value::class.simpleName + ")",
+            )
         }
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("scan_action").assertIsDisplayed()

@@ -77,21 +77,25 @@ class AstraContextArrivalProgressTest {
      * over the opaque window and measures nothing.
      */
     private fun probeOpacity(): Float {
-        val bounds = rule.onNodeWithTag("arrival_probe").fetchSemanticsNode().boundsInWindow
+        val bounds = composeRule.onNodeWithTag("arrival_probe").fetchSemanticsNode().boundsInWindow
         val cx = (bounds.left + bounds.width / 2).toInt().coerceAtLeast(0)
         val cy = (bounds.top + bounds.height / 2).toInt().coerceAtLeast(0)
-        val view = rule.activity.window.decorView
-        val bitmap = android.graphics.Bitmap.createBitmap(
-            view.width, view.height, android.graphics.Bitmap.Config.ARGB_8888,
-        )
-        try {
-            view.draw(android.graphics.Canvas(bitmap))
-            val px = cx.coerceAtMost(bitmap.width - 1)
-            val py = cy.coerceAtMost(bitmap.height - 1)
-            return 1f - android.graphics.Color.green(bitmap.getPixel(px, py)) / 255f
-        } finally {
-            bitmap.recycle()
+        var green = -1
+        composeRule.runOnUiThread {
+            val view = composeRule.activity.window.decorView
+            val bitmap = android.graphics.Bitmap.createBitmap(
+                view.width, view.height, android.graphics.Bitmap.Config.ARGB_8888,
+            )
+            try {
+                view.draw(android.graphics.Canvas(bitmap))
+                val px = cx.coerceAtMost(bitmap.width - 1)
+                val py = cy.coerceAtMost(bitmap.height - 1)
+                green = android.graphics.Color.green(bitmap.getPixel(px, py))
+            } finally {
+                bitmap.recycle()
+            }
         }
+        return 1f - green / 255f
     }
 
     @Test

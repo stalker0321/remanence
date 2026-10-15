@@ -31,6 +31,7 @@ import dev.hryshyn.remanence.pending.PendingFeatureGate
 import dev.hryshyn.remanence.session.RootViewModel
 import dev.hryshyn.remanence.session.SessionState
 import dev.hryshyn.remanence.ui.capsule.CapsuleContentBinding
+import dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource
 import dev.hryshyn.remanence.ui.capsule.CapsuleRoute
 import dev.hryshyn.remanence.ui.create.SenderIdentitySnapshot
 import dev.hryshyn.remanence.ui.hold.HoldTheme
@@ -66,11 +67,15 @@ import org.opencv.android.OpenCVLoader
  * background notify pipeline proceeds normally (never awaited).
  *
  * No receiver/proof/claim/OTP rerun: no R6/proof/mailbox ports are
- * touched here; the existing receiver test is left read-only. Fixed
- * test-only marker `pendingtest-receipt/receipt-r43-ui.json` (+ own
- * tmp) records coarse attempted/rendered phases only, after the R42
- * `opened` marker is validated read-only. All three older receipts
- * stay byte for byte.
+ * touched here; the existing receiver test is left read-only. Two
+ * selected methods share this proven body via a CLOSED mode enum:
+ * the R43 milestone (fixed `receipt-r43-ui.json` after the R42
+ * `opened` marker, behavior preserved) and the T200 post-retirement
+ * ordinary reopen (fixed `receipt-r44-reopen.json` after the R42
+ * `opened` AND R43 `rendered` markers, plus a PENDING-source grant
+ * check and all three photo regions). Markers record coarse
+ * attempted/rendered phases only. All older receipts stay byte for
+ * byte.
  *
  * Production background notify/WorkManager behavior is preserved: the
  * route's onSupportedReady calls the real
@@ -86,6 +91,18 @@ class PendingNativePresentationTest {
 
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
     private val container get() = (context.applicationContext as RemanenceApplication).container
+
+    /**
+     * CLOSED fixed test modes (exhaustive `when`, no `else`): the R43
+     * milestone keeps its original one-shot marker/behavior; R44 is
+     * the post-retirement ordinary reopen of the SAME gift with its
+     * own one-shot marker. Marker filenames are fixed here, never
+     * from caller args.
+     */
+    private enum class PresentationMode(val markerName: String) {
+        R43_INITIAL("receipt-r43-ui.json"),
+        R44_REOPEN("receipt-r44-reopen.json"),
+    }
 
     private fun stringArgument(name: String): String? = try {
         InstrumentationRegistry.getArguments().getString(name)
@@ -130,13 +147,13 @@ class PendingNativePresentationTest {
      * fields (capsule/delivery/phase) — never codes, contacts,
      * tokens, keys, ciphertext, photo bytes, or grant IDs.
      */
-    private fun writeR43Marker(capsuleId: String, deliveryId: String, stage: String) {
+    private fun writePresentationMarker(markerName: String, capsuleId: String, deliveryId: String, stage: String) {
         val json = JSONObject()
             .put("capsuleId", capsuleId)
             .put("deliveryId", deliveryId)
             .put("stage", stage)
         val dir = receiptDir()
-        val marker = File(dir, "receipt-r43-ui.json")
+        val marker = File(dir, markerName)
         val tmp = File(dir, marker.name + ".tmp")
         try {
             java.io.FileOutputStream(tmp).use { out ->
@@ -176,36 +193,45 @@ class PendingNativePresentationTest {
     }
 
     /**
-     * R42 gate (READ-ONLY): the R42 marker must be a regular file whose
-     * JSON holds exactly the expected PUBLIC capsule/delivery and stage
-     * `opened`. Missing/malformed/wrong/earlier stages fail BEFORE any
-     * scan or presentation. Never written or deleted — preserved byte
-     * for byte with its tmp.
+     * Prior-marker gate (READ-ONLY): the given fixed marker must be a
+     * regular file whose JSON holds exactly the expected PUBLIC
+     * capsule/delivery and stage. Missing/malformed/wrong/earlier
+     * stages fail BEFORE any scan or presentation. Never written or
+     * deleted — preserved byte for byte with its tmp.
      */
-    private fun requireR42OpenedMarker(expectedCapsule: String, expectedDelivery: String) {
-        val marker = File(receiptDir(), "receipt-r42.json")
+    private fun requireReceiptStage(fileName: String, expectedCapsule: String, expectedDelivery: String, stage: String) {
+        val marker = File(receiptDir(), fileName)
         if (!marker.isFile) {
-            throw AssertionError("presentation needs the R42 opened marker")
+            throw AssertionError("presentation needs the " + fileName + " marker")
         }
         val text = try {
             marker.readText(Charsets.UTF_8)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
-            throw AssertionError("presentation needs the R42 opened marker")
+            throw AssertionError("presentation needs the " + fileName + " marker")
         }
         val root = try {
             JSONObject(text)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
-            throw AssertionError("R42 marker is not the expected opened attempt")
+            throw AssertionError(fileName + " is not the expected attempt")
         }
         if (root.optString("capsuleId") != expectedCapsule ||
             root.optString("deliveryId") != expectedDelivery ||
-            root.optString("stage") != "opened"
+            root.optString("stage") != stage
         ) {
-            throw AssertionError("R42 marker is not the expected opened attempt")
+            throw AssertionError(fileName + " is not the expected attempt")
+        }
+    }
+
+    /** Refuses ANY pre-existing marker/tmp path (file or directory). */
+    private fun refuseFreshMarker(fileName: String) {
+        val dir = receiptDir()
+        val marker = File(dir, fileName)
+        if (marker.exists() || File(dir, marker.name + ".tmp").exists()) {
+            throw AssertionError("presentation marker already present or partial; refusing replay")
         }
     }
 
@@ -227,6 +253,23 @@ class PendingNativePresentationTest {
 
     @Test
     fun admittedGiftRendersBoundCapsuleRoute(): Unit = runBlocking {
+        runPresentation(PresentationMode.R43_INITIAL)
+    }
+
+    @Test
+    fun admittedGiftReopensAfterRetirement(): Unit = runBlocking {
+        runPresentation(PresentationMode.R44_REOPEN)
+    }
+
+    /**
+     * Shared proven body for both selected methods. The mode selects
+     * ONLY the fixed one-shot marker (+ its gate) and the R44
+     * pending-plane/photo assertions; every guard, port, ownership,
+     * and teardown line below runs identically in both modes.
+     * Original R43 behavior is preserved; the old test is never
+     * executed to manufacture evidence.
+     */
+    private suspend fun runPresentation(mode: PresentationMode) {
         withTimeout(900_000) {
             // 0. Isolated-build guard FIRST (before any container,
             // account, identity, or network touch).
@@ -329,13 +372,23 @@ class PendingNativePresentationTest {
                 ?: throw AssertionError("missing prerequisite: bootstrapped session has no lease")
             checkLease(lease, expectedOwner)
 
-            // 3. R42 gate + fresh R43 one-shot marker, BEFORE any scan or
-            // presentation. All three older receipts stay byte for byte.
-            requireR42OpenedMarker(expectedCapsule, expectedDelivery)
-            val r43dir = receiptDir()
-            val r43marker = File(r43dir, "receipt-r43-ui.json")
-            if (r43marker.exists() || File(r43dir, r43marker.name + ".tmp").exists()) {
-                throw AssertionError("presentation marker already present or partial; refusing replay")
+            // 3. Mode gate + fresh one-shot marker, BEFORE any scan or
+            // presentation. All older receipts stay byte for byte.
+            when (mode) {
+                PresentationMode.R43_INITIAL -> {
+                    requireReceiptStage("receipt-r42.json", expectedCapsule, expectedDelivery, "opened")
+                    refuseFreshMarker(mode.markerName)
+                }
+                PresentationMode.R44_REOPEN -> {
+                    // Post-retirement ordinary reopen: BOTH prior UI
+                    // markers must still show their terminal stages
+                    // (validated read-only, preserved forever); this path
+                    // writes ONLY its separate one-shot marker, refused
+                    // when already present or partial.
+                    requireReceiptStage("receipt-r42.json", expectedCapsule, expectedDelivery, "opened")
+                    requireReceiptStage("receipt-r43-ui.json", expectedCapsule, expectedDelivery, "rendered")
+                    refuseFreshMarker(mode.markerName)
+                }
             }
 
             // 4. Entry readiness: the SAME admitted gift must already be
@@ -404,7 +457,7 @@ class PendingNativePresentationTest {
                     ?: throw AssertionError("root authentication unavailable")
                 assertEquals(expectedOwner, authed.userId)
                 checkLease(lease, expectedOwner)
-                writeR43Marker(expectedCapsule, expectedDelivery, "attempted")
+                writePresentationMarker(mode.markerName, expectedCapsule, expectedDelivery, "attempted")
 
                 // 6. Production-shaped ScanViewModel on the EXISTING
                 // internal constructor: shared authority, production
@@ -597,6 +650,15 @@ class PendingNativePresentationTest {
                                 check(capsuleId == expectedCapsule) {
                                     "unexpected capsule binding"
                                 }
+                                // R44 only: the grant binding must be
+                                // PENDING-sourced, proving the pending-plane
+                                // reopen rather than an accidental OUTBOX
+                                // match. R43 assertions stay untouched.
+                                if (mode == PresentationMode.R44_REOPEN) {
+                                    check(binding.source == CapsulePresentationSource.PENDING) {
+                                        "reopen must be pending-plane"
+                                    }
+                                }
                                 val owner = (root.authState.value as? AuthUiState.Authenticated)?.userId
                                     ?: error("no authenticated local account")
                                 val opened = try {
@@ -694,12 +756,18 @@ class PendingNativePresentationTest {
                 } catch (_: Exception) {
                     throw AssertionError("capsule route not ready")
                 }
-                rule.onNodeWithTag("capsule_photo_region_0").assertIsDisplayed()
+                if (mode == PresentationMode.R44_REOPEN) {
+                    rule.onNodeWithTag("capsule_photo_region_0").assertIsDisplayed()
+                    rule.onNodeWithTag("capsule_photo_region_1").assertIsDisplayed()
+                    rule.onNodeWithTag("capsule_photo_region_2").assertIsDisplayed()
+                } else {
+                    rule.onNodeWithTag("capsule_photo_region_0").assertIsDisplayed()
+                }
                 rule.runOnIdle {
                     assertTrue(supportedNotified.get())
                 }
                 checkLease(lease, expectedOwner)
-                writeR43Marker(expectedCapsule, expectedDelivery, "rendered")
+                writePresentationMarker(mode.markerName, expectedCapsule, expectedDelivery, "rendered")
 
                 // 9. Bounded capture window: the rendered route stays
                 // mounted for root screenshot/UI-hierarchy capture using

@@ -5,6 +5,9 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -32,6 +35,7 @@ import dev.hryshyn.remanence.ui.hold.HoldTheme
 import dev.hryshyn.remanence.ui.navigation.AuthUiState
 import dev.hryshyn.remanence.ui.scan.ScanTerminalState
 import dev.hryshyn.remanence.ui.scan.ScanViewModel
+import dev.hryshyn.remanence.ui.scan.plus
 import dev.hryshyn.remanence.wiring.RemanenceViewModelFactory
 import java.io.File
 import java.util.UUID
@@ -39,6 +43,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -231,6 +236,14 @@ class PendingNativePresentationTest {
                     "missing prerequisite: isolated pendingtest build and loopback epoch required",
                 )
             }
+            // Real constructed-API check in addition to BuildConfig: the
+            // container itself is built against the loopback epoch
+            // (fail-closed in its own init before any client exists).
+            if (container.apiBaseUrl.httpUrl.toString() != "http://127.0.0.1:18042/") {
+                throw AssertionError(
+                    "missing prerequisite: container is not built against the isolated epoch",
+                )
+            }
             val expectedOwner = stringArgument("t186_expected_owner")
             val expectedBundle = stringArgument("t186_expected_bundle")
             val expectedCapsule = stringArgument("t194_capsule_id")
@@ -319,7 +332,7 @@ class PendingNativePresentationTest {
             requireR42OpenedMarker(expectedCapsule, expectedDelivery)
             val r43dir = receiptDir()
             val r43marker = File(r43dir, "receipt-r43-ui.json")
-            if (r43marker.isFile || File(r43dir, r43marker.name + ".tmp").isFile) {
+            if (r43marker.exists() || File(r43dir, r43marker.name + ".tmp").exists()) {
                 throw AssertionError("presentation marker already present or partial; refusing replay")
             }
 
@@ -340,6 +353,7 @@ class PendingNativePresentationTest {
             // via its actual lifecycle (init refresh -> bootstrap).
             val factory = RemanenceViewModelFactory(container)
             var vmStore: ViewModelStore? = null
+            var scanStore: ViewModelStore? = null
             var rootVm: RootViewModel? = null
             var scanVm: ScanViewModel? = null
             // Caller-owned pending photos for the route lifetime (grant-
@@ -347,16 +361,26 @@ class PendingNativePresentationTest {
             // neither reset nor leak the wipe; idempotent across close,
             // failure, disposal, and the test teardown below).
             val pendingOpened = AtomicReference<PendingAdmittedContent.OpenedPhotos?>(null)
+            // Closed fence: once teardown starts disposing the route, an
+            // in-flight open that returns late must wipe instead of adopt.
+            val routeClosed = AtomicBoolean(false)
             val wipePendingPhotos = {
-                pendingOpened.getAndSet(null)?.photosByOrdinal.values.forEach { it.fill(0) }
+                pendingOpened.getAndSet(null)?.let { opened ->
+                    opened.photosByOrdinal.values.forEach { it.fill(0) }
+                }
                 Unit
-            }            // Real background notify is observed, never awaited: display
+            }
+            // Real background notify is observed, never awaited: display
             // must not wait for any retirement HTTP acknowledgement.
             val supportedNotified = AtomicBoolean(false)
             try {
                 vmStore = ViewModelStore()
                 val provider = ViewModelProvider(vmStore, factory)
-                val root = provider.get(RootViewModel::class.java)
+                // Creation on Main like viewModel(): init refresh and
+                // controller ownership start on the owner context.
+                val root = withContext(Dispatchers.Main) {
+                    provider.get(RootViewModel::class.java)
+                }
                 rootVm = root
                 val authenticated = try {
                     withTimeout(120_000) {
@@ -387,8 +411,9 @@ class PendingNativePresentationTest {
                 if (!cvReady) {
                     throw AssertionError("opencv unavailable")
                 }
-                val scan = ScanViewModel(
-                    persistence = container.fingerprintPersistence,
+                fun buildScanViewModel(): ScanViewModel {
+                    return ScanViewModel(
+                        persistence = container.fingerprintPersistence,
                     database = container.database,
                     profile = RecognitionProfile.postcardSiftRootSiftV1(),
                     identityProvider = {
@@ -430,6 +455,18 @@ class PendingNativePresentationTest {
                     scheduleIncomingSync = { owner ->
                         container.scheduleIncomingSync(owner)
                     },
+                    // Mirrors the factory connectivity wiring exactly
+                    // (never the omitted always-true default).
+                    networkConnected = {
+                        val manager = container.appContext.getSystemService(
+                            android.net.ConnectivityManager::class.java,
+                        )
+                        val network = manager?.activeNetwork
+                        val capabilities = network?.let { manager.getNetworkCapabilities(it) }
+                        capabilities?.hasCapability(
+                            android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET,
+                        ) == true
+                    },
                     sessionBoundary = container.sessionBoundary,
                     captureDisplayDecoder = CaptureDisplayDecoder { null },
                     frontProcessor = FixedFrontBytes(),
@@ -455,7 +492,22 @@ class PendingNativePresentationTest {
                             }
                         }
                     },
-                )
+                    )
+                }
+                // Test-owned lifecycle store via the existing provider
+                // factory API (production ViewModels stay untouched):
+                // clearing it runs ScanViewModel.onCleared (cancels work,
+                // unregisters the session-boundary listener).
+                val scanFactory = object : ViewModelProvider.Factory {
+                    @Suppress("UNCHECKED_CAST")
+                    override fun <T : ViewModel> create(modelClass: Class<T>): T =
+                        buildScanViewModel() as T
+                }
+                val freshScanStore = ViewModelStore()
+                scanStore = freshScanStore
+                val scan = withContext(Dispatchers.Main) {
+                    ViewModelProvider(freshScanStore, scanFactory).get(ScanViewModel::class.java)
+                }
                 scanVm = scan
                 // Fresh scan-session epoch mirroring the root scan entry
                 // bump; driven on the owner/UI context like production.
@@ -496,20 +548,22 @@ class PendingNativePresentationTest {
                 // authority.issue, no hand-set destination, no fake
                 // CapsuleAccess, no always-true validator, no stale
                 // grant reuse.
-                val bound = try {
-                    root.openCapsuleWithGrant(granted.grantId, null)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (_: Exception) {
-                    throw AssertionError("root binding unavailable")
-                }
-                assertTrue(bound)
-                try {
-                    root.requireLivePresentationGrant(granted.grantId)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (_: Exception) {
-                    throw AssertionError("presentation grant not live")
+                withContext(Dispatchers.Main) {
+                    val bound = try {
+                        root.openCapsuleWithGrant(granted.grantId, null)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        throw AssertionError("root binding unavailable")
+                    }
+                    assertTrue(bound)
+                    try {
+                        root.requireLivePresentationGrant(granted.grantId)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        throw AssertionError("presentation grant not live")
+                    }
                 }
                 checkLease(lease, expectedOwner)
 
@@ -538,6 +592,16 @@ class PendingNativePresentationTest {
                                     throw cancelled
                                 } catch (_: Exception) {
                                     error("pending capsule is no longer available")
+                                }
+                                // Closed fence: a late return landing after
+                                // teardown started disposing must wipe
+                                // instead of being adopted.
+                                if (routeClosed.get()) {
+                                    try {
+                                        opened.photosByOrdinal.values.forEach { it.fill(0) }
+                                    } catch (_: Exception) {
+                                    }
+                                    error("presentation closed during open")
                                 }
                                 pendingOpened.set(opened)
                                 CapsuleContentBinding(
@@ -627,21 +691,46 @@ class PendingNativePresentationTest {
                 // the existing test facilities, then orderly teardown.
                 delay(30_000)
             } finally {
-                try {
-                    rootVm?.closeCapsule()
-                } catch (_: Exception) {
-                }
-                try {
-                    scanVm?.resetSession()
-                } catch (_: Exception) {
-                }
-                try {
-                    vmStore?.clear()
-                } catch (_: Exception) {
-                }
-                try {
-                    wipePendingPhotos()
-                } catch (_: Exception) {
+                // Cancellation-safe orderly teardown on the owner
+                // context: mark closed and dispose the mounted route
+                // FIRST (its disposal effect closes the presentation and
+                // releases content), then close/revoke, reset the scan
+                // session, clear BOTH lifecycle stores
+                // (ScanViewModel.onCleared cancels work and unregisters
+                // its session-boundary listener), and sweep remaining
+                // photo ownership last. Idempotent on every path,
+                // including timeout/cancellation.
+                withContext(NonCancellable) {
+                    withContext(Dispatchers.Main) {
+                        try {
+                            routeClosed.set(true)
+                        } catch (_: Exception) {
+                        }
+                        try {
+                            rule.setContent { }
+                        } catch (_: Exception) {
+                        }
+                        try {
+                            rootVm?.closeCapsule()
+                        } catch (_: Exception) {
+                        }
+                        try {
+                            scanVm?.resetSession()
+                        } catch (_: Exception) {
+                        }
+                        try {
+                            vmStore?.clear()
+                        } catch (_: Exception) {
+                        }
+                        try {
+                            scanStore?.clear()
+                        } catch (_: Exception) {
+                        }
+                        try {
+                            wipePendingPhotos()
+                        } catch (_: Exception) {
+                        }
+                    }
                 }
             }
         }

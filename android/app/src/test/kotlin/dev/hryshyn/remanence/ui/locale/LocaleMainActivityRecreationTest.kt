@@ -25,6 +25,7 @@ import dev.hryshyn.remanence.ui.navigation.AuthUiState
 import dev.hryshyn.remanence.wiring.RemanenceViewModelFactory
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -232,6 +233,55 @@ class LocaleMainActivityRecreationTest {
      * recreation queue: the final persisted locale wins and no Activity
      * is destroyed or created (handled config change, not a restart).
      */
+    @Test
+    @Config(sdk = [28])
+    fun unrelatedManualRecreateStillRestartsAndPreservesSdk28() {
+        unrelatedManualRecreateStillRestartsAndPreserves()
+    }
+
+    @Test
+    @Config(sdk = [32])
+    fun unrelatedManualRecreateStillRestartsAndPreservesSdk32() {
+        unrelatedManualRecreateStillRestartsAndPreserves()
+    }
+
+    /**
+     * Control: a REAL unrelated restart (manual recreate — the path
+     * rotation and every non-locale config change still takes) DOES
+     * destroy and recreate the Activity. This proves the zero counts
+     * above come from the handled locale contract, not from a broken
+     * witness — while the same ViewModel store, epochs, persisted
+     * locale, and selected UI survive the genuine restart.
+     */
+    private fun unrelatedManualRecreateStillRestartsAndPreserves() {
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("scan_action").assertIsDisplayed()
+        val firstHost = composeRule.activity
+        val before = productionViewModel(firstHost)
+
+        // Locale path first: handled, zero restarts, persisted.
+        selectRussian()
+        assertEquals(AppLocale.RUSSIAN, AppLocaleRepository().load())
+        assertTrue(destroyed.isEmpty())
+        assertTrue(created.isEmpty())
+
+        // Unrelated path: a real restart still destroys + creates.
+        firstHost.recreate()
+        composeRule.waitForIdle()
+
+        assertEquals(1, destroyed.size)
+        assertEquals(1, created.size)
+        assertNotSame(firstHost, created.single())
+        // Same store family across the genuine restart: identical
+        // ViewModel with intact session proof, persisted locale kept.
+        val after = productionViewModel(created.single())
+        assertSame(before, after)
+        assertEquals(AuthUiState.SignedOut, after.authState.value)
+        assertEquals(0L, after.createSessionEpoch.value)
+        assertEquals(0L, after.scanSessionEpoch.value)
+        assertEquals(AppLocale.RUSSIAN, AppLocaleRepository().load())
+    }
+
     private fun rapidDifferentTapsResolveLastWinsWithoutQueue() {
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("scan_action").assertIsDisplayed()

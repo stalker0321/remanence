@@ -39,7 +39,7 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
-import org.junit.RuleChain
+import org.junit.rules.RuleChain
 import org.junit.Test
 import org.junit.rules.TestWatcher
 import org.junit.runner.Description
@@ -148,7 +148,6 @@ class LocaleScanSessionRecreationTest {
         ShadowLocaleManager.reset()
         ApplicationProvider.getApplicationContext<Application>()
             .unregisterActivityLifecycleCallbacks(witness)
-        Dispatchers.resetMain()
     }
 
     private fun resetAppCompatStatics() {

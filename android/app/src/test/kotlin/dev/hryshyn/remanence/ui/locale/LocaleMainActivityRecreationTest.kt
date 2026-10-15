@@ -8,6 +8,7 @@ import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -24,7 +25,6 @@ import dev.hryshyn.remanence.ui.navigation.AuthUiState
 import dev.hryshyn.remanence.wiring.RemanenceViewModelFactory
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -143,43 +143,107 @@ class LocaleMainActivityRecreationTest {
 
     @Test
     @Config(sdk = [28])
-    fun realRecreationExactlyOnceSdk28() {
-        realRecreationExactlyOnce()
+    fun localeChangeAppliesInPlaceWithoutRecreationSdk28() {
+        localeChangeAppliesInPlaceWithoutRecreation()
     }
 
     @Test
     @Config(sdk = [31])
-    fun realRecreationExactlyOnceSdk31() {
-        realRecreationExactlyOnce()
+    fun localeChangeAppliesInPlaceWithoutRecreationSdk31() {
+        localeChangeAppliesInPlaceWithoutRecreation()
     }
 
     @Test
     @Config(sdk = [32])
-    fun realRecreationExactlyOnceSdk32() {
-        realRecreationExactlyOnce()
+    fun localeChangeAppliesInPlaceWithoutRecreationSdk32() {
+        localeChangeAppliesInPlaceWithoutRecreation()
     }
 
-    private fun realRecreationExactlyOnce() {
+    private fun localeChangeAppliesInPlaceWithoutRecreation() {
         // The production bootstrap resolves asynchronously: wait for the
         // terminal proof before asserting the surface, so a slow first
         // resolve is never mistaken for a missing one.
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("scan_action").assertIsDisplayed()
-        val first = created.lastOrNull() ?: composeRule.activity
+        val first = composeRule.activity
 
         selectRussian()
 
         assertEquals(AppLocale.RUSSIAN, AppLocaleRepository().load())
-        assertEquals(1, destroyed.size)
-        assertEquals(1, created.size)
-        assertNotSame(first, created.single())
-        // The recreated production activity boots functionally with the
-        // persisted locale: same public-home surface, chosen option selected.
-        // Wait for the fresh session proof again: same race as cold start.
+        // Handled config change (manifest locale|layoutDirection): the
+        // Activity is never destroyed or recreated for a language change.
+        assertTrue(destroyed.isEmpty())
+        assertTrue(created.isEmpty())
+        assertSame(first, composeRule.activity)
+        // The SAME surface now renders the new language in place: the
+        // chosen option is selected and translated text is visible with
+        // no recreation gap in between. This also proves LocalConfiguration
+        // actually updated without recreation (else text stays English).
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("language_option_russian").assertIsSelected()
+        composeRule.onNodeWithTag("language_group_label").performScrollTo().assertTextEquals("язык")
         composeRule.onNodeWithTag("scan_action").assertIsDisplayed()
         composeRule.onNodeWithTag("create_action").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    @Config(sdk = [28])
+    fun reselectingActiveLocaleIsRealNoOpSdk28() {
+        reselectingActiveLocaleIsRealNoOp()
+    }
+
+    @Test
+    @Config(sdk = [32])
+    fun reselectingActiveLocaleIsRealNoOpSdk32() {
+        reselectingActiveLocaleIsRealNoOp()
+    }
+
+    /**
+     * Tapping the already-active language performs no AppCompat write and
+     * requests no recreation: the persisted tag and the instance counts
+     * are untouched. (Setup boots SYSTEM, so the system option is active.)
+     */
+    private fun reselectingActiveLocaleIsRealNoOp() {
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("scan_action").assertIsDisplayed()
+
+        composeRule.onNodeWithTag("language_option_system").performScrollTo().performClick()
+        composeRule.waitForIdle()
+
+        assertEquals(AppLocale.SYSTEM, AppLocaleRepository().load())
+        assertTrue(destroyed.isEmpty())
+        assertTrue(created.isEmpty())
+    }
+
+    @Test
+    @Config(sdk = [28])
+    fun rapidDifferentTapsResolveLastWinsWithoutQueueSdk28() {
+        rapidDifferentTapsResolveLastWinsWithoutQueue()
+    }
+
+    @Test
+    @Config(sdk = [32])
+    fun rapidDifferentTapsResolveLastWinsWithoutQueueSdk32() {
+        rapidDifferentTapsResolveLastWinsWithoutQueue()
+    }
+
+    /**
+     * Two rapid taps for different languages apply in order with no
+     * recreation queue: the final persisted locale wins and no Activity
+     * is destroyed or created (handled config change, not a restart).
+     */
+    private fun rapidDifferentTapsResolveLastWinsWithoutQueue() {
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("scan_action").assertIsDisplayed()
+
+        composeRule.onNodeWithTag("language_option_russian").performScrollTo().performClick()
+        composeRule.onNodeWithTag("language_option_ukrainian").performScrollTo().performClick()
+        composeRule.waitForIdle()
+
+        assertEquals(AppLocale.UKRAINIAN, AppLocaleRepository().load())
+        assertTrue(destroyed.isEmpty())
+        assertTrue(created.isEmpty())
+        composeRule.onNodeWithTag("language_option_ukrainian").assertIsSelected()
     }
 
     @Test
@@ -196,30 +260,31 @@ class LocaleMainActivityRecreationTest {
 
     @Test
     @Config(sdk = [28])
-    fun authAndDestinationStableAcrossRealRecreationSdk28() {
-        authAndDestinationStableAcrossRealRecreation()
+    fun authAndDestinationStableAcrossLocaleChangeSdk28() {
+        authAndDestinationStableAcrossLocaleChange()
     }
 
     @Test
     @Config(sdk = [31])
-    fun authAndDestinationStableAcrossRealRecreationSdk31() {
-        authAndDestinationStableAcrossRealRecreation()
+    fun authAndDestinationStableAcrossLocaleChangeSdk31() {
+        authAndDestinationStableAcrossLocaleChange()
     }
 
     @Test
     @Config(sdk = [32])
-    fun authAndDestinationStableAcrossRealRecreationSdk32() {
-        authAndDestinationStableAcrossRealRecreation()
+    fun authAndDestinationStableAcrossLocaleChangeSdk32() {
+        authAndDestinationStableAcrossLocaleChange()
     }
 
-    private fun authAndDestinationStableAcrossRealRecreation() {
+    private fun authAndDestinationStableAcrossLocaleChange() {
         // Cold start with no backend: SignedOut public home, actions enabled
         // through the public entry.
         composeRule.onNodeWithTag("scan_action").assertIsDisplayed().assertIsEnabled()
 
         selectRussian()
 
-        assertEquals(1, destroyed.size)
+        assertTrue(destroyed.isEmpty())
+        assertTrue(created.isEmpty())
         // No login/logout path exists on this surface: the auth boundary is
         // untouched and the same public-home destination is showing.
         composeRule.onNodeWithTag("scan_action").assertIsDisplayed().assertIsEnabled()
@@ -229,17 +294,17 @@ class LocaleMainActivityRecreationTest {
 
     @Test
     @Config(sdk = [28])
-    fun viewModelStoreRetainedAcrossRealRecreationSdk28() {
-        viewModelStoreRetainedAcrossRealRecreation()
+    fun viewModelStoreRetainedAcrossLocaleChangeSdk28() {
+        viewModelStoreRetainedAcrossLocaleChange()
     }
 
     @Test
     @Config(sdk = [32])
-    fun viewModelStoreRetainedAcrossRealRecreationSdk32() {
-        viewModelStoreRetainedAcrossRealRecreation()
+    fun viewModelStoreRetainedAcrossLocaleChangeSdk32() {
+        viewModelStoreRetainedAcrossLocaleChange()
     }
 
-    private fun viewModelStoreRetainedAcrossRealRecreation() {
+    private fun viewModelStoreRetainedAcrossLocaleChange() {
         // Cold start with a real async bootstrap: wait for the terminal
         // proof — reading mid-resolve would see the honest Resolving state.
         composeRule.waitForIdle()
@@ -250,11 +315,12 @@ class LocaleMainActivityRecreationTest {
 
         selectRussian()
 
-        assertEquals(1, destroyed.size)
-        // Same wait after recreation: a fresh store re-proves the session
-        // before any terminal assertion.
+        assertTrue(destroyed.isEmpty())
+        assertTrue(created.isEmpty())
+        // Same store, same ViewModel, same session proof: nothing
+        // re-proved, nothing reset, no recreation in between.
         composeRule.waitForIdle()
-        val after = productionViewModel(created.single())
+        val after = productionViewModel(composeRule.activity)
         assertSame(before, after)
         assertEquals(AuthUiState.SignedOut, after.authState.value)
         assertEquals(0L, after.createSessionEpoch.value)

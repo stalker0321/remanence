@@ -101,4 +101,12 @@ class AstraMotionSpecTest {
         assertEquals(0, AstraMotionSpec.imageTravelMs(AstraMotionSpec.Resolved.INSTANT))
         assertEquals(0, AstraMotionSpec.openingMs(AstraMotionSpec.Resolved.INSTANT))
     }
+
+    @Test
+    fun arrivalStartsSoftWithModestTravel() {
+        // Soft continuity, not a pop: arrivals begin well below opaque
+        // and settle over the authored duration with 4 dp travel.
+        assertEquals(0.70f, AstraMotionSpec.ARRIVAL_ALPHA, 0f)
+        assertEquals(4f, AstraMotionSpec.ARRIVAL_OFFSET_DP, 0f)
+    }
 }

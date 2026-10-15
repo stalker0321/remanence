@@ -176,17 +176,17 @@ class LocaleScanSessionRecreationTest {
 
     @Test
     @Config(sdk = [28])
-    fun activeScanSessionSurvivesRealRecreationSdk28() {
-        activeScanSessionSurvivesRealRecreation()
+    fun activeScanSessionSurvivesLocaleChangeSdk28() {
+        activeScanSessionSurvivesLocaleChange()
     }
 
     @Test
     @Config(sdk = [32])
-    fun activeScanSessionSurvivesRealRecreationSdk32() {
-        activeScanSessionSurvivesRealRecreation()
+    fun activeScanSessionSurvivesLocaleChangeSdk32() {
+        activeScanSessionSurvivesLocaleChange()
     }
 
-    private fun activeScanSessionSurvivesRealRecreation() {
+    private fun activeScanSessionSurvivesLocaleChange() {
         val vm = scanViewModel(composeRule.activity)
         vm.beginSession(7L)
         assertEquals(7L, vm.initializedEpoch.value)
@@ -196,11 +196,11 @@ class LocaleScanSessionRecreationTest {
         selectRussian()
 
         assertEquals(AppLocale.RUSSIAN, AppLocaleRepository().load())
-        assertEquals(1, destroyed.size)
-        assertEquals(1, created.size)
+        assertTrue(destroyed.isEmpty())
+        assertTrue(created.isEmpty())
         // Same session object, untouched state: no disposal ran and nothing
-        // re-initialized during the locale restart.
-        val after = scanViewModel(created.single())
+        // re-initialized, with no Activity restart in between.
+        val after = scanViewModel(composeRule.activity)
         assertSame(vm, after)
         assertEquals(7L, after.initializedEpoch.value)
         assertEquals(ScanTerminalState.Idle, after.terminal.value)

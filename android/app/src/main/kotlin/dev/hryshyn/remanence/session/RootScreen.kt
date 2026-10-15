@@ -62,8 +62,15 @@ fun RootScreen(
         Box(modifier.fillMaxSize().testTag("root_resolving_frame"))
         return
     }
+    // Resolved above the early return so the uncovered auth/home switches
+    // below share the same calm arrival as the route boundaries: one
+    // arrival per boundary, owned by the root, keyed coarsely so typing in
+    // a form never replays it.
+    val motion = rememberAstraMotion()
     if (authState == AuthUiState.SignedOut && showPublicHome) {
-        homeContent()
+        AstraContextArrival(motion = motion, modifier = modifier.fillMaxSize(), contentKey = AppDestination.Home) {
+            homeContent()
+        }
         return
     }
     if (authState !is AuthUiState.Authenticated) {
@@ -77,7 +84,9 @@ fun RootScreen(
                 Spacer(Modifier.height(8.dp))
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                authenticationContent()
+                AstraContextArrival(motion = motion, contentKey = authState::class) {
+                    authenticationContent()
+                }
             }
         }
         return
@@ -87,8 +96,6 @@ fun RootScreen(
         enabled = destination == AppDestination.Create || destination == AppDestination.Scan || destination == AppDestination.Settings,
         onBack = onExitFlow,
     )
-
-    val motion = rememberAstraMotion()
 
     // Opening-Carry front holder: remembered outside key(destination) so the
     // Scan branch's disposal cannot wipe the published postcard bounds before

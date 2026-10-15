@@ -86,10 +86,15 @@ class MainActivity : AppCompatActivity() {
         val container = (application as RemanenceApplication).container
 
         setContent {
-            // Hoisted here (not in a ViewModel): the locale switch recreates
-            // only this Activity, so ViewModels, auth state and capsule grants
-            // survive; the persisted tag restores the choice after restart.
-            var appLocale by remember {
+            // Hoisted here (not in a ViewModel): the persisted tag restores
+            // the choice after restart. Keyed on the configuration locale
+            // list so a system-settings language change (which no longer
+            // recreates this Activity — see manifest configChanges) re-syncs
+            // the selection from AppCompat storage instead of going stale.
+            // A re-read can never disagree: select() below persists
+            // synchronously before any configuration dispatch.
+            val localeListTag = androidx.compose.ui.platform.LocalConfiguration.current.locales.toLanguageTags()
+            var appLocale by remember(localeListTag) {
                 mutableStateOf(container.appLocaleRepository.load())
             }
             val factory = remember { RemanenceViewModelFactory(container) }
@@ -106,7 +111,12 @@ class MainActivity : AppCompatActivity() {
                             rootViewModel = rootViewModel,
                             appLocale = appLocale,
                             onLocaleSelected = { locale ->
-                                appLocale = AppLocaleController.select(locale)
+                                // Real no-op for the active language: no
+                                // AppCompat write, no recompose churn, no
+                                // recreation request. Rapid taps resolve
+                                // last-wins through the single funnel; each
+                                // genuine change applies synchronously.
+                                if (locale != appLocale) appLocale = AppLocaleController.select(locale)
                             },
                         )
                     }

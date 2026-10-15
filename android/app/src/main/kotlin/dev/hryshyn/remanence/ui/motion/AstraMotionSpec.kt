@@ -37,7 +37,15 @@ object AstraMotionSpec {
     /** Physical-to-digital opening, one overlapping movement (`motion.mjs:92`). */
     const val OPENING_MS = 820
 
-    const val ARRIVAL_ALPHA = .85f
+    /**
+     * Arrival start opacity for routine context/step Carries. Starts soft
+     * enough that the 520 ms dissolve reads as continuity rather than a
+     * pop: at .85 the new route appeared almost fully opaque on its first
+     * frame, so the duration settled an already-visible surface instead
+     * of arriving it. Travel stays modest (4 dp) and the dissolve easing
+     * keeps its slow start; durations are untouched.
+     */
+    const val ARRIVAL_ALPHA = .70f
     const val ARRIVAL_OFFSET_DP = 4f
 
     /**

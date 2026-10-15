@@ -73,7 +73,7 @@ def _row(**overrides) -> SimpleNamespace:
     return SimpleNamespace(**base)
 
 
-def _otp_line(reference: str, code: str = "123456", age_minutes: int = 1) -> str:
+def _otp_line(reference: str, code: str = "12345678", age_minutes: int = 1) -> str:
     ts = (_now() - timedelta(minutes=age_minutes)).isoformat()
     return json.dumps({"reference": reference, "code": code, "locale": "en",
                        "dispatched_at": ts})
@@ -279,7 +279,7 @@ def test_sink_parser_bounds() -> None:
     line = _otp_line("dev-email-x")
     assert parse_sink_records(f"{marker}\n{line}\n".encode()) == [
         {"event": "epoch-start", "at": 123.0},
-        {"reference": "dev-email-x", "code": "123456", "locale": "en",
+        {"reference": "dev-email-x", "code": "12345678", "locale": "en",
          "dispatched_at": json.loads(line)["dispatched_at"]},
     ]
     for bad in (
@@ -300,25 +300,27 @@ def test_select_code_matrix() -> None:
     good_ts = (now - timedelta(minutes=2)).isoformat()
     zulu_ts = (now - timedelta(minutes=2)).isoformat().replace("+00:00", "Z")
     base = {"reference": ref, "locale": "en", "dispatched_at": good_ts}
-    assert select_code([{**base, "code": "654321"}], reference=ref, now=now) == "654321"
+    assert select_code([{**base, "code": "65432109"}], reference=ref, now=now) == "65432109"
     assert select_code(
-        [{**base, "code": "654321", "dispatched_at": zulu_ts},
-         {**base, "code": "654321"}], reference=ref, now=now,
-    ) == "654321"
+        [{**base, "code": "65432109", "dispatched_at": zulu_ts},
+         {**base, "code": "65432109"}], reference=ref, now=now,
+    ) == "65432109"
     bad_records = [
         [],
-        [{**base, "code": "654321", "reference": "dev-email-other"}],
-        [{**base, "code": "654321"}, {**base, "code": "111111"}],
+        [{**base, "code": "65432109", "reference": "dev-email-other"}],
+        [{**base, "code": "65432109"}, {**base, "code": "11111111"}],
         [{**base, "code": "12345"}],
+        [{**base, "code": "123456"}],
         [{**base, "code": "1234567"}],
+        [{**base, "code": "123456789"}],
         [{**base, "code": "12345a"}],
         [{**base, "code": "١٢٣٤٥٦"}],
         [{**base, "code": None}],
-        [{**base, "code": "654321", "dispatched_at": (now + timedelta(minutes=30)).isoformat()}],
-        [{**base, "code": "654321", "dispatched_at": (now - timedelta(hours=25)).isoformat()}],
-        [{**base, "code": "654321", "dispatched_at": "yesterday"}],
-        [{**base, "code": "654321", "dispatched_at": (now - timedelta(minutes=2)).replace(tzinfo=None).isoformat()}],
-        [{**{k: v for k, v in base.items() if k != "dispatched_at"}, "code": "654321"}],
+        [{**base, "code": "65432109", "dispatched_at": (now + timedelta(minutes=30)).isoformat()}],
+        [{**base, "code": "65432109", "dispatched_at": (now - timedelta(hours=25)).isoformat()}],
+        [{**base, "code": "65432109", "dispatched_at": "yesterday"}],
+        [{**base, "code": "65432109", "dispatched_at": (now - timedelta(minutes=2)).replace(tzinfo=None).isoformat()}],
+        [{**{k: v for k, v in base.items() if k != "dispatched_at"}, "code": "65432109"}],
     ]
     codes = set()
     for records in bad_records:
@@ -334,7 +336,7 @@ def _allowed_setup():
     row = _row(delivery_id=delivery_id, account_user_id=owner_id)
     reference = f"dev-email-{row.id}"
     body = json.dumps({"attemptId": str(row.id)}).encode()
-    sink = bytearray((_otp_line(reference, code="424242") + "\n").encode())
+    sink = bytearray((_otp_line(reference, code="42424242") + "\n").encode())
     calls = {"lookups": [], "reads": 0}
 
     def lookup_attempt(attempt_id):
@@ -355,7 +357,7 @@ def test_allowed_path_returns_invented_code_only() -> None:
         lookup_attempt=lookup_attempt, read_sink=read_sink,
         delivery_id=delivery_id, owner_id=owner_id, now=now,
     )
-    assert (status, payload) == (200, {"code": "424242"})
+    assert (status, payload) == (200, {"code": "42424242"})
     assert len(calls["lookups"]) == 1 and calls["reads"] == 1
     # No verification semantics: the injected fakes observed exactly one
     # metadata read and one sink read — nothing else exists to call.
@@ -412,14 +414,14 @@ def test_request_refusals_share_fixed_codes() -> None:
 
 
 def test_logs_never_carry_request_secrets(tmp_path: Path, capsys, caplog) -> None:
-    sentinel_code = "987654"
+    sentinel_code = "98765432"
     delivery_id, owner_id = uuid4(), uuid4()
     now = _now()
     row = _row(delivery_id=delivery_id, account_user_id=owner_id)
     reference = f"dev-email-{row.id}"
     sink_text = (
         _otp_line(reference, code=sentinel_code) + "\n"
-        + json.dumps({"reference": "dev-email-noise", "code": "000000",
+        + json.dumps({"reference": "dev-email-noise", "code": "00000000",
                       "locale": f"SENTINEL-{uuid4().hex}", "dispatched_at": now.isoformat()}) + "\n"
     )
     sink = bytearray(sink_text.encode())
@@ -927,7 +929,7 @@ def test_serve_otp_post_expiry_gates() -> None:
         calls["reads"] += 1
         buf = _Buf()
         buf += (
-            json.dumps({"reference": f"dev-email-{row.id}", "code": "424242",
+            json.dumps({"reference": f"dev-email-{row.id}", "code": "42424242",
                         "locale": "en",
                         "dispatched_at": (now - timedelta(minutes=1)).isoformat()}).encode()
             + b"\n"
@@ -941,7 +943,7 @@ def test_serve_otp_post_expiry_gates() -> None:
         deadline=100.0, clock=lambda: clock["now"],
     )
     # Healthy: sends the code.
-    assert serve_otp_post(**base) == ("send", 200, {"code": "424242"})
+    assert serve_otp_post(**base) == ("send", 200, {"code": "42424242"})
     assert calls == {"lookups": 1, "reads": 1}
     # Expired before work: silent close, work never starts.
     clock["now"] = 100.0
@@ -987,3 +989,38 @@ def test_engine_kwargs_bounded_without_connecting() -> None:
         assert isinstance(engine.pool, NullPool)
     finally:
         engine.dispose()
+
+
+def test_real_file_sink_record_accepted_at_production_length(tmp_path: Path) -> None:
+    """Regression through the ACTUAL FileSinkEmailSender(mode="test"):
+    its genuinely emitted record — invented contact, invented code of
+    exactly the production OTP_DIGITS length — is accepted by the
+    helper parser/selector. Six/seven/nine-digit codes from the same
+    sender shape are refused (no truncation/padding/union)."""
+    from remanence.pending.proof import OTP_DIGITS
+    from remanence.pending.providers import FileSinkEmailSender
+
+    assert OTP_DIGITS == 8
+    sink_path = str(tmp_path / "invented-otp.jsonl")
+    sender = FileSinkEmailSender(path=sink_path, mode="test")
+    attempt_id = uuid4()
+    code = "24681357"
+    assert len(code) == OTP_DIGITS
+    reference = sender.send(
+        attempt_id=str(attempt_id),
+        stored_destination="invented-contact@example.test",
+        code=code,
+        locale="en",
+    )
+    assert reference == f"dev-email-{attempt_id}"
+    records = parse_sink_records(Path(sink_path).read_bytes())
+    assert (
+        select_code(records, reference=reference, now=datetime.now(timezone.utc))
+        == code
+    )
+    for wrong in ("246813", "2468135", "246813579", "2468135a"):
+        other = dict(records[0])
+        other["code"] = wrong
+        with pytest.raises(BridgeRefusal) as caught:
+            select_code([other], reference=reference, now=datetime.now(timezone.utc))
+        assert caught.value.code == OTP_UNAVAILABLE

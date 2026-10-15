@@ -20,11 +20,11 @@ runtime, nothing request-specific ever logged):
   sealed-destination lookup, no DB mutation.
 - the original epoch sink is read ONLY after passing ownership/mode/
   symlink/size checks, bounded, with every line valid JSON; the exact
-  reference must yield one consistent six-digit code with a bounded
-  timestamp. Unknown/conflicting/malformed/expired records fail with
+  reference must yield one consistent eight-digit code (actual
+  production length) with a bounded timestamp. Unknown/conflicting/malformed/expired records fail with
   the SAME single coarse code as an unknown attempt (no oracle), and
   no line is ever dumped.
-- response is ONLY ``{"code": "<six digits>"}`` with no-store, over
+- response is ONLY ``{"code": "<eight digits>"}`` with no-store, over
   loopback (non-loopback peers refused). No real email/SMS, no
   credential/client reset, no epoch restart, no live config.
 
@@ -55,6 +55,8 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from sqlalchemy import create_engine
+
+from remanence.pending.proof import OTP_DIGITS
 
 BRIDGE_HOST = "127.0.0.1"
 BRIDGE_PORT = 18045
@@ -343,16 +345,23 @@ def _parse_ts(raw: object) -> datetime | None:
 
 
 def select_code(records: list[dict], *, reference: str, now: datetime) -> str:
-    """Find the exact reference; require one consistent six-digit code
-    and a bounded sane timestamp on every matching record. Unknown,
-    conflicting, malformed, or expired records all fail identically."""
+    """Find the exact reference; require one consistent code of exactly
+    the production length (actual OTP_DIGITS, 8 ASCII digits — reused,
+    never altered here) and a bounded sane timestamp on every matching
+    record. Unknown, conflicting, malformed, or expired records all
+    fail identically. No truncation/padding, no permissive unions."""
     matches = [record for record in records if record.get("reference") == reference]
     if not matches:
         raise BridgeRefusal(OTP_UNAVAILABLE)
     codes = set()
     for record in matches:
         code = record.get("code")
-        if not isinstance(code, str) or len(code) != 6 or not code.isascii() or not code.isdigit():
+        if (
+            not isinstance(code, str)
+            or len(code) != OTP_DIGITS
+            or not code.isascii()
+            or not code.isdigit()
+        ):
             raise BridgeRefusal(OTP_UNAVAILABLE)
         moment = _parse_ts(record.get("dispatched_at"))
         if moment is None or moment - now > TS_FUTURE_SKEW or now - moment > TS_MAX_AGE:

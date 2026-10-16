@@ -663,9 +663,19 @@ class SessionReplacementOrderingTest {
                     user: RegistrationUserDto,
                     activeKeyBundleId: String,
                 ) {
+                    // Pause boundary (documented): the account write
+                    // COMPLETES first — retained commitAccount-before-
+                    // publication semantics per T209 design #4 — then the
+                    // callback pauses before publication returns. Logout
+                    // clears the row mid-pause; release then loses the
+                    // lease. The opposite ordering (pause BEFORE the row
+                    // write, leaving C's row with no publication) is a
+                    // known pre-existing raw-row race in the same
+                    // admission semantics, recorded as a follow-up in the
+                    // task result — not redesigned here.
+                    accountOwner.set(UserId.parseRest(user.userId))
                     cEntered.complete(Unit)
                     cRelease.await()
-                    accountOwner.set(UserId.parseRest(user.userId))
                 }
             },
             sessionReplacement = tracking,
@@ -674,6 +684,7 @@ class SessionReplacementOrderingTest {
             registerC.register("c@example.com", "secret", "owner-c")
         }
         withTimeout(5_000) { cEntered.await() }
+        assertEquals(ownerC, accountOwner.get())
 
         var logoutHookCalls = 0
         var grantsCleared = false
@@ -700,9 +711,12 @@ class SessionReplacementOrderingTest {
         assertTrue(grantsCleared)
         cRelease.complete(Unit)
 
-        // The stale completion changes nothing: no commit, no install, no
-        // reopen — and the ONLY store effect allowed (inert archival) never
-        // ran, because archival happens solely after a committed response.
+        // The stale completion publishes nothing: no install, no
+        // reopen — and the ONLY store effect allowed (inert archival)
+        // never ran, because archival happens solely after a committed
+        // response. The pre-logout account callback's completed write
+        // stands as the retained contract prescribes (logout cleared it
+        // after); no rollback is demanded of the replacement fence.
         assertEquals(RegistrationUseCase.Outcome.InvalidResponse, register.await())
         assertEquals(1, tracking.installCount)
         assertEquals(ownerB, tracking.lastInstalled)

@@ -2143,14 +2143,19 @@ class AppContainer private constructor(
             refreshForRecovery = BuildConfig.REMANENCE_RECOVERY_ENABLED,
             recoveryReady = { account -> !BuildConfig.REMANENCE_RECOVERY_ENABLED ||
                 recoveryReadiness.isReady(account.userId, account.activeKeyBundleId) },
-            // Cold-upgrade binding: the bootstrap already validated the
+            // Cold-upgrade gate: the bootstrap already validated the
             // bound sealed record, the agreeing persisted summary, and
-            // the exact unwrapped exports; binding the unclaimed legacy
-            // home to that proven owner keeps private usability without
-            // re-login. claimLegacyIfMatching verifies proof itself and
-            // refuses mismatches/conflicts without clearing or creating.
-            onVerifiedOwnerBundle = { owner, bundle ->
-                runCatching { ownerIdentityStores.claimLegacyIfMatching(owner, bundle) }
+            // the exact unwrapped exports. Attempt the legacy claim, then
+            // PROVE owner-bound private resolution — an Active-family
+            // state requires actually openable keys, never a best-effort
+            // marker. claimLegacyIfMatching verifies proof itself and
+            // refuses mismatches/conflicts without clearing or creating;
+            // already-adopted owner dirs prove with no claim at all.
+            verifyOwnerBinding = { owner, bundle ->
+                runCatching {
+                    ownerIdentityStores.claimLegacyIfMatching(owner, bundle)
+                    ownerIdentityStores.resolve(owner, bundle) is IdentityBundleRepository.LoadResult.Available
+                }.getOrDefault(false)
             },
             refresher = object : dev.hryshyn.remanence.session.SessionRefresher {
                 override suspend fun hasStoredToken(): Boolean =

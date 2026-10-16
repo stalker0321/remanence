@@ -159,16 +159,17 @@ class SessionBootstrap(
     private val recoveryReady: (PersistedAccountSummary) -> Boolean = { true },
     private val refreshForRecovery: Boolean = false,
     /**
-     * Bounded verified-owner binding, invoked only when the session is
-     * authenticated (fresh refresh proof, or the persisted bound
+     * Owner-bound private-resolution proof, invoked only when the session
+     * is authenticated (fresh refresh proof, or the persisted bound
      * record + owner-agreeing summary offline) AND the exact identity
-     * exports are proven present. Production binds an unclaimed legacy
-     * home to its proven owner so a cold upgrade keeps private
-     * usability without re-login; the binding itself verifies proof
-     * and refuses mismatches/conflicts, never clears, never creates.
-     * Best-effort: failures never block the state below.
+     * exports are proven present. Production attempts the legacy claim
+     * and then PROVES `resolve(owner, bundle)` opens private handles;
+     * an already-valid owner directory needs no claim and still proves.
+     * False (or throwing) never emits an Active-family state — the
+     * result is `RecoveryRequired` WITHOUT clearing sealed credentials
+     * or keys. Never generates or deletes.
      */
-    private val onVerifiedOwnerBundle: (ownerUserId: String, bundleId: String) -> Unit = { _, _ -> },
+    private val verifyOwnerBinding: (ownerUserId: String, bundleId: String) -> Boolean = { _, _ -> true },
 ) : SessionStateResolver {
 
     /**
@@ -213,7 +214,7 @@ class SessionBootstrap(
         if (outcome is SessionRefreshOutcome.Rotated || outcome is SessionRefreshOutcome.Reused) {
             if (!identityMatches) return SessionState.RecoveryRequired
             if (!recoveryReady(summary)) return SessionState.RecoverySetupRequired(summary.userId, summary.handle, summary.activeKeyBundleId)
-            runCatching { onVerifiedOwnerBundle(summary.userId, summary.activeKeyBundleId) }
+            if (!ownerBindingProven(summary)) return SessionState.RecoveryRequired
         }
         return when (outcome) {
             is SessionRefreshOutcome.Rotated,
@@ -238,9 +239,10 @@ class SessionBootstrap(
             else if (!recoveryReady(summary)) SessionState.RecoverySetupRequired(summary.userId, summary.handle, summary.activeKeyBundleId)
             else {
                 // Offline with a bound record, agreeing summary, and proven
-                // exact keys: same binding as online, preserving established
-                // offline usability after upgrade. Still best-effort.
-                runCatching { onVerifiedOwnerBundle(summary.userId, summary.activeKeyBundleId) }
+                // exact keys: same binding gate as online, preserving
+                // established offline usability after upgrade. A refused
+                // binding is RecoveryRequired, never a false OfflineActive.
+                if (!ownerBindingProven(summary)) return SessionState.RecoveryRequired
                 SessionState.OfflineActive(
                     userId = summary.userId,
                     handle = summary.handle,
@@ -260,6 +262,20 @@ class SessionBootstrap(
     override suspend fun logout(): SessionState {
         runCatching { tokens.clearToken() }
         return SessionState.SignedOut
+    }
+
+    /**
+     * Owner-bound private-resolution proof for an already-authenticated
+     * session context. Any failure or exception is a closed refusal —
+     * the caller maps it off the Active family without clearing sealed
+     * credentials or keys.
+     */
+    private fun ownerBindingProven(summary: PersistedAccountSummary): Boolean {
+        return try {
+            verifyOwnerBinding(summary.userId, summary.activeKeyBundleId)
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun isCanonicalKeyBundleId(raw: String): Boolean =

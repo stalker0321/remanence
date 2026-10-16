@@ -132,7 +132,7 @@ class SessionBootstrapTest {
         tokenPresent: Boolean? = null,
         recoveryReady: Boolean = true,
         refreshForRecovery: Boolean = false,
-        binder: (ownerUserId: String, bundleId: String) -> Unit = { _, _ -> },
+        binder: (ownerUserId: String, bundleId: String) -> Boolean = { _, _ -> true },
     ): Fixture {
         val dir = createTempDirectory("session").toFile().apply { deleteOnExit() }
         val saved = savedRefresh?.let {
@@ -146,7 +146,7 @@ class SessionBootstrapTest {
         )
         val bootstrap = SessionBootstrap(tokens, identity, { summary }, refresher,
             recoveryReady = { recoveryReady }, refreshForRecovery = refreshForRecovery,
-            onVerifiedOwnerBundle = binder)
+            verifyOwnerBinding = binder)
         return Fixture(bootstrap, tokens, refresher, identity)
     }
 
@@ -209,14 +209,18 @@ class SessionBootstrapTest {
         }
         val bindings = mutableListOf<Pair<String, String>>()
 
-        // Online: refresh proves the session, bootstrap binds the proven
+        // Online: refresh proves the session, the gate binds the proven
         // owner, and the private load actually opens (not just flags).
+        // The binder mirrors production: attempt the claim, then prove
+        // owner-bound private resolution.
         val online = fixture(
             identity = availability,
             summary = PersistedAccountSummary(ownerA, "mykola", derived),
             binder = { owner, bundle ->
                 bindings += owner to bundle
                 stores.claimLegacyIfMatching(owner, bundle)
+                stores.resolve(owner, bundle)
+                    is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available
             },
         )
         val active = online.bootstrap.bootstrap() as SessionState.Active
@@ -273,7 +277,11 @@ class SessionBootstrapTest {
             identity = availability,
             summary = PersistedAccountSummary(ownerA, "mykola", derived),
             refresherOutcome = SessionRefreshOutcome.Unreachable,
-            binder = { owner, bundle -> stores.claimLegacyIfMatching(owner, bundle) },
+            binder = { owner, bundle ->
+                stores.claimLegacyIfMatching(owner, bundle)
+                stores.resolve(owner, bundle)
+                    is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available
+            },
         )
         val state = offline.bootstrap.bootstrap() as SessionState.OfflineActive
         assertEquals(derived, state.activeKeyBundleId)
@@ -285,6 +293,63 @@ class SessionBootstrapTest {
         val preparedB = stores.prepareProvisional("bootstrap-owner-flow", "t210-offline-kek")
         assertTrue(stores.adoptStaged(preparedB.keyBundleId, ownerB))
         assertTrue(availability.hasIdentityFor(preparedB.keyBundleId))
+    }
+
+    @Test
+    fun conflictingLegacyClaimRefusesActiveWithoutClearingCredentials() = runBlocking {
+        val root = createTempDirectory("bootstrap-conflict").toFile()
+        val kek = dev.hryshyn.remanence.auth.SoftwareKekBoundary()
+        if (!kek.hasKey("t210-conflict-kek")) kek.createAes256GcmKey("t210-conflict-kek")
+        val wrapper = dev.hryshyn.remanence.core.crypto.KeysetKekWrapper(kek)
+        val stores = dev.hryshyn.remanence.wiring.OwnerScopedIdentityStore(
+            identityRoot = File(root, "identity"),
+            stagingRoot = File(root, "identity-staging"),
+            wrapper = wrapper,
+        )
+        dev.hryshyn.remanence.core.crypto.IdentityBundleRepository(
+            File(root, "identity"),
+            wrapper,
+        ).createFresh("t210-conflict-kek")
+        val exports = dev.hryshyn.remanence.core.crypto.IdentityBundleRepository(
+            File(root, "identity"),
+            wrapper,
+        ).loadPublicExports() as dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.PublicExportsResult.Available
+        val derived = java.util.UUID.nameUUIDFromBytes(exports.encryptionPublicKeyset).toString()
+        // The legacy home is validly bound to A; B's persisted row points
+        // at A's bundle (conflicting owner).
+        assertTrue(stores.claimLegacyIfMatching(ownerA, derived))
+        val availability = object : IdentityAvailabilityPort {
+            override fun hasIdentityFor(activeKeyBundleId: String): Boolean =
+                stores.hasIdentityFor(activeKeyBundleId)
+        }
+
+        // The public scan still sees A's bundle, but B's bootstrap must NOT
+        // emit Active with unusable keys — and must NOT clear B's sealed
+        // credentials or touch A's keys to resolve the UI state.
+        val conflicted = fixture(
+            recordOwner = ownerB,
+            identity = availability,
+            summary = PersistedAccountSummary(ownerB, "other", derived),
+            binder = { owner, bundle ->
+                stores.claimLegacyIfMatching(owner, bundle)
+                stores.resolve(owner, bundle)
+                    is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available
+            },
+        )
+        assertEquals(SessionState.RecoveryRequired, conflicted.bootstrap.bootstrap())
+        assertEquals(0, conflicted.tokens.clearCount)
+        assertEquals(
+            ownerA to derived,
+            stores.readClaim(File(root, "identity"))?.let { it.ownerUserId to it.keyBundleId },
+        )
+        assertTrue(
+            stores.resolve(ownerA, derived)
+                is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available,
+        )
+        assertTrue(
+            stores.resolve(ownerB, derived)
+                is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.RecoveryRequired,
+        )
     }
 
     @Test

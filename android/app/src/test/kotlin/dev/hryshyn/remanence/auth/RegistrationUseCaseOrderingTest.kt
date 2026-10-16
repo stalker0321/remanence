@@ -125,33 +125,47 @@ class RegistrationUseCaseOrderingTest {
         }
         val useCase = RegistrationUseCase(identity, api, FakeAccounts(trace), RecordingReplacement(trace))
 
-        // Same-flow 409 retry (edited handle, same target): one flow key.
-        useCase.register("private@example.com", "secret-password", "@mykola")
-        useCase.register("private@example.com", "secret-password", "@mykola2")
+        // Same-flow 409 retries (edited handles, same target): one flow
+        // key, reused. Outcomes checked so a setup failure cannot
+        // masquerade as lifecycle evidence.
+        val rejected = RegistrationUseCase.Outcome.Rejected(409, RegistrationProblemCode.HANDLE_UNAVAILABLE)
+        assertEquals(rejected, useCase.register("private@example.com", "secret-password", "@mykola"))
+        assertEquals(rejected, useCase.register("private@example.com", "secret-password", "@mykola2"))
         assertEquals(2, identity.flowKeys.size)
         assertEquals(identity.flowKeys[0], identity.flowKeys[1])
 
-        // Success rotates the epoch THROUGH the real register() path:
-        // the next registration for the SAME target mints independent
-        // keys instead of reusing the completed flow's candidate.
+        // Success USES the old retry flow's candidate first (E0), and only
+        // then rotates: keys are E0,E0,E0,E1 — never the reverse.
         api.nextResult = AuthResult.Success(successResponse, 201)
-        useCase.register("private@example.com", "secret-password", "@mykola")
-        useCase.register("private@example.com", "secret-password", "@mykola")
+        val registered = RegistrationUseCase.Outcome.Registered(
+            "1f0a1234-5678-4abc-9def-aabbccdd1001", "mykola", "2f0a1234-5678-4abc-9def-aabbccdd2002",
+        )
+        assertEquals(registered, useCase.register("private@example.com", "secret-password", "@mykola"))
+        assertEquals(registered, useCase.register("private@example.com", "secret-password", "@mykola"))
         assertEquals(4, identity.flowKeys.size)
-        assertTrue(identity.flowKeys[2] != identity.flowKeys[0])
-        assertEquals(identity.flowKeys[2], identity.flowKeys[3])
+        assertEquals(identity.flowKeys[0], identity.flowKeys[2])
+        assertTrue(identity.flowKeys[2] != identity.flowKeys[3])
 
-        // Explicit new flow (logout/screen boundary) also mints
-        // independent keys for the same target.
+        // Explicit new flow (logout/screen boundary) mints E2; a different
+        // target in the same epoch mints E3. Sequence E0,E0,E0,E1,E2,E3.
         useCase.startNewFlow()
-        useCase.register("private@example.com", "secret-password", "@mykola")
+        assertEquals(registered, useCase.register("private@example.com", "secret-password", "@mykola"))
         assertEquals(5, identity.flowKeys.size)
-        assertEquals(4, identity.flowKeys.toSet().size)
-
-        // Same flow, different target: independent keys as well.
-        useCase.register("other@example.com", "secret-password", "@mykola")
+        assertEquals(3, identity.flowKeys.toSet().size)
+        assertEquals(registered, useCase.register("other@example.com", "secret-password", "@mykola"))
         assertEquals(6, identity.flowKeys.size)
-        assertEquals(5, identity.flowKeys.toSet().size)
+        assertEquals(4, identity.flowKeys.toSet().size)
+        assertEquals(
+            listOf(
+                identity.flowKeys[0],
+                identity.flowKeys[0],
+                identity.flowKeys[0],
+                identity.flowKeys[3],
+                identity.flowKeys[4],
+                identity.flowKeys[5],
+            ),
+            identity.flowKeys,
+        )
     }
 
     @Test

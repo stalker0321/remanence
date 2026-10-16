@@ -1,14 +1,18 @@
 package dev.hryshyn.remanence.ui.auth
 
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -54,7 +58,7 @@ class HandleSetupErrorStabilityTest {
         onHandleChange: (String) -> Unit,
         busy: androidx.compose.runtime.State<Boolean>,
         serverError: androidx.compose.runtime.State<String?>,
-        widthDp: Int = 390,
+        widthDp: Int? = null,
         fontScale: Float = 1f,
     ) {
         composeRule.setContent {
@@ -65,23 +69,41 @@ class HandleSetupErrorStabilityTest {
                         fontScale = fontScale,
                     ),
                 ) {
-                    // Same shape as the production ticket branch: the
-                    // action first, then the weighted form in a bounded
-                    // column (weight needs the ColumnScope parent).
-                    Column(Modifier.fillMaxSize().width(widthDp.dp)) {
-                        TicketClaimContent(
-                            handle = handle.value,
-                            onHandleChange = onHandleChange,
-                            busy = busy.value,
-                            serverError = serverError.value,
-                            onRetryAccount = {},
-                            onContinue = {},
-                        )
+                    // Real AccessPage host (header row + content + footer),
+                    // exactly like production: the shared ticket tree keeps
+                    // its button-first, weighted-form shape. A bounded width
+                    // goes BEFORE fill — fillMaxSize first would tighten the
+                    // min width and make the bound a no-op.
+                    val host: @Composable () -> Unit = {
+                        AccessPage {
+                            TicketClaimContent(
+                                handle = handle.value,
+                                onHandleChange = onHandleChange,
+                                busy = busy.value,
+                                serverError = serverError.value,
+                                onRetryAccount = {},
+                                onContinue = {},
+                            )
+                        }
+                    }
+                    if (widthDp == null) {
+                        Box(Modifier.fillMaxSize().testTag("narrow_probe_host")) { host() }
+                    } else {
+                        Box(
+                            Modifier.width(widthDp.dp).fillMaxHeight()
+                                .testTag("narrow_probe_host"),
+                        ) {
+                            host()
+                        }
                     }
                 }
             }
         }
     }
+
+    /** Measured host width in px — proves the narrow bound actually held. */
+    private fun hostWidthPx(): Float =
+        composeRule.onNodeWithTag("narrow_probe_host").fetchSemanticsNode().boundsInRoot.width
 
     private fun topOf(tag: String): Float =
         composeRule.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot.top
@@ -125,6 +147,7 @@ class HandleSetupErrorStabilityTest {
     }
 
     @Test
+    @Config(sdk = [35], qualifiers = "w360dp-h640dp-xhdpi")
     fun narrowLargeFontRussianErrorStillMovesNothing() {
         val serverError = mutableStateOf<String?>(null)
         mountHost(
@@ -136,6 +159,9 @@ class HandleSetupErrorStabilityTest {
             fontScale = 1.3f,
         )
         composeRule.onNodeWithTag("access_handle_continue").assertIsDisplayed()
+        // The 320 dp bound actually held inside the 360 dp window.
+        val expectedPx = with(composeRule.density) { 320.dp.toPx() }
+        assertEquals(expectedPx, hostWidthPx(), 1f)
         val titleRest = titleTop()
         val inputRest = topOf("access_handle_input")
         val actionRest = topOf("access_google_retry")
@@ -176,6 +202,11 @@ class HandleSetupErrorStabilityTest {
         // onChange may fire per edit, so only the final draft is asserted.
         assertTrue(captured.isNotEmpty())
         assertEquals("takenhandle", captured.last())
+        // And the rendered editable field actually holds it (label text
+        // excluded by construction — no merged-text guessing).
+        val editable = composeRule.onNodeWithTag("access_handle_input")
+            .fetchSemanticsNode().config[SemanticsProperties.EditableText].text
+        assertEquals("takenhandle", editable)
         composeRule.runOnIdle {
             serverError.value = "Handle already taken"
             busy.value = true

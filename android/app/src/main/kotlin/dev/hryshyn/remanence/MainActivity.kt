@@ -45,6 +45,7 @@ import dev.hryshyn.remanence.session.AuthenticatedHomeChrome
 import dev.hryshyn.remanence.session.RootScreen
 import dev.hryshyn.remanence.session.RootViewModel
 import dev.hryshyn.remanence.ui.auth.LoginScreen
+import dev.hryshyn.remanence.ui.auth.TicketClaimContent
 import dev.hryshyn.remanence.ui.auth.AccessPage
 import dev.hryshyn.remanence.ui.auth.AccessHeading
 import dev.hryshyn.remanence.ui.auth.GoogleSignInButton
@@ -308,7 +309,7 @@ private fun RootSurface(
                         var handle by rememberSaveable { mutableStateOf("") }
                         AstraEnterTransition(motion = authMotion) {
                             Column(Modifier.fillMaxSize()) {
-                                dev.hryshyn.remanence.ui.auth.TicketClaimContent(
+                                TicketClaimContent(
                                     handle = handle,
                                     onHandleChange = { if (it.length <= 30) handle = it },
                                     busy = googleWorking,

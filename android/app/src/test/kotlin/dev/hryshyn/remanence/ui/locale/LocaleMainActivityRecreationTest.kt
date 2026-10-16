@@ -321,7 +321,7 @@ class LocaleMainActivityRecreationTest {
     }
 
     @Test
-    fun legacyHostTogglesBothDirectionsWithoutLosingSiblings() {
+    fun legacyHostTogglesBothDirectionsWithoutLosingSiblingsSdk35() {
         legacyHostTogglesBothDirectionsWithoutLosingSiblings()
     }
 

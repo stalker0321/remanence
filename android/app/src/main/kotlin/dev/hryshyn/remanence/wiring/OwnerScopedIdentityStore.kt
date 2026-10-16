@@ -264,11 +264,16 @@ class OwnerScopedIdentityStore(
 
     /**
      * Converges a destination toward staged source records with proven
-     * provenance. A recovered record is authoritative and never mutated:
-     * adopted-same succeeds, anything else refuses. Otherwise each
-     * sealed record either already matches byte-for-byte (our own prior
-     * copy — skipped), is absent (copied via tmp+rename), or differs
-     * (foreign/corrupt — refuse with old bytes preserved).
+     * provenance, in two strict phases. Phase one (preflight) reads and
+     * validates EVERYTHING — recovered-record priority, source
+     * readability, and each existing destination record against the
+     * staged source — without writing anything. Phase two copies only
+     * the records proven absent. A recovered record is authoritative
+     * and never mutated: adopted-same succeeds, anything else refuses.
+     * Otherwise each sealed record either already matches byte-for-byte
+     * (our own prior copy — skipped), is absent (copied via tmp+rename),
+     * or differs (foreign/corrupt — refuse with old bytes preserved).
+     * A rejection therefore never changes the tree.
      */
     private fun copyRecordsInto(
         source: File,
@@ -285,30 +290,34 @@ class OwnerScopedIdentityStore(
                 if (current !is IdentityBundleRepository.LoadResult.Available) return false
                 return identitiesEqual(current, staged)
             }
-            destination.mkdirs()
-            for (name in listOf(
+            val names = listOf(
                 IdentityBundleRepository.ENCRYPTION_FILE_NAME,
                 IdentityBundleRepository.SIGNING_FILE_NAME,
-            )) {
+            )
+            // Phase one: preflight every record before any write.
+            val expected = names.map { name ->
+                try {
+                    File(source, name).readBytes()
+                } catch (_: Exception) {
+                    null
+                } ?: return false
+            }
+            val missing = names.mapIndexedNotNull { index, name ->
                 val target = File(destination, name)
-                if (target.exists()) {
+                if (!target.exists()) name
+                else {
                     val existing = try {
                         target.readBytes()
                     } catch (_: Exception) {
                         null
                     }
-                    val expected = try {
-                        File(source, name).readBytes()
-                    } catch (_: Exception) {
-                        null
-                    }
-                    if (expected == null || existing == null || !expected.contentEquals(existing)) {
-                        return false
-                    }
-                } else {
-                    copyRecord(source, destination, name)
+                    if (existing == null || !expected[index].contentEquals(existing)) return false
+                    null
                 }
             }
+            // Phase two: only proven-absent records are written.
+            destination.mkdirs()
+            missing.forEach { name -> copyRecord(source, destination, name) }
             true
         } catch (_: Exception) {
             false
@@ -351,7 +360,13 @@ class OwnerScopedIdentityStore(
         }
     }
 
-    /** Owner-scoped recovery install (same refuse-to-replace kernel, per dir). */
+    /**
+     * Owner-scoped recovery install (same refuse-to-replace kernel, per
+     * dir). Synchronized on the same monitor as [adoptStaged] so a
+     * competing recovery write cannot invalidate an adoption preflight
+     * unnoticed; the kernel still refuses replacement either way.
+     */
+    @Synchronized
     fun installRecovered(
         ownerUserId: String,
         kekAlias: String,

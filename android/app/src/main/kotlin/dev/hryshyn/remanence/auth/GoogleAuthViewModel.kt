@@ -144,25 +144,16 @@ class GoogleAuthViewModel(private val container: AppContainer) : ViewModel() {
             // Registration carries its prepared identity; an existing-account
             // login binds any retained staged candidate by the assigned
             // bundle instead (lost-ACK path) — never fabricated keys.
+            // The shared adapter seam below is covered by
+            // TinkRegistrationIdentityAdapterTest; keep this call site in
+            // sync with its (PreparedIdentity?, owner, bundle) shape.
             val assignedBundle = login.activeKeyBundle.keyBundleId
-            if (identity != null && identity.keyBundleId == assignedBundle) {
-                try {
-                    container.registrationIdentityAdapter.bindStagedToOwner(identity.keyBundleId, login.user.userId)
-                } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { }
-            } else if (identity == null) {
-                // Existing-account login without prepared keys: bind a
-                // retained staged candidate matching the assigned bundle
-                // (interrupted registration recovered at login), if any.
-                // Never generates or fabricates keys.
-                try {
-                    val staged = container.ownerIdentityStores.resolveStaged(assignedBundle)
-                    if (staged != null) {
-                        container.registrationIdentityAdapter.bindStagedToOwner(assignedBundle, login.user.userId)
-                    }
-                } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { }
-            }
             try {
-                container.ownerIdentityStores.claimLegacyIfMatching(login.user.userId, login.activeKeyBundle.keyBundleId)
+                container.registrationIdentityAdapter.bindVerifiedLogin(
+                    identity,
+                    login.user.userId,
+                    assignedBundle,
+                )
             } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { }
             committed = true; ticket = null; mutableState.value = GoogleAuthState.SignedIn
         } finally {

@@ -71,8 +71,10 @@ class RegistrationUseCase(
 
     /**
      * Starts a new logical registration flow. Called when the
-     * registration screen opens (a fresh ViewModel); retries within the
-     * open screen keep the epoch. Never deletes staged material.
+     * registration screen opens, internally after each successful
+     * registration, and on logout (via `LogoutUseCase`). Retries
+     * within the open flow keep the epoch. Never deletes staged
+     * material.
      */
     fun startNewFlow() {
         flowEpoch = java.util.UUID.randomUUID().toString()
@@ -153,6 +155,13 @@ class RegistrationUseCase(
                     } catch (_: Exception) {
                     }
                 }
+                // The flow completed: rotate the epoch so a LATER unrelated
+                // registration (same screen, same Activity, even the same
+                // target) mints independent keys instead of reusing this
+                // flow's candidate. Retries of THIS flow return above
+                // (Rejected/Network), keeping the epoch. Staged material
+                // is never deleted — it stays for lost-ACK login binding.
+                startNewFlow()
                 Outcome.Registered(
                     userId = response.user.userId,
                     handle = response.user.handle,

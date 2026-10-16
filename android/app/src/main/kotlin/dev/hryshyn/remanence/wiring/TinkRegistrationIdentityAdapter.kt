@@ -45,4 +45,31 @@ class TinkRegistrationIdentityAdapter(
 
     override fun bindStagedToOwner(bundleId: String, ownerId: String): Boolean =
         ownerStores.adoptStaged(bundleId, ownerId)
+
+    /**
+     * Google `SIGNED_IN` binding for a verified login, shared by the
+     * ViewModel's commit path (registration and existing-account login
+     * alike). Adopts the staged candidate matching the server-assigned
+     * bundle into the verified owner's archive — this flow's [prepared]
+     * identity when it matches (registration), else a retained earlier
+     * candidate recovered by exact bundle (existing-account lost-ACK
+     * login) — then claims a matching legacy home. Never generates or
+     * fabricates keys: a mismatch or absent candidate binds nothing and
+     * resolution fails closed downstream.
+     */
+    fun bindVerifiedLogin(
+        prepared: PreparedIdentity?,
+        ownerId: String,
+        assignedBundleId: String,
+    ): Boolean {
+        val bound = if (prepared != null && prepared.keyBundleId == assignedBundleId) {
+            ownerStores.adoptStaged(prepared.keyBundleId, ownerId)
+        } else if (prepared == null && ownerStores.resolveStaged(assignedBundleId) != null) {
+            ownerStores.adoptStaged(assignedBundleId, ownerId)
+        } else {
+            false
+        }
+        ownerStores.claimLegacyIfMatching(ownerId, assignedBundleId)
+        return bound
+    }
 }

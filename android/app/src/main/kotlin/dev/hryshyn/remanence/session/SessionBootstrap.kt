@@ -158,6 +158,17 @@ class SessionBootstrap(
     private val refresher: SessionRefresher? = null,
     private val recoveryReady: (PersistedAccountSummary) -> Boolean = { true },
     private val refreshForRecovery: Boolean = false,
+    /**
+     * Bounded verified-owner binding, invoked only when the session is
+     * authenticated (fresh refresh proof, or the persisted bound
+     * record + owner-agreeing summary offline) AND the exact identity
+     * exports are proven present. Production binds an unclaimed legacy
+     * home to its proven owner so a cold upgrade keeps private
+     * usability without re-login; the binding itself verifies proof
+     * and refuses mismatches/conflicts, never clears, never creates.
+     * Best-effort: failures never block the state below.
+     */
+    private val onVerifiedOwnerBundle: (ownerUserId: String, bundleId: String) -> Unit = { _, _ -> },
 ) : SessionStateResolver {
 
     /**
@@ -202,6 +213,7 @@ class SessionBootstrap(
         if (outcome is SessionRefreshOutcome.Rotated || outcome is SessionRefreshOutcome.Reused) {
             if (!identityMatches) return SessionState.RecoveryRequired
             if (!recoveryReady(summary)) return SessionState.RecoverySetupRequired(summary.userId, summary.handle, summary.activeKeyBundleId)
+            runCatching { onVerifiedOwnerBundle(summary.userId, summary.activeKeyBundleId) }
         }
         return when (outcome) {
             is SessionRefreshOutcome.Rotated,
@@ -224,13 +236,19 @@ class SessionBootstrap(
 
             SessionRefreshOutcome.Unreachable -> if (!identityMatches) SessionState.RequiresConnectivity
             else if (!recoveryReady(summary)) SessionState.RecoverySetupRequired(summary.userId, summary.handle, summary.activeKeyBundleId)
-            else SessionState.OfflineActive(
-                userId = summary.userId,
-                handle = summary.handle,
-                hasEncryptionKeyset = true,
-                hasSigningKeyset = true,
-                activeKeyBundleId = summary.activeKeyBundleId,
-            )
+            else {
+                // Offline with a bound record, agreeing summary, and proven
+                // exact keys: same binding as online, preserving established
+                // offline usability after upgrade. Still best-effort.
+                runCatching { onVerifiedOwnerBundle(summary.userId, summary.activeKeyBundleId) }
+                SessionState.OfflineActive(
+                    userId = summary.userId,
+                    handle = summary.handle,
+                    hasEncryptionKeyset = true,
+                    hasSigningKeyset = true,
+                    activeKeyBundleId = summary.activeKeyBundleId,
+                )
+            }
 
             SessionRefreshOutcome.Unavailable,
             SessionRefreshOutcome.Invalidated,

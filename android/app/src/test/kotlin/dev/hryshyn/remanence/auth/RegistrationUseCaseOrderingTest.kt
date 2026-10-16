@@ -15,12 +15,15 @@ class RegistrationUseCaseOrderingTest {
 
     private class RecordingIdentityPort(private val trace: MutableList<String>) : RegistrationIdentityPort {
         val calls = mutableListOf<String>()
+        /** Actual flow keys per prepare call (calls holds trace literals). */
+        val flowKeys = mutableListOf<String>()
         var prepared = 0
         var failWithRecovery = false
 
         override fun prepareProvisional(flowKey: String): PreparedIdentity {
             trace += "identity"
             calls += "identity"
+            flowKeys += flowKey
             if (failWithRecovery) throw IdentityRecoveryRequiredException()
             prepared++
             return PreparedIdentity(
@@ -110,7 +113,7 @@ class RegistrationUseCaseOrderingTest {
     }
 
     @Test
-    fun sameFlowRetryReusesButNewFlowAndTargetMintIndependentKeys() = runTest {
+    fun sameFlowRetryReusesButSuccessAndNewFlowRotateEpoch() = runTest {
         val trace = mutableListOf<String>()
         val identity = RecordingIdentityPort(trace)
         val api = FakeAuthApi(trace).apply {
@@ -125,20 +128,30 @@ class RegistrationUseCaseOrderingTest {
         // Same-flow 409 retry (edited handle, same target): one flow key.
         useCase.register("private@example.com", "secret-password", "@mykola")
         useCase.register("private@example.com", "secret-password", "@mykola2")
-        assertEquals(2, identity.calls.size)
-        assertEquals(identity.calls[0], identity.calls[1])
+        assertEquals(2, identity.flowKeys.size)
+        assertEquals(identity.flowKeys[0], identity.flowKeys[1])
 
-        // New logical flow, same target: independent keys (post
-        // success/logout reuse of the old candidate is forbidden).
+        // Success rotates the epoch THROUGH the real register() path:
+        // the next registration for the SAME target mints independent
+        // keys instead of reusing the completed flow's candidate.
+        api.nextResult = AuthResult.Success(successResponse, 201)
+        useCase.register("private@example.com", "secret-password", "@mykola")
+        useCase.register("private@example.com", "secret-password", "@mykola")
+        assertEquals(4, identity.flowKeys.size)
+        assertTrue(identity.flowKeys[2] != identity.flowKeys[0])
+        assertEquals(identity.flowKeys[2], identity.flowKeys[3])
+
+        // Explicit new flow (logout/screen boundary) also mints
+        // independent keys for the same target.
         useCase.startNewFlow()
         useCase.register("private@example.com", "secret-password", "@mykola")
-        assertEquals(3, identity.calls.size)
-        assertTrue(identity.calls[0] != identity.calls[2])
+        assertEquals(5, identity.flowKeys.size)
+        assertEquals(4, identity.flowKeys.toSet().size)
 
         // Same flow, different target: independent keys as well.
         useCase.register("other@example.com", "secret-password", "@mykola")
-        assertEquals(4, identity.calls.size)
-        assertEquals(3, identity.calls.toSet().size)
+        assertEquals(6, identity.flowKeys.size)
+        assertEquals(5, identity.flowKeys.toSet().size)
     }
 
     @Test

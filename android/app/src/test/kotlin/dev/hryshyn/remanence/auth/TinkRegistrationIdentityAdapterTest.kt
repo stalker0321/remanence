@@ -111,6 +111,51 @@ class TinkRegistrationIdentityAdapterTest {
         assertTrue(!loginAdapter.bindStagedToOwner("0198f0a0-0000-7000-8000-00000000b099", owner))
     }
 
+    @Test
+    fun verifiedLoginSeamBindsExactAssignedBundleWithoutGenerating() {
+        val directory = Files.createTempDirectory("identity-adapter-vlogin").toFile()
+        val kek = SoftwareKekBoundary()
+        val ownerStores = stores(directory, kek)
+        val adapter = TinkRegistrationIdentityAdapter(ownerStores, kek, kekAlias)
+        val owner = "0198f0a0-0000-7000-8000-00000000a002"
+        val stagingRoot = java.io.File(directory, "identity-staging")
+        val identityRoot = java.io.File(directory, "identity")
+        fun stagedIds(): Set<String> =
+            stagingRoot.listFiles { file -> file.isDirectory }?.map { it.name }?.toSet() ?: emptySet()
+
+        // Earlier registration attempt staged R; the ACK was lost.
+        val staged = adapter.prepareProvisional("google:vlogin-flow")
+        val stagingBefore = stagedIds()
+
+        // Existing-account SIGNED_IN carries NO prepared identity: the
+        // shared Google commit seam adopts the retained candidate matching
+        // the assigned bundle — and only that bundle.
+        assertTrue(adapter.bindVerifiedLogin(null, owner, staged.keyBundleId))
+        val resolved = ownerStores.resolve(owner, staged.keyBundleId)
+        assertTrue(resolved is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available)
+        // Nothing was generated: the staged set is unchanged and no other
+        // owner directory appeared.
+        assertEquals(stagingBefore, stagedIds())
+        assertEquals(
+            setOf(owner),
+            identityRoot.listFiles { file -> file.isDirectory }?.map { it.name }?.toSet(),
+        )
+
+        // Registration-shaped call (prepared matches assigned) also binds.
+        val ownerC = "0198f0a0-0000-7000-8000-00000000a003"
+        assertTrue(adapter.bindVerifiedLogin(staged, ownerC, staged.keyBundleId))
+
+        // Unrelated assigned bundle binds nothing and creates nothing.
+        assertTrue(!adapter.bindVerifiedLogin(null, owner, "0198f0a0-0000-7000-8000-00000000b099"))
+        // Mismatched prepared identity binds nothing either.
+        val other = adapter.prepareProvisional("google:vlogin-other")
+        assertTrue(!adapter.bindVerifiedLogin(other, owner, staged.keyBundleId))
+        assertTrue(
+            ownerStores.resolve(owner, staged.keyBundleId)
+                is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available,
+        )
+    }
+
     private companion object {
         val UUID_REGEX = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
     }

@@ -17,6 +17,13 @@ import dev.hryshyn.remanence.core.crypto.SessionRefreshRecord
 import dev.hryshyn.remanence.core.model.UserId
 import dev.hryshyn.remanence.session.SessionTokenPort
 import dev.hryshyn.remanence.wiring.PreparedIdentity
+import dev.hryshyn.remanence.wiring.OwnerScopedIdentityStore
+import dev.hryshyn.remanence.core.crypto.IdentityBundleRepository
+import dev.hryshyn.remanence.core.crypto.KeysetKekWrapper
+import java.io.File
+import java.nio.file.Files
+import java.security.MessageDigest
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CompletableDeferred
@@ -33,6 +40,7 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -557,5 +565,167 @@ class SessionReplacementOrderingTest {
             CoordinatedRefreshOutcome.Invalidated,
             apiStack.sessionRefreshCoordinator.refreshForBootstrap(ownerB),
         )
+    }
+
+    @Test
+    fun staleRegistrationAfterLogoutAdoptsNothingAndKeepsAAndBIntact() = runBlocking {
+        // Real owner-scoped filesystem: claimed legacy A, staged B.
+        val root = Files.createTempDirectory("stale-race-stores").toFile()
+        val kek = SoftwareKekBoundary()
+        val kekAlias = "t210-stale-race-kek"
+        if (!kek.hasKey(kekAlias)) kek.createAes256GcmKey(kekAlias)
+        val wrapper = KeysetKekWrapper(kek)
+        val stores = OwnerScopedIdentityStore(
+            File(root, "identity"),
+            File(root, "identity-staging"),
+            wrapper,
+        )
+        val legacyRoot = File(root, "identity")
+        IdentityBundleRepository(legacyRoot, wrapper).createFresh(kekAlias)
+        val bundleA = UUID.nameUUIDFromBytes(
+            (IdentityBundleRepository(legacyRoot, wrapper).loadPublicExports()
+                as IdentityBundleRepository.PublicExportsResult.Available).encryptionPublicKeyset,
+        ).toString()
+        assertTrue(stores.claimLegacyIfMatching(ownerA.toRestString(), bundleA))
+        fun sealedHashes(directory: File): Map<String, String> = listOf(
+            IdentityBundleRepository.ENCRYPTION_FILE_NAME,
+            IdentityBundleRepository.SIGNING_FILE_NAME,
+        ).associateWith { name ->
+            MessageDigest.getInstance("SHA-256").digest(File(directory, name).readBytes())
+                .joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+        }
+        val sealedABefore = sealedHashes(legacyRoot)
+
+        val stored = AtomicReference(BoundRefreshCredential(ownerA, "pm_rt_a"))
+        val accountOwner = AtomicReference(ownerA)
+        val tokens = AuthTokenHolder("pm_at_a", "pm_rt_a")
+        val apiStack = stack(stored, tokens)
+        val tracking = TrackingReplacement(replacement(apiStack, accountOwner))
+
+        // Login B completes first through the real use case over the real
+        // store gate: LoggedIn, B adopted into its owner dir, tokens for B.
+        val stagedB = stores.prepareProvisional("stale-race-login-flow", kekAlias)
+        val loginBResponse = loginResponseB().copy(
+            activeKeyBundle = loginResponseB().activeKeyBundle.copy(keyBundleId = stagedB.keyBundleId),
+        )
+        val loginB = LoginUseCase(
+            identity = { candidate -> stores.hasIdentityFor(candidate) },
+            authApi = { AuthResult.Success(loginBResponse, 200) },
+            accounts = object : CurrentAccountPort {
+                override suspend fun recordCurrentAccount(
+                    user: RegistrationUserDto,
+                    activeKeyBundleId: String,
+                ) {
+                    accountOwner.set(UserId.parseRest(user.userId))
+                }
+            },
+            sessionReplacement = tracking,
+            ownerStores = stores,
+        )
+        assertEquals(
+            LoginUseCase.Outcome.LoggedIn(ownerB.toRestString(), "owner-b", stagedB.keyBundleId),
+            loginB.login("b@example.com", "secret"),
+        )
+        assertEquals(1, tracking.installCount)
+        assertEquals("pm_at_b", tokens.accessToken)
+        assertTrue(
+            stores.resolve(ownerB.toRestString(), stagedB.keyBundleId)
+                is IdentityBundleRepository.LoadResult.Available,
+        )
+        val sealedBBefore = sealedHashes(File(legacyRoot, ownerB.toRestString()))
+        val stagedC = stores.prepareProvisional("stale-race-register-flow", kekAlias)
+
+        // A stale registration C pauses inside its commit holding a
+        // pre-logout lease; logout then tears B's session down through the
+        // real LogoutUseCase (firing the production epoch-rotation hook).
+        val cEntered = CompletableDeferred<Unit>()
+        val cRelease = CompletableDeferred<Unit>()
+        val registerC = RegistrationUseCase(
+            identity = object : RegistrationIdentityPort {
+                override fun prepareProvisional(flowKey: String): PreparedIdentity =
+                    PreparedIdentity(
+                        keyBundleId = stagedC.keyBundleId,
+                        encryptionPublicKeysetB64Url = "CIenc",
+                        signingPublicKeysetB64Url = "CJsig",
+                    )
+
+                override fun bindStagedToOwner(bundleId: String, ownerId: String): Boolean =
+                    stores.adoptStaged(bundleId, ownerId)
+            },
+            authApi = object : RegistrationAuthApiPort {
+                override suspend fun register(
+                    request: dev.hryshyn.remanence.core.data.network.RegisterRequestDto,
+                ): AuthResult<RegisterResponseDto> =
+                    AuthResult.Success(registerResponseC().copy(activeKeyBundleId = stagedC.keyBundleId), 201)
+            },
+            accounts = object : CurrentAccountPort {
+                override suspend fun recordCurrentAccount(
+                    user: RegistrationUserDto,
+                    activeKeyBundleId: String,
+                ) {
+                    cEntered.complete(Unit)
+                    cRelease.await()
+                    accountOwner.set(UserId.parseRest(user.userId))
+                }
+            },
+            sessionReplacement = tracking,
+        )
+        val register = async(Dispatchers.Default) {
+            registerC.register("c@example.com", "secret", "owner-c")
+        }
+        withTimeout(5_000) { cEntered.await() }
+
+        var logoutHookCalls = 0
+        var grantsCleared = false
+        val logout = LogoutUseCase(
+            serverLogout = { AuthResult.Success(Unit, 204) },
+            accessToken = { apiStack.sessionRefreshCoordinator.rawAccessToken() },
+            tokens = object : SessionTokenPort {
+                override fun readToken(): String? = stored.get()?.refreshToken
+                override fun readRecord() = null
+                override fun saveToken(refreshToken: String) = Unit
+                override fun saveRecord(record: SessionRefreshRecord) = Unit
+                override fun clearToken() {
+                    stored.set(null)
+                }
+            },
+            credentialSink = LogoutCredentialSink { tokens.clearSession() },
+            accounts = { accountOwner.set(null) },
+            grants = { grantsCleared = true },
+            invalidateSessionLease = { apiStack.sessionRefreshCoordinator.invalidate() },
+            onLogoutCompleted = { logoutHookCalls++ },
+        )
+        logout.logout()
+        assertEquals(1, logoutHookCalls)
+        assertTrue(grantsCleared)
+        cRelease.complete(Unit)
+
+        // The stale completion changes nothing: no commit, no install, no
+        // reopen — and the ONLY store effect allowed (inert archival) never
+        // ran, because archival happens solely after a committed response.
+        assertEquals(RegistrationUseCase.Outcome.InvalidResponse, register.await())
+        assertEquals(1, tracking.installCount)
+        assertEquals(ownerB, tracking.lastInstalled)
+        assertNull(accountOwner.get())
+        assertNull(tokens.accessToken)
+        assertNull(stored.get())
+        assertDomainClosedNoOrdinaryBearer(apiStack)
+        // Readiness gate: B still ready, C's staged keys never readiness.
+        assertTrue(stores.hasIdentityFor(stagedB.keyBundleId))
+        assertTrue(!stores.hasIdentityFor(stagedC.keyBundleId))
+        // A sealed bytes and B adopted bytes byte-identical; C adopted
+        // nowhere (its staged candidate is retained, unbound).
+        assertEquals(sealedABefore, sealedHashes(legacyRoot))
+        assertEquals(sealedBBefore, sealedHashes(File(legacyRoot, ownerB.toRestString())))
+        assertTrue(!File(File(legacyRoot, ownerC.toRestString()), "identity.encryption.pwks").exists())
+        assertTrue(
+            stores.resolve(ownerB.toRestString(), stagedB.keyBundleId)
+                is IdentityBundleRepository.LoadResult.Available,
+        )
+        assertTrue(
+            stores.resolve(ownerA.toRestString(), bundleA)
+                is IdentityBundleRepository.LoadResult.Available,
+        )
+        assertTrue(stores.resolveStaged(stagedC.keyBundleId) != null)
     }
 }

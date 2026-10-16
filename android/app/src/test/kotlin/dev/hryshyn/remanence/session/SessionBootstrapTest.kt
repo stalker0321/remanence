@@ -132,6 +132,7 @@ class SessionBootstrapTest {
         tokenPresent: Boolean? = null,
         recoveryReady: Boolean = true,
         refreshForRecovery: Boolean = false,
+        binder: (ownerUserId: String, bundleId: String) -> Unit = { _, _ -> },
     ): Fixture {
         val dir = createTempDirectory("session").toFile().apply { deleteOnExit() }
         val saved = savedRefresh?.let {
@@ -144,7 +145,8 @@ class SessionBootstrapTest {
             tokens,
         )
         val bootstrap = SessionBootstrap(tokens, identity, { summary }, refresher,
-            recoveryReady = { recoveryReady }, refreshForRecovery = refreshForRecovery)
+            recoveryReady = { recoveryReady }, refreshForRecovery = refreshForRecovery,
+            onVerifiedOwnerBundle = binder)
         return Fixture(bootstrap, tokens, refresher, identity)
     }
 
@@ -180,22 +182,84 @@ class SessionBootstrapTest {
     }
 
     @Test
-    fun realStoreBackedAvailabilityAdmitsExactBundleWithoutHolder() = runBlocking {
+    fun coldUpgradeBindsUnclaimedLegacyAndOpensPrivateKeys() = runBlocking {
         val root = createTempDirectory("bootstrap-stores").toFile()
         val kek = dev.hryshyn.remanence.auth.SoftwareKekBoundary()
         if (!kek.hasKey("t210-bootstrap-kek")) kek.createAes256GcmKey("t210-bootstrap-kek")
+        val wrapper = dev.hryshyn.remanence.core.crypto.KeysetKekWrapper(kek)
         val stores = dev.hryshyn.remanence.wiring.OwnerScopedIdentityStore(
             identityRoot = File(root, "identity"),
             stagingRoot = File(root, "identity-staging"),
-            wrapper = dev.hryshyn.remanence.core.crypto.KeysetKekWrapper(kek),
+            wrapper = wrapper,
         )
+        // Upgrade fixture: valid sealed session + Room row + legacy keys,
+        // but NO claim marker (pre-T210 install).
         dev.hryshyn.remanence.core.crypto.IdentityBundleRepository(
             File(root, "identity"),
-            dev.hryshyn.remanence.core.crypto.KeysetKekWrapper(kek),
+            wrapper,
         ).createFresh("t210-bootstrap-kek")
         val exports = dev.hryshyn.remanence.core.crypto.IdentityBundleRepository(
             File(root, "identity"),
-            dev.hryshyn.remanence.core.crypto.KeysetKekWrapper(kek),
+            wrapper,
+        ).loadPublicExports() as dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.PublicExportsResult.Available
+        val derived = java.util.UUID.nameUUIDFromBytes(exports.encryptionPublicKeyset).toString()
+        val availability = object : IdentityAvailabilityPort {
+            override fun hasIdentityFor(activeKeyBundleId: String): Boolean =
+                stores.hasIdentityFor(activeKeyBundleId)
+        }
+        val bindings = mutableListOf<Pair<String, String>>()
+
+        // Online: refresh proves the session, bootstrap binds the proven
+        // owner, and the private load actually opens (not just flags).
+        val online = fixture(
+            identity = availability,
+            summary = PersistedAccountSummary(ownerA, "mykola", derived),
+            binder = { owner, bundle ->
+                bindings += owner to bundle
+                stores.claimLegacyIfMatching(owner, bundle)
+            },
+        )
+        val active = online.bootstrap.bootstrap() as SessionState.Active
+        assertEquals(derived, active.activeKeyBundleId)
+        assertEquals(listOf(ownerA to derived), bindings)
+        assertTrue(
+            stores.resolve(ownerA, derived)
+                is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available,
+        )
+
+        // Unknown/conflicting B is refused without touching A's binding.
+        assertEquals(SessionState.RecoveryRequired, fixture(
+            identity = availability,
+            summary = PersistedAccountSummary(ownerA, "mykola", bundleB),
+        ).bootstrap.bootstrap())
+        assertEquals(
+            ownerA to derived,
+            stores.readClaim(File(root, "identity"))?.let { it.ownerUserId to it.keyBundleId },
+        )
+        assertTrue(
+            stores.resolve(ownerB, derived)
+                is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.RecoveryRequired,
+        )
+    }
+
+    @Test
+    fun coldUpgradeOfflineKeepsPrivateUsabilityWithoutRelogin() = runBlocking {
+        val root = createTempDirectory("bootstrap-offline").toFile()
+        val kek = dev.hryshyn.remanence.auth.SoftwareKekBoundary()
+        if (!kek.hasKey("t210-offline-kek")) kek.createAes256GcmKey("t210-offline-kek")
+        val wrapper = dev.hryshyn.remanence.core.crypto.KeysetKekWrapper(kek)
+        val stores = dev.hryshyn.remanence.wiring.OwnerScopedIdentityStore(
+            identityRoot = File(root, "identity"),
+            stagingRoot = File(root, "identity-staging"),
+            wrapper = wrapper,
+        )
+        dev.hryshyn.remanence.core.crypto.IdentityBundleRepository(
+            File(root, "identity"),
+            wrapper,
+        ).createFresh("t210-offline-kek")
+        val exports = dev.hryshyn.remanence.core.crypto.IdentityBundleRepository(
+            File(root, "identity"),
+            wrapper,
         ).loadPublicExports() as dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.PublicExportsResult.Available
         val derived = java.util.UUID.nameUUIDFromBytes(exports.encryptionPublicKeyset).toString()
         val availability = object : IdentityAvailabilityPort {
@@ -203,24 +267,22 @@ class SessionBootstrapTest {
                 stores.hasIdentityFor(activeKeyBundleId)
         }
 
-        // Exact bundle: cold bootstrap succeeds with no live owner holder.
-        val active = fixture(
+        // Offline with a bound record, agreeing summary, and proven exact
+        // keys: OfflineActive AND the private load opens — no re-login.
+        val offline = fixture(
             identity = availability,
             summary = PersistedAccountSummary(ownerA, "mykola", derived),
-        ).bootstrap.bootstrap() as SessionState.Active
-        assertEquals(derived, active.activeKeyBundleId)
-
-        // Unknown bundle: RecoveryRequired before any network call.
-        val missing = fixture(
-            identity = availability,
-            summary = PersistedAccountSummary(ownerA, "mykola", bundleB),
+            refresherOutcome = SessionRefreshOutcome.Unreachable,
+            binder = { owner, bundle -> stores.claimLegacyIfMatching(owner, bundle) },
         )
-        assertEquals(SessionState.RecoveryRequired, missing.bootstrap.bootstrap())
-        assertEquals(0, missing.refresher.calls)
-
-        // A second owner adopted into its own directory is equally
-        // bootstrap-visible by exact bundle, with no warm holder.
-        val preparedB = stores.prepareProvisional("bootstrap-owner-flow", "t210-bootstrap-kek")
+        val state = offline.bootstrap.bootstrap() as SessionState.OfflineActive
+        assertEquals(derived, state.activeKeyBundleId)
+        assertTrue(
+            stores.resolve(ownerA, derived)
+                is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available,
+        )
+        // A second adopted owner stays independently visible, holder-free.
+        val preparedB = stores.prepareProvisional("bootstrap-owner-flow", "t210-offline-kek")
         assertTrue(stores.adoptStaged(preparedB.keyBundleId, ownerB))
         assertTrue(availability.hasIdentityFor(preparedB.keyBundleId))
     }

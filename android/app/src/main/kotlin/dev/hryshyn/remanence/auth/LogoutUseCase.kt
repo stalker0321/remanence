@@ -145,6 +145,13 @@ class LogoutUseCase(
     private val workCancellation: LogoutWorkCancellationPort? = null,
     private val generatorBridgeLogout: GeneratorBridgeLogoutPort? = null,
     private val invalidateSessionLease: () -> Unit = {},
+    /**
+     * Bounded post-teardown hook, after step 6, best-effort and never
+     * teardown-blocking. Production rotates the registration flow epoch
+     * here so a post-logout signup mints independent keys; staged
+     * candidates are never deleted by this hook.
+     */
+    private val onLogoutCompleted: () -> Unit = {},
 ) {
 
     /** Runs the bounded sequence once, preserving cancellation after cleanup. */
@@ -277,6 +284,16 @@ class LogoutUseCase(
                 rememberCancellation(cancelled)
             } catch (failure: Exception) {
                 grantsFailure = failure
+            }
+
+            // Post-teardown: rotate the registration flow epoch so an
+            // unrelated post-logout signup cannot reuse this session's
+            // staged candidate. Best-effort, never blocking, no deletes.
+            try {
+                onLogoutCompleted()
+            } catch (cancelled: CancellationException) {
+                rememberCancellation(cancelled)
+            } catch (_: Exception) {
             }
 
             LogoutOutcome(

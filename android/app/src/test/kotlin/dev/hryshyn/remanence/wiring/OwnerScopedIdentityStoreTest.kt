@@ -144,9 +144,11 @@ class OwnerScopedIdentityStoreTest {
         // Forged marker claiming a bundle the keys do not derive: the
         // availability scan ignores it (unwrap-proven only).
         val forgedBundle = "0198f0a0-0000-7000-8000-00000000f099"
+        val forgedJson = """
+            {"userId":"$ownerB","keyBundleId":"$forgedBundle"}
+        """.trimIndent()
         java.io.File(java.io.File(root, "identity"), "owner.json").writeBytes(
-            ("{"userId":"" + ownerB + "","keyBundleId":"" + forgedBundle + ""}")
-                .toByteArray(Charsets.UTF_8),
+            forgedJson.toByteArray(Charsets.UTF_8),
         )
         assertFalse(stores.hasIdentityFor(forgedBundle))
         assertTrue(stores.resolve(ownerB, forgedBundle)
@@ -155,10 +157,7 @@ class OwnerScopedIdentityStoreTest {
         assertTrue(stores.hasIdentityFor(bundleA))
         assertEquals(before + mapOf(
             "identity/$ownerB/identity.encryption.pwks" to sha256Hex(byteArrayOf(1, 2, 3)),
-            "identity/owner.json" to sha256Hex(
-                ("{"userId":"" + ownerB + "","keyBundleId":"" + forgedBundle + ""}")
-                    .toByteArray(Charsets.UTF_8),
-            ),
+            "identity/owner.json" to sha256Hex(forgedJson.toByteArray(Charsets.UTF_8)),
         ), fileHashes(root).filterKeys { !it.startsWith("identity-staging") })
     }
 
@@ -245,6 +244,24 @@ class OwnerScopedIdentityStoreTest {
     }
 
     @Test
+    fun rejectedPartialDestinationWritesNothingBeforeRefusing() {
+        val (root, stores, _) = fixture()
+        val prepared = stores.prepareProvisional("preflight-flow", kekAlias)
+        val dest = java.io.File(java.io.File(root, "identity"), ownerB)
+        dest.mkdirs()
+        // Missing encryption record + FOREIGN signing record: a
+        // copy-while-checking loop would write encryption first and only
+        // then reject signing — the tree would change despite rejection.
+        // Full preflight must refuse before ANY write.
+        java.io.File(dest, "identity.signing.pwks").writeBytes(byteArrayOf(7, 7, 7))
+        val before = fileHashes(root)
+
+        assertFalse(stores.adoptStaged(prepared.keyBundleId, ownerB))
+        assertEquals(before, fileHashes(root))
+        assertFalse(stores.hasIdentityFor(prepared.keyBundleId))
+    }
+
+    @Test
     fun staleAdoptCannotAlterActiveAccountState() {
         val (root, stores, kek) = fixture()
         IdentityBundleRepository(java.io.File(root, "identity"), KeysetKekWrapper(kek))
@@ -277,7 +294,9 @@ class OwnerScopedIdentityStoreTest {
         val legacyRoot = java.io.File(root, "identity")
         IdentityBundleRepository(legacyRoot, KeysetKekWrapper(kek)).createFresh(kekAlias)
         val bundleA = publicBundleOf(legacyRoot)
-        val legacyBefore = fileHashes(legacyRoot)
+        // Snapshot A's sealed files BEFORE the claim marker exists; the
+        // claim itself is asserted separately as a permitted path below.
+        val sealedBefore = legacyFileHashes(legacyRoot)
         assertTrue(stores.claimLegacyIfMatching(ownerA, bundleA))
 
         // Real recovery path: the staged candidate's unwrapped handles go
@@ -302,7 +321,13 @@ class OwnerScopedIdentityStoreTest {
             is IdentityBundleRepository.LoadResult.Available)
         assertTrue(stores.resolve(ownerA, bundleA)
             is IdentityBundleRepository.LoadResult.Available)
-        assertEquals(legacyBefore, fileHashes(legacyRoot))
+        // A's sealed records are byte-identical; only the permitted
+        // claim marker was added at the legacy root.
+        val sealedAfter = legacyFileHashes(legacyRoot)
+        assertEquals(sealedBefore, sealedAfter.filterKeys { it != "owner.json" })
+        assertTrue(sealedAfter.containsKey("owner.json"))
+        val ownerBDir = java.io.File(legacyRoot, ownerB)
+        val recoveredBefore = fileHashes(ownerBDir)
 
         // A mismatched recovery bundle for B refuses without touching B.
         val preparedC = stores.prepareProvisional("restore-mismatch-flow", kekAlias)
@@ -325,6 +350,8 @@ class OwnerScopedIdentityStoreTest {
         assertTrue(stores.resolve(ownerB, preparedB.keyBundleId)
             is IdentityBundleRepository.LoadResult.Available)
         assertFalse(stores.hasIdentityFor(preparedC.keyBundleId))
+        // The refused install left B's store byte-identical too.
+        assertEquals(recoveredBefore, fileHashes(ownerBDir))
     }
 
     @Test

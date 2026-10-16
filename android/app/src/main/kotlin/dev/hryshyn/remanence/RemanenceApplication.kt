@@ -2031,6 +2031,10 @@ class AppContainer private constructor(
                 generatorCreateBridge(owner).onLogout(owner)
             },
             invalidateSessionLease = { apiStack.sessionRefreshCoordinator.invalidate() },
+            // Post-logout flow boundary: an unrelated later signup mints
+            // independent keys. Staged candidates are retained for
+            // lost-ACK login binding.
+            onLogoutCompleted = { runCatching { registrationUseCase.startNewFlow() } },
         )
     }
 
@@ -2139,6 +2143,15 @@ class AppContainer private constructor(
             refreshForRecovery = BuildConfig.REMANENCE_RECOVERY_ENABLED,
             recoveryReady = { account -> !BuildConfig.REMANENCE_RECOVERY_ENABLED ||
                 recoveryReadiness.isReady(account.userId, account.activeKeyBundleId) },
+            // Cold-upgrade binding: the bootstrap already validated the
+            // bound sealed record, the agreeing persisted summary, and
+            // the exact unwrapped exports; binding the unclaimed legacy
+            // home to that proven owner keeps private usability without
+            // re-login. claimLegacyIfMatching verifies proof itself and
+            // refuses mismatches/conflicts without clearing or creating.
+            onVerifiedOwnerBundle = { owner, bundle ->
+                runCatching { ownerIdentityStores.claimLegacyIfMatching(owner, bundle) }
+            },
             refresher = object : dev.hryshyn.remanence.session.SessionRefresher {
                 override suspend fun hasStoredToken(): Boolean =
                     refreshCoordinator.hasStoredToken()

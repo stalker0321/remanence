@@ -6,6 +6,7 @@
     <string name="recovery_failed">Recovery did not complete. Existing keys were not replaced. Check the connection and recovery method.</string>
     <string name="recovery_old_android">Passkey recovery requires Android 9 or newer. This device cannot complete passkey setup.</string>
     <string name="recovery_verified">Access saved and recovery verified. An additional recovery code is optional.</string>
+    <string name="recovery_verification_pending">Passkey saved, but verification is not complete yet. Retry to finish verifying the same passkey.</string>
     <string name="recovery_save">Save or verify passkey</string>
     <string name="recovery_show_code">Show optional recovery code</string>
     <string name="recovery_another_manager">Choose another passkey manager</string>

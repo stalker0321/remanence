@@ -6,6 +6,7 @@
     <string name="recovery_failed">Восстановление не завершено. Существующие ключи не заменены. Проверьте подключение и способ восстановления.</string>
     <string name="recovery_old_android">Для восстановления через passkey нужен Android 9 или новее. На этом устройстве нельзя завершить настройку passkey.</string>
     <string name="recovery_verified">Доступ сохранён, восстановление проверено. Дополнительный код сохранять необязательно.</string>
+    <string name="recovery_verification_pending">Passkey сохранён, но проверка ещё не завершена. Повторите попытку, чтобы завершить проверку того же passkey.</string>
     <string name="recovery_save">Сохранить или проверить passkey</string>
     <string name="recovery_show_code">Показать необязательный код восстановления</string>
     <string name="recovery_another_manager">Выбрать другой менеджер passkey</string>

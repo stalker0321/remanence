@@ -49,6 +49,14 @@ fun RecoveryActions(container: AppContainer, hasIdentity: Boolean, recoveryRequi
                 offerAnotherManager = hasIdentity
                 message = R.string.recovery_prf_missing
             }
+            catch (pending: RecoveryVerificationPending) {
+                // Saved but not yet verifiable: the SAME enrollment is
+                // retried explicitly via the normal save path below.
+                // Never offer another manager merely because this
+                // continuation occurred.
+                offerAnotherManager = false
+                message = recoveryFailureMessage(pending, protecting)
+            }
             catch (failure: Exception) {
                 message = recoveryFailureMessage(failure, protecting)
                 if (!isCredentialUserCancellation(failure)) offerAnotherManager = hasIdentity
@@ -86,6 +94,7 @@ fun RecoveryActions(container: AppContainer, hasIdentity: Boolean, recoveryRequi
 
 /** Only typed provider cancellation is neutral. Timeouts and unknown failures still fail closed. */
 internal fun recoveryFailureMessage(failure: Exception, protecting: Boolean): Int = when {
+    failure is RecoveryVerificationPending -> R.string.recovery_verification_pending
     isCredentialUserCancellation(failure) -> R.string.auth_passkey_cancelled
     protecting -> R.string.auth_passkey_setup_failed
     else -> R.string.recovery_failed

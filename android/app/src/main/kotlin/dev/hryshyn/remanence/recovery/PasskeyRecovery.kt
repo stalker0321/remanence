@@ -7,12 +7,16 @@ import androidx.credentials.CredentialManager
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.GetPublicKeyCredentialOption
 import androidx.credentials.PublicKeyCredential
+import androidx.credentials.exceptions.NoCredentialException
 import dev.hryshyn.remanence.AppContainer
 import dev.hryshyn.remanence.BuildConfig
 import dev.hryshyn.remanence.core.crypto.AccountRecoveryCrypto as Crypto
 import dev.hryshyn.remanence.core.crypto.IdentityBundleRepository
+import dev.hryshyn.remanence.core.data.db.LocalAccountEntity
 import dev.hryshyn.remanence.core.data.network.LoginResponseDto
+import dev.hryshyn.remanence.core.data.network.SessionRequestLease
 import dev.hryshyn.remanence.core.model.UserId
+import dev.hryshyn.remanence.wiring.OwnerScopedIdentityStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
@@ -22,7 +26,27 @@ private val RecoveryJson = Json { ignoreUnknownKeys = false; isLenient = false }
 interface RecoveryCredentialPort {
     suspend fun create(options: JsonObject): JsonObject
     suspend fun get(options: JsonObject): JsonObject
+    /**
+     * Immediate-only get variant for the single fresh-create verification
+     * get. The default keeps source compatibility by delegating to normal
+     * discovery; only the real Android adapter overrides it. Test fakes
+     * override it to record the exact request mode.
+     */
+    suspend fun getImmediate(options: JsonObject): JsonObject = get(options)
 }
+
+/**
+ * Real request builder seam (pinned credentials 1.6.0). Ordinary
+ * discovery is the default; `immediate = true` sets
+ * preferImmediatelyAvailableCredentials for the single fresh-create
+ * verification get only. Never used for PENDING retries, STORED checks,
+ * sign-in, or restore. No allow-list guessing here.
+ */
+internal fun getCredentialRequest(optionsJson: String, immediate: Boolean): GetCredentialRequest =
+    GetCredentialRequest(
+        listOf(GetPublicKeyCredentialOption(optionsJson)),
+        preferImmediatelyAvailableCredentials = immediate,
+    )
 
 class AndroidRecoveryCredentials(private val activity: Activity) : RecoveryCredentialPort {
     private val manager = CredentialManager.create(activity)
@@ -31,7 +55,11 @@ class AndroidRecoveryCredentials(private val activity: Activity) : RecoveryCrede
         return RecoveryJson.decodeFromString(result.registrationResponseJson)
     }
     override suspend fun get(options: JsonObject): JsonObject {
-        val result = manager.getCredential(activity, GetCredentialRequest(listOf(GetPublicKeyCredentialOption(options.toString()))))
+        val result = manager.getCredential(activity, getCredentialRequest(options.toString(), immediate = false))
+        return RecoveryJson.decodeFromString((result.credential as PublicKeyCredential).authenticationResponseJson)
+    }
+    override suspend fun getImmediate(options: JsonObject): JsonObject {
+        val result = manager.getCredential(activity, getCredentialRequest(options.toString(), immediate = true))
         return RecoveryJson.decodeFromString((result.credential as PublicKeyCredential).authenticationResponseJson)
     }
 }
@@ -47,60 +75,11 @@ internal fun publicCredential(c: JsonObject): JsonObject = buildJsonObject {
 class PasskeyRecovery(private val container: AppContainer) {
     private val api = container.apiStack.recoveryRepository
     private fun enabled() = check(BuildConfig.REMANENCE_RECOVERY_ENABLED)
-    private fun verifyBody(flow: String, credential: JsonObject) = buildJsonObject {
-        put("flow", flow); put("response", publicCredential(credential))
-    }
-    private fun prf(c: JsonObject): ByteArray {
-        val value = c["clientExtensionResults"]?.jsonObject?.get("prf")?.jsonObject
-            ?.get("results")?.jsonObject?.get("first")?.jsonPrimitive?.content
-            ?: throw RecoveryCapabilityUnavailable()
-        return Crypto.decode(value).also { if (it.size != 32) { it.fill(0); throw RecoveryCapabilityUnavailable() } }
-    }
 
     /** Returns the code only after a verified complete upload. UI owns its short lifetime. */
     suspend fun protect(credentials: RecoveryCredentialPort, chooseAnotherManager: Boolean = false): ByteArray? {
         enabled()
-        val lease = container.apiStack.captureSessionRequestLease() ?: error("no session")
-        val account = withContext(Dispatchers.IO) { container.currentAccountStore.loadEntity() } ?: error("no account")
-        container.ownerIdentityStores.claimLegacyIfMatching(account.userId, account.activeKeyBundleId)
-        val identity = withContext(Dispatchers.IO) {
-            container.ownerIdentityStores.resolve(account.userId, account.activeKeyBundleId)
-        } as? IdentityBundleRepository.LoadResult.Available ?: error("identity missing")
-        val status = api.requestAuthenticated(lease, "status")
-        val stored = status.text("state") == "STORED"
-        check(!chooseAnotherManager || !stored) { "existing recovery is immutable" }
-        val id = if (status.text("state") == "NOT_STARTED" || chooseAnotherManager) {
-            val start = api.requestAuthenticated(lease, "register/options", JsonObject(emptyMap()))
-            val created = credentials.create(start.getValue("options").jsonObject)
-            api.requestAuthenticated(lease, "register/verify", verifyBody(start.text("flow"), created)).text("credential_id")
-        } else status.text("credential_id")
-        val begin = api.requestAuthenticated(lease, "setup/options", buildJsonObject { put("credential_id", id) })
-        val got = credentials.get(begin.getValue("options").jsonObject)
-        val secret = prf(got)
-        var prepared: Crypto.Prepared? = null
-        try {
-            if (got.text("id") != id) error("wrong credential")
-            val verified = api.requestAuthenticated(lease, "setup/verify", verifyBody(begin.text("flow"), got))
-            if (!container.apiStack.isSessionRequestLeaseLive(lease)) error("session changed")
-            if (stored) {
-                val readback = api.requestAuthenticated(lease, "record")
-                withContext(Dispatchers.IO) { restore(readback, secret, false, account.userId, account.activeKeyBundleId) }
-                check(container.apiStack.isSessionRequestLeaseLive(lease))
-                container.recoveryReadiness.markVerified(account.userId, account.activeKeyBundleId)
-                return null // Existing code is never reissued or replaced.
-            }
-            val pending = withContext(Dispatchers.IO) { Crypto.prepare(account.userId, account.activeKeyBundleId, id, secret, identity) }
-            prepared = pending
-            api.requestAuthenticated(lease, "record", buildJsonObject { put("flow", verified.text("flow")); put("record", pending.record.json()) })
-            if (!container.apiStack.isSessionRequestLeaseLive(lease)) error("session changed")
-            // Read back and unwrap the actual durable server record, not only our input.
-            val readback = api.requestAuthenticated(lease, "record")
-            withContext(Dispatchers.IO) { restore(readback, secret, false, account.userId, account.activeKeyBundleId) }
-            check(container.apiStack.isSessionRequestLeaseLive(lease))
-            container.recoveryReadiness.markVerified(account.userId, account.activeKeyBundleId)
-            return pending.recoveryCode
-        } catch (e: Throwable) { prepared?.recoveryCode?.fill(0); throw e }
-        finally { secret.fill(0) }
+        return protectWith(ProtectEnvironment(container), credentials, chooseAnotherManager)
     }
 
     suspend fun signIn(credentials: RecoveryCredentialPort) {
@@ -180,13 +159,129 @@ class PasskeyRecovery(private val container: AppContainer) {
             }
         } finally { secret.fill(0) }
     }
-
-    private fun restore(out: JsonObject, secret: ByteArray, code: Boolean, account: String, bundle: String) =
-        Crypto.restore(out.getValue("record").jsonObject.record(), secret, code, account, bundle,
-            Crypto.decode(out.text("encryption_public_keyset")), Crypto.decode(out.text("signing_public_keyset")))
 }
 
 class RecoveryCapabilityUnavailable : Exception("PRF unavailable")
+
+/**
+ * Fresh-created credential was saved and server-registered, but the
+ * immediate verification get found nothing discoverable yet: the user
+ * retries explicitly and the retry continues the SAME credential
+ * (normal discovery, same status id). Never auto-retried, never a
+ * readiness mark, never another manager, never a new key. The id is
+ * exposed for tests/orchestration only — UI copy carries no internals.
+ */
+class RecoveryVerificationPending(val credentialId: String) :
+    Exception("saved credential pending verification")
+
+/**
+ * The exact collaborators `protect` orchestration touches, as a small
+ * explicit seam: production builds it from the container with zero
+ * behavior change; JVM tests substitute fakes plus the REAL
+ * owner-scoped stores (Crypto.prepare/readback stay real).
+ */
+internal class ProtectEnvironment(
+    val captureLease: () -> SessionRequestLease?,
+    val loadAccount: suspend () -> LocalAccountEntity?,
+    val stores: OwnerScopedIdentityStore,
+    val requestAuthenticated: suspend (lease: SessionRequestLease, path: String, body: JsonObject?) -> JsonObject,
+    val isLeaseLive: (SessionRequestLease) -> Boolean,
+    val markVerified: (owner: String, bundle: String) -> Unit,
+) {
+    internal constructor(container: AppContainer) : this(
+        captureLease = { container.apiStack.captureSessionRequestLease() },
+        loadAccount = { container.currentAccountStore.loadEntity() },
+        stores = container.ownerIdentityStores,
+        requestAuthenticated = { lease, path, body ->
+            container.apiStack.recoveryRepository.requestAuthenticated(lease, path, body)
+        },
+        isLeaseLive = { lease -> container.apiStack.isSessionRequestLeaseLive(lease) },
+        markVerified = { owner, bundle -> container.recoveryReadiness.markVerified(owner, bundle) },
+    )
+}
+
+private fun verifyBody(flow: String, credential: JsonObject) = buildJsonObject {
+    put("flow", flow); put("response", publicCredential(credential))
+}
+
+private fun prf(c: JsonObject): ByteArray {
+    val value = c["clientExtensionResults"]?.jsonObject?.get("prf")?.jsonObject
+        ?.get("results")?.jsonObject?.get("first")?.jsonPrimitive?.content
+        ?: throw RecoveryCapabilityUnavailable()
+    return Crypto.decode(value).also { if (it.size != 32) { it.fill(0); throw RecoveryCapabilityUnavailable() } }
+}
+
+private fun restore(out: JsonObject, secret: ByteArray, code: Boolean, account: String, bundle: String) =
+    Crypto.restore(out.getValue("record").jsonObject.record(), secret, code, account, bundle,
+        Crypto.decode(out.text("encryption_public_keyset")), Crypto.decode(out.text("signing_public_keyset")))
+
+/**
+ * Protect orchestration over the explicit environment seam: same
+ * ordering, gates, and zeroization as the production path. ONLY a
+ * credential created AND server-registered in THIS invocation takes
+ * the immediate-only verification get; every retry, STORED check,
+ * sign-in, and restore uses normal discovery with hybrid/remote
+ * options intact. A fresh immediate get that finds nothing becomes
+ * the typed same-key continuation — never an automatic retry, new
+ * key, readiness mark, or manager switch.
+ */
+internal suspend fun protectWith(
+    env: ProtectEnvironment,
+    credentials: RecoveryCredentialPort,
+    chooseAnotherManager: Boolean = false,
+): ByteArray? {
+    val lease = env.captureLease() ?: error("no session")
+    val account = withContext(Dispatchers.IO) { env.loadAccount() } ?: error("no account")
+    env.stores.claimLegacyIfMatching(account.userId, account.activeKeyBundleId)
+    val identity = withContext(Dispatchers.IO) {
+        env.stores.resolve(account.userId, account.activeKeyBundleId)
+    } as? IdentityBundleRepository.LoadResult.Available ?: error("identity missing")
+    val status = env.requestAuthenticated(lease, "status", null)
+    val freshState = status.text("state")
+    val stored = freshState == "STORED"
+    check(!chooseAnotherManager || !stored) { "existing recovery is immutable" }
+    // Fresh-create is proven by THIS invocation's register round trip,
+    // never inferred from PENDING alone (that retry keeps discovery).
+    val freshCreated = freshState == "NOT_STARTED" || chooseAnotherManager
+    val id = if (freshCreated) {
+        val start = env.requestAuthenticated(lease, "register/options", JsonObject(emptyMap()))
+        val created = credentials.create(start.getValue("options").jsonObject)
+        env.requestAuthenticated(lease, "register/verify", verifyBody(start.text("flow"), created)).text("credential_id")
+    } else status.text("credential_id")
+    val begin = env.requestAuthenticated(lease, "setup/options", buildJsonObject { put("credential_id", id) })
+    val got = try {
+        val options = begin.getValue("options").jsonObject
+        if (freshCreated) credentials.getImmediate(options) else credentials.get(options)
+    } catch (missing: NoCredentialException) {
+        if (!freshCreated) throw missing
+        throw RecoveryVerificationPending(id)
+    }
+    val secret = prf(got)
+    var prepared: Crypto.Prepared? = null
+    try {
+        if (got.text("id") != id) error("wrong credential")
+        val verified = env.requestAuthenticated(lease, "setup/verify", verifyBody(begin.text("flow"), got))
+        if (!env.isLeaseLive(lease)) error("session changed")
+        if (stored) {
+            val readback = env.requestAuthenticated(lease, "record", null)
+            withContext(Dispatchers.IO) { restore(readback, secret, false, account.userId, account.activeKeyBundleId) }
+            check(env.isLeaseLive(lease))
+            env.markVerified(account.userId, account.activeKeyBundleId)
+            return null // Existing code is never reissued or replaced.
+        }
+        val pending = withContext(Dispatchers.IO) { Crypto.prepare(account.userId, account.activeKeyBundleId, id, secret, identity) }
+        prepared = pending
+        env.requestAuthenticated(lease, "record", buildJsonObject { put("flow", verified.text("flow")); put("record", pending.record.json()) })
+        if (!env.isLeaseLive(lease)) error("session changed")
+        // Read back and unwrap the actual durable server record, not only our input.
+        val readback = env.requestAuthenticated(lease, "record", null)
+        withContext(Dispatchers.IO) { restore(readback, secret, false, account.userId, account.activeKeyBundleId) }
+        check(env.isLeaseLive(lease))
+        env.markVerified(account.userId, account.activeKeyBundleId)
+        return pending.recoveryCode
+    } catch (e: Throwable) { prepared?.recoveryCode?.fill(0); throw e }
+    finally { secret.fill(0) }
+}
 private fun JsonObject.text(key: String) = getValue(key).jsonPrimitive.content
 private fun Crypto.Record.json() = buildJsonObject {
     put("version", version); put("generation", generation); put("account_id", accountId); put("bundle_id", bundleId)

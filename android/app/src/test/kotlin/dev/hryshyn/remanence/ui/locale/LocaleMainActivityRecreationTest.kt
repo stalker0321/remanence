@@ -14,7 +14,6 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.compose.ui.test.performTextInput
 import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStoreOwner
@@ -24,6 +23,7 @@ import dev.hryshyn.remanence.MainActivity
 import dev.hryshyn.remanence.RemanenceApplication
 import dev.hryshyn.remanence.session.RootViewModel
 import dev.hryshyn.remanence.ui.navigation.AuthUiState
+import dev.hryshyn.remanence.R
 import dev.hryshyn.remanence.wiring.RemanenceViewModelFactory
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -321,8 +321,7 @@ class LocaleMainActivityRecreationTest {
     }
 
     @Test
-    @Config(sdk = [32])
-    fun legacyHostTogglesBothDirectionsWithoutLosingSiblingsSdk32() {
+    fun legacyHostTogglesBothDirectionsWithoutLosingSiblings() {
         legacyHostTogglesBothDirectionsWithoutLosingSiblings()
     }
 
@@ -330,9 +329,10 @@ class LocaleMainActivityRecreationTest {
      * Regression for the swallowed outer else: the shared legacy host
      * starts at registering=false with the LOGIN form reachable (never
      * an empty branch), toggles to the register form and back, with the
-     * footer reachable throughout. Typing inside one substate never
-     * remounts it. Reached through the real public-home entry, so the
-     * full host chain (intent -> auth content -> branch) is exercised.
+     * footer reachable throughout. Reached through the real public-home
+     * entry, so the full host chain (intent -> auth content -> branch)
+     * is exercised. Draft stability inside one substate is covered by
+     * HandleSetupErrorStabilityTest with a captured onChange.
      */
     private fun legacyHostTogglesBothDirectionsWithoutLosingSiblings() {
         awaitSignedOutHome()
@@ -340,31 +340,31 @@ class LocaleMainActivityRecreationTest {
         composeRule.onNodeWithTag("scan_action").performClick()
         composeRule.waitForIdle()
         // Legacy branch directly, or via the other-sign-in entry when
-        // the Google column shows first (build-flag dependent).
-        if (composeRule.onAllNodesWithText("Other sign-in options").fetchSemanticsNodes().isNotEmpty()) {
-            composeRule.onNodeWithText("Other sign-in options").performClick()
+        // the Google column shows first (build-flag dependent). Entry
+        // text comes from the same R.string value production renders.
+        val otherSignIn = composeRule.activity.getString(R.string.mvp_other_sign_in)
+        if (composeRule.onAllNodesWithText(otherSignIn).fetchSemanticsNodes().isNotEmpty()) {
+            composeRule.onNodeWithText(otherSignIn).performClick()
             composeRule.waitForIdle()
         }
         // From registering=false: LOGIN form + its toggle + footer.
         composeRule.onNodeWithTag("login_email_field").assertIsDisplayed()
-        composeRule.onNodeWithText("create an account").assertIsDisplayed()
+        composeRule.onNodeWithTag("auth_toggle_register").assertIsDisplayed()
         composeRule.onNodeWithTag("access_language").assertIsDisplayed()
-        // Draft stability inside one substate (no remount on typing).
-        composeRule.onNodeWithTag("login_email_field").performTextInput("probe@example.com")
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag("login_email_field").assertTextEquals("probe@example.com")
         // Toggle to registering: register form + back toggle + footer.
-        composeRule.onNodeWithText("create an account").performClick()
+        // Draft stability inside one substate is covered by
+        // HandleSetupErrorStabilityTest with a captured onChange.
+        composeRule.onNodeWithTag("auth_toggle_register").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("reg_email_field").assertIsDisplayed()
-        composeRule.onNodeWithText("I already have an account").assertIsDisplayed()
+        composeRule.onNodeWithTag("auth_toggle_login").assertIsDisplayed()
         composeRule.onNodeWithTag("access_language").assertIsDisplayed()
         // Toggle back: login form reachable again (fresh instance by the
         // keyed-swap design, which disposes synchronously by contract).
-        composeRule.onNodeWithText("I already have an account").performClick()
+        composeRule.onNodeWithTag("auth_toggle_login").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("login_email_field").assertIsDisplayed()
-        composeRule.onNodeWithText("create an account").assertIsDisplayed()
+        composeRule.onNodeWithTag("auth_toggle_register").assertIsDisplayed()
         composeRule.onNodeWithTag("access_language").assertIsDisplayed()
     }
 

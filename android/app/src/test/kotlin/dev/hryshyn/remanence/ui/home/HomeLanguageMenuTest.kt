@@ -3,13 +3,13 @@ package dev.hryshyn.remanence.ui.home
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
-import androidx.activity.ComponentActivity
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hryshyn.remanence.ui.hold.HoldTheme
 import dev.hryshyn.remanence.ui.locale.AppLocale
@@ -106,7 +106,8 @@ class HomeLanguageMenuTest {
     }
 
     @Test
-    fun reselectingCurrentReportsWithoutStateChange() {        var calls = 0
+    fun reselectingCurrentReportsWithoutStateChange() {
+        var calls = 0
         mountPublicHome(AppLocale.RUSSIAN) { calls++ }
 
         composeRule.onNodeWithTag("access_language").performClick()

@@ -48,7 +48,6 @@ import dev.hryshyn.remanence.ui.auth.LoginScreen
 import dev.hryshyn.remanence.ui.auth.AccessPage
 import dev.hryshyn.remanence.ui.auth.AccessHeading
 import dev.hryshyn.remanence.ui.auth.GoogleSignInButton
-import dev.hryshyn.remanence.ui.auth.HandleSetupContent
 import dev.hryshyn.remanence.ui.auth.AccessLanguageControl
 import dev.hryshyn.remanence.ui.auth.LoginSubmitState
 import dev.hryshyn.remanence.ui.auth.LoginViewModel
@@ -70,7 +69,6 @@ import dev.hryshyn.remanence.ui.navigation.AppDestination
 import dev.hryshyn.remanence.core.data.network.HealthCheckResult
 import dev.hryshyn.remanence.ui.locale.AppLocale
 import dev.hryshyn.remanence.ui.locale.AppLocaleController
-import dev.hryshyn.remanence.ui.locale.LanguageSwitchRow
 
 /**
  * AppCompatActivity (not ComponentActivity): the AppCompat per-app locale
@@ -310,14 +308,14 @@ private fun RootSurface(
                         var handle by rememberSaveable { mutableStateOf("") }
                         AstraEnterTransition(motion = authMotion) {
                             Column(Modifier.fillMaxSize()) {
-                                HoldTextButton(enabled = !googleWorking, onClick = { googleViewModel.start(googleCredentials) }) {
-                                    Text(stringResource(R.string.access_google_again))
-                                }
-                                Box(Modifier.weight(1f).fillMaxWidth().padding(bottom = HoldSpace.Group)) {
-                                    HandleSetupContent(handle, { if (it.length <= 30) handle = it }, googleWorking,
-                                        onContinue = { googleViewModel.register(handle) },
-                                        serverError = failed?.let { stringResource(it.message.resourceId) })
-                                }
+                                dev.hryshyn.remanence.ui.auth.TicketClaimContent(
+                                    handle = handle,
+                                    onHandleChange = { if (it.length <= 30) handle = it },
+                                    busy = googleWorking,
+                                    serverError = failed?.let { stringResource(it.message.resourceId) },
+                                    onRetryAccount = { googleViewModel.start(googleCredentials) },
+                                    onContinue = { googleViewModel.register(handle) },
+                                )
                             }
                         }
                     } else if (legacyVisible) {
@@ -350,11 +348,13 @@ private fun RootSurface(
                                 }
                             }
                             if (registering) {
-                                HoldTextButton(onClick = { registering = false }, enabled = regSubmit !is RegistrationSubmitState.Submitting) {
+                                HoldTextButton(onClick = { registering = false }, enabled = regSubmit !is RegistrationSubmitState.Submitting,
+                                    modifier = Modifier.testTag("auth_toggle_login")) {
                                     Text(stringResource(R.string.hold_existing_account))
                                 }
                             } else {
-                                HoldTextButton(onClick = { registering = true }, enabled = loginSubmit !is LoginSubmitState.Submitting) {
+                                HoldTextButton(onClick = { registering = true }, enabled = loginSubmit !is LoginSubmitState.Submitting,
+                                    modifier = Modifier.testTag("auth_toggle_register")) {
                                     Text(stringResource(R.string.hold_create_account))
                                 }
                             }

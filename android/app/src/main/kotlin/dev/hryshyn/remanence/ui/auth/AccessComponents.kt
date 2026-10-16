@@ -101,6 +101,41 @@ fun GoogleSignInButton(onClick: () -> Unit, enabled: Boolean = true, busy: Boole
     }
 }
 
+/**
+ * Shared ticket-claim host: the retry action first, then the weighted
+ * handle form. Mounted by the ticket branch and by host regression
+ * tests; both observe the same tree, tags, and error slot. Must be
+ * called inside a Column: the form's weight ParentData is only
+ * meaningful with a Column parent (lexical scope never flows into a
+ * plain function body, so this is enforced by receiver, not convention).
+ */
+@Composable
+fun ColumnScope.TicketClaimContent(
+    handle: String,
+    onHandleChange: (String) -> Unit,
+    busy: Boolean,
+    serverError: String?,
+    onRetryAccount: () -> Unit,
+    onContinue: () -> Unit,
+) {
+    HoldTextButton(
+        enabled = !busy,
+        onClick = onRetryAccount,
+        modifier = Modifier.testTag("access_google_retry"),
+    ) {
+        Text(stringResource(R.string.access_google_again))
+    }
+    Box(Modifier.weight(1f).fillMaxWidth().padding(bottom = HoldSpace.Group)) {
+        HandleSetupContent(
+            handle = handle,
+            onChange = onHandleChange,
+            busy = busy,
+            onContinue = onContinue,
+            serverError = serverError,
+        )
+    }
+}
+
 @Composable
 fun HandleSetupContent(handle: String, onChange: (String) -> Unit, busy: Boolean, onContinue: () -> Unit,
                        serverError: String? = null) {

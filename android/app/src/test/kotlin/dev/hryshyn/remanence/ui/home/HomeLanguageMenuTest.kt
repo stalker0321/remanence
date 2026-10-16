@@ -3,8 +3,8 @@ package dev.hryshyn.remanence.ui.home
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -91,12 +91,22 @@ class HomeLanguageMenuTest {
         // Selecting dismisses the menu; the trigger now names the choice
         // (test locale is English, so the caption stays English).
         composeRule.onNodeWithTag("language_option_english").assertDoesNotExist()
-        composeRule.onNodeWithTag("access_language").assertTextEquals("language · Русский")
+        composeRule.onNodeWithTag("access_language").assertTextEquals("language")
     }
 
     @Test
-    fun reselectingCurrentReportsWithoutStateChange() {
-        var calls = 0
+    fun openMenuMarksCurrentOptionSelected() {
+        mountPublicHome(AppLocale.RUSSIAN) {}
+
+        composeRule.onNodeWithTag("access_language").performClick()
+        // Selected menu-item semantics (radio + selected) ride on the
+        // option itself; only the current choice carries them.
+        composeRule.onNodeWithTag("language_option_russian").assertIsSelected()
+        composeRule.onNodeWithTag("language_option_english").assertIsDisplayed()
+    }
+
+    @Test
+    fun reselectingCurrentReportsWithoutStateChange() {        var calls = 0
         mountPublicHome(AppLocale.RUSSIAN) { calls++ }
 
         composeRule.onNodeWithTag("access_language").performClick()
@@ -134,6 +144,6 @@ class HomeLanguageMenuTest {
         }
 
         assertEquals(listOf(AppLocale.ENGLISH, AppLocale.UKRAINIAN, AppLocale.RUSSIAN), selected)
-        composeRule.onNodeWithTag("access_language").assertTextEquals("language · Русский")
+        composeRule.onNodeWithTag("access_language").assertTextEquals("language")
     }
 }

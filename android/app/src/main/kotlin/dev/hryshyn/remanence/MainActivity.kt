@@ -14,6 +14,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import dev.hryshyn.remanence.ui.hold.HoldTheme
 import dev.hryshyn.remanence.ui.hold.HoldTextButton
 import dev.hryshyn.remanence.ui.motion.AstraEnterTransition
+import dev.hryshyn.remanence.ui.motion.AstraStepArrival
 import dev.hryshyn.remanence.ui.motion.rememberAstraMotion
 import dev.hryshyn.remanence.ui.hold.HoldInformation
 import dev.hryshyn.remanence.ui.hold.HoldSpace
@@ -329,24 +330,28 @@ private fun RootSurface(
                         if (recoveryBusy) {
                             Spacer(Modifier.weight(1f))
                         } else if (registering) {
-                            val form by registrationViewModel.form.collectAsStateWithLifecycle()
-                            val submit by registrationViewModel.submitState.collectAsStateWithLifecycle()
-                            AstraEnterTransition(motion = authMotion) {
-                                RegistrationFormScreen(form, submit, registrationViewModel::onFieldChange, registrationViewModel::submit,
-                                    modifier = Modifier.weight(1f).fillMaxWidth())
+                            val regForm by registrationViewModel.form.collectAsStateWithLifecycle()
+                            val regSubmit by registrationViewModel.submitState.collectAsStateWithLifecycle()
+                            val loginForm by loginViewModel.form.collectAsStateWithLifecycle()
+                            val loginSubmit by loginViewModel.submitState.collectAsStateWithLifecycle()
+                            AstraStepArrival(motion = authMotion, stepKey = registering,
+                                modifier = Modifier.weight(1f).fillMaxWidth()) {
+                                if (registering) {
+                                    RegistrationFormScreen(regForm, regSubmit, registrationViewModel::onFieldChange, registrationViewModel::submit,
+                                        modifier = Modifier.fillMaxSize())
+                                } else {
+                                    LoginScreen(loginForm, loginSubmit, loginViewModel::onEmailChange, loginViewModel::onPasswordChange, loginViewModel::submit,
+                                        modifier = Modifier.fillMaxSize())
+                                }
                             }
-                            HoldTextButton(onClick = { registering = false }, enabled = submit !is RegistrationSubmitState.Submitting) {
-                                Text(stringResource(R.string.hold_existing_account))
-                            }
-                        } else {
-                            val form by loginViewModel.form.collectAsStateWithLifecycle()
-                            val submit by loginViewModel.submitState.collectAsStateWithLifecycle()
-                            AstraEnterTransition(motion = authMotion) {
-                                LoginScreen(form, submit, loginViewModel::onEmailChange, loginViewModel::onPasswordChange, loginViewModel::submit,
-                                    modifier = Modifier.weight(1f).fillMaxWidth())
-                            }
-                            HoldTextButton(onClick = { registering = true }, enabled = submit !is LoginSubmitState.Submitting) {
-                                Text(stringResource(R.string.hold_create_account))
+                            if (registering) {
+                                HoldTextButton(onClick = { registering = false }, enabled = regSubmit !is RegistrationSubmitState.Submitting) {
+                                    Text(stringResource(R.string.hold_existing_account))
+                                }
+                            } else {
+                                HoldTextButton(onClick = { registering = true }, enabled = loginSubmit !is LoginSubmitState.Submitting) {
+                                    Text(stringResource(R.string.hold_create_account))
+                                }
                             }
                         }
                         if (!BuildConfig.REMANENCE_GOOGLE_SIGN_IN_ENABLED) dev.hryshyn.remanence.recovery.RecoveryActions(

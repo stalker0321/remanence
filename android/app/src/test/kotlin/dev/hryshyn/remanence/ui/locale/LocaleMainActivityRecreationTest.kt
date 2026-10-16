@@ -7,7 +7,6 @@ import android.os.Bundle
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
-import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -241,7 +240,7 @@ class LocaleMainActivityRecreationTest {
         // no recreation gap in between. This also proves LocalConfiguration
         // actually updated without recreation (else text stays English).
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("access_language").assertTextEquals("язык · Русский")
+        composeRule.onNodeWithTag("access_language").assertTextEquals("язык")
         composeRule.onNodeWithTag("scan_action").assertIsDisplayed()
         composeRule.onNodeWithTag("create_action").performScrollTo().assertIsDisplayed()
     }
@@ -353,7 +352,7 @@ class LocaleMainActivityRecreationTest {
         assertEquals(AppLocale.UKRAINIAN, AppLocaleRepository().load())
         assertTrue(destroyed.isEmpty())
         assertTrue(created.isEmpty())
-        composeRule.onNodeWithTag("access_language").assertTextEquals("мова · Українська")
+        composeRule.onNodeWithTag("access_language").assertTextEquals("мова")
     }
 
     @Test
@@ -365,7 +364,7 @@ class LocaleMainActivityRecreationTest {
         assertEquals(AppLocale.RUSSIAN, AppLocaleRepository().load())
         assertTrue(destroyed.isEmpty())
         assertTrue(created.isEmpty())
-        composeRule.onNodeWithTag("access_language").assertTextEquals("язык · Русский")
+        composeRule.onNodeWithTag("access_language").assertTextEquals("язык")
     }
 
     @Test
@@ -400,7 +399,7 @@ class LocaleMainActivityRecreationTest {
         // untouched and the same public-home destination is showing.
         composeRule.onNodeWithTag("scan_action").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("create_action").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithTag("access_language").assertTextEquals("язык · Русский")
+        composeRule.onNodeWithTag("access_language").assertTextEquals("язык")
     }
 
     @Test

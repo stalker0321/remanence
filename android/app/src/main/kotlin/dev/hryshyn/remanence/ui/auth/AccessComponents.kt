@@ -57,7 +57,7 @@ fun AccessHeading(title: String, detail: String? = null) {
 
 /** Compact before sign-in; unlike a four-label row this survives large text/IME. */
 @Composable
-fun AccessLanguageControl(current: AppLocale, onSelect: (AppLocale) -> Unit) {
+fun AccessLanguageControl(current: AppLocale, onSelect: (AppLocale) -> Unit, showCurrent: Boolean = true) {
     var expanded by remember { mutableStateOf(false) }
     fun label(locale: AppLocale) = when (locale) {
         AppLocale.SYSTEM -> R.string.hold_language_system
@@ -67,7 +67,11 @@ fun AccessLanguageControl(current: AppLocale, onSelect: (AppLocale) -> Unit) {
     }
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         HoldTextButton(onClick = { expanded = true }, modifier = Modifier.testTag("access_language")) {
-            Text(stringResource(R.string.hold_language_label) + " · " + stringResource(label(current)), color = HoldColors.Muted)
+            Text(
+                if (showCurrent) stringResource(R.string.hold_language_label) + " · " + stringResource(label(current))
+                else stringResource(R.string.hold_language_label),
+                color = HoldColors.Muted,
+            )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             AppLocale.options.forEach { locale ->

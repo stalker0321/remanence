@@ -103,7 +103,7 @@ fun HomeScreen(
                 minSurfaceHeight = createFloor, tag = "create_action",
             )
             if (showLanguageSwitch) {
-                if (publicEntry) AccessLanguageControl(current = appLocale, onSelect = onLocaleSelected)
+                if (publicEntry) AccessLanguageControl(current = appLocale, onSelect = onLocaleSelected, showCurrent = false)
                 else LanguageSwitchRow(current = appLocale, onSelect = onLocaleSelected)
             }
         }
@@ -134,7 +134,7 @@ fun HomeScreen(
             .map { it.measure(wrap) }
         val langPlaceables = subcompose("homeLang") {
             if (showLanguageSwitch) {
-                if (publicEntry) AccessLanguageControl(current = appLocale, onSelect = onLocaleSelected)
+                if (publicEntry) AccessLanguageControl(current = appLocale, onSelect = onLocaleSelected, showCurrent = false)
                 else LanguageSwitchRow(current = appLocale, onSelect = onLocaleSelected)
             }
         }.map { it.measure(wrap) }

@@ -17,7 +17,8 @@ import kotlinx.coroutines.launch
 
 /**
  * Inner-step arrival for the Create flow (lookup → confirm → front →
- * content …). The root owns the single Home ↔ Create boundary arrival
+ * content …), also reused for auth substate swaps (login ↔ register)
+ * keyed the same way. The root owns the single Home ↔ Create boundary arrival
  * ([AstraContextArrival]); this helper owns arrivals *between* steps.
  *
  * - First mount snaps to rest: it composes under the root boundary Carry,

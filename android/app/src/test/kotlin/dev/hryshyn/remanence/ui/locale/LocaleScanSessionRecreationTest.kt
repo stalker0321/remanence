@@ -245,6 +245,6 @@ class LocaleScanSessionRecreationTest {
         assertTrue(created.isEmpty())
         assertEquals(7L, vm.initializedEpoch.value)
         assertEquals(ScanTerminalState.Idle, vm.terminal.value)
-        composeRule.onNodeWithTag("access_language").assertTextEquals("язык · Русский")
+        composeRule.onNodeWithTag("access_language").assertTextEquals("язык")
     }
 }

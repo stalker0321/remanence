@@ -329,7 +329,12 @@ private fun RootSurface(
                         Spacer(Modifier.height(HoldSpace.Gutter))
                         if (recoveryBusy) {
                             Spacer(Modifier.weight(1f))
-                        } else if (registering) {
+                        } else {
+                            // Shared legacy host for BOTH substates: the step
+                            // wrapper below (keyed by registering) owns the
+                            // login<->register swap. Gating this branch on
+                            // registering would drop the normal login form
+                            // and its toggle entirely.
                             val regForm by registrationViewModel.form.collectAsStateWithLifecycle()
                             val regSubmit by registrationViewModel.submitState.collectAsStateWithLifecycle()
                             val loginForm by loginViewModel.form.collectAsStateWithLifecycle()

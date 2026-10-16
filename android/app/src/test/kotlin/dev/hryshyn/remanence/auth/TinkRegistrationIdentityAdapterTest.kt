@@ -88,6 +88,29 @@ class TinkRegistrationIdentityAdapterTest {
         assertTrue(adapter.bindStagedToOwner(prepared.keyBundleId, owner))
     }
 
+    @Test
+    fun loginTimeBindAdoptsEarlierStagedCandidateWithoutGenerating() {
+        val directory = Files.createTempDirectory("identity-adapter-lostack").toFile()
+        val kek = SoftwareKekBoundary()
+        val ownerStores = stores(directory, kek)
+        val adapter = TinkRegistrationIdentityAdapter(ownerStores, kek, kekAlias)
+        val owner = "0198f0a0-0000-7000-8000-00000000a002"
+
+        // "Registration" prepares the candidate; the ACK is then lost and
+        // the process dies — only sealed staging survives.
+        val prepared = adapter.prepareProvisional("google:lost-ticket-flow")
+        val loginAdapter = TinkRegistrationIdentityAdapter(ownerStores, kek, kekAlias)
+
+        // "Login" for the existing account binds the retained candidate by
+        // the server-assigned bundle. Binding never generates: the adopted
+        // bundle equals the earlier staged one exactly.
+        assertTrue(loginAdapter.bindStagedToOwner(prepared.keyBundleId, owner))
+        val resolved = ownerStores.resolve(owner, prepared.keyBundleId)
+        assertTrue(resolved is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available)
+        // An unrelated bundle binds nothing and proves nothing.
+        assertTrue(!loginAdapter.bindStagedToOwner("0198f0a0-0000-7000-8000-00000000b099", owner))
+    }
+
     private companion object {
         val UUID_REGEX = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
     }

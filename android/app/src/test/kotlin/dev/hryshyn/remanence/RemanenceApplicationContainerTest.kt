@@ -654,7 +654,7 @@ class RemanenceApplicationContainerTest {
         val capsule = CapsuleId.parseRest("0198f0a0-0000-7000-8000-00000000d452")
         val blob = BlobId.parseRest("0198f0a0-0000-7000-8000-00000000d453")
         val expected = IllegalStateException("provider failure")
-        val appContainer = AppContainer(context, SoftwareKekBoundary(), { _ -> throw expected })
+        val appContainer = AppContainer(context, SoftwareKekBoundary(), { _, _ -> throw expected })
         try {
             appContainer.currentAccountStore.record(
                 owner.toRestString(),
@@ -715,7 +715,7 @@ class RemanenceApplicationContainerTest {
         val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000d455")
         val capsule = CapsuleId.parseRest("0198f0a0-0000-7000-8000-00000000d456")
         val expected = kotlinx.coroutines.CancellationException("identity load cancelled")
-        val appContainer = AppContainer(context, SoftwareKekBoundary(), { _ -> throw expected })
+        val appContainer = AppContainer(context, SoftwareKekBoundary(), { _, _ -> throw expected })
         try {
             appContainer.currentAccountStore.record(
                 owner.toRestString(),

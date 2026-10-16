@@ -2,6 +2,18 @@ package dev.hryshyn.remanence.wiring
 
 import dev.hryshyn.remanence.core.crypto.KekBoundary
 
+/** Stable, client-generated identity snapshot used for one registration flow. */
+data class PreparedIdentity(
+    val keyBundleId: String,
+    val encryptionPublicKeysetB64Url: String,
+    val signingPublicKeysetB64Url: String,
+) {
+    companion object {
+        const val SUITE: String = "HPKE_X25519_HKDF_SHA256_AES256GCM__ED25519"
+        const val PROTOCOL_VERSION: Int = 1
+    }
+}
+
 /**
  * Binds [RegistrationIdentityPort][dev.hryshyn.remanence.auth.RegistrationIdentityPort]
  * to owner-scoped staged identity material. The key bundle ID is derived

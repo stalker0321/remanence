@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.auth
 import dev.hryshyn.remanence.wiring.PreparedIdentity
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import dev.hryshyn.remanence.core.data.network.AuthResult
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -106,6 +107,38 @@ class RegistrationUseCaseOrderingTest {
         assertEquals(RegistrationUseCase.Outcome.Registered("1f0a1234-5678-4abc-9def-aabbccdd1001", "mykola", "2f0a1234-5678-4abc-9def-aabbccdd2002"), outcome)
         assertEquals(listOf("identity", "lease", "network", "close", "account", "install", "adopt"), trace)
         assertEquals(1, replacement.installCount)
+    }
+
+    @Test
+    fun sameFlowRetryReusesButNewFlowAndTargetMintIndependentKeys() = runTest {
+        val trace = mutableListOf<String>()
+        val identity = RecordingIdentityPort(trace)
+        val api = FakeAuthApi(trace).apply {
+            nextResult = AuthResult.Failure(
+                reason = dev.hryshyn.remanence.core.data.network.AuthFailure.HTTP,
+                httpStatus = 409,
+                registrationProblemCode = RegistrationProblemCode.HANDLE_UNAVAILABLE,
+            )
+        }
+        val useCase = RegistrationUseCase(identity, api, FakeAccounts(trace), RecordingReplacement(trace))
+
+        // Same-flow 409 retry (edited handle, same target): one flow key.
+        useCase.register("private@example.com", "secret-password", "@mykola")
+        useCase.register("private@example.com", "secret-password", "@mykola2")
+        assertEquals(2, identity.calls.size)
+        assertEquals(identity.calls[0], identity.calls[1])
+
+        // New logical flow, same target: independent keys (post
+        // success/logout reuse of the old candidate is forbidden).
+        useCase.startNewFlow()
+        useCase.register("private@example.com", "secret-password", "@mykola")
+        assertEquals(3, identity.calls.size)
+        assertTrue(identity.calls[0] != identity.calls[2])
+
+        // Same flow, different target: independent keys as well.
+        useCase.register("other@example.com", "secret-password", "@mykola")
+        assertEquals(4, identity.calls.size)
+        assertEquals(3, identity.calls.toSet().size)
     }
 
     @Test

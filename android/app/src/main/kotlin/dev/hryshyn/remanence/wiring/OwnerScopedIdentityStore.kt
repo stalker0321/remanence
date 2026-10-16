@@ -63,8 +63,11 @@ class OwnerScopedIdentityStore(
     /**
      * Verified private-handle load for an explicitly requested
      * owner+bundle: the owner dir when it verifies, else the legacy
-     * home when ITS exports verify (legacy claim with proof), else
-     * `RecoveryRequired`. Never returns another owner's keys.
+     * home ONLY with an explicit verified-owner binding (a marker
+     * claim for THIS owner plus exact verify), else
+     * `RecoveryRequired`. Unclaimed legacy never yields private
+     * handles for any owner, whatever the bundle match — B asking for
+     * A's bundle gets `RecoveryRequired`, never A's keys.
      */
     @Synchronized
     fun resolve(ownerUserId: String, expectedBundleId: String): IdentityBundleRepository.LoadResult {
@@ -77,7 +80,10 @@ class OwnerScopedIdentityStore(
             val loaded = repositoryFor(owner).load()
             if (loaded is IdentityBundleRepository.LoadResult.Available) return loaded
         }
-        if (verifyDirBundle(identityRoot, bundle)) {
+        val claim = readClaim(identityRoot)
+        if (claim != null && claim.ownerUserId == owner && claim.keyBundleId == bundle &&
+            verifyDirBundle(identityRoot, bundle)
+        ) {
             val legacy = legacyRepository().load()
             if (legacy is IdentityBundleRepository.LoadResult.Available) return legacy
         }
@@ -110,9 +116,11 @@ class OwnerScopedIdentityStore(
             if (root !is JsonObject) return null
             val owner = root["userId"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() } ?: return null
             val bundle = root["keyBundleId"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() } ?: return null
-            canonicalUuid(owner)
-            canonicalUuid(bundle)
-            OwnerClaim(owner, bundle)
+            // Normalize: malformed values fail closed, and stored claims
+            // always compare in canonical form downstream.
+            val ownerNorm = canonicalUuid(owner) ?: return null
+            val bundleNorm = canonicalUuid(bundle) ?: return null
+            OwnerClaim(ownerNorm, bundleNorm)
         } catch (_: Exception) {
             null
         }
@@ -122,8 +130,9 @@ class OwnerScopedIdentityStore(
      * Claims the legacy home for an owner after proof (the login's
      * userId+bundleId equals the legacy exports). Refuses when the
      * legacy material does not match, or when a conflicting claim
-     * already exists. Best-effort boolean — callers proceed regardless
-     * since resolution never depends on the marker.
+     * already exists. Best-effort boolean — callers proceed regardless;
+     * [resolve] serves the legacy home only when this claim binds the
+     * requested owner+bundle, and fails closed otherwise.
      */
     @Synchronized
     fun claimLegacyIfMatching(ownerUserId: String, bundleId: String): Boolean {
@@ -144,19 +153,31 @@ class OwnerScopedIdentityStore(
     @Synchronized
     fun prepareProvisional(flowKey: String, kekAlias: String): PreparedIdentity {
         require(flowKey.isNotBlank()) { "flow key must not be blank" }
-        boundBundle(flowKey)?.let { bound ->
+        if (flowFile(flowKey).exists()) {
+            // An established flow never resets implicitly: a malformed
+            // mapping, missing material, or unusable staged keys all fail
+            // closed (possibly-server-committed state must not be silently
+            // replaced). Fresh keys happen only below, for a new flow.
+            val bound = boundBundle(flowKey)
+                ?: throw java.security.GeneralSecurityException(
+                    "flow binding unreadable; refusing silent reset",
+                )
             if (!stagedDir(bound).exists()) {
-                // Bound material moved away (archived): the flow continues
-                // fresh rather than failing on a ghost binding.
-            } else {
-                val staged = stagedRepository(bound).loadPublicExports()
-                if (staged is IdentityBundleRepository.PublicExportsResult.Available) {
-                    return toPrepared(staged)
-                }
                 throw java.security.GeneralSecurityException(
-                    "staged candidate for this flow is unusable; start a new flow",
+                    "flow binding points at missing material; refusing silent reset",
                 )
             }
+            val staged = try {
+                stagedRepository(bound).loadPublicExports()
+            } catch (_: Exception) {
+                null
+            }
+            if (staged is IdentityBundleRepository.PublicExportsResult.Available) {
+                return toPrepared(staged)
+            }
+            throw java.security.GeneralSecurityException(
+                "staged candidate for this flow is unusable; start a new flow",
+            )
         }
         val generated = AccountIdentityGenerator().generate()
         val bundle = deriveKeyBundleId(generated.encryptionPublicKeyset)
@@ -189,15 +210,15 @@ class OwnerScopedIdentityStore(
 
     /**
      * Idempotent verified archival of a staged candidate into its
-     * owner's directory. Verifies the staged material derives exactly
-     * [bundleId] first, then COPIES (never moves) the sealed files, so
-     * there is no torn-move window and a post-success retry of the same
-     * flow reuses instead of regenerating. Refuses when the owner dir
-     * already holds DIFFERENT usable keys (never overwrites); a missing
-     * source with an already-adopted destination still succeeds; a
-     * partial/corrupt destination converges by completing the copy.
-     * No plaintext crosses. Returns false instead of throwing on any
-     * integrity problem; the staged copy is always retained.
+     * owner's directory. COPIES (never moves) the sealed files, so there
+     * is no torn-move window and a post-success retry of the same flow
+     * reuses instead of regenerating. Every write is provenance-proven:
+     * an existing destination file must be byte-identical to the staged
+     * source (our own prior copy); anything foreign or corrupt refuses
+     * with the old bytes preserved. A recovered record takes priority
+     * and is never mutated by adoption: adopted-same succeeds, anything
+     * else refuses. No plaintext crosses. Returns false instead of
+     * throwing on any integrity problem; the staged copy is retained.
      */
     @Synchronized
     fun adoptStaged(bundleId: String, ownerUserId: String): Boolean {
@@ -212,7 +233,7 @@ class OwnerScopedIdentityStore(
         if (staged is IdentityBundleRepository.PublicExportsResult.Available &&
             deriveKeyBundleId(staged.encryptionPublicKeyset) == bundle
         ) {
-            if (!copyRecordsInto(stagedDir(bundle), destination)) return false
+            if (!copyRecordsInto(stagedDir(bundle), destination, staged)) return false
         } else if (!destination.exists()) {
             return false
         }
@@ -222,56 +243,102 @@ class OwnerScopedIdentityStore(
             null
         }
         if (current !is IdentityBundleRepository.LoadResult.Available) return false
-        val currentBundle = try {
-            deriveLoadedBundle(current)
-        } catch (_: Exception) {
-            null
-        } ?: return false
-        if (currentBundle != bundle) return false
+        if (staged is IdentityBundleRepository.PublicExportsResult.Available) {
+            // Full-identity equality (HPKE AND signing) against the proven
+            // staged source — same HPKE with different Ed25519 is NOT the
+            // same identity.
+            if (!identitiesEqual(current, staged)) return false
+        } else {
+            // No staged reference (already-adopted convergence): the
+            // destination must still derive exactly the bundle.
+            val currentBundle = try {
+                deriveLoadedBundle(current)
+            } catch (_: Exception) {
+                null
+            } ?: return false
+            if (currentBundle != bundle) return false
+        }
         writeClaim(destination, OwnerClaim(owner, bundle))
         return true
     }
 
     /**
-     * Copies the sealed records of one identity directory into another
-     * via tmp+rename per file, so a crash between files leaves a partial
-     * (never half-usable) destination that the next adopt completes.
-     * Refuses when the destination holds different usable keys.
+     * Converges a destination toward staged source records with proven
+     * provenance. A recovered record is authoritative and never mutated:
+     * adopted-same succeeds, anything else refuses. Otherwise each
+     * sealed record either already matches byte-for-byte (our own prior
+     * copy — skipped), is absent (copied via tmp+rename), or differs
+     * (foreign/corrupt — refuse with old bytes preserved).
      */
-    private fun copyRecordsInto(source: File, destination: File): Boolean {
+    private fun copyRecordsInto(
+        source: File,
+        destination: File,
+        staged: IdentityBundleRepository.PublicExportsResult.Available,
+    ): Boolean {
         return try {
-            val current = try {
-                IdentityBundleRepository(destination, wrapper).load()
-            } catch (_: Exception) {
-                null
-            }
-            if (current is IdentityBundleRepository.LoadResult.Available) {
-                // Usable destination: only an exact match may stand.
-                val currentBundle = try {
-                    deriveLoadedBundle(current)
-                } catch (_: Exception) {
-                    null
-                } ?: return false
-                val staged = try {
-                    IdentityBundleRepository(source, wrapper).loadPublicExports()
+            if (File(destination, IdentityBundleRepository.RECOVERED_FILE_NAME).exists()) {
+                val current = try {
+                    IdentityBundleRepository(destination, wrapper).load()
                 } catch (_: Exception) {
                     null
                 }
-                if (staged !is IdentityBundleRepository.PublicExportsResult.Available ||
-                    deriveKeyBundleId(staged.encryptionPublicKeyset) != currentBundle
-                ) {
-                    return false
-                }
-                return true
+                if (current !is IdentityBundleRepository.LoadResult.Available) return false
+                return identitiesEqual(current, staged)
             }
             destination.mkdirs()
-            copyRecord(source, destination, IdentityBundleRepository.ENCRYPTION_FILE_NAME)
-            copyRecord(source, destination, IdentityBundleRepository.SIGNING_FILE_NAME)
+            for (name in listOf(
+                IdentityBundleRepository.ENCRYPTION_FILE_NAME,
+                IdentityBundleRepository.SIGNING_FILE_NAME,
+            )) {
+                val target = File(destination, name)
+                if (target.exists()) {
+                    val existing = try {
+                        target.readBytes()
+                    } catch (_: Exception) {
+                        null
+                    }
+                    val expected = try {
+                        File(source, name).readBytes()
+                    } catch (_: Exception) {
+                        null
+                    }
+                    if (expected == null || existing == null || !expected.contentEquals(existing)) {
+                        return false
+                    }
+                } else {
+                    copyRecord(source, destination, name)
+                }
+            }
             true
         } catch (_: Exception) {
             false
         }
     }
+
+    /** Full-identity equality on public exports (HPKE AND signing). */
+    private fun identitiesEqual(
+        loaded: IdentityBundleRepository.LoadResult.Available,
+        staged: IdentityBundleRepository.PublicExportsResult.Available,
+    ): Boolean {
+        return try {
+            val loadedEncryption = publicBytes(loaded.encryptionHandle)
+            val loadedSigning = publicBytes(loaded.signingHandle)
+            try {
+                loadedEncryption.contentEquals(staged.encryptionPublicKeyset) &&
+                    loadedSigning.contentEquals(staged.signingPublicKeyset)
+            } finally {
+                loadedEncryption.fill(0)
+                loadedSigning.fill(0)
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun publicBytes(handle: com.google.crypto.tink.KeysetHandle): ByteArray =
+        com.google.crypto.tink.TinkProtoKeysetFormat.serializeKeysetWithoutSecret(
+            handle.publicKeysetHandle,
+        )
 
     private fun copyRecord(sourceDir: File, destinationDir: File, name: String) {
         val bytes = File(sourceDir, name).readBytes()

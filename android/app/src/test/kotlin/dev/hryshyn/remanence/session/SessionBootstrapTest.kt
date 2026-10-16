@@ -180,6 +180,52 @@ class SessionBootstrapTest {
     }
 
     @Test
+    fun realStoreBackedAvailabilityAdmitsExactBundleWithoutHolder() = runBlocking {
+        val root = createTempDirectory("bootstrap-stores").toFile()
+        val kek = dev.hryshyn.remanence.auth.SoftwareKekBoundary()
+        if (!kek.hasKey("t210-bootstrap-kek")) kek.createAes256GcmKey("t210-bootstrap-kek")
+        val stores = dev.hryshyn.remanence.wiring.OwnerScopedIdentityStore(
+            identityRoot = File(root, "identity"),
+            stagingRoot = File(root, "identity-staging"),
+            wrapper = dev.hryshyn.remanence.core.crypto.KeysetKekWrapper(kek),
+        )
+        dev.hryshyn.remanence.core.crypto.IdentityBundleRepository(
+            File(root, "identity"),
+            dev.hryshyn.remanence.core.crypto.KeysetKekWrapper(kek),
+        ).createFresh("t210-bootstrap-kek")
+        val exports = dev.hryshyn.remanence.core.crypto.IdentityBundleRepository(
+            File(root, "identity"),
+            dev.hryshyn.remanence.core.crypto.KeysetKekWrapper(kek),
+        ).loadPublicExports() as dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.PublicExportsResult.Available
+        val derived = java.util.UUID.nameUUIDFromBytes(exports.encryptionPublicKeyset).toString()
+        val availability = object : IdentityAvailabilityPort {
+            override fun hasIdentityFor(activeKeyBundleId: String): Boolean =
+                stores.hasIdentityFor(activeKeyBundleId)
+        }
+
+        // Exact bundle: cold bootstrap succeeds with no live owner holder.
+        val active = fixture(
+            identity = availability,
+            summary = PersistedAccountSummary(ownerA, "mykola", derived),
+        ).bootstrap.bootstrap() as SessionState.Active
+        assertEquals(derived, active.activeKeyBundleId)
+
+        // Unknown bundle: RecoveryRequired before any network call.
+        val missing = fixture(
+            identity = availability,
+            summary = PersistedAccountSummary(ownerA, "mykola", bundleB),
+        )
+        assertEquals(SessionState.RecoveryRequired, missing.bootstrap.bootstrap())
+        assertEquals(0, missing.refresher.calls)
+
+        // A second owner adopted into its own directory is equally
+        // bootstrap-visible by exact bundle, with no warm holder.
+        val preparedB = stores.prepareProvisional("bootstrap-owner-flow", "t210-bootstrap-kek")
+        assertTrue(stores.adoptStaged(preparedB.keyBundleId, ownerB))
+        assertTrue(availability.hasIdentityFor(preparedB.keyBundleId))
+    }
+
+    @Test
     fun matchingPersistedBundleProducesNormalActiveState() = runBlocking {
         val f = fixture(identity = FakeIdentity(localBundleId = bundleA))
 

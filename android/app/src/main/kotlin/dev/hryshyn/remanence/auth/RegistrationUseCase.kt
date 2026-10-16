@@ -56,6 +56,28 @@ class RegistrationUseCase(
     private val sessionReplacement: SessionReplacementPort,
 ) {
 
+    /**
+     * Logical-flow epoch. The flow key is the signup TARGET scoped to
+     * this epoch: same-flow retries (e.g. a 409 with an edited handle)
+     * reuse the staged candidate, while a NEW logical flow — next
+     * screen entry after success/logout, or any [startNewFlow] call —
+     * mints independent keys even for the same target. The epoch lives
+     * only in memory: process death starts a new epoch, and the
+     * previous staged candidate is retained for lost-ACK login binding
+     * by exact bundle, never silently reused.
+     */
+    @Volatile
+    private var flowEpoch: String = java.util.UUID.randomUUID().toString()
+
+    /**
+     * Starts a new logical registration flow. Called when the
+     * registration screen opens (a fresh ViewModel); retries within the
+     * open screen keep the epoch. Never deletes staged material.
+     */
+    fun startNewFlow() {
+        flowEpoch = java.util.UUID.randomUUID().toString()
+    }
+
     sealed interface Outcome {
         data class Registered(
             val userId: String,
@@ -79,14 +101,15 @@ class RegistrationUseCase(
     }
 
     suspend fun register(email: String, password: String, handle: String): Outcome {
-        // Flow identity is the signup TARGET owner (email), not the handle:
-        // a 409 retry with an edited handle reuses the staged candidate,
-        // while a different email (independent new signup flow, even with
-        // the same handle) mints independent keys. No in-memory retention
+        // Flow identity is the signup TARGET scoped to the current
+        // logical-flow epoch (see [startNewFlow]): a 409 retry with an
+        // edited handle reuses the staged candidate, while a different
+        // email (independent new signup flow, even with the same handle)
+        // or a new epoch mints independent keys. No in-memory retention
         // across flows — the staged directory is the only continuity, so
         // logout/process death cannot leak candidates into unrelated
         // registrations.
-        val flowKey = "legacy:" + email.trim().lowercase()
+        val flowKey = "legacy:" + flowEpoch + ":" + email.trim().lowercase()
         val prepared = try {
             identity.prepareProvisional(flowKey)
         } catch (_: IdentityRecoveryRequiredException) {

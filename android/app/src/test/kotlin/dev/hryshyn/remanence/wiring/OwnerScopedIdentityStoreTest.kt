@@ -9,6 +9,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -92,6 +93,13 @@ class OwnerScopedIdentityStoreTest {
         val preparedB = stores.prepareProvisional("b-flow", kekAlias)
         assertTrue(stores.adoptStaged(preparedB.keyBundleId, ownerB))
 
+        // Unclaimed legacy serves NOBODY's private handles — not even A.
+        // Bootstrap availability (public scan) still sees A's bundle.
+        assertTrue(stores.resolve(ownerA, bundleA)
+            is IdentityBundleRepository.LoadResult.RecoveryRequired)
+        assertTrue(stores.hasIdentityFor(bundleA))
+        // Claiming with proof binds legacy to A — and only A.
+        assertTrue(stores.claimLegacyIfMatching(ownerA, bundleA))
         val loadedA = stores.resolve(ownerA, bundleA)
         assertTrue(loadedA is IdentityBundleRepository.LoadResult.Available)
         val loadedB = stores.resolve(ownerB, preparedB.keyBundleId)
@@ -104,6 +112,7 @@ class OwnerScopedIdentityStoreTest {
         val publicA = IdentityBundleRepository(java.io.File(root, "identity"), KeysetKekWrapper(kek))
             .loadPublicExports() as IdentityBundleRepository.PublicExportsResult.Available
         assertNotEquals(publicA.encryptionPublicKeyset.toList(), publicB.toList())
+        // Cross-owner requests fail closed both directions, claimed or not.
         assertTrue(stores.resolve(ownerA, preparedB.keyBundleId) is IdentityBundleRepository.LoadResult.RecoveryRequired)
         assertTrue(stores.resolve(ownerB, bundleA) is IdentityBundleRepository.LoadResult.RecoveryRequired)
     }
@@ -132,10 +141,25 @@ class OwnerScopedIdentityStoreTest {
         java.io.File(corrupt, "identity.encryption.pwks").writeBytes(byteArrayOf(1, 2, 3))
         assertTrue(stores.resolve(ownerB, bundleA)
             is IdentityBundleRepository.LoadResult.RecoveryRequired)
-        assertFalse(stores.hasIdentityFor(bundleA) && false) // placeholder replaced below
+        // Forged marker claiming a bundle the keys do not derive: the
+        // availability scan ignores it (unwrap-proven only).
+        val forgedBundle = "0198f0a0-0000-7000-8000-00000000f099"
+        java.io.File(java.io.File(root, "identity"), "owner.json").writeBytes(
+            ("{"userId":"" + ownerB + "","keyBundleId":"" + forgedBundle + ""}")
+                .toByteArray(Charsets.UTF_8),
+        )
+        assertFalse(stores.hasIdentityFor(forgedBundle))
+        assertTrue(stores.resolve(ownerB, forgedBundle)
+            is IdentityBundleRepository.LoadResult.RecoveryRequired)
+        // Genuine keys still resolve by position+verify, marker ignored.
+        assertTrue(stores.hasIdentityFor(bundleA))
         assertEquals(before + mapOf(
             "identity/$ownerB/identity.encryption.pwks" to sha256Hex(byteArrayOf(1, 2, 3)),
-        ), fileHashes(root).filterKeys { !it.endsWith("owner.json") && !it.startsWith("identity-staging") })
+            "identity/owner.json" to sha256Hex(
+                ("{"userId":"" + ownerB + "","keyBundleId":"" + forgedBundle + ""}")
+                    .toByteArray(Charsets.UTF_8),
+            ),
+        ), fileHashes(root).filterKeys { !it.startsWith("identity-staging") })
     }
 
     @Test
@@ -200,15 +224,121 @@ class OwnerScopedIdentityStoreTest {
     }
 
     @Test
+    fun rejectedAdoptionLeavesDestinationByteIdentical() {
+        val (root, stores, kek) = fixture()
+        // Owner B dir holds usable keys for another bundle C: crafted
+        // directly, exactly as a prior legitimate adoption would.
+        val ownerBDir = java.io.File(java.io.File(root, "identity"), ownerB)
+        IdentityBundleRepository(ownerBDir, KeysetKekWrapper(kek)).createFresh(kekAlias)
+        val bundleC = publicBundleOf(ownerBDir)
+        val preparedD = stores.prepareProvisional("foreign-flow", kekAlias)
+        assertNotEquals(bundleC, preparedD.keyBundleId)
+        val before = fileHashes(ownerBDir)
+
+        // Adopting a different bundle refuses WITHOUT touching B's files.
+        assertFalse(stores.adoptStaged(preparedD.keyBundleId, ownerB))
+        assertEquals(before, fileHashes(ownerBDir))
+        // B's own material still resolves; D never landed anywhere.
+        assertTrue(stores.resolve(ownerB, bundleC)
+            is IdentityBundleRepository.LoadResult.Available)
+        assertFalse(stores.hasIdentityFor(preparedD.keyBundleId))
+    }
+
+    @Test
+    fun staleAdoptCannotAlterActiveAccountState() {
+        val (root, stores, kek) = fixture()
+        IdentityBundleRepository(java.io.File(root, "identity"), KeysetKekWrapper(kek))
+            .createFresh(kekAlias)
+        val bundleA = publicBundleOf(java.io.File(root, "identity"))
+        val preparedB = stores.prepareProvisional("stale-flow", kekAlias)
+        assertTrue(stores.adoptStaged(preparedB.keyBundleId, ownerB))
+        val treeBefore = fileHashes(root)
+        val legacyBefore = legacyFileHashes(java.io.File(root, "identity"))
+
+        // Hostile replays: re-adopt, unknown bundles, mismatched claims.
+        // None may touch A's files, tokens/readiness-adjacent state, or grants
+        // (the store has no such APIs — the tree proves containment).
+        assertTrue(stores.adoptStaged(preparedB.keyBundleId, ownerB))
+        assertFalse(stores.adoptStaged("0198f0a0-0000-7000-8000-00000000b099", ownerB))
+        assertFalse(stores.claimLegacyIfMatching(ownerB, preparedB.keyBundleId))
+        assertTrue(stores.resolve(ownerB, preparedB.keyBundleId)
+            is IdentityBundleRepository.LoadResult.Available)
+        // A is untouched and still bootstrap-visible; only expected new
+        // paths (B dir + claim, staging) appeared.
+        assertEquals(legacyBefore, legacyFileHashes(java.io.File(root, "identity")))
+        assertTrue(stores.hasIdentityFor(bundleA))
+        val added = fileHashes(root).keys - treeBefore.keys
+        assertTrue(added.all { it.startsWith("identity/$ownerB/") || it.startsWith("identity-staging/") })
+    }
+
+    @Test
+    fun recoveryInstallWritesBDirAndLeavesAByteIdentical() {
+        val (root, stores, kek) = fixture()
+        val legacyRoot = java.io.File(root, "identity")
+        IdentityBundleRepository(legacyRoot, KeysetKekWrapper(kek)).createFresh(kekAlias)
+        val bundleA = publicBundleOf(legacyRoot)
+        val legacyBefore = fileHashes(legacyRoot)
+        assertTrue(stores.claimLegacyIfMatching(ownerA, bundleA))
+
+        // Real recovery path: the staged candidate's unwrapped handles go
+        // through the SAME installRecovered kernel production recovery uses
+        // (no adoption involved), writing B's owner directory only.
+        val preparedB = stores.prepareProvisional("restore-install-flow", kekAlias)
+        val stagedB = IdentityBundleRepository(
+            java.io.File(java.io.File(root, "identity-staging"), preparedB.keyBundleId),
+            KeysetKekWrapper(kek),
+        ).load()
+        assertTrue(stagedB is IdentityBundleRepository.LoadResult.Available)
+        stagedB as IdentityBundleRepository.LoadResult.Available
+        stores.installRecovered(
+            ownerB,
+            kekAlias,
+            dev.hryshyn.remanence.core.crypto.AccountRecoveryCrypto.Restored(
+                stagedB.encryptionHandle,
+                stagedB.signingHandle,
+            ),
+        )
+        assertTrue(stores.resolve(ownerB, preparedB.keyBundleId)
+            is IdentityBundleRepository.LoadResult.Available)
+        assertTrue(stores.resolve(ownerA, bundleA)
+            is IdentityBundleRepository.LoadResult.Available)
+        assertEquals(legacyBefore, fileHashes(legacyRoot))
+
+        // A mismatched recovery bundle for B refuses without touching B.
+        val preparedC = stores.prepareProvisional("restore-mismatch-flow", kekAlias)
+        val stagedC = IdentityBundleRepository(
+            java.io.File(java.io.File(root, "identity-staging"), preparedC.keyBundleId),
+            KeysetKekWrapper(kek),
+        ).load() as IdentityBundleRepository.LoadResult.Available
+        try {
+            stores.installRecovered(
+                ownerB,
+                kekAlias,
+                dev.hryshyn.remanence.core.crypto.AccountRecoveryCrypto.Restored(
+                    stagedC.encryptionHandle,
+                    stagedC.signingHandle,
+                ),
+            )
+            assertTrue("mismatched recovery install must refuse", false)
+        } catch (_: Exception) {
+        }
+        assertTrue(stores.resolve(ownerB, preparedB.keyBundleId)
+            is IdentityBundleRepository.LoadResult.Available)
+        assertFalse(stores.hasIdentityFor(preparedC.keyBundleId))
+    }
+
+    @Test
     fun restoreOntoAInstallationWritesBDirAndKeepsAReadable() {
         val (root, stores, kek) = fixture()
         IdentityBundleRepository(java.io.File(root, "identity"), KeysetKekWrapper(kek))
             .createFresh(kekAlias)
         val bundleA = publicBundleOf(java.io.File(root, "identity"))
+        // A's legacy home is claimed with proof, as a verified login would.
+        assertTrue(stores.claimLegacyIfMatching(ownerA, bundleA))
         val preparedB = stores.prepareProvisional("restore-flow", kekAlias)
         assertTrue(stores.adoptStaged(preparedB.keyBundleId, ownerB))
 
-        // B's directory holds B's keys; A's legacy home still resolves A.
+        // B's directory holds B's keys; A's claimed legacy home still resolves A.
         assertTrue(stores.resolve(ownerB, preparedB.keyBundleId)
             is IdentityBundleRepository.LoadResult.Available)
         assertTrue(stores.resolve(ownerA, bundleA)
@@ -226,12 +356,19 @@ class OwnerScopedIdentityStoreTest {
             .createFresh(kekAlias)
         val bundleA = publicBundleOf(java.io.File(root, "identity"))
 
+        // Unclaimed legacy serves no private handles, even to A.
+        assertTrue(stores.resolve(ownerA, bundleA)
+            is IdentityBundleRepository.LoadResult.RecoveryRequired)
         // Proof (login's owner+bundle equals the legacy exports): claimed.
         assertTrue(stores.claimLegacyIfMatching(ownerA, bundleA))
         val claim = stores.readClaim(java.io.File(root, "identity"))
         assertEquals(ownerA, claim?.ownerUserId)
         assertEquals(bundleA, claim?.keyBundleId)
-        // Mismatch never claims and never blocks: B proceeds empty.
+        // Claimed legacy now serves its bound owner.
+        assertTrue(stores.resolve(ownerA, bundleA)
+            is IdentityBundleRepository.LoadResult.Available)
+        // Mismatch never claims and never blocks: B proceeds empty, and a
+        // claim for B never unlocks A's material for B either.
         assertFalse(stores.claimLegacyIfMatching(ownerB, bundleA))
         assertTrue(stores.resolve(ownerB, bundleA)
             is IdentityBundleRepository.LoadResult.RecoveryRequired)

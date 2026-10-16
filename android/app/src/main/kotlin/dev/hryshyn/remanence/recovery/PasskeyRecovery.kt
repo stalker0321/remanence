@@ -62,6 +62,7 @@ class PasskeyRecovery(private val container: AppContainer) {
         enabled()
         val lease = container.apiStack.captureSessionRequestLease() ?: error("no session")
         val account = withContext(Dispatchers.IO) { container.currentAccountStore.loadEntity() } ?: error("no account")
+        container.ownerIdentityStores.claimLegacyIfMatching(account.userId, account.activeKeyBundleId)
         val identity = withContext(Dispatchers.IO) {
             container.ownerIdentityStores.resolve(account.userId, account.activeKeyBundleId)
         } as? IdentityBundleRepository.LoadResult.Available ?: error("identity missing")

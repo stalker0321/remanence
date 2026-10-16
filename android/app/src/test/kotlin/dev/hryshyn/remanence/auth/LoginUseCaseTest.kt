@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.auth
 import dev.hryshyn.remanence.wiring.PreparedIdentity
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import dev.hryshyn.remanence.core.data.network.ActiveKeyBundleMetadataDto
@@ -114,8 +115,10 @@ class LoginUseCaseTest {
         val response = successResponse().copy(
             activeKeyBundle = bundle.copy(keyBundleId = staged.keyBundleId),
         )
+        // Actual store-backed readiness gate, not a hardcoded fake.
+        val gate = LoginIdentityPort { candidate -> stores.hasIdentityFor(candidate) }
         val api = FakeApi(AuthResult.Success(response, 200))
-        val outcome = LoginUseCase(FakeIdentity(has = true), api, RecordingAccounts(), NoOpSessionReplacement, stores)
+        val outcome = LoginUseCase(gate, api, RecordingAccounts(), NoOpSessionReplacement, ownerStores = stores)
             .login("private@example.com", "secret-password")
 
         assertEquals(
@@ -138,14 +141,18 @@ class LoginUseCaseTest {
         val response = successResponse().copy(
             activeKeyBundle = bundle.copy(keyBundleId = staged.keyBundleId),
         )
-        // Readiness gate says nothing is installed yet: binding must still
-        // happen (lost-ACK recovery), without generating replacement keys.
+        // Nothing installed anywhere yet (lost-ACK state): the real gate
+        // reports not-ready BEFORE login...
+        assertFalse(stores.hasIdentityFor(staged.keyBundleId))
+        val gate = LoginIdentityPort { candidate -> stores.hasIdentityFor(candidate) }
         val api = FakeApi(AuthResult.Success(response, 200))
-        val outcome = LoginUseCase(FakeIdentity(has = false), api, RecordingAccounts(), NoOpSessionReplacement, stores)
+        // ...but binding during login flips readiness WITHOUT generating
+        // replacement keys, so the outcome is LoggedIn, not RecoveryRequired.
+        val outcome = LoginUseCase(gate, api, RecordingAccounts(), NoOpSessionReplacement, ownerStores = stores)
             .login("private@example.com", "secret-password")
 
         assertEquals(
-            LoginUseCase.Outcome.RecoveryRequired(user.userId, user.handle, staged.keyBundleId),
+            LoginUseCase.Outcome.LoggedIn(user.userId, user.handle, staged.keyBundleId),
             outcome,
         )
         val resolved = stores.resolve(user.userId, staged.keyBundleId)
@@ -168,7 +175,7 @@ class LoginUseCaseTest {
         stagingDir.mkdirs()
         java.io.File(stagingDir, "identity.encryption.pwks").writeBytes(byteArrayOf(9, 9, 9))
         val api = FakeApi(AuthResult.Success(successResponse(), 200))
-        val outcome = LoginUseCase(FakeIdentity(has = true), api, RecordingAccounts(), NoOpSessionReplacement, stores)
+        val outcome = LoginUseCase(FakeIdentity(has = true), api, RecordingAccounts(), NoOpSessionReplacement, ownerStores = stores)
             .login("private@example.com", "secret-password")
 
         // Adoption is best-effort: the login outcome stands, nothing is

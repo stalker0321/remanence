@@ -75,7 +75,7 @@ class GoogleAuthViewModel(private val container: AppContainer) : ViewModel() {
                 })
                 when (result.text("status")) {
                     "NEEDS_HANDLE" -> { ticket = result; mutableState.value = GoogleAuthState.ChooseHandle }
-                    "SIGNED_IN" -> commit(result, lease)
+                    "SIGNED_IN" -> commit(null, result, lease)
                     else -> error("invalid response")
                 }
             } catch (e: CancellationException) { throw e }
@@ -118,7 +118,7 @@ class GoogleAuthViewModel(private val container: AppContainer) : ViewModel() {
     val hasTicket: Boolean get() = ticket != null
 
     private suspend fun commit(
-        identity: dev.hryshyn.remanence.wiring.PreparedIdentity,
+        identity: dev.hryshyn.remanence.wiring.PreparedIdentity?,
         result: JsonObject,
         lease: Long,
     ) {
@@ -141,14 +141,29 @@ class GoogleAuthViewModel(private val container: AppContainer) : ViewModel() {
             // archive, then claim a matching legacy home. Both best-effort:
             // staged material is retained either way and resolution fails
             // closed on mismatch instead of overwriting anything.
-            if (identity.keyBundleId == login.activeKeyBundle.keyBundleId) {
+            // Registration carries its prepared identity; an existing-account
+            // login binds any retained staged candidate by the assigned
+            // bundle instead (lost-ACK path) — never fabricated keys.
+            val assignedBundle = login.activeKeyBundle.keyBundleId
+            if (identity != null && identity.keyBundleId == assignedBundle) {
                 try {
                     container.registrationIdentityAdapter.bindStagedToOwner(identity.keyBundleId, login.user.userId)
                 } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { }
+            } else if (identity == null) {
+                // Existing-account login without prepared keys: bind a
+                // retained staged candidate matching the assigned bundle
+                // (interrupted registration recovered at login), if any.
+                // Never generates or fabricates keys.
                 try {
-                    container.ownerIdentityStores.claimLegacyIfMatching(login.user.userId, login.activeKeyBundle.keyBundleId)
+                    val staged = container.ownerIdentityStores.resolveStaged(assignedBundle)
+                    if (staged != null) {
+                        container.registrationIdentityAdapter.bindStagedToOwner(assignedBundle, login.user.userId)
+                    }
                 } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { }
             }
+            try {
+                container.ownerIdentityStores.claimLegacyIfMatching(login.user.userId, login.activeKeyBundle.keyBundleId)
+            } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { }
             committed = true; ticket = null; mutableState.value = GoogleAuthState.SignedIn
         } finally {
             if (!committed) withContext(NonCancellable) { container.bareAuthRepository.logout(login.accessToken) }

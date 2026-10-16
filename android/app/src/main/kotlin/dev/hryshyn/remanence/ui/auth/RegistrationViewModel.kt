@@ -32,6 +32,16 @@ class RegistrationViewModel(
     scope: CoroutineScope? = null,
 ) : ViewModel() {
 
+    init {
+        // Opening the registration screen starts a new logical flow, so
+        // keys staged by an earlier signup/logout cycle are never reused
+        // for an unrelated registration of the same target. Retries
+        // within this screen keep the epoch and reuse the candidate.
+        // Staged material is never deleted — it stays available for
+        // lost-ACK login binding by exact bundle.
+        useCase.startNewFlow()
+    }
+
     /** Injected scope (tests); production runs on the lifecycle-owned scope. */
     private val launchScope: CoroutineScope = scope ?: viewModelScope
 

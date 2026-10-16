@@ -33,6 +33,7 @@ class ProtectOrchestrationTest {
     private val prfB64 = AccountRecoveryCrypto.encode(prfBytes)
 
     private class Fixture(
+        val owner: String,
         val stores: OwnerScopedIdentityStore,
         val bundleA: String,
         val encB64: String,
@@ -45,15 +46,32 @@ class ProtectOrchestrationTest {
         var registerOptions: JsonObject =
             buildJsonObject { put("flow", "reg-flow"); put("options", buildJsonObject {}) }
         var registerVerifyId: String = "cred-1"
-        var setupOptions: JsonObject =
-            buildJsonObject { put("flow", "setup-flow"); put("options", buildJsonObject {}) }
+        /** Set by register/verify: the fake server remembers the enrollment,
+         * so a later status read in the SAME fixture reports PENDING. */
+        var registeredId: String? = null
         var setupVerify: JsonObject = buildJsonObject { put("flow", "verify-flow") }
         var uploaded: JsonObject? = null
         var storedRecord: JsonObject? = null
         var leaseLive: Boolean = true
         val verified = mutableListOf<Pair<String, String>>()
-        val lease = SessionRequestLease(UserId.parseRest(ownerA), 1L)
-        val row = LocalAccountEntity(ownerA, "mykola", bundleA, 0L, 0L)
+        val lease = SessionRequestLease(UserId.parseRest(owner), 1L)
+        val row = LocalAccountEntity(owner, "mykola", bundleA, 0L, 0L)
+
+        /** Realistic single-id allowCredentials options for one enrollment. */
+        fun setupOptionsFor(id: String): JsonObject = buildJsonObject {
+            put("flow", "setup-flow")
+            put("options", buildJsonObject {
+                put("rpId", "example.test")
+                put("challenge", "setup-challenge")
+                put("allowCredentials", buildJsonArray {
+                    addJsonObject {
+                        put("type", "public-key")
+                        put("id", id)
+                    }
+                })
+                put("userVerification", "required")
+            })
+        }
 
         fun env() = ProtectEnvironment(
             captureLease = { lease },
@@ -62,12 +80,23 @@ class ProtectOrchestrationTest {
             requestAuthenticated = { _, path, body ->
                 apiCalls += path
                 when (path) {
-                    "status" -> status
+                    "status" -> registeredId?.let {
+                        buildJsonObject {
+                            put("state", "PENDING")
+                            put("credential_id", it)
+                        }
+                    } ?: status
                     "register/options" -> registerOptions
-                    "register/verify" -> buildJsonObject { put("credential_id", registerVerifyId) }
+                    "register/verify" -> {
+                        registeredId = registerVerifyId
+                        buildJsonObject { put("credential_id", registerVerifyId) }
+                    }
                     "setup/options" -> {
                         setupOptionBodies += body ?: buildJsonObject {}
-                        setupOptions
+                        setupOptionsFor(
+                            body?.getValue("credential_id")?.jsonPrimitive?.content
+                                ?: error("setup/options missing credential_id"),
+                        )
                     }
                     "setup/verify" -> setupVerify
                     "record" -> if (body == null) {
@@ -106,6 +135,7 @@ class ProtectOrchestrationTest {
         val identity = IdentityBundleRepository(File(root, "identity"), wrapper).load()
             as IdentityBundleRepository.LoadResult.Available
         return Fixture(
+            ownerA,
             stores,
             bundleA,
             AccountRecoveryCrypto.encode(exports.encryptionPublicKeyset),
@@ -121,6 +151,8 @@ class ProtectOrchestrationTest {
         var immediateError: Exception? = null,
     ) : RecoveryCredentialPort {
         val modes = mutableListOf<String>()
+        /** Exact option objects each get variant received, in order. */
+        val receivedOptions = mutableListOf<JsonObject>()
         var createCalls = 0
 
         override suspend fun create(options: JsonObject): JsonObject {
@@ -130,12 +162,14 @@ class ProtectOrchestrationTest {
 
         override suspend fun get(options: JsonObject): JsonObject {
             modes += "get"
+            receivedOptions += options
             getError?.let { throw it }
             return getResult ?: error("no get result scripted")
         }
 
         override suspend fun getImmediate(options: JsonObject): JsonObject {
             modes += "getImmediate"
+            receivedOptions += options
             immediateError?.let { throw it }
             return getResult ?: error("no get result scripted")
         }
@@ -155,6 +189,39 @@ class ProtectOrchestrationTest {
             put("authenticatorData", "auth-data")
             put("signature", "sig")
         })
+    }
+
+    private fun recordJsonOf(record: AccountRecoveryCrypto.Record): JsonObject = buildJsonObject {
+        put("version", record.version)
+        put("generation", record.generation)
+        put("account_id", record.accountId)
+        put("bundle_id", record.bundleId)
+        put("credential_id", record.credentialId)
+        put("salt", record.salt)
+        put("package_sealed", record.packageSealed)
+        put("prf_ark", record.prfArk)
+        put("code_ark", record.codeArk)
+        put("signature", record.signature)
+    }
+
+    /**
+     * Exact get-options passthrough for one get call: the provider
+     * receives byte-identical server options, and the single-id
+     * allowCredentials binds the exact enrollment id.
+     */
+    private fun assertSameEnrollmentOptions(
+        f: Fixture,
+        credentials: FakeCredentials,
+        id: String,
+        callIndex: Int,
+    ) {
+        val seen = credentials.receivedOptions[callIndex]
+        assertEquals(f.setupOptionsFor(id).getValue("options"), seen)
+        assertEquals(
+            id,
+            seen.getValue("allowCredentials").jsonArray.single().jsonObject
+                .getValue("id").jsonPrimitive.content,
+        )
     }
 
     @Test
@@ -180,9 +247,158 @@ class ProtectOrchestrationTest {
             f.apiCalls,
         )
         assertEquals(listOf("getImmediate"), credentials.modes)
+        assertSameEnrollmentOptions(f, credentials, "cred-1", 0)
         assertEquals(1, credentials.createCalls)
         assertTrue(f.verified.isEmpty())
         assertNull(f.uploaded)
+    }
+
+    @Test
+    fun freshPendingThenExplicitRetryCompletesSameEnrollment() = runTest {
+        // ONE stateful fixture for both invocations: the server fake flips
+        // to PENDING on register/verify, exactly like the real backend.
+        val f = fixture()
+        val credentials = FakeCredentials(
+            created = credentialJson("cred-1", prfB64),
+            getResult = credentialJson("cred-1", prfB64),
+            immediateError = NoCredentialException("not indexed yet"),
+        )
+
+        // First invocation: create+register, immediate miss → typed pending.
+        var pending: RecoveryVerificationPending? = null
+        try {
+            protectWith(f.env(), credentials)
+            fail("expected RecoveryVerificationPending")
+        } catch (e: RecoveryVerificationPending) {
+            pending = e
+        }
+        assertEquals("cred-1", pending?.credentialId)
+        assertTrue(f.verified.isEmpty())
+
+        // Explicit retry on the SAME fixture: PENDING reuses the retained
+        // id with normal discovery and runs the full gates to readiness.
+        val code = protectWith(f.env(), credentials)
+
+        assertNotNull(code)
+        assertEquals(32, code?.size)
+        // Exactly one registration across both invocations; the retry
+        // never re-creates. Modes flip immediate → ordinary.
+        assertEquals(1, f.apiCalls.count { it == "register/verify" })
+        assertEquals(1, credentials.createCalls)
+        assertEquals(listOf("getImmediate", "get"), credentials.modes)
+        // Same enrollment id and byte-identical options on both gets.
+        assertSameEnrollmentOptions(f, credentials, "cred-1", 0)
+        assertSameEnrollmentOptions(f, credentials, "cred-1", 1)
+        assertEquals(
+            listOf(
+                "status", "register/options", "register/verify", "setup/options",
+                "status", "setup/options", "setup/verify", "record", "record",
+            ),
+            f.apiCalls,
+        )
+        assertEquals("cred-1", f.uploaded?.getValue("credential_id")?.jsonPrimitive?.content)
+        assertEquals(listOf(ownerA to f.bundleA), f.verified)
+    }
+
+    @Test
+    fun freshImmediateSuccessCompletesFullGatesWithoutFallback() = runTest {
+        val f = fixture()
+        val credentials = FakeCredentials(
+            created = credentialJson("cred-1", prfB64),
+            getResult = credentialJson("cred-1", prfB64),
+        )
+
+        val code = protectWith(f.env(), credentials)
+
+        assertNotNull(code)
+        assertEquals(32, code?.size)
+        // No fallback to ordinary get, no duplicate registration.
+        assertEquals(listOf("getImmediate"), credentials.modes)
+        assertSameEnrollmentOptions(f, credentials, "cred-1", 0)
+        assertEquals(1, credentials.createCalls)
+        assertEquals(1, f.apiCalls.count { it == "register/verify" })
+        assertEquals(
+            listOf("status", "register/options", "register/verify", "setup/options", "setup/verify", "record", "record"),
+            f.apiCalls,
+        )
+        assertEquals(listOf(ownerA to f.bundleA), f.verified)
+    }
+
+    @Test
+    fun corruptDurableReadbackReturnsNoCodeOrReadiness() = runTest {
+        val f = fixture()
+        f.status = buildJsonObject {
+            put("state", "PENDING")
+            put("credential_id", "cred-1")
+        }
+        // Upload succeeds; the DURABLE read then serves a record bound to
+        // a different bundle. The post-upload gate must refuse it.
+        val prepared = AccountRecoveryCrypto.prepare(ownerA, f.bundleA, "cred-1", prfBytes, f.identity)
+        val tampered = JsonObject(
+            recordJsonOf(prepared.record) +
+                ("bundle_id" to JsonPrimitive("0198f0a0-0000-7000-8000-00000000b099")),
+        )
+        prepared.recoveryCode.fill(0)
+        f.storedRecord = buildJsonObject {
+            put("record", tampered)
+            put("encryption_public_keyset", f.encB64)
+            put("signing_public_keyset", f.sigB64)
+        }
+        val credentials = FakeCredentials(getResult = credentialJson("cred-1", prfB64))
+
+        var thrown: java.security.GeneralSecurityException? = null
+        try {
+            protectWith(f.env(), credentials)
+            fail("expected readback refusal")
+        } catch (e: java.security.GeneralSecurityException) {
+            thrown = e
+        }
+        assertNotNull(thrown)
+        assertNotNull(f.uploaded)
+        assertTrue(f.verified.isEmpty())
+    }
+
+    @Test
+    fun freshImmediateCancellationStaysNeutral() = runTest {
+        val f = fixture()
+        val credentials = FakeCredentials(
+            created = credentialJson("cred-1", prfB64),
+            immediateError = GetCredentialCancellationException(),
+        )
+
+        var thrown: GetCredentialCancellationException? = null
+        try {
+            protectWith(f.env(), credentials)
+            fail("expected cancellation")
+        } catch (e: GetCredentialCancellationException) {
+            thrown = e
+        }
+        assertNotNull(thrown)
+        assertEquals(
+            listOf("status", "register/options", "register/verify", "setup/options"),
+            f.apiCalls,
+        )
+        assertTrue(f.verified.isEmpty())
+    }
+
+    @Test
+    fun freshImmediateUnknownStaysDistinctFromPending() = runTest {
+        val f = fixture()
+        val credentials = FakeCredentials(
+            created = credentialJson("cred-1", prfB64),
+            immediateError = GetCredentialUnknownException("fresh provider boom"),
+        )
+
+        var thrown: Exception? = null
+        try {
+            protectWith(f.env(), credentials)
+            fail("expected provider error")
+        } catch (e: Exception) {
+            thrown = e
+        }
+        assertTrue(thrown is GetCredentialUnknownException)
+        assertTrue(thrown !is RecoveryVerificationPending)
+        assertTrue(f.verified.isEmpty())
     }
 
     @Test
@@ -200,6 +416,7 @@ class ProtectOrchestrationTest {
         assertEquals(32, code?.size)
         // Exact same-key retry: normal discovery, server id echoed back.
         assertEquals(listOf("get"), credentials.modes)
+        assertSameEnrollmentOptions(f, credentials, "cred-1", 0)
         assertEquals(0, credentials.createCalls)
         assertEquals("cred-1", f.setupOptionBodies.single().getValue("credential_id").jsonPrimitive.content)
         assertEquals(
@@ -223,20 +440,9 @@ class ProtectOrchestrationTest {
         // from the same real identity the orchestration resolves.
         val credentials = FakeCredentials(getResult = credentialJson("cred-1", prfB64))
         f.storedRecord = buildJsonObject {
-            put("record", AccountRecoveryCrypto.prepare(ownerA, f.bundleA, "cred-1", prfBytes, f.identity).record.let {
-                buildJsonObject {
-                    put("version", it.version)
-                    put("generation", it.generation)
-                    put("account_id", it.accountId)
-                    put("bundle_id", it.bundleId)
-                    put("credential_id", it.credentialId)
-                    put("salt", it.salt)
-                    put("package_sealed", it.packageSealed)
-                    put("prf_ark", it.prfArk)
-                    put("code_ark", it.codeArk)
-                    put("signature", it.signature)
-                }
-            })
+            put("record", recordJsonOf(
+                AccountRecoveryCrypto.prepare(ownerA, f.bundleA, "cred-1", prfBytes, f.identity).record,
+            ))
             put("encryption_public_keyset", f.encB64)
             put("signing_public_keyset", f.sigB64)
         }
@@ -244,6 +450,7 @@ class ProtectOrchestrationTest {
         assertNull(protectWith(f.env(), credentials))
 
         assertEquals(listOf("get"), credentials.modes)
+        assertSameEnrollmentOptions(f, credentials, "cred-1", 0)
         assertEquals(0, credentials.createCalls)
         assertNull(f.uploaded)
         assertEquals(listOf(ownerA to f.bundleA), f.verified)

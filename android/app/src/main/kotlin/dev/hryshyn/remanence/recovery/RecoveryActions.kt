@@ -54,8 +54,9 @@ fun RecoveryActions(container: AppContainer, hasIdentity: Boolean, recoveryRequi
                 // retried explicitly via the normal save path below.
                 // Never offer another manager merely because this
                 // continuation occurred.
-                offerAnotherManager = false
-                message = recoveryFailureMessage(pending, protecting)
+                val presentation = presentRecoveryPending()
+                offerAnotherManager = presentation.offerAnotherManager
+                message = presentation.message
             }
             catch (failure: Exception) {
                 message = recoveryFailureMessage(failure, protecting)
@@ -94,8 +95,29 @@ fun RecoveryActions(container: AppContainer, hasIdentity: Boolean, recoveryRequi
 
 /** Only typed provider cancellation is neutral. Timeouts and unknown failures still fail closed. */
 internal fun recoveryFailureMessage(failure: Exception, protecting: Boolean): Int = when {
-    failure is RecoveryVerificationPending -> R.string.recovery_verification_pending
     isCredentialUserCancellation(failure) -> R.string.auth_passkey_cancelled
     protecting -> R.string.auth_passkey_setup_failed
     else -> R.string.recovery_failed
 }
+
+/**
+ * Presentation for the typed saved-but-pending continuation, shared by
+ * the save and another-manager actions above. Pending is NOT verified
+ * (no Continue, no code), retries the SAME enrollment through the
+ * existing save-or-verify action (which re-reads PENDING status and
+ * uses normal discovery), and never offers another manager merely
+ * because the continuation occurred.
+ */
+internal data class RecoveryPendingPresentation(
+    val verified: Boolean,
+    val message: Int,
+    val offerAnotherManager: Boolean,
+    val retrySameEnrollment: Boolean,
+)
+
+internal fun presentRecoveryPending(): RecoveryPendingPresentation = RecoveryPendingPresentation(
+    verified = false,
+    message = R.string.recovery_verification_pending,
+    offerAnotherManager = false,
+    retrySameEnrollment = true,
+)

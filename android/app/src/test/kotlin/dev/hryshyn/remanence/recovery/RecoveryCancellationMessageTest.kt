@@ -21,16 +21,19 @@ class RecoveryCancellationMessageTest {
         assertEquals(R.string.auth_passkey_setup_failed, recoveryFailureMessage(failure, true))
         assertEquals(R.string.recovery_failed, recoveryFailureMessage(failure, false))
     }
-    @Test fun savedButPendingContinuationHasDedicatedCopy() {
-        for (protecting in listOf(true, false)) {
-            assertEquals(
-                R.string.recovery_verification_pending,
-                recoveryFailureMessage(RecoveryVerificationPending("cred-1"), protecting),
-            )
-        }
-        // Pending is neither verified success nor neutral cancellation.
-        assertNotEquals(R.string.recovery_verified, R.string.recovery_verification_pending)
-        assertNotEquals(R.string.auth_passkey_cancelled, R.string.recovery_verification_pending)
-        assertNotEquals(R.string.auth_passkey_setup_failed, R.string.recovery_verification_pending)
+    @Test fun savedButPendingContinuationHasDedicatedPresentation() {
+        // The exact reducer the save/another-manager actions use: pending
+        // is NOT verified (no Continue, no code), retries the SAME
+        // enrollment through the existing save action, and never offers
+        // another manager merely because the continuation occurred.
+        val presentation = presentRecoveryPending()
+        assertEquals(false, presentation.verified)
+        assertEquals(R.string.recovery_verification_pending, presentation.message)
+        assertEquals(false, presentation.offerAnotherManager)
+        assertEquals(true, presentation.retrySameEnrollment)
+        // Pending copy is neither verified success nor neutral cancellation.
+        assertNotEquals(R.string.recovery_verified, presentation.message)
+        assertNotEquals(R.string.auth_passkey_cancelled, presentation.message)
+        assertNotEquals(R.string.auth_passkey_setup_failed, presentation.message)
     }
 }

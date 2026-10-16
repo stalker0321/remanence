@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hryshyn.remanence.R
 import dev.hryshyn.remanence.ui.hold.HoldTheme
+import dev.hryshyn.remanence.ui.locale.AppLocale
 import androidx.test.core.app.ApplicationProvider
 import android.app.Application
 import org.junit.Assert.assertEquals
@@ -71,11 +72,20 @@ class HandleSetupErrorStabilityTest {
                 ) {
                     // Real AccessPage host (header row + content + footer),
                     // exactly like production: the shared ticket tree keeps
-                    // its button-first, weighted-form shape. A bounded width
-                    // goes BEFORE fill — fillMaxSize first would tighten the
-                    // min width and make the bound a no-op.
+                    // its button-first, weighted-form shape, and the real
+                    // language footer is mounted (never the default empty
+                    // footer). A bounded width goes BEFORE fill —
+                    // fillMaxSize first would tighten the min width and
+                    // make the bound a no-op.
                     val host: @Composable () -> Unit = {
-                        AccessPage {
+                        AccessPage(
+                            footer = {
+                                AccessLanguageControl(
+                                    current = AppLocale.SYSTEM,
+                                    onSelect = {},
+                                )
+                            },
+                        ) {
                             TicketClaimContent(
                                 handle = handle.value,
                                 onHandleChange = onHandleChange,
@@ -112,6 +122,12 @@ class HandleSetupErrorStabilityTest {
         composeRule.onNodeWithText(appString(R.string.mvp_handle_title))
             .fetchSemanticsNode().boundsInRoot.top
 
+    /** Rendered editable text, re-fetched on every call (never a cached
+    node): proves what the field actually displays, not outer state. */
+    private fun renderedDraft(): String =
+        composeRule.onNodeWithTag("access_handle_input")
+            .fetchSemanticsNode().config[SemanticsProperties.EditableText].text
+
     @Test
     fun titlesInputActionAndCtaDoNotMoveWhenErrorToggles() {
         val serverError = mutableStateOf<String?>(null)
@@ -122,12 +138,14 @@ class HandleSetupErrorStabilityTest {
             serverError = serverError,
         )
         composeRule.onNodeWithTag("access_handle_continue").assertIsDisplayed()
+        composeRule.onNodeWithTag("access_language").assertIsDisplayed()
         // Reserved slot carries no content while absent.
         composeRule.onNodeWithTag("access_handle_server_error").assertTextEquals("")
         val titleRest = titleTop()
         val inputRest = topOf("access_handle_input")
         val actionRest = topOf("access_google_retry")
         val ctaRest = topOf("access_handle_continue")
+        val footerRest = topOf("access_language")
 
         composeRule.runOnIdle { serverError.value = "Handle already taken" }
         composeRule.waitForIdle()
@@ -137,6 +155,8 @@ class HandleSetupErrorStabilityTest {
         assertEquals(inputRest, topOf("access_handle_input"), 0f)
         assertEquals(actionRest, topOf("access_google_retry"), 0f)
         assertEquals(ctaRest, topOf("access_handle_continue"), 0f)
+        composeRule.onNodeWithTag("access_language").assertIsDisplayed()
+        assertEquals(footerRest, topOf("access_language"), 0f)
 
         composeRule.runOnIdle { serverError.value = null }
         composeRule.waitForIdle()
@@ -144,6 +164,8 @@ class HandleSetupErrorStabilityTest {
         assertEquals(titleRest, titleTop(), 0f)
         assertEquals(actionRest, topOf("access_google_retry"), 0f)
         assertEquals(ctaRest, topOf("access_handle_continue"), 0f)
+        composeRule.onNodeWithTag("access_language").assertIsDisplayed()
+        assertEquals(footerRest, topOf("access_language"), 0f)
     }
 
     @Test
@@ -159,6 +181,7 @@ class HandleSetupErrorStabilityTest {
             fontScale = 1.3f,
         )
         composeRule.onNodeWithTag("access_handle_continue").assertIsDisplayed()
+        composeRule.onNodeWithTag("access_language").assertIsDisplayed()
         // The 320 dp bound actually held inside the 360 dp window.
         val expectedPx = with(composeRule.density) { 320.dp.toPx() }
         assertEquals(expectedPx, hostWidthPx(), 1f)
@@ -166,6 +189,7 @@ class HandleSetupErrorStabilityTest {
         val inputRest = topOf("access_handle_input")
         val actionRest = topOf("access_google_retry")
         val ctaRest = topOf("access_handle_continue")
+        val footerRest = topOf("access_language")
 
         // Realistic long Russian conflict message: wraps freely instead
         // of clipping, while everything around the slot holds still.
@@ -178,6 +202,8 @@ class HandleSetupErrorStabilityTest {
         assertEquals(inputRest, topOf("access_handle_input"), 0f)
         assertEquals(actionRest, topOf("access_google_retry"), 0f)
         assertEquals(ctaRest, topOf("access_handle_continue"), 0f)
+        composeRule.onNodeWithTag("access_language").assertIsDisplayed()
+        assertEquals(footerRest, topOf("access_language"), 0f)
     }
 
     @Test
@@ -204,9 +230,7 @@ class HandleSetupErrorStabilityTest {
         assertEquals("takenhandle", captured.last())
         // And the rendered editable field actually holds it (label text
         // excluded by construction — no merged-text guessing).
-        val editable = composeRule.onNodeWithTag("access_handle_input")
-            .fetchSemanticsNode().config[SemanticsProperties.EditableText].text
-        assertEquals("takenhandle", editable)
+        assertEquals("takenhandle", renderedDraft())
         composeRule.runOnIdle {
             serverError.value = "Handle already taken"
             busy.value = true
@@ -214,12 +238,16 @@ class HandleSetupErrorStabilityTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("access_handle_server_error")
             .assertTextEquals("Handle already taken")
+        // Rendered draft holds DURING busy/error, not just outer state.
+        assertEquals("takenhandle", renderedDraft())
         composeRule.runOnIdle {
             busy.value = false
             serverError.value = null
         }
         composeRule.waitForIdle()
-        // Draft intact after both toggles; slot empty again.
+        // Draft intact AFTER both toggles, re-fetched from the field;
+        // slot empty again.
+        assertEquals("takenhandle", renderedDraft())
         assertEquals("takenhandle", text.value)
         composeRule.onNodeWithTag("access_handle_server_error").assertTextEquals("")
         assertTrue(topOf("access_handle_continue") > 0f)

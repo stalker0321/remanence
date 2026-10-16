@@ -11,13 +11,26 @@ import kotlin.coroutines.cancellation.CancellationException
 /**
  * Port over the local identity bundle. Implementations must durably wrap the
  * private keysets before any network traffic happens (protocol.md section 5).
+ * All creation is flow-scoped: the same flow/target retry reuses its staged
+ * candidate, while a new flow or target mints independent keys. There is no
+ * global prepare path — a caller without a flow key cannot exist.
  */
-fun interface RegistrationIdentityPort {
+interface RegistrationIdentityPort {
     /**
-     * Returns the stable identity snapshot to register with, creating and
-     * wrapping it on first use. Repeated calls reuse the same identity.
+     * Returns the stable identity snapshot for this flow, creating and
+     * wrapping a FRESH staged candidate on first use for the key. Throws
+     * [IdentityRecoveryRequiredException] when the flow's staged material
+     * exists but is unusable.
      */
-    fun prepareIdentity(): PreparedIdentity
+    fun prepareProvisional(flowKey: String): PreparedIdentity
+
+    /**
+     * Idempotent verified move of a staged candidate into its owner's
+     * archive. Succeeds trivially when already adopted; refuses when the
+     * owner dir already holds different usable keys. Never throws on
+     * integrity problems (returns false); staged material is retained.
+     */
+    fun bindStagedToOwner(bundleId: String, ownerId: String): Boolean
 }
 
 /** Port over the server registration endpoint. */
@@ -66,8 +79,16 @@ class RegistrationUseCase(
     }
 
     suspend fun register(email: String, password: String, handle: String): Outcome {
+        // Flow identity is the signup TARGET owner (email), not the handle:
+        // a 409 retry with an edited handle reuses the staged candidate,
+        // while a different email (independent new signup flow, even with
+        // the same handle) mints independent keys. No in-memory retention
+        // across flows — the staged directory is the only continuity, so
+        // logout/process death cannot leak candidates into unrelated
+        // registrations.
+        val flowKey = "legacy:" + email.trim().lowercase()
         val prepared = try {
-            identity.prepareIdentity()
+            identity.prepareProvisional(flowKey)
         } catch (_: IdentityRecoveryRequiredException) {
             return Outcome.RecoveryRequired
         }
@@ -96,6 +117,18 @@ class RegistrationUseCase(
                     )
                 ) {
                     return Outcome.InvalidResponse
+                }
+                // Adopt the matching staged candidate into the new owner's
+                // archive. Best-effort by design: the staged copy is retained
+                // either way for later recovery, and a mismatch or conflict
+                // fails closed downstream instead of overwriting anything.
+                if (prepared.keyBundleId == response.activeKeyBundleId) {
+                    try {
+                        identity.bindStagedToOwner(prepared.keyBundleId, response.user.userId)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                    }
                 }
                 Outcome.Registered(
                     userId = response.user.userId,

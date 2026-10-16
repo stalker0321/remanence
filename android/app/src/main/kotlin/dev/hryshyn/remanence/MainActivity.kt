@@ -525,7 +525,19 @@ private fun RootSurface(
                                 dev.hryshyn.remanence.ui.capsule.IncomingPresentationContentSource(prepared)
                             }
                         dev.hryshyn.remanence.ui.capsule.CapsulePresentationSource.OUTBOX -> {
-                            val handle = when (val loaded = container.identityRepository.load()) {
+                            val owner = (authState as? AuthUiState.Authenticated)?.userId
+                                ?: error("no authenticated local account")
+                            val row = try {
+                                container.currentAccountStore.loadEntity()
+                            } catch (_: Exception) {
+                                null
+                            }
+                            if (row == null || row.userId != owner ||
+                                row.userId != binding.ownerUserId.toRestString()
+                            ) {
+                                error("outbox owner mismatch")
+                            }
+                            val handle = when (val loaded = container.ownerIdentityStores.resolve(row.userId, row.activeKeyBundleId)) {
                                 is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available ->
                                     loaded.encryptionHandle
                                 dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.RecoveryRequired ->

@@ -152,7 +152,7 @@ internal class IncomingCapsuleAcceptanceComposition(
 class AppContainer private constructor(
     context: Context,
     kekBoundaryOverride: KekBoundary?,
-    private val identityLoadOverride: (() -> IdentityBundleRepository.LoadResult)?,
+    private val identityLoadOverride: ((dev.hryshyn.remanence.core.model.UserId, String) -> IdentityBundleRepository.LoadResult)?,
     @Suppress("UNUSED_PARAMETER") constructionMarker: Unit,
 ) : dev.hryshyn.remanence.pending.PendingRetirementHost,
     dev.hryshyn.remanence.pending.PendingFeedSyncHost {
@@ -165,7 +165,7 @@ class AppContainer private constructor(
     internal constructor(
         context: Context,
         kekBoundaryOverride: KekBoundary?,
-        identityLoadOverride: () -> IdentityBundleRepository.LoadResult,
+        identityLoadOverride: (dev.hryshyn.remanence.core.model.UserId, String) -> IdentityBundleRepository.LoadResult,
     ) : this(context, kekBoundaryOverride, identityLoadOverride, Unit)
 
     init {
@@ -424,9 +424,23 @@ class AppContainer private constructor(
         )
     }
 
+    /**
+     * Owner/bundle-resolved identity filesystem over the same sealed
+     * formats: per-owner dirs, legacy home with proof, flow-staged
+     * candidates, and binding claims. Constructed (not cached) per
+     * use below — never retained across owners.
+     */
+    val ownerIdentityStores: dev.hryshyn.remanence.wiring.OwnerScopedIdentityStore by lazy {
+        dev.hryshyn.remanence.wiring.OwnerScopedIdentityStore(
+            identityRoot = File(appContext.filesDir, "identity"),
+            stagingRoot = File(appContext.filesDir, "identity-staging"),
+            wrapper = KeysetKekWrapper(kekBoundary),
+        )
+    }
+
     private val incomingAcceptanceIdentityLoader:
-        () -> IdentityBundleRepository.LoadResult =
-        identityLoadOverride ?: { identityRepository.load() }
+        (dev.hryshyn.remanence.core.model.UserId, String) -> IdentityBundleRepository.LoadResult =
+        identityLoadOverride ?: { owner, bundle -> ownerIdentityStores.resolve(owner.toRestString(), bundle) }
 
     val sessionTokenStore: SessionTokenStore by lazy {
         if (!kekBoundary.hasKey(SESSION_TOKEN_KEK_ALIAS)) {
@@ -552,7 +566,7 @@ class AppContainer private constructor(
     }
 
     val registrationIdentityAdapter: TinkRegistrationIdentityAdapter by lazy {
-        TinkRegistrationIdentityAdapter(identityRepository, kekBoundary, identityKekAlias)
+        TinkRegistrationIdentityAdapter(ownerIdentityStores, kekBoundary, identityKekAlias)
     }
 
     /** Handle resolution for the create flow (docs/security.md section 8). */
@@ -643,15 +657,17 @@ class AppContainer private constructor(
             ownAccount = {
                 val row = currentAccountStore.loadEntity()
                     ?: return@DirectorySenderKeyStore null
-                when (val exports = identityRepository.loadPublicExports()) {
-                    is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.PublicExportsResult.Available ->
+                when (val loaded = ownerIdentityStores.resolve(row.userId, row.activeKeyBundleId)) {
+                    is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available ->
                         dev.hryshyn.remanence.identity.DirectorySenderKeyStore.OwnAccount(
                             userId = dev.hryshyn.remanence.core.model.UserId(java.util.UUID.fromString(row.userId)),
                             activeKeyBundleId = dev.hryshyn.remanence.core.model.KeyBundleId(
                                 java.util.UUID.fromString(row.activeKeyBundleId),
                             ),
                             publicSigningExportB64Url = com.google.crypto.tink.subtle.Base64.urlSafeEncode(
-                                exports.signingPublicKeyset,
+                                com.google.crypto.tink.TinkProtoKeysetFormat.serializeKeysetWithoutSecret(
+                                    loaded.signingHandle.publicKeysetHandle,
+                                ),
                             ),
                         )
                     else -> null
@@ -1007,7 +1023,7 @@ class AppContainer private constructor(
                 null
             } ?: return@RecipientKeysPort null
             val loaded = try {
-                identityRepository.load()
+                ownerIdentityStores.resolve(summary.userId, summary.activeKeyBundleId)
             } catch (_: Exception) {
                 null
             }
@@ -1411,14 +1427,28 @@ class AppContainer private constructor(
                 }
             },
             signingKeyProvider = {
-                when (val loaded = identityRepository.load()) {
+                val summary = try {
+                    currentAccountStore.load()
+                } catch (_: Exception) {
+                    null
+                }
+                if (summary == null) {
+                    null
+                } else when (val loaded = ownerIdentityStores.resolve(summary.userId, summary.activeKeyBundleId)) {
                     is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available ->
                         loaded.signingHandle
                     dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.RecoveryRequired -> null
                 }
             },
             hpkeKeyProvider = {
-                when (val loaded = identityRepository.load()) {
+                val summary = try {
+                    currentAccountStore.load()
+                } catch (_: Exception) {
+                    null
+                }
+                if (summary == null) {
+                    null
+                } else when (val loaded = ownerIdentityStores.resolve(summary.userId, summary.activeKeyBundleId)) {
                     is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available ->
                         loaded.encryptionHandle
                     dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.RecoveryRequired -> null
@@ -1606,20 +1636,26 @@ class AppContainer private constructor(
             },
             contentPort = contentPort,
             identityPort = dev.hryshyn.remanence.pending.PendingSenderIdentityPort {
-                // ARK-readiness: keys must unwrap (recovery otherwise —
-                // without the signing handle nothing can be framed).
-                val loaded = try {
-                    identityRepository.load()
-                } catch (_: Exception) {
-                    null
-                }
-                val signing = (loaded as? dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available)
-                    ?.signingHandle
+                // ARK-readiness: keys must unwrap for the CURRENT account
+                // (recovery otherwise — without the signing handle nothing
+                // can be framed). Owner+bundle-explicit: another owner's
+                // retained keys never frame this account's proofs.
                 val summary = try {
                     currentAccountStore.load()
                 } catch (_: Exception) {
                     null
                 }
+                val loaded = try {
+                    if (summary == null) {
+                        null
+                    } else {
+                        ownerIdentityStores.resolve(summary.userId, summary.activeKeyBundleId)
+                    }
+                } catch (_: Exception) {
+                    null
+                }
+                val signing = (loaded as? dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available)
+                    ?.signingHandle
                 if (signing == null || summary == null ||
                     summary.userId.isBlank() || summary.activeKeyBundleId.isBlank()
                 ) {
@@ -1706,7 +1742,7 @@ class AppContainer private constructor(
                 ) {
                     null
                 } else {
-                    when (val loaded = identityRepository.load()) {
+                    when (val loaded = ownerIdentityStores.resolve(account.userId, account.activeKeyBundleId)) {
                         is IdentityBundleRepository.LoadResult.Available -> loaded.signingHandle
                         IdentityBundleRepository.LoadResult.RecoveryRequired -> null
                     }
@@ -1879,7 +1915,7 @@ class AppContainer private constructor(
         val account = currentAuthenticatedAccount() ?: return null
         val sessionLease = apiStack.captureSessionRequestLease() ?: return null
         val token = apiStack.accessTokenForSessionRequestLease(sessionLease) ?: return null
-        val loaded = incomingAcceptanceIdentityLoader()
+        val loaded = incomingAcceptanceIdentityLoader(account.ownerUserId, account.activeKeyBundleId.toRestString())
         val encryptionHandle = when (loaded) {
             is IdentityBundleRepository.LoadResult.Available -> loaded.encryptionHandle
             IdentityBundleRepository.LoadResult.RecoveryRequired -> return null
@@ -1912,7 +1948,7 @@ class AppContainer private constructor(
      */
     private suspend fun currentLocalRecipientEncryptionIdentity(): CurrentRecipientEncryptionIdentity? {
         val account = currentAuthenticatedAccount() ?: return null
-        val loaded = incomingAcceptanceIdentityLoader()
+        val loaded = incomingAcceptanceIdentityLoader(account.ownerUserId, account.activeKeyBundleId.toRestString())
         val encryptionHandle = when (loaded) {
             is IdentityBundleRepository.LoadResult.Available -> loaded.encryptionHandle
             IdentityBundleRepository.LoadResult.RecoveryRequired -> return null
@@ -2044,10 +2080,9 @@ class AppContainer private constructor(
     val loginUseCase: dev.hryshyn.remanence.auth.LoginUseCase by lazy {
         dev.hryshyn.remanence.auth.LoginUseCase(
             identity = { activeKeyBundleId ->
-                val exports = identityRepository.loadPublicExports()
-                exports is IdentityBundleRepository.PublicExportsResult.Available &&
-                    deriveKeyBundleId(exports.encryptionPublicKeyset) == activeKeyBundleId
+                ownerIdentityStores.hasIdentityFor(activeKeyBundleId)
             },
+            ownerStores = ownerIdentityStores,
             authApi = { request -> bareAuthRepository.login(request) },
             accounts = object : dev.hryshyn.remanence.auth.CurrentAccountPort {
                 override suspend fun recordCurrentAccount(
@@ -2089,11 +2124,8 @@ class AppContainer private constructor(
      */
     val identityAvailability: IdentityAvailabilityPort by lazy {
         object : IdentityAvailabilityPort {
-            override fun hasIdentityFor(activeKeyBundleId: String): Boolean {
-                val exports = identityRepository.loadPublicExports()
-                return exports is IdentityBundleRepository.PublicExportsResult.Available &&
-                    deriveKeyBundleId(exports.encryptionPublicKeyset) == activeKeyBundleId
-            }
+            override fun hasIdentityFor(activeKeyBundleId: String): Boolean =
+                ownerIdentityStores.hasIdentityFor(activeKeyBundleId)
         }
     }
 

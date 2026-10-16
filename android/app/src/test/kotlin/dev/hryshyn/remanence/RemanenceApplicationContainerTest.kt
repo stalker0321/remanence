@@ -437,7 +437,10 @@ class RemanenceApplicationContainerTest {
         val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000d411")
         val switchedOwner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000d413")
         try {
-            val prepared = appContainer.registrationIdentityAdapter.prepareIdentity()
+            val prepared = appContainer.registrationIdentityAdapter.prepareProvisional("container-test-flow")
+            assertTrue(
+                appContainer.ownerIdentityStores.adoptStaged(prepared.keyBundleId, owner.toRestString()),
+            )
             listOf("switch", "clear", "rotate").forEach { change ->
                 appContainer.currentAccountStore.record(
                     owner.toRestString(),
@@ -582,7 +585,10 @@ class RemanenceApplicationContainerTest {
         }
         val sentinelBytes = sentinel.readBytes()
         try {
-            val prepared = appContainer.registrationIdentityAdapter.prepareIdentity()
+            val prepared = appContainer.registrationIdentityAdapter.prepareProvisional("container-acceptance-flow")
+            assertTrue(
+                appContainer.ownerIdentityStores.adoptStaged(prepared.keyBundleId, ownerA.toRestString()),
+            )
             appContainer.currentAccountStore.record(
                 ownerA.toRestString(),
                 "alice",
@@ -648,7 +654,7 @@ class RemanenceApplicationContainerTest {
         val capsule = CapsuleId.parseRest("0198f0a0-0000-7000-8000-00000000d452")
         val blob = BlobId.parseRest("0198f0a0-0000-7000-8000-00000000d453")
         val expected = IllegalStateException("provider failure")
-        val appContainer = AppContainer(context, SoftwareKekBoundary(), { throw expected })
+        val appContainer = AppContainer(context, SoftwareKekBoundary(), { _ -> throw expected })
         try {
             appContainer.currentAccountStore.record(
                 owner.toRestString(),
@@ -709,7 +715,7 @@ class RemanenceApplicationContainerTest {
         val owner = UserId.parseRest("0198f0a0-0000-7000-8000-00000000d455")
         val capsule = CapsuleId.parseRest("0198f0a0-0000-7000-8000-00000000d456")
         val expected = kotlinx.coroutines.CancellationException("identity load cancelled")
-        val appContainer = AppContainer(context, SoftwareKekBoundary(), { throw expected })
+        val appContainer = AppContainer(context, SoftwareKekBoundary(), { _ -> throw expected })
         try {
             appContainer.currentAccountStore.record(
                 owner.toRestString(),

@@ -92,7 +92,13 @@ class GoogleAuthViewModel(private val container: AppContainer) : ViewModel() {
         mutableState.value = GoogleAuthState.Working
         viewModelScope.launch {
             try {
-                val identity = withContext(Dispatchers.IO) { container.registrationIdentityAdapter.prepareIdentity() }
+                // Flow identity is this ticket's server flow: retries on the
+                // same ticket reuse its staged candidate, while a fresh
+                // ticket (new start()) mints independent keys. Nothing is
+                // retained across flows — staging on disk is the only
+                // continuity, so logout/process death cannot leak candidates.
+                val flowKey = "google:" + pending.getValue("flow").jsonPrimitive.content
+                val identity = withContext(Dispatchers.IO) { container.registrationIdentityAdapter.prepareProvisional(flowKey) }
                 val result = api.request("register", buildJsonObject {
                     put("flow", pending.getValue("flow")); put("registration_token", pending.getValue("registration_token"))
                     put("handle", handle)
@@ -103,7 +109,7 @@ class GoogleAuthViewModel(private val container: AppContainer) : ViewModel() {
                         put("signing_public_keyset", identity.signingPublicKeysetB64Url)
                     })
                 })
-                commit(result, lease)
+                commit(identity, result, lease)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { mutableState.value = googleFailureState(e) }
         }
@@ -111,7 +117,11 @@ class GoogleAuthViewModel(private val container: AppContainer) : ViewModel() {
 
     val hasTicket: Boolean get() = ticket != null
 
-    private suspend fun commit(result: JsonObject, lease: Long) {
+    private suspend fun commit(
+        identity: dev.hryshyn.remanence.wiring.PreparedIdentity,
+        result: JsonObject,
+        lease: Long,
+    ) {
         check(result.text("status") == "SIGNED_IN")
         val login = json.decodeFromJsonElement<LoginResponseDto>(result.getValue("login"))
         var committed = false
@@ -126,6 +136,18 @@ class GoogleAuthViewModel(private val container: AppContainer) : ViewModel() {
             // T186 M7c: fenced session-id for R11 intents (owner-bound).
             runCatching {
                 container.sessionIdHolder.set(UserId.parseRest(login.user.userId), login.sessionId)
+            }
+            // Adopt the matching staged candidate into the new owner's
+            // archive, then claim a matching legacy home. Both best-effort:
+            // staged material is retained either way and resolution fails
+            // closed on mismatch instead of overwriting anything.
+            if (identity.keyBundleId == login.activeKeyBundle.keyBundleId) {
+                try {
+                    container.registrationIdentityAdapter.bindStagedToOwner(identity.keyBundleId, login.user.userId)
+                } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { }
+                try {
+                    container.ownerIdentityStores.claimLegacyIfMatching(login.user.userId, login.activeKeyBundle.keyBundleId)
+                } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { }
             }
             committed = true; ticket = null; mutableState.value = GoogleAuthState.SignedIn
         } finally {

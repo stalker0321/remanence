@@ -17,7 +17,7 @@ class RegistrationUseCaseOrderingTest {
         var prepared = 0
         var failWithRecovery = false
 
-        override fun prepareIdentity(): PreparedIdentity {
+        override fun prepareProvisional(flowKey: String): PreparedIdentity {
             trace += "identity"
             calls += "identity"
             if (failWithRecovery) throw IdentityRecoveryRequiredException()
@@ -27,6 +27,12 @@ class RegistrationUseCaseOrderingTest {
                 encryptionPublicKeysetB64Url = "CIenc",
                 signingPublicKeysetB64Url = "CJsig",
             )
+        }
+
+        override fun bindStagedToOwner(bundleId: String, ownerId: String): Boolean {
+            trace += "adopt"
+            calls += "adopt"
+            return true
         }
     }
 
@@ -98,7 +104,7 @@ class RegistrationUseCaseOrderingTest {
         val outcome = useCase.register("private@example.com", "secret-password", "@mykola")
 
         assertEquals(RegistrationUseCase.Outcome.Registered("1f0a1234-5678-4abc-9def-aabbccdd1001", "mykola", "2f0a1234-5678-4abc-9def-aabbccdd2002"), outcome)
-        assertEquals(listOf("identity", "lease", "network", "close", "account", "install"), trace)
+        assertEquals(listOf("identity", "lease", "network", "close", "account", "install", "adopt"), trace)
         assertEquals(1, replacement.installCount)
     }
 

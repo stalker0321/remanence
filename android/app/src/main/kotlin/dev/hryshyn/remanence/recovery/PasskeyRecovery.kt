@@ -62,7 +62,9 @@ class PasskeyRecovery(private val container: AppContainer) {
         enabled()
         val lease = container.apiStack.captureSessionRequestLease() ?: error("no session")
         val account = withContext(Dispatchers.IO) { container.currentAccountStore.loadEntity() } ?: error("no account")
-        val identity = withContext(Dispatchers.IO) { container.identityRepository.load() } as? IdentityBundleRepository.LoadResult.Available ?: error("identity missing")
+        val identity = withContext(Dispatchers.IO) {
+            container.ownerIdentityStores.resolve(account.userId, account.activeKeyBundleId)
+        } as? IdentityBundleRepository.LoadResult.Available ?: error("identity missing")
         val status = api.requestAuthenticated(lease, "status")
         val stored = status.text("state") == "STORED"
         check(!chooseAnotherManager || !stored) { "existing recovery is immutable" }
@@ -116,7 +118,7 @@ class PasskeyRecovery(private val container: AppContainer) {
             withContext(Dispatchers.IO) {
                 check(container.apiStack.sessionRefreshCoordinator.commitLocalRecovery(lease) {
                     if (!container.kekBoundary.hasKey(container.identityKekAlias)) container.kekBoundary.createAes256GcmKey(container.identityKekAlias)
-                    container.identityRepository.installRecovered(container.identityKekAlias, keys)
+                    container.ownerIdentityStores.installRecovered(login.user.userId, container.identityKekAlias, keys)
                 })
             }
             container.sessionReplacement.replace(lease, UserId.parseRest(login.user.userId), login.accessToken, login.refreshToken) {
@@ -146,7 +148,7 @@ class PasskeyRecovery(private val container: AppContainer) {
             check(container.apiStack.isSessionRequestLeaseLive(lease))
             check(container.apiStack.sessionRefreshCoordinator.commitLocalRecovery(accountLease) {
                 if (!container.kekBoundary.hasKey(container.identityKekAlias)) container.kekBoundary.createAes256GcmKey(container.identityKekAlias)
-                container.identityRepository.installRecovered(container.identityKekAlias, keys)
+                container.ownerIdentityStores.installRecovered(account.userId, container.identityKekAlias, keys)
             })
         }
         container.recoveryReadiness.markVerified(account.userId, account.activeKeyBundleId)
@@ -171,7 +173,7 @@ class PasskeyRecovery(private val container: AppContainer) {
                 check(container.apiStack.isSessionRequestLeaseLive(lease))
                 check(container.apiStack.sessionRefreshCoordinator.commitLocalRecovery(replacement) {
                     if (!container.kekBoundary.hasKey(container.identityKekAlias)) container.kekBoundary.createAes256GcmKey(container.identityKekAlias)
-                    container.identityRepository.installRecovered(container.identityKekAlias, keys)
+                    container.ownerIdentityStores.installRecovered(account.userId, container.identityKekAlias, keys)
                     container.recoveryReadiness.markVerified(account.userId, account.activeKeyBundleId)
                 })
             }

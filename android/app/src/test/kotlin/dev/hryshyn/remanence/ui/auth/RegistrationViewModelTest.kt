@@ -215,12 +215,14 @@ class RegistrationViewModelTest {
         assertEquals(RegistrationSubmitState.Completed, vm.submitState.value)
     }
 
-    private fun identityPort() = RegistrationIdentityPort {
-        PreparedIdentity(
+    private fun identityPort() = object : RegistrationIdentityPort {
+        override fun prepareProvisional(flowKey: String): PreparedIdentity = PreparedIdentity(
             keyBundleId = "2f0a1234-5678-4abc-9def-aabbccdd2002",
             encryptionPublicKeysetB64Url = "CIenc",
             signingPublicKeysetB64Url = "CJsig",
         )
+
+        override fun bindStagedToOwner(bundleId: String, ownerId: String): Boolean = true
     }
 
     private fun rejectingApi(code: RegistrationProblemCode?) = object : RegistrationAuthApiPort {

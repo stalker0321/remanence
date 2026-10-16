@@ -54,11 +54,13 @@ private object NoAccounts : CurrentAccountPort {
 }
 
 private object FixedIdentity : dev.hryshyn.remanence.auth.RegistrationIdentityPort {
-    override fun prepareIdentity(): PreparedIdentity = PreparedIdentity(
+    override fun prepareProvisional(flowKey: String): PreparedIdentity = PreparedIdentity(
         keyBundleId = "0198f0a0-0000-7000-8000-00000000b001",
         encryptionPublicKeysetB64Url = "enc",
         signingPublicKeysetB64Url = "sig",
     )
+
+    override fun bindStagedToOwner(bundleId: String, ownerId: String): Boolean = true
 }
 
 private fun ok201() = AuthResult.Success(

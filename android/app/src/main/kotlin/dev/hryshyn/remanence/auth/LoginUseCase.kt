@@ -36,8 +36,16 @@ class LoginUseCase(
     private val authApi: LoginAuthApiPort,
     private val accounts: CurrentAccountPort,
     private val sessionReplacement: SessionReplacementPort,
-    /** T186 M7c: fenced session-id sink (R11 intents); null keeps legacy tests/behavior. */
+    /** T186 M7c: fenced session-id sink for R11 intents; null keeps legacy tests/behavior. */
     private val sessionIds: dev.hryshyn.remanence.core.data.network.SessionIdHolder? = null,
+    /**
+     * Owner-scoped stores for post-login binding: an interrupted
+     * registration's staged candidate moves into the verified owner's
+     * archive (never generates replacement keys), and a matching
+     * legacy home is claimed. Both best-effort — staged material is
+     * retained either way and resolution fails closed on mismatch.
+     */
+    private val ownerStores: dev.hryshyn.remanence.wiring.OwnerScopedIdentityStore? = null,
 ) {
 
     sealed interface Outcome {
@@ -79,6 +87,21 @@ class LoginUseCase(
                     )
                 ) {
                     return Outcome.InvalidResponse
+                }
+                // Bind staged/legacy material to the just-verified owner
+                // BEFORE readiness is evaluated, so an interrupted
+                // registration's staged candidate is adopted (never a
+                // replacement generated) and a matching legacy home is
+                // claimed. Best-effort: staged material is retained either
+                // way and resolution fails closed on mismatch.
+                ownerStores?.let { stores ->
+                    try {
+                        stores.adoptStaged(response.activeKeyBundle.keyBundleId, response.user.userId)
+                        stores.claimLegacyIfMatching(response.user.userId, response.activeKeyBundle.keyBundleId)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                    }
                 }
                 val loggedInLocally = identity.hasIdentityFor(response.activeKeyBundle.keyBundleId)
                 if (loggedInLocally) {

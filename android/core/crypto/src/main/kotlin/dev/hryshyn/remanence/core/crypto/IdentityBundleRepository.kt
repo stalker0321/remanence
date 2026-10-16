@@ -49,6 +49,31 @@ class IdentityBundleRepository(
         return identity
     }
 
+    /**
+     * Persists caller-generated identity handles, wrapped under the given
+     * KEK alias. Same refuse-to-overwrite kernel as [createFresh]: throws
+     * instead of replacing any existing record, and removes a half-written
+     * first record on failure. Lets owner-scoped stores stage generated
+     * keys without duplicating the atomic-write logic.
+     */
+    @Synchronized
+    fun importHandles(
+        kekAlias: String,
+        encryptionPrivateHandle: KeysetHandle,
+        signingPrivateHandle: KeysetHandle,
+    ) {
+        if (exists()) {
+            throw GeneralSecurityException("identity bundle already exists; refusing silent replacement")
+        }
+        writeAtomically(encryptionFile(), wrapper.wrap(kekAlias, encryptionPrivateHandle))
+        try {
+            writeAtomically(signingFile(), wrapper.wrap(kekAlias, signingPrivateHandle))
+        } catch (firstWriteFailed: Exception) {
+            encryptionFile().delete()
+            throw firstWriteFailed
+        }
+    }
+
     @Synchronized
     fun load(): LoadResult {
         val recovered = File(baseDirectory, RECOVERED_FILE_NAME)
@@ -132,7 +157,7 @@ class IdentityBundleRepository(
         }
     }
 
-    private companion object {
+    companion object {
         const val ENCRYPTION_FILE_NAME = "identity.encryption.pwks"
         const val SIGNING_FILE_NAME = "identity.signing.pwks"
         const val RECOVERED_FILE_NAME = "identity.recovered.pwks"

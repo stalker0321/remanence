@@ -182,7 +182,7 @@ class RemanenceViewModelFactory(
             ),
             identityProvider = {
                 val row = container.currentAccountStore.loadEntity() ?: return@CreateViewModel null
-                when (val loaded = container.identityRepository.load()) {
+                when (val loaded = container.ownerIdentityStores.resolve(row.userId, row.activeKeyBundleId)) {
                     is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available ->
                         dev.hryshyn.remanence.ui.create.SenderIdentitySnapshot(
                             userId = row.userId,
@@ -253,7 +253,7 @@ class RemanenceViewModelFactory(
             profile = dev.hryshyn.remanence.core.recognition.RecognitionProfile.postcardSiftRootSiftV1(),
             identityProvider = {
                 val row = container.currentAccountStore.loadEntity() ?: return@ScanViewModel null
-                when (val loaded = container.identityRepository.load()) {
+                when (val loaded = container.ownerIdentityStores.resolve(row.userId, row.activeKeyBundleId)) {
                     is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available ->
                         dev.hryshyn.remanence.ui.create.SenderIdentitySnapshot(
                             userId = row.userId,

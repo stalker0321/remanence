@@ -3,6 +3,7 @@ package dev.hryshyn.remanence.auth
 import dev.hryshyn.remanence.wiring.PreparedIdentity
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import dev.hryshyn.remanence.core.data.network.ActiveKeyBundleMetadataDto
 import dev.hryshyn.remanence.core.data.network.AuthResult
@@ -103,6 +104,101 @@ class LoginUseCaseTest {
         val outcome = LoginUseCase(FakeIdentity(true), api, RecordingAccounts(), NoOpSessionReplacement)
             .login("e", "p")
         assertEquals(LoginUseCase.Outcome.NetworkUnreachable, outcome)
+    }
+
+    @Test
+    fun successfulLoginAdoptsStagedCandidateForVerifiedOwner() = runTest {
+        val root = java.nio.file.Files.createTempDirectory("login-adopt").toFile()
+        val stores = ownerStores(root)
+        val staged = stagedBundle(stores)
+        val response = successResponse().copy(
+            activeKeyBundle = bundle.copy(keyBundleId = staged.keyBundleId),
+        )
+        val api = FakeApi(AuthResult.Success(response, 200))
+        val outcome = LoginUseCase(FakeIdentity(has = true), api, RecordingAccounts(), NoOpSessionReplacement, stores)
+            .login("private@example.com", "secret-password")
+
+        assertEquals(
+            LoginUseCase.Outcome.LoggedIn(user.userId, user.handle, staged.keyBundleId),
+            outcome,
+        )
+        // Archived under the verified owner with the exact staged keys.
+        val resolved = stores.resolve(user.userId, staged.keyBundleId)
+        assertTrue(resolved is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available)
+        val claim = stores.readClaim(java.io.File(java.io.File(root, "identity"), user.userId))
+        assertEquals(user.userId, claim?.ownerUserId)
+        assertEquals(staged.keyBundleId, claim?.keyBundleId)
+    }
+
+    @Test
+    fun stagedOnlyLoginBindsWithoutGeneratingReplacement() = runTest {
+        val root = java.nio.file.Files.createTempDirectory("login-staged-only").toFile()
+        val stores = ownerStores(root)
+        val staged = stagedBundle(stores)
+        val response = successResponse().copy(
+            activeKeyBundle = bundle.copy(keyBundleId = staged.keyBundleId),
+        )
+        // Readiness gate says nothing is installed yet: binding must still
+        // happen (lost-ACK recovery), without generating replacement keys.
+        val api = FakeApi(AuthResult.Success(response, 200))
+        val outcome = LoginUseCase(FakeIdentity(has = false), api, RecordingAccounts(), NoOpSessionReplacement, stores)
+            .login("private@example.com", "secret-password")
+
+        assertEquals(
+            LoginUseCase.Outcome.RecoveryRequired(user.userId, user.handle, staged.keyBundleId),
+            outcome,
+        )
+        val resolved = stores.resolve(user.userId, staged.keyBundleId)
+        assertTrue(resolved is dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available)
+        resolved as dev.hryshyn.remanence.core.crypto.IdentityBundleRepository.LoadResult.Available
+        val reread = com.google.crypto.tink.TinkProtoKeysetFormat.serializeKeysetWithoutSecret(
+            resolved.encryptionHandle.publicKeysetHandle,
+        )
+        assertEquals(
+            staged.encryptionPublicKeysetB64Url,
+            java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(reread),
+        )
+    }
+
+    @Test
+    fun corruptStagedAdoptFailureDoesNotFailLogin() = runTest {
+        val root = java.nio.file.Files.createTempDirectory("login-corrupt-staged").toFile()
+        val stores = ownerStores(root)
+        val stagingDir = java.io.File(java.io.File(root, "identity-staging"), bundle.keyBundleId)
+        stagingDir.mkdirs()
+        java.io.File(stagingDir, "identity.encryption.pwks").writeBytes(byteArrayOf(9, 9, 9))
+        val api = FakeApi(AuthResult.Success(successResponse(), 200))
+        val outcome = LoginUseCase(FakeIdentity(has = true), api, RecordingAccounts(), NoOpSessionReplacement, stores)
+            .login("private@example.com", "secret-password")
+
+        // Adoption is best-effort: the login outcome stands, nothing is
+        // overwritten, and the corrupt material stays staged (bounded).
+        assertEquals(
+            LoginUseCase.Outcome.LoggedIn(user.userId, user.handle, bundle.keyBundleId),
+            outcome,
+        )
+        assertTrue(stagingDir.exists())
+    }
+
+    private fun ownerStores(root: java.io.File): dev.hryshyn.remanence.wiring.OwnerScopedIdentityStore {
+        val kek = SoftwareKekBoundary()
+        if (!kek.hasKey("t210-login-test-kek")) kek.createAes256GcmKey("t210-login-test-kek")
+        return dev.hryshyn.remanence.wiring.OwnerScopedIdentityStore(
+            identityRoot = java.io.File(root, "identity"),
+            stagingRoot = java.io.File(root, "identity-staging"),
+            wrapper = dev.hryshyn.remanence.core.crypto.KeysetKekWrapper(kek),
+        )
+    }
+
+    private fun stagedBundle(
+        stores: dev.hryshyn.remanence.wiring.OwnerScopedIdentityStore,
+    ): dev.hryshyn.remanence.wiring.PreparedIdentity {
+        val adapter = dev.hryshyn.remanence.wiring.TinkRegistrationIdentityAdapter(
+            stores,
+            SoftwareKekBoundary(),
+            "t210-login-test-kek",
+        )
+        return adapter.prepareProvisional("login-binding-flow")
     }
 
     private class RecordingAccounts : CurrentAccountPort {

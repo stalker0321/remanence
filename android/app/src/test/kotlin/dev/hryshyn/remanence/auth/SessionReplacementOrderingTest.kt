@@ -342,12 +342,15 @@ class SessionReplacementOrderingTest {
         val enteredServer = CompletableDeferred<Unit>()
         val releaseServer = CompletableDeferred<Unit>()
         val useCase = RegistrationUseCase(
-            identity = {
-                PreparedIdentity(
-                    keyBundleId = bundleC,
-                    encryptionPublicKeysetB64Url = "CIenc",
-                    signingPublicKeysetB64Url = "CJsig",
-                )
+            identity = object : RegistrationIdentityPort {
+                override fun prepareProvisional(flowKey: String): PreparedIdentity =
+                    PreparedIdentity(
+                        keyBundleId = bundleC,
+                        encryptionPublicKeysetB64Url = "CIenc",
+                        signingPublicKeysetB64Url = "CJsig",
+                    )
+
+                override fun bindStagedToOwner(bundleId: String, ownerId: String): Boolean = true
             },
             authApi = object : RegistrationAuthApiPort {
                 override suspend fun register(
@@ -481,12 +484,15 @@ class SessionReplacementOrderingTest {
             sessionReplacement = tracking,
         )
         val registerC = RegistrationUseCase(
-            identity = {
-                PreparedIdentity(
-                    keyBundleId = bundleC,
-                    encryptionPublicKeysetB64Url = "CIenc",
-                    signingPublicKeysetB64Url = "CJsig",
-                )
+            identity = object : RegistrationIdentityPort {
+                override fun prepareProvisional(flowKey: String): PreparedIdentity =
+                    PreparedIdentity(
+                        keyBundleId = bundleC,
+                        encryptionPublicKeysetB64Url = "CIenc",
+                        signingPublicKeysetB64Url = "CJsig",
+                    )
+
+                override fun bindStagedToOwner(bundleId: String, ownerId: String): Boolean = true
             },
             authApi = object : RegistrationAuthApiPort {
                 override suspend fun register(

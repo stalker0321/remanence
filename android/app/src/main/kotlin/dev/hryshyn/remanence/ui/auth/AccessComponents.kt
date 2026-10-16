@@ -98,7 +98,8 @@ fun GoogleSignInButton(onClick: () -> Unit, enabled: Boolean = true, busy: Boole
 }
 
 @Composable
-fun HandleSetupContent(handle: String, onChange: (String) -> Unit, busy: Boolean, onContinue: () -> Unit) {
+fun HandleSetupContent(handle: String, onChange: (String) -> Unit, busy: Boolean, onContinue: () -> Unit,
+                       serverError: String? = null) {
     val valid = handle.isNotEmpty() && RegistrationFormValidator.handleError(handle) == null
     val invalid = handle.isNotEmpty() && !valid
     HoldFormScaffold(primary = {
@@ -118,6 +119,17 @@ fun HandleSetupContent(handle: String, onChange: (String) -> Unit, busy: Boolean
             style = MaterialTheme.typography.bodySmall,
             color = if (invalid) HoldColors.Error else HoldColors.Muted,
             modifier = Modifier.testTag("access_handle_guidance").semantics { liveRegion = LiveRegionMode.Polite })
+        // Server-side failure (e.g. handle conflict) lives HERE, next to the
+        // input — never above the heading where it would shove the title,
+        // change-account action and CTA down. The slot always reserves two
+        // lines (wrapping freely beyond that), so toggling the error never
+        // moves surrounding content at any locale or font scale. Empty text
+        // carries no content and announces nothing.
+        Text(serverError.orEmpty(),
+            minLines = 2,
+            style = MaterialTheme.typography.bodySmall,
+            color = HoldColors.Error,
+            modifier = Modifier.testTag("access_handle_server_error").semantics { liveRegion = LiveRegionMode.Polite })
         Text(stringResource(R.string.mvp_handle_permanent), style = MaterialTheme.typography.bodySmall, color = HoldColors.Muted)
     }
 }

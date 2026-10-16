@@ -5,7 +5,7 @@ import android.app.Application
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -189,7 +189,9 @@ class LocaleScanSessionRecreationTest {
     }
 
     private fun selectRussian() {
-        composeRule.onNodeWithTag("language_option_russian").performScrollTo().performClick()
+        composeRule.onNodeWithTag("access_language").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("language_option_russian").performClick()
         composeRule.waitForIdle()
     }
 
@@ -243,6 +245,6 @@ class LocaleScanSessionRecreationTest {
         assertTrue(created.isEmpty())
         assertEquals(7L, vm.initializedEpoch.value)
         assertEquals(ScanTerminalState.Idle, vm.terminal.value)
-        composeRule.onNodeWithTag("language_option_russian").assertIsSelected()
+        composeRule.onNodeWithTag("access_language").assertTextEquals("язык · Русский")
     }
 }

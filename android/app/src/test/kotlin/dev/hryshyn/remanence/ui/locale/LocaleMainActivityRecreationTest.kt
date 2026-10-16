@@ -167,8 +167,14 @@ class LocaleMainActivityRecreationTest {
             .get(RootViewModel::class.java)
     }
 
+    private fun openLanguageMenu() {
+        composeRule.onNodeWithTag("access_language").performScrollTo().performClick()
+        composeRule.waitForIdle()
+    }
+
     private fun selectRussian() {
-        composeRule.onNodeWithTag("language_option_russian").performScrollTo().performClick()
+        openLanguageMenu()
+        composeRule.onNodeWithTag("language_option_russian").performClick()
         composeRule.waitForIdle()
     }
 
@@ -235,8 +241,7 @@ class LocaleMainActivityRecreationTest {
         // no recreation gap in between. This also proves LocalConfiguration
         // actually updated without recreation (else text stays English).
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("language_option_russian").assertIsSelected()
-        composeRule.onNodeWithTag("language_group_label").performScrollTo().assertTextEquals("язык")
+        composeRule.onNodeWithTag("access_language").assertTextEquals("язык · Русский")
         composeRule.onNodeWithTag("scan_action").assertIsDisplayed()
         composeRule.onNodeWithTag("create_action").performScrollTo().assertIsDisplayed()
     }
@@ -261,7 +266,8 @@ class LocaleMainActivityRecreationTest {
     private fun reselectingActiveLocaleIsRealNoOp() {
         awaitSignedOutHome()
 
-        composeRule.onNodeWithTag("language_option_system").performScrollTo().performClick()
+        openLanguageMenu()
+        composeRule.onNodeWithTag("language_option_system").performClick()
         composeRule.waitForIdle()
 
         assertEquals(AppLocale.SYSTEM, AppLocaleRepository().load())
@@ -337,14 +343,17 @@ class LocaleMainActivityRecreationTest {
     private fun rapidDifferentTapsResolveLastWinsWithoutQueue() {
         awaitSignedOutHome()
 
-        composeRule.onNodeWithTag("language_option_russian").performScrollTo().performClick()
-        composeRule.onNodeWithTag("language_option_ukrainian").performScrollTo().performClick()
+        openLanguageMenu()
+        composeRule.onNodeWithTag("language_option_russian").performClick()
+        composeRule.waitForIdle()
+        openLanguageMenu()
+        composeRule.onNodeWithTag("language_option_ukrainian").performClick()
         composeRule.waitForIdle()
 
         assertEquals(AppLocale.UKRAINIAN, AppLocaleRepository().load())
         assertTrue(destroyed.isEmpty())
         assertTrue(created.isEmpty())
-        composeRule.onNodeWithTag("language_option_ukrainian").assertIsSelected()
+        composeRule.onNodeWithTag("access_language").assertTextEquals("мова · Українська")
     }
 
     @Test
@@ -356,7 +365,7 @@ class LocaleMainActivityRecreationTest {
         assertEquals(AppLocale.RUSSIAN, AppLocaleRepository().load())
         assertTrue(destroyed.isEmpty())
         assertTrue(created.isEmpty())
-        composeRule.onNodeWithTag("language_option_russian").assertIsSelected()
+        composeRule.onNodeWithTag("access_language").assertTextEquals("язык · Русский")
     }
 
     @Test
@@ -391,7 +400,7 @@ class LocaleMainActivityRecreationTest {
         // untouched and the same public-home destination is showing.
         composeRule.onNodeWithTag("scan_action").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("create_action").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithTag("language_option_russian").assertIsSelected()
+        composeRule.onNodeWithTag("access_language").assertTextEquals("язык · Русский")
     }
 
     @Test

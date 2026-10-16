@@ -13,6 +13,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import dev.hryshyn.remanence.ui.auth.AccessLanguageControl
 import dev.hryshyn.remanence.ui.hold.HoldActionObject
 import dev.hryshyn.remanence.ui.hold.HoldSpace
 import dev.hryshyn.remanence.ui.locale.AppLocale
@@ -101,10 +102,10 @@ fun HomeScreen(
                 enabled = enabled, onCreate = onCreate,
                 minSurfaceHeight = createFloor, tag = "create_action",
             )
-            if (showLanguageSwitch) LanguageSwitchRow(
-                current = appLocale,
-                onSelect = onLocaleSelected,
-            )
+            if (showLanguageSwitch) {
+                if (publicEntry) AccessLanguageControl(current = appLocale, onSelect = onLocaleSelected)
+                else LanguageSwitchRow(current = appLocale, onSelect = onLocaleSelected)
+            }
         }
         return
     }
@@ -132,7 +133,10 @@ fun HomeScreen(
         val brandPlaceables = subcompose("homeBrand") { HomeBrand(recoveryRequired = recoveryRequired) }
             .map { it.measure(wrap) }
         val langPlaceables = subcompose("homeLang") {
-            if (showLanguageSwitch) LanguageSwitchRow(current = appLocale, onSelect = onLocaleSelected)
+            if (showLanguageSwitch) {
+                if (publicEntry) AccessLanguageControl(current = appLocale, onSelect = onLocaleSelected)
+                else LanguageSwitchRow(current = appLocale, onSelect = onLocaleSelected)
+            }
         }.map { it.measure(wrap) }
         // Intrinsic pass: natural content heights; floors stay minima.
         // Measured copies carry no test tag and cleared semantics so the

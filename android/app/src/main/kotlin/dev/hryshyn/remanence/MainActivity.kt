@@ -13,6 +13,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.saveable.rememberSaveable
 import dev.hryshyn.remanence.ui.hold.HoldTheme
 import dev.hryshyn.remanence.ui.hold.HoldTextButton
+import dev.hryshyn.remanence.ui.motion.AstraEnterTransition
+import dev.hryshyn.remanence.ui.motion.rememberAstraMotion
 import dev.hryshyn.remanence.ui.hold.HoldInformation
 import dev.hryshyn.remanence.ui.hold.HoldSpace
 import dev.hryshyn.remanence.session.HomeIntent
@@ -263,6 +265,10 @@ private fun RootSurface(
         authState = authState,
         destination = destination,
         authenticationContent = {
+            // One regime read for the auth substate arrivals below; the
+            // wrappers are mount-triggered, so typing/busy/error never
+            // replays them.
+            val authMotion = rememberAstraMotion()
             val setupRequired = authState as? AuthUiState.RecoverySetupRequired
             if (setupRequired != null) {
                 AccessPage(footer = { AccessLanguageControl(current = appLocale, onSelect = onLocaleSelected) }) {
@@ -301,13 +307,17 @@ private fun RootSurface(
                 ) {
                     if (googleViewModel.hasTicket && authState == AuthUiState.SignedOut) {
                         var handle by rememberSaveable { mutableStateOf("") }
-                        if (failed != null) HoldInformation(stringResource(failed.message.resourceId))
-                        HoldTextButton(enabled = !googleWorking, onClick = { googleViewModel.start(googleCredentials) }) {
-                            Text(stringResource(R.string.access_google_again))
-                        }
-                        Box(Modifier.weight(1f).fillMaxWidth().padding(bottom = HoldSpace.Group)) {
-                            HandleSetupContent(handle, { if (it.length <= 30) handle = it }, googleWorking,
-                                onContinue = { googleViewModel.register(handle) })
+                        AstraEnterTransition(motion = authMotion) {
+                            Column(Modifier.fillMaxSize()) {
+                                HoldTextButton(enabled = !googleWorking, onClick = { googleViewModel.start(googleCredentials) }) {
+                                    Text(stringResource(R.string.access_google_again))
+                                }
+                                Box(Modifier.weight(1f).fillMaxWidth().padding(bottom = HoldSpace.Group)) {
+                                    HandleSetupContent(handle, { if (it.length <= 30) handle = it }, googleWorking,
+                                        onContinue = { googleViewModel.register(handle) },
+                                        serverError = failed?.let { stringResource(it.message.resourceId) })
+                                }
+                            }
                         }
                     } else if (legacyVisible) {
                         AccessHeading(stringResource(if (registering) R.string.hold_register_title else R.string.hold_auth_title))
@@ -321,16 +331,20 @@ private fun RootSurface(
                         } else if (registering) {
                             val form by registrationViewModel.form.collectAsStateWithLifecycle()
                             val submit by registrationViewModel.submitState.collectAsStateWithLifecycle()
-                            RegistrationFormScreen(form, submit, registrationViewModel::onFieldChange, registrationViewModel::submit,
-                                modifier = Modifier.weight(1f).fillMaxWidth())
+                            AstraEnterTransition(motion = authMotion) {
+                                RegistrationFormScreen(form, submit, registrationViewModel::onFieldChange, registrationViewModel::submit,
+                                    modifier = Modifier.weight(1f).fillMaxWidth())
+                            }
                             HoldTextButton(onClick = { registering = false }, enabled = submit !is RegistrationSubmitState.Submitting) {
                                 Text(stringResource(R.string.hold_existing_account))
                             }
                         } else {
                             val form by loginViewModel.form.collectAsStateWithLifecycle()
                             val submit by loginViewModel.submitState.collectAsStateWithLifecycle()
-                            LoginScreen(form, submit, loginViewModel::onEmailChange, loginViewModel::onPasswordChange, loginViewModel::submit,
-                                modifier = Modifier.weight(1f).fillMaxWidth())
+                            AstraEnterTransition(motion = authMotion) {
+                                LoginScreen(form, submit, loginViewModel::onEmailChange, loginViewModel::onPasswordChange, loginViewModel::submit,
+                                    modifier = Modifier.weight(1f).fillMaxWidth())
+                            }
                             HoldTextButton(onClick = { registering = true }, enabled = submit !is LoginSubmitState.Submitting) {
                                 Text(stringResource(R.string.hold_create_account))
                             }

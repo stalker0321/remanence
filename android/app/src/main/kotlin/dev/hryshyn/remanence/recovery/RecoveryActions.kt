@@ -50,11 +50,14 @@ fun RecoveryActions(container: AppContainer, hasIdentity: Boolean, recoveryRequi
                 message = R.string.recovery_prf_missing
             }
             catch (pending: RecoveryVerificationPending) {
-                // Saved but not yet verifiable: the SAME enrollment is
-                // retried explicitly via the normal save path below.
-                // Never offer another manager merely because this
-                // continuation occurred.
+                // Saved but not yet verifiable: explicit retry runs the
+                // existing save action below (verified stays false, so no
+                // Continue/code), which re-reads PENDING status and uses
+                // normal discovery for the same enrollment. Never offer
+                // another manager merely because this continuation
+                // occurred.
                 val presentation = presentRecoveryPending()
+                verified = presentation.verified
                 offerAnotherManager = presentation.offerAnotherManager
                 message = presentation.message
             }
@@ -103,21 +106,20 @@ internal fun recoveryFailureMessage(failure: Exception, protecting: Boolean): In
 /**
  * Presentation for the typed saved-but-pending continuation, shared by
  * the save and another-manager actions above. Pending is NOT verified
- * (no Continue, no code), retries the SAME enrollment through the
- * existing save-or-verify action (which re-reads PENDING status and
- * uses normal discovery), and never offers another manager merely
- * because the continuation occurred.
+ * (no Continue, no code) and never offers another manager merely
+ * because the continuation occurred. Same-enrollment retry routing is
+ * NOT a flag here: it is established by the existing save action
+ * (`protect()` with default `chooseAnotherManager=false`, which
+ * re-reads PENDING status) plus the connected orchestration test.
  */
 internal data class RecoveryPendingPresentation(
     val verified: Boolean,
     val message: Int,
     val offerAnotherManager: Boolean,
-    val retrySameEnrollment: Boolean,
 )
 
 internal fun presentRecoveryPending(): RecoveryPendingPresentation = RecoveryPendingPresentation(
     verified = false,
     message = R.string.recovery_verification_pending,
     offerAnotherManager = false,
-    retrySameEnrollment = true,
 )

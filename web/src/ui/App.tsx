@@ -23,6 +23,7 @@ import { receivePostcard } from '../scan/receive'
 import { downloadCiphertext, fetchIncoming } from '../sync/incoming'
 import { canvasTextMeasurer } from '../collage/measure'
 import { FrontHold } from '../create/front'
+import { MUSIC_QUERY_MAX_CODE_POINTS, MUSIC_SEARCH_DEBOUNCE_MS, musicCoverKey, musicLine, MusicDraft, searchMusic } from '../create/music'
 import { NOTE_MAX_UTF8_BYTES, type NoteDraft } from '../create/note'
 import { PHOTO_COUNT_MAX, type PhotoDraft } from '../create/photos'
 import { arrayBuffer } from '../protocol/bytes'
@@ -42,6 +43,7 @@ export function App({
   recipient,
   note,
   photos,
+  music,
 }: {
   store: SessionStore
   preferences: PreferencePort
@@ -55,6 +57,7 @@ export function App({
   recipient: RecipientDraft
   note: NoteDraft
   photos: PhotoDraft
+  music: MusicDraft
 }) {
   const view = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const held = useSyncExternalStore(memory.subscribe, memory.getSnapshot)
@@ -108,7 +111,7 @@ export function App({
         />
       ) : null}
       {route === 'create' ? (
-        <Create t={t} store={store} transport={transport} recipient={recipient} camera={camera} note={note} photos={photos} onNotice={setNotice} />
+        <Create t={t} store={store} transport={transport} recipient={recipient} camera={camera} note={note} photos={photos} music={music} onNotice={setNotice} />
       ) : null}
       {view.phase === 'presentation-admitted' && held ? (
         <CollageStage held={held} t={t} onClose={() => store.lock()} />
@@ -312,6 +315,7 @@ function Create({
   camera,
   note,
   photos,
+  music,
   onNotice,
 }: {
   t: (key: MessageKey) => string
@@ -321,6 +325,7 @@ function Create({
   camera: CameraPort
   note: NoteDraft
   photos: PhotoDraft
+  music: MusicDraft
   onNotice: (notice: MessageKey) => void
 }) {
   const view = useSyncExternalStore(store.subscribe, store.getSnapshot)
@@ -330,12 +335,16 @@ function Create({
   const [live, setLive] = useState(false)
   const [pictured, setPictured] = useState(false)
   const abort = useRef<AbortController | null>(null)
+  const musicAbort = useRef<AbortController | null>(null)
+  const musicTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [musicQuery, setMusicQuery] = useState('')
   const front = useRef(new FrontHold())
   const host = useRef<HTMLDivElement>(null)
   const urls = useRef(new Map<string, string>())
   const open = view.phase !== 'signed-out' && view.phase !== 'authenticated' && view.accountId !== null
   const pending = open ? recipient.pending() : null
   const confirmed = open ? recipient.confirmed() : null
+  const selectedMusic = confirmed ? music.selected() : null
   const bound = confirmed ? `${confirmed.userId}:${confirmed.keyBundleId}:${confirmed.directoryVersion}` : ''
   void stamp
 
@@ -359,6 +368,8 @@ function Create({
 
   useEffect(() => () => {
     abort.current?.abort()
+    musicAbort.current?.abort()
+    if (musicTimer.current !== null) clearTimeout(musicTimer.current)
     front.current.close()
     forgetPhotos()
   }, [])
@@ -381,6 +392,25 @@ function Create({
     if (urls.current.size !== before) setStamp((value) => value + 1)
   }, [open])
 
+  useEffect(() => {
+    if (open) return
+    if (musicTimer.current !== null) {
+      clearTimeout(musicTimer.current)
+      musicTimer.current = null
+    }
+    musicAbort.current?.abort()
+    setMusicQuery('')
+  }, [open])
+
+  function stopMusicSearch() {
+    if (musicTimer.current !== null) {
+      clearTimeout(musicTimer.current)
+      musicTimer.current = null
+    }
+    musicAbort.current?.abort()
+    musicAbort.current = null
+  }
+
   function closeCamera() {
     abort.current?.abort()
     front.current.close()
@@ -391,6 +421,7 @@ function Create({
 
   function changeRecipient() {
     closeCamera()
+    stopMusicSearch()
     recipient.restart()
     setStamp((value) => value + 1)
     onNotice('errorRegion')
@@ -450,6 +481,43 @@ function Create({
     rememberPhotos()
     setStamp((value) => value + 1)
     onNotice(refused ? 'photoRejected' : 'errorRegion')
+  }
+
+  function onMusicInput(value: string) {
+    setMusicQuery(value)
+    stopMusicSearch()
+    const trimmed = value.trim()
+    if (trimmed.length === 0 || [...trimmed].length > MUSIC_QUERY_MAX_CODE_POINTS) {
+      music.nextTicket()
+      setStamp((next) => next + 1)
+      onNotice(trimmed.length === 0 ? 'errorRegion' : 'musicRejected')
+      return
+    }
+    const ticket = music.nextTicket()
+    setStamp((next) => next + 1)
+    musicTimer.current = setTimeout(() => {
+      musicTimer.current = null
+      void runMusic(ticket, trimmed)
+    }, MUSIC_SEARCH_DEBOUNCE_MS)
+  }
+
+  async function runMusic(ticket: number, query: string) {
+    const controller = new AbortController()
+    musicAbort.current = controller
+    try {
+      const outcome = await searchMusic(store, transport, query, controller.signal)
+      if (controller.signal.aborted) return
+      if (outcome.kind === 'empty') {
+        music.offer(ticket, [])
+        return
+      }
+      if (!music.offer(ticket, outcome.hits)) return
+      onNotice(outcome.hits.length === 0 ? 'musicNone' : 'errorRegion')
+    } catch (error) {
+      if (!controller.signal.aborted) onNotice(explainFailure(error))
+    } finally {
+      setStamp((next) => next + 1)
+    }
   }
 
   async function lookup(mode: 'named' | 'self') {
@@ -593,6 +661,44 @@ function Create({
             <p>{photos.photos().length} / {PHOTO_COUNT_MAX}</p>
             <p>{t('photoCount')}</p>
             <p>{t('photoNotNormalized')}</p>
+          </div>
+          <div className="music-draft">
+            <label className="handle-form">
+              {t('musicLabel')}
+              <input
+                value={musicQuery}
+                autoComplete="off"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                onChange={(event) => onMusicInput(event.target.value)}
+              />
+            </label>
+            {selectedMusic ? (
+              <div>
+                <p>{musicLine(selectedMusic)}</p>
+                <p>{t(musicCoverKey(selectedMusic))}</p>
+                <button type="button" onClick={() => { music.remove(); setStamp((value) => value + 1) }}>{t('musicRemove')}</button>
+              </div>
+            ) : null}
+            <ul>
+              {music.hits().map((hit) => (
+                <li key={hit.id}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      music.select(hit.id)
+                      setStamp((value) => value + 1)
+                      onNotice('errorRegion')
+                    }}
+                  >
+                    {musicLine(hit)}
+                  </button>
+                  <p>{t(musicCoverKey(hit))}</p>
+                </li>
+              ))}
+            </ul>
+            <p>{t('musicNotSent')}</p>
           </div>
           <div className="actions">
             {live ? (

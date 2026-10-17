@@ -159,6 +159,25 @@ button:focus-visible, a:focus-visible {
   background: var(--ink);
 }
 
+.music-draft {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+
+.music-draft ul {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+}
+
+.music-draft li { list-style: none; }
+
+.music-draft li button { text-align: start; }
+
 video.preview {
   display: block;
   width: 100%;

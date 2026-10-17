@@ -34,6 +34,10 @@ export function explainFailure(error: unknown): MessageKey {
       return 'selfRejected'
     case 'IDENTITY_ABSENT':
       return 'identityAbsent'
+    case 'MUSIC_REJECTED':
+      return 'musicRejected'
+    case 'MUSIC_UNAVAILABLE':
+      return 'musicUnavailable'
     case 'HANDLE_TAKEN':
       return 'handleTaken'
     case 'REGISTRATION_REJECTED':

@@ -15,6 +15,7 @@ export interface ApiRequest {
   body?: unknown
   token?: string
   signal?: AbortSignal
+  query?: Record<string, string>
 }
 
 export interface ApiTransport {
@@ -75,7 +76,7 @@ export function fetchTransport(origin: string): ApiTransport & ByteTransport {
       if (input.token) headers.authorization = `Bearer ${input.token}`
       let response: Response
       try {
-        response = await fetch(endpoint(base, input.path), {
+        response = await fetch(endpoint(base, input.path, input.query), {
           method: input.method,
           headers,
           body: input.body === undefined ? undefined : JSON.stringify(input.body),
@@ -114,14 +115,20 @@ function checkOrigin(origin: string): string {
   return origin.endsWith('/') ? origin : `${origin}/`
 }
 
-function endpoint(origin: string, path: string): string {
+function endpoint(origin: string, path: string, query?: Record<string, string>): string {
   if (!safeApiPath(path)) throw new AuthError('TRANSPORT_FAILED')
-  if (origin === '') return path
-  return new URL(path.slice(1), origin).toString()
+  const relative = `${path.slice(1)}${encodeQuery(query)}`
+  if (origin === '') return `/${relative}`
+  return new URL(relative, origin).toString()
 }
 
-/** Dots are legal in a handle. A `.` or `..` segment is not a handle. */
+/**
+ * Dots are legal in a handle. A `.` or `..` segment is not a handle.
+ * The music search route is the one path outside `/v1/`.
+ */
 function safeApiPath(path: string): boolean {
+  if (path.includes('?') || path.includes('#') || path.includes('%')) return false
+  if (path === '/music/v1/search') return true
   if (!path.startsWith('/v1/')) return false
   const parts = path.split('/')
   if (parts.length < 3 || parts[0] !== '' || parts[1] !== 'v1') return false
@@ -130,6 +137,21 @@ function safeApiPath(path: string): boolean {
     if (!/^[a-z0-9_.-]+$/.test(part)) return false
   }
   return true
+}
+
+function encodeQuery(query: Record<string, string> | undefined): string {
+  if (!query) return ''
+  const keys = Object.keys(query)
+  if (keys.length === 0) return ''
+  if (keys.length > 8) throw new AuthError('TRANSPORT_FAILED')
+  const parts: string[] = []
+  for (const key of keys) {
+    if (!/^[a-z]{1,16}$/.test(key)) throw new AuthError('TRANSPORT_FAILED')
+    const value = query[key]
+    if (typeof value !== 'string' || [...value].length > 200) throw new AuthError('TRANSPORT_FAILED')
+    parts.push(`${key}=${encodeURIComponent(value)}`)
+  }
+  return `?${parts.join('&')}`
 }
 
 async function readBoundedBytes(response: Response, maxBytes: number): Promise<Uint8Array> {

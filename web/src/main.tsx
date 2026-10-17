@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { MemoryKeys } from './auth/memoryKeys'
 import { PresentationMemory } from './collage/memory'
+import { MusicDraft } from './create/music'
 import { NoteDraft } from './create/note'
 import { PhotoDraft } from './create/photos'
 import { RecipientDraft } from './create/recipient'
@@ -29,12 +30,14 @@ const note = new NoteDraft()
 note.attach(store)
 const photos = new PhotoDraft()
 photos.attach(store)
+const music = new MusicDraft()
+music.attach(store)
 
 const root = document.getElementById('root')
 if (!root) throw new Error('ROOT_MISSING')
 
 createRoot(root).render(
   <StrictMode>
-    <App store={store} preferences={preferences} keys={keys} memory={memory} recipient={recipient} note={note} photos={photos} />
+    <App store={store} preferences={preferences} keys={keys} memory={memory} recipient={recipient} note={note} photos={photos} music={music} />
   </StrictMode>,
 )

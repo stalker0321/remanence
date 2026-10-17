@@ -92,4 +92,38 @@ describe('api transport', () => {
       await server.close()
     }
   })
+
+  it('encodes one music search and refuses a query inside the path', async () => {
+    const server = await listen()
+    try {
+      const transport = fetchTransport(server.origin)
+      await transport.request({
+        path: '/music/v1/search',
+        method: 'GET',
+        token: 'access-token-value',
+        query: { q: 'я й', limit: '10', offset: '0' },
+      })
+      const seen = server.seen()
+      expect(seen.url).toBe(`/music/v1/search?q=${encodeURIComponent('я й')}&limit=10&offset=0`)
+      expect(seen.headers.authorization).toBe('Bearer access-token-value')
+      expect(seen.url).not.toContain('access-token')
+      await expect(transport.request({ path: '/music/v1/search?q=no', method: 'GET' })).rejects.toMatchObject({
+        code: 'TRANSPORT_FAILED',
+      })
+      await expect(transport.request({ path: '/music/v1/tracks', method: 'GET' })).rejects.toMatchObject({
+        code: 'TRANSPORT_FAILED',
+      })
+      await expect(transport.request({ path: '/music/v1/search/extra', method: 'GET' })).rejects.toMatchObject({
+        code: 'TRANSPORT_FAILED',
+      })
+      await expect(transport.request({
+        path: '/music/v1/search',
+        method: 'GET',
+        query: { Q: 'no' },
+      })).rejects.toMatchObject({ code: 'TRANSPORT_FAILED' })
+      expect(server.count()).toBe(1)
+    } finally {
+      await server.close()
+    }
+  })
 })

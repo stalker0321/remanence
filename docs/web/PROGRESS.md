@@ -3,9 +3,9 @@
 Base: `5a6e7fd65f7be752daa1c933134df7918dde33ee`
 Branch: `work/t213-remanence-web-20261017`
 Worktree: `/home/vodkolyan/projects/Remanence-web-t213-20261017`
-Last good commit: `0b53d4881f15331c34e050b6b6eeed62b64af719` (W3). The C1 render commit follows this file.
+Last good commit: `a86fab4d4647b8d24703842b98bb10c0c36a9808` (C1).
 
-Current milestone: C1 frozen collage render is in the working tree and verified on Firefox. Recognition parity remains blocked without a SIFT build.
+Current milestone: C1 frozen collage render is committed and verified on Firefox. Recognition parity remains blocked without a SIFT build.
 Next exact action: connect account, keys, incoming sync, scan, grant, decrypt, and this renderer in one journey, including session fencing.
 
 ## Implemented
@@ -15,7 +15,7 @@ Next exact action: connect account, keys, incoming sync, scan, grant, decrypt, a
 - Probe `openRecovery()` still returns the diagnostic and wipes seeds. `openIdentity()` feeds the key owner.
 - W2 `3172229aedab5c7a6f4645a4f1f47b7476c1ea58`: nonce-bound `POST /v1/auth/google/options` and `/verify`. Server status chooses the route. `NEEDS_HANDLE`, link-required, and upgrade-required do not sign in and do not call `/register`. Signed-in restore uses `/v1/recovery/status` and, only for `STORED`, setup options, one passkey get, setup verify, and `GET /v1/recovery/record`. PRF is not sent. `NOT_STARTED` and `PENDING` do not create a passkey. Keys sit in `MemoryKeys` and drop on lock or sign-out.
 - W3 `0b53d4881f15331c34e050b6b6eeed62b64af719`: one incoming page, sender key bundle, publish signature, and signed blob bindings. Download checks length and SHA-256. The camera still stays in memory. Recognition fails closed. A grant admits postcard-matched and does not decrypt.
-- C1: GENEX03/GENEX04 and BEXPR02 bytes match the Android goldens. `prepare` rejects those codec goldens and paints a bundled press sheet. Unsupported expression magic is refused and not drawn. A verified v3 cover replaces the music band. A missing cover stays text. Overflow rejects the whole sheet. The product shows a sheet only after `presentation-admitted`. The fixture page is a separate Vite root.
+- C1 `a86fab4d4647b8d24703842b98bb10c0c36a9808`: GENEX03/GENEX04 and BEXPR02 bytes match the Android goldens. `prepare` rejects those codec goldens and paints a bundled press sheet. Unsupported expression magic is refused and not drawn. A verified v3 cover replaces the music band. A missing cover stays text. Overflow rejects the whole sheet. The product shows a sheet only after `presentation-admitted`. The fixture page is a separate Vite root.
 - Node 22.22.1 on `msi-workstation` at `/home/msi-workstation/remanence-web-t213-20261017/tools/node`.
 
 ## Actual verification

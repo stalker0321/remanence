@@ -310,6 +310,14 @@ title, the artists, and the version. The recording id is not shown. Cover
 bytes are not requested. Nothing is sent. The query is not written to
 localStorage. JS strings in the field cannot be zeroed; lock clears the field.
 
+## Settings route
+
+`#/settings` is a page. The copy says that opening it does not sign in, unlock
+keys, or open a postcard. Firefox, still signed out, opened `#/create`,
+`#/scan`, `#/settings`, an unknown hash, and `#/create?access=secret`. The
+query was not rendered. localStorage gained no key other than the language
+preference. A route does not change the session phase.
+
 ## Known gaps at the start of W0
 
 `docs/product.md` still lists Web as out of scope. That sentence is the older

@@ -7,9 +7,9 @@ A mocked call is not a live integration. Production send stays off.
 ## A
 
 - A01 VERIFIED. Commit `ffcf64edd5879e8b9c2804599f6f17c22d553868`. Firefox 155.0.1 opened the production build on the VM. Bundle `index-DyRX6lAI.js` / `index-CovRG_mx.css`. Boot errors empty. The product page did not request the external crypto stub. HPKE open and the harness journey reached presentation-admitted. Screenshots for this run stayed on the VM at `/tmp/t213-c4-music-smoke`. Next: none.
-- A02 IMPLEMENTED. Hash routes home, scan, create, and account. Unknown hash stays home. `web/test/route.test.ts`. Next: settings hash, and a Firefox check that a locked deep link does not sign in or admit a postcard.
+- A02 VERIFIED. Commit `e2c65392e32e7f50c0a12aae5075ab683c16c55d`. Firefox 155.0.1 opened locked `#/create`, `#/scan`, and `#/settings` without signing in or admitting a postcard. An unknown hash returned home. `#/create?access=secret` did not render or store the query. Boundary: a late in-flight lookup after leaving the page is aborted in code and covered by the recipient and music unit tests, not by a Firefox click.
 - A03 IMPLEMENTED. `SessionStore` phases and generation fencing on lookup, music, receive, and enrollment. Lock and sign-out drop the create drafts in unit tests. Next: one browser check of that teardown.
-- A04 IMPLEMENTED. Profile header, bounded reads, dotted handle, refusal of `..` and percent-encoded parent segments, and one music query on `/music/v1/search`. The access token stays in Authorization. Music maps 401 and 422 to refused, and 429 and 503 to unavailable. Next: 403, 409, 426, and offline on the shared transport.
+- A04 IMPLEMENTED. Profile header, bounded reads, dotted handle, refusal of `..` and percent-encoded parent segments, and one music query on `/music/v1/search`. Statuses 401, 403, 409, 426, and 429 are returned to the caller. A closed port is `TRANSPORT_FAILED`. The access token stays in Authorization and out of the error text. Next: a caller-facing map for 403, 409, and 426 where a real endpoint emits them.
 - A05 TODO. `npm ci` in a clean VM temp directory is not run. The existing `node_modules` was reused. Next: run `npm ci` there without replacing the VM install.
 
 ## B

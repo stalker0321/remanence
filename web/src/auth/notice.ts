@@ -28,6 +28,8 @@ export function explainFailure(error: unknown): MessageKey {
       return 'googleUnavailable'
     case 'HANDLE_INVALID':
       return 'handleInvalid'
+    case 'IDENTITY_ABSENT':
+      return 'identityAbsent'
     case 'HANDLE_TAKEN':
       return 'handleTaken'
     case 'REGISTRATION_REJECTED':

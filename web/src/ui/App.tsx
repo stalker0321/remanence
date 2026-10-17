@@ -3,6 +3,8 @@ import { explainFailure, explainGoogle, explainRestore } from '../auth/notice'
 import { browserGoogleIdentity } from '../auth/googleBrowser'
 import { continueWithGoogle, type GoogleIdentityPort } from '../auth/google'
 import { RegistrationDraft, registerNewAccount } from '../auth/register'
+import { enrollHeldIdentity } from '../auth/enroll'
+import { b64 } from '../../../server/src/remanence/recovery/web/crypto.mjs'
 import { apiOrigin, fetchTransport, type ApiTransport, type ByteTransport } from '../auth/http'
 import { MemoryKeys } from '../auth/memoryKeys'
 import { browserPasskey, type PasskeyPort } from '../auth/passkey'
@@ -332,6 +334,7 @@ function Account({
   const [busy, setBusy] = useState(false)
   const [choosing, setChoosing] = useState(() => draft.hasTicket())
   const [handle, setHandle] = useState('')
+  const [recoveryCode, setRecoveryCode] = useState('')
   const busyRef = useRef(false)
   const abort = useRef<AbortController | null>(null)
   const signedIn = view.phase !== 'signed-out'
@@ -381,7 +384,27 @@ function Account({
             {t('continueGoogle')}
           </button>
         )}
-        {signedIn && !unlocked ? (
+        {signedIn && !unlocked && draft.bundleId() === view.bundleId ? (
+          <button
+            type="button"
+            className="primary"
+            disabled={busy}
+            onClick={() => {
+              void run(async (signal) => {
+                const outcome = await enrollHeldIdentity(store, transport, passkeys, keys, draft, signal)
+                if (outcome.kind === 'enrolled') {
+                  const shown = b64(outcome.code)
+                  outcome.code.fill(0)
+                  setRecoveryCode(shown)
+                }
+                return null
+              })
+            }}
+          >
+            {t('savePasskey')}
+          </button>
+        ) : null}
+        {signedIn && !unlocked && draft.bundleId() !== view.bundleId ? (
           <button
             type="button"
             className="primary"
@@ -407,6 +430,7 @@ function Account({
               draft.wipe()
               store.signOut()
               setChoosing(false)
+              setRecoveryCode('')
               onNotice('errorRegion')
             }}
           >
@@ -415,6 +439,7 @@ function Account({
         ) : null}
         <a href={href('home')}>{t('back')}</a>
       </div>
+      {recoveryCode ? <p className="recovery-code">{t('recoveryCodeHint')} {recoveryCode}</p> : null}
       {choosing && !signedIn ? (
         <form
           className="handle-form"

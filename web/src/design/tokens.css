@@ -117,6 +117,13 @@ button:focus-visible, a:focus-visible {
   outline-offset: 3px;
 }
 
+.recovery-code {
+  margin-top: 0.8rem;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+}
+
 .primary { background: var(--lilac); }
 
 video.preview {

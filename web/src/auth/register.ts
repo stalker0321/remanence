@@ -35,8 +35,9 @@ export class RegistrationDraft {
   }
 
   async identity(): Promise<LocalIdentity> {
-    if (!this.hasTicket()) throw new AuthError('REGISTRATION_REJECTED')
-    if (!this.#identity || this.#identity.wiped) this.#identity = await generateLocalIdentity()
+    if (this.#identity && !this.#identity.wiped) return this.#identity
+    if (!this.hasTicket()) throw new AuthError('IDENTITY_ABSENT')
+    this.#identity = await generateLocalIdentity()
     return this.#identity
   }
 

@@ -37,6 +37,9 @@ function passkey(assertion: PasskeyAssertion | Error): PasskeyPort & { gets: unk
       if (assertion instanceof Error) return Promise.reject(assertion)
       return Promise.resolve(assertion)
     },
+    create() {
+      return Promise.reject(new AuthError('PASSKEY_UNAVAILABLE'))
+    },
   }
 }
 

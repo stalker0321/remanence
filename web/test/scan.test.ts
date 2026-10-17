@@ -97,4 +97,26 @@ describe('scan grant', () => {
     expect(scan.held()).toBeNull()
     await expect(browserCamera({} as Document).open()).rejects.toMatchObject({ code: 'CAMERA_UNAVAILABLE' })
   })
+
+  it('stops a camera that resolves after the scan was cancelled', async () => {
+    let stopped = 0
+    let release: (session: { preview: HTMLVideoElement; capture: () => Promise<StillCapture>; stop: () => void }) => void = () => {}
+    const camera: CameraPort = {
+      open: () => new Promise((resolve) => {
+        release = resolve
+      }),
+    }
+    const scan = new LocalScan()
+    const controller = new AbortController()
+    const pending = scan.shoot(camera, controller.signal)
+    controller.abort()
+    release({
+      preview: {} as HTMLVideoElement,
+      capture: () => Promise.reject(new Error('late')),
+      stop: () => { stopped += 1 },
+    })
+    await expect(pending).rejects.toMatchObject({ code: 'CANCELLED' })
+    expect(stopped).toBe(1)
+    expect(scan.held()).toBeNull()
+  })
 })

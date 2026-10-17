@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { explainFailure, explainGoogle, explainRestore } from '../auth/notice'
 import { browserGoogleIdentity } from '../auth/googleBrowser'
 import { continueWithGoogle, type GoogleIdentityPort } from '../auth/google'
-import { apiOrigin, fetchTransport, type ApiTransport } from '../auth/http'
+import { apiOrigin, fetchTransport, type ApiTransport, type ByteTransport } from '../auth/http'
 import { MemoryKeys } from '../auth/memoryKeys'
 import { browserPasskey, type PasskeyPort } from '../auth/passkey'
 import { restoreSignedInAccount } from '../auth/restore'
@@ -12,8 +12,13 @@ import { writeLanguage, type PreferencePort } from '../preferences/language'
 import { href, parseRoute, type RouteName } from '../router/route'
 import { CollageStage } from '../collage/stage'
 import type { PresentationMemory } from '../collage/memory'
-import { browserCamera, type CameraPort, type CameraSession } from '../scan/camera'
+import { browserCamera, type CameraPort, type CameraSession, type StillCapture } from '../scan/camera'
 import { ScanError } from '../scan/errors'
+import { unavailableRecognition, type RecognitionEngine } from '../scan/grant'
+import { explainScan } from '../scan/notice'
+import { receivePostcard } from '../scan/receive'
+import { downloadCiphertext, fetchIncoming } from '../sync/incoming'
+import { canvasTextMeasurer } from '../collage/measure'
 import { SessionStore } from '../session/session'
 
 export function App({
@@ -22,6 +27,7 @@ export function App({
   keys,
   memory,
   transport = fetchTransport(apiOrigin()),
+  engine = unavailableRecognition(),
   google = browserGoogleIdentity(document),
   passkeys = browserPasskey(),
   camera = browserCamera(document),
@@ -30,7 +36,8 @@ export function App({
   preferences: PreferencePort
   keys: MemoryKeys
   memory: PresentationMemory
-  transport?: ApiTransport
+  transport?: ApiTransport & ByteTransport
+  engine?: RecognitionEngine
   google?: GoogleIdentityPort
   passkeys?: PasskeyPort
   camera?: CameraPort
@@ -73,7 +80,18 @@ export function App({
         </nav>
       </div>
       {route === 'home' ? <Home t={t} /> : null}
-      {route === 'scan' ? <Scan t={t} camera={camera} onNotice={setNotice} /> : null}
+      {route === 'scan' ? (
+        <Scan
+          t={t}
+          camera={camera}
+          onNotice={setNotice}
+          store={store}
+          keys={keys}
+          memory={memory}
+          transport={transport}
+          engine={engine}
+        />
+      ) : null}
       {route === 'create' ? <Waiting t={t} title="homeMakeTitle" body="makeWaiting" /> : null}
       {view.phase === 'presentation-admitted' && held ? (
         <CollageStage held={held} t={t} onClose={() => store.lock()} />
@@ -123,14 +141,24 @@ function Scan({
   t,
   camera,
   onNotice,
+  store,
+  keys,
+  memory,
+  transport,
+  engine,
 }: {
   t: (key: MessageKey) => string
   camera: CameraPort
   onNotice: (notice: MessageKey) => void
+  store: SessionStore
+  keys: MemoryKeys
+  memory: PresentationMemory
+  transport: ApiTransport & ByteTransport
+  engine: RecognitionEngine
 }) {
   const host = useRef<HTMLDivElement>(null)
   const session = useRef<CameraSession | null>(null)
-  const heldBytes = useRef<Uint8Array | null>(null)
+  const heldShot = useRef<StillCapture | null>(null)
   const busy = useRef(false)
   const openAbort = useRef<AbortController | null>(null)
   const [live, setLive] = useState(false)
@@ -140,7 +168,7 @@ function Scan({
     openAbort.current?.abort()
     session.current?.stop()
     session.current = null
-    heldBytes.current = null
+    heldShot.current = null
     host.current?.replaceChildren()
   }, [])
 
@@ -158,7 +186,7 @@ function Scan({
       }
       session.current?.stop()
       session.current = next
-      heldBytes.current = null
+      heldShot.current = null
       next.preview.className = 'preview'
       host.current?.replaceChildren(next.preview)
       setLive(true)
@@ -178,7 +206,7 @@ function Scan({
     try {
       const picture = await session.current?.capture()
       if (!picture) return
-      heldBytes.current = picture.bytes
+      heldShot.current = picture
       setHeld(true)
       onNotice('cameraHeld')
     } catch {
@@ -188,10 +216,49 @@ function Scan({
     }
   }
 
+  async function match() {
+    if (busy.current) return
+    const picture = heldShot.current
+    if (!picture) return
+    if (store.getSnapshot().phase !== 'keys-unlocked') {
+      onNotice('keysLocked')
+      return
+    }
+    busy.current = true
+    const controller = new AbortController()
+    openAbort.current?.abort()
+    openAbort.current = controller
+    try {
+      const incoming = await fetchIncoming(store, transport, controller.signal)
+      if (controller.signal.aborted) return
+      if (incoming.items.length === 0) {
+        onNotice('emptyIndex')
+        return
+      }
+      await receivePostcard(
+        store,
+        keys,
+        memory,
+        engine,
+        picture,
+        incoming,
+        { read: (item, blobId, signal) => downloadCiphertext(store, transport, item, blobId, signal) },
+        canvasTextMeasurer(document),
+        controller.signal,
+      )
+      if (!controller.signal.aborted) onNotice('errorRegion')
+    } catch (error) {
+      if (!controller.signal.aborted) onNotice(explainScan(error))
+    } finally {
+      if (openAbort.current === controller) busy.current = false
+    }
+  }
+
   function close() {
+    openAbort.current?.abort()
     session.current?.stop()
     session.current = null
-    heldBytes.current = null
+    heldShot.current = null
     host.current?.replaceChildren()
     setLive(false)
     setHeld(false)
@@ -207,6 +274,7 @@ function Scan({
         {live ? (
           <>
             <button type="button" className="primary" onClick={() => { void take() }}>{t('takePicture')}</button>
+            {held ? <button type="button" onClick={() => { void match() }}>{t('matchPicture')}</button> : null}
             <button type="button" onClick={close}>{t('closeCamera')}</button>
           </>
         ) : (

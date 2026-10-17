@@ -175,6 +175,28 @@ are synthetic. Firefox 155 loaded the production bundle and completed an
 `@hpke/core` seal/open in the harness. The Node `crypto` fallback chunk was
 not requested because the browser has `globalThis.crypto`.
 
+## C2 receive journey
+
+`receivePostcard` runs only from `keys-unlocked`. An empty incoming list
+throws `EMPTY` before recognition. A missing content blob, photo blob, or
+envelope throws `BODY_MISSING` before `admitScan`. Sign-out or lock during
+the match throws `STALE` and does not admit. After a successful open, the
+sheet is held and the phase becomes `presentation-admitted`. A cancel after
+the match and before the hold leaves the phase at `postcard-matched` and
+shows no sheet.
+
+The scan screen fetches one incoming page and then calls that function.
+The production engine is still `unavailableRecognition`. The button therefore
+reports that recognition is unavailable after a real list, and it does not
+draw a postcard. Locked keys never start the fetch. Closing the camera or
+leaving the screen aborts the controller. `LocalScan` stops a session that
+resolves after that abort.
+
+The harness journey uses the same function with a scripted match and a JS
+AES-GCM producer. Firefox 155 painted that admitted sheet and then saw the
+object URLs drop on sign-out. That producer is not Android output, and the
+camera in that page is not a device.
+
 ## Known gaps at the start of W0
 
 `docs/product.md` still lists Web as out of scope. That sentence is the older

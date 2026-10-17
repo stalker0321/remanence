@@ -3,6 +3,11 @@ import { paintScene, type PaintImage } from '../src/collage/paint'
 import { prepare } from '../src/collage/prepare'
 import '../src/design/tokens.css'
 import './harness.css'
+import { MemoryKeys } from '../src/auth/memoryKeys'
+import { PresentationMemory } from '../src/collage/memory'
+import { receivePostcard } from '../src/scan/receive'
+import { SessionStore } from '../src/session/session'
+import { jsPressCapture, jsPressIds, jsPressMaterial } from '../test/sealedFixture'
 import { fitText, overflowText, pressSheet } from '../test/sheets'
 
 const root = document.documentElement
@@ -90,4 +95,51 @@ const opened = new Uint8Array(await suite.open({
   info,
 }, new Uint8Array(sealed.ct)))
 root.dataset.hpke = new TextDecoder().decode(opened) === 'open' ? 'open' : 'fail'
+
+const material = await jsPressMaterial()
+const journey = new SessionStore()
+journey.signIn({
+  accountId: jsPressIds.account,
+  bundleId: jsPressIds.bundle,
+  handle: 'ada',
+  accessToken: 'access',
+  refreshToken: 'refresh',
+  accessExpiresAt: '2026-10-17T00:00:00Z',
+  refreshExpiresAt: '2026-11-17T00:00:00Z',
+})
+journey.unlock()
+const journeyKeys = new MemoryKeys()
+journeyKeys.hold(journey.getSnapshot(), material.capabilities())
+const journeyMemory = new PresentationMemory()
+journeyMemory.attach(journey)
+await receivePostcard(
+  journey,
+  journeyKeys,
+  journeyMemory,
+  { match: () => Promise.resolve({ kind: 'one', capsuleId: jsPressIds.capsule }) },
+  jsPressCapture,
+  { items: [material.capsule], hasMore: false, nextCursor: null },
+  { read: (_item, blobId) => Promise.resolve(material.ciphertext(blobId).slice()) },
+  fitText,
+  new AbortController().signal,
+)
+const received = journeyMemory.getSnapshot()
+const receivedCanvas = document.getElementById('received')
+if (!(receivedCanvas instanceof HTMLCanvasElement) || !received) throw new Error('journey')
+const receivedContext = receivedCanvas.getContext('2d')
+if (!receivedContext) throw new Error('journey')
+const receivedImages = new Map<string, PaintImage>()
+for (const [id, url] of received.photos) {
+  const image = new Image()
+  image.src = url
+  await image.decode()
+  receivedImages.set(id, { source: image, width: image.naturalWidth, height: image.naturalHeight })
+}
+const receivedPainted = paintScene(receivedContext, received.scene, receivedImages, null)
+receivedCanvas.dataset.painted = receivedPainted ? 'yes' : 'no'
+receivedCanvas.dataset.note = received.scene.note?.text ?? ''
+receivedCanvas.dataset.style = received.scene.styleId
+root.dataset.journey = journey.getSnapshot().phase
+journey.signOut()
+root.dataset.revoked = journeyMemory.getSnapshot() === null ? 'yes' : 'no'
 root.dataset.harness = 'ready'

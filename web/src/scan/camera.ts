@@ -84,6 +84,10 @@ export class LocalScan {
   async shoot(camera: CameraPort, signal?: AbortSignal): Promise<StillCapture> {
     this.release()
     const session = await camera.open(signal)
+    if (signal?.aborted) {
+      session.stop()
+      throw new ScanError('CANCELLED')
+    }
     this.#session = session
     try {
       const capture = await session.capture()

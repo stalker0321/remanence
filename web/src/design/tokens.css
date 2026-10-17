@@ -1,0 +1,114 @@
+:root {
+  --paper: #f4f2ec;
+  --ink: #333951;
+  --lilac: #d6cce9;
+  --lilac-deep: #342343;
+  --sand: #f4e8c7;
+  --bridge: #e4e2ed;
+  --line: #33395122;
+  --shadow: #24273d20;
+  --column: 28rem;
+  --touch: 3rem;
+  color: var(--ink);
+  background: var(--bridge);
+  font-family: "Iowan Old Style", Palatino, "Palatino Linotype", Georgia, serif;
+  font-size: 18px;
+  line-height: 1.45;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(1200px 480px at 50% -10%, var(--sand), transparent 60%),
+    var(--bridge);
+}
+
+button, a {
+  font: inherit;
+  color: inherit;
+}
+
+button, a.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--touch);
+  padding: 0.7rem 1rem;
+  border: 1px solid var(--ink);
+  border-radius: 999px;
+  background: var(--paper);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+button:active, a.button:active { transform: translateY(1px); }
+
+button:focus-visible, a:focus-visible {
+  outline: 2px solid var(--lilac-deep);
+  outline-offset: 3px;
+}
+
+.shell {
+  width: min(100%, var(--column));
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem 3rem;
+}
+
+.mark {
+  margin: 0 0 1.5rem;
+  letter-spacing: 0.08em;
+  text-transform: lowercase;
+  font-size: 0.95rem;
+}
+
+.card {
+  margin: 0 0 0.9rem;
+  padding: 1.1rem 1.15rem 1.2rem;
+  background: var(--paper);
+  border-radius: 1.4rem;
+  box-shadow: 0 10px 24px var(--shadow);
+}
+
+.card h1, .card h2 {
+  margin: 0 0 0.35rem;
+  font-weight: 500;
+  font-size: 1.7rem;
+}
+
+.card p { margin: 0; }
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+
+.primary { background: var(--lilac); }
+
+.quiet {
+  background: transparent;
+  border-color: transparent;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.status {
+  min-height: 3.2rem;
+  margin: 1rem 0 0;
+  color: var(--lilac-deep);
+}
+
+.bar {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button:active { transform: none; }
+}
